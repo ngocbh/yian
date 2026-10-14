@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import BaseModel, ValidationError
 
 from yian.compose import load_flow
 from yian.compose.helpers.errors import LoadError
-from yian.compose.nodes.base import not_text_error
+from yian.compose.nodes.base import not_text_detail, not_text_error
 
 NON_TEXT = [
     ("5", "an integer"),
@@ -502,3 +503,107 @@ def test_non_text_kind_in_a_def_and_inline_body(text):
 )
 def test_null_and_text_kinds_are_unchanged(value, fragment):
     assert fragment in str(_error(_kind(value)))
+
+
+class _Model(BaseModel):
+    name: str
+    uses: dict[str, str] = {}
+    stop: str | list[str] | None = None
+
+
+def _detail(data: dict) -> tuple | None:
+    with pytest.raises(ValidationError) as caught:
+        _Model.model_validate(data)
+    return not_text_detail(caught.value)
+
+
+def test_not_text_detail_reads_the_first_string_error():
+    assert _detail({"name": 5}) == ("name", 5)
+    assert _detail({"name": "n", "uses": {"lib": [1]}}) == ("uses.lib", [1])
+    assert _detail({"name": None}) == ("name", None)
+    assert _detail({}) is None
+    # A union field takes more than text, so its error is not a text-field error.
+    assert _detail({"name": "n", "stop": 5}) is None
+    assert _detail({"name": "n", "stop": [5]}) is None
+
+
+def _flow_field(field: str, v: str) -> str:
+    """A flow whose top-level `<field>:` is `<v>`."""
+    text = """\
+id: f
+name: f
+description: d
+version: '1'
+nodes:
+  a:
+    kind: code
+    output: str
+    code: "return 'x'"
+output: ${a.output}
+"""
+    lines = [f"{field}: @V" if line.startswith(f"{field}: ") else line for line in text.splitlines()]
+    return "\n".join(lines).replace("@V", v) + "\n"
+
+
+@pytest.mark.parametrize(
+    ("value", "phrase"),
+    [("5", "an integer"), ("true", "a boolean"), ("1.5", "a float"), ("[a]", "a list")],
+)
+@pytest.mark.parametrize("field", ["id", "name", "description", "version"])
+def test_non_text_flow_field_is_a_load_error(field, value, phrase):
+    text = _flow_field(field, value)
+    error = _error(text)
+    assert str(error).startswith(
+        f"`{field}:` must be text, but YAML read it as {phrase}; put it in quotes"
+    )
+    assert "validation error for ComposeFile" not in str(error)
+    assert _start_line(error) == _line(text, f"{field}: ")
+
+
+@pytest.mark.parametrize("field", ["id", "name"])
+def test_null_flow_field(field):
+    error = _error(_flow_field(field, "null"))
+    assert f"`{field}:` must be text, but it is empty; write the text" in str(error)
+
+
+@pytest.mark.parametrize("field", ["description", "version"])
+def test_null_optional_flow_field_loads(field):
+    load_flow(_flow_field(field, "null"))
+
+
+_FLOW = """\
+id: f
+name: f
+nodes:
+  a:
+    kind: code
+    output: str
+    code: "return 'x'"
+output: ${a.output}
+"""
+
+
+@pytest.mark.parametrize(
+    ("value", "phrase"),
+    [(value, f"YAML read it as {phrase}") for value, phrase in NON_TEXT]
+    + [("null", "it is empty")],
+)
+def test_non_text_uses_ref_is_a_load_error(value, phrase):
+    text = _FLOW + "uses:\n  lib: @V\n".replace("@V", value)
+    error = _error(text)
+    assert f"`uses.lib:` must be text, but {phrase}" in str(error)
+    assert _start_line(error) == _line(text, "lib: ")
+
+
+@pytest.mark.parametrize(("value", "phrase"), NON_TEXT)
+def test_non_text_flow_assert_is_a_load_error(value, phrase):
+    text = _FLOW + 'asserts:\n  - "true"\n  - @V\n'.replace("@V", value)
+    error = _error(text)
+    assert f"`asserts[1]:` must be text, but YAML read it as {phrase}" in str(error)
+    assert _start_line(error) == len(text.splitlines())
+
+
+def test_other_flow_schema_errors_are_unchanged():
+    error = _error("id: f\nname: f\noutput: x\n")
+    assert "validation error for ComposeFile" in str(error)
+    assert "nodes" in str(error)

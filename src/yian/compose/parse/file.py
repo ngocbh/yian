@@ -32,7 +32,7 @@ from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.yaml_words import yaml_read_as
 from yian.compose.helpers.source import is_extension_key
 from yian.compose.nodes import REMOVED_KINDS
-from yian.compose.nodes.base import not_text_error
+from yian.compose.nodes.base import not_text_detail, not_text_error
 from yian.compose.parse.nodes import IDENTIFIER_RULE, identifier_suggestion, is_identifier
 from yian.compose.source import (
     SourceAccessError,
@@ -475,7 +475,10 @@ def parse_file(source: str | SourceDocument) -> ComposeFile:
 
     Raises `LoadError` on malformed YAML, a non-mapping document, an unknown
     top-level key (after stripping `x-*`), a retired `inputs:`/`outputs:` key in a
-    node or def body, or any schema violation.
+    node or def body, or any schema violation. A text field YAML read as non-text (flow
+    `id:`/`name:`/`description:`/`version:`, a `uses:` ref, a flow `asserts:` item) is
+    reported by `not_text_error`, naming the field; any other schema violation keeps
+    pydantic's message.
     """
     document = (
         parse_source_document(source, "<flow>") if isinstance(source, str) else source
@@ -523,8 +526,9 @@ def parse_file(source: str | SourceDocument) -> ComposeFile:
     except LoadError:
         raise
     except ValidationError as exc:
+        detail = not_text_detail(exc)
         raise diagnostics.error(
-            str(exc),
+            not_text_error(*detail) if detail is not None else str(exc),
             range=_validation_error_range(exc, root),
         ) from exc
     except Exception as exc:

@@ -16,11 +16,13 @@ corresponding authored fields continue to reject them.
 Like `nodes/base.py`, this base imports only the dependencies its contract needs —
 `typesys` (TypeRegistry), `nodes.contracts` (OutputContract/Parameter/ValueContract),
 `compose.helpers.types` (read_type), `compose.helpers.errors` (LoadError),
-`compose.helpers.tags` (has_span), `compose.helpers.yaml_words` (yaml_read_as), and
-`compose.source` (SourceCursor) for parse navigation, `diagnostics` (SourceRange) — all
-earlier layers on the ladder, so it stays a leaf of the nodes package: it never imports any
-sibling kind or `nodes/__init__`. Every kind module imports it at module top level without
-cycling; `parse/file.py` re-exports it as the descriptor base type for its importers.
+`compose.helpers.tags` (has_span), `compose.helpers.yaml_words` (yaml_read_as), `pydantic`
+(ValidationError), `nodes.human_input.node` (site_label, a runtime leaf that imports no
+`yian.compose` module), and `compose.source` (SourceCursor) for parse navigation,
+`diagnostics` (SourceRange) — all earlier layers on the ladder, so it stays a leaf of the
+nodes package: it never imports any sibling kind or `nodes/__init__`. Every kind module
+imports it at module top level without cycling; `parse/file.py` re-exports it as the
+descriptor base type for its importers.
 
 It also owns the shared message for a text field whose value YAML read as non-text, so every
 kind reports that mistake in the same words.
@@ -32,8 +34,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional
 
+from pydantic import ValidationError
+
 from yian.nodes.base import Node
 from yian.nodes.contracts import OutputContract, Parameter, ValueContract
+from yian.nodes.human_input.node import site_label
 from yian.typesys.types import TypeRegistry
 from yian.typesys.values import value_repr
 from yian.compile.model import Edge
@@ -109,6 +114,39 @@ def not_text_error(field: str, value: Any, fix: str | None = None) -> str:
         f"`{field}:` must be text, but YAML read it as {yaml_read_as(value)}; "
         f"{fix or 'put it in quotes'}"
     )
+
+
+def not_text_detail(exc: ValidationError) -> tuple[str, Any] | None:
+    """Return the field and value of a pydantic error that is a text field read as non-text.
+
+    Only the first error is read, so the field named agrees with the range the caller locates
+    from that same first error.
+
+    Args:
+        exc (`ValidationError`):
+            The pydantic validation error.
+
+    Returns:
+        `tuple[str, Any] | None`:
+            The field's path as authored (such as `uses.lib` or `asserts[1]`) and its value,
+            for `not_text_error`; `None` when the first error is not a `string_type` failure,
+            or is the `str` member of a union field, which takes more than text.
+    """
+    errors = exc.errors()
+    first = errors[0]
+    if first["type"] != "string_type":
+        return None
+    loc = tuple(first["loc"])
+    if loc[-1] == "str":
+        # A union reports one error per member, the `str` member first; any other error under
+        # the same parent (a list member's item error extends it) marks a non-text-only field.
+        parent = loc[:-1]
+        if any(
+            error is not first and tuple(error["loc"][: len(parent)]) == parent
+            for error in errors
+        ):
+            return None
+    return site_label(loc), first["input"]
 
 
 def reject_non_text(

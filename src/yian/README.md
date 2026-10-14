@@ -435,8 +435,9 @@ Compose rejects it in YAML with a located `LoadError`; for a carrier set in Pyth
 validation before the body runs. One that parses but raises while evaluating still
 does not hold. A CASE `when:` and a LOOP `while:`/`until:` set in Python follow the
 same rule; the error names the case handle or the predicate keyword. A binding, flow
-output, or prompt set in Python is checked the same way before any record is written
-(`Node.validate_prompts` checks a node's prompts).
+output, or prompt set in Python gets the same check from `run_flow` and `resume_flow`
+before any record is written (`Node.validate_prompts` checks a node's prompts), but
+not from `Node.run`.
 
 `Node.params` has one compiled shape too: an ordered list of exact `Parameter`
 carriers (or `None` for a directly constructed no-input node). The flow still owns each

@@ -13,9 +13,8 @@ from .base_client import BaseLLMClient, normalize_content
 from .provider_blocks import merge_request_body
 from .validators import validate_model
 
-_PASSTHROUGH_KWARGS = (
-    "timeout", "max_retries", "api_key", "callbacks", "http_client", "http_async_client",
-)
+_HTTP_CLIENT_KWARGS = ("http_client", "http_async_client")
+_PASSTHROUGH_KWARGS = ("timeout", "max_retries", "api_key", "callbacks", *_HTTP_CLIENT_KWARGS)
 
 
 # langchain-anthropic takes these as call options and moves them into ``extra_body`` itself
@@ -40,6 +39,27 @@ def _call_keywords() -> frozenset[str]:
 _OPENED_STREAMS: ContextVar[Optional[list]] = ContextVar("anthropic_opened_streams", default=None)
 
 
+def _check_no_redirects(name: str, http_client: Any) -> None:
+    """Reject a caller's HTTP client that follows redirects.
+
+    Args:
+        name (`str`):
+            The keyword the client came in, for the message.
+        http_client (`Any`):
+            The caller's httpx client.
+
+    Raises:
+        `ValueError`:
+            Raised when the client follows redirects.
+    """
+    # The key travels in x-api-key, which httpx re-sends on a cross-origin redirect.
+    if getattr(http_client, "follow_redirects", False):
+        raise ValueError(
+            f"{name} follows redirects, which would send the API key past base_url; "
+            "build it with follow_redirects=False"
+        )
+
+
 class NormalizedChatAnthropic(ChatAnthropic):
     """ChatAnthropic with normalized content output and streams that close early.
 
@@ -51,18 +71,32 @@ class NormalizedChatAnthropic(ChatAnthropic):
         follow_redirects (`bool`, *optional*, defaults to `True`):
             Whether the HTTP client follows redirects. The SDK sends the key in
             ``x-api-key``, which httpx re-sends on a cross-origin redirect, so
-            `AnthropicClient` turns this off for a host ``base_url``.
+            `AnthropicClient` turns this off for a host ``base_url``. When false, a given
+            ``http_client`` / ``http_async_client`` must not follow redirects either;
+            building the SDK client raises `ValueError` otherwise.
+        http_client (`httpx.Client`, *optional*, defaults to `None`):
+            The SDK's sync HTTP client, used in place of the default one; it must come
+            from the httpx package the SDK is built on. `None` uses the SDK default.
+        http_async_client (`httpx.AsyncClient`, *optional*, defaults to `None`):
+            The SDK's async HTTP client, used in place of the default one; it must come
+            from the httpx package the SDK is built on. `None` uses the SDK default.
         block (`dict[str, Any]`, *optional*, defaults to `{}`):
             The ``anthropic`` block, shaped like the Messages API request body and sent
             into every request as written. Empty sends nothing extra.
     """
 
     follow_redirects: bool = True
+    http_client: Any = Field(default=None, exclude=True, repr=False)
+    http_async_client: Any = Field(default=None, exclude=True, repr=False)
     block: dict[str, Any] = Field(default_factory=dict, exclude=True, repr=False)
 
     @cached_property
     def _client(self) -> anthropic.Client:
         client = super()._client
+        if self.http_client is not None:
+            if not self.follow_redirects:
+                _check_no_redirects("http_client", self.http_client)
+            return client.with_options(http_client=self.http_client)
         if self.follow_redirects:
             return client
         return client.with_options(http_client=anthropic.DefaultHttpxClient(**self._http_options()))
@@ -70,6 +104,10 @@ class NormalizedChatAnthropic(ChatAnthropic):
     @cached_property
     def _async_client(self) -> anthropic.AsyncClient:
         client = super()._async_client
+        if self.http_async_client is not None:
+            if not self.follow_redirects:
+                _check_no_redirects("http_async_client", self.http_async_client)
+            return client.with_options(http_client=self.http_async_client)
         if self.follow_redirects:
             return client
         return client.with_options(
@@ -184,14 +222,24 @@ class AnthropicClient(BaseLLMClient):
     """Client for Anthropic Claude models.
 
     With a ``base_url``, the model does not follow redirects, so the key goes only
-    to that URL.
+    to that URL. ``http_client`` / ``http_async_client`` replace the SDK's HTTP clients;
+    beside a ``base_url`` they must not follow redirects.
     """
 
     def __init__(self, model: str, base_url: Optional[str] = None, **kwargs):
         super().__init__(model, base_url, **kwargs)
 
     def get_llm(self) -> Any:
-        """Return configured ChatAnthropic instance."""
+        """Return configured ChatAnthropic instance.
+
+        Raises:
+            `ValueError`:
+                Raised when a given ``http_client`` / ``http_async_client`` follows
+                redirects beside a ``base_url``, or ``ANTHROPIC_PROXY`` is set beside one.
+            `TypeError`:
+                Raised when a given ``http_client`` / ``http_async_client`` is not the
+                SDK's httpx client type.
+        """
         self.warn_if_unknown_model()
         llm_kwargs = {"model": self.model, "block": self.kwargs.get("block") or {}}
 
@@ -203,7 +251,19 @@ class AnthropicClient(BaseLLMClient):
             if key in self.kwargs:
                 llm_kwargs[key] = self.kwargs[key]
 
-        return NormalizedChatAnthropic(**llm_kwargs)
+        given = [key for key in _HTTP_CLIENT_KWARGS if llm_kwargs.get(key) is not None]
+        llm = NormalizedChatAnthropic(**llm_kwargs)
+        if given and llm.anthropic_proxy:
+            raise ValueError(
+                f"ANTHROPIC_PROXY can't be used with {given[0]}; set the proxy on that client"
+            )
+        # Build the SDK clients now so a client of the wrong type, or one that follows
+        # redirects beside a base_url, fails here, not on the first request.
+        if "http_client" in given:
+            llm._client
+        if "http_async_client" in given:
+            llm._async_client
+        return llm
 
     def validate_model(self) -> bool:
         """Validate model for Anthropic."""

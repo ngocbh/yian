@@ -29,7 +29,6 @@ from typing import Mapping, Optional, Sequence, TypeAlias
 
 from yian.compile.model import Edge
 from yian.compile.validation import types_compatible
-from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.output_contracts import (
     combine_output_contracts,
     direct_reference_parts,
@@ -457,13 +456,11 @@ def _on_case_facts(
     inputs_view: Mapping[str, ValueContract],
     producers: Mapping[str, OutputContract],
     inputs: Mapping[str, ValueContract],
-    diagnostics: LoadDiagnostics,
 ) -> dict[str, Env]:
     """The facts each handle of an `on:` CASE over a union tag field carries.
 
-    Raises:
-        `LoadError`:
-            A `when:` value is not a tag of the union.
+    A `when:` value that is not a tag gives its handle an empty member set;
+    `check_case_when_values` reports it.
     """
     parts = _direct_ref(desc.on)
     if parts is None or len(parts) < 3:
@@ -481,26 +478,16 @@ def _on_case_facts(
         return {}
 
     tags = _tags(union, tag_field)
-    for index, case in enumerate(desc.cases):
-        value = case.get("when")
-        if value is not None and str(value) not in tags:
-            when_range = desc.when_ranges[index] if index < len(desc.when_ranges) else None
-            raise diagnostics.error(
-                f"when: {value} is not a tag of the union at "
-                f"${{{'.'.join(parts)}}} (tags: {', '.join(tags)})",
-                range=when_range or desc.range,
-            )
-
     by_handle: dict[str, list[Type]] = {}
     listed: set[str] = set()
     for case in desc.cases:
         value, then = case.get("when"), case.get("then")
         if value is None or then is None:
             continue
-        listed.add(str(value))
-        by_handle.setdefault(then, []).extend(
-            member for member in union.variants if str(value) in member.fields[tag_field].tags
-        )
+        members = by_handle.setdefault(then, [])
+        if isinstance(value, str) and value in tags:
+            listed.add(value)
+            members.extend(m for m in union.variants if value in m.fields[tag_field].tags)
     facts = {
         handle: {base: _members_fact(reference, members, False)}
         for handle, members in by_handle.items()
@@ -756,7 +743,6 @@ def compute_narrowing(
     inputs: Mapping[str, ValueContract],
     *,
     registry: TypeRegistry | None = None,
-    diagnostics: LoadDiagnostics | None = None,
 ) -> Narrowing:
     """Compute each node's narrowing facts and contract views.
 
@@ -789,22 +775,15 @@ def compute_narrowing(
         registry (`TypeRegistry`, *optional*, defaults to `None`):
             The flow's `typedefs:` registry, for `isinstance` type names. `None` knows
             only the builtin names.
-        diagnostics (`LoadDiagnostics`, *optional*, defaults to `None`):
-            Locates load errors. `None` uses an unlocated default.
 
     Returns:
         `Narrowing`:
             The environments, the views of narrowed nodes, and the unordered nodes.
 
-    Raises:
-        `LoadError`:
-            An `on:` CASE over a union tag field lists a `when:` value that is not a tag.
-
     Example:
         With `d` a `Union[Buy, Sell]` and `c` an `on: ${d.output.action}` CASE routing
         `buy` to `b`, `compute_narrowing(...).for_node("b")[0]["d"]` is a `Buy` contract.
     """
-    diagnostics = diagnostics or LoadDiagnostics()
     registry = registry or {}
     known = _known_edges(descriptors, edges)
     order = _topological_order(descriptors, known)
@@ -853,7 +832,6 @@ def compute_narrowing(
                 inputs_view,
                 producers,
                 inputs,
-                diagnostics,
             )
         elif isinstance(desc, CaseDescriptor):
             handle_facts[node_id] = _searched_case_facts(desc, producers, inputs, registry)

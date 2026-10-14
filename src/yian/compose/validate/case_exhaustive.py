@@ -12,19 +12,28 @@ Two coverage laws for `case` nodes:
   the case's narrowing view. Otherwise it is a `LoadError`. A routing-only case with no
   match runs no branch, so only enum coverage applies to it.
 
+One membership law for `on:`-form `when:` values (`check_case_when_values`): where the
+`on:` type is known, every `when:` value must be a possible member of it (compared exactly:
+no text conversion, a bool is not a number), even when the case has an `else:`. A value
+that can never equal the `on:` value is a `LoadError` naming the value, the type, and the
+fix.
+
 This lives in the validate phase (not in `CaseDescriptor.build`) because it needs the flow's
 `producers` map — each producer node's `output_contract` — which only exists after every node is
 built. `.build()` lowers the case unconditionally; the loader runs `check_case_exhaustive` in
 the validate phase, alongside the other cross-node checks.
 
 Imports flow down/peer only: `expr` (ref scan), `nodes.contracts` (the output-contract
-sum), `typesys` (Type), and the compose peers `helpers.output_contracts`/`errors`,
+sum), `typesys` (Type and the strict value check), and the compose peers
+`helpers.output_contracts`/`errors`/`typed_bindings`, `nodes.case`, `source.literals`,
 `parse.file`, and `validate.narrowing`. Nothing in the engine imports this back.
 """
 
 from __future__ import annotations
 
-from typing import Optional
+import datetime
+import math
+from typing import Any, Optional
 
 from yian.compose.helpers.output_contracts import (
     resolve_output_binding_contract,
@@ -35,9 +44,13 @@ from yian.nodes.contracts import (
     PartialRecordContract,
     ValueContract,
 )
-from yian.typesys.values import Type, canonical_type_label
-from yian.compose.helpers.errors import LoadDiagnostics
+from yian.typesys import TypeCheckError, build_value_as
+from yian.typesys.values import Type, ValueKind, canonical_type_label
+from yian.compose.helpers.errors import LoadDiagnostics, source_text
+from yian.compose.helpers.typed_bindings import yaml_quoted
+from yian.compose.nodes.case import on_match_value
 from yian.compose.parse.file import CaseDescriptor, NodeDescriptor
+from yian.compose.source.literals import parse_yaml_literal
 from yian.compose.validate.narrowing import Narrowing
 
 
@@ -89,6 +102,180 @@ def check_case_exhaustive(
         if desc.id in value_cases:
             _check_value_exhaustive(desc, case_producers, case_inputs, diagnostics)
         _check_exhaustive(desc, _on_covered(desc), case_producers, diagnostics)
+
+
+def check_case_when_values(
+    descriptors: dict[str, NodeDescriptor],
+    producers: dict[str, OutputContract],
+    flow_inputs: dict[str, ValueContract],
+    *,
+    narrowing: Narrowing | None = None,
+    diagnostics: LoadDiagnostics | None = None,
+) -> None:
+    """Reject an `on:`-form `when:` value that can never equal the `on:` value.
+
+    A `when:` value is a member of the `on:` type when the type accepts it as is: text is
+    never converted, a bool is not a number, an int fits a float, and `Literal` tags and
+    numeric bounds apply. The `on:` ref resolves against the unnarrowed producers and flow
+    inputs first, then the case's narrowed view, so a field only a branch's members have is
+    checked too. A case whose `on:` type is unknown or `object` is not checked.
+
+    Args:
+        descriptors (`dict[str, NodeDescriptor]`):
+            The level's node id -> descriptor. Non-CASE and searched CASE descriptors are
+            ignored.
+        producers (`dict[str, OutputContract]`):
+            Producer node id -> output contract.
+        flow_inputs (`dict[str, ValueContract]`):
+            Flow input name -> contract.
+        narrowing (`Narrowing | None`, *optional*, defaults to `None`):
+            Per-node narrowed views, tried when the unnarrowed `on:` type is unknown.
+        diagnostics (`LoadDiagnostics | None`, *optional*, defaults to `None`):
+            Source ownership for located errors and the authored `when:` text.
+
+    Raises:
+        `LoadError`:
+            A `when:` value can never be a member of its case's `on:` type. The error is
+            located at the first such value in source order.
+    """
+    diagnostics = diagnostics or LoadDiagnostics()
+    for desc in descriptors.values():
+        if not isinstance(desc, CaseDescriptor) or desc.on is None:
+            continue
+        typ = _resolve_on_type(desc.on, producers, flow_inputs)
+        if typ is None and narrowing is not None:
+            typ = _resolve_on_type(desc.on, *narrowing.for_node(desc.id))
+        if typ is None or typ.kind is ValueKind.OBJECT:
+            continue
+        for index, case in enumerate(desc.cases):
+            when_range = desc.when_ranges[index] if index < len(desc.when_ranges) else None
+            message = _when_value_error(
+                desc.on, case.get("when"), typ, source_text(diagnostics, when_range)
+            )
+            if message is not None:
+                raise diagnostics.error(
+                    f"case node {desc.id!r}: {message}", range=when_range or desc.range
+                )
+
+
+# The scalar kind of each `when:` value type, for "this value has the right kind but is
+# still not a member" (an out-of-bounds number, a non-tag text).
+_VALUE_KINDS: dict[type, tuple[ValueKind, ...]] = {
+    str: (ValueKind.STRING,),
+    bool: (ValueKind.BOOLEAN,),
+    int: (ValueKind.INTEGER, ValueKind.NUMBER),
+    float: (ValueKind.NUMBER,),
+    datetime.date: (ValueKind.DATE,),
+}
+
+_VALUE_PHRASES: dict[type, str] = {
+    str: "text",
+    bool: "a bool",
+    int: "an int",
+    float: "a float",
+    datetime.date: "a date",
+}
+
+
+def _when_value_error(on: str, value: Any, typ: Type, src: str | None) -> str | None:
+    """Return why one `when:` value can never equal an `on:` value of type `typ`.
+
+    Args:
+        on (`str`):
+            The case's `on:` template, as authored.
+        value (`Any`):
+            The authored `when:` value.
+        typ (`Type`):
+            The resolved `on:` type.
+        src (`str | None`):
+            The authored source text of the `when:` scalar, when known.
+
+    Returns:
+        `str | None`:
+            The message (without the `case node` prefix), or `None` when the value is a
+            member or is not a matchable scalar (the build already rejects those).
+    """
+    match = on_match_value(value)
+    if type(value) not in _VALUE_PHRASES:
+        return None
+    try:
+        build_value_as(typ, match)
+        return None
+    except TypeCheckError as exc:
+        error = exc
+    label = canonical_type_label(typ)
+    if isinstance(value, str) and typ.tags is not None:
+        tags = ", ".join(_text_shown(tag) for tag in sorted(typ.tags))
+        shown = src or _text_shown(value)
+        return f"`when: {shown}` is not a tag of `on: {on}` (`{label}`); use one of: {tags}"
+    shown = src or _shown(value, match)
+    message = f"`when: {shown}` is {_VALUE_PHRASES[type(value)]} but `on: {on}` is `{label}`"
+    if typ.kind in _VALUE_KINDS[type(value)]:
+        return f"{message} ({error})"
+    return message + _when_fix(value, typ, shown)
+
+
+def _when_fix(value: Any, typ: Type, written: str) -> str:
+    """Return the `; <fix>` suffix for a `when:` value of the wrong kind, or `""`."""
+    if not isinstance(value, str):
+        if _fits(typ, written):
+            return f"; quote it: `when: {yaml_quoted(written)}`"
+        if isinstance(value, float) and value.is_integer() and _fits(typ, int(value)):
+            return f"; write it as an int: `when: {int(value)}`"
+        return ""
+    reading = _yaml_reading(value)
+    if reading is not None and _fits(typ, reading):
+        return f"; drop the quotes: `when: {value}`"
+    return ""
+
+
+def _fits(typ: Type, value: Any) -> bool:
+    """Return whether `typ` accepts `value` as is."""
+    try:
+        build_value_as(typ, value)
+    except TypeCheckError:
+        return False
+    return True
+
+
+def _yaml_reading(text: str) -> bool | int | float | None:
+    """Return the bool or finite number `text` reads as unquoted, else `None`.
+
+    Only the values `on:` matching lowers as numbers or bools count, so a hint to drop the
+    quotes never suggests text that YAML still reads as text, `null`, a date, or a
+    non-finite number.
+    """
+    try:
+        reading = parse_yaml_literal(text)
+    except ValueError:
+        # SourceSyntaxError is a ValueError, and PyYAML raises a plain ValueError for
+        # date-shaped text that is not a date (`2026-13-01`).
+        return None
+    if isinstance(reading, (bool, int)):
+        return reading
+    if isinstance(reading, float) and math.isfinite(reading):
+        return reading
+    return None
+
+
+def _text_shown(text: str) -> str:
+    """Return `text` bare when YAML reads it back as the same text, else YAML-quoted."""
+    try:
+        reads_back = parse_yaml_literal(text) == text
+    except ValueError:
+        reads_back = False
+    return text if reads_back else yaml_quoted(text)
+
+
+def _shown(value: Any, match: Any) -> str:
+    """Return a `when:` value as YAML would spell it, for when its source text is unknown."""
+    if isinstance(value, str):
+        return _text_shown(value)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, datetime.date):
+        return match
+    return repr(value)
 
 
 def _check_value_exhaustive(

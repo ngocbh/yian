@@ -3,7 +3,9 @@
 Ints and floats compare numerically (`when: 2` matches `2.0`), a bool never equals a number
 (Python's `True == 1` is guarded with `isinstance`), quoted values and unquoted dates are
 text, and an untyped `on:` gets the same exact comparison at runtime. A non-finite number,
-a list or record, and an unquoted datetime are located load errors.
+a list or record, and an unquoted datetime are located load errors. Where the `on:` type is
+known, a `when:` value that can never be a member of it is a located load error, even next
+to an `else:`, naming the value, the type, and the fix.
 """
 
 import pytest
@@ -14,6 +16,7 @@ from yian.compose.nodes.case import _match_condition
 from yian.expr.expressions import evaluate_when_record
 from yian.run import run_flow
 from yian.typesys.types import type_for
+from yian.typesys.values import canonical_type_label
 
 
 def _line_of(text: str, needle: str) -> int:
@@ -49,11 +52,13 @@ def _flow(
     on_type: str | None = "int",
     else_: str | None = "other",
     src_code: str = 'return True if inputs["p"] == "t" else 1',
+    src_output: str | None = None,
 ) -> str:
     """Return a flow whose `route` case matches `on:` against `whens` (`(when, then)` pairs).
 
     With `on_type`, `on:` reads the flow input `n: <on_type>`; with `on_type=None` it reads an
-    untyped CODE producer `src` (no `output:`) that runs `src_code` over the input `pick`.
+    CODE producer `src` that runs `src_code` over the input `pick`, typed by `src_output`
+    (untyped when `None`).
     """
     targets = list(dict.fromkeys(then for _, then in whens))
     if else_ is not None:
@@ -71,6 +76,8 @@ def _flow(
             "    code: |\n"
             f"      {src_code}\n"
         )
+        if src_output is not None:
+            text += f"    output: {src_output}\n"
         on = "${src.output}"
     text += f"  route:\n    kind: case\n    on: {on}\n    cases:\n"
     for when, then in whens:
@@ -209,3 +216,250 @@ def test_untyped_on_compares_exactly():
     assert _route(unquoted, {"pick": "x"}) == "other"
     quoted = _flow([('"1"', "one")], on_type=None, src_code='return "1"')
     assert _route(quoted, {"pick": "x"}) == "one"
+
+
+def _when_error(text: str, when: str) -> str:
+    """Return the message of the load error `text` raises, asserting it is at `when: <when>`."""
+    error = _load_error(text)
+    assert _error_line(error) == _line_of(text, f"when: {when}")
+    return str(error)
+
+
+def test_int_when_on_str_is_a_migration_error():
+    text = _flow([("1", "one")], on_type="str")
+    assert _when_error(text, "1") == (
+        "case node 'route': `when: 1` is an int but `on: ${input.n}` is `str`; "
+        'quote it: `when: "1"`'
+    )
+
+
+def test_text_when_on_int_is_an_error():
+    text = _flow([('"1"', "one")])
+    assert _when_error(text, '"1"') == (
+        "case node 'route': `when: \"1\"` is text but `on: ${input.n}` is `int`; "
+        "drop the quotes: `when: 1`"
+    )
+
+
+def test_bool_when_on_int_is_an_error():
+    text = _flow([("true", "one")])
+    assert _when_error(text, "true") == (
+        "case node 'route': `when: true` is a bool but `on: ${input.n}` is `int`"
+    )
+
+
+def test_int_when_on_bool_is_an_error():
+    text = _flow([("1", "one")], on_type="bool")
+    assert _when_error(text, "1") == (
+        "case node 'route': `when: 1` is an int but `on: ${input.n}` is `bool`"
+    )
+
+
+def test_float_when_on_int_is_an_error():
+    text = _flow([("1.5", "one")])
+    assert _when_error(text, "1.5") == (
+        "case node 'route': `when: 1.5` is a float but `on: ${input.n}` is `int`"
+    )
+
+
+def test_out_of_bounds_int_when():
+    text = _flow([("1", "one"), ("13", "two")], on_type="int[1, 12]")
+    message = _when_error(text, "13")
+    assert message.startswith(
+        "case node 'route': `when: 13` is an int but `on: ${input.n}` is `int[1,12]` ("
+    )
+    assert message.endswith(")")
+
+
+def test_typo_next_to_else_on_a_literal_node_output():
+    text = _flow(
+        [("go", "one"), ("nogo", "two")],
+        on_type=None,
+        src_code='return "go"',
+        src_output="Literal[go, no_go]",
+    )
+    label = canonical_type_label(type_for("Literal[go, no_go]", {}))
+    assert _when_error(text, "nogo") == (
+        f"case node 'route': `when: nogo` is not a tag of `on: ${{src.output}}` (`{label}`); "
+        "use one of: go, no_go"
+    )
+
+
+def test_typo_on_a_literal_flow_input():
+    text = _flow([("a", "one"), ("c", "two")], on_type="Literal[a, b]")
+    label = canonical_type_label(type_for("Literal[a, b]", {}))
+    assert _when_error(text, "c") == (
+        f"case node 'route': `when: c` is not a tag of `on: ${{input.n}}` (`{label}`); "
+        "use one of: a, b"
+    )
+
+
+def test_int_when_on_a_literal_is_an_error():
+    text = _flow([("1", "one")], on_type="Literal[a, b]")
+    label = canonical_type_label(type_for("Literal[a, b]", {}))
+    assert _when_error(text, "1") == (
+        f"case node 'route': `when: 1` is an int but `on: ${{input.n}}` is `{label}`"
+    )
+
+
+def test_quote_fix_on_a_literal_with_a_numeric_tag():
+    text = _flow([("1", "one")], on_type='Literal["1", "2"]')
+    label = canonical_type_label(type_for('Literal["1", "2"]', {}))
+    assert _when_error(text, "1") == (
+        f"case node 'route': `when: 1` is an int but `on: ${{input.n}}` is `{label}`; "
+        'quote it: `when: "1"`'
+    )
+
+
+def test_tags_that_read_as_other_values_are_listed_quoted():
+    text = _flow([('"3"', "one")], on_type='Literal["1", "2"]')
+    label = canonical_type_label(type_for('Literal["1", "2"]', {}))
+    assert _when_error(text, '"3"') == (
+        f"case node 'route': `when: \"3\"` is not a tag of `on: ${{input.n}}` (`{label}`); "
+        'use one of: "1", "2"'
+    )
+
+
+_TEXT_ON_INT = (
+    "case node 'route': `when: \"1\"` is text but `on: ${input.%s}` is `int`; "
+    "drop the quotes: `when: 1`"
+)
+
+
+def _branch_body(name: str, output: str, value: str) -> str:
+    """Return an inline-body CODE node `name` returning `value` as `output`, indented six."""
+    return (
+        f"      {name}:\n"
+        "        kind: code\n"
+        "        code: |\n"
+        f"          return {value}\n"
+        f"        output: {output}\n"
+    )
+
+
+def test_loop_body_carried_field():
+    text = (
+        "id: f\nname: f\ninput:\n  s: int\nnodes:\n"
+        "  rep:\n"
+        "    kind: loop\n"
+        "    times: 2\n"
+        "    input:\n"
+        "      n: int = 0\n"
+        "    nodes:\n"
+        "      route:\n"
+        "        kind: case\n"
+        "        on: ${input.n}\n"
+        "        cases:\n"
+        '          - when: "1"\n'
+        "            then: one\n"
+        "        else: other\n"
+        + _branch_body("one", "int", "2")
+        + _branch_body("other", "int", "1")
+        + "    output:\n"
+        "      n: ${one.output | other.output}\n"
+        "output: ${rep.output}\n"
+    )
+    assert _when_error(text, '"1"').endswith(_TEXT_ON_INT % "n")
+
+
+def test_map_child_input():
+    text = (
+        "id: f\nname: f\ninput:\n  xs: list[int]\nnodes:\n"
+        "  each:\n"
+        "    kind: map\n"
+        "    over: ${input.xs}\n"
+        "    input:\n"
+        "      x: ${item}\n"
+        "    nodes:\n"
+        "      route:\n"
+        "        kind: case\n"
+        "        on: ${input.x}\n"
+        "        cases:\n"
+        '          - when: "1"\n'
+        "            then: one\n"
+        "        else: other\n"
+        + _branch_body("one", "str", '"one"')
+        + _branch_body("other", "str", '"other"')
+        + "    output: ${one.output | other.output}\n"
+        "output: ${each.output}\n"
+    )
+    assert _when_error(text, '"1"').endswith(_TEXT_ON_INT % "x")
+
+
+def test_unknown_on_type_is_not_checked():
+    text = _flow([("1", "one"), ('"a"', "two"), ("true", "three")], on_type=None)
+    load_flow(text)
+
+
+def test_object_on_type_is_not_checked():
+    load_flow(_flow([("1", "one")], on_type="object"))
+
+
+def test_optional_on_type_checks_the_non_null_part():
+    load_flow(_flow([("1", "one")], on_type="Optional[int]"))
+    text = _flow([('"1"', "one")], on_type="Optional[int]")
+    assert "`Optional[int]`" in _when_error(text, '"1"')
+
+
+def test_date_when_on_a_date_input():
+    text = _flow([("2026-01-02", "one"), ('"2026-01-03"', "two")], on_type="date")
+    assert _route(text, {"n": "2026-01-02"}) == "one"
+    assert _route(text, {"n": "2026-01-03"}) == "two"
+
+
+def test_bool_when_on_str_quote_fix_keeps_spelling():
+    title = _flow([("True", "one")], on_type="str")
+    assert _when_error(title, "True").endswith('; quote it: `when: "True"`')
+    lower = _flow([("true", "one")], on_type="str")
+    assert _when_error(lower, "true").endswith('; quote it: `when: "true"`')
+
+
+def test_integral_float_when_on_int():
+    text = _flow([("1.0", "one")])
+    assert _when_error(text, "1.0") == (
+        "case node 'route': `when: 1.0` is a float but `on: ${input.n}` is `int`; "
+        "write it as an int: `when: 1`"
+    )
+
+
+def test_no_drop_quotes_hint_for_text_yaml_reads_as_text():
+    text = _flow([("1e3", "one")], on_type="float")
+    try:
+        load_flow(text)
+    except LoadError as error:
+        assert "is text but `on: ${input.n}` is `float`" in str(error)
+        assert "drop the quotes: `when: 1e3`" not in str(error)
+
+
+def test_invalid_date_text_hint_does_not_crash():
+    text = _flow([('"2026-13-01"', "one")])
+    assert _when_error(text, '"2026-13-01"') == (
+        "case node 'route': `when: \"2026-13-01\"` is text but `on: ${input.n}` is `int`"
+    )
+
+
+@pytest.mark.parametrize(
+    ("when", "on_type"),
+    [('""', "Optional[int]"), ('"null"', "Optional[int]"), ('".inf"', "float")],
+)
+def test_no_drop_quotes_for_null_or_nonfinite_text(when, on_type):
+    text = _flow([(when, "one")], on_type=on_type)
+    message = _when_error(text, when)
+    assert f"`when: {when}` is text but `on: ${{input.n}}` is `{on_type}`" in message
+    assert "drop the quotes" not in message
+
+
+def test_unquoted_date_on_int_is_called_a_date():
+    text = _flow([("2026-01-02", "one")])
+    assert _when_error(text, "2026-01-02") == (
+        "case node 'route': `when: 2026-01-02` is a date but `on: ${input.n}` is `int`"
+    )
+
+
+def test_expression_on_is_typed():
+    text = _flow([('"x"', "one")]).replace("on: ${input.n}", "on: ${input.n > 1}")
+    assert _when_error(text, '"x"') == (
+        "case node 'route': `when: \"x\"` is text but `on: ${input.n > 1}` is `bool`"
+    )
+    untyped = _flow([('"2"', "one")]).replace("on: ${input.n}", "on: ${input.n + 1}")
+    load_flow(untyped)

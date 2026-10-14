@@ -364,6 +364,80 @@ def test_stop_event_set_before_prompt_completion_discards_late_answer(
     assert isinstance(_exception(outcome), CancelledError)
 
 
+def _wake_after_stop(
+    monkeypatch: pytest.MonkeyPatch, stop_seen: Event, woke_on_completion: bool
+) -> None:
+    """Make the worker's first wait return only after completion and a later stop."""
+    calls = 0
+
+    def wait(request: PromptRequest, timeout: float) -> bool:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            assert request._completed.wait(_TIMEOUT)
+            assert stop_seen.wait(_TIMEOUT)
+            return woke_on_completion
+        return request._completed.wait(_TIMEOUT)
+
+    monkeypatch.setattr(PromptRequest, "_wait", wait)
+
+
+@pytest.mark.parametrize(
+    "woke_on_completion", [True, False], ids=["completion-wake", "poll-timeout"]
+)
+def test_eof_that_closed_the_broker_outranks_a_stop_seen_later(
+    monkeypatch: pytest.MonkeyPatch, woke_on_completion: bool
+) -> None:
+    """A worker that sees the stop after its own EOF closed the broker still reports that EOF."""
+    stop_event = Event()
+    stop_seen = Event()
+    expected = EOFError("closed")
+    _wake_after_stop(monkeypatch, stop_seen, woke_on_completion)
+
+    def prompt(request: PromptRequest) -> str:
+        raise expected
+
+    broker = TerminalBroker(prompt, stop_event=stop_event)
+    worker, outcome = _ask_async(broker, question="closing prompt")
+    _wait_for_messages(broker, 1)
+    complete = broker.controller_complete()
+
+    assert broker.serve() is complete
+    # The engine sets the stop after a cancelled sibling unwinds.
+    stop_event.set()
+    stop_seen.set()
+    _join(worker)
+
+    assert _exception(outcome) is expected
+
+
+@pytest.mark.parametrize(
+    "woke_on_completion", [True, False], ids=["completion-wake", "poll-timeout"]
+)
+def test_non_eof_failure_after_a_stop_is_still_discarded(
+    monkeypatch: pytest.MonkeyPatch, woke_on_completion: bool
+) -> None:
+    """A prompt failure that did not close the broker yields to a later stop."""
+    stop_event = Event()
+    stop_seen = Event()
+    _wake_after_stop(monkeypatch, stop_seen, woke_on_completion)
+
+    def prompt(request: PromptRequest) -> str:
+        raise RuntimeError("boom")
+
+    broker = TerminalBroker(prompt, stop_event=stop_event)
+    worker, outcome = _ask_async(broker, question="failing prompt")
+    _wait_for_messages(broker, 1)
+    complete = broker.controller_complete()
+
+    assert broker.serve() is complete
+    stop_event.set()
+    stop_seen.set()
+    _join(worker)
+
+    assert isinstance(_exception(outcome), CancelledError)
+
+
 def test_stop_event_wakes_active_prompt_and_discards_its_late_answer() -> None:
     """A failed sibling wakes the main widget through its cancellation hook."""
     stop_event = Event()

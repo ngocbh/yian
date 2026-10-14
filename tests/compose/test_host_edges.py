@@ -9,14 +9,17 @@ from yian.nodes.case import ELSE_HANDLE
 
 
 def _code(node_id, **kwargs):
+    """A CODE descriptor with the given common fields."""
     return CodeDescriptor(id=node_id, code="return 1", **kwargs)
 
 
 def _nodes(*descriptors):
+    """Descriptors keyed by id, in the given order."""
     return {d.id: d for d in descriptors}
 
 
 def _route(source, target, handle, index=0):
+    """A CASE route edge from ``source`` to ``target``."""
     return Edge(id=f"{source}->{target}#{index}", from_=source, to=target, source_handle=handle)
 
 
@@ -58,6 +61,18 @@ def test_depends_on_and_runs_after_become_ordering_edges():
         Edge(id="p~>L#0", from_="p", to="L", ordering=True, optional=False),
         Edge(id="q~>L#0", from_="q", to="L", ordering=True, optional=True),
     ]
+
+
+def test_routes_come_before_depends_on_then_runs_after():
+    nodes = _nodes(
+        _code("c"),
+        _code("p"),
+        _code("q"),
+        _code("h", depends_on=["p"], runs_after=["q"]),
+        _code("L", host="h"),
+    )
+    edges = host_control_edges(nodes, [_route("c", "h", "h")])
+    assert [e.id for e in edges] == ["c->L#0", "p~>L#0", "q~>L#0"]
 
 
 def test_unknown_or_self_sources_are_skipped():

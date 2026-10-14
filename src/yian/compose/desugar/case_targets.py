@@ -134,8 +134,8 @@ def _lift_case_target(
         outer = calls[-1]
         if new_value.strip() == f"${{{outer.id}.output}}":
             for c in calls:
-                # The outer call is the route target; each inner call feeds it, so it takes
-                # the outer call's route as its host.
+                # The outer call is the route target and gets the route edge; each inner call
+                # only feeds it, so the outer call is its host and passes that route on.
                 synth[c.id] = _to_call_descriptor(
                     c,
                     host=host,

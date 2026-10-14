@@ -96,6 +96,7 @@ _MAYBE = """
 
 
 def _flow(nodes: str, output: str = "  r: ${gate.output}\n") -> str:
+    """A flow with the shared inputs and defs, ``nodes``, and ``output``."""
     return _HEAD + _DEFS + "nodes:\n" + nodes + "output:\n" + output
 
 
@@ -109,20 +110,27 @@ def _run(text: str, go: bool = False, other: bool = False, **kwargs):
 
 
 def _edge(flow, edge_id: str):
+    """The compiled edge named ``edge_id``."""
     [edge] = [e for e in flow.compiled.edges if e.id == edge_id]
     return edge
 
 
 def _never_ran(result, node_id: str) -> bool:
+    """Whether ``node_id`` was skipped and never started."""
     started = {e.node_id for e in result.events if isinstance(e, NodeStarted)}
     skipped = {e.node_id for e in result.events if isinstance(e, NodeSkipped)}
     return node_id not in started and node_id in skipped
 
 
 def _starts_after(result, first: str, then: str) -> bool:
+    """Whether ``then`` started after ``first`` succeeded."""
     events = list(result.events)
-    done = next(i for i, e in enumerate(events) if isinstance(e, NodeSucceeded) and e.node_id == first)
-    start = next(i for i, e in enumerate(events) if isinstance(e, NodeStarted) and e.node_id == then)
+    done = next(
+        i for i, e in enumerate(events) if isinstance(e, NodeSucceeded) and e.node_id == first
+    )
+    start = next(
+        i for i, e in enumerate(events) if isinstance(e, NodeStarted) and e.node_id == then
+    )
     return done < start
 
 
@@ -198,7 +206,9 @@ def test_inline_call_follows_the_else_route(go, ran):
 def test_inline_call_of_a_then_and_else_host_runs_on_both_routes(go):
     gate = _GATE.replace("else: skip_it", "else: publish")
     flow, _result = _run(_flow(gate + _PUBLISH, output="  r: ${publish.output}\n"), go=go)
-    handles = [e.source_handle for e in flow.compiled.edges if e.to == "__call_0" and e.source_handle]
+    handles = [
+        e.source_handle for e in flow.compiled.edges if e.to == "__call_0" and e.source_handle
+    ]
     assert handles == ["publish", ELSE_HANDLE]
     assert _compose_codefns.RECORDED == ["publish"]
 

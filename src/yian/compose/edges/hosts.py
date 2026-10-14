@@ -20,12 +20,19 @@ Only the loader pipeline imports this back.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from typing import NamedTuple, Optional
 
 from yian.compile.model import Edge
 from yian.compose.parse.file import NodeDescriptor
 
-# One inherited edge before it gets a target and an id: (source, handle, ordering, optional).
-_Template = tuple[str, "str | None", bool, bool]
+
+class _Gate(NamedTuple):
+    """One inherited edge before it gets a target and an id."""
+
+    source: str
+    handle: Optional[str]
+    ordering: bool
+    optional: bool
 
 
 def host_control_edges(
@@ -69,32 +76,33 @@ def host_control_edges(
         if edge.source_handle is not None:
             routes_into.setdefault(edge.to, []).append(edge)
 
-    memo: dict[str, list[_Template]] = {}
+    memo: dict[str, list[_Gate]] = {}
 
-    def host_of(node_id: str, desc: NodeDescriptor) -> str:
-        """The host id of a lifted node, checked to be a node of this level."""
-        assert desc.host is not None
-        if desc.host not in descriptors:
-            raise ValueError(f"lifted node {node_id!r} names host {desc.host!r}, which is not a node")
-        return desc.host
+    def checked_host(node_id: str, host: str) -> str:
+        """``host``, checked to be a node of this level."""
+        if host not in descriptors:
+            raise ValueError(
+                f"lifted node {node_id!r} names host {host!r}, which is not a node"
+            )
+        return host
 
-    def gating(node_id: str, chain: tuple[str, ...]) -> list[_Template]:
-        """The route and ordering templates that gate ``node_id``, inherited ones included."""
+    def gating(node_id: str, chain: tuple[str, ...]) -> list[_Gate]:
+        """The route and ordering gates of ``node_id``, inherited ones included."""
         if node_id in memo:
             return memo[node_id]
         if node_id in chain:
             raise ValueError(f"lifted-node hosts form a cycle: {' -> '.join((*chain, node_id))}")
         desc = descriptors[node_id]
-        templates: list[_Template] = [
-            (edge.from_, edge.source_handle, False, edge.optional)
+        gates = [
+            _Gate(edge.from_, edge.source_handle, False, edge.optional)
             for edge in routes_into.get(node_id, [])
         ]
-        templates += [(src, None, True, False) for src in desc.depends_on if src in descriptors]
-        templates += [(src, None, True, True) for src in desc.runs_after if src in descriptors]
+        gates += [_Gate(src, None, True, False) for src in desc.depends_on if src in descriptors]
+        gates += [_Gate(src, None, True, True) for src in desc.runs_after if src in descriptors]
         if desc.host is not None:
-            templates += gating(host_of(node_id, desc), (*chain, node_id))
-        memo[node_id] = templates
-        return templates
+            gates += gating(checked_host(node_id, desc.host), (*chain, node_id))
+        memo[node_id] = gates
+        return gates
 
     taken = {edge.id for edge in edges}
     inherited: list[Edge] = []
@@ -108,23 +116,23 @@ def host_control_edges(
                 f"lifted node {node_id!r} has its own route or ordering edges; "
                 "it may only inherit its host's"
             )
-        for source, handle, ordering, optional in gating(host_of(node_id, desc), (node_id,)):
-            if source == node_id:
+        for gate in gating(checked_host(node_id, desc.host), (node_id,)):
+            if gate.source == node_id:
                 continue
-            arrow = "~>" if ordering else "->"
+            arrow = "~>" if gate.ordering else "->"
             index = 0
-            while f"{source}{arrow}{node_id}#{index}" in taken:
+            while f"{gate.source}{arrow}{node_id}#{index}" in taken:
                 index += 1
-            edge_id = f"{source}{arrow}{node_id}#{index}"
+            edge_id = f"{gate.source}{arrow}{node_id}#{index}"
             taken.add(edge_id)
             inherited.append(
                 Edge(
                     id=edge_id,
-                    from_=source,
+                    from_=gate.source,
                     to=node_id,
-                    source_handle=handle,
-                    ordering=ordering,
-                    optional=optional,
+                    source_handle=gate.handle,
+                    ordering=gate.ordering,
+                    optional=gate.optional,
                 )
             )
     return inherited

@@ -960,9 +960,9 @@ class Node(ABC):
         Declared defaults are filled first, node-owned setup (including that every
         assertion parses) is validated, pre-asserts run against the bound record,
         ``forward`` executes, and post-asserts inspect an ``Output`` against the
-        pristine inputs. The method returns exactly
-        ``Output | Route | Grow`` or a streaming generator with one of those terminal
-        values. Narrow effects are passed only through node-owned trait gates.
+        pristine inputs. The method returns exactly ``Output | Route | Grow`` or a
+        streaming generator with one of those terminal values. Narrow effects are
+        passed only through node-owned trait gates.
 
         Direct calls preserve the original exception and traceback. The evaluator uses
         the private companion path to tag wrapper-owned binding, assertion, and body

@@ -152,6 +152,24 @@ output: ${ask.output}
     assert _line(error) == 6
 
 
+def test_adaptive_questions_mode_wins_over_an_unknown_key() -> None:
+    source = """\
+id: gate
+name: gate
+nodes:
+  ask:
+    kind: human_input
+    adaptive_questions:
+      prompt: Ask
+      bogus: 1
+      mode: plain
+output: ${ask.output}
+"""
+    error = _load_error(source)
+    assert ADAPTIVE in str(error)
+    assert "is not allowed" not in str(error)
+
+
 def test_python_agent_node_has_no_mode() -> None:
     with pytest.raises(TypeError):
         AgentNode("a", mode="plain")

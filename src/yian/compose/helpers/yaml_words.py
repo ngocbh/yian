@@ -1,7 +1,9 @@
-"""YAML 1.1 spellings that the flow loader's YAML 1.2 core rules read as plain text."""
+"""YAML 1.1 spellings that the flow loader's YAML 1.2 core rules read as plain text, and
+names for what YAML read a non-text value as."""
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Any
 
 from yian.typesys import Type, TypeCheckError, build_value_as
@@ -52,6 +54,42 @@ def former_boolean_fix(value: Any, declared: Type | None = None) -> tuple[bool, 
     if again is not None and again.path == rejected.path:
         return None
     return fix
+
+
+def yaml_read_as(value: Any) -> str:
+    """Name what YAML read a value as, for an error message about a value that must be text.
+
+    Args:
+        value (`Any`):
+            The constructed value, such as a mapping key or a field's value.
+
+    Returns:
+        `str`:
+            A phrase such as ``a boolean``, ``a date``, or ``a list``.
+
+    Example:
+        `yaml_read_as(5)` is `"an integer"`; `yaml_read_as(None)` is `"null"`.
+    """
+    # A bool is an int and a datetime is a date, so the subclasses go first.
+    if isinstance(value, bool):
+        return "a boolean"
+    if isinstance(value, int):
+        return "an integer"
+    if isinstance(value, float):
+        return "a float"
+    if isinstance(value, datetime):
+        return "a date and time"
+    if isinstance(value, date):
+        return "a date"
+    if value is None:
+        return "null"
+    if isinstance(value, bytes):
+        return "binary data"
+    if isinstance(value, list):
+        return "a list"
+    if isinstance(value, dict):
+        return "a mapping"
+    return f"a `{type(value).__name__}`"
 
 
 def _word_fix(value: Any) -> tuple[bool, str] | None:

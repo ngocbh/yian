@@ -35,7 +35,9 @@ Modules:
   - `uses`        `UsesRef` / `parse_uses_ref`: the `uses:` child-flow reference parser.
   - `yaml_words`  `former_boolean_fix`: the boolean a YAML 1.1 boolean spelling (`yes`,
                   `off`) meant, and the fix a load error shows when one reaches a `bool`
-                  that the boolean fits, at any depth of a list or record.
+                  that the boolean fits, at any depth of a list or record. `yaml_read_as`:
+                  what YAML read a non-text value as, for the non-text key, prompt, and
+                  question-text errors.
 
 The sibling `compose.source` package exclusively owns YAML parsing and its private
 source graph. Layer: `source <- helpers <- nodes <- parse <- desugar <- edges <-

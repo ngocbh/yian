@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.memory import parse_memory_declarations
 from yian.compose.helpers.types import read_variables
-from yian.compose.helpers.yaml_words import former_boolean_fix
+from yian.compose.helpers.yaml_words import former_boolean_fix, yaml_read_as
 from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from yian.compose.source import SourceCursor
 from yian.diagnostics import SourceRange
@@ -47,6 +47,30 @@ def retries_error(value: Any) -> str | None:
     if type(value) is int and value >= 0:
         return None
     return f"must be a non-negative integer, got {value!r}"
+
+
+def not_text_error(field: str, value: Any) -> str:
+    """Return the load error message for a text field whose value YAML read as non-text.
+
+    Args:
+        field (`str`):
+            The field's path as authored, such as `prompt` or `questions[0].header`.
+        value (`Any`):
+            The field's value as YAML read it.
+
+    Returns:
+        `str`:
+            The message, naming what YAML read the value as and the fix.
+
+    Example:
+        `not_text_error("prompt", 5)` is
+        ``"`prompt:` must be text, but YAML read it as an integer; put it in quotes"``;
+        `not_text_error("questions[0].header", None)` is
+        ``"`questions[0].header:` must be text, but it is empty; write the text"``.
+    """
+    if value is None:
+        return f"`{field}:` must be text, but it is empty; write the text"
+    return f"`{field}:` must be text, but YAML read it as {yaml_read_as(value)}; put it in quotes"
 
 
 def _former_boolean_hint(value: Any) -> str:
@@ -221,7 +245,13 @@ class AgentDescriptor(NodeDescriptor):
         own_range: SourceRange | None,
         diagnostics: LoadDiagnostics,
     ) -> None:
-        """Check the `system_prompt:`, `tools:`, `skills:`, `retries:`, and `steerable:` shapes and parse a present named policy."""
+        """Check the `prompt:`, `system_prompt:`, `tools:`, `skills:`, `retries:`, and `steerable:` shapes and parse a present named policy."""
+        prompt = kwargs.get("prompt")
+        if prompt is not None and not isinstance(prompt, str):
+            raise diagnostics.error(
+                f"node {node_id!r} (kind={cls.kind}): " + not_text_error("prompt", prompt),
+                range=ranges.get(("field", "prompt")) or own_range,
+            )
         if "system_prompt" in kwargs:
             system_prompt = kwargs["system_prompt"]
             if not isinstance(system_prompt, str) or not system_prompt:

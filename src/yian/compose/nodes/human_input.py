@@ -5,7 +5,9 @@ frozen `HumanInputDescriptor`. It wraps the template `parse` from `NodeDescripto
 records each field's `SourceRange`) to reject the removed `adaptive_questions.mode:` key and
 record one `("text", "questions[i]...")` range per question string, overrides the
 `_validate_fields` hook to enforce the one-of-three question-surface legality, and overrides
-`build` (which constructs the runtime `HumanInputNode` and derives the answer schema).
+`build` (which constructs the runtime `HumanInputNode` and derives the answer schema). A
+`prompt:`, an `adaptive_questions.prompt:` brief, or a literal question's `question`/`header`/
+option `label`/`description` YAML read as non-text is rejected at that value.
 `_finish` stamps only the descriptor's opaque origin onto that node and keeps concrete ranges
 on the Compose-owned `BuildResult`. Registered into `KINDS`/`BINDING_FIELDS` at import so the
 shared dispatch routes here.
@@ -21,7 +23,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 
 from yian.compose.helpers.errors import LoadDiagnostics
-from yian.compose.nodes.agent import MODE_REMOVED_FIX, retries_error
+from yian.compose.nodes.agent import MODE_REMOVED_FIX, not_text_error, retries_error
 from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from yian.compose.source import SourceAccessError, SourceCursor
 from yian.diagnostics import SourceRange
@@ -49,9 +51,11 @@ class HumanInputDescriptor(NodeDescriptor):
     Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
     the Compose-only `range`/`field_ranges` parse metadata), the `input:`/`output:` signature surface, and the
     template `parse` from `NodeDescriptor`, which it wraps to reject the removed
-    `adaptive_questions.mode:` key and to add a `("text", "questions[i]...")` range for each
-    question string to `field_ranges`. It overrides the `_validate_fields` hook (the
-    one-of-three legality, calling `super()` first for the default asserts-list check); only the
+    `adaptive_questions.mode:` key, a non-text `adaptive_questions.prompt:` brief, and a
+    non-text `question`/`header`/option `label`/`description` in a literal `questions:` list,
+    and to add a `("text", "questions[i]...")` range for each question string to
+    `field_ranges`. It overrides the `_validate_fields` hook (the one-of-three legality and a
+    text `prompt:`, calling `super()` for the default asserts-list check); only the
     human_input-specific fields are declared here.
 
     Class attrs: `kind="human_input"`; `allowed` adds `prompt`/`questions`/`adaptive_questions`,
@@ -75,16 +79,20 @@ class HumanInputDescriptor(NodeDescriptor):
 
     @classmethod
     def parse(cls, node_id: str, cursor: SourceCursor) -> "HumanInputDescriptor":
-        """Reject the removed `adaptive_questions.mode:` key, parse as usual, and range the text.
+        """Reject `adaptive_questions.mode:` and a non-text brief or question text; range the text.
 
-        On top of the template `parse`'s per-field ranges, records one
+        After the template `parse`, rejects the first `question`/`header`/option `label`/
+        `description` in a literal `questions:` list that is present but not a string, at that
+        value. On top of the template `parse`'s per-field ranges, records one
         `("text", site_label(path))` range for each string `template_sites` finds in a literal
         `questions:` list (`question`, option `label`/`description`), so a text error points at
         the string rather than the whole `questions:` block.
 
         Raises:
-            `LoadError`: The `adaptive_questions:` block authors `mode:`, or the template
-                `parse` rejects the node.
+            `LoadError`: The `adaptive_questions:` block authors `mode:`, its `prompt:` brief is
+                not text (YAML read it as a number, boolean, date, list, or mapping), the
+                template `parse` rejects the node, or a literal question's `question`,
+                `header`, option `label`, or option `description` is present but not text.
         """
         adaptive = cursor.get("adaptive_questions")
         if isinstance(adaptive, dict) and "mode" in adaptive:
@@ -93,9 +101,27 @@ class HumanInputDescriptor(NodeDescriptor):
                 f"{MODE_REMOVED_FIX}",
                 range=cursor.child("adaptive_questions").key_range_of("mode"),
             )
+        brief = adaptive.get("prompt") if isinstance(adaptive, dict) else None
+        if brief is not None and not isinstance(brief, str):
+            raise LoadDiagnostics.from_cursor(cursor).error(
+                f"node {node_id!r} (kind=human_input): "
+                + not_text_error("adaptive_questions.prompt", brief),
+                range=_range_at(cursor, ("adaptive_questions", "prompt"))
+                or cursor.key_range_of("adaptive_questions"),
+            )
         desc = super().parse(node_id, cursor)
         if not isinstance(desc.questions, list):
             return desc
+        found = _non_text_question_field(desc.questions)
+        if found is not None:
+            path, value = found
+            raise LoadDiagnostics.from_cursor(cursor).error(
+                f"node {node_id!r} (kind=human_input): "
+                + not_text_error(site_label(path), value),
+                range=_range_at(cursor, path)
+                or desc.field_ranges.get(("field", "questions"))
+                or desc.range,
+            )
         ranges: dict[tuple[str, str], SourceRange] = {}
         for path, _ in template_sites(None, desc.questions):
             rng = _range_at(cursor, path)
@@ -117,13 +143,14 @@ class HumanInputDescriptor(NodeDescriptor):
         Overrides the base hook, run by the template `parse` after the own-key loop. Reads the
         three question surfaces from `kwargs` (already populated by the loop — human_input has no
         `keyword_remap`, so the kwargs keys equal the surface keys), NOT the raw body. Runs the
-        one-of-three legality check FIRST (matching the pre-refactor precedence), then calls
-        `super()` for the default asserts-list check: exactly one of prompt/questions/
-        adaptive_questions is required, `questions` and `adaptive_questions` are mutually
-        exclusive, and an adaptive block must itself be a dict carrying its own `prompt:` (the
-        LLM brief). The "needs a question surface" error anchors on `own_range` (the node body)
-        since no question field is present to carry a range; the other two anchor on the
-        `adaptive_questions:` field range where it exists."""
+        one-of-three legality check FIRST (matching the pre-refactor precedence): exactly one of
+        prompt/questions/adaptive_questions is required, `questions` and `adaptive_questions`
+        are mutually exclusive, and an adaptive block must itself be a dict carrying its own
+        `prompt:` (the LLM brief). The "needs a question surface" error anchors on `own_range`
+        (the node body) since no question field is present to carry a range; the other two
+        anchor on the `adaptive_questions:` field range where it exists. Then it checks that a
+        present `prompt:` is text, anchored on its own field range, and finally calls `super()`
+        for the default asserts-list check."""
         # One-of-three legality: needs a question surface, `questions`/`adaptive_questions` are
         # mutually exclusive, and an adaptive block needs its own `prompt:` (the LLM brief).
         has_q = kwargs.get("questions") is not None
@@ -154,6 +181,12 @@ class HumanInputDescriptor(NodeDescriptor):
                     f"`adaptive_questions.retries:` {problem}",
                     range=ranges.get(("field", "adaptive_questions")),
                 )
+        prompt = kwargs.get("prompt")
+        if prompt is not None and not isinstance(prompt, str):
+            raise diagnostics.error(
+                f"node {node_id!r} (kind=human_input): " + not_text_error("prompt", prompt),
+                range=ranges.get(("field", "prompt")) or own_range,
+            )
         super()._validate_fields(node_id, kwargs, ranges, own_range, diagnostics)
 
     def _build_gate(self, diagnostics: LoadDiagnostics) -> HumanInputNode:
@@ -237,11 +270,45 @@ class HumanInputDescriptor(NodeDescriptor):
         return self._finish(node, wiring)
 
 
+def _non_text_question_field(questions: list) -> tuple[tuple, Any] | None:
+    """The first question text field that is present and not a `str`, as `(path, value)`.
+
+    Checks each dict question's `question` and `header`, then the `label` and `description` of
+    each dict option in a list `options`; path steps are as in `template_sites`. Other shapes
+    are left to the question validator.
+
+    Args:
+        questions (`list`):
+            The node's literal `questions:` list.
+
+    Returns:
+        `tuple[tuple, Any] | None`:
+            The offending field's key path from the node body and its value, or `None` when
+            every present text field is a `str`.
+    """
+    for i, question in enumerate(questions):
+        if not isinstance(question, dict):
+            continue
+        for key in ("question", "header"):
+            if key in question and not isinstance(question[key], str):
+                return ("questions", i, key), question[key]
+        options = question.get("options")
+        if not isinstance(options, list):
+            continue
+        for j, option in enumerate(options):
+            if not isinstance(option, dict):
+                continue
+            for key in ("label", "description"):
+                if key in option and not isinstance(option[key], str):
+                    return ("questions", i, "options", j, key), option[key]
+    return None
+
+
 def _range_at(cursor: SourceCursor, path: tuple[str | int, ...]) -> Optional[SourceRange]:
     """The `SourceRange` of the value at `path` under `cursor`, or `None` when it has none.
 
     `None` also covers a path the cursor cannot walk (e.g. past a recursive alias cut), so
-    that string's error falls back to the `questions:` range."""
+    the caller's error falls back to an enclosing range."""
     try:
         for step in path:
             cursor = cursor.child(step)

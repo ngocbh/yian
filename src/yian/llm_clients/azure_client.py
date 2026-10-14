@@ -3,7 +3,7 @@ from typing import Any, Optional
 from langchain_openai import AzureChatOpenAI
 
 from .base_client import BaseLLMClient, normalize_content
-from .config import AZURE_NEEDS_BASE_URL
+from .config import AZURE_NEEDS_BASE_URL, azure_resource_endpoint
 from .openai_client import RequestBlockMixin
 from .validators import validate_model
 
@@ -11,22 +11,6 @@ _PASSTHROUGH_KWARGS = (
     "timeout", "max_retries", "api_key", "callbacks", "http_client",
     "http_async_client",
 )
-
-
-def _base_endpoint(endpoint: str) -> str:
-    """Return the base Azure resource URL, stripping an OpenAI-v1 suffix.
-
-    Some Azure portals hand out the `…/openai/v1` (OpenAI-compatible) surface.
-    LangChain's AzureChatOpenAI appends its own `/openai/deployments/…` path,
-    so that suffix yields a 404 ("Resource not found"). Strip it back to the
-    base resource URL.
-    """
-    e = endpoint.rstrip("/")
-    for suffix in ("/openai/v1", "/openai"):
-        if e.endswith(suffix):
-            e = e[: -len(suffix)]
-            break
-    return e.rstrip("/")
 
 
 class NormalizedAzureChatOpenAI(RequestBlockMixin, AzureChatOpenAI):
@@ -70,7 +54,7 @@ class AzureOpenAIClient(BaseLLMClient):
         llm_kwargs: dict[str, Any] = {
             "model": self.model,
             "azure_deployment": self.model,
-            "azure_endpoint": _base_endpoint(self.base_url),
+            "azure_endpoint": azure_resource_endpoint(self.base_url),
         }
 
         for key in _PASSTHROUGH_KWARGS:

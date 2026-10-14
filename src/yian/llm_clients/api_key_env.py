@@ -2,7 +2,7 @@
 
 A single source of truth for which environment variable holds the API
 key for each supported LLM provider. Used by the CLI's interactive key
-prompt (cli/utils.ensure_api_key) and by anything else that needs to
+prompt (cli/utils.ensure_env_key) and by anything else that needs to
 ask "does this provider require a key, and which env var is it?".
 
 A config `api_key` (`LLMConfig.api_key`) takes precedence over these
@@ -36,9 +36,14 @@ PROVIDER_API_KEY_ENV: dict[str, Optional[str]] = {
     # Local runtimes do not authenticate.
     "ollama":     None,
     # vLLM is keyless by default but can be started with `--api-key`; the key is
-    # optional (openai_client._OPTIONAL_API_KEY sends a dummy when this is unset).
+    # optional (see OPTIONAL_API_KEY_PROVIDERS).
     "vllm":       "VLLM_API_KEY",
 }
+
+# Self-hosted runtimes whose key variable may be unset: vLLM runs keyless unless
+# its server was started with `--api-key`, so its client sends a dummy key and
+# the CLI does not ask for one.
+OPTIONAL_API_KEY_PROVIDERS: frozenset[str] = frozenset({"vllm"})
 
 
 def get_api_key_env(provider: str) -> Optional[str]:

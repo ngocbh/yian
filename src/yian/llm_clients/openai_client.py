@@ -11,7 +11,7 @@ from openai.resources.chat.completions import Completions
 from openai.resources.responses import Responses
 from pydantic import Field
 
-from .api_key_env import get_api_key_env
+from .api_key_env import OPTIONAL_API_KEY_PROVIDERS, get_api_key_env
 from .base_client import BaseLLMClient, normalize_content
 from .capabilities import get_capabilities
 from .factory import _PROVIDER_BASE_URL
@@ -253,11 +253,6 @@ _PASSTHROUGH_KWARGS = (
     "http_async_client",
 )
 
-# Self-hosted runtimes whose API key is optional: vLLM runs keyless by default
-# but can be started with `--api-key`. When its env var is unset we send a dummy
-# key (the OpenAI SDK requires some string) rather than raising.
-_OPTIONAL_API_KEY = ("vllm",)
-
 # Per-provider env var that overrides the default base URL (call-time, so tests
 # monkeypatching the env after import still take effect).
 _BASE_URL_ENV = {
@@ -313,8 +308,9 @@ class OpenAIClient(BaseLLMClient):
                 api_key = os.environ.get(api_key_env)
                 if api_key:
                     llm_kwargs["api_key"] = api_key
-                elif self.provider in _OPTIONAL_API_KEY:
-                    llm_kwargs["api_key"] = "EMPTY"  # keyless server; SDK still needs a string
+                elif self.provider in OPTIONAL_API_KEY_PROVIDERS:
+                    # A keyless server; the OpenAI SDK still needs some string.
+                    llm_kwargs["api_key"] = "EMPTY"
                 else:
                     raise ValueError(
                         f"API key for provider '{self.provider}' is not set. "

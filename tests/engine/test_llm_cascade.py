@@ -474,8 +474,8 @@ def test_effective_map_resolves_environment_defaults_once(monkeypatch):
 
 
 def test_replay_uses_logged_map_after_environment_changes(monkeypatch):
-    import yian._settings as settings
-    import yian.compile.llm_cascade as cascade_mod
+    import yian.llm_clients.connection as connection_mod
+    import yian.run as run_mod
 
     original = load_flow(_SHARED_LEAF_FLOW)
     recorded = resolve_llm_cascade(
@@ -487,23 +487,11 @@ def test_replay_uses_logged_map_after_environment_changes(monkeypatch):
     monkeypatch.setenv("YIAN_DEFAULT_PROVIDER", "anthropic")
     monkeypatch.setenv("YIAN_DEFAULT_MODEL", "changed-model")
 
-    def unexpected_settings_read():
+    def unexpected_defaults_read():
         raise AssertionError("replay must not read process LLM defaults")
 
-    monkeypatch.setattr(settings, "default_llm_provider", unexpected_settings_read)
-    monkeypatch.setattr(settings, "default_llm_model", unexpected_settings_read)
-    monkeypatch.setattr(
-        cascade_mod,
-        "default_llm_provider",
-        unexpected_settings_read,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        cascade_mod,
-        "default_llm_model",
-        unexpected_settings_read,
-        raising=False,
-    )
+    monkeypatch.setattr(run_mod, "connection_snapshot", unexpected_defaults_read)
+    monkeypatch.setattr(connection_mod, "connection_snapshot", unexpected_defaults_read)
 
     replayed = load_flow(_SHARED_LEAF_FLOW)
     left_before = replayed.compiled.nodes["left"].child.nodes["leaf_call"].child

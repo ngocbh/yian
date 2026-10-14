@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessage
 import pytest
 
 import yian.llm_clients as llm_clients
+from yian.llm_clients.connection import legacy_connection_config
 from yian.compose import load_flow
 from yian.events import NodeSucceeded
 from yian.expr.builtins import TEMPLATE_FNS
@@ -371,7 +372,7 @@ output:
         for key in ("prompt_template", "rendered_prompt", "variables", "variable_domains"):
             assert material[key] == capture.node_data[key]
         assert material["evaluation_evidence"] == _evidence_payload(occurrence.record.evidence)
-        assert config == capture.node_data["effective_llm_config"]
+        assert config == legacy_connection_config(capture.node_data["effective_llm_config"])
         seen.append(occurrence.source)
     assert len(set(seen)) == len(accepted_agents)
     with JsonlRunLog.resume(path) as log:

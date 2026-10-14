@@ -2,15 +2,18 @@
 
 These are the integration points the `llm_clients` modules point at by name:
 
-- `ensure_api_key` — the interactive key prompt referenced by
-  `llm_clients/api_key_env.py`. Called pre-flight by `yian run` (see
-  `cli/run.py`) so a missing key surfaces as an upfront prompt instead of a
-  cryptic failure on the first API call.
+- `ensure_env_key` — the interactive key prompt referenced by
+  `llm_clients/api_key_env.py`. `yian run` and `yian chat` call it pre-flight
+  (see `cli/run.py`) for agents without a saved login, so a missing key
+  surfaces as an upfront prompt instead of a cryptic failure on the first API
+  call.
+- `ensure_api_key` — resolves a provider's saved login first, then falls back
+  to `ensure_env_key`.
 - `confirm_ollama_endpoint` — referenced by `llm_clients/model_catalog.py`
   as the step that surfaces the resolved Ollama endpoint right after provider
   selection; the future provider-selection wizard is its caller.
 
-`ensure_api_key` and `confirm_ollama_endpoint` are TTY-aware: they prompt only
+`ensure_env_key` and `confirm_ollama_endpoint` are TTY-aware: they prompt only
 when attached to an interactive terminal and otherwise fall back (return the
 ambient value, or raise for a hard-missing required key) so non-interactive
 runs stay scriptable.
@@ -26,7 +29,7 @@ import sys
 from typing import Any, Optional
 
 import yian.json_codec as json_codec
-from yian.llm_clients.api_key_env import get_api_key_env
+from yian.llm_clients.api_key_env import OPTIONAL_API_KEY_PROVIDERS, get_api_key_env
 
 # Mirror of `ollama_client._DEFAULT_BASE_URL`. Duplicated (not imported) so this
 # module stays import-light — importing the ollama client pulls `langchain_ollama`
@@ -85,17 +88,59 @@ def displayable(value: Any) -> Any:
 
 
 def ensure_api_key(provider: str, *, interactive: bool = True) -> Optional[str]:
-    """Return `provider`'s API key, prompting for it interactively if it is unset.
+    """Return the key `provider`'s saved login or environment supplies, prompting if neither does.
+
+    A saved login of any provider resolves its stored credential, so it never
+    prompts. Otherwise the provider's key environment variable is checked with
+    [`ensure_env_key`][yian.cli.utils.ensure_env_key].
+
+    Args:
+        provider (`str`):
+            The LLM provider name (e.g. `"anthropic"`, `"openai"`), matched
+            case-insensitively.
+        interactive (`bool`, *optional*, defaults to `True`):
+            Whether an interactive prompt is permitted. Set `False` to force the
+            non-interactive path (return existing or raise) regardless of TTY.
+
+    Returns:
+        `Optional[str]`:
+            The resolved API key, or `None` for a saved subscription or a provider
+            that needs no key (keyless, unknown, or an optional key left unset).
+
+    Raises:
+        `AuthError`:
+            The saved login cannot be read.
+        `RuntimeError`:
+            No saved login, a required key is unset, and it cannot be prompted
+            for; see [`ensure_env_key`][yian.cli.utils.ensure_env_key].
+        `ValueError`:
+            The saved logins or default-provider environment are invalid.
+    """
+    from yian.llm_clients.auth import ApiKeyCredentials
+    from yian.llm_clients.connection import connection_credentials, connection_snapshot
+
+    name = provider.lower()
+    connection = connection_snapshot().connections.get(name)
+    if connection is not None and connection["source"] == "store":
+        credentials = connection_credentials(connection, name)
+        return credentials.api_key if isinstance(credentials, ApiKeyCredentials) else None
+    return ensure_env_key(provider, interactive=interactive)
+
+
+def ensure_env_key(provider: str, *, interactive: bool = True) -> Optional[str]:
+    """Return `provider`'s API key from its environment variable, prompting for it if unset.
 
     The env var for the key is resolved via
-    [`get_api_key_env`][yian.llm_clients.api_key_env.get_api_key_env].
-    A keyless provider (`ollama`) or an unknown one maps to no env var, so nothing
-    is checked and `None` is returned. When the env var is set its value is
-    returned unchanged. When it is unset and a TTY is attached, the user is
-    prompted (the answer is stripped and exported into the process env so downstream
-    clients read it); an empty answer is treated as a fingerslip and re-prompts, up to
-    `MAX_KEY_PROMPTS` times. With no TTY (or `interactive=False`) a required-but-missing
-    key raises rather than hanging on a prompt.
+    [`get_api_key_env`][yian.llm_clients.api_key_env.get_api_key_env]; saved
+    logins are not consulted. A keyless provider (`ollama`) or an unknown one maps
+    to no env var, so nothing is checked and `None` is returned; so does a
+    provider whose key is optional (`vllm`) when its variable is unset. When the
+    env var is set its value is returned unchanged. When it is unset and a TTY is
+    attached, the user is prompted (the answer is stripped and exported into the
+    process env so downstream clients read it); an empty answer is treated as a
+    fingerslip and re-prompts, up to `MAX_KEY_PROMPTS` times. With no TTY (or
+    `interactive=False`) a required-but-missing key raises rather than hanging on
+    a prompt.
 
     Args:
         provider (`str`):
@@ -107,8 +152,8 @@ def ensure_api_key(provider: str, *, interactive: bool = True) -> Optional[str]:
 
     Returns:
         `Optional[str]`:
-            The resolved API key, or `None` when the provider needs none (keyless
-            or unknown).
+            The resolved API key, or `None` when the provider needs none (keyless,
+            unknown, or an optional key left unset).
 
     Raises:
         `RuntimeError`:
@@ -118,24 +163,19 @@ def ensure_api_key(provider: str, *, interactive: bool = True) -> Optional[str]:
             `MAX_KEY_PROMPTS` times in a row. A single empty answer is not an
             error — it re-prompts.
     """
-    if provider.lower() == "openai":
-        from yian.llm_clients.connection import connection_credentials, connection_snapshot
-        from yian.llm_clients.auth import ApiKeyCredentials
-        connection = connection_snapshot().connections["openai"]
-        if connection["source"] == "store":
-            credentials = connection_credentials(connection)
-            return credentials.api_key if isinstance(credentials, ApiKeyCredentials) else None
     env_var = get_api_key_env(provider)
     if env_var is None:
         return None  # keyless (e.g. ollama) or unknown provider — nothing to ensure
     existing = os.environ.get(env_var)
     if existing:
         return existing
+    if provider.lower() in OPTIONAL_API_KEY_PROVIDERS:
+        return None
     if not (interactive and sys.stdin.isatty()):
         raise RuntimeError(
             f"provider {provider!r} needs an API key but ${env_var} is not set "
-            f"(set it in the environment, or run interactively to be prompted)"
-            + (". Or run 'yian auth openai' to choose a connection" if provider.lower() == "openai" else "")
+            f"(set it in the environment, or run interactively to be prompted). "
+            f"Or run 'yian auth {provider.lower()}' to save a login"
         )
     import questionary
 

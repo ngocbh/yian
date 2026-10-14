@@ -415,6 +415,10 @@ mirrors:
 
 ::: yian.llm_clients.model_from_config
 
+There is no built-in provider or model. An `LLMConfig` that leaves them unset takes
+`YIAN_DEFAULT_PROVIDER`/`YIAN_DEFAULT_MODEL`, then the login saved by `yian auth`;
+with neither, `model_from_config` raises `ValueError` ("No model is set; ...").
+
 ::: yian.llm_clients.create_llm_client
 
 ::: yian.llm_clients.BaseLLMClient
@@ -422,13 +426,6 @@ mirrors:
 ::: yian.llm_clients.list_models
 
 ::: yian.llm_clients.ModelListError
-
-The provider/model defaults used when an `LLMConfig` leaves them unset are read
-from the environment.
-
-::: yian._settings.default_llm_provider
-
-::: yian._settings.default_llm_model
 
 ## Observer events
 

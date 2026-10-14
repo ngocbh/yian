@@ -98,25 +98,29 @@ class LLMConfig(BaseModel):
     """
     LLM selection for an AGENT node.
 
-    Every field is optional: an unset `provider`/`model` falls back to the package's
-    snapshotted provider defaults, and only the block named by the selected provider is
-    sent. `extra="forbid"` makes a mistyped `llm_config:` key loud at load time, and a
-    retired key (`temperature`, `anthropic_effort`, ...) fails with its new form (see
-    `retired_key_error`). Validation errors never echo the input values, so a rejected
-    config cannot leak `api_key`.
+    Every field is optional: an unset `provider`/`model` comes from
+    `YIAN_DEFAULT_PROVIDER`/`YIAN_DEFAULT_MODEL`, then the login saved by `yian auth`;
+    with neither, building the model fails, since no provider or model is built in.
+    Only the block named by the selected provider is sent. `extra="forbid"` makes a
+    mistyped `llm_config:` key loud at load time, and a retired key (`temperature`,
+    `anthropic_effort`, ...) fails with its new form (see `retired_key_error`).
+    Validation errors never echo the input values, so a rejected config cannot leak
+    `api_key`.
 
     Attributes:
         provider (`str`, *optional*, defaults to `None`):
             One of `openai`, `xai`, `deepseek`, `qwen`, `qwen-cn`, `glm`, `glm-cn`,
             `minimax`, `minimax-cn`, `openrouter`, `vllm`, `ollama`, `anthropic`,
-            `google`, or `azure`. `None` inherits the global default provider.
+            `google`, or `azure`. `None` takes `YIAN_DEFAULT_PROVIDER`, else the saved
+            default provider.
         model (`str`, *optional*, defaults to `None`):
-            Provider-specific model id. `None` inherits that provider's default model.
+            Provider-specific model id. `None` takes that provider's default:
+            `YIAN_DEFAULT_MODEL` for the default provider, else its saved model.
         api_key (`SecretStr`, *optional*, defaults to `None`):
             Provider API key supplied by the host. It takes precedence over the provider's
-            key environment variable and saved OpenAI connection. It is masked in `repr`
+            saved login and key environment variable. It is masked in `repr`
             and left out of every `model_dump`; read it with `api_key.get_secret_value()`.
-            `None` keeps the environment or saved-connection key. An empty key is
+            `None` keeps the saved-login or environment key. An empty key is
             rejected, since some clients would treat it as unset and read the environment.
         base_url (`str`, *optional*, defaults to `None`):
             API endpoint that replaces the provider's default, such as an Azure OpenAI
@@ -422,6 +426,28 @@ def validate_base_url(value: Any) -> str:
             "127.0.0.1, and ::1"
         )
     return value
+
+
+def azure_resource_endpoint(url: str) -> str:
+    """Return the base Azure resource URL, stripping an OpenAI-v1 suffix.
+
+    Some Azure portals hand out the ``…/openai/v1`` (OpenAI-compatible) surface.
+    LangChain's AzureChatOpenAI appends its own ``/openai/deployments/…`` path,
+    so that suffix yields a 404 ("Resource not found"). Strip it back to the
+    base resource URL.
+
+    Args:
+        url (`str`): An Azure endpoint, with or without the suffix.
+
+    Returns:
+        `str`: The resource URL without a trailing slash.
+    """
+    base = url.rstrip("/")
+    for suffix in ("/openai/v1", "/openai"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    return base.rstrip("/")
 
 
 # Fields only the host's run layer may set. Authored layers reach the recorded

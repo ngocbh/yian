@@ -1,8 +1,10 @@
 """Resolve and replay effective LLM configuration over the static call tree.
 
 Resolution is a compile-layer operation: callers provide both the outermost authored
-layer and explicit process defaults.  The resulting map is therefore complete and can
-be recorded and replayed without consulting process settings again.
+layer and the host's defaults, which may be empty; there is no built-in provider or
+model.  An agent that no layer gives a provider and model fails, naming its static
+path.  The resulting map is therefore complete and can be recorded and replayed
+without consulting process settings again.
 
 Static paths join local author node ids with ``/``.  The Compose parser reserves that
 separator in node ids, so paths such as ``review/summarize/model`` are unambiguous.  A
@@ -10,8 +12,8 @@ child flow is deep-copied at every CALL/MAP/LOOP callsite before either resoluti
 replay.  A root-level copy alone preserves aliases between shared descendant defs and
 would let one parent's cascade overwrite another's.
 
-Layer: compile — imports nodes and LLM configuration primitives; never runtime or
-``_settings``. Defaults are injected by the host.
+Layer: compile — imports nodes and LLM configuration primitives; never runtime.
+Defaults are injected by the host.
 """
 
 from __future__ import annotations
@@ -30,7 +32,11 @@ from yian.llm_clients.config import (
     retired_key_error,
     validate_base_url,
 )
-from yian.llm_clients.connection import HOST_KEY_MARKER, validate_connection
+from yian.llm_clients.connection import (
+    HOST_KEY_MARKER,
+    missing_model_message,
+    validate_connection,
+)
 from yian.nodes.agent import AgentNode
 
 _REQUIRED_SELECTION_FIELDS = ("provider", "model")
@@ -42,12 +48,14 @@ def resolve_llm_cascade(
     *,
     defaults: dict[str, Any],
     provider_models: dict[str, str] | None = None,
+    stray_model: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """Bake and return every AGENT node's complete effective configuration.
 
     The normal precedence is node, current flow, enclosing flows, caller layer, then
     ``defaults``. An AGENT node with ``llm_inherit=False`` skips the flow/enclosing/caller
-    layers but still receives explicit defaults so its provider and model are concrete.
+    layers but still receives the defaults. An unset model comes from
+    ``provider_models`` for the agent's provider.
     Every returned value and every node-owned value is an independent deep copy.
 
     Args:
@@ -57,11 +65,14 @@ def resolve_llm_cascade(
             The outermost gap-fill layer.  At the root this is the CLI/host layer; in a
             child it is the already-accumulated enclosing flow layer.
         defaults (`dict[str, Any]`):
-            Explicit lowest-precedence process defaults. Must supply ``provider``;
-            ``model`` is a fallback only for that provider. No environment is read.
+            Lowest-precedence host defaults, possibly empty. ``model`` applies only
+            to the default ``provider``. No environment is read.
         provider_models (`dict[str, str] | None`):
-            Matching fallback models for other providers. An authored model still
-            wins per field; a provider with no matching fallback needs an explicit model.
+            Saved models by provider. An authored model still wins per field; a
+            provider with no saved model needs an authored one.
+        stray_model (`bool`, *optional*, defaults to `False`):
+            Whether ``YIAN_DEFAULT_MODEL`` was set without a default provider; an
+            agent missing its provider or model then says so.
 
     Returns:
         `dict[str, dict[str, Any]]`:
@@ -69,14 +80,13 @@ def resolve_llm_cascade(
 
     Raises:
         `ValueError`:
-            If a provider or model selection is invalid.
+            If a provider or model selection is invalid, or an agent has no
+            provider or model.
     """
     _validate_layer(parent_config)
     _validate_layer(defaults)
-    if not isinstance(defaults.get("provider"), str) or not defaults["provider"]:
-        raise ValueError("defaults lacks concrete provider")
     models = dict(provider_models or {})
-    if defaults.get("model"):
+    if defaults.get("provider") and defaults.get("model"):
         models.setdefault(defaults["provider"], defaults["model"])
     effective: dict[str, dict[str, Any]] = {}
     _resolve_flow(
@@ -84,6 +94,7 @@ def resolve_llm_cascade(
         copy.deepcopy(parent_config),
         defaults=copy.deepcopy(defaults),
         provider_models=models,
+        stray_model=stray_model,
         path=(),
         effective=effective,
     )
@@ -144,6 +155,7 @@ def _resolve_flow(
     *,
     defaults: dict[str, Any],
     provider_models: dict[str, str],
+    stray_model: bool,
     path: tuple[str, ...],
     effective: dict[str, dict[str, Any]],
 ) -> None:
@@ -162,12 +174,22 @@ def _resolve_flow(
             base = {} if not node.llm_inherit else flow_layer
             authored = merge_llm_config(copy.deepcopy(node.own_llm_config), base)
             config = merge_llm_config(authored, {key: value for key, value in defaults.items() if key != "model"})
-            if not authored.get("model"):
-                config["model"] = provider_models.get(config["provider"])
-                if not config["model"]:
-                    raise ValueError(f"Provider {config['provider']!r} needs an explicit model; set llm_config.model or --model")
             path_key = _path_key(node_path)
-            _require_concrete_selection(config, path=path_key, label=_agent_label(node, path))
+            label = _agent_label(node, path)
+            provider = config.get("provider")
+            if not provider:
+                raise ValueError(
+                    missing_model_message(path_key, None, stray_model=stray_model, label=label)
+                )
+            if not authored.get("model"):
+                config["model"] = provider_models.get(provider)
+                if not config["model"]:
+                    raise ValueError(
+                        missing_model_message(
+                            path_key, provider, stray_model=stray_model, label=label
+                        )
+                    )
+            _require_concrete_selection(config, path=path_key, label=label)
             node.llm_config = copy.deepcopy(config)
             effective[path_key] = copy.deepcopy(config)
 
@@ -181,6 +203,7 @@ def _resolve_flow(
                 flow_layer,
                 defaults=defaults,
                 provider_models=provider_models,
+                stray_model=stray_model,
                 path=node_path,
                 effective=effective,
             )
@@ -376,6 +399,4 @@ def _validate_layer(config: dict[str, Any]) -> None:
             f"(allowed: {', '.join(sorted(LLM_CONFIG_KEYS))})"
         )
     if "_connection" in config:
-        if config.get("provider") != "openai":
-            raise ValueError("Internal connection metadata requires provider openai")
-        validate_connection(config["_connection"])
+        validate_connection(config["_connection"], config.get("provider"))

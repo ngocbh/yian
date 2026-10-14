@@ -61,7 +61,6 @@ memory_host.py build_memories/MemoryRegistry: host-side construction of declared
 llm_clients/  provider clients, authentication, LLMConfig, model_from_config, model listing
 tools/        tool registry + per-run ToolSet (run tools and the ask_user handler)
 cli/          `yian` commands + main-thread terminal broker
-_settings.py  environment-based default provider/model
 ```
 
 The main import direction is acyclic: `diagnostics` is the lowest
@@ -183,19 +182,29 @@ selects this transport for saved subscription authentication;
 API-key authentication uses the same Yian model/tool/memory pipeline.
 
 `llm_clients/auth/` owns staged login, private atomic credential storage, token
-refresh, and authenticated model discovery. `yian auth openai` activates credentials
-and the provider/model default together. `llm_clients/connection.py` snapshots
-nonsecret method, credential identity, endpoint, and store location into the
-effective model map. Request-time callbacks resolve credentials and refresh
-tokens for that identity. Reconnection or a changed environment key fails a
-pinned request rather than changing its account or billing method.
+refresh, and authenticated model discovery. The store keeps one login per
+provider (an API key, the OpenAI subscription, or no credential; Azure also its
+endpoint) and an optional default provider. `yian auth <provider>` saves a
+provider's credential and model together, and `--default` and `--remove` change
+the default or delete a login. `llm_clients/connection.py` records a `_connection`
+on every agent of a keyed provider (all but Ollama): a `store` connection pins
+the saved login by method, credential identity, endpoint, and store location; an
+`environment` connection names the provider's key variable, read when the model is
+built (OpenAI also records the key's hash). OpenAI request-time callbacks resolve
+credentials and refresh tokens for that identity; other providers resolve the
+saved key once per model build. Reconnection, removal, or a changed OpenAI
+environment key fails a pinned request rather than changing its account or
+billing method.
 
-The fresh-run host reads environment and saved defaults once. Model defaults
-are provider-scoped, with environment overrides above saved choices; explicit
-authored fields retain their existing per-field precedence. Recovery and
-backward calls retain the recorded connection. OpenAI records predating this
-metadata retain their environment API-key semantics, never today's subscription
-selection. Connection metadata is internal and is not an authored YAML field.
+There is no built-in provider or model. The fresh-run host reads environment and
+saved defaults once. Model defaults are provider-scoped, with environment
+overrides above saved choices; explicit authored fields retain their existing
+per-field precedence. An agent that no layer gives a provider and model fails
+the run before the log is created, naming its static path. Recovery and backward
+calls retain the recorded connection. OpenAI records predating this metadata
+retain their environment API-key semantics, never today's subscription
+selection, and older records of other providers replay with their environment
+key. Connection metadata is internal and is not an authored YAML field.
 
 `LLMConfig.api_key` is a `SecretStr` excluded from every dump, and `LLMConfig`
 validation errors hide input values. Clients use it before the provider's key

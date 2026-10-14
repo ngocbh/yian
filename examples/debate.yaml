@@ -8,10 +8,11 @@
 # are always argued before a verdict — an improvising agent might skip one; this
 # structure can't. There is no `edges:` block: the graph is inferred from `${...}`.
 #
-# All four AGENT nodes use the connected default model.
+# All four AGENT nodes use the default provider and model: the one saved by
+# `yian auth <provider>`, or YIAN_DEFAULT_PROVIDER/YIAN_DEFAULT_MODEL.
 #
 # Run it with:
-#   yian auth openai
+#   yian auth openai          # or any provider, e.g. yian auth anthropic --model ...
 #   yian run examples/debate.yaml \
 #     --input question="Should a small team adopt a monorepo?"
 

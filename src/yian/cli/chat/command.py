@@ -177,7 +177,8 @@ def chat(
     # Load and preflight once, mirroring `yian run` — both failure modes surface as a clean
     # stderr error + exit 1, never a raw traceback:
     #   - a malformed flow raises LoadError (a ValueError) -> a located `.yaml` source frame;
-    #   - a missing key with no TTY raises RuntimeError    -> a red key message.
+    #   - a missing key with no TTY raises RuntimeError    -> a red key message;
+    #   - an agent with no provider or model raises ValueError -> a red message naming it.
     try:
         loaded = load_flow(text, search_paths=search, source_label=path.name)
     except LoadError as err:
@@ -185,7 +186,7 @@ def chat(
         raise typer.Exit(code=1)
     try:
         _ensure_provider_keys(loaded, cli_cfg)
-    except RuntimeError as exc:
+    except (RuntimeError, ValueError) as exc:
         err_console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
 

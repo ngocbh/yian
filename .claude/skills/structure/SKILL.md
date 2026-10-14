@@ -201,7 +201,8 @@ host settings. It owns immutable credential/selection carriers, provider login
 and refresh protocols, and private atomic storage. It imports no model SDK,
 CLI, node, memory, compiler, or runtime module. Callers inject presentation and
 HTTP effects; only the CLI prompts, and only an explicit save activates staged
-credentials and the provider/model default. Refresh preserves the selected
+credentials and the provider's model; it becomes the default provider only when
+none is saved. Refresh preserves the selected
 connection identity. Keep tokens out of model configuration and history.
 `llm_clients/connection.py` combines saved selections with environment defaults
 and supplies pinned request-time credential callbacks. The run host owns the

@@ -7,6 +7,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 import pytest
 
 import yian.llm_clients as llm_clients
+from yian.llm_clients.connection import legacy_connection_config
 from yian.nodes.agent import AgentNode
 from yian.nodes.base import BackwardContext, BackwardResult, validate_backward_result
 from tests.engine.test_agent import _FakeChat
@@ -162,7 +163,8 @@ def test_agent_backward_uses_recorded_model_and_no_tools(monkeypatch):
     result = node.backward(context, feedback)
     assert result == expected
     validate_backward_result(result, context)
-    assert configs == [context.node_data["effective_llm_config"]]
+    # A record without a connection replays on its provider's key variable.
+    assert configs == [legacy_connection_config(context.node_data["effective_llm_config"])]
     assert chat.calls == 1 and chat.bound_tools is None
     assert [type(message) for message in chat.messages[0]] == [SystemMessage, HumanMessage]
     prompt = json.loads(chat.messages[0][1].content)

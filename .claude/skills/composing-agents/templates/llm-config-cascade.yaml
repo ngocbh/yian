@@ -3,7 +3,8 @@
 # A flow-level `llm_config:` sets defaults for every AGENT node below it. Each AGENT node
 # fills only the fields it leaves unset from the flow layer (then the parent flow, then the CLI
 # `--provider`/`--model`, then process provider/model defaults captured once when the run
-# initializes). An AGENT node's own field always wins. `inherit: false` skips the authored
+# initializes: YIAN_DEFAULT_PROVIDER/YIAN_DEFAULT_MODEL, then the `yian auth` saved login;
+# none is built in). An AGENT node's own field always wins. `inherit: false` skips the authored
 # flow/parent/CLI layers but still receives those process defaults.
 #
 # Request settings live in a block named after the provider (`anthropic:` below), shaped

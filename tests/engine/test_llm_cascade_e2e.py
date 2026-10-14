@@ -8,6 +8,15 @@ from yian.compose.loader import load_flow
 from yian.run import run_flow
 from yian.llm_clients.connection import resolve_model_config
 
+# With no saved anthropic login, the agent reads ANTHROPIC_API_KEY.
+_ENVIRONMENT = {
+    "method": "api_key",
+    "source": "environment",
+    "credential_id": None,
+    "endpoint": None,
+    "store_path": None,
+}
+
 # Top flow sets provider and an anthropic temperature; calls `sub`. Inside `sub`, `inner`
 # overrides only `model` (so it fills provider and its anthropic block from the flow and the
 # CLI fields, merged per block field), while
@@ -62,6 +71,7 @@ def test_cascade_end_to_end_with_cli_layer(monkeypatch):
         "model": "claude-opus-4-8",
         "provider": "anthropic",
         "anthropic": {"temperature": 0.2, "output_config": {"effort": "low"}},
+        "_connection": _ENVIRONMENT,
     }
     # solo: inherit:false — own complete selection, no authored flow/CLI layers
     assert by_model["gpt-5.5"] == resolve_model_config({"provider": "openai", "model": "gpt-5.5"})

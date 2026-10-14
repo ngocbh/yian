@@ -250,20 +250,22 @@ def _supports_native_structured(llm_config: Any) -> bool:
     """Whether the node's effective `(provider, model)` can use native structured output.
 
     Reads `provider`/`model` off the effective config (a plain dict on the run path, or an
-    `LLMConfig` in some unit harnesses); an unset field falls back to the package env defaults
-    (the same source `model_from_config` uses), so the gate matches the model the node actually
+    `LLMConfig` in some unit harnesses); when either is unset, both resolve as
+    `model_from_config` resolves them, so the gate matches the model the node actually
     built. Delegates the decision to the capability catalog.
     """
-    from yian._settings import default_llm_model, default_llm_provider
     from yian.llm_clients.capabilities import supports_native_structured
+    from yian.llm_clients.connection import resolve_model_config
 
     def _get(key: str) -> Any:
         if isinstance(llm_config, dict):
             return llm_config.get(key)
         return getattr(llm_config, key, None)
 
-    provider = _get("provider") or default_llm_provider()
-    model = _get("model") or default_llm_model(provider)
+    provider, model = _get("provider"), _get("model")
+    if not provider or not model:
+        resolved = resolve_model_config(llm_config or {})
+        provider, model = resolved["provider"], resolved["model"]
     connection = _get("_connection")
     if connection is not None and connection.get("method") == "subscription":
         return True

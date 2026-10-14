@@ -329,10 +329,11 @@ def test_provider_change_requires_reset_then_starts_fresh(monkeypatch):
 def test_compatibility_matches_factory_defaults_and_config_carriers(monkeypatch):
     from yian.nodes.agent import memory as conversation
     from yian.llm_clients import LLMConfig
-    monkeypatch.setattr(conversation, "default_llm_provider", lambda: "OpenAI")
+    monkeypatch.setenv("YIAN_DEFAULT_PROVIDER", "OpenAI")
     expected = {"provider": "openai", "message_format": conversation.MESSAGE_FORMAT}
     assert conversation.compatibility(None) == expected
     assert conversation.compatibility(LLMConfig()) == expected
+    assert conversation.compatibility(LLMConfig(provider="openai")) == expected
     assert conversation.compatibility({"provider": "OpenAI", "model": "other", "api_key": "not-retained"}) == expected
 
 

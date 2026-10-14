@@ -27,11 +27,14 @@ _LIMIT = 1024 * 1024
 
 
 class AuthStore:
-    """Persist one active connection per provider in an owner-only POSIX file.
+    """Persist one saved login per provider, with an optional default, privately.
 
-    Reading a missing store never creates a directory or lock file. Selection
-    and credentials are committed together by ``save`` after host validation.
-    Refresh reloads under the same lock and cannot replace a newer connection.
+    A login holds an API key, a subscription, or no credential; an Azure login
+    also holds its endpoint. Reading a missing store never creates a directory
+    or lock file. Selection and credentials are committed together by ``save``
+    after host validation; ``remove`` and ``set_default`` change a saved store
+    and never create one. Refresh reloads under the same lock and cannot
+    replace a newer connection.
     """
 
     def __init__(
@@ -156,7 +159,7 @@ class AuthStore:
                 raise ValueError
             providers = {}
             for provider, entry in value["providers"].items():
-                if type(entry) is not dict or set(entry) != {
+                if type(entry) is not dict or set(entry) - {"endpoint"} != {
                     "method",
                     "model",
                     "credential_id",
@@ -164,14 +167,25 @@ class AuthStore:
                 }:
                     raise ValueError
                 selection = ProviderSelection(
-                    provider, entry["method"], entry["model"], entry["credential_id"]
+                    provider,
+                    entry["method"],
+                    entry["model"],
+                    entry["credential_id"],
+                    entry.get("endpoint"),
                 )
-                kind = (
-                    ApiKeyCredentials
-                    if selection.method == "api_key"
-                    else OAuthCredentials
-                )
-                credentials = kind(**entry["credentials"])
+                if selection.method == "none":
+                    if entry["credentials"] is not None:
+                        raise ValueError
+                    credentials = None
+                else:
+                    if type(entry["credentials"]) is not dict:
+                        raise ValueError
+                    kind = (
+                        ApiKeyCredentials
+                        if selection.method == "api_key"
+                        else OAuthCredentials
+                    )
+                    credentials = kind(**entry["credentials"])
                 providers[provider] = (selection, credentials)
             default = value["default_provider"]
             if default is not None and (
@@ -193,7 +207,12 @@ class AuthStore:
                     "method": selection.method,
                     "model": selection.model,
                     "credential_id": selection.credential_id,
-                    "credentials": asdict(credentials),
+                    "credentials": None if credentials is None else asdict(credentials),
+                    **(
+                        {}
+                        if selection.endpoint is None
+                        else {"endpoint": selection.endpoint}
+                    ),
                 }
                 for provider, (selection, credentials) in providers.items()
             },
@@ -242,16 +261,36 @@ class AuthStore:
     def save(
         self,
         provider: str,
-        credentials: Credentials,
+        credentials: Credentials | None,
         model: str,
         *,
+        endpoint: str | None = None,
         make_default: bool = True,
     ) -> ProviderSelection:
-        """Atomically reconnect a provider and optionally make it the default."""
-        if type(credentials) not in (ApiKeyCredentials, OAuthCredentials):
+        """Atomically reconnect a provider and optionally make it the default.
+
+        Args:
+            provider (str): Provider name to save the login under.
+            credentials (Credentials | None): The validated credential, or
+                ``None`` for a provider that needs none.
+            model (str): Model to select for the provider.
+            endpoint (str | None): Provider base URL, such as an Azure resource.
+            make_default (bool): Whether the provider becomes the default.
+
+        Returns:
+            ProviderSelection: The saved selection with a new credential id.
+
+        Raises:
+            AuthError: If the values are invalid or storage cannot be written.
+        """
+        if credentials is not None and type(credentials) not in (
+            ApiKeyCredentials,
+            OAuthCredentials,
+        ):
             raise AuthError("Unsupported credential type")
+        method = "none" if credentials is None else credentials.method
         selection = ProviderSelection(
-            provider, credentials.method, model, secrets.token_hex(16)
+            provider, method, model, secrets.token_hex(16), endpoint
         )
         self._check_stopped()
         with self._directory(create=True) as directory:
@@ -260,6 +299,48 @@ class AuthStore:
                 providers[provider] = (selection, credentials)
                 self._write(directory, provider if make_default else default, providers)
         return selection
+
+    def _update(self, provider: str, remove: bool) -> None:
+        missing = AuthError(
+            f"There is no saved {provider} login; run 'yian auth' to list them"
+        )
+        self._check_stopped()
+        with self._directory() as directory:
+            if directory is None:
+                raise missing
+            with self._locked(directory):
+                default, providers = self._load(directory)
+                if provider not in providers:
+                    raise missing
+                if remove:
+                    del providers[provider]
+                    if default == provider:
+                        default = None
+                else:
+                    default = provider
+                self._write(directory, default, providers)
+
+    def remove(self, provider: str) -> None:
+        """Delete a provider's saved login, clearing the default if it names it.
+
+        Args:
+            provider (str): Saved provider name, supported or not.
+
+        Raises:
+            AuthError: If the provider has no saved login or storage fails.
+        """
+        self._update(provider, remove=True)
+
+    def set_default(self, provider: str) -> None:
+        """Make a saved provider the default.
+
+        Args:
+            provider (str): Saved provider name.
+
+        Raises:
+            AuthError: If the provider has no saved login or storage fails.
+        """
+        self._update(provider, remove=False)
 
     def credentials(
         self,
@@ -286,6 +367,8 @@ class AuthStore:
         with self._directory() as directory:
             _, providers = self._load(directory)
             _, credentials = resolve(providers)
+            if credentials is None:
+                raise AuthError(f"{provider} has no saved credential")
             if fresh(credentials):
                 return credentials
             with self._locked(directory):

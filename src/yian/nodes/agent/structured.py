@@ -30,7 +30,16 @@ from typing import Annotated, Any, Callable, List, Literal, Optional, Union
 from uuid import uuid4
 
 from langchain_core.messages import HumanMessage
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    StrictStr,
+    ValidationError,
+    create_model,
+)
 
 import yian.json_codec as json_codec
 from yian.memory.contracts import (
@@ -61,15 +70,27 @@ _SCALAR_PY: dict[ValueKind, type] = {
     ValueKind.DATETIME: str,
 }
 
+# Any non-null JSON value. Strict scalars keep pydantic's smart-mode union from turning
+# `True` into 1 or "3" into 3; a reply is stored as given.
+_ANY_PY = Union[
+    StrictBool,
+    StrictInt,
+    Annotated[float, Field(allow_inf_nan=False)],
+    StrictStr,
+    dict[str, Any],
+    list[Any],
+]
+
 
 def _py_type(typ: Type, *, closed: bool = False, position: str = "") -> Any:
     """The python annotation for a value of `typ` as a pydantic field type.
 
     A `STRING` with `tags` is a `Literal[...]` variant; a nested `OBJECT` with `fields`
     becomes its own submodel; a union becomes a plain `Union[...]` of closed member models
-    in member order; a `LIST_*` becomes `list[<element type>]`. A nullable `typ` is
-    `Optional[...]` wherever it appears. Nested models are named after their position
-    (see `_member_names`), so every `$defs` key stays readable.
+    in member order; a `LIST_*` becomes `list[<element type>]`; `Any` becomes a union of
+    the JSON types (`_ANY_PY`). A nullable `typ` is `Optional[...]` wherever it appears.
+    Nested models are named after their position (see `_member_names`), so every `$defs`
+    key stays readable.
 
     Args:
         typ (`Type`):
@@ -95,6 +116,8 @@ def _py_type(typ: Type, *, closed: bool = False, position: str = "") -> Any:
 def _non_null_py_type(typ: Type, *, closed: bool, position: str) -> Any:
     """`_py_type` without the nullable widening."""
     seg = typ.kind
+    if seg == ValueKind.ANY:
+        return _ANY_PY
     if seg == ValueKind.STRING and typ.tags:
         return Literal[tuple(sorted(typ.tags))]  # type: ignore[valid-type]
     if seg in _SCALAR_PY:
@@ -751,6 +774,8 @@ def _select_error(
     """Pick the error to report and drop the union member segments from its location.
 
     Outside unions this is the first error. At a union position see `_select_member_error`.
+    At an `Any` position the error is that position itself: pydantic names the JSON type
+    each member of the value union expects, which is not a contract path.
 
     Args:
         errors (`list[tuple[tuple[str | int, ...], Any]]`):
@@ -765,6 +790,8 @@ def _select_error(
         `tuple[tuple[str | int, ...], Any]`:
             The contract-relative location and the error type of the chosen error.
     """
+    if typ.kind == ValueKind.ANY:
+        return (), errors[0][1]
     if typ.variants is not None:
         return _select_member_error(errors, typ, position)
     location = errors[0][0]

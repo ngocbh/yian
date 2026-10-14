@@ -1816,3 +1816,60 @@ def test_ensure_cwd_importable_prepends_cwd(monkeypatch, tmp_path):
     assert sys.path[0] == str(tmp_path)
     cli._ensure_cwd_importable()                      # idempotent: no duplicate entry
     assert sys.path.count(str(tmp_path)) == 1
+
+
+_ANY_INPUT_FLOW = """
+id: echo
+name: echo
+input:
+  x: !Any
+nodes:
+  keep:
+    kind: code
+    input:
+      x: ${input.x}
+    code: |
+      return inputs["x"]
+    output: Any
+output: ${keep.output}
+"""
+
+
+def test_any_input_from_the_command_line_reaches_the_flow_as_text():
+    result = run_flow(load_flow(_ANY_INPUT_FLOW), _parse_kv(["x=3"]))
+    assert result.status == "succeeded", result.failure
+    assert result.output == "3"
+
+
+@pytest.mark.parametrize("required", [True, False])
+def test_any_prompt_uses_the_scalar_text_editor_without_set_null(monkeypatch, required):
+    fake = _FakeQuestionary({"value": "3"})
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+
+    gathered = _gather_missing_inputs(
+        [_parameter("value", Type.scalar(ValueKind.ANY), required=required)],
+        {},
+        prompt_available=True,
+    )
+
+    assert gathered == {"value": "3"}
+    assert [(call.kind, call.instruction) for call in fake.calls] == [("text", None)]
+
+
+def test_optional_any_prompt_offers_set_null(monkeypatch):
+    fake = _FakeQuestionary({"value": _SelectTitle("Set null")})
+    monkeypatch.setitem(sys.modules, "questionary", fake)
+    _sink(monkeypatch)
+
+    gathered = _gather_missing_inputs(
+        [_parameter("value", Type(kind=ValueKind.ANY, nullable=True))],
+        {},
+        prompt_available=True,
+    )
+
+    assert gathered == {"value": None}
+    assert [call.kind for call in fake.calls] == ["select"]
+    assert [choice.title for choice in fake.calls[0].choices] == [
+        "↩ Omit input", "Set null", "Enter value",
+    ]

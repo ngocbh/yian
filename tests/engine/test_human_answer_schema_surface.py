@@ -19,7 +19,7 @@ def test_human_input_answer_schema_type_uses_surface_name():
     for t in types:
         assert t in {"str", "int", "float", "bool", "object", "date", "datetime",
                      "list[str]", "list[int]", "list[float]", "list[bool]",
-                     "list[object]", "list[Any]", "None"}
+                     "list[object]", "list[Any]", "Any", "None"}
         assert "[integer]" not in t and "[number]" not in t and t not in {
             "string", "integer", "number", "boolean",
         }

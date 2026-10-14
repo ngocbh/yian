@@ -5,12 +5,31 @@ node, or a CASE route reads it as `${<id>.output}`. These runs cover literal and
 template entries, named and nested tags, keys a node body would treat specially, `$$`
 escapes, top-level `call(...)` entries, value entries inside `defs:`, inline CALL, LOOP
 and MAP bodies, and YAML anchors, aliases and merge keys on value entries.
+
+An entry is skipped like any node: when a CASE routes away from it, or when a whole-span
+read names a skipped node, while an embedded span renders a skipped read as empty text
+and an entry with no reads always runs. A routed `call(...)` entry skips its lifted call
+with it, and a resumed log replays an entry's recorded output.
 """
+
+from pathlib import Path
 
 import pytest
 
 from yian.compose import load_flow
-from yian.run import run_flow
+from yian.events import NodeSkipped, NodeStarted
+from yian.nodes.base import _HostStop
+from yian.run import resume_flow, run_flow
+
+
+def _started(result) -> set[str]:
+    """Return the ids of every node that started in a run."""
+    return {e.node_id for e in result.events if isinstance(e, NodeStarted)}
+
+
+def _skipped(result) -> set[str]:
+    """Return the ids of every node skipped in a run."""
+    return {e.node_id for e in result.events if isinstance(e, NodeSkipped)}
 
 
 def _run(text: str, inputs: dict | None = None):
@@ -305,3 +324,185 @@ def _producer(output: str) -> str:
 )
 def test_a_written_out_object_entry_runs_with_its_record(entries, output, expected):
     assert _run(_flow(entries, output=output), {"name": "Ada"}) == expected
+
+
+_ROUTE_FLOW = """
+id: f
+name: f
+input:
+  cmd: !str
+nodes:
+  route:
+    kind: case
+    on: ${input.cmd}
+    cases:
+      - when: /exit
+        then: exit_result
+    else: reply
+  exit_result: !object {exited: true, reply: ""}
+  reply:
+    kind: code
+    input:
+      text: ${input.cmd}
+    code: |
+      return {'exited': False, 'reply': inputs['text']}
+output: ${route.output}
+"""
+
+
+@pytest.mark.parametrize(
+    ("cmd", "taken", "untaken", "expected"),
+    [
+        ("/exit", "exit_result", "reply", {"exited": True, "reply": ""}),
+        ("hi", "reply", "exit_result", {"exited": False, "reply": "hi"}),
+    ],
+)
+def test_a_case_routes_to_a_value_entry_or_a_node(cmd, taken, untaken, expected):
+    result = run_flow(load_flow(_ROUTE_FLOW), {"cmd": cmd})
+
+    assert result.status == "succeeded", result.failure
+    assert result.output == expected
+    assert taken in _started(result)
+    assert untaken in _skipped(result)
+    assert untaken not in _started(result)
+
+
+_SKIP_FLOW = """
+id: f
+name: f
+input:
+  cmd: !str
+nodes:
+  route:
+    kind: case
+    on: ${input.cmd}
+    cases:
+      - when: go
+        then: maybe
+  maybe:
+    kind: code
+    output: str
+    code: |
+      return 'm'
+  whole: !object
+    a: ${maybe.output}
+  embedded: !str "got ${maybe.output}"
+  lone: !int 7
+output:
+  whole: ${whole.output}
+  embedded: ${embedded.output}
+  lone: ${lone.output}
+"""
+
+
+def test_entries_reading_a_routed_away_node():
+    result = run_flow(load_flow(_SKIP_FLOW), {"cmd": "stop"})
+
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"whole": None, "embedded": "got ", "lone": 7}
+    assert {"maybe", "whole"} <= _skipped(result)
+    assert not {"maybe", "whole"} & _started(result)
+    assert {"embedded", "lone"} <= _started(result)
+
+
+def test_entries_reading_a_routed_node():
+    result = run_flow(load_flow(_SKIP_FLOW), {"cmd": "go"})
+
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"whole": {"a": "m"}, "embedded": "got m", "lone": 7}
+    assert {"maybe", "whole", "embedded", "lone"} <= _started(result)
+
+
+_CALL_FLOW = _F_DEF + """
+id: f
+name: f
+input:
+  cmd: !str
+  t: !str
+nodes:
+  route:
+    kind: case
+    on: ${input.cmd}
+    cases:
+      - when: go
+        then: e
+    else: other
+  other:
+    kind: code
+    code: |
+      return 'other'
+  e: !str call(f, x=${input.t})
+output: ${route.output}
+"""
+
+
+def test_a_routed_flow_call_entry_runs_its_call_only_when_taken():
+    flow = load_flow(_CALL_FLOW)
+    (call_id,) = [node_id for node_id in flow.compiled.nodes if node_id.startswith("__call_")]
+
+    taken = run_flow(flow, {"cmd": "go", "t": "ada"})
+    untaken = run_flow(flow, {"cmd": "no", "t": "ada"})
+
+    assert taken.status == "succeeded", taken.failure
+    assert taken.output == "ADA"
+    assert {"e", call_id} <= _started(taken)
+    assert untaken.status == "succeeded", untaken.failure
+    assert untaken.output == "other"
+    assert {"e", call_id} <= _skipped(untaken)
+    assert not {"e", call_id} & _started(untaken)
+
+
+_GATE_FLOW = """
+id: f
+name: f
+input:
+  t: !str
+nodes:
+  ask:
+    kind: human_input
+    prompt: "Command?"
+  route:
+    kind: case
+    on: ${ask.output}
+    cases:
+      - when: exit
+        then: exit_result
+    else: other
+  exit_result: !object
+    reply: ${input.t}
+    exited: true
+  other:
+    kind: code
+    code: |
+      return {'reply': 'still here', 'exited': False}
+output: ${route.output}
+"""
+
+
+def test_a_resumed_run_routes_to_a_value_entry_and_replays_it(tmp_path: Path):
+    path = tmp_path / "gate.jsonl"
+    interruption = _HostStop("interrupt before human answer")
+
+    def interrupt(**request):
+        raise interruption
+
+    with pytest.raises(_HostStop) as caught:
+        run_flow(load_flow(_GATE_FLOW), {"t": "bye"}, log=path, tools={"ask_user": interrupt})
+    assert caught.value is interruption
+
+    answered = resume_flow(
+        load_flow(_GATE_FLOW), log=path, tools={"ask_user": lambda **request: "exit"}
+    )
+
+    assert answered.status == "succeeded", answered.failure
+    assert answered.output == {"reply": "bye", "exited": True}
+    assert "exit_result" in _started(answered)
+    assert "other" in _skipped(answered)
+    before = path.read_bytes()
+
+    replayed = resume_flow(load_flow(_GATE_FLOW), log=path)
+
+    assert replayed.status == "succeeded", replayed.failure
+    assert replayed.output == answered.output
+    assert _started(replayed) == set()
+    assert path.read_bytes() == before

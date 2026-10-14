@@ -1,7 +1,15 @@
 """Open AGENT output schemas (`object`, `Any`, elementless lists) under strict structured output."""
 
-import pytest
+import json
 
+import httpx
+import pytest
+from langchain_core.messages import HumanMessage
+from langchain_core.runnables import RunnableBinding, RunnableParallel, RunnableSequence
+from langchain_openai import AzureChatOpenAI
+from openai.lib._parsing._completions import type_to_response_format_param
+
+from yian.llm_clients.azure_client import AzureOpenAIClient
 from yian.llm_clients.capabilities import has_open_schema
 from yian.nodes.agent.structured import type_to_schema
 from yian.typesys.types import read_typedefs, type_for
@@ -51,3 +59,146 @@ def test_closed_types_have_no_open_schema(text):
 ])
 def test_dict_schemas_are_read_as_given(schema, expected):
     assert has_open_schema(schema) is expected
+
+
+_AZURE_ENDPOINT = "https://x.openai.azure.com/"
+
+
+@pytest.fixture
+def azure_env(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_VERSION", "2025-03-01-preview")
+    monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
+
+
+def _azure(deployment="gpt-4o", **kwargs):
+    return AzureOpenAIClient(deployment, base_url=_AZURE_ENDPOINT, api_key="k", **kwargs).get_llm()
+
+
+def _binding(runnable):
+    """Return the `RunnableBinding` holding the model call inside a structured runnable."""
+    stack = [runnable]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, RunnableBinding):
+            return node
+        if isinstance(node, RunnableSequence):
+            stack.extend(reversed(node.steps))
+        elif isinstance(node, RunnableParallel):
+            stack.extend(node.steps__.values())
+        else:
+            stack.extend(
+                child for name in ("first", "bound", "runnable")
+                if (child := getattr(node, name, None)) is not None
+            )
+    raise AssertionError(f"no model binding in {runnable!r}")
+
+
+def _payload(llm, runnable):
+    """Return the request body keywords `llm` builds for the bound structured call."""
+    kwargs = dict(_binding(runnable).kwargs)
+    # Tracing metadata langchain pops before building a real request.
+    kwargs.pop("ls_structured_output_format", None)
+    return llm._get_request_payload([HumanMessage("hi")], **kwargs)
+
+
+def _only_function(payload):
+    (tool,) = payload["tools"]
+    assert tool["type"] == "function"
+    return tool.get("function", tool)
+
+
+@pytest.mark.parametrize("text", ["object", "Any", "R"])
+def test_azure_sends_an_open_schema_as_a_non_strict_function_tool(azure_env, text):
+    llm = _azure()
+    schema = _schema(text)
+    payload = _payload(llm, llm.with_structured_output(schema))
+    function = _only_function(payload)
+    assert "strict" not in function
+    assert "strict" not in payload["tools"][0]
+    assert payload["tool_choice"] == {"type": "function", "function": {"name": function["name"]}}
+    assert "response_format" not in payload
+    assert has_open_schema(function["parameters"])
+    if text == "Any":
+        assert {"additionalProperties": True, "type": "object"} in (
+            function["parameters"]["properties"]["value"]["anyOf"]
+        )
+        assert {"items": {}, "type": "array"} in function["parameters"]["properties"]["value"]["anyOf"]
+
+
+@pytest.mark.parametrize("text", ["C", "int"])
+def test_azure_closed_schema_payload_is_unchanged(azure_env, text):
+    llm = _azure()
+    schema = _schema(text)
+    payload = _payload(llm, llm.with_structured_output(schema))
+    assert payload == _payload(llm, AzureChatOpenAI.with_structured_output(llm, schema))
+    assert payload["response_format"] is schema
+    assert type_to_response_format_param(schema)["json_schema"]["strict"] is True
+    assert "tools" not in payload
+
+
+def test_azure_explicit_method_is_kept_for_an_open_schema(azure_env):
+    llm = _azure()
+    schema = _schema("object")
+    payload = _payload(llm, llm.with_structured_output(schema, method="json_schema"))
+    assert payload["response_format"] is schema
+    assert "tools" not in payload
+
+
+def test_azure_responses_deployment_sends_strict_false_for_an_open_schema(azure_env):
+    llm = _azure("gpt-5-codex")
+    assert llm._use_responses_api({})
+    payload = _payload(llm, llm.with_structured_output(_schema("object")))
+    (tool,) = payload["tools"]
+    assert tool["type"] == "function"
+    assert tool["strict"] is False
+    assert has_open_schema(tool["parameters"])
+
+
+def test_azure_responses_deployment_closed_schema_payload_is_unchanged(azure_env):
+    llm = _azure("gpt-5-codex")
+    schema = _schema("C")
+    payload = _payload(llm, llm.with_structured_output(schema))
+    assert payload == _payload(llm, AzureChatOpenAI.with_structured_output(llm, schema))
+    assert "tools" not in payload
+
+
+class _ToolCallServer:
+    """Record Chat Completions request bodies; answer with a call to the first tool."""
+
+    def __init__(self, arguments):
+        self.arguments = arguments
+        self.bodies = []
+
+    def __call__(self, request):
+        body = json.loads(request.content)
+        self.bodies.append(body)
+        if "tools" not in body:
+            return httpx.Response(200, json={
+                "id": "c", "object": "chat.completion", "created": 0, "model": "m",
+                "choices": [{"index": 0, "finish_reason": "stop",
+                             "message": {"role": "assistant", "content": "{}"}}],
+            })
+        name = body["tools"][0]["function"]["name"]
+        return httpx.Response(200, json={
+            "id": "c", "object": "chat.completion", "created": 0, "model": "m",
+            "choices": [{"index": 0, "finish_reason": "tool_calls", "message": {
+                "role": "assistant", "content": None,
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {
+                    "name": name, "arguments": json.dumps(self.arguments)}}],
+            }}],
+        })
+
+
+def test_azure_open_schema_with_include_raw_parses_the_tool_call(azure_env):
+    server = _ToolCallServer({"value": {"k": 1}})
+    with httpx.Client(transport=httpx.MockTransport(server)) as http_client:
+        llm = _azure(http_client=http_client, max_retries=0)
+        result = llm.with_structured_output(_schema("object"), include_raw=True).invoke(
+            [HumanMessage("hi")]
+        )
+    assert set(result) == {"raw", "parsed", "parsing_error"}
+    assert result["parsing_error"] is None
+    assert result["parsed"].value == {"k": 1}
+    (body,) = server.bodies
+    assert "tools" in body
+    assert "response_format" not in body

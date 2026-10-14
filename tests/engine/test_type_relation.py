@@ -50,6 +50,9 @@ def _t(text: str) -> Type:
         ("list(int)", "list(Optional(int))"),
         ("NestedA", "Nested"),
         ("file", "file"),
+        ("int(5..)", "int(0..)"),
+        ("int(0..10)", "int(..10)"),
+        ("int(0..)", "float(0.0..)"),
     ],
 )
 def test_fits(inferred: str, declared: str) -> None:
@@ -83,10 +86,25 @@ def test_fits(inferred: str, declared: str) -> None:
         ("float", "float(0..1)"),
         # a float-typed value may hold an int, since a typed binding never converts
         ("float", "int"),
+        ("int(0..)", "int(0..100)"),
+        ("int", "int(0..)"),
+        ("int(..5)", "int(0..)"),
+        ("int(..5)", "int(..3)"),
+        # a whole number lies in the overlap [1, 1.5]
+        ("float(..1.5)", "int(1..)"),
+        ("float", "float(0.0..)"),
     ],
 )
 def test_narrower(inferred: str, declared: str) -> None:
     assert type_relation(_t(inferred), _t(declared)) == "narrower"
+
+
+def test_open_range_with_a_huge_int_end_is_narrower() -> None:
+    huge = 10**400
+    at_least_huge = Type(ValueKind.INTEGER, bounds=(huge, None))
+    at_most_minus_huge = Type(ValueKind.INTEGER, bounds=(None, -huge))
+    assert type_relation(_t("int(0..)"), at_least_huge) == "narrower"
+    assert type_relation(_t("int(..0)"), at_most_minus_huge) == "narrower"
 
 
 def test_refined_list_into_unrefined_list_fits() -> None:
@@ -128,6 +146,11 @@ def test_unrefined_list_into_refined_list_is_narrower() -> None:
         ("Literal(\"2026-01-01\")", "datetime"),
         ("date", "Literal(a)"),
         ("datetime", "Literal(\"2026-01-01\")"),
+        ("int(..-1)", "int(0..)"),
+        ("int(..0)", "int(1..)"),
+        # the overlap [1, 0.5] is empty, and no whole number lies in it
+        ("float(..0.5)", "int(1..)"),
+        ("int(5..)", "int(..4)"),
     ],
 )
 def test_disjoint(inferred: str, declared: str) -> None:

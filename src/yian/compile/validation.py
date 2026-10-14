@@ -20,7 +20,7 @@ from typing import Literal
 from dataclasses import replace
 
 from yian.compile.model import END_ID, START_ID
-from yian.typesys.values import TypeCheckError, ValueKind, Type, build_value_as
+from yian.typesys.values import TypeCheckError, ValueKind, Type, build_value_as, numeric_interval
 
 _CLOSED_HEADS = ()              # `outputs` is no longer a head; node-first head dispatch
 # The ONLY valid ${system.X} ambients, each with its scalar type label:
@@ -88,7 +88,8 @@ def types_compatible(source: Type, sink: Type) -> bool:
     sink's accepted tags, so an untagged source cannot fill an enum sink); list elements
     recurse, treating a bare specialized list as its non-null scalar element contract; a
     nullable source cannot fill a non-nullable sink.
-    A bounded numeric sink requires a source interval contained within its bounds.
+    A bounded numeric sink (either end may be open) requires a source interval
+    contained within it.
     A source union fits a sink union when each of its members fits some sink member; a
     record fits a union when it fits some member; a union fits `object` but never a
     record, and `object` never fits a union.
@@ -120,12 +121,11 @@ def types_compatible(source: Type, sink: Type) -> bool:
     if source.kind != sink.kind:
         if not (sink.kind == ValueKind.NUMBER and source.kind == ValueKind.INTEGER):
             return False
-    if sink.bounds is not None and (
-        source.bounds is None
-        or source.bounds[0] < sink.bounds[0]
-        or source.bounds[1] > sink.bounds[1]
-    ):
-        return False
+    if sink.bounds is not None:
+        source_low, source_high = numeric_interval(source)
+        sink_low, sink_high = numeric_interval(sink)
+        if not (sink_low <= source_low and source_high <= sink_high):
+            return False
     if sink.variants is not None:
         if source.variants is not None:
             members = source.variants
@@ -299,17 +299,23 @@ def _relate_kinds(inferred: ValueKind, declared: ValueKind) -> TypeRelation:
 
 
 def _relate_bounds(inferred: Type, declared: Type) -> TypeRelation:
-    """Compare numeric intervals; an absent bound is unbounded."""
+    """Compare numeric intervals; an absent bound or open end is unbounded."""
     if declared.bounds is None:
         return "fits"
-    low, high = inferred.bounds if inferred.bounds is not None else (-math.inf, math.inf)
-    if declared.bounds[0] <= low and high <= declared.bounds[1]:
+    low, high = numeric_interval(inferred)
+    declared_low, declared_high = numeric_interval(declared)
+    if declared_low <= low and high <= declared_high:
         return "fits"
-    shared_low = max(low, declared.bounds[0])
-    shared_high = min(high, declared.bounds[1])
+    shared_low = max(low, declared_low)
+    shared_high = min(high, declared_high)
     if inferred.kind is ValueKind.INTEGER:
         # An int interval overlaps only if a whole number lies in the shared range.
-        shared_low, shared_high = math.ceil(shared_low), math.floor(shared_high)
+        # Only finite ends are rounded: math.ceil/floor raise OverflowError on
+        # infinity (and math.isfinite on an int too large for a float).
+        if shared_low != -math.inf:
+            shared_low = math.ceil(shared_low)
+        if shared_high != math.inf:
+            shared_high = math.floor(shared_high)
     return "narrower" if shared_low <= shared_high else "disjoint"
 
 

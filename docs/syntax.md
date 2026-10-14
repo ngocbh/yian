@@ -119,6 +119,17 @@ An unquoted value shaped like a date that isn't a real one (`2026-13-45`,
 `2026-02-30`, `2026-01-01T25:00:00`, `2026-01-01T10:00:00+05:99`) is a located
 load error; quote it to keep it as text.
 
+A flow file's YAML nests at most 200 levels; each mapping and list is a level, counting
+the file's top level. A deeper file is a load error at the first mapping or list past
+the limit (`invalid YAML: this list nests deeper than 200 levels, the limit for a YAML
+document ...`). A written-out value deeper than 100 levels loads, and fails its node
+when it runs (see [Operators inside `${...}`](#operators-inside) and
+[Types → Nesting limit](typing.md#nesting-limit)).
+
+Changed: a file nested deeper than about 330 (mappings) to 490 (lists) levels used to
+crash with a raw `RecursionError`; one between 201 levels and that depth used to load
+and is now a load error.
+
 Every mapping key in a flow file must be text after YAML reads it: node ids, input
 and output names, typedef names and fields, keys in a written-out record value, and
 keys in `x-*` blocks alike, as in JSON. An unquoted `true`, `1`, `1.5`, `null`, or date

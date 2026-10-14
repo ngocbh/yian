@@ -820,7 +820,11 @@ for isolated literals (`parse_yaml_literal`), and for one bare plain scalar
 (`read_plain_scalar`, which reads an inline `call(...)` argument), without
 touching PyYAML's global resolver or constructor tables. A date-shaped plain
 scalar that isn't a real date, such as `2026-13-45`, is a located YAML error that
-says to quote it. Root text and each uncached external file are constructed once
+says to quote it. The loader counts collection events as the composer takes them and
+refuses a document nested deeper than `compose.source.scalars.MAX_YAML_NESTING`
+(200) levels, each mapping and list a level, with a located YAML error before
+PyYAML's recursive composer can exhaust the stack; the count adds no frame per
+level. Root text and each uncached external file are constructed once
 as `SourceDocument`s, whose public cursor interface is immutable and defensive.
 They retain the original text and label while keeping PyYAML's
 composed/constructed graph private. YAML aliases and merge mappings are

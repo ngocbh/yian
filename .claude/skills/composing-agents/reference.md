@@ -302,7 +302,8 @@ A value nests at most 100 levels, counting each record and list. A binding or MA
 list around a 100-level value is one level too deep. A run input may nest 100 levels.
 An expression nests at most 100 levels as well (each call, list, unary operator,
 comparison, `|`/`:-`/`:?`, and operator chain is one); a deeper one is a load error at
-its field.
+its field. A flow file's YAML nests at most 200 levels (each mapping and list is one);
+deeper is a located load error.
 
 Bounds are ordered numeric literals with at most one end left open (`int(0..)`,
 `int(..100)`; `int(..)` is an error) and exclude booleans. Integer bounds

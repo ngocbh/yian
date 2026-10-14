@@ -8,7 +8,8 @@ YAML 1.2 core schema, keeping two YAML 1.1 extensions: unquoted timestamps and
 ``<<`` merge keys. Its own ``timestamp`` constructor makes a date-shaped plain
 scalar that is not a real date or time, such as ``2026-13-45`` or an offset of
 ``+05:99``, a located ``ConstructorError`` that says to quote it. PyYAML's global
-``SafeLoader`` tables are never modified.
+``SafeLoader`` tables are never modified. A document nested deeper than
+``MAX_YAML_NESTING`` levels is a located ``ComposerError``.
 
 Knows about:   PyYAML, yian.json_codec.
 Never imports: compose helpers or phases, nodes, compile, runtime, the run
@@ -21,6 +22,7 @@ import re
 from datetime import date, datetime
 
 import yaml
+from yaml.composer import ComposerError
 from yaml.constructor import ConstructorError
 
 import yian.json_codec as json_codec
@@ -77,17 +79,67 @@ class ScalarValueError(ConstructorError):
         self.reason = reason
 
 
+# Twice a yian value's 100 levels: a value at that limit fits inside a flow's own
+# structure, and composing and walking a document this deep from a shallow caller
+# stays within Python's default recursion limit.
+MAX_YAML_NESTING = 200
+"""Deepest nesting of a YAML document yian reads; each mapping and list is a level."""
+
+
 class _FlowLoader(yaml.SafeLoader):
     """SafeLoader that reads plain scalars with YAML 1.2 core rules.
 
     Unquoted timestamps and ``<<`` merge keys keep their YAML 1.1 meaning.
     Explicit ``!!int``, ``!!float``, and ``!!bool`` tags accept only the forms
     the table resolves. A ``timestamp`` that can't be built is a located
-    ``ConstructorError``; every other tag keeps PyYAML's safe behavior.
+    ``ConstructorError``; every other tag keeps PyYAML's safe behavior. A
+    mapping or list nested past ``MAX_YAML_NESTING`` is a located
+    ``ComposerError``.
+
+    Args:
+        stream (`str`):
+            The YAML text.
     """
 
     # An own dict, so add_implicit_resolver below never copies SafeLoader's table.
     yaml_implicit_resolvers: dict = {}
+
+    def __init__(self, stream: str):
+        super().__init__(stream)
+        self._nesting = 0
+
+    # PyYAML composes recursively, a few frames per level, and takes every event
+    # through get_event, so counting here stops a too-deep document before the
+    # composer recurses further, without adding a frame per level.
+    def get_event(self) -> yaml.Event:
+        """Take the next parser event, refusing a mapping or list past the nesting limit.
+
+        Returns:
+            `yaml.Event`:
+                The next event.
+
+        Raises:
+            `ComposerError`:
+                Raised at the start of the first mapping or list nested deeper than
+                ``MAX_YAML_NESTING`` levels.
+        """
+
+        event = super().get_event()
+        if isinstance(event, yaml.CollectionStartEvent):
+            self._nesting += 1
+            if self._nesting > MAX_YAML_NESTING:
+                kind = "list" if isinstance(event, yaml.SequenceStartEvent) else "mapping"
+                raise ComposerError(
+                    None,
+                    None,
+                    f"this {kind} nests deeper than {MAX_YAML_NESTING} levels, the limit "
+                    "for a YAML document (each mapping and list is a level; a yian value "
+                    "nests at most 100); flatten it",
+                    event.start_mark,
+                )
+        elif isinstance(event, yaml.CollectionEndEvent):
+            self._nesting -= 1
+        return event
 
     def construct_yaml_bool(self, node: yaml.Node) -> bool:
         """Construct a core-schema boolean.

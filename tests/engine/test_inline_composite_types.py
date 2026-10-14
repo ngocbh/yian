@@ -760,7 +760,7 @@ _LIST_VALUE_KINDS = tuple(kind for kind in ValueKind if kind.is_list())
 def _list_label(kind: ValueKind) -> str:
     """The label of a list kind with no element type, e.g. `list(str)`."""
     element = kind.element_kind
-    return f"list({'Any' if element is None else element.value})"
+    return f"list({'Optional(Any)' if element is None else element.value})"
 
 
 @pytest.mark.parametrize("kind", _LIST_VALUE_KINDS)
@@ -917,7 +917,7 @@ def test_direct_reference_proves_the_entire_root_before_selecting_a_field():
             label="call.input.value",
         )
 
-    assert "list(Any)" in str(caught.value)
+    assert "list(Optional(Any))" in str(caught.value)
     assert "no proven element type" in str(caught.value)
 
 

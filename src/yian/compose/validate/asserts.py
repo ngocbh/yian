@@ -441,7 +441,7 @@ def validate_node_asserts(
                             )
                         if (
                             type(contract) is ValueContract
-                            and contract.type.kind != ValueKind.OBJECT
+                            and contract.type.kind not in (ValueKind.OBJECT, ValueKind.ANY)
                         ):
                             errors.append(
                                 (

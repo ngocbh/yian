@@ -321,7 +321,7 @@ def _item_type(value: Any) -> Type | None:
             element = _joined(element, typ)
         return None if element is None else _list_of(element)
     try:
-        # An empty list is `list(Any)` with no element type, which joins any list.
+        # An empty list is a `list(Optional(Any))` with no element type, which joins any list.
         return Type.scalar(build_value(value).kind)
     except TypeCheckError:
         return None

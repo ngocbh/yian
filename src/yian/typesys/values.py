@@ -787,7 +787,8 @@ def canonical_type_label(typ: Type) -> str:
     Record keys use compact JSON quoting; variant tags print bare when they read back
     as names, else JSON-quoted (`Literal(go, "no go")`). Structurally refined
     lists render from their element; a valid flat-list type renders from its
-    storage kind (`list(str)`). A union lists its members in canonical order.
+    storage kind (`list(str)`), and a `LIST_ANY` with no element as
+    `list(Optional(Any))`. A union lists its members in canonical order.
 
     Args:
         typ (`Type`): The resolved structural type to label.
@@ -836,6 +837,9 @@ def _canonical_nonnullable_label(typ: Type) -> tuple[str, str]:
 
     if typ.kind.is_list():
         if typ.element is None:
+            if typ.kind is ValueKind.LIST_ANY:
+                # Items not proven may be any JSON value, null included.
+                return "list(Optional(Any))", "list[Optional[Any]]"
             return _kind_label(typ.kind), typ.kind.value
         label, key = _labels(typ.element)
         return f"list({label})", f"list[{key}]"
@@ -856,10 +860,11 @@ def _canonical_nonnullable_label(typ: Type) -> tuple[str, str]:
 def _kind_label(kind: ValueKind) -> str:
     """Spell a list storage kind as a type for messages, e.g. `list(str)` for `LIST_STRING`.
 
+    `LIST_ANY` reads `list(Optional(Any))`, since its items may be any JSON value.
     `ValueKind` values are stored and sent as they are (`"list[str]"`).
     """
     element = kind.element_kind
-    return f"list({'Any' if element is None else element.value})"
+    return f"list({'Optional(Any)' if element is None else element.value})"
 
 
 def _json_string(value: str) -> str:
@@ -1654,7 +1659,7 @@ def _build_for_type(
     if typ.kind.is_list() and typ.element is not None:
         if not isinstance(value, (list, tuple)):
             raise TypeCheckError(
-                f"{value_repr(value)} is not a list for declared {_kind_label(typ.kind)}",
+                f"{value_repr(value)} is not a list for declared {canonical_type_label(typ)}",
                 path=path,
             )
         items = [

@@ -198,8 +198,8 @@ def require_proven_type(
     A refined record is closed: each declared field must either be required or
     nullable, and every child type is checked recursively. A union requires each
     member to be proven. An unrefined object remains valid as a whole value. Every
-    list storage kind, including ``list[Any]``, requires a recursively proven
-    structural element.
+    list storage kind, including ``list(Optional(Any))`` with no element, requires a
+    recursively proven structural element.
 
     Args:
         typ (`Type`):

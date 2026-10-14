@@ -57,7 +57,7 @@ def test_parse_python_scalar_names():
     assert parse_type("int") == ScalarExpr("int")
     assert parse_type("float") == ScalarExpr("float")
     assert parse_type("bool") == ScalarExpr("bool")
-    assert parse_type("Any") == ScalarExpr("object")
+    assert parse_type("Any") == ScalarExpr("Any")
     assert parse_type("date") == ScalarExpr("date")
     assert parse_type("datetime") == ScalarExpr("datetime")
 
@@ -554,7 +554,7 @@ from yian.typesys.types import (  # noqa: E402
     ("int( 0 .. )", ScalarExpr("int", (0, None))),
     ("dict(str, int)", DictExpr()),
     ("Dict(str, Buy)", DictExpr()),
-    ("Any", ScalarExpr("object")),
+    ("Any", ScalarExpr("Any")),
     ("None", ScalarExpr("None")),
     ("Optional(None)", OptionalExpr(ScalarExpr("None"))),
     ("topics", ListExpr(ScalarExpr("str"))),
@@ -645,7 +645,7 @@ def test_label_of_a_list_without_an_element_type():
     from yian.typesys.values import ValueKind
 
     assert canonical_type_label(Type(kind=ValueKind.LIST_STRING)) == "list(str)"
-    assert canonical_type_label(Type(kind=ValueKind.LIST_ANY)) == "list(Any)"
+    assert canonical_type_label(Type(kind=ValueKind.LIST_ANY)) == "list(Optional(Any))"
 
 
 def test_union_member_order_follows_the_bracket_labels():

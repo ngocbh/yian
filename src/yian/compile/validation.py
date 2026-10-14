@@ -86,8 +86,9 @@ def types_compatible(source: Type, sink: Type) -> bool:
     `None` source may fill any nullable sink; records match structurally (every field the
     sink REQUIRES is present + compatible); enums by tag-subset (source tags within the
     sink's accepted tags, so an untagged source cannot fill an enum sink); list elements
-    recurse, treating a bare specialized list as its non-null scalar element contract; a
-    nullable source cannot fill a non-nullable sink.
+    recurse, treating a bare specialized list as its non-null scalar element contract and
+    an unproven `list(Optional(Any))` as `Optional(Any)` items; a nullable source cannot
+    fill a non-nullable sink.
     A bounded numeric sink (either end may be open) requires a source interval
     contained within it.
     A source union fits a sink union when each of its members fits some sink member; a
@@ -110,14 +111,7 @@ def types_compatible(source: Type, sink: Type) -> bool:
     if source_is_list or sink_is_list:
         if not (source_is_list and sink_is_list):
             return False
-        source_element = _list_element(source)
-        sink_element = _list_element(sink)
-        if sink_element is None:
-            return True
-        return source_element is not None and types_compatible(
-            source_element,
-            sink_element,
-        )
+        return types_compatible(_list_element(source), _list_element(sink))
     if source.kind != sink.kind:
         if not (sink.kind == ValueKind.NUMBER and source.kind == ValueKind.INTEGER):
             return False
@@ -214,13 +208,17 @@ def _weakest(*relations: TypeRelation) -> TypeRelation:
     return min(relations, key=_RELATION_RANK.__getitem__)
 
 
-def _list_element(typ: Type) -> "Type | None":
-    """Return a list type's element contract, or `None` for an unrefined list."""
+def _list_element(typ: Type) -> Type:
+    """Return a list type's element contract.
+
+    A flat list reads as its non-null scalar items; a `LIST_ANY` with no element (an
+    unproven list) reads as `Optional(Any)` items, since they may be any JSON value.
+    """
     if typ.element is not None:
         return typ.element
     if typ.kind.element_kind is not None:
         return Type.scalar(typ.kind.element_kind)
-    return None
+    return Type(kind=ValueKind.ANY, nullable=True)
 
 
 def _relate_non_null(inferred: Type, declared: Type) -> TypeRelation:
@@ -232,14 +230,8 @@ def _relate_non_null(inferred: Type, declared: Type) -> TypeRelation:
     if inferred_is_list or declared_is_list:
         if not (inferred_is_list and declared_is_list):
             return "disjoint"
-        declared_element = _list_element(declared)
-        if declared_element is None:
-            return "fits"
-        inferred_element = _list_element(inferred)
-        if inferred_element is None:
-            return "narrower"
         # The empty list is shared by every pair of list types; it is not overlap.
-        return type_relation(inferred_element, declared_element)
+        return type_relation(_list_element(inferred), _list_element(declared))
 
     relation = _relate_kinds(inferred.kind, declared.kind)
     if relation == "disjoint":

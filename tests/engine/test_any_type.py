@@ -1,7 +1,14 @@
 import datetime
+import re
 from typing import Any
 
 import pytest
+from yian.compile.validation import type_relation, types_compatible
+from yian.compose import load_flow
+from yian.compose.build.inline_inputs import require_proven_type
+from yian.compose.helpers.errors import LoadError
+from yian.nodes.contracts import ValueContract, output_contract_field_error
+from yian.typesys.types import ScalarExpr, parse_type, read_typedefs, type_for
 from yian.typesys.values import (
     ANY_VALUE_ADAPTER,
     BooleanValue,
@@ -16,6 +23,8 @@ from yian.typesys.values import (
     TypeCheckError,
     ValueKind,
     build_value_as,
+    canonical_type_label,
+    canonical_union_order,
 )
 
 ANY = Type.scalar(ValueKind.ANY)
@@ -251,3 +260,138 @@ def test_any_type_shape_is_valid():
 def test_any_type_rejects_refinements(refinement):
     with pytest.raises(ValueError):
         Type(kind=ValueKind.ANY, **refinement).validate_shape()
+
+
+# --------------------------------------------------------------------------- #
+# Authored `Any`: parsing, resolution, labels
+# --------------------------------------------------------------------------- #
+
+OPTIONAL_ANY = Type(kind=ValueKind.ANY, nullable=True)
+LIST_ANY = Type(kind=ValueKind.LIST_ANY, element=ANY)
+LIST_OPTIONAL_ANY = Type(kind=ValueKind.LIST_ANY, element=OPTIONAL_ANY)
+UNPROVEN_LIST = Type(kind=ValueKind.LIST_ANY)
+
+
+def test_any_parses_as_its_own_scalar():
+    assert parse_type("Any") == ScalarExpr("Any")
+
+
+@pytest.mark.parametrize(
+    ("text", "typ", "label"),
+    [
+        ("Any", ANY, "Any"),
+        ("Optional(Any)", OPTIONAL_ANY, "Optional(Any)"),
+        ("list(Any)", LIST_ANY, "list(Any)"),
+        ("list(Optional(Any))", LIST_OPTIONAL_ANY, "list(Optional(Any))"),
+    ],
+)
+def test_authored_any_types_resolve_and_label_back(text, typ, label):
+    assert type_for(text, {}) == typ
+    assert canonical_type_label(typ) == label
+    assert type_for(canonical_type_label(typ), {}) == typ
+
+
+def test_a_list_with_unproven_items_is_labelled_list_of_optional_any():
+    assert canonical_type_label(UNPROVEN_LIST) == "list(Optional(Any))"
+
+
+def test_list_of_any_rejects_a_null_item_and_list_of_optional_any_accepts_it():
+    with pytest.raises(TypeCheckError) as caught:
+        build_value_as(type_for("list(Any)", {}), [1, None])
+    assert caught.value.path == (1,)
+
+    typed = build_value_as(type_for("list(Optional(Any))", {}), [1, None])
+    assert typed == ListAnyValue(value=[1, None])
+
+
+def test_issue_examples_pass():
+    assert build_value_as(type_for("Any", {}), "hello") == StringValue(value="hello")
+    assert build_value_as(type_for("list(Any)", {}), [1, "two"]) == ListAnyValue(
+        value=[1, "two"]
+    )
+
+
+def test_records_that_differ_only_in_list_item_nullability_sort_deterministically():
+    reg = read_typedefs({"A": {"xs": "list(Any)"}, "B": {"xs": "list(Optional(Any))"}})
+    a, b = type_for("A", reg), type_for("B", reg)
+
+    assert canonical_union_order((a, b)) == canonical_union_order((b, a)) == (a, b)
+
+
+def test_lowercase_any_is_not_a_type():
+    with pytest.raises(TypeCheckError, match="unknown type 'any'; write Any"):
+        parse_type("any")
+
+
+def test_a_typedef_cannot_be_named_any():
+    with pytest.raises(TypeCheckError, match="shadows"):
+        read_typedefs({"Any": "str"})
+
+
+def test_any_resolves_through_an_alias_and_a_record_field():
+    reg = read_typedefs({"Payload": "Any", "Rec": {"data": "Any"}})
+
+    assert type_for("Payload", reg) == ANY
+    assert type_for("Rec", reg).fields["data"] == ANY
+
+
+# --------------------------------------------------------------------------- #
+# Lists with unproven items
+# --------------------------------------------------------------------------- #
+
+
+def test_unproven_list_items_compare_as_optional_any():
+    list_str = Type(kind=ValueKind.LIST_STRING, element=Type.scalar(ValueKind.STRING))
+    list_file = Type(kind=ValueKind.LIST_ANY, element=Type.scalar(ValueKind.FILE))
+
+    assert types_compatible(UNPROVEN_LIST, type_for("list(Optional(Any))", {}))
+    assert types_compatible(list_str, UNPROVEN_LIST)
+    assert not types_compatible(list_file, UNPROVEN_LIST)
+    assert type_relation(UNPROVEN_LIST, list_str) == "narrower"
+
+
+def test_proof_rejects_an_unproven_list_and_accepts_list_of_optional_any():
+    with pytest.raises(LoadError) as caught:
+        require_proven_type(UNPROVEN_LIST, binding_label="call.input.xs")
+    assert "list(Optional(Any))" in str(caught.value)
+    assert "no proven element type" in str(caught.value)
+
+    proven = type_for("list(Optional(Any))", {})
+    assert require_proven_type(proven, binding_label="call.input.xs") is proven
+
+
+@pytest.mark.parametrize(
+    ("text", "label"),
+    [("list(list(int))", "list(list(int))"), ("list(Any)", "list(Any)")],
+)
+def test_a_refined_list_names_its_declared_type(text, label):
+    with pytest.raises(TypeCheckError, match=re.escape(f"3 is not a list for declared {label}")):
+        build_value_as(type_for(text, {}), 3)
+
+
+# --------------------------------------------------------------------------- #
+# Field reads on `Any`
+# --------------------------------------------------------------------------- #
+
+
+def test_a_field_read_on_any_is_not_checked():
+    contract = ValueContract(ANY)
+
+    assert output_contract_field_error(contract, ["anything"], "xs.anything") is None
+
+
+def test_an_assert_reading_a_field_of_an_any_output_loads():
+    load_flow(
+        "id: p\nname: p\n"
+        "input:\n  s: !str\n"
+        "nodes:\n"
+        "  step:\n"
+        "    kind: code\n"
+        "    input:\n"
+        "      x: ${input.s}\n"
+        "    output: Any\n"
+        "    code: return None\n"
+        "    asserts:\n"
+        "      - output.a.b == 1\n"
+        "output: ${step.output}\n"
+    )

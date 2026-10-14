@@ -298,6 +298,9 @@ def _validate_layer(config: dict[str, Any]) -> None:
     # values, including block contents, are checked against the effective config
     # before the run starts (`check_model_config`) and when the model client is built.
     unknown = sorted(set(config) - LLM_CONFIG_KEYS - {"_connection"})
+    for key in unknown:
+        if isinstance(key, str) and key.replace("_", "-") in LLM_CONFIG_KEYS:
+            raise ValueError(f"`{key}` is not an llm_config key; write `{key.replace('_', '-')}`")
     if unknown:
         raise ValueError(
             f"llm_config has unknown field(s) {unknown} "

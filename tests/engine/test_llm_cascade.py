@@ -512,7 +512,7 @@ def test_replay_uses_logged_map_after_environment_changes(monkeypatch):
 
 @pytest.mark.parametrize(
     "layer",
-    [{"modle": "x"}, {"provider": "openai", "inherit": False}, {"qwen_cn": {"top_k": 4}}],
+    [{"modle": "x"}, {"provider": "openai", "inherit": False}],
 )
 def test_host_layer_rejects_unknown_fields(layer):
     loaded = load_flow("""
@@ -524,6 +524,21 @@ output: ${a.output}
 """)
     with pytest.raises(ValueError, match=r"llm_config has unknown field\(s\)"):
         resolve_llm_cascade(loaded.compiled, layer, defaults=_DEFAULTS, provider_models=_PROVIDER_MODELS)
+
+
+def test_host_layer_python_block_spelling_names_the_dashed_key():
+    loaded = load_flow("""
+id: f
+name: f
+nodes:
+  a: {kind: agent, prompt: hi}
+output: ${a.output}
+""")
+    with pytest.raises(ValueError, match="`qwen_cn` is not an llm_config key; write `qwen-cn`"):
+        resolve_llm_cascade(
+            loaded.compiled, {"qwen_cn": {"top_k": 4}}, defaults=_DEFAULTS,
+            provider_models=_PROVIDER_MODELS,
+        )
 
 
 def test_host_layer_block_merges_per_field_with_authored_blocks():

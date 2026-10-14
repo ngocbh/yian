@@ -141,7 +141,7 @@ class LLMConfig(BaseModel):
             is called; it needs no `api_key`, since the key may come from
             `AZURE_OPENAI_API_KEY`, and a flow file may set it beside
             `provider: azure`. Unlike the key, it appears in `model_dump` when set.
-        <provider> (block class, *optional*, defaults to `None`):
+        <provider> (`_Block`, *optional*, defaults to `None`):
             One block per provider in `SUPPORTED_LLM_PROVIDERS` (`openai`, `qwen-cn`,
             `anthropic`, ...), named after it: request-body fields for the API that
             provider's calls reach, checked by that provider's class in `PROVIDER_BLOCKS`
@@ -263,7 +263,7 @@ class LLMConfig(BaseModel):
         return self
 
     @model_serializer(mode="wrap")
-    def _omit_unset_base_url(self, handler):
+    def _omit_unset_fields(self, handler):
         """Dump an unset base_url or block as absent, so existing recorded dumps stay identical."""
         data = handler(self)
         if not isinstance(data, dict):
@@ -482,8 +482,8 @@ def merge_llm_config(specific: dict, base: dict) -> dict:
     `PROVIDER_BLOCKS`, e.g. ``openai``) merges per block field when both layers set it
     to a mapping: ``specific``'s non-``None`` fields win, ``base`` fills the rest, and a
     value inside a field (e.g. ``thinking: {...}``) is replaced whole. A block that is
-    not a mapping is kept over the other layer's block, whichever layer sets it, so it
-    reaches validation instead of being hidden. Every other key, including
+    not a mapping is kept over the other layer's block, whichever layer sets it (the
+    ``specific`` one when both are), so it reaches validation instead of being hidden. Every other key, including
     ``_connection``, is replaced whole. Filtering ``None`` keeps the merge associative,
     so a cascade can be grouped without changing its result.
 

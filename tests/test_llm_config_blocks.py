@@ -242,9 +242,13 @@ def test_merge_is_associative(node, flow, host):
 
 
 def test_host_layer_rejects_the_python_spelling_of_a_dash_block():
-    with pytest.raises(ValueError, match=r"unknown field\(s\) \['qwen_cn'\]") as caught:
+    with pytest.raises(ValueError, match="`qwen_cn` is not an llm_config key; write `qwen-cn`"):
         _validate_layer({"qwen_cn": {"enable_thinking": True}})
-    assert "qwen-cn" in str(caught.value)
+
+
+def test_host_layer_unknown_key_lists_the_authored_keys():
+    with pytest.raises(ValueError, match=r"unknown field\(s\) \['modle'\]") as caught:
+        _validate_layer({"modle": "x"})
     assert ", ".join(sorted(LLM_CONFIG_KEYS)) in str(caught.value)
 
 

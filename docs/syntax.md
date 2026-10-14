@@ -36,8 +36,8 @@ The shape of `output:` sets what the flow returns:
   returns `{}`. A caller reads a field by name, as in `${child.output.order}`.
 - No `output:`, or `output: null`, returns `None`.
 
-A record field name must be a string. YAML reads an unquoted `true`, `yes`, `null`,
-or `1` key as a bool, null, or number, so loading fails at that key; quote it
+A record field name must be a string. YAML reads an unquoted `true`, `null`, or `1`
+key as a bool, null, or number, so loading fails at that key; quote it
 (`'true': ${x}`). A scalar YAML literal in place of a binding (`output: 5`, or a
 field `x: 5`) is returned as written.
 
@@ -86,6 +86,35 @@ section written twice is a load error at the second key, such as `duplicate key 
 
 Changed: a repeated key used to load silently, and the last one won. Remove or rename
 the earlier copy; the flow then runs as before.
+
+### YAML values
+
+yian reads an unquoted value with YAML 1.2's core rules, the rules editors such as
+VS Code's YAML extension use, and keeps two older extensions: an unquoted date or
+timestamp is a date, and a `<<:` merge key merges a mapping. Quoted and block (`|`,
+`>`) values are always text.
+
+| Unquoted | Reads as |
+|---|---|
+| `true`, `false` (also `True`, `TRUE`, ...) | boolean |
+| `yes`, `no`, `on`, `off`, `y`, `n` (any case) | text |
+| `null`, `~`, or nothing | null |
+| `17`, `-3`, `017` | integer (`017` is 17) |
+| `0o17`, `0x1F` | integer (octal 15, hex 31) |
+| `1.5`, `.5`, `1e3` | float (`1e3` is 1000.0) |
+| `1:30`, `1_000`, `0b101` | text |
+| `2026-10-14`, `2026-10-14T10:00:00Z` | date, datetime |
+
+The same rules apply to keys (CASE's `on:` is the text `on`), to input and output
+defaults, and to the literal after ` = ` in a typed binding. A `yes`/`no`/`on`/`off`
+that reaches a `bool` slot fails with the fix, such as
+"`yes` is text; write `true`".
+
+Changed: yian used to read values with YAML 1.1's rules: an unquoted `yes`, `no`,
+`on`, or `off` was a boolean, `1:30` was the number 90, `1_000` was 1000, and `017`
+was octal 15, while `1e3` was text. Write `true`/`false` for a boolean, `90` or
+`1000` for those numbers, `0o17` for octal, and quote a value you mean as text. A
+`when: yes` on a `Literal[yes, no]` `on:` now matches the text `yes`.
 
 ### Compact mode — when the flow *is* one node
 
@@ -504,9 +533,10 @@ The value after ` = ` is read in this order:
   the int `0`, `items: list[str] = []` an empty list, and `x: Optional[int] = null`
   a null.
 
-Literals are checked against the type at load. YAML 1.1 rules apply, so
-`str = 30`, `str = yes`, and `date = 2026-01-01` fail with a hint to quote the
-value (`str = "30"`).
+Literals are checked against the type at load, read with the flow's
+[YAML value rules](#yaml-values). So `str = 30` and `date = 2026-01-01` fail with a
+hint to quote the value (`str = "30"`), and `bool = yes` fails with
+"`yes` is text; write `true`".
 
 The whole binding is one plain YAML scalar, so it can't contain `: ` or ` #`
 anywhere, even inside quotes after ` = ` (`msg: str = "Status: ${x}"` does not
@@ -1280,6 +1310,9 @@ that suggests the nearest node and quoting:
 ```text
 case node 'route' then: `replyy` names no node. Did you mean `reply`? If you meant the text "replyy", quote it: `then: "replyy"`
 ```
+
+A `yes`, `no`, `on`, or `off` is a word too, so `else: yes` names a node. When the
+case's `output:` takes a boolean, the error adds ``or write `true` for the boolean``.
 
 A quoted branch (`"..."`, `'...'`, or a block `|`/`>`) is always a value:
 

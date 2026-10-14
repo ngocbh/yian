@@ -80,7 +80,7 @@ is. `output: {name: ${x}, ...}` always returns a record, even with one field
 `${child.output.order}`) or none (`output: {}` returns `{}`). No `output:` (or
 `output: null`) returns `None`. Either form may declare types with typed bindings:
 `output: Size = ${x}`, or a field `size: Size = ${x}` under a block `output:`.
-Field names must be strings: quote a `true`/`yes`/`null`/`1` key (`'true': ${x}`).
+Field names must be strings: quote a `true`/`null`/`1` key (`'true': ${x}`).
 A scalar literal (`output: 5`, a field `x: 5`) is returned as written.
 
 Node IDs are the keys under `nodes:`. A node id must be an identifier: ASCII
@@ -93,6 +93,12 @@ multi-node def name may keep hyphens.
 
 A mapping can't repeat a key (two nodes with one id, a field written twice): it's
 a load error at the second key. Keys a `<<:` merge brings in may still be overridden.
+
+Unquoted values follow YAML 1.2's core rules plus unquoted dates and `<<:` merges:
+only `true`/`false` are booleans, so `yes`/`no`/`on`/`off` are text (CASE's `on:`
+key too); `017` is 17 (octal is `0o17`); `1e3` is a float; `1:30` and `1_000` are
+text; `2026-10-14` is a date. A `yes` that reaches a `bool` slot fails with
+"`yes` is text; write `true`".
 
 ### Compact mode — when the flow is a single node
 
@@ -291,8 +297,9 @@ quotes (`v: str = "${input.a} = 2"` binds `1 = 2`), and strings inside a list or
 record stay text (`list[str] = ["${x}"]` is that literal list). Otherwise a `${...}`
 or `call(...)` stays as written; anything else is a YAML literal like an input
 default (`rounds: int = 0`, `items: list[str] = []`, `x: Optional[int] = null`),
-checked at load. YAML 1.1 applies, so `str = 30`, `str = yes`, and
-`date = 2026-01-01` fail with a hint to quote (`str = "30"`). The whole binding is
+checked at load with those YAML value rules, so `str = 30` and
+`date = 2026-01-01` fail with a hint to quote (`str = "30"`), and `bool = yes`
+fails with "`yes` is text; write `true`". The whole binding is
 one plain scalar, so it can't contain `: ` or ` #`, even in quotes after ` = `
 (drop the type and quote the whole value); write a record literal as
 `v: Rec = {"a":1}`, not `{a: 1}`.

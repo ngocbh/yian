@@ -629,7 +629,10 @@ operation defines no lexical key policy and knows nothing about Compose or YAML.
 ## One-pass source ownership
 
 `compose/source/` is the only production Compose package that imports PyYAML.
-Root text and each uncached external file are constructed once as
+One loader class (`compose/source/scalars.py`) reads plain scalars with YAML 1.2
+core-schema rules plus unquoted timestamps and `<<` merge keys, for documents and
+for isolated literals (`parse_yaml_literal`), without touching PyYAML's global
+resolver or constructor tables. Root text and each uncached external file are constructed once as
 `SourceDocument`s, whose public cursor interface is immutable and defensive. They
 retain the original text and label while keeping PyYAML's composed/constructed
 graph private. YAML aliases and merge mappings are interpreted without mutating

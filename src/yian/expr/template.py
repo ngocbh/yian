@@ -65,8 +65,8 @@ if TYPE_CHECKING:  # annotation-only imports
 # `_find_paren_end` / `_split_calls_aware` are the paren/quote/span-aware splitters +
 # arg-literal coercion the directive recognizer reuses. Keyword args only; each arg
 # VALUE is a full binding — a `${…}`-bearing value (or a quoted scalar) stays a string,
-# else it is a literal (so `window=30` binds int 30). The literal grammar is a
-# deliberate YAML-1.1 SUBSET — see `_arg_source`.
+# else it is a literal (so `window=30` binds int 30). The literal grammar is the
+# expression grammar's, not YAML's — see `_arg_source`.
 # --------------------------------------------------------------------------- #
 
 
@@ -109,9 +109,11 @@ def _arg_source(value: str) -> Any:
     - else a bare token -> a literal via `_default_literal` (number / bool / null / a
       bare string), so `window=30` binds int 30.
 
-    NB this literal grammar is a deliberate SUBSET of YAML 1.1: a bare `yes`/`no`/`on`/
-    `off`/`None` stays a string (no boolean/null coercion) — avoiding the YAML bool
-    footgun. Quote, number, true/false, and null spellings match the named form."""
+    NB this literal grammar is the expression grammar's, not YAML's. A bare `yes`/`no`/
+    `on`/`off` stays a string, as in a flow file, and so do forms YAML reads as numbers or
+    dates (`1e3`, `0x1F`, `0o17`, `+12`, `.5`, `2026-10-14`) and YAML's `~` null; `None`/
+    `none` is null here, while YAML reads it as text. Quotes, decimal numbers, `true`/
+    `false`, and `null` match the named form."""
     stripped = value.strip()
     if len(stripped) >= 2 and stripped[0] in ("'", '"') and stripped[-1] == stripped[0]:
         return stripped[1:-1]  # a quoted scalar -> its inner text (template or literal)

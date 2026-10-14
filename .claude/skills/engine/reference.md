@@ -950,8 +950,10 @@ key construction and returned-flow resolver integration remain front-end work.
 
 ## Compose source ownership
 
-`compose/source/` is the sole production Compose package that imports PyYAML. It
-constructs root text once as a `SourceDocument` with an immutable, defensive public
+`compose/source/` is the sole production Compose package that imports PyYAML. Its
+one loader class (`scalars.py`) reads plain scalars with YAML 1.2 core-schema rules
+plus unquoted timestamps and `<<` merge keys, for documents and isolated literals,
+and never touches PyYAML's global tables. It constructs root text once as a `SourceDocument` with an immutable, defensive public
 cursor interface and keeps the composed and constructed YAML graph private. Each
 uncached external file gets one document too. The document owns the original text,
 label, semantic value, occurrence topology, and source ranges. Alias and merge

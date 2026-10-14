@@ -49,7 +49,8 @@ which means `+00:00`. The same strings are accepted on every supported Python ve
 Other ISO 8601 forms, such as `20260521` or `2026-W21-4`, are rejected with an error
 that shows the format. The value keeps the text as written.
 
-In a flow file, YAML 1.1 reads an unquoted timestamp first. A WAIT `until:` or a `case`
+In a flow file, yian's loader reads an unquoted timestamp as a date or datetime first
+(see [YAML values](syntax.md#yaml-values)). A WAIT `until:` or a `case`
 value gets its ISO text, so YAML forms such as `2026-05-21 14:30:00 -5` work there; a
 typed default must be quoted (see [syntax](syntax.md#types)), and so must a timestamp
 anywhere else.

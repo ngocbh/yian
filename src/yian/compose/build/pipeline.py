@@ -876,7 +876,7 @@ def _check_output_names(
 ) -> None:
     """Reject a flow `output:` record whose field name is not a string.
 
-    YAML reads an unquoted `true`, `yes`, `null`, or `1` key as a bool, None, or
+    YAML reads an unquoted `true`, `null`, or `1` key as a bool, None, or
     number; naming the output after its `str()` would rename it, and `1:` beside
     `'1':` would drop one output.
 

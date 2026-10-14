@@ -8,11 +8,14 @@ from types import SimpleNamespace
 
 import pytest
 
+import tests.engine._compose_codefns as fns
+import yian.run
 from yian.compose import LoadError, load_flow
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.validate.asserts import validate_node_asserts
 from yian.diagnostics import OriginRef, SourceRange
-from yian.nodes.base import Node
+from yian.expr import ExpressionError
+from yian.nodes.base import Node, _HostStop
 from yian.nodes.contracts import (
     Assertion,
     ContractOrigins,
@@ -20,7 +23,7 @@ from yian.nodes.contracts import (
     PartialRecordContract,
     ValueContract,
 )
-from yian.run import run_flow
+from yian.run import resume_flow, run_flow
 from yian.typesys.values import Type, ValueKind
 
 
@@ -549,3 +552,67 @@ output: ${{m.output}}
     loaded = load_flow(flow)
     assert run_flow(loaded, {"vs": [1, 2, 3]}).status == "succeeded"
     assert run_flow(loaded, {"vs": [1, -1, 3]}).status != "succeeded"  # element -1 -> y=-2 fails
+
+
+_TWO_NODES = """
+id: two
+name: two
+input:
+  v: int
+nodes:
+  a:
+    kind: code
+    code: tests.engine._compose_codefns:double
+    input:
+      n: ${input.v}
+    output: int
+  b:
+    kind: code
+    code: tests.engine._compose_codefns:double
+    input:
+      n: ${a.output}
+    output: int
+output: ${b.output}
+"""
+
+
+def test_python_built_unparseable_assert_fails_before_the_run_starts(tmp_path):
+    """A downstream node's bad assert raises before any node runs or any record is written."""
+    flow = load_flow(_TWO_NODES)
+    flow.compiled.nodes["b"].pre_asserts = [Assertion("${n} >= 0", "n non-negative")]
+    path = tmp_path / "run.jsonl"
+
+    with pytest.raises(ExpressionError) as excinfo:
+        run_flow(flow, {"v": 1}, log=path)
+
+    message = str(excinfo.value)
+    assert message.startswith(
+        "node 'b' pre-assert 'n non-negative' (`${n} >= 0`) is not a valid boolean expression: "
+    )
+    assert "write `n >= 0`" in message
+    assert not path.exists()
+
+
+def test_python_built_unparseable_assert_fails_before_resume_appends(tmp_path, monkeypatch):
+    """An unfinished run's bad assert raises before resume appends anything.
+
+    The first run skips the pre-run check, as a run logged before the check existed did:
+    changing an assert after the run would change the flow fingerprint instead.
+    """
+    flow = load_flow(_TWO_NODES)
+    flow.compiled.nodes["b"].pre_asserts = [Assertion("${n} >= 0", "n non-negative")]
+    path = tmp_path / "run.jsonl"
+
+    def stop(inputs):
+        raise _HostStop()
+
+    with monkeypatch.context() as m:
+        m.setattr(yian.run, "_check_assertions", lambda flow: None)
+        m.setattr(fns, "double", stop)  # node `a` stops after its durable start
+        with pytest.raises(_HostStop):
+            run_flow(flow, {"v": 1}, log=path)
+    lines = path.read_text().splitlines()
+
+    with pytest.raises(ExpressionError, match=r"^node 'b' pre-assert 'n non-negative'"):
+        resume_flow(flow, log=path)
+    assert path.read_text().splitlines() == lines

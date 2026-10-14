@@ -425,9 +425,10 @@ def run_flow(
             clashes or is reserved, an AGENT grants a tool or group not in the
             run's tools, a TOOL node's inputs or `output:` do not match the
             names and types its tool declares (an input the tool does not take,
-            a missing required input, or a type that can never fit), or an
+            a missing required input, or a type that can never fit), an
             AGENT grants skills while `skills` is `None` or lacks a listed
-            skill.
+            skill, or a node assertion set in Python is not a valid boolean
+            expression.
         `MemorySetupError`:
             Memory is enabled without a required memory implementation, cannot
             open an exact run snapshot, or has an invalid configuration.
@@ -496,6 +497,7 @@ def _run_flow_controlled(
         raise TypeError("learnable must be a bool")
     run_tools = ToolSet(tools)
     _check_tool_grants(flow.compiled, run_tools)
+    _check_assertions(flow.compiled)
     _check_tool_types(flow.compiled, run_tools)
     skills = _check_skills(flow.compiled, skills)
     require_steering(steering)
@@ -703,8 +705,10 @@ def resume_flow(
             worker count violates its contract, a group tool's name clashes or
             is reserved, an unfinished run's AGENT grants a tool or group
             not in `tools` or grants skills while `skills` is `None` or lacks
-            a listed skill, or an unfinished run's TOOL node's inputs or
-            `output:` do not match the names and types its tool declares.
+            a listed skill, an unfinished run's TOOL node's inputs or
+            `output:` do not match the names and types its tool declares, or
+            an unfinished run's node assertion set in Python is not a valid
+            boolean expression.
         `MemorySetupError`:
             The recorded run needs memory but its mapping is absent, incomplete,
             or cannot reproduce the exact recorded snapshots.
@@ -769,6 +773,7 @@ def _resume_flow_controlled(
                                       handle=_retained_handle(retained_program, state, authority, memory,
                                                               locator=retained_locator, api_key=api_key))
         _check_tool_grants(flow.compiled, run_tools)
+        _check_assertions(flow.compiled)
         _check_tool_types(flow.compiled, run_tools)
         skills = _check_skills(flow.compiled, skills)
         if check_llm_configs is not None:
@@ -856,6 +861,15 @@ def _check_tool_grants(flow: CompiledFlow, tools: ToolSet) -> None:
                         f"{list(tools.groups)}"
                     )
                 raise ValueError(f"AGENT node {node_id!r} grants {reason}") from None
+
+
+def _check_assertions(flow: CompiledFlow) -> None:
+    """Reject an assertion that doesn't parse on any static node, before any record is written.
+
+    A YAML flow can't hold one (Compose rejects it at load); this catches carriers set in Python.
+    """
+    for node_path, node in _static_nodes(flow):
+        node.validate_assertions(path=node_path)
 
 
 def _check_tool_types(flow: CompiledFlow, tools: ToolSet) -> None:

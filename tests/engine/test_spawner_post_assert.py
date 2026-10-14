@@ -27,6 +27,7 @@ from yian.compile.expand import _SYNTH_PREFIX, call_subgraph
 from yian.compose import load_flow
 from yian.diagnostics import OriginRef
 from yian.events import RunFailed
+from yian.expr import ExpressionError
 from yian.nodes.base import _HostStop
 from yian.nodes.contracts import Assertion
 from yian.run import resume_flow, run_flow
@@ -407,3 +408,15 @@ def test_repeated_input_ref_run_succeeds():
     res = run_flow(_load_repeated(), {"v": 5})
     assert res.status == "succeeded", res.failure
     assert res.output == 10
+
+
+def test_python_built_unparseable_spawner_post_assert_fails_before_the_run():
+    """A spawner's bad post-assert is named before the run, not raised bare at growth time."""
+    loaded = _load_output(5)
+    loaded.compiled.nodes["callee"].post_asserts = [Assertion("${output} < 100", "under 100")]
+
+    with pytest.raises(
+        ExpressionError,
+        match=r"^node 'callee' post-assert 'under 100' \(`\$\{output\} < 100`\) is not a valid boolean expression: ",
+    ):
+        run_flow(loaded, {})

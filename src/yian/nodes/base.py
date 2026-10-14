@@ -28,7 +28,7 @@ from typing import Any, Callable, ClassVar, Iterator, Optional, Protocol, Union,
 
 from yian.diagnostics import Failure, OriginRef
 from yian.expr import ExpressionError
-from yian.expr.expressions import evaluate_when_record
+from yian.expr.expressions import evaluate_when_record, parse_condition
 from yian.expr.lineage import FeedbackValue, has_feedback, validate_feedback
 from yian.memory.contracts import MemoryScope
 from yian.nodes.binding import BindingError, ReservedBinder, _validate_parameters, apply_defaults
@@ -913,22 +913,56 @@ class Node(ABC):
     def validate_execution_setup(self) -> None:
         """Reject malformed node-owned execution setup before entering the body stage.
 
-        The base implementation requires a concrete ``forward``. Composite kinds
-        extend this hook for invariants such as requiring their compiled child flow.
+        The base implementation requires a concrete ``forward`` and rejects an
+        assertion whose expression doesn't parse, so a malformed post-assert is
+        reported before the body has effects. Composite kinds extend this hook for
+        invariants such as requiring their compiled child flow.
         """
         if type(self).forward is Node.forward:
             raise NotImplementedError(
                 f"node {self.id!r} ({type(self).__name__}) defines no forward"
             )
+        self.validate_assertions()
+
+    def validate_assertions(self, *, path: str | None = None) -> None:
+        """Parse every pre-assert and post-assert expression on this node.
+
+        Args:
+            path (`str`, *optional*, defaults to `None`):
+                The static node path to name in the error instead of the node's id,
+                used by a pre-run check over a whole flow.
+
+        Raises:
+            `ExpressionError`: If an assertion's expression doesn't parse; the message
+                names the node, the assertion list, and the assertion.
+        """
+        for assertion in self.pre_asserts:
+            self._parse_assertion("pre-assert", assertion, path)
+        for assertion in self.post_asserts:
+            self._parse_assertion("post-assert", assertion, path)
+
+    def _parse_assertion(self, label: str, assertion: Assertion, where: str | None = None) -> None:
+        """Parse one assertion's expression, naming the node and assertion when it doesn't parse."""
+        try:
+            parse_condition(assertion.expression)
+        except ExpressionError as exc:
+            shown = repr(assertion.display)
+            if assertion.expression != assertion.display:
+                shown += f" (`{assertion.expression}`)"
+            raise ExpressionError(
+                f"node {(where or self.id)!r} {label} {shown} "
+                f"is not a valid boolean expression: {exc}"
+            ) from exc
 
     def run(self, inputs: dict[str, Any], **caps: Any) -> "NodeResult":
         """Run the node's complete pure-execution template.
 
-        Declared defaults are filled first, node-owned setup is validated, pre-asserts
-        run against the bound record, ``forward`` executes, and post-asserts inspect
-        an ``Output`` against the pristine inputs. The method returns exactly
-        ``Output | Route | Grow`` or a streaming generator with one of those terminal
-        values. Narrow effects are passed only through node-owned trait gates.
+        Declared defaults are filled first, node-owned setup (including that every
+        assertion parses) is validated, pre-asserts run against the bound record,
+        ``forward`` executes, and post-asserts inspect an ``Output`` against the
+        pristine inputs. The method returns exactly ``Output | Route | Grow`` or a
+        streaming generator with one of those terminal values. Narrow effects are
+        passed only through node-owned trait gates.
 
         Direct calls preserve the original exception and traceback. The evaluator uses
         the private companion path to tag wrapper-owned binding, assertion, and body
@@ -1012,7 +1046,7 @@ class Node(ABC):
             (
                 assertion
                 for assertion in self.pre_asserts
-                if not self._assert_holds(assertion.expression, inputs)
+                if not self._assert_holds("pre-assert", assertion, inputs)
             ),
             None,
         )
@@ -1057,7 +1091,7 @@ class Node(ABC):
                 (
                     assertion
                     for assertion in self.post_asserts
-                    if not self._assert_holds(assertion.expression, post_record)
+                    if not self._assert_holds("post-assert", assertion, post_record)
                 ),
                 None,
             )
@@ -1201,12 +1235,16 @@ class Node(ABC):
         text, so a message about an authored param is byte-identical to before."""
         return self.wiring_labels.get(param, f"input {param!r}")
 
-    def _assert_holds(self, expr: str, record: dict) -> bool:
-        """Evaluate a node assert against `record` with this node's type table; a raising
-        assert (ordered/arith over a non-scalar / None `${output}`) is treated as not holding,
-        which the wrapper marks as ``assertion.failed`` at the evaluator boundary."""
+    def _assert_holds(self, label: str, assertion: Assertion, record: dict) -> bool:
+        """Evaluate a node assert against `record` with this node's type table.
+
+        An expression that doesn't parse raises its named parse error. One that parses
+        but raises while evaluating (ordered/arith over a non-scalar / None `output`) is
+        treated as not holding, which the wrapper marks as ``assertion.failed`` at the
+        evaluator boundary."""
+        self._parse_assertion(label, assertion)
         try:
-            return bool(evaluate_when_record(expr, record, self.types))
+            return bool(evaluate_when_record(assertion.expression, record, self.types))
         except ExpressionError:
             return False
 

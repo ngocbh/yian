@@ -553,8 +553,8 @@ A union is `Type(kind=OBJECT, variants=(member, ...))`: two or more non-nullable
 members in canonical order (by tag, else by the canonical label in the older bracket
 spelling, `Optional[int]` rather than the printed `Optional(int)`), deduplicated by
 equality because `Type` holds dicts and is unhashable. `Optional(Union(...))` sets
-`nullable` on the union, never on a member. Tag fields are derived (`union_tag_fields`), not stored. A
-tagged union's value check picks the member by the first tag field; an untagged one, whose
+`nullable` on the union, never on a member. Tag fields are derived (`union_tag_fields`),
+not stored. A tagged union's value check picks the member by the first tag field; an untagged one, whose
 members `types_overlap` proved disjoint at resolution, checks the one member the value
 satisfies. Compatibility, labels, inline type copying, structured-output schemas, and
 manifests (`"union": [...]`, only when present) all walk the arm. `union_field` and

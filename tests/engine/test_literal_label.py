@@ -4,7 +4,14 @@ import pytest
 
 from yian import LoadError, load_flow
 from yian.typesys.types import EnumExpr, format_type_expr, parse_type, read_typedefs, type_for
-from yian.typesys.values import Type, TypeCheckError, ValueKind, _labels, canonical_type_label
+from yian.typesys.values import (
+    Type,
+    TypeCheckError,
+    ValueKind,
+    _labels,
+    canonical_type_label,
+    literal_label,
+)
 
 
 def _lit(*tags):
@@ -28,7 +35,6 @@ def test_canonical_label_spells_literal_in_the_parenthesized_form(tags, label):
 
 
 def test_both_renderers_share_one_spelling():
-    from yian.typesys.values import literal_label
 
     assert (
         format_type_expr(EnumExpr(("go", "no_go")))

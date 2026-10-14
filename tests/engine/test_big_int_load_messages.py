@@ -316,6 +316,26 @@ def test_an_unknown_long_int_tool_id_shows_a_placeholder():
     assert result.status == "failed"
     assert f"unknown tool id {PLACEHOLDER}" in msg
     assert "set_int_max_str_digits" not in msg
+    assert re.search(r"[0-9]{600}", msg) is None
+
+
+def test_a_tool_receives_a_long_int_input():
+    seen = []
+
+    def place_order(qty: int, lots: list[int]) -> int:
+        """Place an order."""
+        seen.append((type(qty), qty, lots))
+        return qty + 1
+
+    flow = load_flow(
+        "id: p\nname: p\ninput:\n  x: !int\nnodes:\n  place:\n    kind: tool\n"
+        "    tool_id: place_order\n    input:\n      qty: ${input.x}\n      lots: ${[input.x]}\n"
+        "output: ${place.output}\n"
+    )
+    result = run_flow(flow, {"x": BIG}, tools={"place_order": place_order})
+    assert result.status == "succeeded", result.failure
+    assert result.output == BIG + 1
+    assert seen == [(int, BIG, [BIG])]
 
 
 def test_a_wait_until_long_int_fails_with_a_placeholder():

@@ -1,8 +1,8 @@
 # The default `yian chat` flow — a Yian assistant with flow-op tools.
 # Same LOOP-per-turn shape as examples/chat.yaml; the reply agent runs a tool loop.
-# A typed CASE returns each turn's record: exact exit text is a value branch that
-# keeps the transcript and sets `exited`; anything else calls `respond`, whose
-# reply agent and transcript fold produce the same record.
+# A CASE picks each turn's record: exact exit text routes to `exited`, a value
+# entry that keeps the transcript and sets `exited`; anything else calls `respond`,
+# whose reply agent and transcript fold produce the same record.
 id: yian-chat
 name: composer_chat
 description: An assistant that can discover, read, validate, run, and author Yian flows.
@@ -66,21 +66,19 @@ defs:
         kind: human_input
         prompt: "You:"
         output: str
+      exited: !Turn
+        transcript: ${input.transcript}
+        exited: true
       route:
         kind: case
         on: ${ask.output}
-        output: Turn
         cases:
           - when: /exit
-            then:
-              transcript: ${input.transcript}
-              exited: true
+            then: exited
           - when: /quit
-            then:
-              transcript: ${input.transcript}
-              exited: true
+            then: exited
         else: call(respond, transcript=${input.transcript}, message=${ask.output})
-    output: ${route.output}
+    output: !Turn ${route.output}
 
 nodes:
   chat:

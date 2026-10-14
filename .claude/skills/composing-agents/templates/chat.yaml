@@ -1,12 +1,13 @@
 # Conversational REPL — the same turn-by-turn LOOP shape used by `yian chat`.
-# The turn boundary is STRUCTURAL: HUMAN_INPUT feeds a typed CASE that returns the turn's
-# record. Exact exit text is a value branch: it keeps the transcript and sets `exited`.
-# Anything else calls `respond`, where an AGENT node fills the reply and a CODE node folds
-# it into the transcript. The LLM only fills the reply.
+# The turn boundary is STRUCTURAL: HUMAN_INPUT feeds a CASE that picks the turn's record.
+# Exact exit text routes to `exited`, a value entry that keeps the transcript and sets
+# `exited`. Anything else calls `respond`, where an AGENT node fills the reply and a CODE
+# node folds it into the transcript. The LLM only fills the reply.
 #
 # Carried record ('a): {transcript: str, exited: bool} — threaded turn to turn ('a -> 'a).
-# A CASE with `output:` must be exhaustive (`else:` here) and every branch, value or
-# routed, must produce that type; `${route.output}` reads whichever branch ran.
+# A tagged `nodes:` entry such as `exited: !Turn` is a value: its tag checks the fields
+# written out under it. `${route.output}` reads whichever branch ran; `!Turn` on the
+# body's output types that as the carried record.
 
 id: chat
 name: chat
@@ -64,23 +65,21 @@ defs:
         kind: human_input       # blocks a worker until the broker returns the message
         prompt: "You:"
         output: str
+      exited: !Turn             # a value entry: the exit record itself
+        transcript: ${input.transcript}
+        exited: true
       route:
         kind: case
         on: ${ask.output}
-        output: Turn            # every branch produces a Turn
         cases:
           - when: /exit
-            then:               # a value branch: the exit record itself
-              transcript: ${input.transcript}
-              exited: true
+            then: exited
           - when: /quit
-            then:
-              transcript: ${input.transcript}
-              exited: true
+            then: exited
         else: call(respond, transcript=${input.transcript}, message=${ask.output})
     # The whole carried record; a body may instead return a mapping of carried fields,
     # and an omitted field keeps its value.
-    output: ${route.output}
+    output: !Turn ${route.output}
 
 nodes:
   chat:
@@ -88,6 +87,6 @@ nodes:
     call: turn
     input:                          # the SEED carried record — defines 'a
       transcript: ${input.opening}
-      exited: false                 # the CASE's exit branch sets true for exact /exit or /quit
+      exited: false                 # the `exited` entry sets true for exact /exit or /quit
     while: not exited               # pre-check over a carried field
 output: ${chat.output.transcript}

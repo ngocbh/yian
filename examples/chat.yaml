@@ -1,9 +1,9 @@
 # chat — a turn-by-turn conversational REPL (agent without tools; deterministic transcript).
 #
-# The turn boundary is STRUCTURAL: HUMAN_INPUT feeds a typed CASE that returns the turn's
-# record. Exact exit text is a value branch: it keeps the transcript and sets `exited`.
-# Anything else calls `respond`, where the AGENT fills the reply and a CODE node folds it
-# into the transcript. The LLM only fills the reply.
+# The turn boundary is STRUCTURAL: HUMAN_INPUT feeds a CASE that picks the turn's record.
+# Exact exit text routes to `exited`, a value entry that keeps the transcript and sets
+# `exited`. Anything else calls `respond`, where the AGENT fills the reply and a CODE node
+# folds it into the transcript. The LLM only fills the reply.
 # Run it with:  yian chat examples/chat.yaml
 id: chat
 name: chat
@@ -61,21 +61,19 @@ defs:
         kind: human_input       # blocks a worker until the broker returns the message
         prompt: "You:"
         output: str
+      exited: !Turn             # a value entry: the exit record itself
+        transcript: ${input.transcript}
+        exited: true
       route:
         kind: case
         on: ${ask.output}
-        output: Turn            # every branch produces a Turn
         cases:
           - when: /exit
-            then:               # a value branch: the exit record itself
-              transcript: ${input.transcript}
-              exited: true
+            then: exited
           - when: /quit
-            then:
-              transcript: ${input.transcript}
-              exited: true
+            then: exited
         else: call(respond, transcript=${input.transcript}, message=${ask.output})
-    output: ${route.output}
+    output: !Turn ${route.output}   # whichever branch ran; the tag types it as the record
 
 nodes:
   chat:
@@ -83,6 +81,6 @@ nodes:
     call: turn
     input:
       transcript: ${input.opening}
-      exited: false                 # the CASE's exit branch sets true for exact /exit or /quit
+      exited: false                 # the `exited` entry sets true for exact /exit or /quit
     while: not exited               # a carried-field predicate
 output: ${chat.output.transcript}

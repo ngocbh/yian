@@ -798,14 +798,16 @@ identity-neutral. Live output validation resolves a `TypeCheckError.path` throug
 whole or field-local contract. The structural path is consumed before `Failure` and
 never enters the durable record schema.
 
-Numeric `Type.bounds` refines INTEGER/NUMBER with one inclusive endpoint pair.
-The shared shape validator rejects malformed or reversed bounds and competing
-refinements. Integer endpoints retain arbitrary precision; NUMBER endpoints must
-have a finite, lossless float representation. Runtime checks retain nested
-`TypeCheckError.path`; compatibility checks interval containment, including
-integer-to-number widening. Inline canonicalization preserves the pair, and
-generated numeric schemas carry `minimum`/`maximum` recursively through lists
-and records. Canonical labels and manifests include present bounds; absent bounds
+Numeric `Type.bounds` refines INTEGER/NUMBER with one inclusive endpoint pair;
+either end may be `None` (open), but not both. The shared shape validator rejects
+malformed or reversed bounds and competing refinements. Integer endpoints retain
+arbitrary precision; NUMBER endpoints must have a finite, lossless float
+representation. Runtime checks retain nested `TypeCheckError.path`; compatibility
+checks interval containment through `typesys.values.numeric_interval` (an open end
+is infinite), including integer-to-number widening. Inline canonicalization
+preserves the pair, and generated numeric schemas carry `minimum` and/or `maximum` for the ends that are
+present, recursively through lists and records. Canonical labels and manifests
+include present bounds (a manifest writes an open end as `null`); absent bounds
 remain omitted from manifests to preserve unbounded identities.
 
 NaN, infinity, and complex numbers are not yian values.

@@ -50,12 +50,14 @@ this model whenever you design anything:
   source stays a literal;
   `iter_origins()` and `map_origins()` touch only declared provenance slots, and
   `typesys.Type` remains provenance-free while arbitrary payloads stay opaque.
-- Numeric `Type.bounds` is one optional inclusive pair on INTEGER/NUMBER.
-  Validate shape and values through the existing type system. Integer endpoints
-  remain arbitrary precision; NUMBER endpoints need finite, lossless float
-  representation. Compatibility requires interval containment, and inline type
-  copies, nested schemas, and labels retain the refinement. Omit absent bounds
-  from manifests so unbounded declarations keep their identity.
+- Numeric `Type.bounds` is one optional inclusive pair on INTEGER/NUMBER; an open
+  end is `None`, never both. Validate shape and values through the existing type
+  system. Integer endpoints remain arbitrary precision; NUMBER endpoints need
+  finite, lossless float representation. Compatibility requires interval
+  containment (through `typesys.values.numeric_interval`, an open end as
+  infinite), and inline type copies, nested schemas, and labels retain the
+  refinement. Omit absent bounds from manifests so unbounded declarations keep
+  their identity.
 - NaN, infinity, and complex numbers are not yian values.
   `typesys.values.reject_nonfinite(value, where)` finds one at any depth and
   raises `TypeCheckError` with its path; the first boundary rejects it. The

@@ -193,10 +193,10 @@ not the reverse.
 Authors write types in yian's own grammar: Python typing's vocabulary, spelled with
 parentheses (`list(X)`, `Optional(X)`, `Literal(...)`, `dict(K, V)`, a bare PascalCase
 registry name, `Union(A, B, ...)`) and inclusive numeric ranges (`int(1..12)`,
-`float(0.0..1.0)`, both ends required). `parse_type` is a hand-written tokenizer and
-recursive-descent parser that reads `0..1` as a range, not as `0.` and `.1`. It builds the
-same `TypeExpr` AST as before, so resolution is unchanged, and `format_type_expr` prints the
-parenthesized spelling. The old bracket spelling (`Optional[str]`, `int[1, 12]`) is a load
+`float(0.0..1.0)`, `int(0..)`, `int(..100)`; either end may be open). `parse_type` is a
+hand-written tokenizer and recursive-descent parser that reads `0..1` as a range, not as
+`0.` and `.1`. It builds the same `TypeExpr` AST as before, so resolution is unchanged,
+and `format_type_expr` prints the parenthesized spelling. The old bracket spelling (`Optional[str]`, `int[1, 12]`) is a load
 error that shows the new spelling; a private legacy parser reads it only to print that
 message. Wire values keep their own names: a `ValueKind` such as `list[str]` is a storage
 tag, not authored syntax.
@@ -246,9 +246,9 @@ narrows: it never fills in a field and never converts a value.
 - **fits** — every inferred value is a declared value; no check is needed beyond the
   usual runtime one.
 - **narrower** — some inferred values may miss the declared type (Optional into
-  non-Optional, `str` into a `Literal`, an unbounded number into a bounded one, an
-  `object` value into a record, a union into one of its members); the binding loads
-  and the binder checks it at runtime with `build_value_as`, failing with
+  non-Optional, `str` into a `Literal`, an unbounded or wider-ranged number into a
+  bounded one, an `object` value into a record, a union into one of its members); the
+  binding loads and the binder checks it at runtime with `build_value_as`, failing with
   `binding.type`.
 - **disjoint** — no non-null inferred value fits; loading fails. Records count as
   closed, so an extra required field makes them disjoint, and sharing only `None`

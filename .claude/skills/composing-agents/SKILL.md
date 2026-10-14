@@ -226,12 +226,14 @@ use parentheses: `list(X)`, `Optional(X)`, `Literal(a, b)` (an enum of tags), na
 `date` is `YYYY-MM-DD`; `datetime` is `YYYY-MM-DDTHH:MM[:SS[.fff]][Z|±HH:MM]` (a
 space may replace `T`; `.fff` is 1–6 digits); other forms are rejected.
 
-Use `int(1..12)` or `float(0.0..1.0)` for inclusive numeric ranges. Both ends are
-required and the lower must not exceed the upper (`0..1` reads as a range). Integer
+Use `int(1..12)` or `float(0.0..1.0)` for inclusive numeric ranges. Either end may
+be open: `int(0..)` is 0 or more, `int(..100)` is at most 100; `int(..)` is an error
+(write `int`). The lower must not exceed the upper (`0..1` reads as a range). Integer
 ends may be arbitrary precision; float ends must be finite, and integer ends in a
 float domain must convert without rounding. Booleans are invalid. Ranges compose
 with lists, records, aliases, and nullable types. Defaults and supplied values are
-checked; cross-flow sources must fit the destination domain.
+checked; cross-flow sources must fit the destination domain, with an open end
+counting as unbounded (an `int(0..)` source into `int(0..100)` needs a tag).
 
 A `float` is finite: a binding whose value is NaN, infinity, or complex (say an
 overflowing `${x * 10}`, or `${(0 - 8) ** 0.5}`) fails its node with

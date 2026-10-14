@@ -273,9 +273,9 @@ field_labels = result.field_labels
 - **`node_range` / `field_ranges` / `field_labels`** remain in Compose so post-build
   validators can locate and name errors after a descriptor has produced its semantic
   node. `field_labels` holds the author-facing names a desugar sets for a synth node's
-  fields, such as `node 'ask' adaptive_questions.prompt` for an adaptive gate's
-  composer. Assembly drops all three before `CompiledFlow.from_parts`; compile and
-  runtime never receive them.
+  fields and inputs, such as `node 'ask' adaptive_questions.prompt` or
+  `node 'ask' input 'proj'` for an adaptive gate's composer. Assembly drops all three
+  before `CompiledFlow.from_parts`; compile and runtime never receive them.
 
 Leaf kinds (`agent`/`code`/`tool`) ignore `ctx.resolver`; `call`/`map`/`loop` use
 it to resolve the child flow they expand into. CODE alone also reads

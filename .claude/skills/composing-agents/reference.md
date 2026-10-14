@@ -118,7 +118,8 @@ nested call also carries its outer call's other arguments (in
 `call(f, x=call(g), y=${a.output})`, `g` waits for `a`).
 An **unquoted** value starting with `call(` must be exactly one well-formed
 directive, else a load error names the problem (unbalanced parens, trailing text,
-missing comma, positional or repeated keyword, a keyword without a name). A
+missing comma, positional or repeated keyword, a keyword without a name, a bare
+value YAML can't build like `d=2026-13-45`). A
 **quoted** value is text, so `"call(...)"` is the escape for literal text; a quoted
 call holding `${...}` is a load error. The old `${flow(args)}`
 (a flow call inside braces) is a load error: hoist an embedded flow call to a named

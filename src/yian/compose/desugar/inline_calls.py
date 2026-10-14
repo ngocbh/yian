@@ -165,7 +165,7 @@ class SecretArgumentError(ExpressionError):
 class ArgumentValueError(ExpressionError):
     """A `call(...)` keyword argument's bare value can't be read as a YAML scalar.
 
-    Its message never includes the value; quoting the value keeps it as text.
+    Its message never repeats the authored text; quoting the value keeps it as text.
 
     Args:
         flow_id (`str`): The called flow's id.

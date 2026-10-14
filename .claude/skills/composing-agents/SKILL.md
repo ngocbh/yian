@@ -945,7 +945,7 @@ the flow `output:`/`asserts:` has no host. An **unquoted** value whose trimmed t
 with `call(` must be **exactly one** well-formed directive, else a load
 error names the problem (unbalanced parens, trailing text after `)`, flow id not a bare name
 / missing comma, positional or repeated keyword, a keyword value that reads as two keywords
-like `a=1 b=2`). A **quoted** value (`"call(f) tail"`, or a quoted arg `x="call(g)"`) is
+like `a=1 b=2`, a bare value YAML can't build like `d=2026-13-45`). A **quoted** value (`"call(f) tail"`, or a quoted arg `x="call(g)"`) is
 text — the escape for literal `call(` text; a quoted call holding `${...}` is a load error.
 A `call(` mid-value or inside `${...}` is literal text. A flow `asserts:` item follows the
 rule quoted or not (an assert is an expression, never text). The old

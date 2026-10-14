@@ -470,6 +470,7 @@ def test_an_unreadable_keyword_value_is_a_located_load_error(node):
     assert "2026-13-45" not in message
     assert "quote the whole value" not in message
     assert "If you meant the text" not in message
+    assert "a branch target must be" not in message
     assert caught.value.diagnostic.frames[-1].range is not None
 
 

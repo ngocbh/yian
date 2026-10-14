@@ -57,7 +57,7 @@ def read_plain_scalar(text: str) -> Any:
             impossible date.
     """
 
-    if "\n" in text or "\r" in text:
+    if "\n" in text:
         return text  # one line only: the resolver's `$` would also match before "\n"
     loader = _FlowLoader("")
     tag = loader.resolve(yaml.ScalarNode, text, (True, False))

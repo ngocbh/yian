@@ -329,6 +329,9 @@ def _is_value(
                 and not isinstance(exc, ArgumentValueError)
                 else ""
             )
+            if isinstance(exc, ArgumentValueError):
+                # The target is a single call; only one of its arguments is wrong.
+                raise diagnostics.error(f"{host} {exc}", range=rng) from exc
             raise diagnostics.error(
                 f"{host} a branch target must be a node id or a single call: {exc}{hint}",
                 range=rng,

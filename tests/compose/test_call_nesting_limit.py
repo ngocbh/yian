@@ -1,15 +1,17 @@
 """A flow's call, map, and loop bodies nest at most 50 levels; a deeper chain is a located load error.
 
-Each body is one level, whether it is a `defs:` entry, an inline body, or a `uses:` flow.
-A chain at the limit loads, runs, and resumes. A chain one past it fails at the root call
-that reaches 51 levels; a much longer chain fails at the first call past the limit, before
-the loader recurses any deeper. Imported files load before `defs:`, so a file loads at
+Each body is one level, whether it is a `defs:` entry, an inline body, a `call(...)`
+directive, or a `uses:` flow, and whether a call, map, or loop reaches it. A chain at the
+limit loads, runs, and resumes. A chain one past it fails at the root call that reaches 51
+levels; a much longer chain fails at the first call past the limit, before the loader
+recurses any deeper. Imported files load before `defs:`, so a file loads at
 its importer's base stack and its own uncalled defs don't count the importing chain.
 """
 
 import inspect
 import json
 import sys
+import textwrap
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -18,6 +20,7 @@ import pytest
 from yian.compose import LoadError, load_flow
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.nodes.resolver import call_nesting
+from yian.compose.source import SourceDocument
 from yian.events import NodeStarted
 from yian.run import resume_flow, run_flow
 
@@ -96,6 +99,141 @@ def _defs_chain(
         "  top:\n"
         "    kind: call\n"
         f"    call: {prefix}0\n"
+        "    input:\n"
+        "      x: ${input.x}\n"
+        "output: ${top.output}\n"
+    )
+
+
+def _inline_chain(n: int) -> str:
+    """Return a flow whose root `top` nests `n` inline call bodies around a CODE leaf."""
+    body = (
+        "kind: code\n"
+        "code: tests.engine._compose_codefns:echo\n"
+        "input:\n"
+        "  topic: ${input.x}\n"
+        "output: str\n"
+    )
+    for _ in range(n):
+        body = (
+            "kind: call\n"
+            "input:\n"
+            "  x: ${input.x}\n"
+            "nodes:\n"
+            "  step:\n" + textwrap.indent(body, "    ") + "output: ${step.output}\n"
+        )
+    return (
+        f"id: inline{n}\nname: inline{n}\ninput:\n  x: !str\nnodes:\n  top:\n"
+        + textwrap.indent(body, "    ")
+        + "output: ${top.output}\n"
+    )
+
+
+def _mixed_chain(n: int) -> str:
+    """Return a flow whose root `top` calls `c0` and each `ci` reaches `c(i+1)` in turn by
+    CALL, MAP, and LOOP; the last def is a CODE leaf.
+
+    A LOOP body returns the record it carries, so each def right under a LOOP outputs
+    `{v: ...}`.
+    """
+    entries = []
+    for i in range(n):
+        under_loop = i > 0 and (i - 1) % 3 == 2
+        if i == n - 1:
+            node = (
+                "        kind: code\n"
+                "        code: tests.engine._compose_codefns:echo\n"
+                "        input:\n"
+                "          topic: ${input.v}\n"
+                "        output: str\n"
+            )
+            result = "${step.output}"
+        else:
+            callee = f"c{i + 1}"
+            node = {
+                0: f"        kind: call\n        call: {callee}\n"
+                "        input:\n          v: ${input.v}\n",
+                1: f"        kind: map\n        over: ${{[input.v]}}\n        call: {callee}\n"
+                "        input:\n          v: ${item}\n",
+                2: f"        kind: loop\n        times: 1\n        call: {callee}\n"
+                "        input:\n          v: ${input.v}\n",
+            }[i % 3]
+            result = "${input.v}" if under_loop else "${step.output}"
+        output = f"\n      v: {result}\n" if under_loop else f" {result}\n"
+        entries.append(
+            f"  c{i}:\n    input:\n      v: !str\n    nodes:\n      step:\n{node}"
+            f"    output:{output}"
+        )
+    return (
+        f"id: mixed{n}\nname: mixed{n}\ninput:\n  v: !str\ndefs:\n"
+        + "".join(entries)
+        + "nodes:\n"
+        "  top:\n"
+        "    kind: call\n"
+        "    call: c0\n"
+        "    input:\n"
+        "      v: ${input.v}\n"
+        "output: ${top.output}\n"
+    )
+
+
+def _directive_chain(n: int) -> str:
+    """Return a flow whose root `top` and each `ci` echo `call(c(i+1), x=${input.x})`,
+    starting from `c0`; the last def is a CODE leaf."""
+
+    def echo_call(target: str, indent: str) -> str:
+        return (
+            f"{indent}step:\n"
+            f"{indent}  kind: code\n"
+            f"{indent}  code: tests.engine._compose_codefns:echo\n"
+            f"{indent}  input:\n"
+            f"{indent}    topic: call({target}, x=${{input.x}})\n"
+            f"{indent}  output: str\n"
+        )
+
+    entries = []
+    for i in range(n):
+        if i < n - 1:
+            body = (
+                "    input:\n      x: !str\n    nodes:\n"
+                + echo_call(f"c{i + 1}", "      ")
+                + "    output: ${step.output}\n"
+            )
+        else:
+            body = _LEAF
+        entries.append(f"  c{i}:\n{body}")
+    return (
+        f"id: directive{n}\nname: directive{n}\ninput:\n  x: !str\ndefs:\n"
+        + "".join(entries)
+        + "nodes:\n"
+        + echo_call("c0", "  ")
+        + "output: ${step.output}\n"
+    )
+
+
+def _uses_files(directory: Path, n: int) -> str:
+    """Write flow files `u0`..`u(n-1)` to `directory`, each importing and calling the next
+    and the last a CODE leaf, and return a root flow importing `u0` as `first`."""
+    for i in range(n):
+        head = f"id: u{i}\nname: u{i}\ninput:\n  x: !str\n"
+        if i < n - 1:
+            text = (
+                head + f"uses:\n  nxt: u{i + 1}\nnodes:\n"
+                "  step:\n"
+                "    kind: call\n"
+                "    call: nxt\n"
+                "    input:\n"
+                "      x: ${input.x}\n"
+                "output: ${step.output}\n"
+            )
+        else:
+            text = head + "nodes:\n" + _ROOT_LEAF
+        (directory / f"u{i}.yaml").write_text(text)
+    return (
+        "id: root\nname: root\ninput:\n  x: !str\nuses:\n  first: u0\nnodes:\n"
+        "  top:\n"
+        "    kind: call\n"
+        "    call: first\n"
         "    input:\n"
         "      x: ${input.x}\n"
         "output: ${top.output}\n"
@@ -346,3 +484,79 @@ def test_resolver_exceptions_become_load_errors_at_the_alias(text: str) -> None:
     assert frames[0].note == "uses alias 'ext'"
     assert frames[0].range is not None
     assert frames[0].range.start_line == _line_of(text, "ext: child")
+
+
+def test_inline_bodies_count() -> None:
+    with _stack_headroom():
+        result = run_flow(load_flow(_inline_chain(50)), {"x": "hi"}, num_workers=0)
+    assert result.status == "succeeded", result.failure
+    assert result.output == "hi"
+
+    text = _inline_chain(51)
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+
+    assert _PAST_DEEP in str(caught.value)
+    _assert_no_recursion_error(caught.value)
+    # An inline body is the callable its node calls, so the error sits on the innermost
+    # call node's `nodes:` body.
+    innermost = SourceDocument.parse(text).root.child("nodes").child("top")
+    for _ in range(50):
+        innermost = innermost.child("nodes").child("step")
+    assert caught.value.diagnostic.frames[-1].range == innermost.range_of("nodes")
+
+
+def test_map_and_loop_bodies_count() -> None:
+    with _stack_headroom():
+        result = run_flow(load_flow(_mixed_chain(50)), {"v": "hi"}, num_workers=0)
+    assert result.status == "succeeded", result.failure
+    assert result.output == [{"v": "hi"}]
+    # The CODE leaf, 50 bodies down, ran.
+    assert any(
+        e.node_id.count("/") == 50 and e.node_id.endswith("/step")
+        for e in result.events
+        if isinstance(e, NodeStarted)
+    )
+
+    text = _mixed_chain(51)
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+
+    assert _PAST_51 in str(caught.value)
+    _assert_no_recursion_error(caught.value)
+    assert _error_line(caught.value) == _line_of(text, "call: c0")
+
+
+def test_call_directive_counts() -> None:
+    with _stack_headroom():
+        result = run_flow(load_flow(_directive_chain(50)), {"x": "hi"}, num_workers=0)
+    assert result.status == "succeeded", result.failure
+    assert result.output == "hi"
+
+    with pytest.raises(LoadError, match="past the call nesting limit of 50") as caught:
+        load_flow(_directive_chain(51))
+    _assert_no_recursion_error(caught.value)
+
+
+def test_uses_files_count(tmp_path: Path) -> None:
+    legal = tmp_path / "legal"
+    legal.mkdir()
+    with _stack_headroom():
+        flow = load_flow(_uses_files(legal, 50), search_paths=[legal])
+        result = run_flow(flow, {"x": "hi"}, num_workers=0)
+    assert result.status == "succeeded", result.failure
+    assert result.output == "hi"
+
+    deep = tmp_path / "deep"
+    deep.mkdir()
+    text = _uses_files(deep, 51)
+    with pytest.raises(LoadError) as caught:
+        load_flow(text, search_paths=[deep])
+
+    assert _PAST_51 in str(caught.value)
+    assert "call node 'top': calling callable 'first'" in str(caught.value)
+    _assert_no_recursion_error(caught.value)
+    frames = caught.value.diagnostic.frames
+    assert len(frames) == 1
+    assert frames[0].note is None
+    assert _error_line(caught.value) == _line_of(text, "call: first")

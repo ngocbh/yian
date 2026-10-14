@@ -104,8 +104,9 @@ class HumanInputNode(Node):
 
         Raises:
             `ExpressionError`:
-                If a template's `${...}` span doesn't parse, calls a function that isn't a
-                builtin (or `isinstance`), or calls a builtin with arguments it doesn't take;
+                Raised when a template's `${...}` span doesn't parse, calls `isinstance` or
+                a function that isn't a builtin, or calls a builtin with arguments it doesn't
+                take;
                 the message names the node and the site.
         """
         for site_path, text in template_sites(self.prompt, self.questions):

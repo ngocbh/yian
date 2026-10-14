@@ -434,8 +434,12 @@ def run_flow(
             names and types its tool declares (an input the tool does not take,
             a missing required input, or a type that can never fit), an
             AGENT grants skills while `skills` is `None` or lacks a listed
-            skill, or a node assertion, CASE `when`, or LOOP `while`/`until`
-            set in Python is not a valid boolean expression.
+            skill, a node assertion, CASE `when`, or LOOP `while`/`until`
+            set in Python is not a valid boolean expression, or a binding, flow
+            output, or prompt set in Python has a `${...}` span that doesn't
+            parse or calls a function it can't (a builtin with arguments it
+            doesn't take, a name outside the node's type table, or in a prompt
+            any non-builtin).
         `MemorySetupError`:
             Memory is enabled without a required memory implementation, cannot
             open an exact run snapshot, or has an invalid configuration.
@@ -717,7 +721,11 @@ def resume_flow(
             a listed skill, an unfinished run's TOOL node's inputs or
             `output:` do not match the names and types its tool declares, or
             an unfinished run's node assertion, CASE `when`, or LOOP
-            `while`/`until` set in Python is not a valid boolean expression.
+            `while`/`until` set in Python is not a valid boolean expression, or
+            an unfinished run's binding, flow output, or prompt set in Python
+            has a `${...}` span that doesn't parse or calls a function it can't
+            (a builtin with arguments it doesn't take, a name outside the node's
+            type table, or in a prompt any non-builtin).
         `MemorySetupError`:
             The recorded run needs memory but its mapping is absent, incomplete,
             or cannot reproduce the exact recorded snapshots.
@@ -889,9 +897,10 @@ def _check_templates(flow: Any, path: tuple[str, ...] = ()) -> None:
 
     Checks every static flow level: each template string of a wiring source (END's is
     the flow's output) must parse, pass each builtin arguments it takes, and name only
-    constructors in the reading node's type table; each node checks its prompts. A YAML
-    flow can't hold such a span (Compose rejects it at load); this catches values set in
-    Python.
+    constructors in the type table the binder evaluates it with (the reading node's; none
+    for a reserved key such as WAIT `until` or MAP `over`); each node checks its prompts.
+    A YAML flow can't hold such a span (Compose rejects it at load); this catches values
+    set in Python.
 
     Args:
         flow (`Any`):
@@ -901,7 +910,8 @@ def _check_templates(flow: Any, path: tuple[str, ...] = ()) -> None:
 
     Raises:
         `ExpressionError`:
-            Naming the node and binding, the flow output, or the prompt field.
+            Raised when a span can't run; the message names the node and binding, the flow
+            output, or the prompt field.
     """
     owner = f"node {'/'.join(path)!r} " if path else ""
     for node_id, node in flow.nodes.items():
@@ -916,7 +926,8 @@ def _check_templates(flow: Any, path: tuple[str, ...] = ()) -> None:
                 subject = f"node {node_path!r} map input {key!r}"
             else:
                 subject = f"node {node_path!r} {node.wiring_ref_label(key).rstrip(':')}"
-            _check_template_source(binding, subject, node.types)
+            # The binder resolves a reserved key with no type table.
+            _check_template_source(binding, subject, {} if key in reserved else node.types)
         node.validate_prompts(path=node_path)
         for child in node.origin_children():
             _check_templates(child, (*path, node_id))

@@ -10,6 +10,7 @@ from yian.expr import ExpressionError
 from yian.nodes.base import _HostStop
 from yian.nodes.contracts import Binding, ValueTemplate
 from yian.run import resume_flow, run_flow
+from yian.typesys import Type, ValueKind
 
 _UPPER = "expression function 'upper' takes (s): too many positional arguments"
 
@@ -323,6 +324,21 @@ def test_python_built_reserved_and_synthetic_keys_use_their_site_labels(tmp_path
     waiting = load_flow(_fill(_WAIT, until="${input.d}"))
     waiting.compiled.wiring["w"]["until"] = Binding("${upper(input.d, 1)}")
     _run_raises(waiting, rf"^node 'w' wait until: {_UPPER_RUN}", tmp_path, {"d": "2026-01-01"})
+
+
+def test_python_built_reserved_key_constructor_is_checked_without_a_type_table(tmp_path):
+    """MAP `over:` is bound with no type table, so a name in the node's table still fails."""
+    flow = load_flow(_fill(_MAP, over="${[input.v]}", item="${item}"))
+    node = flow.compiled.nodes["m"]
+    node.types = {**node.types, "Buy": Type.scalar(ValueKind.STRING)}
+    flow.compiled.wiring["m"]["over"] = Binding("${[Buy(input.v)]}")
+    _run_raises(flow, r"^node 'm' map over: unknown expression function 'Buy'$", tmp_path)
+
+
+def test_python_built_map_child_binding_names_its_static_path(tmp_path):
+    flow = load_flow(_fill(_MAP, over="${[input.v]}", item="${item}"))
+    flow.compiled.nodes["m"].child.wiring["s"]["n"] = Binding("${upper(input.item, 1)}")
+    _run_raises(flow, rf"^node 'm/s' input 'n': {_UPPER_RUN}", tmp_path)
 
 
 def test_python_built_agent_prompt_mis_calling_a_builtin_fails_before_the_run(tmp_path):

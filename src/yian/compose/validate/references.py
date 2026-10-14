@@ -191,7 +191,8 @@ def validate_references(
 
     With `registry`, every `${T(...)}` constructor call in a binding is checked too
     (`constructor_errors`), with each reference typed by the same contracts.
-Every builtin call in a binding or prompt must pass arguments the builtin takes.
+
+    Every builtin call in a binding or prompt must pass arguments the builtin takes.
 
     Accumulates ALL located errors and raises a single `LoadError`; passes silently
     on a clean flow. Reuses `_classify_path` (head-resolution + dotted walk)
@@ -360,7 +361,8 @@ Every builtin call in a binding or prompt must pass arguments the builtin takes.
     ) -> None:
         """Parse one rendered template and name-check each ref against `declared`.
 
-        A malformed span, unknown builtin, or nested `${...}` is one error at `where`; each
+        A malformed span, unknown builtin, builtin called with arguments it doesn't take, or
+        nested `${...}` is one error at `where`; each
         ref whose head is not in `declared` is another, with the pool-ref hint (ending in
         `hint_tail`) when the head is a pool-style head or a node id."""
         try:

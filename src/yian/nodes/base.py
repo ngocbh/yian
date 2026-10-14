@@ -987,18 +987,15 @@ class Node(ABC):
     def validate_prompts(self, *, path: str | None = None) -> None:
         """Check every prompt template this node renders.
 
-        The base renders none; AGENT and HUMAN_INPUT override this.
+        The base renders none; AGENT and HUMAN_INPUT override this. An override raises
+        `ExpressionError` when a template's `${...}` span doesn't parse, calls `isinstance`
+        or a function that isn't a builtin, or calls a builtin with arguments it doesn't
+        take; the message names the node and the field.
 
         Args:
             path (`str`, *optional*, defaults to `None`):
                 The static node path to name in the error instead of the node's id,
                 used by a pre-run check over a whole flow.
-
-        Raises:
-            `ExpressionError`:
-                If a template's `${...}` span doesn't parse, calls a function that isn't a
-                builtin (or `isinstance`), or calls a builtin with arguments it doesn't take;
-                the message names the node and the field.
         """
 
     def _parse_assertion(self, label: str, assertion: Assertion, where: str | None = None) -> None:

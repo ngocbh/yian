@@ -80,9 +80,10 @@ Choose ChatGPT subscription sign-in (browser or device login for SSH) or an
 OpenAI API key, then select a model. Successful setup saves the method and model
 as the default together. Cancelled or failed setup leaves the previous selection
 intact. The `openai` extra supports both methods.
-Subscription-backed nodes must omit `llm_config.temperature`, which that
-transport does not accept; a run that sets it for any such agent fails before
-its first node, naming the agent.
+Subscription-backed nodes are checked at run start against the ChatGPT
+subscription endpoint's schema: the `openai` block of the Responses API without
+`temperature` and `max_output_tokens`. A run that sets either for such an agent
+fails before its first node, naming the agent.
 
 For SSH, select device login. Flags can supply choices without interactive
 menus; subscription login still requires completing sign-in in a browser:

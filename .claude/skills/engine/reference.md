@@ -581,7 +581,8 @@ model made enforceable.
   langchain + `llm_clients` and builds its model via `model_from_config`.
 - **`llm_config` cascade resolved once at run start** — `resolve_llm_cascade`
   (`compile/`) walks the static call tree top-down, per-field fill-the-gap
-  (most-specific wins), deep-copying each CALL/MAP/LOOP child for per-callsite isolation,
+  (most-specific wins; `merge_llm_config` merges a provider block such as `openai:`
+  per block field, one level deep, replacing nested values whole), deep-copying each CALL/MAP/LOOP child for per-callsite isolation,
   and bakes the effective dict onto every `AgentNode`. It also returns a complete map
   keyed by stable slash-separated static paths. The CLI config is the outermost
   authored layer; the run boundary reads process provider/model defaults exactly once

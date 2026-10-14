@@ -410,8 +410,36 @@ A node may pin its model via `llm_config:`; otherwise the process defaults captu
 once when the run initializes apply. `inherit: false` skips authored flow/parent/CLI
 layers but still receives those provider/model defaults.
 Node, `defs:`, and flow `llm_config:` are all checked at load against the same
-fields; `inherit:` is node-only. A non-finite number (`anthropic: {temperature: .nan}`)
+fields; `inherit:` is node-only. A non-finite number (`openai: {temperature: .nan}`)
 is a load error.
+The top level holds only `provider`, `model`, and `inherit:`. Request settings go in a
+block named after the provider (`openai`, `azure`, `xai`, `deepseek`, `qwen`, `qwen-cn`,
+`glm`, `glm-cn`, `minimax`, `minimax-cn`, `openrouter`, `vllm`, `anthropic`, `google`,
+`ollama`), written exactly as that provider's API request body and sent as written:
+`openai` is the Responses API, `anthropic` the Messages API, `google` Gemini
+`generateContent` (camelCase, `thinkingLevel: HIGH`), `ollama` `/api/chat` (`think`,
+`options`, `keep_alive`, ...), the others their vendor's Chat Completions. A node uses
+the block of its resolved provider; the others are inert but still checked.
+
+```yaml
+llm_config:
+  provider: anthropic
+  model: claude-opus-4-8
+  anthropic: {max_tokens: 16000, thinking: {type: adaptive}, output_config: {effort: high}}
+  openai: {reasoning: {effort: high}}      # used only if a layer picks provider: openai
+```
+
+Fields yian builds (messages, system prompt, tools, tool choice, structured output,
+streaming, conversation state, `n`/`candidateCount`) are a load error in a block. A
+limit of one model is the provider's to enforce: `temperature` on newer Claude models
+fails with the provider's error, so prefer `max_tokens`, `output_config.effort`, and
+`thinking` there. A ChatGPT-subscription `openai` agent is re-checked at run start
+without `temperature`/`max_output_tokens`. Retired keys fail with their block form:
+`anthropic_effort` → `anthropic: {output_config: {effort: …}}`,
+`openai_reasoning_effort` → `openai: {reasoning: {effort: …}}`,
+`google_thinking_level` → `google: {generationConfig: {thinkingConfig: {thinkingLevel: …}}}`,
+`temperature` → `<provider>: {temperature: …}` (google `generationConfig.temperature`,
+ollama `options.temperature`).
 OpenAI subscription and API-key connections both use `provider: openai`;
 select the method and default model with `yian auth openai`.
 Never put `api_key` in a flow's `llm_config:`, nor `base_url` except beside

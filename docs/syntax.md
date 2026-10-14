@@ -983,8 +983,9 @@ when the run initializes apply (see [Installation](installation.md)).
 #### `llm_config` — the model-selection cascade
 
 Model selection cascades **per field, most-specific wins**. Each field (provider,
-model, temperature, …) is resolved independently: an AGENT node fills only the fields
-it leaves unset from the layer outside it. Precedence, most specific first:
+model, a field of a [provider block](#provider-blocks-request-settings), …) is
+resolved independently: an AGENT node fills only the fields it leaves unset from the
+layer outside it. Precedence, most specific first:
 
 1. the AGENT node's own `llm_config:`
 2. the enclosing flow's `llm_config:`, then each parent flow outward
@@ -1002,21 +1003,24 @@ A flow can set defaults for every AGENT node under it with a top-level `llm_conf
 ```yaml
 llm_config:                     # flow layer — every AGENT node inherits these
   provider: anthropic
-  temperature: 0.2
+  anthropic:
+    max_tokens: 8000
 nodes:
   drafter:
     kind: agent
     prompt: Draft a summary.
     llm_config:
-      model: claude-opus-4-8    # fills the one field the flow leaves unset
+      model: claude-opus-4-8    # fills a field the flow leaves unset
+      anthropic:
+        output_config: {effort: high}   # joins the flow's max_tokens
 ```
 
 Every `llm_config:` in a flow file (node, `defs:` entry, or top level) is checked
 when the flow loads: an unknown key such as `modle:`, a bad value such as
-`temperature: hot`, a non-finite number such as `temperature: .nan`, or an unknown
-provider fails at that `llm_config:`. `inherit:` is valid only in a node's
-`llm_config:`. A host `run_flow(..., llm_config=...)` layer with an unknown key
-fails before any node runs.
+`openai: {temperature: hot}`, a non-finite number such as
+`openai: {temperature: .nan}`, or an unknown provider fails at that `llm_config:`.
+`inherit:` is valid only in a node's `llm_config:`. A host
+`run_flow(..., llm_config=...)` layer with an unknown key fails before any node runs.
 
 A flow file cannot set `api_key` at any level, nor `base_url` except beside
 `provider: azure`; loading such a flow fails. A library host passes the provider
@@ -1049,6 +1053,102 @@ provider/model defaults; it ignores enclosing flow, parent-flow, and CLI layers:
 ```
 
 `inherit:` must be `true` or `false`; a quoted `"false"` or `null` fails at load.
+
+#### Provider blocks — request settings
+
+The top level of `llm_config:` selects the model: `provider`, `model`, `inherit:`
+(node only), and the host-only `api_key` and `base_url` (a flow sets `base_url` only
+beside `provider: azure`). Everything else about the request goes in a block named
+after a provider: `openai`, `azure`, `xai`, `deepseek`, `qwen`, `qwen-cn`, `glm`,
+`glm-cn`, `minimax`, `minimax-cn`, `openrouter`, `vllm`, `anthropic`, `google`, or
+`ollama`. A node uses the block of its resolved provider.
+The other blocks are inert, but they are still checked at load, so one flow can carry
+settings for several providers and each node takes the block of the provider it
+resolves to:
+
+```yaml
+llm_config:
+  provider: openai
+  model: gpt-5.5
+  openai:
+    reasoning: {effort: high}
+    max_output_tokens: 4096
+  anthropic:                    # used only when a layer selects provider: anthropic
+    max_tokens: 16000
+    thinking: {type: adaptive}
+    output_config: {effort: high}
+```
+
+A block mirrors the request body of the API yian calls for that provider, with the
+same names, nesting, and values, and yian sends it as written. There is no
+translation layer: copy a field from the provider's API reference and it means what
+the reference says. The load check follows that reference too. An unknown key, a wrong
+type, a value outside the documented enum or bounds, or a non-finite number fails at
+that `llm_config:`, naming the block, the key path, and what is allowed. The error
+never shows the value.
+
+| Provider | API yian calls | Reference |
+| --- | --- | --- |
+| `openai` | OpenAI Responses (`POST /v1/responses`) | [platform.openai.com](https://platform.openai.com/docs/api-reference/responses/create) |
+| `azure` | Azure OpenAI Chat Completions | [learn.microsoft.com](https://learn.microsoft.com/azure/ai-foundry/openai/latest) |
+| `xai` | xAI Chat Completions | [docs.x.ai](https://docs.x.ai/developers/rest-api-reference/inference/chat-completions) |
+| `deepseek` | DeepSeek Chat Completion | [api-docs.deepseek.com](https://api-docs.deepseek.com/api/create-chat-completion) |
+| `qwen`, `qwen-cn` | Alibaba Cloud Model Studio OpenAI-compatible Chat Completions | [alibabacloud.com](https://www.alibabacloud.com/help/en/model-studio/qwen-api-via-openai-chat-completions) |
+| `glm`, `glm-cn` | Z.AI Chat Completion | [docs.z.ai](https://docs.z.ai/api-reference/llm/chat-completion) |
+| `minimax`, `minimax-cn` | MiniMax OpenAI-compatible Chat Completions | [platform.minimax.io](https://platform.minimax.io/docs/api-reference/text-openai-api) |
+| `openrouter` | OpenRouter Chat Completions | [openrouter.ai](https://openrouter.ai/docs/api/api-reference/chat/create-a-chat-completion) |
+| `vllm` | a vLLM server's Chat Completions | [docs.vllm.ai](https://docs.vllm.ai/en/latest/serving/online_serving/) |
+| `anthropic` | Anthropic Messages (`POST /v1/messages`) | [platform.claude.com](https://platform.claude.com/docs/en/api/messages) |
+| `google` | Gemini `generateContent` | [ai.google.dev](https://ai.google.dev/api/generate-content) |
+| `ollama` | Ollama `POST /api/chat` | [github.com/ollama](https://github.com/ollama/ollama/blob/main/docs/api.md#generate-a-chat-completion) |
+
+A few providers need a note:
+
+- `openai` on a ChatGPT subscription (`yian auth openai`, no host `api_key`) reaches
+  the subscription endpoint, which accepts the Responses body without `temperature`
+  and `max_output_tokens`. The block is checked against that narrower schema when the
+  run starts, and a block that sets either fails before the first node, naming the
+  agent.
+- `google` uses the REST names and enum spellings: camelCase keys and upper-case
+  levels, such as `google: {generationConfig: {thinkingConfig: {thinkingLevel: HIGH}}}`.
+- `ollama` takes what the Ollama client sends: `think` (`true`, `false`, or a level),
+  `options` (`temperature`, `num_ctx`, …), `keep_alive`, `logprobs`, and
+  `top_logprobs`. It has no default `think`, so the model's own default applies.
+
+An omitted field is not sent, so the provider's default applies. The one exception is
+Anthropic `max_tokens`, which the Messages API requires; the client library fills it in
+when the block leaves it unset.
+
+Some request fields are built by yian, so a block cannot set them: the model, the
+messages (`messages`, `input`, `contents`), the system prompt (`system`,
+`instructions`, `systemInstruction`), tools and tool choice (`tools`, `tool_choice`,
+`toolConfig`, `parallel_tool_calls`), the output format and structured output
+(`response_format`, `text.format`, `output_config.format`, `responseMimeType`,
+`responseSchema`, Ollama `format`), streaming (`stream`, `stream_options`),
+conversation state (`previous_response_id`, `conversation`, `store` on Responses),
+and the number of replies (`n`, `candidateCount`). Setting one is a load error that
+says the field is built by yian and why.
+
+The block check covers what the API reference documents for every model. A limit of
+one model is left to the provider: sent as written means the provider's or the client
+library's error replaces a silent drop. For example, `anthropic: {temperature: 0.5}`
+passes the load check, but newer Claude models refuse `temperature`, so the node fails
+with the provider's error.
+
+Blocks follow the cascade one level deep: a node's block and the flow's block of the
+same name merge per block field, the node's fields winning. A value inside a field is
+replaced whole, so a node's `thinking: {type: disabled}` replaces the flow's whole
+`thinking` mapping. `null` means unset at every level.
+
+The provider-specific keys yian used to translate are gone. Each one is a load error
+that shows its block form:
+
+| Removed key | Write instead |
+| --- | --- |
+| `anthropic_effort: high` | `anthropic: {output_config: {effort: high}}` |
+| `openai_reasoning_effort: high` | `openai: {reasoning: {effort: high}}` |
+| `google_thinking_level: high` | `google: {generationConfig: {thinkingConfig: {thinkingLevel: HIGH}}}` |
+| `temperature: 0.2` | `<provider>: {temperature: 0.2}`; `google: {generationConfig: {temperature: 0.2}}`; `ollama: {options: {temperature: 0.2}}` |
 
 #### OpenAI authentication
 
@@ -1099,7 +1199,7 @@ references read the same local value. A variable belongs to its authored AGENT
 path and name: MAP items and LOOP iterations of that node share its declaration,
 while distinct authored callsites have distinct owners. Variables introduce no
 data dependencies or flow outputs. A variable named `temperature` is prompt data;
-configure model temperature through `llm_config:`.
+configure model temperature in the provider block of `llm_config:`.
 
 #### System prompt — `system_prompt:`
 

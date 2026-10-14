@@ -210,6 +210,12 @@ snapshot; compiler resolution stays pure and receives provider-scoped defaults.
 over the `auth/http.py` transport. It imports no model SDK, so the
 OpenAI-compatible default endpoints live in `factory.py` beside the routes, where
 both it and the OpenAI client read them.
+`llm_clients/provider_blocks.py` holds the `llm_config` provider-block schemas: one
+pydantic class per provider API (`PROVIDER_BLOCKS`) with its reserved paths,
+`block_schema` (the class for the API a call actually reaches, such as the ChatGPT
+subscription endpoint), and `merge_request_body` (how a client sends a block as
+written). It imports only pydantic and the standard library; `config.py` builds
+`LLMConfig`'s block fields from it and the client wrappers send the blocks.
 
 Compiled-origin traversal follows the same direction. Semantic carriers and
 nodes own their local origin slots and static-child hooks; `diagnostics` owns the

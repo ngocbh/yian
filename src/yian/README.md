@@ -218,6 +218,27 @@ def-level `api_key`. The loader checks flow- and def-level `llm_config:` against
 `LLMConfig` as it does a node's, and the cascade rejects unknown keys in the host
 layer, so a typo never reaches the recorded map.
 
+Request settings live in provider blocks: `LLMConfig` has one optional block per
+provider, named after it (`openai`, `qwen-cn`, `anthropic`, ...), beside `provider`,
+`model`, `api_key`, and `base_url`. `llm_clients/provider_blocks.py` holds one class
+per API (`PROVIDER_BLOCKS`), each mirroring the request body of the API yian calls
+for that provider, with the same names, nesting, and allowed values, plus a table
+of reserved paths that yian builds itself (messages, system prompt, tools,
+structured output, streaming, conversation state, reply count). A block is checked
+in three places. The loader validates every authored layer against `LLMConfig`, so
+every block, used or not, is checked at load. The cascade (`_validate_layer`)
+rejects unknown and retired keys in the host layer, and `merge_llm_config` merges a
+block per block field, one level deep, replacing nested values whole. At run start
+`check_model_config` re-checks each agent's resolved block against the schema of
+the API the call actually reaches (`block_schema`): an `openai` agent on a ChatGPT
+subscription connection without a host key is checked against
+`OpenAISubscriptionBlock`, which has no `temperature` or `max_output_tokens`. The
+clients send the block as written (`merge_request_body`), with no translation and
+no defaults except Anthropic `max_tokens`, so a limit specific to one model surfaces
+as the provider's or client library's error. Retired keys (`temperature`,
+`anthropic_effort`, `openai_reasoning_effort`, `google_thinking_level`) fail with
+their block form (`retired_key_error`); recorded runs may still carry them as null.
+
 `LLMConfig.base_url` is where a config's key is sent, so a host key is never sent
 to a `base_url` from an authored layer. This covers authored layers only: when the
 host passes a key without `base_url`, the provider's default endpoint or its

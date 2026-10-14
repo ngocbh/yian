@@ -4,6 +4,9 @@ The model-access leaf: `LLMConfig` (the selection
 carrier) and `model_from_config` (resolve it to a ready `BaseChatModel`), plus the
 per-provider client wrappers behind `create_llm_client`. The AGENT node and the
 Compose loader's `llm_config:` field draw on this; `chat/` and `cli/` use it too.
+`provider_blocks` holds the schema of each provider block in `LLMConfig`: the request
+body of the API that provider's calls reach, checked at load and again at run start
+against the API actually called, then sent as written by the client wrappers.
 The direct OpenAI subscription transport accepts an injected access source and
 returns a normal chat model; it owns no login, credential persistence, or tool loop.
 Both OpenAI authentication methods use this model interface. `auth/` owns staged

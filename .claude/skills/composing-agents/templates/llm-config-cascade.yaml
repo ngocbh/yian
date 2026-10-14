@@ -21,16 +21,16 @@ llm_config:                       # the flow layer: every AGENT node inherits th
   provider: anthropic
   anthropic:
     max_tokens: 2048
-    temperature: 0.2
+    output_config: {effort: low}
 
 nodes:
-  drafter:                        # inherits provider, max_tokens; sets model, temperature
+  drafter:                        # inherits provider, max_tokens; sets model, effort
     kind: agent
     prompt: Draft a one-line summary.
     llm_config:
       model: claude-opus-4-8
       anthropic:
-        temperature: 0.7
+        output_config: {effort: high}   # replaces the flow's output_config whole
 
   grader:                         # own selection + process defaults; no flow/CLI layer
     kind: agent

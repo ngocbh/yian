@@ -165,9 +165,9 @@ def displayable(value: Any) -> Any:
     """Return `value` with every long int swapped for an object whose `repr` is its digits.
 
     `repr` and `str` of an int past Python's process-wide digit limit raise
-    `ValueError`; the returned value prints instead. Dicts, lists and tuples are
-    walked (and rebuilt only when they hold a long int); any other value is
-    returned unchanged.
+    `ValueError`; the returned value prints instead. Dicts (keys and values),
+    lists and tuples are walked and rebuilt, as their base type, only when they
+    hold a long int; any other value is returned unchanged.
 
     Args:
         value (`Any`): The value to print.
@@ -178,10 +178,13 @@ def displayable(value: Any) -> Any:
     if isinstance(value, int) and not isinstance(value, bool):
         return _IntDigits(value) if value.bit_length() > _SHORT_INT_BITS else value
     if isinstance(value, dict):
-        items = {key: displayable(item) for key, item in value.items()}
-        if all(items[key] is item for key, item in value.items()):
+        pairs = [(displayable(key), displayable(item)) for key, item in value.items()]
+        if all(
+            new_key is key and new_item is item
+            for (new_key, new_item), (key, item) in zip(pairs, value.items())
+        ):
             return value
-        return items
+        return dict(pairs)
     if isinstance(value, (list, tuple)):
         items = [displayable(item) for item in value]
         if all(new is old for new, old in zip(items, value)):
@@ -195,13 +198,15 @@ def as_text(value: Any) -> str:
 
     Values that `str` converts take it directly. When `str` raises
     `ValueError`, the value is converted again through `displayable`, so a long
-    int, alone or inside dicts, lists and tuples, is written with every digit.
+    int, alone or inside dicts (keys included), lists and tuples, is written with
+    every digit.
 
     Args:
         value (`Any`): The value to convert.
 
     Returns:
-        `str`: The same text as `str(value)` would give without the digit limit.
+        `str`: The text `str(value)` would give without the digit limit; on the
+            retry, a dict, list or tuple subclass is written as its base type.
 
     Raises:
         `ValueError`: `str` raised for a value that `displayable` can't walk,
@@ -216,7 +221,7 @@ def as_text(value: Any) -> str:
     try:
         return str(value)
     except ValueError:
-        # For yian values only the digit limit raises here.
+        # Most likely the digit limit; any other ValueError is raised again here.
         return str(displayable(value))
 
 

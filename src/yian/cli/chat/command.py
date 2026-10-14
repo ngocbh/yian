@@ -229,7 +229,7 @@ def chat(
                         return
                     segment = _last_segment(event.node_id)
                     if segment == "reply":
-                        reply_text = str(json_codec.displayable(event.output))
+                        reply_text = json_codec.as_text(event.output)
                         render(partial(console.print, Markdown(reply_text)))
                     elif segment == "__end__" and isinstance(event.output, dict):
                         state["transcript"] = event.output.get(

@@ -105,6 +105,19 @@ def test_as_text_writes_long_ints_in_full() -> None:
     assert json_codec.as_text([1, BIG]) == "[1, " + DIGITS + "]"
     assert json_codec.as_text({"a": BIG}) == "{'a': " + DIGITS + "}"
     assert json_codec.as_text((BIG,)) == "(" + DIGITS + ",)"
+    assert json_codec.as_text({BIG: 1}) == "{" + DIGITS + ": 1}"
+
+
+def test_as_text_raises_for_a_long_int_it_cannot_walk() -> None:
+    """A long int inside a set is not walked, so `str`'s error stands."""
+    with pytest.raises(ValueError):
+        json_codec.as_text({BIG})
+
+
+def test_displayable_spells_ints_below_the_limit_as_repr_does() -> None:
+    """An int past 2000 bits but under the limit prints the same text as before."""
+    value = {10**700: [10**700, -(10**700)]}
+    assert str(json_codec.displayable(value)) == str(value)
 
 
 @pytest.mark.parametrize("value", [5, [1, "a", None, True, 2.5], {"k": "v"}, "text"])

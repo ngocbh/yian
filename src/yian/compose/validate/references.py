@@ -395,10 +395,12 @@ def validate_references(
         for param, src in nwiring.items():
             if param in reserved:
                 continue
-            if case_reads is not None and param not in case_reads:
-                # A param no `when:` reads is a join input over a co-skipping escape's
-                # producers; each of its references is already checked at the read that
-                # introduced it, so scanning it would repeat that error.
+            if case_reads and param not in case_reads:
+                # In a searched case whose `when:`s read something, a param they don't read
+                # is a join input over a co-skipping escape's producers; each of its
+                # references is already checked at the read that introduced it, so
+                # scanning it would repeat that error. An `on:` case with no cases reads
+                # nothing, so its `on:` value is still checked.
                 continue
             label = node.wiring_ref_label(param)
             param_rng = franges.get(("input", param)) or input_rng

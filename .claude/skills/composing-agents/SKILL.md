@@ -619,8 +619,9 @@ goes through a host tool (`kind: tool`); `kind: model` was removed.
 ### `case` — branching (no `input:`)
 It takes one branch; the other targets skip, and so does every node that plainly
 reads (or `depends_on`) a skipped one. A searched `case` that reads a node only under
-`:-`/`:?`/`|` runs when that node is skipped, like a binding would. Read the taken branch's result with
-`${route.output}` (or `${route.output.field}`). A routing-only `case` (no `output:`,
+a default that keeps a binding running (`(a.output :- 0)`, not `(a.output :- b.output)`)
+runs when that node is skipped, like the binding would. Read the taken branch's result
+with `${route.output}` (or `${route.output.field}`). A routing-only `case` (no `output:`,
 no value branch, never read via `${route.output}`) may take none when no `when:`
 matches and there is no `else:`; over a `Literal` node output or flow input it still
 needs a `when:` for every tag.
@@ -702,8 +703,8 @@ ref to the tag (not a coalesce); a `when:` that isn't a tag is a load error (``c
 use one of: buy, sell``). A searched `case`
 narrows with a top-level `and` part `isinstance(<ref>, T)`:
 `when: isinstance(d.output, Buy) and d.output.qty > 5`. Its `else:` doesn't narrow.
-A searched `case` whose `when:` reads a node only under `:-`/`:?`/`|` doesn't pass that
-node's narrowing to its branches. Inline
+A searched `case` whose `when:` reads a node only under such a default doesn't pass
+that node's narrowing to its branches. Inline
 child bodies are typed before narrowing; read member fields in a branch node.
 
 ### `human_input` — a guaranteed human gate

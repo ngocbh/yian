@@ -189,3 +189,30 @@ def test_an_unknown_namespace_inside_a_co_skipping_escape_is_reported_once(when,
         f"  node 'gate2' cases[0].when from: reference {reference} uses unknown namespace "
         "'nope'"
     )
+
+
+def test_an_on_case_with_no_cases_still_checks_its_on_value():
+    flow = """
+id: f
+name: f
+nodes:
+  a:
+    kind: code
+    output: int
+    code: |
+      return 1
+  gate:
+    kind: case
+    on: ${a.outptu}
+    cases: []
+    else: cold
+  cold:
+    kind: code
+    output: str
+    code: |
+      return "cold"
+output: ${cold.output}
+"""
+    with pytest.raises(LoadError) as caught:
+        load_flow(flow)
+    assert "${a.outptu}" in str(caught.value)

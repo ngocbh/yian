@@ -317,7 +317,8 @@ value.
 
 **Branch and rejoin.** A `case` takes one branch; the other targets skip, and so do
 nodes that plainly read them. A searched `case` whose `when:` reads a node only under
-`:-`/`:?`/`|` (`(score.output :- 0) >= 0.5`) still runs when that node is skipped. Read the taken branch's result with `${route.output}`
+a default that keeps a binding running (`(score.output :- 0) >= 0.5`) still runs when
+that node is skipped. Read the taken branch's result with `${route.output}`
 (see `branching.yaml`). A branch may also be a value (`else: "approve"`, a record, a
 list) when the `case` declares `output:`; quote text, since an unquoted word names a
 node. A `case` whose result is used needs an `else:`, every tag of a non-nullable
@@ -338,7 +339,7 @@ fields (`${d.output.qty}` under `when: buy`); `else:` sees the unlisted members.
 branch only fields every member has can be read. For an untagged union, use a searched
 `case` with `when: isinstance(d.output, Text)`. Return a member field from the flow by
 joining branch nodes (`${b.output | s.output}`); flow outputs are never narrowed. A
-searched `case` whose `when:` reads a node only under `:-`/`:?`/`|` doesn't pass that
+searched `case` whose `when:` reads a node only under such a default doesn't pass that
 node's narrowing to its branches.
 
 **Order without data flow.** When node B must run after A but consumes no value

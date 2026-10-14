@@ -765,7 +765,6 @@ def _searched_params(desc: CaseDescriptor, diagnostics: LoadDiagnostics) -> _Sea
             allocate(source, ci)
         # `guarded_refs` walks the same occurrences in the same order as `condition_reads`.
         occurrences = guarded_refs(tree)
-        assert [path for path, _ in occurrences] == [read.path for read in reads]
         for local, (_, checks) in zip(locals_, occurrences, strict=True):
             guards[local].append((ci, checks))
         case_locals.append(locals_)

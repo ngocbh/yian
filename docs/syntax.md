@@ -1519,8 +1519,8 @@ its `input:`, an adaptive composer) is skipped too, whether that node is a targe
 untaken branch or is skipped through its inputs or `depends_on`. A node that names the
 `case` itself in `depends_on:` or `runs_after:` is not on a branch: it runs whichever
 branch the `case` takes, and is skipped only when the `case` is. A searched `case`
-that reads a node only under `:-`, `:?` or `|` is not skipped with it (see the
-[searched form](#searched-form)). Read its result with
+that reads a node only under a default that keeps a binding running, such as
+`(a.output :- 0)`, is not skipped with it (see the [searched form](#searched-form)). Read its result with
 `${case.output}`. A routing-only `case` may take
 none when no `when:` matches and there is no `else:` (see
 [Exhaustiveness](#exhaustiveness)); a flow output that reads a skipped node returns
@@ -1567,8 +1567,11 @@ with the same value (`when: 1` twice, `when: 1` and `when: 1.0`) used to load wi
 later one dead; that is now a load error.
 
 Changed: a searched `when:` that read a node under `:-`, `:?` or `|`
-(`(a.output :- 0) >= 1`) used to skip the `case` with that node; now the `case` runs (see
-the [searched form](#searched-form)). A `:-` or `|` over two node reads used to skip it
+(`(a.output :- 0) >= 1`) used to skip the `case` with that node; now the `case` runs
+when a binding of that part would (see the [searched form](#searched-form)). A call on
+such a value, as in `(upper(a.output) :- "x") == "X"`, then fails the run when `a` is
+skipped, as it does in a binding; give the argument the default
+(`upper(a.output :- "")`). A `:-` or `|` over two node reads used to skip it
 when either node was skipped; now only when both are. When such a `case` runs with the
 node skipped, its branches don't inherit that node's routing: a union narrowed on the
 way to that node isn't narrowed in them, a branch's arithmetic on a value that may be a
@@ -1825,8 +1828,8 @@ output:
 - **May be skipped:** a `case` target, or a node that plainly reads one (or names it
   in `depends_on`), under some combination of `case` choices. A node that names the
   `case` itself in `depends_on` runs on every branch the `case` takes. A searched
-  `case` whose `when:`s read a node only under `:-`, `:?` or `|` runs when that
-  node is skipped. A `case` that
+  `case` whose `when:`s read a node only under a default that keeps a binding
+  running (`(a.output :- 0)`) runs when that node is skipped. A `case` that
   runs takes one branch, or none unless it is exhaustive: it has `else:`, or its `on:`
   is a non-nullable `Literal` node output or flow input with every tag listed, or a
   non-nullable `bool` with `when: true` and `when: false` (a null `on:` value matches
@@ -1899,8 +1902,9 @@ place_buy:
   reference, or names it in `depends_on`, sees the same members. A join
   `${b.output | s.output}` of a `buy` and a `sell` branch sees `Buy` or `Sell`.
   Narrowing doesn't pass through an optional read (`${b.output:-0}`) or `runs_after`,
-  nor through a searched `case` whose `when:` reads that node only under `:-`, `:?` or
-  `|`: its branches see the value unnarrowed.
+  nor through a searched `case` whose `when:` reads that node only under a default
+  that keeps a binding running (`(a.output :- 0)`): its branches see the value
+  unnarrowed.
   A node that several `case`s route is narrowed only when every one of them narrows the
   same value, and then sees the members any of them allows.
 - A nested `on:` over a field of the narrowed member narrows again, and its exhaustiveness

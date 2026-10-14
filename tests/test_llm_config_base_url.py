@@ -1,5 +1,6 @@
 """`LLMConfig.base_url`: a host endpoint bound to the key and provider beside it."""
 
+import asyncio
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,7 +17,7 @@ from yian.llm_clients.connection import (
     resolve_model_config,
     split_model_config,
 )
-from yian.llm_clients.factory import model_from_config
+from yian.llm_clients.factory import create_llm_client, model_from_config
 from yian.llm_clients.openai_client import OpenAIClient
 from tests.fixtures.openai_responses import ResponsesServer
 
@@ -410,3 +411,53 @@ def test_dedicated_clients_do_not_follow_a_redirect_with_the_key(
         model.invoke("hi")
     assert [(p, h[header]) for p, h in configured.requests] == [(path, SENTINEL)]
     assert elsewhere.requests == []
+
+
+def _redirecting_client(kind):
+    import openai
+
+    return {
+        None: None,
+        "httpx": lambda: httpx.Client(follow_redirects=True),
+        "openai": lambda: openai.DefaultHttpxClient(),
+        "httpx-async": lambda: httpx.AsyncClient(follow_redirects=True),
+    }[kind]
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [None, "httpx", "openai", "httpx-async"],
+    ids=["sdk-default", "httpx-follow-redirects", "openai-DefaultHttpxClient", "async"],
+)
+def test_azure_does_not_send_its_key_past_a_redirect(clean_env, endpoints, kind):
+    # Azure's key travels in `api-key`, which httpx itself keeps on a cross-origin redirect;
+    # openai >= 3.4.0 drops it, for its own client and a host's.
+    clean_env.setenv("OPENAI_API_VERSION", "2025-03-01-preview")
+    elsewhere = endpoints()
+    configured = endpoints(redirect_to=elsewhere.url)
+    factory = _redirecting_client(kind)
+    client = factory() if factory else None
+    kwargs = {}
+    if client is not None:
+        kwargs["http_async_client" if kind == "httpx-async" else "http_client"] = client
+    try:
+        chat = create_llm_client(
+            "azure", "dep", base_url=configured.url, api_key=SENTINEL, max_retries=0, **kwargs
+        ).get_llm()
+        with pytest.raises(Exception):
+            if kind == "httpx-async":
+                asyncio.run(chat.ainvoke("hi"))
+            else:
+                chat.invoke("hi")
+    finally:
+        if kind == "httpx-async":
+            asyncio.run(client.aclose())
+        elif client is not None:
+            client.close()
+    assert [h.get("api-key") for _, h in configured.requests] == [SENTINEL]
+    assert len(elsewhere.requests) == 1  # the redirect was followed ...
+    assert "api-key" not in elsewhere.requests[0][1]  # ... without the key
+    if kind == "httpx-async":
+        assert chat.root_async_client._client is client
+    elif client is not None:
+        assert chat.root_client._client is client

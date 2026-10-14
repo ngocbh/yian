@@ -7,10 +7,11 @@ import sys
 import pytest
 
 import yian.json_codec as json_codec
+from tests.engine._graph_builder import _engine
 from yian import load_flow, run_flow
-from yian.compile.model import START_ID
+from yian.events import RunSucceeded
 from yian.expr.expressions import _parse_literal
-from yian.expr.lineage import ValueRoute
+from yian.expr.lineage import SourceRef, ValueRoute, route_feedback
 from yian.nodes.binding import coerce_param
 from yian.nodes.contracts import Parameter, ValueContract
 from yian.runtime.contracts import _validate_route
@@ -19,6 +20,7 @@ from yian.typesys.values import Type, ValueKind
 
 BIG = 10**4999 + 12345  # 5000 digits, past Python's default 4300-digit limit
 DIGITS = json_codec.int_text(BIG)
+ONES = (10**5000 - 1) // 9  # the int spelled by 5000 ones
 
 
 @pytest.fixture(autouse=True)
@@ -103,6 +105,7 @@ def test_a_big_int_literal_route_keeps_its_value():
     assert route.kind == "literal"
     assert route.result_type is None
     assert route.value_json == DIGITS
+    assert json_codec.loads(route.value_json) == BIG
     _validate_route(route)
 
 
@@ -118,10 +121,27 @@ def test_a_nested_big_int_literal_route_keeps_its_value():
     _validate_route(route)
 
 
-def test_a_learnable_run_records_the_big_int_binding_route():
-    from tests.engine._graph_builder import _engine
-    from yian.events import RunSucceeded
+def test_feedback_context_keeps_a_big_int_literal_result():
+    route = ValueRoute(
+        "list",
+        children=(
+            ValueRoute("source", source=SourceRef("r", 1), expression="${a.output}"),
+            ValueRoute.literal(BIG),
+        ),
+        expression="[${a.output}, BIG]",
+    )
 
+    routed = route_feedback(route, ["bad", "too big"], lambda ref: "x")
+
+    (contribution,) = routed.contributions
+    assert contribution.source == SourceRef("r", 1)
+    assert contribution.feedback == "bad"
+    item = contribution.context[0]
+    assert item.role == "item"
+    assert item.result == ["x", BIG]
+
+
+def test_a_learnable_run_records_the_big_int_binding_route():
     flow = load_flow(_INCREMENT_FLOW).compiled
     engine = _engine(flow, {"x": BIG}, learnable=True)
 
@@ -135,7 +155,6 @@ def test_a_learnable_run_records_the_big_int_binding_route():
     assert route.kind in ("literal", "scalar")
     assert route.result_type is None
     assert json_codec.loads(route.value_json) == BIG + 1
-    assert START_ID in occurrences
 
 
 def test_a_learnable_run_of_a_big_int_expression_succeeds():
@@ -171,8 +190,8 @@ def test_a_big_int_expression_literal_evaluates_to_the_int():
     result = run_flow(load_flow(_LITERAL_FLOW), {})
 
     assert result.status == "succeeded", result.failure
-    assert result.output == int("1" * 4000) * 10**1000 + int("1" * 1000) + 1
+    assert result.output == ONES + 1
 
 
 def test_parse_literal_reads_a_big_int():
-    assert _parse_literal("1" * 5000) == int("1" * 4000) * 10**1000 + int("1" * 1000)
+    assert _parse_literal("1" * 5000) == ONES

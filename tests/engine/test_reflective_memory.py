@@ -393,7 +393,8 @@ def test_snapshot_rejects_excessive_nesting_as_typed_invalid_snapshot() -> None:
     assert exc.value.code == "reflective.invalid_snapshot"
     cause = str(exc.value.__cause__)
     assert cause.endswith(
-        "nests deeper than the memory limit of 128 levels (set by YIAN_MAX_VALUE_NESTING)"
+        "nests deeper than the memory limit of 128 levels "
+        "(derived from YIAN_MAX_VALUE_NESTING)"
     )
     assert "wire-safe" not in cause
 

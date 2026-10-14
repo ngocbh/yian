@@ -33,7 +33,7 @@ def _memory_nesting_error(name: str, limit: int) -> ValueError:
     """
     return ValueError(
         f"{name} nests deeper than the memory limit of {limit} levels "
-        "(set by YIAN_MAX_VALUE_NESTING)"
+        "(derived from YIAN_MAX_VALUE_NESTING)"
     )
 
 
@@ -527,7 +527,8 @@ _BUILTIN_MEMORY_CONFIG_RULES: Mapping[str, Mapping[str, tuple[int, bool]]] = Map
 
 These mirror the backend constructors so a bad value fails at load, not first at
 ``build_memories``; null leaves an episodic or reflective limit to the stored or
-default value.
+default value. Null is refused for the session and profile keys, although their
+constructors take `None` as the yian default; leaving a key out has that effect.
 """
 
 
@@ -565,7 +566,7 @@ def _shown(value: object) -> str:
     except ValueError:
         # An int past Python's str-digit limit can't be written. The placeholder
         # repeats `typesys.values.value_repr`'s text because this module may
-        # import only `yian.diagnostics`.
+        # import only `yian.diagnostics` and `yian.defaults`.
         return f"<{type(value).__name__} too large to display>"
 
 

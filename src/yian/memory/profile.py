@@ -150,16 +150,17 @@ class ProfileMemory:
                 empty or lacks ``provider``, a non-Azure ``base_url`` lacks
                 ``api_key``, an Azure ``api_key`` lacks ``base_url``, or
                 ``base_url`` is not an allowed URL.
+            `DefaultsError`: A budget is `None` and a `YIAN_` variable holds a
+                value it does not accept.
         """
         if not isinstance(store, MarkdownStore):
             raise TypeError("store must provide read() and write()")
         if llm_config is not None and type(llm_config) is not dict:
             raise TypeError("llm_config must be a dict or None")
-        values = current()
         if max_chars is None:
-            max_chars = values.profile_max_chars
+            max_chars = current().profile_max_chars
         if input_budget_chars is None:
-            input_budget_chars = values.profile_input_budget_chars
+            input_budget_chars = current().profile_input_budget_chars
         for name, value in (("max_chars", max_chars), ("input_budget_chars", input_budget_chars)):
             if type(value) is not int or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")

@@ -215,7 +215,8 @@ def test_snapshot_rejects_nesting_beyond_the_memory_limit() -> None:
     assert exc.value.code == "episodic.invalid_snapshot"
     cause = str(exc.value.__cause__)
     assert cause.endswith(
-        "nests deeper than the memory limit of 128 levels (set by YIAN_MAX_VALUE_NESTING)"
+        "nests deeper than the memory limit of 128 levels "
+        "(derived from YIAN_MAX_VALUE_NESTING)"
     )
 
 

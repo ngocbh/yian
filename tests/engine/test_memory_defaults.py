@@ -83,18 +83,18 @@ def test_reflection_limit_material_follows_its_budget(monkeypatch, set_defaults)
     # The limit material is a short object that never reaches the 256-char floor, so
     # the budget it is cut to is observed directly.
     set_defaults(REFLECTIVE_MAX_LIMIT_CHARS=500)
-    budgets: list[int] = []
+    calls: list[tuple[object, int]] = []
     bounded = reflective._bounded_json_material
 
     def spy(value, limit):
-        budgets.append(limit)
+        calls.append((value, limit))
         return bounded(value, limit)
 
     monkeypatch.setattr(reflective, "_bounded_json_material", spy)
     _install_model(monkeypatch, _NOOP)
     with ReflectiveMemory(_CONFIG).open_run() as session:
         assert session.learn(_context()) == []
-    assert 500 in budgets
+    assert [limit for value, limit in calls if value == {"max_items": 100}] == [500]
 
 
 def test_session_memory_settings_default_from_the_environment(set_defaults) -> None:
@@ -129,4 +129,4 @@ def test_memory_nesting_bound_follows_the_value_nesting_limit(check, set_default
     check(_nested(108))
     with pytest.raises(ValueError, match="memory limit of 108 levels") as caught:
         check(_nested(109))
-    assert "YIAN_MAX_VALUE_NESTING" in str(caught.value)
+    assert str(caught.value).endswith("(derived from YIAN_MAX_VALUE_NESTING)")

@@ -1,4 +1,4 @@
-"""Interactive CLI helpers for provider credentials and endpoints.
+"""Interactive CLI helpers for provider credentials and endpoints, and for printing values.
 
 These are the integration points the `llm_clients` modules point at by name:
 
@@ -9,12 +9,14 @@ These are the integration points the `llm_clients` modules point at by name:
 - `confirm_ollama_endpoint` — referenced by `llm_clients/model_catalog.py`
   as the step that surfaces the resolved Ollama endpoint right after provider
   selection; the future provider-selection wizard is its caller.
-- `displayable` — lets `yian run` and `yian chat` print values that hold ints
-  too long for `repr`.
 
-Both are TTY-aware: they prompt only when attached to an interactive terminal
-and otherwise fall back (return the ambient value, or raise for a hard-missing
-required key) so non-interactive runs stay scriptable.
+`ensure_api_key` and `confirm_ollama_endpoint` are TTY-aware: they prompt only
+when attached to an interactive terminal and otherwise fall back (return the
+ambient value, or raise for a hard-missing required key) so non-interactive
+runs stay scriptable.
+
+`displayable` lets `yian run` and `yian chat` print values that hold ints too
+long for `repr`.
 """
 
 from __future__ import annotations

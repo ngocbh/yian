@@ -2,12 +2,16 @@
 
 from pathlib import Path
 import re
+from types import ModuleType
 import sys
 
 import pytest
+import typer.testing as typer_testing
 from typer.testing import CliRunner
 
+from tests.cli.test_run import STRUCTURED_INPUT_FLOW, _tty_input_stream
 from yian.cli import app
+import yian.cli.run as run_cli
 from yian.cli.utils import displayable
 import yian.json_codec as json_codec
 
@@ -136,13 +140,62 @@ def test_verbose_prints_a_big_node_output_on_stderr(tmp_path: Path) -> None:
     assert DIGITS in re.sub(r"\s+", "", _ANSI_SGR.sub("", result.stderr))
 
 
+def test_structured_prompt_reads_a_big_int(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The interactive JSON editor accepts and binds a big int in a list input."""
+    flow = _write(tmp_path, "flow.yaml", STRUCTURED_INPUT_FLOW)
+    raw = "[" + DIGITS + "]"
+    validated: list[str] = []
+    questionary = ModuleType("questionary")
+
+    class TextWidget:
+        """Return the scripted raw text after the production validator accepts it."""
+
+        def __init__(self, validate) -> None:
+            """Retain the callback that the real widget runs before submission."""
+            self._validate = validate
+
+        def ask(self) -> str:
+            """Validate and return the scripted answer without converting it."""
+            if self._validate is not None:
+                validated.append(raw)
+                assert self._validate(raw) is True
+            return raw
+
+    def style(_rules):
+        """Supply the minimal style constructor used by the production prompt."""
+        return object()
+
+    def text(_label, *, validate=None, **_options):
+        """Build the minimal text widget around production's callback."""
+        return TextWidget(validate)
+
+    questionary.Style = style
+    questionary.text = text
+    monkeypatch.setitem(sys.modules, "questionary", questionary)
+    monkeypatch.setattr(run_cli, "_Q_STYLE", None)
+    monkeypatch.setattr(typer_testing, "make_input_stream", _tty_input_stream)
+
+    result = runner.invoke(
+        app,
+        ["run", str(flow), "--log", str(tmp_path / "run.jsonl"), "--quiet"],
+        input=b"",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert validated == [raw]
+    assert DIGITS in _unwrapped(result.stdout)
+
+
 def test_displayable_spells_big_ints_and_keeps_other_values() -> None:
     """`displayable` swaps long ints for their digits and leaves other values alone."""
     assert DIGITS in str(displayable({"a": [BIG]}))
     assert DIGITS in repr(displayable((BIG,)))
-    assert displayable(BIG).__repr__() == DIGITS
+    assert repr(displayable(BIG)) == DIGITS
     small = {"a": [1, 2.5, "x", None, True], "b": (3,)}
-    assert displayable(small) == small
+    assert displayable(small) is small
     marker = object()
     assert displayable(marker) is marker
     assert displayable(True) is True
@@ -163,6 +216,7 @@ def test_chat_prints_a_big_int_reply(tmp_path: Path) -> None:
         "    kind: code\n"
         "    output: list[int]\n"
         "    code: |\n"
+        # The same expression as BIG, so the reply spells DIGITS.
         "      return [10**4999 + 12345]\n"
         "output: ${reply.output}\n",
     )

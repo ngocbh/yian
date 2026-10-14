@@ -6,6 +6,8 @@ sources) and returns the node's one output value (a dict for a record `output:`,
 a scalar otherwise). No Ollama, no agent runtime — these keep the run tests pure.
 """
 
+import threading
+
 
 def make_plan(inputs: dict) -> dict:
     # returns a multi-field object matching a declared {rating, score} record.
@@ -136,3 +138,14 @@ def record(inputs: dict) -> str:
     # a side-effect probe: notes that its node ran, then echoes its tag.
     RECORDED.append(inputs["tag"])
     return inputs["tag"]
+
+
+# Two `meet` nodes pass the barrier only when both are running, so a run that finishes proves
+# they ran at the same time; one waiting on the other times out instead. Reset before each use.
+MEET = threading.Barrier(2, timeout=5)
+
+
+def meet(inputs: dict) -> str:
+    # waits for the other `meet` node, then records its tag like `record`.
+    MEET.wait()
+    return record(inputs)

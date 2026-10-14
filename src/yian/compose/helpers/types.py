@@ -25,12 +25,6 @@ from yian.typesys.values import ValueKind, value_repr
 from yian.typesys.types import BUILTIN_TYPE_NAMES, TypeRegistry, encodes_as_utf8
 
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
-from yian.compose.helpers.secret_literals import (
-    input_ref,
-    is_binding_text,
-    secret_literal_message,
-    secret_literal_path,
-)
 from yian.compose.helpers.tags import (
     close_type_name,
     old_form_suggestion,
@@ -49,7 +43,6 @@ from yian.compose.source import (
     parse_yaml_literal,
 )
 from yian.diagnostics import OriginRef
-from yian.secret_names import is_secret_name
 
 if TYPE_CHECKING:
     from yian.compose.source.catalog import _SourceCatalogBuilder
@@ -280,31 +273,6 @@ def _read_type_only(
     )
 
 
-def _secret_default_error(
-    name: str, declaration_label: str, diagnostics: LoadDiagnostics
-) -> LoadError:
-    """Word the error for a literal default under a secret name; it omits the value.
-
-    Args:
-        name (`str`): The declaration's name.
-        declaration_label (`str`): What the declaration is, `"input"` or `"variable"`.
-        diagnostics (`LoadDiagnostics`): Factory for load errors.
-
-    Returns:
-        `LoadError`: The error to raise.
-    """
-    if declaration_label == "variable":
-        return diagnostics.error(
-            f"variable {name!r}: a secret name can't be a variable, whose value is "
-            f"written in the flow file; pass it as a node input ({input_ref(name)}) "
-            "instead"
-        )
-    return diagnostics.error(
-        f"{declaration_label} {name!r}: a secret name can't have a default value in "
-        "the flow file; drop the default and pass the value when the flow runs"
-    )
-
-
 def read_flow_inputs(
     mapping,
     registry: TypeRegistry,
@@ -409,23 +377,8 @@ def _read_tagged_parameter(
     """Read one tagged declaration: the tag is its type, a value after it its default.
 
     A declaration with no value after the tag (`qty: !int`) has no default and is
-    required unless its type is nullable. A default is part of the flow file, so
-    under a secret name it must be `null` or `${...}` text, and no default may hold
-    a literal under a nested secret key.
+    required unless its type is nullable.
     """
-    if cursor.has_value:
-        # Checked before the default is read or type-checked, since those errors
-        # quote it.
-        default = cursor.value
-        if is_secret_name(name) and default is not None and not is_binding_text(default):
-            raise _secret_default_error(name, declaration_label, diagnostics)
-        path = secret_literal_path(None, default)
-        if path is not None:
-            raise diagnostics.error(
-                secret_literal_message(
-                    "default", name, path, owner=f"{declaration_label} {name!r}"
-                )
-            )
     slot = read_tagged_value(
         cursor,
         registry,

@@ -16,8 +16,8 @@ corresponding authored fields continue to reject them.
 Like `nodes/base.py`, this base imports only the dependencies its contract needs —
 `typesys` (TypeRegistry), `nodes.contracts` (OutputContract/Parameter/ValueContract),
 `compose.helpers.types` (read_type), `compose.helpers.errors` (LoadError),
-`compose.helpers.secret_literals` (check_env_secrets), `compose.helpers.tags` (has_span),
-and `compose.source` (SourceCursor) for parse navigation, `diagnostics` (SourceRange) — all
+`compose.helpers.tags` (has_span), and `compose.source` (SourceCursor) for parse
+navigation, `diagnostics` (SourceRange) — all
 earlier layers on the ladder, so it stays a leaf of the nodes package: it never imports any
 sibling kind or `nodes/__init__`. Every kind module imports it at module top level without
 cycling; `parse/file.py` re-exports it as the descriptor base type for its importers.
@@ -36,7 +36,6 @@ from yian.typesys.values import value_repr
 from yian.compile.model import Edge
 from yian.compose.helpers.types import read_type
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
-from yian.compose.helpers.secret_literals import check_env_secrets
 from yian.compose.helpers.tags import has_span
 from yian.compose.source import SourceCursor
 from yian.diagnostics import DiagnosticFrame, OriginRef, SourceRange
@@ -414,10 +413,6 @@ class NodeDescriptor:
                     range=cursor.range_of("env"),
                 )
             kwargs["env"] = cursor.mapping("env")
-            # The plain copy, since the body's read-only view nests views, not dicts.
-            check_env_secrets(
-                kwargs["env"], f"node {node_id!r}: env", cursor.child("env"), diagnostics
-            )
             rng = cursor.range_of("env")
             if rng is not None:
                 ranges[("field", "env")] = rng

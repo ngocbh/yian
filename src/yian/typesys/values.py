@@ -1792,7 +1792,7 @@ def _build_scalar_or_list(
         items = list(value)
         element = declared.element_kind
         if element is None:
-            _require_json_value(items, path)
+            _require_json_value(value, path)
         else:
             for index, item in enumerate(items):
                 if not _scalar_matches(element, item):

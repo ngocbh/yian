@@ -76,7 +76,7 @@ from yian.typesys.values import reject_nonfinite, value_repr
 from yian.compose.helpers.errors import LoadDiagnostics, source_text
 from yian.compose.helpers.output_contracts import direct_reference_parts
 from yian.compose.helpers.tags import yaml_quoted
-from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
+from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor, reject_non_text
 from yian.compose.source import SourceCursor
 
 if TYPE_CHECKING:
@@ -103,8 +103,9 @@ class CaseDescriptor(NodeDescriptor):
     `range`/`field_ranges` parse metadata) and delegates common parsing to `NodeDescriptor`.
     Its `parse` wrapper captures positional predicate/target ranges, and
     `with_source_origins` attaches indexed predicate and optional `on:` origins. Its parse
-    wrapper also checks the `cases:` shape; field legality otherwise uses the default
-    allowed/required-key and asserts-list checks.
+    wrapper also checks the `cases:` shape. Its `_validate_fields` hook rejects an `on:` YAML
+    read as non-text (`null` stays absent), then runs the default asserts-list check; field
+    legality otherwise uses the default allowed/required-key checks.
     Only the case-specific fields are declared here.
 
     Class attrs: `kind="case"`; `allowed` adds `cases`/`else`/`on`/`outputs` to the commons;
@@ -185,6 +186,27 @@ class CaseDescriptor(NodeDescriptor):
             or len(self.when_origins) != len(self.cases)
         ):
             raise ValueError("CASE predicate origins must align with cases")
+
+    @classmethod
+    def _validate_fields(
+        cls,
+        node_id: str,
+        kwargs: dict[str, Any],
+        ranges: dict[tuple[str, str], SourceRange],
+        own_range: Optional[SourceRange],
+        diagnostics: LoadDiagnostics,
+    ) -> None:
+        """Reject a non-text `on:`, then run the base checks."""
+        reject_non_text(
+            cls.kind,
+            node_id,
+            "on",
+            kwargs.get("on"),
+            ranges.get(("field", "on")) or own_range,
+            diagnostics,
+            fix="write a reference such as `on: ${input.x}`",
+        )
+        super()._validate_fields(node_id, kwargs, ranges, own_range, diagnostics)
 
     @classmethod
     def parse(

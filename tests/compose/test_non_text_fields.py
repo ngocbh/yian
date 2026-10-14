@@ -275,3 +275,50 @@ def test_null_call_is_empty(kind):
 @pytest.mark.parametrize("kind", list(_CALL_HEADS))
 def test_text_call_still_loads(kind):
     load_flow(_call(kind, "body"))
+
+
+def _case_on(v: str) -> str:
+    """A flow whose CASE node `a` has `on: <v>`, routing to CODE nodes `b` and `c`."""
+    return """\
+id: f
+name: f
+input:
+  proj: !str
+nodes:
+  a:
+    kind: case
+    on: @V
+    cases:
+      - when: x
+        then: b
+    else: c
+  b:
+    kind: code
+    output: str
+    code: "return 'b'"
+  c:
+    kind: code
+    output: str
+    code: "return 'c'"
+output: ${b.output | c.output}
+""".replace("@V", v)
+
+
+@pytest.mark.parametrize(("value", "phrase"), NON_TEXT)
+def test_non_text_case_on_is_a_load_error(value, phrase):
+    text = _case_on(value)
+    error = _error(text)
+    assert (
+        f"node 'a' (kind=case): `on:` must be text, but YAML read it as {phrase}; "
+        "write a reference such as `on: ${input.x}`"
+    ) in str(error)
+    assert _start_line(error) == _line(text, "on: ")
+
+
+def test_null_case_on_is_absent():
+    # `on: null` is the searched form, where `when: x` names no input.
+    assert "unresolved references" in str(_error(_case_on("null")))
+
+
+def test_text_case_on_still_loads():
+    load_flow(_case_on("${input.proj}"))

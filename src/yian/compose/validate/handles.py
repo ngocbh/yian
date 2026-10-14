@@ -5,7 +5,7 @@ to the desugared `CaseNode`s + their control edges (the Compose path has no
 `FlowSpec`). Runs in the validate phase over the built node map + derived edges.
 
 Imports flow DOWN only: `compile.model` (Edge), `nodes.base` (Node) + `nodes.case`
-(CaseNode/DEFAULT_HANDLE), `compose.helpers.errors` (LoadError). Nothing in
+(CaseNode/ELSE_HANDLE), `compose.helpers.errors` (LoadError). Nothing in
 helpers/nodes/parse/desugar/edges imports this back.
 """
 
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from yian.compile.model import Edge
 from yian.nodes.base import Node
-from yian.nodes.case import DEFAULT_HANDLE, CaseNode
+from yian.nodes.case import ELSE_HANDLE, CaseNode
 from yian.compose.helpers.errors import LoadDiagnostics
 
 
@@ -25,7 +25,7 @@ def check_case_handles(
 ) -> None:
     """Every desugared `CaseNode`'s handles align with its outgoing control edges.
 
-    Each outgoing control edge's handle must be a declared case handle or `default`, and
+    Each outgoing control edge's handle must be a declared case handle or the else handle, and
     every declared case must have an outgoing edge. A handle-less edge (`depends_on`,
     `runs_after`, a data read) is not a branch, so it is not checked. The `case` desugar emits the
     `gate -> <then|else>` control edges and the `CaseNode.cases`; this pins them
@@ -42,7 +42,7 @@ def check_case_handles(
             if e.from_ == node_id and e.source_handle is not None
         }
         for handle in out_handles:
-            if handle != DEFAULT_HANDLE and handle not in case_handles:
+            if handle != ELSE_HANDLE and handle not in case_handles:
                 raise diagnostics.error(
                     f"case node {node_id!r} has edge handle {handle!r} with no matching case"
                 )

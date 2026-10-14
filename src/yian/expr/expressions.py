@@ -187,7 +187,7 @@ def _evaluate(
     is coerced to `bool`.
 
     Runs the unified `eval_expr` in `CONDITION_FALSY` mode — a missing reference is `None`
-    and therefore falsy through comparisons, which lets `case default` routing handle
+    and therefore falsy through comparisons, which lets a CASE's `else:` route handle
     absent values. The truthiness fold of `and`/`or` is coerced back to a
     plain `bool` here, so a `when:`/`asserts:` predicate always yields a boolean.
     """
@@ -265,8 +265,8 @@ def evaluate_when_record(
     node's input `from:` bindings).
 
     cf. `render_template_record` (strict AGENT), which RAISES on the same dotted miss.
-    `when:` deliberately stays falsy so `default` can fire — so a dotted-key typo on a
-    declared dict input routes to `default` silently until the `types:` registry can
+    `when:` deliberately stays falsy so the CASE's `else:` route can fire — so a dotted-key
+    typo on a declared dict input routes to `else:` silently until the `types:` registry can
     validate dotted paths at compile time (the head is checked today, not the path).
 
     `types` is the table `isinstance(x, T)` looks `T` up in (`None` means no types).
@@ -752,7 +752,7 @@ def eval_expr(
     literals, coalesce / default / required, pure builtin calls, and the
     `isinstance(x, T)` type test.
 
-    Three semantics support `case default` routing:
+    Three semantics support a CASE's `else:` routing:
     a missing reference is `None` (in the non-strict modes); arithmetic over that
     `None` raises a loud `ExpressionError` (a wrapped `TypeError`); an ordered
     comparison with a `None` operand is `False` (missing->falsy).

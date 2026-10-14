@@ -14,6 +14,7 @@ from yian.compile.model import (
 )
 from yian.runtime.common import NodeState
 from yian.events import RunFailed, RunSucceeded
+from yian.nodes.base import ELSE_HANDLE
 from yian.nodes.call import CallNode
 from yian.nodes.end import EndNode
 from yian.nodes.loop import LoopNode
@@ -306,7 +307,7 @@ def _replay(
 def test_required_call_child_end_redirect_skips_parent_output_path() -> None:
     state, log = _router_in_flight(_call_redirect_flow())
 
-    commit_prepared(log, state, prepare_node_routed(state, "router", "default"))
+    commit_prepared(log, state, prepare_node_routed(state, "router", ELSE_HANDLE))
 
     assert state.node_state[_CHILD_END] is NodeState.SKIPPED
     assert state.node_state["call"] is NodeState.UNKNOWN
@@ -324,7 +325,7 @@ def test_redirected_skip_completes_coalesced_fallback_and_run() -> None:
         prepare_node_succeeded(state, "fallback", "fallback-value"),
     )
 
-    commit_prepared(log, state, prepare_node_routed(state, "router", "default"))
+    commit_prepared(log, state, prepare_node_routed(state, "router", ELSE_HANDLE))
 
     assert state.edge_state["call-end"] is NodeState.SKIPPED
     assert state.edge_state["fallback-end"] is NodeState.TAKEN
@@ -360,7 +361,7 @@ def test_malformed_skipped_output_target_leaves_state_unchanged(
     sequence = log.next_sequence
 
     with pytest.raises(error):
-        prepare_node_routed(state, "router", "default")
+        prepare_node_routed(state, "router", ELSE_HANDLE)
 
     assert _state_snapshot(state) == before
     assert log.next_sequence == sequence
@@ -449,7 +450,7 @@ def test_live_redirect_target_is_rejected_before_skip() -> None:
     sequence = log.next_sequence
 
     with pytest.raises(ValueError, match="also executable"):
-        prepare_node_routed(state, "router", "default")
+        prepare_node_routed(state, "router", ELSE_HANDLE)
 
     assert _state_snapshot(state) == before
     assert log.next_sequence == sequence
@@ -464,7 +465,7 @@ def test_settled_redirect_residue_does_not_own_a_future_output() -> None:
     state, log = _router_in_flight(flow)
     state.node_state[residue.id] = NodeState.TAKEN
 
-    commit_prepared(log, state, prepare_node_routed(state, "router", "default"))
+    commit_prepared(log, state, prepare_node_routed(state, "router", ELSE_HANDLE))
 
     assert state.edge_state["call-end"] is NodeState.SKIPPED
     assert state.node_state[END_ID] is NodeState.SKIPPED
@@ -474,7 +475,7 @@ def test_settled_redirect_residue_does_not_own_a_future_output() -> None:
 def test_map_collector_redirects_skipped_output_to_spawner() -> None:
     state, log = _router_in_flight(_map_redirect_flow())
 
-    commit_prepared(log, state, prepare_node_routed(state, "router", "default"))
+    commit_prepared(log, state, prepare_node_routed(state, "router", ELSE_HANDLE))
 
     assert state.node_state["map#0/__end__"] is NodeState.SKIPPED
     assert state.edge_state["map-child-collector"] is NodeState.SKIPPED
@@ -487,7 +488,7 @@ def test_map_collector_redirects_skipped_output_to_spawner() -> None:
 def test_loop_driver_redirects_skipped_output_to_origin() -> None:
     state, log = _router_in_flight(_loop_redirect_flow())
 
-    commit_prepared(log, state, prepare_node_routed(state, "router", "default"))
+    commit_prepared(log, state, prepare_node_routed(state, "router", ELSE_HANDLE))
 
     assert state.node_state["loop#0/__end__"] is NodeState.SKIPPED
     assert state.edge_state["loop-body-driver"] is NodeState.SKIPPED
@@ -500,7 +501,7 @@ def test_loop_driver_redirects_skipped_output_to_origin() -> None:
 def test_nested_redirects_propagate_to_the_top_level_end() -> None:
     state, log = _router_in_flight(_nested_call_redirect_flow())
 
-    commit_prepared(log, state, prepare_node_routed(state, "router", "default"))
+    commit_prepared(log, state, prepare_node_routed(state, "router", ELSE_HANDLE))
 
     assert state.node_state["outer/inner/__end__"] is NodeState.SKIPPED
     assert state.node_state["outer/inner"] is NodeState.UNKNOWN
@@ -516,7 +517,7 @@ def test_redirected_skip_replays_without_a_terminal_record() -> None:
     commit_prepared(
         live_log,
         live_state,
-        prepare_node_routed(live_state, "router", "default"),
+        prepare_node_routed(live_state, "router", ELSE_HANDLE),
     )
 
     record_types = [type(envelope.record) for envelope in live_log]

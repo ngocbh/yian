@@ -91,6 +91,12 @@ class Route:
     handle: str
 
 
+# The handle a router takes when no labeled branch matches. Unlike any other handle it may
+# have no outgoing edge. Labeled branches are named by their target node id, and no authored
+# node id may hold `#`, so no labeled branch can share the else route.
+ELSE_HANDLE = "#else"
+
+
 @dataclass(frozen=True)
 class Grow:
     """A spawner describes one deterministic graph expansion for the runtime to record.

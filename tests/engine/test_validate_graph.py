@@ -4,7 +4,7 @@
 node_ids)`) on the synthesized edges; a cyclic inferred graph (`errors/e02`) is a
 loud `LoadError` naming the stuck nodes. `check_case_handles` ports the legacy
 handle-alignment rule to the desugared `CaseNode`s + their control edges (every
-case handle has an outgoing edge; every edge handle is a case handle or `default`).
+case handle has an outgoing edge; every edge handle is a case handle or the else handle).
 """
 
 from pathlib import Path
@@ -13,7 +13,7 @@ import pytest
 
 from yian.compile.model import Edge
 from yian.compile.validation import types_compatible
-from yian.nodes.case import DEFAULT_HANDLE
+from yian.nodes.case import ELSE_HANDLE
 from yian.compose.nodes.base import BuildContext
 from yian.compose.edges.data import infer_data_edges
 from yian.compose.helpers.errors import LoadError
@@ -258,11 +258,11 @@ def test_case_without_outgoing_edge_rejected():
     assert "positive" in str(exc.value)
 
 
-def test_default_handle_always_allowed():
+def test_else_handle_always_allowed():
     node_ids, edges, nodes = _build("02-case.yaml")
-    # the else: -> default handle is on a control edge; it must not trip the check.
-    default_edges = [
-        e for e in edges if e.from_ == "gate" and e.source_handle == DEFAULT_HANDLE
+    # the else: -> else handle is on a control edge; it must not trip the check.
+    else_edges = [
+        e for e in edges if e.from_ == "gate" and e.source_handle == ELSE_HANDLE
     ]
-    assert default_edges  # seed 02 has an else:
+    assert else_edges  # seed 02 has an else:
     check_case_handles(nodes, edges)  # no raise

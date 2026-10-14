@@ -295,7 +295,7 @@ def test_binding_default_call_result_miss_supplies_default():
 
 def test_condition_call_result_miss_stays_falsy():
     # CONDITION_FALSY: a `when:`-style comparison over a call-result dotted miss stays False
-    # (missing -> falsy), it does NOT raise — so `default` routing can still fire.
+    # (missing -> falsy), it does NOT raise — so the else route can still fire.
     register_template_fn("_mkrec")(lambda x: {"field": f"F-{x}"})
     tree = grammar.parse_expr("_mkrec(${name}).nope == 1")
     assert eval_expr(tree, _record_resolve(_REC), mode=ResolveMode.CONDITION_FALSY) is False

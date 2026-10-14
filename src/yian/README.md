@@ -764,7 +764,7 @@ node-outcome sum:
 | Node outcome | Meaning |
 |--------|---------|
 | `Output(value, commit_as=None)` | one value for the engine to type-check and bind under the resolved success target |
-| `Route(handle)` | one named outgoing branch, with redirect-aware sibling skip-flooding |
+| `Route(handle)` | one named outgoing branch, with redirect-aware sibling skip-flooding; the handle must match an outgoing edge, except the no-match route `ELSE_HANDLE` (`"#else"`), which may have none |
 | `Grow(seed, prune)` | one canonical deterministic expansion description |
 
 Success and absence resolve their logical output boundaries through distinct

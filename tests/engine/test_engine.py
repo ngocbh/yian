@@ -11,6 +11,7 @@ from yian.events import (
 )
 from yian.compile.model import END_ID, START_ID, Edge, CompiledFlow, FlowOutput
 from yian.runtime.common import NodeState
+from yian.nodes.base import ELSE_HANDLE
 from yian.nodes.contracts import ValueContract
 from yian.nodes.end import EndNode
 from yian.nodes.start import StartNode
@@ -210,7 +211,7 @@ def test_case_takes_branch_and_skips_other():
     log: list = []
     g = _graph(
         [BranchNode("cond", "yes"), RecordNode("b", log), RecordNode("c", log)],
-        [(START_ID, "cond"), ("cond", "b", "yes"), ("cond", "c", "default"), ("b", END_ID), ("c", END_ID)],
+        [(START_ID, "cond"), ("cond", "b", "yes"), ("cond", "c", ELSE_HANDLE), ("b", END_ID), ("c", END_ID)],
     )
     engine = _engine(g)
     events = _run(engine)
@@ -219,22 +220,22 @@ def test_case_takes_branch_and_skips_other():
     assert isinstance(events[-1], RunSucceeded)
 
 
-def test_case_default_fallback():
+def test_case_else_fallback():
     log: list = []
     g = _graph(
-        [BranchNode("cond", "default"), RecordNode("b", log), RecordNode("c", log)],
-        [(START_ID, "cond"), ("cond", "b", "yes"), ("cond", "c", "default"), ("b", END_ID), ("c", END_ID)],
+        [BranchNode("cond", ELSE_HANDLE), RecordNode("b", log), RecordNode("c", log)],
+        [(START_ID, "cond"), ("cond", "b", "yes"), ("cond", "c", ELSE_HANDLE), ("b", END_ID), ("c", END_ID)],
     )
     _run(_engine(g))
     assert log == ["c"]
 
 
 def test_skip_floods_through_unreachable_chain():
-    # cond -default-> b -> c ; selecting "yes" (a dead-end to END_ID) skips b AND c.
+    # cond -else-> b -> c ; selecting "yes" (a dead-end to END_ID) skips b AND c.
     log: list = []
     g = _graph(
         [BranchNode("cond", "yes"), RecordNode("b", log), RecordNode("c", log)],
-        [(START_ID, "cond"), ("cond", "b", "default"), ("cond", END_ID, "yes"), ("b", "c"), ("c", END_ID)],
+        [(START_ID, "cond"), ("cond", "b", ELSE_HANDLE), ("cond", END_ID, "yes"), ("b", "c"), ("c", END_ID)],
     )
     engine = _engine(g)
     _run(engine)

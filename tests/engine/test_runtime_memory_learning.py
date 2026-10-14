@@ -310,14 +310,14 @@ def test_owner_context_projects_synthetic_source_free_failure_only_to_root_flow(
 @pytest.mark.parametrize("same_boundary", [False, True])
 def test_owner_context_root_fallback_uses_only_actual_source_zero_fields(same_boundary):
     from yian.compile.model import CompiledFlow
-    from yian.nodes.base import Route
+    from yian.nodes.base import ELSE_HANDLE, Route
     from yian.nodes.contracts import Parameter
     from yian.nodes.start import StartNode
     from yian.runtime.backward import compute_backward
     from yian.runtime.engine import FlowEngine
 
     start = StartNode(START_ID, params=[Parameter("topic"), Parameter("omitted", has_default=True, default="unused")])
-    start.forward = lambda _inputs: Route("default")
+    start.forward = lambda _inputs: Route(ELSE_HANDLE)
     start.memory_scope = MemoryScope((START_ID,), (_POLICY,))
     flow = CompiledFlow({START_ID: start}, [])
     flow.end_id = START_ID if same_boundary else END_ID

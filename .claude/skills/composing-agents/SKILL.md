@@ -569,9 +569,10 @@ Routing on a `Literal` node output is **exhaustiveness-checked** — omitting a 
 with no `else:` is a load error.
 
 **Branches.** A `then:`/`else:` is a sibling node (an unquoted word), a child call
-(an unquoted `call(...)` as the whole value), or a **value**. An unquoted word always
-names a node; one that names no node is a load error (``then: `replyy` names no node.
-Did you mean `reply`? If you meant the text "replyy", quote it: `then: "replyy"` ``).
+(an unquoted `call(...)` as the whole value), or a **value**. Any node name works as a
+target, including `default`. An unquoted word always names a node; one that names no
+node is a load error (``then: `replyy` names no node. Did you mean `reply`? If you
+meant the text "replyy", quote it: `then: "replyy"` ``).
 A quoted branch is always a value: `then: "reply"` is the text, and `"call(f)"` is
 text too. Values are text, numbers, bools, `null`, lists, and block-mapping records,
 with `${...}` spans anywhere inside; nested words are text and `$$` is a `$`.

@@ -4,8 +4,8 @@ These drive `eval_expr(tree, resolve, item, mode)` — the single evaluator that
 walks a tree from `expr.grammar.parse_expr` against a `resolve` callable. Unlike
 the parse-only grammar tests (`test_expr_grammar.py`), these assert computed
 VALUES, the three missing-ref-by-mode behaviors, and the load-bearing semantics
-(missing->None, arith-over-None->loud, cmp-with-None->False) that `case default`
-routing depends on.
+(missing->None, arith-over-None->loud, cmp-with-None->False) that a CASE's
+`else:` routing depends on.
 """
 
 import pytest

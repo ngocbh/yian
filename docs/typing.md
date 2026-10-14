@@ -100,6 +100,10 @@ fails. `reject_deep_nesting(value, where)` checks without recursion and raises
 <where> at <path>: value nests deeper than 100 levels, the limit for a yian value (each record and list is a level)
 ```
 
+An expression has the same bound (`expr.grammar.MAX_EXPRESSION_NESTING`), checked when
+it is parsed; see
+[Expressions → Expression nesting limit](expressions.md#expression-nesting-limit).
+
 The first boundary that sees a deeper value rejects it:
 
 - a run input may nest 100 levels; a deeper one makes `run_flow` raise `ValueError`

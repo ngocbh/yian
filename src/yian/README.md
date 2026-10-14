@@ -548,6 +548,17 @@ Replay validation does not re-apply the limit, so logs recorded before it still
 replay, and the run-log codecs never apply it; they see only values these entry
 checks bounded.
 
+An expression has the same bound, `expr.grammar.MAX_EXPRESSION_NESTING` (set to
+`MAX_VALUE_NESTING`). A chain of same-precedence operators parses as one flat node
+(`a + b - c` is one `sum`, `a * b / c % d` one `product`, `a ** b ** c` one `power`),
+evaluated left to right (`**` right to left), so a chain is one level at any length.
+`parse_expr` walks the tree with an explicit stack before any recursive walker runs and
+raises `ExpressionError` past 100 levels, counting each call, list literal, unary
+operator, comparison, escape, `and`/`or` chain, and operator chain. A traced chain keeps
+two-child routes, so the run-record format is unchanged: a `+` chain of lists is a
+balanced tree of `concat` routes, and a `* / %` chain that repeats one list is one
+`repeat` route with a count child.
+
 Authored types use one parenthesized grammar: `Optional(str)`, `list(Buy)`,
 `dict(str, int)`, `Literal(a, b)`, `Union(Buy, Sell)`, and inclusive ranges, either end
 of which may be open (`int(1..12)`, `float(0.0..1.0)`, `int(0..)`, `int(..100)`).

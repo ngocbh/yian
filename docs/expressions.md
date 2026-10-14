@@ -50,6 +50,26 @@ ids like `node#0`) while `-` is not (so `a - b` is subtraction).
 name of a reference. They remain legal as dotted field names, such as
 `record.output.in`.
 
+A chain of same-precedence operators is one flat node, like an `and` or `or` chain:
+`a + b - c` is one `sum`, `a * b / c % d` one `product`, and `a ** b ** c` one `power`.
+The evaluator applies a `sum` or `product` left to right and a `power` right to left,
+so the results are Python's and a chain of any length needs no recursion per operator.
+
+### Expression nesting limit
+
+An expression nests at most 100 levels (`expr.grammar.MAX_EXPRESSION_NESTING`, the same
+bound as a [value](typing.md#nesting-limit)). Each call, list literal, unary operator
+(`-`, `not`), comparison, escape (`|`, `:-`, `:?`), `and`/`or` chain, and operator chain is
+one level; a plain reference adds none, and parentheses add none of their own. Mixing
+precedence nests: `a * b + c` is a `product` inside a `sum`, two levels, and
+`((a + b) + c) + d` is three chains, three levels. `-1` is one level. `parse_expr` checks
+the depth first, without recursion, so no later walk meets a tree deep enough to
+overflow it, and a deeper expression is a load error at its field:
+
+```
+expression nests deeper than 100 levels, the limit for a yian expression (each call, list, unary operator, comparison, and chain of operators is a level); split it into smaller bindings or steps
+```
+
 ## Layer 2 — the one evaluator
 
 `eval_expr(tree, resolve, item=None, mode=...)` is the single evaluator for every

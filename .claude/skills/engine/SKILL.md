@@ -225,7 +225,8 @@ this model whenever you design anything:
   flow/CALL lowering replace only the expression, while child cloning and LOOP
   respawn retain the carrier fields. START/END reuse the lowered flow carriers.
   `Node.run` diagnoses a failed assertion through that exact carrier's origin.
-  An expression that doesn't parse is malformed setup, not a failed assertion:
+  An expression that doesn't parse, or calls an unknown function or a builtin with
+  arguments it doesn't take, is malformed setup, not a failed assertion:
   `run_flow` and `resume_flow` (unfinished run) raise `ExpressionError` before any
   record is written, and `Node.run` raises it from setup validation before the body.
   The same holds for a CASE `when` and a LOOP `while`/`until` set in Python.

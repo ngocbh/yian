@@ -130,8 +130,9 @@ rejected too: in a flow file it is a load error, and in the host `llm_config` it
 `ValueError` before the run starts when an AGENT uses it. An int of any size is a
 value: the log records every digit, and `resume_flow` reads it back exact. A node
 assertion, CASE `when`, or LOOP `while`/`until` set in Python whose expression doesn't
-parse raises `ExpressionError` (a `ValueError`) naming the node and the field (assertion
-list and assertion, case handle, or predicate keyword), before the log is created;
+parse (or calls an unknown function or a builtin with the wrong arguments) raises
+`ExpressionError` (a `ValueError`) naming the node and the field (assertion list and
+assertion, case handle, or predicate keyword), before the log is created;
 `resume_flow` raises it for an unfinished run before appending any record.
 
 - `log` — an optional JSONL path. `None` still uses the same record/reducer path

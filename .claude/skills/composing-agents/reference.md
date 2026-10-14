@@ -95,7 +95,7 @@ One `${...}` grammar; the context decides what happens to the result:
 | Context | Where | What it does |
 |---------|-------|--------------|
 | **Bindings** | `input:` / `output:` values | **evaluated** to a typed value — refs, literals, arithmetic, lists, `:-` / `:?` / `\|`, pure builtins. Child-flow call = `call(...)` directive. `name: Type = value` declares the type. |
-| **Conditions** | `when:` / `asserts:` | **tested** as a boolean: `== != < <= > >=`, `in`/`not in`, `and`/`or`/`not`, parens, arithmetic operands. Canonical **bare** form (no `${}`); one whole `${...}` loads and evaluates identically; a `${...}` inside the expression is a load error. |
+| **Conditions** | `when:` / `asserts:` | **tested** as a boolean: `== != < <= > >=`, `in`/`not in`, `and`/`or`/`not`, parens, arithmetic operands. Canonical **bare** form (no `${}`); one whole `${...}` loads and evaluates identically; a `${...}` inside the expression is a load error, as is a call to a non-builtin function or a builtin with arguments it doesn't take. |
 | **Prompts** | `prompt:` text | free text with embedded `${...}` spans (each stringified) |
 
 > Bindings wire, conditions test, nodes compute. A heavy transform still belongs

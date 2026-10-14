@@ -220,6 +220,10 @@ value still renders as `null`.
 
 New builtins register with `@register_template_fn()`.
 
+In a condition the loader checks every call: an unknown function, or arguments the
+builtin doesn't take, is a load error. Register a builtin with
+`@register_template_fn()` before loading a flow that calls it.
+
 ## `isinstance` — the type test
 
 `isinstance(x, T)` is `true` when the value of `x` satisfies the type named `T`:

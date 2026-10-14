@@ -913,10 +913,11 @@ One `${...}` grammar; the context decides what happens to the result:
 - **`when:` / `asserts:`**: **tested** as a boolean — `== != < <= > >=`,
   `in`/`not in`, `and`/`or`/`not`, parens, arithmetic operands. Bare, or one
   whole `${...}`, are equivalent; braces on a ref inside (`${a} > 5`) are a load
-  error. A flow-level `asserts:` reads `input.X`
-  (boundary, before any node) or `node.output` (post, after the terminal). An
-  exact unqualified flow-input name is shorthand (`age` means `input.age`) and
-  wins over a same-named node; keep fields explicit as `input.profile.age`.
+  error, as is calling a non-builtin function or a builtin with arguments it doesn't
+  take (even in an `or` branch that never runs). A flow-level `asserts:` reads
+  `input.X` (boundary, before any node) or `node.output` (post, after the
+  terminal). An exact unqualified flow-input name is shorthand (`age` means
+  `input.age`) and wins over a same-named node; keep fields explicit as `input.profile.age`.
   `${system.X}` is **not** allowed there (it is ambient; a `system` ref is a
   LoadError — move the check into a body node).
 - **Prompts**: free text with embedded `${...}` spans (each stringified).

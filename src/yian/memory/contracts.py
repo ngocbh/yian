@@ -525,13 +525,32 @@ def _check_builtin_config_values(type_name: str, config: Mapping[str, object]) -
             expected = "an integer or null" if nullable else "an integer"
             raise TypeError(
                 f"{type_name} memory config {key} must be {expected}, "
-                f"got {json.dumps(value)}"
+                f"got {_shown(value)}"
             )
         if value < minimum:
             raise ValueError(
                 f"{type_name} memory config {key} must be an integer of at least "
-                f"{minimum}, got {value}"
+                f"{minimum}, got {_shown(value)}"
             )
+
+
+def _shown(value: object) -> str:
+    """Return a config value's JSON text, or a placeholder naming its type when too large.
+
+    Args:
+        value (`object`):
+            The config value to show in a message.
+
+    Returns:
+        `str`: ``json.dumps(value)``, or ``<{type} too large to display>``.
+    """
+    try:
+        return json.dumps(value)
+    except ValueError:
+        # An int past Python's str-digit limit can't be written. The placeholder
+        # repeats `typesys.values.value_repr`'s text because this module may
+        # import only `yian.diagnostics`.
+        return f"<{type(value).__name__} too large to display>"
 
 
 def _require_memory_identifier(value: object, what: str) -> str:

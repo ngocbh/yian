@@ -102,7 +102,7 @@ from yian.tools.types import tool_types
 from yian.typesys import Type, ValueKind, canonical_type_label
 from yian.typesys.pool import VariablePool
 from yian.typesys.seeding import default_run_id, seed_system_clock
-from yian.typesys.values import reject_deep_nesting, reject_nonfinite
+from yian.typesys.values import reject_deep_nesting, reject_nonfinite, value_repr
 
 
 EventHook = Callable[[Any], None]
@@ -1085,7 +1085,7 @@ def _binding_label(typ: Type) -> str:
         and typ.bounds[0] == typ.bounds[1]
         and not typ.nullable
     ):
-        return f"{typ.bounds[0]} (int)"
+        return f"{value_repr(typ.bounds[0])} (int)"
     if (
         typ.kind is ValueKind.STRING
         and typ.tags is not None

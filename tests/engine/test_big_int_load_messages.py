@@ -10,6 +10,9 @@ import pytest
 import yian.json_codec as json_codec
 from yian.compose import LoadError, load_flow
 from yian.compose.helpers.errors import LoadDiagnostics
+from yian.llm_clients import LLMConfig
+from yian.nodes.agent import AgentNode
+from yian.run import run_flow
 
 
 BIG = 10**4999 + 12345  # 5000 digits, past Python's default 4300-digit limit
@@ -202,3 +205,94 @@ def test_load_diagnostics_elide_a_digit_run_past_the_limit():
 def test_load_diagnostics_keep_a_digit_run_within_the_limit():
     kept = "1" * 4300
     assert str(LoadDiagnostics().error("x " + kept + " y")) == "x " + kept + " y"
+
+
+# --- run and memory ----------------------------------------------------------
+
+
+def _episodic(max_episodes: str) -> str:
+    return _agent(
+        "    long_term_memory:\n"
+        f"      e: {{type: episodic, config: {{max_episodes: {max_episodes}}}}}\n"
+    )
+
+
+def test_an_episodic_memory_limit_below_its_minimum_shows_a_placeholder():
+    assert_load_message(_episodic(f"-{D}"))
+
+
+def test_an_episodic_memory_limit_of_the_wrong_type_shows_a_placeholder():
+    msg = assert_load_message(_episodic(f"[{D}]"), placeholder=False)
+    assert "got <list too large to display>" in msg
+
+
+def test_the_run_start_tool_iteration_check_shows_a_placeholder():
+    node = AgentNode("n", prompt="hi", llm_config=LLMConfig())
+    node.env = {"max_tool_iterations": -ONES}
+    with pytest.raises(ValueError) as info:
+        node._max_tool_iterations()
+    msg = str(info.value)
+    assert "set_int_max_str_digits" not in msg
+    assert msg.endswith("got " + PLACEHOLDER)
+
+
+def test_a_tool_binding_label_shows_a_long_int_as_a_placeholder():
+    def place_order(qty: str) -> str:
+        return qty
+
+    flow = load_flow(
+        "id: p\nname: p\nnodes:\n  place:\n    kind: tool\n    tool_id: place_order\n"
+        f"    input:\n      qty: {D}\noutput: ${{place.output}}\n"
+    )
+    with pytest.raises(ValueError) as info:
+        run_flow(flow, {}, tools={"place_order": place_order})
+    msg = str(info.value)
+    assert "set_int_max_str_digits" not in msg
+    assert re.search(r"[0-9]{600}", msg) is None
+    assert msg.endswith("but the binding is " + PLACEHOLDER + " (int)")
+
+
+
+def test_a_wait_until_long_int_fails_with_a_placeholder():
+    result = run_flow(load_flow(_flow(f"  c:\n    kind: wait\n    until: {D}\n")), {})
+    msg = result.failure.message
+    assert "set_int_max_str_digits" not in msg
+    assert re.search(r"[0-9]{600}", msg) is None
+    assert f"wait `until` ({PLACEHOLDER}) did not resolve to a date/datetime: {PLACEHOLDER}" in msg
+
+
+_MEMORY_KEYS = """id: root
+name: root
+defs:
+  child:
+    long_term_memory:
+      inner: {type: inner, config: {limit: CHILD}}
+    nodes:
+      answer:
+        kind: agent
+        long_term_memory: {inner: {type: inner, config: {limit: AGENT}}}
+        prompt: answer
+        output: str
+    output: ${answer.output}
+nodes:
+  invoke:
+    kind: call
+    call: child
+output: ${invoke.output}
+"""
+
+
+def _memory_keys(child: str, agent: str) -> str:
+    return _MEMORY_KEYS.replace("CHILD", child).replace("AGENT", agent)
+
+
+def test_one_memory_key_declared_twice_with_one_long_int_config_loads():
+    load_flow(_memory_keys(D, D))
+
+
+@pytest.mark.parametrize(
+    "child, agent", [(D, "1"), ("1", D), (D, D + "1")], ids=["long_short", "short_long", "two_long"]
+)
+def test_one_memory_key_with_long_int_configs_that_differ_fails(child, agent):
+    msg = assert_load_message(_memory_keys(child, agent), placeholder=False)
+    assert "memory 'inner' is declared with different type or config" in msg

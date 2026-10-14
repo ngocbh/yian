@@ -10,10 +10,10 @@ separate, all-or-nothing mutation over a private compiled graph.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
+import yian.json_codec as json_codec
 from yian.compile.model import END_ID, START_ID, CompiledFlow, Flow
 from yian.diagnostics import OriginRef
 from yian.memory.contracts import (
@@ -505,7 +505,7 @@ def _note(error: BaseException, text: str) -> None:
 
 def _canonical_json(value: object) -> str:
     """Encode one JSON value for exact comparison, so ``1``, ``1.0`` and ``true`` differ."""
-    return json.dumps(
+    return json_codec.dumps(
         value, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":")
     )
 

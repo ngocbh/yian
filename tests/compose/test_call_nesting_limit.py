@@ -130,15 +130,14 @@ def _inline_chain(n: int) -> str:
 
 
 def _mixed_chain(n: int) -> str:
-    """Return a flow whose root `top` calls `c0` and each `ci` reaches `c(i+1)` in turn by
-    CALL, MAP, and LOOP; the last def is a CODE leaf.
+    """Return a flow whose defs reach one another by CALL, MAP, and LOOP in turn.
 
-    A LOOP body returns the record it carries, so each def right under a LOOP outputs
+    Root `top` calls `c0`, each `ci` reaches `c(i+1)`, and the last def is a CODE leaf. A LOOP body returns the record it carries, so each def right under a LOOP outputs
     `{v: ...}`.
     """
     entries = []
     for i in range(n):
-        under_loop = i > 0 and (i - 1) % 3 == 2
+        under_loop = i > 0 and i % 3 == 0  # the CALL levels sit right under a LOOP
         if i == n - 1:
             node = (
                 "        kind: code\n"
@@ -159,7 +158,9 @@ def _mixed_chain(n: int) -> str:
                 "        input:\n          v: ${input.v}\n",
             }[i % 3]
             result = "${input.v}" if under_loop else "${step.output}"
-        output = f"\n      v: {result}\n" if under_loop else f" {result}\n"
+        record_output = f"\n      v: {result}\n"
+        value_output = f" {result}\n"
+        output = record_output if under_loop else value_output
         entries.append(
             f"  c{i}:\n    input:\n      v: !str\n    nodes:\n      step:\n{node}"
             f"    output:{output}"
@@ -178,8 +179,11 @@ def _mixed_chain(n: int) -> str:
 
 
 def _directive_chain(n: int) -> str:
-    """Return a flow whose root `top` and each `ci` echo `call(c(i+1), x=${input.x})`,
-    starting from `c0`; the last def is a CODE leaf."""
+    """Return a flow whose `call(...)` directives chain through every def.
+
+    The root `step` echoes `call(c0, x=${input.x})`, each `ci` echoes `call(c(i+1), ...)`,
+    and the last def is a CODE leaf.
+    """
 
     def echo_call(target: str, indent: str) -> str:
         return (
@@ -212,8 +216,11 @@ def _directive_chain(n: int) -> str:
 
 
 def _uses_files(directory: Path, n: int) -> str:
-    """Write flow files `u0`..`u(n-1)` to `directory`, each importing and calling the next
-    and the last a CODE leaf, and return a root flow importing `u0` as `first`."""
+    """Write a chain of flow files and return a root flow that imports the first.
+
+    Files `u0`..`u(n-1)` each import and call the next, the last is a CODE leaf, and the
+    root imports `u0` as `first`.
+    """
     for i in range(n):
         head = f"id: u{i}\nname: u{i}\ninput:\n  x: !str\n"
         if i < n - 1:

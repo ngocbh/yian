@@ -1291,8 +1291,9 @@ The result is validated while its canonical success record is prepared, like eve
 other node output.
 
 Changed: an AGENT `output:` holding `object` or `Any` used to fail on Azure, whose strict
-JSON-schema mode rejects an open part, and to come back as `{}` on Anthropic with
-`thinking` on. It now works on every provider.
+JSON-schema mode rejects an open part. On Anthropic with `thinking` on, an `object` came
+back as `{}` and an `Any` failed before the request was sent. Both now go through a tool
+call that isn't strict.
 
 A [union](#unions-of-records-union) `output:` asks for one of the members: each member's
 schema forbids unknown fields and pins its tag with a `const`. The node returns the
@@ -1472,7 +1473,7 @@ A few providers need a note:
 - `anthropic` with `thinking` on (any `type` other than `disabled`) gets structured
   output through the JSON-schema output format (`output_config.format`), because the
   Messages API refuses thinking beside a forced tool call. An output with an open part
-  (`object`, `Any`) can't go through that format, whose grammar closes every mapping, so
+  (`object`, `Any`) can't go through that format, which accepts only closed mappings, so
   it goes as a tool the model may call; a reply without that tool call is corrected and
   retried under `retries:`.
 - `ollama` takes what the Ollama client sends: `think` (`true`, `false`, or a level),

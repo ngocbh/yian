@@ -643,9 +643,10 @@ model made enforceable.
   Responses API (OpenAI, the subscription, a `*-codex` name on Azure or OpenRouter) sends
   `strict: false`; Anthropic with block thinking binds an unforced tool, and a reply
   without that tool call raises `OutputParserException` (with `include_raw`, a
-  `parsing_error`) for the retry to correct. Closed schemas there, Gemini, Ollama, Chat
-  Completions, and Anthropic without thinking are unchanged; an explicit `method=` or
-  `strict=` is respected.
+  `parsing_error`) for the retry to correct. Closed schemas there, Gemini, Ollama, the
+  OpenAI-compatible Chat Completions clients, and Anthropic without thinking are
+  unchanged; an explicit `method=` is respected, and so is an explicit `strict=` on the
+  OpenAI-family clients.
   A root enum string (`Literal(...)`) uses `ScalarWrapper.value` with a Pydantic
   `Literal` annotation and unwraps to the bare tag returned to the flow.
   Three-part contract: **generate-tries** (the schema asks), **boundary-enforces**

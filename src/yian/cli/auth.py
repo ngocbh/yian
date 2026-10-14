@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 from typing import Optional
+import warnings
 import webbrowser
 
 import typer
@@ -15,43 +16,91 @@ from yian.llm_clients.auth import (
     AuthStore,
     OpenAIAuth,
 )
-from yian.llm_clients.config import SUPPORTED_LLM_PROVIDERS
+from yian.llm_clients.api_key_env import (
+    OPTIONAL_API_KEY_PROVIDERS,
+    PROVIDER_API_KEY_ENV,
+)
+from yian.llm_clients.config import SUPPORTED_LLM_PROVIDERS, validate_base_url
+from yian.llm_clients.factory import create_llm_client
+from yian.llm_clients.model_list import ModelListError, list_models
+from yian.llm_clients.redact import redact_key, scrub_key
 
 _KINDS = {"api_key": "api-key", "subscription": "subscription", "none": "none"}
+_CANCELLED = "Authentication cancelled; the previous connection is unchanged"
 _NO_DEFAULT = (
     "No default provider is saved; choose one with 'yian auth <provider> --default'"
 )
+# Environment overrides of a local server's URL, read the way its client reads them.
+_BASE_URL_ENV = {"ollama": "OLLAMA_BASE_URL", "vllm": "VLLM_BASE_URL"}
 
 
-def _choose(message: str, choices: list[str], *, default: str, option: str) -> str:
-    """Select a value on a terminal, or require an explicit command option."""
+def _require_terminal(option: str) -> None:
+    """Refuse a prompt when no interactive terminal is available.
+
+    Raises:
+        AuthError: Standard input is not a terminal; the message names `option`.
+    """
     if not sys.stdin.isatty():
         raise AuthError(
             f"Authentication needs {option} when no interactive terminal is available"
         )
+
+
+def _choose(message: str, choices: list[str], *, default: str, option: str) -> str:
+    """Select a value on a terminal, or require an explicit command option."""
+    _require_terminal(option)
     import questionary
 
     answer = questionary.select(message, choices=choices, default=default).ask()
     if answer is None:
-        raise AuthError(
-            "Authentication cancelled; the previous connection is unchanged"
-        )
+        raise AuthError(_CANCELLED)
     return answer
 
 
-def _api_key(variable: str) -> str:
-    """Read a selected environment key or ask without echoing its contents."""
+def _ask(message: str, *, option: str) -> str:
+    """Read a typed value on a terminal, or require an explicit command option."""
+    _require_terminal(option)
+    import questionary
+
+    answer = questionary.text(message).ask()
+    if answer is None or not answer.strip():
+        raise AuthError(_CANCELLED)
+    return answer.strip()
+
+
+def _api_key(provider: str, variable: str, *, optional: bool = False) -> Optional[str]:
+    """Read the provider's key from `variable` or a hidden prompt.
+
+    Args:
+        provider (`str`): Provider name shown in the prompt.
+        variable (`str`): Environment variable checked first.
+        optional (`bool`): The provider can run without a key; off a terminal or
+            with an empty answer, no key is returned.
+
+    Returns:
+        `str | None`: The key, or `None` when an optional key is not given.
+
+    Raises:
+        AuthError: A required key is missing, or the prompt is cancelled.
+    """
     key = os.environ.get(variable)
     if key:
         return key
     if not sys.stdin.isatty():
+        if optional:
+            return None
         raise AuthError(
             f"Set {variable} before API-key setup, or run in an interactive terminal"
         )
     import questionary
 
-    key = questionary.password("OpenAI API key:").ask()
-    if not key or not key.strip():
+    hint = " (leave empty for none)" if optional else ""
+    key = questionary.password(f"{provider} API key{hint}:").ask()
+    if key is None:
+        raise AuthError(_CANCELLED)
+    if not key.strip():
+        if optional:
+            return None
         raise AuthError("Authentication cancelled; no API key was supplied")
     return key.strip()
 
@@ -104,10 +153,10 @@ def _list() -> None:
         if state.default_provider is None:
             typer.echo(_NO_DEFAULT)
     if overrides:
-        verb = "is" if len(overrides) == 1 else "are"
+        verbs = ("is", "overrides") if len(overrides) == 1 else ("are", "override")
         typer.echo(
-            f"{' and '.join(overrides)} {verb} set in the environment and "
-            "override the saved choice"
+            f"{' and '.join(overrides)} {verbs[0]} set in the environment and "
+            f"{verbs[1]} the saved choice"
         )
 
 
@@ -196,7 +245,7 @@ def _setup_openai(
     else:
         if login is not None:
             raise AuthError("--login applies to subscription authentication")
-        credentials = ApiKeyCredentials(_api_key(api_key_env))
+        credentials = ApiKeyCredentials(_api_key("openai", api_key_env))
         models = service.api_models(credentials)
         choices = _text_models(models)
     if model is None:
@@ -211,6 +260,120 @@ def _setup_openai(
     typer.echo(f"Saved OpenAI {method} authentication with model {model}")
 
 
+def _model_answers(
+    provider: str, model: str, key: Optional[str], endpoint: Optional[str]
+) -> Optional[str]:
+    """Send the model one short prompt and say why it failed, if it did.
+
+    The client is built from the given key and endpoint only. Without a key, the
+    client takes its keyless path (vLLM, Ollama).
+
+    Args:
+        provider (`str`): Provider name.
+        model (`str`): Model id, or the Azure deployment name.
+        key (`str | None`): API key to send, or `None` for none.
+        endpoint (`str | None`): Azure resource endpoint, or `None`.
+
+    Returns:
+        `str | None`: `None` when the model replied; otherwise the error type and
+        a short message without the key, or the install hint for a missing extra.
+    """
+    # The Ollama client ignores timeout and max_retries.
+    options: dict = {"max_retries": 0, "timeout": 30}
+    if key is not None:
+        options["api_key"] = key
+    try:
+        with warnings.catch_warnings():
+            # The reply decides whether the model is usable, not yian's catalog.
+            warnings.filterwarnings(
+                "ignore", message="Model .* is not in the known model list"
+            )
+            llm = create_llm_client(provider, model, base_url=endpoint, **options)
+            llm.get_llm().invoke("Reply with OK.")
+    except ImportError as error:
+        return str(error)
+    except Exception as error:
+        scrub_key(error, key)
+        # Some errors, such as pydantic's ValidationError, build their text from
+        # fields scrub_key does not rewrite, so the text is redacted again.
+        text = " ".join(redact_key(str(error), key).split())
+        return f"{type(error).__name__}: {text[:200]}"
+    return None
+
+
+def _setup_provider(
+    store: AuthStore,
+    provider: str,
+    model: Optional[str],
+    api_key_env: Optional[str],
+    endpoint: Optional[str],
+    make_default: bool,
+) -> None:
+    """Read a provider's key, endpoint, and model, check the model, and save the login.
+
+    A model in the provider's listing is accepted as is. Any other model, and every
+    Azure deployment, must answer one short prompt.
+
+    Raises:
+        AuthError: A value is missing or invalid, or the model did not answer.
+    """
+    if provider == "azure":
+        endpoint = endpoint or _ask(
+            "Azure OpenAI endpoint (https://<resource>.openai.azure.com/):",
+            option="--endpoint",
+        )
+        try:
+            validate_base_url(endpoint)
+        except ValueError as error:
+            raise AuthError(f"Invalid Azure endpoint: {error}") from None
+    key = None
+    if provider != "ollama":
+        key = _api_key(
+            provider,
+            api_key_env or PROVIDER_API_KEY_ENV[provider],
+            optional=provider in OPTIONAL_API_KEY_PROVIDERS,
+        )
+    models = None
+    if provider == "azure":
+        model = model or _ask("Deployment name:", option="--model")
+    else:
+        if model is None:
+            _require_terminal("--model")  # Before the listing request.
+        variable = _BASE_URL_ENV.get(provider)
+        base_url = (os.environ.get(variable) or None) if variable else None
+        failure = None
+        try:
+            models = list_models(provider, key, base_url)
+        except ModelListError as error:
+            failure = str(error)
+        if model is None:
+            if models:
+                model = _choose(
+                    "Model:", list(models), default=models[0], option="--model"
+                )
+            else:
+                typer.echo(
+                    f"Couldn't list the {provider} models "
+                    f"({failure or 'none were returned'}); type a model name"
+                )
+                model = _ask("Model:", option="--model")
+    if models is None or model not in models:
+        problem = _model_answers(provider, model, key, endpoint)
+        if problem:
+            raise AuthError(
+                f"The model didn't answer: {problem}; the previous login is unchanged"
+            )
+    store.save(
+        provider,
+        ApiKeyCredentials(key) if key else None,
+        model,
+        endpoint=endpoint,
+        make_default=make_default,
+    )
+    kind = "api-key" if key else "none"
+    typer.echo(f"Saved {provider} login ({kind}) with model {model}")
+
+
 def auth(
     provider: Optional[str] = typer.Argument(
         None, help="Provider to set up, make the default, or remove; omit to list logins."
@@ -222,10 +385,12 @@ def auth(
         None, help="OpenAI subscription sign-in: browser or device (for SSH)."
     ),
     model: Optional[str] = typer.Option(
-        None, help="Available model to save for the provider; prompts when omitted."
+        None, help="Model to save (azure: the deployment name); prompts when omitted."
     ),
     api_key_env: Optional[str] = typer.Option(
-        None, help="Environment variable containing the API key (openai: OPENAI_API_KEY)."
+        None,
+        help="Environment variable holding the API key; defaults to the provider's "
+        "own, such as ANTHROPIC_API_KEY.",
     ),
     endpoint: Optional[str] = typer.Option(
         None, help="Azure resource endpoint, such as https://NAME.openai.azure.com/."
@@ -239,24 +404,31 @@ def auth(
 ) -> None:
     """List, set up, choose the default among, or remove saved provider logins.
 
-    `yian auth` lists the saved logins and the default. `yian auth PROVIDER` signs in
-    and saves the provider's credential and model; it becomes the default only when
-    none is saved. `yian auth PROVIDER --default` makes a saved login the default
-    without signing in. `yian auth PROVIDER --remove` deletes one saved login.
+    `yian auth` lists the saved logins and the default.
 
-    Options are checked before the store is read or any request is made. Login and
-    model discovery finish before the private store changes. Tokens and keys are
-    supplied by sign-in, a hidden prompt, or the named environment variable.
+    `yian auth PROVIDER` saves the provider's credential and model; it becomes
+    the default only when no default is saved. openai signs in with a
+    subscription or an API key. Other providers read the key from their
+    environment variable or a hidden prompt; ollama takes none, and vllm's is
+    optional. A model the provider doesn't list, and every Azure deployment,
+    must answer one short prompt before the login is saved.
+
+    `yian auth PROVIDER --default` makes a saved login the default.
+    `yian auth PROVIDER --remove` deletes one saved login.
+
+    A failed or cancelled setup leaves the saved logins unchanged.
 
     \f
     Args:
         provider (`str | None`): Provider name; omitted lists the saved logins.
         method (`str | None`): `subscription` or `api-key` (openai); omitted values prompt.
         login (`str | None`): `browser` or `device` for openai subscription sign-in.
-        model (`str | None`): An available model identifier; omitted values prompt.
-        api_key_env (`str | None`): API-key environment variable; `OPENAI_API_KEY`
-            for openai when omitted. Refused for ollama.
-        endpoint (`str | None`): Azure resource endpoint; azure only.
+        model (`str | None`): Model id, or the Azure deployment name; omitted values
+            prompt.
+        api_key_env (`str | None`): API-key environment variable; the provider's
+            entry in `PROVIDER_API_KEY_ENV` when omitted. Refused for ollama.
+        endpoint (`str | None`): Azure resource endpoint; azure only; omitted values
+            prompt.
         default (`bool`): Make the saved provider the default without signing in.
         remove (`bool`): Delete the provider's saved login; accepts any saved name.
 
@@ -296,12 +468,13 @@ def auth(
             return
         # Reading first also diagnoses an unusable store before account sign-in.
         current = store.read().default_provider
-        if provider != "openai":
-            raise AuthError(f"Setting up {provider} is not supported yet")
-        _setup_openai(
-            store, method, login, model, api_key_env or "OPENAI_API_KEY", current is None
-        )
-        if current is None:
+        if provider == "openai":
+            _setup_openai(
+                store, method, login, model, api_key_env or "OPENAI_API_KEY", current is None
+            )
+        else:
+            _setup_provider(store, provider, model, api_key_env, endpoint, current is None)
+        if current in (None, provider):
             typer.echo(f"Default provider: {provider}")
         else:
             typer.echo(
@@ -312,7 +485,5 @@ def auth(
         typer.echo(str(error), err=True)
         raise typer.Exit(1) from None
     except (KeyboardInterrupt, EOFError):
-        typer.echo(
-            "Authentication cancelled; the previous connection is unchanged", err=True
-        )
+        typer.echo(_CANCELLED, err=True)
         raise typer.Exit(1) from None

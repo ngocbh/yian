@@ -3,6 +3,7 @@
 import importlib
 import json
 
+from langchain_core.messages import AIMessage
 import pytest
 from typer.testing import CliRunner
 
@@ -13,6 +14,8 @@ from yian.llm_clients.auth import (
     AuthStore,
     OAuthCredentials,
 )
+from yian.llm_clients.api_key_env import PROVIDER_API_KEY_ENV
+from yian.llm_clients.model_list import ModelListError
 
 auth_cli = importlib.import_module("yian.cli.auth")
 runner = CliRunner()
@@ -307,6 +310,11 @@ def test_setup_keeps_existing_default(setup_auth):
     assert store.read().default_provider == "openai"
     assert "Default provider: openai" in result.output
 
+    result = runner.invoke(app, args)
+    assert result.exit_code == 0, result.output
+    assert "Default provider: openai" in result.output
+    assert "switch with" not in result.output
+
     store.save("anthropic", ApiKeyCredentials("private-other"), "claude-test")
     result = runner.invoke(app, args)
     assert result.exit_code == 0, result.output
@@ -314,3 +322,268 @@ def test_setup_keeps_existing_default(setup_auth):
     assert store.selection("openai").model == "gpt-test"
     assert "Default provider: anthropic" in result.output
     assert "yian auth openai --default" in result.output
+
+
+class Checks:
+    """Fake model listing and one-reply check that record their calls."""
+
+    def __init__(self):
+        self.models = ("m1", "m2")
+        self.listings = []
+        self.answers = []
+        self.problem = None
+
+    def list_models(self, provider, api_key=None, base_url=None):
+        self.listings.append((provider, api_key, base_url))
+        if isinstance(self.models, Exception):
+            raise self.models
+        return self.models
+
+    def model_answers(self, provider, model, key, endpoint):
+        self.answers.append((provider, model, key, endpoint))
+        return self.problem
+
+
+@pytest.fixture
+def checks(monkeypatch, setup_auth):
+    fake = Checks()
+    monkeypatch.setattr(auth_cli, "list_models", fake.list_models)
+    monkeypatch.setattr(auth_cli, "_model_answers", fake.model_answers)
+    for name in ("OLLAMA_BASE_URL", "VLLM_BASE_URL", "VLLM_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    return setup_auth[0], fake
+
+
+@pytest.mark.parametrize(
+    "provider",
+    [
+        "anthropic", "google", "xai", "deepseek", "qwen", "qwen-cn", "glm",
+        "glm-cn", "minimax", "minimax-cn", "openrouter",
+    ],
+)
+def test_api_key_provider_setup_saves_key_and_model(monkeypatch, checks, provider):
+    store, fake = checks
+    monkeypatch.setenv(PROVIDER_API_KEY_ENV[provider], "private-key")
+    result = runner.invoke(app, ["auth", provider, "--model", "m1"])
+    assert result.exit_code == 0, result.output
+    selected = store.selection(provider)
+    assert selected.method == "api_key" and selected.model == "m1"
+    assert store.credentials(provider, selected.credential_id).api_key == "private-key"
+    assert store.read().default_provider == provider
+    assert f"Saved {provider} login (api-key) with model m1" in result.output
+    assert f"Default provider: {provider}" in result.output
+    assert "switch with" not in result.output
+    assert "private-" not in result.output
+    assert fake.listings == [(provider, "private-key", None)]
+    assert fake.answers == []
+
+
+def test_api_key_setup_keeps_another_default(monkeypatch, checks):
+    store, fake = checks
+    store.save("openai", ApiKeyCredentials("private-other"), "gpt-test")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "private-key")
+    result = runner.invoke(app, ["auth", "anthropic", "--model", "m2"])
+    assert result.exit_code == 0, result.output
+    assert store.selection("anthropic").model == "m2"
+    assert store.read().default_provider == "openai"
+    assert (
+        "Default provider: openai (switch with 'yian auth anthropic --default')"
+        in result.output
+    )
+
+
+def test_api_key_env_option_names_the_variable(monkeypatch, checks):
+    store, fake = checks
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    result = runner.invoke(app, ["auth", "anthropic", "--model", "m1"])
+    assert result.exit_code == 1 and "ANTHROPIC_API_KEY" in result.output
+    assert fake.listings == [] and not store.path.exists()
+
+    monkeypatch.setenv("MY_KEY", "private-key")
+    args = ["auth", "anthropic", "--model", "m1", "--api-key-env", "MY_KEY"]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 0, result.output
+    assert fake.listings == [("anthropic", "private-key", None)]
+
+
+def test_unlisted_model_is_checked_with_one_reply(monkeypatch, checks):
+    store, fake = checks
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "private-key")
+    fake.models = ("claude-x-20250101",)
+    result = runner.invoke(app, ["auth", "anthropic", "--model", "claude-x"])
+    assert result.exit_code == 0, result.output
+    assert fake.answers == [("anthropic", "claude-x", "private-key", None)]
+    assert store.selection("anthropic").model == "claude-x"
+
+    before = store.path.read_bytes()
+    fake.problem = "NotFoundError: model not found"
+    result = runner.invoke(app, ["auth", "anthropic", "--model", "claude-y"])
+    assert result.exit_code == 1
+    assert "didn't answer" in result.output and "NotFoundError" in result.output
+    assert store.path.read_bytes() == before
+
+
+def test_listing_failure_falls_back_to_one_reply(monkeypatch, checks):
+    store, fake = checks
+    previous = store.save("anthropic", ApiKeyCredentials("old-key"), "claude-old")
+    before = store.path.read_bytes()
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "private-key")
+    fake.models = ModelListError("HTTP 401")
+    fake.problem = "AuthenticationError: invalid key"
+    result = runner.invoke(app, ["auth", "anthropic", "--model", "claude-x"])
+    assert result.exit_code == 1
+    assert fake.answers == [("anthropic", "claude-x", "private-key", None)]
+    assert store.path.read_bytes() == before
+    assert store.selection() == previous and store.read().default_provider == "anthropic"
+    assert "private-" not in result.output and "old-key" not in result.output
+
+
+def test_listing_failure_on_a_terminal_asks_for_a_model_name(monkeypatch, checks):
+    store, fake = checks
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "private-key")
+    fake.models = ModelListError("can't reach host")
+    asked = []
+
+    def ask(message, *, option):
+        asked.append(option)
+        return "claude-x"
+
+    monkeypatch.setattr(auth_cli, "_require_terminal", lambda option: None)
+    monkeypatch.setattr(auth_cli, "_ask", ask)
+    result = runner.invoke(app, ["auth", "anthropic"])
+    assert result.exit_code == 0, result.output
+    assert "can't reach host" in result.output and asked == ["--model"]
+    assert fake.answers == [("anthropic", "claude-x", "private-key", None)]
+    assert store.selection("anthropic").model == "claude-x"
+
+
+def test_ollama_setup_saves_model_only(monkeypatch, checks):
+    store, fake = checks
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:9999")
+    fake.models = ("llama3",)
+    result = runner.invoke(app, ["auth", "ollama", "--model", "llama3"])
+    assert result.exit_code == 0, result.output
+    assert fake.listings == [("ollama", None, "http://localhost:9999")]
+    assert fake.answers == []
+    selected = store.selection("ollama")
+    assert selected.method == "none" and selected.model == "llama3"
+    assert "Saved ollama login (none) with model llama3" in result.output
+
+
+def test_vllm_key_is_optional(monkeypatch, checks):
+    store, fake = checks
+    result = runner.invoke(app, ["auth", "vllm", "--model", "m1"])
+    assert result.exit_code == 0, result.output
+    assert fake.listings == [("vllm", None, None)]
+    assert store.selection("vllm").method == "none"
+
+    monkeypatch.setenv("VLLM_API_KEY", "private-key")
+    monkeypatch.setenv("VLLM_BASE_URL", "https://vllm.example.com/v1")
+    result = runner.invoke(app, ["auth", "vllm", "--model", "m1"])
+    assert result.exit_code == 0, result.output
+    assert fake.listings[-1] == ("vllm", "private-key", "https://vllm.example.com/v1")
+    assert store.selection("vllm").method == "api_key"
+    assert "private-" not in result.output
+
+
+def test_noninteractive_setup_requires_model(monkeypatch, checks):
+    store, fake = checks
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "private-key")
+    for provider in ("anthropic", "ollama"):
+        result = runner.invoke(app, ["auth", provider])
+        assert result.exit_code == 1 and "--model" in result.output
+    assert fake.listings == [] and not store.path.exists()
+
+
+def test_azure_setup_saves_endpoint_key_and_deployment(monkeypatch, checks):
+    store, fake = checks
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "private-key")
+    endpoint = "https://r.openai.azure.com/"
+    result = runner.invoke(app, ["auth", "azure", "--endpoint", endpoint, "--model", "dep"])
+    assert result.exit_code == 0, result.output
+    assert fake.listings == []
+    assert fake.answers == [("azure", "dep", "private-key", endpoint)]
+    selected = store.selection("azure")
+    assert selected.endpoint == endpoint and selected.model == "dep"
+    assert selected.method == "api_key"
+    assert "private-" not in result.output
+
+    before = store.path.read_bytes()
+    result = runner.invoke(app, ["auth", "azure", "--model", "dep"])
+    assert result.exit_code == 1 and "--endpoint" in result.output
+    result = runner.invoke(app, ["auth", "azure", "--endpoint", endpoint])
+    assert result.exit_code == 1 and "--model" in result.output
+    result = runner.invoke(
+        app, ["auth", "azure", "--endpoint", "http://r.example.com", "--model", "dep"]
+    )
+    assert result.exit_code == 1 and "endpoint" in result.output
+    assert len(fake.answers) == 1 and fake.listings == []
+    assert store.path.read_bytes() == before
+
+
+class StubModel:
+    def __init__(self, failure=None):
+        self.prompts = []
+        self.failure = failure
+
+    def invoke(self, prompt):
+        self.prompts.append(prompt)
+        if self.failure:
+            raise self.failure
+        return AIMessage("OK")
+
+
+def test_model_answers_builds_and_invokes_once(monkeypatch):
+    built = []
+    model = StubModel()
+
+    class Client:
+        def get_llm(self):
+            return model
+
+    def create(provider, name, base_url=None, **kwargs):
+        built.append((provider, name, base_url, kwargs))
+        return Client()
+
+    monkeypatch.setattr(auth_cli, "create_llm_client", create)
+    assert auth_cli._model_answers("azure", "dep", "private-key", "https://r/") is None
+    provider, name, base_url, kwargs = built[0]
+    assert (provider, name, base_url) == ("azure", "dep", "https://r/")
+    assert kwargs["api_key"] == "private-key" and kwargs["max_retries"] == 0
+    assert "timeout" in kwargs
+    assert len(model.prompts) == 1
+
+    model.failure = RuntimeError("bad key private-key")
+    problem = auth_cli._model_answers("anthropic", "claude-x", "private-key", None)
+    assert "RuntimeError" in problem and "private-key" not in problem
+
+    class Echo(Exception):
+        def __str__(self):
+            return "rejected\n  input private-key"
+
+    model.failure = Echo()
+    problem = auth_cli._model_answers("anthropic", "claude-x", "private-key", None)
+    assert problem == "Echo: rejected input [REDACTED]"
+
+    model.failure = None
+    assert auth_cli._model_answers("vllm", "m1", None, None) is None
+    assert "api_key" not in built[-1][3]
+
+
+def test_model_answers_reports_a_missing_extra(monkeypatch):
+    def create(*args, **kwargs):
+        raise ImportError("Install it with:  pip install 'yian[anthropic]'")
+
+    monkeypatch.setattr(auth_cli, "create_llm_client", create)
+    problem = auth_cli._model_answers("anthropic", "claude-x", "private-key", None)
+    assert "pip install" in problem
+
+
+def test_env_override_note_agrees_with_the_number_of_variables(monkeypatch, setup_auth):
+    result = runner.invoke(app, ["auth"])
+    assert "YIAN_DEFAULT_PROVIDER and YIAN_DEFAULT_MODEL are set" in result.output
+    assert "and override the saved choice" in result.output
+    monkeypatch.delenv("YIAN_DEFAULT_MODEL")
+    result = runner.invoke(app, ["auth"])
+    assert "YIAN_DEFAULT_PROVIDER is set" in result.output
+    assert "and overrides the saved choice" in result.output

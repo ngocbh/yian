@@ -209,6 +209,13 @@ def test_searched_when_join_reuses_a_plain_read():
     assert _edge_stances(result) == [("score", "__r0", False), ("score", "__r1", True)]
 
 
+def test_searched_when_input_read_inside_an_escape_stays_plain():
+    # `:- null` only changes a node-output read's edge; an input read has none to change.
+    result = _searched("(input.weight :- 0) > 1 and input.weight < 5")
+    assert result.wiring == {"__r0": "${input.weight}"}
+    assert result.node.cases[0].when == "(__r0 :- 0) > 1 and __r0 < 5"
+
+
 def test_searched_when_same_escape_in_two_cases_shares_locals():
     result = _searched("(score.output | other.output) > 1", "(score.output | other.output) < 0")
     assert list(result.wiring) == ["__r0", "__r1", "__r2"]

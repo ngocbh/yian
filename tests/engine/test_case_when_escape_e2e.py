@@ -147,6 +147,14 @@ def test_a_call_on_a_skipped_branch_in_a_later_case_is_not_evaluated():
     assert out.output == _HOT
 
 
+def test_a_co_skipping_default_skips_the_gate_when_its_producers_skip():
+    # A binding `${pro.output :- input.topic}` skips with `pro`; so does the gate, through
+    # its required join input `${pro.output}`.
+    out = _run(('\'(pro.output :- input.topic) == "ACME"\'', "hot"))
+    assert out.status == "succeeded"
+    assert out.output is None
+
+
 def test_a_default_reads_the_branch_when_it_ran():
     out = _run(('\'(pro.output :- "none") == "none"\'', "hot"), score=0.9)
     assert out.status == "succeeded"
@@ -164,3 +172,20 @@ def test_an_unknown_field_inside_an_escape_names_the_authored_reference():
     )
     assert "__r" not in message
     assert ":- null" not in message
+
+
+@pytest.mark.parametrize(
+    "when, reference",
+    [
+        ('"(nope.output | pro.output) == 1"', "${nope.output}"),
+        ('"(pro.output :- nope.output.x) == 1"', "${nope.output.x}"),
+    ],
+)
+def test_an_unknown_namespace_inside_a_co_skipping_escape_is_reported_once(when, reference):
+    with pytest.raises(LoadError) as caught:
+        load_flow(_flow((when, "hot")))
+    assert str(caught.value) == (
+        "flow has unresolved references:\n"
+        f"  node 'gate2' cases[0].when from: reference {reference} uses unknown namespace "
+        "'nope'"
+    )

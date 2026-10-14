@@ -46,10 +46,12 @@ from yian.compose.validate.narrowing import Narrowing
 from yian.diagnostics import SourceRange
 from yian.expr import (
     ExpressionError,
+    condition_refs,
     expr_refs_of,
     prompt_refs,
 )
 from yian.nodes.agent import AgentNode
+from yian.nodes.case import CaseNode
 from yian.nodes.contracts import (
     OutputContract,
     PartialRecordContract,
@@ -380,8 +382,23 @@ def validate_references(
         # one for its synthetic params (a CASE `__rN` -> its `cases[N].when` line); the block range
         # is only the fallback (a spanless flow has no ranges at all). `wiring_ref_label` gives a
         # synthetic param the author-facing name it was hoisted from instead of leaking `__rN`.
+        case_reads = (
+            {
+                ref.split(".", 1)[0]
+                for case in node.cases
+                if case.when
+                for ref in condition_refs(case.when)
+            }
+            if isinstance(node, CaseNode)
+            else None
+        )
         for param, src in nwiring.items():
             if param in reserved:
+                continue
+            if case_reads is not None and param not in case_reads:
+                # A param no `when:` reads is a join input over a co-skipping escape's
+                # producers; each of its references is already checked at the read that
+                # introduced it, so scanning it would repeat that error.
                 continue
             label = node.wiring_ref_label(param)
             param_rng = franges.get(("input", param)) or input_rng

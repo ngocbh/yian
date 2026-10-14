@@ -230,7 +230,9 @@ def test_searched_case_plain_and_default_reads_of_one_output():
     assert sorted(e.optional for e in edges) == [False, True]
 
 
-def test_searched_case_default_after_an_input_conjunct_is_only_optional():
+def test_searched_case_unparenthesized_default_covers_the_whole_condition():
+    # `:-` binds looser than `and`, so this is `(input.seed > 0 and a.output) :- false`: one
+    # escape around the whole condition, whose literal default does not co-skip.
     edges = _a_to_gate_edges(_searched_gate('"input.seed > 0 and a.output :- false"'))
     assert edges and all(e.optional for e in edges)
 
@@ -319,6 +321,21 @@ def test_a_default_read_of_a_branch_rejects_arithmetic_on_it_downstream():
         "node 'hot' input 'v': ${a.output + 1} does arithmetic on a.output, which is null "
         "when node 'a' is skipped; give it a default with :-, e.g. (a.output :- <default>)"
     )
+
+
+def test_a_guarded_read_inside_a_default_loads():
+    from yian.compose import load_flow
+
+    load_flow(
+        _branch_gate('"isinstance(d.output, Buy) and (d.output.limit :- 0) > 1"', "${input.s}")
+    )
+
+
+def test_a_co_skipping_default_keeps_the_gate_in_the_branch():
+    # The required join `${a.output}` still skips the gate with `a`, so `hot` sees only Buy.
+    from yian.compose import load_flow
+
+    load_flow(_branch_gate('"(a.output :- input.s) == 1"', "${d.output.limit}"))
 
 
 def test_searched_case_condition_with_a_nested_span_shows_the_rewrite():

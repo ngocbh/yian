@@ -14,11 +14,11 @@ no new node kind. Two surface forms:
 
 - **searched** (`cases: [{when: "<bool>", then: <t>}]`, `else: <e>`): scan each `when:` for its
   reads -> allocate one `CaseNode` input `__rN` per distinct read: a reference (`${path}`), a
-  reference inside a `:-`/`:?`/`|` (`${path :- null}`, an optional edge), plus a join input over
-  a co-skipping escape's producers (so the gate skips as a binding of that escape would) ->
-  rewrite each reference in the `when:` to its bare local `__rN`. The `when:` itself stays
-  lazily evaluated. Each case routes to its `then:` (the edge handle); `else:` routes to the
-  internal else handle (`ELSE_HANDLE`).
+  node-output reference inside a `:-`/`:?`/`|` (`${path :- null}`, an optional edge), plus a
+  join input over a co-skipping escape's producers (so the gate skips as a binding of that
+  escape would) -> rewrite each reference in the `when:` to its bare local `__rN`. The `when:`
+  itself stays lazily evaluated. Each case routes to its `then:` (the edge handle); `else:`
+  routes to the internal else handle (`ELSE_HANDLE`).
 
 - **`on:`** (`on: ${ref}`, `cases: [{when: <value>, then: <t>}]`): one input `__on = ${ref}`;
   each `when: <value>` is a typed literal compared exactly: text (quoted, or an unquoted date
@@ -508,8 +508,8 @@ def _data_edges(node_id: str, wiring: dict[str, Any]) -> list[Edge]:
                     to=node_id,
                     input_group=name,
                     # Each source carries a binding's stance: an `on:` value may carry an
-                    # escape, a searched read inside one is `${path :- null}` (optional), and
-                    # a co-skipping escape's join input is required.
+                    # escape, a searched node-output read inside one is `${path :- null}`
+                    # (optional), and a co-skipping escape's join input is required.
                     optional=not binding_co_skips(source),
                 )
             )
@@ -663,10 +663,20 @@ class _SearchedParams:
 def _read_source(read: ConditionRead) -> str:
     """The binding source of one `when:` reference occurrence.
 
-    Inside an escape the read is `${path :- null}`: it reads the same value (a miss is
-    already null) but does not co-skip, so the escape decides as it does in a binding.
+    A node-output read inside an escape is `${path :- null}`: it reads the same value (a
+    miss is already null) but takes an optional edge, so the escape decides as it does in
+    a binding. Any other read (outside an escape, or of an input or `system.*`, which has
+    no producer edge) stays the plain `${path}`.
+
+    Args:
+        read (`ConditionRead`):
+            The reference occurrence.
+
+    Returns:
+        `str`:
+            Its binding source, also the dedupe key of its local.
     """
-    if read.escape is None:
+    if read.escape is None or _outputs_producer(read.path) is None:
         return f"${{{read.path}}}"
     return f"${{{read.path} :- null}}"
 
@@ -676,6 +686,14 @@ def _join_sources(reads: list[ConditionRead]) -> list[str]:
 
     A binding of such an escape skips only when all its producers skip; the join
     `${<p1>.output | <p2>.output ...}` gives the gate that same required input group.
+
+    Args:
+        reads (`list[ConditionRead]`):
+            One `when:`'s reference occurrences, in `condition_reads` order.
+
+    Returns:
+        `list[str]`:
+            One join source per such escape, each producer listed once in first-read order.
     """
     producers: dict[int, list[str]] = {}
     for read in reads:
@@ -691,29 +709,13 @@ def _join_sources(reads: list[ConditionRead]) -> list[str]:
     ]
 
 
-def _occurrence_checks(tree: Tree | Token) -> list[tuple[IsinstanceCheck, ...]]:
-    """The checks guarding each reference occurrence, in `condition_reads` order.
-
-    Same rule as `guarded_refs`, but per occurrence rather than per distinct reference in
-    a conjunct, so it lines up with `condition_reads`.
-    """
-    guards: list[tuple[IsinstanceCheck, ...]] = []
-    checks: list[IsinstanceCheck] = []
-    for conjunct in _conjuncts(tree):
-        guards.extend(tuple(checks) for _ in condition_reads(conjunct))
-        check = _isinstance_check(conjunct)
-        if check is not None:
-            checks.append(check)
-    return guards
-
-
 def _searched_params(desc: CaseDescriptor, diagnostics: LoadDiagnostics) -> _SearchedParams:
     """Allocate one `__rN` local per distinct read across all searched `when:`s.
 
-    A read is a reference (`${path}`), a reference inside a `:-`/`:?`/`|` (`${path :- null}`),
-    or, once per co-skipping escape that reads a node output, a join input over its
-    producers; its source is also its dedupe key. Per `when:`, its reference reads are
-    allocated before its join inputs.
+    A read is a reference (`${path}`), a node-output reference inside a `:-`/`:?`/`|`
+    (`${path :- null}`), or, once per co-skipping escape that reads a node output, a join
+    input over its producers; its source is also its dedupe key. Per `when:`, its reference
+    reads are allocated before its join inputs.
 
     Locals and guards come from the same parse, so every guarded occurrence has a local.
     An occurrence inside a top-level `and` operand is guarded by the
@@ -761,7 +763,10 @@ def _searched_params(desc: CaseDescriptor, diagnostics: LoadDiagnostics) -> _Sea
         locals_ = [allocate(_read_source(read), ci) for read in reads]
         for source in _join_sources(reads):
             allocate(source, ci)
-        for local, checks in zip(locals_, _occurrence_checks(tree), strict=True):
+        # `guarded_refs` walks the same occurrences in the same order as `condition_reads`.
+        occurrences = guarded_refs(tree)
+        assert [path for path, _ in occurrences] == [read.path for read in reads]
+        for local, (_, checks) in zip(locals_, occurrences, strict=True):
             guards[local].append((ci, checks))
         case_locals.append(locals_)
     return _SearchedParams(source_to_local, local_case_index, case_locals, guards)
@@ -863,7 +868,7 @@ def _desugar_searched(
 ) -> tuple[CaseNode, dict[str, Any], list[Edge], list[Edge], dict, dict[str, str]]:
     """Searched form -> one `__rN` input per distinct read; `when:` rewritten.
 
-    A read is a reference (`${path}`), a reference inside a `:-`/`:?`/`|`
+    A read is a reference (`${path}`), a node-output reference inside a `:-`/`:?`/`|`
     (`${path :- null}`), or a join input over a co-skipping escape's producers, which the
     `when:` does not read but whose required edges skip the gate as that escape's binding
     would skip.

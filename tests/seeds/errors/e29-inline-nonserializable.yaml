@@ -6,7 +6,7 @@
 id: err-inline-nonserializable
 name: err_inline_nonserializable
 input:
-  topic: str
+  topic: !str
 nodes:
   bad:
     kind: code

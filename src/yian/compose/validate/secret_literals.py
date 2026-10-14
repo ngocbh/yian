@@ -1,9 +1,10 @@
 """Reject a literal value under a secret name in node bindings, case values and outputs.
 
-Runs on the authored values, before typed bindings are split or anything is desugared,
-because those later passes may echo a value in their own errors. In a binding position a
-whole-value `call(...)` directive also counts as a binding, and a typed binding
-(`Type = value`) is checked on its right side. A directive's own keyword arguments are
+Runs on the authored values, before tagged bindings are read or anything is desugared,
+because those later passes may echo a value in their own errors. A tag is not part of
+the value, so a tagged binding (`api_key: !str ...`) is checked on the value after its
+tag. In a binding position a whole-value `call(...)` directive also counts as a binding.
+A directive's own keyword arguments are
 held to the same rule (`SecretArgumentError`), so a directive under a secret name that
 passes a literal secret is reported as that argument. A `case` value branch has no name
 of its own, so only secret keys nested in a mapping or list branch are checked.
@@ -24,21 +25,15 @@ from yian.compose.helpers.secret_literals import (
     secret_literal_message,
     secret_literal_path,
 )
-from yian.compose.helpers.typed_bindings import (
-    CALL_HEAD,
-    QUOTED_STYLES,
-    read_typed_value,
-    typed_binding_parts,
-)
+from yian.compose.helpers.directives import CALL_HEAD
+from yian.compose.helpers.tags import QUOTED_STYLES
 from yian.compose.nodes import BINDING_FIELDS
 from yian.compose.nodes.case import CaseDescriptor
-from yian.compose.source import SourceSyntaxError
 from yian.diagnostics import SourceRange
 from yian.expr import ExpressionError
-from yian.secret_names import is_secret_name
 
-# The descriptor field whose bindings may be typed, as `_split_typed_inputs` splits them.
-_TYPED_FIELD = "inputs"
+# The descriptor field that names one binding per key.
+_INPUTS_FIELD = "inputs"
 
 
 def check_authored_bindings(
@@ -75,7 +70,7 @@ def check_authored_bindings(
             current = getattr(desc, field, None)
             # `input:` names one binding per key; any other field (MAP's `over:`) is one
             # binding whose value may itself be a mapping.
-            if field == _TYPED_FIELD and isinstance(current, dict):
+            if field == _INPUTS_FIELD and isinstance(current, dict):
                 for key, value in current.items():
                     site = (
                         desc.field_ranges.get(("input", key))
@@ -86,7 +81,6 @@ def check_authored_bindings(
                         key,
                         value,
                         binding_style_at(node_id, field, key),
-                        typed=True,
                         owner=owner,
                         range=site,
                         diagnostics=diagnostics,
@@ -105,7 +99,6 @@ def check_authored_bindings(
                     field,
                     current,
                     binding_style_at(node_id, field, field),
-                    typed=False,
                     owner=owner,
                     range=site,
                     diagnostics=diagnostics,
@@ -126,7 +119,6 @@ def check_authored_bindings(
             key,
             value,
             output_style_at(key),
-            typed=True,
             owner="flow outputs",
             range=output_range(key),
             diagnostics=diagnostics,
@@ -179,7 +171,6 @@ def _binding_path(
     value: Any,
     style: str | None,
     *,
-    typed: bool,
     owner: str,
     range: SourceRange | None,
     diagnostics: LoadDiagnostics,
@@ -190,7 +181,6 @@ def _binding_path(
         name (`Any`): The binding's name.
         value (`Any`): The authored binding value.
         style (`str | None`): The value's YAML scalar style, `None` when unknown.
-        typed (`bool`): Whether this position accepts a typed binding.
         owner (`str`): The binding's host as messages name it, e.g. `"node 'b'"`.
         range (`SourceRange | None`): The binding's location.
         diagnostics (`LoadDiagnostics`): Factory for located load errors.
@@ -203,27 +193,11 @@ def _binding_path(
             value under a secret keyword.
     """
     try:
-        return _authored_path(name, value, style, typed=typed)
-    except SecretArgumentError as exc:
-        raise diagnostics.error(exc.message_for(owner), range=range) from exc
-
-
-def _authored_path(
-    name: Any, value: Any, style: str | None, *, typed: bool
-) -> tuple[str | int, ...] | None:
-    """The body of `_binding_path`, letting `SecretArgumentError` propagate."""
-    parts = typed_binding_parts(value, style) if typed else None
-    if parts is None:
         return secret_literal_path(
             name, value, is_binding=lambda v: _is_binding(v, style)
         )
-    try:
-        right = read_typed_value(parts[1])
-    except SourceSyntaxError:
-        # Under another name the typed split reports the malformed right side.
-        return () if isinstance(name, str) and is_secret_name(name) else None
-    # The right side of a typed binding is never quoted text: the split unquotes it.
-    return secret_literal_path(name, right, is_binding=lambda v: _is_binding(v, None))
+    except SecretArgumentError as exc:
+        raise diagnostics.error(exc.message_for(owner), range=range) from exc
 
 
 def _is_binding(value: Any, style: str | None) -> bool:

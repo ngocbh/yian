@@ -10,7 +10,7 @@
 #      and drafts a short, tone-aware response.
 #
 # Exercises (the structured-output contract): a record `output:` with a nested
-# `Literal[...]` enum field, and downstream field-access references into the record.
+# `Literal(...)` enum field, and downstream field-access references into the record.
 # Both agents are tool-free AGENT nodes, so it runs against any provider/model — including a
 # local Ollama model — with no extra Python.
 #
@@ -23,7 +23,7 @@ name: triage_ticket
 description: Extract a structured triage record from a support message and draft a tailored reply.
 
 input:
-  message: str
+  message: !str
 
 nodes:
   # --- extract: unstructured message -> a typed record (the structured-output feature) ---
@@ -32,10 +32,10 @@ nodes:
     input:
       message: ${input.message}
     output:                                  # a record: the model must fill every field
-      category: Literal[billing, bug, feature_request, account, other]
-      priority: Literal[low, medium, high, urgent]
+      category: Literal(billing, bug, feature_request, account, other)
+      priority: Literal(low, medium, high, urgent)
       summary: str                           # one sentence capturing the core issue
-      sentiment: Literal[positive, neutral, negative]
+      sentiment: Literal(positive, neutral, negative)
     prompt: |-
       You are a support triage assistant. Read the customer message and extract:
       - category: the kind of issue

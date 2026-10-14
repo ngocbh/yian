@@ -1,6 +1,6 @@
 """Typed node input bindings checked when a run binds a node's inputs.
 
-A binding written `name: Type = value` declares the value's type. The binder
+A binding written `name: !Type value` declares the value's type. The binder
 checks the resolved value against it without converting, and a mismatch fails the
 node with code `binding.type`, located on the typed binding.
 """
@@ -22,7 +22,7 @@ nodes:
   use:
     kind: code
     input:
-      qty: int = ${{size.output.qty}}
+      qty: !int ${{size.output.qty}}
     code: |
       return inputs["qty"]
 output: ${{use.output}}
@@ -46,7 +46,7 @@ def test_mismatched_typed_input_fails_the_consumer_on_its_binding():
     binding_line = next(
         number
         for number, line in enumerate(text.splitlines(), start=1)
-        if "qty: int = " in line
+        if "qty: !int " in line
     )
     assert frame.text == text
     assert frame.range.covered_lines(text) == [binding_line]
@@ -74,7 +74,7 @@ nodes:
   c:
     kind: code
     input:
-      x: {declared} = ${{p.output}}
+      x: !{declared} ${{p.output}}
     code: |
       return type(inputs["x"]).__name__
 output: ${{c.output}}
@@ -102,7 +102,7 @@ _HUMAN_FLOW = """
 id: typed_gate
 name: typed_gate
 input:
-  n: str
+  n: !str
 nodes:
   src:
     kind: code
@@ -113,7 +113,7 @@ nodes:
   ask:
     kind: human_input
     input:
-      count: int = ${src.output}
+      count: !int ${src.output}
     prompt: "Proceed with ${count} items?"
 output: ${ask.output}
 """
@@ -153,7 +153,7 @@ _ADAPTIVE_FLOW = """
 id: typed_adaptive
 name: typed_adaptive
 input:
-  n: str
+  n: !str
 nodes:
   src:
     kind: code
@@ -164,7 +164,7 @@ nodes:
   ask:
     kind: human_input
     input:
-      count: int = ${src.output}
+      count: !int ${src.output}
     adaptive_questions:
       prompt: "Design one question about ${count} items."
 output: ${ask.output}

@@ -12,8 +12,8 @@ name: err_required_missing
 description: (negative, runtime) :? on an omitted Optional param fails the run.
 
 input:
-  topic: str
-  as_of: Optional[date]            # may be omitted -> null
+  topic: !str
+  as_of: !Optional(date)            # may be omitted -> null
 
 nodes:
   report:

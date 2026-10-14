@@ -19,7 +19,7 @@ from yian.compile.model import Edge
 from yian.expr import binding_co_skips
 from yian.compose.edges.producers import _binding_producers
 from yian.compose.parse.file import CaseDescriptor, NodeDescriptor, WaitDescriptor
-from yian.nodes.contracts import binding_source
+from yian.nodes.contracts import binding_input_groups
 
 
 def infer_data_edges(
@@ -31,8 +31,9 @@ def infer_data_edges(
     For each consuming node, scan its sources and emit a data `Edge` per `${<id>.output[.…]}`
     ref, tagged with the `input_group` that identifies WHICH sink it feeds (the param/arg name
     for a leaf/call input; `over` for a map's `over:`; `until` for WAIT). A coalesce
-    sink's alternatives share one group. Edges are the **projection of `flow.wiring`** for
-    leaf + WAIT + call/map.
+    sink's alternatives share one group. Each string nested in a `ValueTemplate` source is
+    its own group (`binding_input_groups`), with its own co-skip stance. Edges are the
+    **projection of `flow.wiring`** for leaf + WAIT + call/map.
 
     `flow_wiring[node_id]` is the `{param -> source}` map (WAIT carries its `until`, a
     MAP its `over`, under the reserved keys). A `case` node is SKIPPED here — `CaseDescriptor.build`
@@ -55,11 +56,12 @@ def infer_data_edges(
             )
         )
 
-    def emit_for(value: Any, consumer: str, group: str) -> None:
-        # the whole group's co-skip stance is a property of its binding.
-        optional = not binding_co_skips(binding_source(value))
-        for producer in _binding_producers(value):
-            emit(producer, consumer, group, optional)
+    def emit_for(value: Any, consumer: str, param: str) -> None:
+        # Each template string is its own group, and its co-skip stance is its own.
+        for group, text in binding_input_groups(param, value):
+            optional = not binding_co_skips(text)
+            for producer in _binding_producers(text):
+                emit(producer, consumer, group, optional)
 
     for node_id, desc in descriptors.items():
         if isinstance(desc, CaseDescriptor):

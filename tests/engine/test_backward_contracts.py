@@ -57,10 +57,12 @@ def test_backward_attribution_rejects_malformed_root_coordinates(args):
 
 @pytest.mark.parametrize("inputs", [{"topic": "reefs"}, None])
 def test_declared_variables_supply_local_backward_targets_without_activating_hooks(inputs):
-    from yian.compose.helpers.types import read_variables
     from yian.nodes.agent import AgentNode
+    from tests.compose._declarations import parameters_from_yaml
 
-    node = AgentNode("writer", variables=read_variables({"tone": "str = concise"}, {}))
+    node = AgentNode("writer", variables=parameters_from_yaml(
+        "variables:\n  tone: !str concise\n", {}, field="variables", require_default=True,
+    ))
     context = BackwardContext(
         inputs=inputs,
         input_names=("topic",),

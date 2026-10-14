@@ -44,7 +44,7 @@ _INCREMENT_FLOW = """
 id: big-increment
 name: big_increment
 input:
-  x: int
+  x: !int
 nodes:
   inc:
     kind: code
@@ -59,7 +59,7 @@ _RENDER_FLOW = """
 id: big-render
 name: big_render
 input:
-  xs: list[int]
+  xs: !list(int)
 nodes:
   show:
     kind: code
@@ -87,7 +87,7 @@ _COERCE_FLOW = """
 id: big-coerce
 name: big_coerce
 input:
-  n: int
+  n: !int
 nodes:
   echo:
     kind: code

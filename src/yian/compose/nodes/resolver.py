@@ -34,6 +34,7 @@ from yian.nodes.contracts import (
     ValueContract,
 )
 from yian.nodes.end import EndNode
+from yian.typesys.types import BUILTIN_TYPE_NAMES
 
 
 @dataclass(frozen=True)
@@ -123,7 +124,8 @@ def child_signature(loaded: Any) -> ChildSignature:
     so `build` need not import `loader` (which imports `build`). The codomain contract
     follows the child's END: a record END gives an exact or partial closed record keyed by
     every declared name; a value END re-exports its one output's exact or partial contract,
-    or `None` without one.
+    or `None` without one. A `T(...)` constructor in an output is typed through END's type
+    table, which holds the child's own typedefs the outputs use.
 
     Args:
         loaded (`ComposedFlow`):
@@ -157,6 +159,10 @@ def child_signature(loaded: Any) -> ChildSignature:
         if parameter.contract is not None
     }
     outs = list(loaded.compiled.outputs)
+    # `isinstance` may also put a builtin scalar name in the table; no constructor uses one.
+    constructor_types = {
+        name: typ for name, typ in end.types.items() if name not in BUILTIN_TYPE_NAMES
+    }
     declared_outputs = tuple(
         (
             declared.name,
@@ -164,6 +170,7 @@ def child_signature(loaded: Any) -> ChildSignature:
                 declared.binding,
                 producers,
                 flow_inputs,
+                type_fn=constructor_types.get,
             ),
         )
         for declared in outs

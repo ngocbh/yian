@@ -112,7 +112,7 @@ def _questions_ref_flow(questions: str) -> str:
 id: ask
 name: ask
 input:
-  order: object
+  order: !object
 nodes:
   ask:
     kind: human_input
@@ -138,7 +138,8 @@ def _load_questions(questions_yaml):
     return load_flow(
         "id: f\n"
         "name: f\n"
-        "input: {qs: \"list[object]\"}\n"
+        "input:\n"
+        "  qs: !list(object)\n"
         "nodes:\n"
         "  ask:\n"
         "    kind: human_input\n"
@@ -161,7 +162,7 @@ def test_human_input_build_rejects_questions_that_are_not_a_list_or_ref(question
     # A non-list, non-string `questions:` used to build a plain gate with an empty prompt.
     with pytest.raises(LoadError, match=r"`questions:` must be a list") as exc:
         _load_questions(questions_yaml)
-    assert _questions_line(exc) == 8
+    assert _questions_line(exc) == 9
 
 
 @pytest.mark.parametrize(
@@ -181,7 +182,7 @@ def test_human_input_build_rejects_questions_string_that_is_not_one_whole_ref(qu
     # Text or an expression around the ref used to be dropped, keeping only the name.
     with pytest.raises(LoadError, match=r"exactly one `\$\{name\}`") as exc:
         _load_questions(questions_yaml)
-    assert _questions_line(exc) == 8
+    assert _questions_line(exc) == 9
 
 
 @pytest.mark.parametrize("questions_yaml", ['"${qs}"', '"${ qs }"', "${qs}"])

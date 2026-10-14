@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from yian.compose.helpers.output_contracts import TypeFn
 from yian.compose.nodes.base import BuildResult
 from yian.compose.validate.narrowing import Narrowing
 from yian.compose.validate.typed_bindings import infer_binding_type
@@ -32,6 +33,7 @@ def stamp_tool_input_types(
     build_results: dict[str, BuildResult],
     *,
     narrowing: Narrowing | None = None,
+    type_fn: TypeFn | None = None,
 ) -> None:
     """Set each TOOL node's `input_types` to its bindings' proven inferred types.
 
@@ -46,6 +48,8 @@ def stamp_tool_input_types(
         narrowing (`Narrowing | None`, *optional*, defaults to `None`):
             The union narrowing each param reads against, from the CASE branches
             that route its node; `None` reads every param against the unchanged maps.
+        type_fn (`TypeFn | None`, *optional*, defaults to `None`): Resolves a
+            constructor name to its type.
     """
     for node_id, result in build_results.items():
         node = result.node
@@ -58,7 +62,9 @@ def stamp_tool_input_types(
                 if narrowing is not None
                 else (producers, flow_inputs)
             )
-            inferred = infer_binding_type(binding, param_producers, param_inputs)
+            inferred = infer_binding_type(
+                binding, param_producers, param_inputs, type_fn=type_fn
+            )
             if inferred is not None:
                 input_types[name] = inferred
         node.input_types = input_types

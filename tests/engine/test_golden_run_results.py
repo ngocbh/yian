@@ -34,7 +34,7 @@ _CHILD = """
 id: child-one
 name: child_one
 input:
-  topic: str
+  topic: !str
 nodes:
   emit:
     kind: code
@@ -53,7 +53,7 @@ _CALL = """
 id: ref-parent
 name: ref_parent
 input:
-  topic: str
+  topic: !str
 uses:
   child-one: child-one
 nodes:
@@ -69,7 +69,7 @@ _MAP = """
 id: map-parent
 name: map_parent
 input:
-  topics: list[str]
+  topics: !list(str)
 uses:
   child-one: child-one
 nodes:
@@ -107,9 +107,9 @@ _EFFECTS = """
 id: e
 name: e
 typedefs:
-  Approval: Literal[approve, reject]
+  Approval: Literal(approve, reject)
 input:
-  settle_at: date
+  settle_at: !date
 nodes:
   approve:
     kind: human_input
@@ -196,7 +196,7 @@ _STATIC_EDGE_FLOW = """
 id: f
 name: f
 input:
-  x: str
+  x: !str
 nodes:
   n:
     kind: code
@@ -223,8 +223,8 @@ _SURFACE = """
 id: surface
 name: surface
 input:
-  topic: str
-  window: int = 30
+  topic: !str
+  window: !int 30
 nodes:
   emit:
     kind: code
@@ -261,7 +261,7 @@ _ARITY_0 = """
 id: arity0
 name: arity0
 input:
-  x: str
+  x: !str
 nodes:
   n:
     kind: code
@@ -275,7 +275,7 @@ _ARITY_1 = """
 id: arity1
 name: arity1
 input:
-  x: str
+  x: !str
 nodes:
   n:
     kind: code
@@ -290,7 +290,7 @@ _ARITY_2 = """
 id: arity2
 name: arity2
 input:
-  x: str
+  x: !str
 nodes:
   n:
     kind: code

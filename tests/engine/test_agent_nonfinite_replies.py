@@ -252,11 +252,11 @@ def test_an_exhausted_nonfinite_fallback_field_is_located_at_the_field():
 
 def test_a_bounded_float_rejects_nan_as_not_finite():
     with pytest.raises(ValidationError) as caught:
-        _generate(_texts('{"value": NaN}'), type_for("float[0, 10]", {}), max_retries=0)
+        _generate(_texts('{"value": NaN}'), type_for("float(0..10)", {}), max_retries=0)
     assert caught.value.errors()[0]["type"] == "finite_number"
 
 
-@pytest.mark.parametrize("typ", [type_for("list[float]", {}), Type(kind=ValueKind.LIST_NUMBER)])
+@pytest.mark.parametrize("typ", [type_for("list(float)", {}), Type(kind=ValueKind.LIST_NUMBER)])
 def test_a_nonfinite_list_item_is_retried(typ):
     model = _texts('{"items": [1.0, NaN]}', '{"items": [1.0, 2.0]}')
     assert _generate(model, typ) == [1.0, 2.0]
@@ -264,9 +264,9 @@ def test_a_nonfinite_list_item_is_retried(typ):
 
 
 def test_a_nonfinite_union_member_field_is_retried():
-    registry = read_typedefs({"A": {"kind": "Literal[a]", "x": "float"}, "B": {"kind": "Literal[b]"}})
+    registry = read_typedefs({"A": {"kind": "Literal(a)", "x": "float"}, "B": {"kind": "Literal(b)"}})
     model = _texts('{"value": {"kind": "a", "x": NaN}}', '{"value": {"kind": "a", "x": 1.0}}')
-    assert _generate(model, type_for("Union[A, B]", registry)) == {"kind": "a", "x": 1.0}
+    assert _generate(model, type_for("Union(A, B)", registry)) == {"kind": "a", "x": 1.0}
     assert len(model.calls) == 2 and "finite" in _correction(model)
 
 

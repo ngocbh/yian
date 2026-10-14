@@ -361,13 +361,13 @@ follows the same rules:
 | JSON Schema | yian type |
 | --- | --- |
 | `string`, `integer`, `number`, `boolean`, `null` | `str`, `int`, `float`, `bool`, `None` |
-| a number bound on both ends | `int[a,b]` / `float[a,b]`; a one-sided bound is dropped |
-| string `enum` or `const` | `Literal[...]` |
+| a number bound on both ends | `int(a..b)` / `float(a..b)`; a one-sided bound is dropped |
+| string `enum` or `const` | `Literal(...)` |
 | `format` (`date`, `uri`, …) | `str` |
-| `array` with `items` | `list[...]`; tuples give `list[Any]` |
+| `array` with `items` | `list(...)`; tuples give `list(Any)` |
 | `object` with `properties` | input: `object`, unless `additionalProperties: false` makes it a record; output: a record, unless it allows extra keys |
-| `anyOf`/`oneOf` with `null` | `Optional[...]` |
-| `anyOf`/`oneOf` of records | `Union[...]` |
+| `anyOf`/`oneOf` with `null` | `Optional(...)` |
+| `anyOf`/`oneOf` of records | `Union(...)` |
 | other unions, or anything untranslatable | not checked |
 
 An input with a pydantic function validator (`mode="before"`, `"wrap"`, or
@@ -453,7 +453,7 @@ flow = load_flow('''
 id: structured-feedback
 name: structured_feedback
 input:
-  items: list[int]
+  items: !list(int)
 nodes: {}
 output:
   items: ${input.items}
@@ -629,7 +629,7 @@ long_term_memory:
     type: reflective
     config: {max_items: 100, recall_limit: 12}
 input:
-  question: str
+  question: !str
 nodes:
   answer:
     kind: agent
@@ -949,7 +949,8 @@ from yian.memory.session import SessionMemory
 flow = load_flow("""
 id: remembered-chat
 name: remembered_chat
-input: {question: str}
+input:
+  question: !str
 nodes:
   answer:
     kind: agent
@@ -1238,7 +1239,7 @@ loaded = load_flow('''
 id: delayed-feedback
 name: delayed_feedback
 input:
-  text: str
+  text: !str
 nodes: {}
 output: ${input.text}
 ''')

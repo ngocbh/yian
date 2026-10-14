@@ -57,8 +57,8 @@ name: loop_ask
 defs:
   turn:
     input:
-      count: int
-      last: str
+      count: !int
+      last: !str
     nodes:
       ask:
         kind: human_input
@@ -85,7 +85,7 @@ name: map_ask
 defs:
   one:
     input:
-      item: str
+      item: !str
     nodes:
       ask:
         kind: human_input
@@ -93,7 +93,7 @@ defs:
         output: str
     output: ${ask.output}
 input:
-  items: list[str]
+  items: !list(str)
 nodes:
   m:
     kind: map
@@ -412,7 +412,7 @@ llm_config: {provider: openai, model: test-model}
 defs:
   inner:
     input:
-      item: str
+      item: !str
     nodes:
       agent:
         kind: agent
@@ -420,7 +420,7 @@ defs:
         tools: [toolbox]
     output: ${agent.output}
 input:
-  items: list[str]
+  items: !list(str)
 nodes:
   each:
     kind: map
@@ -438,8 +438,8 @@ llm_config: {provider: openai, model: test-model}
 defs:
   turn:
     input:
-      count: int
-      last: str
+      count: !int
+      last: !str
     nodes:
       agent:
         kind: agent

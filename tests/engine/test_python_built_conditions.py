@@ -73,7 +73,7 @@ _GATED = """
 id: gated
 name: gated
 input:
-  v: int
+  v: !int
 nodes:
   a:
     kind: code

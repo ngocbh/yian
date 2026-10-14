@@ -24,8 +24,8 @@ _DEFS = """
 defs:
   pair:
     input:
-      x: str
-      y: str
+      x: !str
+      y: !str
     nodes:
       j:
         kind: code
@@ -37,7 +37,7 @@ defs:
     output: ${j.output}
   meet:
     input:
-      tag: str
+      tag: !str
     nodes:
       fx:
         kind: code
@@ -48,7 +48,7 @@ defs:
     output: ${fx.output}
   side:
     input:
-      tag: str
+      tag: !str
     nodes:
       fx:
         kind: code
@@ -59,7 +59,7 @@ defs:
     output: ${fx.output}
   wrap:
     input:
-      x: str
+      x: !str
     nodes:
       w:
         kind: code
@@ -70,7 +70,7 @@ defs:
     output: ${w.output}
   items:
     input:
-      tag: str
+      tag: !str
     nodes:
       fx:
         kind: code
@@ -82,12 +82,12 @@ defs:
         kind: code
         input:
           t: ${fx.output}
-        output: list[str]
+        output: list(str)
         code: return [inputs["t"]]
     output: ${ls.output}
   echo:
     input:
-      item: str
+      item: !str
     nodes:
       e:
         kind: code
@@ -98,7 +98,7 @@ defs:
     output: ${e.output}
 """
 
-_HEAD = "id: t\nname: t\ninput:\n  go: bool\n  other: bool\n"
+_HEAD = "id: t\nname: t\ninput:\n  go: !bool\n  other: !bool\n"
 
 # `prep` records `prep`; `pick` routes `maybe` only when `other` is true.
 _PREP = """
@@ -324,7 +324,7 @@ def test_loop_seed_call_does_not_run_on_an_untaken_route():
 _CHILD_DEF = """
   child:
     input:
-      go: bool
+      go: !bool
     nodes:
       gate:
         kind: case
@@ -378,14 +378,14 @@ def test_flow_output_call_has_no_host_and_runs():
 
 _TYPED_DEFS = """
 typedefs:
-  Buy: {action: 'Literal[buy]', qty: int}
-  Hold: {action: 'Literal[hold]'}
-  Decision: Union[Buy, Hold]
+  Buy: {action: 'Literal(buy)', qty: int}
+  Hold: {action: 'Literal(hold)'}
+  Decision: Union(Buy, Hold)
 """
 _PLACE_DEF = """
   place:
     input:
-      order: Buy
+      order: !Buy
     nodes:
       p:
         kind: code
@@ -427,7 +427,7 @@ def test_inline_call_in_a_routed_node_reads_the_narrowed_member(action, ran):
     code: return "held"
 """
     text = (
-        "id: t\nname: t\ninput:\n  action: str\n" + _TYPED_DEFS + _DEFS + _PLACE_DEF
+        "id: t\nname: t\ninput:\n  action: !str\n" + _TYPED_DEFS + _DEFS + _PLACE_DEF
         + "nodes:\n" + nodes + "output:\n  r: ${route.output}\n"
     )
     _compose_codefns.RECORDED.clear()
@@ -669,6 +669,33 @@ def test_inline_call_only_waits_for_a_defaulted_host_input():
     assert result.output == {"r": "draftnone"}
     assert _edge(flow, "maybe->__call_0#0").optional is True
     assert _index(result, NodeSkipped, "maybe") < _index(result, NodeStarted, "__call_0")
+
+
+
+# Each string nested in a host's value is its own input group, so a lifted node gets one
+# gate group per nested read, named after the host and the nested position.
+_PUBLISH_NESTED_VALUE = _PUBLISH_NOTES.replace(
+    "      notes: ${maybe.output}\n", '      notes: {text: "${maybe.output}", n: 1}\n'
+).replace('inputs["notes"]', 'inputs["notes"]["text"]')
+
+
+def test_inline_call_is_skipped_with_a_host_nested_data_input():
+    text = _flow(_MAYBE + _PUBLISH_NESTED_VALUE, output=_PUBLISH_OUT)
+    flow, result = _run(text, other=False)
+    assert _never_ran(result, "__call_0")
+    assert _compose_codefns.RECORDED == []
+    assert result.output == {"r": None}
+    edge = _edge(flow, "maybe->__call_0#0")
+    assert edge.input_group == "publish.notes/text"
+    assert edge.optional is False
+
+
+def test_inline_call_only_waits_for_a_defaulted_host_nested_input():
+    publish = _PUBLISH_NESTED_VALUE.replace("${maybe.output}", "${maybe.output :- 'none'}")
+    flow, result = _run(_flow(_MAYBE + publish, output=_PUBLISH_OUT), other=False)
+    assert _compose_codefns.RECORDED == ["draft"]
+    assert result.output == {"r": "draftnone"}
+    assert _edge(flow, "maybe->__call_0#0").optional is True
 
 
 _PUBLISH_TWO = """

@@ -346,7 +346,7 @@ def test_deep_untagged_union_labels_and_checks_in_linear_work(monkeypatch):
     typ = _deep_untagged_union(depth)
     calls = _count_label_nodes(monkeypatch)
     label = canonical_type_label(typ)
-    assert label.count("Union[") == depth + 1
+    assert label.count("Union(") == depth + 1
     # Each level adds a union, two records and a leaf: a constant number of nodes.
     assert depth < calls[0] <= 6 * (depth + 1)
     calls[0] = 0
@@ -368,9 +368,9 @@ def test_list_of_union():
 
 def test_union_label_lists_members_in_canonical_order():
     assert canonical_type_label(union(sell, buy)) == (
-        f"Union[{canonical_type_label(buy)},{canonical_type_label(sell)}]"
+        f"Union({canonical_type_label(buy)},{canonical_type_label(sell)})"
     )
-    assert canonical_type_label(replace(U, nullable=True)).startswith("Optional[Union[")
+    assert canonical_type_label(replace(U, nullable=True)).startswith("Optional(Union(")
 
 
 # --------------------------------------------------------------------------- #

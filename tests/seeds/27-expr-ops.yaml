@@ -17,12 +17,12 @@ name: expr_ops
 description: One flow exercising every new unified-${...} expression form.
 
 input:
-  topic: str
-  base_weight: float = 0.02      # fraction of capital in [0, 1]
-  extra_bps: int = 0             # extra basis points (1 bp = 0.01%)
-  tags: Optional[list[str]]      # optional -> coalesce falls through to a literal list
-  note: Optional[str]            # optional -> shows a quoted :- default
-  as_of: Optional[date]
+  topic: !str
+  base_weight: !float 0.02      # fraction of capital in [0, 1]
+  extra_bps: !int 0             # extra basis points (1 bp = 0.01%)
+  tags: !Optional(list(str))      # optional -> coalesce falls through to a literal list
+  note: !Optional(str)            # optional -> shows a quoted :- default
+  as_of: !Optional(date)
 
 nodes:
   brief:

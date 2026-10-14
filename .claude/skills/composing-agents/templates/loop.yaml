@@ -26,7 +26,7 @@ description: Chat-shaped loop — block per turn, fold the message, stop on "bye
 defs:
   chat_turn:                       # the body flow ('a -> 'a over {messages, exited})
     input:
-      messages: list[str]          # a subset of the carried names is fine
+      messages: !list(str)          # a subset of the carried names is fine
     nodes:
       ask:
         kind: human_input
@@ -38,7 +38,7 @@ defs:
           messages: ${input.messages}
           msg: ${ask.output}       # this turn's human message
         output:                    # carried fields only; here it returns both
-          messages: list[str]
+          messages: list(str)
           exited: bool
         code: your_package.chat:fold_turn
     output: ${fold.output}

@@ -28,7 +28,7 @@ def test_section_keywords_load() -> None:
 id: f
 name: f
 input:
-  x: str
+  x: !str
 nodes:
   n:
     kind: code
@@ -101,7 +101,7 @@ def test_constructors_emit_new_shape() -> None:
 id: f
 name: f
 input:
-  x: str
+  x: !str
 nodes:
   echo:
     kind: code
@@ -129,7 +129,7 @@ def test_case_value_shorthand_node_first() -> None:
 id: f
 name: f
 input:
-  x: int
+  x: !int
 nodes:
   gate:
     kind: case
@@ -315,7 +315,7 @@ def test_llm_config_dict_carrier() -> None:
 id: f
 name: f
 input:
-  x: str
+  x: !str
 nodes:
   a:
     kind: agent
@@ -343,7 +343,7 @@ def test_llm_config_extra_forbid() -> None:
 id: f
 name: f
 input:
-  x: str
+  x: !str
 nodes:
   a:
     kind: agent
@@ -373,7 +373,7 @@ def test_legacy_shape_loud_after_alias_delete() -> None:
 id: f
 name: f
 inputs:
-  x: str
+  x: !str
 nodes:
   n:
     kind: code

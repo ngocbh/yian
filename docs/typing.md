@@ -2,8 +2,8 @@
 
 > The `typesys` package (`values.py` + `types.py` + `pool.py`) — the **leaf** of the
 > layer ladder, below `nodes`. Everything above depends on it; it depends on nothing
-> internal. For the authoring surface (`type:` / `typedefs:`), see
-> [Flow syntax → Types](syntax.md#types).
+> internal. For the authoring surface (`typedefs:`, `output:` types, and tagged slots),
+> see [Flow syntax → Types](syntax.md#types).
 
 ## Why a flow is typed
 
@@ -22,7 +22,7 @@ binding a value. Two forces make the typing non-negotiable:
   three nodes later.
 
 ```
-   types.py  → authoring surface: "list[Signal]" / typedefs: → a runtime Type
+   types.py  → authoring surface: "list(Signal)" / typedefs: → a runtime Type
    values.py → the leaf: ValueKind, the TypedValue containers, the write-boundary check
    pool.py   → VariablePool: the run's typed value store + the ${...} resolver
 ```
@@ -179,7 +179,7 @@ dataclass whose `kind` is the storage tag, with optional refining fields:
 | **variant** (enum) | `kind=STRING`, `tags={labels}` |
 | **typed list** | `kind=LIST_*`, `element=<Type>` |
 | **union** | `kind=OBJECT`, `variants=(record, ...)`: two or more non-nullable records |
-| **Optional[X]** | X's `Type` with `nullable=True` |
+| **Optional(X)** | X's `Type` with `nullable=True` |
 
 For a refined specialized list, `Type.element.nullable` permits `None` alongside
 the element's ordinary values; a bare or non-nullable specialized list still
@@ -190,17 +190,30 @@ lowering it to `LIST_ANY`. Cross-flow compatibility applies the same structural
 check recursively: a strict element source may fill a nullable element sink, but
 not the reverse.
 
-Authors write types as Python-typing strings; `parse_type` parses them via Python's own
-`ast` (so the vocabulary *is* typing: `list[X]`, `Optional[X]`, `Literal[...]`, a bare
-PascalCase registry name, `Union[A, B, ...]`). `read_typedefs` builds the per-flow
+Authors write types in yian's own grammar: Python typing's vocabulary, spelled with
+parentheses (`list(X)`, `Optional(X)`, `Literal(...)`, `dict(K, V)`, a bare PascalCase
+registry name, `Union(A, B, ...)`) and inclusive numeric ranges (`int(1..12)`,
+`float(0.0..1.0)`, both ends required). `parse_type` is a hand-written tokenizer and
+recursive-descent parser that reads `0..1` as a range, not as `0.` and `.1`. It builds the
+same `TypeExpr` AST as before, so resolution is unchanged, and `format_type_expr` prints the
+parenthesized spelling. The old bracket spelling (`Optional[str]`, `int[1, 12]`) is a load
+error that shows the new spelling; a private legacy parser reads it only to print that
+message. Wire values keep their own names: a `ValueKind` such as `list[str]` is a storage
+tag, not authored syntax.
+
+A type definition (a typedef, or a node's `output:`) is written as a type. A slot's type
+is a YAML tag on its value, read by `compose/helpers/tags.py` with the same parser (see
+[Typed slots](syntax.md#typed-slots-yaml-tags)). A tag can't hold `,`, `[`, `]`, `{` or
+`}` and ends at the first space, so a multi-argument type is named in `typedefs:` and
+tagged by its name. `read_typedefs` builds the per-flow
 `TypeRegistry`, `resolve_type` resolves a parsed expr against it into a leaf `Type`.
 `read_typedefs` resolves every typedef as it builds the registry, even one nothing uses,
 so an unknown constructor or name, bad bounds, a recursive record, or an alias cycle fails
 there. The error names the typedef and field (`typedef 'Signal' field 'tags': unknown type
-constructor 'lst' in 'lst[str]'`), and its `path` is `(typedef, field)` so the loader can
+constructor 'lst' in 'lst(str)'`), and its `path` is `(typedef, field)` so the loader can
 point at that field.
 
-`Union[...]` members are records. `resolve_type` flattens nested unions and aliases, drops
+`Union(...)` members are records. `resolve_type` flattens nested unions and aliases, drops
 repeated members, and orders the members canonically (by tag, else by
 `canonical_type_label`), so authored order is not identity. A union with one distinct
 member is that member. The members must be told apart by the data alone:
@@ -215,7 +228,7 @@ member is that member. The members must be told apart by the data alone:
   value satisfies at most one, and that member's check runs. No match fails at `()` with
   `value matches no member of <label>: <member>: <reason>; ...`.
 
-Otherwise resolution fails: `Union[Buy, Sell]: members 'Buy' and 'Sell' can match the same
+Otherwise resolution fails: `Union(Buy, Sell): members 'Buy' and 'Sell' can match the same
 value; add a tag field every member declares as a single-value Literal, ...`. Like every
 typedef, a union typedef resolves in `read_typedefs`, so a bad union fails even when
 nothing uses it. Compatibility is member by member: a source union
@@ -225,15 +238,17 @@ can't tell which member arrives). `union_field` describes a field read on a unio
 member has it, some do, or none do); `restrict_union` keeps some members. The manifest
 emits a union as `"union": [...]` in canonical order.
 
-A [typed binding](syntax.md#typed-bindings-name-type-value) compares its declared
-type with the type inferred for its value through `compile.validation.type_relation`:
+A [tagged slot](syntax.md#typed-slots-yaml-tags) compares its tag's type with the type
+inferred for its value through `compile.validation.type_relation`. A tag only checks and
+narrows: it never fills in a field and never converts a value.
 
 - **fits** — every inferred value is a declared value; no check is needed beyond the
   usual runtime one.
 - **narrower** — some inferred values may miss the declared type (Optional into
   non-Optional, `str` into a `Literal`, an unbounded number into a bounded one, an
   `object` value into a record, a union into one of its members); the binding loads
-  and the binder checks it at runtime.
+  and the binder checks it at runtime with `build_value_as`, failing with
+  `binding.type`.
 - **disjoint** — no non-null inferred value fits; loading fails. Records count as
   closed, so an extra required field makes them disjoint, and sharing only `None`
   is not overlap.
@@ -247,8 +262,12 @@ This relation agrees with `types_compatible`, the check for wiring, on what fits
 two differences. It treats records as closed, so a record fits only when its fields are
 a subset of the declared fields at every level. It lets `date` and `datetime` fit
 `str`, since they are stored as strings. Where wiring rejects a source that is only
-narrower, such as a tag-less `str` into a `Literal`, a typed binding accepts it and
-checks the value at runtime.
+narrower, such as a plain `str` into a `Literal`, a tagged slot accepts it and
+checks the value at runtime. Downstream readers see the tag's type.
+
+A value with `${...}` nested in a record or list is inferred structurally, field by
+field, so each field keeps its type. A record that omits a required single-value
+`Literal` field is not filled in; the check fails and names the field.
 
 ## Authored contract origins
 
@@ -259,13 +278,13 @@ node `output:` declaration populates the same root/nested `ContractOrigins` on t
 node's canonical `ValueContract`. Compose reads that retained cursor at the descriptor's
 existing per-kind build position, so source compilation does not move ahead of
 kind-owned validation.
-For a packed declaration such as `count: "int = 3"`, `default_origin` is a distinct
-semantic key that resolves to the same scalar range as the contract root.
+For a tagged declaration with a default, such as `count: !int 3`, `default_origin` is a
+distinct semantic key that resolves to the same scalar range as the contract root.
 
 When a boundary check reports a `TypeCheckError.path`, origin selection tries that exact
 contract path, then its nearest authored ancestor and the contract root. An input failure
 then falls back to the parameter key; an output failure uses the effective commit target's
-contract and finally the executing node. A scalar typedef reference or scalar `list[...]`
+contract and finally the executing node. A scalar typedef reference or scalar `list(...)`
 spelling has no separately authored nested sites, so nested failures fall back to its root.
 Full and compact root flows, both `defs:` forms, and inline children retain physical node
 output sites; external-flow views rebase those origins through the same resolver mechanism

@@ -49,7 +49,7 @@ from yian.nodes.contracts import (
     Parameter,
     PartialRecordContract,
     SeedConnection,
-    binding_source,
+    iter_source_strings,
     output_contract_field_error,
     output_contract_origin,
     output_contract_type,
@@ -2996,16 +2996,15 @@ def _validate_growth_wiring_refs(
 ) -> None:
     """Apply closed reference rules to raw or carrier-wrapped fragment wiring."""
     for param, source in wiring.items():
-        source = binding_source(source)
-        if not isinstance(source, str):
-            continue
-        try:
-            paths = expr_refs_of(source)
-        except ExpressionError as exc:
-            error = ValueError(
-                f"growth fragment node {node_id!r} wiring {param!r} is invalid: {exc}"
-            )
-            raise GrowthRejected(error) from exc
+        paths: list[str] = []
+        for _, text in iter_source_strings(source):
+            try:
+                paths.extend(expr_refs_of(text))
+            except ExpressionError as exc:
+                error = ValueError(
+                    f"growth fragment node {node_id!r} wiring {param!r} is invalid: {exc}"
+                )
+                raise GrowthRejected(error) from exc
         for path in paths:
             extra_heads = (
                 ("item",)
@@ -3091,15 +3090,13 @@ def _node_names(node_id: str, node: Node, wiring: dict[str, Any]) -> tuple[str, 
         if type(target) is str and target != node_id:
             names[target] = None
     for source in wiring.values():
-        source = binding_source(source)
-        if not isinstance(source, str):
-            continue
-        try:
-            paths = expr_refs_of(source)
-        except ExpressionError as exc:
-            raise ValueError(f"node {node_id!r} has invalid wiring: {exc}") from exc
-        for path in paths:
-            names.setdefault(path.split(".", 1)[0], None)
+        for _, text in iter_source_strings(source):
+            try:
+                paths = expr_refs_of(text)
+            except ExpressionError as exc:
+                raise ValueError(f"node {node_id!r} has invalid wiring: {exc}") from exc
+            for path in paths:
+                names.setdefault(path.split(".", 1)[0], None)
     return tuple(names)
 
 
@@ -3214,14 +3211,12 @@ def _read_ids(state: RunState, node_id: str) -> set[str]:
         if type(target) is str
     )
     for source in state.flow.wiring.get(node_id, {}).values():
-        source = binding_source(source)
-        if not isinstance(source, str):
-            continue
-        try:
-            paths = expr_refs_of(source)
-        except ExpressionError:
-            continue  # the prune dependency check reports invalid wiring
-        reads.update(path.split(".", 1)[0] for path in paths)
+        for _, text in iter_source_strings(source):
+            try:
+                paths = expr_refs_of(text)
+            except ExpressionError:
+                continue  # the prune dependency check reports invalid wiring
+            reads.update(path.split(".", 1)[0] for path in paths)
     return reads
 
 
@@ -3372,23 +3367,21 @@ def _validate_prune_dependencies_data(
                 )
             )
         for source in combined_wiring.get(node_id, {}).values():
-            source = binding_source(source)
-            if not isinstance(source, str):
-                continue
-            try:
-                paths = expr_refs_of(source)
-            except ExpressionError as exc:
-                raise ValueError(
-                    f"surviving node {node_id!r} has invalid wiring: {exc}"
-                ) from exc
-            for path in paths:
-                if path.split(".", 1)[0] in prune_ids:
-                    _raise_growth_rejected(
-                        ValueError(
-                            f"surviving node {node_id!r} wiring depends on "
-                            "pruned node"
+            for _, text in iter_source_strings(source):
+                try:
+                    paths = expr_refs_of(text)
+                except ExpressionError as exc:
+                    raise ValueError(
+                        f"surviving node {node_id!r} has invalid wiring: {exc}"
+                    ) from exc
+                for path in paths:
+                    if path.split(".", 1)[0] in prune_ids:
+                        _raise_growth_rejected(
+                            ValueError(
+                                f"surviving node {node_id!r} wiring depends on "
+                                "pruned node"
+                            )
                         )
-                    )
 
 
 def _recorded_stack(stacks: tuple[MemoryStack, ...], locator: tuple[str, ...]) -> MemoryStack | None:

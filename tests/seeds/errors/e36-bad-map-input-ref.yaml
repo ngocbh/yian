@@ -7,13 +7,13 @@
 id: err-bad-map-input-ref
 name: err_bad_map_input_ref
 input:
-  topics: list[str]
+  topics: !list(str)
 defs:
   body:
     input:
-      item: str
-      n: int
-      extra: int
+      item: !str
+      n: !int
+      extra: !int
     nodes:
       double:
         kind: code

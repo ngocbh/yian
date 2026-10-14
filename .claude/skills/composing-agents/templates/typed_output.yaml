@@ -2,7 +2,7 @@
 #
 # An AGENT node's `output:` may be any declared shape except one holding `file` or `None`
 # (a load error; a model can't generate them). Only a bare `str` keeps the
-# node a text producer; a `Literal[...]`, record, union, non-string scalar, or list switches
+# node a text producer; a `Literal(...)`, record, union, non-string scalar, or list switches
 # it to STRUCTURED GENERATION — the engine derives a schema from `output:` and asks the model
 # to emit a conforming value (native structured output, or a JSON prompt-injection
 # fallback for providers that lack it), validated at the write boundary like any other
@@ -18,7 +18,7 @@ name: typed_output
 description: An AGENT node declaring a record output -> structured generation.
 
 input:
-  text: str
+  text: !str
 
 nodes:
   extract:

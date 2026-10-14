@@ -10,7 +10,7 @@ name: chat
 description: A turn-by-turn conversational assistant (one model call per turn, no tools).
 
 input:
-  opening: str            # seed transcript; the CLI passes "" (empty)
+  opening: !str            # seed transcript; the CLI passes "" (empty)
 
 typedefs:
   Turn:                   # the carried record, and each turn's result
@@ -20,8 +20,8 @@ typedefs:
 defs:
   respond:                # a CASE result is the routed node's output, so the reply chain is a def
     input:
-      transcript: str
-      message: str
+      transcript: !str
+      message: !str
     nodes:
       reply:
         kind: agent
@@ -54,8 +54,8 @@ defs:
 
   turn:                   # body: 'a -> 'a over {transcript, exited}
     input:
-      transcript: str
-      exited: bool
+      transcript: !str
+      exited: !bool
     nodes:
       ask:
         kind: human_input       # blocks a worker until the broker returns the message

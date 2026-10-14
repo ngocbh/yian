@@ -166,7 +166,7 @@ attachment hook, and the sink derivations (`output_contract` / `sink_params` /
   The inherited `self.output_contract(ctx)` returns a `ValueContract | None`;
   assign that carrier directly to `node.output_contract`. Retain an existing carrier when
   re-exporting a child output; construct a new carrier only when the kind changes the semantic
-  type (for example, MAP deriving `list[U]`). The authored `output:` field does not change.
+  type (for example, MAP deriving `list(U)`). The authored `output:` field does not change.
   The one input is the immutable `BuildContext`: `ctx.registry` (the `TypeRegistry`),
   `ctx.resolver` (the child-flow resolver — only call/map/loop read it), plus
   `ctx.source_file` and optional `ctx.resolve_origin` (only CODE reads these, as an opaque

@@ -21,7 +21,7 @@ _CHAT = """id: chat
 name: chat
 long_term_memory: profile
 input:
-  message: str
+  message: !str
 nodes:
   reply:
     kind: agent
@@ -36,12 +36,12 @@ _NESTED = """id: nested
 name: nested
 long_term_memory: profile
 input:
-  message: str
+  message: !str
 defs:
   child:
     long_term_memory: profile
     input:
-      message: str
+      message: !str
     nodes:
       reply:
         kind: agent
@@ -63,7 +63,7 @@ output: ${invoke.output}
 _SIBLINGS = """id: siblings
 name: siblings
 input:
-  message: str
+  message: !str
 nodes:
   first:
     kind: agent
@@ -86,7 +86,7 @@ _OFFICE = """id: office
 name: office
 long_term_memory: profile
 input:
-  message: str
+  message: !str
 nodes:
   reply:
     kind: agent

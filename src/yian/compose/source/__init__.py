@@ -28,6 +28,7 @@ from yian.compose.source.common import (
     ScalarSource,
     SourceAccessError,
     SourceSyntaxError,
+    TaggedNode,
 )
 from yian.compose.source.catalog import SourceCatalog
 from yian.compose.source.cursor import SourceCursor
@@ -41,6 +42,7 @@ __all__ = [
     "SourceDocument",
     "ScalarSource",
     "SourceSyntaxError",
+    "TaggedNode",
     "parse_yaml_literal",
     "read_plain_scalar",
 ]

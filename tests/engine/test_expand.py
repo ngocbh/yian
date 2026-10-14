@@ -188,11 +188,11 @@ _CALL_INSIDE_MAP = """
 id: parent
 name: parent
 input:
-  xs: list[str]
+  xs: !list(str)
 defs:
   leaf:
     input:
-      v: str
+      v: !str
     nodes:
       e:
         kind: code
@@ -203,7 +203,7 @@ defs:
     output: ${e.output}
   mid:
     input:
-      v: str
+      v: !str
     nodes:
       inner:
         kind: call
@@ -252,11 +252,11 @@ def _mixed_chain_source(levels: int) -> str:
         "id: chain",
         "name: chain",
         "input:",
-        "  v: str",
+        "  v: !str",
         "defs:",
         "  leaf:",
         "    input:",
-        "      v: str",
+        "      v: !str",
         "    nodes:",
         "      e:",
         "        kind: code",
@@ -268,7 +268,7 @@ def _mixed_chain_source(levels: int) -> str:
     ]
     for k in range(1, levels):
         callee = "leaf" if k == levels - 1 else f"step{k + 1}"
-        lines += [f"  step{k}:", "    input:", "      v: str", "    nodes:"]
+        lines += [f"  step{k}:", "    input:", "      v: !str", "    nodes:"]
         if k % 2:
             lines += [
                 "      next:",

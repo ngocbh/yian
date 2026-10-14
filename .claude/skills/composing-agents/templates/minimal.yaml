@@ -7,7 +7,7 @@ name: minimal
 description: A one-node flow — a topic in, a paragraph out.
 
 input:
-  topic: str
+  topic: !str
 
 nodes:
   answer:

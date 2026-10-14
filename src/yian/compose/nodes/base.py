@@ -16,8 +16,8 @@ corresponding authored fields continue to reject them.
 Like `nodes/base.py`, this base imports only the dependencies its contract needs —
 `typesys` (TypeRegistry), `nodes.contracts` (OutputContract/Parameter/ValueContract),
 `compose.helpers.types` (read_type), `compose.helpers.errors` (LoadError),
-`compose.helpers.secret_literals` (check_env_secrets), and `compose.source`
-(SourceCursor) for parse navigation, `diagnostics` (SourceRange) — all
+`compose.helpers.secret_literals` (check_env_secrets), `compose.helpers.tags` (has_span),
+and `compose.source` (SourceCursor) for parse navigation, `diagnostics` (SourceRange) — all
 earlier layers on the ladder, so it stays a leaf of the nodes package: it never imports any
 sibling kind or `nodes/__init__`. Every kind module imports it at module top level without
 cycling; `parse/file.py` re-exports it as the descriptor base type for its importers.
@@ -36,11 +36,54 @@ from yian.compile.model import Edge
 from yian.compose.helpers.types import read_type
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.secret_literals import check_env_secrets
+from yian.compose.helpers.tags import has_span
 from yian.compose.source import SourceCursor
 from yian.diagnostics import DiagnosticFrame, OriginRef, SourceRange
 
 if TYPE_CHECKING:
     from yian.compose.source.catalog import _SourceCatalogBuilder
+
+
+def reject_container_spans(
+    kind: str,
+    node_id: str,
+    key: str,
+    value: Any,
+    range: Optional[SourceRange],
+    diagnostics: LoadDiagnostics,
+) -> None:
+    """Reject a list or mapping holding a `${...}` span in a field that binds whole.
+
+    Such a field's container is a literal, so a span inside it would stay text.
+
+    Args:
+        kind (`str`): The node kind, for the message.
+        node_id (`str`): The node id, for the message.
+        key (`str`): The authored field name.
+        value (`Any`): The field's authored value.
+        range (`SourceRange | None`): Where the error points.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
+
+    Raises:
+        `LoadError`: Raised when `value` is a list or mapping with a span inside it.
+    """
+    if isinstance(value, (list, dict)) and _holds_span(value):
+        raise diagnostics.error(
+            f"{kind} node {node_id!r} {key}: a value holding ${{...}} can't be a list or "
+            "mapping; write the list as an expression, e.g. `${[a.output, b.output]}`",
+            range=range,
+        )
+
+
+def _holds_span(value: Any) -> bool:
+    """Whether any string inside `value`, or `value` itself, holds a `${...}` span."""
+    if isinstance(value, str):
+        return has_span(value)
+    if isinstance(value, dict):
+        return any(_holds_span(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_holds_span(item) for item in value)
+    return False
 
 
 @dataclass(frozen=True)

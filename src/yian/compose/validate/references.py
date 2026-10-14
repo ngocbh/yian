@@ -39,30 +39,42 @@ from typing import Any, Optional
 
 from yian.compile.validation import _classify_path
 from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.helpers.isinstance_types import constructor_type_fn
 from yian.compose.helpers.output_contracts import (
+    TypeFn,
     output_contract_path_error,
+    project_output_contract,
+    reference_contract,
     resolve_output_binding_contract,
 )
 from yian.compose.nodes.base import BuildResult
+from yian.compose.validate.constructors import constructor_errors
 from yian.compose.validate.narrowing import Narrowing
+from yian.compose.validate.typed_bindings import ResolveOrigin
 from yian.diagnostics import SourceRange
 from yian.expr import (
     ExpressionError,
     condition_refs,
     expr_refs_of,
     prompt_refs,
+    scan_template,
 )
+from yian.expr.template import Span
 from yian.nodes.agent import AgentNode
 from yian.nodes.case import CaseNode
 from yian.nodes.contracts import (
     OutputContract,
     PartialRecordContract,
     ValueContract,
+    ValueTemplate,
     binding_source,
+    iter_source_strings,
+    output_contract_type,
 )
 from yian.nodes.human_input import HumanInputNode
 from yian.nodes.human_input.node import site_label, template_sites
 from yian.typesys import Type
+from yian.typesys.types import TypeRegistry
 
 # Heads forbidden in a strict prompt (always trigger the bespoke hint).
 # `input`/`system`/`item` are the pool-style heads; a node-id head (e.g. `${other.output}`)
@@ -73,8 +85,8 @@ _PROMPT_FORBIDDEN_HEADS = ("input", "system", "item")
 def _output_bindings(outputs: Any) -> list[Any]:
     """The flow `output:` section as a flat list of binding values (sites to check).
 
-    A whole-string binding (`${a.output | b.output}`) is one value; a
-    name -> binding map is each mapped value. Mirrors
+    A whole-string binding (`${a.output | b.output}`) or a tagged single output's
+    `Binding` carrier is one value; a name -> binding map is each mapped value. Mirrors
     `build._output_bindings` (kept local — this pass does not import `build`).
     """
     if isinstance(outputs, dict):
@@ -88,6 +100,7 @@ def _item_contract(
     over: Any,
     producers: dict[str, OutputContract],
     input_contracts: dict[str, ValueContract],
+    type_fn: TypeFn | None = None,
 ) -> ValueContract | None:
     """The element contract of a MAP's `over:` binding when it is a proven list, else `None`.
 
@@ -98,6 +111,8 @@ def _item_contract(
             Exact or partial node output contracts keyed by producer id.
         input_contracts (`dict[str, ValueContract]`):
             Exact flow input contracts keyed by input name.
+        type_fn (`TypeFn | None`, *optional*, defaults to `None`):
+            Resolves a constructor name to its type.
 
     Returns:
         `ValueContract | None`:
@@ -109,7 +124,9 @@ def _item_contract(
             A referenced producer is not an `OutputContract`, or a flow-input contract is
             not an exact `ValueContract`.
     """
-    contract = resolve_output_binding_contract(over, producers, input_contracts)
+    contract = resolve_output_binding_contract(
+        over, producers, input_contracts, type_fn=type_fn
+    )
     if type(contract) is not ValueContract or not contract.type.kind.is_list():
         return None
     typ = contract.type
@@ -131,6 +148,8 @@ def validate_references(
     input_contracts: dict[str, ValueContract] | None = None,
     outputs_range: Optional[SourceRange] = None,
     narrowing: Narrowing | None = None,
+    registry: TypeRegistry | None = None,
+    resolve_origin: ResolveOrigin | None = None,
     diagnostics: LoadDiagnostics | None = None,
 ) -> None:
     """Validate every `${...}` reference site of a built flow.
@@ -158,13 +177,18 @@ def validate_references(
     input reads `node '<gate>' input '<p>'`), else `node '<id>' <site>`. A plain input binding
     whose site name, source text, and range match one already scanned is skipped, so a binding
     a desugar copied onto a synth node is reported once. `outputs_range` is the authored output
-    value/block range when the caller retains it. The aggregate carries the first retained range.
+    value/block range when the caller retains it. A string nested in a value template is located
+    at its own authored site instead, resolved through `resolve_origin`. The aggregate carries
+    the first retained range.
 
     With `narrowing`, each node's references (a CASE's own sources included) are checked
     against that node's view of the producer and flow-input contracts, so a branch can
     read the fields of the union members that reach it. A node a topological order could
     not reach skips the member-only field rule, so the later cycle check reports the cycle.
     The flow outputs are always checked unnarrowed.
+
+    With `registry`, every `${T(...)}` constructor call in a binding is checked too
+    (`constructor_errors`), with each reference typed by the same contracts.
 
     Accumulates ALL located errors and raises a single `LoadError`; passes silently
     on a clean flow. Reuses `_classify_path` (head-resolution + dotted walk)
@@ -184,7 +208,9 @@ def validate_references(
     errors: list[tuple[str, Optional[SourceRange]]] = []
     # `(site name, source, range)` of each plain input binding already scanned.
     scanned: set[tuple[str, str, Optional[SourceRange]]] = set()
+    constructor_problems: list[tuple[str, Optional[SourceRange]]] = []
     unordered = narrowing.unordered if narrowing is not None else frozenset()
+    type_fn = constructor_type_fn(registry) if registry is not None else None
 
     def scan(
         from_value: Any,
@@ -196,6 +222,7 @@ def validate_references(
         item_contract: ValueContract | None = None,
         extra_heads: tuple = (),
         partial_union_fields: bool = False,
+        constructors: bool = True,
     ) -> None:
         """Name-check every reference a BINDING `from:` reads (coalesce + nested-default
         split by `expr_refs_of`); a non-string source / literal yields no refs.
@@ -205,15 +232,70 @@ def validate_references(
         `extra_heads` is the per-site set of body-local scopes treated as lenient — e.g.
         a MAP per-element input's `${item}` (valid only inside `map.inputs`, not `over:`);
         `item_contract` is that `${item}`'s element contract when known, for field checks.
-        `partial_union_fields` lets a field only some union members have be read."""
-        from_value = binding_source(from_value)
-        if not isinstance(from_value, str):
-            return
+        `partial_union_fields` lets a field only some union members have be read.
+        `constructors` checks its `${T(...)}` calls; a reserved key, where they are not
+        supported, leaves that error to the type-table pass.
+        Each string nested in a `ValueTemplate` is scanned on its own and located at
+        its authored site when that resolves."""
+        source = binding_source(from_value)
+        for value_path, text in iter_source_strings(from_value):
+            text_rng = rng
+            if isinstance(source, ValueTemplate) and resolve_origin is not None:
+                origin = source.origin_at(value_path)
+                frame = resolve_origin(origin) if origin is not None else None
+                if frame is not None:
+                    text_rng = frame.range
+            scan_text(
+                text,
+                where,
+                text_rng,
+                site_producers=site_producers,
+                site_inputs=site_inputs,
+                item_contract=item_contract,
+                extra_heads=extra_heads,
+                partial_union_fields=partial_union_fields,
+                constructors=constructors,
+            )
+
+    def scan_text(
+        text: str,
+        where: str,
+        rng: Optional[SourceRange],
+        *,
+        site_producers: dict[str, OutputContract],
+        site_inputs: dict[str, ValueContract],
+        item_contract: ValueContract | None,
+        extra_heads: tuple,
+        partial_union_fields: bool,
+        constructors: bool,
+    ) -> None:
+        """Name-check every reference one template string reads; see `scan`."""
         try:
-            paths = expr_refs_of(from_value)
+            paths = expr_refs_of(text)
         except ExpressionError as exc:
             errors.append((f"{where}: {exc}", rng))
             return
+        if registry is not None and constructors:
+
+            def ref_type(path: str) -> Type | None:
+                """The proven type of one reference this site reads."""
+                head, *fields = path.split(".")
+                if head == "item":
+                    contract = (
+                        project_output_contract(item_contract, fields)
+                        if item_contract is not None
+                        else None
+                    )
+                else:
+                    contract = reference_contract(path, site_producers, site_inputs)
+                return output_contract_type(contract)
+
+            for segment in scan_template(text):
+                if isinstance(segment, Span):
+                    constructor_problems.extend(
+                        (f"{where}: {problem}", rng)
+                        for problem in constructor_errors(segment.tree, registry, ref_type)
+                    )
         for path in paths:
             err = _classify_path(
                 path, valid_targets, flow_inputs, extra_heads
@@ -354,12 +436,15 @@ def validate_references(
                 site_producers=node_producers,
                 site_inputs=node_inputs,
                 partial_union_fields=partial_union_fields,
+                constructors=False,
             )
 
         # A per-item binder (MAP) reads its iteration source above, then validates each
         # element input with the body-local `${item}` scope enabled.
         if node.binds_per_item:
-            item_contract = _item_contract(nwiring.get("over"), node_producers, node_inputs)
+            item_contract = _item_contract(
+                nwiring.get("over"), node_producers, node_inputs, type_fn
+            )
             for param, src in nwiring.items():
                 if param in reserved:
                     continue
@@ -445,13 +530,16 @@ def validate_references(
             site_inputs=input_contracts,
         )
 
-    if errors:
-        first_range = next(
-            (error_range for _, error_range in errors if error_range is not None),
-            None,
-        )
-        raise diagnostics.error(
-            "flow has unresolved references:\n  "
-            + "\n  ".join(msg for msg, _ in errors),
-            range=first_range,
-        )
+    for headline, problems in (
+        ("flow has unresolved references", errors),
+        ("flow has constructor calls that can never succeed", constructor_problems),
+    ):
+        if problems:
+            first_range = next(
+                (error_range for _, error_range in problems if error_range is not None),
+                None,
+            )
+            raise diagnostics.error(
+                f"{headline}:\n  " + "\n  ".join(msg for msg, _ in problems),
+                range=first_range,
+            )

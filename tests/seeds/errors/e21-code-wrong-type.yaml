@@ -3,7 +3,7 @@
 id: err-code-wrong-type
 name: err_code_wrong_type
 input:
-  topic: str
+  topic: !str
 nodes:
   calc:
     kind: code

@@ -2,7 +2,7 @@
 id: err-removed-model-kind
 name: err_removed_model_kind
 input:
-  topic: str
+  topic: !str
 nodes:
   rank:
     kind: model        # ERROR: removed; ML inference goes through a host tool

@@ -10,7 +10,7 @@ test_map.py; the cross-flow type check e06 in test_errors.py.) These assert:
   re-exports the child's exact codomain contract (a `{report, asof}` record) via the
   test-local child resolver;
 - seed 05 (a `map` over 03) loads+compiles; the built `MapNode` (`kind: map`)
-  has `output_contract.type == list[<child codomain>]` (a `LIST_OBJECT` of the record)
+  has `output_contract.type == list(<child codomain>)` (a `LIST_OBJECT` of the record)
   and `parallel=True`;
 - a `call` binding to a non-declared callable input → loud `LoadError`;
 - a `map` whose callable has no codomain (≠1 declared output value) → loud `LoadError`;
@@ -127,7 +127,7 @@ def test_seed04_downstream_dotted_ref_validates_against_child_record():
 
 
 # --------------------------------------------------------------------------- #
-# seed 05 — MAP loads + list[<child codomain>] output contract, parallel=True
+# seed 05 — MAP loads + list(<child codomain>) output contract, parallel=True
 # --------------------------------------------------------------------------- #
 
 
@@ -140,7 +140,7 @@ def test_seed05_map_loads_with_list_output_and_parallel():
     assert research_each.flow_id == "research-one"
     assert research_each.parallel is True
     assert research_each.title == "Research each topic"  # node_name -> title
-    # The contract type is list[<child codomain>] (element = the record).
+    # The contract type is list(<child codomain>) (element = the record).
     contract = research_each.output_contract
     assert contract is not None
     typ = contract.type
@@ -166,7 +166,7 @@ def test_map_input_named_over_is_reserved():
     # a `map`'s `over` is the iteration source (the reserved wiring key);
     # an `input:` parameter named `over` collides and is rejected at load.
     text = (
-        "id: bad-over\nname: bad\ninput:\n  xs: list[str]\n"
+        "id: bad-over\nname: bad\ninput:\n  xs: !list(str)\n"
         "nodes:\n  m:\n    kind: map\n    call: child\n    over: ${input.xs}\n"
         "    input:\n      over: ${item}\n"
         "output: ${m.output}\n"
@@ -184,7 +184,7 @@ _CALL_BAD_NAME = """
 id: bad-ref
 name: bad_ref
 input:
-  topic: str
+  topic: !str
 uses:
   research-one: research-one
 nodes:
@@ -210,7 +210,7 @@ _CHILD_NO_OUTPUT = """
 id: no-output
 name: no_output
 input:
-  topic: str
+  topic: !str
 nodes:
   emit:
     kind: code
@@ -223,7 +223,7 @@ _MAP_OVER_NO_OUTPUT = """
 id: bad-map
 name: bad_map
 input:
-  topics: list[str]
+  topics: !list(str)
 nodes:
   each:
     kind: map
@@ -240,7 +240,7 @@ def test_map_child_with_no_output_is_loud():
     child = load_flow(_CHILD_NO_OUTPUT)
     signature = child_signature(child)
     assert signature.output is None
-    assert signature.output_names == ()  # no declaration -> MAP cannot form list[U]
+    assert signature.output_names == ()  # no declaration -> MAP cannot form list(U)
     assert signature.declared_outputs == ()
 
     def resolver(flow_id, version=None):
@@ -258,7 +258,7 @@ name: null_to_nullable_call
 defs:
   echo:
     input:
-      maybe: Optional[str]
+      maybe: !Optional(str)
     nodes: {}
     output: ${input.maybe}
 nodes:

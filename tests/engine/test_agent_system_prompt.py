@@ -15,7 +15,6 @@ import pytest
 
 import yian.llm_clients as llm_clients
 from yian.compose import load_flow
-from yian.compose.helpers.types import read_variables
 from yian.memory import MemoryContext, MemorySection
 from yian.nodes.agent import AgentNode
 from yian.nodes.agent.memory import system_prompt_with_memory
@@ -29,6 +28,7 @@ from yian.skills import Skill
 from yian.skills.tool import system_prompt_with_skills
 from yian.tools import ToolSet
 from yian.typesys import Type, ValueKind, VariablePool
+from tests.compose._declarations import parameters_from_yaml
 from tests.engine.test_agent_memory_recall import _CaptureModel, _keys, _opener, _scope
 from tests.engine.test_run_backward import _records
 
@@ -82,7 +82,9 @@ def test_every_path_sends_the_rendered_system_prompt(monkeypatch, structured, to
 
 def test_system_prompt_reads_the_node_variables(monkeypatch) -> None:
     model = _model(monkeypatch)
-    variables = read_variables({"tone": "str = warm"}, {})
+    variables = parameters_from_yaml(
+        "variables:\n  tone: !str warm\n", {}, field="variables", require_default=True
+    )
     _eval(_node(system_prompt="${name}, be ${tone}.", variables=variables))
     assert model.calls[0][0].content == "Ada, be warm."
 
@@ -162,9 +164,9 @@ id: chat
 name: chat
 llm_config: {provider: anthropic, model: claude-test}
 input:
-  name: str
-  title: str
-  message: str
+  name: !str
+  title: !str
+  message: !str
 nodes:
   reply:
     kind: agent

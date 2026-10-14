@@ -65,39 +65,39 @@ _TAGGED_UNION = {
         ({"type": "string", "format": "date"}, "str"),
         ({"type": "string", "format": "date-time"}, "str"),
         ({"type": "string", "format": "email", "minLength": 1, "pattern": "@"}, "str"),
-        ({"enum": ["b", "a"]}, 'Literal["a","b"]'),
-        ({"enum": ["a", "b"], "type": "string"}, 'Literal["a","b"]'),
-        ({"const": "buy"}, 'Literal["buy"]'),
+        ({"enum": ["b", "a"]}, 'Literal("a","b")'),
+        ({"enum": ["a", "b"], "type": "string"}, 'Literal("a","b")'),
+        ({"const": "buy"}, 'Literal("buy")'),
         ({"enum": [1, 2], "type": "integer"}, "int"),
         ({"const": 3, "type": "number"}, "float"),
         ({"enum": [1, 2]}, None),
         ({"type": "integer"}, "int"),
         ({"type": "number"}, "float"),
-        ({"type": "integer", "minimum": 1, "maximum": 10}, "int[1,10]"),
-        ({"type": "integer", "minimum": 1, "exclusiveMaximum": 10}, "int[1,9]"),
-        ({"type": "integer", "exclusiveMinimum": 0, "maximum": 5}, "int[1,5]"),
-        ({"type": "integer", "minimum": 0.5, "maximum": 3.7}, "int[1,3]"),
+        ({"type": "integer", "minimum": 1, "maximum": 10}, "int(1..10)"),
+        ({"type": "integer", "minimum": 1, "exclusiveMaximum": 10}, "int(1..9)"),
+        ({"type": "integer", "exclusiveMinimum": 0, "maximum": 5}, "int(1..5)"),
+        ({"type": "integer", "minimum": 0.5, "maximum": 3.7}, "int(1..3)"),
         ({"type": "integer", "minimum": 1}, "int"),
         ({"type": "integer", "maximum": 1}, "int"),
-        ({"type": "number", "minimum": 0, "maximum": 1.5}, "float[0,1.5]"),
+        ({"type": "number", "minimum": 0, "maximum": 1.5}, "float(0..1.5)"),
         ({"type": "number", "exclusiveMinimum": 0, "maximum": 1}, "float"),
         ({"type": "number", "minimum": 0}, "float"),
         ({"type": "boolean"}, "bool"),
         ({"type": "null"}, "None"),
-        ({"type": "array", "items": {"type": "integer"}}, "list[int]"),
-        ({"type": "array", "items": {"enum": ["x", "y"]}}, 'list[Literal["x","y"]]'),
+        ({"type": "array", "items": {"type": "integer"}}, "list(int)"),
+        ({"type": "array", "items": {"enum": ["x", "y"]}}, 'list(Literal("x","y"))'),
         ({"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
-         "list[list[str]]"),
+         "list(list(str))"),
         ({"type": "array", "items": {"anyOf": [{"type": "integer"}, {"type": "null"}]}},
-         "list[Optional[int]]"),
-        ({"type": "array"}, "list[Any]"),
-        ({"type": "array", "items": {}}, "list[Any]"),
+         "list(Optional(int))"),
+        ({"type": "array"}, "list(Any)"),
+        ({"type": "array", "items": {}}, "list(Any)"),
         ({"type": "object"}, "object"),
         ({"type": "object", "additionalProperties": {"type": "integer"}}, "object"),
-        ({"anyOf": [{"type": "integer"}, {"type": "null"}]}, "Optional[int]"),
-        ({"oneOf": [{"type": "null"}, {"type": "string"}]}, "Optional[str]"),
-        ({"type": ["integer", "null"]}, "Optional[int]"),
-        ({"type": ["integer", "null"], "minimum": 0, "maximum": 3}, "Optional[int[0,3]]"),
+        ({"anyOf": [{"type": "integer"}, {"type": "null"}]}, "Optional(int)"),
+        ({"oneOf": [{"type": "null"}, {"type": "string"}]}, "Optional(str)"),
+        ({"type": ["integer", "null"]}, "Optional(int)"),
+        ({"type": ["integer", "null"], "minimum": 0, "maximum": 3}, "Optional(int(0..3))"),
         ({"anyOf": [{"type": "integer"}, {"type": "string"}]}, None),
         ({"type": ["integer", "string"]}, None),
         ({"anyOf": [{"type": "object"}, _BUY]}, "object"),
@@ -110,17 +110,17 @@ _TAGGED_UNION = {
         ({}, None),
         ({"not": {"type": "string"}}, None),
         ({"type": "string", "not": {"const": "x"}}, "str"),
-        ({"type": "array", "prefixItems": [{"type": "integer"}]}, "list[Any]"),
+        ({"type": "array", "prefixItems": [{"type": "integer"}]}, "list(Any)"),
         ({"type": "array", "prefixItems": [{"type": "integer"}], "items": {"type": "integer"}},
-         "list[Any]"),
+         "list(Any)"),
         ({"minimum": 0}, None),
         ({"type": "integer", "title": "N", "description": "d", "default": 1,
           "examples": [1], "multipleOf": 2}, "int"),
         ({"type": "string", "minLength": 1, "maxLength": 9}, "str"),
         ({"anyOf": [_BUY, _SELL], "discriminator": {"propertyName": "action"}},
-         'Union[{"action":Literal["buy"],"qty":int},{"action":Literal["sell"],"price":float}]'),
+         'Union({"action":Literal("buy"),"qty":int},{"action":Literal("sell"),"price":float})'),
         ({"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 3,
-          "uniqueItems": True}, "list[str]"),
+          "uniqueItems": True}, "list(str)"),
     ],
 )
 def test_schema_translates_to_label(schema: dict[str, Any], label: str | None) -> None:
@@ -162,9 +162,9 @@ def test_closed_object_is_a_record(schema: dict[str, Any], closed: bool) -> None
     assert typ is not None
     assert typ.kind is ValueKind.OBJECT
     assert {name: canonical_type_label(field) for name, field in typ.fields.items()} == {
-        "a": "Optional[int]",
-        "b": "list[str]",
-        "c": 'Literal["x","y"]',
+        "a": "Optional(int)",
+        "b": "list(str)",
+        "c": 'Literal("x","y")',
         "d": "int",
     }
     # `a` is nullable and `d` is not listed in JSON `required`.
@@ -197,8 +197,8 @@ def test_tagged_union_of_defs_is_a_union_of_records_when_closed() -> None:
     assert typ is not None
     assert typ.variants is not None
     assert [canonical_type_label(member) for member in typ.variants] == [
-        '{"action":Literal["buy"],"qty":int}',
-        '{"action":Literal["sell"],"price":float}',
+        '{"action":Literal("buy"),"qty":int}',
+        '{"action":Literal("sell"),"price":float}',
     ]
     assert all(member.required == frozenset(member.fields) for member in typ.variants)
 
@@ -335,10 +335,10 @@ def test_pydantic_union_of_a_model_and_a_scalar_has_no_type(closed: bool) -> Non
     ("schema", "expected"),
     [
         ({"type": "integer", "minimum": 10**400, "maximum": 10**401},
-         f"int[{10**400},{10**401}]"),
+         f"int({10**400}..{10**401})"),
         ({"type": "number", "minimum": 0, "maximum": 10**400}, "float"),
         ({"type": "integer", "minimum": 0, "exclusiveMaximum": 10**400},
-         f"int[0,{10**400 - 1}]"),
+         f"int(0..{10**400 - 1})"),
     ],
     ids=["integer", "number", "exclusive-integer"],
 )
@@ -428,7 +428,7 @@ def _registered_place() -> BaseTool:
 def test_function_tool_types(build, restore_tool_registry) -> None:
     types = tool_types(build())
 
-    assert _input_labels(types) == {"sym": "str", "qty": "int", "mode": 'Literal["a","b"]'}
+    assert _input_labels(types) == {"sym": "str", "qty": "int", "mode": 'Literal("a","b")'}
     assert types.required == frozenset({"sym", "qty"})
     assert types.output == _FILLED
 
@@ -563,11 +563,11 @@ def test_inputs_with_custom_validation_are_unchecked() -> None:
     types = tool_types(StructuredTool.from_function(_validated))
 
     assert _input_labels(types) == {
-        "bounded": "int[1,9]",
+        "bounded": "int(1..9)",
         "before": None,
         "nested": None,
         "skipped": None,
-        "maybe": "Optional[int]",
+        "maybe": "Optional(int)",
         "when": "str",
     }
     # `Optional[int]` with no default is still required.
@@ -700,7 +700,7 @@ class _JsonSchemaTool(BaseTool):
 def test_json_schema_dict_tool_inputs_are_translated() -> None:
     types = tool_types(_JsonSchemaTool())
 
-    assert _input_labels(types) == {"value": "int[0,5]", "mode": 'Literal["x","y"]'}
+    assert _input_labels(types) == {"value": "int(0..5)", "mode": 'Literal("x","y")'}
     assert types.required == frozenset({"value"})
     assert types.output is None
 

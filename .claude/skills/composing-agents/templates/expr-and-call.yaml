@@ -23,13 +23,13 @@ name: expr_and_call
 description: Draft on a topic, critique via an inline call(), and score with arithmetic.
 
 input:
-  topic: str
-  bonus: int = 0            # default-fill: omitted -> 0
+  topic: !str
+  bonus: !int 0            # default-fill: omitted -> 0
 
 defs:
   critique:                 # an in-file child flow (resolver-free) with one node
     input:
-      text: str
+      text: !str
     nodes:
       judge:
         kind: agent

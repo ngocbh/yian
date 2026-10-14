@@ -11,20 +11,20 @@ _FLOW = """
 id: unions
 name: unions
 typedefs:
-  Buy: {action: 'Literal[buy]', qty: int}
-  Sell: {action: 'Literal[sell]', qty: int, price: float}
-  Hold: {action: 'Literal[hold]', note: str}
-  Decision: Union[Buy, Sell, Hold]
+  Buy: {action: 'Literal(buy)', qty: int}
+  Sell: {action: 'Literal(sell)', qty: int, price: float}
+  Hold: {action: 'Literal(hold)', note: str}
+  Decision: Union(Buy, Sell, Hold)
   Text: {text: str}
   Num: {num: int}
-  Note: Union[Text, Num]
+  Note: Union(Text, Num)
 input:
-  decision: object
-  note: object
+  decision: !object
+  note: !object
 defs:
   sell_flow:
     input:
-      order: Sell
+      order: !Sell
     nodes:
       fill:
         kind: code
@@ -144,7 +144,7 @@ def test_a_code_node_returning_no_untagged_member_fails_the_node():
     assert result.status == "failed"
     assert result.failure.node_id == "n"
     assert result.failure.code == "contract.output"
-    assert result.failure.message.startswith("value matches no member of Union[")
+    assert result.failure.message.startswith("value matches no member of Union(")
     assert "record missing required fields: ['num']" in result.failure.message
     assert "record missing required fields: ['text']" in result.failure.message
 
@@ -153,14 +153,14 @@ _NESTED_FLOW = """
 id: nested
 name: nested
 typedefs:
-  Buy: {action: 'Literal[buy]', qty: int}
-  Sell: {action: 'Literal[sell]', qty: int, price: float}
-  Decision: Union[Buy, Sell]
+  Buy: {action: 'Literal(buy)', qty: int}
+  Sell: {action: 'Literal(sell)', qty: int, price: float}
+  Decision: Union(Buy, Sell)
   Text: {text: str}
   Num: {num: int}
-  Note: Union[Text, Num]
+  Note: Union(Text, Num)
 input:
-  value: object
+  value: !object
 nodes:
   d:
     kind: code
@@ -170,7 +170,7 @@ nodes:
       return inputs["value"]
     output:
       decision: Decision
-      notes: list[Note]
+      notes: list(Note)
 output: ${d.output}
 """
 
@@ -188,7 +188,7 @@ output: ${d.output}
     ),
     (
         {"decision": BUY, "notes": [{"text": "a"}, {"zz": 1}]},
-        "value matches no member of Union[",
+        "value matches no member of Union(",
         "notes",
     ),
 ])

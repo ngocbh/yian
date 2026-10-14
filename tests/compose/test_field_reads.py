@@ -15,7 +15,7 @@ def _flow(step_output: str, rest: str, *, preamble: str = "") -> str:
     return (
         "id: p\nname: p\n"
         + preamble
-        + "input:\n  s: str\n"
+        + "input:\n  s: !str\n"
         "nodes:\n"
         "  step:\n"
         "    kind: code\n"
@@ -35,7 +35,7 @@ def _load_error(text: str) -> str:
 
 def test_optional_record_field_reads_null_when_the_whole_value_is_null():
     text = _flow(
-        "Optional[Rec]",
+        "Optional(Rec)",
         "output:\n  a: ${step.output.a}\n  note: 'a=${step.output.a}'\n",
         preamble="typedefs:\n  Rec: {a: str}\n",
     )
@@ -45,11 +45,11 @@ def test_optional_record_field_reads_null_when_the_whole_value_is_null():
 
 
 def test_case_when_on_a_missing_optional_record_input_is_falsy():
-    """A `when:` reading a field of an omitted `Optional[Rec]` input takes the else branch."""
+    """A `when:` reading a field of an omitted `Optional(Rec)` input takes the else branch."""
     text = (
         "id: p\nname: p\n"
         "typedefs:\n  Rec: {a: str}\n"
-        "input:\n  s: str\n  maybe: Optional[Rec]\n"
+        "input:\n  s: !str\n  maybe: !Optional(Rec)\n"
         "nodes:\n"
         "  route:\n"
         "    kind: case\n"
@@ -83,10 +83,10 @@ def test_case_when_on_a_missing_optional_record_input_is_falsy():
         ("bool", "bool"),
         ("date", "date"),
         ("datetime", "datetime"),
-        ("int[0, 10]", "int[0,10]"),
-        ("Literal[a, b]", 'Literal["a","b"]'),
-        ("list[str]", "list[str]"),
-        ("Optional[str]", "Optional[str]"),
+        ("int(0..10)", "int(0..10)"),
+        ("Literal(a, b)", 'Literal("a","b")'),
+        ("list(str)", "list(str)"),
+        ("Optional(str)", "Optional(str)"),
     ],
 )
 def test_field_on_a_fieldless_output_in_a_flow_output_is_a_load_error(step_output, label):
@@ -181,7 +181,7 @@ def test_undeclared_record_field_keeps_its_message():
 _EACH_DEFS = (
     "defs:\n"
     "  each:\n"
-    "    input:\n      v: str\n"
+    "    input:\n      v: !str\n"
     "    nodes:\n"
     "      inner:\n"
     "        kind: code\n"
@@ -227,10 +227,10 @@ def test_field_on_str_in_wait_until_is_a_load_error():
 
 _BARE_CHILD = (
     "id: p\nname: p\n"
-    "input:\n  s: str\n  xs: list[str]\n"
+    "input:\n  s: !str\n  xs: !list(str)\n"
     "defs:\n"
     "  child:\n"
-    "    input:\n      s: str\n"
+    "    input:\n      s: !str\n"
     "    nodes:\n"
     "      step:\n"
     "        kind: code\n"
@@ -267,7 +267,7 @@ def test_field_on_a_map_output_is_a_load_error():
         "    input:\n      s: ${item}\n"
         "output: ${m.output.first}\n"
     )
-    assert "reference ${m.output.first} reads field 'first' on type list[str]" in _load_error(text)
+    assert "reference ${m.output.first} reads field 'first' on type list(str)" in _load_error(text)
 
 
 def test_field_on_str_in_a_flow_assert_is_a_load_error():
@@ -281,10 +281,10 @@ def test_field_on_str_in_a_flow_assert_is_a_load_error():
 # A child whose output is a partial record: `a` is typed, `b` comes from an untyped CODE node.
 _PARTIAL_CHILD = (
     "id: p\nname: p\n"
-    "input:\n  s: str\n"
+    "input:\n  s: !str\n"
     "defs:\n"
     "  child:\n"
-    "    input:\n      s: str\n"
+    "    input:\n      s: !str\n"
     "    nodes:\n"
     "      typed:\n"
     "        kind: code\n"
@@ -339,9 +339,9 @@ def test_node_assert_on_an_exact_record_output_checks_typed_fields():
     "step_output, ref, preamble",
     [
         ("object", "${step.output.anything.deeper}", ""),          # opaque
-        ("Optional[Rec]", "${step.output.a}", "typedefs:\n  Rec: {a: str}\n"),
+        ("Optional(Rec)", "${step.output.a}", "typedefs:\n  Rec: {a: str}\n"),
         ("{a: str, b: object}", "${step.output.b.anything}", ""),  # object-typed field
-        ("list[str]", "${step.output}", ""),                     # whole value
+        ("list(str)", "${step.output}", ""),                     # whole value
     ],
 )
 def test_reads_the_type_allows_still_load(step_output, ref, preamble):
@@ -350,7 +350,7 @@ def test_reads_the_type_allows_still_load(step_output, ref, preamble):
 
 def test_untyped_output_reads_still_load():
     text = (
-        "id: p\nname: p\ninput:\n  s: str\n"
+        "id: p\nname: p\ninput:\n  s: !str\n"
         "nodes:\n"
         "  step:\n"
         "    kind: code\n"
@@ -362,7 +362,8 @@ def test_untyped_output_reads_still_load():
 
 
 _INPUTS = (
-    "input:\n  s: str\n  r:\n    a: str\n  tags: list[str]\n  o: object\n  d: file\n"
+    "typedefs:\n  R: {a: str}\n"
+    "input:\n  s: !str\n  r: !R\n  tags: !list(str)\n  o: !object\n  d: !file\n"
 )
 
 
@@ -383,7 +384,7 @@ def _input_flow(ref: str) -> str:
     "ref, expected",
     [
         ("${input.s.first}", "reads field 'first' on type str, which has no fields"),
-        ("${input.tags.first}", "reads field 'first' on type list[str], which has no fields"),
+        ("${input.tags.first}", "reads field 'first' on type list(str), which has no fields"),
         ("${input.r.b}", "reads unknown field 'b' on record"),
         ("${input.r.a.b}", "reads field 'b' on type str, which has no fields"),
     ],
@@ -403,10 +404,10 @@ def test_valid_flow_input_reads_still_load(ref):
 def test_defs_body_input_field_reads_are_checked():
     """A named `defs:` body's own typed inputs are checked."""
     text = (
-        "id: p\nname: p\ninput:\n  s: str\n"
+        "id: p\nname: p\ninput:\n  s: !str\n"
         "defs:\n"
         "  child:\n"
-        "    input:\n      s: str\n"
+        "    input:\n      s: !str\n"
         "    nodes:\n"
         "      step:\n"
         "        kind: code\n"
@@ -427,7 +428,7 @@ def test_defs_body_input_field_reads_are_checked():
 def test_inline_body_input_field_reads_are_checked():
     """An inline body's inputs, inferred from the call site, are checked."""
     text = (
-        "id: p\nname: p\ninput:\n  s: str\n"
+        "id: p\nname: p\ninput:\n  s: !str\n"
         "nodes:\n"
         "  c:\n"
         "    kind: call\n"
@@ -448,7 +449,7 @@ def _map_flow(over_input: str, item_ref: str) -> str:
     return (
         "id: p\nname: p\n"
         "typedefs:\n  Rec: {a: str}\n"
-        f"input:\n  xs: {over_input}\n"
+        f"input:\n  xs: !{over_input}\n"
         + _EACH_DEFS
         + "nodes:\n"
         "  m:\n"
@@ -463,9 +464,9 @@ def _map_flow(over_input: str, item_ref: str) -> str:
 @pytest.mark.parametrize(
     "over_input, item_ref, expected",
     [
-        ("list[str]", "${item.a}", "reads field 'a' on type str, which has no fields"),
-        ("list[Rec]", "${item.b}", "reads unknown field 'b' on record"),
-        ("Optional[list[Rec]]", "${item.b}", "reads unknown field 'b' on record"),
+        ("list(str)", "${item.a}", "reads field 'a' on type str, which has no fields"),
+        ("list(Rec)", "${item.b}", "reads unknown field 'b' on record"),
+        ("Optional(list(Rec))", "${item.b}", "reads unknown field 'b' on record"),
     ],
 )
 def test_map_item_field_reads_are_checked(over_input, item_ref, expected):
@@ -476,10 +477,10 @@ def test_map_item_field_reads_are_checked(over_input, item_ref, expected):
 @pytest.mark.parametrize(
     "over_input, item_ref",
     [
-        ("list[Rec]", "${item.a}"),
-        ("list[str]", "${item}"),
-        ("list[object]", "${item.anything}"),
-        ("list[Any]", "${item.anything}"),
+        ("list(Rec)", "${item.a}"),
+        ("list(str)", "${item}"),
+        ("list(object)", "${item.anything}"),
+        ("list(Any)", "${item.anything}"),
         ("object", "${item.anything}"),  # over: not a proven list
     ],
 )

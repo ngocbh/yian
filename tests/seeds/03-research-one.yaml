@@ -10,8 +10,8 @@ name: research_one
 description: Research a single topic into {report, asof} as of a date.
 
 input:
-  topic: str
-  as_of: date = "2026-01-01"   # typed defaults must already satisfy their declared type
+  topic: !str
+  as_of: !date "2026-01-01"   # typed defaults must already satisfy their declared type
 
 nodes:
   fetch:
@@ -20,8 +20,8 @@ nodes:
       topic: ${input.topic}
       as_of:  ${input.as_of}
     output:                    # an object: values + recent headlines
-      values: list[float]
-      news:   list[str]
+      values: list(float)
+      news:   list(str)
     code: tests.seeds.fns:fetch_facts   # deterministic data pull
 
   synth:

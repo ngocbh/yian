@@ -16,18 +16,18 @@ NATIVE = {"provider": "openai", "model": "gpt-4o"}
 FALLBACK = {"provider": "vllm", "model": "no-structured-sentinel"}
 
 REGISTRY = read_typedefs({
-    "Buy": {"action": "Literal[buy]", "qty": "int"},
-    "Sell": {"action": "Literal[sell]", "price": "float"},
-    "Hold": {"action": "Literal[hold]"},
+    "Buy": {"action": "Literal(buy)", "qty": "int"},
+    "Sell": {"action": "Literal(sell)", "price": "float"},
+    "Hold": {"action": "Literal(hold)"},
     "Text": {"text": "str"},
     "Call": {"name": "str", "input": "object"},
-    "Order": {"trade": "Union[Buy, Sell]", "note": "str"},
-    "Ticket": {"kind": "Literal[ticket]", "trade": "Optional[Union[Buy, Sell]]"},
-    "Skip": {"kind": "Literal[skip]"},
+    "Order": {"trade": "Union(Buy, Sell)", "note": "str"},
+    "Ticket": {"kind": "Literal(ticket)", "trade": "Optional(Union(Buy, Sell))"},
+    "Skip": {"kind": "Literal(skip)"},
     "Limit": {"px": "float"},
-    "Bid": {"action": "Literal[bid]", "limit": "Limit"},
+    "Bid": {"action": "Literal(bid)", "limit": "Limit"},
 })
-TRADE = type_for("Union[Buy, Sell]", REGISTRY)
+TRADE = type_for("Union(Buy, Sell)", REGISTRY)
 
 
 class _Replies:
@@ -92,7 +92,7 @@ def test_sell_reply_with_qty_retries_then_reports_the_sell_members_first_error(c
 
 
 def test_unknown_field_in_a_record_nested_in_a_member_is_rejected_at_its_path():
-    typ = type_for("Union[Bid, Sell]", REGISTRY)
+    typ = type_for("Union(Bid, Sell)", REGISTRY)
     _, error = _exhausted(typ, {"value": {"action": "bid", "limit": {"px": 1.0, "zz": 1}}})
     assert _structured_validation_path(error, typ) == ("limit", "zz")
 
@@ -114,7 +114,7 @@ def test_missing_or_unknown_tag_reports_the_tag_field(payload):
 
 
 def test_nested_list_of_union_error_maps_to_the_item_field():
-    typ = type_for("list[Union[Buy, Sell]]", REGISTRY)
+    typ = type_for("list(Union(Buy, Sell))", REGISTRY)
     _, error = _exhausted(typ, {"items": [{"action": "sell", "price": "high"}]})
     assert _structured_validation_path(error, typ) == (0, "price")
 
@@ -126,7 +126,7 @@ def test_record_field_of_union_type_error_maps_through_the_member():
 
 
 def test_union_inside_a_union_member_maps_through_both_members():
-    typ = type_for("Union[Ticket, Skip]", REGISTRY)
+    typ = type_for("Union(Ticket, Skip)", REGISTRY)
     payload = {"value": {"kind": "ticket", "trade": {"action": "sell", "price": "high"}}}
     _, error = _exhausted(typ, payload)
     assert _structured_validation_path(error, typ) == ("trade", "price")
@@ -136,17 +136,17 @@ def test_union_inside_a_union_member_maps_through_both_members():
 
 
 def test_untagged_union_with_no_match_maps_to_the_union_position():
-    typ = type_for("Union[Text, Call]", REGISTRY)
+    typ = type_for("Union(Text, Call)", REGISTRY)
     _, error = _exhausted(typ, {"value": {"zz": 1}})
     assert _structured_validation_path(error, typ) == ()
 
-    listed = type_for("list[Union[Text, Call]]", REGISTRY)
+    listed = type_for("list(Union(Text, Call))", REGISTRY)
     _, error = _exhausted(listed, {"items": [{"text": "a"}, {"name": 3}]})
     assert _structured_validation_path(error, listed) == (1,)
 
 
 def test_untagged_union_reply_returns_the_matching_member():
-    typ = type_for("Union[Text, Call]", REGISTRY)
+    typ = type_for("Union(Text, Call)", REGISTRY)
     model = _Replies({"value": {"name": "lookup", "input": {"q": 1}}})
     assert generate_structured(model, [], typ, llm_config=NATIVE) == {
         "name": "lookup", "input": {"q": 1},
@@ -157,10 +157,10 @@ _AGENT_FLOW = """
 id: decide
 name: decide
 typedefs:
-  Buy: {action: 'Literal[buy]', qty: int}
-  Sell: {action: 'Literal[sell]', qty: int, price: float}
-  Hold: {action: 'Literal[hold]', note: str}
-  Decision: Union[Buy, Sell, Hold]
+  Buy: {action: 'Literal(buy)', qty: int}
+  Sell: {action: 'Literal(sell)', qty: int, price: float}
+  Hold: {action: 'Literal(hold)', note: str}
+  Decision: Union(Buy, Sell, Hold)
 nodes:
   a:
     kind: agent

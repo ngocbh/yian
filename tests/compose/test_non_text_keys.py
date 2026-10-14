@@ -25,8 +25,8 @@ defs:
         output: int
     output: 1
 input:
-  q: str
-  {flow_input}: str
+  q: !str
+  {flow_input}: !str
 nodes:
   a:
     kind: code
@@ -180,7 +180,7 @@ def test_case_on_needs_no_exemption():
     text = """id: f
 name: f
 input:
-  x: str
+  x: !str
 nodes:
   route:
     kind: case
@@ -258,3 +258,51 @@ output: ${a.output}
         "the key `1` was read by YAML as an integer"
     )
     assert error.diagnostic.frames[-1].range == SourceRange(6, 13, 6, 14)
+
+
+@pytest.mark.parametrize(
+    ("where", "value"),
+    [
+        ("node_input", "!object {KEY: 2}"),
+        ("node_input", "!list(object) [{KEY: 2}]"),
+        ("node_input", '{KEY: "${input.q}"}'),
+        ("node_input", "{d: !object {KEY: 2}, s: '${input.q}'}"),
+        ("flow_default", "!object {KEY: 2}"),
+        ("flow_default", "!list(object) [{KEY: 2}]"),
+    ],
+    ids=[
+        "tagged",
+        "tagged-list",
+        "nested-template",
+        "nested-tag",
+        "tagged-default",
+        "tagged-list-default",
+    ],
+)
+def test_a_non_text_key_in_a_tagged_or_nested_value_is_the_same_error(where, value):
+    written = value.replace("KEY", "1")
+    if where == "node_input":
+        line = f"      v: {written}"
+        text = (
+            "id: f\nname: f\ninput:\n  q: !str\nnodes:\n  a:\n    kind: code\n"
+            f"    code: return 1\n    input:\n{line}\n    output: int\n"
+            "output: ${a.output}\n"
+        )
+    else:
+        line = f"  v: {written}"
+        text = (
+            f"id: f\nname: f\ninput:\n{line}\nnodes:\n  a:\n    kind: code\n"
+            "    code: return 1\n    output: int\noutput: ${a.output}\n"
+        )
+
+    error = _load_error(text)
+
+    assert error.diagnostic.message == (
+        "the key `1` was read by YAML as an integer, but names in a flow must be "
+        'text. Quote it ("1") or choose another name.'
+    )
+    line_number = text.splitlines().index(line) + 1
+    column = line.index("1:") + 1
+    assert error.diagnostic.frames[-1].range == SourceRange(
+        line_number, column, line_number, column + 1
+    )

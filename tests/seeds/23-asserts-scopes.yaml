@@ -23,17 +23,17 @@ name: asserts_scopes
 description: Asserts at every scope — flow (boundary/post + named-call post), def-child, and node.
 
 input:
-  topic: str
-  window: int = 30
-  weight: float = 0.02
+  topic: !str
+  window: !int 30
+  weight: !float 0.02
 
 defs:
   # A callable sub-flow. Its top-level `asserts:` are DEF/CHILD-scope — enforced at the
   # call seam when `score_one` runs (NOT in this file's top-level run).
   score_one:
     input:
-      topic: str
-      window: int
+      topic: !str
+      window: !int
     nodes:
       raw:
         kind: code

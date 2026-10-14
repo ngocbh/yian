@@ -13,7 +13,7 @@
 # any provider/model with no extra Python.
 #
 # Note on typed outputs: an AGENT can declare any `output:` shape. A bare `str` is free
-# text; a `Literal[...]` enum, record, number, or list uses structured generation (see
+# text; a `Literal(...)` enum, record, number, or list uses structured generation (see
 # triage-ticket.yaml). The verdict here is an enum on purpose: `case ... on` routes on a
 # single tag, so a one-tag answer is exactly what this flow needs.
 #
@@ -25,11 +25,11 @@ name: decision_brief
 description: Weigh a decision from three angles, pick a verdict, and write a tailored brief.
 
 typedefs:
-  Decision: Literal[go, no_go, needs_more_info]
+  Decision: Literal(go, no_go, needs_more_info)
 
 input:
-  question: str
-  audience: Optional[str]        # omitted -> defaults to "a general audience" in the prompts
+  question: !str
+  audience: !Optional(str)        # omitted -> defaults to "a general audience" in the prompts
 
 nodes:
   # --- fan-out: three independent angles (no edges between them; they run in parallel) ---

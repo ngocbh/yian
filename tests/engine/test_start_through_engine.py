@@ -20,7 +20,7 @@ _AGE_FLOW = """
 id: age
 name: age
 input:
-  age: int
+  age: !int
 nodes:
   n:
     kind: code
@@ -60,7 +60,7 @@ _DEFAULT_FLOW = """
 id: dflt
 name: dflt
 input:
-  n: int = 5
+  n: !int 5
 nodes:
   echo:
     kind: code
@@ -89,7 +89,7 @@ _DEFAULT_ASSERT_FLOW = """
 id: da
 name: da
 input:
-  n: int = 5
+  n: !int 5
 nodes:
   echo:
     kind: code
@@ -116,11 +116,11 @@ _CHILD_ASSERT_FLOW = """
 id: d
 name: d
 input:
-  v: int
+  v: !int
 defs:
   checked:
     input:
-      n: int
+      n: !int
     nodes:
       x:
         kind: code
@@ -164,8 +164,8 @@ _REUSE_FLOW = """
 id: reuse
 name: reuse
 input:
-  topic: str
-  window: int = 30
+  topic: !str
+  window: !int 30
 nodes:
   emit:
     kind: code

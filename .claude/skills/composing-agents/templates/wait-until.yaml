@@ -3,7 +3,7 @@
 id: wait-until
 name: wait_until
 input:
-  deadline: datetime
+  deadline: !datetime
 nodes:
   settle:
     kind: wait

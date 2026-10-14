@@ -1,4 +1,4 @@
-"""Typed LOOP seeds: `name: Type = value` on a loop's `input:` types its carried record.
+"""Typed LOOP seeds: `name: !Type value` on a loop's `input:` types its carried record.
 
 A loop's `input:` is the carried record's turn-0 seed, so a typed seed is checked when the
 driver binds it, and a field the body omits carries the declared type into the loop's merged
@@ -22,7 +22,7 @@ nodes:
     kind: loop
     times: 3
     input:
-      rounds: int = 0
+      rounds: !int 0
     nodes:
       bump:
         kind: code
@@ -59,7 +59,7 @@ name: partial_typed_seed
 defs:
   bump:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code
@@ -80,7 +80,7 @@ nodes:
     times: 2
     input:
       n: 0
-      label: Optional[str] = ${p.output}
+      label: !Optional(str) ${p.output}
     call: bump
 output: ${loop.output}
 """
@@ -97,7 +97,7 @@ def test_omitted_typed_seed_carries_its_declared_type():
     assert contract.type == Type(
         kind=ValueKind.OBJECT,
         fields={
-            "label": type_for("Optional[str]", registry),
+            "label": type_for("Optional(str)", registry),
             "n": type_for("int", registry),
         },
         required=frozenset({"label", "n"}),
@@ -114,7 +114,7 @@ name: misfit_seed
 defs:
   bump:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code
@@ -134,7 +134,7 @@ nodes:
     kind: loop
     times: 2
     input:
-      n: int = ${p.output}
+      n: !int ${p.output}
     call: bump
 output: ${loop.output}
 """

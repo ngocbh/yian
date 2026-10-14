@@ -62,7 +62,7 @@ def type_from_json_schema(
 
     Example:
         `{"anyOf": [{"type": "integer", "minimum": 1, "exclusiveMaximum": 10},
-        {"type": "null"}]}` gives `Optional[int[1,9]]` either way. An object with
+        {"type": "null"}]}` gives `Optional(int(1..9))` either way. An object with
         `properties` gives a record when `closed=True` and plain `object` when
         `closed=False`.
     """

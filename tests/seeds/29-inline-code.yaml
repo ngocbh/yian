@@ -13,8 +13,8 @@ name: inline_code
 description: Inline `code:` source — a bare body run as `def main(inputs)` in-process.
 
 input:
-  rating: float
-  label: str
+  rating: !float
+  label: !str
 
 nodes:
   verdict:

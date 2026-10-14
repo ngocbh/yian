@@ -28,7 +28,7 @@ granted tools, but they do not rewrite the flow structure at run time.
 id: hello
 name: hello
 input:
-  name: str
+  name: !str
 output: str
 kind: agent
 prompt: Write a warm one-sentence greeting to ${name}.

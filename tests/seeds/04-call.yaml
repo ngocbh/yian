@@ -10,7 +10,7 @@ name: call_take
 description: Research one topic (via call) and add a one-line neutral observation.
 
 input:
-  topic: str
+  topic: !str
 
 uses:
   research-one: 03-research-one   # external sibling flow, resolved by filename on the search path

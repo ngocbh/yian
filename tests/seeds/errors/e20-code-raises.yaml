@@ -2,7 +2,7 @@
 id: err-code-raises
 name: err_code_raises
 input:
-  topic: str
+  topic: !str
 nodes:
   boom:
     kind: code

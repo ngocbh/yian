@@ -8,12 +8,12 @@
 id: err-nested-code-raise
 name: err_nested_code_raise
 input:
-  topic: str
+  topic: !str
 
 defs:
   inner:
     input:
-      topic: str
+      topic: !str
     nodes:
       boom:
         kind: code

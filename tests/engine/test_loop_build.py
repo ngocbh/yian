@@ -42,8 +42,8 @@ name: loop_good
 defs:
   bump:
     input:
-      n: int
-      exited: bool
+      n: !int
+      exited: !bool
     nodes:
       step:
         kind: code
@@ -74,8 +74,8 @@ name: loop_partial_reference
 defs:
   body:
     input:
-      n: int
-      note: str
+      n: !int
+      note: !str
     nodes: {}
     output:
       n: ${input.n}
@@ -112,8 +112,8 @@ name: loop_subset_body
 defs:
   bump:
     input:
-      n: int
-      exited: bool
+      n: !int
+      exited: !bool
     nodes:
       step:
         kind: code
@@ -147,12 +147,12 @@ BAD_TYPES = """
 id: loop-bad-types
 name: loop_bad_types
 input:
-  n0: int
+  n0: !int
 defs:
   bump:
     input:
-      n: int
-      exited: bool
+      n: !int
+      exited: !bool
     nodes:
       step:
         kind: code
@@ -184,13 +184,13 @@ PARTIAL_OPAQUE_BAD_TYPES = """
 id: loop-partial-opaque-bad-types
 name: loop_partial_opaque_bad_types
 input:
-  n0: int
-  note0: str
+  n0: !int
+  note0: !str
 defs:
   bump:
     input:
-      n: int
-      note: str
+      n: !int
+      note: !str
     nodes: {}
     output:
       n: ${input.note}
@@ -213,8 +213,8 @@ name: loop_nullable_seed
 defs:
   keep:
     input:
-      maybe: Optional[str]
-      done: bool
+      maybe: !Optional(str)
+      done: !bool
     nodes: {}
     output:
       maybe: ${input.maybe}
@@ -307,7 +307,7 @@ name: loop_outside_carried
 defs:
   bump:
     input:
-      n: int
+      n: !int
     nodes: {}
     output:
       n: ${input.n}
@@ -339,7 +339,7 @@ name: loop_single_output
 defs:
   bump:
     input:
-      n: int
+      n: !int
     nodes: {}
     output:
       n: ${input.n}
@@ -370,7 +370,7 @@ name: loop_single_output_record
 defs:
   bump:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code
@@ -408,7 +408,7 @@ name: loop_rejected_body
 defs:
   bump:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code
@@ -450,7 +450,7 @@ name: loop_value_body_carried_result
 defs:
   bump:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code
@@ -499,15 +499,15 @@ typedefs:
     name: str
     handle: str
 input:
-  person: Person
-  talking_to: str
+  person: !Person
+  talking_to: !str
 defs:
   turn:
     input:
-      person: Person
-      talking_to: str
-      exited: bool
-      reply: str
+      person: !Person
+      talking_to: !str
+      exited: !bool
+      reply: !str
     nodes: {}
     output:
       exited: ${input.exited}
@@ -577,15 +577,15 @@ typedefs:
     name: str
     handle: str
 input:
-  person: Person
-  talking_to: str
+  person: !Person
+  talking_to: !str
 defs:
   turn:
     input:
-      person: Person
-      talking_to: str
-      exited: bool
-      reply: str
+      person: !Person
+      talking_to: !str
+      exited: !bool
+      reply: !str
     nodes: {}
     output:
       exited: ${input.exited}
@@ -629,8 +629,8 @@ name: loop_seed_cycle
 defs:
   bump:
     input:
-      n: int
-      exited: bool
+      n: !int
+      exited: !bool
     nodes:
       step:
         kind: code
@@ -678,12 +678,12 @@ PARTIAL_BAD_TYPES = """
 id: loop-partial-bad-types
 name: loop_partial_bad_types
 input:
-  n0: int
+  n0: !int
 defs:
   bump:
     input:
-      n: int
-      exited: bool
+      n: !int
+      exited: !bool
     nodes:
       step:
         kind: code
@@ -717,13 +717,13 @@ PARTIAL_OPAQUE_RETURNED = """
 id: loop-partial-opaque-returned
 name: loop_partial_opaque_returned
 input:
-  note0: str
-  k0: int
+  note0: !str
+  k0: !int
 defs:
   bump:
     input:
-      n: int
-      note: str
+      n: !int
+      note: !str
     nodes:
       step:
         kind: code
@@ -797,12 +797,12 @@ TEMPLATE_STR = """
 id: loop-template-str
 name: loop_template_str
 input:
-  opening: str
+  opening: !str
 defs:
   turn:
     input:
-      transcript: str
-      exited: bool
+      transcript: !str
+      exited: !bool
     nodes:
       step:
         kind: code
@@ -965,8 +965,8 @@ name: loop_never_ends
 defs:
   body:
     input:
-      done: bool
-      attempts: int
+      done: !bool
+      attempts: !int
     nodes: {}
     output:
       attempts: ${input.attempts + 1}
@@ -1006,9 +1006,9 @@ name: loop_never_ends_two
 defs:
   body:
     input:
-      a: bool
-      b: bool
-      n: int
+      a: !bool
+      b: !bool
+      n: !int
     nodes: {}
     output:
       n: ${input.n + 1}
@@ -1055,7 +1055,7 @@ def test_null_max_still_gets_the_never_ending_error():
 
 def test_dotted_condition_ref_names_the_carried_field():
     src = _swap(NEVER_ENDS, "      done: false\n", "      st: {ok: false}\n").replace(
-        "      done: bool\n", "      st: Any\n"
+        "      done: !bool\n", "      st: !Any\n"
     ).replace("    until: done\n", "    until: st.ok\n")
     with pytest.raises(LoadError, match="reads `st`.*return `st` from the body"):
         load_flow(src)
@@ -1184,8 +1184,10 @@ def test_predicate_field_read_on_scalar_is_rejected():
 OMITTED_SEED = """
 id: loop-omitted
 name: loop_omitted
+typedefs:
+  Cfg: {limit: int}
 input:
-  cfg: {limit: int}
+  cfg: !Cfg
 nodes:
   repeat:
     kind: loop
@@ -1235,14 +1237,14 @@ name: loop_union
 typedefs:
   Done: {answer: str}
   More: {hint: str}
-  Step: Union[Done, More]
+  Step: Union(Done, More)
 nodes:
   ask:
     kind: loop
     PRED
     input:
       n: 0
-      r: Step = {"hint":"start"}
+      r: !Step {"hint":"start"}
     nodes:
       step:
         kind: code
@@ -1303,8 +1305,8 @@ def test_predicate_tagged_member_field_error_points_at_isinstance():
     src = (
         _swap(UNION_STATE, 
             "  Done: {answer: str}\n  More: {hint: str}\n",
-            "  Done: {kind: 'Literal[done]', answer: str}\n"
-            "  More: {kind: 'Literal[more]', hint: str}\n",
+            "  Done: {kind: 'Literal(done)', answer: str}\n"
+            "  More: {kind: 'Literal(more)', hint: str}\n",
         )
         .replace('{"hint":"start"}', '{"kind":"more","hint":"start"}')
         .replace('{"answer": "ok"}', '{"kind": "done", "answer": "ok"}')
@@ -1321,7 +1323,7 @@ def test_predicate_tagged_member_field_error_points_at_isinstance():
 
 
 def test_predicate_isinstance_check_on_an_object_field_checks_reads_on_the_type():
-    src = _swap(UNION_STATE, 'r: Step = {"hint":"start"}', 'r: object = {"hint":"start"}').replace(
+    src = _swap(UNION_STATE, 'r: !Step {"hint":"start"}', 'r: !object {"hint":"start"}').replace(
         "          r: Step\n", "          r: object\n"
     )
     with pytest.raises(LoadError, match="reads unknown field 'answr' on record"):
@@ -1347,8 +1349,8 @@ name: p
 defs:
   body:
     input:
-      n: {n_type}
-      k: int
+      n: !{n_type}
+      k: !int
     nodes:
       step:
         kind: code
@@ -1387,7 +1389,7 @@ def _seeded(n_type: str, seed: str, driver: str = "times: 1") -> str:
             "text is not converted between flows, so write 1 without quotes",
         ),
         ("int", "null", "child expects 'int', but the value null does not fit"),
-        ("int = 5", "null", "child expects 'int', but the value null does not fit"),
+        ("int 5", "null", "child expects 'int', but the value null does not fit"),
         (
             "str",
             "2026-01-01",
@@ -1422,8 +1424,8 @@ def test_seed_is_checked_even_when_a_while_loop_never_runs():
     [
         ("int", "1", 1),
         ("float", "5", 5),
-        ("Optional[int]", "null", None),
-        ("Optional[int]", "${null}", None),
+        ("Optional(int)", "null", None),
+        ("Optional(int)", "${null}", None),
         ("str", '"2026-01-01"', "2026-01-01"),
         ("int", "${1 + 2}", 3),
     ],
@@ -1468,7 +1470,7 @@ name: p
 defs:
   bump:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code

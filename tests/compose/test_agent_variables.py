@@ -7,23 +7,47 @@ from yian.compose.nodes.agent import AgentDescriptor
 from yian.compose.nodes.base import BuildContext
 from yian.compose.source import SourceDocument
 from yian.nodes.contracts import Parameter, ValueContract
-from yian.typesys.types import read_typedefs
+from yian.typesys.types import TypeRegistry, read_typedefs
+
+from tests.compose._declarations import parameters_from_yaml
 
 
-def test_source_free_agent_build_resolves_typed_variables_without_input_bindings():
-    registry = read_typedefs({"Settings": {"limit": "int[1,12]", "tags": "list[str]"}})
-    result = AgentDescriptor(id="writer", variables={
-        "num_sentences": "int[1,12] = 4",
-        "temperature": "float[0,1] = 0.4",
-        "tone": "Literal[concise,detailed,technical] = concise",
-        "instruction": 'str = "Summarize clearly"',
-        "settings": 'Settings = {limit: 4, tags: [a, b]}',
-        "items": 'list[int[1,12]] = [1, 4]',
-        "optional": "Optional[str] = null",
-        "empty": 'str = ""',
-        "compatible": "float[0,4] = 4",
-        "literal": "str = ${input.topic}",
-    }).build(BuildContext(registry))
+def _yaml_variables(declarations: str, registry: TypeRegistry | None = None) -> list[Parameter]:
+    """Read `declarations` (indented `name: !T default` lines) as agent variables."""
+    return parameters_from_yaml(
+        "variables:\n" + declarations,
+        registry or TypeRegistry(),
+        field="variables",
+        require_default=True,
+    )
+
+
+def _reading(parameters: list[Parameter], registry=None) -> BuildContext:
+    """Return a build context whose variable reader returns `parameters`."""
+    return BuildContext(registry or {}, variable_declaration_reader=lambda _node, _raw: parameters)
+
+
+def test_agent_build_resolves_typed_variables_without_input_bindings():
+    registry = read_typedefs({
+        "Settings": {"limit": "int(1..12)", "tags": "list(str)"},
+        "Tone": "Literal(concise, detailed, technical)",
+    })
+    variables = _yaml_variables(
+        "  num_sentences: !int(1..12) 4\n"
+        "  temperature: !float(0..1) 0.4\n"
+        "  tone: !Tone concise\n"
+        '  instruction: !str "Summarize clearly"\n'
+        "  settings: !Settings {limit: 4, tags: [a, b]}\n"
+        "  items: !list(int(1..12)) [1, 4]\n"
+        "  optional: !Optional(str) null\n"
+        '  empty: !str ""\n'
+        "  compatible: !float(0..4) 4\n"
+        "  literal: !str ${input.topic}\n",
+        registry,
+    )
+    result = AgentDescriptor(id="writer", variables={variable.name: None for variable in variables}).build(
+        _reading(variables, registry)
+    )
     variables = result.node.variables
     assert all(type(variable) is Parameter for variable in variables)
     assert all(type(variable.contract) is ValueContract for variable in variables)
@@ -35,22 +59,22 @@ def test_source_free_agent_build_resolves_typed_variables_without_input_bindings
         "literal": "${input.topic}",
     }
     assert type(next(variable.default for variable in variables if variable.name == "compatible")) is int
-    assert all(list(variable.iter_origins()) == [] for variable in variables)
     assert result.node.params == [] and result.wiring == {}
     assert result.node.llm_config == {}
 
 
 @pytest.mark.parametrize("declaration", [
-    "int", "Optional[str]", "int =", "int = 4.5", 'int = "4"',
-    "int[1,12] = 13", "float[0,1] = 1.1", "Literal[a,b] = c",
-    "str = null", "int = true", "list[int] = [1, wrong]", {"field": "str"}, 4,
+    "!int", "!Optional(str)", "!int ''", "!int 4.5", '!int "4"',
+    "!int(1..12) 13", "!float(0..1) 1.1", "!AB c",
+    "!str null", "!int true", "!list(int) [1, wrong]", "{field: str}", "4",
 ])
 def test_agent_variables_reject_missing_empty_or_invalid_defaults(declaration):
+    registry = read_typedefs({"AB": "Literal(a, b)"})
     with pytest.raises(LoadError):
-        AgentDescriptor(id="writer", variables={"value": declaration}).build(BuildContext({}))
+        _yaml_variables(f"  value: {declaration}\n", registry)
 
 
-@pytest.mark.parametrize("variables", [None, [], "x", 4, {"": "int = 1"}, {1: "int = 1"}])
+@pytest.mark.parametrize("variables", [None, [], "x", 4, {"": "int"}, {1: "int"}])
 def test_agent_variables_reject_malformed_mappings_and_names(variables):
     with pytest.raises(LoadError):
         AgentDescriptor(id="writer", variables=variables).build(BuildContext({}))
@@ -63,13 +87,14 @@ def test_variable_reader_can_decline_a_source_free_declaration():
         calls.append((node_id, declarations))
         return None
 
-    declarations = {"count": "int[1,12] = 4"}
-    node = AgentDescriptor(id="writer", variables=declarations).build(
-        BuildContext({}, variable_declaration_reader=reader),
-    ).node
+    declarations = {"count": "int(1..12)"}
+    # Declining hands the declarations to the source-free reader, which takes a type only,
+    # so the variable has no default.
+    with pytest.raises(LoadError, match="variable 'count'"):
+        AgentDescriptor(id="writer", variables=declarations).build(
+            BuildContext({}, variable_declaration_reader=reader),
+        )
     assert calls == [("writer", declarations)]
-    assert node.variables[0].default == 4
-    assert list(node.variables[0].iter_origins()) == []
 
 
 @pytest.mark.parametrize("returned", [(), {}, [object()]])
@@ -84,14 +109,16 @@ def test_loaded_agent_prompt_can_name_inputs_and_variables_without_default_data_
     text = """\
 id: local-variables
 name: local-variables
+typedefs:
+  Tone: Literal(concise, detailed)
 nodes:
   writer:
     kind: agent
     input:
       topic: supplied
     variables:
-      tone: Literal[concise,detailed] = concise
-      instruction: str = ${missing.output}
+      tone: !Tone concise
+      instruction: !str ${missing.output}
     prompt: "${topic}: ${tone}, ${instruction}"
     output: str
 output: ${writer.output}
@@ -117,7 +144,7 @@ nodes:
     input:
       topic: supplied
     variables:
-      topic: str = fallback
+      topic: !str fallback
     prompt: ${topic}
     output: str
 output: ${writer.output}
@@ -128,11 +155,12 @@ output: ${writer.output}
     cursor = document.root.child("nodes").child("writer").child("variables").child("topic")
     assert caught.value.diagnostic.frames[-1].range == cursor.key_range
     with pytest.raises(LoadError, match="variable.*topic.*input"):
-        AgentDescriptor(id="writer", inputs={"topic": "supplied"},
-                        variables={"topic": "str = fallback"}).build(BuildContext({}))
+        AgentDescriptor(id="writer", inputs={"topic": "supplied"}, variables={"topic": None}).build(
+            _reading(_yaml_variables("  topic: !str fallback\n"))
+        )
 
 
-@pytest.mark.parametrize("declaration", ['int = "4"', "int[1,12] = 13", "str =", "Optional[str]"])
+@pytest.mark.parametrize("declaration", ['!int "4"', "!int(1..12) 13", "!str", "!Optional(str)"])
 def test_invalid_variable_default_selects_the_declaration_value(declaration):
     text = f"""\
 id: invalid-variable-default
@@ -141,7 +169,7 @@ nodes:
   writer:
     kind: agent
     variables:
-      value: '{declaration}'
+      value: {declaration}
     output: str
 output: ${{writer.output}}
 """
@@ -168,7 +196,7 @@ nodes:
   writer:
     kind: agent
     variables:
-      {key}: int = 4
+      {key}: !int 4
     output: str
 output: ${{writer.output}}
 """

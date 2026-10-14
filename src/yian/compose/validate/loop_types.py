@@ -29,6 +29,8 @@ from typing import Any, Optional
 
 from yian.compile.validation import types_compatible
 from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.helpers.isinstance_types import constructor_type_fn
+from yian.compose.helpers.tags import suggest_tag
 from yian.compose.helpers.output_contracts import (
     resolve_output_binding_contract,
 )
@@ -39,9 +41,11 @@ from yian.nodes.contracts import (
     OutputContract,
     PartialRecordContract,
     ValueContract,
+    ValueTemplate,
     binding_source,
 )
 from yian.typesys import canonical_type_label
+from yian.typesys.types import TypeRegistry
 from yian.typesys.values import Type
 
 
@@ -52,6 +56,7 @@ def check_loop_type_contract(
     flow_wiring: dict[str, dict[str, Any]],
     *,
     inline_loops: Collection[str] = (),
+    registry: TypeRegistry | None = None,
     diagnostics: LoadDiagnostics | None = None,
 ) -> None:
     """The TYPE-level half of a `loop`'s `'a -> 'a` contract (a loader post-build pass).
@@ -86,6 +91,9 @@ def check_loop_type_contract(
         flow_wiring (`dict[str, dict[str, Any]]`): Each node's `param -> source` bindings.
         inline_loops (`Collection[str]`, *optional*, defaults to `()`): The ids of loop
             nodes whose body is written inline.
+        registry (`TypeRegistry | None`, *optional*, defaults to `None`): The flow's
+            typedefs, used to spell a suggested seed tag by a typedef name and to type
+            a `T(...)` constructor seed as `T`.
         diagnostics (`LoadDiagnostics | None`, *optional*, defaults to `None`): Factory
             for located load errors.
 
@@ -94,6 +102,7 @@ def check_loop_type_contract(
             returns a field that cannot fit its generated parameter.
         `TypeError`: A producer, flow input, or loop contract has an unexpected type."""
     diagnostics = diagnostics or LoadDiagnostics()
+    type_fn = constructor_type_fn(registry) if registry is not None else None
     for label, contracts in (
         ("output producer", producers),
         ("flow input", flow_inputs),
@@ -161,6 +170,7 @@ def check_loop_type_contract(
                 src,
                 producers,
                 flow_inputs,
+                type_fn=type_fn,
             )
             if source_contract is None:
                 continue  # literal/coalesce/opaque seed source -> lenient
@@ -189,6 +199,7 @@ def check_loop_type_contract(
                 result,
                 carried_fields,
                 flow_wiring.get(nid, {}),
+                registry or {},
                 diagnostics,
             )
 
@@ -197,6 +208,7 @@ def _check_inline_returned_fields(
     result: BuildResult,
     carried_fields: dict[str, Type],
     wiring: dict[str, Any],
+    registry: TypeRegistry,
     diagnostics: LoadDiagnostics,
 ) -> None:
     """Require each returned field of an inline loop body to fit its generated parameter.
@@ -209,6 +221,7 @@ def _check_inline_returned_fields(
         carried_fields (`dict[str, Type]`): The statically proven carried field types;
             a returned field's entry is the body's own field type.
         wiring (`dict[str, Any]`): The loop's seed bindings keyed by carried field.
+        registry (`TypeRegistry`): The flow's typedefs, for the suggested seed tag.
         diagnostics (`LoadDiagnostics`): Factory for located load errors.
 
     Raises:
@@ -245,7 +258,12 @@ def _check_inline_returned_fields(
                 else f"typed {canonical_type_label(parameter.type)} from its seed"
             )
             + "; declare the seed's type: "
-            f"`{field_name}: {returned_label} = {_seed_text(binding_source(seed))}`",
+            + suggest_tag(
+                field_name,
+                body_field,
+                _seed_text(binding_source(seed)),
+                registry=registry,
+            ),
             range=result.field_ranges.get(("input", field_name))
             or result.field_ranges.get(("field", "inputs"))
             or result.node_range,
@@ -259,9 +277,23 @@ def _seed_text(value: Any) -> str:
         value (`Any`): The seed's binding value: template or directive text, or a literal.
 
     Returns:
-        `str`: Template and directive text as written; a literal in YAML flow style.
+        `str`: Template and directive text as written; a literal or a value template
+            in YAML flow style (a nested binding is shown by its value).
     """
     if isinstance(value, str) and ("${" in value or value.startswith("call(")):
         return value
+    if isinstance(value, ValueTemplate):
+        value = _untyped_tree(value.value)
     # JSON is YAML flow style, and a quoted string stays literal text.
     return json.dumps(value, default=str)
+
+
+def _untyped_tree(node: Any) -> Any:
+    """Return a template tree with each nested binding replaced by its value."""
+    if isinstance(node, Binding):
+        return _untyped_tree(node.source)
+    if type(node) is dict:
+        return {key: _untyped_tree(item) for key, item in node.items()}
+    if type(node) is list:
+        return [_untyped_tree(item) for item in node]
+    return node

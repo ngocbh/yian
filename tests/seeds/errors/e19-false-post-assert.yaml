@@ -2,7 +2,7 @@
 id: err-false-post-assert
 name: err_false_post_assert
 input:
-  topic: str
+  topic: !str
 nodes:
   calc:
     kind: code

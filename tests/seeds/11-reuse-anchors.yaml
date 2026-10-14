@@ -19,7 +19,7 @@ x-agent-defaults: &agent_defaults    # parked under x- so the strict schema igno
       temperature: 0.2
 
 input:
-  topic: str
+  topic: !str
 
 nodes:
   pro:

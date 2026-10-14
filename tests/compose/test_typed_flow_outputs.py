@@ -1,17 +1,16 @@
-"""Loading typed flow outputs: `output: Type = value` and typed record fields."""
+"""Loading typed flow outputs: `output: !Type value` and typed record fields."""
 
 from __future__ import annotations
 
-import pytest
 
 from yian.compile.manifest import flow_fingerprint
-from yian.compose.helpers.errors import LoadError
 from yian.compose.loader import load_flow
 from yian.nodes.contracts import PartialRecordContract, ValueContract
+from yian.run import run_flow
 from yian.typesys import TypeRegistry, type_for
 from yian.typesys.types import read_typedefs
 
-_REGISTRY = read_typedefs({"Size": {"qty": "int"}, "Decision": "Literal[go, stop]"})
+_REGISTRY = read_typedefs({"Size": {"qty": "int"}, "Decision": "Literal(go, stop)"})
 _SIZE = type_for("Size", _REGISTRY)
 
 
@@ -43,8 +42,8 @@ output: {output}
 """
 
 
-def test_typed_single_output_splits_and_carries_its_contract():
-    loaded = load_flow(_size_flow("Size = ${size.output}"))
+def test_typed_single_output_carries_its_contract():
+    loaded = load_flow(_size_flow("!Size ${size.output}"))
 
     output = _outputs(loaded.compiled)["result"]
     assert output.binding.source == "${size.output}"
@@ -63,7 +62,7 @@ def test_untyped_single_output_leaves_end_untyped():
 
 
 def test_typed_output_changes_the_flow_fingerprint():
-    typed = load_flow(_size_flow("Size = ${size.output}"))
+    typed = load_flow(_size_flow("!Size ${size.output}"))
     plain = load_flow(_size_flow("${size.output}"))
 
     assert flow_fingerprint(typed.compiled) != flow_fingerprint(plain.compiled)
@@ -75,7 +74,7 @@ def test_record_output_types_only_its_typed_fields():
 id: decided
 name: decided
 typedefs:
-  Decision: Literal[go, stop]
+  Decision: Literal(go, stop)
 nodes:
   d:
     kind: code
@@ -86,7 +85,7 @@ nodes:
     code: |
       return "fine"
 output:
-  decision: Decision = ${d.output}
+  decision: !Decision ${d.output}
   note: ${n.output}
   label: "a = b"
 """
@@ -120,8 +119,8 @@ nodes:
     code: |
       return 1
 output:
-  a: int = ${n.output}
-  b: str = ${n.output}
+  a: !int ${n.output}
+  b: !str ${n.output}
 """
     )
 
@@ -151,10 +150,10 @@ output:
     assert loaded.compiled.nodes["__end__"].output_contract is None
 
 
-def test_plain_output_whose_left_side_is_not_a_type_fails_at_its_line():
+def test_plain_output_whose_left_side_is_not_a_type_is_text():
     text = """
-id: bad
-name: bad
+id: plain
+name: plain
 nodes:
   n:
     kind: code
@@ -162,22 +161,16 @@ nodes:
       return 1
 output: a = b
 """
-    with pytest.raises(LoadError) as info:
-        load_flow(text)
+    result = run_flow(load_flow(text), {})
 
-    assert str(info.value.diagnostic.message).startswith(
-        "`a` in `output: a = b` is not a type"
-    )
-    frames = info.value.diagnostic.frames
-    assert frames
-    line = text.splitlines().index("output: a = b") + 1
-    assert frames[0].range.start_line == line
+    assert result.status == "succeeded", result.failure
+    assert result.output == "a = b"
 
 
-def test_record_output_field_whose_left_side_is_not_a_type_names_the_field():
+def test_record_output_field_whose_left_side_is_not_a_type_is_text():
     text = """
-id: bad
-name: bad
+id: plain
+name: plain
 nodes:
   n:
     kind: code
@@ -186,14 +179,10 @@ nodes:
 output:
   note: a = b
 """
-    with pytest.raises(LoadError) as info:
-        load_flow(text)
+    result = run_flow(load_flow(text), {})
 
-    assert str(info.value.diagnostic.message).startswith(
-        "`a` in `note: a = b` is not a type"
-    )
-    line = text.splitlines().index("  note: a = b") + 1
-    assert info.value.diagnostic.frames[0].range.start_line == line
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"note": "a = b"}
 
 
 def test_compact_flow_output_stays_the_node_output_type():
@@ -227,7 +216,7 @@ typedefs:
 defs:
   sized:
     input:
-      n: int
+      n: !int
     nodes:
       size:
         kind: code
@@ -255,21 +244,21 @@ output:
 
 
 def test_call_parent_sees_the_child_declared_output_type():
-    loaded = load_flow(_CHILD_FLOW.format(child_output="Size = ${size.output}"))
+    loaded = load_flow(_CHILD_FLOW.format(child_output="!Size ${size.output}"))
 
     assert loaded.compiled.nodes["use"].output_contract.type == _SIZE
 
 
 def test_map_parent_sees_a_list_of_the_child_declared_output_type():
-    loaded = load_flow(_CHILD_FLOW.format(child_output="Size = ${size.output}"))
+    loaded = load_flow(_CHILD_FLOW.format(child_output="!Size ${size.output}"))
 
     assert loaded.compiled.nodes["each"].output_contract.type == type_for(
-        "list[Size]", _REGISTRY
+        "list(Size)", _REGISTRY
     )
 
 
 def test_call_parent_sees_a_partial_record_for_a_partly_typed_child():
-    child_output = "\n      size: Size = ${size.output}\n      raw: ${size.output}"
+    child_output = "\n      size: !Size ${size.output}\n      raw: ${size.output}"
     loaded = load_flow(_CHILD_FLOW.format(child_output=child_output))
 
     contract = loaded.compiled.nodes["use"].output_contract
@@ -285,7 +274,7 @@ def test_inline_call_body_output_field_carries_its_declared_type():
 id: inline_call
 name: inline_call
 input:
-  n: int
+  n: !int
 nodes:
   wrapper:
     kind: call
@@ -299,7 +288,7 @@ nodes:
         code: |
           return inputs["n"]
     output:
-      qty: int = ${echo.output}
+      qty: !int ${echo.output}
 output: ${wrapper.output}
 """
     )
@@ -338,7 +327,7 @@ output: ${{loop.output}}
 
 
 def test_inline_loop_body_output_field_types_the_carried_record():
-    typed = load_flow(_loop_flow("int = ${bump.output}"))
+    typed = load_flow(_loop_flow("!int ${bump.output}"))
     plain = load_flow(_loop_flow("${bump.output}"))
 
     contract = typed.compiled.nodes["loop"].output_contract

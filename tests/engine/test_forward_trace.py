@@ -90,7 +90,8 @@ def test_accepted_backward_inventories_and_layout_replay_without_recapturing(mon
 
     flow = load_flow("""id: captured_layout
 name: captured_layout
-input: {topic: 'str = reefs'}
+input:
+  topic: !str reefs
 nodes:
   work:
     kind: code
@@ -180,18 +181,21 @@ name: captured_models
 llm_config: {provider: ollama, model: root, ollama: {options: {temperature: 0.2}}}
 defs:
   leaf:
-    input: {topic: str}
+    input:
+      topic: !str
     nodes:
       writer:
         kind: agent
         input: {topic: '${input.topic}'}
         prompt: '${topic}: ${instruction}'
-        variables: {instruction: 'str = clearly'}
+        variables:
+          instruction: !str clearly
         output: {topic: str}
     output: ${writer.output}
   repeat_left:
     llm_config: {model: left}
-    input: {topic: str}
+    input:
+      topic: !str
     nodes:
       twice:
         kind: loop
@@ -201,7 +205,8 @@ defs:
     output: ${twice.output}
   repeat_right:
     llm_config: {model: right}
-    input: {topic: str}
+    input:
+      topic: !str
     nodes:
       twice:
         kind: loop
@@ -1435,10 +1440,12 @@ def _nested_growth_flow(kind):
     return load_flow(f"""
 id: nested-seeds
 name: nested-seeds
-input: {{n: int}}
+input:
+  n: !int
 defs:
   leaf:
-    input: {{n: int}}
+    input:
+      n: !int
     nodes:
       work:
         kind: code
@@ -1447,7 +1454,8 @@ defs:
         output: {{n: int}}
     output: ${{work.output}}
   body:
-    input: {{n: int}}
+    input:
+      n: !int
     nodes:
       invoke:
         kind: call
@@ -1455,7 +1463,8 @@ defs:
         input: {{n: '${{input.n}}'}}
     output: ${{invoke.output}}
   repeated:
-    input: {{n: int}}
+    input:
+      n: !int
     nodes:
       repeat:
         kind: loop
@@ -1770,10 +1779,12 @@ def test_call_seed_routes_survive_materialized_values():
     flow = load_flow("""
 id: seed-call
 name: seed-call
-input: {n: int}
+input:
+  n: !int
 defs:
   child:
-    input: {n: int}
+    input:
+      n: !int
     nodes:
       work:
         kind: code
@@ -1891,10 +1902,12 @@ def test_loop_carried_routes_survive_live_pruning(times):
     flow = load_flow(f"""
 id: seed-loop
 name: seed-loop
-input: {{n: int}}
+input:
+  n: !int
 defs:
   child:
-    input: {{n: int}}
+    input:
+      n: !int
     nodes:
       work:
         kind: code
@@ -1964,7 +1977,8 @@ id: trace-growth
 name: trace-growth
 defs:
   child:
-    input: {{n: int}}
+    input:
+      n: !int
     nodes:
       work:
         kind: code

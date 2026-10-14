@@ -66,11 +66,11 @@ _MAP_FLOW = """id: memory-map
 name: memory_map
 long_term_memory: test
 input:
-  values: list[int]
+  values: !list(int)
 defs:
   increment:
     input:
-      value: int
+      value: !int
     nodes: {}
     output: ${input.value + 1}
 nodes:

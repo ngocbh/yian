@@ -161,7 +161,7 @@ _SUCCESS_FLOW = """
 id: lifecycle-success
 name: lifecycle_success
 input:
-  n: int
+  n: !int
 nodes:
   twice:
     kind: code
@@ -176,8 +176,8 @@ _NULLABLE_LIST_FLOW = """
 id: lifecycle_nullable_list
 name: lifecycle_nullable_list
 input:
-  items: list[Optional[int]]
-output: list[Optional[int]]
+  items: !list(Optional(int))
+output: list(Optional(int))
 kind: code
 code: |
   return inputs["items"]
@@ -198,7 +198,7 @@ _LOCATED_FAILURE_FLOW = """
 id: lifecycle-located-failure
 name: lifecycle_located_failure
 input:
-  window: int
+  window: !int
 nodes:
   echo:
     kind: code
@@ -213,7 +213,7 @@ _TERMINAL_SKIP_FLOW = """
 id: lifecycle-terminal-skip
 name: lifecycle_terminal_skip
 input:
-  score: float
+  score: !float
 nodes:
   gate:
     kind: case
@@ -262,7 +262,7 @@ _PARALLEL_FLOW = """
 id: lifecycle-parallel
 name: lifecycle_parallel
 input:
-  n: int
+  n: !int
 nodes:
   a:
     kind: code
@@ -292,7 +292,7 @@ _AGENT_FLOW = """
 id: lifecycle-agent
 name: lifecycle_agent
 input:
-  topic: str
+  topic: !str
 nodes:
   answer:
     kind: agent

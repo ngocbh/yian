@@ -13,12 +13,12 @@ name: inline_call
 description: Enrich one topic via an INLINE call expression (sugar over a call node).
 
 input:
-  topic: str
+  topic: !str
 
 defs:
   enrich:                      # an in-file callable — a sub-flow (as in seed 20)
     input:
-      topic: str
+      topic: !str
     nodes:
       fetch:
         kind: code
@@ -26,8 +26,8 @@ defs:
         input:
           topic: ${input.topic}
         output:
-          values: list[float]
-          news: list[str]
+          values: list(float)
+          news: list(str)
     output: ${fetch.output.news}     # the callee's codomain (the headlines)
 
 nodes:
@@ -35,7 +35,7 @@ nodes:
     kind: agent
     input:
       # INLINE call directive: desugars to a synth `call` node (call: enrich) whose value
-      # (list[str] of headlines) this input then binds — equivalent to declaring a
+      # (list(str) of headlines) this input then binds — equivalent to declaring a
       # separate `kind: call` node and referencing ${<that node>.output}.
       news: call(enrich, topic=${input.topic})
     output: str

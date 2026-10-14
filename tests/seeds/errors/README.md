@@ -47,7 +47,7 @@ just what can.
 | `e42-removed-model-kind.yaml` | `kind: model`, a removed kind; the error points at `kind: tool` | removed-kind pointer |
 | `e11-field-not-allowed.yaml` | a flat field illegal for the kind (`prompt` on a `code`) | per-kind body shape |
 | `e12-missing-required-field.yaml` | a kind-required field omitted (`code` w/o `code:`) | per-kind body shape |
-| `e13-bad-type-expression.yaml` | a malformed type expression (`output: list[`) | the `ast` type parser |
+| `e13-bad-type-expression.yaml` | a malformed type expression (`output: list(`) | the type parser |
 | `e14-unknown-system-ambient.yaml` | `${system.bogus}` — only `today`/`now`/`run_id` are valid | strict `system` ambients |
 | `e15-prompt-undeclared-input.yaml` | an AGENT prompt references a non-declared input | prompt input validation |
 | `e16-bad-typedef-name.yaml` | a `typedefs:` name shadows a typing constructor | `read_typedefs` rules |

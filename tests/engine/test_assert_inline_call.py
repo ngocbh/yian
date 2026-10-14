@@ -14,7 +14,7 @@ _DBL_DEF = """
 defs:
   dbl:
     input:
-      n: int
+      n: !int
     nodes:
       x:
         kind: code
@@ -29,7 +29,7 @@ _FLOW = f"""
 id: ai
 name: ai
 input:
-  v: int
+  v: !int
 {_DBL_DEF}
 nodes:
   main:

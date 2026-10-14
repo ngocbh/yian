@@ -31,12 +31,13 @@ from lark import Token, Tree
 from yian.compile.validation import types_compatible
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.output_contracts import (
+    TypeFn,
     direct_reference_parts,
     project_output_contract,
     reference_contract,
     resolve_output_binding_contract,
 )
-from yian.compose.helpers.typed_bindings import yaml_quoted
+from yian.compose.helpers.tags import yaml_quoted
 from yian.compose.helpers.yaml_words import former_boolean_fix
 from yian.compose.nodes.base import BuildResult
 from yian.compose.validate.narrowing import Narrowing
@@ -64,6 +65,7 @@ from yian.nodes.contracts import (
     PartialRecordContract,
     ValueContract,
     binding_source,
+    iter_source_strings,
 )
 from yian.typesys import Type, TypeCheckError, build_value_as, canonical_type_label
 
@@ -75,6 +77,7 @@ def check_call_map_types(
     flow_wiring: dict[str, dict[str, Any]],
     *,
     narrowing: Narrowing | None = None,
+    type_fn: TypeFn | None = None,
     diagnostics: LoadDiagnostics | None = None,
 ) -> None:
     """Cross-flow type check for every `call`/`map` binding (a loader post-build pass).
@@ -90,7 +93,8 @@ def check_call_map_types(
     params) so a mis-named binding still surfaces here when its child decl is absent
     rather than being silently skipped. A LOOP's untyped seeds that read no reference
     are checked the same way against its body's inputs; its typed and reference seeds
-    are not checked against the body's inputs."""
+    are not checked against the body's inputs. ``type_fn`` types a `T(...)` constructor
+    source as `T`."""
     diagnostics = diagnostics or LoadDiagnostics()
     for label, contracts in (
         ("output producer", producers),
@@ -133,6 +137,7 @@ def check_call_map_types(
             node_inputs,
             item_contract(result, wiring, node_producers, node_inputs),
             _literal_items(result, wiring),
+            type_fn,
         )
         for param, src in wiring.items():
             decl = child_decls.get(param)
@@ -163,12 +168,14 @@ class _Scope:
             over a proven list, else `None`.
         items (`tuple[Any, ...] | None`): The elements of a MAP's literal `over:`
             list, which `${item}` reads by value, else `None`.
+        type_fn (`TypeFn | None`): Types a `T(...)` constructor source as `T`.
     """
 
     producers: dict[str, OutputContract]
     flow_inputs: dict[str, ValueContract]
     item: ValueContract | None
     items: tuple[Any, ...] | None
+    type_fn: TypeFn | None = None
 
 
 def _literal_items(result: BuildResult, wiring: dict[str, Any]) -> tuple[Any, ...] | None:
@@ -233,7 +240,9 @@ def _binding_mismatch(src: Any, decl: Parameter, scope: _Scope) -> str | None:
     # (apply_defaults fills only OMITTED inputs, never a bound null), so it doesn't
     # cover a null. `not binding_co_skips` is exactly that non-null guarantee.
     return _contract_mismatch(
-        resolve_output_binding_contract(src, scope.producers, scope.flow_inputs),
+        resolve_output_binding_contract(
+            src, scope.producers, scope.flow_inputs, type_fn=scope.type_fn
+        ),
         child_type,
         non_null=not binding_co_skips(source),
     )
@@ -253,14 +262,14 @@ def _lone_span(source: Any) -> Tree | Token | None:
 
 
 def _constant_seed(src: Any) -> bool:
-    """Return whether a binding is untyped and reads no reference."""
+    """Return whether a binding is untyped and reads no reference.
+
+    Each string nested in a value template counts as a read of its own.
+    """
     if isinstance(src, Binding) and src.contract is not None:
         return False
-    source = binding_source(src)
-    if not isinstance(source, str):
-        return True
     try:
-        return not expr_refs_of(source)
+        return not any(expr_refs_of(text) for _, text in iter_source_strings(src))
     except ExpressionError:
         return False  # malformed text is reported by reference validation
 

@@ -42,11 +42,11 @@ def _call_flow(declared: str, binding: str) -> str:
 id: complex
 name: complex
 input:
-  x: float
+  x: !float
 defs:
   body:
     input:
-      y: {declared}
+      y: !{declared}
     nodes:
       inner:
         kind: code
@@ -151,7 +151,7 @@ nodes:
     kind: map
     over: "${[1.0, (0 - 8) ** 0.5]}"
     input:
-      y: float = ${item}
+      y: !float ${item}
     nodes:
       work:
         kind: code
@@ -177,7 +177,7 @@ def test_a_complex_run_input_is_rejected_before_the_run_starts(tmp_path):
 id: complex
 name: complex
 input:
-  x: object
+  x: !object
 nodes:
   c:
     kind: code

@@ -58,13 +58,13 @@ _LIST_FLOW = """\
 id: big_list
 name: big_list
 input:
-  xs: list[int]
+  xs: !list(int)
 nodes:
   echo:
     kind: code
     input:
       xs: ${input.xs}
-    output: list[int]
+    output: list(int)
     code: |
       return inputs["xs"]
 output: ${echo.output}
@@ -74,7 +74,7 @@ _INT_FLOW = """\
 id: big_int
 name: big_int
 input:
-  n: int
+  n: !int
 nodes:
   echo:
     kind: code
@@ -210,11 +210,11 @@ def test_chat_prints_a_big_int_reply(tmp_path: Path) -> None:
         "id: big_chat\n"
         "name: big_chat\n"
         "input:\n"
-        "  opening: str\n"
+        "  opening: !str\n"
         "nodes:\n"
         "  reply:\n"
         "    kind: code\n"
-        "    output: list[int]\n"
+        "    output: list(int)\n"
         "    code: |\n"
         # The same expression as BIG, so the reply spells DIGITS.
         "      return [10**4999 + 12345]\n"

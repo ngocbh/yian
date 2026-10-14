@@ -167,7 +167,7 @@ def test_prompt_default_fires_in_a_running_flow():
 id: p
 name: p
 input:
-  note: Optional[str]
+  note: !Optional(str)
 nodes:
   ask:
     kind: human_input
@@ -232,7 +232,7 @@ _FLOW = """
 id: pb
 name: pb
 input:
-  topic: str
+  topic: !str
 nodes:
   brief:
     kind: agent

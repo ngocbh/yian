@@ -12,6 +12,8 @@ resolution. Runtime receives only the resolved ``Type`` values.
 from __future__ import annotations
 
 import ast
+import json
+import re
 from dataclasses import dataclass, replace
 from typing import Union
 
@@ -47,12 +49,12 @@ class RefExpr:
 
 @dataclass(frozen=True)
 class OptionalExpr:
-    inner: "TypeExpr"  # Optional[X] — the resolved Type is X's, marked nullable
+    inner: "TypeExpr"  # Optional(X) — the resolved Type is X's, marked nullable
 
 
 @dataclass(frozen=True)
 class EnumExpr:
-    tags: tuple  # an inline Literal[...] enum (a tag-only variant)
+    tags: tuple  # an inline Literal(...) enum (a tag-only variant)
 
 
 @dataclass(frozen=True)
@@ -63,7 +65,7 @@ class DictExpr:
 
 @dataclass(frozen=True)
 class UnionExpr:
-    members: tuple  # the authored `Union[...]` members, in authored order
+    members: tuple  # the authored `Union(...)` members, in authored order
 
 
 TypeExpr = Union[ScalarExpr, ListExpr, RefExpr, OptionalExpr, EnumExpr, DictExpr, UnionExpr]
@@ -81,19 +83,20 @@ BUILTIN_TYPE_NAMES = frozenset(_SCALAR_KEYWORDS | _TYPING_CONSTRUCTORS | {"any"}
 
 
 def parse_type(s: str) -> TypeExpr:
-    """Parse a type reference string into a `TypeExpr` AST via Python `ast` (eval mode).
+    """Parse an authored type expression into a `TypeExpr` AST.
 
-    Accepts the one Python-surface vocabulary (`str`/`int`/`float`/`bool`/`Any`/`date`/
-    `datetime`/`object`/`file`/`None`, `int[min,max]`/`float[min,max]`,
-    `list[X]`/`Optional[X]`/`dict[K,V]`/`Literal[...]`/`Union[A, B, ...]`,
-    `topics`). A bare name that is neither a scalar nor a constructor is a registry
-    reference. The legacy engine spelling (`string`/`integer`/`number`/`boolean`) no
-    longer parses (it resolves as an unknown registry RefExpr). `Union[...]` members are
-    only checked to be records when the type is resolved.
+    The vocabulary is `str`/`int`/`float`/`bool`/`Any`/`date`/`datetime`/`object`/
+    `file`/`None`, inclusive ranges `int(1..12)`/`float(0.0..1.0)`, and the
+    constructors `list(X)`/`Optional(X)`/`dict(K, V)`/`Literal(a, "b c")`/
+    `Union(A, B, ...)`, plus the `topics` alias. A bare name that is neither a
+    scalar nor a constructor is a registry reference. `Union(...)` members are only
+    checked to be records when the type is resolved. Text in the older bracket
+    spelling (`Optional[str]`, `int[1, 12]`) is an error that shows the parenthesized
+    spelling.
 
     Args:
         s (`str`):
-            The authored type expression, e.g. `"list[Signal]"` or `"Optional[date]"`.
+            The authored type expression, e.g. `"list(Signal)"` or `"Optional(date)"`.
 
     Returns:
         `TypeExpr`:
@@ -102,14 +105,354 @@ def parse_type(s: str) -> TypeExpr:
 
     Raises:
         `TypeCheckError`:
-            The string is not a valid expression (including a lone Unicode surrogate or an
-            empty `Literal` member), uses an unknown constructor, spells a
-            union as `A | B` (the hint suggests `Union[A, B]`), or lists `None` as a
-            `Union[...]` member (the hint suggests `Optional[Union[...]]`).
+            The string is not a valid expression (including unbalanced parentheses, a
+            lone Unicode surrogate, or an empty `Literal` member), uses an unknown
+            constructor, gives a numeric range without both ends or as two arguments,
+            spells a union as `A | B` (the hint suggests `Union(A, B)`), or lists `None`
+            as a `Union(...)` member (the hint suggests `Optional(Union(...))`), or holds
+            a `[` outside a quoted string (the message shows the parenthesized spelling).
 
     Example:
-        `parse_type("Union[Buy, Sell]")` gives
+        `parse_type("Union(Buy, Sell)")` gives
         `UnionExpr((RefExpr("Buy"), RefExpr("Sell")))`.
+    """
+    s = s.strip()
+    if _has_unquoted_bracket(s):
+        raise _bracket_error(s)
+    if not encodes_as_utf8(s):
+        raise TypeCheckError(
+            f"type expression {s!r} contains a Unicode surrogate (types must be valid UTF-8 text)"
+        )
+    return _TypeParser(s).parse()
+
+
+def _bracket_error(s: str) -> TypeCheckError:
+    """Explain that types use parentheses, showing `s` in that spelling when it parses."""
+    try:
+        spelled = legacy_respelling(s)
+    except TypeCheckError as exc:
+        return TypeCheckError(f"types use parentheses, not brackets ({exc})")
+    return TypeCheckError(f"types use parentheses: `{spelled}`")
+
+
+def legacy_respelling(s: str) -> str:
+    """Spell bracket-style type text in the parenthesized spelling, for error messages.
+
+    A `dict[K, V]` becomes `object`, the lenient mapping it stood for.
+
+    Args:
+        s (`str`): Type text in the older bracket spelling, e.g. `"Optional[str]"`.
+
+    Returns:
+        `str`: The same type in the parenthesized spelling, e.g. `"Optional(str)"`.
+
+    Raises:
+        `TypeCheckError`: `s` is not a type in the bracket spelling either.
+    """
+    return format_type_expr(_dict_as_object(_parse_legacy_type(s)))
+
+
+def _dict_as_object(expr: TypeExpr) -> TypeExpr:
+    """Replace every `dict(K, V)` in a parsed type with `object`."""
+    if isinstance(expr, DictExpr):
+        return ScalarExpr("object")
+    if isinstance(expr, ListExpr):
+        return ListExpr(_dict_as_object(expr.element))
+    if isinstance(expr, OptionalExpr):
+        return OptionalExpr(_dict_as_object(expr.inner))
+    if isinstance(expr, UnionExpr):
+        return UnionExpr(tuple(_dict_as_object(member) for member in expr.members))
+    return expr
+
+
+def _has_unquoted_bracket(s: str) -> bool:
+    """Whether `s` holds a `[` outside quoted strings, i.e. is in the bracket spelling."""
+    quote = None
+    escaped = False
+    for char in s:
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+        elif char in "\"'":
+            quote = char
+        elif char == "[":
+            return True
+    return False
+
+
+# NUMBER needs a digit after a dot, so `0..1` reads as `0`, `..`, `1`. Its digits are
+# ASCII only, so `int(١..٣)` is not a range.
+_TYPE_TOKEN = re.compile(
+    r"""\s*(?:
+        (?P<number>[+-]?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)
+      | (?P<name>[^\W\d]\w*)
+      | (?P<string>"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')
+      | (?P<punct>\.\.|[(),|])
+    )""",
+    re.VERBOSE,
+)
+
+_BUILTIN_CONSTANTS = ("True", "False", "None")
+
+# Deeper types are rejected before they can exhaust Python's recursion limit.
+_MAX_TYPE_DEPTH = 100
+
+
+class _TypeParser:
+    """Recursive-descent parser for the parenthesized type grammar."""
+
+    def __init__(self, src: str) -> None:
+        self.src = src
+        self.tokens: list[tuple[str, str]] = []
+        pos = 0
+        while pos < len(src):
+            match = _TYPE_TOKEN.match(src, pos)
+            if match is None:
+                # An unclosed quote often means a `{...}` mapping's comma split the type.
+                raise self._unbalanced() if self._opens_unclosed() else self._malformed()
+            kind = match.lastgroup
+            self.tokens.append((kind, match.group(kind)))
+            pos = match.end()
+        self.index = 0
+        self.depth = 0
+
+    def parse(self) -> TypeExpr:
+        t = self._type()
+        if self._peek() == ")":
+            raise self._unbalanced()
+        if self._peek() is not None:
+            raise self._malformed()
+        return t
+
+    def _peek(self) -> str | None:
+        """The next token's text, or `None` at the end."""
+        return self.tokens[self.index][1] if self.index < len(self.tokens) else None
+
+    def _peek_kind(self) -> str | None:
+        return self.tokens[self.index][0] if self.index < len(self.tokens) else None
+
+    def _next(self) -> tuple[str, str]:
+        if self.index >= len(self.tokens):
+            raise self._ended()
+        token = self.tokens[self.index]
+        self.index += 1
+        return token
+
+    def _expect(self, text: str) -> None:
+        if self._peek() is None and text == ")":
+            raise self._unbalanced()
+        if self._next()[1] != text:
+            raise self._malformed()
+
+    def _malformed(self, detail: str = "") -> TypeCheckError:
+        suffix = f": {detail}" if detail else ""
+        return TypeCheckError(f"malformed type expression {self.src!r}{suffix}")
+
+    def _opens_unclosed(self) -> bool:
+        """Whether the text opens more parentheses than it closes."""
+        return self.src.count("(") > self.src.count(")")
+
+    def _ended(self) -> TypeCheckError:
+        """The error for text that ends before the type does."""
+        return self._unbalanced() if self._opens_unclosed() else self._malformed()
+
+    def _trailing_comma(self, ctor: str) -> None:
+        """Reject a `,` directly before `)`."""
+        if self._peek() == ")":
+            raise self._malformed(f"remove the trailing comma in {ctor}(...)")
+
+    def _unbalanced(self) -> TypeCheckError:
+        return self._malformed(
+            "unbalanced parentheses — if this type sits inside a `{...}` mapping, its comma "
+            "split it; quote it or use block style"
+        )
+
+    def _type(self) -> TypeExpr:
+        t = self._primary()
+        if self._peek() == "|":
+            operands = [t]
+            while self._peek() == "|":
+                self._next()
+                operands.append(self._primary())
+            names = ", ".join(format_type_expr(operand) for operand in operands)
+            raise self._malformed(f"use Union({names}) (| is not a type operator)")
+        return t
+
+    def _primary(self) -> TypeExpr:
+        kind, name = self._next()
+        # `None` is the null type; `True` and `False` are no types.
+        if kind != "name" or (name in _BUILTIN_CONSTANTS and name != "None"):
+            raise self._malformed()
+        if self._peek() != "(":
+            return _named_type(name)
+        self._next()
+        self.depth += 1
+        if self.depth > _MAX_TYPE_DEPTH:
+            raise TypeCheckError(
+                f"type nested too deeply in {self.src[:40]!r}... "
+                f"(at most {_MAX_TYPE_DEPTH} levels)"
+            )
+        t = self._constructed(name)
+        self.depth -= 1
+        return t
+
+    def _constructed(self, name: str) -> TypeExpr:
+        """Read the arguments of constructor `name` after its `(`."""
+        if name in ("int", "float"):
+            return self._range(name)
+        if name in ("list", "List"):
+            return ListExpr(self._one_type(name))
+        if name == "Optional":
+            return OptionalExpr(self._one_type(name))
+        if name == "Literal":
+            return EnumExpr(self._literal_tags())
+        if name in ("dict", "Dict"):
+            self._args(name, 2)
+            return DictExpr()
+        if name == "Union":
+            members = tuple(self._args(name, None))
+            if ScalarExpr("None") in members:
+                raise TypeCheckError(
+                    f"None is not a union member in {self.src!r}; use Optional(Union(...))"
+                )
+            return UnionExpr(members)
+        raise TypeCheckError(f"unknown type constructor {name!r} in {self.src!r}")
+
+    def _one_type(self, ctor: str) -> TypeExpr:
+        (t,) = self._args(ctor, 1)
+        return t
+
+    def _args(self, ctor: str, count: int | None) -> list[TypeExpr]:
+        """Read comma-separated types up to `)`: exactly `count`, or one or more."""
+        if self._peek() == ")":
+            raise self._malformed(f"{ctor}(...) needs a type")
+        args = [self._type()]
+        while self._peek() == ",":
+            self._next()
+            self._trailing_comma(ctor)
+            args.append(self._type())
+        self._expect(")")
+        if count is not None and len(args) != count:
+            wanted = "one type" if count == 1 else f"{count} types"
+            raise self._malformed(f"{ctor}(...) takes {wanted}")
+        return args
+
+    def _range(self, ctor: str) -> ScalarExpr:
+        """Read `lo..hi)` after `int(` or `float(`: an inclusive range with both ends."""
+        example = "int(1..12)" if ctor == "int" else "float(0.0..1.0)"
+        low = self._endpoint()
+        if self._peek() == ",":
+            self._next()
+            high = self._endpoint()
+            if low is not None and high is not None and _valid_bounds(ctor, (low, high)):
+                example = f"{ctor}({low}..{high})"
+            raise self._malformed(f"write a range: {example}")
+        if self._peek() == "..":
+            self._next()
+            high = self._endpoint()
+        else:
+            high = None
+        if self._peek() is None:
+            raise self._ended()
+        if self._peek() in (",", ".."):
+            raise self._malformed(f"a range takes one lo..hi, e.g. {example}")
+        if self._peek() != ")":
+            raise TypeCheckError(f"numeric bounds require literal endpoints in {self.src!r}")
+        if low is None or high is None:
+            raise self._malformed(f"a numeric range needs both ends, e.g. {example}")
+        self._expect(")")
+        bounds = (low, high)
+        try:
+            _validate_numeric_bounds(_SCALAR_SEG[ctor], bounds)
+        except (TypeError, ValueError) as exc:
+            raise TypeCheckError(f"invalid bounds in {self.src!r}: {exc}") from exc
+        return ScalarExpr(ctor, bounds=bounds)
+
+    def _endpoint(self) -> int | float | None:
+        """Read a numeric endpoint, or return `None` when the next token is not a number."""
+        if self._peek_kind() != "number":
+            return None
+        text = self._next()[1]
+        if re.fullmatch(r"[+-]?[0-9]+", text):
+            return int(text)
+        return float(text)
+
+    def _literal_tags(self) -> tuple:
+        tags = []
+        while True:
+            kind, text = self._next()
+            if kind == "string":
+                tags.append(_literal_string(text, self.src))
+            elif kind == "name" and text not in _BUILTIN_CONSTANTS and self._peek() != "(":
+                tags.append(text)
+            elif text == ")" and not tags:
+                raise self._malformed("Literal(...) needs a member")
+            else:
+                raise TypeCheckError(
+                    f"invalid Literal member in {self.src!r} (use names or quoted strings)"
+                )
+            if self._peek() == ",":
+                self._next()
+                self._trailing_comma("Literal")
+                continue
+            self._expect(")")
+            return tuple(tags)
+
+
+def _valid_bounds(ctor: str, bounds: tuple) -> bool:
+    """Whether `bounds` make a valid range for `ctor` (`int` or `float`)."""
+    try:
+        _validate_numeric_bounds(_SCALAR_SEG[ctor], bounds)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _named_type(name: str) -> TypeExpr:
+    """Read a bare type name: a scalar keyword, an alias, or a registry reference."""
+    if name in ("Any", "any"):
+        return ScalarExpr("object")
+    if name == "topics":
+        return ListExpr(ScalarExpr("str"))  # domain alias (to be retired)
+    if name == "none":
+        return ScalarExpr("None")  # tolerate the historical lowercase token
+    if name in _SCALAR_KEYWORDS:
+        return ScalarExpr(name)
+    return RefExpr(name)
+
+
+def _literal_string(text: str, src: str) -> str:
+    """Decode one quoted `Literal` member and check it is a usable tag."""
+    try:
+        value = ast.literal_eval(text)
+    except (SyntaxError, ValueError) as exc:
+        raise TypeCheckError(f"malformed type expression {src!r}: {exc}") from exc
+    _check_literal_tag(value, src)
+    return value
+
+
+def _check_literal_tag(value: str, src: str) -> None:
+    """Reject an empty quoted `Literal` member or one holding a Unicode surrogate."""
+    if not value:
+        raise TypeCheckError(
+            f"empty Literal member in {src!r} (tags must be non-empty names or quoted strings)"
+        )
+    if not encodes_as_utf8(value):
+        # An escape such as "\uD800" in the quoted member decodes to a lone surrogate.
+        raise TypeCheckError(
+            f"Literal member {value!r} in {src!r} contains a Unicode surrogate "
+            f"(tags must be valid UTF-8 text)"
+        )
+
+
+def _parse_legacy_type(s: str) -> TypeExpr:
+    """Parse the older bracket spelling (`Optional[str]`, `int[1, 12]`) via Python `ast`.
+
+    Only migration errors use it, to show the parenthesized spelling.
     """
     s = s.strip()
     try:
@@ -121,24 +464,21 @@ def parse_type(s: str) -> TypeExpr:
         raise TypeCheckError(
             f"type expression {s!r} contains a Unicode surrogate (types must be valid UTF-8 text)"
         ) from exc
-    return _type_from_ast(node, s)
+    except (RecursionError, MemoryError) as exc:
+        raise TypeCheckError(f"type nested too deeply in {s[:40]!r}...") from exc
+    try:
+        return _type_from_ast(node, s)
+    except RecursionError as exc:
+        raise TypeCheckError(f"type nested too deeply in {s[:40]!r}...") from exc
 
 
 def _type_from_ast(node: "ast.expr", src: str) -> TypeExpr:
+    """Convert one node of a bracket-spelled type, parsed by `ast`, into a `TypeExpr`."""
     # `None` arrives from `ast` as a constant, not a Name — it never reaches the Name arm.
     if isinstance(node, ast.Constant) and node.value is None:
         return ScalarExpr("None")
     if isinstance(node, ast.Name):
-        nm = node.id
-        if nm in ("Any", "any"):
-            return ScalarExpr("object")
-        if nm == "topics":
-            return ListExpr(ScalarExpr("str"))  # domain alias (to be retired)
-        if nm == "none":
-            return ScalarExpr("None")  # tolerate the historical lowercase token
-        if nm in _SCALAR_KEYWORDS:
-            return ScalarExpr(nm)
-        return RefExpr(nm)
+        return _named_type(node.id)
     if isinstance(node, ast.Subscript):
         if not isinstance(node.value, ast.Name):
             raise TypeCheckError(f"malformed type expression {src!r}")
@@ -146,7 +486,11 @@ def _type_from_ast(node: "ast.expr", src: str) -> TypeExpr:
         sl = node.slice
         if ctor in ("int", "float"):
             if not isinstance(sl, ast.Tuple) or len(sl.elts) != 2:
-                raise TypeCheckError(f"numeric bounds require two endpoints in {src!r}")
+                example = "int(1..12)" if ctor == "int" else "float(0.0..1.0)"
+                raise TypeCheckError(
+                    f"malformed type expression {src!r}: a numeric range needs both ends, "
+                    f"e.g. {example}"
+                )
             bounds = tuple(_numeric_endpoint(endpoint, src) for endpoint in sl.elts)
             try:
                 _validate_numeric_bounds(_SCALAR_SEG[ctor], bounds)
@@ -168,14 +512,14 @@ def _type_from_ast(node: "ast.expr", src: str) -> TypeExpr:
             members = tuple(_type_from_ast(e, src) for e in elts)
             if ScalarExpr("None") in members:
                 raise TypeCheckError(
-                    f"None is not a union member in {src!r}; use Optional[Union[...]]"
+                    f"None is not a union member in {src!r}; use Optional(Union(...))"
                 )
             return UnionExpr(members)
         raise TypeCheckError(f"unknown type constructor {ctor!r} in {src!r}")
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
-        operands = ", ".join(ast.unparse(operand) for operand in _bar_operands(node))
+        operands = ", ".join(_legacy_label(operand, src) for operand in _bar_operands(node))
         raise TypeCheckError(
-            f"malformed type expression {src!r}: use Union[{operands}] (| is not a type operator)"
+            f"malformed type expression {src!r}: use Union({operands}) (| is not a type operator)"
         )
     raise TypeCheckError(f"malformed type expression {src!r}")
 
@@ -185,6 +529,14 @@ def _bar_operands(node: "ast.expr") -> list:
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
         return _bar_operands(node.left) + _bar_operands(node.right)
     return [node]
+
+
+def _legacy_label(node: "ast.expr", src: str) -> str:
+    """Spell one `A | B` operand in the parenthesized syntax, or as written if it is no type."""
+    try:
+        return format_type_expr(_type_from_ast(node, src))
+    except TypeCheckError:
+        return ast.unparse(node)
 
 
 def _numeric_endpoint(node: ast.expr, src: str) -> int | float:
@@ -199,20 +551,12 @@ def _numeric_endpoint(node: ast.expr, src: str) -> int | float:
 
 
 def _literal_tags(sl: "ast.expr", src: str) -> tuple:
+    """Read the members of a bracket-spelled `Literal[...]`."""
     elts = sl.elts if isinstance(sl, ast.Tuple) else [sl]
     tags = []
     for e in elts:
         if isinstance(e, ast.Constant) and isinstance(e.value, str):
-            if not e.value:
-                raise TypeCheckError(
-                    f"empty Literal member in {src!r} (tags must be non-empty names or quoted strings)"
-                )
-            if not encodes_as_utf8(e.value):
-                # An escape such as "\uD800" in the quoted member decodes to a lone surrogate.
-                raise TypeCheckError(
-                    f"Literal member {e.value!r} in {src!r} contains a Unicode surrogate "
-                    f"(tags must be valid UTF-8 text)"
-                )
+            _check_literal_tag(e.value, src)
             tags.append(e.value)  # quoted member: Literal["red"]
         elif isinstance(e, ast.Name):
             tags.append(e.id)  # unquoted member: Literal[red]
@@ -280,7 +624,7 @@ def resolve_type(t: TypeExpr, registry: TypeRegistry, _seen: frozenset[str] = fr
     """Resolve a `TypeExpr` against the registry into a runtime `Type`.
 
     Expands records field-by-field and follows aliases transitively, guarding against
-    reference cycles via `_seen`. A `Union[...]` flattens nested unions and aliases,
+    reference cycles via `_seen`. A `Union(...)` flattens nested unions and aliases,
     drops duplicate members, and requires every member to be a non-nullable record. Its
     members must be told apart by a tag field or by shapes that can't overlap. A union
     with one distinct member is that member.
@@ -308,9 +652,9 @@ def resolve_type(t: TypeExpr, registry: TypeRegistry, _seen: frozenset[str] = fr
             the same value.
 
     Example:
-        With `Buy: {action: Literal[buy], qty: int}` and
-        `Sell: {action: Literal[sell], price: float}` registered,
-        `resolve_type(parse_type("Union[Sell, Buy]"), registry)` gives a union whose
+        With `Buy: {action: Literal(buy), qty: int}` and
+        `Sell: {action: Literal(sell), price: float}` registered,
+        `resolve_type(parse_type("Union(Sell, Buy)"), registry)` gives a union whose
         members are `Buy` then `Sell`.
     """
     if isinstance(t, ScalarExpr):
@@ -362,13 +706,13 @@ def resolve_type(t: TypeExpr, registry: TypeRegistry, _seen: frozenset[str] = fr
 
 
 def _resolve_union(t: UnionExpr, registry: TypeRegistry, _seen: frozenset[str]) -> Type:
-    """Resolve a `Union[...]` into a record, or a union of distinguishable records."""
+    """Resolve a `Union(...)` into a record, or a union of distinguishable records."""
     label = _expr_label(t)
     members: list[tuple[str, str | None, Type]] = []
     for name, origin, member in _union_parts(t, registry, _seen):
         if member.nullable:
             raise TypeCheckError(
-                f"{label}: member {name!r} is nullable; use Optional[Union[...]] instead"
+                f"{label}: member {name!r} is nullable; use Optional(Union(...)) instead"
             )
         if member.fields is None:
             raise TypeCheckError(f"{label}: member {name!r} is not a record")
@@ -398,7 +742,7 @@ def _overlap_error(label: str, a_name: str, b_name: str) -> TypeCheckError:
     return TypeCheckError(
         f"{label}: members {a_name!r} and {b_name!r} can match the same value; add a tag "
         f"field every member declares as a single-value Literal, with a different value "
-        f"in each member, e.g. kind: Literal[{a_name.lower()}]"
+        f"in each member, e.g. kind: Literal({a_name.lower()})"
     )
 
 
@@ -430,23 +774,51 @@ def _union_parts(
     return [(name or _expr_label(t), origin, resolve_type(t, registry, _seen))]
 
 
-def _expr_label(t: TypeExpr) -> str:
-    """Render a parsed type back to its authored spelling, for messages."""
+def format_type_expr(t: TypeExpr) -> str:
+    """Render a parsed type in the parenthesized spelling `parse_type` reads back.
+
+    Args:
+        t (`TypeExpr`):
+            A parsed type AST.
+
+    Returns:
+        `str`:
+            The type text, e.g. `"Optional(list(Buy))"` or `"int(1..12)"`. A `dict(K, V)`
+            renders as `dict`, since its key and value types are not kept.
+
+    Example:
+        `format_type_expr(parse_type("Optional(Union(Buy,Sell))"))` gives
+        `"Optional(Union(Buy, Sell))"`.
+    """
     if isinstance(t, ScalarExpr):
         if t.bounds is None:
             return t.name
-        return f"{t.name}[{t.bounds[0]}, {t.bounds[1]}]"
+        return f"{t.name}({t.bounds[0]}..{t.bounds[1]})"
     if isinstance(t, RefExpr):
         return t.name
     if isinstance(t, ListExpr):
-        return f"list[{_expr_label(t.element)}]"
+        return f"list({format_type_expr(t.element)})"
     if isinstance(t, OptionalExpr):
-        return f"Optional[{_expr_label(t.inner)}]"
+        return f"Optional({format_type_expr(t.inner)})"
     if isinstance(t, EnumExpr):
-        return "Literal[" + ", ".join(t.tags) + "]"
+        return "Literal(" + ", ".join(_format_literal_tag(tag) for tag in t.tags) + ")"
     if isinstance(t, UnionExpr):
-        return "Union[" + ", ".join(_expr_label(m) for m in t.members) + "]"
+        return "Union(" + ", ".join(format_type_expr(m) for m in t.members) + ")"
     return "dict"
+
+
+def _format_literal_tag(tag: str) -> str:
+    """Spell a `Literal` member bare when it reads back as a name, else quoted."""
+    # The tokenizer's NAME and `str.isidentifier` disagree on a few Unicode characters;
+    # a bare member must pass both to read back as the same single name.
+    if _TYPE_TOKEN.fullmatch(tag) and tag.isidentifier() and tag not in _BUILTIN_CONSTANTS:
+        return tag
+    return json.dumps(tag, ensure_ascii=False)
+
+
+def _expr_label(t: TypeExpr) -> str:
+    """Render a parsed type back to its authored spelling, for messages."""
+    return format_type_expr(t)
 
 
 def type_for(type_str: str, registry: TypeRegistry) -> Type:
@@ -578,13 +950,13 @@ def read_typedefs(raw: dict) -> TypeRegistry:
     """Build a `TypeRegistry` from a raw `typedefs:` mapping (Python-typing surface).
 
     A mapping value is a RECORD (`RecordDef`; field type-strings kept raw). A
-    `Literal[...]` string is an ENUM (`VariantDef`, tag-only). Any other string is an
+    `Literal(...)` string is an ENUM (`VariantDef`, tag-only). Any other string is an
     ALIAS (`AliasDef`). A **sequence** is the dropped tagged-union spelling and is
-    rejected: an all-bare-tags sequence must be a `Literal[...]` enum; a payload
-    sequence must be a `Union[...]` of records. Names must be PascalCase and must not
+    rejected: an all-bare-tags sequence must be a `Literal(...)` enum; a payload
+    sequence must be a `Union(...)` of records. Names must be PascalCase and must not
     shadow a scalar/typing constructor. Every typedef is then resolved, even one
     nothing uses, so a bad field type, an unknown name, a recursive record, an alias
-    cycle, or a bad `Union[...]` fails here.
+    cycle, or a bad `Union(...)` fails here.
 
     Args:
         raw (`dict`):
@@ -599,13 +971,13 @@ def read_typedefs(raw: dict) -> TypeRegistry:
             A name is not PascalCase or shadows a builtin, a field name is empty, not a
             string, or holds a Unicode surrogate, a field type is not a string, a value is
             a union sequence, or a typedef does not resolve (an unknown constructor or
-            name, bad bounds, a recursive record, an alias cycle, or a bad `Union[...]`).
+            name, bad bounds, a recursive record, an alias cycle, or a bad `Union(...)`).
             The message names the typedef and field, and `path` is `(typedef,)` or
             `(typedef, field)` when the error belongs to one entry.
 
     Example:
-        `read_typedefs({"Buy": {"action": "Literal[buy]"}, "Sell": {"action":
-        "Literal[sell]"}, "Decision": "Union[Buy, Sell]"})` registers two records and an
+        `read_typedefs({"Buy": {"action": "Literal(buy)"}, "Sell": {"action":
+        "Literal(sell)"}, "Decision": "Union(Buy, Sell)"})` registers two records and an
         alias to their union.
     """
     registry: TypeRegistry = {}
@@ -651,13 +1023,13 @@ def read_typedefs(raw: dict) -> TypeRegistry:
             if all(isinstance(m, str) for m in value):
                 members = ", ".join(str(m) for m in value)
                 raise TypeCheckError(
-                    f"typedef {name!r}: a tag-only union must be a Literal[...] enum, not a "
-                    f"sequence (e.g. {name}: Literal[{members}])",
+                    f"typedef {name!r}: a tag-only union must be a Literal(...) enum, not a "
+                    f"sequence (e.g. {name}: Literal({members}))",
                     path=(name,),
                 )
             raise TypeCheckError(
                 f"typedef {name!r}: a tagged/payload union sequence is not supported; declare "
-                f"each member as a record and write {name}: Union[A, B, ...]",
+                f"each member as a record and write {name}: Union(A, B, ...)",
                 path=(name,),
             )
         else:

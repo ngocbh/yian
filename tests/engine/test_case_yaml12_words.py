@@ -17,8 +17,10 @@ def _flow(cmd_type: str, case_tail: str) -> str:
     return (
         "id: f\n"
         "name: f\n"
+        "typedefs:\n"
+        "  Cmd: Literal(yes, no)\n"
         "input:\n"
-        f"  cmd: {cmd_type}\n"
+        f"  cmd: !{cmd_type}\n"
         "nodes:\n"
         "  route:\n"
         "    kind: case\n"
@@ -46,7 +48,7 @@ def _flow(cmd_type: str, case_tail: str) -> str:
 def test_yes_and_no_cover_a_literal_input_without_else():
     loaded = load_flow(
         _flow(
-            "Literal[yes, no]",
+            "Cmd",
             "      - when: no\n"
             "        then: refuse\n",
         )

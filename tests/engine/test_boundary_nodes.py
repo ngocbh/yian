@@ -15,7 +15,7 @@ _FLOW = """
 id: f
 name: f
 input:
-  x: str
+  x: !str
 nodes:
   n:
     kind: code
@@ -33,7 +33,7 @@ _SKIPPED_TERMINAL = """
 id: e7
 name: e7
 input:
-  seed: float
+  seed: !float
 nodes:
   score:
     kind: code

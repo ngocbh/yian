@@ -33,8 +33,8 @@ name: counter
 defs:
   bump:
     input:
-      n: int
-      exited: bool
+      n: !int
+      exited: !bool
     nodes:
       step:
         kind: code
@@ -110,7 +110,7 @@ name: nested_call_loop_maxed
 defs:
   keep:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code
@@ -160,7 +160,7 @@ name: chat
 defs:
   chat_turn:
     input:
-      messages: list[str]
+      messages: !list(str)
     nodes:
       ask:
         kind: human_input
@@ -173,7 +173,7 @@ defs:
           messages: ${input.messages}
           msg: ${ask.output}
         output:
-          messages: list[str]
+          messages: list(str)
           exited: bool
     output: ${fold.output}
 nodes:
@@ -202,12 +202,12 @@ DIRECT_EXIT_LOOP = """
 id: direct-exit-chat
 name: direct_exit_chat
 input:
-  initial_exited: bool
+  initial_exited: !bool
 defs:
   chat_turn:
     input:
-      messages: list[str]
-      exited: bool
+      messages: !list(str)
+      exited: !bool
     nodes:
       ask:
         kind: human_input
@@ -252,12 +252,12 @@ OPAQUE_ARITHMETIC_LOOP = """
 id: opaque-arithmetic-loop
 name: opaque_arithmetic_loop
 input:
-  initial_n: int
+  initial_n: !int
 defs:
   bump:
     input:
-      n: int
-      exited: bool
+      n: !int
+      exited: !bool
     nodes: {}
     output:
       n: ${input.n + 1}
@@ -296,12 +296,12 @@ OPAQUE_TURN_ZERO_LOOP = """
 id: opaque-turn-zero
 name: opaque_turn_zero
 input:
-  initial_n: str
+  initial_n: !str
 defs:
   body:
     input:
-      n: int
-      note: str
+      n: !int
+      note: !str
     nodes: {}
     output:
       n: ${input.n}
@@ -332,20 +332,20 @@ NESTED_OPAQUE_TURN_ZERO_LOOP = """
 id: nested-opaque-turn-zero
 name: nested_opaque_turn_zero
 input:
-  initial_n: str
+  initial_n: !str
 defs:
   inner_body:
     input:
-      n: int
-      note: str
+      n: !int
+      note: !str
     nodes: {}
     output:
       n: ${input.n}
       note: ${input.note + "!"}
   outer_body:
     input:
-      n: int
-      note: str
+      n: !int
+      note: !str
     nodes:
       inner:
         kind: loop
@@ -391,20 +391,20 @@ PASSTHROUGH_OPAQUE_TURN_ZERO_LOOP = """
 id: passthrough-opaque-turn-zero
 name: passthrough_opaque_turn_zero
 input:
-  initial_n: str
+  initial_n: !str
 defs:
   inner_body:
     input:
-      n: int
-      note: str
+      n: !int
+      note: !str
     nodes: {}
     output:
       n: ${input.n}
       note: ${input.note + "!"}
   middle:
     input:
-      n: int
-      note: str
+      n: !int
+      note: !str
     nodes:
       inner:
         kind: loop
@@ -417,8 +417,8 @@ defs:
     output: ${inner.output}
   outer_body:
     input:
-      n: int
-      note: str
+      n: !int
+      note: !str
     nodes:
       middle_call:
         kind: call
@@ -491,7 +491,7 @@ name: pred_raise
 defs:
   down:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code
@@ -533,7 +533,7 @@ name: ust
 defs:
   countdown:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code
@@ -572,15 +572,15 @@ name: usu
 defs:
   step:
     input:
-      seen: Optional[list[str]]
-      n: int
+      seen: !Optional(list(str))
+      n: !int
     nodes:
       bump:
         kind: code
         input:
           n: ${input.n}
         output:
-          seen: Optional[list[str]]
+          seen: Optional(list(str))
           n: int
         code: |
           return {"seen": ["a", "b"][: inputs["n"] + 1], "n": inputs["n"] + 1}
@@ -626,7 +626,7 @@ name: t3
 defs:
   countdown:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code
@@ -655,7 +655,7 @@ name: uc
 defs:
   countdown:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code
@@ -699,7 +699,7 @@ name: t20
 defs:
   countdown:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code
@@ -806,14 +806,14 @@ typedefs:
   Person:
     name: str
 input:
-  person: Person
-  talking_to: str
+  person: !Person
+  talking_to: !str
 defs:
   turn:
     input:
-      person: Person
-      talking_to: str
-      n: int
+      person: !Person
+      talking_to: !str
+      n: !int
     nodes:
       step:
         kind: code
@@ -894,11 +894,11 @@ PARTIAL_NOTE = """
 id: partial-note
 name: partial_note
 input:
-  note0: Optional[str]
+  note0: !Optional(str)
 defs:
   clear_note:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code
@@ -908,11 +908,11 @@ defs:
           n: ${input.n}
         output:
           n: int
-          note: Optional[str]
+          note: Optional(str)
     output: ${step.output}
   bump_only:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code
@@ -1023,7 +1023,7 @@ name: partial_in_call
 defs:
   bump:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code
@@ -1036,7 +1036,7 @@ defs:
     output: ${step.output}
   counter:
     input:
-      tag: str
+      tag: !str
     nodes:
       loop:
         kind: loop
@@ -1088,7 +1088,7 @@ def test_partial_loop_resumes_from_its_log(tmp_path):
 _ONE = """
   one:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code
@@ -1117,7 +1117,7 @@ name: nested_call
 defs:""" + _ONE + """
   body:
     input:
-      n: int
+      n: !int
     nodes:
       c:
         kind: call
@@ -1134,7 +1134,7 @@ name: nested_map
 defs:""" + _ONE + """
   body:
     input:
-      n: int
+      n: !int
     nodes:
       m:
         kind: map
@@ -1159,7 +1159,7 @@ name: nested_loop
 defs:""" + _ONE + """
   inc:
     input:
-      n: int
+      n: !int
     nodes:
       c:
         kind: call
@@ -1170,7 +1170,7 @@ defs:""" + _ONE + """
       n: ${c.output}
   body:
     input:
-      n: int
+      n: !int
     nodes:
       inner:
         kind: loop
@@ -1188,7 +1188,7 @@ name: nested_case
 defs:
   up:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code
@@ -1200,7 +1200,7 @@ defs:
     output: ${step.output}
   up2:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code
@@ -1212,7 +1212,7 @@ defs:
     output: ${step.output}
   body:
     input:
-      n: int
+      n: !int
     nodes:
       pick:
         kind: case
@@ -1318,7 +1318,7 @@ name: dangling_side
 defs:
   one:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code
@@ -1358,7 +1358,7 @@ defs:
     output: ${step.output}
   body:
     input:
-      n: int
+      n: !int
     nodes:
       c:
         kind: call
@@ -1400,7 +1400,7 @@ name: direct_side
 defs:
   body:
     input:
-      n: int
+      n: !int
     nodes:
       bump:
         kind: code
@@ -1487,7 +1487,7 @@ name: deferred_call
 defs:
   echo:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code
@@ -1499,7 +1499,7 @@ defs:
     output: ${step.output}
   body:
     input:
-      n: int
+      n: !int
     nodes:
       bump:
         kind: code

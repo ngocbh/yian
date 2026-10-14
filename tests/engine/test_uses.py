@@ -13,7 +13,8 @@ from yian.compose.source import SourceDocument
 _BASE = """\
 id: f
 name: f
-input: {x: str}
+input:
+  x: !str
 nodes:
   a: {kind: code, code: tests.seeds.fns:one_line_summary, input: {x: "${input.x}"}}
 output: {y: "${a.output}"}
@@ -120,7 +121,8 @@ def test_system_paths_is_not_a_runtime_ref():
 _CHILD = """\
 id: child
 name: child
-input: {x: str}
+input:
+  x: !str
 nodes:
   c: {kind: code, code: tests.seeds.fns:one_line_summary, input: {x: "${input.x}"}}
 output: {y: "${c.output}"}
@@ -130,7 +132,7 @@ output: {y: "${c.output}"}
 def _with_call(alias):
     """A flow whose node `a` is `{kind: call, call: <alias>, input: {x: ...}}`."""
     return (
-        "id: f\nname: f\ninput: {x: str}\n"
+        "id: f\nname: f\ninput:\n  x: !str\n"
         f"nodes:\n  a: {{kind: call, call: {alias}, input: {{x: \"${{input.x}}\"}}}}\n"
         "output: {y: \"${a.output}\"}\n"
     )
@@ -173,7 +175,7 @@ def test_defs_uses_collision():
     text = (
         _with_call("dup")
         + "uses:\n  dup: child\n"
-        + "defs:\n  dup:\n    input: {x: str}\n"
+        + "defs:\n  dup:\n    input:\n      x: !str\n"
         "    nodes:\n      c: {kind: code, code: tests.seeds.fns:one_line_summary, input: {x: \"${x}\"}}\n"
         "    output: {y: \"${c.output}\"}\n"
     )
@@ -236,7 +238,7 @@ def test_first_broken_alias_in_source_order_is_reported():
 def test_inline_call_routes_through_uses_arm():
     seen = []
     text = (
-        "id: f\nname: f\ninput: {x: str}\n"
+        "id: f\nname: f\ninput:\n  x: !str\n"
         "nodes:\n"
         "  a: {kind: code, code: tests.seeds.fns:one_line_summary, "
         "input: {x: \"call(mom, x=inputs.x)\"}}\n"
@@ -254,12 +256,12 @@ def test_inline_call_routes_through_uses_arm():
 def test_e06_through_alias():
     # child expects x: int; parent binds a str through the alias -> a type mismatch at load.
     child_int = (
-        "id: c\nname: c\ninput: {x: int}\n"
+        "id: c\nname: c\ninput:\n  x: !int\n"
         "nodes:\n  c: {kind: code, code: tests.seeds.fns:const_one, input: {x: \"${input.x}\"}}\n"
         "output: {y: \"${c.output}\"}\n"
     )
     text = (
-        "id: f\nname: f\ninput: {s: str}\n"
+        "id: f\nname: f\ninput:\n  s: !str\n"
         "nodes:\n  a: {kind: call, call: mom, input: {x: \"${input.s}\"}}\n"
         "output: {y: \"${a.output}\"}\nuses:\n  mom: c@1\n"
     )

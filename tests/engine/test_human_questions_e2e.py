@@ -51,12 +51,12 @@ _MANUAL_REF = """
 id: manual_ref
 name: manual_ref
 input:
-  seed: str
+  seed: !str
 nodes:
   src:
     kind: code
     input: {seed: "${input.seed}"}
-    output: list[object]
+    output: list(object)
     code: tests.seeds.fns:questions_seed
   ask:
     kind: human_input
@@ -91,7 +91,7 @@ _ADAPTIVE = """
 id: adaptive
 name: adaptive
 input:
-  ctx: str
+  ctx: !str
 nodes:
   ask:
     kind: human_input
@@ -119,7 +119,7 @@ _COMPOSED = [
 class _ComposeChat:
     """A fake chat for the synth compose-agent's native structured path.
 
-    The synth agent declares a top-level `list[Question]` output, which
+    The synth agent declares a top-level `list(Question)` output, which
     `type_to_schema` wraps in a single-field `ListWrapper` model (field `items`).
     An agent without tools calls `with_structured_output(schema).invoke(...)`, so the bound
     object must return `schema.model_validate({"items": [...]})` — a ListWrapper, NOT

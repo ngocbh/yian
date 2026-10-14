@@ -5,7 +5,7 @@
 id: err-inline-no-return
 name: err_inline_no_return
 input:
-  topic: str
+  topic: !str
 nodes:
   silent:
     kind: code

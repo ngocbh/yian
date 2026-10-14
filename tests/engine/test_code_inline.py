@@ -313,7 +313,7 @@ _INLINE_FLOW = """\
 id: t
 name: t
 input:
-  rating: float
+  rating: !float
 nodes:
   verdict:
     kind: code

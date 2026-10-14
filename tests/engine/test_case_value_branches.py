@@ -53,7 +53,7 @@ def _skipped(result) -> set[str]:
     return {e.node_id for e in result.events if isinstance(e, NodeSkipped)}
 
 
-def _flow(case_body: str, *, inputs: str = "  cmd: str\n", extra_nodes: str = "") -> str:
+def _flow(case_body: str, *, inputs: str = "  cmd: !str\n", extra_nodes: str = "") -> str:
     """Return a flow with one `route` case (indented body), a `reply` node, and an output."""
     return (
         "id: f\n"
@@ -186,27 +186,43 @@ def test_empty_branch_without_output_type_is_rejected(then_text, else_text, labe
         load_flow(text)
     assert (
         f"case node 'route' {label} is empty; name a node, or add "
-        "`output: Optional[...]` for a null value"
+        "`output: Optional(...)` for a null value"
     ) in str(caught.value)
 
 
-def test_unquoted_typed_binding_branch_is_rejected_with_quote_hint():
+@pytest.mark.parametrize("left", ["int", "Optional[int]"])
+def test_unquoted_typed_binding_branch_is_rejected_with_quote_hint(left):
     text = _flow(
         "    on: ${input.cmd}\n"
-        "    output: int\n"
+        "    output: Optional(int)\n"
         "    cases:\n"
         "      - when: a\n"
-        "        then: int = ${input.n}\n"
+        f"        then: {left} = ${{input.n}}\n"
         "    else: reply\n",
-        inputs="  cmd: str\n  n: int\n",
+        inputs="  cmd: !str\n  n: !int\n",
     )
     with pytest.raises(LoadError) as caught:
         load_flow(text)
     assert (
-        "case node 'route' then: `int = ${input.n}` is not a branch; the case's "
-        "`output:` gives the type. If you meant the text, quote it: "
-        '`then: "int = ${input.n}"`'
+        f"case node 'route' then: `{left} = ${{input.n}}` is not a branch; the case's "
+        "`output:` gives the type, so write `then: ${input.n}`. If you meant the text, "
+        f'quote it: `then: "{left} = ${{input.n}}"`'
     ) in str(caught.value)
+
+
+def test_unquoted_branch_without_a_type_on_the_left_is_a_text_value():
+    text = _flow(
+        "    on: ${input.cmd}\n"
+        "    output: str\n"
+        "    cases:\n"
+        "      - when: a\n"
+        "        then: n = ${input.n}\n"
+        "    else: reply\n",
+        inputs="  cmd: !str\n  n: !int\n",
+    )
+    result = run_flow(load_flow(text), {"cmd": "a", "n": 5})
+    assert result.status == "succeeded", result.failure
+    assert result.output == "n = 5"
 
 
 def test_quoted_call_with_span_is_rejected():
@@ -452,7 +468,7 @@ def test_quoted_lone_span_keeps_its_type():
         "      - when: a\n"
         '        then: "${input.n}"\n'
         "    else: 0\n",
-        inputs="  cmd: str\n  n: int\n",
+        inputs="  cmd: !str\n  n: !int\n",
     )
     result = run_flow(load_flow(text), {"cmd": "a", "n": 7})
     assert result.status == "succeeded", result.failure
@@ -536,7 +552,7 @@ def test_record_value_with_span():
         "    else:\n"
         '      reply: "no"\n'
         "      exited: false\n",
-        inputs="  cmd: str\n  text: str\n",
+        inputs="  cmd: !str\n  text: !str\n",
     )
     result = run_flow(load_flow(text), {"cmd": "a", "text": "hi"})
     assert result.status == "succeeded", result.failure
@@ -547,7 +563,7 @@ def test_nested_list_with_span():
     text = _flow(
         "    on: ${input.cmd}\n"
         "    output:\n"
-        "      items: list[str]\n"
+        "      items: list(str)\n"
         "    cases:\n"
         "      - when: a\n"
         "        then:\n"
@@ -556,7 +572,7 @@ def test_nested_list_with_span():
         "            - x\n"
         "    else:\n"
         "      items: []\n",
-        inputs="  cmd: str\n  a: str\n",
+        inputs="  cmd: !str\n  a: !str\n",
     )
     result = run_flow(load_flow(text), {"cmd": "a", "a": "first"})
     assert result.status == "succeeded", result.failure
@@ -566,7 +582,7 @@ def test_nested_list_with_span():
 def test_else_null_with_optional_output():
     text = _flow(
         "    on: ${input.cmd}\n"
-        "    output: Optional[str]\n"
+        "    output: Optional(str)\n"
         "    cases:\n"
         "      - when: a\n"
         "        then: reply\n"
@@ -585,7 +601,7 @@ def test_else_null_with_optional_output():
     ("output_type", "then_text", "else_text", "expected"),
     [
         ("int", "3", "0", 3),
-        ("list[str]", "[]", "[x]", []),
+        ("list(str)", "[]", "[x]", []),
         ("int", "${input.n}", "0", 5),
         ("bool", "false", "true", False),
     ],
@@ -598,7 +614,7 @@ def test_scalar_and_list_values(output_type, then_text, else_text, expected):
         "      - when: a\n"
         f"        then: {then_text}\n"
         f"    else: {else_text}\n",
-        inputs="  cmd: str\n  n: int\n",
+        inputs="  cmd: !str\n  n: !int\n",
     )
     result = run_flow(load_flow(text), {"cmd": "a", "n": 5})
     assert result.status == "succeeded", result.failure
@@ -610,11 +626,11 @@ def test_value_branch_inside_defs_body():
 id: f
 name: f
 input:
-  cmd: str
+  cmd: !str
 defs:
   pick:
     input:
-      cmd: str
+      cmd: !str
     nodes:
       route:
         kind: case
@@ -747,7 +763,7 @@ def test_outer_case_reads_a_typed_inner_case_through_its_result_node():
 id: f
 name: f
 input:
-  cmd: str
+  cmd: !str
 nodes:
   outer:
     kind: case
@@ -758,7 +774,7 @@ nodes:
     else: other
   inner:
     kind: case
-    output: Literal[x]
+    output: Literal(x)
     cases:
       - when: "input.cmd == 'never'"
         then: "x"
@@ -850,18 +866,18 @@ def test_result_node_locates_its_output_at_the_case_output():
 
 
 def _literal_flow(output: str = "${route.output}", extra_nodes: str = "") -> str:
-    """Return a flow whose `Literal[yes, no]` case routes `else:` to a CODE node that
+    """Return a flow whose `Literal(yes, no)` case routes `else:` to a CODE node that
     returns `"maybe"`."""
     return (
         "id: f\n"
         "name: f\n"
         "input:\n"
-        "  cmd: str\n"
+        "  cmd: !str\n"
         "nodes:\n"
         "  route:\n"
         "    kind: case\n"
         "    on: ${input.cmd}\n"
-        "    output: Literal[yes, no]\n"
+        "    output: Literal(yes, no)\n"
         "    cases:\n"
         "      - when: a\n"
         '        then: "yes"\n'
@@ -888,7 +904,7 @@ def _assert_bad_branch_fails(loaded, text: str) -> None:
     assert diagnostic.frames, diagnostic.notes
     frame = diagnostic.frames[-1]
     assert frame.text == text
-    assert frame.range.covered_lines(text) == [_line_of(text, "output: Literal[yes, no]")]
+    assert frame.range.covered_lines(text) == [_line_of(text, "output: Literal(yes, no)")]
 
 
 def test_typed_case_checks_a_narrower_branch_at_runtime():
@@ -942,11 +958,11 @@ def test_typed_case_reader_sees_the_case_type_in_a_call():
 id: f
 name: f
 input:
-  cmd: str
+  cmd: !str
 defs:
   child:
     input:
-      n: str
+      n: !str
     nodes:
       c:
         kind: code
@@ -982,7 +998,7 @@ def test_typed_case_disjoint_typed_reader_is_a_load_error():
 id: f
 name: f
 input:
-  cmd: str
+  cmd: !str
 nodes:
   route:
     kind: case
@@ -995,7 +1011,7 @@ nodes:
   use:
     kind: code
     input:
-      x: int = ${route.output}
+      x: !int ${route.output}
     code: |
       return inputs["x"]
 output: ${use.output}
@@ -1003,7 +1019,7 @@ output: ${use.output}
     with pytest.raises(LoadError) as exc:
         load_flow(text)
     assert "declared int, but the value is str" in str(exc.value)
-    assert _error_line(exc.value) == _line_of(text, "x: int = ")
+    assert _error_line(exc.value) == _line_of(text, "x: !int ")
 
 
 def test_typed_case_wider_reader_still_checks_the_case_type():
@@ -1015,7 +1031,7 @@ typedefs:
     reply: str
     n: int
 input:
-  cmd: str
+  cmd: !str
 nodes:
   route:
     kind: case
@@ -1035,7 +1051,7 @@ nodes:
   use:
     kind: code
     input:
-      x: object = ${route.output}
+      x: !object ${route.output}
     code: |
       return inputs["x"]
 output: ${use.output}
@@ -1058,7 +1074,7 @@ def _record_case_flow(read: str) -> str:
         "id: f\n"
         "name: f\n"
         "input:\n"
-        "  cmd: str\n"
+        "  cmd: !str\n"
         "nodes:\n"
         "  route:\n"
         "    kind: case\n"
@@ -1098,12 +1114,12 @@ def test_typed_case_feeds_loop_seed_inline_call_and_map():
 id: f
 name: f
 input:
-  cmd: str
+  cmd: !str
 nodes:
   route:
     kind: case
     on: ${input.cmd}
-    output: list[str]
+    output: list(str)
     cases:
       - when: a
         then:
@@ -1122,7 +1138,7 @@ nodes:
           return inputs["items"]
         input:
           items: ${input.items}
-        output: list[str]
+        output: list(str)
     output:
       items: ${keep.output}
   wrapped:
@@ -1172,14 +1188,14 @@ id: f
 name: f
 typedefs:
   Buy:
-    action: Literal[buy]
+    action: Literal(buy)
     qty: int
   Hold:
-    action: Literal[hold]
+    action: Literal(hold)
     note: str
-  Decision: Union[Buy, Hold]
+  Decision: Union(Buy, Hold)
 input:
-  kind: str
+  kind: !str
 nodes:
   d:
     kind: code
@@ -1275,7 +1291,7 @@ def test_typed_case_result_node_skips_when_its_case_is_skipped():
 id: f
 name: f
 input:
-  cmd: str
+  cmd: !str
 nodes:
   outer:
     kind: case
@@ -1365,7 +1381,7 @@ def test_null_into_non_optional_output_is_rejected():
         load_flow(text)
     assert (
         "case node 'route' else: null needs an Optional output; the case declares str "
-        "(write `output: Optional[str]`)"
+        "(write `output: Optional(str)`)"
     ) in str(caught.value)
     assert _error_line(caught.value) == _line_of(text, "else: null")
 
@@ -1555,7 +1571,7 @@ def test_disjoint_call_branch_is_rejected():
 id: f
 name: f
 input:
-  cmd: str
+  cmd: !str
 defs:
   child:
     nodes:
@@ -1588,12 +1604,12 @@ output: ${route.output}
 def test_narrower_node_branch_loads_and_is_checked_at_runtime():
     text = _flow(
         "    on: ${input.cmd}\n"
-        "    output: Literal[a, b]\n"
+        "    output: Literal(a, b)\n"
         "    cases:\n"
         "      - when: a\n"
         '        then: "a"\n'
         "    else: pick\n",
-        inputs="  cmd: str\n  s: str\n",
+        inputs="  cmd: !str\n  s: !str\n",
         extra_nodes=(
             "  pick:\n"
             "    kind: code\n"
@@ -1641,7 +1657,7 @@ def _case_of_case_flow(inner_output: str, inner_then: str) -> str:
         "id: f\n"
         "name: f\n"
         "input:\n"
-        "  cmd: str\n"
+        "  cmd: !str\n"
         "nodes:\n"
         "  outer:\n"
         "    kind: case\n"
@@ -1674,7 +1690,7 @@ def test_typed_inner_case_disjoint_from_outer_is_rejected():
 
 
 def test_typed_inner_case_narrower_than_outer_loads():
-    text = _case_of_case_flow("    output: Literal[x, y]\n", '"x"').replace(
+    text = _case_of_case_flow("    output: Literal(x, y)\n", '"x"').replace(
         "    else: num\n", '    else: "y"\n'
     )
     loaded = load_flow(text)
@@ -1688,7 +1704,7 @@ def test_two_typed_cases_routing_to_each_other_is_a_cycle_error():
 id: f
 name: f
 input:
-  cmd: str
+  cmd: !str
 nodes:
   a:
     kind: case
@@ -1741,7 +1757,7 @@ def test_span_value_disjoint_from_output_is_rejected():
         "      - when: a\n"
         "        then: ${input.n}\n"
         "    else: reply\n",
-        inputs="  cmd: str\n  n: int\n",
+        inputs="  cmd: !str\n  n: !int\n",
     )
     with pytest.raises(LoadError) as caught:
         load_flow(text)
@@ -1752,12 +1768,12 @@ def test_span_value_disjoint_from_output_is_rejected():
 def test_narrower_span_value_loads_and_is_checked_at_runtime():
     text = _flow(
         "    on: ${input.cmd}\n"
-        "    output: Literal[a, b]\n"
+        "    output: Literal(a, b)\n"
         "    cases:\n"
         "      - when: a\n"
         "        then: ${input.s}\n"
         '    else: "b"\n',
-        inputs="  cmd: str\n  s: str\n",
+        inputs="  cmd: !str\n  s: !str\n",
     )
     loaded = load_flow(text)
     bad = run_flow(loaded, {"cmd": "a", "s": "c"})
@@ -1780,7 +1796,7 @@ def test_record_value_field_disjoint_from_output_names_the_field():
         "          reply: ${input.n}\n"
         "    else:\n"
         '      reply: "no"\n',
-        inputs="  cmd: str\n  n: int\n",
+        inputs="  cmd: !str\n  n: !int\n",
     )
     with pytest.raises(LoadError) as caught:
         load_flow(text)
@@ -1806,12 +1822,12 @@ def test_record_value_field_disjoint_from_output_names_the_field():
         ),
         ("int", "\n          reply: ${input.s}", "declared int, but the value is a record"),
         (
-            "\n      items: list[int]",
+            "\n      items: list(int)",
             "\n          items:\n            - ${input.s}",
             "the value at .items[0] is str, but the output expects int there",
         ),
         (
-            "\n      items: list[int]",
+            "\n      items: list(int)",
             "\n          items:\n            - ${input.n}\n            - x",
             'the value at .items[1] is "x", but the output expects int there',
         ),
@@ -1826,7 +1842,7 @@ def test_span_value_shapes_that_cannot_fit_are_rejected(output, then_text, messa
         "      - when: a\n"
         f"        then: {then_text}\n"
         "    else: null\n",
-        inputs="  cmd: str\n  s: str\n  n: int\n",
+        inputs="  cmd: !str\n  s: !str\n  n: !int\n",
     )
     with pytest.raises(LoadError) as caught:
         load_flow(text)
@@ -1836,9 +1852,9 @@ def test_span_value_shapes_that_cannot_fit_are_rejected(output, then_text, messa
 @pytest.mark.parametrize(
     ("output", "then_text"),
     [
-        ("Optional[object]", "\n          a: ${input.s}"),
-        ("Optional[Reply]", "\n          text: ${input.s}"),
-        ("Optional[list[str]]", "\n          - ${input.s}"),
+        ("Optional(object)", "\n          a: ${input.s}"),
+        ("Optional(Reply)", "\n          text: ${input.s}"),
+        ("Optional(list(str))", "\n          - ${input.s}"),
     ],
 )
 def test_span_value_shapes_that_fit_load(output, then_text):
@@ -1846,7 +1862,7 @@ def test_span_value_shapes_that_fit_load(output, then_text):
         "typedefs:\n"
         "  Text:\n    text: str\n"
         "  Num:\n    num: int\n"
-        "  Reply: Union[Text, Num]\n"
+        "  Reply: Union(Text, Num)\n"
     ) + _flow(
         "    on: ${input.cmd}\n"
         f"    output: {output}\n"
@@ -1854,26 +1870,26 @@ def test_span_value_shapes_that_fit_load(output, then_text):
         "      - when: a\n"
         f"        then: {then_text}\n"
         "    else: null\n",
-        inputs="  cmd: str\n  s: str\n",
+        inputs="  cmd: !str\n  s: !str\n",
     )
     result = run_flow(load_flow(text), {"cmd": "a", "s": "hi"})
     assert result.status == "succeeded", result.failure
 
 
 def _union_flow(*, then_value: str, else_value: str) -> str:
-    """Return a flow whose case on a `Union[Buy, Sell]` tag has the given branch values."""
+    """Return a flow whose case on a `Union(Buy, Sell)` tag has the given branch values."""
     return (
         "id: f\n"
         "name: f\n"
         "typedefs:\n"
         "  Buy:\n"
-        "    action: Literal[buy]\n"
+        "    action: Literal(buy)\n"
         "    qty: int\n"
         "  Sell:\n"
-        "    action: Literal[sell]\n"
+        "    action: Literal(sell)\n"
         "    price: float\n"
         "input:\n"
-        "  kind: str\n"
+        "  kind: !str\n"
         "nodes:\n"
         "  d:\n"
         "    kind: code\n"
@@ -1883,7 +1899,7 @@ def _union_flow(*, then_value: str, else_value: str) -> str:
         '      if inputs["kind"] == "buy":\n'
         '          return {"action": "buy", "qty": 3}\n'
         '      return {"action": "sell", "price": 1.5}\n'
-        "    output: Union[Buy, Sell]\n"
+        "    output: Union(Buy, Sell)\n"
         "  route:\n"
         "    kind: case\n"
         "    on: ${d.output.action}\n"
@@ -1969,11 +1985,11 @@ def test_value_reading_a_sibling_branch_in_a_coalesce_loads():
 def test_span_into_a_tagged_union_whose_tag_picks_the_wrong_member_is_rejected():
     text = (
         "typedefs:\n"
-        "  Buy:\n    action: Literal[buy]\n    qty: int\n"
-        "  Sell:\n    action: Literal[sell]\n    price: float\n"
+        "  Buy:\n    action: Literal(buy)\n    qty: int\n"
+        "  Sell:\n    action: Literal(sell)\n    price: float\n"
     ) + _flow(
         "    on: ${input.cmd}\n"
-        "    output: Union[Buy, Sell]\n"
+        "    output: Union(Buy, Sell)\n"
         "    cases:\n"
         "      - when: a\n"
         "        then:\n"
@@ -1982,11 +1998,11 @@ def test_span_into_a_tagged_union_whose_tag_picks_the_wrong_member_is_rejected()
         "    else:\n"
         "      action: buy\n"
         "      qty: 1\n",
-        inputs="  cmd: str\n  n: int\n",
+        inputs="  cmd: !str\n  n: !int\n",
     )
     with pytest.raises(LoadError) as caught:
         load_flow(text)
-    assert "case node 'route' then: declared Union[" in str(caught.value)
+    assert "case node 'route' then: declared Union(" in str(caught.value)
     assert "but the value fits no member" in str(caught.value)
     assert _error_line(caught.value) == _line_of(text, "action: sell")
 
@@ -2016,14 +2032,16 @@ _EXHAUSTIVE = "case node {case!r} produces a value, so it must be exhaustive: ad
 def _gate_flow(
     gate: str,
     *,
-    inputs: str = "  x: str\n",
+    inputs: str = "  x: !str\n",
     output: str = "${gate.output}",
     extra_nodes: str = "",
+    typedefs: str = "",
 ) -> str:
     """Return a flow with a `gate` case (indented body), CODE nodes `pa`/`pb`, and `output`."""
     return (
         "id: f\n"
         "name: f\n"
+        f"{typedefs}"
         "input:\n"
         f"{inputs}"
         "nodes:\n"
@@ -2043,6 +2061,9 @@ def _gate_flow(
         f"{extra_nodes}"
         f"output: {output}\n"
     )
+
+
+_CHOICE = "typedefs:\n  Choice: Literal(a, b)\n"
 
 
 def _routes(*tags: str) -> str:
@@ -2091,7 +2112,7 @@ _PICK = (
     "      x: ${input.x}\n"
     "    code: |\n"
     '      return inputs["x"]\n'
-    "    output: Literal[a, b]\n"
+    "    output: Literal(a, b)\n"
 )
 
 
@@ -2121,7 +2142,8 @@ def test_typed_case_over_a_literal_node_output_missing_a_tag_is_rejected():
 def test_typed_case_over_a_literal_input_listing_every_tag_runs():
     text = _gate_flow(
         "    on: ${input.choice}\n    output: str\n" + _values("a", "b"),
-        inputs="  choice: Literal[a, b]\n",
+        typedefs=_CHOICE,
+        inputs="  choice: !Choice\n",
     )
     loaded = load_flow(text)
     assert run_flow(loaded, {"choice": "a"}).output == "A"
@@ -2131,7 +2153,8 @@ def test_typed_case_over_a_literal_input_listing_every_tag_runs():
 def test_typed_case_over_a_literal_input_missing_a_tag_is_rejected():
     text = _gate_flow(
         "    on: ${input.choice}\n    output: str\n" + _values("a"),
-        inputs="  choice: Literal[a, b]\n",
+        typedefs=_CHOICE,
+        inputs="  choice: !Choice\n",
     )
     with pytest.raises(LoadError) as caught:
         load_flow(text)
@@ -2143,7 +2166,8 @@ def test_typed_case_over_a_literal_input_missing_a_tag_is_rejected():
 def test_typed_case_over_an_optional_literal_input_is_rejected():
     text = _gate_flow(
         "    on: ${input.choice}\n    output: str\n" + _values("a", "b"),
-        inputs="  choice: Optional[Literal[a, b]]\n",
+        typedefs=_CHOICE,
+        inputs="  choice: !Optional(Choice)\n",
     )
     with pytest.raises(LoadError) as caught:
         load_flow(text)
@@ -2169,7 +2193,8 @@ def test_routing_only_case_over_a_str_without_else_still_skips_on_no_match():
 def test_routing_only_case_over_a_literal_input_missing_a_tag_is_a_load_error():
     text = _gate_flow(
         "    on: ${input.choice}\n" + _routes("a"),
-        inputs="  choice: Literal[a, b]\n",
+        typedefs=_CHOICE,
+        inputs="  choice: !Choice\n",
         output="${input.choice}",
     )
     with pytest.raises(LoadError) as caught:
@@ -2220,13 +2245,13 @@ def _narrowed_flow(inner_tag: str) -> str:
         "name: f\n"
         "typedefs:\n"
         "  Buy:\n"
-        "    action: Literal[buy]\n"
+        "    action: Literal(buy)\n"
         "    qty: int\n"
         "  Sell:\n"
-        "    action: Literal[sell]\n"
+        "    action: Literal(sell)\n"
         "    price: float\n"
         "input:\n"
-        "  kind: str\n"
+        "  kind: !str\n"
         "nodes:\n"
         "  d:\n"
         "    kind: code\n"
@@ -2236,7 +2261,7 @@ def _narrowed_flow(inner_tag: str) -> str:
         '      if inputs["kind"] == "buy":\n'
         '          return {"action": "buy", "qty": 3}\n'
         '      return {"action": "sell", "price": 1.5}\n'
-        "    output: Union[Buy, Sell]\n"
+        "    output: Union(Buy, Sell)\n"
         "  route:\n"
         "    kind: case\n"
         "    on: ${d.output.action}\n"

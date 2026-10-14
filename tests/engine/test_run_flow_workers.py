@@ -22,7 +22,7 @@ _FANOUT = """
 id: angles
 name: angles
 input:
-  topic: str
+  topic: !str
 nodes:
   pro:
     kind: code
@@ -71,7 +71,7 @@ _LONG_LOOP = """
 id: counter
 name: counter
 input:
-  k: int
+  k: !int
 nodes:
   l:
     kind: loop

@@ -2,7 +2,7 @@
 id: err-unknown-kind
 name: err_unknown_kind
 input:
-  topic: str
+  topic: !str
 nodes:
   note:
     kind: llm          # ERROR: not a supported node kind

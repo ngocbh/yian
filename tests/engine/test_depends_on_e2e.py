@@ -20,8 +20,8 @@ _FLOW = """
 id: ordering-e2e
 name: ordering_e2e
 input:
-  score: float
-  topic: str
+  score: !float
+  topic: !str
 nodes:
   gate:
     kind: case
@@ -91,8 +91,8 @@ def _case_source_flow(*, field: str, on_branch: bool, with_else: bool = True) ->
 id: case-source
 name: case_source
 input:
-  score: float
-  topic: str
+  score: !float
+  topic: !str
 nodes:
   gate:
     kind: case
@@ -167,7 +167,7 @@ _UNKNOWN_DEP = """
 id: bad-dep
 name: bad_dep
 input:
-  topic: str
+  topic: !str
 nodes:
   fetch:
     kind: code
@@ -183,7 +183,7 @@ _ORDERING_CYCLE = """
 id: dep-cycle
 name: dep_cycle
 input:
-  topic: str
+  topic: !str
 nodes:
   a:
     kind: code

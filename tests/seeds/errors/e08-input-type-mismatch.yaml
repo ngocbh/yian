@@ -16,8 +16,8 @@ name: err_input_type_mismatch
 description: (negative, runtime) a flow input value can't coerce to its declared type.
 
 input:
-  topic: str
-  window: int                    # required integer
+  topic: !str
+  window: !int                    # required integer
 
 nodes:
   note:

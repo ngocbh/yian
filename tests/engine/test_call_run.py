@@ -17,8 +17,8 @@ _CHILD = """
 id: child-one
 name: child_one
 input:
-  topic: str
-  suffix: str = "!"
+  topic: !str
+  suffix: !str "!"
 nodes:
   emit:
     kind: code
@@ -37,7 +37,7 @@ _BOOM_CHILD = """
 id: boom-child
 name: boom_child
 input:
-  topic: str
+  topic: !str
 nodes:
   emit:
     kind: code
@@ -52,7 +52,7 @@ _CALL_PARENT = """
 id: ref-parent
 name: ref_parent
 input:
-  topic: str
+  topic: !str
 uses:
   child-one: child-one
 nodes:
@@ -70,7 +70,7 @@ _CALL_BOOM = """
 id: ref-boom
 name: ref_boom
 input:
-  topic: str
+  topic: !str
 uses:
   boom-child: boom-child
 nodes:
@@ -112,11 +112,11 @@ typedefs:
   Payload:
     value: int
 input:
-  payload: Optional[Payload]
+  payload: !Optional(Payload)
 defs:
   pick:
     input:
-      payload: Optional[Payload]
+      payload: !Optional(Payload)
     nodes: {}
     output: ${input.payload.value}
 nodes:
@@ -146,7 +146,7 @@ name: list_none_call
 defs:
   echo:
     input:
-      values: list[Optional[str]]
+      values: !list(Optional(str))
     nodes: {}
     output: ${input.values}
 nodes:
@@ -154,7 +154,7 @@ nodes:
     kind: code
     code: |
       return [None]
-    output: list[None]
+    output: list(None)
   invoke:
     kind: call
     call: echo
@@ -183,7 +183,7 @@ def test_call_child_failure_fails_the_run():
 
 
 def test_call_child_applies_its_own_default():
-    # the child declares `suffix: str = "!"`, which the parent does not bind; the child's
+    # the child declares `suffix: !str "!"`, which the parent does not bind; the child's
     # own default fills it (the default-seeding path runs without the parent supplying it).
     parent = load_flow(_CALL_PARENT, child_resolver=_resolver(**{"child-one": _CHILD}))
     result = run_flow(parent, {"topic": "X"})
@@ -195,8 +195,8 @@ _CHILD_BOUNDARY_DEFAULT = """
 id: child-bd
 name: child_bd
 input:
-  topic: str
-  window: int = 30
+  topic: !str
+  window: !int 30
 nodes:
   emit:
     kind: code
@@ -213,7 +213,7 @@ _CALL_PARENT_BD = """
 id: ref-parent-bd
 name: ref_parent_bd
 input:
-  topic: str
+  topic: !str
 uses:
   child-bd: child-bd
 nodes:
@@ -241,7 +241,7 @@ _CALL_PARENT_BD_TEXT = """
 id: ref-parent-bdc
 name: ref_parent_bdc
 input:
-  topic: str
+  topic: !str
 uses:
   child-bd: child-bd
 nodes:

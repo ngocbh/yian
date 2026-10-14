@@ -631,7 +631,8 @@ def test_loader_allows_private_callable_prefix_in_graph_node_id():
     loaded = load_flow(
         f"""id: prefix-node
 name: prefix_node
-input: {{x: str}}
+input:
+  x: !str
 nodes:
   {INLINE_FLOW_PREFIX}host:
     kind: code
@@ -1008,7 +1009,7 @@ def test_typed_inline_call_preserves_nullable_parent_scalar(value):
         """id: inline-call-nullable-input
 name: inline_call_nullable_input
 input:
-  maybe: Optional[int]
+  maybe: !Optional(int)
 nodes:
   wrapper:
     kind: call
@@ -1020,7 +1021,7 @@ nodes:
         code: tests.engine._compose_codefns:echo_x
         input:
           x: ${input.value}
-        output: Optional[int]
+        output: Optional(int)
     output: ${echo.output}
 output: ${wrapper.output}
 """
@@ -1301,7 +1302,7 @@ output: ${consumer.output}
     assert "consumer.input.value" in message
     assert "producer 'missing' has no available static type" in message
     assert (
-        "declare its type with a typed binding (`name: Type = value`) or use an "
+        "declare its type with a tag (`value: !<type> ...`) or use an "
         "explicitly typed named `defs:` body"
     ) in message
     assert INLINE_FLOW_PREFIX not in message
@@ -1344,7 +1345,7 @@ output: ${consumer.output}
     assert "consumer.input.value" in message
     assert "producer 'producer' has no available static type" in message
     assert (
-        "declare its type with a typed binding (`name: Type = value`) or use an "
+        "declare its type with a tag (`value: !<type> ...`) or use an "
         "explicitly typed named `defs:` body"
     ) in message
     assert INLINE_FLOW_PREFIX not in message
@@ -1389,10 +1390,12 @@ output:
     assert result.output == {"first": "base", "second": "base", "merged": "merged"}
 
 
-def test_inline_literal_containers_are_inert_at_edges_and_runtime():
+def test_inline_nested_containers_are_evaluated_at_edges_and_runtime():
     loaded = load_flow(
-        """id: inline-literal-containers
-name: inline_literal_containers
+        """id: inline-nested-containers
+name: inline_nested_containers
+input:
+  x: !str
 nodes:
   producer:
     kind: code
@@ -1404,12 +1407,11 @@ nodes:
     input:
       payload:
         producer: ${producer.output}
-        item: ${item.x}
         parent: ${input.x}
         dollars: $$
         deep:
           - ${producer.output}
-          - ${item.x}
+          - got ${input.x}
     nodes:
       echo:
         kind: code
@@ -1419,27 +1421,25 @@ nodes:
           payload: ${input.payload}
         output:
           producer: str
-          item: str
           parent: str
           dollars: str
-          deep: list[str]
+          deep: list(str)
     output: ${echo.output}
 output: ${wrapper.output}
 """
     )
 
-    assert not any(
+    assert any(
         edge.from_ == "producer" and edge.to == "wrapper"
         for edge in loaded.compiled.edges
     )
-    result = run_flow(loaded, {})
+    result = run_flow(loaded, {"x": "parent"})
     assert result.status == "succeeded"
     assert result.output == {
-        "producer": "${producer.output}",
-        "item": "${item.x}",
-        "parent": "${input.x}",
-        "dollars": "$$",
-        "deep": ["${producer.output}", "${item.x}"],
+        "producer": "resolved",
+        "parent": "parent",
+        "dollars": "$",
+        "deep": ["resolved", "got parent"],
     }
 
 
@@ -1451,10 +1451,10 @@ typedefs:
   Inner:
     value: str
   Outer:
-    inner: Optional[Inner]
+    inner: Optional(Inner)
 input:
-  root: Optional[Inner]
-  outer: Outer
+  root: !Optional(Inner)
+  outer: !Outer
 nodes:
   wrapper:
     kind: call
@@ -1470,8 +1470,8 @@ nodes:
           root_value: ${input.root_value}
           nested_value: ${input.nested_value}
         output:
-          root: Optional[str]
-          nested: Optional[str]
+          root: Optional(str)
+          nested: Optional(str)
     output: ${collect.output}
 output: ${wrapper.output}
 """
@@ -1513,8 +1513,8 @@ name: inline_partial_producer_field
 defs:
   body:
     input:
-      n: int
-      note: str
+      n: !int
+      note: !str
     nodes: {}
     output:
       n: ${input.n}
@@ -1560,7 +1560,7 @@ name: inline_named_equivalence
 defs:
   named:
     input:
-      x: int
+      x: !int
     nodes:
       echo:
         kind: code
@@ -1828,9 +1828,9 @@ def test_inline_map_opaque_over_without_direct_item_walk_loads_and_runs():
         """id: inline-map-opaque-over-no-item
 name: inline_map_opaque_over_no_item
 input:
-  primary: list[str]
-  fallback: list[str]
-  prefix: str
+  primary: !list(str)
+  fallback: !list(str)
+  prefix: !str
 nodes:
   each:
     kind: map
@@ -1840,7 +1840,7 @@ nodes:
       parent: ${input.prefix}
       template: item ${item}
       literal:
-        nested: ${item.value}
+        nested: ${input.prefix}
     nodes:
       collect:
         kind: code
@@ -1878,26 +1878,28 @@ output: ${each.output}
             "constant": "fixed",
             "parent": "P",
             "template": "item first",
-            "literal": {"nested": "${item.value}"},
+            "literal": {"nested": "P"},
         },
         {
             "constant": "fixed",
             "parent": "P",
             "template": "item second",
-            "literal": {"nested": "${item.value}"},
+            "literal": {"nested": "P"},
         },
     ]
 
 
-@pytest.mark.parametrize("item_source", ["${item}", "${item.name}"])
+@pytest.mark.parametrize(
+    "item_source", ["${item}", "${item.name}", "{nested: '${item}'}"]
+)
 def test_inline_map_direct_item_on_opaque_over_fails_at_requesting_binding(
     item_source: str,
 ):
     source = f"""id: inline-map-opaque-over-item
 name: inline_map_opaque_over_item
 input:
-  primary: list[str]
-  fallback: list[str]
+  primary: !list(str)
+  fallback: !list(str)
 nodes:
   each:
     kind: map
@@ -1925,7 +1927,7 @@ output: ${{each.output}}
     message = str(caught.value)
     assert "each.input.row" in message
     assert (
-        "declare its type with a typed binding (`name: Type = value`) or use an "
+        "declare its type with a tag (`row: !<type> ...`) or use an "
         "explicitly typed named `defs:` body"
     ) in message
     assert "only typed inside an outer MAP input" not in message
@@ -1960,8 +1962,8 @@ typedefs:
   Row:
     name: str
 input:
-  items: list[Row]
-  prefix: str
+  items: !list(Row)
+  prefix: !str
 nodes:
   each:
     kind: map
@@ -1971,7 +1973,7 @@ nodes:
       parent: ${input.prefix}
       template: prefix ${input.prefix}
       literal:
-        nested: ${item.name}
+        nested: $${item.name}
     nodes:
       echo:
         kind: code
@@ -1991,7 +1993,7 @@ typedefs:
   Row:
     name: str
 input:
-  items: list[Row]
+  items: !list(Row)
 nodes:
   each:
     kind: map
@@ -2033,7 +2035,7 @@ typedefs:
     name: str
     position: int
 input:
-  rows: list[Row]
+  rows: !list(Row)
 nodes:
   prepare:
     kind: code
@@ -2041,7 +2043,7 @@ nodes:
       return inputs["rows"]
     input:
       rows: ${input.rows}
-    output: list[Row]
+    output: list(Row)
   each:
     kind: map
     parallel: true
@@ -2091,7 +2093,7 @@ def test_inline_map_proves_list_any_date_element_and_runs():
         """id: inline-map-date-items
 name: inline_map_date_items
 input:
-  days: list[date]
+  days: !list(date)
 nodes:
   each:
     kind: map
@@ -2129,7 +2131,7 @@ def test_inline_map_missing_list_element_fails_at_item_binding(
     source = """id: inline-map-missing-element
 name: inline_map_missing_element
 input:
-  items: list[str]
+  items: !list(str)
 nodes:
   each:
     kind: map
@@ -2176,9 +2178,9 @@ typedefs:
   Detail:
     name: str
   Row:
-    detail: Optional[Detail]
+    detail: Optional(Detail)
 input:
-  items: list[Optional[Row]]
+  items: !list(Optional(Row))
 nodes:
   each:
     kind: map
@@ -2195,8 +2197,8 @@ nodes:
           row: ${input.row}
           name: ${input.name}
         output:
-          row: Optional[Row]
-          name: Optional[str]
+          row: Optional(Row)
+          name: Optional(str)
     output: ${collect.output}
 output: ${each.output}
 """
@@ -2238,7 +2240,7 @@ def test_inline_map_rejects_outer_asserts_without_private_identity():
             """id: inline-map-asserts
 name: inline_map_asserts
 input:
-  items: list[str]
+  items: !list(str)
 nodes:
   each:
     kind: map
@@ -2416,7 +2418,7 @@ def test_inline_map_child_keeps_item_namespace_closed():
     source = """id: inline-map-closed-child
 name: inline_map_closed_child
 input:
-  items: list[str]
+  items: !list(str)
 nodes:
   each:
     kind: map
@@ -2591,7 +2593,7 @@ def test_inline_loop_contract_diagnostics_are_friendly_and_redacted(
         """id: inline-loop-bad-contract
 name: inline_loop_bad_contract
 input:
-  seed: int
+  seed: !int
 nodes:
   repeat:
     kind: loop
@@ -2623,7 +2625,7 @@ def test_nested_inline_composites_register_four_lexical_children_once(
         """id: nested-inline-composites
 name: nested_inline_composites
 input:
-  items: list[int]
+  items: !list(int)
 nodes:
   outer_call:
     kind: call
@@ -2854,8 +2856,8 @@ def test_inline_wrapper_bad_input_uses_outer_binding_range(bad_input: str):
     source = """id: inline-child-input-ranges
 name: inline_child_input_ranges
 input:
-  value: str
-  count: int
+  value: !str
+  count: !int
 nodes:
   wrapper:
     kind: call
@@ -2999,7 +3001,7 @@ def test_inline_map_output_error_uses_friendly_child_label():
             """id: inline-map-no-output
 name: inline_map_no_output
 input:
-  items: list[str]
+  items: !list(str)
 nodes:
   each:
     kind: map

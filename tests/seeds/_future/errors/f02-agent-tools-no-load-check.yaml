@@ -18,7 +18,7 @@
 id: fut-agent-tools-no-load-check
 name: fut_agent_tools_no_load_check
 input:
-  topic: str
+  topic: !str
 nodes:
   note:
     kind: agent

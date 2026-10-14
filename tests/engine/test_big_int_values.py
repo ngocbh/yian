@@ -41,7 +41,7 @@ _INPUT_FLOW = """
 id: big-input
 name: big_input
 input:
-  xs: list[int]
+  xs: !list(int)
 nodes:
   n:
     kind: code
@@ -58,7 +58,7 @@ _OUTPUT_FLOW = """
 id: big-output
 name: big_output
 input:
-  n: int
+  n: !int
 nodes:
   t:
     kind: code
@@ -71,7 +71,7 @@ _GATE_FLOW = """
 id: big-gate
 name: big_gate
 input:
-  x: int
+  x: !int
 nodes:
   inc:
     kind: code

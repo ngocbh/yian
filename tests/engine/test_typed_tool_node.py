@@ -105,7 +105,7 @@ _ONE_NODE_FLOW = """
 id: count
 name: count
 input:
-  qty: int
+  qty: !int
 kind: tool
 tool_id: place_order
 output: int
@@ -132,9 +132,9 @@ _ORDERS_FLOW = """
 id: orders
 name: orders
 typedefs:
-  Filled: {type: 'Literal[filled]', qty: int}
-  Interrupted: {type: 'Literal[interrupted]', by: str, partial: 'Optional[int]'}
-  OrderResult: Union[Filled, Interrupted]
+  Filled: {type: 'Literal(filled)', qty: int}
+  Interrupted: {type: 'Literal(interrupted)', by: str, partial: 'Optional(int)'}
+  OrderResult: Union(Filled, Interrupted)
 nodes:
   place:
     kind: tool
@@ -365,8 +365,8 @@ name: looping
 defs:
   turn:
     input:
-      count: int
-      last: str
+      count: !int
+      last: !str
     nodes:
       place:
         kind: tool
@@ -488,7 +488,7 @@ output: ${{place.output}}
 
 def test_a_disjoint_input_type_fails_at_run_start(tmp_path: Path):
     path = tmp_path / "run.jsonl"
-    flow = load_flow(_typed_flow("${input.s}", flow_inputs="input:\n  s: str"))
+    flow = load_flow(_typed_flow("${input.s}", flow_inputs="input:\n  s: !str"))
 
     with pytest.raises(ValueError, match=re.escape(
         "TOOL node 'place' input 'qty': tool 'place_order' takes int, but the binding is str"
@@ -532,7 +532,7 @@ def test_an_int_literal_into_an_int_runs():
 
 
 def test_an_optional_input_starts_and_the_tool_validates_none():
-    flow = load_flow(_typed_flow("${input.n}", flow_inputs="input:\n  n: Optional[int]"))
+    flow = load_flow(_typed_flow("${input.n}", flow_inputs="input:\n  n: !Optional(int)"))
 
     missing = run_flow(flow, {"n": None}, tools={"place_order": place_int})
     present = run_flow(flow, {"n": 3}, tools={"place_order": place_int})
@@ -544,7 +544,7 @@ def test_an_optional_input_starts_and_the_tool_validates_none():
 
 
 def test_an_int_into_a_float_runs():
-    flow = load_flow(_typed_flow("${input.n}", flow_inputs="input:\n  n: int"))
+    flow = load_flow(_typed_flow("${input.n}", flow_inputs="input:\n  n: !int"))
 
     result = run_flow(flow, {"n": 2}, tools={"place_order": place_float})
 
@@ -557,7 +557,7 @@ def test_a_typed_binding_over_an_unproven_source_is_checked_by_its_declared_type
     kind: code
     code: 'return 1'
 """
-    flow = load_flow(_typed_flow("int = ${c.output}", extra_nodes=code))
+    flow = load_flow(_typed_flow("!int ${c.output}", extra_nodes=code))
 
     with pytest.raises(ValueError, match=r"input 'qty'.*takes str, but the binding is int$"):
         run_flow(flow, {}, tools={"place_order": place_str})
@@ -566,8 +566,10 @@ def test_a_typed_binding_over_an_unproven_source_is_checked_by_its_declared_type
 _RECORD_FLOW = """
 id: placing
 name: placing
+typedefs:
+  Order: {qty: int, note: str}
 input:
-  order: {qty: int, note: str}
+  order: !Order
 nodes:
   place:
     kind: tool
@@ -599,7 +601,7 @@ def test_a_record_with_an_extra_field_into_a_closed_model_fails_at_run_start():
 
 
 def test_a_json_schema_tool_with_a_disjoint_binding_fails_at_run_start():
-    flow = load_flow(_typed_flow("${input.s}", flow_inputs="input:\n  s: str"))
+    flow = load_flow(_typed_flow("${input.s}", flow_inputs="input:\n  s: !str"))
 
     with pytest.raises(ValueError, match=r"input 'qty'.*takes int, but the binding is str$"):
         run_flow(flow, {"s": "x"}, tools={"place_order": _JsonSchemaTool()})
@@ -687,8 +689,8 @@ def test_a_union_return_with_no_shared_tag_fails_at_run_start():
     assert _declared_output(place_refused) is not None
 
     with pytest.raises(ValueError, match=(
-        r"output: declared Union\[.*\], but tool 'place_order' returns "
-        r'Union\[\{"type":Literal\["cancelled"\]\},\{"reason":str,"type":Literal\["rejected"\]\}\]$'
+        r"output: declared Union\(.*\), but tool 'place_order' returns "
+        r'Union\(\{"type":Literal\("cancelled"\)\},\{"reason":str,"type":Literal\("rejected"\)\}\)$'
     )):
         run_flow(load_flow(_ORDERS_FLOW), {}, tools={"place_order": place_refused})
 

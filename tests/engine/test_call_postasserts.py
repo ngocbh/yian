@@ -30,7 +30,7 @@ _CHILD = """
 id: child-one
 name: child_one
 input:
-  topic: str
+  topic: !str
 nodes:
   emit:
     kind: code
@@ -145,7 +145,7 @@ _BLOCKING_CHILD = """
 id: approver
 name: approver
 input:
-  action: str
+  action: !str
 nodes:
   approve:
     kind: human_input
@@ -164,7 +164,7 @@ name: gate_parent
 uses:
   approver: approver
 input:
-  action: str
+  action: !str
 nodes:
   gate:
     kind: call

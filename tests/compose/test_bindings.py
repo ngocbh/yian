@@ -13,6 +13,8 @@ from yian.compose.nodes.loop import LoopDescriptor
 from yian.compose.nodes.map import MapDescriptor
 from yian.compose.nodes.tool import ToolDescriptor
 from yian.compose.nodes.wait import WaitDescriptor
+from yian.diagnostics import OriginRef
+from yian.nodes.contracts import ValueTemplate
 
 
 def _up(_field, _key, value):
@@ -94,3 +96,21 @@ def test_human_input_and_loop_inputs_rewritten():
         out = map_binding_strings(desc, _up)
         assert out.inputs == {"q": "${QS}"}
         assert out is not desc
+
+
+def test_template_leaf_strings_rewritten_with_their_binding_key():
+    origin = OriginRef(key="/s:leaf")
+    template = ValueTemplate({"a": "${src}", "b": [1, "${other}"]}, ((("a",), origin),))
+    desc = AgentDescriptor(id="a", inputs={"x": template})
+    sites = []
+
+    def record(field, key, value):
+        sites.append((field, key, value))
+        return value.upper()
+
+    out = map_binding_strings(desc, record)
+
+    assert out.inputs["x"] == ValueTemplate(
+        {"a": "${SRC}", "b": [1, "${OTHER}"]}, ((("a",), origin),)
+    )
+    assert sites == [("inputs", "x", "${src}"), ("inputs", "x", "${other}")]

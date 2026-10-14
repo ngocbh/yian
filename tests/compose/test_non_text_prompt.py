@@ -29,7 +29,7 @@ def _agent(value: str) -> str:
     return f"""\
 id: f
 name: f
-input: {{proj: str}}
+input: {{proj: !str }}
 nodes:
   a:
     kind: agent
@@ -44,7 +44,7 @@ def _gate(value: str) -> str:
     return f"""\
 id: f
 name: f
-input: {{proj: str}}
+input: {{proj: !str }}
 nodes:
   ask:
     kind: human_input
@@ -59,7 +59,7 @@ def _adaptive(value: str) -> str:
     return f"""\
 id: f
 name: f
-input: {{proj: str}}
+input: {{proj: !str }}
 nodes:
   ask:
     kind: human_input
@@ -76,7 +76,7 @@ def _compact(kind: str, value: str) -> str:
 id: reply
 name: reply
 input:
-  proj: str
+  proj: !str
 output: str
 kind: {kind}
 prompt: {value}
@@ -168,11 +168,11 @@ def test_defs_body_prompt_must_be_text() -> None:
 id: f
 name: f
 input:
-  topic: str
+  topic: !str
 defs:
   enrich:
     input:
-      topic: str
+      topic: !str
     nodes:
       summarize:
         kind: agent

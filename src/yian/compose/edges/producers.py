@@ -13,7 +13,7 @@ from typing import Any, Optional
 
 from yian.compile.model import START_ID
 from yian.expr import ExpressionError, expr_refs_of
-from yian.nodes.contracts import binding_source
+from yian.nodes.contracts import iter_source_strings
 
 
 def _ref_producer(path: str) -> Optional[str]:
@@ -36,20 +36,19 @@ def _binding_producers(value: Any) -> list[str]:
     """The producer node ids a binding/expression value reads (in source order).
 
     `value` may be a `${...}` binding string, a `when:`/`on:` expression template,
-    or a non-string literal (no refs). Coalesce alternatives flatten to several
-    producers — the caller assigns them ALL the one sink `input_group`. An `inputs.X` ref
-    produces from START_ID (the input-reader data edge); `system.X` produces nothing.
+    a `ValueTemplate` (each nested string, in tree order), or a non-string literal (no
+    refs). Coalesce alternatives flatten to several producers — the caller assigns them
+    ALL the one sink `input_group`. An `inputs.X` ref produces from START_ID (the
+    input-reader data edge); `system.X` produces nothing.
     """
-    value = binding_source(value)
-    if not isinstance(value, str):
-        return []
-    try:
-        refs = expr_refs_of(value)
-    except ExpressionError:
-        return []  # malformed refs surface in the ref-wiring pass, located
     producers: list[str] = []
-    for ref in refs:
-        producer = _ref_producer(ref)
-        if producer is not None:
-            producers.append(producer)
+    for _, text in iter_source_strings(value):
+        try:
+            refs = expr_refs_of(text)
+        except ExpressionError:
+            continue  # malformed refs surface in the ref-wiring pass, located
+        for ref in refs:
+            producer = _ref_producer(ref)
+            if producer is not None:
+                producers.append(producer)
     return producers

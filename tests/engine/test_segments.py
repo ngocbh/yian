@@ -376,7 +376,7 @@ def test_flat_list_failure_carries_the_actual_element_index() -> None:
         build_value_as(ValueKind.LIST_INTEGER, [1, "bad", 3])
 
     assert caught.value.path == (1,)
-    assert str(caught.value) == "list element 'bad' is not int (declared list[int])"
+    assert str(caught.value) == "list element 'bad' is not int (declared list(int))"
 
 
 def test_record_shape_failures_choose_one_deterministic_field_path() -> None:

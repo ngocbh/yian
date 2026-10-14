@@ -6,7 +6,7 @@
 id: err-agent-controls-no-range
 name: err_agent_controls_no_range
 input:
-  topic: str
+  topic: !str
 nodes:
   note:
     kind: agent

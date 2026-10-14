@@ -64,7 +64,10 @@ class Node:
 - **`inputs`** — the params, already resolved from the pool into a plain dict (never the
   pool itself). Each source-neutral `Parameter` declares a name plus optional
   contract/default/coercion policy; the **flow** owns where it reads from, and the
-  engine binds the two before calling.
+  engine binds the two before calling. A flow-owned `Binding` is a template string, a
+  literal, or a `ValueTemplate` (an authored mapping or list whose nested `${...}`
+  strings and tagged parts are evaluated in place). A tagged binding's value is checked
+  against its tag before `run`, without conversion; a mismatch fails with `binding.type`.
 - **`caps`** — narrow capabilities a plain input dict cannot carry, such as a mapped
   call's `caps["bind_item"]` or a cooperative `stop_event`. The read boundary supplies
   only traits a node explicitly requests. The AGENT node is the documented exception for

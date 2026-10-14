@@ -9,7 +9,7 @@ name: hello_agent
 description: One AGENT turns a topic into a neutral one-paragraph note.
 
 input:                       # the flow's parameters (top-level section)
-  topic: str                 # a str leaf = a scalar type (a required parameter)
+  topic: !str                 # a str leaf = a scalar type (a required parameter)
 
 nodes:                        # a MAP keyed by node id (no `id:` field, no `edges:`)
   note:

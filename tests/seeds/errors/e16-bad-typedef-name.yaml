@@ -4,7 +4,7 @@ name: err_bad_typedef_name
 typedefs:
   Optional: str          # ERROR: shadows the `Optional` typing constructor
 input:
-  topic: str
+  topic: !str
 nodes:
   note:
     kind: agent

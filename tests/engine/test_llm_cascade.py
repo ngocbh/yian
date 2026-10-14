@@ -289,8 +289,8 @@ llm_config: {provider: anthropic}
 defs:
   bump:
     input:
-      n: int
-      exited: bool
+      n: !int
+      exited: !bool
     nodes:
       think: {kind: agent, prompt: hi}
       step:

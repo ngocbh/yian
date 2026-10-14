@@ -31,7 +31,7 @@ _FLOW = """\
 id: cli_log
 name: cli_log
 input:
-  topic: str
+  topic: !str
 nodes:
   echo:
     kind: code

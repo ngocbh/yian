@@ -26,7 +26,7 @@ name: typed_replay
 defs:
   bump:
     input:
-      rounds: int
+      rounds: !int
     nodes:
       step:
         kind: code
@@ -45,16 +45,16 @@ nodes:
     kind: code
     code: tests.engine._compose_codefns:replay_use
     input:
-      qty: int = ${p.output}
+      qty: !int ${p.output}
     output: int
   loop:
     kind: loop
     call: bump
     times: 2
     input:
-      rounds: int = 0
+      rounds: !int 0
 output:
-  total: int = ${use.output}
+  total: !int ${use.output}
   rounds: ${loop.output.rounds}
 """
 
@@ -109,7 +109,7 @@ nodes:
   use:
     kind: code
     input:
-      n: int = ${ask.output}
+      n: !int ${ask.output}
     code: |
       return inputs["n"] * 2
 output: ${use.output}
@@ -154,7 +154,7 @@ def test_resume_rejects_a_changed_declared_binding_type(tmp_path: Path, calls: l
     """Changing only a binding's declared type changes the fingerprint, so resume refuses."""
     path = tmp_path / "typed.jsonl"
     assert run_flow(load_flow(_TYPED_FLOW), {}, log=path).status == "succeeded"
-    changed = _TYPED_FLOW.replace("qty: int = ${p.output}", "qty: float = ${p.output}")
+    changed = _TYPED_FLOW.replace("qty: !int ${p.output}", "qty: !float ${p.output}")
     assert changed != _TYPED_FLOW
 
     with pytest.raises(ValueError, match="flow fingerprint mismatch"):
@@ -172,7 +172,7 @@ nodes:
     code: |
       return 5
 output:
-  total: int = ${n.output}
+  total: !int ${n.output}
 """
     path = tmp_path / "end.jsonl"
     first = run_flow(load_flow(flow), {}, log=path)

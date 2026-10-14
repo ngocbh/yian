@@ -39,7 +39,7 @@ validate phase.
 Imports flow down/peer only: `lark` (parse-tree types), `expr` (ref scan/rewrite and the
 `isinstance` tree helpers), `nodes` (Case/CaseNode/Parameter), `compile.model` (Edge),
 `typesys` (the non-finite check), and the compose peers
-`source`/`helpers.errors`/`helpers.output_contracts`/`helpers.typed_bindings`/`nodes.base`.
+`source`/`helpers.errors`/`helpers.output_contracts`/`helpers.tags`/`nodes.base`.
 It imports NOTHING from parse/desugar/edges/validate/build/loader (the ladder), so it stays a
 leaf of the nodes package.
 """
@@ -69,12 +69,12 @@ from yian.expr import (
     rewrite_condition_reads,
 )
 from yian.nodes.case import ELSE_HANDLE, Case, CaseNode
-from yian.nodes.contracts import Binding, Parameter, binding_source
+from yian.nodes.contracts import Binding, Parameter, binding_source, iter_source_strings
 from yian.typesys import TypeCheckError
 from yian.typesys.values import reject_nonfinite
 from yian.compose.helpers.errors import LoadDiagnostics, source_text
 from yian.compose.helpers.output_contracts import direct_reference_parts
-from yian.compose.helpers.typed_bindings import yaml_quoted
+from yian.compose.helpers.tags import yaml_quoted
 from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from yian.compose.source import SourceCursor
 
@@ -488,31 +488,30 @@ def _data_edges(node_id: str, wiring: dict[str, Any]) -> list[Edge]:
     edges: list[Edge] = []
     counts: dict[str, int] = {}
     for name, source in wiring.items():
-        source = binding_source(source)
-        if not isinstance(source, str):
-            continue
-        try:
-            refs = expr_refs_of(source)
-        except ExpressionError:
-            continue  # malformed refs surface, located, in the ref-wiring pass
-        for ref in refs:
-            producer = _outputs_producer(ref)
-            if producer is None:
-                continue
-            i = counts.get(producer, 0)
-            counts[producer] = i + 1
-            edges.append(
-                Edge(
-                    id=f"{producer}->{node_id}#{i}",
-                    from_=producer,
-                    to=node_id,
-                    input_group=name,
-                    # Each source carries a binding's stance: an `on:` value may carry an
-                    # escape, a searched node-output read inside one is `${path :- null}`
-                    # (optional), and a co-skipping escape's join input is required.
-                    optional=not binding_co_skips(source),
+        # Each source carries a binding's stance: an `on:` value may carry an escape, a
+        # searched node-output read inside one is `${path :- null}` (optional), and a
+        # co-skipping escape's join input is required.
+        optional = not binding_co_skips(binding_source(source))
+        for _, text in iter_source_strings(source):
+            try:
+                refs = expr_refs_of(text)
+            except ExpressionError:
+                continue  # malformed refs surface, located, in the ref-wiring pass
+            for ref in refs:
+                producer = _outputs_producer(ref)
+                if producer is None:
+                    continue
+                i = counts.get(producer, 0)
+                counts[producer] = i + 1
+                edges.append(
+                    Edge(
+                        id=f"{producer}->{node_id}#{i}",
+                        from_=producer,
+                        to=node_id,
+                        input_group=name,
+                        optional=optional,
+                    )
                 )
-            )
     return edges
 
 

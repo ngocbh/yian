@@ -111,15 +111,15 @@ _BINDING = """
 id: f
 name: f
 input:
-  a: Optional[str] = null
-  b: Optional[str] = null
+  a: !Optional(str) null
+  b: !Optional(str) null
 nodes:
   n:
     kind: code
     code: "return inputs['v']"
     input:
       v: <value>
-    output: Optional[str]
+    output: Optional(str)
 output: ${n.output}
 """
 
@@ -146,15 +146,15 @@ _SEARCHED = """
 id: f
 name: f
 input:
-  n: Optional[int] = null
-  approve: bool = false
-  label: str = none
+  n: !Optional(int) null
+  approve: !bool false
+  label: !str none
 nodes:
   score:
     kind: code
     code: "return inputs['n']"
     input: {n: '${input.n}'}
-    output: Optional[int]
+    output: Optional(int)
   gate:
     kind: case
     cases:
@@ -208,7 +208,8 @@ def test_case_on_a_whole_span_routes():
 _ASSERTS = """
 id: f
 name: f
-input: {n: int}
+input:
+  n: !int
 nodes:
   n:
     kind: code
@@ -242,7 +243,9 @@ id: f
 name: f
 defs:
   step:
-    input: {n: int, exited: bool}
+    input:
+      n: !int
+      exited: !bool
     nodes:
       s:
         kind: code
@@ -280,7 +283,8 @@ def test_loop_predicate_in_the_bare_spelling_runs():
 _PROMPT = """
 id: f
 name: f
-input: {name: str}
+input:
+  name: !str
 nodes:
   brief:
     kind: agent

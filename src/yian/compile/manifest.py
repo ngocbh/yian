@@ -42,6 +42,7 @@ from yian.nodes.contracts import (
     Parameter,
     PartialRecordContract,
     ValueContract,
+    ValueTemplate,
 )
 from yian.nodes.end import EndNode
 from yian.nodes.human_input import HumanInputNode
@@ -176,6 +177,8 @@ _EDGE_FIELDS = frozenset(
 _FLOW_OUTPUT_FIELDS = frozenset({"name", "binding"})
 _BINDING_CANONICAL_FIELDS = frozenset({"source", "contract"})
 _BINDING_IGNORED_FIELDS = frozenset({"origin"})
+_VALUE_TEMPLATE_CANONICAL_FIELDS = frozenset({"value"})
+_VALUE_TEMPLATE_IGNORED_FIELDS = frozenset({"origins"})
 _ASSERTION_CANONICAL_FIELDS = frozenset({"expression", "display"})
 _ASSERTION_IGNORED_FIELDS = frozenset({"origin"})
 _PARAMETER_CANONICAL_FIELDS = frozenset(
@@ -406,8 +409,81 @@ def _canonical_mapping(value: dict, ctx: _ManifestContext, path: str) -> dict[st
         ctx.values.remove(object_id)
 
 
+def _value_template_manifest(
+    value: ValueTemplate,
+    ctx: _ManifestContext,
+    path: str,
+) -> dict[str, Any]:
+    """Encode a value template's tree; its origins are diagnostic-only."""
+    _check_fields(
+        value,
+        _VALUE_TEMPLATE_CANONICAL_FIELDS | _VALUE_TEMPLATE_IGNORED_FIELDS,
+        path,
+    )
+    return {
+        "tree": _template_tree_manifest(value.value, ctx, f"{path}.value"),
+        "type": "value_template",
+    }
+
+
+def _template_tree_manifest(value: Any, ctx: _ManifestContext, path: str) -> Any:
+    """Encode one part of a template tree, where a nested `Binding` may appear.
+
+    Containers encode as `_canonical_value` does; a nested binding encodes its
+    source and declared type, and every other leaf encodes as a plain value.
+    """
+    if isinstance(value, Binding):
+        _check_fields(
+            value,
+            _BINDING_CANONICAL_FIELDS | _BINDING_IGNORED_FIELDS,
+            path,
+        )
+        contract = (
+            None
+            if value.contract is None
+            else _value_contract_manifest(value.contract, ctx, f"{path}.contract")["type"]
+        )
+        return {
+            "contract": contract,
+            "source": _template_tree_manifest(value.source, ctx, f"{path}.source"),
+            "type": "binding",
+        }
+    if type(value) not in (dict, list):
+        return _canonical_value(value, ctx, path)
+    object_id = id(value)
+    if object_id in ctx.values:
+        raise ValueError(f"{path}: cyclic value is not manifestable")
+    ctx.values.add(object_id)
+    try:
+        if type(value) is list:
+            return {
+                "items": [
+                    _template_tree_manifest(item, ctx, f"{path}[{index}]")
+                    for index, item in enumerate(value)
+                ],
+                "type": "list",
+            }
+        entries = [
+            {
+                "key": _canonical_value(key, ctx, f"{path}.keys[{index}]"),
+                "value": _template_tree_manifest(item, ctx, f"{path}.values[{index}]"),
+            }
+            for index, (key, item) in enumerate(value.items())
+        ]
+        entries.sort(key=_canonical_json)
+        return {"entries": entries, "type": "mapping"}
+    finally:
+        ctx.values.remove(object_id)
+
+
 def _canonical_value(value: Any, ctx: _ManifestContext, path: str) -> Any:
-    """Encode one value as a deterministic, type-discriminated JSON record."""
+    """Encode one value as a deterministic, type-discriminated JSON record.
+
+    A `ValueTemplate` encodes as `value_template` around its tree, so no literal
+    shares a template's encoding.
+    """
+    if isinstance(value, ValueTemplate):
+        return _value_template_manifest(value, ctx, path)
     if isinstance(value, Enum):
         enum_type = type(value)
         return {
@@ -732,7 +808,8 @@ def _node_manifest(
         ],
     }
 
-    # Emitted only when non-empty so nodes without `isinstance` keep their fingerprints.
+    # Emitted only when non-empty so nodes without `isinstance` or a `T(...)` constructor
+    # keep their fingerprints.
     if type(node.types) is not dict:
         raise TypeError(f"{path}.types: expected dict, got {type(node.types).__name__}")
     for name, typ in node.types.items():

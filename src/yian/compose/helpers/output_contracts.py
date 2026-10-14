@@ -15,11 +15,12 @@ or runtime.
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any, Iterable
+from math import isfinite
+from typing import Any, Callable, Iterable
 
 from lark import Token, Tree
 
-from yian.expr import ExpressionError, expr_refs, infer_expr_type
+from yian.expr import ExpressionError, eval_binding, expr_refs, infer_expr_type
 from yian.expr.template import Span, scan_template, template_refs
 from yian.nodes.contracts import (
     Binding,
@@ -27,11 +28,25 @@ from yian.nodes.contracts import (
     OutputContract,
     PartialRecordContract,
     ValueContract,
+    ValueTemplate,
     binding_source,
     output_contract_field_error,
     output_contract_type,
 )
-from yian.typesys.values import FieldRead, Type, ValueKind, union_field
+from yian.typesys import TypeCheckError, build_value
+from yian.typesys.values import (
+    FieldRead,
+    Type,
+    ValueKind,
+    list_kind_for_element,
+    union_field,
+)
+
+NOT_LITERAL = object()
+"""Marks a binding source that is a template, not a literal, in `literal_value`."""
+
+TypeFn = Callable[[str], "Type | None"]
+"""Resolves a `T(...)` constructor name to its type, or `None` for a name that is none."""
 
 
 def project_output_contract(
@@ -175,6 +190,8 @@ def resolve_output_binding_contract(
     binding: Any,
     producers: dict[str, OutputContract],
     flow_inputs: dict[str, ValueContract],
+    *,
+    type_fn: TypeFn | None = None,
 ) -> OutputContract | None:
     """Resolve one Compose output binding to its canonical value contract.
 
@@ -186,7 +203,10 @@ def resolve_output_binding_contract(
     source-free ``Optional`` contract.  A computed whole-value expression receives a new
     source-free contract only when the expression engine proves its result type.  Embedded
     or multiple template spans always produce ``str``; malformed, literal-text, and
-    unsupported computed bindings remain untyped.
+    unsupported computed bindings remain untyped.  A `T(...)` constructor has type
+    ``T`` (``type_fn`` resolves it).  A value template's contract is inferred from its
+    structure (``template_contract``), each string by these rules and each literal by
+    its kind.
 
     Args:
         binding (`Any`):
@@ -197,6 +217,9 @@ def resolve_output_binding_contract(
             proven field of a partial record remains projectable.
         flow_inputs (`dict[str, ValueContract]`):
             Exact flow input contracts keyed by input name.
+        type_fn (`TypeFn | None`, *optional*, defaults to `None`):
+            Resolves a constructor name to its type; ``None`` leaves constructors
+            untyped.
 
     Returns:
         `OutputContract | None`:
@@ -211,6 +234,13 @@ def resolve_output_binding_contract(
     if isinstance(binding, Binding) and binding.contract is not None:
         return binding.contract
     source = binding_source(binding)
+    if isinstance(source, ValueTemplate):
+        return template_contract(
+            source,
+            lambda text: resolve_output_binding_contract(
+                text, producers, flow_inputs, type_fn=type_fn
+            ),
+        )
     if not isinstance(source, str):
         return None
     try:
@@ -243,8 +273,161 @@ def resolve_output_binding_contract(
             contract = reference_contract(path, producers, flow_inputs)
         return output_contract_type(contract)
 
-    inferred = infer_expr_type(expression, reference_type)
+    inferred = infer_expr_type(expression, reference_type, type_fn)
     return None if inferred is None else ValueContract(inferred)
+
+
+def template_contract(
+    template: ValueTemplate,
+    string_contract: Callable[[str], OutputContract | None],
+    *,
+    exact_literals: bool = False,
+) -> OutputContract | None:
+    """Infer a value template's contract from its structure.
+
+    A mapping is a closed record of its fields' contracts: exact when every field is
+    exact, else partial. A list is a list of its items' joined type when every item
+    is exact and the items are equal up to `Optional` (or become equal once literal
+    refinements are widened); otherwise, and for an empty list, it is unproven. A
+    nested typed binding has its declared contract, a template string the contract
+    `string_contract` gives it, and a literal (including a string with no `${...}`
+    span) its kind, as a top-level literal would leave it open to change.
+
+    Args:
+        template (`ValueTemplate`): The template to infer.
+        string_contract (`Callable[[str], OutputContract | None]`): Infers one
+            template string's contract.
+        exact_literals (`bool`, *optional*, defaults to `False`): Give each literal
+            its exact type (a one-tag `Literal`, one-point bounds), for checking the
+            value against a declared type, where a wrong literal must not fit.
+
+    Returns:
+        `OutputContract | None`: The inferred exact or partial contract, or `None`
+            when the value's shape is not proven.
+    """
+    return _tree_contract(template.value, string_contract, exact_literals)
+
+
+def _tree_contract(
+    node: Any,
+    string_contract: Callable[[str], OutputContract | None],
+    exact_literals: bool,
+) -> OutputContract | None:
+    """Infer the contract of one node of a template tree (see `template_contract`)."""
+    if isinstance(node, Binding):
+        if node.contract is not None:
+            return node.contract
+        return _tree_contract(node.source, string_contract, exact_literals)
+    if type(node) is dict:
+        return combine_output_contracts(
+            {
+                key: _tree_contract(item, string_contract, exact_literals)
+                for key, item in node.items()
+            }
+        )
+    if type(node) is list:
+        return _list_contract(
+            [_tree_contract(item, string_contract, exact_literals) for item in node]
+        )
+    literal = literal_value(node)
+    if literal is NOT_LITERAL:
+        return string_contract(node)
+    typ = literal_type(literal)
+    if typ is None:
+        return None
+    return ValueContract(typ if exact_literals else _widened(typ))
+
+
+def _list_contract(items: list[OutputContract | None]) -> ValueContract | None:
+    """Return the list contract of exact items with one joined type, else `None`."""
+    # Unlike an inline body's strict element join, this leaves a list it can't join
+    # unproven (the runtime check covers it) instead of failing the load.
+    if not items or any(type(item) is not ValueContract for item in items):
+        return None
+    types = [item.type for item in items]
+    element = _joined(types)
+    if element is None:
+        element = _joined([_widened(typ) for typ in types])
+    if element is None:
+        return None
+    return ValueContract(Type(kind=list_kind_for_element(element), element=element))
+
+
+def _joined(types: list[Type]) -> Type | None:
+    """Return the types' common type when they are equal up to `Optional`, else `None`."""
+    bare = [replace(typ, nullable=False) for typ in types]
+    if any(typ != bare[0] for typ in bare[1:]):
+        return None
+    return replace(bare[0], nullable=any(typ.nullable for typ in types))
+
+
+def _widened(typ: Type) -> Type:
+    """Return `typ` with literal refinements (tags, bounds) dropped, at every depth."""
+    return replace(
+        typ,
+        tags=None,
+        bounds=None,
+        fields=(
+            None
+            if typ.fields is None
+            else {name: _widened(field) for name, field in typ.fields.items()}
+        ),
+        element=None if typ.element is None else _widened(typ.element),
+    )
+
+
+def literal_value(source: Any) -> Any:
+    """Return the value a literal binding source binds, or `NOT_LITERAL` for a template.
+
+    A string with no `${...}` span binds its text after `$$` unescaping, exactly as
+    the binder evaluates it; a value template is a template; any other value is
+    bound as is.
+
+    Args:
+        source (`Any`): The binding's raw source.
+
+    Returns:
+        `Any`: The bound literal value, or `NOT_LITERAL`.
+    """
+    if isinstance(source, ValueTemplate):
+        return NOT_LITERAL
+    if not isinstance(source, str):
+        return source
+    try:
+        segments = scan_template(source)
+        if any(isinstance(segment, Span) for segment in segments):
+            return NOT_LITERAL
+        return eval_binding(source, lambda path: None)
+    except ExpressionError:
+        return NOT_LITERAL  # malformed text is reported by reference validation
+
+
+def literal_type(value: Any) -> Type | None:
+    """Return the exact type of a literal value, else `None`.
+
+    Args:
+        value (`Any`): The bound literal.
+
+    Returns:
+        `Type | None`: A one-tag `Literal` for non-empty text, one-point bounds for a
+            finite number, the value's kind otherwise; `None` for a non-finite number
+            or a value with no type.
+    """
+    if type(value) is int:
+        return Type(kind=ValueKind.INTEGER, bounds=(value, value))
+    if type(value) is float:
+        if not isfinite(value):
+            return None
+        return Type(kind=ValueKind.NUMBER, bounds=(value, value))
+    if type(value) is str:
+        # A tag must be non-empty, so empty text is plain str.
+        if not value:
+            return Type.scalar(ValueKind.STRING)
+        return Type(kind=ValueKind.STRING, tags=frozenset({value}))
+    try:
+        return Type.scalar(build_value(value).kind)
+    except TypeCheckError:
+        return None
 
 
 def _null_default_contract(
@@ -475,11 +658,17 @@ def direct_reference_parts(expression: Tree | Token) -> tuple[str, ...] | None:
 
 
 __all__ = [
+    "NOT_LITERAL",
     "combine_output_contracts",
     "direct_reference_parts",
+    "literal_type",
+    "literal_value",
     "output_contract_path_error",
     "project_output_contract",
+    "reference_contract",
     "record_field_origins",
     "reference_contract",
     "resolve_output_binding_contract",
+    "template_contract",
+    "TypeFn",
 ]

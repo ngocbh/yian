@@ -30,14 +30,14 @@ from yian.typesys.types import read_typedefs
 
 _REGISTRY = read_typedefs(
     {
-        "Limit": {"type": "Literal[limit]", "price": "float"},
-        "Market": {"type": "Literal[market]"},
-        "Leg": "Union[Limit, Market]",
-        "Buy": {"action": "Literal[buy]", "qty": "int", "leg": "Leg"},
-        "Hold": {"action": "Literal[hold]"},
-        "Sell": {"action": "Literal[sell]", "qty": "int", "price": "float"},
-        "Decision": "Union[Buy, Hold, Sell]",
-        "BuyOrSell": "Union[Buy, Sell]",
+        "Limit": {"type": "Literal(limit)", "price": "float"},
+        "Market": {"type": "Literal(market)"},
+        "Leg": "Union(Limit, Market)",
+        "Buy": {"action": "Literal(buy)", "qty": "int", "leg": "Leg"},
+        "Hold": {"action": "Literal(hold)"},
+        "Sell": {"action": "Literal(sell)", "qty": "int", "price": "float"},
+        "Decision": "Union(Buy, Hold, Sell)",
+        "BuyOrSell": "Union(Buy, Sell)",
         "Text": {"text": "str"},
     }
 )

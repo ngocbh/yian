@@ -20,6 +20,7 @@ from dataclasses import replace
 from typing import Any, Callable
 
 from yian.compose.nodes import BINDING_FIELDS
+from yian.nodes.contracts import ValueTemplate, map_source_strings
 
 
 def _descriptor_kind(desc: Any) -> str:
@@ -30,23 +31,24 @@ def _descriptor_kind(desc: Any) -> str:
     return desc.kind
 
 
-def map_binding_strings(
+def map_binding_sources(
     desc: Any,
-    mapper: Callable[[str, str, str], Any],
+    mapper: Callable[[str, str, Any], Any],
     *,
     binding_fields: dict = BINDING_FIELDS,
 ) -> Any:
-    """Apply `mapper(field, key, value)` to each declared string binding.
+    """Apply `mapper(field, key, source)` to each declared template-bearing binding.
 
     The fields are `binding_fields[kind]` (from each kind's `binding_fields`): a dict field
-    (e.g. `inputs`) supplies `("inputs", binding_name, value)`; a scalar field (e.g.
-    MAP's `over`) supplies `("over", "over", value)`. Keeping the owning field separate
-    from the binding key disambiguates `input: {over: ...}` from scalar `over:`.
+    (e.g. `inputs`) supplies `("inputs", binding_name, source)`; a scalar field (e.g.
+    MAP's `over`) supplies `("over", "over", source)`. Keeping the owning field separate
+    from the binding key disambiguates `input: {over: ...}` from scalar `over:`. A source
+    is a string or a `ValueTemplate`; any other value is left as is.
 
     Args:
         desc (`Any`): Descriptor whose class declares a registered binding surface.
-        mapper (`Callable[[str, str, str], Any]`): Owning field, binding key, and value
-            transformer. It may raise.
+        mapper (`Callable[[str, str, Any], Any]`): Owning field, binding key, and
+            source transformer. It may raise.
         binding_fields (`dict`, *optional*): Kind-to-field registry; defaults to the
             package registry and is injectable for tests.
 
@@ -64,14 +66,45 @@ def map_binding_strings(
         current = getattr(desc, name)
         if isinstance(current, dict):
             updates[name] = {
-                k: (mapper(name, k, v) if isinstance(v, str) else v)
+                k: (mapper(name, k, v) if isinstance(v, (str, ValueTemplate)) else v)
                 for k, v in current.items()
             }
-        elif isinstance(current, str):
+        elif isinstance(current, (str, ValueTemplate)):
             updates[name] = mapper(name, name, current)
-        # None / non-string scalar: nothing to rewrite.
+        # None / literal scalar: nothing to rewrite.
 
     return replace(desc, **updates) if updates else desc
+
+
+def map_binding_strings(
+    desc: Any,
+    mapper: Callable[[str, str, str], Any],
+    *,
+    binding_fields: dict = BINDING_FIELDS,
+) -> Any:
+    """Apply `mapper(field, key, value)` to each declared binding's template strings.
+
+    Walks the same sources as `map_binding_sources`; a string source is one value and a
+    `ValueTemplate` supplies each leaf string under its binding's field and key.
+
+    Args:
+        desc (`Any`): Descriptor whose class declares a registered binding surface.
+        mapper (`Callable[[str, str, str], Any]`): Owning field, binding key, and string
+            transformer. It may raise.
+        binding_fields (`dict`, *optional*): Kind-to-field registry; defaults to the
+            package registry and is injectable for tests.
+
+    Returns:
+        `Any`: Replaced frozen descriptor when a field was visited, otherwise the
+        original descriptor.
+    """
+    return map_binding_sources(
+        desc,
+        lambda field, key, source: map_source_strings(
+            source, lambda text: mapper(field, key, text)
+        ),
+        binding_fields=binding_fields,
+    )
 
 
 def keyless(fn: Callable[[str], Any]) -> Callable[[str, str, str], Any]:

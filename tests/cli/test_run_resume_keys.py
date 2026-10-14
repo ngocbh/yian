@@ -30,7 +30,7 @@ _FLOW = """\
 id: resume_key
 name: resume_key
 input:
-  topic: str
+  topic: !str
 nodes:
   prep:
     kind: code

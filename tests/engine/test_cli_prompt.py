@@ -113,7 +113,7 @@ def test_input_label_required():
 
 def test_input_label_optional_no_default():
     as_of = next(d for d in _decls() if d.name == "as_of")
-    assert _input_label(as_of) == "as_of (Optional[date]) [optional] e.g. 2026-05-21"
+    assert _input_label(as_of) == "as_of (Optional(date)) [optional] e.g. 2026-05-21"
 
 
 def test_input_label_optional_with_default():
@@ -134,7 +134,7 @@ def test_input_label_default_suppresses_example():
         has_default=True,
         default="2026-01-01",
     )
-    assert _input_label(as_of) == "as_of (Optional[date]) [default: 2026-01-01]"
+    assert _input_label(as_of) == "as_of (Optional(date)) [default: 2026-01-01]"
 
 
 def test_input_label_derives_a_canonical_structural_type():
@@ -151,7 +151,7 @@ def test_input_label_derives_a_canonical_structural_type():
         required=True,
     )
 
-    assert _input_label(profile) == 'profile ({"a":Optional[str],"z":int}) *'
+    assert _input_label(profile) == 'profile ({"a":Optional(str),"z":int}) *'
 
 
 def test_input_label_displays_an_explicit_null_default():
@@ -162,7 +162,7 @@ def test_input_label_displays_an_explicit_null_default():
         default=None,
     )
 
-    assert _input_label(maybe) == "maybe (Optional[int]) [default: None]"
+    assert _input_label(maybe) == "maybe (Optional(int)) [default: None]"
 
 
 def test_input_label_supports_a_flat_list_contract():
@@ -172,7 +172,7 @@ def test_input_label_supports_a_flat_list_contract():
         required=True,
     )
 
-    assert _input_label(items) == "items (list[str]) *"
+    assert _input_label(items) == "items (list(str)) *"
 
 
 # --- _gather_missing_inputs: policy + interactive labels --------------------- #
@@ -381,7 +381,7 @@ def test_parse_structured_input_returns_native_arrays_and_objects(raw, typ, expe
         (
             '["bad"]',
             Type.scalar(ValueKind.LIST_INTEGER),
-            "$[0]: list element 'bad' is not int (declared list[int])",
+            "$[0]: list element 'bad' is not int (declared list(int))",
         ),
         (
             '[{"count": "bad"}]',
@@ -970,7 +970,7 @@ def test_prompt_labels_carry_marks(monkeypatch):
     _gather_missing_inputs(_decls(), {}, prompt_available=True)
     joined = " || ".join(fake.labels)
     assert "topic (str) *" in joined
-    assert "as_of (Optional[date]) [optional]" in joined
+    assert "as_of (Optional(date)) [optional]" in joined
     assert "window (int) [default: 30]" in joined
 
 
@@ -1073,10 +1073,12 @@ def test_prompt_accepting_omission_preserves_start_owned_defaults(monkeypatch):
         """
 id: prompt-defaults
 name: prompt-defaults
+typedefs:
+  Mode: Literal(z, a)
 input:
-  items: list[str] = [a, b]
-  mode: Literal["z", "a"] = z
-  flag: Optional[bool]
+  items: !list(str) [a, b]
+  mode: !Mode z
+  flag: !Optional(bool)
 nodes:
   show:
     kind: code

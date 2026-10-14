@@ -19,7 +19,7 @@ def _new_only() -> str:
 id: f
 name: f
 input:
-  x: str
+  x: !str
 nodes:
   n:
     kind: code
@@ -37,7 +37,7 @@ def _legacy_input() -> str:
 id: f
 name: f
 inputs:
-  x: str
+  x: !str
 nodes: {}
 """
 
@@ -47,7 +47,7 @@ def _legacy_output() -> str:
 id: f
 name: f
 input:
-  x: str
+  x: !str
 nodes: {}
 outputs:
   r: ${n.output}
@@ -74,7 +74,7 @@ _NODE_PLURAL = """\
 id: f
 name: f
 input:
-  x: int
+  x: !int
 nodes:
   n:
     kind: code
@@ -109,7 +109,7 @@ def test_node_with_both_signature_spellings_rejected(order) -> None:
 id: f
 name: f
 input:
-  x: int
+  x: !int
 nodes:
   n:
     kind: code
@@ -130,11 +130,11 @@ def test_legacy_def_signature_key_rejected_at_its_key() -> None:
 id: f
 name: f
 input:
-  x: int
+  x: !int
 defs:
   child:
     inputs:
-      x: int
+      x: !int
     nodes:
       n:
         kind: code
@@ -164,12 +164,12 @@ def test_legacy_single_node_def_signature_key_rejected() -> None:
 id: f
 name: f
 input:
-  x: int
+  x: !int
 defs:
   child:
     kind: code
     input:
-      x: int
+      x: !int
     outputs: int
     code: return inputs["x"]
 nodes:

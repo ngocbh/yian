@@ -20,7 +20,7 @@ _CODE = "tests.engine._compose_codefns:echo_x"
 
 
 def _lib(memory: str = "{notes: episodic}", *, call: str | None = None, uses=None) -> str:
-    lines = ["id: lib", "name: lib", f"long_term_memory: {memory}", "input: {x: str}", "nodes:"]
+    lines = ["id: lib", "name: lib", f"long_term_memory: {memory}", "input:", "  x: !str", "nodes:"]
     if call:
         lines.append(f'  a: {{kind: call, call: {call}, input: {{x: "${{input.x}}"}}}}')
     else:
@@ -38,7 +38,7 @@ def _root(calls: dict[str, str], uses: dict[str, str], memory: str | None = None
     lines = ["id: root", "name: root"]
     if memory is not None:
         lines.append(f"long_term_memory: {memory}")
-    lines += ["input: {x: str}", "nodes:"]
+    lines += ["input:", "  x: !str", "nodes:"]
     for node, target in calls.items():
         lines.append(f'  {node}: {{kind: call, call: {target}, input: {{x: "${{input.x}}"}}}}')
     lines.append('output: {y: "${input.x}"}')
@@ -130,7 +130,8 @@ def test_one_file_under_two_aliases_gives_two_sets(tmp_path: Path) -> None:
             "nodes:\n",
             "defs:\n"
             "  inner:\n"
-            "    input: {x: str}\n"
+            "    input:\n"
+            "      x: !str\n"
             "    nodes:\n"
             "      ask:\n"
             "        kind: agent\n"
@@ -254,7 +255,8 @@ def test_a_clash_inside_an_import_names_the_scoped_sites(tmp_path: Path) -> None
         "id: lib\nname: lib\n"
         "long_term_memory: {notes: episodic}\n"
         "llm_config: {provider: openai, model: fake-model}\n"
-        "input: {x: str}\n"
+        "input:\n"
+        "  x: !str\n"
         "nodes:\n"
         "  ask:\n"
         "    kind: agent\n"

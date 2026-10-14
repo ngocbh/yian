@@ -10,7 +10,7 @@
 id: err-external-raise
 name: err_external_raise
 input:
-  topic: str
+  topic: !str
 
 uses:
   boom: lib_boom                # external flow on the search path (this dir)

@@ -128,7 +128,7 @@ def test_a_far_too_deep_reference_output_fails_on_depth():
 id: nesting
 name: nesting
 input:
-  n: int
+  n: !int
 nodes:
   deep:
     kind: code
@@ -166,7 +166,7 @@ nodes:
     kind: map
     over: "${{[1, 2]}}"
     input:
-      y: int = ${{item}}
+      y: !int ${{item}}
     nodes:
       work:
         kind: code
@@ -211,7 +211,7 @@ def test_a_run_input_record_may_carry_a_value_at_the_limit():
 id: nesting
 name: nesting
 input:
-  x: object
+  x: !object
 nodes:
   echo:
     kind: code
@@ -236,7 +236,7 @@ def test_a_run_input_over_the_limit_is_rejected_before_the_run_starts(tmp_path, 
 id: nesting
 name: nesting
 input:
-  x: object
+  x: !object
 nodes: {}
 output: ${input.x}
 """)
@@ -265,7 +265,7 @@ _WRAPPED_BINDING_FLOW = """
 id: nesting
 name: nesting
 input:
-  x: object
+  x: !object
 nodes:
   c:
     kind: code
@@ -284,17 +284,26 @@ def test_a_binding_around_a_value_at_the_limit_fails_its_node():
     assert result.failure.trace[0].key == "/s:root/s:node/s:c/s:input/s:y/s:binding"
 
 
+def test_a_value_template_around_a_value_at_the_limit_fails_its_node():
+    # A record written around a nested `${...}` adds a level, like `${[x]}`.
+    text = _WRAPPED_BINDING_FLOW.replace("y: ${[input.x]}", 'y: {w: "${input.x}"}')
+
+    assert run_flow(load_flow(text), {"x": _nest_dict(99)}).status == "succeeded"
+    result = run_flow(load_flow(text), {"x": _nest_dict(100)})
+    _assert_binding_too_deep(result, "c", "input 'y' at w.a")
+
+
 def _call_flow(binding: str, declared: str) -> str:
     """Return a flow whose `k` CALL node binds the def input `y: declared` to `binding`."""
     return f"""
 id: nesting
 name: nesting
 input:
-  x: object
+  x: !object
 defs:
   body:
     input:
-      y: {declared}
+      y: !{declared}
     nodes:
       inner:
         kind: code
@@ -321,7 +330,7 @@ def test_a_call_bound_to_a_value_at_the_limit_succeeds():
 
 
 def test_a_call_bound_over_the_limit_fails_the_call_not_its_start():
-    result = run_flow(load_flow(_call_flow("${[input.x]}", "list[object]")), {"x": _nest_dict(100)})
+    result = run_flow(load_flow(_call_flow("${[input.x]}", "list(object)")), {"x": _nest_dict(100)})
 
     _assert_binding_too_deep(result, "k", "input 'y' at [0].a")
 
@@ -331,13 +340,13 @@ def test_a_map_over_list_around_a_value_at_the_limit_fails_the_map():
 id: nesting
 name: nesting
 input:
-  x: object
+  x: !object
 nodes:
   m:
     kind: map
     over: ${[input.x]}
     input:
-      y: object = ${item}
+      y: !object ${item}
     nodes:
       work:
         kind: code
@@ -441,7 +450,7 @@ def test_value_at_the_limit_learns_from_an_input():
 id: nesting
 name: nesting
 input:
-  x: object
+  x: !object
 nodes:
   echo:
     kind: code
@@ -836,7 +845,8 @@ llm_config: {{provider: ollama, model: test}}
 nodes:
   writer:
     kind: agent
-    variables: {{t: 'object = {_flow_literal(101)}'}}
+    variables:
+      t: !object {_flow_literal(101)}
     prompt: go
     output: str
 output: ${{writer.output}}
@@ -857,7 +867,7 @@ def test_a_start_default_over_the_limit_fails_start():
 id: nesting
 name: nesting
 input:
-  x: 'object = {_flow_literal(101)}'
+  x: !object {_flow_literal(101)}
 nodes:
   c:
     kind: code

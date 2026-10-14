@@ -27,7 +27,7 @@ _TWO_STEP = """
 id: two-step
 name: two_step
 input:
-  x: int
+  x: !int
 nodes:
   first:
     kind: code
@@ -50,7 +50,7 @@ _RECORD_OUTPUT = """
 id: record-out
 name: record_out
 input:
-  x: int
+  x: !int
 nodes:
   first:
     kind: code
@@ -68,7 +68,7 @@ _CHILD = """
 id: child
 name: child
 input:
-  x: int
+  x: !int
 nodes:
   inner:
     kind: code
@@ -84,7 +84,7 @@ _PARENT = """
 id: parent
 name: parent
 input:
-  x: int
+  x: !int
 uses:
   child: child
 nodes:

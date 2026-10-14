@@ -357,7 +357,7 @@ class LoopDescriptor(NodeDescriptor):
     def _seed_contract(self, ctx: BuildContext, name: str) -> OutputContract | None:
         """One omitted field's contract, resolved from its seed binding, else `None`.
 
-        A typed seed (`name: Type = value`) carries its declared type, which the driver
+        A typed seed (`name: !Type value`) carries its declared type, which the driver
         checks when it binds the seed; an untyped seed's contract is read from its value.
 
         Args:

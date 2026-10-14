@@ -10,7 +10,7 @@ name: lib_boom
 description: An external flow whose only node raises (external-frame traceback fixture).
 
 input:
-  topic: str
+  topic: !str
 
 nodes:
   kaboom:

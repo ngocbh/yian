@@ -19,7 +19,7 @@ id: reusable
 name: reusable
 llm_config: {openai: {temperature: 0.2}}
 input:
-  topics: list[str]
+  topics: !list(str)
 defs:
   call_child:
     nodes:
@@ -30,7 +30,7 @@ defs:
     output: ${answer.output}
   map_child:
     input:
-      topic: str
+      topic: !str
     nodes:
       inspect:
         kind: agent
@@ -46,8 +46,8 @@ defs:
     output: ${emit.output}
   loop_child:
     input:
-      n: int
-      exited: bool
+      n: !int
+      exited: !bool
     nodes:
       inspect:
         kind: agent

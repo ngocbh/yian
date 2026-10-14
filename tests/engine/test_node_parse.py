@@ -530,7 +530,7 @@ fetch:
   input:
     topic: ${input.topic}
   output:
-    values: list[float]
+    values: list(float)
   code: tests.seeds.fns:fetch_facts
 """
     )["fetch"]

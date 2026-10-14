@@ -33,7 +33,7 @@ def _flow(asserts: list[str], *, input_decl="n: ${input.v}", outputs="int") -> s
 id: na
 name: na
 input:
-  v: int
+  v: !int
 nodes:
   x:
     kind: code
@@ -260,11 +260,11 @@ def test_reject_inline_call_in_node_assert():
 id: na
 name: na
 input:
-  v: int
+  v: !int
 defs:
   dbl:
     input:
-      n: int
+      n: !int
     nodes:
       y:
         kind: code
@@ -295,11 +295,11 @@ def test_reject_call_directive_in_node_assert():
 id: na
 name: na
 input:
-  v: int
+  v: !int
 defs:
   dbl:
     input:
-      n: int
+      n: !int
     nodes:
       y:
         kind: code
@@ -338,11 +338,11 @@ def test_reject_node_asserts_on_mapped_call():
 id: nam
 name: nam
 input:
-  vs: list[int]
+  vs: !list(int)
 defs:
   dbl:
     input:
-      n: int
+      n: !int
     nodes:
       y:
         kind: code
@@ -395,7 +395,7 @@ def test_post_assert_on_nonscalar_output_fails_cleanly():
 id: rec
 name: rec
 input:
-  topic: str
+  topic: !str
 nodes:
   x:
     kind: code
@@ -418,7 +418,7 @@ def test_post_assert_record_field_passes():
 id: recf
 name: recf
 input:
-  topic: str
+  topic: !str
 nodes:
   x:
     kind: code
@@ -443,7 +443,7 @@ def test_skipped_branch_target_asserts_do_not_fire():
 id: skp
 name: skp
 input:
-  v: int
+  v: !int
 nodes:
   gate:
     kind: case
@@ -478,7 +478,7 @@ def test_absent_input_pre_assert_fails_cleanly():
 id: ab
 name: ab
 input:
-  maybe: Optional[int]
+  maybe: !Optional(int)
 nodes:
   x:
     kind: code
@@ -498,7 +498,7 @@ _CHECKED_DEF = """
 defs:
   checked:
     input:
-      n: int
+      n: !int
     nodes:
       y:
         kind: code
@@ -517,7 +517,7 @@ def test_def_internal_node_assert_via_call():
 id: dr
 name: dr
 input:
-  v: int
+  v: !int
 {_CHECKED_DEF}
 nodes:
   call_it:
@@ -538,7 +538,7 @@ def test_def_internal_node_assert_via_map():
 id: dm
 name: dm
 input:
-  vs: list[int]
+  vs: !list(int)
 {_CHECKED_DEF}
 nodes:
   m:
@@ -558,7 +558,7 @@ _TWO_NODES = """
 id: two
 name: two
 input:
-  v: int
+  v: !int
 nodes:
   a:
     kind: code

@@ -2,7 +2,7 @@
 id: err-required-missing
 name: err_required_missing
 input:
-  as_of: Optional[date]
+  as_of: !Optional(date)
 nodes:
   use:
     kind: code

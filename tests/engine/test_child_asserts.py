@@ -19,7 +19,7 @@ _CHECKED_DEF = """
 defs:
   checked:
     input:
-      n: int
+      n: !int
     nodes:
       x:
         kind: code
@@ -37,7 +37,7 @@ _CALL_FLOW = f"""
 id: d
 name: d
 input:
-  v: int
+  v: !int
 {_CHECKED_DEF}
 nodes:
   call_it:
@@ -52,7 +52,7 @@ _MAP_FLOW = f"""
 id: dm
 name: dm
 input:
-  vs: list[int]
+  vs: !list(int)
 {_CHECKED_DEF}
 nodes:
   map_it:

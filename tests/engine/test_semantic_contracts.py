@@ -281,8 +281,8 @@ def test_output_contract_field_error_rejects_fields_on_fieldless_types() -> None
     assert err(Type.scalar(ValueKind.STRING), "a") == (
         "reference ${x} reads field 'a' on type str, which has no fields"
     )
-    assert "on type list[str]" in err(Type.scalar(ValueKind.LIST_STRING), "a")
-    assert "on type Optional[int]" in err(Type(kind=ValueKind.INTEGER, nullable=True), "a")
+    assert "on type list(str)" in err(Type.scalar(ValueKind.LIST_STRING), "a")
+    assert "on type Optional(int)" in err(Type(kind=ValueKind.INTEGER, nullable=True), "a")
     assert "on type None" in err(Type.scalar(ValueKind.NONE), "a")
     assert err(Type.scalar(ValueKind.OBJECT), "a", "b") is None
     assert err(Type.scalar(ValueKind.FILE), "uri") is None

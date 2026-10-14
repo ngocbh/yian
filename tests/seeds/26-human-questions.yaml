@@ -20,7 +20,7 @@ name: human_questions_static
 description: Ask a person a static set of questions, then route on the keyed answer.
 
 input:
-  proj: str
+  proj: !str
 
 nodes:
   ask:

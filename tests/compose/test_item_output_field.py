@@ -7,7 +7,7 @@ from yian.run import run_flow
 
 _LEAF = (
     "  leaf:\n"
-    "    input:\n      x: str\n"
+    "    input:\n      x: !str\n"
     "    nodes:\n"
     "      up:\n"
     "        kind: code\n"
@@ -34,7 +34,7 @@ def test_map_reads_an_item_field_named_output(item_ref, expected):
     text = (
         "id: p\nname: p\n"
         "typedefs:\n  Row: {output: str}\n"
-        "input:\n  rows: list[Row]\n"
+        "input:\n  rows: !list(Row)\n"
         "defs:\n" + _LEAF
         + "nodes:\n"
         "  m:\n"
@@ -51,10 +51,10 @@ def test_map_inside_a_called_def_reads_an_item_field_named_output():
     text = (
         "id: p\nname: p\n"
         "typedefs:\n  Row: {output: str}\n"
-        "input:\n  rows: list[Row]\n"
+        "input:\n  rows: !list(Row)\n"
         "defs:\n" + _LEAF
         + "  mid:\n"
-        "    input:\n      rows: list[Row]\n"
+        "    input:\n      rows: !list(Row)\n"
         "    nodes:\n"
         "      m:\n"
         "        kind: map\n"
@@ -76,7 +76,7 @@ def test_inline_map_body_reads_an_item_field_named_output():
     text = (
         "id: p\nname: p\n"
         "typedefs:\n  Row: {output: str}\n"
-        "input:\n  rows: list[Row]\n"
+        "input:\n  rows: !list(Row)\n"
         "nodes:\n"
         "  m:\n"
         "    kind: map\n"

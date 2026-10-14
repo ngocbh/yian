@@ -20,7 +20,7 @@ name: nested_call_loop_maxed
 defs:
   keep:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code
@@ -52,7 +52,7 @@ name: nested_binding
 defs:
   inner:
     input:
-      maybe: Optional[str]
+      maybe: !Optional(str)
     nodes:
       leaf:
         kind: code
@@ -75,7 +75,7 @@ name: nested_map_binding
 defs:
   inner:
     input:
-      maybe: Optional[str]
+      maybe: !Optional(str)
     nodes:
       leaf:
         kind: code
@@ -98,7 +98,7 @@ output: ${invoke.output}
 _EXTERNAL_CHILD = """id: echo-child
 name: echo_child
 input:
-  v: int
+  v: !int
 nodes:
   x:
     kind: code
@@ -129,7 +129,7 @@ name: nested_assert_parent
 defs:
   deep:
     input:
-      v: int
+      v: !int
     nodes:
       x:
         kind: code
@@ -140,7 +140,7 @@ defs:
     output: ${x.output}
   middle:
     input:
-      v: int
+      v: !int
     nodes:
       via:
         kind: call

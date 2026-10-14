@@ -15,6 +15,9 @@ Evaluation deliberately lives in `expr.expressions`.
   the result (`fn(x).field`) — mirroring the prompt call form.
 - Coalesce (`a | b | c`), default (`a :- d`), required (`a :? "msg"`).
 - The `isinstance(x, T)` special form, whose second argument is a bare type name.
+- Constructor calls `T(x)` / `T(a=..., b=...)`, parsed like any other call; whether a
+  callee is a constructor (and so takes keyword fields or one value) is known only once
+  compose resolves it against the flow's `typedefs:`.
 
 `${...}` marks an expression inside a YAML string, so it never appears inside one:
 values are named directly and grouped with parentheses. `parse_expr` rejects a
@@ -398,6 +401,25 @@ def _validate_isinstance(tree: Tree | Token) -> None:
             )
 
 
+def _validate_call_arguments(tree: Tree | Token) -> None:
+    """Reject a call that repeats a keyword argument, which no callee accepts."""
+    if not isinstance(tree, Tree):
+        return
+    for node in tree.iter_subtrees():
+        if node.data != "refcall":
+            continue
+        call_suffix = next(
+            (c for c in node.children if isinstance(c, Tree) and c.data == "call_suffix"),
+            None,
+        )
+        if call_suffix is None:
+            continue
+        keywords = [str(arg.children[0]) for arg in call_suffix.children if len(arg.children) == 2]
+        repeated = next((name for i, name in enumerate(keywords) if name in keywords[:i]), None)
+        if repeated is not None:
+            raise ExpressionError(f"{node.children[0]}(...) repeats the keyword {repeated!r}")
+
+
 def parse_expr(text: str) -> Tree | Token:
     """
     Parse one unified `${...}` expression into a Lark tree (PARSE ONLY).
@@ -426,8 +448,8 @@ def parse_expr(text: str) -> Tree | Token:
         `ExpressionError`:
             If `text` holds a `${...}` (see `reject_nested_spans`), does not parse,
             is a dotted-callee builtin call, uses a reserved operator word as a
-            reference root, or calls `isinstance` with anything but a value and a
-            bare type name.
+            reference root, calls `isinstance` with anything but a value and a bare
+            type name, or repeats a keyword argument.
     """
     reject_nested_spans(text)
     try:
@@ -437,5 +459,6 @@ def parse_expr(text: str) -> Tree | Token:
     _reject_dotted_callee(tree)
     # Before the reserved-root check, so `isinstance(x, in)` reports the type-name rule.
     _validate_isinstance(tree)
+    _validate_call_arguments(tree)
     _reject_reserved_reference_roots(tree)
     return tree

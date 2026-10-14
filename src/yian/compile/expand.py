@@ -62,6 +62,8 @@ from yian.nodes.contracts import (
     ExecutionScope,
     Parameter,
     SeedConnection,
+    ValueTemplate,
+    map_source_strings,
 )
 from yian.nodes.end.node import EndNode
 from yian.nodes.ids import map_callsite, ns
@@ -96,14 +98,15 @@ def _rens_internal(binding: Binding, callsite: str) -> Binding:
     Legacy plural heads (`outputs.X` / `inputs.X`) are rejected at parse time.
 
     Routes every `${...}` span through `rewrite_template_refs` and the shared parse tree, so
-    embedded, coalesced, and whole-expression spans are re-namespaced leaf by leaf."""
+    embedded, coalesced, and whole-expression spans are re-namespaced leaf by leaf; each
+    leaf string of a ``ValueTemplate`` source is rewritten the same way."""
     if not isinstance(binding, Binding):
         raise TypeError(
             "compiled flow wiring must contain Binding values, "
             f"got {type(binding).__name__}"
         )
     source = binding.source
-    if not isinstance(source, str):
+    if not isinstance(source, (str, ValueTemplate)):
         return replace(binding)
 
     def _rename(path: str) -> "str | None":
@@ -121,7 +124,9 @@ def _rens_internal(binding: Binding, callsite: str) -> Binding:
             return new + ("." + ".".join(parts[2:]) if len(parts) > 2 else "")
         return None  # system.X / any other head untouched
 
-    rewritten = rewrite_template_refs(source, _rename)
+    rewritten = map_source_strings(
+        source, lambda text: rewrite_template_refs(text, _rename)
+    )
     return replace(binding, source=rewritten)
 
 

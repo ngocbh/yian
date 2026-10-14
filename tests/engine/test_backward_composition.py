@@ -33,21 +33,21 @@ def test_nested_call_case_selects_partial_feedback_without_promoting_child_defau
     flow = load_flow("""id: selected-feedback
 name: selected_feedback
 input:
-  selected: bool
-  payload: object
+  selected: !bool
+  payload: !object
 defs:
   leaf:
     input:
-      payload: object
-      local: str = child default
+      payload: !object
+      local: !str child default
     nodes: {}
     output:
       payload: ${input.payload}
       local: ${input.local}
   wrapper:
     input:
-      selected: bool
-      payload: object
+      selected: !bool
+      payload: !object
     nodes:
       gate:
         kind: case
@@ -111,11 +111,11 @@ def test_public_map_preserves_equal_item_positions_after_reversed_completion(tmp
 name: ordered_map_feedback
 llm_config: {provider: ollama, model: local-test}
 input:
-  values: list[str]
+  values: !list(str)
 defs:
   item_flow:
     input:
-      value: str
+      value: !str
     nodes:
       gate:
         kind: code
@@ -215,17 +215,17 @@ def test_call_and_map_loop_calls_retain_each_agent_after_pruning_and_terminal_re
     flow = load_flow("""id: nested-agent-history
 name: nested_agent_history
 input:
-  n: int
-  values: list[int]
+  n: !int
+  values: !list(int)
 defs:
   agent_body:
     input:
-      n: int
+      n: !int
     nodes:
       author:
         kind: agent
         variables:
-          tone: str = concise
+          tone: !str concise
         input:
           n: ${input.n}
         prompt: '${tone}: ${n}'
@@ -234,7 +234,7 @@ defs:
     output: ${author.output}
   loop_body:
     input:
-      n: int
+      n: !int
     nodes:
       invoke:
         kind: call
@@ -245,7 +245,7 @@ defs:
   direct:
     llm_config: {provider: openai, model: no-structured-sentinel, openai: {temperature: 0.1}}
     input:
-      n: int
+      n: !int
     nodes:
       loop:
         kind: loop
@@ -257,7 +257,7 @@ defs:
   mapped:
     llm_config: {provider: deepseek, model: no-structured-sentinel, deepseek: {temperature: 0.8}}
     input:
-      n: int
+      n: !int
     nodes:
       loop:
         kind: loop
@@ -392,16 +392,16 @@ def test_concat_repeat_and_opaque_routes_cross_public_call_without_reevaluation(
 name: composed_expressions
 long_term_memory: test
 input:
-  values: list[str]
+  values: !list(str)
 defs:
   identity:
     input:
-      values: list[str]
+      values: !list(str)
     nodes: {}
     output: ${input.values}
   combine:
     input:
-      values: list[str]
+      values: !list(str)
     nodes:
       invoke:
         kind: call
@@ -446,12 +446,12 @@ name: owned_composition
 long_term_memory: outer
 llm_config: {provider: ollama, model: local-test}
 input:
-  topic: str
+  topic: !str
 defs:
   child:
     long_term_memory: inner
     input:
-      topic: str
+      topic: !str
     nodes:
       work:
         kind: code
@@ -461,7 +461,7 @@ defs:
         kind: agent
         long_term_memory: local
         variables:
-          tone: str = concise
+          tone: !str concise
         input:
           topic: ${input.topic}
         prompt: '${topic}: ${tone}'
@@ -561,7 +561,7 @@ def test_two_public_runs_reject_the_stale_reflective_snapshot_after_any_commit(t
 name: reflective_composition
 long_term_memory: reflective
 input:
-  text: str
+  text: !str
 nodes: {}
 output: ${input.text}
 """)

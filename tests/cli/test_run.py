@@ -59,7 +59,7 @@ ECHO_FLOW = """\
 id: cli_echo
 name: cli_echo
 input:
-  topic: str
+  topic: !str
 nodes:
   echo:
     kind: code
@@ -75,7 +75,7 @@ FAIL_FLOW = """\
 id: cli_fail
 name: cli_fail
 input:
-  topic: str
+  topic: !str
 nodes:
   boom:
     kind: code
@@ -91,7 +91,7 @@ INLINE_FLOW = """\
 id: cli_inline
 name: cli_inline
 input:
-  topic: str
+  topic: !str
 nodes:
   shout:
     kind: code
@@ -108,10 +108,10 @@ OMITTABLE_INPUTS_FLOW = """\
 id: cli_omittable_inputs
 name: cli_omittable_inputs
 input:
-  topic: str
-  limit: int = 7
-  labels: list[str] = [alpha, beta]
-  note: Optional[str]
+  topic: !str
+  limit: !int 7
+  labels: !list(str) [alpha, beta]
+  note: !Optional(str)
 nodes:
   show:
     kind: code
@@ -130,9 +130,9 @@ REQUIRED_INPUTS_FLOW = """\
 id: cli_required_inputs
 name: cli_required_inputs
 input:
-  first: str
-  optional: Optional[str]
-  second: int
+  first: !str
+  optional: !Optional(str)
+  second: !int
 nodes:
   show:
     kind: code
@@ -150,7 +150,7 @@ STRUCTURED_INPUT_FLOW = """\
 id: cli_structured_input
 name: cli_structured_input
 input:
-  items: list[int]
+  items: !list(int)
 nodes:
   inspect:
     kind: code
@@ -169,7 +169,7 @@ NULLABLE_STRUCTURED_INPUT_FLOW = """\
 id: cli_nullable_structured_input
 name: cli_nullable_structured_input
 input:
-  items: Optional[list[int]]
+  items: !Optional(list(int))
 nodes:
   inspect:
     kind: code
@@ -188,7 +188,7 @@ NULLABLE_DEFAULTED_SCALAR_FLOW = """\
 id: cli_nullable_defaulted_scalar
 name: cli_nullable_defaulted_scalar
 input:
-  value: Optional[int] = 7
+  value: !Optional(int) 7
 nodes:
   inspect:
     kind: code

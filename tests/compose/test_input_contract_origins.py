@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from textwrap import indent
 
 import pytest
@@ -19,17 +20,22 @@ from yian.run import run_flow
 _ROOT_FLOW = """\
 id: input-contract-origins
 name: input-contract-origins
-input:
-  topic: str
-  window: int = 30
-  payload:
-    profile:
-      age: int
-      nickname: Optional[str]
-  flags:
+typedefs:
+  Profile:
+    age: int
+    nickname: Optional(str)
+  Payload:
+    profile: Profile
+  Limits:
+    count: int
+  Flags:
     enabled: bool
-    limits:
-      count: int
+    limits: Limits
+input:
+  topic: !str
+  window: !int 30
+  payload: !Payload
+  flags: !Flags
 nodes:
   echo:
     kind: code
@@ -90,14 +96,14 @@ id: variable-origins
 name: variable-origins
 typedefs:
   Settings:
-    limit: int[1,12]
-    tags: list[str]
+    limit: int(1..12)
+    tags: list(str)
 nodes:
   writer:
     kind: agent
     variables:
-      settings: 'Settings = {limit: 4, tags: [a, b]}'
-      note: Optional[str] = null
+      settings: !Settings {limit: 4, tags: [a, b]}
+      note: !Optional(str) null
     prompt: ${note}
     output: str
 output: ${writer.output}
@@ -118,7 +124,7 @@ output: ${writer.output}
 
 @pytest.mark.parametrize("placement", ["compact", "definition", "flat-definition", "inline"])
 def test_agent_variable_locations_follow_existing_node_projections(placement):
-    body = "kind: agent\nvariables:\n  count: int[1,12] = 4\nprompt: ${count}\noutput: str\n"
+    body = "kind: agent\nvariables:\n  count: !int(1..12) 4\nprompt: ${count}\noutput: str\n"
     header = "id: projected_variables\nname: projected_variables\n"
     if placement == "compact":
         text = header + body
@@ -151,8 +157,8 @@ def test_agent_variable_locations_follow_existing_node_projections(placement):
     _assert_site(loaded.origin_resolver, variable.contract.origins.default, cursor)
     _assert_site(loaded.origin_resolver, variable.default_origin, cursor)
 
-    invalid = text.replace("int[1,12] = 4", "int[1,12] = 13")
-    with pytest.raises(LoadError, match="default.*does not satisfy") as caught:
+    invalid = text.replace("!int(1..12) 4", "!int(1..12) 13")
+    with pytest.raises(LoadError, match=re.escape("'count': `13` is not a valid int(1..12)")) as caught:
         load_flow(invalid)
     invalid_cursor = SourceDocument.parse(invalid).root
     for segment in cursor_path:
@@ -166,7 +172,7 @@ id: variable_child
 name: variable_child
 kind: agent
 variables:
-  count: int[1,12] = 4
+  count: !int(1..12) 4
 prompt: ${count}
 output: str
 """
@@ -236,48 +242,22 @@ def test_root_inputs_compile_parameter_contract_default_and_nested_origins():
     )
     assert len({parameter_origin, contract_origin, default_origin}) == 3
 
-    payload = _parameter(loaded.input, "payload")
-    payload_cursor = inputs.child("payload")
-    payload_entries = dict(_contract(payload).origins.entries)
-    _assert_site(
-        loaded.origin_resolver,
-        _contract(payload).origins.default,
-        payload_cursor,
-    )
-    _assert_site(
-        loaded.origin_resolver,
-        payload_entries[("profile",)],
-        payload_cursor.child("profile"),
-    )
-    _assert_site(
-        loaded.origin_resolver,
-        payload_entries[("profile", "age")],
-        payload_cursor.child("profile").child("age"),
-    )
-    _assert_site(
-        loaded.origin_resolver,
-        payload_entries[("profile", "nickname")],
-        payload_cursor.child("profile").child("nickname"),
-    )
-
-    flags = _parameter(loaded.input, "flags")
-    flags_cursor = inputs.child("flags")
-    flags_entries = dict(_contract(flags).origins.entries)
-    _assert_site(
-        loaded.origin_resolver,
-        flags_entries[("enabled",)],
-        flags_cursor.child("enabled"),
-    )
-    _assert_site(
-        loaded.origin_resolver,
-        flags_entries[("limits",)],
-        flags_cursor.child("limits"),
-    )
-    _assert_site(
-        loaded.origin_resolver,
-        flags_entries[("limits", "count")],
-        flags_cursor.child("limits").child("count"),
-    )
+    # A record-typed input names its typedef in a tag, so every nested path resolves to that tag.
+    for name, paths in (
+        ("payload", [("profile",), ("profile", "age"), ("profile", "nickname")]),
+        ("flags", [("enabled",), ("limits",), ("limits", "count")]),
+    ):
+        record = _parameter(loaded.input, name)
+        record_cursor = inputs.child(name)
+        _assert_site(loaded.origin_resolver, record.origin, record_cursor, anchor="key")
+        tag_origin = _assert_site(
+            loaded.origin_resolver,
+            _contract(record).origins.default,
+            record_cursor,
+        )
+        assert _contract(record).origins.entries == ()
+        for path in paths:
+            assert _contract(record).origins.at(path) == tag_origin
 
 
 def test_required_flow_input_failure_selects_the_authored_parameter_key():
@@ -305,12 +285,13 @@ def test_required_flow_input_failure_selects_the_authored_parameter_key():
     )
 
 
-def test_nested_flow_input_failure_selects_the_exact_contract_field():
-    """A structural type path resolves to its nested authored type occurrence."""
+def test_nested_flow_input_failure_selects_the_record_tag():
+    """A nested field mismatch resolves to the tag naming the input's record type."""
     document = SourceDocument.parse(_ROOT_FLOW, label="nested.yaml")
     loaded = load_flow(_ROOT_FLOW, source_label="nested.yaml")
     payload = _parameter(loaded.input, "payload")
-    age_origin = dict(_contract(payload).origins.entries)[("profile", "age")]
+    age_origin = _contract(payload).origins.at(("profile", "age"))
+    assert age_origin == _contract(payload).origins.default
 
     result = run_flow(
         loaded,
@@ -326,9 +307,7 @@ def test_nested_flow_input_failure_selects_the_exact_contract_field():
     assert result.failure.code == "contract.input"
     assert result.failure.trace[-1] == age_origin
     diagnostic = loaded.diagnose(result.failure)
-    expected = (
-        document.root.child("input").child("payload").child("profile").child("age")
-    )
+    expected = document.root.child("input").child("payload")
     assert diagnostic.frames[-1].range == expected.range
 
 
@@ -359,13 +338,15 @@ def test_scalar_flow_input_failure_selects_the_contract_root():
 
 
 def test_non_string_record_field_is_a_located_load_error():
-    """Invalid YAML record keys never escape the Compose error boundary."""
+    """Invalid YAML record keys in a typedef never escape the Compose error boundary."""
     text = """\
 id: invalid-record-field
 name: invalid-record-field
-input:
-  payload:
+typedefs:
+  Payload:
     true: int
+input:
+  payload: !Payload
 nodes: {}
 """
     document = SourceDocument.parse(text)
@@ -373,7 +354,7 @@ nodes: {}
     with pytest.raises(LoadError, match="names in a flow must be text") as caught:
         load_flow(text)
 
-    expected = document.root.child("input").child("payload").child(True)
+    expected = document.root.child("typedefs").child("Payload").child(True)
     assert caught.value.diagnostic.frames[-1].range == expected.key_range
 
 
@@ -398,12 +379,12 @@ def test_invalid_definition_input_name_is_a_located_load_error(
         f"""    kind: code
     code: tests.engine._compose_codefns:echo_x
     input:
-      {key}: int
+      {key}: !int
     output: int
 """
         if compact
         else f"""    input:
-      {key}: int
+      {key}: !int
     nodes: {{}}
 """
     )
@@ -446,7 +427,7 @@ def test_compact_root_and_both_definition_forms_retain_input_contract_sites():
 id: compact_input_contract
 name: compact_input_contract
 input:
-  x: int = 3
+  x: !int 3
 output: int
 kind: code
 code: tests.engine._compose_codefns:echo_x
@@ -469,11 +450,11 @@ code: tests.engine._compose_codefns:echo_x
 id: definition-input-contracts
 name: definition-input-contracts
 input:
-  x: int
+  x: !int
 defs:
   named:
     input:
-      x: int
+      x: !int
     nodes:
       echo:
         kind: code
@@ -486,7 +467,7 @@ defs:
     kind: code
     code: tests.engine._compose_codefns:echo_x
     input:
-      x: int
+      x: !int
     output: int
 nodes:
   named_call:
@@ -536,7 +517,7 @@ def test_generated_inline_child_input_contract_stays_source_free():
 id: generated-inline-input
 name: generated-inline-input
 input:
-  x: int
+  x: !int
 nodes:
   invoke:
     kind: call
@@ -568,11 +549,14 @@ def test_external_alias_rebases_every_input_contract_origin():
     child_text = """\
 id: external-input-child
 name: external-input-child
+typedefs:
+  Profile:
+    age: int
+  Payload:
+    profile: Profile
 input:
-  payload:
-    profile:
-      age: int
-  window: int = 30
+  payload: !Payload
+  window: !int 30
 nodes:
   echo:
     kind: code
@@ -588,10 +572,13 @@ output: ${echo.output}
     parent_text = """\
 id: external-input-parent
 name: external-input-parent
+typedefs:
+  Profile:
+    age: int
+  Payload:
+    profile: Profile
 input:
-  payload:
-    profile:
-      age: int
+  payload: !Payload
 uses:
   imported: child
 nodes:
@@ -619,12 +606,8 @@ output: ${invoke.output}
             _contract(_parameter(embedded_inputs, "payload")).origins.default,
         ),
         (
-            dict(_contract(_parameter(child.input, "payload")).origins.entries)[
-                ("profile", "age")
-            ],
-            dict(_contract(_parameter(embedded_inputs, "payload")).origins.entries)[
-                ("profile", "age")
-            ],
+            _contract(_parameter(child.input, "payload")).origins.at(("profile", "age")),
+            _contract(_parameter(embedded_inputs, "payload")).origins.at(("profile", "age")),
         ),
         (
             _parameter(child.input, "window").default_origin,
@@ -649,8 +632,8 @@ def test_formatting_only_relocation_keeps_keys_and_moves_resolved_ranges():
     moved = load_flow(moved_text, source_label="flow.yaml")
     baseline_payload = _parameter(baseline.input, "payload")
     moved_payload = _parameter(moved.input, "payload")
-    baseline_age = dict(_contract(baseline_payload).origins.entries)[("profile", "age")]
-    moved_age = dict(_contract(moved_payload).origins.entries)[("profile", "age")]
+    baseline_age = _contract(baseline_payload).origins.at(("profile", "age"))
+    moved_age = _contract(moved_payload).origins.at(("profile", "age"))
 
     assert moved_payload.origin == baseline_payload.origin
     assert _contract(moved_payload).origins == _contract(baseline_payload).origins

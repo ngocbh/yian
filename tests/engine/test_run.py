@@ -31,7 +31,7 @@ _PLAN_FLOW = """
 id: run-plan
 name: plan_flow
 input:
-  topic: str
+  topic: !str
 nodes:
   plan:
     kind: code
@@ -54,8 +54,8 @@ _CASE_FLOW = """
 id: run-case
 name: case_flow
 input:
-  topic: str
-  seed: float
+  topic: !str
+  seed: !float
 nodes:
   score:
     kind: code
@@ -92,8 +92,8 @@ _ASSERT_FLOW = """
 id: run-asserts
 name: assert_flow
 input:
-  topic: str
-  seed: float
+  topic: !str
+  seed: !float
 nodes:
   plan:
     kind: code
@@ -222,7 +222,7 @@ _BOOL_FLOW = """
 id: bool_flag
 name: bool_flag
 input:
-  flag: bool
+  flag: !bool
 nodes:
   echo:
     kind: code
@@ -261,7 +261,7 @@ name: gatekeeper
 defs:
   gate:
     input:
-      ok: bool
+      ok: !bool
     nodes:
       e:
         kind: code
@@ -271,7 +271,7 @@ defs:
           return inputs["ok"]
     output: ${e.output}
 input:
-  answer: str
+  answer: !str
 nodes:
   src:
     kind: code
@@ -350,7 +350,7 @@ _RUN_ID_FLOW = """
 id: run-runid
 name: runid_flow
 input:
-  topic: str
+  topic: !str
 nodes:
   echo:
     kind: code

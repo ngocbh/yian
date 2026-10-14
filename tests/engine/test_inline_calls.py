@@ -26,7 +26,7 @@ _ENRICH_DEF = """
 defs:
   enrich:
     input:
-      topic: str
+      topic: !str
     nodes:
       x:
         kind: code
@@ -43,7 +43,7 @@ def test_inline_call_in_node_input_runs():
 id: ic1
 name: ic1
 input:
-  topic: str
+  topic: !str
 {_ENRICH_DEF}
 nodes:
   use:
@@ -66,7 +66,7 @@ def test_inline_call_in_human_input_synthesizes_and_wires_call():
 id: ic_human_input
 name: ic_human_input
 input:
-  topic: str
+  topic: !str
 {_ENRICH_DEF}
 nodes:
   ask:
@@ -89,11 +89,11 @@ def test_inline_call_in_loop_input_synthesizes_wires_and_runs():
 id: ic_loop
 name: ic_loop
 input:
-  start: int
+  start: !int
 defs:
   seed:
     input:
-      n: int
+      n: !int
     nodes:
       echo:
         kind: code
@@ -104,7 +104,7 @@ defs:
     output: ${echo.output}
   body:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code
@@ -139,7 +139,7 @@ def test_inline_call_literal_arg_runs():
 id: ic_lit
 name: ic_lit
 input:
-  topic: str
+  topic: !str
 {_ENRICH_DEF}
 nodes:
   use:
@@ -159,7 +159,7 @@ def test_inline_call_fan_in_infers_edges():
 id: ic_fanin
 name: ic_fanin
 input:
-  topic: str
+  topic: !str
 {_ENRICH_DEF}
 nodes:
   y:
@@ -190,11 +190,11 @@ def test_nested_inline_calls_run():
 id: ic_nested
 name: ic_nested
 input:
-  topic: str
+  topic: !str
 defs:
   inner:
     input:
-      topic: str
+      topic: !str
     nodes:
       x:
         kind: code
@@ -205,7 +205,7 @@ defs:
     output: ${x.output}
   outer:
     input:
-      topic: str
+      topic: !str
     nodes:
       x:
         kind: code
@@ -236,7 +236,7 @@ def test_inline_call_in_flow_output_runs():
 id: ic_out
 name: ic_out
 input:
-  topic: str
+  topic: !str
 {_ENRICH_DEF}
 nodes:
   seed:
@@ -259,7 +259,7 @@ def test_inline_call_resolves_through_external_resolver():
 id: ext_flow
 name: ext_flow
 input:
-  topic: str
+  topic: !str
 nodes:
   x:
     kind: code
@@ -273,7 +273,7 @@ output: ${x.output}
 id: ic_ext
 name: ic_ext
 input:
-  topic: str
+  topic: !str
 uses:
   ext_flow: ext_flow
 nodes:
@@ -308,11 +308,11 @@ def test_inline_call_capturing_item_is_loud():
 id: ic_item
 name: ic_item
 input:
-  topics: list[str]
+  topics: !list(str)
 defs:
   one:
     input:
-      topic: str
+      topic: !str
     nodes:
       x:
         kind: code
@@ -323,7 +323,7 @@ defs:
     output: ${x.output}
   wrap:
     input:
-      t: str
+      t: !str
     nodes:
       x:
         kind: code
@@ -354,7 +354,7 @@ def test_user_node_with_synth_prefix_is_loud():
 id: ic_collide
 name: ic_collide
 input:
-  topic: str
+  topic: !str
 nodes:
   __call_0:
     kind: code
@@ -376,7 +376,7 @@ def test_inline_call_positional_arg_is_loud_and_located():
 id: ic_pos
 name: ic_pos
 input:
-  topic: str
+  topic: !str
 {_ENRICH_DEF}
 nodes:
   use:
@@ -419,7 +419,7 @@ def test_quoted_interpolated_arg_strips_quotes_like_named_form():
 id: ic_qi
 name: ic_qi
 input:
-  name: str
+  name: !str
 {_ENRICH_DEF}
 nodes:
   use:
@@ -440,7 +440,7 @@ def test_malformed_inline_call_in_outputs_is_located():
 id: ic_outloc
 name: ic_outloc
 input:
-  topic: str
+  topic: !str
 {_ENRICH_DEF}
 nodes:
   seed:
@@ -476,11 +476,11 @@ def test_inline_call_in_mapped_call_over_runs():
 id: ic_over
 name: ic_over
 input:
-  topics: list[str]
+  topics: !list(str)
 defs:
   one:
     input:
-      topic: str
+      topic: !str
     nodes:
       x:
         kind: code
@@ -491,14 +491,14 @@ defs:
     output: ${x.output}
   producelist:
     input:
-      xs: list[str]
+      xs: !list(str)
     nodes:
       x:
         kind: code
         code: tests.engine._compose_codefns:echo
         input:
           topic: ${input.xs}
-        output: list[str]
+        output: list(str)
     output: ${x.output}
 nodes:
   each:
@@ -522,7 +522,7 @@ def test_two_host_sites_mint_unique_ids_and_both_run():
 id: ic_two
 name: ic_two
 input:
-  topic: str
+  topic: !str
 {_ENRICH_DEF}
 nodes:
   a:
@@ -555,11 +555,11 @@ def test_inline_call_inside_defs_body_runs():
 id: ic_defbody
 name: ic_defbody
 input:
-  topic: str
+  topic: !str
 defs:
   helper:
     input:
-      topic: str
+      topic: !str
     nodes:
       x:
         kind: code
@@ -570,7 +570,7 @@ defs:
     output: ${x.output}
   enrich:
     input:
-      topic: str
+      topic: !str
     nodes:
       y:
         kind: code
@@ -597,7 +597,7 @@ def test_inline_call_unknown_callee_is_loud():
 id: ic_unk
 name: ic_unk
 input:
-  topic: str
+  topic: !str
 nodes:
   use:
     kind: code
@@ -620,11 +620,11 @@ def test_inline_call_e06_type_mismatch_is_loud():
 id: ic_e06
 name: ic_e06
 input:
-  topic: str
+  topic: !str
 defs:
   enrich:
     input:
-      topic: str
+      topic: !str
     nodes:
       x:
         kind: code

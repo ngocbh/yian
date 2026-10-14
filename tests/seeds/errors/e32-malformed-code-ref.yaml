@@ -5,7 +5,7 @@
 id: err-malformed-code-ref
 name: err_malformed_code_ref
 input:
-  topic: str
+  topic: !str
 nodes:
   oops:
     kind: code

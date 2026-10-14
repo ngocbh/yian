@@ -20,10 +20,10 @@ name: human_approval
 description: Draft a plan, ask a human to approve or revise it, then finalize accordingly.
 
 typedefs:
-  Approval: Literal[approve, revise]    # the typed human answer (a tag-only enum)
+  Approval: Literal(approve, revise)    # the typed human answer (a tag-only enum)
 
 input:
-  task: str
+  task: !str
 
 nodes:
   draft:

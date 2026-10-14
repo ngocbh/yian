@@ -6,11 +6,11 @@
 id: err-bad-map-over-ref
 name: err_bad_map_over_ref
 input:
-  topics: list[str]
+  topics: !list(str)
 defs:
   body:
     input:
-      item: str
+      item: !str
     nodes:
       double:
         kind: code

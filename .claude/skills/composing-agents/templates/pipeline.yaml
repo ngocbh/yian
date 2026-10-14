@@ -18,7 +18,7 @@ typedefs:
     word_count: int
 
 input:
-  topic: str
+  topic: !str
 
 nodes:
   draft:

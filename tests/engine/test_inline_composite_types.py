@@ -6,7 +6,6 @@ from copy import deepcopy
 
 import pytest
 
-from yian.compose.build import inline_inputs
 from yian.compose.build.inline_inputs import (
     canonicalize_inline_type,
     infer_inline_binding_type,
@@ -14,7 +13,7 @@ from yian.compose.build.inline_inputs import (
 )
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.diagnostics import SourceRange
-from yian.nodes.contracts import PartialRecordContract, ValueContract
+from yian.nodes.contracts import PartialRecordContract, ValueContract, ValueTemplate
 from yian.typesys import canonical_type_label
 from yian.typesys.values import Type, ValueKind
 
@@ -127,7 +126,7 @@ def test_lone_non_scalar_expression_is_rejected(source):
     message = str(caught.value)
     assert "call.input.payload" in message
     assert (
-        "declare its type with a typed binding (`name: Type = value`) or use an "
+        "declare its type with a tag (`payload: !<type> ...`) or use an "
         "explicitly typed named `defs:` body"
     ) in message
 
@@ -235,22 +234,22 @@ def test_equivalent_record_elements_ignore_authored_key_order():
     assert list(inferred.element.fields or {}) == ["a", "b"]
 
 
-def test_nested_container_strings_never_scan_templates(monkeypatch):
-    def fail_if_scanned(_source: str):
-        pytest.fail("nested literal strings must not be scanned as templates")
-
-    monkeypatch.setattr(inline_inputs, "scan_template", fail_if_scanned)
+def test_nested_template_strings_scan_as_templates():
     inferred = _infer(
-        {
-            "deep": {"value": "${input.x}"},
-            "ref": "${producer.output}",
-            "items": ["${item.text}", "$$"],
-        }
+        ValueTemplate(
+            {
+                "deep": {"value": "${input.x}"},
+                "ref": "${input.x}",
+                "items": ["n=${input.x}", "$$"],
+            }
+        ),
+        parent_input_types={"x": Type.scalar(ValueKind.INTEGER)},
     )
 
+    int_type = Type.scalar(ValueKind.INTEGER)
     string_type = Type.scalar(ValueKind.STRING)
-    assert inferred.fields["deep"].fields["value"] == string_type
-    assert inferred.fields["ref"] == string_type
+    assert inferred.fields["deep"].fields["value"] == int_type
+    assert inferred.fields["ref"] == int_type
     assert inferred.fields["items"] == Type(
         kind=ValueKind.LIST_STRING,
         element=string_type,
@@ -671,7 +670,7 @@ def test_unproven_direct_reference_is_a_located_named_def_error(source):
     assert _only_frame(error).range == source_range
     assert "call.input.payload" in str(error)
     assert (
-        "declare its type with a typed binding (`name: Type = value`) or use an "
+        "declare its type with a tag (`payload: !<type> ...`) or use an "
         "explicitly typed named `defs:` body"
     ) in str(error)
 
@@ -727,7 +726,7 @@ def test_inference_error_preserves_binding_range_line_and_hint():
     assert _only_frame(error).range == source_range
     assert "each.input.items" in str(error)
     assert (
-        "declare its type with a typed binding (`name: Type = value`) or use an "
+        "declare its type with a tag (`items: !<type> ...`) or use an "
         "explicitly typed named `defs:` body"
     ) in str(error)
 
@@ -750,12 +749,18 @@ def test_template_scan_error_preserves_binding_range_and_line():
     assert "call.input.query" in str(error)
     assert "unbalanced" in str(error)
     assert (
-        "declare its type with a typed binding (`name: Type = value`) or use an "
+        "declare its type with a tag (`query: !<type> ...`) or use an "
         "explicitly typed named `defs:` body"
     ) in str(error)
 
 
 _LIST_VALUE_KINDS = tuple(kind for kind in ValueKind if kind.is_list())
+
+
+def _list_label(kind: ValueKind) -> str:
+    """The label of a list kind with no element type, e.g. `list(str)`."""
+    element = kind.element_kind
+    return f"list({'Any' if element is None else element.value})"
 
 
 @pytest.mark.parametrize("kind", _LIST_VALUE_KINDS)
@@ -768,7 +773,7 @@ def test_every_list_kind_requires_a_recursively_proven_element(kind):
     with pytest.raises(LoadError) as caught:
         require_proven_type(Type(kind=kind), binding_label="call.input.items")
 
-    assert kind.value in str(caught.value)
+    assert _list_label(kind) in str(caught.value)
     assert "no proven element type" in str(caught.value)
 
 
@@ -789,7 +794,7 @@ def test_list_proof_recurses_into_a_present_malformed_element():
     [
         (
             Type(kind=ValueKind.LIST_ANY, element=Type.scalar(ValueKind.NONE)),
-            "list[None]",
+            "list(None)",
         ),
         (
             Type(
@@ -799,15 +804,15 @@ def test_list_proof_recurses_into_a_present_malformed_element():
                     element=Type.scalar(ValueKind.DATE),
                 ),
             ),
-            "list[list[date]]",
+            "list(list(date))",
         ),
         (
             Type(kind=ValueKind.LIST_ANY, element=Type.scalar(ValueKind.DATETIME)),
-            "list[datetime]",
+            "list(datetime)",
         ),
         (
             Type(kind=ValueKind.LIST_ANY, element=Type.scalar(ValueKind.FILE)),
-            "list[file]",
+            "list(file)",
         ),
     ],
 )
@@ -912,7 +917,7 @@ def test_direct_reference_proves_the_entire_root_before_selecting_a_field():
             label="call.input.value",
         )
 
-    assert "list[Any]" in str(caught.value)
+    assert "list(Any)" in str(caught.value)
     assert "no proven element type" in str(caught.value)
 
 
@@ -931,7 +936,7 @@ def test_structural_proof_error_preserves_source_range_line_and_hint():
     assert _only_frame(error).range == source_range
     assert "each.input.rows" in str(error)
     assert (
-        "declare its type with a typed binding (`name: Type = value`) or use an "
+        "declare its type with a tag (`rows: !<type> ...`) or use an "
         "explicitly typed named `defs:` body"
     ) in str(error)
 
@@ -987,8 +992,8 @@ def test_inline_type_copy_preserves_bounded_nested_validation():
     from yian.typesys.values import TypeCheckError, build_value_as
 
     declared = Type(ValueKind.OBJECT, fields={
-        "scores": type_for("list[Optional[float[-0.5, 1]]]", {}),
-        "count": type_for("int[1, 12]", {}),
+        "scores": type_for("list(Optional(float(-0.5..1)))", {}),
+        "count": type_for("int(1..12)", {}),
     }, required=frozenset({"scores", "count"}))
     inferred = _infer("${input.payload}", parent_input_types={"payload": declared})
     copied = canonicalize_inline_type(inferred)
@@ -1024,12 +1029,12 @@ def test_canonical_scalar_labels_use_author_vocabulary(kind):
 def test_every_list_kind_label_uses_its_structural_element(kind):
     typ = Type(kind=kind, element=Type(kind=ValueKind.INTEGER, nullable=True))
 
-    assert canonical_type_label(typ) == "list[Optional[int]]"
+    assert canonical_type_label(typ) == "list(Optional(int))"
 
 
 @pytest.mark.parametrize("kind", _LIST_VALUE_KINDS)
 def test_canonical_flat_list_label_uses_its_storage_kind(kind):
-    assert canonical_type_label(Type(kind=kind)) == kind.value
+    assert canonical_type_label(Type(kind=kind)) == _list_label(kind)
 
 
 def test_canonical_variant_label_sorts_and_json_quotes_adversarial_tags():
@@ -1038,7 +1043,7 @@ def test_canonical_variant_label_sorts_and_json_quotes_adversarial_tags():
         tags=frozenset({"é", "z", 'a,"b'}),
     )
 
-    assert canonical_type_label(typ) == 'Literal["a,\\"b","z","é"]'
+    assert canonical_type_label(typ) == 'Literal("a,\\"b","z","é")'
 
 
 def test_canonical_record_label_sorts_and_json_quotes_adversarial_keys():
@@ -1063,4 +1068,4 @@ def test_nullable_wrapper_is_outermost_for_a_structural_record_label():
         nullable=True,
     )
 
-    assert canonical_type_label(typ) == 'Optional[{"value":str}]'
+    assert canonical_type_label(typ) == 'Optional({"value":str})'

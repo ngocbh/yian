@@ -8,11 +8,13 @@ references and literals, combined with `and` / `or` / `not` and parentheses. The
 parsed tree feeds `eval_expr`, conservative `infer_expr_type`, and the reference walkers.
 Conditions route through the ONE unified engine; a bare reference with no comparison
 operator is a truthiness test (not an error). `isinstance(x, T)` checks a value against a
-type named in the `types` table every evaluation entry point accepts.
+type named in the `types` table every evaluation entry point accepts, and a constructor
+`T(x)` / `T(a=..., b=...)` checks (or builds and checks) a value of that type.
 """
 
 import inspect
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Callable
@@ -22,7 +24,15 @@ from lark import Token, Tree
 import yian.json_codec as json_codec
 from yian.expr.lineage import ResolvedValue, SourceRef, TracedValue, ValueRoute
 from yian.typesys.pool import VariablePool
-from yian.typesys.values import Type, TypeCheckError, ValueKind, build_value_as
+from yian.typesys.types import BUILTIN_TYPE_NAMES
+from yian.typesys.values import (
+    FieldRead,
+    Type,
+    TypeCheckError,
+    ValueKind,
+    build_value_as,
+    union_field,
+)
 
 
 class ExpressionError(ValueError):
@@ -33,10 +43,69 @@ class RequiredError(ExpressionError):
     """A `${ref:?message}` whose ref was unbound (the binder maps it to BindingError)."""
 
 
+class ConstructorTypeError(ExpressionError):
+    """A `${T(...)}` constructor's value does not fit `T` (the binder's `binding.type`)."""
+
+
 # The type-test special form `isinstance(x, T)`: its second argument is a type name
 # looked up in the node's type table, never a reference, so the evaluator, the reference
 # walkers and rewriters, and type inference treat only its first argument as an expression.
 ISINSTANCE = "isinstance"
+
+
+def conversion_hint(name: str) -> str:
+    """Return the hint for calling a builtin type name, else `""`.
+
+    `int(x)` reads like a conversion, but constructors are `typedefs:` names that only
+    check.
+
+    Args:
+        name (`str`): The callee.
+
+    Returns:
+        `str`: `"; types in expressions are typedef names; ..."` for a builtin type name
+            (`int`, `list`, `Optional`), else empty.
+    """
+    if name not in BUILTIN_TYPE_NAMES:
+        return ""
+    return f"; types in expressions are typedef names; `{name}(...)` is not a conversion"
+
+
+def unknown_function_message(name: str) -> str:
+    """Return the error text for a call to `name`, which is no builtin or type.
+
+    Args:
+        name (`str`): The callee.
+
+    Returns:
+        `str`: The message, with `conversion_hint` for a builtin type name.
+    """
+    return f"unknown expression function {name!r}" + conversion_hint(name)
+
+
+def constructor_shape_error(name: str, call_suffix: "Tree") -> "str | None":
+    """Return why a call to constructor `name` has the wrong arguments, else `None`.
+
+    A constructor takes keyword fields (`Buy(action="buy", conviction=x)`) or exactly one
+    positional value (`Buy(x)`), never both.
+
+    Args:
+        name (`str`): The constructor name.
+        call_suffix (`Tree`): The call's parsed `call_suffix`.
+
+    Returns:
+        `str | None`: The message, or `None` for a well-formed call.
+    """
+    args = call_suffix.children
+    keywords = sum(1 for arg in args if len(arg.children) == 2)
+    positional = len(args) - keywords
+    if positional > 1 or (positional and keywords):
+        return (
+            f"{name}(...) takes keyword fields, as in {name}(name=value, ...), or one "
+            f"value to check, as in {name}(x)"
+        )
+    return None
+
 
 _NUMBER_RE = re.compile(r"^-?\d+(\.\d+)?$")
 
@@ -126,7 +195,9 @@ def _eval_comparison(op: str, lhs: Any, rhs: Any) -> bool:
     raise ExpressionError(f"unsupported operator: {op!r}")
 
 
-def parse_condition(expression: str) -> "Tree | Token":
+def parse_condition(
+    expression: str, types: "Mapping[str, Any] | None" = None
+) -> "Tree | Token":
     """Parse an expression-field value (`when:`/`on:`/an `asserts:` entry) via the ONE
     unified grammar, honouring the both-spellings entry rule.
 
@@ -138,13 +209,18 @@ def parse_condition(expression: str) -> "Tree | Token":
     parse the interior; otherwise parse the whole value directly. A `${...}` inside the
     expression (`${a} > 5`) is an error that shows the bare rewrite.
 
-    Every call in the parsed expression must name a builtin (`TEMPLATE_FNS`, or the
-    `isinstance` special form) that takes its arguments. The check is static: it applies
-    even to a call `and`/`or` would never evaluate.
+    Every call to a builtin (`TEMPLATE_FNS`) must pass arguments it takes. Any other
+    callee except the `isinstance` special form is a `T(...)` constructor: with `types`,
+    it must name a type in it; without, its name is left to the caller (compose resolves
+    it against the flow's `typedefs:`). The check is static: it applies even to a call
+    `and`/`or` would never evaluate.
 
     Args:
         expression (`str`):
             The field value, in either spelling.
+        types (`Mapping[str, Any] | None`, *optional*, defaults to `None`):
+            The type table constructors are looked up in, or `None` when it is not known
+            yet.
 
     Returns:
         `Tree | Token`:
@@ -153,27 +229,33 @@ def parse_condition(expression: str) -> "Tree | Token":
     Raises:
         `ExpressionError`:
             Raised when the value does not parse or holds a `${...}` inside it, calls a
-            function that isn't a builtin, or calls a builtin with arguments it doesn't take.
+            builtin with arguments it doesn't take, or, with `types`, calls a function that
+            is neither a builtin nor a type in `types`.
     """
     from yian.expr.grammar import parse_expr, whole_span_interior
 
     interior = whole_span_interior(expression)
     tree = parse_expr(expression.strip() if interior is None else interior)
-    _check_condition_calls(tree)
+    _check_condition_calls(tree, types)
     return tree
 
 
-def _check_condition_calls(tree: "Tree | Token") -> None:
-    """Require every call in a parsed condition to name a builtin that takes its arguments.
+def _check_condition_calls(
+    tree: "Tree | Token", types: "Mapping[str, Any] | None" = None
+) -> None:
+    """Require every builtin call in a parsed condition to pass arguments it takes.
 
-    `isinstance` is skipped: the grammar already checks its shape.
+    `isinstance` is skipped: the grammar already checks its shape. Any other callee that
+    is no builtin is a `T(...)` constructor, checked against `types` when given.
 
     Args:
         tree (`Tree | Token`): A tree from `parse_expr`.
+        types (`Mapping[str, Any] | None`, *optional*, defaults to `None`): The type table
+            constructor names must be in, or `None` to leave them to the caller.
 
     Raises:
-        `ExpressionError`: If a callee is not a builtin, or a builtin's signature can't bind
-            the call's positional count and keyword names.
+        `ExpressionError`: If a builtin's signature can't bind the call's positional count
+            and keyword names, or, with `types`, a callee is neither a builtin nor in it.
     """
     from yian.expr.builtins import TEMPLATE_FNS
 
@@ -190,7 +272,11 @@ def _check_condition_calls(tree: "Tree | Token") -> None:
             continue
         fn = TEMPLATE_FNS.get(callee)
         if fn is None:
-            raise ExpressionError(f"unknown expression function {callee!r}")
+            # A constructor: one unknown-function message, here or where compose resolves
+            # the name against the flow's typedefs.
+            if types is not None and callee not in types:
+                raise ExpressionError(unknown_function_message(callee))
+            continue
         try:
             signature = inspect.signature(fn)
         except (TypeError, ValueError):
@@ -272,7 +358,7 @@ def _evaluate(
     absent values. The truthiness fold of `and`/`or` is coerced back to a
     plain `bool` here, so a `when:`/`asserts:` predicate always yields a boolean.
     """
-    tree = parse_condition(expression)
+    tree = parse_condition(expression, types or {})
     return bool(eval_expr(tree, resolve, mode=ResolveMode.CONDITION_FALSY, types=types))
 
 
@@ -533,8 +619,11 @@ class _EvalExpr:
         # exactly as a ref miss (strict raises, non-strict maps to None). Without this the
         # miss leaked a plain `None`, which a multi-span concat stringified to "" (a silent
         # blank that broke the STRICT_RAISE floor).
+        constructor = self._is_constructor(name)
         if name == ISINSTANCE:
             value = self._isinstance(call_suffix)
+        elif constructor:
+            value = self._construct(name, call_suffix)
         else:
             value = self._call_builtin(name, call_suffix)
         after = [c for c in children if isinstance(c, Tree) and c.data == "trailer"]
@@ -542,7 +631,11 @@ class _EvalExpr:
             value = self._dotted_step(value, str(tr.children[0]))
         if value is _MISSING:
             self._miss_path = f"{name}(...)" + "".join(f".{tr.children[0]}" for tr in after)
-        if self._trace:
+        if self._trace and constructor:
+            self._frames[-1].route = self._constructor_route(name, call_suffix).project(
+                tuple(str(tr.children[0]) for tr in after)
+            )
+        elif self._trace:
             routes = tuple(self._frames[-1].children)
             names = tuple(
                 str(arg.children[0]) if len(arg.children) == 2 else ""
@@ -647,6 +740,68 @@ class _EvalExpr:
             return False
         return True
 
+    def _is_constructor(self, name: str) -> bool:
+        """Whether a call to `name` is a `${T(...)}` constructor.
+
+        A builtin wins over a type of the same name, and a builtin type name
+        (`int`) is never a constructor even when an `isinstance` put it in the table.
+        """
+        from yian.expr.builtins import TEMPLATE_FNS
+
+        return (
+            name != ISINSTANCE
+            and name not in TEMPLATE_FNS
+            and name not in BUILTIN_TYPE_NAMES
+            and name in (self._types or {})
+        )
+
+    def _construct(self, name: str, call_suffix: Tree) -> Any:
+        """`T(x)` checks the value of `x` against `T`; `T(a=..., b=...)` builds a record.
+
+        The keyword form's record holds exactly the given fields. Either value is
+        checked with the variable pool's write-boundary check and given back
+        unchanged, so it is exactly what `!T ${x}` delivers. A missing `x` is checked
+        as `None` in the non-strict modes and raises in `STRICT_RAISE`.
+
+        Raises:
+            ExpressionError: The call mixes keyword and positional arguments or has
+                several positional ones (compose rejects this at load).
+            ConstructorTypeError: The value does not fit `T`.
+        """
+        shape_error = constructor_shape_error(name, call_suffix)
+        if shape_error is not None:
+            raise ExpressionError(shape_error)
+        args = call_suffix.children
+        if len(args) == 1 and len(args[0].children) == 1:
+            value = self._as_value(self._walk(args[0].children[0]))
+        else:
+            value = {
+                str(arg.children[0]): self._as_value(self._walk(arg.children[1]))
+                for arg in args
+            }
+        try:
+            build_value_as(self._types[name], value)
+        except TypeCheckError as exc:
+            raise ConstructorTypeError(f"{name}(...): {exc}") from exc
+        return value
+
+    def _constructor_route(self, name: str, call_suffix: Tree) -> ValueRoute:
+        """The route of a constructor call, from its argument routes.
+
+        `T(x)` selects its argument's route, so feedback passes through to `x`; the
+        keyword form is a record route, so feedback on a field reaches that field's
+        argument.
+        """
+        routes = tuple(self._frames[-1].children)
+        args = call_suffix.children
+        if len(args) == 1 and len(args[0].children) == 1:
+            return ValueRoute(
+                "selected", children=routes, expression=f"{name}({routes[0].expression})",
+            )
+        names = [str(arg.children[0]) for arg in args]
+        expression = ", ".join(f"{key}={route.expression}" for key, route in zip(names, routes))
+        return replace(ValueRoute.record(zip(names, routes)), expression=f"{name}({expression})")
+
     def _call_builtin(self, callee: str, call_suffix: Tree) -> Any:
         """Dispatch a builtin call through `TEMPLATE_FNS`. Positional and keyword
         `arg`s are distinguished by shape (a kwarg carries a leading NAME token).
@@ -655,7 +810,7 @@ class _EvalExpr:
 
         fn = TEMPLATE_FNS.get(callee)
         if fn is None:
-            raise ExpressionError(f"unknown expression function {callee!r}")
+            raise ExpressionError(unknown_function_message(callee))
         pos: list = []
         kw: dict = {}
         for arg in call_suffix.children:  # each child is an `arg` subtree
@@ -847,9 +1002,9 @@ def eval_expr(
     The ONE evaluator for every `${...}` construct: references (bare / dotted /
     `${}`-wrapped / `item`-scoped), arithmetic and comparisons over VALUES (so
     `str+str` concatenates and `list+list` extends), boolean combinators, list
-    literals, coalesce / default / required, pure builtin calls, and the
-    `isinstance(x, T)` type test. The operators are Python's (`%` formats text, a
-    bool counts as 0/1).
+    literals, coalesce / default / required, pure builtin calls, the
+    `isinstance(x, T)` type test, and `T(...)` constructors. The operators are Python's
+    (`%` formats text, a bool counts as 0/1).
 
     Three semantics support a CASE's `else:` routing:
     a missing reference is `None` (in the non-strict modes); arithmetic over that
@@ -880,8 +1035,9 @@ def eval_expr(
             Internal retention switch. Collect a compositional route during this
             evaluation and return `TracedValue(value, route)`.
         types (`dict[str, Type] | None`, *optional*, defaults to `None`):
-            The type table `isinstance(x, T)` looks `T` up in, keyed by type name.
-            `None` means no types, so any `isinstance` raises.
+            The type table `isinstance(x, T)` and a `T(...)` constructor look `T` up
+            in, keyed by type name. `None` means no types, so any `isinstance` raises
+            and no call is a constructor.
 
     Returns:
         `Any`:
@@ -894,6 +1050,8 @@ def eval_expr(
             over an incompatible operand (incl. `None`), an operator Python can't
             complete (overflow, a repetition count too large, a missing `%(key)s`), a
             strict-mode miss, or an `isinstance` type name absent from `types`.
+        `ConstructorTypeError`:
+            When a `T(...)` constructor's value does not fit `T`.
         `RequiredError`:
             When a `head :? message` required atom's head misses / is None.
         `TypeError`:
@@ -910,15 +1068,17 @@ def eval_expr(
 def infer_expr_type(
     tree: "Tree | Token",
     ref_type_fn: Callable[[str], "Type | None"],
+    type_fn: "Callable[[str], Type | None] | None" = None,
 ) -> "Type | None":
     """Return the statically proven type of one parsed expression, if any.
 
     Inference is deliberately conservative: literal tokens, exact references,
-    comparisons, boolean
-    combinators, and `isinstance(x, T)` have fixed result types. Other forms remain
-    unknown until their runtime value semantics can be modeled without guessing.
-    Reference lookup is injected so this source-neutral expression layer does not
-    know about a flow graph or Compose document.
+    comparisons, boolean combinators, and `isinstance(x, T)` have fixed result types,
+    and a `T(...)` constructor has type `T` (its value is checked against `T`), with
+    field reads on the result typed through `T`. Other forms remain unknown until their
+    runtime value semantics can be modeled without guessing. Reference and constructor
+    lookup are injected so this source-neutral expression layer does not know about a
+    flow graph or Compose document.
 
     Args:
         tree (`Tree | Token`):
@@ -927,6 +1087,9 @@ def infer_expr_type(
             Resolves one dotted reference path to its known type, or returns
             ``None`` when the type is not statically known. Any exception raised
             by the callback propagates unchanged.
+        type_fn (`Callable[[str], Type | None] | None`, *optional*, defaults to `None`):
+            Resolves a constructor name to its type, or returns ``None`` for a name
+            that is no constructor. ``None`` leaves every constructor unknown.
 
     Returns:
         `Type | None`:
@@ -960,9 +1123,23 @@ def infer_expr_type(
             isinstance(child, Tree) and child.data == "call_suffix"
             for child in children
         ):
-            # `parse_expr` rejects dotted access on an `isinstance(...)` result.
-            is_type_test = str(children[0]) == ISINSTANCE
-            return Type.scalar(ValueKind.BOOLEAN) if is_type_test else None
+            name = str(children[0])
+            if name == ISINSTANCE:
+                # `parse_expr` rejects dotted access on an `isinstance(...)` result.
+                return Type.scalar(ValueKind.BOOLEAN)
+            from yian.expr.builtins import TEMPLATE_FNS
+
+            typ = None if type_fn is None or name in TEMPLATE_FNS else type_fn(name)
+            trailers = [
+                str(child.children[0])
+                for child in children
+                if isinstance(child, Tree) and child.data == "trailer"
+            ]
+            for field_name in trailers:
+                if typ is None:
+                    return None
+                typ = _field_read_type(typ, field_name)
+            return typ
         path = ".".join(
             [str(children[0]), *(str(child.children[0]) for child in children[1:])]
         )
@@ -979,6 +1156,26 @@ def infer_expr_type(
         return Type.scalar(ValueKind.BOOLEAN)
 
     return None
+
+
+def _field_read_type(typ: Type, name: str) -> "Type | None":
+    """Return the type of reading field `name` on a value of type `typ`, if proven.
+
+    A record's field is `Optional` when the record is, or the field is not required;
+    a union's field is the members' shared type when every member has it.
+    """
+    if typ.variants is not None:
+        read = union_field(typ, name)
+        if not isinstance(read, FieldRead) or read.type is None:
+            return None
+        field = read.type
+    elif typ.fields is not None and name in typ.fields:
+        field = typ.fields[name]
+        if name not in (typ.required or frozenset()):
+            field = replace(field, nullable=True)
+    else:
+        return None
+    return replace(field, nullable=True) if typ.nullable else field
 
 
 # --------------------------------------------------------------------------- #
@@ -1031,6 +1228,42 @@ def isinstance_type_names(tree: "Tree | Token") -> list[str]:
             name = _isinstance_type_name(call_suffix)
             if name not in names:
                 names.append(name)
+    return names
+
+
+def constructor_names(tree: "Tree | Token") -> list[str]:
+    """Return the callees in a parsed expression that can only be `T(...)` constructors.
+
+    A callee that is neither a builtin nor `isinstance` is a constructor name; compose
+    resolves each against the flow's `typedefs:` and rejects any other name at load.
+
+    Args:
+        tree (`Tree | Token`):
+            A tree from [`parse_expr`][yian.expr.grammar.parse_expr] or `parse_condition`.
+
+    Returns:
+        `list[str]`:
+            Each name in source order, without duplicates. `[]` for a lone token.
+
+    Example:
+        ```python
+        constructor_names(parse_expr("[Buy(d.output), upper(x), Sell(price=p)]"))
+        # ["Buy", "Sell"]
+        ```
+    """
+    from yian.expr.builtins import TEMPLATE_FNS
+
+    if not isinstance(tree, Tree):
+        return []
+    names: list[str] = []
+    for node in tree.iter_subtrees_topdown():
+        if node.data != "refcall" or not any(
+            isinstance(child, Tree) and child.data == "call_suffix" for child in node.children
+        ):
+            continue
+        name = str(node.children[0])
+        if name != ISINSTANCE and name not in TEMPLATE_FNS and name not in names:
+            names.append(name)
     return names
 
 

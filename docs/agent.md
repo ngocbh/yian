@@ -273,7 +273,8 @@ long_term_memory: {notes: episodic}
 defs:
   research:
     long_term_memory: {lessons: reflective}
-    input: {topic: str}
+    input:
+      topic: !str
     nodes:
       investigate:
         kind: agent
@@ -282,7 +283,8 @@ defs:
         output: str
         prompt: Investigate ${topic}.
     output: ${investigate.output}
-input: {topic: str}
+input:
+  topic: !str
 nodes:
   run: {kind: call, call: research, input: {topic: "${input.topic}"}}
 output: ${run.output}
@@ -344,8 +346,8 @@ one definition:
 id: classify
 name: classify
 input:
-  text: str
-output: Literal[positive, neutral, negative]
+  text: !str
+output: Literal(positive, neutral, negative)
 kind: agent
 prompt: |-
   Classify ${text} as positive, neutral, or negative.
@@ -363,7 +365,7 @@ Use a full flow when the transformation needs multiple steps:
 id: summarize
 name: summarize
 input:
-  article: str
+  article: !str
 nodes:
   draft:
     kind: agent
@@ -396,12 +398,12 @@ Put a reusable agent in `defs:` and apply it with a CALL node:
 id: review_draft
 name: review_draft
 input:
-  draft: str
+  draft: !str
 
 defs:
   review:
     input:
-      text: str
+      text: !str
     nodes:
       reviewer:
         kind: agent

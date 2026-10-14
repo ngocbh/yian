@@ -27,23 +27,23 @@ name: f
 _UNION_WITH_FILE = """\
 typedefs:
   Report:
-    kind: Literal[report]
+    kind: Literal(report)
     doc: file
   Note:
-    kind: Literal[note]
+    kind: Literal(note)
     text: str
-  Reply: Union[Report, Note]
+  Reply: Union(Report, Note)
 """
 
 _UNION = """\
 typedefs:
   Buy:
-    action: Literal[buy]
+    action: Literal(buy)
     qty: int
   Hold:
-    action: Literal[hold]
+    action: Literal(hold)
     note: str
-  Decision: Union[Buy, Hold]
+  Decision: Union(Buy, Hold)
 """
 
 
@@ -98,9 +98,9 @@ output: ${c.output}
     ("output", "typedefs"),
     [
         ("file", ""),
-        ("list[file]", ""),
+        ("list(file)", ""),
         ("None", ""),
-        ("Optional[file]", ""),
+        ("Optional(file)", ""),
         ("{doc: file}", ""),
         pytest.param("Reply", _UNION_WITH_FILE, id="union-with-file"),
     ],
@@ -120,10 +120,10 @@ def test_agent_output_without_a_structured_form_fails_at_load(output: str, typed
     [
         ("str", ""),
         ("int", ""),
-        ("Literal['a', 'b']", ""),
-        ("list[int]", ""),
+        ("Literal('a', 'b')", ""),
+        ("list(int)", ""),
         ("{x: int, y: str}", ""),
-        ("Optional[int]", ""),
+        ("Optional(int)", ""),
         pytest.param("Decision", _UNION, id="union"),
     ],
 )

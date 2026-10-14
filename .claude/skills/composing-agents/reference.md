@@ -48,6 +48,7 @@ One expression grammar, everywhere `${...}` appears:
 | `${a + b}`, `${a * b + 1}` | arithmetic — `+ - * / % **`, unary minus |
 | `${a == b}`, `${x in [1, 2]}` | comparisons / membership / `and`/`or`/`not` |
 | `${[a, b]}`, `${upper(x)}` | list literal / pure builtin call (null or wrong-typed args fail: `${upper(x :- "")}`) |
+| `${Buy(action="buy", qty=n)}`, `${Buy(x)}` | constructor: build a typedef record from exactly these fields, or check and narrow `x` (like `!Buy ${x}`) |
 | `${X:-default}` | value, else `default` if absent |
 | `${X:?"msg"}` | required — fail with the literal `msg` if absent (quote the message) |
 | `${a \| b \| c}` | first present among peers (e.g. the branches of a routing-only `case`) |
@@ -84,9 +85,10 @@ For LOOP, those proven siblings and the carried field-name set remain enforced e
 when `while:` stops before the first body run or a durable run is replayed. A field
 the LOOP body omits takes its type from its seed binding.
 
-A typed binding (`name: Type = value`) replaces the inferred type with its declared
-one: a parent sees a child's declared output type, an inline parameter or omitted
-LOOP field takes the declared type, and the binder checks the value at runtime.
+A tag (`name: !T value`) replaces the inferred type with its declared one: a parent
+sees a child's declared output type, an inline parameter or omitted LOOP field takes
+the declared type, and the binder checks the value at runtime. `${...}` nested in a
+slot's mappings and lists is evaluated, and each field keeps its inferred type.
 
 ## The three expression contexts (one grammar)
 
@@ -94,8 +96,8 @@ One `${...}` grammar; the context decides what happens to the result:
 
 | Context | Where | What it does |
 |---------|-------|--------------|
-| **Bindings** | `input:` / `output:` values | **evaluated** to a typed value — refs, literals, arithmetic, lists, `:-` / `:?` / `\|`, pure builtins. Child-flow call = `call(...)` directive. `name: Type = value` declares the type. |
-| **Conditions** | `when:` / `asserts:` | **tested** as a boolean: `== != < <= > >=`, `in`/`not in`, `and`/`or`/`not`, parens, arithmetic operands. Canonical **bare** form (no `${}`); one whole `${...}` loads and evaluates identically; a `${...}` inside the expression is a load error, as is a call to a function other than a builtin or `isinstance`, or to a builtin with arguments it doesn't take. |
+| **Bindings** | `input:` / `output:` values | **evaluated** to a typed value — refs, literals, arithmetic, lists, `:-` / `:?` / `\|`, pure builtins. Child-flow call = `call(...)` directive. A tag (`name: !T value`) declares the type; nested `${...}` in mappings and lists is evaluated. |
+| **Conditions** | `when:` / `asserts:` | **tested** as a boolean: `== != < <= > >=`, `in`/`not in`, `and`/`or`/`not`, parens, arithmetic operands. Canonical **bare** form (no `${}`); one whole `${...}` loads and evaluates identically; a `${...}` inside the expression is a load error, as is a call to a function other than a builtin, `isinstance`, or a `typedefs:` constructor `T(...)`, or to a builtin with arguments it doesn't take. |
 | **Prompts** | `prompt:` text | free text with embedded `${...}` spans (each stringified) |
 
 > Bindings wire, conditions test, nodes compute. A heavy transform still belongs
@@ -176,17 +178,17 @@ Contract:
   Cross-flow bindings accept strict-to-nullable elements but reject the reverse.
   Unsupported whole-value computations, empty/heterogeneous lists, producers
   without an available static output type, or incomplete list element types fail
-  at the authored binding. Declare the type with a typed binding
-  (`n: int = ${input.a + input.b}`, `tags: list[str] = []`): the parameter takes
+  at the authored binding. Declare the type with a tag
+  (`n: !int ${input.a + input.b}`, `tags: !list(str) []`): the parameter takes
   the declared type and the binder checks the value at runtime. A typed named
   `defs:` body also works.
 - MAP's `${item...}` provider is demand-driven. If no outer argument is a lone
   whole-value item reference, `over:` need not be statically inspectable. The
   first such item read proves `over:` is a list with an exact element type;
   later reads reuse that proof.
-- Only a string at the outer binding value is scanned as a template. Strings
-  nested inside a literal mapping/list remain literal, including `${...}` and
-  `$$` text.
+- `${...}` nested inside a mapping or list argument is evaluated, and each field
+  keeps its type; `$$` is a literal `$` at any depth. A nested `call(...)` is a
+  load error.
 - Nesting is recursive. Every source occurrence has a distinct private child,
   including YAML alias/merge occurrences.
 - Existing fields do not change ownership: loop drivers configure the outer
@@ -201,82 +203,94 @@ Contract:
 
 ## Type forms
 
-Python typing vocabulary. Scalars: `str`, `int`, `float`, `bool`, `date`,
-`datetime`, `object`, `None`.
+Scalars: `str`, `int`, `float`, `bool`, `date`, `datetime`, `object`, `None`. Forms use
+parentheses; bracket spellings are a load error that shows the new one.
 
 | Form | Example | Notes |
 |------|---------|-------|
-| list | `list[str]` | |
-| nullable | `Optional[str]` | may be `null` |
-| default-fill | `lookback: int = 30` | filled when the input is omitted |
-| typed binding | `qty: int = ${size.output.qty}` | a node input or flow output declaring its value's type (see below) |
-| enum | `Literal[go, no_go, wait]` | one of these tags |
-| bounded integer | `int[1, 12]` | inclusive integer endpoints |
-| bounded float | `float[0.0, 1.0]` | inclusive finite float endpoints |
-| alias | `Basket: list[str]` | aliases compose |
+| list | `list(str)` | |
+| nullable | `Optional(str)` | may be `null` |
+| enum | `Literal(go, no_go, wait)` | one of these tags |
+| bounded integer | `int(1..12)` | inclusive range, both ends required |
+| bounded float | `float(0.0..1.0)` | inclusive finite range |
+| mapping | `dict(str, int)` | |
+| alias | `Basket: list(str)` | aliases compose |
 | record | (see below) | fields recurse |
-| union | `Union[Buy, Sell]` | one of several records, told apart by a tag field or by shape |
+| union | `Union(Buy, Sell)` | one of several records, told apart by a tag field or by shape |
+| required input | `qty: !int` | a flow input: the tag with no value |
+| default-fill | `lookback: !int 30` | filled when the input is omitted |
+| typed slot | `qty: !int ${size.output.qty}` | a binding, flow output, or variable declaring its value's type (see below) |
 
 ```yaml
 typedefs:
   Signal:
     score: float
-    note: Optional[str]
+    note: Optional(str)
 ```
 
-`Optional[X]` (nullable) and `= default` (omission-fill) are **orthogonal** —
-nullable says the value may be null; default says what to use when the input
-isn't supplied at all.
+Typedefs and node/compact-flow `output:` declarations are written as plain types,
+with no tag. Every slot is typed with a tag.
 
-An explicit `Optional[int] = null` is a present default, unlike no `=`. A null
-default requires a nullable or `None` type, and an empty `=` is invalid. Defaults
-are YAML literals validated at load and are never string-coerced: use `int = 30`,
-not `int = "30"`, and quote date strings (`date = "2026-01-01"`). Only strings supplied
+`Optional(X)` (nullable) and a default (omission-fill) are **orthogonal** —
+nullable says the value may be null; default says what to use when the input
+isn't supplied at all. `note: !Optional(str)` may be omitted and gives null;
+`note: !Optional(str) null` has a present null default.
+
+A null default requires a nullable or `None` type. Defaults are literal YAML
+validated at load: `${...}` inside is text, and nothing is coerced: use `!int 30`,
+not `!int "30"`, and quote date strings (`!date "2026-01-01"`). Only strings supplied
 to the top-level flow (CLI, JSON inputs, `run_flow`) may be coerced; a `call`, `map`, or
 `loop` edge is not a flow boundary. A compatible default keeps its authored payload,
-so `float = 30` remains an integer.
+so `!float 30` remains an integer.
 
-A `Union[...]` lists records. Give every member a **tag field**: the same field name
+A `Union(...)` lists records. Give every member a **tag field**: the same field name
 declared as a single-value `Literal`, with a different value in each member. Members
 with no tag load only when their shapes can't overlap.
 
 ```yaml
 typedefs:
   Buy:
-    action: Literal[buy]
+    action: Literal(buy)
     qty: int
   Sell:
-    action: Literal[sell]
+    action: Literal(sell)
     price: float
-  Order: Union[Buy, Sell]
+  Order: Union(Buy, Sell)
 ```
 
-`Buy | Sell` and `Union[Buy, None]` are load errors with hints (`use Union[Buy, Sell]`,
-`use Optional[Union[...]]`). A bad union fails at its typedef even if nothing uses it.
+`Buy | Sell` and `Union(Buy, None)` are load errors with hints (`use Union(Buy, Sell)`,
+`use Optional(Union(...))`). A bad union fails at its typedef even if nothing uses it.
 
-**Typed bindings.** `name: Type = value` works on node `input:` bindings (LOOP
-seeds and HUMAN_INPUT context too), flow `output:` fields, and a single
-`output: Type = ${x}`, including `defs:` and inline bodies; not in `call(...)`
-keyword arguments. An unquoted value containing ` = ` is typed (unless it starts
-with `call(`, a directive) and the left side must be a type, else a load error
-suggests quoting; quoted and block values are never typed (their `${...}` still
-evaluates). `int=3` without spaces is plain text.
-A right side starting with a quote, `[`, or `{` is read as YAML first: a quoted
-`${...}`/`call(...)` drops its quotes and stays a template or call (unlike a quoted
-whole value, which is text), and strings inside a list or record stay text.
-Otherwise the right side is a `${...}`/`call(...)` kept as written, or a YAML
-literal (YAML 1.2 core values plus unquoted dates) checked at load (`str = 30` fails;
-write `str = "30"`; `bool = yes` fails; write `bool = true`). The whole binding
-is one plain scalar, so it can't contain `: ` or ` #` (write a record literal as
-`{"a":1}`). Load rejects a value whose
-inferred type is disjoint from the declared one; narrower or unknown types are
-checked at runtime, without conversion, failing the consumer (END for a flow output)
-with `binding.type`. Declared types are in the flow fingerprint.
+**Typed slots.** A slot's type is a YAML tag on its value: `name: !T value`, or
+`name: !T` with no value (an empty tagged scalar, not null). Slots are flow inputs,
+node `input:` bindings (LOOP seeds, HUMAN_INPUT context, CALL/MAP/inline-body
+arguments), flow `output:` fields and a single `output: !T ${x}`, agent
+`variables:` (always with a value), and records or lists nested in any of these.
+`output: !T {...}` is one typed value. Inside a tag there are no commas: name a
+multi-argument type (`Union`, a multi-value `Literal`, `dict(K, V)`) in `typedefs:`
+and tag by name. A tag ends at a space, so `!Union(A, B)` is a load error that says
+to name it; `[ ] { } ,` in a tag are load errors. Inside `{...}`, quote an unquoted
+multi-argument type or use block style, and put a space after a tag before `,`/`}`.
+Tags only check: no fill-in, no conversion. Quoted values stay text (`!int "5"`
+fails), and values follow YAML 1.2 core rules plus unquoted dates (`!str 30` fails with a hint to quote; `!bool yes` fails: `yes` is text, write `true`). A
+record missing a required single-value tag field fails, naming the field. Load
+rejects a value whose inferred type is disjoint from the declared one; narrower or
+unknown types are checked at runtime, failing the consumer (END for a flow output)
+with `binding.type`. Downstream sees the declared type. Declared types are in the
+flow fingerprint. Tags anywhere else (typedefs, node `output:`, other fields, keys,
+`<<:` sources) are load errors; tags under `x-*` keys are ignored, and `!!` tags keep
+their YAML meaning.
+
+**Old forms** are load errors that show the new spelling: `name: T = value`,
+`name: T = default` inputs and variables, untagged inputs (`qty: int` -> `qty: !int`),
+inline record input types (`cfg: {a: int}` -> name the record, `cfg: !Cfg`; `!object`
+is an unstructured mapping), and brackets anywhere. `note: a = b` (no type on the
+left) is plain text.
 
 NaN, infinity, and complex numbers (`${(0 - 8) ** 0.5}`) are not yian values. A
 binding whose value holds one at any depth fails its node with `binding.evaluate`;
 a temporary inside an expression is fine. Keep the value in range or return null
-explicitly: a `case` value branch `then: null` under `output: Optional[...]`, or a
+explicitly: a `case` value branch `then: null` under `output: Optional(...)`, or a
 `code` node returning `None`. An int of any size is a value and is recorded
 exactly; rendering one past Python's digit limit as text still fails, and an int
 literal written in the YAML past that limit is a load error.
@@ -292,26 +306,26 @@ in a float domain must convert without rounding. Bounds compose with other
 type forms and constrain defaults, supplied values, and generated schemas.
 Cross-flow wiring requires the source domain to fit inside the destination;
 an unbounded source does not prove a bounded destination safe, and a plain `str`
-does not prove a `Literal[...]` destination safe (its tags must be a subset).
-A typed binding (`mode: Literal[a, b] = ${input.s}`) accepts either and checks
-the value at run time.
+does not prove a `Literal(...)` destination safe (its tags must be a subset).
+A tag (`mode: !Mode ${input.s}`, with `Mode: Literal(a, b)` in `typedefs:`) accepts
+either and checks the value at run time.
 
 ## Recipes
 
 **Give an AGENT a local prompt setting.** Add `variables:` beside `input:`, with
-an entry such as `num_sentences: int[1, 12] = 4`, then use `${num_sentences}` in
-the prompt. Each variable requires a validated typed default; nullable variables
+an entry such as `num_sentences: !int(1..12) 4`, then use `${num_sentences}` in
+the prompt. Each variable requires a tag and a validated default; nullable variables
 also need an explicit default. Variable and input names cannot overlap. Default
 strings stay literal, and each invocation gets a fresh copy of all defaults.
 Ownership follows the authored AGENT path plus name across repeated executions.
 A variable named `temperature` does not configure the model; use its provider block in `llm_config:`.
 
 **Get a structured or numeric value out of an AGENT node.** Declare the typed shape
-directly as the node's `output:` — a `Literal[...]`, record, union, non-string scalar, or
+directly as the node's `output:` — a `Literal(...)`, record, union, non-string scalar, or
 list switches the AGENT node to **structured generation** (the engine derives a schema and
 the model emits a conforming value, retried up to `retries:` times on deviation; see
-`typed_output.yaml`). `Optional[X]` lets the model answer null at the root, in a list
-element, or in a record field; a root `Optional[str]` stays plain text and never returns
+`typed_output.yaml`). `Optional(X)` lets the model answer null at the root, in a list
+element, or in a record field; a root `Optional(str)` stays plain text and never returns
 null. Use a downstream `code` node only when you need deterministic post-processing of the
 value.
 
@@ -326,7 +340,7 @@ node. A `case` whose result is used needs an `else:`, every tag of a non-nullabl
 routing on a `Literal` node output or flow input is always exhaustiveness-checked. A
 routing-only `case` takes none when nothing matches and there is no `else:`. A flow
 output field that reads only nodes a `case` may skip returns `null` when they were
-skipped (typed `Optional[T]`, as if `:- null` were written), in root, `defs:`, and
+skipped (typed `Optional(T)`, as if `:- null` were written), in root, `defs:`, and
 inline bodies; a join
 over an exhaustive `case` never does. A LOOP body field like that sets the carried field
 to null. Templates and comparisons keep their null behavior; arithmetic needs a `:-`
@@ -407,12 +421,12 @@ that change; a field it omits keeps its value. This is the shape
 
 ## Gotchas
 
-- **Text containing ` = ` must be quoted.** An unquoted binding value with ` = ` is
-  a typed binding, and the left side must be a type: `qty: a = b` fails to load
-  (`` `a` ... is not a type ... quote it: `qty: "a = b"` ``). Quote it:
-  `note: "a = b"`, `fallback: '${input.y:-"a = b"}'`. A value starting with `call(`
-  is a directive, not a typed binding, so `x: call(f, a = 1)` needs no quotes (quoted,
-  it is text). Typed bindings need block-style mappings.
+- **Type a slot with a tag, not `T = value`.** `qty: int = ${x}` is a load error that
+  shows `` `qty: !int ${x}` ``; `note: a = b` (no type on the left) is plain text.
+  A multi-argument type in a tag is a load error: name it in `typedefs:` and tag by
+  name (`!Decision`). Prefer block-style mappings for tagged values; inside `{...}`
+  put a space after a tag before `,` or `}`. A value starting with `call(` is a
+  directive (quoted, it is text).
 - **No secrets in the file.** Under a secret name (`password`, `secret`,
   `client_secret`, `private_key`, `access_token`, `refresh_token`, `api_key`,
   `passwd`, or a name ending in `_api_key`, `_password`, `_secret`, matched across
@@ -430,7 +444,7 @@ that change; a field it omits keeps its value. This is the shape
     x: ${input.x}
   ```
 - **An AGENT node's `output:` may be any shape** — only a bare, untagged `str` keeps it a text
-  producer; a `Literal[...]`/record/union/non-string scalar/list switches it to structured
+  producer; a `Literal(...)`/record/union/non-string scalar/list switches it to structured
   generation (schema-checked at the write boundary, `retries:`-capped self-correction).
 - **Prompt names are local.** Inside `prompt:` use names from the node's own
   `input:` block, written bare (`${name}`); AGENT prompts also see local `variables:`. Pool refs
@@ -458,7 +472,7 @@ that change; a field it omits keeps its value. This is the shape
   each omitted field keeps its previous value. The body reads only a subset of the
   carried names. Names are checked at build; each returned field must keep its carried
   type (checked at load). Omitted keeps a field; a returned null sets a nullable field
-  to null. A literal `${null}` is typed `None`, so it does not fit an `Optional[str]`
+  to null. A literal `${null}` is typed `None`, so it does not fit an `Optional(str)`
   seed; return a nullable-typed producer instead. A body may return one field
   (`output: {done: ...}`); an empty `output: {}`, or a reference to an empty record,
   is rejected. A predicate that reads only fields the body never returns cannot
@@ -479,13 +493,14 @@ that change; a field it omits keeps its value. This is the shape
   A `call`/`loop` node's own asserts can't use `isinstance` (they run on the child's
   `end`); assert inside the child flow.
 - **`isinstance(x, T)` takes a bare type name** — a `typedefs:` name or
-  `str`/`int`/`float`/`bool`/`date`/`datetime`/`object`. `list[...]`/`Optional[...]` need
-  an alias. It is not a prompt function: compute it in an input binding. WAIT `until:`
+  `str`/`int`/`float`/`bool`/`date`/`datetime`/`object`. `list(...)`/`Optional(...)` need
+  an alias. Constructors `${T(...)}` take only typedef names (`${int(x)}` is an unknown
+  function). It is not a prompt function: compute it in an input binding. WAIT `until:`
   and MAP `over:` reject it.
 - **A member-only union field fails to load outside its branch.** `${d.output.qty}`
   where only `Buy` has `qty` must sit under `when: buy` (or an `isinstance` case).
   A `when:` value that isn't a tag of the union is a load error (``case node 'route':
-  `when: buyy` is not a tag of `on: ${d.output.action}` (`Literal["buy","sell"]`); use one
+  `when: buyy` is not a tag of `on: ${d.output.action}` (`Literal("buy","sell")`); use one
   of: buy, sell``), and inline child bodies are typed before narrowing.
 - **Flow-level `asserts:` read `input.X` (boundary, before any node) or `node.output`
   (post, after the terminal).** An exact unqualified input name is shorthand (`age`
@@ -683,7 +698,7 @@ inputs load first; repeatable `--input` flags override individual
 keys but remain a string/scalar surface. With an interactive stdin (TTY), `yian`
 prompts for declarations still missing and keeps four outcomes distinct: an explicit
 value, `Set null`, omit/use-default when allowed, and cancellation. Nullable
-boolean/`Literal[...]` widgets put `Set null` in their value select. A null-capable
+boolean/`Literal(...)` widgets put `Set null` in their value select. A null-capable
 open scalar/list/object first offers omit/default when allowed, `Set null`, and
 `Enter value`; Enter opens the existing scalar or typed-JSON editor. Optional blank
 there returns to the palette instead of omitting. A direct non-null-capable

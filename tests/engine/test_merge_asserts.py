@@ -26,7 +26,7 @@ _INTERNAL_ASSERT_CHILD_DEF = """
 defs:
   child:
     input:
-      seed: int
+      seed: !int
     nodes:
       emit:
         kind: code
@@ -47,7 +47,7 @@ def test_call_bare_internal_assert_succeeds():
 id: c2call
 name: c2_call
 input:
-  seed: int
+  seed: !int
 {_INTERNAL_ASSERT_CHILD_DEF}
 nodes:
   callee:
@@ -68,7 +68,7 @@ def test_map_bare_internal_assert_all_satisfy_succeeds():
 id: c2map
 name: c2_map
 input:
-  seeds: list[int]
+  seeds: !list(int)
 {_INTERNAL_ASSERT_CHILD_DEF}
 nodes:
   fan:
@@ -90,7 +90,7 @@ def test_map_bare_internal_assert_one_element_violates_fails_loudly():
 id: c2mapv
 name: c2_map_violate
 input:
-  seeds: list[int]
+  seeds: !list(int)
 {_INTERNAL_ASSERT_CHILD_DEF}
 nodes:
   fan:
@@ -113,11 +113,11 @@ def test_loop_bare_internal_assert_succeeds():
 id: c2loop
 name: c2_loop
 input:
-  start: int
+  start: !int
 defs:
   body:
     input:
-      n: int
+      n: !int
     nodes:
       step:
         kind: code
@@ -168,7 +168,7 @@ def _boundary_assert_flow(assert_str: str) -> str:
 id: c3
 name: c3
 input:
-  age: int
+  age: !int
 {_BOUNDARY_ASSERT_ECHO_BODY}
 asserts:
   - "{assert_str}"
@@ -232,7 +232,7 @@ def _branch_assert_flow(assert_str: str) -> str:
 id: c1
 name: c1
 input:
-  v: int
+  v: !int
 {_BRANCH_ASSERT_BODY}
 asserts:
   - "{assert_str}"
@@ -268,7 +268,7 @@ def test_system_ref_in_flow_assert_is_load_error():
 id: sysf
 name: sysf
 input:
-  age: int
+  age: !int
 {_BOUNDARY_ASSERT_ECHO_BODY}
 asserts:
   - "system.run_id != null"

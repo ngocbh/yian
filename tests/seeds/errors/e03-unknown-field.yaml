@@ -6,7 +6,7 @@ id: err-unknown-field
 name: err_unknown_field
 
 input:
-  topic: str
+  topic: !str
 
 nodes:
   score:

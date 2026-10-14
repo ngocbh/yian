@@ -14,7 +14,7 @@ name: err_type_mismatch_ref
 description: (negative) bind a float-typed output to a `call` child input declared str.
 
 input:
-  topic: str
+  topic: !str
 
 uses:
   research-one: research-one      # external callee (resolved by the test's child_resolver)

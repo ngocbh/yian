@@ -11,7 +11,7 @@ name: case_router
 description: Route a topic to a positive or cautious take based on a score threshold.
 
 input:
-  topic: str
+  topic: !str
 
 nodes:
   score:

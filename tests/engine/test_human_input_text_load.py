@@ -9,7 +9,7 @@ from yian.compose import LoadError, load_flow
 _FLOW = """\
 id: f
 name: f
-input: {{proj: str}}
+input: {{proj: !str }}
 nodes:
   ask:
     kind: human_input
@@ -105,11 +105,11 @@ _DEFS_FLOW = """\
 id: f
 name: f
 input:
-  proj: str
+  proj: !str
 defs:
   confirm:
     input:
-      proj: str
+      proj: !str
     nodes:
       ask:
         kind: human_input
@@ -157,7 +157,7 @@ def test_question_text_error_points_at_the_string(site, line, text):
 _ADAPTIVE_FLOW = """\
 id: f
 name: f
-input: {proj: str}
+input: {proj: !str }
 nodes:
   ask:
     kind: human_input

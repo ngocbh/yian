@@ -13,15 +13,15 @@ name: nested_suspension
 description: Call a child that blocks for human approval, then confirm inside the same live run.
 
 typedefs:
-  Approval: Literal[approve, reject]
+  Approval: Literal(approve, reject)
 
 input:
-  action: str
+  action: !str
 
 defs:
   review:                       # an in-file callable that BLOCKS on a HUMAN_INPUT
     input:
-      action: str
+      action: !str
     nodes:
       approve:
         kind: human_input

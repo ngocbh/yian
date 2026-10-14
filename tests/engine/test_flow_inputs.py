@@ -1,5 +1,7 @@
 """Compose flow inputs lower directly into canonical semantic parameters."""
 
+import re
+
 import pytest
 
 from yian.diagnostics import SourceRange
@@ -9,10 +11,17 @@ from yian.nodes.binding import apply_defaults, coerce_inputs
 from yian.compose import LoadError
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.types import read_flow_inputs
+from tests.compose._declarations import parameters_from_yaml
 
 
 def _by_name(decls):
     return {d.name: d for d in decls}
+
+
+def _inputs(body: str) -> list[Parameter]:
+    """Read flow `input:` declarations from their YAML body, one per line."""
+    lines = "".join(f"  {line}\n" for line in body.splitlines())
+    return parameters_from_yaml("input:\n" + lines, {})
 
 
 def _type(parameter: Parameter):
@@ -33,7 +42,7 @@ def test_required_scalar():
 
 
 def test_int_with_default_and_coercion():
-    decls = read_flow_inputs({"window": "int = 30"}, {})
+    decls = _inputs("window: !int 30")
     d = _by_name(decls)["window"]
     assert _type(d).kind == ValueKind.INTEGER
     assert d.default == 30 and isinstance(d.default, int)
@@ -46,7 +55,7 @@ def test_int_with_default_and_coercion():
 
 
 def test_optional_nullable():
-    d = _by_name(read_flow_inputs({"as_of": "Optional[date]"}, {}))["as_of"]
+    d = _by_name(read_flow_inputs({"as_of": "Optional(date)"}, {}))["as_of"]
     assert _type(d).nullable is True
     assert d.required is False
     assert d.has_default is False
@@ -54,10 +63,8 @@ def test_optional_nullable():
 
 
 def test_nullable_null_default_is_distinct_from_no_default():
-    absent = _by_name(read_flow_inputs({"value": "Optional[int]"}, {}))["value"]
-    explicit_null = _by_name(read_flow_inputs({"value": "Optional[int] = null"}, {}))[
-        "value"
-    ]
+    absent = _by_name(read_flow_inputs({"value": "Optional(int)"}, {}))["value"]
+    explicit_null = _by_name(_inputs("value: !Optional(int) null"))["value"]
 
     assert absent.has_default is False
     assert explicit_null.has_default is True
@@ -67,46 +74,49 @@ def test_nullable_null_default_is_distinct_from_no_default():
 
 
 def test_nonnullable_null_default_is_rejected_during_load():
-    with pytest.raises(LoadError, match="default"):
-        read_flow_inputs({"value": "int = null"}, {})
+    with pytest.raises(LoadError, match=re.escape("'value': `null` is not a valid int")):
+        _inputs("value: !int null")
 
 
-def test_empty_default_assignment_is_rejected_during_load():
-    with pytest.raises(LoadError, match="default"):
+def test_source_free_default_assignment_is_rejected_during_load():
+    with pytest.raises(
+        LoadError,
+        match=re.escape(
+            "input 'value': source-free declarations take a type only; "
+            "write defaults in YAML with a tag"
+        ),
+    ):
         read_flow_inputs({"value": "int ="}, {})
 
 
 def test_quoted_integer_default_is_not_coerced():
-    with pytest.raises(LoadError, match="default"):
-        read_flow_inputs({"value": 'int = "30"'}, {})
+    with pytest.raises(LoadError, match=re.escape("""'value': `"30"` is not a valid int""")):
+        _inputs('value: !int "30"')
 
 
 def test_former_boolean_word_default_for_bool_names_the_boolean_to_write():
     with pytest.raises(LoadError) as caught:
-        read_flow_inputs({"flag": "bool = no"}, {})
+        _inputs("flag: !bool no")
 
-    assert str(caught.value) == (
-        "input 'flag': default 'no' does not satisfy the declared type: "
-        "'no' does not match declared type bool; `no` is text; write `false`"
-    )
+    assert str(caught.value) == "'flag': `no` is not a valid bool; `no` is text; write `false`"
 
 
 def test_former_boolean_word_default_for_int_gets_no_fix():
     with pytest.raises(LoadError) as caught:
-        read_flow_inputs({"flag": "int = no"}, {})
+        _inputs("flag: !int no")
 
     assert "is text" not in str(caught.value)
 
 
 def test_former_boolean_word_in_a_list_default_names_the_boolean_to_write():
     with pytest.raises(LoadError) as caught:
-        read_flow_inputs({"flags": "list[bool] = [yes, no]"}, {})
+        _inputs("flags: !list(bool) [yes, no]")
 
     assert str(caught.value).endswith("; `yes` is text; write `true`")
 
 
 def test_number_default_retains_compatible_integer_payload():
-    parameter = _by_name(read_flow_inputs({"value": "float = 30"}, {}))["value"]
+    parameter = _by_name(_inputs("value: !float 30"))["value"]
 
     assert _type(parameter).kind == ValueKind.NUMBER
     assert parameter.has_default is True
@@ -117,10 +127,10 @@ def test_number_default_retains_compatible_integer_payload():
 @pytest.mark.parametrize(
     ("declaration", "message"),
     [
-        ("list[", "bad type expression"),
-        ({"field": 3}, "cannot read type"),
-        ([{"field": "int"}], "declaration must be a type string or a record map"),
-        (3, "declaration must be a type string or a record map"),
+        ("list(", "bad type expression"),
+        ({"field": 3}, "a source-free declaration is type text, got dict"),
+        ([{"field": "int"}], "a source-free declaration is type text, got list"),
+        (3, "a source-free declaration is type text, got int"),
     ],
 )
 def test_input_declaration_errors_retain_their_source_range(declaration, message):
@@ -141,13 +151,13 @@ def test_input_declaration_errors_retain_their_source_range(declaration, message
 
 
 def test_float_default():
-    d = _by_name(read_flow_inputs({"budget": "float = 1000.0"}, {}))["budget"]
+    d = _by_name(_inputs("budget: !float 1000.0"))["budget"]
     assert _type(d).kind == ValueKind.NUMBER
     assert d.default == 1000.0 and isinstance(d.default, float)
 
 
 def test_list_default():
-    d = _by_name(read_flow_inputs({"bundle": 'list[str] = ["ACME"]'}, {}))["bundle"]
+    d = _by_name(_inputs('bundle: !list(str) ["ACME"]'))["bundle"]
     assert _type(d).kind == ValueKind.LIST_STRING
     assert d.default == ["ACME"]
     assert d.has_default is True
@@ -155,38 +165,15 @@ def test_list_default():
 
 
 def test_bare_word_string_default():
-    d = _by_name(read_flow_inputs({"style": "str = relevance"}, {}))["style"]
+    d = _by_name(_inputs("style: !str relevance"))["style"]
     assert _type(d).kind == ValueKind.STRING
     assert d.default == "relevance"
     assert d.has_default is True
     assert d.required is False
 
 
-def test_record_typed_dict_value():
-    d = _by_name(
-        read_flow_inputs(
-            {
-                "config": {
-                    "regroup": "bool",
-                    "bands": {"lower": "float", "upper": "float"},
-                }
-            },
-            {},
-        )
-    )["config"]
-    typ = _type(d)
-    assert typ.kind == ValueKind.OBJECT
-    assert typ.fields["regroup"].kind == ValueKind.BOOLEAN
-    bands = typ.fields["bands"]
-    assert bands.kind == ValueKind.OBJECT
-    assert bands.fields["lower"].kind == ValueKind.NUMBER
-    assert bands.fields["upper"].kind == ValueKind.NUMBER
-    assert d.default is None
-    assert d.required is True
-
-
 def test_apply_defaults_fills_omitted():
-    decls = read_flow_inputs({"topic": "str", "window": "int = 30"}, {})
+    decls = _inputs("topic: !str\nwindow: !int 30")
     out = apply_defaults(decls, coerce_inputs(decls, {"topic": "ACME"}))
     assert out == {"topic": "ACME", "window": 30}
 

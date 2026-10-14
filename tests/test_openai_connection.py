@@ -287,7 +287,7 @@ _SLOW_THEN_AGENT = """
 id: test
 name: test
 input:
-  topic: str
+  topic: !str
 output: ${w.output}
 {extra}nodes:
   first:

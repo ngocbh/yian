@@ -38,7 +38,7 @@ _ECHO_CHILD = """
 id: echo-child
 name: echo_child
 input:
-  v: int
+  v: !int
 nodes:
   x:
     kind: code
@@ -121,7 +121,7 @@ name: in_parent
 uses:
   echo-child: echo-child
 input:
-  v: int
+  v: !int
 nodes:
   callee:
     kind: call
@@ -164,7 +164,7 @@ _BLOCKING_CHILD = """
 id: approver
 name: approver
 input:
-  v: int
+  v: !int
 nodes:
   approve:
     kind: human_input
@@ -185,7 +185,7 @@ name: recovery_parent
 uses:
   approver: approver
 input:
-  v: int
+  v: !int
 nodes:
   gate:
     kind: call
@@ -242,7 +242,7 @@ _ECHO_CHILD_WITH_INPUT_ASSERT = """
 id: echo-child
 name: echo_child
 input:
-  v: int
+  v: !int
 asserts:
   - "input.v >= 0 and x.output >= 0"
 nodes:
@@ -266,7 +266,7 @@ name: collision_parent
 uses:
   echo-child: echo-child
 input:
-  v: int
+  v: !int
 nodes:
   callee:
     kind: call
@@ -376,7 +376,7 @@ name: repeat_parent
 uses:
   echo-child: echo-child
 input:
-  v: int
+  v: !int
 nodes:
   callee:
     kind: call

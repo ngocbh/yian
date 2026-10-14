@@ -4,7 +4,7 @@
 id: err-inline-syntax
 name: err_inline_syntax
 input:
-  topic: str
+  topic: !str
 nodes:
   broken:
     kind: code

@@ -15,7 +15,8 @@ from tests.engine.test_agent_session import _Model
 FLOW = """id: summarized-session
 name: summarized_session
 llm_config: {provider: openai, model: old-model}
-input: {question: str}
+input:
+  question: !str
 nodes:
   answer:
     kind: agent

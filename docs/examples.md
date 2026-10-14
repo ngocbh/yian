@@ -17,7 +17,7 @@ name: hello
 description: Greet someone with a short, friendly one-liner.
 
 input:
-  name: str
+  name: !str
 output: str
 kind: agent
 prompt: |-
@@ -43,21 +43,21 @@ yian run examples/summarize.yaml --input text="...long text..."
 
 ## `classify.yaml` — a constrained output
 
-An AGENT node whose `output:` is a `Literal[...]` enum, so the model must answer with
+An AGENT node whose `output:` is a `Literal(...)` enum, so the model must answer with
 exactly one tag, and the flow returns a one-field object.
 
 ```yaml
 id: classify
 name: classify
 input:
-  text: str
+  text: !str
 
 nodes:
   label:
     kind: agent
     input:
       text: ${input.text}
-    output: Literal[positive, neutral, negative]
+    output: Literal(positive, neutral, negative)
     prompt: "Classify the sentiment of: ${text}"
 output:
   sentiment: ${label.output}

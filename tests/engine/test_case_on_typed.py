@@ -51,6 +51,17 @@ def _branch(name: str) -> str:
     )
 
 
+def _declare_n(on_type: str) -> str:
+    """Return the `input:` section declaring `n: !<on_type>`.
+
+    A type a tag can't hold (one with a comma, space, or quote) is named `N` in
+    `typedefs:` and tagged by that name.
+    """
+    if any(char in on_type for char in ", \"'"):
+        return f"typedefs:\n  N: {on_type}\ninput:\n  n: !N\n"
+    return f"input:\n  n: !{on_type}\n"
+
+
 def _flow(
     whens: list[tuple[str, str]],
     *,
@@ -69,11 +80,11 @@ def _flow(
     if else_ is not None:
         targets.append(else_)
     if on_type is not None:
-        text = f"id: f\nname: f\ninput:\n  n: {on_type}\nnodes:\n"
+        text = f"id: f\nname: f\n{_declare_n(on_type)}nodes:\n"
         on = "${input.n}"
     else:
         text = (
-            "id: f\nname: f\ninput:\n  pick: str\nnodes:\n"
+            "id: f\nname: f\ninput:\n  pick: !str\nnodes:\n"
             "  src:\n"
             "    kind: code\n"
             "    input:\n"
@@ -268,9 +279,9 @@ def test_float_when_on_int_is_an_error():
 
 
 def test_out_of_bounds_int_when():
-    text = _flow([("1", "one"), ("13", "two")], on_type="int[1, 12]")
+    text = _flow([("1", "one"), ("13", "two")], on_type="int(1..12)")
     assert _when_error(text, "13") == (
-        "case node 'route': `when: 13` is not a value of `on: ${input.n}` (`int[1,12]`): "
+        "case node 'route': `when: 13` is not a value of `on: ${input.n}` (`int(1..12)`): "
         "13 is outside inclusive int bounds (1, 12)"
     )
 
@@ -280,9 +291,9 @@ def test_typo_next_to_else_on_a_literal_node_output():
         [("go", "one"), ("nogo", "two")],
         on_type=None,
         src_code='return "go"',
-        src_output="Literal[go, no_go]",
+        src_output="Literal(go, no_go)",
     )
-    label = canonical_type_label(type_for("Literal[go, no_go]", {}))
+    label = canonical_type_label(type_for("Literal(go, no_go)", {}))
     assert _when_error(text, "nogo") == (
         f"case node 'route': `when: nogo` is not a tag of `on: ${{src.output}}` (`{label}`); "
         "use one of: go, no_go"
@@ -290,8 +301,8 @@ def test_typo_next_to_else_on_a_literal_node_output():
 
 
 def test_typo_on_a_literal_flow_input():
-    text = _flow([("a", "one"), ("c", "two")], on_type="Literal[a, b]")
-    label = canonical_type_label(type_for("Literal[a, b]", {}))
+    text = _flow([("a", "one"), ("c", "two")], on_type="Literal(a, b)")
+    label = canonical_type_label(type_for("Literal(a, b)", {}))
     assert _when_error(text, "c") == (
         f"case node 'route': `when: c` is not a tag of `on: ${{input.n}}` (`{label}`); "
         "use one of: a, b"
@@ -299,16 +310,16 @@ def test_typo_on_a_literal_flow_input():
 
 
 def test_int_when_on_a_literal_is_an_error():
-    text = _flow([("1", "one")], on_type="Literal[a, b]")
-    label = canonical_type_label(type_for("Literal[a, b]", {}))
+    text = _flow([("1", "one")], on_type="Literal(a, b)")
+    label = canonical_type_label(type_for("Literal(a, b)", {}))
     assert _when_error(text, "1") == (
         f"case node 'route': `when: 1` is an int but `on: ${{input.n}}` is `{label}`"
     )
 
 
 def test_quote_fix_on_a_literal_with_a_numeric_tag():
-    text = _flow([("1", "one")], on_type='Literal["1", "2"]')
-    label = canonical_type_label(type_for('Literal["1", "2"]', {}))
+    text = _flow([("1", "one")], on_type='Literal("1", "2")')
+    label = canonical_type_label(type_for('Literal("1", "2")', {}))
     assert _when_error(text, "1") == (
         f"case node 'route': `when: 1` is an int but `on: ${{input.n}}` is `{label}`; "
         'quote it: `when: "1"`'
@@ -316,8 +327,8 @@ def test_quote_fix_on_a_literal_with_a_numeric_tag():
 
 
 def test_tags_that_read_as_other_values_are_listed_quoted():
-    text = _flow([('"3"', "one")], on_type='Literal["1", "2"]')
-    label = canonical_type_label(type_for('Literal["1", "2"]', {}))
+    text = _flow([('"3"', "one")], on_type='Literal("1", "2")')
+    label = canonical_type_label(type_for('Literal("1", "2")', {}))
     assert _when_error(text, '"3"') == (
         f"case node 'route': `when: \"3\"` is not a tag of `on: ${{input.n}}` (`{label}`); "
         'use one of: "1", "2"'
@@ -343,12 +354,12 @@ def _branch_body(name: str, output: str, value: str) -> str:
 
 def test_loop_body_carried_field():
     text = (
-        "id: f\nname: f\ninput:\n  s: int\nnodes:\n"
+        "id: f\nname: f\ninput:\n  s: !int\nnodes:\n"
         "  rep:\n"
         "    kind: loop\n"
         "    times: 2\n"
         "    input:\n"
-        "      n: int = 0\n"
+        "      n: !int 0\n"
         "    nodes:\n"
         "      route:\n"
         "        kind: case\n"
@@ -368,7 +379,7 @@ def test_loop_body_carried_field():
 
 def test_map_child_input():
     text = (
-        "id: f\nname: f\ninput:\n  xs: list[int]\nnodes:\n"
+        "id: f\nname: f\ninput:\n  xs: !list(int)\nnodes:\n"
         "  each:\n"
         "    kind: map\n"
         "    over: ${input.xs}\n"
@@ -400,9 +411,9 @@ def test_object_on_type_is_not_checked():
 
 
 def test_optional_on_type_checks_the_non_null_part():
-    load_flow(_flow([("1", "one")], on_type="Optional[int]"))
-    text = _flow([('"1"', "one")], on_type="Optional[int]")
-    assert "`Optional[int]`" in _when_error(text, '"1"')
+    load_flow(_flow([("1", "one")], on_type="Optional(int)"))
+    text = _flow([('"1"', "one")], on_type="Optional(int)")
+    assert "`Optional(int)`" in _when_error(text, '"1"')
 
 
 def test_date_when_on_a_date_input():
@@ -441,7 +452,7 @@ def test_no_drop_quotes_hint_for_text_yaml_reads_as_text():
     ("when", "on_type", "fix"),
     [
         ("off", "bool", "`off` is text; write `false`"),
-        ('"yes"', "Optional[bool]", "`yes` is text; write `true`"),
+        ('"yes"', "Optional(bool)", "`yes` is text; write `true`"),
     ],
 )
 def test_former_boolean_word_on_a_bool(when, on_type, fix):
@@ -461,7 +472,7 @@ def test_invalid_date_text_hint_does_not_crash():
 
 @pytest.mark.parametrize(
     ("when", "on_type"),
-    [('""', "Optional[int]"), ('"null"', "Optional[int]"), ('".inf"', "float")],
+    [('""', "Optional(int)"), ('"null"', "Optional(int)"), ('".inf"', "float")],
 )
 def test_no_drop_quotes_for_null_or_nonfinite_text(when, on_type):
     text = _flow([(when, "one")], on_type=on_type)
@@ -510,7 +521,7 @@ _NOT_EXHAUSTIVE = (
 def _value_flow(whens: list[tuple[str, str]], on_type: str) -> str:
     """Return a flow whose value case `route` maps `${input.n}` to text per `whens`, no else."""
     text = (
-        f"id: f\nname: f\ninput:\n  n: {on_type}\nnodes:\n"
+        f"id: f\nname: f\n{_declare_n(on_type)}nodes:\n"
         "  route:\n    kind: case\n    on: ${input.n}\n    output: str\n    cases:\n"
     )
     for when, value in whens:
@@ -530,7 +541,7 @@ def test_bool_value_case_missing_false_is_not_exhaustive():
 
 
 def test_optional_bool_is_not_exhaustive():
-    error = _load_error(_value_flow([("true", "yes"), ("false", "no")], "Optional[bool]"))
+    error = _load_error(_value_flow([("true", "yes"), ("false", "no")], "Optional(bool)"))
     assert str(error) == _NOT_EXHAUSTIVE % "${input.n} may be null"
 
 
@@ -541,7 +552,7 @@ def test_int_value_case_reason_names_literal_or_bool():
 
 def test_routing_only_bool_join_is_exhaustive():
     text = (
-        "id: f\nname: f\ninput:\n  n: bool\nnodes:\n"
+        "id: f\nname: f\ninput:\n  n: !bool\nnodes:\n"
         "  route:\n    kind: case\n    on: ${input.n}\n    cases:\n"
         "      - when: true\n        then: one\n"
         "      - when: false\n        then: two\n"
@@ -554,7 +565,7 @@ def test_routing_only_bool_join_is_exhaustive():
 
 
 def test_literal_value_case_listing_every_tag_needs_no_else():
-    text = _value_flow([("a", "A"), ("b", "B")], "Literal[a, b]")
+    text = _value_flow([("a", "A"), ("b", "B")], "Literal(a, b)")
     assert _route(text, {"n": "a"}) == "A"
     assert _route(text, {"n": "b"}) == "B"
 
@@ -563,10 +574,10 @@ def test_unquoted_date_when_narrows_a_date_shaped_union_tag():
     text = (
         "id: f\nname: f\n"
         "typedefs:\n"
-        "  A: {d: 'Literal[\"2026-01-02\"]', x: int}\n"
-        "  B: {d: 'Literal[other]', y: int}\n"
-        "  U: Union[A, B]\n"
-        "input:\n  pick: str\nnodes:\n"
+        "  A: {d: 'Literal(\"2026-01-02\")', x: int}\n"
+        "  B: {d: 'Literal(other)', y: int}\n"
+        "  U: Union(A, B)\n"
+        "input:\n  pick: !str\nnodes:\n"
         "  p:\n    kind: code\n    input:\n      s: ${input.pick}\n    output: U\n"
         "    code: |\n"
         '      return {"d": "2026-01-02", "x": 5} if inputs["s"] == "a" '
@@ -640,7 +651,7 @@ def test_duplicate_on_an_untyped_on():
 
 
 def test_duplicate_text_when():
-    text = _flow([("a", "one"), ('"a"', "two"), ("b", "three")], on_type="Literal[a, b]")
+    text = _flow([("a", "one"), ('"a"', "two"), ("b", "three")], on_type="Literal(a, b)")
     assert _when_error(text, '"a"') == _DUPLICATE % ('"a"', "a", _line_of(text, "when: a"))
 
 
@@ -697,27 +708,27 @@ _UNCOVERED = (
 
 
 def test_routing_only_literal_flow_input_missing_a_tag():
-    text = _flow([("a", "one")], on_type="Literal[a, b]", else_=None)
+    text = _flow([("a", "one")], on_type="Literal(a, b)", else_=None)
     error = _load_error(text)
     assert str(error) == _UNCOVERED % "${input.n}"
     assert _error_line(error) == _line_of(text, "  route:")
 
 
 def test_routing_only_literal_flow_input_with_else_loads():
-    load_flow(_flow([("a", "one")], on_type="Literal[a, b]", else_="other"))
+    load_flow(_flow([("a", "one")], on_type="Literal(a, b)", else_="other"))
 
 
 def test_routing_only_literal_flow_input_listing_every_tag_loads():
-    load_flow(_flow([("a", "one"), ("b", "two")], on_type="Literal[a, b]", else_=None))
+    load_flow(_flow([("a", "one"), ("b", "two")], on_type="Literal(a, b)", else_=None))
 
 
 def test_routing_only_loop_carried_literal_missing_a_tag():
     text = (
-        "id: f\nname: f\ninput:\n  s: int\nnodes:\n"
-        "  rep:\n    kind: loop\n    times: 2\n    input:\n      n: Literal[a, b] = a\n    nodes:\n"
+        "id: f\nname: f\ntypedefs:\n  N: Literal(a, b)\ninput:\n  s: !int\nnodes:\n"
+        "  rep:\n    kind: loop\n    times: 2\n    input:\n      n: !N a\n    nodes:\n"
         "      route:\n        kind: case\n        on: ${input.n}\n        cases:\n"
         "          - when: a\n            then: one\n"
-        + _branch_body("one", "Literal[a, b]", '"b"')
+        + _branch_body("one", "Literal(a, b)", '"b"')
         + "    output:\n      n: ${one.output}\n"
         "output: ${rep.output}\n"
     )
@@ -728,7 +739,7 @@ def test_routing_only_loop_carried_literal_missing_a_tag():
 
 def test_routing_only_map_child_literal_input_missing_a_tag():
     text = (
-        "id: f\nname: f\ninput:\n  xs: list[Literal[a, b]]\nnodes:\n"
+        "id: f\nname: f\ntypedefs:\n  Xs: list(Literal(a, b))\ninput:\n  xs: !Xs\nnodes:\n"
         "  each:\n    kind: map\n    over: ${input.xs}\n    input:\n      x: ${item}\n    nodes:\n"
         "      route:\n        kind: case\n        on: ${input.x}\n        cases:\n"
         "          - when: a\n            then: one\n"
@@ -743,8 +754,8 @@ def test_routing_only_map_child_literal_input_missing_a_tag():
 
 def test_routing_only_call_child_literal_input_missing_a_tag():
     text = (
-        "id: f\nname: f\ninput:\n  k: Literal[a, b]\n"
-        "defs:\n  child:\n    input:\n      k: Literal[a, b]\n    nodes:\n"
+        "id: f\nname: f\ntypedefs:\n  K: Literal(a, b)\ninput:\n  k: !K\n"
+        "defs:\n  child:\n    input:\n      k: !K\n    nodes:\n"
         "      route:\n        kind: case\n        on: ${input.k}\n        cases:\n"
         "          - when: a\n            then: one\n"
         + _branch_body("one", "str", '"one"')

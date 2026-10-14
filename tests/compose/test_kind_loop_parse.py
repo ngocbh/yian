@@ -74,11 +74,11 @@ _PREDICATE_FLOW = """\
 id: f
 name: f
 input:
-  n: int
+  n: !int
 defs:
   body:
     input:
-      x: int
+      x: !int
     nodes:
       inc:
         kind: code

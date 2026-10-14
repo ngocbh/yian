@@ -40,9 +40,9 @@ def test_other_values_have_no_fix(value):
     ("type_text", "expected"),
     [
         ("bool", (True, "`yes` is text; write `true`")),
-        ("Optional[bool]", (True, "`yes` is text; write `true`")),
+        ("Optional(bool)", (True, "`yes` is text; write `true`")),
         ("int", None),
-        ("Literal[a, b]", None),
+        ("Literal(a, b)", None),
     ],
 )
 def test_fix_is_offered_only_when_the_boolean_fits_the_declared_type(type_text, expected):
@@ -53,12 +53,12 @@ def test_fix_is_offered_only_when_the_boolean_fits_the_declared_type(type_text, 
 @pytest.mark.parametrize(
     ("type_text", "value", "expected"),
     [
-        ("list[bool]", ["yes", "no"], (True, "`yes` is text; write `true`")),
-        ("list[bool]", [True, "Off"], (False, "`Off` is text; write `false`")),
+        ("list(bool)", ["yes", "no"], (True, "`yes` is text; write `true`")),
+        ("list(bool)", [True, "Off"], (False, "`Off` is text; write `false`")),
         ("Rec", {"ok": "on", "name": "yes"}, (True, "`on` is text; write `true`")),
-        ("list[str]", ["yes"], None),
-        ("list[bool]", ["maybe"], None),
-        ("list[bool]", [1], None),
+        ("list(str)", ["yes"], None),
+        ("list(bool)", ["maybe"], None),
+        ("list(bool)", [1], None),
         ("Rec", {"ok": True, "name": 3}, None),
     ],
 )

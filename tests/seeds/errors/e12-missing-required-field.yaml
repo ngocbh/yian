@@ -2,7 +2,7 @@
 id: err-missing-required-field
 name: err_missing_required_field
 input:
-  topic: str
+  topic: !str
 nodes:
   calc:
     kind: code         # ERROR: missing `code:`

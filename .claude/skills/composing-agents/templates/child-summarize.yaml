@@ -7,7 +7,7 @@ name: child_summarize
 description: Summarize one piece of text in a sentence.
 
 input:
-  text: str
+  text: !str
 
 nodes:
   summarize:

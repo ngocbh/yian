@@ -19,7 +19,7 @@ _MINIMAL = """
 id: min
 name: minimal
 input:
-  topic: str
+  topic: !str
 nodes:
   note:
     kind: agent
@@ -32,12 +32,15 @@ output: ${note.output}
 
 
 def test_minimal_parses():
-    f = parse_file(_MINIMAL)
+    document = parse_source_document(_MINIMAL, "<flow>")
+    f = parse_file(document)
     assert isinstance(f, ComposeFile)
     assert f.id == "min"
     assert f.name == "minimal"
     assert f.description is None
-    assert f.inputs == {"topic": "str"}
+    # The section stays raw; the input's type is the tag on its source node.
+    assert f.inputs == {"topic": None}
+    assert document.root.child("input").child("topic").tag == "str"
     assert "note" in f.nodes  # nodes stays a raw dict at this step
     assert f.nodes["note"]["kind"] == "agent"
     assert f.outputs == "${note.output}"

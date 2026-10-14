@@ -126,7 +126,7 @@ def test_map_over_ref_produces_data_edge():
     descriptors = parse_nodes(
         SourceCursor.virtual(
             {
-                "bundle": {"kind": "code", "outputs": "list[str]", "code": "m:f"},
+                "bundle": {"kind": "code", "outputs": "list(str)", "code": "m:f"},
                 "each": {
                     "kind": "map",
                     "call": "child",
@@ -183,7 +183,7 @@ def test_case_when_produces_no_infer_edge_in_every_spelling():
     # (the case build owns the score->gate edge). One flow per spelling.
     for when in ("score.output >= 0.5", "${score.output >= 0.5}"):
         text = (
-            "id: f\nname: f\ninput:\n  x: float\nnodes:\n"
+            "id: f\nname: f\ninput:\n  x: !float\nnodes:\n"
             "  score:\n    kind: code\n    input:\n      x: ${input.x}\n"
             "    output: float\n    code: m:fn\n"
             "  gate:\n    kind: case\n    cases:\n"

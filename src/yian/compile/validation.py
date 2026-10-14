@@ -172,7 +172,7 @@ def type_relation(inferred: Type, declared: Type) -> TypeRelation:
       may not be; the binding is accepted and checked at runtime.
     - ``"disjoint"``: no non-null value of ``inferred`` is a value of ``declared``;
       the binding can never succeed. Sharing only `None` does not count as overlap,
-      so ``Optional[str]`` against ``Optional[int]`` is disjoint. This null-only
+      so ``Optional(str)`` against ``Optional(int)`` is disjoint. This null-only
       rule applies to the whole value: a record whose differing field both sides
       may omit (or may both hold `None`) still shares non-null record values, so it
       is narrower, not disjoint.

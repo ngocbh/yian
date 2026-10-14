@@ -12,10 +12,10 @@ from yian.run import resume_flow, run_flow
 from yian.typesys.types import read_typedefs, type_for
 
 _TYPEDEFS_RAW = {
-    "Buy": {"action": "Literal[buy]", "qty": "int"},
-    "Sell": {"action": "Literal[sell]", "price": "float"},
-    "Order": "Union[Buy, Sell]",
-    "Running": "Literal[running]",
+    "Buy": {"action": "Literal(buy)", "qty": "int"},
+    "Sell": {"action": "Literal(sell)", "price": "float"},
+    "Order": "Union(Buy, Sell)",
+    "Running": "Literal(running)",
 }
 _REGISTRY = read_typedefs(_TYPEDEFS_RAW)
 BUY = type_for("Buy", _REGISTRY)
@@ -24,10 +24,10 @@ ORDER = type_for("Order", _REGISTRY)
 RUNNING = type_for("Running", _REGISTRY)
 
 TYPEDEFS = """typedefs:
-  Buy: {action: 'Literal[buy]', qty: int}
-  Sell: {action: 'Literal[sell]', price: float}
-  Order: Union[Buy, Sell]
-  Running: Literal[running]
+  Buy: {action: 'Literal(buy)', qty: int}
+  Sell: {action: 'Literal(sell)', price: float}
+  Order: Union(Buy, Sell)
+  Running: Literal(running)
 """
 
 A_BUY = {"action": "buy", "qty": 3}
@@ -38,7 +38,7 @@ _HEAD = (
     "id: p\nname: p\n"
     + TYPEDEFS
     + """input:
-  order: object
+  order: !object
 nodes:
   d:
     kind: code
@@ -158,7 +158,7 @@ _NODE_ASSERT_FLOW = (
     "id: p\nname: p\n"
     + TYPEDEFS
     + """input:
-  order: object
+  order: !object
 nodes:
   step:
     kind: code
@@ -232,8 +232,8 @@ _LOOP_FLOW = (
     + """defs:
   bump:
     input:
-      n: int
-      status: str
+      n: !int
+      status: !str
     nodes:
       step:
         kind: code
@@ -301,11 +301,11 @@ _CHILD_FLOWS = (
     "id: p\nname: p\n"
     + TYPEDEFS
     + """input:
-  order: object
+  order: !object
 defs:
   classify:
     input:
-      order: object
+      order: !object
     nodes:
       inner:
         kind: code
@@ -364,9 +364,9 @@ def test_isinstance_in_defs_and_nested_inline_children(order, expected):
 _USES_CHILD = """id: child
 name: child
 typedefs:
-  Ticket: {kind: 'Literal[ticket]', id: int}
+  Ticket: {kind: 'Literal(ticket)', id: int}
 input:
-  value: object
+  value: !object
 nodes:
   check:
     kind: code
@@ -380,7 +380,7 @@ output: ${check.output}
 _USES_PARENT = """id: parent
 name: parent
 input:
-  value: object
+  value: !object
 uses:
   child: child
 nodes:
@@ -428,7 +428,7 @@ def test_a_parent_cannot_use_a_childs_typedef():
 _FLAG_DEF = """defs:
   flag:
     input:
-      is_buy: bool
+      is_buy: !bool
     nodes:
       e:
         kind: code
@@ -444,7 +444,7 @@ _MAP_FLOW = (
     + TYPEDEFS
     + _FLAG_DEF
     + """input:
-  orders: list[object]
+  orders: !list(object)
 nodes:
   each:
     kind: map
@@ -493,12 +493,12 @@ _LOOP_SEED_FLOW = (
     "id: p\nname: p\n"
     + TYPEDEFS
     + """input:
-  order: object
+  order: !object
 defs:
   bump:
     input:
-      n: int
-      buy: bool
+      n: !int
+      buy: !bool
     nodes:
       step:
         kind: code
@@ -647,7 +647,7 @@ def test_isinstance_in_wait_until_is_a_located_load_error():
     text = """id: w
 name: w
 input:
-  when: date
+  when: !date
 nodes:
   w:
     kind: wait
@@ -664,11 +664,11 @@ def test_isinstance_in_map_over_is_a_located_load_error():
         "id: m\nname: m\n"
         + TYPEDEFS
         + """input:
-  items: list[int]
+  items: !list(int)
 defs:
   one:
     input:
-      x: int
+      x: !int
     nodes:
       e:
         kind: code
@@ -717,7 +717,7 @@ def test_isinstance_in_an_agent_prompt_is_a_located_load_error():
         "id: a\nname: a\n"
         + TYPEDEFS
         + """input:
-  order: object
+  order: !object
 nodes:
   ask:
     kind: agent
@@ -738,7 +738,7 @@ def test_isinstance_in_a_human_input_question_is_a_located_load_error():
         "id: h\nname: h\n"
         + TYPEDEFS
         + """input:
-  order: object
+  order: !object
 nodes:
   ask:
     kind: human_input

@@ -70,7 +70,7 @@ def test_load_flow_installs_an_exact_resolver_and_filters_unused_defs():
     text = """id: complete-local
 name: complete-local
 input:
-  n: int
+  n: !int
 defs:
   unused:
     kind: code

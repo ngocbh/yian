@@ -746,49 +746,77 @@ def canonical_type_label(typ: Type) -> str:
     """Render one deterministic, unambiguous label for a structural type.
 
     Record keys and variant tags use compact JSON quoting. Structurally refined
-    lists render from their element; a valid flat-list type falls back to its
-    storage-kind spelling. A union lists its members in canonical order.
+    lists render from their element; a valid flat-list type renders from its
+    storage kind (`list(str)`). A union lists its members in canonical order.
 
     Args:
         typ (`Type`): The resolved structural type to label.
 
     Returns:
-        `str`: A compact canonical type expression.
+        `str`: A compact canonical type expression, e.g. `Optional(int(1..12))`.
 
     """
-    label = _canonical_nonnullable_label(typ)
-    return f"Optional[{label}]" if typ.nullable else label
+    return _labels(typ)[0]
 
 
-def _canonical_nonnullable_label(typ: Type) -> str:
-    """Render ``typ`` without applying its outer nullable wrapper."""
+def _labels(typ: Type) -> tuple[str, str]:
+    """Return `(label, order key)` for `typ`.
+
+    The label is the parenthesized spelling. The order key is the same label in the
+    older bracket spelling (`Optional[int[1,12]]`); union members sort by it, so
+    member order, JSON Schema `anyOf` order and manifest fingerprints did not move
+    when the spelling changed. Both come from one walk so nested unions stay linear.
+    """
+    label, key = _canonical_nonnullable_label(typ)
+    if typ.nullable:
+        return f"Optional({label})", f"Optional[{key}]"
+    return label, key
+
+
+def _canonical_nonnullable_label(typ: Type) -> tuple[str, str]:
+    """Return `(label, order key)` for ``typ`` without its outer nullable wrapper."""
     if typ.variants is not None:
-        labelled = _ordered_member_labels(typ.variants)
-        return "Union[" + ",".join(label for _, label in labelled) + "]"
+        ordered = _ordered_member_labels(typ.variants)
+        return (
+            "Union(" + ",".join(label for _, label, _ in ordered) + ")",
+            "Union[" + ",".join(key for _, _, key in ordered) + "]",
+        )
 
     if typ.fields is not None:
-        fields = (
-            f"{_json_string(name)}:{canonical_type_label(typ.fields[name])}"
-            for name in sorted(typ.fields)
+        pairs = [(_json_string(name), _labels(typ.fields[name])) for name in sorted(typ.fields)]
+        return (
+            "{" + ",".join(f"{name}:{label}" for name, (label, _) in pairs) + "}",
+            "{" + ",".join(f"{name}:{key}" for name, (_, key) in pairs) + "}",
         )
-        return "{" + ",".join(fields) + "}"
 
     if typ.tags is not None:
-        return "Literal[" + ",".join(
-            _json_string(tag) for tag in sorted(typ.tags)
-        ) + "]"
+        tags = ",".join(_json_string(tag) for tag in sorted(typ.tags))
+        return f"Literal({tags})", f"Literal[{tags}]"
 
     if typ.kind.is_list():
         if typ.element is None:
-            return typ.kind.value
-        return f"list[{canonical_type_label(typ.element)}]"
+            return _kind_label(typ.kind), typ.kind.value
+        label, key = _labels(typ.element)
+        return f"list({label})", f"list[{key}]"
 
     if typ.bounds is not None:
         _validate_numeric_bounds(typ.kind, typ.bounds)
-        endpoints = ",".join(json.dumps(value, allow_nan=False) for value in typ.bounds)
-        return f"{typ.kind.value}[{endpoints}]"
+        endpoints = [json.dumps(value, allow_nan=False) for value in typ.bounds]
+        return (
+            f"{typ.kind.value}({'..'.join(endpoints)})",
+            f"{typ.kind.value}[{','.join(endpoints)}]",
+        )
 
-    return typ.kind.value
+    return typ.kind.value, typ.kind.value
+
+
+def _kind_label(kind: ValueKind) -> str:
+    """Spell a list storage kind as a type for messages, e.g. `list(str)` for `LIST_STRING`.
+
+    `ValueKind` values are stored and sent as they are (`"list[str]"`).
+    """
+    element = kind.element_kind
+    return f"list({'Any' if element is None else element.value})"
 
 
 def _json_string(value: str) -> str:
@@ -889,7 +917,8 @@ def canonical_union_order(members: Iterable[Type]) -> tuple[Type, ...]:
     """Return union members in canonical order.
 
     Members with a tag field sort by the value of the first tag field by name;
-    otherwise they sort by `canonical_type_label`.
+    otherwise they sort by their canonical label in the bracket spelling
+    (`Optional[int]`), which predates the parenthesized one.
 
     Args:
         members (`Iterable[Type]`):
@@ -905,21 +934,22 @@ def canonical_union_order(members: Iterable[Type]) -> tuple[Type, ...]:
         # Tag order reads best in labels and manifests, and needs no member labels.
         field = tag_fields[0]
         return tuple(sorted(members, key=lambda member: _single_tag(member.fields[field])))
-    return tuple(member for member, _ in _ordered_member_labels(members))
+    return tuple(member for member, _, _ in _ordered_member_labels(members))
 
 
-def _ordered_member_labels(members: tuple[Type, ...]) -> list[tuple[Type, str]]:
-    """Return `(member, label)` pairs in canonical order, labelling each member once.
+def _ordered_member_labels(members: tuple[Type, ...]) -> list[tuple[Type, str, str]]:
+    """Return `(member, label, order key)` triples in canonical order, labelling each member once.
 
     Labelling once keeps nested untagged unions linear: their order depends on the
-    labels, so ordering and rendering share them.
+    labels, so ordering and rendering share them. Untagged members sort by their
+    bracket-spelled order key (see `_labels`).
     """
-    labelled = [(member, canonical_type_label(member)) for member in members]
+    labelled = [(member, *_labels(member)) for member in members]
     tag_fields = _members_tag_fields(members)
     if tag_fields:
         field = tag_fields[0]
-        return sorted(labelled, key=lambda pair: _single_tag(pair[0].fields[field]))
-    return sorted(labelled, key=lambda pair: pair[1])
+        return sorted(labelled, key=lambda triple: _single_tag(triple[0].fields[field]))
+    return sorted(labelled, key=lambda triple: triple[2])
 
 
 def _tag_field(typ: Type, field: Optional[str]) -> str:
@@ -1442,7 +1472,7 @@ def _build_for_type(
     if typ.kind.is_list() and typ.element is not None:
         if not isinstance(value, (list, tuple)):
             raise TypeCheckError(
-                f"{value_repr(value)} is not a list for declared {typ.kind.value}",
+                f"{value_repr(value)} is not a list for declared {_kind_label(typ.kind)}",
                 path=path,
             )
         items = [
@@ -1564,7 +1594,7 @@ def _build_scalar_or_list(
     if declared.is_list():
         if not isinstance(value, (list, tuple)):
             raise TypeCheckError(
-                f"{value_repr(value)} is not a list for declared {declared.value}",
+                f"{value_repr(value)} is not a list for declared {_kind_label(declared)}",
                 path=path,
             )
         items = list(value)
@@ -1574,7 +1604,7 @@ def _build_scalar_or_list(
                 if not _scalar_matches(element, item):
                     raise TypeCheckError(
                         f"list element {value_repr(item)} is not {element.value} "
-                        f"(declared {declared.value})",
+                        f"(declared {_kind_label(declared)})",
                         path=path + (index,),
                     )
             items = [

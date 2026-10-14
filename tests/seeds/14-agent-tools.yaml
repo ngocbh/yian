@@ -10,7 +10,7 @@ name: agent_tools
 description: An AGENT running a tool loop with ordinary tools plus blocking ask_user.
 
 input:
-  topic: str
+  topic: !str
 
 nodes:
   reviewer:

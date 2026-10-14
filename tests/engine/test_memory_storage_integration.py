@@ -33,7 +33,7 @@ _AGENT_FLOW = """id: durable-session
 name: durable_session
 llm_config: {provider: openai, model: storage-test-model}
 input:
-  question: str
+  question: !str
 nodes:
   agent:
     kind: agent

@@ -30,7 +30,7 @@ def test_read_flow_rejects_escape(tmp_path):
         T.read_flow("../secret.txt")
 
 
-GOOD = "id: g\nname: g\ninput:\n  x: str\nnodes:\n  e:\n    kind: code\n    input:\n      x: ${input.x}\n    output: str\n    code: tests.seeds.fns:echo_value\noutput:\n  x: ${e.output}\n"
+GOOD = "id: g\nname: g\ninput:\n  x: !str\nnodes:\n  e:\n    kind: code\n    input:\n      x: ${input.x}\n    output: str\n    code: tests.seeds.fns:echo_value\noutput:\n  x: ${e.output}\n"
 
 
 def test_validate_good_and_bad(tmp_path):

@@ -22,7 +22,7 @@ _TAKE_DEF = """
 defs:
   take:
     input:
-      stance: str
+      stance: !str
     nodes:
       x:
         kind: code
@@ -41,7 +41,7 @@ def test_non_bare_then_call_is_rejected():
 id: bad
 name: bad
 input:
-  score: float
+  score: !float
 {_TAKE_DEF}
 nodes:
   gate:
@@ -63,12 +63,12 @@ def test_inline_binding_and_then_call_share_minter_no_collision():
 id: both
 name: both
 input:
-  score: float
-  topic: str
+  score: !float
+  topic: !str
 defs:
   take:
     input:
-      stance: str
+      stance: !str
     nodes:
       x:
         kind: code
@@ -79,7 +79,7 @@ defs:
     output: ${{x.output}}
   enrich:
     input:
-      topic: str
+      topic: !str
     nodes:
       y:
         kind: code
@@ -119,7 +119,7 @@ def _flow_directive():
 id: cc
 name: cc
 input:
-  score: float
+  score: !float
 {_TAKE_DEF}
 nodes:
   gate:
@@ -162,7 +162,7 @@ def test_non_bare_then_call_directive_is_rejected():
 id: bad
 name: bad
 input:
-  score: float
+  score: !float
 {_TAKE_DEF}
 nodes:
   gate:
@@ -195,7 +195,7 @@ def test_malformed_branch_call_directive_is_a_located_load_error(label, target, 
 id: bad
 name: bad
 input:
-  score: float
+  score: !float
 {_TAKE_DEF}
 nodes:
   gate:
@@ -231,7 +231,7 @@ def test_quoted_malformed_branch_call_is_a_text_value():
 id: ok
 name: ok
 input:
-  score: float
+  score: !float
 nodes:
   gate:
     kind: case
@@ -253,12 +253,12 @@ def test_inline_binding_and_then_call_directive_share_minter_no_collision():
 id: both
 name: both
 input:
-  score: float
-  topic: str
+  score: !float
+  topic: !str
 defs:
   take:
     input:
-      stance: str
+      stance: !str
     nodes:
       x:
         kind: code
@@ -269,7 +269,7 @@ defs:
     output: ${{x.output}}
   enrich:
     input:
-      topic: str
+      topic: !str
     nodes:
       y:
         kind: code
@@ -319,7 +319,7 @@ def _flow_nested_directive():
 id: cc
 name: cc
 input:
-  score: float
+  score: !float
 {_TAKE_DEF}
 nodes:
   gate:
@@ -400,7 +400,7 @@ def test_then_span_flow_call_target_is_rejected():
 id: bad
 name: bad
 input:
-  score: float
+  score: !float
 {_TAKE_DEF}
 nodes:
   gate:
@@ -422,7 +422,7 @@ def test_malformed_branch_call_holding_a_span_offers_no_quoting_fix():
 id: bad
 name: bad
 input:
-  score: float
+  score: !float
 {_TAKE_DEF}
 nodes:
   gate:

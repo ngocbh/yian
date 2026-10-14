@@ -14,7 +14,8 @@ NOTE = "Check the measurement units before answering."
 FLOW = """id: learned-session
 name: learned_session
 llm_config: {provider: openai, model: test-model}
-input: {question: str}
+input:
+  question: !str
 nodes:
   answer:
     kind: agent
@@ -111,7 +112,8 @@ def test_learned_notes_do_not_cross_sibling_conversations(monkeypatch):
     flow = load_flow("""id: sibling-notes
 name: sibling_notes
 llm_config: {provider: openai, model: test-model}
-input: {question: str}
+input:
+  question: !str
 nodes:
   left:
     kind: agent

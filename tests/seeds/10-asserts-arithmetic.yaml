@@ -13,10 +13,10 @@ name: asserts_arithmetic
 description: Position-sizing gate showcasing arithmetic + boolean logic in when:/asserts:.
 
 input:
-  topic: str
-  window: int = 30           # calendar days (dataclass-style default)
-  weight: float = 0.02           # fraction of capital in [0, 1]
-  style: str = relevance
+  topic: !str
+  window: !int 30           # calendar days (dataclass-style default)
+  weight: !float 0.02           # fraction of capital in [0, 1]
+  style: !str relevance
 
 nodes:
   score:

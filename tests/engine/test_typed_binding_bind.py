@@ -13,7 +13,13 @@ from yian.compose import load_flow
 from yian.diagnostics import OriginRef
 from yian.nodes.base import Node
 from yian.nodes.binding import BindingError, bind_params
-from yian.nodes.contracts import Binding, ContractOrigins, Parameter, ValueContract
+from yian.nodes.contracts import (
+    Binding,
+    ContractOrigins,
+    Parameter,
+    ValueContract,
+    ValueTemplate,
+)
 from yian.run import run_flow
 from yian.runtime.eval_node import EvaluationFailure, eval_node
 from yian.typesys import Type, ValueKind
@@ -139,6 +145,22 @@ def test_map_item_scope_is_checked_per_item():
     assert _bind("${item}", contract, _pool(), item=3) == {"qty": 3}
     with pytest.raises(BindingError) as caught:
         _bind("${item}", contract, _pool(), item="x")
+    assert caught.value.failure_code == "binding.type"
+
+
+def test_typed_binding_checks_its_evaluated_value_template():
+    record_type = Type(
+        kind=ValueKind.OBJECT,
+        fields={"n": INTEGER, "label": Type.scalar(ValueKind.STRING)},
+        required=frozenset({"n", "label"}),
+    )
+    template = ValueTemplate({"n": "${a.output}", "label": "n=${a.output}"})
+
+    assert _bind(template, ValueContract(record_type), _pool(a=2)) == {
+        "qty": {"n": 2, "label": "n=2"}
+    }
+    with pytest.raises(BindingError) as caught:
+        _bind(template, ValueContract(record_type), _pool(a="two"))
     assert caught.value.failure_code == "binding.type"
 
 

@@ -34,11 +34,11 @@ _DEFS_PARENT = """
 id: defs-parent
 name: defs_parent
 input:
-  topic: str
+  topic: !str
 defs:
   research_pair:
     input:
-      topic: str
+      topic: !str
     nodes:
       data:
         kind: code
@@ -189,11 +189,11 @@ _DEFS_MAP = """
 id: defs-map
 name: defs_map
 input:
-  topics: list[str]
+  topics: !list(str)
 defs:
   one:
     input:
-      topic: str
+      topic: !str
     nodes:
       x:
         kind: code
@@ -228,11 +228,11 @@ _NESTED_DEFS = """
 id: nested
 name: nested
 input:
-  topic: str
+  topic: !str
 defs:
   inner:
     input:
-      topic: str
+      topic: !str
     nodes:
       x:
         kind: code
@@ -245,7 +245,7 @@ defs:
     output: ${x.output.report}
   outer:
     input:
-      topic: str
+      topic: !str
     nodes:
       inner_call:
         kind: call
@@ -278,11 +278,11 @@ _SHADOW_PARENT = """
 id: shadow-parent
 name: shadow_parent
 input:
-  topic: str
+  topic: !str
 defs:
   shared:
     input:
-      topic: str
+      topic: !str
     nodes:
       x:
         kind: code
@@ -306,7 +306,7 @@ _EXTERNAL_SHARED = """
 id: shared
 name: shared
 input:
-  topic: str
+  topic: !str
 nodes:
   x:
     kind: code
@@ -337,11 +337,11 @@ _SELF_RECURSIVE = """
 id: rec
 name: rec
 input:
-  topic: str
+  topic: !str
 defs:
   a:
     input:
-      topic: str
+      topic: !str
     nodes:
       step:
         kind: call
@@ -362,11 +362,11 @@ _MUTUAL_RECURSIVE = """
 id: mutual
 name: mutual
 input:
-  topic: str
+  topic: !str
 defs:
   a:
     input:
-      topic: str
+      topic: !str
     nodes:
       to_b:
         kind: call
@@ -376,7 +376,7 @@ defs:
     output: ${to_b.output}
   b:
     input:
-      topic: str
+      topic: !str
     nodes:
       to_a:
         kind: call
@@ -416,12 +416,12 @@ _SINGLE_NODE_DEF = """
 id: single
 name: single
 input:
-  t: str
+  t: !str
 defs:
   passthru:
     kind: code
     code: tests.engine._compose_codefns:echo
-    input: { topic: str }
+    input: { topic: !str }
     output: str
 nodes:
   go:
@@ -461,7 +461,7 @@ def test_single_node_def_generated_inputs_keep_binding_origin():
 
     assert resolver is not None
     assert binding.origin is not None
-    assert resolver.resolve(binding.origin).range == SourceRange(10, 21, 10, 24)
+    assert resolver.resolve(binding.origin).range == SourceRange(10, 21, 10, 25)
 
 
 def test_single_node_def_generated_output_keeps_contract_origin():
@@ -479,12 +479,13 @@ _SINGLE_NODE_DEF_BADTYPE = """
 id: single
 name: single
 input:
-  t: str
+  t: !str
 defs:
   passthru:
     kind: code
     code: tests.engine._compose_codefns:echo
-    input: { topic: int }
+    input:
+      topic: !int
     output: str
 nodes:
   go:
@@ -510,11 +511,11 @@ _UNKNOWN_CALL = """
 id: unk
 name: unk
 input:
-  topic: str
+  topic: !str
 defs:
   known:
     input:
-      topic: str
+      topic: !str
     nodes:
       x:
         kind: code
@@ -547,11 +548,11 @@ def test_malformed_def_without_nodes_is_loud():
 id: bad
 name: bad
 input:
-  topic: str
+  topic: !str
 defs:
   oops:
     input:
-      topic: str
+      topic: !str
     output: ${nope.output}
 nodes:
   go:
@@ -574,11 +575,11 @@ _DEF_WITH_ASSERTS = """
 id: da
 name: da
 input:
-  topic: str
+  topic: !str
 defs:
   d:
     input:
-      topic: str
+      topic: !str
     nodes:
       x:
         kind: code
@@ -614,11 +615,11 @@ _DEF_DANGLING_REF = """
 id: dd
 name: dd
 input:
-  topic: str
+  topic: !str
 defs:
   enrich:
     input:
-      topic: str
+      topic: !str
     nodes:
       x:
         kind: code
@@ -655,7 +656,7 @@ def test_def_non_mapping_body_is_loud():
 id: nm
 name: nm
 input:
-  topic: str
+  topic: !str
 defs:
   d: just a string
 nodes:
@@ -677,11 +678,11 @@ def test_def_unknown_field_is_loud():
 id: uf
 name: uf
 input:
-  topic: str
+  topic: !str
 defs:
   d:
     input:
-      topic: str
+      topic: !str
     nodes:
       x:
         kind: code
@@ -713,11 +714,11 @@ _UNREFERENCED_BROKEN_DEF = """
 id: ub
 name: ub
 input:
-  topic: str
+  topic: !str
 defs:
   used:
     input:
-      topic: str
+      topic: !str
     nodes:
       x:
         kind: code
@@ -728,7 +729,7 @@ defs:
     output: ${x.output}
   unused_broken:
     input:
-      topic: str
+      topic: !str
     nodes:
       y:
         kind: code
@@ -757,6 +758,8 @@ def test_unreferenced_broken_def_is_loud_eager_build():
 _STR_TO_LITERAL_CHILD = """
 id: str-to-literal
 name: str_to_literal
+typedefs:
+  Mode: Literal(a, b)
 input:
   s: {source}
 defs:
@@ -765,7 +768,7 @@ defs:
     code: |
       return inputs["mode"]
     input:
-      mode: Literal[a, b]
+      mode: !Mode
     output: str
 nodes:
   go:
@@ -778,19 +781,19 @@ output: ${{go.output}}
 
 
 def test_untagged_source_to_literal_child_input_is_rejected():
-    """A plain `str` cannot fill a `Literal[...]` input at load, as `int` cannot fill `int[1, 12]`."""
+    """A plain `str` cannot fill a `Literal(...)` input at load, as `int` cannot fill `int(1..12)`."""
     with pytest.raises(LoadError) as caught:
-        load_flow(_STR_TO_LITERAL_CHILD.format(source="str", binding="${input.s}"))
+        load_flow(_STR_TO_LITERAL_CHILD.format(source="!str", binding="${input.s}"))
 
     assert "call node 'go': binding 'mode'" in str(caught.value)
-    assert "child expects 'Literal[\"a\",\"b\"]', source is 'str'" in str(caught.value)
+    assert "child expects 'Literal(\"a\",\"b\")', source is 'str'" in str(caught.value)
 
 
 @pytest.mark.parametrize("source,binding", [
-    ("Literal[a]", "${input.s}"),
-    ("Literal[a, b]", "${input.s}"),
-    ("str", "a"),
-    ("str", "Literal[a, b] = ${input.s}"),
+    ("!Literal(a)", "${input.s}"),
+    ("!Mode", "${input.s}"),
+    ("!str", "a"),
+    ("!str", "!Mode ${input.s}"),
 ])
 def test_tag_subset_or_literal_binding_fills_literal_child_input(source, binding):
     flow = load_flow(_STR_TO_LITERAL_CHILD.format(source=source, binding=binding))
@@ -800,7 +803,7 @@ def test_tag_subset_or_literal_binding_fills_literal_child_input(source, binding
 
 def test_typed_binding_from_str_checks_the_tag_at_run_time():
     flow = load_flow(
-        _STR_TO_LITERAL_CHILD.format(source="str", binding="Literal[a, b] = ${input.s}")
+        _STR_TO_LITERAL_CHILD.format(source="!str", binding="!Mode ${input.s}")
     )
 
     result = run_flow(flow, {"s": "c"})
@@ -814,16 +817,16 @@ _STR_TO_LITERAL_GUARDED = """
 id: str-to-literal-guarded
 name: str_to_literal_guarded
 typedefs:
-  Mode: Literal[a, b]
+  Mode: Literal(a, b)
 input:
-  s: str
+  s: !str
 defs:
   child:
     kind: code
     code: |
       return inputs["mode"]
     input:
-      mode: Mode
+      mode: !Mode
     output: str
 nodes:
   route:
@@ -862,13 +865,13 @@ _NULLABLE_TO_DEFAULTED = """
 id: nstrict
 name: nstrict
 input:
-  x: Optional[str]
+  x: !Optional(str)
 defs:
   child:
     kind: code
     code: tests.engine._compose_codefns:echo
     input:
-      topic: str = "fallback"
+      topic: !str "fallback"
     output: str
 nodes:
   go:
@@ -891,15 +894,15 @@ _NULLABLE_LIST_TO_STRICT_CHILD = """
 id: nullable-list-strict-child
 name: nullable_list_strict_child
 input:
-  items: list[Optional[int]]
+  items: !list(Optional(int))
 defs:
   child:
     kind: code
     code: |
       return inputs["items"]
     input:
-      items: list[int]
-    output: list[int]
+      items: !list(int)
+    output: list(int)
 nodes:
   go:
     kind: call
@@ -917,7 +920,7 @@ def test_nullable_list_element_source_to_strict_child_is_rejected():
 
     assert "call node 'go': binding 'items'" in str(caught.value)
     assert (
-        "child expects 'list[int]', source is 'list[Optional[int]]'"
+        "child expects 'list(int)', source is 'list(Optional(int))'"
         in str(caught.value)
     )
 
@@ -926,12 +929,13 @@ _NULLABLE_WITH_LITERAL_ESCAPE = """
 id: nok
 name: nok
 input:
-  x: Optional[str]
+  x: !Optional(str)
 defs:
   child:
     kind: code
     code: tests.engine._compose_codefns:echo
-    input: { topic: str }
+    input:
+      topic: !str
     output: str
 nodes:
   go:
@@ -960,14 +964,14 @@ _SHADOW = """
 id: shadow
 name: shadow
 input:
-  x: Optional[str]
+  x: !Optional(str)
 defs:
   child:
     kind: code
     code: tests.engine._compose_codefns:echo
     input:
-      topic: Optional[str] = "fallback"
-    output: Optional[str]
+      topic: !Optional(str) "fallback"
+    output: Optional(str)
 nodes:
   go:
     kind: call
@@ -995,8 +999,8 @@ defs:
     code: |
       return inputs["maybe"]
     input:
-      maybe: Optional[int] = null
-    output: Optional[int]
+      maybe: !Optional(int) null
+    output: Optional(int)
 nodes:
   go:
     kind: call
@@ -1027,7 +1031,7 @@ defs:
     code: |
       return inputs["value"]
     input:
-      value: int = null
+      value: !int null
     output: int
 nodes:
   go:

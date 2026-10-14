@@ -32,7 +32,7 @@ id: live
 name: live
 llm_config: {provider: anthropic, model: claude-test}
 input:
-  topic: str
+  topic: !str
 nodes:
   writer:
     kind: agent
@@ -49,7 +49,7 @@ id: pair
 name: pair
 llm_config: {provider: anthropic, model: claude-test}
 input:
-  topic: str
+  topic: !str
 nodes:
   left:
     kind: agent

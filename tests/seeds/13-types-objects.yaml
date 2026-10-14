@@ -1,24 +1,27 @@
 # 13 — The type grammar (Python typing): scalars, lists, objects, nesting.
 #
 # A planning CODE node whose I/O exercises every type form. Shows: all scalars
-# (str / int / float / bool / date), list[X], inline vs block objects (records),
+# (str / int / float / bool / date), list(X), inline vs block objects (records),
 # nested objects, and deep dotted access (${plan.output.summary.meta.as_of}).
 
 id: types-objects
 name: types_objects
-description: Exercise the type grammar — scalars, list[X], inline/block/nested objects.
+description: Exercise the type grammar — scalars, list(X), inline/block/nested objects.
 
-input:
-  topic: str
-  names: list[str]
-  quantity: int
-  budget: float
-  as_of: date
-  dry_run: bool
-  weights: list[float]
-  config:                      # a nested object parameter (block style)
+typedefs:
+  Bands: { lower: float, upper: float }   # inline record (flow style)
+  Config:                      # a nested record parameter (block style)
     regroup: bool
-    bands: { lower: float, upper: float }   # inline object (no [ ] or ${} inside -> OK)
+    bands: Bands
+input:
+  topic: !str
+  names: !list(str)
+  quantity: !int
+  budget: !float
+  as_of: !date
+  dry_run: !bool
+  weights: !list(float)
+  config: !Config
 
 nodes:
   plan:
@@ -33,7 +36,7 @@ nodes:
       weights: ${input.weights}
       config:  ${input.config}    # bind the whole nested object
     output:                       # a nested object output
-      items: list[str]
+      items: list(str)
       summary:
         count: int
         total: float

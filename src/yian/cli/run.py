@@ -523,6 +523,7 @@ def _run_with_terminal_controller(
         deferred = False
 
         def defer_sigint(signum: int, frame: Any) -> None:
+            """Record a Ctrl-C that arrives while the controller thread starts."""
             nonlocal deferred
             deferred = True
 

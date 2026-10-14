@@ -134,6 +134,15 @@ def _success(output: Any = "done") -> RunResult:
     )
 
 
+@pytest.fixture
+def default_sigint_handler() -> Any:
+    """Run the test with Python's default SIGINT handler and restore the previous one."""
+
+    previous = signal.signal(signal.SIGINT, signal.default_int_handler)
+    yield
+    signal.signal(signal.SIGINT, previous)
+
+
 def test_prompt_free_result_transfers_after_controller_join() -> None:
     """A successful controller returns its exact result and never touches the registry."""
 
@@ -175,6 +184,7 @@ def test_controller_stop_links_to_child_without_reverse_propagation() -> None:
 @pytest.mark.skipif(not hasattr(signal, "pthread_kill"), reason="needs pthread_kill")
 def test_sigint_during_thread_launch_stops_and_joins_the_controller(
     monkeypatch: pytest.MonkeyPatch,
+    default_sigint_handler: None,
 ) -> None:
     """Ctrl-C handled inside Thread.start still stops and joins the tracked controller."""
 
@@ -216,7 +226,9 @@ def test_sigint_during_thread_launch_stops_and_joins_the_controller(
 
 
 @pytest.mark.skipif(not hasattr(signal, "pthread_kill"), reason="needs pthread_kill")
-def test_sigint_on_the_controller_thread_stops_and_joins_before_raising() -> None:
+def test_sigint_on_the_controller_thread_stops_and_joins_before_raising(
+    default_sigint_handler: None,
+) -> None:
     """A SIGINT the OS hands to the controller thread still stops the run gracefully."""
 
     controller_done = Event()

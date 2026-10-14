@@ -273,6 +273,9 @@ CALL, MAP, and LOOP bodies nest at most 50 levels too (each body is one, whether
 `defs:` entry, an inline `nodes:` body, a `call(...)` directive, or a `uses:` flow); a
 deeper chain is a load error at the `call:` that crosses the limit, so move short
 bodies into their callers or split the work into separate steps.
+These limits are the defaults of `YIAN_MAX_VALUE_NESTING` (which also sets expression
+nesting), `YIAN_MAX_YAML_NESTING`, and `YIAN_MAX_CALL_NESTING`; each can only be
+lowered. `docs/defaults.md` lists every default and limit and its variable.
 
 Only values supplied to the top-level flow (CLI, JSON inputs, `run_flow`) may undergo
 string coercion; a `call`, `map`, or `loop` edge is not a flow boundary.
@@ -472,8 +475,9 @@ node a text producer. A `Literal(...)` enum, record, union, non-string scalar, o
 switches it to **structured generation** — the engine derives a schema from
 `output:` and the model emits a conforming value (native structured output, or a
 JSON fallback for providers that lack it), validated at the write boundary and
-retried up to `retries:` times (default 2, a non-negative integer) on deviation, a NaN
-or infinity in the reply or a value nested deeper than 100 levels included. A root
+retried up to `retries:` times (default 2, `YIAN_AGENT_RETRIES`; a non-negative
+integer) on deviation, a NaN or infinity in the reply or a value nested deeper than 100
+levels included. A root
 `Literal(...)` returns its bare tag to the flow. A union returns the matching member's record; each
 member's schema pins its tag and rejects unknown fields. An `object` or `Any` output is
 an open mapping or any JSON value; where structured output is strict (Azure, the OpenAI
@@ -564,7 +568,8 @@ tools explicitly; retired `provider: codex`, `sandbox`, `cwd`, and `builtin_tool
 settings are rejected.
 Tune a node's non-model behavior with a static `env:` block (flow-level default +
 per-node override, node wins): e.g. `env: {max_tool_iterations: 300}` bounds an
-AGENT's tool-calling loop (default `-1` = no cap). `retries` bounds typed-output
+AGENT's tool-calling loop (default `-1` = no cap, `YIAN_AGENT_MAX_TOOL_ITERATIONS`).
+`retries` bounds typed-output
 correction, not tool, transport, authentication, or stop failures.
 
 ### Agent-owned variables — `variables:`

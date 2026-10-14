@@ -202,7 +202,7 @@ def _source_origin(source: Any) -> OriginRef | None:
 def _reject_invalid_binding(value: Any, where: str, origin: OriginRef | None) -> None:
     """Raise a ``binding.evaluate`` `BindingError` if ``value`` is not a yian value.
 
-    A value is rejected when it nests deeper than `MAX_VALUE_NESTING` levels or holds a
+    A value is rejected when it nests deeper than `YIAN_MAX_VALUE_NESTING` levels or holds a
     NaN, infinity, or complex number at any depth.
     """
     try:
@@ -313,7 +313,7 @@ def apply_defaults(
 
     Raises:
         `BindingError`: With ``failure_code="binding.evaluate"`` when a default nests
-            deeper than `MAX_VALUE_NESTING` levels, holds a NaN, infinity, or complex
+            deeper than `YIAN_MAX_VALUE_NESTING` levels, holds a NaN, infinity, or complex
             number at any depth, or violates its parameter's contract.
     """
     _validate_parameters(params)
@@ -643,7 +643,7 @@ def bind_params(
 
     Raises:
         `BindingError`: On expression/default/required evaluation failure, a resolved value
-            or filled default nesting deeper than `MAX_VALUE_NESTING` levels or holding a
+            or filled default nesting deeper than `YIAN_MAX_VALUE_NESTING` levels or holding a
             NaN, infinity, or complex number at any depth, typed binding
             rejection, or supplied input contract rejection; ``failure_code`` identifies
             the stage.

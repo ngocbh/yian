@@ -242,7 +242,8 @@ conversation. Explicit backward learning reuses API self-feedback
 as committed notes for future runs, without another model call. API history uses a
 soft 32,000-character context budget and preserves the latest four whole turns;
 older context can be summarized without deleting raw history. Configure these
-defaults on `SessionMemory(history_budget_chars=32_000, recent_turns=4)`.
+defaults on `SessionMemory(history_budget_chars=32_000, recent_turns=4)`, or
+process-wide with `YIAN_SESSION_HISTORY_BUDGET_CHARS` and `YIAN_SESSION_RECENT_TURNS`.
 Run logs do not reconstruct history. The episodic, reflective, and session
 backends optionally retain their state across restarts in a SQLite file.
 `build_memories` places one memory with `storage={key: path}`, or every memory
@@ -293,6 +294,8 @@ See [CLI memory](docs/cli.md#memory-and-storage) for lifetime and examples.
 - [Compose](docs/compose.md) — parsing, lowering, validation, and source origins.
 - [The engine](docs/engine.md) — scheduling, records, recovery, and learning.
 - [Runtime nodes](docs/nodes.md) — the `Node` / `NodeResult` contract.
+- [Defaults and limits](docs/defaults.md) — every built-in default and limit, and
+  the `YIAN_<NAME>` environment variable that changes it.
 - [Engine design](src/yian/README.md) — contributor invariants and
   package ownership.
 

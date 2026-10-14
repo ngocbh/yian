@@ -122,7 +122,8 @@ and `inputs` that is not a mapping raises `TypeError`, both before the log is
 created. NaN, infinity, and complex numbers are not yian values: an `inputs` value
 holding one at any depth raises `ValueError` naming where it sits
 (`input 'x' at a[1]: ...`), also before the log is created. An `inputs` value may
-nest 100 levels (each record and list is a level); a deeper one raises `ValueError`
+nest 100 levels (each record and list is a level; `YIAN_MAX_VALUE_NESTING`); a deeper
+one raises `ValueError`
 naming the input and path, before the log is created (see
 [Types → Nesting limit](typing.md#nesting-limit)). A non-finite value in an
 `llm_config` provider block, such as `{"openai": {"temperature": float("nan")}}`, is
@@ -246,7 +247,8 @@ raises it for an unfinished run before appending any record.
   `localhost`, `127.0.0.1`, and `[::1]`. It is checked and used exactly as written:
   whitespace, control characters, non-ASCII characters (write an international
   host in its `xn--` form), a port outside 1–65535, and URLs over 2048 characters
-  are rejected, not normalised. The OpenAI-compatible providers, `anthropic`,
+  (`YIAN_MAX_BASE_URL_CHARS`) are rejected, not normalised. The OpenAI-compatible
+  providers, `anthropic`,
   and `google` take it; `ollama` rejects it. For `provider: azure` it is the
   required resource endpoint: a flow file or this layer may set it beside
   `provider: azure` without a key, and an Azure `api_key` here needs one beside it,
@@ -500,7 +502,8 @@ learner, or commit failure. A `memory.invalid_context` learner failure, raised w
 memory's learn context cannot be built from run material, names the owner occurrence
 (`node_id`, `node_started_seq`, `scope`, `run_id`) and the cause, such as
 `memory learn context could not be constructed for node 'n': ... nests deeper than the
-memory limit of 128 levels`; only a failure in the root flow's fallback feedback has no
+memory limit of 128 levels (derived from YIAN_MAX_VALUE_NESTING)`; only a failure in the
+root flow's fallback feedback has no
 node.
 `learning` is `None` when the run had no memory.
 The root result's `input_feedback` maps input names to ordered tuples of ordinary
@@ -570,7 +573,8 @@ the same instructions. The listing becomes part of the node's recorded
 result, so backward learning sees what the model saw. The run log does not store
 skills: pass the same mapping to `resume_flow`, as with `memory=`.
 
-Each `load_skill` result is capped at 256 KiB. There is no cumulative cap: every
+Each `load_skill` result is capped at 256 KiB (`YIAN_MAX_SKILL_FILE_BYTES`; see
+[Defaults and limits](defaults.md)). There is no cumulative cap: every
 result stays in the loop's message history, the evidence, and any logs.
 
 ## Steering
@@ -1017,8 +1021,10 @@ with restored.open_run(snapshot=snapshot) as opened:
 memory.reset()  # Backend-wide; allowed only while no turn is active or queued.
 ```
 
-The host constructor accepts `history_budget_chars=32_000`, `recent_turns=4`, and
-optional `storage=path`. YAML `config` may set `history_budget_chars` and
+The host constructor accepts `history_budget_chars` (default 32,000,
+`YIAN_SESSION_HISTORY_BUDGET_CHARS`), `recent_turns` (default 4,
+`YIAN_SESSION_RECENT_TURNS`), and optional `storage=path`. YAML `config` may set
+`history_budget_chars` and
 `recent_turns`; `storage` is host-only. A public snapshot has exactly `version`
 (currently `3`), `namespace`, `generation`, `conversation`, and `notes`.
 `conversation` is the instance's one conversation view, or `null`. A snapshot
@@ -1214,7 +1220,12 @@ The closed durable record vocabulary is `RunStartedRecord`,
 `NodeRoutedRecord`, `NodeExpandedRecord`, `NodeFailedRecord`,
 `MemoryCommitRequestedRecord`,
 `MemoryCommitSucceededRecord`, `MemoryCommitFailedRecord`,
-`BackwardStartedRecord`, `BackwardReadyRecord`, and `BackwardFinishedRecord`. The four node
+`BackwardStartedRecord`, `BackwardReadyRecord`, and `BackwardFinishedRecord`.
+`RunStartedRecord.defaults` holds the [`yian.defaults`](#defaults-and-limits) values the
+run started with that differ from the built-in ones, keyed by entry name
+(`{"MAX_TOTAL_NODES": 20000}`); it is omitted from the line when empty, so a run with
+every built-in value writes the same bytes as before, and a log without it counts as
+all built-in values. The four node
 outcome records carry canonical forward inputs and routes when the recorded
 run has `learnable=True`; `learnable=False` omits that capture. Optional model/tool
 evaluation evidence is separate. Terminal success
@@ -1311,7 +1322,13 @@ A log that marks no agent ignores it.
 Recovery locks the existing file before reading it and validates the complete
 record prefix; a file whose complete lines are not a valid run log is rejected and
 left unchanged. Only then does it durably truncate any bytes after its final
-newline, and it checks that the supplied flow has the recorded fingerprint. A log
+newline, and it checks that the supplied flow has the recorded fingerprint. Before the
+fingerprint, it checks that this process's [defaults and limits](#defaults-and-limits)
+equal the ones the run started with; a difference raises `DefaultsMismatchError` (a
+`ValueError`) with one line per variable, such as `YIAN_MAX_TOTAL_NODES is 20000 here,
+but this run started with 5000; set YIAN_MAX_TOTAL_NODES=5000 to resume it`, or
+`... started with the default 10000; unset YIAN_MAX_TOTAL_NODES to resume it`. A log
+that recorded an entry this version doesn't know can't be resumed by it. A log
 another writer still holds raises `BlockingIOError` naming the path; a damaged
 record raises `ValueError` naming the path, its 1-based line, and the expected seq.
 It reconstructs the typed pool,
@@ -1392,6 +1409,43 @@ retry. Log/cleanup faults preserve the primary exception and accepted records.
     latest saved history, but may resend requests or repeat external effects.
     The log makes engine state deterministic, but cannot make an interrupted
     external effect exactly-once.
+
+## Defaults and limits
+
+Every predefined default and limit is an entry in `yian.defaults`, overridable by a
+`YIAN_<NAME>` environment variable; [Defaults and limits](defaults.md) lists them all.
+
+```python
+from yian.defaults import DefaultsError, DefaultsMismatchError, current
+
+current().max_total_nodes  # 10000 unless YIAN_MAX_TOTAL_NODES sets it
+```
+
+- `current()` returns this process's frozen `Defaults`, one lower-case attribute per
+  entry. It reads and checks every variable the first time it is called and returns
+  the same values afterwards, so set the variables before the first yian call;
+  changing `os.environ` later has no effect. `load_flow`, `run_flow`, and
+  `resume_flow` call it first.
+- `DefaultsError` (a `ValueError`) is raised for a variable that is not a plain
+  decimal integer in its range, naming the variable, the value, and the range. It is
+  a host setup error, not a `LoadError`.
+- `DefaultsMismatchError` (a `ValueError`) is raised by `resume_flow` when the run
+  started with different values; see
+  [Durable recovery](#durable-recovery-with-resume_flow).
+
+Changed: these module constants were removed; set the variable instead.
+
+| Removed | Variable (default) |
+|---------|--------------------|
+| `yian.typesys.values.MAX_VALUE_NESTING` | `YIAN_MAX_VALUE_NESTING` (100) |
+| `yian.expr.MAX_EXPRESSION_NESTING` | `YIAN_MAX_VALUE_NESTING` (100); expressions share the value bound |
+| `yian.compose.source.scalars.MAX_YAML_NESTING` | `YIAN_MAX_YAML_NESTING` (200) |
+| `yian.compose.nodes.resolver.MAX_CALL_NESTING` | `YIAN_MAX_CALL_NESTING` (50) |
+| `yian.runtime.state.MAX_TOTAL_NODES` | `YIAN_MAX_TOTAL_NODES` (10,000) |
+| `yian.nodes.agent.loop.MAX_TOOL_ITERATIONS` | `YIAN_AGENT_MAX_TOOL_ITERATIONS` (-1, no cap) |
+| `yian.skills.catalog.MAX_SKILL_FILE_BYTES` | `YIAN_MAX_SKILL_FILE_BYTES` (262,144) |
+| `yian.skills.tool.MAX_LISTED_DESCRIPTION` | `YIAN_MAX_SKILL_DESCRIPTION_CHARS` (1,024) |
+| `yian.cli.utils.MAX_KEY_PROMPTS` | `YIAN_MAX_KEY_PROMPTS` (3) |
 
 ## CLI path policy
 

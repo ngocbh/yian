@@ -183,7 +183,7 @@ class RunResult:
         Raises:
             `TypeError`: Feedback has an invalid ordinary-message carrier.
             `ValueError`: Retention is disabled, or feedback does not match the
-                output's shape or nests deeper than `MAX_VALUE_NESTING` levels.
+                output's shape or nests deeper than `YIAN_MAX_VALUE_NESTING` levels.
             `MemorySetupError`: Enabled memories cannot restore their recorded
                 snapshots. Host and log faults also propagate while preserving
                 the accepted prefix.
@@ -427,7 +427,7 @@ def run_flow(
             object without `drain`/`interrupted`.
         `ValueError`:
             An `inputs` key names no declared input, an `inputs` value nests
-            deeper than `MAX_VALUE_NESTING` levels, holds a NaN, infinity, or
+            deeper than `YIAN_MAX_VALUE_NESTING` levels, holds a NaN, infinity, or
             complex number at any depth, or holds a mapping with a non-text key;
             identity, worker count,
             model configuration, or prepared run state violates its contract,

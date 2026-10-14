@@ -96,4 +96,5 @@ nav:
     - Types: typing.md
     - Expressions: expressions.md
   - Python API: api.md
+  - Defaults and limits: defaults.md
   - API Reference: reference.md

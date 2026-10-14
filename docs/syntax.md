@@ -119,8 +119,9 @@ An unquoted value shaped like a date that isn't a real one (`2026-13-45`,
 `2026-02-30`, `2026-01-01T25:00:00`, `2026-01-01T10:00:00+05:99`) is a located
 load error; quote it to keep it as text.
 
-A flow file's YAML nests at most 200 levels; each mapping and list is a level, counting
-the file's top level. A deeper file is a load error at the first mapping or list past
+A flow file's YAML nests at most 200 levels (`YIAN_MAX_YAML_NESTING` can lower it; see
+[Defaults and limits](defaults.md)); each mapping and list is a level, counting the
+file's top level. A deeper file is a load error at the first mapping or list past
 the limit (`invalid YAML: this list nests deeper than 200 levels, the limit for a YAML
 document ...`). A value written out where the flow reads a value (a node input, MAP
 `over:`, WAIT `until:`, CASE value, default, value entry, or flow output) nests at most
@@ -421,8 +422,10 @@ named `<site> call(f) argument 'y'` and located at the binding the call is writt
 A temporary inside an expression is fine: the embedded template `"v=${x * 10}"` is
 the text `v=inf`. Only a binding's final value is checked. See [Expressions → Non-finite results](expressions.md#non-finite-results).
 
-A value nests at most 100 levels; each record and list is a level, and a record or
-list built around a value is one level deeper. A binding (an expression result, or a
+A value nests at most 100 levels (`YIAN_MAX_VALUE_NESTING` can lower it; see
+[Defaults and limits](defaults.md)); each record and list is a level, and a record or
+list built around a
+value is one level deeper. A binding (an expression result, or a
 written-out value that a `${...}` inside makes deeper) or a MAP `over` list nested
 deeper fails its node with `binding.evaluate`, naming the path (`input 'y' at [0].a...:
 value nests deeper than 100 levels, ...`): `${[input.x]}` around a 100-level `x`
@@ -1098,7 +1101,7 @@ Keys in use today:
 
 | Key | Node kind | Meaning |
 |-----|-----------|---------|
-| `max_tool_iterations` | `agent` | Model turns the tool-calling loop runs before it gives up with an `AgentLoopError`. If the reply on the last allowed turn asks for tools, the node fails without running them, since no later model call could read their results. Default `-1` (**no cap** — run until a final answer). Set a positive int to bound it; any other value (`0`, other negatives, a non-int) fails at load, on the flow `env:` or the AGENT node's `env:`. |
+| `max_tool_iterations` | `agent` | Model turns the tool-calling loop runs before it gives up with an `AgentLoopError`. If the reply on the last allowed turn asks for tools, the node fails without running them, since no later model call could read their results. Default `-1` (**no cap** — run until a final answer; `YIAN_AGENT_MAX_TOOL_ITERATIONS` changes it, see [Defaults and limits](defaults.md)). Set a positive int to bound it; any other value (`0`, other negatives, a non-int) fails at load, on the flow `env:` or the AGENT node's `env:`. |
 
 ## Secrets stay out of flow files
 
@@ -1317,7 +1320,8 @@ extract:
 ```
 
 If the model deviates from the schema, the engine feeds the error back and retries
-up to `retries:` times (default 2). A NaN or infinity in the reply (`{"score": NaN}`),
+up to `retries:` times (default 2, `YIAN_AGENT_RETRIES`; see [Defaults and
+limits](defaults.md)). A NaN or infinity in the reply (`{"score": NaN}`),
 or a value nested deeper than 100 levels, is a deviation too. `retries:` must be a
 non-negative integer (`0` means no retry); anything else fails at load:
 
@@ -1643,10 +1647,11 @@ message. It reads a skill when it needs it by calling the built-in tool
 `load_skill(name)`, which returns the `SKILL.md` instructions, or
 `load_skill(name, path)`, which returns a file inside the skill folder, such as
 `references/checklist.md`. Paths outside the folder and hidden files (such as
-`.env`) are rejected, and files must be UTF-8 text of at most 256 KiB.
+`.env`) are rejected, and files must be UTF-8 text of at most 256 KiB
+(`YIAN_MAX_SKILL_FILE_BYTES`; see [Defaults and limits](defaults.md)).
 
 - `skills: [name, ...]` grants exactly those skills. Names use lowercase letters,
-  digits, and single hyphens, up to 64 characters.
+  digits, and single hyphens, up to 64 characters (`YIAN_MAX_SKILL_NAME_CHARS`).
 - `skills: all` grants every skill the host supplies for the run. Use it in a
   shared flow when each run should see a different set.
 - Omitting `skills:` grants none; the system message is unchanged.
@@ -2352,7 +2357,8 @@ alongside) a `prompt:`, a gate may carry **questions** —
 AskUserQuestion-shaped multiple-choice/free-text prompts. Each question is
 `{question, header, options:[{label, description}], multi_select}`; `options`
 (omit ⇒ free-text) and `multi_select` (default `false`) are optional. 1–4
-questions, headers unique. The host always offers a free-text **"Other"** escape.
+questions (`YIAN_MAX_QUESTIONS`; see [Defaults and limits](defaults.md)), headers
+unique. The host always offers a free-text **"Other"** escape.
 The gate's answer is a **record keyed by header** — `{header: label}`, or
 `{header: [labels]}` for a `multi_select` question — so `output:` defaults to
 `object`. `prompt:` is optional once a node has questions; `questions:` and
@@ -2607,7 +2613,9 @@ the loop runs zero times, so a null fails the tag.
 Each CALL, MAP, or LOOP body is one level, whether it is a `defs:` entry, an inline
 `nodes:` body, a [`call(...)`](#inline-call-a-flow-call-as-a-bindings-whole-value)
 directive, or a `uses:` flow. A flow's bodies nest at most 50 levels, counting through
-imported files. A deeper chain is a load error at the `call:` field of the call that
+imported files (`YIAN_MAX_CALL_NESTING` can lower it; see [Defaults and
+limits](defaults.md)). A deeper chain is a load error at the `call:` field of the call
+that
 crosses the limit, or at the node for an inline body:
 
 ```text
@@ -3023,7 +3031,8 @@ live graph, along with the nodes grown under them by a nested CALL, MAP, or LOOP
 the live graph stays about one iteration, whatever the body. The run log still keeps
 every iteration, and so does the execution record a `learnable=True` run keeps for
 backward. Resume and backward read those, not the live graph. The engine's node budget
-(10,000 live nodes, "expansion exceeded node budget") is checked before pruning. So it
+(10,000 live nodes by default, `YIAN_MAX_TOTAL_NODES`, "expansion exceeded node budget")
+is checked before pruning. So it
 limits how big one iteration can get (the finished iteration plus the next body), not
 how many iterations run.
 

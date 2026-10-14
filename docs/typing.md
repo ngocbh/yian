@@ -95,9 +95,10 @@ all its digits; see
 
 ## Nesting limit
 
-A yian value nests at most 100 levels (`typesys.values.MAX_VALUE_NESTING`), counting
-itself. Each dict, list, tuple, pydantic model (such as a `FileRef`), or dataclass
-instance is one level; a `TypedValue` wrapper and a scalar add none. A record or list
+A yian value nests at most 100 levels by default, counting itself;
+`YIAN_MAX_VALUE_NESTING` can lower it (see [Defaults and limits](defaults.md)). Each
+dict, list, tuple, pydantic model (such as a `FileRef`), or dataclass instance is one
+level; a `TypedValue` wrapper and a scalar add none. A record or list
 built around a value is a new value one level deeper, so wrapping a 100-level value
 fails. `reject_deep_nesting(value, where)` checks without recursion and raises
 `TypeCheckError` whose `path` locates the first container past the limit:
@@ -106,11 +107,10 @@ fails. `reject_deep_nesting(value, where)` checks without recursion and raises
 <where> at <path>: value nests deeper than 100 levels, the limit for a yian value (each record and list is a level)
 ```
 
-An expression has the same bound (`expr.grammar.MAX_EXPRESSION_NESTING`), checked when
-it is parsed; see
+An expression has the same bound, checked when it is parsed; see
 [Expressions → Expression nesting limit](expressions.md#expression-nesting-limit).
-A flow file's YAML has its own, larger bound of 200 levels; see
-[Syntax → YAML values](syntax.md#yaml-values).
+A flow file's YAML has its own, larger bound of 200 levels (`YIAN_MAX_YAML_NESTING`);
+see [Syntax → YAML values](syntax.md#yaml-values).
 
 A value written out in a flow file (a node input, MAP `over:`, WAIT `until:`, a value
 entry, an input or AGENT variable default, a CASE value branch, a flow `output:`) is

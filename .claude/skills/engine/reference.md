@@ -249,7 +249,7 @@ identity-neutral. The source-neutral `iter_local_origins`,
 `rewrite_local_origins`, and `origin_children` hooks are consumed by
 `compile.origins`, not by the engine core.
 
-The rest of the splice (add subgraph, enforce `MAX_TOTAL_NODES`, mint one uniform `NodeExpandedRecord`,
+The rest of the splice (add subgraph, enforce the recorded `run_defaults.max_total_nodes`, mint one uniform `NodeExpandedRecord`,
 finish/mark the spawner, apply the origin `commit_as` to the derived terminal, schedule the
 subgraph's `start_id`) is uniform. It costs the fragment plus its prunes: validation looks
 up live nodes through adjacency and `RunState.growth_index` instead of scanning or copying
@@ -294,7 +294,7 @@ Kind-specific diagnostics stay with their kind.
 
 | Record | Transition |
 |--------|------------|
-| `RunStartedRecord` | complete initial pool, flow fingerprint, START override, resolved LLM map, worker count, and optional memory configuration |
+| `RunStartedRecord` | complete initial pool, flow fingerprint, START override, resolved LLM map, worker count, optional memory configuration, and the `yian.defaults` values that differ from the built-in ones (`defaults`, omitted when empty) |
 | `RunResumedRecord` | eligible ordered unfinished starts to retry and the selected worker count |
 | `NodeStartedRecord` | move the exact ready head into the ordered in-flight set before evaluation/submission |
 | `NodeSucceededRecord` | commit one canonical typed value under an already-resolved target, with optional evaluation evidence |
@@ -325,6 +325,14 @@ envelope's canonical bytes through preparation, replay, trace comparison, tamper
 checks, and append verification. Recovery appends without rewriting the accepted
 prefix.
 
+Every predefined default and limit is an entry in `yian.defaults`
+(`docs/defaults.md`), overridable by `YIAN_<NAME>` and read once per process by
+`current()`. `run_flow` records `current().non_defaults()` in
+`RunStartedRecord.defaults`; `RunStartData.defaults` defaults to `{}` (built-in
+values), never `current()`. The reducer overlays the record on the built-in values as
+`RunState.run_defaults`, which the growth check's node budget reads, so replay depends
+only on the log.
+
 `run_flow(..., log=None)` uses process-local authority; a path selects a durable
 JSONL log. `memory={key: implementation}` opens one run-scoped session per memory
 key in the recorded table, for recall and optional conversation history. Hosts
@@ -350,7 +358,9 @@ requesting attempt uses `ac-memory-v3` commit IDs over
 `[run_id, attempt_id, memory, mutations]`. An unconfirmed request stays
 unknown, and all confirmations without Finished still describe an interruption.
 
-`resume_flow(flow, *, log=..., num_workers=None, memory=None)` validates the
+`resume_flow(flow, *, log=..., num_workers=None, memory=None)` checks the recorded
+`defaults` against `yian.defaults.current()` (`check_recorded`, raising
+`DefaultsMismatchError` naming each variable) before it validates the
 authored flow fingerprint, silently folds the locked contiguous prefix through
 the same reducer. An eligible unfinished primary appends one
 `RunResumedRecord` before retrying starts in original dispatch order; a terminal
@@ -871,7 +881,7 @@ literals with `json_codec.parse_int`. Show a long int in a message with
 `typesys.values.value_repr`, which writes `<int too large to display>`; load errors
 show a long digit run echoed from the source the same way.
 
-A yian value nests at most `typesys.values.MAX_VALUE_NESTING` (100) levels, counting
+A yian value nests at most `YIAN_MAX_VALUE_NESTING` (default 100) levels, counting
 itself. `reject_deep_nesting(value, where, *, enclosing_levels=0)` counts each dict,
 list, tuple, pydantic model, and dataclass instance as a level (a `TypedValue` adds
 none), walks with an explicit stack, and raises `TypeCheckError` with the path of the
@@ -1077,7 +1087,8 @@ unquoted timestamps and `<<` merge keys, for documents, isolated literals
 (`parse_yaml_literal`), and one bare plain scalar (`read_plain_scalar`, which reads an
 inline `call(...)` argument), and never touches PyYAML's global tables. A date-shaped
 plain scalar that isn't a real date, such as `2026-13-45`, is a located YAML error
-that says to quote it. A document nested deeper than `MAX_YAML_NESTING` (200) levels,
+that says to quote it. A document nested deeper than `YIAN_MAX_YAML_NESTING` (default
+200) levels,
 each mapping and list a level, is a located YAML error: `_FlowLoader.get_event` counts
 collection events, adding no frame per level, and stops before PyYAML's recursive
 composer runs out of stack. It constructs root text once as a `SourceDocument` with an
@@ -1215,7 +1226,7 @@ and runtime:
   defs share the scope's in-progress guard, while the default file resolver's
   load context guards cross-file recursion. An injected resolver is responsible
   for any equivalent protection, so the baked call graph remains finite when
-  that seam honors the contract, and at most `MAX_CALL_NESTING` (50) deep,
+  that seam honors the contract, and at most `YIAN_MAX_CALL_NESTING` (default 50) deep,
   checked in `_resolve_child` for any resolver.
 - `compose.build.pipeline` associates retained bodies with final descriptors.
   Outer `input:` bindings become generated `Parameter` values through
@@ -1251,7 +1262,7 @@ formatter for ints past Python's digit limit:
   on the result. A chain of same-precedence operators is one flat node (`sum`,
   `product`, `power`; the evaluator folds left to right, `**` right to left). Before any
   recursive walker, an iterative check rejects a tree nested deeper than
-  `MAX_EXPRESSION_NESTING` (`= typesys.values.MAX_VALUE_NESTING`, 100; each call, list,
+  `current().max_value_nesting` (`YIAN_MAX_VALUE_NESTING`, default 100; each call, list,
   unary operator, comparison, escape, and chain is a level). A traced chain keeps
   two-child routes, so the run-record format is unchanged: a `+` chain of lists is a
   balanced tree of `concat`s, and a `*` chain repeating one list is one `repeat` with a

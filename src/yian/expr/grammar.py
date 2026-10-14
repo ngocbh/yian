@@ -70,7 +70,7 @@ from lark.exceptions import LarkError
 # Reuse the existing expression error — `expressions.ExpressionError` is already
 # the base of `expressions.RequiredError`, so parse failures here stay in one family.
 from yian.expr.expressions import ISINSTANCE, ExpressionError
-from yian.typesys.values import MAX_VALUE_NESTING
+from yian.defaults import current
 
 # The unified grammar. Precedence, lowest to highest:
 #   coalesce (`|`) -> default/required (`:-`/`:?`) -> or -> and -> not
@@ -164,10 +164,6 @@ NULL.3: /null\b/ | /none\b/
 # the tree.
 _PARSER = Lark(_GRAMMAR, parser="lalr", maybe_placeholders=False)
 
-# One nesting bound for yian: an expression nests no deeper than a value, and the two
-# move together on purpose.
-MAX_EXPRESSION_NESTING = MAX_VALUE_NESTING
-
 # Parse nodes that only group the parts of a reference or call; they add no level.
 _WRAPPER_NODES = frozenset({"trailer", "call_suffix", "arg"})
 
@@ -237,11 +233,14 @@ def _is_lone_atom(text: str) -> bool:
     )
 
 
-def _unwrap_spans(text: str, depth: int = 0) -> str | None:
+def _unwrap_spans(text: str, depth: int = 0, limit: int | None = None) -> str | None:
     """`text` with each `${X}` outside a string literal replaced by `X`, or `(X)` when `X`
     is more than one reference or literal; None when a `${` is unbalanced or spans nest
-    deeper than `MAX_EXPRESSION_NESTING` (`depth` counts the spans around `text`)."""
-    if depth > MAX_EXPRESSION_NESTING:
+    deeper than `limit` (`depth` counts the spans around `text`; `limit` defaults to the
+    value nesting limit)."""
+    if limit is None:
+        limit = current().max_value_nesting
+    if depth > limit:
         return None
     out: list[str] = []
     quote, i, n = None, 0, len(text)
@@ -258,7 +257,7 @@ def _unwrap_spans(text: str, depth: int = 0) -> str | None:
             i += 1
         elif c == "$" and text[i + 1 : i + 2] == "{":
             end = find_span_end(text, i + 2)
-            inner = None if end is None else _unwrap_spans(text[i + 2 : end], depth + 1)
+            inner = None if end is None else _unwrap_spans(text[i + 2 : end], depth + 1, limit)
             if inner is None:
                 return None
             inner = inner.strip()
@@ -319,7 +318,10 @@ def reject_nested_spans(text: str, *, in_span: bool = False) -> None:
 
 
 def _reject_deep_expression(tree: Tree | Token) -> None:
-    """Raise if a parsed expression nests deeper than `MAX_EXPRESSION_NESTING` levels.
+    """Raise if a parsed expression nests deeper than the value nesting limit.
+
+    An expression nests no deeper than a value, so one limit,
+    `current().max_value_nesting`, bounds both.
 
     Each operator chain (`sum`, `product`, `power`, `and_expr`, `or_expr`), unary operator,
     comparison, escape (`|`, `:-`, `:?`), list literal, and call is one level; a plain
@@ -332,8 +334,9 @@ def _reject_deep_expression(tree: Tree | Token) -> None:
 
     Raises:
         `ExpressionError`:
-            If any path from the root passes more than `MAX_EXPRESSION_NESTING` levels.
+            If any path from the root passes more than the limit.
     """
+    limit = current().max_value_nesting
     stack: list[tuple[Tree | Token, int]] = [(tree, 0)]
     while stack:
         node, depth = stack.pop()
@@ -347,9 +350,9 @@ def _reject_deep_expression(tree: Tree | Token) -> None:
             )
         ):
             depth += 1
-            if depth > MAX_EXPRESSION_NESTING:
+            if depth > limit:
                 raise ExpressionError(
-                    f"expression nests deeper than {MAX_EXPRESSION_NESTING} levels, the "
+                    f"expression nests deeper than {limit} levels, the "
                     "limit for a yian expression (each call, list, unary operator, "
                     "comparison, and chain of operators is a level); split it into smaller "
                     "bindings or steps"
@@ -507,7 +510,7 @@ def parse_expr(text: str) -> Tree | Token:
     Raises:
         `ExpressionError`:
             If `text` holds a `${...}` (see `reject_nested_spans`), does not parse,
-            nests deeper than `MAX_EXPRESSION_NESTING` levels, is a dotted-callee
+            nests deeper than `current().max_value_nesting` levels, is a dotted-callee
             builtin call, uses a reserved operator word as a reference root, calls
             `isinstance` with anything but a value and a bare type name, or repeats a
             keyword argument.

@@ -24,7 +24,7 @@ def check_written_value(
     *,
     enclosing_levels: int = 0,
 ) -> None:
-    """Reject `value` if it nests deeper than `MAX_VALUE_NESTING` levels.
+    """Reject `value` if it nests deeper than `current().max_value_nesting` levels.
 
     Args:
         value (`Any`): The authored value.

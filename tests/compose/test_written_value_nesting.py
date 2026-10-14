@@ -27,8 +27,10 @@ from typing import Callable, Iterator
 import pytest
 
 from yian.compose import LoadError, load_flow
+from yian.defaults import Defaults
 from yian.run import run_flow
-from yian.typesys.values import MAX_VALUE_NESTING
+
+MAX_VALUE_NESTING = Defaults().max_value_nesting
 
 _LIMIT = (
     f"value nests deeper than {MAX_VALUE_NESTING} levels, the limit for a yian value"

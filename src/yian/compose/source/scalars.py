@@ -9,9 +9,9 @@ YAML 1.2 core schema, keeping two YAML 1.1 extensions: unquoted timestamps and
 scalar that is not a real date or time, such as ``2026-13-45`` or an offset of
 ``+05:99``, a located ``ConstructorError`` that says to quote it. PyYAML's global
 ``SafeLoader`` tables are never modified. A document nested deeper than
-``MAX_YAML_NESTING`` levels is a located ``ComposerError``.
+``current().max_yaml_nesting`` levels is a located ``ComposerError``.
 
-Knows about:   PyYAML, yian.json_codec.
+Knows about:   PyYAML, yian.json_codec, yian.defaults.
 Never imports: compose helpers or phases, nodes, compile, runtime, the run
                boundary, CLI modules, or provider SDKs.
 """
@@ -26,6 +26,7 @@ from yaml.composer import ComposerError
 from yaml.constructor import ConstructorError
 
 import yian.json_codec as json_codec
+from yian.defaults import current
 
 _BOOL_TAG = "tag:yaml.org,2002:bool"
 _INT_TAG = "tag:yaml.org,2002:int"
@@ -79,13 +80,6 @@ class ScalarValueError(ConstructorError):
         self.reason = reason
 
 
-# Twice a yian value's 100 levels: a value at that limit fits inside a flow's own
-# structure, and composing and walking a document this deep from a shallow caller
-# stays within Python's default recursion limit.
-MAX_YAML_NESTING = 200
-"""Deepest nesting of a YAML document yian reads; each mapping and list is a level."""
-
-
 class _FlowLoader(yaml.SafeLoader):
     """SafeLoader that reads plain scalars with YAML 1.2 core rules.
 
@@ -93,7 +87,7 @@ class _FlowLoader(yaml.SafeLoader):
     Explicit ``!!int``, ``!!float``, and ``!!bool`` tags accept only the forms
     the table resolves. A ``timestamp`` that can't be built is a located
     ``ConstructorError``; every other tag keeps PyYAML's safe behavior. A
-    mapping or list nested past ``MAX_YAML_NESTING`` is a located
+    mapping or list nested past ``current().max_yaml_nesting`` is a located
     ``ComposerError``.
 
     Args:
@@ -107,6 +101,9 @@ class _FlowLoader(yaml.SafeLoader):
     def __init__(self, stream: str):
         super().__init__(stream)
         self._nesting = 0
+        limits = current()
+        self._max_nesting = limits.max_yaml_nesting
+        self._max_value_nesting = limits.max_value_nesting
 
     # PyYAML composes recursively, a few frames per level, and takes every event
     # through get_event, so counting here stops a too-deep document before the
@@ -121,20 +118,20 @@ class _FlowLoader(yaml.SafeLoader):
         Raises:
             `ComposerError`:
                 Raised at the start of the first mapping or list nested deeper than
-                ``MAX_YAML_NESTING`` levels.
+                ``current().max_yaml_nesting`` levels.
         """
 
         event = super().get_event()
         if isinstance(event, yaml.CollectionStartEvent):
             self._nesting += 1
-            if self._nesting > MAX_YAML_NESTING:
+            if self._nesting > self._max_nesting:
                 kind = "list" if isinstance(event, yaml.SequenceStartEvent) else "mapping"
                 raise ComposerError(
                     None,
                     None,
-                    f"this {kind} nests deeper than {MAX_YAML_NESTING} levels, the limit "
+                    f"this {kind} nests deeper than {self._max_nesting} levels, the limit "
                     "for a YAML document (each mapping and list is a level; a yian value "
-                    "nests at most 100); flatten it",
+                    f"nests at most {self._max_value_nesting}); flatten it",
                     event.start_mark,
                 )
         elif isinstance(event, yaml.CollectionEndEvent):

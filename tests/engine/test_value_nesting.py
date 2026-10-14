@@ -4,9 +4,8 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from yian.typesys import values
+from yian.defaults import current
 from yian.typesys.values import (
-    MAX_VALUE_NESTING,
     FileRef,
     ObjectValue,
     TypeCheckError,
@@ -53,7 +52,7 @@ class _Extras(BaseModel):
 
 
 def test_limit_is_100():
-    assert MAX_VALUE_NESTING == 100
+    assert current().max_value_nesting == 100
 
 
 @pytest.mark.parametrize("value", [1, "s", None, {}, [], _nest(100), _nest(100, _as_list)])
@@ -143,11 +142,11 @@ def test_first_offender_depth_first_in_order():
     assert exc_info.value.path == ("deep",) + ("a",) * 99
 
 
-def test_very_deep_value_does_not_recurse(monkeypatch):
+def test_very_deep_value_does_not_recurse(set_defaults):
     deep = _nest(100_000, _as_list)
     with pytest.raises(TypeCheckError):
         reject_deep_nesting(deep, "output")
-    monkeypatch.setattr(values, "MAX_VALUE_NESTING", 200_000)
+    set_defaults.unchecked(max_value_nesting=200_000)
     reject_deep_nesting(deep, "output")
 
 
@@ -160,8 +159,8 @@ def test_cycles_are_not_reported_as_too_deep():
     reject_deep_nesting(items, "output")
 
 
-def test_limit_is_read_at_call_time(monkeypatch):
-    monkeypatch.setattr(values, "MAX_VALUE_NESTING", 3)
+def test_limit_is_read_at_call_time(set_defaults):
+    set_defaults(MAX_VALUE_NESTING=3)
     reject_deep_nesting(_nest(3), "output")
     with pytest.raises(TypeCheckError) as exc_info:
         reject_deep_nesting(_nest(4), "output")

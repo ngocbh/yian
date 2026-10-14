@@ -57,7 +57,7 @@ def test_read_with_no_variables_is_builtin() -> None:
 
 
 def test_override_takes_effect() -> None:
-    assert read({"YIAN_MAX_VALUE_NESTING": "120"}).max_value_nesting == 120
+    assert read({"YIAN_MAX_VALUE_NESTING": "80"}).max_value_nesting == 80
 
 
 def test_empty_value_counts_as_unset() -> None:
@@ -66,7 +66,7 @@ def test_empty_value_counts_as_unset() -> None:
 
 @pytest.mark.parametrize(
     "value",
-    ["abc", "1.5", "1e3", " 5", "1_000", "+5", "-0", "007", "0", "151", "9" * 5000],
+    ["abc", "1.5", "1e3", " 5", "1_000", "+5", "-0", "007", "0", "101", "9" * 5000],
 )
 def test_bad_value_names_the_variable(value: str) -> None:
     with pytest.raises(DefaultsError) as caught:
@@ -75,7 +75,7 @@ def test_bad_value_names_the_variable(value: str) -> None:
     assert "YIAN_MAX_VALUE_NESTING" in message
     assert value[:30] in message
     assert "=" + repr(value if len(value) <= 40 else value[:37] + "...") in message
-    assert "from 1 to 150" in message
+    assert "from 1 to 100" in message
     assert len(message) < 300
     assert "Exceeds the limit" not in message
     assert isinstance(caught.value, ValueError)
@@ -157,19 +157,19 @@ def test_int_digits_has_no_upper_bound_on_an_interpreter_without_the_limit(
 
 def test_memory_json_nesting_follows_value_nesting() -> None:
     assert Defaults().memory_json_nesting == 128
-    assert read({"YIAN_MAX_VALUE_NESTING": "120"}).memory_json_nesting == 148
+    assert read({"YIAN_MAX_VALUE_NESTING": "80"}).memory_json_nesting == 108
 
 
 def test_non_defaults_lists_only_changed_values_sorted() -> None:
     values = read(
         {
-            "YIAN_MAX_VALUE_NESTING": "120",
+            "YIAN_MAX_VALUE_NESTING": "80",
             "YIAN_AGENT_RETRIES": "5",
             "YIAN_MAX_TOTAL_NODES": "10000",
         }
     )
     changed = values.non_defaults()
-    assert changed == {"AGENT_RETRIES": 5, "MAX_VALUE_NESTING": 120}
+    assert changed == {"AGENT_RETRIES": 5, "MAX_VALUE_NESTING": 80}
     assert list(changed) == sorted(changed)
 
 
@@ -183,10 +183,10 @@ def test_from_recorded_overlays_builtins() -> None:
 
 def test_current_reads_once(monkeypatch: pytest.MonkeyPatch) -> None:
     assert current() == Defaults()
-    monkeypatch.setenv("YIAN_MAX_VALUE_NESTING", "120")
+    monkeypatch.setenv("YIAN_MAX_VALUE_NESTING", "80")
     assert current().max_value_nesting == 100
-    assert defaults._reload().max_value_nesting == 120
-    assert current().max_value_nesting == 120
+    assert defaults._reload().max_value_nesting == 80
+    assert current().max_value_nesting == 80
 
 
 def test_failed_read_is_not_cached(monkeypatch: pytest.MonkeyPatch) -> None:

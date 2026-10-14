@@ -11,8 +11,8 @@ can skip an ancestor of the queried nodes. The default side of `:-` is checked a
 runs: `${a.output :- (b.output + 1)}` is rejected even when `b` runs whenever `a` is skipped,
 which is a false positive only when `a` cannot be null while it runs.
 
-The enumeration is bounded by `_WORLD_LIMIT` assignments (complete or cut short) per query.
-Past the bound each query falls back to the answer that is safe for its caller:
+The enumeration is bounded by `current().max_skip_worlds` assignments (complete or cut short)
+per query. Past the bound each query falls back to the answer that is safe for its caller:
 `may_all_skip` says True (the output gets a null default it may not need) and
 `may_skip_while_running` says False (nothing is reported). A level whose edges have a cycle
 has no skippable nodes here; the cycle check reports the cycle.
@@ -42,6 +42,7 @@ from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.output_contracts import direct_reference_parts, direct_reference_path
 from yian.compose.nodes.base import BuildResult
 from yian.compose.validate.typed_bindings import ResolveOrigin, _located_error
+from yian.defaults import current
 from yian.diagnostics import OriginRef, SourceRange
 from yian.expr import (
     ExpressionError,
@@ -59,8 +60,6 @@ from yian.nodes.contracts import (
     iter_source_strings,
     map_source_strings,
 )
-
-_WORLD_LIMIT = 10_000
 
 # The grammar's arithmetic trees: the `+ -`, `* / %` and `**` chains and unary minus.
 _ARITHMETIC = frozenset({"sum", "product", "power", "neg"})
@@ -96,8 +95,9 @@ class SkipModel:
             The level's edges. An edge into a node outside `node_ids` is ignored.
         exhaustive (`Set[str]`):
             Ids of the CASEs that always take a branch when they run.
-        limit (`int`, *optional*, defaults to `_WORLD_LIMIT`):
-            Most CASE assignments one query examines before it falls back.
+        limit (`int | None`, *optional*, defaults to `None`):
+            Most CASE assignments one query examines before it falls back; `None`
+            reads `current().max_skip_worlds`.
 
     Example:
         >>> edges = [Edge(id="t", from_="c", to="a", source_handle="then"),
@@ -112,11 +112,11 @@ class SkipModel:
         edges: Iterable[Edge],
         exhaustive: Set[str],
         *,
-        limit: int = _WORLD_LIMIT,
+        limit: int | None = None,
     ) -> None:
         self._nodes = list(dict.fromkeys(node_ids))
         self._known = set(self._nodes)
-        self._limit = limit
+        self._limit = current().max_skip_worlds if limit is None else limit
         self._joins = {n: _Join() for n in self._nodes}
         graph_parents: dict[str, set[str]] = {n: set() for n in self._nodes}
         handles: dict[str, dict[str, None]] = {}

@@ -14,8 +14,8 @@ yet exposed to flow authors (so adding real file handling later is additive,
 not a schema migration).
 
 This module's only package-internal dependencies are the stdlib-only date/datetime
-grammar in `yian.typesys.temporal` and the stdlib-only `yian.json_codec`; otherwise it
-is the leaf.
+grammar in `yian.typesys.temporal` and the stdlib-only `yian.json_codec` and
+`yian.defaults`; otherwise it is the leaf.
 """
 
 import json
@@ -30,6 +30,7 @@ from typing import Annotated, Any, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
 import yian.json_codec as json_codec
+from yian.defaults import current
 from yian.typesys.temporal import parse_date, parse_datetime
 
 
@@ -173,15 +174,8 @@ def _render_value_path(path: tuple[str | int, ...]) -> str:
     return "".join(parts)
 
 
-MAX_VALUE_NESTING = 100
-"""Deepest nesting a yian value may have.
-
-Each dict, list, tuple, model, or dataclass is one level.
-"""
-
-
 def reject_deep_nesting(value: Any, where: str, *, enclosing_levels: int = 0) -> None:
-    """Raise if a value nests deeper than `MAX_VALUE_NESTING` levels.
+    """Raise if a value nests deeper than `current().max_value_nesting` levels.
 
     Each `dict`, `list`, `tuple`, pydantic model, and dataclass instance is one
     level; a `TypedValue` is unwrapped and adds none. A model's declared fields
@@ -204,7 +198,7 @@ def reject_deep_nesting(value: Any, where: str, *, enclosing_levels: int = 0) ->
             message reads ``<where>[ at <path>]: value nests deeper than <limit>
             levels, the limit for a yian value (each record and list is a level)``.
     """
-    limit = MAX_VALUE_NESTING
+    limit = current().max_value_nesting
     while isinstance(value, TypedValue):
         value = value.to_object()
     if 1 + enclosing_levels > limit and _nesting_children(value) is not None:

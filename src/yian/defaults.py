@@ -59,25 +59,27 @@ class Entry:
 
 ENTRIES: tuple[Entry, ...] = (
     # Language safety limits.
-    # Deeper nested call expressions measured a raw RecursionError with reduced stack
-    # headroom; 150 levels passed.
+    # A learnable run logs a CALL binding's expression as a route two JSON levels per
+    # call deep, and pydantic refuses to encode past 255 levels, so a 125-level call
+    # expression can't be logged; 100 levels log, resume, and run with reduced stack
+    # headroom.
     Entry(
         "MAX_VALUE_NESTING",
         default=100,
         description="Deepest nesting a value may have; also bounds expression nesting",
         group="limit",
         minimum=1,
-        maximum=150,
+        maximum=100,
     ),
     # Deeper types are rejected before they can exhaust Python's recursion limit, and
-    # 150 levels still parse with reduced stack headroom.
+    # 125 levels still parse with reduced stack headroom.
     Entry(
         "MAX_TYPE_NESTING",
         default=100,
         description="Deepest nesting a type expression may have",
         group="limit",
         minimum=1,
-        maximum=150,
+        maximum=125,
     ),
     # Twice a value's 100 levels: a value at that limit fits inside a flow's own
     # structure, and composing and walking a document this deep from a shallow caller

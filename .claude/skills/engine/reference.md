@@ -1165,7 +1165,7 @@ reference paths), `evaluate_when` (a condition), plus `render_template_record` /
 `prompt_refs` for prompts. Two families back the reference walkers. Extraction:
 `expr_refs_of` reads only `${...}` spans (bindings, templates, prompts), while
 `condition_refs` parses a WHOLE expression (a `when:`/`on:`/loop predicate/assert
-written bare, mixed, or whole-span) so the bare spelling's refs are seen — using
+written bare or whole-span) so the bare spelling's refs are seen — using
 the template walker on a bare condition finds nothing. Rewriting (spelling-
 preserving, for the `case` desugar): `rewrite_expr_refs` / `rewrite_template_refs`
 (span walkers) and `rewrite_condition_refs` (whole-expression). Callers pass

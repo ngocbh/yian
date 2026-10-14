@@ -184,9 +184,11 @@ to render as text, fails like an expression error.
 `and`, `or`, `not`, and `in` are reserved operators, so none can be the root
 name of a reference. A dotted field may use those names (`${record.output.in}`).
 
-Nesting a ref is allowed: `${a:-${b:-"lit"}}`. The `:-`/`:?` RHS is an
-expression, so a string default must be **quoted** (`${x:-"today"}`; bare `today`
-reads a variable). A child-flow call is the whole-value `call(...)` directive
+Inside an expression, name values directly and group with parentheses:
+`${a :- (b :- "lit")}` or `${a | b | "lit"}`. A `${...}` inside an expression
+(`${a :- ${b}}`, `when: "${a.output} > 5"`) is a load error that shows the rewrite.
+The `:-`/`:?` RHS is an expression, so a string default must be **quoted**
+(`${x:-"today"}`; bare `today` reads a variable). A child-flow call is the whole-value `call(...)` directive
 (see below), never a `${flow(args)}` span. Arithmetic on a value that is null when a
 `case` skips its node is a load error; give it a default: `${(o.output.qty :- 0) + 1}`.
 
@@ -620,7 +622,7 @@ span that reads a node that may be skipped needs `:-`; a value may not read its 
 CASE or plainly read another of its branches.
 
 **Skipped branches in a flow output.** An output field that reads only nodes a `case`
-may skip (`${order.output}`, `${a.output | b.output}`, `${a.output :- ${b.output}}`)
+may skip (`${order.output}`, `${a.output | b.output}`, `${a.output :- b.output}`)
 returns `null` when they were skipped, typed `Optional[T]`; the loader reads it as if
 `:- null` were written. This holds in `defs:` children and inline CALL/LOOP/MAP bodies.
 A join over an exhaustive `case` (`else:`, every tag of a non-nullable `Literal`, or a
@@ -787,7 +789,7 @@ turn:
   input:                       # the SEED carried record — defines 'a
     messages: []
     exited: false
-  while: not ${exited}         # pre-check over the carried record; `not` OUTSIDE ${...}
+  while: not exited            # pre-check over the carried record
 ```
 A typed seed (`n: int = 0`) checks the starting value; a field the body omits
 keeps its declared type.
@@ -844,8 +846,9 @@ One `${...}` grammar; the context decides what happens to the result:
   directive, not a `${...}` span. `name: Type = value` declares the value's type
   (see "Typed bindings").
 - **`when:` / `asserts:`**: **tested** as a boolean — `== != < <= > >=`,
-  `in`/`not in`, `and`/`or`/`not`, parens, arithmetic operands. Bare or
-  `${...}`-wrapped are equivalent. A flow-level `asserts:` reads `input.X`
+  `in`/`not in`, `and`/`or`/`not`, parens, arithmetic operands. Bare, or one
+  whole `${...}`, are equivalent; braces on a ref inside (`${a} > 5`) are a load
+  error. A flow-level `asserts:` reads `input.X`
   (boundary, before any node) or `node.output` (post, after the terminal). An
   exact unqualified flow-input name is shorthand (`age` means `input.age`) and
   wins over a same-named node; keep fields explicit as `input.profile.age`.

@@ -111,7 +111,7 @@ def test_agent_output_without_a_structured_form_fails_at_load(output: str, typed
     message = str(info.value)
     assert "node 'a'" in message
     assert "an AGENT can't produce this `output:`" in message
-    assert "Literal, record, union, and list values" in message
+    assert "Literal, record, union, object, Any, and list values" in message
     assert info.value.diagnostic.frames[-1].range.start_line == 7
 
 

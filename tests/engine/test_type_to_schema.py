@@ -375,7 +375,7 @@ def test_any_schema_accepts_every_non_null_json_value_unchanged():
     typ = Type.scalar(ValueKind.ANY)
     model = type_to_schema(typ)
     assert model.__name__ == "ScalarWrapper"
-    for value in ("x", 3, 2**80, 2.5, True, "3", {"a": 1}, [1, "a"]):
+    for value in ("x", 3, 2**80, 2.5, 1.0, True, "3", {"a": 1}, [1, "a"], {"a": 1.0, "b": True}):
         out = _unwrap(model.model_validate({"value": value}), typ)
         assert out == value and type(out) is type(value)
     with pytest.raises(ValidationError):

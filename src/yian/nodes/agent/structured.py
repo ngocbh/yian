@@ -35,6 +35,7 @@ from pydantic import (
     ConfigDict,
     Field,
     StrictBool,
+    StrictFloat,
     StrictInt,
     StrictStr,
     ValidationError,
@@ -70,12 +71,12 @@ _SCALAR_PY: dict[ValueKind, type] = {
     ValueKind.DATETIME: str,
 }
 
-# Any non-null JSON value. Strict scalars keep pydantic's smart-mode union from turning
-# `True` into 1 or "3" into 3; a reply is stored as given.
+# Any non-null JSON value. Strict members keep pydantic's smart-mode union from turning
+# `True` into 1, "3" into 3, or 1 into 1.0; a reply is stored as given.
 _ANY_PY = Union[
     StrictBool,
     StrictInt,
-    Annotated[float, Field(allow_inf_nan=False)],
+    Annotated[StrictFloat, Field(allow_inf_nan=False)],
     StrictStr,
     dict[str, Any],
     list[Any],

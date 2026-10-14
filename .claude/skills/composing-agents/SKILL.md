@@ -735,6 +735,8 @@ is coerced across it: `"3"` does not fit `int` (write `3`), an unquoted `2026-01
 source into an `int` input fails at the child's start (`contract.input`). A `str`
 reference does not fit an `int` or `date` input: type the source (`list[date]`), or
 use a typed binding (`t: int = ${input.n}`) for a value narrower than the input.
+A LOOP's untyped literal or `${null}` seed is checked the same way against a named body's
+input.
 
 For a one-off child, replace `call:` with a non-empty `nodes:` body and add the
 required `output:` key:
@@ -794,7 +796,8 @@ turn:
   while: not exited            # pre-check over the carried record
 ```
 A typed seed (`n: int = 0`) checks the starting value; a field the body omits
-keeps its declared type.
+keeps its declared type. An untyped literal seed must fit the body's input
+(`n: "1"` into `int` fails; write `1`).
 `loop` accepts the same inline `nodes:` + `output:` form instead of `call:`; its
 generated parameters are the carried `input:` fields, so the same `'a -> 'a`
 contract still applies. Those parameters are typed from the seeds, and each returned

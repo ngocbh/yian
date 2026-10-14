@@ -93,7 +93,7 @@ def test_read_case_over_a_str_without_else_is_rejected():
         load_flow(text)
     assert (
         _EXHAUSTIVE.format(case="gate") + " (on: ${input.x} is str, not a Literal or bool)"
-    ) in str(caught.value)
+    ) == str(caught.value)
     assert _error_line(caught.value) == _line_of(text, "  gate:")
 
 
@@ -105,8 +105,8 @@ def test_read_searched_case_without_else_is_rejected():
     )
     with pytest.raises(LoadError) as caught:
         load_flow(text)
-    assert (_EXHAUSTIVE.format(case="gate") + " (a searched case needs an else:)") in str(
-        caught.value
+    assert str(caught.value) == (
+        _EXHAUSTIVE.format(case="gate") + " (a searched case needs an else:)"
     )
     assert _error_line(caught.value) == _line_of(text, "  gate:")
 
@@ -135,7 +135,7 @@ def test_read_case_over_a_literal_node_output_missing_a_tag_is_rejected():
         load_flow(text)
     assert (
         _EXHAUSTIVE.format(case="gate") + " (enum tag(s) ['b'] not covered)"
-    ) in str(caught.value)
+    ) == str(caught.value)
     assert _error_line(caught.value) == _line_of(text, "  gate:")
 
 
@@ -160,7 +160,7 @@ def test_read_case_over_a_literal_input_missing_a_tag_is_rejected():
         load_flow(text)
     assert (
         _EXHAUSTIVE.format(case="gate") + " (enum tag(s) ['b'] not covered)"
-    ) in str(caught.value)
+    ) == str(caught.value)
 
 
 def test_read_case_over_an_optional_literal_input_is_rejected():
@@ -173,7 +173,7 @@ def test_read_case_over_an_optional_literal_input_is_rejected():
         load_flow(text)
     assert (
         _EXHAUSTIVE.format(case="gate") + " (${input.choice} may be null)"
-    ) in str(caught.value)
+    ) == str(caught.value)
 
 
 def test_routing_only_case_over_a_str_without_else_still_skips_on_no_match():
@@ -186,8 +186,8 @@ def test_routing_only_case_over_a_str_without_else_still_skips_on_no_match():
     result = run_flow(loaded, {"x": "c"})
     assert result.status == "succeeded", result.failure
     assert result.output == "none"
-    assert {"pa", "pb"} <= _skipped(result)
-    assert not {"pa", "pb"} & _started(result)
+    assert _skipped(result) == {"pa", "pb"}
+    assert _started(result) == {"__start__", "gate", "__end__"}
 
 
 def test_routing_only_case_over_a_literal_input_missing_a_tag_is_a_load_error():
@@ -199,7 +199,10 @@ def test_routing_only_case_over_a_literal_input_missing_a_tag_is_a_load_error():
     )
     with pytest.raises(LoadError) as caught:
         load_flow(text)
-    assert "non-exhaustive — enum tag(s) ['b'] not covered" in str(caught.value)
+    assert str(caught.value) == (
+        "case node 'gate' on ${input.choice}: non-exhaustive — enum tag(s) ['b'] not "
+        "covered by a case `when:` or an `else:`"
+    )
     assert _error_line(caught.value) == _line_of(text, "  gate:")
 
 
@@ -223,7 +226,7 @@ def test_inner_case_of_a_value_producing_case_must_be_exhaustive():
         load_flow(text)
     assert (
         _EXHAUSTIVE.format(case="inner") + " (on: ${input.x} is str, not a Literal or bool)"
-    ) in str(caught.value)
+    ) == str(caught.value)
     assert _error_line(caught.value) == _line_of(text, "  inner:")
 
 
@@ -235,7 +238,7 @@ def test_case_read_inside_text_must_be_exhaustive():
         load_flow(text)
     assert (
         _EXHAUSTIVE.format(case="gate") + " (on: ${input.x} is str, not a Literal or bool)"
-    ) in str(caught.value)
+    ) == str(caught.value)
 
 
 def _narrowed_flow(inner_tag: str) -> str:
@@ -291,8 +294,10 @@ def test_narrowed_read_case_missing_its_reachable_tag_is_rejected():
     text = _narrowed_flow("sell")
     with pytest.raises(LoadError) as caught:
         load_flow(text)
-    assert _EXHAUSTIVE.format(case="inner") in str(caught.value)
-    assert "enum tag(s) ['buy'] not covered" in str(caught.value)
+    assert str(caught.value) == (
+        _EXHAUSTIVE.format(case="inner") + " (enum tag(s) ['buy'] not covered)"
+    )
+    assert _error_line(caught.value) == _line_of(text, "  inner:")
 
 
 def test_unquoted_yes_routes_to_a_node_named_yes():

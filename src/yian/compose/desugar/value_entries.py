@@ -76,7 +76,7 @@ class ValueEntryDescriptor(CodeDescriptor):
 
         Raises:
             `LoadError`: A span reads the entry's own output, directly or through
-                other entries (a node build dependency cycle).
+                other inferred `!object` entries (a node build dependency cycle).
         """
         if not self._infers_record():
             return self.tag

@@ -344,7 +344,7 @@ def test_a_reference_in_a_case_value_under_a_secret_key_gets_the_branch_error():
     with pytest.raises(LoadError) as caught:
         load_flow(_case_flow())
 
-    assert str(caught.value).startswith(
+    assert str(caught.value) == (
         "case node 'pick' then: a branch names a node or calls a flow; put the value in "
         "its own entry in `nodes:` and name it: "
         '`pick_then_0: !object {password: "${input.pw}"}` and `then: pick_then_0`'

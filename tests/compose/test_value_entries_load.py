@@ -14,8 +14,6 @@ a field it lacks is a load error, a `${...}` field has its producer's type, and 
 tagged `!object` stays opaque. `!object ${x.output}` stays `object`.
 """
 
-import re
-
 import pytest
 
 from yian.compile.manifest import flow_fingerprint
@@ -233,7 +231,7 @@ def test_an_entry_reading_itself_is_rejected():
 
     error = _load_error(text)
 
-    assert re.fullmatch(re.escape("node build dependency cycle: x -> x"), str(error))
+    assert str(error) == "node build dependency cycle: x -> x"
     assert _error_line(error) == _line_of(text, "  x: !object")
 
 

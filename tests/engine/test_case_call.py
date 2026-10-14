@@ -194,11 +194,25 @@ output: ${{gate.output}}
 @pytest.mark.parametrize(
     "target, problem",
     [
-        ('call(take, stance="a", stance="b")', "keyword 'stance' more than once"),
-        ("call(take, 30)", "passes a positional argument '30'"),
-        ("call(take", "`call(` is never closed"),
-        ('call(take, stance="a") tail', "text follows the closing `)`: 'tail'"),
-        ('call(take stance="a")', "must start with a flow id (a bare name) and a comma"),
+        (
+            'call(take, stance="a", stance="b")',
+            "call(take, ...) passes keyword 'stance' more than once",
+        ),
+        (
+            "call(take, 30)",
+            "call(take, ...) passes a positional argument '30'; every argument after the "
+            "flow id must be a keyword (name=value)",
+        ),
+        ("call(take", "`call(` is never closed (check its parentheses and quotes)"),
+        (
+            'call(take, stance="a") tail',
+            "text follows the closing `)`: 'tail'; a call(...) must be the whole value",
+        ),
+        (
+            'call(take stance="a")',
+            "a call(...) must start with a flow id (a bare name) and a comma, got "
+            "'take stance=\"a\"'",
+        ),
     ],
 )
 def test_malformed_branch_call_directive_is_a_located_load_error(label, target, problem):
@@ -227,12 +241,10 @@ output: ${{gate.output}}
 """
     with pytest.raises(LoadError) as caught:
         load_flow(text)
-    message = str(caught.value)
-    assert f"case node 'gate' {label}:" in message
-    assert problem in message
     entry = "gate_then_0" if label == "then" else "gate_else"
-    assert message.endswith(
-        f". For the text, add a value entry and name it: `{entry}: !str "
+    assert str(caught.value) == (
+        f"case node 'gate' {label}: a branch target must be a node id or a single call: "
+        f"{problem}. For the text, add a value entry and name it: `{entry}: !str "
         f"{yaml_quoted(target)}`"
     )
     line = next(
@@ -478,7 +490,7 @@ output: ${{gate.output}}
 """
     with pytest.raises(LoadError) as caught:
         load_flow(text)
-    message = str(caught.value)
-    assert "case node 'gate' then: a branch target must be a node id or a single call" in message
-    assert "`call(` is never closed" in message
-    assert "For the text" not in message
+    assert str(caught.value) == (
+        "case node 'gate' then: a branch target must be a node id or a single call: "
+        "`call(` is never closed (check its parentheses and quotes)"
+    )

@@ -9,11 +9,12 @@ value entries.
 
 An entry is skipped like any node: when a CASE routes away from it, or when a whole-span
 read names a skipped node, while an embedded span renders a skipped read as empty text
-and an entry with no reads always runs. A routed `call(...)` entry skips its lifted call
+and an unrouted entry with no reads always runs. A routed `call(...)` entry skips its lifted call
 with it, and a resumed log replays an entry's recorded output. A routed entry reads a
 union member field its branch selects; a field its branch excludes is a load error.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -24,14 +25,42 @@ from yian.nodes.base import _HostStop
 from yian.run import resume_flow, run_flow
 
 
+# The graph's own boundary nodes, which start in every run.
+_BOUNDARY = {"__start__", "__end__"}
+
+
+def _flow_node(node_id: str) -> bool:
+    """Whether `node_id` is a node of the flow itself: not a boundary, not inside a call."""
+    return node_id not in _BOUNDARY and "/" not in node_id
+
+
 def _started(result) -> set[str]:
-    """Return the ids of every node that started in a run."""
-    return {e.node_id for e in result.events if isinstance(e, NodeStarted)}
+    """Return the ids of the flow's nodes that started in a run."""
+    return {
+        e.node_id
+        for e in result.events
+        if isinstance(e, NodeStarted) and _flow_node(e.node_id)
+    }
 
 
 def _skipped(result) -> set[str]:
-    """Return the ids of every node skipped in a run."""
-    return {e.node_id for e in result.events if isinstance(e, NodeSkipped)}
+    """Return the ids of the flow's nodes skipped in a run."""
+    return {
+        e.node_id
+        for e in result.events
+        if isinstance(e, NodeSkipped) and _flow_node(e.node_id)
+    }
+
+
+def _succeeded_values(path: Path) -> dict[str, object]:
+    """Return each recorded node success in a run log, keyed by node id."""
+    values: dict[str, object] = {}
+    for line in path.read_text().splitlines():
+        record = json.loads(line)
+        if record["kind"] == "node_succeeded":
+            payload = record["payload"]
+            values[payload["node_id"]] = payload["value"]
+    return values
 
 
 def _run(text: str, inputs: dict | None = None):
@@ -370,9 +399,8 @@ def test_a_case_routes_to_a_value_entry_or_a_node(cmd, taken, untaken, expected)
 
     assert result.status == "succeeded", result.failure
     assert result.output == expected
-    assert taken in _started(result)
-    assert untaken in _skipped(result)
-    assert untaken not in _started(result)
+    assert _started(result) == {"route", taken}
+    assert _skipped(result) == {untaken}
 
 
 _SKIP_FLOW = """
@@ -408,9 +436,8 @@ def test_entries_reading_a_routed_away_node():
 
     assert result.status == "succeeded", result.failure
     assert result.output == {"whole": None, "embedded": "got ", "lone": 7}
-    assert {"maybe", "whole"} <= _skipped(result)
-    assert not {"maybe", "whole"} & _started(result)
-    assert {"embedded", "lone"} <= _started(result)
+    assert _started(result) == {"route", "embedded", "lone"}
+    assert _skipped(result) == {"maybe", "whole"}
 
 
 def test_entries_reading_a_routed_node():
@@ -418,7 +445,8 @@ def test_entries_reading_a_routed_node():
 
     assert result.status == "succeeded", result.failure
     assert result.output == {"whole": {"a": "m"}, "embedded": "got m", "lone": 7}
-    assert {"maybe", "whole", "embedded", "lone"} <= _started(result)
+    assert _started(result) == {"route", "maybe", "whole", "embedded", "lone"}
+    assert _skipped(result) == set()
 
 
 def _union_flow(*, buy: str, other: str) -> str:
@@ -512,11 +540,12 @@ def test_a_routed_flow_call_entry_runs_its_call_only_when_taken():
 
     assert taken.status == "succeeded", taken.failure
     assert taken.output == "ADA"
-    assert {"e", call_id} <= _started(taken)
+    assert _started(taken) == {"route", "e", call_id}
+    assert _skipped(taken) == {"other"}
     assert untaken.status == "succeeded", untaken.failure
     assert untaken.output == "other"
-    assert {"e", call_id} <= _skipped(untaken)
-    assert not {"e", call_id} & _started(untaken)
+    assert _started(untaken) == {"route", "other"}
+    assert _skipped(untaken) == {"e", call_id}
 
 
 _GATE_FLOW = """
@@ -556,6 +585,7 @@ def test_a_resumed_run_routes_to_a_value_entry_and_replays_it(tmp_path: Path):
     with pytest.raises(_HostStop) as caught:
         run_flow(load_flow(_GATE_FLOW), {"t": "bye"}, log=path, tools={"ask_user": interrupt})
     assert caught.value is interruption
+    assert "exit_result" not in _succeeded_values(path)
 
     answered = resume_flow(
         load_flow(_GATE_FLOW), log=path, tools={"ask_user": lambda **request: "exit"}
@@ -563,13 +593,14 @@ def test_a_resumed_run_routes_to_a_value_entry_and_replays_it(tmp_path: Path):
 
     assert answered.status == "succeeded", answered.failure
     assert answered.output == {"reply": "bye", "exited": True}
-    assert "exit_result" in _started(answered)
-    assert "other" in _skipped(answered)
+    assert _started(answered) == {"ask", "route", "exit_result"}
+    assert _skipped(answered) == {"other"}
+    assert _succeeded_values(path)["exit_result"]["value"] == answered.output
     before = path.read_bytes()
 
     replayed = resume_flow(load_flow(_GATE_FLOW), log=path)
 
     assert replayed.status == "succeeded", replayed.failure
     assert replayed.output == answered.output
-    assert _started(replayed) == set()
+    assert not [e for e in replayed.events if isinstance(e, NodeStarted)]
     assert path.read_bytes() == before

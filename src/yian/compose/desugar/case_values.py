@@ -50,6 +50,7 @@ from typing import Any, Optional
 
 from yian.compose.desugar.inline_calls import (
     _SYNTH_PREFIX,
+    ArgumentValueError,
     SecretArgumentError,
     desugar_call_directives,
     holds_secret_keyword,
@@ -319,10 +320,13 @@ def _is_value(
             raise diagnostics.error(exc.message_for(host), range=rng) from exc
         except ExpressionError as exc:
             # Quoting a call that holds a span is its own error, so no quoting fix then;
-            # nor for one with a secret keyword, whose text must not be echoed.
+            # nor for one with a secret keyword, whose text must not be echoed, nor for an
+            # unreadable argument, whose own message says to quote that argument.
             hint = (
                 f". If you meant the text, quote it: `{label} {yaml_quoted(stripped)}`"
-                if "${" not in value and not holds_secret_keyword(value)
+                if "${" not in value
+                and not holds_secret_keyword(value)
+                and not isinstance(exc, ArgumentValueError)
                 else ""
             )
             raise diagnostics.error(

@@ -63,7 +63,8 @@ if TYPE_CHECKING:  # annotation-only imports
 # `InlineCall` is the plain-data record a desugared call produces (the directive
 # path builds one per call); `_split_kv` / `_find_paren_end` / `_split_calls_aware`
 # are the paren/quote/span-aware splitters the directive recognizer reuses. Keyword
-# args only; reading each arg VALUE lives in `compose.desugar.inline_calls`.
+# args only; reading each arg VALUE (a bare one with the flow's YAML rules) lives in
+# `compose.desugar.inline_calls`.
 # --------------------------------------------------------------------------- #
 
 
@@ -74,7 +75,7 @@ class InlineCall:
 
     id: str
     callee: str
-    args: dict  # name -> a literal value or a `${…}` binding string
+    args: dict  # name -> a YAML-scalar value or a `${…}` binding string
 
 
 def _split_kv(pair: str) -> tuple:

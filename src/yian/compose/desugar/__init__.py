@@ -36,10 +36,10 @@ lifted node its host's CASE routes, `depends_on`/`runs_after` edges, and data ga
 host's other inputs in one place. A branch target (`then: call(...)`, `__value_<n>`), a
 `__case_<id>` result node, and a flow `output:`/`asserts:` call have no host.
 
-Ladder position: desugar imports DOWN/peer only — `helpers`, `nodes`, `parse`, and
-the engine core (`expr`, `events`, `compile`, `nodes.*`). It NEVER imports the
-later phases (`edges`, `validate`, `build`, `loader`, `cases`); nothing earlier
-imports it back. Only the loader (and the later phases) import this package. The
-file-owned callable table and one-build cache stay in the loader; desugar only
+Ladder position: desugar imports DOWN/peer only — `helpers`, `nodes`, `parse`,
+`source`, and the engine core (`expr`, `events`, `compile`, `nodes.*`). It NEVER
+imports the later phases (`edges`, `validate`, `build`, `loader`, `cases`); nothing
+earlier imports it back. Only the loader (and the later phases) import this package.
+The file-owned callable table and one-build cache stay in the loader; desugar only
 produces retained private-child declarations.
 """

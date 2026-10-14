@@ -11,12 +11,16 @@ These tests drive the pass directly (rather than via a full load), so recognitio
 is asserted on the returned descriptor map with a deterministic minter.
 """
 
+import math
+from datetime import date, datetime, timezone
+
 import pytest
 
 from yian.compose import LoadError, desugar_inline_calls, load_flow
 from yian.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.parse.file import CodeDescriptor
+from yian.compose.source import parse_yaml_literal
 from yian.diagnostics import OriginRef, SourceRange
 from yian.nodes.contracts import Assertion
 from yian.run import run_flow
@@ -335,12 +339,145 @@ def test_keyword_literal_values_coerce_like_named_form():
 
 
 def test_bare_bool_word_arg_stays_string():
-    # deliberate: inline bare literals are a YAML-1.1 SUBSET — `yes`/`on`/`off`/`no` stay
-    # strings (no boolean coercion), avoiding the YAML bool footgun. (A named call's YAML
-    # authored `input:` map would coerce `yes` -> True; the directive form intentionally does not.)
+    # `yes` is text in both forms: the flow reads plain scalars with YAML 1.2 rules.
     descriptors = {"use": _code("use", {"topic": "call(f, flag=yes)"})}
     new_descriptors, _, _ = desugar_inline_calls(descriptors, None, next_id=_ids())
     assert new_descriptors["__call_0"].inputs == {"flag": "yes"}
+
+
+def _synth_inputs(directive: str) -> dict:
+    """Desugar `directive` as a node binding and return its synth call's inputs."""
+    descriptors = {"use": _code("use", {"topic": directive})}
+    new_descriptors, _, _ = desugar_inline_calls(descriptors, None, next_id=_ids())
+    return new_descriptors["__call_0"].inputs
+
+
+def _assert_same(actual, expected):
+    assert actual == expected
+    assert type(actual) is type(expected)
+
+
+@pytest.mark.parametrize(
+    ("arg", "expected"),
+    [
+        ("1e3", 1000.0),
+        ("0x1F", 31),
+        ("0o17", 15),
+        ("+12", 12),
+        (".5", 0.5),
+        ("1.", 1.0),
+        (".inf", float("inf")),
+        ("~", None),
+        ("2026-10-14", date(2026, 10, 14)),
+        ("2026-10-14T10:00:00Z", datetime(2026, 10, 14, 10, tzinfo=timezone.utc)),
+        ("None", "None"),
+        ("none", "none"),
+        ("NONE", "NONE"),
+        ("tRUE", "tRUE"),
+        ("-.nan", "-.nan"),
+        ("yes", "yes"),
+        ("30", 30),
+        ("null", None),
+        ("true", True),
+        ("hello world", "hello world"),
+        # The named form reads a list here; a bare argument is one scalar.
+        ("[1]", "[1]"),
+    ],
+)
+def test_bare_keyword_values_read_with_the_flow_yaml_rules(arg, expected):
+    _assert_same(_synth_inputs(f"call(f, x={arg})")["x"], expected)
+
+
+def test_bare_nan_keyword_value_is_a_float():
+    assert math.isnan(_synth_inputs("call(f, x=.nan)")["x"])
+
+
+def test_keyword_value_whitespace_is_trimmed():
+    _assert_same(_synth_inputs("call(f, x= 1e3 )")["x"], 1000.0)
+
+
+@pytest.mark.parametrize(
+    ("arg", "expected"),
+    [('"1e3"', "1e3"), ("'~'", "~"), ('"None"', "None"), ("'2026-10-14'", "2026-10-14")],
+)
+def test_quoted_keyword_values_stay_text(arg, expected):
+    _assert_same(_synth_inputs(f"call(f, x={arg})")["x"], expected)
+
+
+def test_empty_keyword_value_is_null():
+    assert _synth_inputs("call(f, x=)") == {"x": None}
+
+
+@pytest.mark.parametrize("arg", ["${a.output}", "hi ${a.output}"])
+def test_binding_keyword_values_are_unchanged(arg):
+    assert _synth_inputs(f"call(f, x={arg})") == {"x": arg}
+
+
+@pytest.mark.parametrize("value", ["1e3", "0x1F", "~", "2026-10-14", "None", "tRUE", ".5"])
+def test_named_and_inline_forms_read_a_bare_value_alike(value):
+    _assert_same(
+        _synth_inputs(f"call(f, x={value})")["x"], parse_yaml_literal(f"x: {value}")["x"]
+    )
+
+
+def _g_flow(node: str, d_type: str = "str") -> str:
+    """A flow with a `defs:` child `g` taking input `d`, and the given `nodes:` body."""
+    return f"""id: f
+name: f
+input:
+  cmd: str
+defs:
+  g:
+    input:
+      d: {d_type}
+    nodes:
+      run:
+        kind: code
+        output: str
+        code: |
+          return "x"
+    output: ${{run.output}}
+nodes:
+{node}"""
+
+
+def _binding_node(binding: str) -> str:
+    """A `use` node binding `topic` to `binding`, and the flow output reading it."""
+    return (
+        "  use:\n    kind: code\n    code: tests.engine._compose_codefns:echo\n"
+        f"    input:\n      topic: {binding}\n    output: str\n"
+        "output: ${use.output}\n"
+    )
+
+
+def _case_node(target: str) -> str:
+    """A `route` case node whose only branch targets `target`, and the output."""
+    return (
+        "  route:\n    kind: case\n    on: ${input.cmd}\n    output: str\n"
+        f"    cases:\n      - when: a\n        then: {target}\n"
+        '    else: "other"\n'
+        "output: ${route.output}\n"
+    )
+
+
+@pytest.mark.parametrize("node", [_binding_node, _case_node], ids=["binding", "case"])
+def test_an_unreadable_keyword_value_is_a_located_load_error(node):
+    with pytest.raises(LoadError) as caught:
+        load_flow(_g_flow(node("call(g, d=2026-13-45)")))
+    message = str(caught.value)
+    assert "keyword 'd'" in message
+    assert "quote it to keep it as text" in message
+    assert "2026-13-45" not in message
+    assert "quote the whole value" not in message
+    assert "If you meant the text" not in message
+    assert caught.value.diagnostic.frames[-1].range is not None
+
+
+@pytest.mark.parametrize("d_type", ["str", "date"])
+def test_bare_and_quoted_dates_into_call_inputs(d_type):
+    load_flow(_g_flow(_binding_node("call(g, d='2026-10-14')"), d_type))
+    with pytest.raises(LoadError, match="quote it to keep it as text"):
+        load_flow(_g_flow(_binding_node("call(g, d=2026-10-14)"), d_type))
 
 
 def test_directive_in_outputs_and_asserts_is_desugared():

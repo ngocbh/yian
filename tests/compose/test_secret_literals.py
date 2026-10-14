@@ -390,11 +390,23 @@ def test_a_literal_secret_call_argument_is_rejected():
         "call(g, password=${input.pw})",
         "call(g, password='${input.pw}')",
         "call(g, password=null)",
+        "call(g, password=~)",
+        "call(g, password=)",
         "call(g, x=1, password=call(g, x=2))",
     ],
 )
 def test_a_binding_call_argument_under_a_secret_name_loads(binding):
     load_flow(_call_flow(binding))
+
+
+@pytest.mark.parametrize(
+    "binding", ["call(g, password=None)", "call(g, password=2026-13-45)"]
+)
+def test_a_none_or_unreadable_secret_call_argument_is_rejected(binding):
+    message = str(_secret_error(_call_flow(binding)))
+
+    assert "call(...) argument 'password' is a secret name" in message
+    assert "2026-13-45" not in message
 
 
 @pytest.mark.parametrize(

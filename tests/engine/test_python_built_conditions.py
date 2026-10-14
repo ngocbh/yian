@@ -4,9 +4,12 @@ import traceback
 
 import pytest
 
+from tests.engine.test_loop_run import COUNTER
+from yian.compose.loader import load_flow
 from yian.expr import ExpressionError
 from yian.nodes.case import Case, CaseNode
 from yian.nodes.loop import LoopNode
+from yian.run import run_flow
 
 
 def test_unparseable_case_when_raises_its_parse_error_from_setup():
@@ -64,3 +67,68 @@ def test_validate_conditions_names_the_given_path():
 
     with pytest.raises(ExpressionError, match=r"^node 'loop/gate' case 'pos' `when:`"):
         node.validate_conditions(path="loop/gate")
+
+
+_GATED = """
+id: gated
+name: gated
+input:
+  v: int
+nodes:
+  a:
+    kind: code
+    code: tests.engine._compose_codefns:double
+    input:
+      n: ${input.v}
+    output: int
+  gate:
+    kind: case
+    cases:
+      - when: "a.output > 0"
+        then: pos
+    else: neg
+  pos:
+    kind: code
+    code: tests.engine._compose_codefns:double
+    input:
+      n: ${a.output}
+    output: int
+  neg:
+    kind: code
+    code: tests.engine._compose_codefns:double
+    input:
+      n: ${a.output}
+    output: int
+output: ${pos.output}
+"""
+
+
+def test_python_set_case_when_fails_before_the_run_starts(tmp_path):
+    """A downstream CASE's bad `when` raises before any node runs or any record is written."""
+    flow = load_flow(_GATED)
+    flow.compiled.nodes["gate"].cases[0].when = "${__r0} > 0"
+    path = tmp_path / "run.jsonl"
+
+    with pytest.raises(ExpressionError) as excinfo:
+        run_flow(flow, {"v": 1}, log=path)
+
+    message = str(excinfo.value)
+    assert message.startswith(
+        "node 'gate' case 'pos' `when:` '${__r0} > 0' is not a valid boolean expression: "
+    )
+    assert "write `__r0 > 0`" in message
+    assert not path.exists()
+
+
+def test_python_set_loop_predicate_fails_before_the_run_starts(tmp_path):
+    """A LOOP's bad predicate raises before the run starts."""
+    flow = load_flow(COUNTER)
+    flow.compiled.nodes["loop"].predicate = "not ${exited}"
+    path = tmp_path / "run.jsonl"
+
+    with pytest.raises(
+        ExpressionError,
+        match=r"^node 'loop' `while:` 'not \$\{exited\}' is not a valid boolean expression: ",
+    ):
+        run_flow(flow, {}, log=path)
+    assert not path.exists()

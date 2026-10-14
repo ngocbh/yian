@@ -4,8 +4,9 @@ One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `human_input`
 frozen `HumanInputDescriptor`. It wraps the template `parse` from `NodeDescriptor` (which
 records each field's `SourceRange`) to reject the removed `adaptive_questions.mode:` key and
 any `adaptive_questions:` key the adaptive desugar does not read, and to record one
-`("text", "questions[i]...")` range per question string and a
-`("text", "adaptive_questions.prompt")` range for the adaptive brief, overrides the
+`("text", "questions[i]...")` range per question string, a
+`("text", "adaptive_questions.prompt")` range for the adaptive brief, and a
+`("field", "adaptive_questions.llm_config")` range for its `llm_config:` value, overrides the
 `_validate_fields` hook to enforce the one-of-three question-surface legality, and overrides
 `build` (which constructs the runtime `HumanInputNode` and derives the answer schema). A
 `prompt:`, an `adaptive_questions.prompt:` brief, or a literal question's `question`/`header`/
@@ -59,11 +60,12 @@ class HumanInputDescriptor(NodeDescriptor):
     `adaptive_questions.mode:` key, any `adaptive_questions:` key other than `prompt`,
     `llm_config`, or `retries`, a non-text `adaptive_questions.prompt:` brief, and a
     non-text `question`/`header`/option `label`/`description` in a literal `questions:` list,
-    and to add a `("text", "questions[i]...")` range for each question string and a
-    `("text", "adaptive_questions.prompt")` range for the adaptive brief to `field_ranges`. It
-    overrides the `_validate_fields` hook (the one-of-three legality and a text `prompt:`,
-    calling `super()` for the default asserts-list check); only the human_input-specific
-    fields are declared here.
+    and to add a `("text", "questions[i]...")` range for each question string, a
+    `("text", "adaptive_questions.prompt")` range for the adaptive brief, and a
+    `("field", "adaptive_questions.llm_config")` range for its `llm_config:` value to
+    `field_ranges`. It overrides the `_validate_fields` hook (the one-of-three legality and a
+    text `prompt:`, calling `super()` for the default asserts-list check); only the
+    human_input-specific fields are declared here.
 
     Class attrs: `kind="human_input"`; `allowed` adds `prompt`/`questions`/`adaptive_questions`,
     normalized `inputs`/`outputs`, and `asserts` to the commons; `required` is empty (no single flat field is
@@ -92,9 +94,10 @@ class HumanInputDescriptor(NodeDescriptor):
         `description` in a literal `questions:` list that is present but not a string, at that
         value. On top of the template `parse`'s per-field ranges, records a
         `("text", "adaptive_questions.prompt")` range for an `adaptive_questions:` block's
-        `prompt:` brief and one `("text", site_label(path))` range for each string
+        `prompt:` brief, a `("field", "adaptive_questions.llm_config")` range for its
+        `llm_config:` value, and one `("text", site_label(path))` range for each string
         `template_sites` finds in a literal `questions:` list (`question`, option `label`/
-        `description`), so a text error points at the string rather than the whole
+        `description`), so an error points at the string or config rather than the whole
         `adaptive_questions:` or `questions:` block.
 
         Raises:
@@ -135,6 +138,10 @@ class HumanInputDescriptor(NodeDescriptor):
             rng = _range_at(cursor, ("adaptive_questions", "prompt"))
             if rng is not None:
                 ranges[("text", "adaptive_questions.prompt")] = rng
+        if isinstance(adaptive, dict) and "llm_config" in adaptive:
+            rng = _range_at(cursor, ("adaptive_questions", "llm_config"))
+            if rng is not None:
+                ranges[("field", "adaptive_questions.llm_config")] = rng
         if not isinstance(desc.questions, list):
             return replace(desc, field_ranges={**desc.field_ranges, **ranges})
         found = _non_text_question_field(desc.questions)

@@ -1,3 +1,4 @@
+import copy
 import inspect
 import os
 from functools import cache
@@ -94,7 +95,13 @@ class RequestBlockMixin(BaseChatOpenAI):
                 f"but model {self.model_name!r} is routed to the Responses API; remove the "
                 f"block or use a model served through Chat Completions."
             )
-        return merge_request_body(payload, self.block, top_level=_sdk_body_keywords(responses))
+        top_level = _sdk_body_keywords(responses)
+        # Nested payload dicts can be the model's own fields or the caller's call
+        # options; copy the ones the merge writes into so no call leaks into the next.
+        for key in {*self.block, "extra_body"}:
+            if isinstance(payload.get(key), dict):
+                payload[key] = copy.deepcopy(payload[key])
+        return merge_request_body(payload, self.block, top_level=top_level)
 
 
 class NormalizedChatOpenAI(RequestBlockMixin, ChatOpenAI):

@@ -7,7 +7,6 @@ import pytest
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 
-from yian.llm_clients import create_llm_client
 from yian.llm_clients.azure_client import AzureOpenAIClient
 from yian.llm_clients.factory import model_from_config
 from yian.llm_clients.openai_client import OpenAIClient
@@ -134,6 +133,18 @@ def test_deepseek_block_sends_thinking_and_max_tokens(server):
     assert "max_completion_tokens" not in body
 
 
+def test_block_merge_leaves_model_and_call_extra_body_unchanged(server):
+    model = model_from_config(_config("deepseek", "deepseek-chat", {"thinking": {"type": "disabled"}}))
+    model.extra_body = {"own": 1}
+    call_extra = {"call": 2}
+    model.invoke([HumanMessage("hi")], extra_body=call_extra)
+    model.invoke([HumanMessage("hi")])
+    assert model.extra_body == {"own": 1}
+    assert call_extra == {"call": 2}
+    assert server.bodies[1]["thinking"] == {"type": "disabled"}
+    assert "call" not in server.bodies[1]
+
+
 def test_minimax_block_keeps_reasoning_split(server):
     block = {"thinking": {"type": "adaptive"}}
     model_from_config(_config("minimax", "MiniMax-M2.7", block)).invoke([HumanMessage("hi")])
@@ -182,16 +193,3 @@ def test_without_a_block_the_body_is_unchanged(server, provider, model, path, ex
     model_from_config(_config(provider, model)).invoke([HumanMessage("hi")])
     assert server.requests[0].url.path == path
     assert server.bodies[0] == expected
-
-
-@pytest.mark.parametrize(
-    ("provider", "model", "block"),
-    [
-        ("anthropic", "claude-sonnet-4-5", {"top_k": 5}),
-        ("google", "gemini-2.5-flash", {"generationConfig": {"seed": 1}}),
-        ("ollama", "qwen3.5:35b", {"keep_alive": "5m"}),
-    ],
-)
-def test_other_clients_accept_the_block_argument(clean_env, provider, model, block):
-    # These clients do not send their block yet; the factory passes it to every client.
-    assert create_llm_client(provider, model, api_key="sk-test", block=block).get_llm() is not None

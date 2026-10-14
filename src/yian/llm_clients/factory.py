@@ -158,9 +158,8 @@ def model_from_config(config) -> BaseChatModel:
     `base_url` is the required resource endpoint and `model` the deployment name.
 
     Provider-specific reasoning knobs apply only to the selected provider. The block
-    named after the provider is passed to its client as ``block``; the OpenAI-family
-    clients (``openai``, ``azure`` and the OpenAI-compatible vendors) send it into the
-    request body as written. The returned model supports ordinary tool binding,
+    named after the provider is passed to its client as ``block``, and every client
+    sends it into the request body as written. The returned model supports ordinary tool binding,
     structured output, and invocation.
 
     Args:

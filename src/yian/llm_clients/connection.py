@@ -285,6 +285,10 @@ def _check_block(validated: LLMConfig, connection: dict[str, Any] | None) -> Non
     Load time checks a block against the provider's usual API; the connection can route
     the call to a narrower one (the ChatGPT subscription endpoint), known only here.
 
+    Args:
+        validated (`LLMConfig`): The validated config; its ``provider`` names the block.
+        connection (`dict[str, Any] | None`): The pinned connection, if any.
+
     Raises:
         `ValueError`: The block has a key or value that API refuses; the message is
             the block class's own and never echoes values.

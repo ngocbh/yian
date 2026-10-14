@@ -45,10 +45,13 @@ class NormalizedChatOllama(ChatOllama):
     it. With `think` set in the block alone, langchain-ollama does not copy the reply's
     `message.thinking` into `reasoning_content` (it does so only when its own
     `reasoning` is truthy); the answer still lands in `content`.
+
+    Attributes:
+        block (`dict[str, Any]`, *optional*, defaults to `{}`):
+            The `ollama` block, merged into the request parameters as written.
     """
 
-    block: dict = Field(default_factory=dict, exclude=True, repr=False)
-    """The `ollama` block, merged into the request parameters as written."""
+    block: dict[str, Any] = Field(default_factory=dict, exclude=True, repr=False)
 
     def _chat_params(
         self,

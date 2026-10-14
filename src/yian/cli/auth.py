@@ -158,7 +158,7 @@ def _list() -> None:
             )
         if state.default_provider is None:
             typer.echo(_NO_DEFAULT)
-    if overrides:
+    if overrides and state.selections:
         verbs = ("is", "overrides") if len(overrides) == 1 else ("are", "override")
         typer.echo(
             f"{' and '.join(overrides)} {verbs[0]} set in the environment and "
@@ -222,6 +222,8 @@ def _check_options(
         raise AuthError("--method and --login apply only to openai")
     if name != "azure" and endpoint is not None:
         raise AuthError("--endpoint applies only to azure")
+    if api_key_env is not None and not api_key_env.strip():
+        raise AuthError("--api-key-env needs an environment variable name")
     if name == "ollama" and api_key_env is not None:
         raise AuthError("ollama takes no API key; omit --api-key-env")
     if method is not None and method not in ("subscription", "api-key"):
@@ -476,7 +478,8 @@ def auth(
         endpoint (`str | None`): Azure resource endpoint; azure only; omitted values
             prompt.
         default (`bool`): Make the saved provider the default without signing in.
-        remove (`bool`): Delete the provider's saved login; accepts any saved name.
+        remove (`bool`): Delete the provider's saved login; accepts any saved name,
+            and a lowercase saved name in any case.
 
     Raises:
         typer.Exit: The command fails or is cancelled; saved logins stay unchanged.
@@ -502,7 +505,11 @@ def auth(
         )
         store = AuthStore()
         if remove:
-            was_default = store.read().default_provider == provider
+            state = store.read()
+            saved = {selection.provider for selection in state.selections}
+            if provider not in saved and provider.lower() in saved:
+                provider = provider.lower()
+            was_default = state.default_provider == provider
             store.remove(provider)
             typer.echo(f"Removed the saved {provider} login")
             if was_default:

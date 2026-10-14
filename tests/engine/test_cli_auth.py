@@ -276,6 +276,15 @@ def test_remove_accepts_an_unsupported_saved_provider(setup_auth):
     assert store.read().selections == ()
 
 
+def test_remove_finds_a_lowercase_saved_name(setup_auth):
+    store, service = setup_auth
+    store.save("vllm", None, "m1")
+    result = runner.invoke(app, ["auth", "VLLM", "--remove"])
+    assert result.exit_code == 0, result.output
+    assert "Removed the saved vllm login" in result.output
+    assert store.read().selections == ()
+
+
 @pytest.mark.parametrize(
     "args",
     [
@@ -285,6 +294,7 @@ def test_remove_accepts_an_unsupported_saved_provider(setup_auth):
         ["auth", "anthropic", "--login", "device"],
         ["auth", "openai", "--endpoint", "https://x.openai.azure.com/"],
         ["auth", "ollama", "--api-key-env", "X"],
+        ["auth", "anthropic", "--api-key-env", ""],
         ["auth", "openai", "--remove", "--model", "x"],
         ["auth", "azure", "--default", "--endpoint", "https://x.openai.azure.com/"],
     ],
@@ -743,6 +753,10 @@ def test_model_answers_reports_a_missing_extra(monkeypatch):
 
 
 def test_env_override_note_agrees_with_the_number_of_variables(monkeypatch, setup_auth):
+    store, service = setup_auth
+    result = runner.invoke(app, ["auth"])
+    assert "No login is saved" in result.output and "YIAN_DEFAULT" not in result.output
+    store.save("anthropic", ApiKeyCredentials("private-key"), "claude-test")
     result = runner.invoke(app, ["auth"])
     assert "YIAN_DEFAULT_PROVIDER and YIAN_DEFAULT_MODEL are set" in result.output
     assert "and override the saved choice" in result.output

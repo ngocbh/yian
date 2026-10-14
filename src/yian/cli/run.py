@@ -1342,8 +1342,9 @@ def _ensure_provider_keys(loaded, cli_cfg: Dict[str, Any]) -> None:
     resolves its stored credential without a prompt; any other agent needs its
     provider's key environment variable, via
     [`ensure_env_key`][yian.cli.utils.ensure_env_key], which skips keyless and
-    unknown providers, and optional-key providers whose variable is unset. An Azure agent whose `base_url` names
-    another resource than the saved login needs `AZURE_OPENAI_API_KEY`.
+    unknown providers, and optional-key providers whose variable is unset. An
+    Azure agent whose `base_url` names another resource than the saved login
+    needs `AZURE_OPENAI_API_KEY`.
 
     Args:
         loaded (`ComposedFlow`):

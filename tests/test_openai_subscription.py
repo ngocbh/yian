@@ -250,3 +250,20 @@ def test_async_uses_same_completion_guard(terminal):
 
     asyncio.run(invoke())
     assert server.streams[0].closed
+
+
+def test_openai_block_is_sent_beside_the_subscription_protocol_settings():
+    server = ResponsesServer()
+    with httpx.Client(transport=httpx.MockTransport(server)) as client:
+        model = create_subscription_model(
+            "gpt-5.5",
+            access_source=_access,
+            http_client=client,
+            block={"reasoning": {"effort": "high"}, "text": {"verbosity": "low"}},
+        )
+        model.invoke("Hi")
+    body = server.bodies[0]
+    assert body["reasoning"]["effort"] == "high"
+    assert body["text"]["verbosity"] == "low"
+    assert body["store"] is False and body["stream"] is True
+    assert "reasoning.encrypted_content" in body["include"]

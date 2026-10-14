@@ -172,7 +172,8 @@ def model_from_config(config) -> BaseChatModel:
         `BaseChatModel`: A langchain chat model, ready for `.bind_tools(...)`.
 
     Raises:
-        ValueError: If the provider is unsupported.
+        ValueError: If the provider is unsupported, or `check_model_config` rejects the
+            config (e.g. a block the API it reaches refuses).
         ImportError: If the resolved provider's optional dependency extra is not installed.
     """
     from .connection import check_model_config, connection_credentials, resolve_model_config
@@ -196,6 +197,7 @@ def model_from_config(config) -> BaseChatModel:
         return create_subscription_model(
             model, access_source=access_source,
             reasoning_effort=config.openai_reasoning_effort,
+            block=config.block_for("openai"),
         )
 
     kwargs: dict[str, Any] = {"block": config.block_for(provider)}

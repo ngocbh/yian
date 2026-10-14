@@ -535,29 +535,29 @@ subset of the base's own union members, with nullability) or `Exact(T)`. An `on:
 over a union tag field gives each `when:` handle its tagged members and `else:` the
 unlisted ones. A searched CASE's top-level `isinstance(<ref>, T)` conjunct gives its
 handle a fact; its `else:` carries none. A later conjunct of the same `and` chain is
-checked against the narrowed base (`Narrowing.for_param`). Facts flow in Kahn's order over data, CASE, and `depends_on` edges:
-control edges join by union, each required data group joins its producers by union, and
-all contributions meet by intersection. Optional groups and `runs_after` contribute
-nothing; nodes on a cycle get no facts and are left for `reject_cycles`. The call-type and
-CASE-exhaustiveness checks read `Narrowing.for_node(id)`, and the reference and
-typed-input checks read `for_param`, which falls back to it; flow outputs are checked
-unnarrowed. A CASE that produces a value (it declares `output:`, has a value branch, or is
-read as `${case.output}`) must be exhaustive: an `else:`, every tag of a non-nullable
-enum `on:`, or `true` and `false` for a non-nullable `bool` `on:`, with a flow-input `on:`
-resolved for it too; `when:` values compare as typed values, not text. An `on:` CASE's
-`when:` values are typed literals, and `compose/validate/case_exhaustive.py`
-(`check_case_when_values`) runs one membership check right after narrowing: where the
-`on:` type is known, a `when:` it can't hold (a non-tag, a wrong scalar type) is a located
-load error, even next to an `else:`. Compose lifts each CASE value
-branch to a synthetic `__value_N` CODE node and gives a typed CASE one `__case_<id>`
-CODE result node that checks the taken branch; this is load-time desugar, and the
-runtime is unchanged. A node a desugar pass lifts out of an authored node (an inline
-`call(...)` in its binding, an inner call of a nested branch call, an adaptive composer)
-records that node as its `host`, and `compose/edges/hosts.py` copies the host's CASE route
-edges and `depends_on`/`runs_after` ordering edges onto it, so it runs only on the host's
-branches and in the host's order. It doesn't wait on the host's other inputs. Inline child
-bodies and LOOP seeds are typed while nodes build, before the pass, so they see unnarrowed
-types. Runtime routing is unchanged.
+checked against the narrowed base (`Narrowing.for_param`). Facts flow in Kahn's order
+over data, CASE, and `depends_on` edges: control edges join by union, each required data
+group joins its producers by union, and all contributions meet by intersection. Optional
+groups and `runs_after` contribute nothing; nodes on a cycle get no facts and are left for
+`reject_cycles`. The call-type and CASE-exhaustiveness checks read
+`Narrowing.for_node(id)`, and the reference and typed-input checks read `for_param`, which
+falls back to it; flow outputs are checked unnarrowed. A CASE that produces a value (it
+declares `output:`, has a value branch, or is read as `${case.output}`) must be
+exhaustive: an `else:`, every tag of a non-nullable enum `on:`, or `true` and `false` for
+a non-nullable `bool` `on:`, with a flow-input `on:` resolved for it too; `when:` values
+compare as typed values, not text. An `on:` CASE's `when:` values are typed literals, and
+`compose/validate/case_exhaustive.py` (`check_case_when_values`) runs one membership check
+right after narrowing: where the `on:` type is known, a `when:` it can't hold (a non-tag,
+a wrong scalar type) is a located load error, even next to an `else:`. Compose lifts each
+CASE value branch to a synthetic `__value_N` CODE node and gives a typed CASE one
+`__case_<id>` CODE result node that checks the taken branch; this is load-time desugar,
+and the runtime is unchanged. A node a desugar pass lifts out of an authored node (an
+inline `call(...)` in its binding, an inner call of a nested branch call, an adaptive
+composer) records that node as its `host`, and `compose/edges/hosts.py` copies the host's
+CASE route edges and `depends_on`/`runs_after` ordering edges onto it, so it runs only on
+the host's branches and in the host's order. It doesn't wait on the host's other inputs.
+Inline child bodies and LOOP seeds are typed while nodes build, before the pass, so they
+see unnarrowed types. Runtime routing is unchanged.
 
 Physical Compose declarations derive exact `ValueContract`s. Output binding derivation,
 builders, child signatures, producer maps, and validators retain the complete

@@ -304,13 +304,14 @@ nodes that plainly read them. Read the taken branch's result with `${route.outpu
 (see `branching.yaml`). A branch may also be a value (`else: "approve"`, a record, a
 list) when the `case` declares `output:`; quote text, since an unquoted word names a
 node. A `case` whose result is used needs an `else:`, every tag of a non-nullable
-`Literal` `on:`, or `when: true` and `when: false` on a non-nullable `bool` `on:`; routing on a `Literal` node output is always exhaustiveness-checked.
-A routing-only `case` takes none when nothing matches and there is no `else:`. A flow
-output field that reads only nodes a `case` may skip returns `null` when they were
-skipped (typed `Optional[T]`, as if `:- null` were written), in root, `defs:`, and
-inline bodies; a join over an exhaustive `case` never does. A LOOP body field like
-that sets the carried field to null. Templates and comparisons keep their null
-behavior; arithmetic needs a `:-` default.
+`Literal` `on:`, or `when: true` and `when: false` on a non-nullable `bool` `on:`;
+routing on a `Literal` node output is always exhaustiveness-checked. A routing-only
+`case` takes none when nothing matches and there is no `else:`. A flow output field that
+reads only nodes a `case` may skip returns `null` when they were skipped (typed
+`Optional[T]`, as if `:- null` were written), in root, `defs:`, and inline bodies; a join
+over an exhaustive `case` never does. A LOOP body field like that sets the carried field
+to null. Templates and comparisons keep their null behavior; arithmetic needs a `:-`
+default.
 
 **Branch on a union.** Route with `on: ${d.output.action}` (the tag field). Each
 `when:` target, nodes chained to it by plain refs or `depends_on`, and inline `call(...)`s

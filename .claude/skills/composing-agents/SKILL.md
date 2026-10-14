@@ -624,9 +624,10 @@ may skip (`${order.output}`, `${a.output | b.output}`, `${a.output :- ${b.output
 returns `null` when they were skipped, typed `Optional[T]`; the loader reads it as if
 `:- null` were written. This holds in `defs:` children and inline CALL/LOOP/MAP bodies.
 A join over an exhaustive `case` (`else:`, every tag of a non-nullable `Literal`, or a
-non-nullable `bool` with `when: true` and `when: false`) is never null. A typed `x: str = ${order.output}` loads and fails with `binding.type`
-when skipped. Templates and comparisons are unchanged (embedded null renders as
-empty text). Arithmetic on such a value is a load error asking for `:-`.
+non-nullable `bool` with `when: true` and `when: false`) is never null. A typed
+`x: str = ${order.output}` loads and fails with `binding.type` when skipped. Templates
+and comparisons are unchanged (embedded null renders as empty text). Arithmetic on such a
+value is a load error asking for `:-`.
 
 **Narrowing a union.** `on: ${d.output.action}` over a union's tag field narrows
 `d.output` in each branch: a `when: buy` target (and nodes chained to it by plain refs or

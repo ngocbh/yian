@@ -42,6 +42,7 @@ from yian.compose.nodes.case import (
     CaseDescriptor,
     IsinstanceCheck,
     isinstance_conjuncts,
+    on_match_value,
     searched_param_guards,
 )
 from yian.expr import ExpressionError
@@ -481,7 +482,8 @@ def _on_case_facts(
     by_handle: dict[str, list[Type]] = {}
     listed: set[str] = set()
     for case in desc.cases:
-        value, then = case.get("when"), case.get("then")
+        # Match what the lowering compares: an unquoted date is its ISO text.
+        value, then = on_match_value(case.get("when")), case.get("then")
         if value is None or then is None:
             continue
         members = by_handle.setdefault(then, [])

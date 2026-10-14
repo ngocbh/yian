@@ -538,3 +538,35 @@ def test_literal_value_case_listing_every_tag_needs_no_else():
     text = _value_flow([("a", "A"), ("b", "B")], "Literal[a, b]")
     assert _route(text, {"n": "a"}) == "A"
     assert _route(text, {"n": "b"}) == "B"
+
+
+def test_unquoted_date_when_narrows_a_date_shaped_union_tag():
+    text = (
+        "id: f\nname: f\n"
+        "typedefs:\n"
+        "  A: {d: 'Literal[\"2026-01-02\"]', x: int}\n"
+        "  B: {d: 'Literal[other]', y: int}\n"
+        "  U: Union[A, B]\n"
+        "input:\n  pick: str\nnodes:\n"
+        "  p:\n    kind: code\n    input:\n      s: ${input.pick}\n    output: U\n"
+        "    code: |\n"
+        '      return {"d": "2026-01-02", "x": 5} if inputs["s"] == "a" '
+        'else {"d": "other", "y": 1}\n'
+        "  route:\n    kind: case\n    on: ${p.output.d}\n    cases:\n"
+        "      - when: 2026-01-02\n        then: a\n"
+        "    else: e\n"
+        "  a:\n    kind: code\n    input:\n      x: ${p.output.x}\n"
+        "    code: |\n      return inputs[\"x\"]\n    output: int\n"
+        "  e:\n    kind: code\n    code: |\n      return 0\n    output: int\n"
+        "output: ${a.output | e.output}\n"
+    )
+    assert _route(text, {"pick": "a"}) == 5
+    assert _route(text, {"pick": "b"}) == 0
+
+
+def test_malformed_date_text_on_a_date_is_not_a_value():
+    text = _flow([('"2026-1-2"', "one")], on_type="date")
+    message = _when_error(text, '"2026-1-2"')
+    assert message.startswith(
+        "case node 'route': `when: \"2026-1-2\"` is not a value of `on: ${input.n}` (`date`): "
+    )

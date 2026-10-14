@@ -1259,12 +1259,12 @@ replayed.
 Changed: a `when:` in the `on:` form used to be compared as text, so `when: 1` and
 `when: true` never matched an int or bool `on:`; it is now a typed literal of the `on:`
 type. `when: 1` on a `str` `on:` used to match `"1"`; it is now a load error that says to
-quote it. Where the `on:` type isn't known at load (an untyped output, `object`, a
-computed expression), the runtime comparison is exact too: `when: 1` no longer matches the
-text `"1"`, so type the producer or quote the value. A `when:` that can't be a value of
-the `on:` type (a typo'd tag, a wrong scalar type) is a load error even with an `else:`.
-An unquoted datetime `when:` is a load error; quote it. Flows with a number or bool
-`when:` get new fingerprints.
+quote it. Where the `on:` type isn't known at load (an untyped output, `object`, an
+expression whose type isn't proven, e.g. `${input.n + 1}`), the runtime comparison is
+exact too: `when: 1` no longer matches the text `"1"`, so type the producer or quote the
+value. A `when:` that can't be a value of the `on:` type (a typo'd tag, a wrong scalar
+type) is a load error even with an `else:`. An unquoted datetime `when:` is a load error;
+quote it. Flows with a number or bool `when:` get new fingerprints.
 
 Simple form — match a value:
 

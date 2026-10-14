@@ -248,14 +248,13 @@ this model whenever you design anything:
   non-nullable `bool` `on:`, compared as typed values), with a flow-input `on:` resolved
   for it. `case_exhaustive.py`'s `check_case_when_values` runs right after narrowing: an
   `on:` CASE's `when:` values are typed literals, and one the known `on:` type can't hold
-  is a located load error, even next to an `else:`. Load-time desugar lifts each CASE value branch to a
-  `__value_N` CODE node and gives a typed CASE a `__case_<id>` result node; the runtime
-  is unchanged. Python-authored
-  nodes pass `output_contract=`; there is no parallel
-  output-Type API. Authored `output:` syntax (the descriptor's normalized `outputs` field)
-  stays unchanged. Compose injects an optional source-aware reader through `BuildContext`;
-  `NodeDescriptor.output_contract()` invokes it
-  only at each output-authoring leaf's established build position, so earlier kind-owned
+  is a located load error, even next to an `else:`. Load-time desugar lifts each CASE
+  value branch to a `__value_N` CODE node and gives a typed CASE a `__case_<id>` result
+  node; the runtime is unchanged. Python-authored nodes pass `output_contract=`; there is
+  no parallel output-Type API. Authored `output:` syntax (the descriptor's normalized
+  `outputs` field) stays unchanged. Compose injects an optional source-aware reader
+  through `BuildContext`; `NodeDescriptor.output_contract()` invokes it only at each
+  output-authoring leaf's established build position, so earlier kind-owned
   validation and error ordering do not move. A physical declaration supplies the contract
   root/default and exact nested record-field origins; scalar alias/list interiors fall back
   through the nearest authored ancestor to the root. Compact roots and flat definitions

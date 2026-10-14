@@ -165,7 +165,8 @@ def check_case_when_values(
 # The scalar kind of each `when:` value type, for "this value has the right kind but is
 # still not a member" (an out-of-bounds number).
 _VALUE_KINDS: dict[type, tuple[ValueKind, ...]] = {
-    str: (ValueKind.STRING,),
+    # Text is how a date or datetime `on:` value is written, so wrong text is a bad value.
+    str: (ValueKind.STRING, ValueKind.DATE, ValueKind.DATETIME),
     bool: (ValueKind.BOOLEAN,),
     int: (ValueKind.INTEGER, ValueKind.NUMBER),
     float: (ValueKind.NUMBER,),

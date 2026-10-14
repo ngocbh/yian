@@ -166,6 +166,103 @@ def _render_value_path(path: tuple[str | int, ...]) -> str:
     return "".join(parts)
 
 
+MAX_VALUE_NESTING = 100
+"""Deepest nesting a yian value may have.
+
+Each dict, list, tuple, model, or dataclass is one level.
+"""
+
+
+def reject_deep_nesting(value: Any, where: str, *, enclosing_levels: int = 0) -> None:
+    """Raise if a value nests deeper than `MAX_VALUE_NESTING` levels.
+
+    Each `dict`, `list`, `tuple`, pydantic model, and dataclass instance is one
+    level; a `TypedValue` is unwrapped and adds none. A model's declared fields
+    and extras are its direct children. The walk is iterative, depth-first, and
+    in order, so it never hits Python's recursion limit. A container already on
+    the current path is skipped; the canonical codecs reject cycles.
+
+    Args:
+        value (`Any`):
+            The value to check.
+        where (`str`):
+            Names the boundary for the message, e.g. ``"output"``.
+        enclosing_levels (`int`):
+            Levels counted around the value; -1 lets the value itself go one
+            level over, as for a START's input record.
+
+    Raises:
+        `TypeCheckError`:
+            A container sits past the limit; ``path`` locates the first one and the
+            message reads ``<where>[ at <path>]: value nests deeper than <limit>
+            levels, the limit for a yian value (each record and list is a level)``.
+    """
+    limit = MAX_VALUE_NESTING
+    while isinstance(value, TypedValue):
+        value = value.to_object()
+    children = _nesting_children(value, ())
+    if children is None:
+        return
+    if 1 + enclosing_levels > limit:
+        raise _too_deep(where, (), limit)
+    stack = [(iter(children), id(value))]
+    active = {id(value)}
+    while stack:
+        iterator, container_id = stack[-1]
+        entry = next(iterator, None)
+        if entry is None:
+            stack.pop()
+            active.discard(container_id)
+            continue
+        child, child_path = entry
+        while isinstance(child, TypedValue):
+            child = child.to_object()
+        if id(child) in active:
+            continue
+        grandchildren = _nesting_children(child, child_path)
+        if grandchildren is None:
+            continue
+        if len(stack) + 1 + enclosing_levels > limit:
+            raise _too_deep(where, child_path, limit)
+        stack.append((iter(grandchildren), id(child)))
+        active.add(id(child))
+
+
+def _nesting_children(
+    value: Any,
+    path: tuple[str | int, ...],
+) -> list[tuple[Any, tuple[str | int, ...]]] | None:
+    """Return a container's children with their paths, or `None` for a leaf."""
+    if isinstance(value, BaseModel):
+        children = [(getattr(value, name), path + (name,)) for name in type(value).model_fields]
+        children.extend((item, path + (name,)) for name, item in (value.model_extra or {}).items())
+        return children
+    if isinstance(value, dict):
+        # `TypeCheckError` paths hold exact `str` segments, so a `str` subclass key is unwrapped.
+        return [
+            (item, path + (str.__str__(key) if isinstance(key, str) else repr(key),))
+            for key, item in value.items()
+        ]
+    if isinstance(value, (list, tuple)):
+        return [(item, path + (index,)) for index, item in enumerate(value)]
+    if is_dataclass(value) and not isinstance(value, type):
+        return [
+            (getattr(value, field.name), path + (field.name,))
+            for field in _dataclass_fields(value)
+        ]
+    return None
+
+
+def _too_deep(where: str, path: tuple[str | int, ...], limit: int) -> TypeCheckError:
+    """Build the error for a container past the nesting limit at `path`."""
+    location = f"{where} at {_render_value_path(path)}" if path else where
+    return TypeCheckError(
+        f"{location}: value nests deeper than {limit} levels, "
+        "the limit for a yian value (each record and list is a level)",
+        path=path,
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Type vocabulary
 # --------------------------------------------------------------------------- #

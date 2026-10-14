@@ -84,6 +84,26 @@ _FINGERPRINT = "a" * 64
 _TOPOLOGY_DIGEST = "b" * 64
 
 
+BIG = 10**4999 + 12345  # 5000 digits, past Python's default 4300-digit limit
+
+
+@pytest.fixture
+def _default_int_digit_limit():
+    """Run a test under Python's default int/str digit limit."""
+    get = getattr(sys, "get_int_max_str_digits", None)
+    if get is None:
+        yield  # this Python has no limit
+        return
+    before = get()
+    sys.set_int_max_str_digits(4300)
+    try:
+        yield
+        after = get()
+    finally:
+        sys.set_int_max_str_digits(before)
+    assert after == 4300, "yian code changed the global digit limit"
+
+
 @pytest.mark.parametrize("resumed", [False, True], ids=["started", "resumed"])
 def test_historical_frontier_prepares_recorded_schema_bytes(resumed):
     from copy import deepcopy
@@ -1194,26 +1214,6 @@ def test_run_log_protocol_pins_iteration_append_close_and_context_management():
     assert log.close_count == 1
 
 
-BIG = 10**4999 + 12345  # 5000 digits, past Python's default 4300-digit limit
-
-
-@pytest.fixture
-def _default_int_digit_limit():
-    """Run a test under Python's default int/str digit limit."""
-    get = getattr(sys, "get_int_max_str_digits", None)
-    if get is None:
-        yield  # this Python has no limit
-        return
-    before = get()
-    sys.set_int_max_str_digits(4300)
-    try:
-        yield
-        after = get()
-    finally:
-        sys.set_int_max_str_digits(before)
-    assert after == 4300, "yian code changed the global digit limit"
-
-
 @pytest.mark.usefixtures("_default_int_digit_limit")
 @pytest.mark.parametrize("value", [BIG, [-BIG]], ids=["int", "list"])
 def test_records_round_trip_ints_past_the_digit_limit(value):
@@ -1249,5 +1249,7 @@ def test_typed_json_decode_reads_ints_past_the_digit_limit():
 
     assert decode_typed_json(data) == build_value({"a": [BIG]})
     assert decode_typed_json(data.decode()).to_object() == {"a": [BIG]}
+    keyed = decode_typed_json(ANY_VALUE_ADAPTER.dump_json(build_value({"b": 1, "a": BIG})))
+    assert list(keyed.to_object()) == ["b", "a"]
     with pytest.raises(ValidationError):
         decode_typed_json(b'{"kind":"int","value":"x"}')

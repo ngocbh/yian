@@ -2603,14 +2603,15 @@ def decode_typed_json(data: bytes | str) -> TypedValue:
             The document is not valid JSON or not a valid typed value.
     """
     try:
-        # Pydantic's parser is the fast path for every document without a long int.
+        # Parsing and validating in one pass avoids building Python objects
+        # first; only documents with long ints need the slower path below.
         return ANY_VALUE_ADAPTER.validate_json(data, strict=True)
     except ValidationError as exc:
         if any(error["type"] != "json_invalid" for error in exc.errors()):
             raise
         try:
             parsed = json_codec.loads(data)
-        except ValueError:
+        except (ValueError, RecursionError):
             raise exc from None
     return ANY_VALUE_ADAPTER.validate_python(parsed, strict=True)
 

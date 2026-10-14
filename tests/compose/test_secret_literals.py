@@ -297,7 +297,7 @@ nodes:
     kind: case
     output: dict[str, str]
     cases:
-      - when: "${{input.score}} >= 0.5"
+      - when: input.score >= 0.5
         then:
           password: {then}
     else:

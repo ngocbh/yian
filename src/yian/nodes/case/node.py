@@ -112,6 +112,7 @@ class CaseNode(Node):
                 _parse_named_condition(
                     case.when,
                     f"node {(path or self.id)!r} case {case.handle!r} `when:` {case.when!r}",
+                    self.types,
                 )
 
     def iter_local_origins(

@@ -235,10 +235,15 @@ def _validate_declared_names(names: tuple[str, ...], field_name: str) -> None:
         raise ValueError(f"{field_name} must contain unique names")
 
 
-def _parse_named_condition(expression: str, subject: str) -> None:
-    """Parse a condition expression, prefixing its parse error with `subject`."""
+def _parse_named_condition(
+    expression: str, subject: str, types: "dict[str, Type] | None" = None
+) -> None:
+    """Parse a condition expression, prefixing its parse error with `subject`.
+
+    A `T(...)` constructor must name a type in `types`, the node's type table.
+    """
     try:
-        parse_condition(expression)
+        parse_condition(expression, types or {})
     except ExpressionError as exc:
         raise ExpressionError(f"{subject} is not a valid boolean expression: {exc}") from exc
 
@@ -976,7 +981,9 @@ class Node(ABC):
         shown = repr(assertion.display)
         if assertion.expression != assertion.display:
             shown += f" (`{assertion.expression}`)"
-        _parse_named_condition(assertion.expression, f"node {(where or self.id)!r} {label} {shown}")
+        _parse_named_condition(
+            assertion.expression, f"node {(where or self.id)!r} {label} {shown}", self.types
+        )
 
     def run(self, inputs: dict[str, Any], **caps: Any) -> "NodeResult":
         """Run the node's complete pure-execution template.

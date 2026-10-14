@@ -283,9 +283,6 @@ def _check_condition_calls(
             continue  # e.g. a C builtin a host registered; it is checked when called
         positional = [arg for arg in call_suffix.children if len(arg.children) == 1]
         keywords = [str(arg.children[0]) for arg in call_suffix.children if len(arg.children) == 2]
-        repeated = next((k for i, k in enumerate(keywords) if k in keywords[:i]), None)
-        if repeated is not None:  # the grammar accepts `f(a=1, a=2)`; binding would collapse it
-            raise ExpressionError(f"expression function {callee!r} got keyword {repeated!r} twice")
         try:
             signature.bind(*([None] * len(positional)), **dict.fromkeys(keywords))
         except TypeError as exc:

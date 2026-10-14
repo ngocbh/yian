@@ -889,8 +889,8 @@ def test_excessively_nested_output_constructs_contract_failure(
 
     assert len(failures) == 1
     assert failures[0].code == "contract.output"
-    assert failures[0].cause_type == "ValueError"
-    assert "nesting exceeds" in failures[0].message
+    assert failures[0].cause_type == "TypeCheckError"
+    assert "deeper than 100 levels" in failures[0].message
     assert isinstance(events[-2], NodeFailed)
     assert isinstance(events[-1], RunFailed)
     assert isinstance(tuple(log)[-1].record, NodeFailedRecord)

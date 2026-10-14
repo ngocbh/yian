@@ -42,7 +42,7 @@ from yian.expr.template import Span, eval_template, scan_template
 from yian.nodes.contracts import Binding, Parameter, ValueContract, binding_source
 from yian.typesys import TypeCheckError, ValueKind, build_value_as
 from yian.typesys.pool import VariablePool
-from yian.typesys.values import Type, reject_nonfinite, value_repr
+from yian.typesys.values import Type, reject_deep_nesting, reject_nonfinite, value_repr
 
 
 BindingFailureCode: TypeAlias = Literal[
@@ -181,9 +181,15 @@ def _source_origin(source: Any) -> OriginRef | None:
     return source.origin if isinstance(source, Binding) else None
 
 
-def _reject_nonfinite_binding(value: Any, where: str, origin: OriginRef | None) -> None:
-    """Raise a ``binding.evaluate`` `BindingError` if ``value`` holds NaN, infinity, or complex."""
+def _reject_invalid_binding(value: Any, where: str, origin: OriginRef | None) -> None:
+    """Raise a ``binding.evaluate`` `BindingError` if ``value`` is not a yian value.
+
+    A value is rejected when it nests deeper than `MAX_VALUE_NESTING` levels or holds a
+    NaN, infinity, or complex number at any depth.
+    """
     try:
+        # Depth first, so the non-finite walk never meets an unbounded value.
+        reject_deep_nesting(value, where)
         reject_nonfinite(value, where)
     except TypeCheckError as exc:
         raise BindingError(str(exc), failure_code="binding.evaluate", origin=origin) from exc
@@ -288,16 +294,16 @@ def apply_defaults(
     payload rather than the typed value system's normalized representation.
 
     Raises:
-        `BindingError`: With ``failure_code="binding.evaluate"`` when a default holds a
-            NaN, infinity, or complex number at any depth or violates its parameter's
-            contract.
+        `BindingError`: With ``failure_code="binding.evaluate"`` when a default nests
+            deeper than `MAX_VALUE_NESTING` levels, holds a NaN, infinity, or complex
+            number at any depth, or violates its parameter's contract.
     """
     _validate_parameters(params)
     output = dict(inputs)
     for parameter in params:
         if parameter.name in output or not parameter.has_default:
             continue
-        _reject_nonfinite_binding(
+        _reject_invalid_binding(
             parameter.default,
             f"default for {parameter.name!r}",
             parameter.default_origin or parameter.origin,
@@ -452,7 +458,8 @@ def bind_params(
 
     Raises:
         `BindingError`: On expression/default/required evaluation failure, a resolved value
-            or filled default holding a NaN, infinity, or complex number at any depth, typed binding
+            or filled default nesting deeper than `MAX_VALUE_NESTING` levels or holding a
+            NaN, infinity, or complex number at any depth, typed binding
             rejection, or supplied input contract rejection; ``failure_code`` identifies
             the stage.
     """
@@ -469,7 +476,7 @@ def bind_params(
                 source, pool, item, collector=collector if present else None,
                 name=p.name, source_resolver=source_resolver, types=types,
             )
-            _reject_nonfinite_binding(value, f"input {p.name!r}", _source_origin(source))
+            _reject_invalid_binding(value, f"input {p.name!r}", _source_origin(source))
             if present and isinstance(source, Binding) and source.contract is not None:
                 _check_binding_type(p.name, source, source.contract, value)
             if value is None:
@@ -481,7 +488,7 @@ def bind_params(
                 if not present and p.has_default:
                     value = p.default
                     used_default = True
-                    _reject_nonfinite_binding(
+                    _reject_invalid_binding(
                         value, f"default for {p.name!r}", p.default_origin or p.origin
                     )
                     if collector is not None:

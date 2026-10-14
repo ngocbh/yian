@@ -23,7 +23,7 @@ from typing import Any, Callable, ClassVar, Iterator, Optional
 from yian.diagnostics import OriginRef
 from yian.nodes.base import Grow, Node, NodeKind
 from yian.nodes.binding import (
-    BindingError, ReservedBinder, _reject_nonfinite_binding, _resolve_source, _source_origin,
+    BindingError, ReservedBinder, _reject_invalid_binding, _resolve_source, _source_origin,
 )
 from yian.nodes.contracts import (
     Parameter,
@@ -117,9 +117,9 @@ class MapNode(Node):
 
         Returns `{"over": <list>}`: the `over` source rides `node_wiring["over"]`, evaluated
         against `pool`. A source that resolves to `None`/non-list raises a binder-owned
-        ``BindingError`` classified as ``contract.input`` by the read seam; a list holding
-        a NaN, infinity, or complex number at any depth raises one classified as
-        ``binding.evaluate``."""
+        ``BindingError`` classified as ``contract.input`` by the read seam; a list nesting
+        deeper than `MAX_VALUE_NESTING` levels or holding a NaN, infinity, or complex
+        number at any depth raises one classified as ``binding.evaluate``."""
         over_src = node_wiring["over"]
 
         def validate(items):
@@ -130,7 +130,7 @@ class MapNode(Node):
                     failure_code="contract.input",
                     origin=_source_origin(over_src),
                 )
-            _reject_nonfinite_binding(
+            _reject_invalid_binding(
                 items, f"MAP node {self.id!r}: `over` ({display_src})", _source_origin(over_src)
             )
             return items

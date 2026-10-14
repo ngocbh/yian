@@ -98,7 +98,7 @@ from yian.tools.types import tool_types
 from yian.typesys import Type, ValueKind, canonical_type_label
 from yian.typesys.pool import VariablePool
 from yian.typesys.seeding import default_run_id, seed_system_clock
-from yian.typesys.values import reject_nonfinite
+from yian.typesys.values import reject_deep_nesting, reject_nonfinite
 
 
 EventHook = Callable[[Any], None]
@@ -172,7 +172,8 @@ class RunResult:
 
         Raises:
             `TypeError`: Feedback has an invalid ordinary-message carrier.
-            `ValueError`: Retention is disabled or feedback is invalid.
+            `ValueError`: Retention is disabled, or feedback does not match the
+                output's shape or nests deeper than `MAX_VALUE_NESTING` levels.
             `MemorySetupError`: Enabled memories cannot restore their recorded
                 snapshots. Host and log faults also propagate while preserving
                 the accepted prefix.
@@ -186,6 +187,8 @@ class RunResult:
         handle = self._backward_handle
         if handle is None:
             raise ValueError("backward requires a run retained with learnable=True")
+        # Checked before anything walks the feedback recursively.
+        reject_deep_nesting(feedback, "feedback")
         if not handle._guard.acquire(blocking=False):
             raise RuntimeError("a backward call on this result is already in progress")
         try:
@@ -413,8 +416,9 @@ def run_flow(
             a mapping, a malformed `tools` entry or group item, or a `steering`
             object without `drain`/`interrupted`.
         `ValueError`:
-            An `inputs` key names no declared input, an `inputs` value holds a
-            NaN, infinity, or complex number at any depth, or identity, worker count,
+            An `inputs` key names no declared input, an `inputs` value nests
+            deeper than `MAX_VALUE_NESTING` levels or holds a NaN, infinity, or
+            complex number at any depth, or identity, worker count,
             model configuration, or prepared run state violates its contract,
             ``llm_config.api_key`` lacks ``llm_config.provider``,
             ``llm_config.base_url`` lacks
@@ -543,6 +547,7 @@ def _run_flow_controlled(
     # required/default handling and contract validation.
     coerced = coerce_inputs(flow.input, inputs)
     for name, value in coerced.items():
+        reject_deep_nesting(value, f"input {name!r}")
         reject_nonfinite(value, f"input {name!r}")
     pool = VariablePool(start_id=private_flow.start_id)
     pool.set(private_flow.start_id, copy.deepcopy(coerced))

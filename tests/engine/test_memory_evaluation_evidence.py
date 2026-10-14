@@ -530,8 +530,11 @@ def test_oversized_recall_inputs_fail_identically_with_or_without_capture(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Recall context validation is semantic while evidence remains observational."""
+    # A low memory bound keeps the payload well inside the yian value limit, which the
+    # binder enforces before recall sees the inputs.
+    monkeypatch.setattr("yian.memory.contracts._MAX_JSON_NESTING", 5)
     nested: dict = {}
-    for _ in range(160):
+    for _ in range(10):
         nested = {"nested": nested}
     monkeypatch.setattr(
         llm_clients,

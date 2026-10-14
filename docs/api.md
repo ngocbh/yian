@@ -121,7 +121,10 @@ declared input; an unknown name raises `ValueError` listing the declared inputs,
 and `inputs` that is not a mapping raises `TypeError`, both before the log is
 created. NaN, infinity, and complex numbers are not yian values: an `inputs` value
 holding one at any depth raises `ValueError` naming where it sits
-(`input 'x' at a[1]: ...`), also before the log is created. A non-finite
+(`input 'x' at a[1]: ...`), also before the log is created. An `inputs` value may
+nest 100 levels (each record and list is a level); a deeper one raises `ValueError`
+naming the input and path, before the log is created (see
+[Types → Nesting limit](typing.md#nesting-limit)). A non-finite
 `llm_config` value, such as `temperature`, is rejected too: in a flow file it is a
 load error, and in the host `llm_config` it raises `ValueError` before the run starts
 when an AGENT uses it. An int of any size is a value: the log records every digit,
@@ -409,7 +412,10 @@ level, including positions containing only `None`. Omitted fields and `None`
 carry no effective feedback. An empty string is effective text. A failed forward
 run accepts only a string or `None`, because it has no usable output shape.
 Invalid feedback is rejected before a new attempt or memory session opens, and
-preserves this result's previously observed outcome and learning objects.
+preserves this result's previously observed outcome and learning objects. A message
+that is not a string, object, list, or `None`, or an object key that is not a string,
+raises `TypeError`; feedback that does not match the output's shape, or nests deeper
+than 100 levels, raises `ValueError`.
 
 This complete example needs no model or memory backend:
 
@@ -438,7 +444,13 @@ assert result.output == {"items": [1, 2], "label": "batch"}
 `BackwardOutcome` is exported from `yian.runtime`. Its `status` is
 `succeeded` or `failed`; `feedback` is the accepted complete root `BackwardResult`,
 or `None` when the accepted prefix has no completed result. `failure` identifies a backward,
-learner, or commit failure. `learning` is `None` when the run had no memory.
+learner, or commit failure. A `memory.invalid_context` learner failure, raised when a
+memory's learn context cannot be built from run material, names the owner occurrence
+(`node_id`, `node_started_seq`, `scope`, `run_id`) and the cause, such as
+`memory learn context could not be constructed for node 'n': ... nests deeper than the
+memory limit of 128 levels`; only a failure in the root flow's fallback feedback has no
+node.
+`learning` is `None` when the run had no memory.
 The root result's `input_feedback` maps input names to ordered tuples of ordinary
 messages. These tuples are batches; positional lists inside them remain single
 structured messages. Node self/variable channels contain ordered text messages
@@ -558,7 +570,8 @@ result = run_flow(flow, inputs, log="run.jsonl", steering=inbox)
   error, not a node failure.
 - An interrupted node succeeds with its text so far. The run log records its
   output like any other; it has no separate interrupted flag. A complete reply
-  whose tool call holds a NaN or infinity still fails the node, interrupt or not.
+  whose tool call holds a NaN or infinity, or arguments nested deeper than 100
+  levels, still fails the node, interrupt or not.
 - `on_event` shows the interrupt taking effect. A cut stream ends with its
   `final=True` chunk, and its `ModelCallFinished` has no `error` and the usage of
   the chunks already received. Each tool call the node skipped gets a

@@ -831,6 +831,32 @@ Type-check messages show one as `<int too large to display>`
 (`typesys.values.value_repr`). Rendering one as text (template interpolation,
 prompt text) still fails as an expression error.
 
+A yian value nests at most `typesys.values.MAX_VALUE_NESTING` (100) levels, counting
+itself. `reject_deep_nesting(value, where, *, enclosing_levels=0)` counts each dict,
+list, tuple, pydantic model, and dataclass instance as a level (a `TypedValue` adds
+none), walks with an explicit stack, and raises `TypeCheckError` with the path of the
+first container past the limit (`<where> at <path>: value nests deeper than 100
+levels, the limit for a yian value (each record and list is a level)`). The binder
+runs it before `reject_nonfinite`, so a resolved value, filled default, or MAP `over`
+list fails `binding.evaluate` at its origin (`${[x]}` around a 100-level `x` fails;
+MAP items may nest 99); an AGENT variable default fails `node.execute`; `run_flow`
+raises `ValueError` for a run input before the log exists; `RunResult.backward`
+raises `ValueError` for deeper feedback before an attempt starts. A model reply is
+checked like a NaN: deeper tool-call arguments fail the AGENT with `node.execute`
+before any call of the reply runs (`tool call 'lookup' arguments at x.a...`), and a
+deeper structured value fails `structured output at <path>`, retried under
+`retries:`. With session memory the native path checks the carrier's parsed value
+before storing the raw reply (or, for a carrier with a parsing error, the raw reply,
+raising the parsing error), so the model effect is observed `failed` and the reply is
+not kept.
+`prepare_node_succeeded` checks a live output whole and fails `contract.output` at
+the field path with the declared field's origin. A record or list built around a
+value is one level deeper: a record flow output fails at `__end__`, a MAP's result
+list at `<map>/__end__`, and a LOOP body's record output counts its level. A node
+with `commits_input_record` (START) passes `enclosing_levels=-1`. Replay validation
+skips the check so logs recorded before the limit replay, and `canonical_typed`,
+`canonical_seed`, and `encode_pool` never apply it.
+
 `Type.variants` refines OBJECT into a union: a tuple of two or more non-nullable record
 members, in canonical order (by tag, else by `canonical_type_label`) and deduplicated by
 `==`, never `set()`, since `Type` holds dicts. `Optional[Union[...]]` sets `nullable` on

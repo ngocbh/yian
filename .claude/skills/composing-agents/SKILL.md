@@ -237,6 +237,11 @@ recorded exactly. An int literal written in the YAML may have at most Python's l
 (4300 digits by default), else it is a load error; rendering an int that long as
 text (in a template or a prompt) fails.
 
+A value nests at most 100 levels (each record and list is one): a binding, MAP
+`over` list, or node output nested deeper fails its node, and wrapping a 100-level
+value (`${[x]}`, a record flow output, a MAP's result list) adds the level that fails.
+An AGENT's tool call whose arguments nest deeper fails the node before any call runs.
+
 An explicit `Optional[int] = null` is a present default, distinct from no `=`;
 null is invalid for a non-nullable type, and an empty `=` is invalid. The default
 RHS is a YAML literal validated at load and never string-coerced: write
@@ -366,8 +371,8 @@ switches it to **structured generation** — the engine derives a schema from
 `output:` and the model emits a conforming value (native structured output, or a
 JSON fallback for providers that lack it), validated at the write boundary and
 retried up to `retries:` times (default 2, a non-negative integer) on deviation, a NaN
-or infinity in the reply included. A root `Literal[...]`
-returns its bare tag to the flow. A union returns the matching member's record; each
+or infinity in the reply or a value nested deeper than 100 levels included. A root
+`Literal[...]` returns its bare tag to the flow. A union returns the matching member's record; each
 member's schema pins its tag and rejects unknown fields.
 Use a downstream `code` node only for deterministic post-processing.
 `prompt:` must be text: quote a number, boolean, date, or a value starting with `[` or `{`;
@@ -443,8 +448,8 @@ writer:
 
 Every variable needs an explicit, valid default, including nullable variables.
 Names cannot overlap inputs. Defaults are literal values; `${...}` inside a
-default string stays text. A NaN or infinity default fails the node when it
-runs. Each invocation receives a fresh copy and repeated prompt references read
+default string stays text. A NaN or infinity default, or one nested deeper than
+100 levels, fails the node when it runs. Each invocation receives a fresh copy and repeated prompt references read
 the same local value. Ownership follows the authored AGENT path plus name across
 MAP items and LOOP iterations. These declarations create no data edges. Model settings still belong in `llm_config:` even when a
 variable has the same name, such as `temperature`.

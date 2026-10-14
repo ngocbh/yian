@@ -20,7 +20,11 @@ JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 JsonObject: TypeAlias = dict[str, JsonValue]
 
 _MAX_JSON_NESTING = 128
-"""Conservative memory JSON nesting bound for nested record payloads."""
+"""Memory JSON nesting bound.
+
+A run value nests at most `MAX_VALUE_NESTING` (100) levels and memory wraps it
+only a few levels deeper, so run material always fits.
+"""
 
 
 class _FrozenJsonScalarKind(Enum):
@@ -264,8 +268,7 @@ def _freeze_json(
         raise TypeError(f"{name} must contain exact JSON values")
     if nesting >= _MAX_JSON_NESTING:
         raise ValueError(
-            f"{name} JSON nesting exceeds the conservative wire-safe limit "
-            f"of {_MAX_JSON_NESTING}"
+            f"{name} nests deeper than the memory limit of {_MAX_JSON_NESTING} levels"
         )
 
     active = set() if active is None else active

@@ -358,6 +358,16 @@ reads `default for 'x': ...`. A negative base to a fractional power is complex:
 A temporary inside an expression is fine: the embedded template `"v=${x * 10}"` is
 the text `v=inf`. Only a binding's final value is checked. See [Expressions → Non-finite results](expressions.md#non-finite-results).
 
+A value nests at most 100 levels; each record and list is a level, and a record or
+list built around a value is one level deeper. A binding (expression result, literal,
+or default) or a MAP `over` list nested deeper fails its node with
+`binding.evaluate`, naming the path (`input 'y' at [0].a...: value nests deeper than
+100 levels, ...`): `${[input.x]}` around a 100-level `x` fails, and MAP items may
+nest 99 levels. A run input may nest 100 levels; `run_flow` rejects a deeper one
+before the run starts. A record flow output such as `{t: ${n.output}}` adds a level,
+so wrapping a 100-level output fails `contract.output` at `__end__`. See
+[Types → Nesting limit](typing.md#nesting-limit).
+
 !!! note "Flow calls are not expressions"
     A `${...}` computes over values — it does **not** invoke a flow. To call a
     child flow inline, use the `call(...)` directive (see [`call` / `map`](#call-map-composition-over-child-flows)),
@@ -955,9 +965,9 @@ extract:
 ```
 
 If the model deviates from the schema, the engine feeds the error back and retries
-up to `retries:` times (default 2). A NaN or infinity in the reply (`{"score": NaN}`)
-is a deviation too. `retries:` must be a non-negative integer
-(`0` means no retry); anything else fails at load:
+up to `retries:` times (default 2). A NaN or infinity in the reply (`{"score": NaN}`),
+or a value nested deeper than 100 levels, is a deviation too. `retries:` must be a
+non-negative integer (`0` means no retry); anything else fails at load:
 
 ```yaml
 extract:
@@ -1081,8 +1091,8 @@ Variable names must be unique and cannot overlap the node's input names. Default
 are validated while loading, including bounds and enum choices. Nullable variables
 still require an explicit default, such as `Optional[str] = null`; a quoted empty
 string is a valid `str` default. Default strings are literal text, so `${...}`
-inside a default is not evaluated as a binding. A NaN or infinity default fails the
-node when it runs.
+inside a default is not evaluated as a binding. A NaN or infinity default, or one
+nested deeper than 100 levels, fails the node when it runs.
 
 Each invocation starts with a fresh copy of these defaults. Repeated `${name}`
 references read the same local value. A variable belongs to its authored AGENT

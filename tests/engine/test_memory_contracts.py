@@ -294,10 +294,10 @@ def test_memory_strings_must_have_a_canonical_utf8_representation(factory: Any) 
 
 
 @pytest.mark.parametrize("carrier", ["value", "arguments"])
-def test_memory_json_rejects_nesting_beyond_the_durable_wire_limit(
+def test_memory_json_rejects_nesting_beyond_the_memory_limit(
     carrier: str,
 ) -> None:
-    """A conservative evidence bound stays below the schema-4 wire ceiling."""
+    """Memory JSON carriers reject values deeper than the memory limit, naming it."""
     nested: JsonObject = {}
     for _ in range(300):
         nested = {"nested": nested}
@@ -307,8 +307,11 @@ def test_memory_json_rejects_nesting_beyond_the_durable_wire_limit(
         if carrier == "value"
         else ToolCallInteraction("lookup", nested)
     )
-    with pytest.raises(ValueError, match="nesting"):
+    with pytest.raises(
+        ValueError, match="nests deeper than the memory limit of 128 levels"
+    ) as rejected:
         factory()
+    assert "wire-safe" not in str(rejected.value)
 
 
 def test_context_episode_and_mutation_keep_json_snapshots() -> None:

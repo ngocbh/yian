@@ -145,6 +145,10 @@ with a `case`, such as checking the base is not negative before `**`, or compute
 a `code` node), or return null explicitly: a `case` value branch `then: null` (with
 `output: Optional[...]`), or a `code` node that returns `None`.
 
+A list literal adds a level of nesting (`${[x]}` is one level deeper than `x`), and
+a binding whose final value nests deeper than 100 levels fails its node
+with `binding.evaluate` (see [Types → Nesting limit](typing.md#nesting-limit)).
+
 **Compile-time companions** (never evaluate): `infer_expr_type(tree, ref_type_fn)` returns
 a type only for statically fixed results: scalar literals, exact references,
 comparisons/membership, `not`/`and`/`or`, and `isinstance`. Other expressions remain

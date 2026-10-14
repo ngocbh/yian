@@ -18,7 +18,7 @@ in `yian.typesys.temporal`; otherwise it is the leaf.
 """
 
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, is_dataclass, replace
 from dataclasses import fields as _dataclass_fields
 from enum import Enum
@@ -164,6 +164,114 @@ def _render_value_path(path: tuple[str | int, ...]) -> str:
         else:
             parts.append(f"[{segment!r}]")
     return "".join(parts)
+
+
+MAX_VALUE_NESTING = 100
+"""Deepest nesting a yian value may have.
+
+Each dict, list, tuple, model, or dataclass is one level.
+"""
+
+
+def reject_deep_nesting(value: Any, where: str, *, enclosing_levels: int = 0) -> None:
+    """Raise if a value nests deeper than `MAX_VALUE_NESTING` levels.
+
+    Each `dict`, `list`, `tuple`, pydantic model, and dataclass instance is one
+    level; a `TypedValue` is unwrapped and adds none. A model's declared fields
+    and extras are its direct children. The walk is depth-first and in order. A
+    container already on the current path is skipped; the canonical codecs
+    reject cycles.
+
+    Args:
+        value (`Any`):
+            The value to check.
+        where (`str`):
+            Names the boundary for the message, e.g. ``"output"``.
+        enclosing_levels (`int`, *optional*, defaults to `0`):
+            Levels counted around the value; -1 lets the value itself go one
+            level over, as for a START's input record.
+
+    Raises:
+        `TypeCheckError`:
+            A container sits past the limit; ``path`` locates the first one and the
+            message reads ``<where>[ at <path>]: value nests deeper than <limit>
+            levels, the limit for a yian value (each record and list is a level)``.
+    """
+    limit = MAX_VALUE_NESTING
+    while isinstance(value, TypedValue):
+        value = value.to_object()
+    children = _nesting_children(value)
+    if children is None:
+        return
+    if 1 + enclosing_levels > limit:
+        raise _too_deep(where, (), limit)
+    # An explicit stack, not recursion, so the walk does not depend on the caller's stack
+    # depth or the configured recursion limit.
+    # Each frame holds its children iterator, the container, and its key in the parent;
+    # the path is built only when rejecting.
+    stack: list[tuple[Iterator[tuple[Any, Any]], Any, Any]] = [(iter(children), value, None)]
+    active = {id(value)}
+    while stack:
+        iterator, container, _ = stack[-1]
+        entry = next(iterator, None)
+        if entry is None:
+            stack.pop()
+            active.discard(id(container))
+            continue
+        key, child = entry
+        if child is None or type(child) in _NESTING_SCALARS:
+            continue
+        while isinstance(child, TypedValue):
+            child = child.to_object()
+        if id(child) in active:
+            continue
+        grandchildren = _nesting_children(child)
+        if grandchildren is None:
+            continue
+        if len(stack) + 1 + enclosing_levels > limit:
+            path = tuple(
+                _nesting_segment(parent, frame_key)
+                for (_, parent, _), (_, _, frame_key) in zip(stack, stack[1:])
+            ) + (_nesting_segment(container, key),)
+            raise _too_deep(where, path, limit)
+        stack.append((iter(grandchildren), child, key))
+        active.add(id(child))
+
+
+_NESTING_SCALARS = frozenset({str, int, float, bool})
+
+
+def _nesting_children(value: Any) -> Iterable[tuple[Any, Any]] | None:
+    """Return a container's ``(key, child)`` pairs lazily, or `None` for a leaf."""
+    if isinstance(value, BaseModel):
+        children = [(name, getattr(value, name)) for name in type(value).model_fields]
+        children.extend((value.model_extra or {}).items())
+        return children
+    if isinstance(value, dict):
+        return value.items()
+    if isinstance(value, (list, tuple)):
+        return enumerate(value)
+    if is_dataclass(value) and not isinstance(value, type):
+        return [(field.name, getattr(value, field.name)) for field in _dataclass_fields(value)]
+    return None
+
+
+def _nesting_segment(container: Any, key: Any) -> str | int:
+    """Return the path segment for `key` within `container`."""
+    if isinstance(container, dict):
+        # `TypeCheckError` paths hold exact `str` segments, so a `str` subclass key is unwrapped.
+        return str.__str__(key) if isinstance(key, str) else repr(key)
+    return key
+
+
+def _too_deep(where: str, path: tuple[str | int, ...], limit: int) -> TypeCheckError:
+    """Build the error for a container past the nesting limit at `path`."""
+    location = f"{where} at {_render_value_path(path)}" if path else where
+    return TypeCheckError(
+        f"{location}: value nests deeper than {limit} levels, "
+        "the limit for a yian value (each record and list is a level)",
+        path=path,
+    )
 
 
 # --------------------------------------------------------------------------- #

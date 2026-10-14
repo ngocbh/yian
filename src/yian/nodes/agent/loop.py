@@ -48,7 +48,7 @@ from yian.nodes.agent.text import (
 from yian.nodes.agent.structured import generate_structured, type_to_schema
 from yian.nodes.base import Output
 from yian.skills.tool import LOAD_SKILL, invoke_load_skill, load_skill_tool
-from yian.typesys.values import reject_nonfinite
+from yian.typesys.values import reject_deep_nesting, reject_nonfinite
 
 # -1 means no bound; a positive per-node env value bounds model turns.
 MAX_TOOL_ITERATIONS = -1
@@ -133,7 +133,7 @@ def run_agent(ctx: AgentRunContext) -> Output:
                 new_messages=new_messages,
                 check_stopped=ctx.check_stopped,
                 exchange_id=exchange_id,
-                check_reply=_reject_nonfinite_arguments,
+                check_reply=_reject_invalid_arguments,
             )
         except ReplyInterrupted as cut:
             return _interrupted(ctx, cut.reply)
@@ -242,10 +242,13 @@ def run_agent(ctx: AgentRunContext) -> Output:
             messages.append(result_message)
 
 
-def _reject_nonfinite_arguments(reply: BaseMessage) -> None:
-    """Raise `TypeCheckError` if any tool call of a reply has a NaN or infinity in its arguments."""
+def _reject_invalid_arguments(reply: BaseMessage) -> None:
+    """Raise `TypeCheckError` if a tool call's arguments nest too deep or hold a NaN or infinity."""
     for call in getattr(reply, "tool_calls", None) or []:
-        reject_nonfinite(call.get("args"), f"tool call {call.get('name')!r} arguments")
+        where = f"tool call {call.get('name')!r} arguments"
+        # Depth first: the non-finite walk recurses, so it must not see an unbounded value.
+        reject_deep_nesting(call.get("args"), where)
+        reject_nonfinite(call.get("args"), where)
 
 
 def _interrupted(ctx: AgentRunContext, reply: BaseMessage | None) -> Output:

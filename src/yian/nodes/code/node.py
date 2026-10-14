@@ -48,6 +48,7 @@ from yian.typesys.values import (
     ANY_VALUE_ADAPTER,
     TypeCheckError,
     build_value,
+    reject_deep_nesting,
     reject_nonfinite,
 )
 
@@ -362,14 +363,17 @@ class CodeNode(Node):
         non-serializable value (e.g. a bare object inside a returned dict) would otherwise
         reach canonical success-record encoding before it fails. Running the typed-value
         serializer once here surfaces the error inside this CODE invocation. `None` is left
-        to the declared-`output:` check.
+        to the declared-`output:` check, and a value nested past the value limit or holding
+        a NaN or infinity to the output boundary.
         """
         if value is None:
             return
         try:
+            reject_deep_nesting(value, "output")  # first: the non-finite walk recurses
             reject_nonfinite(value, "output")
         except TypeCheckError:
-            # The output-contract boundary rejects it with its path, the same failure NaN gets.
+            # The output-contract boundary rejects it with its path and the declared field's
+            # origin; serializing it here could fail with an opaque recursion error.
             return
         try:
             typed = build_value(value)  # top-level: raises if the value can't be wrapped

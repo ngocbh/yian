@@ -512,7 +512,11 @@ def _validate_backward_finished(
             raise ValueError("learner failure requires one recorded memory key and memory-operation cause")
         expected = BackwardFailure("learn", failure.cause.code, failure.cause.message,
                                    memory=failure.memory, cause=failure.cause)
-        if failure != expected or outcome.feedback is None:
+        unattributed = failure
+        if failure.node_started_seq is not None:
+            _validate_context_failure_owner(trace, failure)
+            unattributed = replace(failure, scope=None, run_id=None, node_id=None, node_started_seq=None)
+        if unattributed != expected or outcome.feedback is None:
             raise ValueError("learner Finished must retain the exact attributed failure and completed feedback")
         validate_attributed_backward(trace, current.started.feedback, outcome.feedback, record.attributed_results)
         known = LearningFailure(failure.memory, "learn", failure.cause)
@@ -537,6 +541,23 @@ def _validate_backward_finished(
         raise ValueError("backward computation failure must match its recorded invocation")
     if outcome.learning != _prefix_learning(backward):
         raise ValueError("failed computation learning must retain incomplete unrequested memories")
+
+
+def _validate_context_failure_owner(trace: RetainedTrace, failure: BackwardFailure) -> None:
+    """Require a context failure's node to be an accepted occurrence that receives its memory."""
+    if failure.code != "memory.invalid_context" or failure.run_id != trace.run_id:
+        raise ValueError("an attributed learner failure must be a context failure of this run")
+    source = SourceRef(trace.run_id, failure.node_started_seq)
+    try:
+        occurrence = trace.occurrence(source)
+    except KeyError:
+        raise ValueError("a context failure must name an accepted occurrence") from None
+    context = trace.backward_context(source)
+    if failure.node_id != context.node_id or failure.scope != context.scope:
+        raise ValueError("a context failure must match its recorded occurrence")
+    scope = occurrence.memory_scope
+    if scope is None or failure.memory not in scope.memories:
+        raise ValueError("a context failure must name an occurrence that receives its memory")
 
 
 def reduce_backward_record(
@@ -662,14 +683,24 @@ def _episode_outcome(
 
 
 class OwnerContextError(Exception):
-    """A validated owner's material cannot fit the existing memory JSON boundary."""
+    """A receiving memory's learn context cannot be built from validated run material."""
 
-    def __init__(self, memory: str, original: Exception) -> None:
-        """Retain the receiving memory key and original context-construction error."""
+    def __init__(self, memory: str, original: Exception, context: BackwardContext | None = None) -> None:
+        """Retain the receiving memory key, the original error, and the owner occurrence.
+
+        Args:
+            memory (`str`): Receiving memory key.
+            original (`Exception`): Context-construction error.
+            context (`BackwardContext | None`): Occurrence whose material failed, or
+                None when only the source-free root feedback failed.
+        """
         if type(memory) is not str or not memory:
             raise TypeError("owner context failure requires a memory key string")
+        if context is not None and type(context) is not BackwardContext:
+            raise TypeError("owner context failure context must be a BackwardContext or None")
         self.memory = memory
         self.original = original
+        self.context = context
         super().__init__(str(original))
 
 
@@ -775,7 +806,9 @@ def project_owner_contexts(
             backward authority.
         `KeyError`: For missing accepted source authority during materialization.
         `OwnerContextError`: When validated material cannot satisfy a receiving
-            memory's existing JSON contract. No callback or backend is invoked.
+            memory's JSON contract. It names the occurrence whose episode or
+            feedback failed, or no occurrence when only the root feedback failed.
+            No callback or backend is invoked.
     """
     if type(memories) is not tuple or any(type(spec) is not MemorySpec for spec in memories):
         raise TypeError("owner contexts require the complete recorded memory table")
@@ -832,7 +865,8 @@ def project_owner_contexts(
                 "occurrence_path": None if execution_scope is None else execution_scope["occurrence_path"],
                 "execution_scope": execution_scope,
             }
-            feedback.extend({**coordinates, **entry} for entry in feedback_by_source[occurrence.source])
+            entries = [{**coordinates, **entry} for entry in feedback_by_source[occurrence.source]]
+            feedback.extend(entries)
             try:
                 episodes.append(MemoryEpisode(
                     run_id=trace.run_id,
@@ -845,8 +879,10 @@ def project_owner_contexts(
                     memory_sections=() if evidence is None else evidence.memory_sections,
                     execution_seq=occurrence.source.execution_seq,
                 ))
+                # Validating this occurrence's feedback alone attributes a failure to it.
+                LearnContext(trace.run_id, spec.key, (), tuple(entries))
             except (TypeError, ValueError) as exc:
-                raise OwnerContextError(spec.key, exc) from exc
+                raise OwnerContextError(spec.key, exc, trace.backward_context(occurrence.source)) from exc
         if _ROOT_FLOW_SITE in spec.owners:
             feedback.extend(fallback)
         try:

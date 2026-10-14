@@ -307,13 +307,12 @@ def test_owner_context_projects_synthetic_source_free_failure_only_to_root_flow(
     },)
 
 
-@pytest.mark.parametrize("same_boundary", [False, True])
-def test_owner_context_root_fallback_uses_only_actual_source_zero_fields(same_boundary):
+def _start_only_run(same_boundary):
+    """Run a flow of only START; when START is also the end, root input feedback falls back to the root."""
     from yian.compile.model import CompiledFlow
     from yian.nodes.base import ELSE_HANDLE, Route
     from yian.nodes.contracts import Parameter
     from yian.nodes.start import StartNode
-    from yian.runtime.backward import compute_backward
     from yian.runtime.engine import FlowEngine
 
     start = StartNode(START_ID, params=[Parameter("topic"), Parameter("omitted", has_default=True, default="unused")])
@@ -335,6 +334,14 @@ def test_owner_context_root_fallback_uses_only_actual_source_zero_fields(same_bo
         memory_snapshots=(MemorySnapshotEnvelope(_POLICY, {}),),
     )))
     list(FlowEngine(state, log, grow_builder=build_grow, num_workers=0).run())
+    return state, log, memories, stacks
+
+
+@pytest.mark.parametrize("same_boundary", [False, True])
+def test_owner_context_root_fallback_uses_only_actual_source_zero_fields(same_boundary):
+    from yian.runtime.backward import compute_backward
+
+    state, _log, memories, stacks = _start_only_run(same_boundary)
     root, results = compute_backward(state.trace, "review")
     context, = learning_module.project_owner_contexts(state.trace, memories, stacks, "review", root, results)
     assert all(not item.invoked for item in results)
@@ -346,14 +353,17 @@ def test_owner_context_root_fallback_uses_only_actual_source_zero_fields(same_bo
 
 
 @pytest.mark.parametrize("material", ["episode", "contribution"])
-def test_owner_context_error_identifies_receiver_without_changing_forward_acceptance(material):
+def test_owner_context_error_identifies_receiver_without_changing_forward_acceptance(material, monkeypatch):
     from yian.compile.model import FlowOutput
     from yian.nodes.base import BackwardResult
     from yian.runtime.backward import compute_backward
     from tests.engine._backward_fakes import RecordingBackwardNode
 
+    # A low memory bound lets values well inside the yian value limit exceed it. The
+    # contribution value fits in the episode but not in the deeper feedback contribution.
+    monkeypatch.setattr("yian.memory.contracts._MAX_JSON_NESTING", 10)
     value = "leaf"
-    for _ in range(140 if material == "episode" else 123):
+    for _ in range(20 if material == "episode" else 5):
         value = [value]
     node = RecordingBackwardNode("work", lambda inputs: inputs["x"], lambda _c, f: BackwardResult({"x": f}),
                                  reads={"x": value})
@@ -372,8 +382,36 @@ def test_owner_context_error_identifies_receiver_without_changing_forward_accept
         learning_module.project_owner_contexts(trace, memories, stacks, feedback, root, results)
     assert caught.value.memory == memories[0].key
     assert type(caught.value.original) is ValueError and caught.value.__cause__ is caught.value.original
-    assert "nesting" in str(caught.value.original)
+    assert "nests deeper than the memory limit of 10 levels" in str(caught.value.original)
+    # Both values first exceed the bound in the material "work" retains, so "work" is named.
+    work = next(item for item in trace.occurrences if item.node_id == "work")
+    assert caught.value.context == trace.backward_context(work.source)
     assert tuple(engine.log) == accepted and trace.terminal.output == value
+
+
+def test_root_feedback_context_failure_names_no_node(monkeypatch):
+    from yian.runtime.backward import drive_backward
+    from yian.runtime.memory_runtime import MemoryRuntime
+    from tests.engine._memory_fakes import _Memory
+
+    state, log, memories, stacks = _start_only_run(True)
+    real = learning_module.LearnContext
+
+    def learn_context(run_id, memory, episodes=(), feedback=()):
+        if any(entry.get("root") is True for entry in feedback):
+            raise ValueError("boom")
+        return real(run_id, memory, episodes, feedback)
+
+    monkeypatch.setattr(learning_module, "LearnContext", learn_context)
+    outcome = drive_backward(state, log, "review", open_memory=lambda: MemoryRuntime.open(
+        memories=memories, origins={spec.key: None for spec in memories}, memory={_POLICY: _Memory()},
+        snapshots=tuple(MemorySnapshotEnvelope(spec.key, {}) for spec in memories),
+    ))
+    failure = outcome.failure
+    assert failure.code == "memory.invalid_context" and failure.memory == _POLICY
+    assert failure.message == "memory learn context could not be constructed: boom"
+    assert (failure.scope, failure.run_id, failure.node_id, failure.node_started_seq) == (None,) * 4
+    assert failure.cause.message == failure.message
 
 
 def test_owner_context_authority_errors_are_not_context_construction_failures(monkeypatch):

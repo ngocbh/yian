@@ -15,7 +15,6 @@ from asyncio import CancelledError as AsyncCancelledError
 from collections.abc import Iterator, Mapping
 from concurrent.futures import CancelledError as FutureCancelledError
 from contextlib import contextmanager, nullcontext
-from copy import deepcopy
 from typing import Any
 
 from yian.diagnostics import OriginRef
@@ -451,9 +450,12 @@ class MemoryRuntime:
             type(context) is not LearnContext for context in contexts
         ):
             raise TypeError("learning contexts must be a tuple of exact LearnContext values")
-        copied = tuple(deepcopy(LearnContext(
+        # Rebuilding re-validates each context and detaches its feedback; every other
+        # carrier is a frozen slotted dataclass over tuples, so a deep copy would add
+        # nothing but recursion deep enough to overflow on a value at the nesting limit.
+        copied = tuple(LearnContext(
             context.run_id, context.memory, context.episodes, context.feedback,
-        )) for context in contexts)
+        ) for context in contexts)
         if tuple(context.memory for context in copied) != tuple(
             spec.key for spec in self._memories
         ):

@@ -755,7 +755,7 @@ def test_snapshot_envelope_adds_no_nesting_beyond_the_view():
                 )
             assert rejected is not None, "expected a too-deep view boundary"
             exported_before = snapshot(h.memory)
-            with pytest.raises(ValueError, match="nesting"):
+            with pytest.raises(ValueError, match="nests deeper than the memory limit"):
                 turn.request(rejected.kind, rejected.payload)
             assert snapshot(h.memory) == exported_before
             assert turn.view == before
@@ -912,7 +912,7 @@ def test_invalid_request_wire_publishes_nothing_and_keeps_lease_usable():
     with harness() as h:
         with h.frame.open_turn(request(), check_stopped=lambda: None) as turn:
             before = snapshot(h.memory)
-            with pytest.raises(ValueError, match="nesting") as rejected:
+            with pytest.raises(ValueError, match="nests deeper than the memory limit") as rejected:
                 turn.request("model", _nested(127))
             assert snapshot(h.memory) == before
             assert not getattr(rejected.value, "__notes__", ())

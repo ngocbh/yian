@@ -148,6 +148,19 @@ invent lessons or perform backend-specific writes. See
 interfaces and [AGENT memory](agent.md#memory-is-an-outer-to-local-stack) for
 recall order.
 
+Memory JSON has its own nesting bound of 128 levels. A run value nests at most 100
+levels ([nesting limit](typing.md#nesting-limit)) and an episode or feedback entry
+wraps it about 8 levels deeper, so run material always fits; an AGENT's structured
+value or tool-call arguments past the limit fail at the reply, so they never become
+evidence. When a learn context
+still cannot be built, for example from a log recorded before the value limit, the
+attempt fails with `memory.invalid_context` before any learner runs. The
+`BackwardFailure` names the occurrence whose episode or feedback failed (`node_id`,
+`node_started_seq`, `scope`, `run_id`), and its message gives the cause:
+`memory learn context could not be constructed for node 'n': ... nests deeper than
+the memory limit of 128 levels`. Only a failure in the root flow's fallback feedback
+names no node.
+
 ## Episodic memory
 
 `EpisodicMemory` is the built-in deterministic history memory. Declare it, for

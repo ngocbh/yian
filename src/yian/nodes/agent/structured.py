@@ -47,6 +47,7 @@ from yian.typesys.values import (
     Type,
     TypeCheckError,
     ValueKind,
+    reject_deep_nesting,
     reject_nonfinite,
     union_tag_fields,
 )
@@ -390,6 +391,7 @@ def _generate_native(
         nonlocal reply_surfaced
         reply_surfaced = True
         if memory_context.transcript is not None:
+            _reject_deep_carrier(response, schema, typ)
             _reject_nonfinite_carrier(response)
 
     for _ in range(max_retries + 1):
@@ -409,6 +411,7 @@ def _generate_native(
             )
             obj = response if memory_context.transcript is None else _native_parsed(response)
             value = _unwrap(obj, typ)
+            reject_deep_nesting(value, "structured output")
             reject_nonfinite(value, "structured output")
             if memory_context.transcript is not None:
                 check_stopped()
@@ -473,6 +476,36 @@ def _native_carrier_error(response: dict) -> BaseException | None:
     if not isinstance(response["parsed"], BaseModel):
         raise _CapabilityFault(TypeError("native structured parsed value must be a BaseModel"))
     return None
+
+
+def _reject_deep_carrier(response: Any, schema: type[BaseModel], typ: Type) -> None:
+    """Reject a native carrier whose reply nests past the value limit, before it is stored.
+
+    A parsed value past the limit raises `TypeCheckError`. A carrier holding a parsing
+    error whose raw reply is past the limit raises that parsing error, so the retry and
+    the exhausted error's origin match a run without memory. A malformed carrier is left
+    alone. The raw reply carries the value, so a reply past the limit may be too deep
+    for memory, and the non-finite walk of the raw reply recurses.
+    """
+    if type(response) is not dict or set(response) != {"raw", "parsed", "parsing_error"}:
+        return
+    if response["parsing_error"] is None:
+        if isinstance(response["parsed"], schema):
+            reject_deep_nesting(_unwrap(response["parsed"], typ), "structured output")
+        return
+    # The raw message wraps the value a few levels deeper, so this can also catch a value
+    # just under the limit. Only a reply that already missed the schema is checked here;
+    # it is retried either way, and the check only keeps memory from storing it.
+    try:
+        reject_deep_nesting(response.get("raw"), "model reply")
+    except TypeCheckError:
+        pass
+    else:
+        return
+    # Raised outside the handler so the provider's error gains no `__context__`.
+    error = _native_carrier_error(response)
+    if error is not None:
+        raise error
 
 
 def _reject_nonfinite_carrier(response: Any) -> None:
@@ -547,6 +580,7 @@ def _generate_fallback(
             record_model_text(evaluation_trace, text)
             obj = schema.model_validate(json_codec.loads(_strip_code_fence(text)))
             value = _unwrap(obj, typ)
+            reject_deep_nesting(value, "structured output")
             reject_nonfinite(value, "structured output")
             if memory_context.transcript is not None:
                 check_stopped()

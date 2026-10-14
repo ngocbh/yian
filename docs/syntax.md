@@ -323,9 +323,9 @@ written bare, or as one whole `${...}` (see
 [Expression contexts](#expression-contexts)).
 
 - A searched `case` condition `"${a.output:-0} >= 1"` gave its gate an optional input,
-  so the `case` still ran when `a` was skipped. The rewrite
-  `(a.output :- 0) >= 1` reads `a` like any bare condition: the `case` is skipped
-  with `a`. The default still covers a null value or an absent flow input.
+  so the `case` still ran when `a` was skipped. The rewrite `(a.output :- 0) >= 1`
+  does too (see the [searched form](#searched-form)). The default still covers a null
+  value or an absent flow input.
 - Each `on:` match now lowers to a condition on a bare `__on` (`__on == "<value>"`)
   instead of `${__on}`. So every flow with an `on:` `case` gets a new fingerprint,
   and resuming an old run log of one fails with a fingerprint error.
@@ -1518,7 +1518,9 @@ are skipped, and so is every node that plainly reads a skipped node or names it 
 its `input:`, an adaptive composer) is skipped too, whether that node is a target on an
 untaken branch or is skipped through its inputs or `depends_on`. A node that names the
 `case` itself in `depends_on:` or `runs_after:` is not on a branch: it runs whichever
-branch the `case` takes, and is skipped only when the `case` is. Read its result with
+branch the `case` takes, and is skipped only when the `case` is. A searched `case`
+that reads a node only under `:-`, `:?` or `|` is not skipped with it (see the
+[searched form](#searched-form)). Read its result with
 `${case.output}`. A routing-only `case` may take
 none when no `when:` matches and there is no `else:` (see
 [Exhaustiveness](#exhaustiveness)); a flow output that reads a skipped node returns
@@ -1564,6 +1566,17 @@ branch for that tag; it is now a load error, as for a `Literal` node output. Two
 with the same value (`when: 1` twice, `when: 1` and `when: 1.0`) used to load with the
 later one dead; that is now a load error.
 
+Changed: a searched `when:` that read a node under `:-`, `:?` or `|`
+(`(a.output :- 0) >= 1`) used to skip the `case` with that node; now the `case` runs (see
+the [searched form](#searched-form)). A `:-` or `|` over two node reads used to skip it
+when either node was skipped; now only when both are. When such a `case` runs with the
+node skipped, its branches don't inherit that node's routing: a union narrowed on the
+way to that node isn't narrowed in them, a branch's arithmetic on a value that may be a
+skipped null can be a [load error](#skipped-branches-and-flow-outputs), and a flow
+output over the branches may be null. Arithmetic in such a `when:` on a value that may
+be a skipped null is now a load error. A `case` whose searched `when:` reads a node
+under `:-`, `:?` or `|` gets a new fingerprint; others keep theirs.
+
 Simple form — match a value:
 
 ```yaml
@@ -1598,6 +1611,7 @@ case node 'route': `when: 1.0` duplicates `when: 1` (first at line 7), so it nev
 ```
 
 Searched form — first true `when:` wins (a boolean expression, no `on:`):
+{: #searched-form }
 
 ```yaml
 gate:
@@ -1611,6 +1625,24 @@ gate:
 `cases:` is a list of `{when:, then:}` mappings. Any other shape (a `cases:`
 mapping without `- `, a bare word, a list item that is not a mapping) is a load
 error at that field.
+
+A `when:` reads a node the way a binding does. A plain read
+(`score.output.signal >= 0.5`) skips the `case` with `score`. Each outermost `:-`, `:?`
+or `|` decides as a binding of just that part, `${...}`, would:
+
+- `when: "(score.output :- 0) >= 0.5"` (or `score.output | 0`) still routes when
+  `score` is skipped; the default applies.
+- `when: '(score.output :? "need a score") >= 0.5'` routes too; testing that case fails
+  the run with `need a score`.
+- `(a.output :- b.output) >= 1` is skipped only when both `a` and `b` are;
+  `(a.output :- input.seed) >= 1` is skipped with `a`, as `${a.output :- input.seed}`
+  would be.
+- `a.output > 5 or (a.output :- 0) < 1` is skipped with `a`, by its plain read.
+
+Cases are still tested in order, and `and` / `or` short-circuit, so a later case's `:?`
+isn't evaluated once an earlier case matches. `:-` binds loosest:
+`x.output and a.output :- false` defaults the whole condition, so write
+`x.output and (a.output :- false)`.
 
 Read the taken branch's output with `${gate.output}`:
 
@@ -1792,7 +1824,9 @@ output:
 
 - **May be skipped:** a `case` target, or a node that plainly reads one (or names it
   in `depends_on`), under some combination of `case` choices. A node that names the
-  `case` itself in `depends_on` runs on every branch the `case` takes. A `case` that
+  `case` itself in `depends_on` runs on every branch the `case` takes. A searched
+  `case` whose `when:`s read a node only under `:-`, `:?` or `|` runs when that
+  node is skipped. A `case` that
   runs takes one branch, or none unless it is exhaustive: it has `else:`, or its `on:`
   is a non-nullable `Literal` node output or flow input with every tag listed, or a
   non-nullable `bool` with `when: true` and `when: false` (a null `on:` value matches
@@ -1810,8 +1844,8 @@ output:
   `'${order.output.qty} and ${rejected.output}'` renders ` and no`, and
   `${order.output.qty == 2}` is `false`.
 - **Arithmetic** (`+ - * / % **`, unary minus) on such a value is a load error at the
-  binding: in a flow output, and in a node binding (including a `case`'s `on:`) whose
-  node still runs when the value's node is skipped:
+  binding: in a flow output, and in a node binding (including a `case`'s `on:`) or a
+  searched `case`'s `when:` whose node still runs when the value's node is skipped:
 
   ```
   output 'q': ${order.output.qty + 1} does arithmetic on order.output.qty, which is null
@@ -1822,6 +1856,8 @@ output:
   arithmetic loads. Arithmetic in flow-level `asserts:` is not checked. The default
   side of `:-` is checked as if it always runs: `${a.output :- (b.output + 1)}` is an
   error even when `b` runs whenever `a` is skipped, since `a` might be null while it runs.
+  In a `when:`, `((a.output.n + 1) :- 0) > 1` is an error and
+  `(a.output.n :- 0) + 1 > 1` loads.
   A null guard is reported too: `${a.output != null and a.output.n + 1 > 1}` is an
   error though `and` stops at the guard; write `${(a.output.n :- 0) + 1 > 1}` instead.
 - In a LOOP body the null sets the carried field (see [`loop`](#loop-re-run-a-body-under-a-predicate-or-a-fixed-count));
@@ -1862,7 +1898,9 @@ place_buy:
 - Narrowing follows the branch target's chain: a node that reads it through a plain
   reference, or names it in `depends_on`, sees the same members. A join
   `${b.output | s.output}` of a `buy` and a `sell` branch sees `Buy` or `Sell`.
-  Narrowing doesn't pass through an optional read (`${b.output:-0}`) or `runs_after`.
+  Narrowing doesn't pass through an optional read (`${b.output:-0}`) or `runs_after`,
+  nor through a searched `case` whose `when:` reads that node only under `:-`, `:?` or
+  `|`: its branches see the value unnarrowed.
   A node that several `case`s route is narrowed only when every one of them narrows the
   same value, and then sees the members any of them allows.
 - A nested `on:` over a field of the narrowed member narrows again, and its exhaustiveness

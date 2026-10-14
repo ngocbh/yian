@@ -69,7 +69,7 @@ The `:-`/`:?` RHS is an expression, so a string default must be **quoted**
 to the **typed value**; embedded in surrounding text it is **stringified**. A
 child-flow call is the whole-value `call(...)` directive (below), never a
 `${flow(args)}` span. Arithmetic on a value that is null when a `case` skips its
-node is a load error at that binding
+node is a load error at that binding or searched `when:`
 (`output 'q': ${order.output.qty + 1} does arithmetic on order.output.qty, which is null
 when node 'order' is skipped; give it a default with :-, e.g. (order.output.qty :- <default>)`).
 
@@ -316,7 +316,8 @@ null. Use a downstream `code` node only when you need deterministic post-process
 value.
 
 **Branch and rejoin.** A `case` takes one branch; the other targets skip, and so do
-nodes that plainly read them. Read the taken branch's result with `${route.output}`
+nodes that plainly read them. A searched `case` whose `when:` reads a node only under
+`:-`/`:?`/`|` (`(score.output :- 0) >= 0.5`) still runs when that node is skipped. Read the taken branch's result with `${route.output}`
 (see `branching.yaml`). A branch may also be a value (`else: "approve"`, a record, a
 list) when the `case` declares `output:`; quote text, since an unquoted word names a
 node. A `case` whose result is used needs an `else:`, every tag of a non-nullable
@@ -336,7 +337,9 @@ lifted out of it (which carry its route and wait for its inputs), read its membe
 fields (`${d.output.qty}` under `when: buy`); `else:` sees the unlisted members. Outside a
 branch only fields every member has can be read. For an untagged union, use a searched
 `case` with `when: isinstance(d.output, Text)`. Return a member field from the flow by
-joining branch nodes (`${b.output | s.output}`); flow outputs are never narrowed.
+joining branch nodes (`${b.output | s.output}`); flow outputs are never narrowed. A
+searched `case` whose `when:` reads a node only under `:-`/`:?`/`|` doesn't pass that
+node's narrowing to its branches.
 
 **Order without data flow.** When node B must run after A but consumes no value
 from it (a `wait`, a side-effecting tool), use `depends_on: [a]` (co-skips B if A

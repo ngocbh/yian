@@ -64,7 +64,8 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   ├─ null skipped outputs   → a flow output whose producers a case may all skip gets
   │                            the explicit null default (`${x.output:-null}`)
   ├─ check skipped arithmetic → arithmetic over a value a skip may null is rejected,
-  │                            asking for a `:-` default
+  │                            in a binding or a searched `when:` (the case is the
+  │                            consumer), asking for a `:-` default
   ├─ check typed outputs    → a typed flow output whose inferred type is disjoint
   │                            from its declared type is rejected (narrower or
   │                            unknown is left to the runtime check)
@@ -311,7 +312,7 @@ so they have no `Parameter.origin`. The final (possibly rewritten) payload stays
 without a retained source occurrence receive no new Compose origin; an explicit
 programmatic origin remains intact, and source-backed projections inherit their backing
 occurrence. CASE lowering assigns each searched generated `Binding` the first predicate
-origin that introduced its reference; the `on:` origin belongs to the generated `__on`
+origin that introduced its read; the `on:` origin belongs to the generated `__on`
 binding, while synthetic `Parameter` values stay source-free. Ordered predicate origins
 and these bindings enter ordinary clone and external-rebase paths through existing carrier
 hooks. CODE's extra origins enter the same paths through its node-owned traversal/rewrite hooks.

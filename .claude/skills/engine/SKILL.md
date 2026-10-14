@@ -244,7 +244,7 @@ this model whenever you design anything:
   corresponding `Binding`. Source-backed reserved MAP `over:`
   and WAIT `until:` values are stamped only on their `Binding` because they have no
   formal parameter. CASE's kind-owned lowering stamps each generated searched
-  `Binding` with the first predicate origin that introduced the reference, or stamps
+  `Binding` with the first predicate origin that introduced the read, or stamps
   `__on` from `on:`; its generated `Parameter` carriers remain source-free.
   A present typed `Binding` is checked after its source resolves and before the
   parameter contract: `build_value_as` against `Binding.contract`, discarding the

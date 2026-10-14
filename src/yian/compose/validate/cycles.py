@@ -45,12 +45,15 @@ def reject_cycles(
     components. A node blocked downstream of a cycle is not a cycle member. Sentinel
     `__start__`/`__end__` edges cannot close a cycle.
 
-    `node_ranges` (node id -> `SourceRange`) gives every located node in the loop its own
-    frame, ordered by authored line and column.
+    `node_ranges` (node id -> `SourceRange`) gives every located node named in the error one
+    frame, ordered by authored line and column; a synth node reported as its host shares the
+    host's frame.
 
     The error also carries a "why" legend (`Diagnostic.notes`): one line per dependency edge
     *inside* the loop — "<consumer> depends on <producer> (<consumer>.input.<group>)" — so the
-    author sees which reference closes the cycle, not just which nodes are in it.
+    author sees which reference closes the cycle, not just which nodes are in it. A synth node
+    reported as its host is named as the host, its generated wire is left out, and duplicate
+    lines collapse.
 
     `gate_ids` names the data gates a lifted node got from its host (group
     `<node>.<group>`); their notes cite the host's input, "(gate: <node>.input.<group>)".

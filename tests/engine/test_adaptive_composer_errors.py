@@ -312,6 +312,7 @@ def _line_of(text: str, needle: str) -> int:
 
 
 def _frame_lines(error: LoadError) -> list[int]:
+    """Return the start line of each frame of `error`, in order."""
     return [frame.range.start_line for frame in error.diagnostic.frames]
 
 

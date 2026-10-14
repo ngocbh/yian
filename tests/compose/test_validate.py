@@ -216,6 +216,23 @@ def test_reject_cycles_reports_an_alias_as_its_host() -> None:
     assert caught.value.diagnostic.notes == ("g depends on g (g.input.proj)",)
 
 
+def test_reject_cycles_frames_an_unlocated_host_at_its_synth_node() -> None:
+    synth = SourceRange(7, 3, 7, 6)
+
+    with pytest.raises(LoadError) as caught:
+        reject_cycles(
+            _alias_cycle_edges(),
+            {"g", "c"},
+            node_ranges={"c": synth},
+            diagnostics=_range_diagnostics(),
+            synth_hosts={"c": "g"},
+            synth_wires=frozenset({"c->g"}),
+        )
+
+    assert "flow has a cycle involving ['g']" in str(caught.value)
+    assert [frame.range for frame in caught.value.diagnostic.frames] == [synth]
+
+
 def test_reject_cycles_alias_keeps_other_members() -> None:
     edges = [
         Edge(id="b->g", from_="b", to="g", input_group="proj"),

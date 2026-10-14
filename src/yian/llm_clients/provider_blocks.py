@@ -9,6 +9,7 @@ key path and never echo values.
 
 from __future__ import annotations
 
+import types
 import typing
 from collections.abc import Collection, Mapping
 from typing import Any, ClassVar, Dict, List, Literal, Optional, Union
@@ -16,8 +17,10 @@ from typing import Any, ClassVar, Dict, List, Literal, Optional, Union
 from pydantic import (
     BaseModel,
     ConfigDict,
+    Discriminator,
     Field,
     StringConstraints,
+    Tag,
     ValidationInfo,
     model_serializer,
     model_validator,
@@ -79,9 +82,23 @@ class _Block(BaseModel):
                     f"`{block}.{path}` {cls.api}; allowed: {', '.join(sorted(fields))}"
                 )
             else:
-                part = _part_type(fields[key].annotation)
-                if part is not None and isinstance(value, Mapping):
-                    cls._collect_problems(part, value, block, f"{path}.", problems)
+                cls._check_value(fields[key].annotation, value, block, path, problems)
+
+    @classmethod
+    def _check_value(
+        cls, annotation: Any, value: Any, block: str, path: str, problems: list[str]
+    ) -> None:
+        """Check the keys of a nested block, or of each block in a list, at ``path``."""
+        if isinstance(value, Mapping):
+            part = _nested_block(annotation, value)
+            if part is not None:
+                cls._collect_problems(part, value, block, f"{path}.", problems)
+        elif isinstance(value, list):
+            items = [typing.get_args(m)[0] for m in _members(annotation) if _is_list(m)]
+            if items:
+                item = Union[tuple(items)]
+                for index, entry in enumerate(value):
+                    cls._check_value(item, entry, block, f"{path}[{index}]", problems)
 
     @model_serializer(mode="wrap")
     def _drop_unset(self, handler):
@@ -92,12 +109,58 @@ class _Block(BaseModel):
         return data
 
 
-def _part_type(annotation: Any) -> Optional[type[_Block]]:
-    """Return the nested ``_Block`` class inside a field annotation, if there is one."""
-    for candidate in (annotation, *typing.get_args(annotation)):
-        if isinstance(candidate, type) and issubclass(candidate, _Block):
+def _members(annotation: Any) -> list[Any]:
+    """Return the types an annotation allows, through ``Optional``, unions and ``Annotated``."""
+    origin = typing.get_origin(annotation)
+    if origin is Annotated:
+        return _members(typing.get_args(annotation)[0])
+    if origin is Union or origin is types.UnionType:
+        return [member for arg in typing.get_args(annotation) for member in _members(arg)]
+    return [annotation]
+
+
+def _is_list(annotation: Any) -> bool:
+    """Return whether ``annotation`` is a parametrized list type."""
+    return typing.get_origin(annotation) is list and bool(typing.get_args(annotation))
+
+
+def _nested_block(annotation: Any, value: Mapping) -> Optional[type[_Block]]:
+    """Return the block class to check the mapping ``value`` against, if one can be chosen.
+
+    A union of several block classes is told apart by their ``type`` field; when ``value``
+    names no variant, there is none, and field validation reports the problem instead.
+    """
+    blocks = [m for m in _members(annotation) if isinstance(m, type) and issubclass(m, _Block)]
+    if len(blocks) == 1:
+        return blocks[0]
+    tag = value.get("type")
+    for candidate in blocks:
+        field = candidate.model_fields.get("type")
+        if field is not None and tag in typing.get_args(field.annotation):
             return candidate
     return None
+
+
+def _by_type(*variants: type[_Block]) -> Any:
+    """Return a union of block classes discriminated by their ``type`` literal.
+
+    An unknown or missing ``type`` fails with a message listing the accepted ones, without
+    echoing the value as pydantic's own tag error would.
+    """
+    tags = {typing.get_args(v.model_fields["type"].annotation)[0]: v for v in variants}
+
+    def tag_of(value: Any) -> Optional[str]:
+        tag = value.get("type") if isinstance(value, Mapping) else getattr(value, "type", None)
+        return tag if isinstance(tag, str) and tag in tags else None
+
+    return Annotated[
+        Union[tuple(Annotated[variant, Tag(tag)] for tag, variant in tags.items())],
+        Discriminator(
+            tag_of,
+            custom_error_type="unknown_type",
+            custom_error_message=f"`type` must be one of: {', '.join(sorted(tags))}",
+        ),
+    ]
 
 
 class OpenAIReasoning(_Block):
@@ -303,7 +366,6 @@ class GLMChatBlock(_Block):
     reasoning_effort: Optional[
         Literal["max", "xhigh", "high", "medium", "low", "minimal", "none"]
     ] = None
-    request_id: Optional[str] = Field(default=None, min_length=6, max_length=64)
     stop: Optional[Annotated[List[str], Field(max_length=4)]] = None
     temperature: Optional[float] = Field(default=None, ge=0, le=1)
     thinking: Optional[GLMThinking] = None
@@ -464,20 +526,6 @@ class OpenRouterPromptCacheOptions(_Block):
     ttl: Optional[str] = None
 
 
-class ChatTextPart(_Block):
-    """A text content part of a Chat Completions ``prediction``."""
-
-    type: Literal["text"]
-    text: str
-
-
-class ChatPrediction(_Block):
-    """The ``prediction`` object of a Chat Completions request: predicted output content."""
-
-    type: Literal["content"]
-    content: Union[str, List[ChatTextPart]]
-
-
 class OpenRouterChatBlock(_ChatSampling, _ChatPenalties, _ChatLength, _ChatLogprobs):
     """The ``openrouter`` block: the request body of the OpenRouter Chat Completions API.
 
@@ -515,7 +563,6 @@ class OpenRouterChatBlock(_ChatSampling, _ChatPenalties, _ChatLength, _ChatLogpr
     metadata: Optional[_Metadata] = None
     min_p: Optional[float] = Field(default=None, ge=0, le=1)
     models: Optional[List[str]] = None
-    prediction: Optional[ChatPrediction] = None
     prompt_cache_key: Optional[str] = None
     prompt_cache_options: Optional[OpenRouterPromptCacheOptions] = None
     provider: Optional[Dict[str, Any]] = None
@@ -633,7 +680,6 @@ class AzureChatBlock(_ChatSampling, _ChatPenalties, _ChatLength, _ChatLogprobs):
 
     logit_bias: Optional[Dict[str, Annotated[int, Field(ge=-100, le=100)]]] = None
     metadata: Optional[_Metadata] = None
-    prediction: Optional[ChatPrediction] = None
     prompt_cache_key: Optional[str] = None
     prompt_cache_retention: Optional[Literal["in_memory", "24h"]] = None
     reasoning_effort: Optional[
@@ -646,6 +692,270 @@ class AzureChatBlock(_ChatSampling, _ChatPenalties, _ChatLength, _ChatLogprobs):
     user: Optional[str] = None
     user_security_context: Optional[AzureUserSecurityContext] = None
     verbosity: Optional[Literal["low", "medium", "high"]] = None
+
+
+class AnthropicCacheControl(_Block):
+    """A ``CacheControlEphemeral`` object of an Anthropic Messages request."""
+
+    type: Literal["ephemeral"]
+    ttl: Optional[Literal["5m", "1h"]] = None
+
+
+class AnthropicMetadata(_Block):
+    """The ``metadata`` object of an Anthropic Messages request."""
+
+    user_id: Optional[str] = Field(default=None, max_length=512)
+
+
+class AnthropicOutputConfig(_Block):
+    """The ``output_config`` object of an Anthropic Messages request (``format`` is reserved)."""
+
+    effort: Optional[Literal["low", "medium", "high", "xhigh", "max"]] = None
+
+
+_ThinkingDisplay = Optional[Literal["summarized", "omitted"]]
+
+
+class AnthropicThinkingEnabled(_Block):
+    """Manual extended thinking with a token budget of at least 1024."""
+
+    type: Literal["enabled"]
+    budget_tokens: int = Field(ge=1024)
+    display: _ThinkingDisplay = None
+
+
+class AnthropicThinkingDisabled(_Block):
+    """Thinking turned off."""
+
+    type: Literal["disabled"]
+
+
+class AnthropicThinkingBetweenTools(_Block):
+    """Thinking only between tool calls."""
+
+    type: Literal["between_tools"]
+
+
+class AnthropicThinkingAdaptive(_Block):
+    """Thinking whose amount the model decides."""
+
+    type: Literal["adaptive"]
+    display: _ThinkingDisplay = None
+
+
+class AnthropicMessagesBlock(_Block):
+    """The ``anthropic`` block: the request body of the Anthropic Messages API.
+
+    Mirrors ``POST /v1/messages``
+    (https://platform.claude.com/docs/en/api/messages), checked 2026-10-13. ``temperature``,
+    ``top_k`` and ``top_p`` are deprecated for newer models but still body fields; a model
+    that refuses them answers with a provider error. ``max_tokens`` starts at 1 because a
+    zero-token call only warms the cache and yian reads the reply.
+
+    Example:
+        ```yaml
+        anthropic:
+          max_tokens: 16000
+          thinking: {type: adaptive, display: summarized}
+          output_config: {effort: high}
+        ```
+    """
+
+    default_block: ClassVar[str] = "anthropic"
+    api: ClassVar[str] = "is not a field of the Anthropic Messages API request"
+    reserved: ClassVar[Dict[str, str]] = {
+        "model": "llm_config.model",
+        "messages": "messages",
+        "system": "system prompt",
+        "tools": "tools",
+        "tool_choice": "tools",
+        "stream": "streaming",
+        "output_config.format": "structured output",
+        "container": "tools",
+        "mcp_servers": "tools",
+        "diagnostics": "conversation state",
+    }
+
+    cache_control: Optional[AnthropicCacheControl] = None
+    inference_geo: Optional[str] = None
+    max_tokens: Optional[int] = Field(default=None, ge=1)
+    metadata: Optional[AnthropicMetadata] = None
+    output_config: Optional[AnthropicOutputConfig] = None
+    service_tier: Optional[Literal["auto", "standard_only"]] = None
+    stop_sequences: Optional[List[str]] = None
+    temperature: Optional[float] = Field(default=None, ge=0, le=1)
+    thinking: Optional[
+        _by_type(
+            AnthropicThinkingEnabled,
+            AnthropicThinkingDisabled,
+            AnthropicThinkingBetweenTools,
+            AnthropicThinkingAdaptive,
+        )
+    ] = None
+    top_k: Optional[int] = Field(default=None, ge=0)
+    top_p: Optional[float] = Field(default=None, ge=0, le=1)
+
+
+class GeminiThinkingConfig(_Block):
+    """The ``generationConfig.thinkingConfig`` object of a Gemini request."""
+
+    includeThoughts: Optional[bool] = None
+    # -1 asks for a dynamic budget and 0 turns thinking off on models that allow it.
+    thinkingBudget: Optional[int] = None
+    thinkingLevel: Optional[Literal["MINIMAL", "LOW", "MEDIUM", "HIGH"]] = None
+
+
+class GeminiGenerationConfig(_Block):
+    """The ``generationConfig`` object of a Gemini request, without its output-format fields."""
+
+    enableEnhancedCivicAnswers: Optional[bool] = None
+    frequencyPenalty: Optional[float] = None
+    logprobs: Optional[int] = Field(default=None, ge=0, le=20)
+    maxOutputTokens: Optional[int] = Field(default=None, ge=1)
+    mediaResolution: Optional[
+        Literal["MEDIA_RESOLUTION_LOW", "MEDIA_RESOLUTION_MEDIUM", "MEDIA_RESOLUTION_HIGH"]
+    ] = None
+    presencePenalty: Optional[float] = None
+    responseLogprobs: Optional[bool] = None
+    seed: Optional[int] = None
+    stopSequences: Optional[Annotated[List[str], Field(max_length=5)]] = None
+    temperature: Optional[float] = Field(default=None, ge=0, le=2)
+    thinkingConfig: Optional[GeminiThinkingConfig] = None
+    topK: Optional[int] = None
+    topP: Optional[float] = Field(default=None, ge=0, le=1)
+
+
+class GeminiSafetySetting(_Block):
+    """One ``safetySettings`` entry of a Gemini request: a category and its block threshold."""
+
+    category: Literal[
+        "HARM_CATEGORY_HARASSMENT",
+        "HARM_CATEGORY_HATE_SPEECH",
+        "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+        "HARM_CATEGORY_DANGEROUS_CONTENT",
+        "HARM_CATEGORY_CIVIC_INTEGRITY",
+        "HARM_CATEGORY_JAILBREAK",
+    ]
+    threshold: Literal[
+        "BLOCK_LOW_AND_ABOVE", "BLOCK_MEDIUM_AND_ABOVE", "BLOCK_ONLY_HIGH", "BLOCK_NONE", "OFF"
+    ]
+
+
+class GeminiGenerateContentBlock(_Block):
+    """The ``google`` block: the request body of the Gemini API ``generateContent`` method.
+
+    Mirrors ``POST /v1beta/{model=models/*}:generateContent``
+    (https://ai.google.dev/api/generate-content), checked 2026-10-13, with the REST
+    (camelCase) names and enum spellings. Safety categories are the ones the reference
+    says ``safetySettings`` supports. Output-modality fields (speech, image, audio,
+    translation) are left out because yian reads a text reply, and ``labels`` because
+    the Gemini Developer API refuses it.
+
+    Example:
+        ```yaml
+        google:
+          generationConfig:
+            thinkingConfig: {thinkingLevel: HIGH}
+            maxOutputTokens: 8192
+          safetySettings:
+            - {category: HARM_CATEGORY_DANGEROUS_CONTENT, threshold: BLOCK_ONLY_HIGH}
+        ```
+    """
+
+    default_block: ClassVar[str] = "google"
+    api: ClassVar[str] = "is not a field of the Gemini generateContent request"
+    reserved: ClassVar[Dict[str, str]] = {
+        "model": "llm_config.model",
+        "contents": "messages",
+        "systemInstruction": "system prompt",
+        "tools": "tools",
+        "toolConfig": "tools",
+        "cachedContent": "system prompt and tools",
+        "continuationToken": "conversation state",
+        "generationConfig.responseMimeType": "structured output",
+        "generationConfig.responseSchema": "structured output",
+        "generationConfig.responseJsonSchema": "structured output",
+        "generationConfig._responseJsonSchema": "structured output",
+        "generationConfig.responseFormat": "structured output",
+        "generationConfig.candidateCount": "yian reads one reply",
+    }
+
+    generationConfig: Optional[GeminiGenerationConfig] = None
+    safetySettings: Optional[List[GeminiSafetySetting]] = None
+    serviceTier: Optional[Literal["standard", "flex", "priority"]] = None
+    store: Optional[bool] = None
+
+
+class OllamaOptions(_Block):
+    """The ``options`` object of an Ollama chat request, with the fields of ``ollama.Options``."""
+
+    # Load-time options.
+    numa: Optional[bool] = None
+    num_ctx: Optional[int] = None
+    num_batch: Optional[int] = None
+    num_gpu: Optional[int] = None
+    main_gpu: Optional[int] = None
+    low_vram: Optional[bool] = None
+    f16_kv: Optional[bool] = None
+    logits_all: Optional[bool] = None
+    vocab_only: Optional[bool] = None
+    use_mmap: Optional[bool] = None
+    use_mlock: Optional[bool] = None
+    embedding_only: Optional[bool] = None
+    num_thread: Optional[int] = None
+
+    # Runtime options.
+    num_keep: Optional[int] = None
+    seed: Optional[int] = None
+    num_predict: Optional[int] = None
+    top_k: Optional[int] = None
+    top_p: Optional[float] = None
+    tfs_z: Optional[float] = None
+    typical_p: Optional[float] = None
+    repeat_last_n: Optional[int] = None
+    temperature: Optional[float] = None
+    repeat_penalty: Optional[float] = None
+    presence_penalty: Optional[float] = None
+    frequency_penalty: Optional[float] = None
+    mirostat: Optional[int] = None
+    mirostat_tau: Optional[float] = None
+    mirostat_eta: Optional[float] = None
+    penalize_newline: Optional[bool] = None
+    stop: Optional[List[str]] = None
+
+
+class OllamaChatBlock(_Block):
+    """The ``ollama`` block: the request body of Ollama's native chat API.
+
+    Mirrors ``POST /api/chat``
+    (https://github.com/ollama/ollama/blob/main/docs/api.md#generate-a-chat-completion),
+    checked 2026-10-13, limited to what ``ollama.Client.chat`` sends (``ollama`` 0.6.3).
+
+    Example:
+        ```yaml
+        ollama:
+          think: high
+          options: {num_ctx: 8192, temperature: 0.6}
+          keep_alive: 10m
+        ```
+    """
+
+    default_block: ClassVar[str] = "ollama"
+    api: ClassVar[str] = "is not a field of the Ollama /api/chat request"
+    reserved: ClassVar[Dict[str, str]] = {
+        "model": "llm_config.model",
+        "messages": "messages",
+        "tools": "tools",
+        "stream": "streaming",
+        "format": "structured output",
+    }
+
+    # A duration string such as "5m", or a number of seconds; negative keeps the model loaded.
+    keep_alive: Optional[Union[float, str]] = None
+    logprobs: Optional[bool] = None
+    options: Optional[OllamaOptions] = None
+    think: Optional[Union[bool, Literal["low", "medium", "high"]]] = None
+    top_logprobs: Optional[int] = None
 
 
 PROVIDER_BLOCKS: Dict[str, type[_Block]] = {
@@ -661,6 +971,9 @@ PROVIDER_BLOCKS: Dict[str, type[_Block]] = {
     "minimax-cn": MiniMaxChatBlock,
     "openrouter": OpenRouterChatBlock,
     "vllm": VLLMChatBlock,
+    "ollama": OllamaChatBlock,
+    "anthropic": AnthropicMessagesBlock,
+    "google": GeminiGenerateContentBlock,
 }
 
 

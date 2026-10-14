@@ -9,10 +9,13 @@ from pydantic import ValidationError
 from yian.llm_clients.config import SUPPORTED_LLM_PROVIDERS
 from yian.llm_clients.provider_blocks import (
     PROVIDER_BLOCKS,
+    AnthropicMessagesBlock,
     AzureChatBlock,
     DeepSeekChatBlock,
+    GeminiGenerateContentBlock,
     GLMChatBlock,
     MiniMaxChatBlock,
+    OllamaChatBlock,
     OpenAIResponsesBlock,
     OpenAISubscriptionBlock,
     OpenRouterChatBlock,
@@ -51,21 +54,13 @@ def _error(block_cls, data, **kwargs) -> str:
 
 def test_registry_maps_openai_to_the_responses_block():
     assert PROVIDER_BLOCKS["openai"] is OpenAIResponsesBlock
-    assert set(PROVIDER_BLOCKS) == {
-        "openai",
-        "azure",
-        "xai",
-        "deepseek",
-        "qwen",
-        "qwen-cn",
-        "glm",
-        "glm-cn",
-        "minimax",
-        "minimax-cn",
-        "openrouter",
-        "vllm",
-    }
-    assert set(PROVIDER_BLOCKS) <= set(SUPPORTED_LLM_PROVIDERS)
+    assert PROVIDER_BLOCKS["anthropic"] is AnthropicMessagesBlock
+    assert PROVIDER_BLOCKS["google"] is GeminiGenerateContentBlock
+    assert PROVIDER_BLOCKS["ollama"] is OllamaChatBlock
+
+
+def test_every_supported_provider_has_a_block():
+    assert set(PROVIDER_BLOCKS) == set(SUPPORTED_LLM_PROVIDERS)
 
 
 def test_valid_responses_sample_dumps_unchanged():
@@ -319,7 +314,6 @@ CHAT_SAMPLES = {
         "do_sample": True,
         "max_tokens": 131072,
         "reasoning_effort": "xhigh",
-        "request_id": "req-123456",
         "stop": ["END"],
         "temperature": 1,
         "thinking": {"type": "disabled", "clear_thinking": False},
@@ -460,7 +454,6 @@ def test_vendor_field_validates_through_the_registry(provider, data):
         (GLMChatBlock, {"temperature": 1.5}),
         (GLMChatBlock, {"top_p": 0.001}),
         (GLMChatBlock, {"stop": "END"}),
-        (GLMChatBlock, {"request_id": "abc"}),
         (GLMChatBlock, {"thinking": {"type": "adaptive"}}),
         (MiniMaxChatBlock, {"thinking": {"type": "enabled"}}),
         (MiniMaxChatBlock, {"reasoning_effort": "none"}),
@@ -556,3 +549,378 @@ def test_chat_block_docstring_names_its_reference(block_cls):
 def test_chat_errors_never_echo_values(block_cls):
     assert SENTINEL not in _error(block_cls, {"temperature": SENTINEL, "stop": {SENTINEL: 1}})
     assert SENTINEL not in _error(block_cls, {"typo": SENTINEL, "n": SENTINEL})
+
+
+@pytest.mark.parametrize(
+    "block_cls, data, path",
+    [
+        (AzureChatBlock, {"prediction": {"type": "content", "content": "x"}}, "azure.prediction"),
+        (
+            OpenRouterChatBlock,
+            {"prediction": {"type": "content", "content": "x"}},
+            "openrouter.prediction",
+        ),
+        (GLMChatBlock, {"request_id": "req-123456"}, "glm.request_id"),
+    ],
+)
+def test_per_request_fields_are_not_block_fields(block_cls, data, path):
+    assert f"`{path}` is not a field of the" in _error(block_cls, data)
+
+
+NEW_BLOCKS = [AnthropicMessagesBlock, GeminiGenerateContentBlock, OllamaChatBlock]
+
+NEW_SAMPLES = {
+    AnthropicMessagesBlock: {
+        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+        "inference_geo": "us",
+        "max_tokens": 8192,
+        "metadata": {"user_id": "user-hash"},
+        "output_config": {"effort": "xhigh"},
+        "service_tier": "standard_only",
+        "stop_sequences": ["END"],
+        "temperature": 1,
+        "thinking": {"type": "enabled", "budget_tokens": 2048, "display": "summarized"},
+        "top_k": 40,
+        "top_p": 0.99,
+    },
+    GeminiGenerateContentBlock: {
+        "generationConfig": {
+            "stopSequences": ["END"],
+            "maxOutputTokens": 4096,
+            "temperature": 0.7,
+            "topP": 0.95,
+            "topK": 40,
+            "seed": 7,
+            "presencePenalty": 0.5,
+            "frequencyPenalty": -0.5,
+            "responseLogprobs": True,
+            "logprobs": 5,
+            "enableEnhancedCivicAnswers": False,
+            "thinkingConfig": {"includeThoughts": True, "thinkingLevel": "HIGH"},
+            "mediaResolution": "MEDIA_RESOLUTION_LOW",
+        },
+        "safetySettings": [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "OFF"},
+        ],
+        "serviceTier": "flex",
+        "store": False,
+    },
+    OllamaChatBlock: {
+        "think": "high",
+        "options": {
+            "num_ctx": 8192,
+            "num_predict": 512,
+            "temperature": 0.6,
+            "top_k": 20,
+            "top_p": 0.95,
+            "repeat_penalty": 1.1,
+            "seed": 1,
+            "stop": ["</s>"],
+            "use_mmap": True,
+        },
+        "keep_alive": "5m",
+        "logprobs": True,
+        "top_logprobs": 3,
+    },
+}
+
+
+@pytest.mark.parametrize("block_cls", NEW_BLOCKS, ids=lambda cls: cls.__name__)
+def test_valid_new_sample_dumps_unchanged(block_cls):
+    sample = NEW_SAMPLES[block_cls]
+    block = block_cls.model_validate(sample)
+    assert block.model_dump(exclude_none=False) == sample
+    assert block.model_dump(mode="json") == sample
+
+
+@pytest.mark.parametrize("block_cls", NEW_BLOCKS, ids=lambda cls: cls.__name__)
+def test_new_block_docstring_names_its_reference(block_cls):
+    assert "https://" in block_cls.__doc__
+    assert "checked 2026-10-13" in " ".join(block_cls.__doc__.split())
+    assert block_cls.api.startswith("is not a field of the ")
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"output_config": {"effort": "high"}},
+        {"thinking": {"type": "enabled", "budget_tokens": 2048}},
+        {"thinking": {"type": "adaptive", "display": "omitted"}},
+        {"thinking": {"type": "disabled"}},
+        {"thinking": {"type": "between_tools"}},
+        {"cache_control": {"type": "ephemeral"}},
+    ],
+)
+def test_anthropic_field_is_accepted(data):
+    assert PROVIDER_BLOCKS["anthropic"].model_validate(data).model_dump() == data
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"output_config": {"effort": "hgih"}},
+        {"thinking": {"type": "enabled", "budget_tokens": 100}},
+        {"thinking": {"type": "enabled"}},
+        {"thinking": {"type": "adaptive", "budget_tokens": 2048}},
+        {"thinking": {"type": "disabled", "display": "omitted"}},
+        {"thinking": {"type": "enabled", "budget_tokens": 2048, "display": "full"}},
+        {"thinking": {"type": "sometimes"}},
+        {"thinking": {}},
+        {"thinking": "enabled"},
+        {"max_tokens": 0},
+        {"temperature": 1.5},
+        {"top_p": -0.1},
+        {"top_k": -1},
+        {"service_tier": "priority"},
+        {"cache_control": {"type": "ephemeral", "ttl": "2h"}},
+        {"cache_control": {"ttl": "5m"}},
+        {"metadata": {"user_id": "u" * 513}},
+    ],
+)
+def test_anthropic_bad_value_is_rejected(data):
+    with pytest.raises(ValidationError):
+        AnthropicMessagesBlock.model_validate(data)
+
+
+def test_thinking_variant_is_picked_by_type_for_key_checks():
+    message = _error(
+        AnthropicMessagesBlock, {"thinking": {"type": "adaptive", "budget_tokens": 2048}}
+    )
+    assert "`anthropic.thinking.budget_tokens` is not a field of the" in message
+    assert "allowed: display, type" in message
+
+    message = _error(
+        AnthropicMessagesBlock, {"thinking": {"type": "enabled", "budget_token": 2048}}
+    )
+    assert "`anthropic.thinking.budget_token` is not a field of the" in message
+    assert "allowed: budget_tokens, display, type" in message
+
+
+def test_thinking_without_a_known_type_is_left_to_validation():
+    message = _error(AnthropicMessagesBlock, {"thinking": {"type": SENTINEL, "budget": 1}})
+    assert "`anthropic.thinking.budget`" not in message
+    assert "adaptive, between_tools, disabled, enabled" in message
+    assert SENTINEL not in message
+
+
+@pytest.mark.parametrize(
+    "data, path, reason",
+    [
+        (
+            {"output_config": {"format": {"type": "json_schema"}}},
+            "output_config.format",
+            "structured output",
+        ),
+        ({"mcp_servers": []}, "mcp_servers", "tools"),
+        ({"container": "c-1"}, "container", "tools"),
+        ({"system": "be terse"}, "system", "system prompt"),
+        ({"diagnostics": {}}, "diagnostics", "conversation state"),
+        ({"messages": []}, "messages", "messages"),
+        ({"model": "claude"}, "model", "llm_config.model"),
+        ({"tools": []}, "tools", "tools"),
+        ({"tool_choice": {"type": "auto"}}, "tool_choice", "tools"),
+        ({"stream": True}, "stream", "streaming"),
+    ],
+)
+def test_anthropic_reserved_path_is_built_by_yian(data, path, reason):
+    message = _error(AnthropicMessagesBlock, data)
+    assert f"`anthropic.{path}` is built by yian ({reason}); remove it" in message
+
+
+@pytest.mark.parametrize("key", ["user_profile_id", "workspace_id", "temprature"])
+def test_anthropic_fields_outside_the_body_list_are_unknown(key):
+    message = _error(AnthropicMessagesBlock, {key: "x"})
+    assert f"`anthropic.{key}` is not a field of the Anthropic Messages API request" in message
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"generationConfig": {"thinkingConfig": {"thinkingLevel": "HIGH"}}},
+        {"generationConfig": {"thinkingConfig": {"thinkingBudget": 1024}}},
+        {"generationConfig": {"thinkingConfig": {"thinkingBudget": -1}}},
+        {"generationConfig": {"thinkingConfig": {"thinkingLevel": "MINIMAL"}}},
+        {"safetySettings": [{"category": "HARM_CATEGORY_JAILBREAK", "threshold": "BLOCK_NONE"}]},
+        {"serviceTier": "priority"},
+    ],
+)
+def test_gemini_field_is_accepted(data):
+    assert PROVIDER_BLOCKS["google"].model_validate(data).model_dump() == data
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"generationConfig": {"thinkingConfig": {"thinkingLevel": "high"}}},
+        {"generationConfig": {"thinkingConfig": {"thinkingLevel": "THINKING_LEVEL_UNSPECIFIED"}}},
+        {"generationConfig": {"thinkingConfig": {"thinkingBudget": "1024"}}},
+        {"generationConfig": {"temperature": 2.5}},
+        {"generationConfig": {"logprobs": 21}},
+        {"generationConfig": {"maxOutputTokens": 0}},
+        {"generationConfig": {"stopSequences": ["a", "b", "c", "d", "e", "f"]}},
+        {"generationConfig": {"mediaResolution": "LOW"}},
+        {"safetySettings": [{"category": "HARM_CATEGORY_TOXICITY", "threshold": "OFF"}]},
+        {"safetySettings": [{"category": "HARM_CATEGORY_HARASSMENT", "threshold": "block_none"}]},
+        {"safetySettings": [{"category": "HARM_CATEGORY_HARASSMENT"}]},
+        {"safetySettings": {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "OFF"}},
+        {"serviceTier": "FLEX"},
+        {"serviceTier": "unspecified"},
+        {"store": "no"},
+    ],
+)
+def test_gemini_bad_value_is_rejected(data):
+    with pytest.raises(ValidationError):
+        GeminiGenerateContentBlock.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["generation_config", "safety_settings", "service_tier", "labels", "temperature"],
+)
+def test_gemini_snake_case_and_other_keys_are_unknown(key):
+    message = _error(GeminiGenerateContentBlock, {key: {}})
+    assert f"`google.{key}` is not a field of the Gemini generateContent request" in message
+    assert "allowed: generationConfig, safetySettings, serviceTier, store" in message
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["responseModalities", "speechConfig", "imageConfig", "max_output_tokens", "thinking_config"],
+)
+def test_gemini_generation_config_rejects_unknown_keys(key):
+    message = _error(GeminiGenerateContentBlock, {"generationConfig": {key: {}}})
+    assert f"`google.generationConfig.{key}` is not a field of the" in message
+
+
+def test_gemini_list_item_typo_names_its_index():
+    message = _error(
+        GeminiGenerateContentBlock,
+        {
+            "safetySettings": [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "OFF"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshhold": "OFF"},
+            ]
+        },
+    )
+    assert "`google.safetySettings[1].threshhold` is not a field of the" in message
+    assert "allowed: category, threshold" in message
+    assert "safetySettings[0]" not in message
+
+
+def test_gemini_nested_typo_names_the_full_path():
+    message = _error(
+        GeminiGenerateContentBlock,
+        {"generationConfig": {"thinkingConfig": {"thinking_level": "HIGH"}}},
+    )
+    path = "google.generationConfig.thinkingConfig.thinking_level"
+    assert f"`{path}` is not a field of the" in message
+    assert "allowed: includeThoughts, thinkingBudget, thinkingLevel" in message
+
+
+@pytest.mark.parametrize(
+    "data, path, reason",
+    [
+        ({"contents": []}, "contents", "messages"),
+        ({"systemInstruction": {}}, "systemInstruction", "system prompt"),
+        ({"tools": []}, "tools", "tools"),
+        ({"toolConfig": {}}, "toolConfig", "tools"),
+        ({"cachedContent": "cachedContents/1"}, "cachedContent", "system prompt and tools"),
+        ({"continuationToken": "abc"}, "continuationToken", "conversation state"),
+    ],
+)
+def test_gemini_reserved_path_is_built_by_yian(data, path, reason):
+    message = _error(GeminiGenerateContentBlock, data)
+    assert f"`google.{path}` is built by yian ({reason}); remove it" in message
+
+
+@pytest.mark.parametrize(
+    "key, value, reason",
+    [
+        ("responseSchema", {}, "structured output"),
+        ("responseMimeType", "application/json", "structured output"),
+        ("responseJsonSchema", {}, "structured output"),
+        ("_responseJsonSchema", {}, "structured output"),
+        ("responseFormat", {}, "structured output"),
+        ("candidateCount", 2, "yian reads one reply"),
+    ],
+)
+def test_gemini_generation_config_reserved_path_is_built_by_yian(key, value, reason):
+    message = _error(GeminiGenerateContentBlock, {"generationConfig": {key: value}})
+    assert f"`google.generationConfig.{key}` is built by yian ({reason}); remove it" in message
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"options": {"num_ctx": 8192}},
+        {"think": "high"},
+        {"think": True},
+        {"think": False},
+        {"keep_alive": "5m"},
+        {"keep_alive": 300},
+        {"keep_alive": -1},
+        {"options": {"mirostat": 2, "mirostat_tau": 5.0, "numa": False}},
+    ],
+)
+def test_ollama_field_is_accepted(data):
+    assert PROVIDER_BLOCKS["ollama"].model_validate(data).model_dump() == data
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"think": "max"},
+        {"think": "HIGH"},
+        {"think": 1},
+        {"keep_alive": True},
+        {"keep_alive": ["5m"]},
+        {"options": {"num_ctx": "8192"}},
+        {"options": {"stop": "END"}},
+        {"top_logprobs": 1.5},
+    ],
+)
+def test_ollama_bad_value_is_rejected(data):
+    with pytest.raises(ValidationError):
+        OllamaChatBlock.model_validate(data)
+
+
+def test_ollama_options_fields_match_the_client_options():
+    ollama = pytest.importorskip("ollama")
+    assert set(OllamaChatBlock.model_fields["options"].annotation.__args__[0].model_fields) == set(
+        ollama.Options.model_fields
+    )
+
+
+def test_ollama_block_fields_are_keywords_of_client_chat():
+    ollama = pytest.importorskip("ollama")
+    keywords = set(inspect.signature(ollama.Client.chat).parameters)
+    assert set(OllamaChatBlock.model_fields) <= keywords
+
+
+@pytest.mark.parametrize(
+    "data, path, reason",
+    [
+        ({"format": "json"}, "format", "structured output"),
+        ({"model": "llama3"}, "model", "llm_config.model"),
+        ({"messages": []}, "messages", "messages"),
+        ({"tools": []}, "tools", "tools"),
+        ({"stream": False}, "stream", "streaming"),
+    ],
+)
+def test_ollama_reserved_path_is_built_by_yian(data, path, reason):
+    message = _error(OllamaChatBlock, data)
+    assert f"`ollama.{path}` is built by yian ({reason}); remove it" in message
+
+
+def test_ollama_option_at_top_level_is_unknown():
+    message = _error(OllamaChatBlock, {"num_ctx": 8192})
+    assert "`ollama.num_ctx` is not a field of the Ollama /api/chat request" in message
+    assert "allowed: keep_alive, logprobs, options, think, top_logprobs" in message
+    message = _error(OllamaChatBlock, {"options": {"num_ctxx": 8192}})
+    assert "`ollama.options.num_ctxx` is not a field of the" in message
+
+
+@pytest.mark.parametrize("block_cls", NEW_BLOCKS, ids=lambda cls: cls.__name__)
+def test_new_block_errors_never_echo_values(block_cls):
+    assert SENTINEL not in _error(block_cls, {"typo": SENTINEL, "tools": SENTINEL})

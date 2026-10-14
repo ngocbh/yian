@@ -89,5 +89,5 @@ nodes:
     input:                          # the SEED carried record — defines 'a
       transcript: ${input.opening}
       exited: false                 # the CASE's exit branch sets true for exact /exit or /quit
-    while: "not ${exited}"          # pre-check over a carried field
+    while: not exited               # pre-check over a carried field
 output: ${chat.output.transcript}

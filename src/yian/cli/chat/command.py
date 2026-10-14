@@ -35,7 +35,6 @@ from rich.markdown import Markdown
 from rich.text import Text
 
 from yian.cli.chat import tools as chat_tools
-from yian.cli.utils import displayable
 from yian.cli.run import (  # reused helpers
     _default_run_log_path,
     _ensure_cwd_importable,
@@ -48,6 +47,7 @@ from yian.cli.run import (  # reused helpers
 )
 from yian.compose.helpers.errors import LoadError
 from yian.compose.loader import load_flow
+import yian.json_codec as json_codec
 from yian.run import _run_flow_controlled
 from yian.events import NodeSucceeded
 from yian.tools import registered_tools
@@ -229,7 +229,8 @@ def chat(
                         return
                     segment = _last_segment(event.node_id)
                     if segment == "reply":
-                        render(partial(console.print, Markdown(str(displayable(event.output)))))
+                        reply_text = str(json_codec.displayable(event.output))
+                        render(partial(console.print, Markdown(reply_text)))
                     elif segment == "__end__" and isinstance(event.output, dict):
                         state["transcript"] = event.output.get(
                             "transcript", state["transcript"]

@@ -16,6 +16,7 @@ import yian.json_codec as json_codec
 
 
 BIG = 10**4999 + 12345  # 5000 digits, past Python's default 4300-digit limit
+DIGITS = json_codec.int_text(BIG)
 
 
 @pytest.fixture(autouse=True)
@@ -95,6 +96,34 @@ def test_parse_int_rejects_long_non_int_text(text: str) -> None:
     with pytest.raises(ValueError, match="invalid literal for int") as caught:
         json_codec.parse_int(text)
     assert len(str(caught.value)) < 100
+
+
+def test_as_text_writes_long_ints_in_full() -> None:
+    """Long ints, alone or inside containers, are written with every digit."""
+    assert json_codec.as_text(BIG) == DIGITS
+    assert json_codec.as_text(-BIG) == "-" + DIGITS
+    assert json_codec.as_text([1, BIG]) == "[1, " + DIGITS + "]"
+    assert json_codec.as_text({"a": BIG}) == "{'a': " + DIGITS + "}"
+    assert json_codec.as_text((BIG,)) == "(" + DIGITS + ",)"
+
+
+@pytest.mark.parametrize("value", [5, [1, "a", None, True, 2.5], {"k": "v"}, "text"])
+def test_as_text_matches_str_for_values_without_long_ints(value) -> None:
+    """Values without long ints get Python's own `str`."""
+    assert json_codec.as_text(value) == str(value)
+
+
+def test_displayable_spells_big_ints_and_keeps_other_values() -> None:
+    """`displayable` swaps long ints for their digits and leaves other values alone."""
+    assert DIGITS in str(json_codec.displayable({"a": [BIG]}))
+    assert DIGITS in repr(json_codec.displayable((BIG,)))
+    assert repr(json_codec.displayable(BIG)) == DIGITS
+    small = {"a": [1, 2.5, "x", None, True], "b": (3,)}
+    assert json_codec.displayable(small) is small
+    marker = object()
+    assert json_codec.displayable(marker) is marker
+    assert json_codec.displayable(True) is True
+    assert json_codec.displayable(7) == 7
 
 
 def test_dumps_and_loads_round_trip_a_long_int() -> None:

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
 import stat
 from threading import Lock
 
+import yian.json_codec as json_codec
 from yian.memory.contracts import (
     JsonObject,
     MemoryOperationError,
@@ -59,7 +59,7 @@ def _encode(backend: str, state: JsonObject | None) -> str:
             "storage envelope",
         )
     )
-    return json.dumps(
+    return json_codec.dumps(
         envelope,
         ensure_ascii=False,
         allow_nan=False,
@@ -74,7 +74,7 @@ def _decode(raw: object, backend: str) -> JsonObject | None:
             raise ValueError("envelope must be text")
         envelope = _thaw_json_object(
             _freeze_json_object(
-                json.loads(raw, object_pairs_hook=_object_pairs),
+                json_codec.loads(raw, object_pairs_hook=_object_pairs),
                 "storage envelope",
             )
         )

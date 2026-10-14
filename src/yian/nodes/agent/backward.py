@@ -8,12 +8,12 @@ configuration, expression evaluation, or memory operations.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import SecretStr
 
+import yian.json_codec as json_codec
 import yian.llm_clients as llm_clients
 from yian.llm_clients.connection import legacy_connection_config
 from yian.expr.lineage import FeedbackValue, has_feedback, validate_feedback
@@ -91,10 +91,10 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 def _parse_result(text: str) -> BackwardResult:
     """Convert only outer channel arrays; nested lists stay positional feedback."""
-    value = json.loads(text, object_pairs_hook=_unique_object)
+    value = json_codec.loads(text, object_pairs_hook=_unique_object)
     if type(value) is not dict or set(value) != {"input_feedback", "self_feedback", "variable_feedback"}:
         raise ValueError("backward response must contain exactly the three feedback channels")
-    json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    json_codec.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
     inputs, own, variables = (value[name] for name in ("input_feedback", "self_feedback", "variable_feedback"))
     if type(inputs) is not dict or type(variables) is not dict or type(own) is not list:
         raise TypeError("backward response channels must be object, array, and object")
@@ -153,7 +153,7 @@ def backward_agent(
         },
         "feedback": feedback, "downstream_context": context.downstream_context,
     }
-    prompt = json.dumps(material, ensure_ascii=False, allow_nan=False)
+    prompt = json_codec.dumps(material, ensure_ascii=False, allow_nan=False)
     prompt.encode("utf-8")
     config = legacy_connection_config(data["effective_llm_config"])
     if api_key is not None:

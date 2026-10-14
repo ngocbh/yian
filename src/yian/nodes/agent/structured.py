@@ -33,6 +33,7 @@ from uuid import uuid4
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model
 
+import yian.json_codec as json_codec
 from yian.memory.contracts import (
     MemoryContext,
     EvaluationTrace,
@@ -544,7 +545,7 @@ def _generate_fallback(
             text = text_of(reply)
             check_stopped()
             record_model_text(evaluation_trace, text)
-            obj = schema.model_validate(json.loads(_strip_code_fence(text)))
+            obj = schema.model_validate(json_codec.loads(_strip_code_fence(text)))
             value = _unwrap(obj, typ)
             reject_nonfinite(value, "structured output")
             if memory_context.transcript is not None:

@@ -14,13 +14,13 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import json
 import struct
 from dataclasses import fields, is_dataclass
 from datetime import date, datetime
 from enum import Enum
 from typing import Any
 
+import yian.json_codec as json_codec
 from yian.compile.model import CompiledFlow, Edge, Flow, FlowOutput, validate_growth_metadata
 from yian.diagnostics import OriginRef
 from yian.memory.contracts import (
@@ -420,7 +420,7 @@ def _canonical_value(value: Any, ctx: _ManifestContext, path: str) -> Any:
     if isinstance(value, bool):
         return {"type": "bool", "value": value}
     if isinstance(value, int):
-        return {"type": "int", "value": str(value)}
+        return {"type": "int", "value": json_codec.int_text(value)}
     if isinstance(value, float):
         return {"type": "float", "value": struct.pack("!d", value).hex()}
     if isinstance(value, str):
@@ -1064,7 +1064,7 @@ def _flow_manifest(
 
 def _canonical_json(value: Any) -> str:
     """Encode already-canonical primitives in one byte-stable JSON spelling."""
-    return json.dumps(
+    return json_codec.dumps(
         value,
         ensure_ascii=False,
         allow_nan=False,

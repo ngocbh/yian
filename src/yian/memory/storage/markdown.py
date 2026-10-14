@@ -10,13 +10,13 @@ from __future__ import annotations
 from contextlib import contextmanager
 import fcntl
 import hashlib
-import json
 import os
 from pathlib import Path
 import tempfile
 from threading import Lock
 from typing import Iterator, Protocol, runtime_checkable
 
+import yian.json_codec as json_codec
 from yian.memory.contracts import JsonObject, _freeze_json_object, _thaw_json_object
 from yian.memory.storage.sqlite import check_storage_path
 
@@ -215,7 +215,7 @@ class FileMarkdownStore:
         new_version = markdown_version(text)
         # Encode the log line before touching the document so a bad value
         # cannot leave a replaced document without its log entry.
-        line = json.dumps(
+        line = json_codec.dumps(
             {"base_version": base_version, "version": new_version,
              "provenance": provenance},
             allow_nan=False,

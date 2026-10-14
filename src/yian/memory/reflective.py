@@ -10,7 +10,6 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
-import json
 import os
 import re
 from threading import RLock
@@ -22,6 +21,7 @@ from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+import yian.json_codec as json_codec
 from yian.llm_clients.connection import legacy_connection_config, resolve_model_config, split_model_config
 from yian.llm_clients import LLMConfig, model_from_config
 from yian.memory.contracts import (
@@ -218,7 +218,7 @@ def _copy_json_object(value: object, name: str) -> JsonObject:
 
 def _canonical_json(value: JsonValue) -> str:
     """Return one stable compact JSON encoding."""
-    return json.dumps(
+    return json_codec.dumps(
         value,
         ensure_ascii=False,
         allow_nan=False,

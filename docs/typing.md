@@ -87,6 +87,43 @@ error. Rendering an int as text (embedded in a string or in prompt text) follows
 same limit; see
 [Expressions → Arithmetic follows Python](expressions.md#arithmetic-follows-python).
 
+## Nesting limit
+
+A yian value nests at most 100 levels (`typesys.values.MAX_VALUE_NESTING`), counting
+itself. Each dict, list, tuple, pydantic model (such as a `FileRef`), or dataclass
+instance is one level; a `TypedValue` wrapper and a scalar add none. A record or list
+built around a value is a new value one level deeper, so wrapping a 100-level value
+fails. `reject_deep_nesting(value, where)` checks without recursion and raises
+`TypeCheckError` whose `path` locates the first container past the limit:
+
+```
+<where> at <path>: value nests deeper than 100 levels, the limit for a yian value (each record and list is a level)
+```
+
+The first boundary that sees a deeper value rejects it:
+
+- a run input may nest 100 levels; a deeper one makes `run_flow` raise `ValueError`
+  (a `TypeCheckError`) naming `input 'x'` and the path, before the log exists;
+- a binding's value (expression result, literal, or default) or a MAP `over` list:
+  the node fails with `binding.evaluate` at the binding or default. `${[x]}` around a
+  100-level `x` fails, and MAP items may nest 99 levels. An AGENT variable default
+  fails `node.execute`. Only a binding's final value is checked, not temporaries
+  inside an expression;
+- a node output, checked whole when the node succeeds: the node fails with
+  `contract.output` at the field path. A flow output is its END's output, so
+  `output: ${n.output}` carries a 100-level value, but a record flow output
+  `{t: ${n.output}}` adds a level and fails at `__end__`. A MAP's result list adds a
+  level too, so a MAP whose children return 100-level values fails at its fan-in END
+  (`<map>/__end__`); a LOOP body's record output likewise counts its level;
+- `RunResult.backward(feedback)`: deeper feedback raises `ValueError` before any
+  backward attempt starts.
+
+START's input record holds the input values, so it alone may sit one level over the
+limit. Replaying or resuming a recorded log does not re-check the limit, so logs
+recorded before it still replay. The run-log codecs (`canonical_typed`,
+`canonical_seed`, `encode_pool`) do not apply it; they see only values these
+boundaries bounded.
+
 ## `TypedValue` — self-describing, losslessly serializable
 
 Each value is a frozen pydantic model pinning its `ValueKind` as a `Literal`

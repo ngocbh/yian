@@ -72,6 +72,17 @@ this model whenever you design anything:
   typed value bytes with `runtime.log.decode_typed_json`; never call
   `sys.set_int_max_str_digits` in source. Show a long int in a message with
   `typesys.values.value_repr`. Rendering one as text stays an expression error.
+- A yian value nests at most `typesys.values.MAX_VALUE_NESTING` (100) levels,
+  counting itself; each dict, list, tuple, model, or dataclass is a level and a
+  `TypedValue` adds none. `reject_deep_nesting(value, where, *,
+  enclosing_levels=0)` checks iteratively, before the non-finite walk, at the same
+  entries: binder (`binding.evaluate`, MAP `over` included), AGENT variable
+  default (`node.execute`), `run_flow` inputs and `RunResult.backward` feedback
+  (`ValueError`). Live success admission checks a node output whole
+  (`contract.output` at the path); a record or list built around a value is a
+  level deeper, so a MAP's result list or a record flow output can fail at its
+  END. Only the kind-blind `commits_input_record` trait (START) may go one level
+  over. Replay and the run-log codecs never apply the limit, so older logs replay.
 - `AgentNode.variables` reuses ordered `Parameter` declarations, each with an
   exact contract and explicit typed default. Reject duplicate names and input
   collisions. Resolve a detached default record once per invocation, then render
@@ -510,7 +521,11 @@ Most are just the functional model (above) made enforceable:
   explicit attempt driver. Ready/replay validation must not call a node or
   materialize transcript contexts. `RuntimeBackwardState` is the sole attempt
   authority. `project_owner_contexts` is the only episode projection; forward
-  execution keeps no per-memory episode inventory.
+  execution keeps no per-memory episode inventory. Memory JSON allows 128 levels,
+  so run material at the value limit fits; a context that still cannot be built
+  raises `OwnerContextError` with the owner's `BackwardContext`, and the driver
+  records `memory.invalid_context` naming that occurrence and the cause (only
+  root fallback feedback has no node). Rebuild a `LearnContext`; never deep-copy one.
 - **Binding capture follows the actual read boundary** — optional input capture
   uses the existing expression walk and a paired value/presence/source resolver.
   Never reevaluate a callable or reconstruct provenance from value equality.

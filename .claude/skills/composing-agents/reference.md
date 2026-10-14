@@ -279,6 +279,11 @@ explicitly: a `case` value branch `then: null` under `output: Optional[...]`, or
 exactly; rendering one past Python's digit limit as text still fails, and an int
 literal written in the YAML past that limit is a load error.
 
+A value nests at most 100 levels, counting each record and list. A binding or MAP
+`over` list nested deeper fails `binding.evaluate` and a node output fails
+`contract.output`, naming the path; `${[x]}`, a record flow output, or a MAP's result
+list around a 100-level value is one level too deep. A run input may nest 100 levels.
+
 Bounds require two ordered numeric literals and exclude booleans. Integer bounds
 retain arbitrary precision. Float bounds must be finite; integer endpoints used
 in a float domain must convert without rounding. Bounds compose with other

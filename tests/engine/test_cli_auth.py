@@ -2,6 +2,8 @@
 
 import importlib
 import json
+from types import SimpleNamespace
+import warnings
 
 from langchain_core.messages import AIMessage
 import pytest
@@ -349,17 +351,15 @@ def checks(monkeypatch, setup_auth):
     fake = Checks()
     monkeypatch.setattr(auth_cli, "list_models", fake.list_models)
     monkeypatch.setattr(auth_cli, "_model_answers", fake.model_answers)
-    for name in ("OLLAMA_BASE_URL", "VLLM_BASE_URL", "VLLM_API_KEY"):
+    variables = ("OLLAMA_BASE_URL", "VLLM_BASE_URL", "VLLM_API_KEY", "OPENAI_API_VERSION")
+    for name in variables:
         monkeypatch.delenv(name, raising=False)
     return setup_auth[0], fake
 
 
 @pytest.mark.parametrize(
     "provider",
-    [
-        "anthropic", "google", "xai", "deepseek", "qwen", "qwen-cn", "glm",
-        "glm-cn", "minimax", "minimax-cn", "openrouter",
-    ],
+    sorted(set(PROVIDER_API_KEY_ENV) - {"openai", "azure", "ollama", "vllm"}),
 )
 def test_api_key_provider_setup_saves_key_and_model(monkeypatch, checks, provider):
     store, fake = checks
@@ -486,6 +486,72 @@ def test_vllm_key_is_optional(monkeypatch, checks):
     assert "private-" not in result.output
 
 
+def test_vllm_named_key_variable_is_required(monkeypatch, checks):
+    store, fake = checks
+    monkeypatch.delenv("MY_KEY", raising=False)
+    args = ["auth", "vllm", "--model", "m1", "--api-key-env", "MY_KEY"]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 1 and "MY_KEY" in result.output
+    assert fake.listings == [] and not store.path.exists()
+
+
+class Tty:
+    def isatty(self):
+        return True
+
+
+@pytest.fixture
+def terminal(monkeypatch):
+    """Run the CLI as if on a terminal and answer the hidden key prompt."""
+    import questionary
+
+    prompts = []
+    answer = SimpleNamespace(value="")
+
+    def password(message):
+        prompts.append(message)
+        return SimpleNamespace(ask=lambda: answer.value)
+
+    # CliRunner swaps sys.stdin during invoke, so the module's sys is replaced.
+    monkeypatch.setattr(auth_cli, "sys", SimpleNamespace(stdin=Tty()))
+    monkeypatch.setattr(questionary, "password", password)
+    return prompts, answer
+
+
+def test_hidden_prompt_reads_the_key(monkeypatch, checks, terminal):
+    store, fake = checks
+    prompts, answer = terminal
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    answer.value = "private-key"
+    result = runner.invoke(app, ["auth", "anthropic", "--model", "m1"])
+    assert result.exit_code == 0, result.output
+    assert prompts == ["anthropic API key:"]
+    assert fake.listings == [("anthropic", "private-key", None)]
+    assert store.selection("anthropic").method == "api_key"
+
+    answer.value = None
+    result = runner.invoke(app, ["auth", "anthropic", "--model", "m2"])
+    assert result.exit_code == 1
+    assert "the previous login is unchanged" in result.output
+    assert store.selection("anthropic").model == "m1"
+
+
+def test_hidden_prompt_empty_answer_means_no_vllm_key(monkeypatch, checks, terminal):
+    store, fake = checks
+    prompts, answer = terminal
+    result = runner.invoke(app, ["auth", "vllm", "--model", "m1"])
+    assert result.exit_code == 0, result.output
+    assert prompts == ["vllm API key (leave empty for none):"]
+    assert store.selection("vllm").method == "none"
+
+    monkeypatch.delenv("MY_KEY", raising=False)
+    args = ["auth", "vllm", "--model", "m2", "--api-key-env", "MY_KEY"]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 1 and "no API key was supplied" in result.output
+    assert prompts[-1] == "vllm API key:"
+    assert store.selection("vllm").model == "m1"
+
+
 def test_noninteractive_setup_requires_model(monkeypatch, checks):
     store, fake = checks
     monkeypatch.setenv("ANTHROPIC_API_KEY", "private-key")
@@ -498,6 +564,7 @@ def test_noninteractive_setup_requires_model(monkeypatch, checks):
 def test_azure_setup_saves_endpoint_key_and_deployment(monkeypatch, checks):
     store, fake = checks
     monkeypatch.setenv("AZURE_OPENAI_API_KEY", "private-key")
+    monkeypatch.setenv("OPENAI_API_VERSION", "2025-03-01-preview")
     endpoint = "https://r.openai.azure.com/"
     result = runner.invoke(app, ["auth", "azure", "--endpoint", endpoint, "--model", "dep"])
     assert result.exit_code == 0, result.output
@@ -519,6 +586,16 @@ def test_azure_setup_saves_endpoint_key_and_deployment(monkeypatch, checks):
     assert result.exit_code == 1 and "endpoint" in result.output
     assert len(fake.answers) == 1 and fake.listings == []
     assert store.path.read_bytes() == before
+
+
+def test_azure_setup_requires_the_api_version(monkeypatch, checks):
+    store, fake = checks
+    monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
+    endpoint = "https://r.openai.azure.com/"
+    result = runner.invoke(app, ["auth", "azure", "--endpoint", endpoint, "--model", "dep"])
+    assert result.exit_code == 1 and "OPENAI_API_VERSION" in result.output
+    assert "AZURE_OPENAI_API_KEY" not in result.output
+    assert fake.answers == [] and fake.listings == [] and not store.path.exists()
 
 
 class StubModel:
@@ -549,8 +626,8 @@ def test_model_answers_builds_and_invokes_once(monkeypatch):
     assert auth_cli._model_answers("azure", "dep", "private-key", "https://r/") is None
     provider, name, base_url, kwargs = built[0]
     assert (provider, name, base_url) == ("azure", "dep", "https://r/")
-    assert kwargs["api_key"] == "private-key" and kwargs["max_retries"] == 0
-    assert "timeout" in kwargs
+    assert kwargs["api_key"] == "private-key"
+    assert kwargs["timeout"] == 30 and kwargs["max_retries"] == 0
     assert len(model.prompts) == 1
 
     model.failure = RuntimeError("bad key private-key")
@@ -566,8 +643,29 @@ def test_model_answers_builds_and_invokes_once(monkeypatch):
     assert problem == "Echo: rejected input [REDACTED]"
 
     model.failure = None
+    # A keyless vLLM login is checked with the client's dummy key, not VLLM_API_KEY.
+    monkeypatch.setenv("VLLM_API_KEY", "private-ambient")
     assert auth_cli._model_answers("vllm", "m1", None, None) is None
+    assert built[-1][3]["api_key"] == "EMPTY"
+    assert auth_cli._model_answers("ollama", "m1", None, None) is None
     assert "api_key" not in built[-1][3]
+
+
+def test_model_answers_mutes_the_unknown_model_warning(monkeypatch):
+    class Client:
+        def get_llm(self):
+            warnings.warn(
+                "Model 'claude-x' is not in the known model list for provider "
+                "'anthropic'. Continuing anyway.",
+                RuntimeWarning,
+            )
+            return StubModel()
+
+    monkeypatch.setattr(auth_cli, "create_llm_client", lambda *a, **k: Client())
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        problem = auth_cli._model_answers("anthropic", "claude-x", "private-key", None)
+    assert problem is None and caught == []
 
 
 def test_model_answers_reports_a_missing_extra(monkeypatch):

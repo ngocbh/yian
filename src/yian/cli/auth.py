@@ -26,7 +26,7 @@ from yian.llm_clients.model_list import ModelListError, list_models
 from yian.llm_clients.redact import redact_key, scrub_key
 
 _KINDS = {"api_key": "api-key", "subscription": "subscription", "none": "none"}
-_CANCELLED = "Authentication cancelled; the previous connection is unchanged"
+_CANCELLED = "Authentication cancelled; the previous login is unchanged"
 _NO_DEFAULT = (
     "No default provider is saved; choose one with 'yian auth <provider> --default'"
 )
@@ -265,8 +265,8 @@ def _model_answers(
 ) -> Optional[str]:
     """Send the model one short prompt and say why it failed, if it did.
 
-    The client is built from the given key and endpoint only. Without a key, the
-    client takes its keyless path (vLLM, Ollama).
+    The client is built from the given key and endpoint only. Without a key, vLLM
+    gets the dummy key its client sends to a keyless server, and Ollama sends none.
 
     Args:
         provider (`str`): Provider name.
@@ -282,6 +282,10 @@ def _model_answers(
     options: dict = {"max_retries": 0, "timeout": 30}
     if key is not None:
         options["api_key"] = key
+    elif provider in OPTIONAL_API_KEY_PROVIDERS:
+        # Passed explicitly so an ambient VLLM_API_KEY doesn't stand in for the
+        # keyless login being saved.
+        options["api_key"] = "EMPTY"
     try:
         with warnings.catch_warnings():
             # The reply decides whether the model is usable, not yian's catalog.
@@ -312,12 +316,18 @@ def _setup_provider(
     """Read a provider's key, endpoint, and model, check the model, and save the login.
 
     A model in the provider's listing is accepted as is. Any other model, and every
-    Azure deployment, must answer one short prompt.
+    Azure deployment, must answer one short prompt. vLLM's key is optional unless
+    `api_key_env` names its variable.
 
     Raises:
         AuthError: A value is missing or invalid, or the model did not answer.
     """
     if provider == "azure":
+        # The Azure client reads the API version only from the environment.
+        if not os.environ.get("OPENAI_API_VERSION"):
+            raise AuthError(
+                "Azure needs OPENAI_API_VERSION set to its API version (runs read it too)"
+            )
         endpoint = endpoint or _ask(
             "Azure OpenAI endpoint (https://<resource>.openai.azure.com/):",
             option="--endpoint",
@@ -331,7 +341,7 @@ def _setup_provider(
         key = _api_key(
             provider,
             api_key_env or PROVIDER_API_KEY_ENV[provider],
-            optional=provider in OPTIONAL_API_KEY_PROVIDERS,
+            optional=provider in OPTIONAL_API_KEY_PROVIDERS and api_key_env is None,
         )
     models = None
     if provider == "azure":
@@ -410,8 +420,9 @@ def auth(
     the default only when no default is saved. openai signs in with a
     subscription or an API key. Other providers read the key from their
     environment variable or a hidden prompt; ollama takes none, and vllm's is
-    optional. A model the provider doesn't list, and every Azure deployment,
-    must answer one short prompt before the login is saved.
+    optional unless --api-key-env names its variable. A model the provider
+    doesn't list, and every Azure deployment, must answer one short prompt
+    before the login is saved. azure also needs OPENAI_API_VERSION set.
 
     `yian auth PROVIDER --default` makes a saved login the default.
     `yian auth PROVIDER --remove` deletes one saved login.

@@ -124,3 +124,24 @@ def test_loop_rejects_an_empty_predicate_at_load():
 
     with pytest.raises(LoadError, match=r"`while:` is not a valid boolean expression"):
         load_flow(_PREDICATE_FLOW.replace("PREDICATE", "while: ''"))
+
+
+def test_loop_reports_a_malformed_predicate_at_its_field():
+    """A predicate that fails to parse is located at its `until:` line, not the node's."""
+    from pathlib import Path
+
+    from yian.compose import load_flow
+
+    seeds = Path(__file__).resolve().parents[1] / "seeds"
+    text = (seeds / "28-refine-loop.yaml").read_text()
+    assert "    until: score >= 0.8" in text
+    text = text.replace("    until: score >= 0.8", "    until: score >= >= 1")
+
+    with pytest.raises(LoadError, match=r"`until:` is not a valid boolean expression") as excinfo:
+        load_flow(text, search_paths=[seeds])
+    line = next(
+        number
+        for number, row in enumerate(text.splitlines(), start=1)
+        if row.startswith("    until:")
+    )
+    assert excinfo.value.diagnostic.frames[-1].range.start_line == line

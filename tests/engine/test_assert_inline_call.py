@@ -1,7 +1,7 @@
 """A named `call` node whose `.output` a flow `asserts:` expression reads.
 
 A flow-level post assert can reference any node's output, including a named `call`
-node's: `dbl_call` runs the `dbl` def, and `${dbl_call.output} >= 0` is classified
+node's: `dbl_call` runs the `dbl` def, and `dbl_call.output >= 0` is classified
 post and checked after the run. No synth node is minted — the call is an ordinary,
 author-named node in the flow.
 """
@@ -45,7 +45,7 @@ nodes:
       n: ${{input.v}}
 output: ${{main.output}}
 asserts:
-  - "${{dbl_call.output}} >= 0"
+  - "dbl_call.output >= 0"
 """
 
 

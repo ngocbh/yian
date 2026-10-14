@@ -29,8 +29,8 @@ defs:
         output: int
     output: ${x.output}
     asserts:
-      - "${input.n} >= 0"
-      - "${x.output} < 100"
+      - "input.n >= 0"
+      - "x.output < 100"
 """
 
 _CALL_FLOW = f"""
@@ -79,7 +79,7 @@ def test_call_child_boundary_assert_satisfying_value_succeeds():
 
 
 def test_call_child_boundary_assert_violating_value_fails():
-    res = run_flow(load_flow(_CALL_FLOW), {"v": -1})          # -1 violates ${input.n} >= 0
+    res = run_flow(load_flow(_CALL_FLOW), {"v": -1})          # -1 violates input.n >= 0
     assert res.status == "failed"
     assert res.failure is not None
     assert "assert failed" in res.failure.message
@@ -91,7 +91,7 @@ def test_call_child_post_assert_satisfying_value_succeeds():
 
 
 def test_call_child_post_assert_violating_value_fails():
-    res = run_flow(load_flow(_CALL_FLOW), {"v": 60})          # x=120 violates ${x.output} < 100
+    res = run_flow(load_flow(_CALL_FLOW), {"v": 60})          # x=120 violates x.output < 100
     assert res.status == "failed"                            # child END_ID pool-scoped post-assert
     assert res.failure is not None
     assert "assert failed" in res.failure.message
@@ -106,7 +106,7 @@ def test_map_child_asserts_all_elements_satisfy_succeeds():
 
 
 def test_map_child_assert_one_violating_element_fails():
-    res = run_flow(load_flow(_MAP_FLOW), {"vs": [1, -1, 3]})         # element -1 violates ${input.n} >= 0
+    res = run_flow(load_flow(_MAP_FLOW), {"vs": [1, -1, 3]})         # element -1 violates input.n >= 0
     assert res.status == "failed"                                    # per-element eager boundary eval
     assert res.failure is not None
     assert "assert failed" in res.failure.message

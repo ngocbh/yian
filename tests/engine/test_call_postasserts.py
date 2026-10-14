@@ -84,7 +84,7 @@ def _load(asserts: str):
 
 def test_call_post_assert_true_passes():
     # a true `${output.field}` post-assert -> the run succeeds.
-    loaded = _load("      - ${output.n} == 4")
+    loaded = _load("      - output.n == 4")
     res = run_flow(loaded, {})
     assert res.status == "succeeded", res.failure
     assert res.output == {"report": "report for ACME", "n": 4}
@@ -96,7 +96,7 @@ def test_call_post_assert_true_passes():
 def test_call_post_assert_false_fails_loudly():
     # A false `${output}` post-assert fails on the CLONED CHILD END
     # (`research/__end__`), where the lowered assertion now rides.
-    loaded = _load("      - ${output.n} == 999")
+    loaded = _load("      - output.n == 999")
     res = run_flow(loaded, {})
     assert res.status == "failed"
     failed = [e for e in res.events if isinstance(e, RunFailed)]
@@ -111,15 +111,15 @@ def test_call_post_assert_false_fails_loudly():
 def test_call_post_assert_reads_input_and_output_true():
     # a post-assert reading BOTH a declared call input (`topic`) AND `${output}` -> true holds.
     # n == len("ACME") == 4, so `len(topic) == n` is satisfied via the recovered input record.
-    loaded = _load("      - ${output.n} == 4")  # baseline true
+    loaded = _load("      - output.n == 4")  # baseline true
     res = run_flow(loaded, {})
     assert res.status == "succeeded", res.failure
 
 
 def test_call_post_assert_reads_input_and_output_false():
     # an input+output post-assert that is FALSE -> loud failure. `topic` ("ACME") is the
-    # recovered call input; `${output.report}` mentions it but `${topic} == "OTHER"` is false.
-    loaded = _load('      - ${topic} == "OTHER" and ${output.n} == 4')
+    # recovered call input; `${output.report}` mentions it but `topic == "OTHER"` is false.
+    loaded = _load('      - topic == "OTHER" and output.n == 4')
     res = run_flow(loaded, {})
     assert res.status == "failed"
     failed = [e for e in res.events if isinstance(e, RunFailed)]
@@ -129,7 +129,7 @@ def test_call_post_assert_reads_input_and_output_false():
 
 def test_call_post_assert_reads_input_true():
     # The input ref resolves from the call's canonical growth seed (not None/dropped).
-    loaded = _load('      - ${topic} == "ACME" and ${output.n} == 4')
+    loaded = _load('      - topic == "ACME" and output.n == 4')
     res = run_flow(loaded, {})
     assert res.status == "succeeded", res.failure
 
@@ -218,7 +218,7 @@ def test_call_post_assert_survives_recovery_true(tmp_path: Path):
     # (`action`) comes from the authoritative NodeExpanded seed.
     res = _drive_durable(
         tmp_path,
-        '      - ${action} == "deploy" and ${output} == "yes"',
+        '      - action == "deploy" and output == "yes"',
         "yes",
     )
     assert res.status == "succeeded", res.failure
@@ -229,7 +229,7 @@ def test_call_post_assert_survives_recovery_false(tmp_path: Path):
     # A false post-assert after recovery fails and remains located at the cloned child END.
     res = _drive_durable(
         tmp_path,
-        '      - ${action} == "deploy" and ${output} == "no"',
+        '      - action == "deploy" and output == "no"',
         "yes",
     )
     assert res.status == "failed"

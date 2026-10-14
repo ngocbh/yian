@@ -317,7 +317,7 @@ def test_partial_record_output_checks_names_and_typed_fields():
 def test_node_assert_on_a_partial_record_output_checks_typed_fields():
     text = _PARTIAL_CHILD.replace(
         "    input:\n      s: ${input.s}\n",
-        "    input:\n      s: ${input.s}\n    asserts:\n      - ${output.a.x} == 1\n",
+        "    input:\n      s: ${input.s}\n    asserts:\n      - output.a.x == 1\n",
     ) + "output: ${c.output.a}\n"
     assert "node 'c' assert: reference ${output.a.x} reads field 'x' on type str" in _load_error(
         text
@@ -327,7 +327,7 @@ def test_node_assert_on_a_partial_record_output_checks_typed_fields():
 def test_node_assert_on_an_exact_record_output_checks_typed_fields():
     text = _flow("{a: str}", "output: ${step.output.a}\n").replace(
         "    code: return None\n",
-        "    code: return None\n    asserts:\n      - ${output.a.b} == 1\n",
+        "    code: return None\n    asserts:\n      - output.a.b == 1\n",
     )
     assert (
         "node 'step' assert: reference ${output.a.b} reads field 'b' on type str, "

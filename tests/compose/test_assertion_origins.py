@@ -53,10 +53,10 @@ nodes:
     output: int
 output: ${worker.output}
 asserts:
-  - ${input.n} >= 0
-  - ${input.n} >= 0
+  - input.n >= 0
+  - input.n >= 0
   - call(truthy)
-  - ${worker.output} >= 0
+  - worker.output >= 0
 """
     document = SourceDocument.parse(text)
     loaded = load_flow(text)
@@ -67,16 +67,16 @@ asserts:
     end = loaded.compiled.nodes[END_ID]
 
     assert [assertion.display for assertion in start.post_asserts] == [
-        "${input.n} >= 0",
-        "${input.n} >= 0",
+        "input.n >= 0",
+        "input.n >= 0",
     ]
     assert [assertion.expression for assertion in start.post_asserts] == [
-        "${output.n} >= 0",
-        "${output.n} >= 0",
+        "output.n >= 0",
+        "output.n >= 0",
     ]
     assert [assertion.display for assertion in end.post_asserts] == [
         "call(truthy)",
-        "${worker.output} >= 0",
+        "worker.output >= 0",
     ]
     assert end.post_asserts[0].expression == "${__assert___call_0}"
 
@@ -106,13 +106,13 @@ nodes:
     code: return 1
     output: int
     asserts:
-      - ${output} >= 0
+      - output >= 0
   second: *shared_node
 output:
   first: ${first.output}
   second: ${second.output}
 asserts:
-  - &shared_rule ${input.n} >= 0
+  - &shared_rule input.n >= 0
   - *shared_rule
 """
     document = SourceDocument.parse(text)
@@ -164,7 +164,7 @@ asserts:
 
 def test_same_node_assertion_text_has_distinct_root_def_inline_and_flat_sites():
     """Lexically equal node assertions retain four physical identities."""
-    assertion_text = "${output} >= 0"
+    assertion_text = "output >= 0"
     text = f"""id: lexical-node-assertions
 name: lexical-node-assertions
 defs:
@@ -279,7 +279,7 @@ kind: code
 code: return 1
 output: int
 asserts:
-  - ${output} >= 0
+  - output >= 0
 """
     document = SourceDocument.parse(text)
     loaded = load_flow(text)
@@ -290,8 +290,8 @@ asserts:
         loaded.origin_resolver,
         node.post_asserts[0],
         cursor,
-        expression="${output} >= 0",
-        display="${output} >= 0",
+        expression="output >= 0",
+        display="output >= 0",
     )
 
 
@@ -307,8 +307,8 @@ nodes:
       n: 0
       exited: false
     asserts:
-      - ${output.n} >= 0
-      - ${output.n} >= 0
+      - output.n >= 0
+      - output.n >= 0
     nodes:
       bump:
         kind: code
@@ -363,8 +363,8 @@ defs:
         output: int
     output: ${worker.output}
     asserts:
-      - ${input.n} >= 0
-      - ${worker.output} >= 0
+      - input.n >= 0
+      - worker.output >= 0
 nodes:
   invoke:
     kind: call
@@ -372,7 +372,7 @@ nodes:
     input:
       n: 1
     asserts:
-      - ${n} >= 0 and ${output} >= 0
+      - n >= 0 and output >= 0
 output: ${invoke.output}
 """
     document = SourceDocument.parse(text)
@@ -414,17 +414,16 @@ output: ${invoke.output}
     assert relocated is not call_assertion
     assert relocated.origin == call_origin
     assert relocated.display == call_assertion.display
-    assert "${__assert_input_n}" in relocated.expression
-    assert "${output}" in relocated.expression
+    assert relocated.expression == "__assert_input_n >= 0 and output >= 0"
     assert catalog.resolve(relocated.origin) == catalog.resolve(call_origin)
 
 
 def test_virtual_assertions_do_not_mint_or_erase_programmatic_origins():
     """Source-free assembly leaves raw assertions empty and explicit origins intact."""
-    raw = "${input.n} >= 0"
+    raw = "input.n >= 0"
     explicit = OriginRef("programmatic-assertion")
     programmatic = Assertion(
-        "${worker.output} >= 0",
+        "worker.output >= 0",
         "programmatic worker assertion",
         explicit,
     )

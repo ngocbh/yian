@@ -177,7 +177,7 @@ asserts:
 
 def test_braced_boundary_assert_fail_fast_and_pass():
     """The braced boundary form fails for age 10 and succeeds for age 20."""
-    loaded = load_flow(_boundary_assert_flow("${input.age} >= 18"))
+    loaded = load_flow(_boundary_assert_flow("input.age >= 18"))
     assert run_flow(loaded, {"age": 10}).status == "failed"
     assert run_flow(loaded, {"age": 20}).status == "succeeded"
 
@@ -271,7 +271,7 @@ input:
   age: int
 {_BOUNDARY_ASSERT_ECHO_BODY}
 asserts:
-  - "${{system.run_id}} != null"
+  - "system.run_id != null"
 """
     with pytest.raises(LoadError):
         load_flow(flow)

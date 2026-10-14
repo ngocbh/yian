@@ -66,7 +66,7 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: "${score.output} >= 0.5"
+      - when: "score.output >= 0.5"
         then: positive
     else: cautious
   positive:
@@ -107,8 +107,8 @@ output:
   rating: ${plan.output.rating}
   score: ${plan.output.score}
 asserts:
-  - "${input.seed} >= 0.0"
-  - "${plan.output.score} >= 0.5"
+  - "input.seed >= 0.0"
+  - "plan.output.score >= 0.5"
 """
 
 
@@ -318,7 +318,7 @@ def test_post_terminal_assert_false_flips_succeeded_to_failed():
     # make_plan always returns score 0.9, so to fail the post assert we raise the
     # threshold via... no — instead use a flow whose post assert is unsatisfiable.
     flow = _ASSERT_FLOW.replace(
-        "${plan.output.score} >= 0.5", "${plan.output.score} >= 2.0"
+        "plan.output.score >= 0.5", "plan.output.score >= 2.0"
     )
     loaded = load_flow(flow)
     result = run_flow(loaded, {"topic": "ACME", "seed": 1.0})

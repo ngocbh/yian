@@ -106,8 +106,8 @@ def test_post_bare_producer_ref_lowers_to_synth_param():
 
 
 def test_post_dotted_field_ref_lowers_to_synth_field():
-    r = _lower(['${classify.output.label} == "x"'])
-    assert _expressions(r.end_post) == ['${__assert_classify.label} == "x"']
+    r = _lower(['classify.output.label == "x"'])
+    assert _expressions(r.end_post) == ['__assert_classify.label == "x"']
     assert r.synth_params == [Parameter(name="__assert_classify")]
     assert r.synth_wiring == {"__assert_classify": "${classify.output:-null}"}
 
@@ -148,7 +148,7 @@ def test_post_mixed_producer_and_unqualified_input_two_synths():
 
 def test_system_namespace_is_forbidden():
     with pytest.raises(LoadError):
-        _lower(["${system.run_id} != null"])
+        _lower(["system.run_id != null"])
 
 
 def test_dangling_producer_ref_raises():
@@ -160,7 +160,7 @@ def test_dangling_input_ref_raises():
     # A `${input.X}` naming an undeclared input is a loud LoadError (mirrors the old
     # classify_asserts dangling-input check).
     with pytest.raises(LoadError, match="nope"):
-        _lower(["${input.nope} != []"])
+        _lower(["input.nope != []"])
 
 
 def test_unknown_unqualified_name_remains_a_located_error():
@@ -196,7 +196,7 @@ def test_unknown_field_on_record_producer_raises():
     )
     with pytest.raises(LoadError, match="badfield"):
         _lower(
-            ["${synth.output.badfield} >= 0"],
+            ["synth.output.badfield >= 0"],
             valid_targets={"synth"},
             producers={"synth": ValueContract(view)},
         )
@@ -213,7 +213,7 @@ def test_unknown_field_on_partial_record_producer_raises():
 
     with pytest.raises(LoadError, match="badfield"):
         _lower(
-            ["${synth.output.badfield} >= 0"],
+            ["synth.output.badfield >= 0"],
             valid_targets={"synth"},
             producers={"synth": partial},
         )
@@ -232,12 +232,12 @@ def test_type_walk_preserves_the_producer_contract_and_origins():
     )
 
     lowered = _lower(
-        ["${synth.output.score} >= 0"],
+        ["synth.output.score >= 0"],
         valid_targets={"synth"},
         producers={"synth": contract},
     )
 
-    assert _expressions(lowered.end_post) == ["${__assert_synth.score} >= 0"]
+    assert _expressions(lowered.end_post) == ["__assert_synth.score >= 0"]
     assert contract.type is view
     assert contract.origins.default == OriginRef("producer-output")
 
@@ -246,7 +246,7 @@ def test_assert_lowering_rejects_non_contract_producer_map_values():
     """The flow-assert boundary accepts exact ValueContract values only."""
     with pytest.raises(TypeError, match="producer contracts.*ValueContract"):
         _lower(  # type: ignore[dict-item]
-            ["${synth.output} != null"],
+            ["synth.output != null"],
             valid_targets={"synth"},
             producers={"synth": Type.scalar(ValueKind.STRING)},
         )
@@ -270,9 +270,9 @@ def test_lowering_error_reports_display_not_rewritten_expression():
 def test_all_lowered_strings_parse():
     r = _lower(
         [
-            "${input.age} >= 18",
+            "input.age >= 18",
             "emit.output.n >= 1",
-            '${classify.output.label} == "x"',
+            'classify.output.label == "x"',
             "emit.output.n >= input.threshold",
         ]
     )
@@ -294,7 +294,7 @@ def test_ranges_are_not_carried_by_lowered_product():
     rng_pre = SourceRange(start_line=3, start_col=1, end_line=3, end_col=20)
     rng_post = SourceRange(start_line=4, start_col=1, end_line=4, end_col=20)
     r = _lower(
-        ["${input.age} >= 18", "emit.output.n >= 1"],  # [0] PRE, [1] POST
+        ["input.age >= 18", "emit.output.n >= 1"],  # [0] PRE, [1] POST
         assert_ranges=[rng_pre, rng_post],
     )
     assert len(r.start_pre) == 1
@@ -305,19 +305,19 @@ def test_ranges_are_not_carried_by_lowered_product():
 
 def test_lowering_without_ranges_needs_no_padding():
     """A source-free assert lowers without synthetic location state."""
-    r = _lower(["${input.age} >= 18"])
+    r = _lower(["input.age >= 18"])
     assert len(r.start_pre) == 1
     assert r.end_post == []
 
 
 def test_lowering_changes_only_expression_and_preserves_occurrence_metadata():
     """Display and origin belong to each occurrence even when executable text is rewritten."""
-    first = Assertion("${input.age} >= 18", "age must be adult", OriginRef("asserts/0"))
-    second = Assertion("${input.age} >= 18", "age must be adult", OriginRef("asserts/1"))
+    first = Assertion("input.age >= 18", "age must be adult", OriginRef("asserts/0"))
+    second = Assertion("input.age >= 18", "age must be adult", OriginRef("asserts/1"))
 
     lowered = _lower([first, second])
 
-    assert _expressions(lowered.start_pre) == ["${output.age} >= 18"] * 2
+    assert _expressions(lowered.start_pre) == ["output.age >= 18"] * 2
     assert [a.display for a in lowered.start_pre] == ["age must be adult"] * 2
     assert [a.origin for a in lowered.start_pre] == [first.origin, second.origin]
     assert lowered.start_pre[0] is not lowered.start_pre[1]

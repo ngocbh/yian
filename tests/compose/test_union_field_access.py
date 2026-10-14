@@ -166,8 +166,8 @@ def test_member_only_field_of_an_untagged_union_is_a_load_error():
 
 
 def test_member_only_field_in_a_flow_assert_is_a_load_error():
-    text = _flow("asserts:\n  - ${d.output.qty} > 0\noutput: ${d.output}\n")
-    assert f"assert '${{d.output.qty}} > 0': {_TAGGED_QTY}" in _load_error(text)
+    text = _flow("asserts:\n  - d.output.qty > 0\noutput: ${d.output}\n")
+    assert f"assert 'd.output.qty > 0': {_TAGGED_QTY}" in _load_error(text)
 
 
 def test_member_only_field_in_a_searched_case_when_is_a_load_error():
@@ -257,7 +257,7 @@ def test_member_only_field_of_a_map_item_is_a_load_error():
 def test_member_only_field_in_a_node_assert_is_a_load_error():
     text = _flow("output: ${d.output}\n").replace(
         "    code: return None\n",
-        "    code: return None\n    asserts:\n      - ${output.qty} > 0\n",
+        "    code: return None\n    asserts:\n      - output.qty > 0\n",
     )
     assert (
         "node 'd' assert: reference ${output.qty} reads field 'qty', which only union "
@@ -268,7 +268,7 @@ def test_member_only_field_in_a_node_assert_is_a_load_error():
 def test_shared_field_in_a_node_assert_loads():
     text = _flow("output: ${d.output}\n").replace(
         "    code: return None\n",
-        "    code: return None\n    asserts:\n      - ${output.note} != ''\n",
+        "    code: return None\n    asserts:\n      - output.note != ''\n",
     )
     load_flow(text)
 

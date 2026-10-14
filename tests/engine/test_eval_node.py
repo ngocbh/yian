@@ -231,7 +231,7 @@ def test_post_assert_isolated_from_node_input_mutation():
     pool = VariablePool()
     pool.set(START_ID, {"x": 1})
     node = _MutatingNode("n")
-    node.post_asserts = [Assertion("${x} == 1", "${x} == 1")]
+    node.post_asserts = [Assertion("x == 1", "x == 1")]
 
     result = drive(node, pool)
 
@@ -261,7 +261,7 @@ def test_wrapper_post_assertion_uses_assertion_stage_and_origin() -> None:
     assertion_origin = OriginRef("assert:n:post:0")
     node = FuncNode("n", lambda _inputs: "value", origin=OriginRef("node:n"))
     node.post_asserts = [
-        Assertion("${output} == 'other'", "output must match", origin=assertion_origin)
+        Assertion("output == 'other'", "output must match", origin=assertion_origin)
     ]
 
     result = drive(node)

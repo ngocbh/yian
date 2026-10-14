@@ -64,7 +64,7 @@ def _resolver(**children):
 
 def _output_parent(value: int) -> str:
     # A parent that calls echo-child with a fixed value, carrying a node-level
-    # `${output} < 100` post-assert. child doubles v -> output == 2*value.
+    # `output < 100` post-assert. child doubles v -> output == 2*value.
     return f"""
 id: out-parent
 name: out_parent
@@ -77,7 +77,7 @@ nodes:
     input:
       v: {value}
     asserts:
-      - ${{output}} < 100
+      - output < 100
 output: ${{callee.output}}
 """
 
@@ -95,7 +95,7 @@ def test_output_post_assert_satisfying_succeeds():
 
 
 def test_output_post_assert_violating_fails_on_child_end():
-    # v=60 -> output 120, violates ${output} < 100 -> loud failure fired on the CHILD END.
+    # v=60 -> output 120, violates output < 100 -> loud failure fired on the CHILD END.
     res = run_flow(_load_output(60), {})
     assert res.status == "failed"
     failed = [e for e in res.events if isinstance(e, RunFailed)]
@@ -128,7 +128,7 @@ nodes:
     input:
       v: {seed_expr}
     asserts:
-      - ${{v}} >= 0 and ${{output}} > 0
+      - v >= 0 and output > 0
 output: ${{callee.output}}
 """
 
@@ -146,7 +146,7 @@ def test_declared_input_post_assert_satisfying_succeeds():
 
 
 def test_declared_input_post_assert_violating_fails():
-    # v=-3 < 0 -> ${v} >= 0 violated, loud failure on the child END.
+    # v=-3 < 0 -> v >= 0 violated, loud failure on the child END.
     res = run_flow(_load_input(), {"v": -3})
     assert res.status == "failed"
     failed = [e for e in res.events if isinstance(e, RunFailed)]
@@ -176,7 +176,7 @@ output: ${approve.output}
 
 
 def _blocking_parent() -> str:
-    # The call carries a node-level ${output} < 100 post-assert. Recovery retries the
+    # The call carries a node-level output < 100 post-assert. Recovery retries the
     # unfinished HUMAN_INPUT, then the rebuilt child END evaluates this assertion.
     return """
 id: recovery-parent
@@ -192,7 +192,7 @@ nodes:
     input:
       v: ${input.v}
     asserts:
-      - ${output} < 100
+      - output < 100
 output: ${gate.output}
 """
 
@@ -207,7 +207,7 @@ def _load_blocking():
 def test_spawner_post_assert_fires_after_log_recovery(tmp_path: Path):
     # Interrupt the live HUMAN_INPUT after its NodeStarted is durable. Recovery replays the
     # expansion, retries the whole input node, and delivers 120. The rebuilt child END must
-    # then reject ${output} < 100 through its ordinary post-assert path.
+    # then reject output < 100 through its ordinary post-assert path.
     path = tmp_path / "spawner-post-assert.jsonl"
     interruption = _HostStop("interrupt before human answer")
 
@@ -243,7 +243,7 @@ name: echo_child
 input:
   v: int
 asserts:
-  - "${input.v} >= 0 and ${x.output} >= 0"
+  - "input.v >= 0 and x.output >= 0"
 nodes:
   x:
     kind: code
@@ -258,7 +258,7 @@ output: ${x.output}
 def _collision_parent() -> str:
     # The call declares input `v` seeded from the run arg; its node-level POST assert reads
     # the SAME declared input `${v}` (`< 100`). The child def already lowered `__assert_input_v`
-    # for its OWN `${input.v} >= 0` flow assert — so the spawner lowering must NOT reuse that name.
+    # for its OWN `input.v >= 0` flow assert — so the spawner lowering must NOT reuse that name.
     return """
 id: collision-parent
 name: collision_parent
@@ -273,7 +273,7 @@ nodes:
     input:
       v: ${input.v}
     asserts:
-      - "${v} < 100 and ${output} > 0"
+      - "v < 100 and output > 0"
 output: ${callee.output}
 """
 
@@ -325,7 +325,7 @@ def test_spawner_lowering_preserves_presentation_origin():
     callee = loaded.compiled.nodes["callee"]
     origin = OriginRef("nodes/callee/asserts/0")
     assertion = Assertion(
-        "${v} >= 0 and ${output} > 0",
+        "v >= 0 and output > 0",
         "callee input and output must be positive",
         origin,
     )
@@ -339,13 +339,13 @@ def test_spawner_lowering_preserves_presentation_origin():
     )
     lowered = flow.nodes[flow.end_id]
 
-    assert lowered.post_asserts[-1].expression.startswith("${__assert_input_v}")
+    assert lowered.post_asserts[-1].expression == "__assert_input_v >= 0 and output > 0"
     assert lowered.post_asserts[-1].display == assertion.display
     assert lowered.post_asserts[-1].origin is origin
 
 
 def test_collision_case_run_satisfying_succeeds():
-    # v=5: satisfies BOTH `${input.v} >= 0` (child) and `${v} < 100` (spawner). output == 10.
+    # v=5: satisfies BOTH `input.v >= 0` (child) and `v < 100` (spawner). output == 10.
     res = run_flow(_load_collision(), {"v": 5})
     assert res.status == "succeeded", res.failure
     assert res.output == 10
@@ -383,7 +383,7 @@ nodes:
     input:
       v: ${input.v}
     asserts:
-      - "${v} >= 0 and ${v} < 100 and ${output} > 0"
+      - "v >= 0 and v < 100 and output > 0"
 output: ${callee.output}
 """
 

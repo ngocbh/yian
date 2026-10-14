@@ -120,7 +120,7 @@ nodes:
     input:
       v: 60
     asserts:
-      - ${output} < 100
+      - output < 100
 output: ${callee.output}
 """
 
@@ -148,7 +148,7 @@ defs:
         input:
           v: ${input.v}
         asserts:
-          - ${output} < 100
+          - output < 100
     output: ${via.output}
 nodes:
   outer:

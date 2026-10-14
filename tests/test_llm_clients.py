@@ -176,7 +176,7 @@ def test_vllm_accepts_any_model_name():
     assert validate_model("vllm", "any/arbitrary-served-model") is True
 
 
-# --- Ollama (native client, thinking disabled) ------------------------------ #
+# --- Ollama (native client, no default think) ------------------------------ #
 
 
 def test_factory_routes_ollama_to_native_client():
@@ -186,11 +186,11 @@ def test_factory_routes_ollama_to_native_client():
     assert isinstance(client, OllamaClient)
 
 
-def test_ollama_get_llm_disables_thinking_and_strips_v1(monkeypatch):
+def test_ollama_get_llm_sets_no_thinking_default_and_strips_v1(monkeypatch):
     # an OpenAI-style base URL (with /v1) must be normalized to the native one
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://gpu-box:11434/v1")
     m = create_llm_client("ollama", "qwen3.5:35b", temperature=0.0).get_llm()
-    assert m.reasoning is False  # thinking off -> answer lands in content
+    assert m.reasoning is None  # no default: `think` is sent only from the ollama block
     assert str(m.base_url) == "http://gpu-box:11434"
     assert m.temperature == 0.0
 

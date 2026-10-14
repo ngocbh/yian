@@ -464,6 +464,7 @@ Compose phases.
 | a node kind's fields or how it builds | `compose/nodes/<kind>.py` |
 | a whole-graph pass (edges, validation, cycles) | the phase packages `compose/{parse,desugar,edges,validate,build}/` |
 | the one-pass YAML source document | `compose/source/document.py` (`SourceDocument`) |
+| how plain YAML scalars read (YAML 1.2 core plus dates and merge keys) | `compose/source/scalars.py` |
 | physical, virtual, or projected source navigation | `compose/source/cursor.py` (`SourceCursor`) |
 | opaque Compose origin resolution | `compose/source/catalog.py` (`SourceCatalog`) |
 | strict top-level section parsing | `parse/file.py` (`parse_file`) |

@@ -876,7 +876,7 @@ def _check_output_names(
 ) -> None:
     """Reject a flow `output:` record whose field name is not a string.
 
-    YAML reads an unquoted `true`, `yes`, `null`, or `1` key as a bool, None, or
+    YAML reads an unquoted `true`, `null`, or `1` key as a bool, None, or
     number; naming the output after its `str()` would rename it, and `1:` beside
     `'1':` would drop one output.
 
@@ -1591,13 +1591,10 @@ def _assemble(
         diagnostics=diagnostics,
     )
 
-    # Classify `case` branches and lift each value branch to a synth CODE node. Runs
-    # BEFORE the inline-call desugar so a value's `${...}` input bindings are walked by it
-    # and by the `${case.output}` expansion like any authored CODE input.
-    descriptors = desugar_case_values(descriptors, diagnostics=diagnostics)
-
     # Compile each typed case's `output:` once: its synth result node checks every taken
     # branch against this contract, located at the case's `output:` (source-free: none).
+    # Compiled before branch classification, whose "names no node" error offers the
+    # boolean to write for a `yes`/`no` word only when the case's type takes it.
     case_types: dict[str, ValueContract] = {}
     for node_id, descriptor in descriptors.items():
         if isinstance(descriptor, CaseDescriptor) and descriptor.outputs is not None:
@@ -1606,6 +1603,13 @@ def _assemble(
             ) or ValueContract(
                 read_type(descriptor.outputs, registry, diagnostics=diagnostics)
             )
+
+    # Classify `case` branches and lift each value branch to a synth CODE node. Runs
+    # BEFORE the inline-call desugar so a value's `${...}` input bindings are walked by it
+    # and by the `${case.output}` expansion like any authored CODE input.
+    descriptors = desugar_case_values(
+        descriptors, case_types=case_types, diagnostics=diagnostics
+    )
 
     # Desugar inline `${ f(...) }` call expressions: each becomes a synth `call`
     # node (CallDescriptor, over=None) and its host binding is rewritten to

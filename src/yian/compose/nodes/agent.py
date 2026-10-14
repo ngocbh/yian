@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.memory import parse_memory_declarations
 from yian.compose.helpers.types import read_variables
+from yian.compose.helpers.yaml_words import former_boolean_fix
 from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from yian.compose.source import SourceCursor
 from yian.diagnostics import SourceRange
@@ -46,6 +47,21 @@ def retries_error(value: Any) -> str | None:
     if type(value) is int and value >= 0:
         return None
     return f"must be a non-negative integer, got {value!r}"
+
+
+def _former_boolean_hint(value: Any) -> str:
+    """Return `"; "` and the fix for a YAML 1.1 boolean spelling in a boolean field, else `""`.
+
+    Args:
+        value (`Any`):
+            The field's value as YAML read it.
+
+    Returns:
+        `str`:
+            Such as ``"; `yes` is text; write `true`"``, or `""` for any other value.
+    """
+    fix = former_boolean_fix(value)
+    return "" if fix is None else f"; {fix[1]}"
 
 
 def _validate_llm_config(
@@ -91,7 +107,8 @@ def _validate_llm_config(
     inherit = cfg.pop("inherit", True)
     if type(inherit) is not bool:
         raise diagnostics.error(
-            f"node {node_id!r}: llm_config `inherit:` must be true or false, got {inherit!r}",
+            f"node {node_id!r}: llm_config `inherit:` must be true or false, got "
+            f"{inherit!r}{_former_boolean_hint(inherit)}",
             range=source_range,
         )
     host_only = host_only_field_error(cfg)
@@ -240,9 +257,11 @@ class AgentDescriptor(NodeDescriptor):
                 "skill names or `all`",
                 range=ranges.get(("field", "skills")) or own_range,
             )
-        if type(kwargs.get("steerable", False)) is not bool:
+        steerable = kwargs.get("steerable", False)
+        if type(steerable) is not bool:
             raise diagnostics.error(
-                f"node {node_id!r} (kind={cls.kind}): `steerable:` must be true or false",
+                f"node {node_id!r} (kind={cls.kind}): `steerable:` must be true or false"
+                f"{_former_boolean_hint(steerable)}",
                 range=ranges.get(("field", "steerable")) or own_range,
             )
         if "memories" in kwargs:

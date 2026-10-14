@@ -35,6 +35,10 @@ output: ${{a.output}}
         ("    retries: null", r"`retries:` must be a non-negative integer, got None"),
         ("    llm_config: {inherit: 'false'}", r"`inherit:` must be true or false, got 'false'"),
         ("    llm_config: {inherit: null}", r"`inherit:` must be true or false, got None"),
+        (
+            "    llm_config: {inherit: on}",
+            r"`inherit:` must be true or false, got 'on'; `on` is text; write `true`",
+        ),
         ("    llm_config: {inherit: 0, model: m}", r"`inherit:` must be true or false, got 0"),
     ],
 )

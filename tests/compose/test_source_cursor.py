@@ -1439,15 +1439,15 @@ def test_renamed_rejects_a_key_that_collides_with_another():
 
 
 def test_renamed_collision_names_keys_as_authored():
-    # YAML 1.1 reads a plain `on:` key as True; the error quotes what the author wrote.
-    base = SourceDocument.parse('on: plain\n"on": quoted\n').root
+    # A plain `0x1F:` key reads as 31; the error quotes what the author wrote.
+    base = SourceDocument.parse('0x1F: plain\n"x": quoted\n').root
 
     with pytest.raises(SourceAccessError) as exc:
-        base.renamed({True: "on"})
+        base.renamed({31: "x"})
 
-    assert str(exc.value).startswith('key `on` and key `"on"` both mean \'on\'')
-    assert "True" not in str(exc.value)
-    assert exc.value.range == base.key_range_of(True)
+    assert str(exc.value).startswith('key `0x1F` and key `"x"` both mean \'x\'')
+    assert "31" not in str(exc.value)
+    assert exc.value.range == base.key_range_of(31)
 
 
 def test_renamed_allows_swapping_two_keys():

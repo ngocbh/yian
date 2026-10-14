@@ -2,8 +2,7 @@
 
 One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `case` node's frozen
 `CaseDescriptor`. Its `parse` wraps the `NodeDescriptor` template to retain positional
-`cases[N].when`/`then` ranges, while `_normalize_cursor` handles the sole author key that
-YAML 1.1 coerces (`on:` -> `True`). Its immutable source-origin hook registers each indexed
+`cases[N].when`/`then` ranges. Its immutable source-origin hook registers each indexed
 predicate and optional `on:` site before lowering. Registered into `KINDS`/`BINDING_FIELDS`
 at import so the shared dispatch routes here.
 
@@ -69,43 +68,6 @@ if TYPE_CHECKING:
     from yian.diagnostics import SourceRange
     from yian.compose.source.catalog import _SourceCatalogBuilder
 
-# YAML 1.1 (PyYAML `safe_load`) coerces the bare key `on:` to the boolean `True` (likewise
-# `off`/`yes`/`no`). The case-node surface key `on:` is the only such key in any node body, so
-# this pure key projection undoes the coercion. Case-local: no other kind body
-# carries a YAML-bool-coerced key.
-_YAML_BOOL_KEYS = {True: "on", False: "off"}
-
-
-def _normalized_key_names(cursor: SourceCursor) -> dict[Any, Any]:
-    """Return effective YAML 1.1 boolean keys mapped to schema names.
-
-    Args:
-        cursor (`SourceCursor`):
-            Node-body cursor whose effective source pairs determine whether a
-            Python-equal key was authored as a YAML boolean or a number.
-
-    Returns:
-        `dict[Any, Any]`:
-            Displayed constructed keys mapped to their replacement schema
-            keys, usually ``"on"`` or ``"off"``.
-    """
-
-    body = cursor._value_view()
-    if not isinstance(body, Mapping):
-        return {}
-    names: dict[Any, Any] = {}
-    for key in body:
-        child = cursor.child(key)
-        source_key = child.source_key_value
-        if type(source_key) is bool:
-            names[key] = _YAML_BOOL_KEYS[source_key]
-        elif child.key_range is not None and type(key) is not type(source_key):
-            names[key] = source_key
-        elif child.document is None and type(key) is bool:
-            names[key] = _YAML_BOOL_KEYS[key]
-    return names
-
-
 @dataclass(frozen=True, kw_only=True)
 class CaseDescriptor(NodeDescriptor):
     """kind=case — branch routing (searched `when:` or `on:`-value form).
@@ -122,8 +84,7 @@ class CaseDescriptor(NodeDescriptor):
 
     Inherits the common node fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + the
     `range`/`field_ranges` parse metadata) and delegates common parsing to `NodeDescriptor`.
-    Its `parse` wrapper captures positional predicate/target ranges; `_normalize_cursor`
-    undoes the `on:`->`True` YAML coercion before key legality runs; and
+    Its `parse` wrapper captures positional predicate/target ranges, and
     `with_source_origins` attaches indexed predicate and optional `on:` origins. Its parse
     wrapper also checks the `cases:` shape; field legality otherwise uses the default
     allowed/required-key and asserts-list checks.
@@ -222,7 +183,6 @@ class CaseDescriptor(NodeDescriptor):
         It also records each `then:` value's YAML scalar style (aligned with `cases`), the
         `else:` value's style, and whether `else:` was written at all. A `cases:` that is not a
         list of mappings is a located load error before any of this runs."""
-        cursor = cls._normalize_cursor(cursor)
         desc = super().parse(node_id, cursor)
         cls._check_cases_shape(desc, cursor)
         body = cursor._value_view()
@@ -269,16 +229,6 @@ class CaseDescriptor(NodeDescriptor):
                     range=cases_cursor.child(index).range or desc.range,
                 )
 
-    @classmethod
-    def _normalize_cursor(cls, cursor: SourceCursor) -> SourceCursor:
-        """Project YAML 1.1's boolean `on:` key back to its surface spelling."""
-
-        body = cursor._value_view()
-        if not isinstance(body, Mapping):
-            return cursor
-        names = _normalized_key_names(cursor)
-        return cursor.renamed(names) if names else cursor
-
     def with_source_origins(
         self,
         cursor: SourceCursor,
@@ -292,7 +242,6 @@ class CaseDescriptor(NodeDescriptor):
         distinct. Missing/malformed entries retain ``None`` and continue to the
         established build-time validation instead of changing error order.
         """
-        cursor = self._normalize_cursor(cursor)
         case_specs = (
             self.cases
             if isinstance(self.cases, Sequence)

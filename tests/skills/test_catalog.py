@@ -37,6 +37,12 @@ def test_name_defaults_to_directory_and_frontmatter_name_wins(tmp_path: Path) ->
     assert load_skill_dir(write_skill(tmp_path, "x", "name: triage\ndescription: Triage.\n")).name == "triage"
 
 
+def test_frontmatter_reads_yes_and_no_as_text(tmp_path: Path) -> None:
+    # Frontmatter follows the flow's YAML 1.2 rules, as Claude Code and Codex read it.
+    skill = load_skill_dir(write_skill(tmp_path, "no", "name: no\ndescription: yes\n"))
+    assert (skill.name, skill.description) == ("no", "yes")
+
+
 @pytest.mark.parametrize(
     ("content", "message"),
     [

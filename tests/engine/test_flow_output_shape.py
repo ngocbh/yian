@@ -365,7 +365,6 @@ def test_root_feedback_on_a_one_field_record_reaches_its_producer():
     [
         ("output:\n  1: ${step.output}\n", "  1: ${step.output}", "int"),
         ("output:\n  true: ${step.output}\n", "  true: ${step.output}", "bool"),
-        ("output:\n  yes: ${step.output}\n", "  yes: ${step.output}", "bool"),
         ("output:\n  null: ${step.output}\n", "  null: ${step.output}", "NoneType"),
         (
             "output:\n  '1': ${step.output}\n  1: ${step.output}\n",
@@ -373,7 +372,7 @@ def test_root_feedback_on_a_one_field_record_reaches_its_producer():
             "int",
         ),
     ],
-    ids=["int", "true", "yes", "null", "int-beside-quoted"],
+    ids=["int", "true", "null", "int-beside-quoted"],
 )
 def test_a_non_string_flow_output_name_is_a_load_error_at_its_key(section, key_line, kind):
     text = _FLOW % section
@@ -386,6 +385,10 @@ def test_a_non_string_flow_output_name_is_a_load_error_at_its_key(section, key_l
     assert f"quote the key: `'{authored}':`" in message
     frames = info.value.diagnostic.frames
     assert frames and frames[0].range.start_line == text.splitlines().index(key_line) + 1
+
+
+def test_an_unquoted_yes_flow_output_name_is_text():
+    assert _run(_FLOW % "output:\n  yes: ${step.output}\n") == {"yes": "filled"}
 
 
 def test_a_non_string_output_name_in_a_def_is_a_load_error():

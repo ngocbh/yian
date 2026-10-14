@@ -256,8 +256,9 @@ evaluates). `int=3` without spaces is plain text.
 A right side starting with a quote, `[`, or `{` is read as YAML first: a quoted
 `${...}`/`call(...)` drops its quotes and stays a template or call (unlike a quoted
 whole value, which is text), and strings inside a list or record stay text.
-Otherwise the right side is a `${...}`/`call(...)` kept as written, or a YAML 1.1
-literal checked at load (`str = 30` fails; write `str = "30"`). The whole binding
+Otherwise the right side is a `${...}`/`call(...)` kept as written, or a YAML
+literal (YAML 1.2 core values plus unquoted dates) checked at load (`str = 30` fails;
+write `str = "30"`; `bool = yes` fails; write `bool = true`). The whole binding
 is one plain scalar, so it can't contain `: ` or ` #` (write a record literal as
 `{"a":1}`). Load rejects a value whose
 inferred type is disjoint from the declared one; narrower or unknown types are
@@ -408,7 +409,7 @@ that change; a field it omits keeps its value. This is the shape
 - **`output: {...}` always returns a record.** `output: ${x}` returns the value
   as is; `output: {order: ${x}}` returns `{order: x}` (a caller reads
   `${child.output.order}`), and `output: {}` returns `{}`. No `output:` returns
-  `None`. Field names must be strings: an unquoted `true`, `yes`, `null`, or `1` key
+  `None`. Field names must be strings: an unquoted `true`, `null`, or `1` key
   is a load error, so quote it (`'true': ${x}`). A scalar literal (`output: 5`,
   `x: 5`) is returned as written.
 - **`call:` resolves defs-first, else a `uses:` alias** (a sibling file by name on

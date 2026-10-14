@@ -92,7 +92,7 @@ def test_parse_nodes_normalizes_without_mutating_cursor():
     assert not nodes.child("writer").has("inputs")
 
 
-def test_case_on_normalization_does_not_mutate_cursor():
+def test_case_on_key_is_text():
     source = """\
 nodes:
   route:
@@ -108,27 +108,10 @@ nodes:
     desc = parse_nodes(nodes)["route"]
 
     assert desc.on == "${score.output}"
-    assert route.has(True)
-    assert not route.has("on")
+    assert route.has("on")
 
 
-def test_case_normalization_uses_last_effective_boolean_key():
-    source = """\
-nodes:
-  route:
-    kind: case
-    1: ignored
-    on: ${score.output}
-    cases: []
-"""
-    nodes = SourceDocument.parse(source).root.child("nodes")
-
-    desc = parse_nodes(nodes)["route"]
-
-    assert desc.on == "${score.output}"
-
-
-def test_case_normalization_rejects_last_effective_numeric_key():
+def test_case_rejects_numeric_key():
     source = """\
 nodes:
   route:
@@ -143,4 +126,4 @@ nodes:
     with pytest.raises(LoadError, match="field 1 is not allowed") as caught:
         parse_nodes(nodes)
 
-    assert caught.value.diagnostic.frames[-1].range == route.range_of(True)
+    assert caught.value.diagnostic.frames[-1].range == route.range_of(1)

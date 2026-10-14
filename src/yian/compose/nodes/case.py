@@ -36,9 +36,9 @@ the flow's producer types, which are only assembled after every node is built, s
 in `.build()`. `.build()` lowers unconditionally; the loader runs `check_case_exhaustive` in the
 validate phase.
 
-Imports flow down/peer only: `lark` (parse-tree types), `expr` (ref scan/rewrite and the
-`isinstance` tree helpers), `nodes` (Case/CaseNode/Parameter), `compile.model` (Edge),
-`typesys` (the non-finite check), and the compose peers
+Imports flow down/peer only: `lark` (parse-tree types), `json_codec` (int digits), `expr`
+(ref scan/rewrite and the `isinstance` tree helpers), `nodes` (Case/CaseNode/Parameter),
+`compile.model` (Edge), `typesys` (the non-finite check), and the compose peers
 `source`/`helpers.errors`/`helpers.output_contracts`/`helpers.tags`/`nodes.base`.
 It imports NOTHING from parse/desugar/edges/validate/build/loader (the ladder), so it stays a
 leaf of the nodes package.
@@ -54,6 +54,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from lark import Token, Tree
 
+import yian.json_codec as json_codec
 from yian.compile.model import Edge
 from yian.diagnostics import OriginRef
 from yian.expr import (
@@ -425,6 +426,8 @@ def on_match_key(value: Any) -> tuple[str, Any]:
 
 def _number_text(value: int | float) -> str:
     """Return a number as expression-literal digits: no exponent, and a float keeps a `.`."""
+    if isinstance(value, int):
+        return json_codec.int_text(value)
     # repr is the shortest round-tripping form; Decimal spells it positionally, since the
     # NUMBER terminal has no exponent.
     text = format(Decimal(repr(value)), "f")

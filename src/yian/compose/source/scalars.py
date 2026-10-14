@@ -10,7 +10,7 @@ scalar that is not a real date or time, such as ``2026-13-45`` or an offset of
 ``+05:99``, a located ``ConstructorError`` that says to quote it. PyYAML's global
 ``SafeLoader`` tables are never modified.
 
-Knows about:   PyYAML.
+Knows about:   PyYAML, yian.json_codec.
 Never imports: compose helpers or phases, nodes, compile, runtime, the run
                boundary, CLI modules, or provider SDKs.
 """
@@ -22,6 +22,8 @@ from datetime import date, datetime
 
 import yaml
 from yaml.constructor import ConstructorError
+
+import yian.json_codec as json_codec
 
 _BOOL_TAG = "tag:yaml.org,2002:bool"
 _INT_TAG = "tag:yaml.org,2002:int"
@@ -119,26 +121,17 @@ class _FlowLoader(yaml.SafeLoader):
 
         Raises:
             `ConstructorError`:
-                Raised when the text is not a core-schema integer or has more digits
-                than Python converts.
+                Raised when the text is not a core-schema integer.
         """
 
         text = self._core_text(node, _INT, "integer")
-        digits, base = text, 10
         if text.startswith("0o"):
-            digits, base = text[2:], 8
-        elif text.startswith("0x"):
-            digits, base = text[2:], 16
-        try:
-            return int(digits, base)
-        except ValueError:
-            # Python caps how many digits it converts; keep the error located.
-            raise ConstructorError(
-                None,
-                None,
-                f"an integer with {len(digits)} digits is too long",
-                node.start_mark,
-            ) from None
+            return int(text[2:], 8)
+        if text.startswith("0x"):
+            return int(text[2:], 16)
+        # Python's digit limit covers only non-power-of-two bases, so base 10 alone
+        # needs the codec to read a literal of any length.
+        return json_codec.parse_int(text)
 
     def construct_yaml_float(self, node: yaml.Node) -> float:
         """Construct a core-schema float, including ``.inf`` and ``.nan`` forms.

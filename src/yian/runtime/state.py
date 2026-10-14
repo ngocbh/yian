@@ -3808,9 +3808,11 @@ def _validate_growth_redirects(
     """Require every redirect a growth adds to have one inert logical anchor.
 
     Only targets of fragment nodes gain an owner, and the growth only relaxes
-    every other target, so those are the targets checked.  Each is read in the
-    post-growth topology: the live state plus the fragment minus the retired
-    nodes and edges.
+    every other target, so those are the targets checked.  Other targets are not
+    rechecked here: success and route commits only settle nodes and edges, and a
+    route checks each redirect again when it skips through it.  Each target is
+    read in the post-growth topology: the live state plus the fragment minus the
+    retired nodes and edges.
     """
     final_ids = _GrowthNodeIds(fragment.nodes, state.flow.nodes, retired_ids)
     new_owners: dict[str, list[str]] = {}
@@ -4682,8 +4684,10 @@ def _apply_growth(
     retired = frozenset(delta.retired_ids)
     _apply_growth_index(state, delta, topology)
     if retired:
-        # Edges are appended in growth order and a prune retires recent growth, so
-        # scanning back from the end finds the retired edges without a full pass.
+        # Edges are appended in growth order and a prune usually retires recent
+        # growth, so scan back from the end and stop once every retired edge is
+        # found.  Sibling growth (other MAP items, say) can sit in between, so the
+        # scan may still pass edges the growth does not retire.
         pending = {edge.id for edge in topology.retired_edges}
         position = len(flow.edges)
         while pending and position:

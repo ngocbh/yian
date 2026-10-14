@@ -1232,6 +1232,12 @@ def _prompt_request(request: PromptRequest) -> Any:
     """Render and answer one broker request on the process main thread."""
     import questionary
 
+    if request.secret:
+        return _ask_widget(
+            questionary.password(request.question, qmark="?", style=_q_style()),
+            request,
+        )
+
     if request.questions:
         title = request.title or request.node_id or "this step"
         count = len(request.questions)

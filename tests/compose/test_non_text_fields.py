@@ -459,6 +459,29 @@ def test_non_text_compact_kind_is_a_load_error(value, phrase):
     assert _start_line(error) == _line(text, "kind: ")
 
 
+def _compact_id(v: str | None) -> str:
+    """A compact (single-node) flow with `id: <v>`, or no `id:` when `v` is None."""
+    head = "" if v is None else f"id: {v}\n"
+    return head + "name: f\noutput: int\nkind: code\ncode: return 1\n"
+
+
+@pytest.mark.parametrize(("value", "phrase"), NON_TEXT)
+def test_non_text_compact_id_is_a_load_error(value, phrase):
+    text = _compact_id(value)
+    error = _error(text)
+    assert (
+        f"compact (single-node) flow: `id:` must be text, but YAML read it as {phrase}; "
+        "put it in quotes"
+    ) in str(error)
+    assert _start_line(error) == _line(text, "id: ")
+
+
+@pytest.mark.parametrize("value", ["null", "''", None], ids=["null", "empty", "absent"])
+def test_null_empty_and_absent_compact_id_are_required(value):
+    error = _error(_compact_id(value))
+    assert "compact (single-node) flow: a top-level `id:` is required" in str(error)
+
+
 _KIND_IN_DEF = """\
 id: f
 name: f

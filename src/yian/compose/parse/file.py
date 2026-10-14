@@ -262,8 +262,8 @@ def _desugar_compact(body: dict, root: SourceCursor) -> dict:
 
     The returned dict is the canonical compose body (with a `nodes:` map) the strict
     `ComposeFile` schema then validates unchanged. Raises `LoadError` on a `kind:` YAML
-    read as non-text (`null` included), a removed kind, a non-leaf kind, or a missing or
-    non-identifier flow `id:`.
+    read as non-text (`null` included), a removed kind, a non-leaf kind, a flow `id:` YAML
+    read as non-text, or a missing, null, empty, or non-identifier flow `id:`.
     """
     diagnostics = LoadDiagnostics.from_cursor(root)
     kind = body["kind"]
@@ -288,7 +288,12 @@ def _desugar_compact(body: dict, root: SourceCursor) -> dict:
             range=root.range_of("kind"),
         )
     flow_id = body.get("id")
-    if not isinstance(flow_id, str) or not flow_id:
+    if flow_id is not None and not isinstance(flow_id, str):
+        raise diagnostics.error(
+            "compact (single-node) flow: " + not_text_error("id", flow_id),
+            range=root.range_of("id"),
+        )
+    if not flow_id:
         raise diagnostics.error(
             "compact (single-node) flow: a top-level `id:` is required — it names the "
             "single node",

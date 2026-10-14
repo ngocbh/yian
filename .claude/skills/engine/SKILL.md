@@ -785,10 +785,16 @@ Most are just the functional model (above) made enforceable:
   `split_model_config`, so agents marked for the key never fall back to the
   environment. A key that marks no agent is dropped from the result and ignored
   by replay. `LLMConfig` keeps the key a `SecretStr` excluded from dumps, rejects
-  an empty key, and hides inputs in validation errors. `AgentNode` (forward and
-  backward) and `ProfileMemory.learn` pass provider errors through
-  `llm_clients.redact.scrub_key`, which removes the key and masked echoes of it
-  before the runtime records a failure. Authored layers reject `api_key` and
+  an empty key, and hides inputs in validation errors. `AgentNode` forward,
+  AGENT backward (`backward_agent`), `ProfileMemory.learn`, and
+  `ReflectiveMemory.learn` pass provider errors through
+  `llm_clients.connection.scrub_call_credentials`, which removes every
+  credential the call sends (`call_credentials`: the host key, else a `store`
+  connection's saved login read without refresh, else the provider's first set
+  key variable, plus `AZURE_OPENAI_AD_TOKEN` for azure) and masked echoes of
+  each before the runtime records a failure. Learners scrub the chained cause
+  of their fixed-message errors; `yian auth`'s model check scrubs the key it
+  sends and, for azure, `AZURE_OPENAI_AD_TOKEN`. Authored layers reject `api_key` and
   `_host_key` (flow and def levels at load); `ProfileMemory` needs `provider`
   with its key; `ReflectiveMemory` rejects `api_key` and always uses environment
   credentials. A run-layer `llm_config.base_url` is where the key goes: it is

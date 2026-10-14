@@ -747,7 +747,7 @@ def test_any_into_a_loop_carried_int_suggests_a_tag_or_isinstance():
         load_flow(_ANY_INTO_LOOP.replace("SEED", "${seed.output}"))
 
     message = str(caught.value)
-    assert "carried source is 'Any'" in message
+    assert "source is 'Any'" in message
     assert "`n: !int ${...}`" in message
     assert "isinstance" in message
 

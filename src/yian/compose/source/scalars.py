@@ -5,9 +5,9 @@ PyYAML resolves plain scalars with YAML 1.1 rules, where ``yes``/``no``/``on``/
 sexagesimal integer. ``_FlowLoader`` keeps PyYAML as the parser and swaps only its
 own implicit-resolver table and the ``int``/``float``/``bool`` constructors for the
 YAML 1.2 core schema, keeping two YAML 1.1 extensions: unquoted timestamps and
-``<<`` merge keys. A date-shaped plain scalar that is not a real date is a located
-``ConstructorError`` that says to quote it. PyYAML's global ``SafeLoader`` tables
-are never modified.
+``<<`` merge keys. Its own ``timestamp`` constructor makes a date-shaped plain
+scalar that is not a real date a located ``ConstructorError`` that says to quote
+it. PyYAML's global ``SafeLoader`` tables are never modified.
 
 Knows about:   PyYAML.
 Never imports: compose helpers or phases, nodes, compile, runtime, the run
@@ -98,7 +98,8 @@ class _FlowLoader(yaml.SafeLoader):
 
     Unquoted timestamps and ``<<`` merge keys keep their YAML 1.1 meaning.
     Explicit ``!!int``, ``!!float``, and ``!!bool`` tags accept only the forms
-    the table resolves; every other tag keeps PyYAML's safe behavior.
+    the table resolves. A ``timestamp`` that can't be built is a located
+    ``ConstructorError``; every other tag keeps PyYAML's safe behavior.
     """
 
     # An own dict, so add_implicit_resolver below never copies SafeLoader's table.
@@ -220,7 +221,7 @@ class _FlowLoader(yaml.SafeLoader):
             reason = f"not a valid {kind}: {_date_problem(exc)}"
             if node.style is None:
                 raise ScalarValueError(reason, node.start_mark) from None
-            # Quoted text under an explicit tag: quoting can't be the fix.
+            # Quoted or block text under an explicit tag: quoting can't be the fix.
             raise ConstructorError(None, None, reason, node.start_mark) from None
 
     def _core_text(self, node: yaml.Node, pattern: re.Pattern[str], kind: str) -> str:

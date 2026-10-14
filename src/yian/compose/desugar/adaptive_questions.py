@@ -141,6 +141,7 @@ def desugar_adaptive_questions(
             "field_labels": {
                 "prompt": f"node {gid!r} adaptive_questions.prompt",
                 "llm_config": f"node {gid!r} adaptive_questions.llm_config",
+                # Keyed like `Node.wiring_ref_label`'s default, which validators look up.
                 **{f"input {p!r}": f"node {gid!r} input {p!r}" for p in desc.inputs},
             },
         }

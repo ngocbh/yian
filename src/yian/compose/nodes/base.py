@@ -93,7 +93,7 @@ class BuildResult:
     field_labels: dict[str, str] = field(default_factory=dict, compare=False)
 
     def site_name(self, node_id: str, site: str) -> str:
-        """The author-facing name of one site of this node in a diagnostic.
+        """Return the author-facing name of one site of this node in a diagnostic.
 
         Args:
             node_id (`str`):

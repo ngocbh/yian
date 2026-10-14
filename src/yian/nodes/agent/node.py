@@ -32,7 +32,17 @@ from yian.nodes.agent.memory import compatibility
 from yian.nodes.agent.backward import backward_agent
 from yian.nodes.agent.loop import MAX_TOOL_ITERATIONS, run_agent
 from yian.nodes.agent.structured import _structured_validation_path
-from yian.nodes.base import BackwardContext, BackwardResult, Node, NodeKind, Output, Steering, _CapabilityFault, _HostStop, _check_named_prompt
+from yian.nodes.base import (
+    BackwardContext,
+    BackwardResult,
+    Node,
+    NodeKind,
+    Output,
+    Steering,
+    _CapabilityFault,
+    _HostStop,
+    _check_named_prompt,
+)
 from yian.nodes.binding import BindingError, apply_defaults
 from yian.nodes.contracts import (
     Parameter,

@@ -14,10 +14,15 @@ from yian.run import resume_flow, run_flow
 _UPPER = "expression function 'upper' takes (s): too many positional arguments"
 
 
-def _load_error(text: str) -> str:
+def _load_error(text: str, located: str | None = None) -> str:
+    """Load `text`, expecting a `LoadError` whose range covers `located` when given."""
     with pytest.raises(LoadError) as caught:
         load_flow(text)
-    assert caught.value.diagnostic.frames[-1].range is not None
+    rng = caught.value.diagnostic.frames[-1].range
+    assert rng is not None
+    if located is not None:
+        assert rng.start_line == rng.end_line
+        assert located in text.splitlines()[rng.start_line - 1][rng.start_col - 1 : rng.end_col]
     return str(caught.value)
 
 
@@ -247,9 +252,8 @@ _SITES = {
 @pytest.mark.parametrize("site", sorted(_SITES))
 def test_mis_called_builtin_fails_to_load_at_its_site(site):
     text, where = _SITES[site]
-    message = _load_error(text)
-    line = next(ln for ln in message.splitlines() if _UPPER in ln)
-    assert line.strip() == f"{where}{_UPPER}"
+    message = _load_error(text, located="upper(")
+    assert [ln.strip() for ln in message.splitlines() if _UPPER in ln] == [f"{where}{_UPPER}"]
 
 
 def test_unknown_function_in_a_binding_keeps_the_flow_call_message():
@@ -306,7 +310,7 @@ def test_python_built_child_binding_names_its_static_path(tmp_path):
     _run_raises(flow, rf"^node 'c/s' input 'n': {_UPPER_RUN}", tmp_path)
 
 
-def test_python_built_case_on_and_map_item_use_their_site_labels(tmp_path):
+def test_python_built_reserved_and_synthetic_keys_use_their_site_labels(tmp_path):
     case = load_flow(_fill(_CASE_ON, on="${input.v}"))
     case.compiled.wiring["g"]["__on"] = Binding("${upper(input.v, 1)}")
     _run_raises(case, rf"^node 'g' on: {_UPPER_RUN}", tmp_path)

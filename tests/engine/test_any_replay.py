@@ -192,11 +192,13 @@ def test_a_straight_run_stores_any_values_in_their_natural_carriers(tmp_path: Pa
     _assert_exact(committed["mixed"]["value"], [1, 2.0, True, None])
     _assert_exact(committed["items"]["value"], [1, "two"])
     _assert_exact(committed["rec"]["value"], {"v": [1, True]})
+    _assert_exact(committed["obj"]["value"], {"a": [1, None]})
+    _assert_exact(committed["big"]["value"], 2**80)
     started = json.loads(path.read_text().splitlines()[0])["payload"]["initial_pool"]
     assert started["store"]["__start__"] == {"kind": ValueKind.OBJECT, "value": _INPUT}
 
 
-def test_resuming_a_completed_any_run_replays_the_same_values(tmp_path: Path):
+def test_resuming_a_completed_any_run_returns_the_same_output(tmp_path: Path):
     """Recovering a finished log returns the same exact output without running a node."""
     path = tmp_path / "done.jsonl"
     first = _straight_run(path)
@@ -225,7 +227,7 @@ def test_a_node_after_resume_reads_replayed_any_values_unchanged(tmp_path: Path)
     with pytest.raises(_HostStop) as caught:
         run_flow(load_flow(_ANY_FLOW), _INPUT, log=path, tools={"ask_user": interrupt})
     assert caught.value is interruption
-    assert _committed(path) == _committed(straight)
+    _assert_exact(_committed(path), _committed(straight))
 
     resumed = resume_flow(load_flow(_ANY_FLOW), log=path, tools={"ask_user": _answer})
 
@@ -234,4 +236,4 @@ def test_a_node_after_resume_reads_replayed_any_values_unchanged(tmp_path: Path)
     started = {event.node_id for event in resumed.events if isinstance(event, NodeStarted)}
     assert started.isdisjoint(_ANY_NODES)
     assert "seen" in started
-    assert _committed(path) == _committed(straight)
+    _assert_exact(_committed(path), _committed(straight))

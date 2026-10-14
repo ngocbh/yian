@@ -19,6 +19,8 @@ Two subtleties mirror the representation-neutral collector:
 Located parse metadata: each error anchors on the referencing field's `SourceRange`, read
 from the transient Compose `BuildResult` (the coarse per-field span — e.g. the node's
 `input:` mapping for an input-binding ref, its `prompt:` or `system_prompt:` for a template ref).
+A HUMAN_INPUT question-text error anchors on its own `("text", "questions[i]...")` string
+range, else the `questions:` block.
 
 Imports flow down only: `compile.validation` (the leaf namespace checker), `expr` (the
 binding parser), `nodes` (Node/AgentNode/HumanInputNode behavior and the output-contract
@@ -142,7 +144,8 @@ def validate_references(
     Each error anchors on the referencing site's `SourceRange`, resolved from its
     `BuildResult.field_ranges` — the OFFENDING ENTRY where one exists (`("input", name)`, stamped per
     binding by the parse loop for every kind), else the enclosing block (`("field", "inputs")`
-    / `("field", "prompt")`), else the node header. `outputs_range` is the authored output
+    / `("field", "prompt")`), else the node header. A HUMAN_INPUT question-text error anchors on
+    its `("text", "questions[i]...")` string range, else the `questions:` block. `outputs_range` is the authored output
     value/block range when the caller retains it. The aggregate carries the first retained range.
 
     With `narrowing`, each node's references (a CASE's own sources included) are checked
@@ -304,15 +307,18 @@ def validate_references(
                     hint_tail="a strict AGENT prompt",
                 )
         elif isinstance(node, HumanInputNode):
-            declared = {p.name for p in node.params or []}
+            declared = {p.name for p in (node.params or [])}
             for path, text in template_sites(node.prompt, node.questions):
                 if not text:
                     continue
+                label = site_label(path)
                 check_template(
-                    f"node {node_id!r} {site_label(path)}",
+                    f"node {node_id!r} {label}",
                     text,
                     declared,
-                    franges.get(("field", path[0])) or node_range,
+                    franges.get(("text", label))
+                    or franges.get(("field", path[0]))
+                    or node_range,
                     noun="input",
                     hint_tail="human_input text",
                 )

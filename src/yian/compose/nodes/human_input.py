@@ -2,8 +2,8 @@
 
 One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `human_input` node's
 frozen `HumanInputDescriptor`. It wraps the template `parse` from `NodeDescriptor` (which
-records each field's `SourceRange`) to reject the removed `adaptive_questions.mode:` key,
-overrides the `_validate_fields` hook to enforce the one-of-three question-surface legality,
+records each field's `SourceRange`) to reject the removed `adaptive_questions.mode:` key and
+record one `("text", "questions[i]...")` range per question string, overrides the `_validate_fields` hook to enforce the one-of-three question-surface legality,
 and overrides `build` (which constructs the runtime
 `HumanInputNode` and derives the answer schema). `_finish` stamps only the descriptor's opaque
 origin onto that node and keeps concrete ranges on the Compose-owned `BuildResult`. Registered
@@ -16,19 +16,20 @@ validates the block's shape and carries it verbatim.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.nodes.agent import MODE_REMOVED_FIX, retries_error
 from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
-from yian.compose.source import SourceCursor
+from yian.compose.source import SourceAccessError, SourceCursor
 from yian.diagnostics import SourceRange
 from yian.expr import ExpressionError
 from yian.expr.grammar import is_bare_name
 from yian.expr.template import Span, scan_template
 from yian.nodes.contracts import ValueContract
 from yian.nodes.human_input import HumanInputNode
+from yian.nodes.human_input.node import site_label, template_sites
 from yian.typesys.values import Type, ValueKind
 
 
@@ -47,7 +48,8 @@ class HumanInputDescriptor(NodeDescriptor):
     Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
     the Compose-only `range`/`field_ranges` parse metadata), the `input:`/`output:` signature surface, and the
     template `parse` from `NodeDescriptor`, which it wraps to reject the removed
-    `adaptive_questions.mode:` key. It overrides the `_validate_fields` hook (the
+    `adaptive_questions.mode:` key and to add a `("text", "questions[i]...")` range for each
+    question string to `field_ranges`. It overrides the `_validate_fields` hook (the
     one-of-three legality, calling `super()` first for the default asserts-list check); only the
     human_input-specific fields are declared here.
 
@@ -72,7 +74,12 @@ class HumanInputDescriptor(NodeDescriptor):
 
     @classmethod
     def parse(cls, node_id: str, cursor: SourceCursor) -> "HumanInputDescriptor":
-        """Reject the removed `adaptive_questions.mode:` key, then parse as usual.
+        """Reject the removed `adaptive_questions.mode:` key, parse as usual, and range the text.
+
+        On top of the template `parse`'s per-field ranges, records one
+        `("text", site_label(path))` range for each string `template_sites` finds in a literal
+        `questions:` list (`question`, option `label`/`description`), so a text error points at
+        the string rather than the whole `questions:` block.
 
         Raises:
             `LoadError`: The `adaptive_questions:` block authors `mode:`, or the template
@@ -85,7 +92,15 @@ class HumanInputDescriptor(NodeDescriptor):
                 f"{MODE_REMOVED_FIX}",
                 range=cursor.child("adaptive_questions").key_range_of("mode"),
             )
-        return super().parse(node_id, cursor)
+        desc = super().parse(node_id, cursor)
+        if not isinstance(desc.questions, list):
+            return desc
+        ranges: dict[tuple[str, str], SourceRange] = {}
+        for path, _ in template_sites(None, desc.questions):
+            rng = _range_at(cursor, path)
+            if rng is not None:
+                ranges[("text", site_label(path))] = rng
+        return replace(desc, field_ranges={**desc.field_ranges, **ranges})
 
     @classmethod
     def _validate_fields(
@@ -219,6 +234,19 @@ class HumanInputDescriptor(NodeDescriptor):
         node.params = self.sink_params()
         wiring = self.sink_wiring()
         return self._finish(node, wiring)
+
+
+def _range_at(cursor: SourceCursor, path: tuple[str | int, ...]) -> Optional[SourceRange]:
+    """The `SourceRange` of the value at `path` under `cursor`, or `None` when it has none.
+
+    `None` also covers a path the cursor cannot walk (e.g. past a recursive alias cut), so
+    that string's error falls back to the `questions:` range."""
+    try:
+        for step in path:
+            cursor = cursor.child(step)
+    except SourceAccessError:
+        return None
+    return cursor.range
 
 
 def _whole_ref_name(text: str) -> Optional[str]:

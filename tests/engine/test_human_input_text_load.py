@@ -142,6 +142,18 @@ def test_prompt_error_points_at_the_prompt_line():
     assert caught.value.diagnostic.frames[-1].range.start_line == prompt_line
 
 
+@pytest.mark.parametrize(
+    ("site", "line"), [("question", 10), ("label", 13), ("description", 14)]
+)
+@pytest.mark.parametrize("text", ["${upper(${proj})}", "${other}"])
+def test_question_text_error_points_at_the_string(site, line, text):
+    flow = _flow(**{site: text})
+    assert f'"{text}"' in flow.splitlines()[line - 1]
+    with pytest.raises(LoadError) as caught:
+        load_flow(flow)
+    assert caught.value.diagnostic.frames[-1].range.start_line == line
+
+
 _ADAPTIVE_FLOW = """\
 id: f
 name: f

@@ -1,4 +1,4 @@
-"""Graph-stage: the cross-flow TYPE check for every `call`/`map` binding.
+"""Graph-stage: the cross-flow TYPE check for `call`/`map` bindings and `loop` constant seeds.
 
 A loader post-build pass (run after the flow's leaves + child signatures are assembled).
 Each binding's SOURCE contract is resolved from its reference over the PARENT producer +
@@ -86,7 +86,9 @@ def check_call_map_types(
     `over` key), stays lenient (skipped). Loud + located at the node's Compose-owned
     `input:` mapping range, else its authored node range. Iterates the WIRING (not the
     params) so a mis-named binding still surfaces here when its child decl is absent
-    rather than being silently skipped."""
+    rather than being silently skipped. A LOOP's untyped constant seeds are checked the
+    same way against its body's inputs; its other seeds are left to
+    `check_loop_type_contract`."""
     diagnostics = diagnostics or LoadDiagnostics()
     for label, contracts in (
         ("output producer", producers),
@@ -110,11 +112,13 @@ def check_call_map_types(
                 )
     for nid, result in build_results.items():
         node = result.node
-        # CALL/MAP carry `child_inputs` to type-check against; a LOOP also carries a child but
-        # its `'a -> 'a` contract is checked by check_loop_type_contract/carried_types instead.
+        # CALL/MAP/LOOP carry `child_inputs` to type-check against. A LOOP's seeds fill its
+        # body's START like CALL arguments, but only a constant seed is checked here;
+        # check_loop_type_contract checks the carried types.
         # A leaf has no `child_inputs` attr, and a zero-input child gives [] (falsy), so skip.
-        if node.is_loop or not getattr(node, "child_inputs", None):
+        if not getattr(node, "child_inputs", None):
             continue
+        kind = "loop" if node.is_loop else "call"
         child_decls = {d.name: d for d in node.child_inputs}
         node_producers, node_inputs = (
             narrowing.for_node(nid) if narrowing is not None else (producers, flow_inputs)
@@ -130,6 +134,8 @@ def check_call_map_types(
             decl = child_decls.get(param)
             if decl is None or decl.contract is None:
                 continue  # `over`/name-caught-in-build/opaque child input -> lenient
+            if node.is_loop and not _constant_seed(src):
+                continue
             message = _binding_mismatch(src, decl, scope)
             if message is not None:
                 rng: Optional[SourceRange] = (
@@ -137,14 +143,14 @@ def check_call_map_types(
                     or result.node_range
                 )
                 raise diagnostics.error(
-                    f"call node {nid!r}: binding {param!r} — {message}",
+                    f"{kind} node {nid!r}: binding {param!r} — {message}",
                     range=rng,
                 )
 
 
 @dataclass(frozen=True)
 class _Scope:
-    """What a CALL/MAP node's bindings read, for the load check.
+    """What a CALL/MAP/LOOP node's bindings read, for the load check.
 
     Attributes:
         producers (`dict[str, OutputContract]`): Node output contracts by producer id.
@@ -240,6 +246,17 @@ def _lone_span(source: Any) -> Tree | Token | None:
     if not (len(segments) == 1 and isinstance(segments[0], Span)):
         return None
     return segments[0].tree
+
+
+def _constant_seed(src: Any) -> bool:
+    """Return whether an untyped binding is a YAML literal or a lone `${...}` with no references."""
+    if isinstance(src, Binding) and src.contract is not None:
+        return False
+    source = binding_source(src)
+    if literal_value(source) is not NOT_LITERAL:
+        return True
+    tree = _lone_span(source)
+    return tree is not None and not expr_refs(tree)
 
 
 def _operand_path(node: Tree | Token) -> str | None:

@@ -1333,3 +1333,137 @@ def test_predicate_isinstance_check_with_an_unknown_type_reports_the_type():
     message = str(e.value)
     assert "unknown type 'Dnoe'" in message
     assert "union members" not in message
+
+
+# A named body taking `n: <body>` and `k: int`, returning only `k`, so `n` carries over
+# (a partial loop). The carried `extra` is not a body input, so it is never checked.
+_SEEDED = """id: p
+name: p
+defs:
+  body:
+    input:
+      n: {body}
+      k: int
+    nodes:
+      step:
+        kind: code
+        input:
+          n: ${{input.n}}
+          k: ${{input.k}}
+        output:
+          k: int
+        code: return dict(k=inputs["k"] + 1)
+    output: ${{step.output}}
+nodes:
+  loop:
+    kind: loop
+    {driver}
+    input:
+      n: {seed}
+      k: 0
+      extra: "abc"
+    call: body
+output: ${{loop.output}}
+"""
+
+
+def _seeded(body: str, seed: str, driver: str = "times: 1") -> str:
+    return _SEEDED.format(body=body, seed=seed, driver=driver)
+
+
+@pytest.mark.parametrize(
+    "body, seed, message",
+    [
+        ("int", '"abc"', "child expects 'int', but the value \"abc\" does not fit"),
+        ("int", '"1"', "child expects 'int', but the value \"1\" does not fit; text is not converted between flows, so write 1 without quotes"),
+        ("int", "null", "child expects 'int', but the value null does not fit"),
+        ("int = 5", "null", "child expects 'int', but the value null does not fit"),
+        ("str", "2026-01-01", "child expects 'str', but the value 2026-01-01 does not fit; quote it to keep it as text: \"2026-01-01\""),
+        ("int", "${null}", "child expects 'int', source is 'None'"),
+        ("int", "${'1'}", "child expects 'int', source is 'str'"),
+    ],
+)
+def test_constant_seed_that_cannot_fill_the_body_input_is_a_load_error(body, seed, message):
+    text = _seeded(body, seed)
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert f"loop node 'loop': binding 'n' — {message}" in str(caught.value)
+    # Located like a CALL argument: the loop's whole `input:` mapping, which starts at
+    # its first key.
+    input_mapping_start = text.splitlines().index(f"      n: {seed}") + 1
+    assert caught.value.diagnostic.frames[-1].range.start_line == input_mapping_start
+
+
+def test_seed_is_checked_even_when_a_while_loop_never_runs():
+    # `k: 0` fails `while:` at once, so the body never binds `n`; like a CALL on an
+    # untaken branch, the provable mismatch still fails at load.
+    with pytest.raises(LoadError, match="loop node 'loop': binding 'n' — child expects 'int'"):
+        load_flow(_seeded("int", '"abc"', driver="while: ${k} > 5"))
+
+
+@pytest.mark.parametrize(
+    "body, seed, n",
+    [
+        ("int", "1", 1),
+        ("float", "5", 5),
+        ("Optional[int]", "null", None),
+        ("Optional[int]", "${null}", None),
+        ("str", '"2026-01-01"', "2026-01-01"),
+        ("int", "${1 + 2}", 3),
+    ],
+)
+def test_constant_seed_that_fits_the_body_input_loads_and_runs(body, seed, n):
+    result = run_flow(load_flow(_seeded(body, seed)), {})
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"n": n, "k": 1, "extra": "abc"}
+
+
+def test_inline_body_constant_seed_fits_its_generated_parameter():
+    flow = load_flow("""id: p
+name: p
+nodes:
+  loop:
+    kind: loop
+    times: 1
+    input:
+      n: "abc"
+    nodes:
+      step:
+        kind: code
+        input:
+          n: ${input.n}
+        output:
+          n: str
+        code: return dict(n=inputs["n"])
+    output: ${step.output}
+output: ${loop.output}
+""")
+    assert run_flow(flow, {}).output == {"n": "abc"}
+
+
+def test_issue_repro_full_loop_reports_the_binding():
+    with pytest.raises(LoadError, match="loop node 'loop': binding 'n' — child expects 'int', but the value \"abc\" does not fit"):
+        load_flow("""id: p
+name: p
+defs:
+  bump:
+    input:
+      n: int
+    nodes:
+      step:
+        kind: code
+        input:
+          n: ${input.n}
+        output:
+          n: int
+        code: return dict(n=inputs["n"] + 1)
+    output: ${step.output}
+nodes:
+  loop:
+    kind: loop
+    times: 2
+    input:
+      n: "abc"
+    call: bump
+output: ${loop.output}
+""")

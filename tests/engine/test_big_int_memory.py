@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import sys
 
 from langchain_core.messages import AIMessage
@@ -229,9 +230,8 @@ def test_agent_backward_reply_holding_a_big_int_parses_and_is_checked_as_feedbac
         '"variable_feedback": {}}'
     )
 
-    # Feedback messages are text, so the decoded int is refused as feedback
-    # rather than as unreadable JSON.
-    with pytest.raises(TypeError, match="must be a string"):
+    # The reply decodes; an int is not a feedback shape.
+    with pytest.raises(TypeError, match="must be a string, object, list, or None"):
         backward._parse_result(reply)
 
 
@@ -324,7 +324,9 @@ output: ${call.output}
 """
 
 
-def _assert_grown_and_replayed(text: str, inputs: dict, path, expected, *, learnable: bool = False) -> None:
+def _assert_grown_and_replayed(
+    text: str, inputs: dict, path: Path, expected: object, *, learnable: bool = False
+) -> None:
     """Run `text` with a log, then assert resuming the terminal log changes no bytes."""
     result = run_flow(load_flow(text), inputs, log=path, learnable=learnable)
     assert result.status == "succeeded", result.failure

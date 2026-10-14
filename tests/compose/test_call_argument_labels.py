@@ -211,10 +211,24 @@ asserts:
 
 
 def test_a_nested_call_shares_its_enclosing_binding_site():
-    _assert_names(
-        _node_input_flow(f"call(child, y=call(child, y={_BAD_REF}))"),
-        "node 'n' input 'a' call(child) argument 'y' from:",
+    text = _node_input_flow(f"call(child, y=call(inner, z={_BAD_REF}))").replace(
+        "defs:\n",
+        """defs:
+  inner:
+    input:
+      z: !str
+    nodes:
+      x:
+        kind: code
+        code: "return inputs['z']"
+        input:
+          z: ${input.z}
+        output: str
+    output: ${x.output}
+""",
+        1,
     )
+    _assert_names(text, "node 'n' input 'a' call(inner) argument 'z' from:")
 
 
 def test_a_mis_called_builtin_in_an_argument_names_the_argument():

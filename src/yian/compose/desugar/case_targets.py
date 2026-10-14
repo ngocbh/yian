@@ -111,7 +111,7 @@ def _lift_case_target(
     *,
     host: str,
     site: Optional[str] = None,
-    call_site: Optional[tuple[str | int, ...]] = None,
+    call_site: Optional[tuple[str | int | None, ...]] = None,
     range: Optional[SourceRange] = None,
     diagnostics: LoadDiagnostics | None = None,
 ) -> Any:

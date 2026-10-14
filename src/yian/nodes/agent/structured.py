@@ -42,6 +42,7 @@ from pydantic import (
     create_model,
 )
 
+from yian.defaults import current
 import yian.json_codec as json_codec
 from yian.memory.contracts import (
     MemoryContext,
@@ -320,7 +321,7 @@ def generate_structured(
     messages: list,
     typ: Type,
     *,
-    max_retries: int = 2,
+    max_retries: int | None = None,
     llm_config: dict | None = None,
     check_stopped: Callable[[], None] | None = None,
     evaluation_trace: EvaluationTrace | None = None,
@@ -348,7 +349,8 @@ def generate_structured(
         model (`Any`): Configured provider model, optionally supporting native binding.
         messages (`list`): Complete current provider context, including restored history.
         typ (`Type`): Exact declared output type used for schema and error ownership.
-        max_retries (`int`): Extra correction attempts; defaults to two.
+        max_retries (`int | None`): Extra correction attempts; `None` uses the
+            `AGENT_RETRIES` default.
         llm_config (`dict | None`): Provider/model capability selection; defaults to
             environment settings when omitted. Existing config objects also work.
         check_stopped (`Callable | None`): Optional cooperative cancellation check.
@@ -369,6 +371,8 @@ def generate_structured(
         `_HostStop`: Cooperative cancellation occurs. Exhausted provider/parser errors
             propagate as their original exception, preserving schema ownership.
     """
+    if max_retries is None:
+        max_retries = current().agent_retries
     check = check_stopped or (lambda: None)
     memory_context = memory_context if memory_context is not None else MemoryContext()
     schema = type_to_schema(typ)

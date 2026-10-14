@@ -17,7 +17,13 @@ from yian.run import run_flow
 
 
 def _named_loop(
-    body_in: str, body_out: str, ret: str, seed: str, *, driver: str = "times: 2"
+    body_in: str,
+    body_out: str,
+    ret: str,
+    seed: str,
+    *,
+    driver: str = "times: 2",
+    flow_input: str = "z: !int",
 ) -> str:
     """Return a flow whose LOOP `repeat` calls the `defs:` body `step`, carrying `n`.
 
@@ -27,12 +33,13 @@ def _named_loop(
         ret (`str`): The Python expression the body's CODE node returns as `n`.
         seed (`str`): The LOOP's `n:` seed binding, e.g. `${input.z}`.
         driver (`str`, *optional*, defaults to `"times: 2"`): The LOOP's driver lines.
+        flow_input (`str`, *optional*, defaults to `"z: !int"`): The flow's input line.
     """
     return f"""
 id: named
 name: named
 input:
-  z: !int
+  {flow_input}
 defs:
   step:
     input:
@@ -132,10 +139,20 @@ def test_float_returned_into_an_int_input_is_rejected(seed: str) -> None:
 def test_any_returned_into_an_int_input_is_rejected() -> None:
     message = (
         "loop node 'repeat': the body 'step' returns 'n' as Any, but takes 'n' as int; "
-        "narrow it in the body with isinstance in a case"
+        "narrow it in the body with isinstance in a case, or declare its producer's type"
     )
     with pytest.raises(LoadError, match=re.escape(message)):
         load_flow(_named_loop("int", "Any", "1", "${input.z}"))
+
+
+def test_optional_any_returned_into_an_int_input_is_rejected() -> None:
+    message = (
+        "loop node 'repeat': the body 'step' returns 'n' as Optional(Any), but takes 'n' "
+        "as int; narrow it in the body with isinstance in a case, or declare its "
+        "producer's type"
+    )
+    with pytest.raises(LoadError, match=re.escape(message)):
+        load_flow(_named_loop("int", "Optional(Any)", "1", "${input.z}"))
 
 
 def test_optional_any_returned_into_an_any_input_over_an_untyped_seed_is_rejected() -> None:
@@ -168,8 +185,8 @@ def test_int_returned_into_a_float_input_loads() -> None:
 def _record_loop(seed: str) -> str:
     """Return a flow whose named body takes `n: P` and returns it as `Optional(P)`."""
     return "typedefs:\n  P:\n    x: int\n" + _named_loop(
-        "P", "Optional(P)", 'inputs["n"]', seed
-    ).replace("  z: !int\n", "  p: !P\n")
+        "P", "Optional(P)", 'inputs["n"]', seed, flow_input="p: !P"
+    )
 
 
 def test_untyped_seed_with_an_optional_typedef_field_is_rejected() -> None:

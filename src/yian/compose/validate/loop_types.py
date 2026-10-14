@@ -93,8 +93,8 @@ def check_loop_type_contract(
         flow_inputs (`dict[str, ValueContract]`): The flow's declared input contracts.
         flow_wiring (`dict[str, dict[str, Any]]`): Each node's `param -> source` bindings.
         inline_loops (`Collection[str]`, *optional*, defaults to `()`): The ids of loop
-            nodes whose body is written inline; it selects the wording of a returned
-            field that does not fit its parameter.
+            nodes whose body is written inline; it selects the wording of the error for
+            a returned field that does not fit its parameter.
         registry (`TypeRegistry | None`, *optional*, defaults to `None`): The flow's
             typedefs, used to spell a suggested seed tag by a typedef name and to type
             a `T(...)` constructor seed as `T`.
@@ -245,7 +245,7 @@ def _check_returned_fields(
     returned = node.returned_fields
     parameters = {
         parameter.name: parameter.contract
-        for parameter in node.child_inputs
+        for parameter in getattr(node, "child_inputs", None) or ()
         if parameter.contract is not None
     }
     for field_name, seed in wiring.items():
@@ -254,7 +254,7 @@ def _check_returned_fields(
         body_field = carried_fields.get(field_name)
         parameter = parameters.get(field_name)
         if body_field is None or parameter is None:
-            continue  # an opaque returned field has nothing proven to compare
+            continue  # opaque on either side, or not a body input: nothing to compare
         if types_compatible(body_field, parameter.type):
             continue
         typed = isinstance(seed, Binding) and seed.contract is not None

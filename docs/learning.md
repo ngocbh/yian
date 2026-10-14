@@ -150,20 +150,17 @@ recall order.
 
 Memory JSON has its own nesting bound of 128 levels: the value limit plus 28, so
 lowering `YIAN_MAX_VALUE_NESTING` lowers it too (see [Defaults and
-limits](defaults.md)). A run value
-nests at most 100 levels ([nesting limit](typing.md#nesting-limit)) and an episode or
-feedback entry
-wraps it about 8 levels deeper, so run material always fits; an AGENT's structured
-value or tool-call arguments past the limit fail at the reply, so they never become
-evidence. When a learn context
-still cannot be built, for example from a log recorded before the value limit, the
-attempt fails with `memory.invalid_context` before any learner runs. The
+limits](defaults.md)). A run value nests at most 100 levels ([nesting
+limit](typing.md#nesting-limit)) and an episode or feedback entry wraps it about 8
+levels deeper, so run material always fits; an AGENT's structured value or tool-call
+arguments past the limit fail at the reply, so they never become evidence. When a learn
+context still cannot be built, for example from a log recorded before the value limit,
+the attempt fails with `memory.invalid_context` before any learner runs. The
 `BackwardFailure` names the occurrence whose episode or feedback failed (`node_id`,
 `node_started_seq`, `scope`, `run_id`), and its message gives the cause:
 `memory learn context could not be constructed for node 'n': ... nests deeper than
 the memory limit of 128 levels (derived from YIAN_MAX_VALUE_NESTING)`. Only a failure in
-the root flow's fallback feedback
-names no node.
+the root flow's fallback feedback names no node.
 
 ## Episodic memory
 
@@ -180,15 +177,14 @@ the constructor. An unset limit adopts the stored value, else the default
 (`YIAN_EPISODIC_MAX_EPISODES` and `YIAN_EPISODIC_RECALL_LIMIT`,
 `YIAN_REFLECTIVE_MAX_ITEMS` and `YIAN_REFLECTIVE_RECALL_LIMIT`; see
 [Defaults and limits](defaults.md)); a different explicit value raises
-`episodic.config_conflict`. `ReflectiveMemory`
-limits (`max_items`, `recall_limit`) follow the same rule with
-`reflective.config_conflict`. `max_episodes` bounds the stored history and
-evicts its oldest entries after a commit. `recall_limit`
-bounds contextual AGENT recall. Contextual recall uses deterministic lexical
-overlap and recency; context-free recall returns the complete bounded history in
-chronological order. Entries are canonical JSON and preserve the run ID,
-occurrence, owner path, inputs, outcome or failure, prompts, recalled sections,
-visible model/tool interactions, and accepted execution sequence.
+`episodic.config_conflict`. `ReflectiveMemory` limits (`max_items`, `recall_limit`)
+follow the same rule with `reflective.config_conflict`. `max_episodes` bounds the stored
+history and evicts its oldest entries after a commit. `recall_limit` bounds contextual
+AGENT recall. Contextual recall uses deterministic lexical overlap and recency;
+context-free recall returns the complete bounded history in chronological order. Entries
+are canonical JSON and preserve the run ID, occurrence, owner path, inputs, outcome or
+failure, prompts, recalled sections, visible model/tool interactions, and accepted
+execution sequence.
 
 By default the backend lives only in the current process. Reusing one instance shares
 committed episodes with later fresh runs; `reset()` clears them. Run sessions pin

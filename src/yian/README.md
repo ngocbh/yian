@@ -1472,14 +1472,13 @@ Defined JSON/materialization failure becomes a memory-attributed context failure
 before Ready; invalid record authority remains an error. Memory JSON allows
 `current().memory_json_nesting` levels (`YIAN_MAX_VALUE_NESTING` plus 28, so 128 by
 default), and run material at the value limit nests about 8 levels deeper than the
-value, so it always fits. A
-context that still cannot be built (for example from a log recorded before the
-limit) raises `OwnerContextError` carrying the owner occurrence's `BackwardContext`;
-each occurrence's feedback is validated on its own so the failure is attributed to
-it. The driver records a `memory.invalid_context` `BackwardFailure` naming that
-occurrence (`scope`, `run_id`, `node_id`, `node_started_seq`) with the message
-`memory learn context could not be constructed for node '<id>': <cause>`; replay
-requires the named occurrence to be accepted and to receive that memory. Only a
+value, so it always fits. A context that still cannot be built (for example from a log
+recorded before the limit) raises `OwnerContextError` carrying the owner occurrence's
+`BackwardContext`; each occurrence's feedback is validated on its own so the failure
+is attributed to it. The driver records a `memory.invalid_context` `BackwardFailure`
+naming that occurrence (`scope`, `run_id`, `node_id`, `node_started_seq`) with the
+message `memory learn context could not be constructed for node '<id>': <cause>`;
+replay requires the named occurrence to be accepted and to receive that memory. Only a
 failure in root fallback feedback carries no node. `MemoryRuntime.propose_learning`
 rebuilds each `LearnContext` instead of deep-copying it, which re-validates and
 detaches the feedback without recursing through a value at the limit.
@@ -1640,11 +1639,10 @@ cancellation or parsing. Memory faults bypass structured/provider retry loops.
 history budget and nonnegative prior-turn count as keyword settings, from host code
 or the declaration's `config`; an unset one takes `YIAN_SESSION_HISTORY_BUDGET_CHARS`
 (default 32,000) or `YIAN_SESSION_RECENT_TURNS` (default 4). A session memory is
-declared on exactly one AGENT,
-and each instance holds one conversation with one FIFO queue. MAP items, LOOP
-iterations, the call sites of one def, and concurrent runs on the same instance
-take turns, and no fork mode exists. Run setup rejects a session key whose
-placements resolve different conversation compatibility. FIFO is admission
+declared on exactly one AGENT, and each instance holds one conversation with one FIFO
+queue. MAP items, LOOP iterations, the call sites of one def, and concurrent runs on
+the same instance take turns, and no fork mode exists. Run setup rejects a session key
+whose placements resolve different conversation compatibility. FIFO is admission
 order, not a MAP input-index guarantee. A turn reads its live
 baseline only after acquiring the lease. The run handle's detached opening
 snapshot stays pinned as live turns advance history. Public

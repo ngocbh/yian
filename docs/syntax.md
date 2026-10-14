@@ -422,17 +422,16 @@ named `<site> call(f) argument 'y'` and located at the binding the call is writt
 A temporary inside an expression is fine: the embedded template `"v=${x * 10}"` is
 the text `v=inf`. Only a binding's final value is checked. See [Expressions → Non-finite results](expressions.md#non-finite-results).
 
-A value nests at most 100 levels (`YIAN_MAX_VALUE_NESTING` can lower it; see
-[Defaults and limits](defaults.md)); each record and list is a level, and a record or
-list built around a
-value is one level deeper. A binding (an expression result, or a
-written-out value that a `${...}` inside makes deeper) or a MAP `over` list nested
-deeper fails its node with `binding.evaluate`, naming the path (`input 'y' at [0].a...:
-value nests deeper than 100 levels, ...`): `${[input.x]}` around a 100-level `x`
-fails, and MAP items may nest 99 levels. A run input may nest 100 levels; `run_flow`
-rejects a deeper one before the run starts. A record flow output such as
-`{t: ${n.output}}` adds a level, so wrapping a 100-level output fails `contract.output`
-at `__end__`. See [Types → Nesting limit](typing.md#nesting-limit).
+A value nests at most 100 levels (`YIAN_MAX_VALUE_NESTING` can lower it; see [Defaults
+and limits](defaults.md)); each record and list is a level, and a record or list built
+around a value is one level deeper. A binding (an expression result, or a written-out
+value that a `${...}` inside makes deeper) or a MAP `over` list nested deeper fails its
+node with `binding.evaluate`, naming the path (`input 'y' at [0].a...: value nests
+deeper than 100 levels, ...`): `${[input.x]}` around a 100-level `x` fails, and MAP
+items may nest 99 levels. A run input may nest 100 levels; `run_flow` rejects a deeper
+one before the run starts. A record flow output such as `{t: ${n.output}}` adds a level,
+so wrapping a 100-level output fails `contract.output` at `__end__`. See [Types →
+Nesting limit](typing.md#nesting-limit).
 
 A value written out in the flow file is checked at load instead, with the same
 counting, whether YAML text or aliases build its depth: a node input (LOOP seeds and
@@ -2615,8 +2614,7 @@ Each CALL, MAP, or LOOP body is one level, whether it is a `defs:` entry, an inl
 directive, or a `uses:` flow. A flow's bodies nest at most 50 levels, counting through
 imported files (`YIAN_MAX_CALL_NESTING` can lower it; see [Defaults and
 limits](defaults.md)). A deeper chain is a load error at the `call:` field of the call
-that
-crosses the limit, or at the node for an inline body:
+that crosses the limit, or at the node for an inline body:
 
 ```text
 call node 'top': calling callable 'c0' nests calls 51 levels deep, past the call nesting limit of 50 (each call, map, or loop body is a level); flatten the chain
@@ -3032,9 +3030,8 @@ the live graph stays about one iteration, whatever the body. The run log still k
 every iteration, and so does the execution record a `learnable=True` run keeps for
 backward. Resume and backward read those, not the live graph. The engine's node budget
 (10,000 live nodes by default, `YIAN_MAX_TOTAL_NODES`, "expansion exceeded node budget")
-is checked before pruning. So it
-limits how big one iteration can get (the finished iteration plus the next body), not
-how many iterations run.
+is checked before pruning. So it limits how big one iteration can get (the finished
+iteration plus the next body), not how many iterations run.
 
 The next iteration starts as soon as the body `output:` is ready, as a CALL's caller
 continues as soon as its child's output is. A body node the output doesn't read (a

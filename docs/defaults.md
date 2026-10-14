@@ -104,7 +104,8 @@ load, run, and resume with stack to spare:
   shown to fit.
 - `YIAN_MAX_YAML_NESTING` can only be lowered (maximum 200): composing and walking a
   document 200 levels deep stays within Python's default recursion limit.
-- `YIAN_MAX_TYPE_NESTING` may be raised to 125.
+- `YIAN_MAX_TYPE_NESTING` may be raised to 125: a type nested 125 levels still parses
+  with stack to spare, and one nested 150 levels does not.
 
 ## Integer digits
 

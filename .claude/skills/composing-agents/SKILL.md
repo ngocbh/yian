@@ -475,15 +475,14 @@ node a text producer. A `Literal(...)` enum, record, union, non-string scalar, o
 switches it to **structured generation** — the engine derives a schema from
 `output:` and the model emits a conforming value (native structured output, or a
 JSON fallback for providers that lack it), validated at the write boundary and
-retried up to `retries:` times (default 2, `YIAN_AGENT_RETRIES`; a non-negative
-integer) on deviation, a NaN or infinity in the reply or a value nested deeper than 100
-levels included. A root
-`Literal(...)` returns its bare tag to the flow. A union returns the matching member's record; each
-member's schema pins its tag and rejects unknown fields. An `object` or `Any` output is
-an open mapping or any JSON value; where structured output is strict (Azure, the OpenAI
-Responses API, Anthropic with `thinking` on) yian asks for that whole schema through a
-non-strict or unforced tool instead, and still validates and retries the reply.
-Use a downstream `code` node only for deterministic post-processing.
+retried up to `retries:` times (default 2, `YIAN_AGENT_RETRIES`; a non-negative integer)
+on deviation, a NaN or infinity in the reply or a value nested deeper than 100 levels
+included. A root `Literal(...)` returns its bare tag to the flow. A union returns the
+matching member's record; each member's schema pins its tag and rejects unknown fields.
+An `object` or `Any` output is an open mapping or any JSON value; where structured output
+is strict (Azure, the OpenAI Responses API, Anthropic with `thinking` on) yian asks for
+that whole schema through a non-strict or unforced tool instead, and still validates and
+retries the reply. Use a downstream `code` node only for deterministic post-processing.
 `prompt:` must be text: quote a number, boolean, date, or a value starting with `[` or `{`;
 otherwise it is a load error at the value.
 An AGENT with `tools:` or `skills:` runs the tool loop; without them it makes one model
@@ -569,8 +568,8 @@ settings are rejected.
 Tune a node's non-model behavior with a static `env:` block (flow-level default +
 per-node override, node wins): e.g. `env: {max_tool_iterations: 300}` bounds an
 AGENT's tool-calling loop (default `-1` = no cap, `YIAN_AGENT_MAX_TOOL_ITERATIONS`).
-`retries` bounds typed-output
-correction, not tool, transport, authentication, or stop failures.
+`retries` bounds typed-output correction, not tool, transport, authentication, or stop
+failures.
 
 ### Agent-owned variables — `variables:`
 
@@ -842,9 +841,9 @@ approve:
   output: Approval                    # a typed answer, e.g. a Literal enum
 ```
 Instead of a typed `prompt:`+`output:`, a gate can present **questions** (1–4,
-AskUserQuestion-shaped) — the answer is a record keyed by each `header`; `output:`
-then defaults to `object`. `prompt:` is optional; `questions:` and
-`adaptive_questions:` are mutually exclusive. The gate itself never chooses or
+`YIAN_MAX_QUESTIONS`; AskUserQuestion-shaped) — the answer is a record keyed by each
+`header`; `output:` then defaults to `object`. `prompt:` is optional; `questions:`
+and `adaptive_questions:` are mutually exclusive. The gate itself never chooses or
 calls an LLM: `adaptive_questions:` is LOAD-TIME sugar that lowers to a
 synthetic composer AGENT node + gate; the composer carries the gate's `case` routes,
 `depends_on:`, and `runs_after:`, and waits for the gate's other inputs, so the composer makes

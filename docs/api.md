@@ -123,23 +123,22 @@ created. NaN, infinity, and complex numbers are not yian values: an `inputs` val
 holding one at any depth raises `ValueError` naming where it sits
 (`input 'x' at a[1]: ...`), also before the log is created. An `inputs` value may
 nest 100 levels (each record and list is a level; `YIAN_MAX_VALUE_NESTING`); a deeper
-one raises `ValueError`
-naming the input and path, before the log is created (see
-[Types → Nesting limit](typing.md#nesting-limit)). A non-finite value in an
-`llm_config` provider block, such as `{"openai": {"temperature": float("nan")}}`, is
-rejected too: in a flow file it is a load error, and in the host `llm_config` it raises
-`ValueError` before the run starts when an AGENT uses it. An int of any size is a
-value: the log records every digit, and `resume_flow` reads it back exact. A node
-assertion, CASE `when`, or LOOP `while`/`until` set in Python whose expression doesn't
-parse (or calls an unknown function or a builtin with the wrong arguments) raises
-`ExpressionError` (a `ValueError`) naming the node and the field (assertion list and
-assertion, case handle, or predicate keyword), before the log is created;
-`resume_flow` raises it for an unfinished run before appending any record. Likewise a
-binding, flow output, AGENT prompt, or `human_input` text set in Python whose `${...}`
-span doesn't parse, calls a builtin with the wrong arguments, or calls any other function
-(in a binding, one that is not a `typedefs:` constructor in the node's type table) raises
-`ExpressionError` naming the node and field before the log is created; `resume_flow`
-raises it for an unfinished run before appending any record.
+one raises `ValueError` naming the input and path, before the log is created (see [Types
+→ Nesting limit](typing.md#nesting-limit)). A non-finite value in an `llm_config`
+provider block, such as `{"openai": {"temperature": float("nan")}}`, is rejected too: in
+a flow file it is a load error, and in the host `llm_config` it raises `ValueError`
+before the run starts when an AGENT uses it. An int of any size is a value: the log
+records every digit, and `resume_flow` reads it back exact. A node assertion, CASE
+`when`, or LOOP `while`/`until` set in Python whose expression doesn't parse (or calls
+an unknown function or a builtin with the wrong arguments) raises `ExpressionError` (a
+`ValueError`) naming the node and the field (assertion list and assertion, case handle,
+or predicate keyword), before the log is created; `resume_flow` raises it for an
+unfinished run before appending any record. Likewise a binding, flow output, AGENT
+prompt, or `human_input` text set in Python whose `${...}` span doesn't parse, calls a
+builtin with the wrong arguments, or calls any other function (in a binding, one that is
+not a `typedefs:` constructor in the node's type table) raises `ExpressionError` naming
+the node and field before the log is created; `resume_flow` raises it for an unfinished
+run before appending any record.
 
 - `log` — an optional JSONL path. `None` still uses the same record/reducer path
   with a process-local log. A path creates a new durable log exclusively; an
@@ -503,11 +502,9 @@ memory's learn context cannot be built from run material, names the owner occurr
 (`node_id`, `node_started_seq`, `scope`, `run_id`) and the cause, such as
 `memory learn context could not be constructed for node 'n': ... nests deeper than the
 memory limit of 128 levels (derived from YIAN_MAX_VALUE_NESTING)`; only a failure in the
-root flow's fallback feedback has no
-node.
-`learning` is `None` when the run had no memory.
-The root result's `input_feedback` maps input names to ordered tuples of ordinary
-messages. These tuples are batches; positional lists inside them remain single
+root flow's fallback feedback has no node. `learning` is `None` when the run had no
+memory. The root result's `input_feedback` maps input names to ordered tuples of
+ordinary messages. These tuples are batches; positional lists inside them remain single
 structured messages. Node self/variable channels contain ordered text messages
 and remain attributed to their own occurrences, rather than becoming root channels.
 
@@ -1024,10 +1021,9 @@ memory.reset()  # Backend-wide; allowed only while no turn is active or queued.
 The host constructor accepts `history_budget_chars` (default 32,000,
 `YIAN_SESSION_HISTORY_BUDGET_CHARS`), `recent_turns` (default 4,
 `YIAN_SESSION_RECENT_TURNS`), and optional `storage=path`. YAML `config` may set
-`history_budget_chars` and
-`recent_turns`; `storage` is host-only. A public snapshot has exactly `version`
-(currently `3`), `namespace`, `generation`, `conversation`, and `notes`.
-`conversation` is the instance's one conversation view, or `null`. A snapshot
+`history_budget_chars` and `recent_turns`; `storage` is host-only. A public snapshot has
+exactly `version` (currently `3`), `namespace`, `generation`, `conversation`, and
+`notes`. `conversation` is the instance's one conversation view, or `null`. A snapshot
 also holds learned notes, never queues, leases, the private summary cache, or
 the commit ledger. Version 1 and 2 snapshots are rejected with
 `session.invalid_snapshot`.
@@ -1429,9 +1425,9 @@ current().max_total_nodes  # 10000 unless YIAN_MAX_TOTAL_NODES sets it
 - `DefaultsError` (a `ValueError`) is raised for a variable that is not a plain
   decimal integer in its range, naming the variable, the value, and the range. It is
   a host setup error, not a `LoadError`.
-- `DefaultsMismatchError` (a `ValueError`) is raised by `resume_flow` when the run
-  started with different values; see
-  [Durable recovery](#durable-recovery-with-resume_flow).
+- `DefaultsMismatchError` (a `ValueError`) is raised by `resume_flow` and by
+  `RunResult.backward`'s replay when the run's recorded values differ from this
+  process's; see [Durable recovery](#durable-recovery-with-resume_flow).
 
 Changed: these module constants were removed; set the variable instead.
 

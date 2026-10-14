@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import dis
 import os
 import signal
+import sys
 import time
+import types
 from queue import Queue
 from threading import (
     Barrier,
@@ -256,7 +259,7 @@ def test_sigint_on_the_controller_thread_stops_and_joins_before_raising(
 def test_sigint_deferred_at_launch_is_replayed_through_the_callers_handler(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The launch-time handler hands a recorded Ctrl-C to the handler it replaced."""
+    """The helper's handler hands a Ctrl-C recorded at launch to the caller's handler."""
 
     calls: list[int] = []
     real_start = Thread.start
@@ -293,7 +296,7 @@ def test_sigint_deferred_at_launch_is_replayed_through_the_callers_handler(
 def test_sigint_deferred_at_launch_stays_ignored_for_an_ignoring_caller(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A caller with SIGINT ignored gets no KeyboardInterrupt from the replay."""
+    """A caller with SIGINT ignored gets no KeyboardInterrupt from a Ctrl-C at launch."""
 
     real_start = Thread.start
 
@@ -867,3 +870,356 @@ def test_real_pooled_failure_wakes_prompt_and_joins_every_engine_worker(
         for thread in enumerate_threads()
     )
     assert "ask_user" not in TOOL_REGISTRY
+
+
+def _trip_sigint_on_another_thread() -> None:
+    """Trip SIGINT on a short-lived thread; the main thread runs the handler afterwards."""
+
+    def trip() -> None:
+        signal.pthread_kill(current_thread().ident, signal.SIGINT)
+
+    tripper = Thread(target=trip, name="test-sigint-tripper")
+    tripper.start()
+    tripper.join()
+
+
+class _SigintOnStopReporter(_Reporter):
+    """A reporter whose stop() first takes a Ctrl-C tripped on another thread."""
+
+    def stop(self) -> None:
+        _trip_sigint_on_another_thread()
+        super().stop()
+
+
+@pytest.mark.skipif(not hasattr(signal, "pthread_kill"), reason="needs pthread_kill")
+def test_sigint_on_the_controller_thread_during_drain_waits_for_cleanup() -> None:
+    """A Ctrl-C tripped while the controller drains runs only after join and reporter stop."""
+
+    expected = LookupError("observer failed")
+    reporter = _Reporter(failure=expected)
+    controller_threads: list[Thread] = []
+    handled: list[list[str]] = []
+
+    def caller_handler(signum, frame):
+        # Snapshot cleanup progress when the caller's handler finally runs.
+        handled.append(
+            [name for name, _ in reporter.calls if name == "stop"]
+            + [f"controller alive={controller_threads[0].is_alive()}"]
+        )
+        raise KeyboardInterrupt
+
+    def controller(stop_event, on_event, ask_user, render):
+        controller_threads.append(current_thread())
+        assert on_event is not None
+        on_event(NodeStarted("work"))
+        assert stop_event.wait(_TIMEOUT)
+        signal.pthread_kill(current_thread().ident, signal.SIGINT)
+        time.sleep(0.05)
+        return _success("stopped")
+
+    previous = signal.signal(signal.SIGINT, caller_handler)
+    try:
+        with pytest.raises(LookupError) as caught:
+            run_cli._run_with_terminal_controller(
+                controller,
+                prompt_handler=lambda request: "unused",
+                reporter=reporter,
+            )
+        assert signal.getsignal(signal.SIGINT) is caller_handler
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+    assert caught.value is expected
+    assert handled == [["stop", "controller alive=False"]]
+    assert not controller_threads[0].is_alive()
+
+
+@pytest.mark.skipif(not hasattr(signal, "pthread_kill"), reason="needs pthread_kill")
+def test_sigint_during_reporter_stop_lets_it_finish_and_keeps_the_first_cause(
+    default_sigint_handler: None,
+) -> None:
+    """A Ctrl-C handled in reporter.stop() neither cuts it short nor replaces the cause."""
+
+    expected = LookupError("observer failed")
+
+    reporter = _SigintOnStopReporter(failure=expected)
+    controller_threads: list[Thread] = []
+
+    def controller(stop_event, on_event, ask_user, render):
+        controller_threads.append(current_thread())
+        assert on_event is not None
+        on_event(NodeStarted("work"))
+        assert stop_event.wait(_TIMEOUT)
+        return _success("stopped")
+
+    with pytest.raises(LookupError) as caught:
+        run_cli._run_with_terminal_controller(
+            controller,
+            prompt_handler=lambda request: "unused",
+            reporter=reporter,
+        )
+
+    assert caught.value is expected
+    assert [name for name, _ in reporter.calls if name == "stop"] == ["stop"]
+    assert not controller_threads[0].is_alive()
+    assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+
+
+@pytest.mark.skipif(not hasattr(signal, "pthread_kill"), reason="needs pthread_kill")
+def test_sigint_during_a_clean_drain_raises_after_cleanup(
+    default_sigint_handler: None,
+) -> None:
+    """With no earlier cause, a Ctrl-C deferred in cleanup raises once cleanup is done."""
+
+    reporter = _SigintOnStopReporter()
+
+    with pytest.raises(KeyboardInterrupt):
+        run_cli._run_with_terminal_controller(
+            lambda stop_event, on_event, ask_user, render: _success("done"),
+            prompt_handler=lambda request: "unused",
+            reporter=reporter,
+        )
+
+    assert [name for name, _ in reporter.calls if name == "stop"] == ["stop"]
+    assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+
+
+@pytest.mark.skipif(not hasattr(signal, "pthread_kill"), reason="needs pthread_kill")
+def test_sigint_during_a_clean_drain_stays_ignored_for_an_ignoring_caller() -> None:
+    """A caller with SIGINT ignored gets the result when Ctrl-C lands in cleanup."""
+
+    reporter = _SigintOnStopReporter()
+    previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        observed = run_cli._run_with_terminal_controller(
+            lambda stop_event, on_event, ask_user, render: _success("done"),
+            prompt_handler=lambda request: "unused",
+            reporter=reporter,
+        )
+        restored = signal.getsignal(signal.SIGINT)
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+    assert observed.output == "done"
+    assert [name for name, _ in reporter.calls if name == "stop"] == ["stop"]
+    assert restored == signal.SIG_IGN
+
+
+def _helper_code_objects() -> set[types.CodeType]:
+    """The helper's code object and every function nested in it."""
+
+    codes = {run_cli._run_with_terminal_controller.__code__}
+    pending = list(codes)
+    while pending:
+        for const in pending.pop().co_consts:
+            if isinstance(const, types.CodeType) and const not in codes:
+                codes.add(const)
+                pending.append(const)
+    return codes
+
+
+_NO_SIGNAL_OPCODES = frozenset({"PUSH_EXC_INFO", "POP_EXCEPT"})
+
+
+def _run_with_sigint_at_opcode(index: int, *, first_cause: str) -> dict[str, Any]:
+    """Run the helper, tripping SIGINT at the index-th helper opcode after tracing starts.
+
+    Tracing starts as the first cause is raised: a Ctrl-C the controller sends to the
+    main thread (``first_cause="sigint"``) or a render failure (``"render"``). With
+    ``"none"`` the run completes, and tracing starts in a render action just before the
+    controller returns. Opcodes are counted on the main thread, in the helper and the
+    functions nested in it.
+    """
+
+    codes = _helper_code_objects()
+    helper_code = run_cli._run_with_terminal_controller.__code__
+    raised: list[BaseException] = []
+    state: dict[str, Any] = {"seen": 0, "trip": None}
+
+    def local_trace(frame, event, arg):
+        if (
+            event == "opcode"
+            and state["trip"] is None
+            # These neither raise nor run signal handlers; an exception there would
+            # unbalance the interpreter's handled-exception stack.
+            and dis.opname[frame.f_code.co_code[frame.f_lasti]] not in _NO_SIGNAL_OPCODES
+        ):
+            if state["seen"] == index:
+                installed = signal.getsignal(signal.SIGINT)
+                # Read the helper's flag through its handler's closure: touching the
+                # frame's f_locals from a trace function writes stale values back.
+                cells = dict(
+                    zip(
+                        getattr(installed, "__code__", helper_code).co_freevars,
+                        getattr(installed, "__closure__", None) or (),
+                    )
+                )
+                state["trip"] = {
+                    # The caller's own handler is back: cleanup has finished.
+                    "after_restore": installed is caller_handler,
+                    "deferring": "defer_sigint" in cells
+                    and cells["defer_sigint"].cell_contents,
+                }
+                signal.raise_signal(signal.SIGINT)
+            state["seen"] += 1
+        return local_trace
+
+    def global_trace(frame, event, arg):
+        if frame.f_code in codes:
+            frame.f_trace_opcodes = True
+            return local_trace
+        return None
+
+    def start_tracing() -> None:
+        # Tracing from the start would let the first Ctrl-C run inside the trace
+        # function, which turns tracing off.
+        frame = sys._getframe(1)
+        while frame is not None:
+            if frame.f_code is helper_code:
+                frame.f_trace = local_trace
+                frame.f_trace_opcodes = True
+            frame = frame.f_back
+        sys.settrace(global_trace)
+
+    def caller_handler(signum, frame):
+        exc = KeyboardInterrupt()
+        if first_cause == "sigint" and not raised:
+            start_tracing()
+        raised.append(exc)
+        raise exc
+
+    expected = LookupError("observer failed")
+
+    class _TracingReporter(_Reporter):
+        def handle(self, event: Any) -> None:
+            start_tracing()
+            super().handle(event)
+
+    reporter = _TracingReporter(failure=expected if first_cause == "render" else None)
+    controller_threads: list[Thread] = []
+    saw_stop: list[bool] = []
+    main_ident = main_thread().ident
+
+    def controller(stop_event, on_event, ask_user, render):
+        controller_threads.append(current_thread())
+        if first_cause == "none":
+            render(start_tracing)
+            return _success("done")
+        if first_cause == "render":
+            on_event(NodeStarted("work"))
+        else:
+            signal.pthread_kill(main_ident, signal.SIGINT)
+        saw_stop.append(stop_event.wait(_TIMEOUT))
+        return _success("stopped")
+
+    previous_handler = signal.signal(signal.SIGINT, caller_handler)
+    previous_trace = sys.gettrace()
+    outcome: Any = None
+    try:
+        outcome = run_cli._run_with_terminal_controller(
+            controller,
+            prompt_handler=lambda request: "unused",
+            reporter=reporter,
+        )
+    except BaseException as exc:
+        outcome = exc
+    finally:
+        sys.settrace(previous_trace)
+        restored = signal.getsignal(signal.SIGINT)
+        signal.signal(signal.SIGINT, previous_handler)
+    # A trip must leave no exception marked as being handled.
+    assert sys.exc_info()[1] is None
+    if first_cause == "render":
+        first: Any = expected
+    elif first_cause == "sigint":
+        first = raised[0] if raised else None
+    else:
+        first = None
+    return {
+        "trip": state["trip"],
+        "outcome": outcome,
+        "first": first,
+        "joined": not controller_threads[0].is_alive(),
+        "saw_stop": saw_stop,
+        "reporter_stops": [name for name, _ in reporter.calls].count("stop"),
+        "restored": restored is caller_handler,
+    }
+
+
+@pytest.mark.skipif(not hasattr(signal, "pthread_kill"), reason="needs pthread_kill")
+@pytest.mark.skipif(sys.gettrace() is not None, reason="replaces the active tracer")
+@pytest.mark.skipif(
+    sys.version_info < (3, 11),
+    reason="3.10 writes a frame's locals back after each trace call, undoing the handler's stores",
+)
+@pytest.mark.parametrize("first_cause", ["sigint", "render", "none"])
+def test_sigint_at_any_cleanup_opcode_still_joins_and_stops(first_cause: str) -> None:
+    """A Ctrl-C at any helper bytecode after the first cause never cuts cleanup short."""
+
+    failures = []
+    index = 0
+    while True:
+        result = _run_with_sigint_at_opcode(index, first_cause=first_cause)
+        trip = result["trip"]
+        if trip is None:
+            break
+        outcome = result["outcome"]
+        if trip["after_restore"]:
+            # A fresh Ctrl-C after cleanup finished may replace the cause.
+            kept = True
+        elif first_cause == "none":
+            # This Ctrl-C is the first one: it raises, now or after cleanup.
+            kept = isinstance(outcome, KeyboardInterrupt)
+        elif first_cause == "render" and not trip["deferring"]:
+            # Handled before the helper's except turned deferral on: it raises once
+            # through the caller's handler, as if it came just before the failure.
+            kept = outcome is result["first"] or isinstance(outcome, KeyboardInterrupt)
+        else:
+            kept = outcome is result["first"]
+        ok = (
+            result["joined"]
+            and result["saw_stop"] == ([] if first_cause == "none" else [True])
+            and result["reporter_stops"] == 1
+            and result["restored"]
+            and kept
+        )
+        if not ok:
+            failures.append((index, {k: v for k, v in result.items() if k != "first"}))
+        index += 1
+
+    assert index > 20
+    assert failures == []
+
+
+@pytest.mark.skipif(not hasattr(signal, "pthread_kill"), reason="needs pthread_kill")
+def test_a_non_raising_caller_handler_gets_each_ctrl_c_while_serving() -> None:
+    """A caller handler that doesn't raise keeps getting Ctrl-C while the run goes on."""
+
+    calls: list[int] = []
+    delivered = [Event(), Event()]
+    main_ident = main_thread().ident
+
+    def caller_handler(signum, frame):
+        calls.append(signum)
+        delivered[len(calls) - 1].set()
+
+    def controller(stop_event, on_event, ask_user, render):
+        for event in delivered:
+            signal.pthread_kill(main_ident, signal.SIGINT)
+            assert event.wait(_TIMEOUT)
+        return _success("done")
+
+    previous = signal.signal(signal.SIGINT, caller_handler)
+    try:
+        observed = run_cli._run_with_terminal_controller(
+            controller,
+            prompt_handler=lambda request: "unused",
+            reporter=None,
+        )
+        restored = signal.getsignal(signal.SIGINT)
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+    assert observed.output == "done"
+    assert calls == [signal.SIGINT, signal.SIGINT]
+    assert restored is caller_handler

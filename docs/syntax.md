@@ -1592,7 +1592,7 @@ non-nullable `Literal` with every tag listed in a `when:`, or a non-nullable `bo
 as an `on:` type, and inside a narrowing branch only the tags that reach the
 `case` count. Only a tagged union's member narrows: a branch on a plain `Literal`
 doesn't, so a nested `case` on that same `Literal` still lists every tag or has an
-`else:`. Otherwise loading fails:
+`else:`. A value-producing `case` that may match nothing fails to load:
 
 ```text
 case node 'gate' produces a value, so it must be exhaustive: add an `else:` (on: ${input.x} is str, not a Literal or bool)

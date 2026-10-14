@@ -170,8 +170,6 @@ def scrub_keys(exc: BaseException, keys: Iterable[Union[str, SecretStr, None]]) 
         pending.extend(_linked(current))
 
 
-
-
 def _rewrite(exc: BaseException, plains: tuple[str, ...]) -> None:
     """Redact one exception's string ``args``, ``message``, and ``__notes__``."""
     try:

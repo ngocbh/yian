@@ -62,8 +62,8 @@ def _route_openai_client(monkeypatch: pytest.MonkeyPatch, transport: httpx.Clien
 
 
 def _compact(text: str) -> str:
-    """Remove styling and all whitespace, so Rich wrapping cannot split a fragment."""
-    return re.sub(r"\s+", "", _ANSI.sub("", text))
+    """Remove styling, box-drawing borders, and whitespace, so Rich wrapping cannot split a fragment."""
+    return re.sub(r"[\s\u2500-\u257f]+", "", _ANSI.sub("", text))
 
 
 @pytest.mark.parametrize("source", ["environment", "saved login"])

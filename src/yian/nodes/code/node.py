@@ -44,7 +44,12 @@ from typing import Callable, Iterator, Optional, cast
 from yian.diagnostics import OriginRef
 from yian.nodes.base import Node, NodeKind, Output
 from yian.nodes.contracts import _map_origin, _validate_optional_origin
-from yian.typesys.values import ANY_VALUE_ADAPTER, TypeCheckError, build_value
+from yian.typesys.values import (
+    ANY_VALUE_ADAPTER,
+    TypeCheckError,
+    build_value,
+    reject_nonfinite,
+)
 
 # A reference is a single dotted module path + one colon + a function identifier:
 # `pkg.mod:func`, `mymod:myfunc`. Anchored (fullmatch): real source never matches.
@@ -360,6 +365,11 @@ class CodeNode(Node):
         to the declared-`output:` check.
         """
         if value is None:
+            return
+        try:
+            reject_nonfinite(value, "output")
+        except TypeCheckError:
+            # The output-contract boundary rejects it with its path, the same failure NaN gets.
             return
         try:
             typed = build_value(value)  # top-level: raises if the value can't be wrapped

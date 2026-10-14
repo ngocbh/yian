@@ -63,7 +63,7 @@ class TypeCheckError(ValueError):
 
 
 def reject_nonfinite(value: Any, where: str) -> None:
-    """Raise if a value contains a NaN or infinity at any depth.
+    """Raise if a value contains a number that is not a yian value: NaN, infinity, or complex.
 
     Walks `dict` values, `list`/`tuple` items, `TypedValue` payloads, pydantic
     models, and dataclass instances, depth-first and in order. It walks declared
@@ -78,28 +78,29 @@ def reject_nonfinite(value: Any, where: str) -> None:
 
     Raises:
         `TypeCheckError`:
-            A non-finite float was found; ``path`` locates it and the message reads
-            ``<where>[ at <path>]: non-finite number <repr> is not a yian value``.
+            Such a number was found; ``path`` locates it and the message reads
+            ``<where>[ at <path>]: non-finite number <repr> is not a yian value``, or
+            ``... complex number <repr> ...`` for a complex.
     """
     found = _find_nonfinite(value, (), set())
     if found is None:
         return
     path, number = found
     location = f"{where} at {_render_value_path(path)}" if path else where
-    raise TypeCheckError(
-        f"{location}: non-finite number {number!r} is not a yian value",
-        path=path,
-    )
+    label = "complex number" if isinstance(number, complex) else "non-finite number"
+    raise TypeCheckError(f"{location}: {label} {number!r} is not a yian value", path=path)
 
 
 def _find_nonfinite(
     value: Any,
     path: tuple[str | int, ...],
     active: set[int],
-) -> tuple[tuple[str | int, ...], float] | None:
-    """Return the path to and value of the first non-finite float, or `None`."""
+) -> tuple[tuple[str | int, ...], float | complex] | None:
+    """Return the path to and value of the first NaN, infinity, or complex, or `None`."""
     if isinstance(value, float):
         return None if isfinite(value) else (path, value)
+    if isinstance(value, complex):
+        return (path, value)
     if id(value) in active:
         return None
     # `TypedValue` subclasses `BaseModel`; unwrap it first so paths gain no `value` segment.

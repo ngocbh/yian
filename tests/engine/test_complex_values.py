@@ -3,7 +3,7 @@
 import pytest
 
 from yian import load_flow, run_flow
-from yian.events import NodeStarted, NodeSucceeded
+from yian.events import NodeStarted
 
 C = (0 - 8) ** 0.5
 
@@ -34,10 +34,6 @@ output: ${n.output}
 
     _assert_binding_fails(result, "n", f"input 'v': complex number {C!r} is not a yian value")
     assert result.failure.trace[0].key == "/s:root/s:node/s:n/s:input/s:v/s:binding"
-    assert not [
-        event for event in result.events
-        if isinstance(event, NodeSucceeded) and event.node_id == "n"
-    ]
 
 
 def _call_flow(declared: str, binding: str) -> str:

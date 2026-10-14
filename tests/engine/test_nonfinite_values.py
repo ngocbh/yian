@@ -127,7 +127,7 @@ def test_an_inferred_float_list_with_a_huge_int_fails_at_its_index():
         "input 'x' at [0]: non-finite number nan is not a yian value",
     ),
 ])
-def test_reject_nonfinite_rejects_a_complex_at_its_path(value, path, message):
+def test_reject_nonfinite_reports_the_first_rejected_number(value, path, message):
     with pytest.raises(TypeCheckError) as caught:
         reject_nonfinite(value, "input 'x'")
     assert str(caught.value) == message

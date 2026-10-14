@@ -1185,6 +1185,49 @@ class _CallableScope:
             self.resolve(name)
 
 
+def _check_def_asserts(
+    name: str,
+    asserts: Any,
+    def_cursor: SourceCursor | None,
+    diagnostics: LoadDiagnostics,
+) -> None:
+    """Reject a multi-node `defs:` entry's `asserts:` that is not a list of strings.
+
+    A def body is not validated by `ComposeFile`, so its `asserts:` is checked here, in the
+    same words as a node's.
+
+    Args:
+        name (`str`): The `defs:` entry name, for the message.
+        asserts (`Any`): The authored `asserts:` value; `None` means absent.
+        def_cursor (`SourceCursor | None`): The authored def body, when retained.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
+
+    Raises:
+        `LoadError`: Raised at the field when `asserts:` is set but not a list, and at the
+            item for the first item YAML read as non-text.
+    """
+    if asserts is None:
+        return
+    field_range = def_cursor.range_of("asserts") if def_cursor is not None else None
+    if not isinstance(asserts, list):
+        raise diagnostics.error(
+            f"defs entry {name!r}: `asserts:` must be a list of strings", range=field_range
+        )
+    for i, item in enumerate(asserts):
+        if isinstance(item, str):
+            continue
+        item_range = None
+        if def_cursor is not None:
+            try:
+                item_range = def_cursor.child("asserts").child(i).range
+            except SourceAccessError:
+                item_range = None
+        raise diagnostics.error(
+            f"defs entry {name!r}: " + not_text_error(f"asserts[{i}]", item),
+            range=item_range or field_range,
+        )
+
+
 def _load_def(
     name: str,
     body,
@@ -1197,7 +1240,8 @@ def _load_def(
     Supports both a multi-node child flow (`{input?, nodes, output?, asserts?}`)
     and a flat single-node body (`{kind, ...}`). Both share the file's typedef
     registry and callable scope. ``def_cursor`` is the occurrence-local authored
-    body: it retains absolute locations used by assembly and source diagnosis.
+    body: it retains absolute locations used by assembly and source diagnosis. A
+    multi-node body's ``asserts:`` must be a list of strings, else a located `LoadError`.
     """
     diagnostics = scope.diagnostics
     if not isinstance(body, dict):
@@ -1251,6 +1295,7 @@ def _load_def(
             f"defs entry {name!r}: `env:` must be a mapping with string keys",
             range=(def_cursor.range_of("env") if def_cursor is not None else None),
         )
+    _check_def_asserts(name, body.get("asserts"), def_cursor, diagnostics)
     nodes_cursor = _def_assembly_cursor(def_cursor, body["nodes"])
     try:
         def_memories = (

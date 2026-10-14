@@ -700,3 +700,48 @@ def test_other_llm_config_errors_are_unchanged(builder, prefix, value):
     assert prefix + "1 validation error for LLMConfig" in message or (
         prefix + "2 validation errors for LLMConfig" in message
     )
+
+
+def _def_asserts(v: str) -> str:
+    """A flow whose multi-node `defs:` entry `b` has `asserts: <v>`."""
+    return """\
+id: f
+name: f
+defs:
+  b:
+    nodes:
+      c:
+        kind: code
+        output: int
+        code: return 1
+    output: ${c.output}
+    asserts: @V
+nodes:
+  a:
+    kind: call
+    call: b
+output: ${a.output}
+""".replace("@V", v)
+
+
+@pytest.mark.parametrize(("value", "phrase"), NON_TEXT)
+def test_non_text_def_assert_is_a_load_error(value, phrase):
+    text = _def_asserts('\n      - "true"\n      - ' + value)
+    error = _error(text)
+    assert (
+        f"defs entry 'b': `asserts[1]:` must be text, but YAML read it as {phrase}; "
+        "put it in quotes"
+    ) in str(error)
+    assert _start_line(error) == _line(text, "      - " + value)
+
+
+@pytest.mark.parametrize("value", ["5", "false", "0", "''", "{}", "{x: 1}", "output > 0"])
+def test_non_list_def_asserts_is_a_load_error(value):
+    text = _def_asserts(value)
+    error = _error(text)
+    assert "defs entry 'b': `asserts:` must be a list of strings" in str(error)
+    assert _start_line(error) == _line(text, "asserts: ")
+
+
+def test_null_def_asserts_loads():
+    load_flow(_def_asserts("null"))

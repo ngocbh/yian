@@ -175,7 +175,7 @@ def _check_condition_calls(tree: "Tree | Token") -> None:
         `ExpressionError`: If a callee is not a builtin, or a builtin's signature can't bind
             the call's positional count and keyword names.
     """
-    from yian.expr.builtins import TEMPLATE_FNS  # builtins imports this module
+    from yian.expr.builtins import TEMPLATE_FNS
 
     if not isinstance(tree, Tree):
         return

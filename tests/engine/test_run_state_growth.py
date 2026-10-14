@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from copy import deepcopy
 from typing import Any
 
@@ -46,6 +47,7 @@ from yian.runtime.state import (
     prepare_run_started,
 )
 from yian.typesys import Type, ValueKind, VariablePool
+from yian.typesys.values import TypeCheckError
 
 
 _FINGERPRINT = "d" * 64
@@ -364,6 +366,23 @@ def test_growth_rejects_a_cyclic_seed_before_builder():
         )
 
     assert type(caught.value.original) is ValueError
+
+
+def test_growth_rejects_a_nonfinite_seed_before_builder():
+    state, _ = _initialized_spawner()
+    builder_called = False
+
+    def builder(_spawner: Node, _seed: Any) -> Flow:
+        nonlocal builder_called
+        builder_called = True
+        return _fragment("spawn")
+
+    with pytest.raises(GrowthRejected) as caught:
+        prepare_expanded(state, "spawn", Grow(seed={"x": math.nan}), builder)
+
+    assert type(caught.value.original) is TypeCheckError
+    assert caught.value.original.path == ("x",)
+    assert builder_called is False
 
 
 def test_growth_rejects_an_excessively_nested_seed_before_builder():

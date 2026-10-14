@@ -707,6 +707,34 @@ def test_nonfinite_output_at_the_root_uses_the_contract_default_origin(
     assert failures[0].trace == (root_origin,)
 
 
+def test_non_type_output_failure_uses_the_contract_default_origin(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Canonical JSON rejection has no value path and retains the root fallback."""
+    root_origin = OriginRef("nodes/work/output")
+    unrelated_origin = OriginRef("nodes/work/output/unrelated")
+    node = _ActionNode(
+        "work",
+        lambda: "\ud800",
+        output_contract=ValueContract(
+            Type.scalar(ValueKind.STRING),
+            ContractOrigins(
+                default=root_origin,
+                entries=((("unrelated",), unrelated_origin),),
+            ),
+        ),
+    )
+    state, log = _initialized(_flow([node]), num_workers=0)
+    failures = _capture_semantic_failures(monkeypatch)
+
+    list(_dispatcher(state, log, num_workers=0).run())
+
+    assert len(failures) == 1
+    assert failures[0].code == "contract.output"
+    assert failures[0].cause_type == "ValueError"
+    assert failures[0].trace == (root_origin,)
+
+
 @pytest.mark.parametrize("explicit", [False, True], ids=("baked", "result"))
 def test_redirected_output_uses_effective_target_contract_origin(
     monkeypatch: pytest.MonkeyPatch,

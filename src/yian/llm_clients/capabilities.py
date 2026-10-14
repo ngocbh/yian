@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
+
+from pydantic import BaseModel
 
 
 StructuredMethod = Literal[
@@ -158,3 +160,56 @@ def supports_native_structured(provider: str, model: str) -> bool:
     if provider.lower() in _NATIVE_STRUCTURED_PROVIDERS:
         return True
     return get_capabilities(model).preferred_structured_method != "none"
+
+
+# JSON-schema keys whose value is one subschema, a name -> subschema map, or a list of them.
+_SUBSCHEMA_KEYS = ("items", "additionalProperties")
+_SUBSCHEMA_MAP_KEYS = ("properties", "$defs")
+_SUBSCHEMA_LIST_KEYS = ("anyOf", "oneOf", "allOf")
+
+
+def has_open_schema(schema: Any) -> bool:
+    """Whether the JSON schema sent for `schema` has an open part.
+
+    It recognizes the open shapes `type_to_schema` emits for an ``object``, ``Any`` or
+    elementless-list AGENT output: ``additionalProperties: true`` or an empty ``{}``
+    subschema (any value), anywhere, ``$defs`` included. Other JSON-schema constructs
+    are not inspected. Strict structured-output modes (OpenAI and Azure strict,
+    Responses ``strict: true``) reject these shapes. It lives beside the
+    capability table because, like the table, it decides which structured-output method
+    and options a client sends.
+
+    Args:
+        schema (`Any`):
+            The schema given to ``with_structured_output``: a pydantic class (read through
+            ``model_json_schema()``) or a JSON-schema dict (read as given).
+
+    Returns:
+        `bool`:
+            `True` when the schema has an open part; `False` when it has none or is any
+            other kind of input (a TypedDict, a pydantic v1 class, a callable).
+    """
+    if isinstance(schema, dict):
+        root = schema
+    elif isinstance(schema, type) and issubclass(schema, BaseModel):
+        root = schema.model_json_schema()
+    else:
+        return False
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, dict):
+            continue
+        if not node or node.get("additionalProperties") is True:
+            return True
+        for key in _SUBSCHEMA_KEYS:
+            if isinstance(node.get(key), dict):
+                stack.append(node[key])
+        # Walk the maps by value, so an empty `properties: {}` is not itself open.
+        for key in _SUBSCHEMA_MAP_KEYS:
+            if isinstance(node.get(key), dict):
+                stack.extend(node[key].values())
+        for key in _SUBSCHEMA_LIST_KEYS:
+            if isinstance(node.get(key), list):
+                stack.extend(node[key])
+    return False

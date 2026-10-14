@@ -636,6 +636,17 @@ model made enforceable.
   constrained outputs, and `generate_structured` produces a conforming value (native
   `with_structured_output`, or a JSON prompt-injection fallback gated by
   `supports_native_structured(provider, model)`), with `retries:`-capped self-correction.
+  A schema with an open part (`llm_clients.capabilities.has_open_schema`:
+  `additionalProperties: true` or an empty subschema, from `object`, `Any`, or an
+  elementless list) goes non-strict, whole, where a client's default is strict: Azure
+  binds a forced function tool without `strict`; a request langchain routes to the
+  Responses API (OpenAI, the subscription, a `*-codex` name on Azure or OpenRouter) sends
+  `strict: false`; Anthropic with block thinking binds an unforced tool, and a reply
+  without that tool call raises `OutputParserException` (with `include_raw`, a
+  `parsing_error`) for the retry to correct. Closed schemas there, Gemini, Ollama, the
+  OpenAI-compatible Chat Completions clients, and Anthropic without thinking are
+  unchanged; an explicit `method=` is respected, and so is an explicit `strict=` on the
+  OpenAI-family clients.
   A root enum string (`Literal(...)`) uses `ScalarWrapper.value` with a Pydantic
   `Literal` annotation and unwraps to the bare tag returned to the flow.
   Three-part contract: **generate-tries** (the schema asks), **boundary-enforces**
@@ -914,7 +925,8 @@ first tag field (or the one untagged member the value satisfies) and keep
 sink, a union fits `object`, and `object` never fits a union. An AGENT `output: Any` maps
 to a union of the JSON types inside the `value` wrapper: strict
 `bool`/`int`/`float`/`str` members, so a reply is stored as given, plus an open `dict`
-and `list`. Like `output: object`, a provider's strict JSON-schema mode rejects it.
+and `list`. Like `output: object`, it is an open schema, which the clients ask for
+non-strictly (see AGENT node structured output).
 Structured generation maps a union to a plain pydantic `Union[...]` of `extra='forbid'`
 member models inside the `value` wrapper (`anyOf` + `const` tags, no `discriminator`),
 and maps a validation error at a union position to the member its tag selects. Manifests

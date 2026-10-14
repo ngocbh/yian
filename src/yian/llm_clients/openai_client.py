@@ -13,7 +13,7 @@ from pydantic import Field
 
 from .api_key_env import OPTIONAL_API_KEY_PROVIDERS, get_api_key_env
 from .base_client import BaseLLMClient, normalize_content
-from .capabilities import get_capabilities
+from .capabilities import get_capabilities, has_open_schema
 from .factory import _PROVIDER_BASE_URL
 from .provider_blocks import merge_request_body
 from .validators import validate_model
@@ -39,6 +39,33 @@ def _sdk_body_keywords(responses: bool) -> frozenset[str]:
     methods = (resource.create, resource.parse)
     names = {name for method in methods for name in inspect.signature(method).parameters}
     return frozenset(names - _TRANSPORT_KEYWORDS)
+
+
+def _strict_false_for_open_schema(
+    llm: BaseChatOpenAI, schema: Any, method: Optional[str], kwargs: dict[str, Any]
+) -> None:
+    """Set ``kwargs["strict"] = False`` for an open schema bound as a Responses function tool.
+
+    With ``strict`` omitted, the Responses API tries strict mode, which can't express a
+    schema with an open part (`has_open_schema`); an explicit ``False`` opts out. Chat Completions tools are non-strict unless asked, and an
+    explicit ``strict`` is the caller's choice, so both are left alone.
+
+    Args:
+        llm (`BaseChatOpenAI`):
+            The model the schema is bound to.
+        schema (`Any`):
+            The schema given to ``with_structured_output``.
+        method (`str`, *optional*):
+            The resolved structured-output method.
+        kwargs (`dict[str, Any]`):
+            The remaining ``with_structured_output`` keyword arguments; updated in place.
+    """
+    if method != "function_calling" or "strict" in kwargs or not has_open_schema(schema):
+        return
+    # langchain routes by the model's own fields and name plus any Responses-only
+    # argument in the call, so the call's own arguments are what it is asked about.
+    if llm._use_responses_api(kwargs):
+        kwargs["strict"] = False
 
 
 class RequestBlockMixin(BaseChatOpenAI):
@@ -133,6 +160,29 @@ class NormalizedChatOpenAI(RequestBlockMixin, ChatOpenAI):
         return normalize_content(response)
 
     def with_structured_output(self, schema, *, method=None, **kwargs):
+        """Bind `schema` for structured output with the method the capability table picks.
+
+        On a request langchain routes to the Responses API, where function tools default
+        to strict, a schema with an open part (`has_open_schema`) is sent with
+        ``strict=False``, since strict mode rejects it. An explicit ``method`` or
+        ``strict`` is respected; Chat Completions requests are unchanged.
+
+        Args:
+            schema (`dict | type`):
+                The output schema: a pydantic class, a TypedDict or a JSON-schema dict.
+            method (`str`, *optional*, defaults to `None`):
+                The structured-output method; `None` takes the model's preferred one.
+            **kwargs:
+                Passed to `ChatOpenAI.with_structured_output`.
+
+        Returns:
+            `Runnable`:
+                The structured-output runnable langchain builds.
+
+        Raises:
+            `NotImplementedError`:
+                The model has no structured-output method.
+        """
         caps = get_capabilities(self.model_name)
         if caps.preferred_structured_method == "none":
             raise NotImplementedError(
@@ -145,6 +195,7 @@ class NormalizedChatOpenAI(RequestBlockMixin, ChatOpenAI):
         # DeepSeek's official tool-calling examples do.
         if method == "function_calling" and not caps.supports_tool_choice:
             kwargs.setdefault("tool_choice", None)
+        _strict_false_for_open_schema(self, schema, method, kwargs)
         return super().with_structured_output(schema, method=method, **kwargs)
 
 

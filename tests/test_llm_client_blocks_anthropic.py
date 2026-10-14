@@ -10,12 +10,19 @@ import warnings
 import anthropic
 import pytest
 from anthropic.resources.messages import Messages
-from langchain_core.messages import HumanMessage
+from langchain_anthropic import convert_to_anthropic_tool
+from langchain_core.exceptions import OutputParserException
+from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel
 
+from tests.engine._session_fakes import harness, request
 from yian.llm_clients.anthropic_client import AnthropicClient, NormalizedChatAnthropic
+from yian.llm_clients.capabilities import has_open_schema
 from yian.llm_clients.factory import model_from_config
 from yian.llm_clients.provider_blocks import AnthropicMessagesBlock
+from yian.memory import MemoryContext
+from yian.nodes.agent.structured import generate_structured, type_to_schema
+from yian.typesys.types import read_typedefs, type_for
 
 _ENV_KEYS = (
     "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "YIAN_DEFAULT_PROVIDER", "YIAN_DEFAULT_MODEL",
@@ -30,19 +37,29 @@ def _anthropic_httpx():
 
 
 class _Server:
-    """Record Messages request bodies and answer each with one text reply."""
+    """Record Messages request bodies and answer each with a reply.
+
+    The reply is the next of `replies` (lists of content blocks) while any are queued,
+    else `content` when set, else one text block holding `text`.
+    """
 
     def __init__(self):
         self.text = "ok"
+        self.content = None
+        self.replies = []
         self.requests = []
         self.bodies = []
 
     def __call__(self, request):
         self.requests.append(request)
         self.bodies.append(json.loads(request.content))
+        if self.replies:
+            content = self.replies.pop(0)
+        else:
+            content = self.content or [{"type": "text", "text": self.text}]
         return _anthropic_httpx().Response(200, json={
             "id": "msg_1", "type": "message", "role": "assistant", "model": "m",
-            "content": [{"type": "text", "text": self.text}],
+            "content": content,
             "stop_reason": "end_turn", "stop_sequence": None,
             "usage": {"input_tokens": 1, "output_tokens": 1},
         })
@@ -224,6 +241,200 @@ def test_structured_output_without_block_thinking_forces_the_tool(server, block)
     body = server.bodies[0]
     assert body["tool_choice"] == {"type": "tool", "name": "Answer"}
     assert "output_config" not in body
+
+
+_AGENT_TYPES = read_typedefs({"R": {"a": "int", "m": "object"}, "C": {"a": "int", "b": "list(str)"}})
+_THINKING = {"type": "enabled", "budget_tokens": 1024}
+# AGENT output type -> tool arguments of a valid reply.
+_OPEN_CASES = {
+    "object": {"value": {"k": 1}},
+    "Any": {"value": [1, {"a": None}]},
+    "R": {"a": 1, "m": {"q": "x"}},
+}
+
+
+def _agent_schema(text):
+    return type_to_schema(type_for(text, _AGENT_TYPES))
+
+
+def _tool_reply(name, args):
+    return [
+        {"type": "thinking", "thinking": "h", "signature": "s"},
+        {"type": "tool_use", "id": "toolu_1", "name": name, "input": args},
+    ]
+
+
+_NO_TOOL_REPLIES = {
+    "text": [
+        {"type": "thinking", "thinking": "h", "signature": "s"},
+        {"type": "text", "text": '{"value": {"k": 1}}'},
+    ],
+    "other tool": _tool_reply("Other", {"value": {"k": 1}}),
+}
+
+
+@pytest.mark.parametrize("thinking", [_THINKING, {"type": "adaptive"}])
+@pytest.mark.parametrize("text", sorted(_OPEN_CASES))
+@pytest.mark.parametrize("include_raw", [False, True])
+def test_open_schema_with_block_thinking_goes_as_an_unforced_tool(
+    server, thinking, text, include_raw
+):
+    # The output format and a forced tool both fail here: the Messages API rejects
+    # thinking beside a forced tool, and its grammar rejects an open schema.
+    schema = _agent_schema(text)
+    name = convert_to_anthropic_tool(schema)["name"]
+    server.content = _tool_reply(name, _OPEN_CASES[text])
+    model = _model({"thinking": thinking, "max_tokens": 4096})
+    result = model.with_structured_output(schema, include_raw=include_raw).invoke("hi")
+    expected = schema.model_validate(_OPEN_CASES[text])
+    if include_raw:
+        assert result["parsed"] == expected and result["parsing_error"] is None
+        assert result["raw"].tool_calls[0]["name"] == name
+    else:
+        assert result == expected
+    body = server.bodies[0]
+    assert body["thinking"] == thinking
+    assert [tool["name"] for tool in body["tools"]] == [name]
+    assert has_open_schema(body["tools"][0]["input_schema"])
+    assert "tool_choice" not in body
+    assert "output_config" not in body
+
+
+_HOLDER = {
+    "title": "Holder", "description": "Holds a value.", "type": "object",
+    "properties": {"value": {"type": "object", "additionalProperties": True}},
+    "required": ["value"],
+}
+
+
+def test_open_dict_schema_with_block_thinking_parses_the_tool_arguments(server):
+    server.content = _tool_reply("Holder", {"value": {"k": 1}})
+    model = _model({"thinking": _THINKING, "max_tokens": 4096})
+    assert model.with_structured_output(_HOLDER).invoke("hi") == {"value": {"k": 1}}
+    assert "tool_choice" not in server.bodies[0]
+
+
+@pytest.mark.parametrize("include_raw", [False, True])
+@pytest.mark.parametrize("kind", ["pydantic", "dict"])
+def test_open_schema_reply_calling_another_tool_first_parses_the_schemas_call(
+    server, kind, include_raw
+):
+    schema = _agent_schema("object") if kind == "pydantic" else _HOLDER
+    name = convert_to_anthropic_tool(schema)["name"]
+    other, call = _tool_reply("Other", {"x": 1}), _tool_reply(name, {"value": {"k": 1}})
+    server.content = [*other, {**call[1], "id": "toolu_2"}]
+    model = _model({"thinking": _THINKING, "max_tokens": 4096})
+    result = model.with_structured_output(schema, include_raw=include_raw).invoke("hi")
+    value = {"value": {"k": 1}}
+    expected = schema.model_validate(value) if kind == "pydantic" else value
+    if include_raw:
+        assert result["parsed"] == expected and result["parsing_error"] is None
+        assert [c["name"] for c in result["raw"].tool_calls] == ["Other", name]
+    else:
+        assert result == expected
+
+
+def test_open_record_keeps_its_open_part_in_the_tool(server):
+    schema = _agent_schema("R")
+    server.content = _tool_reply(schema.__name__, _OPEN_CASES["R"])
+    _model({"thinking": _THINKING, "max_tokens": 4096}).with_structured_output(schema).invoke("hi")
+    input_schema = server.bodies[0]["tools"][0]["input_schema"]
+    assert input_schema["properties"]["m"]["additionalProperties"] is True
+
+
+@pytest.mark.parametrize("reply", sorted(_NO_TOOL_REPLIES))
+def test_open_schema_reply_without_the_tool_call_raises_naming_the_tool(server, reply):
+    schema = _agent_schema("object")
+    name = convert_to_anthropic_tool(schema)["name"]
+    server.content = _NO_TOOL_REPLIES[reply]
+    model = _model({"thinking": _THINKING, "max_tokens": 4096})
+    with pytest.raises(OutputParserException, match=f"Call the {name} tool with the answer"):
+        model.with_structured_output(schema).invoke("hi")
+
+
+@pytest.mark.parametrize("reply", sorted(_NO_TOOL_REPLIES))
+def test_open_schema_reply_without_the_tool_call_is_a_parsing_error_with_raw(server, reply):
+    schema = _agent_schema("object")
+    name = convert_to_anthropic_tool(schema)["name"]
+    server.content = _NO_TOOL_REPLIES[reply]
+    model = _model({"thinking": _THINKING, "max_tokens": 4096})
+    result = model.with_structured_output(schema, include_raw=True).invoke("hi")
+    assert set(result) == {"raw", "parsed", "parsing_error"}
+    assert isinstance(result["raw"], AIMessage)
+    assert result["raw"].response_metadata["id"] == "msg_1"
+    assert result["parsed"] is None
+    assert isinstance(result["parsing_error"], OutputParserException)
+    assert f"Call the {name} tool with the answer" in str(result["parsing_error"])
+
+
+def test_open_schema_binding_leaves_warnings_alone(server):
+    schema = _agent_schema("object")
+    server.content = _tool_reply(schema.__name__, _OPEN_CASES["object"])
+    model = _model({"thinking": _THINKING, "max_tokens": 4096})
+    filters = list(warnings.filters)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        model.with_structured_output(schema).invoke("hi")
+        model.with_structured_output(schema, include_raw=True).invoke("hi")
+    assert caught == []
+    model.with_structured_output(schema)
+    assert warnings.filters == filters
+
+
+def test_closed_agent_record_with_block_thinking_uses_the_output_format(server):
+    schema = _agent_schema("C")
+    server.text = '{"a": 1, "b": ["x"]}'
+    model = _model({"thinking": _THINKING, "max_tokens": 4096})
+    assert model.with_structured_output(schema).invoke("hi") == schema(a=1, b=["x"])
+    body = server.bodies[0]
+    assert body["output_config"]["format"]["type"] == "json_schema"
+    assert "tools" not in body
+
+
+@pytest.mark.parametrize("block", [None, {"thinking": {"type": "disabled"}}])
+def test_open_schema_without_block_thinking_forces_the_tool(server, block):
+    schema = _agent_schema("object")
+    name = convert_to_anthropic_tool(schema)["name"]
+    server.content = [{"type": "tool_use", "id": "toolu_1", "name": name,
+                       "input": _OPEN_CASES["object"]}]
+    result = _model(block).with_structured_output(schema).invoke("hi")
+    assert result == schema.model_validate(_OPEN_CASES["object"])
+    assert server.bodies[0]["tool_choice"] == {"type": "tool", "name": name}
+    assert "output_config" not in server.bodies[0]
+
+
+@pytest.mark.parametrize("method", ["json_schema", "function_calling"])
+def test_open_schema_with_block_thinking_keeps_an_explicit_method(server, method):
+    schema = _agent_schema("object")
+    name = convert_to_anthropic_tool(schema)["name"]
+    server.text = '{"value": {"k": 1}}'
+    model = _model({"thinking": _THINKING, "max_tokens": 4096})
+    model.with_structured_output(schema, method=method).invoke("hi")
+    body = server.bodies[0]
+    if method == "json_schema":
+        assert body["output_config"]["format"]["type"] == "json_schema"
+        assert "tools" not in body
+    else:
+        assert body["tool_choice"] == {"type": "tool", "name": name}
+        assert "output_config" not in body
+
+
+def test_open_schema_run_with_a_transcript_corrects_a_reply_without_the_tool_call(server):
+    typ = type_for("object", _AGENT_TYPES)
+    name = convert_to_anthropic_tool(type_to_schema(typ))["name"]
+    server.replies = [_NO_TOOL_REPLIES["text"], _tool_reply(name, _OPEN_CASES["object"])]
+    model = _model({"thinking": _THINKING, "max_tokens": 4096})
+    with harness() as opened:
+        with opened.frame.open_turn(request(), check_stopped=lambda: None) as turn:
+            value = generate_structured(
+                model, [HumanMessage(content="question")], typ,
+                llm_config={"provider": "anthropic", "model": "claude-sonnet-4-5"},
+                memory_context=MemoryContext(transcript=turn),
+            )
+    assert value == {"k": 1}
+    assert len(server.bodies) == 2
+    correction = json.dumps(server.bodies[1]["messages"][-1])
+    assert f"Call the {name} tool with the answer" in correction
 
 
 @pytest.fixture

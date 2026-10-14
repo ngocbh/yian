@@ -510,6 +510,14 @@ Converting a long int costs time quadratic in its digits (about 0.2 s each way a
 source the same way. An operator Python can't complete fails like any other
 expression error (`binding.evaluate` in a binding, `node.execute` for a prompt).
 
+Structured generation asks for a schema with an open part
+(`llm_clients.capabilities.has_open_schema`, from an `object`, `Any`, or elementless-list
+output) without strict constraints, chosen per client in `with_structured_output`: Azure
+binds a forced function tool without `strict`, a request routed to the Responses API sends
+`strict: false`, and Anthropic with block thinking binds an unforced tool whose reply
+without that call is an `OutputParserException` the retry corrects. One open part makes
+the whole schema non-strict; other clients and closed schemas are unchanged.
+
 An AGENT checks what the model sends back. `run_agent` passes `invoke_model` a
 `check_reply` that rejects a tool call whose arguments hold a NaN or infinity, before any call of
 that reply runs, so the AGENT fails `node.execute` (`tool call 'lookup' arguments at

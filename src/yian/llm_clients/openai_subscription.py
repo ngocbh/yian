@@ -17,7 +17,7 @@ from langchain_core.messages import ChatMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from pydantic import Field
 
-from .openai_client import RequestBlockMixin
+from .openai_client import RequestBlockMixin, _strict_false_for_open_schema
 
 _BASE_URL = "https://chatgpt.com/backend-api/codex"
 _ACCESS_ARGUMENT = "_composer_subscription_access"
@@ -92,10 +92,28 @@ class _SubscriptionChatOpenAI(RequestBlockMixin, ChatOpenAI):
             self.stop_check()
 
     def with_structured_output(self, schema, *, method=None, **kwargs):
-        """Use the subscription transport's ordinary function-tool protocol."""
-        return super().with_structured_output(
-            schema, method=method or "function_calling", **kwargs
-        )
+        """Use the subscription transport's ordinary function-tool protocol.
+
+        Every request is Responses-shaped, where an omitted ``strict`` lets the API try
+        strict mode, which can't express an open part, so a schema with one
+        (`has_open_schema`) is sent with an explicit ``strict=False``. An explicit
+        ``method`` or ``strict`` is respected.
+
+        Args:
+            schema (`dict | type`):
+                The output schema: a pydantic class, a TypedDict or a JSON-schema dict.
+            method (`str`, *optional*, defaults to `None`):
+                The structured-output method; `None` means ``function_calling``.
+            **kwargs:
+                Passed to `ChatOpenAI.with_structured_output`.
+
+        Returns:
+            `Runnable`:
+                The structured-output runnable langchain builds.
+        """
+        method = method or "function_calling"
+        _strict_false_for_open_schema(self, schema, method, kwargs)
+        return super().with_structured_output(schema, method=method, **kwargs)
 
     def _get_request_payload(self, input_, *, stop=None, **kwargs) -> dict:
         access = kwargs.pop(_ACCESS_ARGUMENT, None)

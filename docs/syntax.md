@@ -2804,14 +2804,20 @@ returns the whole carried record.
   sibling fields. LOOP enforces the closed field set and every proven sibling on normal
   iterations, zero-iteration `while:` commits, and durable replay. A literal `${null}`
   seed is compatible with a nullable body field, including inside a typed list, when
-  the body is a named `defs:` body or the seed is tagged. An inline body's parameters
-  are typed from the seeds, and each returned field must fit its parameter at load,
-  since the next iteration binds it there. An untyped `${null}` seed gives the type
-  `None`, so with an inline body, tag the seed: `seen: !Optional(list(str)) ${null}`.
-  Over a tagged seed (`note: !str "start"`), a returned field typed `Optional(str)`
-  loads, and the next iteration's input check rejects a null (`contract.input`). Over
-  an untagged seed (`note: "start"`) the same field is a load error that asks you to
-  declare `note: !Optional(str) "start"`.
+  the body is a named `defs:` body or the seed is tagged. Each returned field must
+  fit, at load, the parameter the next iteration binds it to: a named body's own
+  input, or the parameter an inline body types from its seed. An untyped `${null}`
+  seed gives the type `None`, so with an inline body, tag the seed:
+  `seen: !Optional(list(str)) ${null}`. Over a tagged seed (`note: !str "start"`), a
+  returned field typed `Optional(str)` loads, and the next iteration's input check
+  rejects a null (`contract.input`). Over an untagged seed (`note: "start"`) the same
+  field is a load error. With an inline body, it asks you to declare
+  `note: !Optional(str) "start"`. With a named body that takes `note: !str`, it asks
+  you to make the input `Optional(str)`, or to tag the seed to leave the check to
+  runtime. A named body that returns an `Any` field into a typed input is a load
+  error that asks you to narrow it with `isinstance` in a `case`; any other mismatch,
+  such as a `float` into an `int` input, asks you to make the body's input and output
+  types agree, tagged seed or not.
 - **Omitted is not null.** An omitted field keeps its value. A returned null sets the
   field to null, and so does a field that reads a node a `case` skipped (see
   [Skipped branches and flow outputs](#skipped-branches-and-flow-outputs)). When the
@@ -2827,6 +2833,14 @@ returns the whole carried record.
 - **Exactly one** of `while:` / `until:` / `times:` per loop node selects the
   driver. Zero or more than one is a load-time error (`exactly one of
   while:/until:/times: is required`).
+
+Changed: a named LOOP body whose returned field can't fit its own input
+(`Optional(int)` or `float` into `n: !int`) used to load; it is now a load error, as
+for an inline body. This includes a `while: ${n != null}` loop whose null ends the
+loop before it reaches the input: make the body's input `Optional(int)`, or tag the
+seed (`n: !int ${input.z}`) to leave the check of the returned value to runtime.
+(This is about the value the body returns; a seed that may be null still needs an
+`Optional` body input, as before.)
 
 A chat body carries `person` and `talking_to` unchanged every turn and returns only
 what changes:

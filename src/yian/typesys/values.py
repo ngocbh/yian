@@ -1291,7 +1291,7 @@ def types_overlap(a: Type, b: Type) -> bool:
     The check is conservative: it may say two types overlap when no value
     satisfies both, but never the reverse. It decides whether an untagged union's
     members can be told apart from the data alone. `Any` overlaps every type
-    except `None` and types whose every non-null value holds a `file`.
+    except `None` and a bare `file`.
 
     Args:
         a (`Type`):
@@ -1311,7 +1311,10 @@ def types_overlap(a: Type, b: Type) -> bool:
         return True
     if a.kind is ValueKind.ANY or b.kind is ValueKind.ANY:
         other = b if a.kind is ValueKind.ANY else a
-        return other.kind is not ValueKind.NONE and not requires_file(other)
+        # Only a bare `file` is excluded: a container that holds files can still share
+        # a value with `Any` (an empty list, say), and this check may only err towards
+        # overlap.
+        return other.kind not in (ValueKind.NONE, ValueKind.FILE)
     if a.variants is not None:
         return any(types_overlap(member, b) for member in a.variants)
     if b.variants is not None:

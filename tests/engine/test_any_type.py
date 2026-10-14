@@ -517,10 +517,10 @@ def test_any_is_disjoint_from_file_and_none(declared):
         (ANY, True),
         (_t("None"), False),
         (FILE, False),
-        (FILE_RECORD, False),
+        (FILE_RECORD, True),  # conservative: only a bare file is excluded
     ],
 )
-def test_any_overlaps_every_type_but_none_and_file(other, expected):
+def test_any_overlaps_every_type_but_none_and_a_bare_file(other, expected):
     assert types_overlap(ANY, other) is expected
     assert types_overlap(other, ANY) is expected
 
@@ -529,6 +529,14 @@ def test_a_record_with_an_any_field_overlaps_one_with_an_int_field():
     reg = read_typedefs({"A": {"v": "Any"}, "B": {"v": "int"}})
 
     assert types_overlap(type_for("A", reg), type_for("B", reg))
+
+
+def test_any_overlaps_a_list_of_files_through_the_empty_list():
+    list_of_files = Type(kind=ValueKind.LIST_ANY, element=Type.scalar(ValueKind.FILE))
+
+    assert types_overlap(ANY, list_of_files)
+    with pytest.raises(TypeCheckError, match="can match the same value"):
+        read_typedefs({"A": {"v": "Any"}, "B": {"v": "list(file)"}, "W": "Union(A, B)"})
 
 
 def test_an_untagged_union_of_any_and_int_fields_does_not_resolve():

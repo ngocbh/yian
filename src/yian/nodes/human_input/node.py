@@ -117,3 +117,67 @@ class HumanInputNode(Node):
             if isinstance(rendered.get(key), str):
                 rendered[key] = render_template_record(rendered[key], inputs)
         return rendered
+
+
+def template_sites(
+    prompt: Optional[str], questions: Optional[list]
+) -> list[tuple[tuple[str | int, ...], str]]:
+    """Every string a HUMAN_INPUT gate renders as a template, as `(path, text)` pairs.
+
+    `path` is the key path from the node body: `("prompt",)`, `("questions", i, "question")`,
+    or `("questions", i, "options", j, "label" | "description")`. Only string values count,
+    matching `HumanInputNode.forward`: `header`, `multi_select`, string options, and an
+    upstream `questions_input` list are not templates.
+
+    Args:
+        prompt (`str`, *optional*):
+            The node's authored prompt; a site only when it is a `str`.
+        questions (`list`, *optional*):
+            The node's literal question list; non-list values and non-mapping items
+            contribute no sites.
+
+    Returns:
+        `list[tuple[tuple[str | int, ...], str]]`:
+            The `(path, text)` pairs in body order: the prompt, then each question's
+            `question` followed by its options' `label` and `description`.
+    """
+    sites: list[tuple[tuple[str | int, ...], str]] = []
+    if isinstance(prompt, str):
+        sites.append((("prompt",), prompt))
+    if not isinstance(questions, list):
+        return sites
+    for i, question in enumerate(questions):
+        if not isinstance(question, dict):
+            continue
+        if isinstance(question.get("question"), str):
+            sites.append((("questions", i, "question"), question["question"]))
+        options = question.get("options")
+        if not isinstance(options, list):
+            continue
+        for j, option in enumerate(options):
+            if not isinstance(option, dict):
+                continue
+            for key in ("label", "description"):
+                if isinstance(option.get(key), str):
+                    sites.append((("questions", i, "options", j, key), option[key]))
+    return sites
+
+
+def site_label(path: tuple[str | int, ...]) -> str:
+    """`path` from `template_sites` written as an author reads it: `questions[0].options[1].label`.
+
+    Args:
+        path (`tuple[str | int, ...]`):
+            A key path; string steps are field names and int steps are list indexes.
+
+    Returns:
+        `str`:
+            The string steps joined with `.`, each int step written as `[i]`.
+    """
+    label = ""
+    for step in path:
+        if isinstance(step, int):
+            label += f"[{step}]"
+        else:
+            label += f".{step}" if label else step
+    return label

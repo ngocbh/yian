@@ -28,8 +28,9 @@ from typing import (
     runtime_checkable,
 )
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
 
+import yian.json_codec as json_codec
 from yian.diagnostics import Failure, FailureCode, OriginRef
 from yian.memory import (
     DeclSite,
@@ -1585,7 +1586,7 @@ def decode_record(data: bytes | str) -> RecordEnvelope:
     if not isinstance(data, (bytes, str)):
         raise TypeError("decode_record expects bytes or str")
     try:
-        raw = json.loads(
+        raw = json_codec.loads(
             data,
             object_pairs_hook=_object_without_duplicates,
             parse_constant=_reject_json_constant,
@@ -2582,6 +2583,38 @@ def _decode_typed(wire: dict[str, Any]) -> TypedValue:
     return ANY_VALUE_ADAPTER.validate_python(copied, strict=True)
 
 
+def decode_typed_json(data: bytes | str) -> TypedValue:
+    """Strictly decode a typed value from JSON that may hold ints of any size.
+
+    Pydantic's JSON parser rejects ints past Python's digit limit as invalid
+    JSON; those documents are read through `json_codec` and validated as Python
+    data, which keeps object key order.
+
+    Args:
+        data (`bytes | str`):
+            One typed-value JSON document, as written by `ANY_VALUE_ADAPTER.dump_json`.
+
+    Returns:
+        `TypedValue`:
+            The strictly validated typed value.
+
+    Raises:
+        `ValidationError`:
+            The document is not valid JSON or not a valid typed value.
+    """
+    try:
+        # Pydantic's parser is the fast path for every document without a long int.
+        return ANY_VALUE_ADAPTER.validate_json(data, strict=True)
+    except ValidationError as exc:
+        if any(error["type"] != "json_invalid" for error in exc.errors()):
+            raise
+        try:
+            parsed = json_codec.loads(data)
+        except ValueError:
+            raise exc from None
+    return ANY_VALUE_ADAPTER.validate_python(parsed, strict=True)
+
+
 def _copy_json(value: Any) -> Any:
     """Return a key-sorted deep copy while rejecting values outside strict JSON."""
     if value is None or type(value) in (bool, int):
@@ -2692,7 +2725,7 @@ def _json_bytes(value: Any) -> bytes:
     """Serialize strict JSON with stable key order and no trailing newline."""
     canonical = _copy_json(value)
     try:
-        return json.dumps(
+        return json_codec.dumps(
             canonical,
             ensure_ascii=False,
             allow_nan=False,

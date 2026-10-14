@@ -6,10 +6,13 @@ from dataclasses import FrozenInstanceError, dataclass
 from datetime import date, datetime, timezone
 import json
 from pathlib import Path
+import sys
 from typing import Any, Iterator, get_args
 
+from pydantic import ValidationError
 import pytest
 
+import yian.json_codec as json_codec
 from yian.diagnostics import Failure, OriginRef
 from yian.runtime.log import (
     SCHEMA_VERSION,
@@ -27,10 +30,12 @@ from yian.runtime.log import (
     canonical_typed,
     decode_pool,
     decode_record,
+    decode_typed_json,
     encode_pool,
     encode_record,
 )
 from yian.typesys import FileRef, ValueKind, VariablePool
+from yian.typesys.values import ANY_VALUE_ADAPTER, build_value
 
 
 # Fixed writer output for the source-free causal-route graph.
@@ -1187,3 +1192,62 @@ def test_run_log_protocol_pins_iteration_append_close_and_context_management():
 
     log.close()
     assert log.close_count == 1
+
+
+BIG = 10**4999 + 12345  # 5000 digits, past Python's default 4300-digit limit
+
+
+@pytest.fixture
+def _default_int_digit_limit():
+    """Run a test under Python's default int/str digit limit."""
+    get = getattr(sys, "get_int_max_str_digits", None)
+    if get is None:
+        yield  # this Python has no limit
+        return
+    before = get()
+    sys.set_int_max_str_digits(4300)
+    try:
+        yield
+        after = get()
+    finally:
+        sys.set_int_max_str_digits(before)
+    assert after == 4300, "yian code changed the global digit limit"
+
+
+@pytest.mark.usefixtures("_default_int_digit_limit")
+@pytest.mark.parametrize("value", [BIG, [-BIG]], ids=["int", "list"])
+def test_records_round_trip_ints_past_the_digit_limit(value):
+    pool = VariablePool(start_id="start")
+    pool.set("start", {"x": value})
+    typed_wire, _ = canonical_typed(value, None)
+    records = (
+        RunStartedRecord(
+            flow_fingerprint=_FINGERPRINT,
+            initial_pool=encode_pool(pool),
+            start_wiring_override={},
+            effective_llm_by_static_path={},
+            num_workers=0,
+        ),
+        NodeSucceededRecord(node_id="n", commit_target="n", value=typed_wire),
+    )
+    for seq, record in enumerate(records):
+        envelope = RecordEnvelope(schema=SCHEMA_VERSION, run_id="run-big", seq=seq, record=record)
+
+        encoded = encode_record(envelope)
+        decoded = decode_record(encoded)
+
+        assert json_codec.int_text(BIG).encode() in encoded
+        assert decoded == envelope
+        assert encode_record(decoded) == encoded
+    assert decode_pool(records[0].initial_pool).get("start") == {"x": value}
+    assert typed_wire["value"] == value
+
+
+@pytest.mark.usefixtures("_default_int_digit_limit")
+def test_typed_json_decode_reads_ints_past_the_digit_limit():
+    data = ANY_VALUE_ADAPTER.dump_json(build_value({"a": [BIG]}))
+
+    assert decode_typed_json(data) == build_value({"a": [BIG]})
+    assert decode_typed_json(data.decode()).to_object() == {"a": [BIG]}
+    with pytest.raises(ValidationError):
+        decode_typed_json(b'{"kind":"int","value":"x"}')

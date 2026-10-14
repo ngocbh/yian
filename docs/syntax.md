@@ -145,7 +145,8 @@ They now read as the table says, as in a named `input:`, which also changes such
 flow's fingerprint. A bare date passed to any call input (`date` included) and a
 bare number such as `1e3` passed to a `str` input now fail at load. Write `null`
 for null and quote a value you mean as text (`x="1e3"`). Under a secret name,
-`password=None` now fails; write `null`.
+`password=None` now fails; write `null`. A bare int too long for Python to convert
+used to load and now fails at load, as in a named `input:`.
 
 ### Compact mode — when the flow *is* one node
 

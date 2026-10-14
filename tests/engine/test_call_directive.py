@@ -20,7 +20,7 @@ from yian.compose import LoadError, desugar_inline_calls, load_flow
 from yian.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.parse.file import CodeDescriptor
-from yian.compose.source import parse_yaml_literal
+from yian.compose.source import SourceSyntaxError, parse_yaml_literal
 from yian.diagnostics import OriginRef, SourceRange
 from yian.nodes.contracts import Assertion
 from yian.run import run_flow
@@ -418,6 +418,17 @@ def test_named_and_inline_forms_read_a_bare_value_alike(value):
     _assert_same(
         _synth_inputs(f"call(f, x={value})")["x"], parse_yaml_literal(f"x: {value}")["x"]
     )
+
+
+def test_a_bare_int_too_long_to_convert_fails_as_in_the_named_form():
+    digits = "1" * 5000
+    with pytest.raises(SourceSyntaxError, match="an integer with 5000 digits is too long"):
+        parse_yaml_literal(f"x: {digits}")
+    with pytest.raises(LoadError) as caught:
+        _synth_inputs(f"call(f, x={digits})")
+    assert "keyword 'x'" in str(caught.value)
+    assert "an integer with 5000 digits is too long" in str(caught.value)
+    assert digits not in str(caught.value)
 
 
 def _g_flow(node: str, d_type: str = "str") -> str:

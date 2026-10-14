@@ -18,7 +18,7 @@ from typing import Any, Callable, Iterator, Literal, Mapping, Optional
 from yian.diagnostics import OriginRef
 from yian.expr.template import render_template_record
 from yian.expr.lineage import FeedbackValue
-from yian.llm_clients.redact import scrub_key
+from yian.llm_clients.connection import scrub_call_credentials
 from yian.memory.contracts import (
     MemoryContext,
     EvaluationTrace,
@@ -462,8 +462,8 @@ class AgentNode(Node):
                 steering=steering,
             ))
         except BaseException as exc:
-            # Providers may echo a rejected key; the failure record must not carry it.
-            scrub_key(exc, self._host_api_key())
+            # Providers may echo any credential the call sent; the failure record must not carry it.
+            scrub_call_credentials(exc, self.llm_config)
             raise
 
     def _host_api_key(self) -> Any:
@@ -499,12 +499,7 @@ class AgentNode(Node):
             constructing a model. Effective messages use only that recorded context.
         """
         # The one live field: a host key, which is never recorded, bound for this call.
-        api_key = self._host_api_key()
-        try:
-            return backward_agent(context, feedback, api_key=api_key)
-        except BaseException as exc:
-            scrub_key(exc, api_key)
-            raise
+        return backward_agent(context, feedback, api_key=self._host_api_key())
 
     def declared_variables(self) -> tuple[Parameter, ...]:
         """Return the canonical local declarations in their authored order."""

@@ -51,7 +51,8 @@ nodes:
     kind: agent
     input:
       # INLINE call directive: desugars to a synth `call` node (call: critique) whose
-      # value this input binds — equivalent to a separate `kind: call` node.
+      # value this input binds — like a separate `kind: call` node that carries
+      # `review`'s case routes, depends_on, and runs_after.
       note: call(critique, text=${draft.output})
       # ARITHMETIC in a binding: base 7 plus the caller's bonus, computed at wiring time.
       score: ${input.bonus + 7}

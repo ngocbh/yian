@@ -105,7 +105,10 @@ A child-flow call written as a binding's **whole value** (or a `case`
 anonymous `call` node; the host becomes `${<synth>.output}`. Keyword args only,
 each at most once;
 every authored node `input:` mapping participates, including HUMAN_INPUT context
-and LOOP carried-record seeds. Nesting is allowed (`call(a, x=call(b, y=1))`).
+and LOOP carried-record seeds. Nesting is allowed (`call(a, x=call(b, y=1))`). The synth
+node carries its host node's `case` routes, `depends_on:`, and `runs_after:` (inner calls of
+a nested branch call carry the branch), so it never runs on a branch its host isn't on; it
+doesn't wait on the host's other inputs.
 An **unquoted** value starting with `call(` must be exactly one well-formed
 directive, else a load error names the problem (unbalanced parens, trailing text,
 missing comma, positional or repeated keyword, a keyword without a name). A
@@ -309,7 +312,8 @@ that sets the carried field to null. Templates and comparisons keep their null
 behavior; arithmetic needs a `:-` default.
 
 **Branch on a union.** Route with `on: ${d.output.action}` (the tag field). Each
-`when:` target, and nodes chained to it by plain refs or `depends_on`, reads its member's
+`when:` target, nodes chained to it by plain refs or `depends_on`, and inline `call(...)`s
+lifted out of it, read its member's
 fields (`${d.output.qty}` under `when: buy`); `else:` sees the unlisted members. Outside a
 branch only fields every member has can be read. For an untagged union, use a searched
 `case` with `when: isinstance(d.output, Text)`. Return a member field from the flow by
@@ -330,7 +334,8 @@ worker until the host answers). For "ask only if the model decides it needs to",
 give an AGENT node `tools: [ask_user]`. Both calls stay inside their live
 node execution. A `human_input` gate can present multiple-choice questions
 (static `questions:`), have an LLM compose them
-(`adaptive_questions:`, which desugars to a synthetic composer AGENT node + gate at load), or read
+(`adaptive_questions:`, which desugars to a synthetic composer AGENT node + gate at load;
+the composer carries the gate's `case` routes, `depends_on:`, and `runs_after:`), or read
 them from an upstream node (`questions: ${name}`); the answer is then a record
 keyed by each question's `header`. The adaptive desugar owns the `__questions`
 input name, so authors cannot bind that name on an adaptive gate.

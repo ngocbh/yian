@@ -56,7 +56,7 @@ evidence, and exact recorded config. It never rerenders, recalls, or grants tool
 | Return | Meaning |
 |--------|---------|
 | `Output(value)` | the one produced value. The dispatcher prepares a canonical `NodeSucceededRecord`; after append, the reducer writes it under the resolved success target and fires that target's out-edges. Optional `Output(value, commit_as=<id>)` chooses another success target; `None` uses the node's baked redirect or its own id. |
-| `Route(handle)` | a routing-only outcome (a CASE picks an out-edge `handle`); carries no value and writes no pool entry. The handle must match an outgoing edge, except the `else:`/no-match route `ELSE_HANDLE` (`"#else"`), which may have none. The dispatcher records the handle, then the reducer takes the selected edge, skip-floods its siblings through their logical output targets, and derives `NodeRouted`. |
+| `Route(handle)` | a routing-only outcome (a CASE picks an out-edge `handle`); carries no value and writes no pool entry. The handle must match an outgoing edge, except the `else:`/no-match route `ELSE_HANDLE` (`"#else"`), which may have none. The dispatcher records the handle, then the reducer takes every edge with that handle (a target and the nodes compose lifted out of it), skip-floods its siblings through their logical output targets, and derives `NodeRouted`. |
 | `Grow(seed, prune)` | describe one deterministic graph expansion without constructing it. `seed` is the kind-shaped but runtime-opaque builder input (CALL record, MAP records, or LOOP carried record/index); `prune` names ids to retire in the same step; the reducer retires a pruned id with its whole grown subtree when every node in it is settled, and otherwise keeps them live (with any pruned id they read) until a later growth finds them settled. Compile-owned `build_grow(spawner, seed)` constructs the self-describing `Flow`; the dispatcher prepares a `NodeExpandedRecord`, then the reducer applies the generic splice. The canonical seed is persisted for replay. Only spawner kinds (`is_spawner`) may return it. |
 
 Success and absence resolve their logical output boundaries through distinct
@@ -1147,7 +1147,10 @@ including recursively inside lists.
 compile-time directive recognized at TWO sites, by ONE whole-value rule (only the
 entire trimmed value, never embedded in a span): a binding's whole value, and a
 `case` `then:`/`else:` target. At load it desugars into an anonymous `call` node
-(`__call_N`) and the host is rewritten to `${<synth>.output}`. A flow call inside
+(`__call_N`) and the host is rewritten to `${<synth>.output}`. The synth node records
+that host (a nested branch call's inner calls record the outer call), and
+`compose/edges/hosts.py` gives it the host's CASE route edges and `depends_on`/`runs_after`
+edges; the adaptive composer gets its gate's edges the same way. A flow call inside
 a span (`${flow(args)}`) is a hard `LoadError` — hoist an embedded call to a named
 node; a coalesce-of-calls (`${a() | b()}`) is likewise rejected. Pure builtins
 (`${upper(x)}`) and `isinstance` stay legal inside `${}`. A prompt rejects

@@ -547,7 +547,11 @@ read as `${case.output}`) must be exhaustive: an `else:`, or every tag of a non-
 enum `on:`, with a flow-input `on:` resolved for it too. Compose lifts each CASE value
 branch to a synthetic `__value_N` CODE node and gives a typed CASE one `__case_<id>`
 CODE result node that checks the taken branch; this is load-time desugar, and the
-runtime is unchanged. Inline child bodies and LOOP seeds are typed while nodes build, before
+runtime is unchanged. A node a desugar pass lifts out of an authored node (an inline
+`call(...)` in its binding, an inner call of a nested branch call, an adaptive composer)
+records that node as its `host`, and `compose/edges/hosts.py` copies the host's CASE route
+edges and `depends_on`/`runs_after` ordering edges onto it, so it runs only on the host's
+branches and in the host's order (not on the host's other inputs). Inline child bodies and LOOP seeds are typed while nodes build, before
 the pass, so they see unnarrowed types. Runtime routing is unchanged.
 
 Physical Compose declarations derive exact `ValueContract`s. Output binding derivation,
@@ -766,7 +770,7 @@ node-outcome sum:
 | Node outcome | Meaning |
 |--------|---------|
 | `Output(value, commit_as=None)` | one value for the engine to type-check and bind under the resolved success target |
-| `Route(handle)` | one named outgoing branch, with redirect-aware sibling skip-flooding; the handle must match an outgoing edge, except the no-match route `ELSE_HANDLE` (`"#else"`), which may have none |
+| `Route(handle)` | one named outgoing branch (every edge with that handle: the target and the nodes lifted out of it), with redirect-aware sibling skip-flooding; the handle must match an outgoing edge, except the no-match route `ELSE_HANDLE` (`"#else"`), which may have none |
 | `Grow(seed, prune)` | one canonical deterministic expansion description |
 
 Success and absence resolve their logical output boundaries through distinct

@@ -33,6 +33,11 @@ This is also the flow-assert carrier boundary. Raw entries become one ordered
 Desugaring replaces only the executable expression, preserving display and any existing
 or injected origin for later START/END lowering.
 
+Each synth node from a node binding records that node as its `host`; the host-edge step
+(`compose.edges.hosts`) gives it the host's CASE routes, `depends_on`, and `runs_after`, so
+it runs only on the host's branches and in the host's order. A synth node from the flow
+`output:`/`asserts:` has no host.
+
 Three guards (loud): an inline call cannot target the compiler-private
 `__inline_flow_` namespace or capture `${item}` (the synth node is a top-level node
 with no map-element scope — use a named `call` node with `over:`), and a user node id

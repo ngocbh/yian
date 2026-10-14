@@ -1190,9 +1190,10 @@ Inline notes:
 
 A `case` node routes — it has no `input:`. It takes one branch; the other targets
 are skipped, and so is every node that plainly reads a skipped node or names it in
-`depends_on`. A node that names the `case` itself in `depends_on:` or `runs_after:` is
-not on a branch: it runs whichever branch the `case` takes, and is skipped only when the
-`case` is. Read its result with `${case.output}`. A routing-only `case` may take
+`depends_on`, and every node the loader lifted out of a skipped target (an inline
+`call(...)` in its `input:`, an adaptive composer). A node that names the `case` itself
+in `depends_on:` or `runs_after:` is not on a branch: it runs whichever branch the
+`case` takes, and is skipped only when the `case` is. Read its result with `${case.output}`. A routing-only `case` may take
 none when no `when:` matches and there is no `else:` (see
 [Exhaustiveness](#exhaustiveness)); a flow output that reads a skipped node returns
 null (see [Skipped branches and flow outputs](#skipped-branches-and-flow-outputs)).
@@ -1268,7 +1269,8 @@ A `then:` or `else:` is one of:
 - a sibling node: an unquoted word (`then: reply`);
 - a child flow call: an unquoted `call(...)` that is the whole value
   (`else: call(respond, message=${ask.output})`, see
-  [Inline `call(...)`](#inline-call-a-flow-call-as-a-bindings-whole-value));
+  [Inline `call(...)`](#inline-call-a-flow-call-as-a-bindings-whole-value)). A nested
+  call in its arguments (`then: call(outer, x=call(inner))`) runs only on that branch too;
 - a value: anything else (`else: "approve"`).
 
 An unquoted word always names a node. A word that names no node is a load error
@@ -1499,9 +1501,9 @@ place_buy:
   spans may read `${decide.output.qty}`.
 - A `call` target can pass the narrowed value to a child whose input is the member
   (`order: Buy`). An inline child body's inputs are typed before narrowing, so a member
-  field bound there fails with `cannot infer type for inline binding`. A nested
-  `call(...)` in a target's arguments is its own unrouted node, so it isn't narrowed
-  either. Read the field in a branch node first.
+  field bound there fails with `cannot infer type for inline binding`. An inline
+  `call(...)` lifted out of a routed node (a nested call in a target's arguments, or a
+  call in a branch node's `input:`) carries that node's route, so it is narrowed like it.
 
 A searched `case` narrows with [`isinstance`](expressions.md#isinstance-the-type-test): each
 top-level `and` part `isinstance(<ref>, T)` of a `when:` narrows that reference to `T`
@@ -1573,7 +1575,10 @@ ask:
 
 **Adaptive questions** — an LLM composes the questions from context. The block
 **desugars at load** into a synthetic composer AGENT node (`<node>__compose`, output
-`list[Question]`) wired into the gate; the runtime gate never calls an LLM.
+`list[Question]`) wired into the gate; the runtime gate never calls an LLM. The
+composer carries the gate's `case` routes, `depends_on:`, and `runs_after:`, so on a
+branch the gate isn't on no LLM call happens, and it waits for the gate's `runs_after:`
+nodes.
 The input name `__questions` is reserved for that generated wire and cannot be
 authored on an adaptive gate.
 
@@ -1790,17 +1795,21 @@ that node's output. This applies to every authored node `input:` mapping, includ
 HUMAN_INPUT context bindings and LOOP carried-record seeds.
 
 ```yaml
-# these two are equivalent —
+# on a node `brief` (routed by a case, with `runs_after: [fetch]`) —
 news: call(enrich, topic=${input.topic})   # inline directive (sugar)
 
-# desugars to:
+# desugars to a sibling that carries `brief`'s route and ordering:
 __call_0:
   kind: call
   call: enrich
   input:
     topic: ${input.topic}
+  runs_after: [fetch]   # copied from `brief`, as are its `depends_on:` and case routes
 news: ${__call_0.output}
 ```
+
+A route can't be written on a node, so the example doesn't show it: a `case` branch
+that routes to `brief` routes `__call_0` too.
 
 Rules:
 
@@ -1821,6 +1830,11 @@ Rules:
   (`x="call(g)"`) is text. Each keyword appears at most once.
 - **Nesting is allowed** — `call(outer, x=call(inner, y=1))`. An unquoted arg that
   starts with `call(` follows the same whole-value rule.
+- **Routed and ordered like its host.** The call runs only on the `case` branches that
+  reach the node it is written in (its host), is skipped when a host `depends_on:` node
+  is skipped, and waits for the host's `runs_after:` nodes. It does not wait on the
+  host's other inputs: if one of them is skipped, the call still runs. A call in the
+  flow `output:` or `asserts:` has no host.
 - **In a flow `asserts:` item** a value starting with `call(` follows the same rule,
   quoted or not: an assert is an expression, so quoting it does not make it text.
 - **A flow call inside `${...}` is retired.** The old `${flow(args)}` form (a flow

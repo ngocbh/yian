@@ -111,7 +111,8 @@ what `run` returns:
   `ask_user` on an AGENT node, HUMAN_INPUT, and WAIT may block inside the live invocation, but
   still return `Output`. WAIT returns `None` after its absolute UTC deadline.
 - A **router** (`case`) is a leaf that returns `Route(handle)` — no value, it just selects
-  the live out-edge (siblings skip-flood); on no match a `case` routes to the `#else`
+  the live out-edges with that handle (the target and any node the loader lifted out of
+  it; siblings skip-flood); on no match a `case` routes to the `#else`
   handle. Still `is_spawner=False`; routing isn't growth.
   A `depends_on:`/`runs_after:` edge from a router is not a branch: the router settled by
   routing, so the dependent runs whichever branch was taken.

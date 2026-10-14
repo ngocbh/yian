@@ -29,6 +29,13 @@ passes:
   the case's branch leaf targets, or, for a case that declares `output:`, to its synth
   `__case_<id>` result node, which checks each taken branch against that type.
 
+A pass that lifts a node out of an authored node (an inline call in a node's binding, the
+inner calls of a nested branch call, the adaptive composer) records that node as the synth
+descriptor's `host`; after the build, `compose.edges.hosts.host_control_edges` gives every
+lifted node its host's CASE routes and `depends_on`/`runs_after` edges in one place. A
+branch target (`then: call(...)`, `__value_<n>`), a `__case_<id>` result node, and a flow
+`output:`/`asserts:` call have no host.
+
 Ladder position: desugar imports DOWN/peer only — `helpers`, `nodes`, `parse`, and
 the engine core (`expr`, `events`, `compile`, `nodes.*`). It NEVER imports the
 later phases (`edges`, `validate`, `build`, `loader`, `cases`); nothing earlier

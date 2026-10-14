@@ -32,7 +32,8 @@ nodes:
 
   # ADAPTIVE — an LLM composes the questions from context. This block
   # DESUGARS at load into a synthetic composer AGENT node (ask_adaptive__compose, output
-  # list[Question]) wired into the gate; the runtime gate never calls an LLM.
+  # list[Question]) wired into the gate; the runtime gate never calls an LLM. The composer
+  # carries the gate's case routes, depends_on, and runs_after.
   ask_adaptive:
     kind: human_input
     input:

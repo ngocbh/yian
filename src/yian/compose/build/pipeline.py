@@ -545,6 +545,32 @@ def _register_assertion_origin(
         raise diagnostics.error(str(exc), range=exc.range) from exc
 
 
+def _stamp_binding_labels(build_results: dict[str, BuildResult]) -> None:
+    """Give each param a desugar named for load errors the same phrase for runtime errors.
+
+    A CASE ``on:`` or ``cases[i].when`` param takes its ``wiring_labels`` site name; a
+    value entry's input takes its ``field_labels`` phrase. Other params keep the plain
+    ``input '<param>'`` wording.
+
+    Args:
+        build_results (`dict[str, BuildResult]`):
+            Built nodes keyed by final descriptor id; each node's ``binding_labels`` is
+            filled in place.
+    """
+    for node_id, result in build_results.items():
+        node = result.node
+        for parameter in node.params or ():
+            name = parameter.name
+            wiring_label = node.wiring_labels.get(name)
+            if wiring_label is not None:
+                # `on:` names the YAML key; a runtime message adds its own colon.
+                node.binding_labels[name] = result.site_name(
+                    node_id, wiring_label.removesuffix(":")
+                )
+            elif (site := f"input {name!r}") in result.field_labels:
+                node.binding_labels[name] = result.field_labels[site]
+
+
 def _stamp_node_wiring_origins(
     descriptors: dict[str, NodeDescriptor],
     nodes_cursor: SourceCursor,
@@ -2095,6 +2121,7 @@ def _assemble(
     flow_wiring: dict[str, dict] = {
         nid: result.wiring for nid, result in build_results.items()
     }
+    _stamp_binding_labels(build_results)
     _stamp_node_wiring_origins(
         descriptors,
         nodes_cursor,

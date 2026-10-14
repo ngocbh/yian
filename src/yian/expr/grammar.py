@@ -53,6 +53,8 @@ reference roots after parsing. Dotted field segments retain the ordinary `NAME`
 token and remain legal.
 """
 
+import re
+
 from lark import Lark, Token, Tree
 from lark.exceptions import LarkError
 
@@ -187,6 +189,100 @@ def whole_span_interior(text: str) -> str | None:
         return None
     end = find_span_end(text, 2)
     return text[2:end] if end == len(text) - 1 else None
+
+
+# A character that would fuse with an unwrapped name: `not${x}` must become `not x`.
+_NAME_CHAR = re.compile(r"[A-Za-z0-9_#/]")
+
+
+def _is_lone_atom(text: str) -> bool:
+    """True when `text` parses as one reference or one literal (no operator or call)."""
+    try:
+        tree = _PARSER.parse(text)
+    except LarkError:
+        return False
+    if isinstance(tree, Token):
+        return True
+    return tree.data == "refcall" and not any(
+        isinstance(child, Tree) and child.data == "call_suffix" for child in tree.children
+    )
+
+
+def _unwrap_spans(text: str) -> str | None:
+    """`text` with each `${X}` outside a string literal replaced by `X`, or `(X)` when `X`
+    is more than one reference or literal; None when a `${` is unbalanced."""
+    out: list[str] = []
+    quote, i, n = None, 0, len(text)
+    while i < n:
+        c = text[i]
+        if quote is not None:
+            out.append(c)
+            if c == quote:
+                quote = None
+            i += 1
+        elif c in ("'", '"'):
+            quote = c
+            out.append(c)
+            i += 1
+        elif c == "$" and text[i + 1 : i + 2] == "{":
+            end = find_span_end(text, i + 2)
+            inner = None if end is None else _unwrap_spans(text[i + 2 : end])
+            if inner is None:
+                return None
+            inner = inner.strip()
+            piece = inner if _is_lone_atom(inner) else f"({inner})"
+            if out and _NAME_CHAR.match(out[-1]):
+                piece = " " + piece
+            if _NAME_CHAR.match(text[end + 1 : end + 2]):
+                piece += " "
+            out.append(piece)
+            i = end + 1
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def _has_span(text: str) -> bool:
+    """True when `text` has a `${` outside a string literal."""
+    quote = None
+    for i, c in enumerate(text):
+        if quote is not None:
+            if c == quote:
+                quote = None
+        elif c in ("'", '"'):
+            quote = c
+        elif c == "$" and text[i + 1 : i + 2] == "{":
+            return True
+    return False
+
+
+def reject_nested_spans(text: str, *, in_span: bool = False) -> None:
+    """Raise if the expression `text` holds a `${...}`, showing the rewrite.
+
+    `${...}` marks an expression inside a YAML string, so inside an expression values are
+    named directly and grouped with parentheses. A `${...}` inside a quoted string literal
+    is text and allowed.
+
+    Args:
+        text (`str`):
+            One expression: a span interior or a bare condition.
+        in_span (`bool`, *optional*, defaults to `False`):
+            `text` is the interior of a template span, so the rewrite is shown as the whole
+            fixed span (`${a :- b}`) rather than the bare expression (`a :- b`).
+
+    Raises:
+        `ExpressionError`:
+            If `text` holds a `${...}` outside a string literal.
+    """
+    if not _has_span(text):
+        return
+    message = "`${...}` can't appear inside an expression"
+    rewrite = _unwrap_spans(text)
+    if rewrite is not None:
+        rewrite = rewrite.strip()
+        message += f"; write `{'${' + rewrite + '}' if in_span else rewrite}`"
+    raise ExpressionError(message)
 
 
 def _raise_if_reserved_reference_root(path: str) -> None:
@@ -336,6 +432,7 @@ def parse_expr(text: str) -> Tree | Token:
             reserved operator word as a reference root, or calls `isinstance`
             with anything but a value and a bare type name.
     """
+    reject_nested_spans(text)
     try:
         tree = _PARSER.parse(text)
     except LarkError as exc:

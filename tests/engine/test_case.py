@@ -122,13 +122,12 @@ def test_searched_multiref_allocates_r0_r1():
     assert not any(e.from_ == "weight" for e in data_edges)
 
 
-# A searched `when:` may be written in any of the three condition spellings — the
-# build extracts refs (_searched_params) and rewrites them (_rewrite_when) through the SAME
-# parse, so all three allocate the same __rN, wire the same source, and route the same.
+# A searched `when:` may be written bare or as one whole `${...}` — the build extracts
+# refs (_searched_params) and rewrites them (_rewrite_when) through the SAME parse, so
+# both allocate the same __rN, wire the same source, and route the same.
 @pytest.mark.parametrize(
     "when, expect_when",
     [
-        ("${score.output} >= 0.5", "${__r0} >= 0.5"),   # mixed
         ("score.output >= 0.5", "__r0 >= 0.5"),          # bare
         ("${score.output >= 0.5}", "${__r0 >= 0.5}"),    # whole-span
     ],

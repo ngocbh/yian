@@ -4,7 +4,7 @@ and `expr_refs_of(source)`.
 The binding functions take a raw template string and scan it internally through the
 unified grammar. These tests cover:
 - binding semantics (typed whole-span, embedded stringify, `$$`,
-  coalesce `|`, `:-` default, `:?` required, one nested `${x:-${y}}`, `${item}` scope);
+  coalesce `|`, `:-` default, `:?` required, a default ref `${x :- y}`, `${item}` scope);
 - full expressions inside a binding span, including arithmetic and string/list operations.
 """
 
@@ -49,9 +49,9 @@ def test_default_and_required():
         eval_binding('${a :? "need a topic"}', _from({}))
 
 
-def test_one_level_nested_default():
-    # `${x:-${y}}`: the wrapped-ref default resolves when the head misses.
-    assert eval_binding("${a :- ${b}}", _from({"b": "fb"})) == "fb"
+def test_default_ref():
+    # `${a :- b}`: the default ref resolves when the head misses.
+    assert eval_binding("${a :- b}", _from({"b": "fb"})) == "fb"
 
 
 def test_item_scope():

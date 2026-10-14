@@ -13,6 +13,7 @@ from lark import Token, Tree
 
 from yian.expr.expressions import ExpressionError
 from yian.expr.grammar import parse_expr
+from yian.expr.template import scan_template
 
 _RESERVED_KEYWORDS = ("and", "or", "not", "in")
 
@@ -66,12 +67,10 @@ def test_ref_with_slash():
     assert "refcall" in _kinds(_tree("def/child.output"))
 
 
-def test_wrapped_ref():
-    # `${a}` back-compat form must still parse. It is a lone atom, so with no
-    # spurious wrapper it inlines up to a bare WRAPPED_REF token (not a Tree).
-    result = parse_expr("${a}")
-    assert isinstance(result, Token)
-    assert result.type == "WRAPPED_REF"
+def test_wrapped_ref_is_rejected():
+    # `${...}` marks an expression in a YAML string; inside an expression a name is bare.
+    with pytest.raises(ExpressionError, match=r"can't appear inside an expression; write `a`"):
+        parse_expr("${a}")
 
 
 def test_item_ref():
@@ -95,15 +94,15 @@ def test_reserved_keyword_cannot_be_an_operand_reference_root(source):
 
 @pytest.mark.parametrize("keyword", _RESERVED_KEYWORDS)
 @pytest.mark.parametrize("prefix", ["", "x :- "])
-def test_reserved_keyword_cannot_be_a_wrapped_reference_root(keyword, prefix):
-    with pytest.raises(ExpressionError, match="reserved expression keyword"):
+def test_wrapped_reserved_keyword_is_a_nested_span_error(keyword, prefix):
+    with pytest.raises(ExpressionError, match="can't appear inside an expression"):
         parse_expr(f"{prefix}${{{keyword}}}")
 
 
 @pytest.mark.parametrize("keyword", _RESERVED_KEYWORDS)
 def test_reserved_keyword_remains_legal_as_a_dotted_field(keyword):
     _tree(f"record.output.{keyword}")
-    parse_expr(f"${{record.output.{keyword}}}")
+    scan_template(f"${{record.output.{keyword}}}")
 
 
 @pytest.mark.parametrize(
@@ -112,7 +111,7 @@ def test_reserved_keyword_remains_legal_as_a_dotted_field(keyword):
 )
 def test_keyword_prefix_remains_legal_in_generated_reference_roots(root):
     _tree(f"{root}.output")
-    parse_expr(f"${{{root}.output}}")
+    scan_template(f"${{{root}.output}}")
 
 
 @pytest.mark.parametrize("source", ["and(x)", "or(x)", "in(x)"])
@@ -267,9 +266,10 @@ def test_required():
     assert "required_expr" in _kinds(tree)
 
 
-def test_nested_default():
-    # `a :- ${b}`: a wrapped-ref default RHS.
-    _tree("a :- ${b}")
+def test_nested_default_is_rejected():
+    # `a :- ${b}`: the default names `b` directly.
+    with pytest.raises(ExpressionError, match=r"write `a :- b`"):
+        _tree("a :- ${b}")
 
 
 def test_default_binds_tighter_than_coalesce():

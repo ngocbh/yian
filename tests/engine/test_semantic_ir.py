@@ -438,13 +438,6 @@ def test_output_contract_resolution_retains_whole_value_identity() -> None:
     assert computed.type == Type.scalar(ValueKind.BOOLEAN)
     assert computed.origins == ContractOrigins()
 
-    wrapped = resolve_output_binding_contract(
-        "${${producer.output}}",
-        {"producer": contract},
-        {},
-    )
-    assert wrapped is contract
-
     for expression, expression_producers in (
         ("${false}", {}),
         ("${true and false}", {}),

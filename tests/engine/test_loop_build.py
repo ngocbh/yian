@@ -1148,7 +1148,7 @@ output: ${repeat.output}
 
 @pytest.mark.parametrize(
     "pred",
-    ["while: state.count < 3", "until: state.count >= 3", "while: ${state.count} < 3"],
+    ["while: state.count < 3", "until: state.count >= 3"],
 )
 def test_predicate_nested_field_read_builds(pred):
     flow = load_flow(_swap(NESTED_STATE, "PRED", pred))
@@ -1260,7 +1260,6 @@ output: ${ask.output}
     [
         "until: isinstance(r, Done) and r.answer == 'ok'",
         "until: ${isinstance(r, Done) and r.answer == 'ok'}",
-        "until: isinstance(${r}, Done) and n > 0 and ${r.answer} == 'ok'",
     ],
 )
 def test_predicate_member_field_read_guarded_by_isinstance_builds(pred):

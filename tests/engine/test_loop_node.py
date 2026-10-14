@@ -323,7 +323,6 @@ def test_should_stop_without_max_never_stops():
 
 
 @pytest.mark.parametrize(("kind", "predicate"), [
-    ("while", "not ${exited}"),
     ("until", "${exited}"),
 ])
 def test_unlimited_driver_far_past_any_cap_still_grows(kind, predicate):

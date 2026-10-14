@@ -75,18 +75,21 @@ def test_when_bare_reference_is_truthiness():
 # --- the three when: spellings evaluate identically (unified entry rule) ----- #
 
 
-def test_when_three_spellings_evaluate_identically():
-    # An expression field may be a bare expr, a legacy `${ref} op lit` (braces on the
-    # ref only), or a whole `${expr}` (braces around the whole thing). All three must
-    # evaluate identically through the unified entry (whole-span strip else parse whole).
+def test_when_both_spellings_evaluate_identically():
+    # An expression field may be a bare expr or one whole `${expr}`. Both evaluate
+    # identically through the unified entry (whole-span strip else parse whole).
     pool = _pool_with(a=8)
     assert evaluate_when("a.output > 5", pool) is True
-    assert evaluate_when("${a.output} > 5", pool) is True
     assert evaluate_when("${a.output > 5}", pool) is True
     low = _pool_with(a=3)
     assert evaluate_when("a.output > 5", low) is False
-    assert evaluate_when("${a.output} > 5", low) is False
     assert evaluate_when("${a.output > 5}", low) is False
+
+
+def test_when_with_braces_on_a_ref_is_rejected():
+    # Braces on a ref inside the condition are a `${...}` inside an expression.
+    with pytest.raises(ExpressionError, match=r"write `a.output > 5`"):
+        evaluate_when("${a.output} > 5", _pool_with(a=8))
 
 
 def test_when_bare_arithmetic_condition():
@@ -96,24 +99,22 @@ def test_when_bare_arithmetic_condition():
     assert evaluate_when("a.output + 1 > 10", pool) is False
 
 
-def test_when_record_three_spellings_identical():
+def test_when_record_both_spellings_identical():
     from yian.expr.expressions import evaluate_when_record
 
     rec = {"a": 8}
     assert evaluate_when_record("a > 5", rec) is True
-    assert evaluate_when_record("${a} > 5", rec) is True
     assert evaluate_when_record("${a > 5}", rec) is True
 
 
-def test_first_failing_assert_three_spellings():
+def test_first_failing_assert_both_spellings():
     from yian.expr.expressions import first_failing_assert
 
     pool = _pool_with(a=8)
     # all hold -> None
-    assert first_failing_assert(["a.output > 5", "${a.output} > 5", "${a.output > 5}"], pool) is None
-    # the failing one is returned (verbatim), and all three spellings agree
+    assert first_failing_assert(["a.output > 5", "${a.output > 5}"], pool) is None
+    # the failing one is returned (verbatim), and both spellings agree
     assert first_failing_assert(["a.output < 5"], pool) == "a.output < 5"
-    assert first_failing_assert(["${a.output} < 5"], pool) == "${a.output} < 5"
     assert first_failing_assert(["${a.output < 5}"], pool) == "${a.output < 5}"
 
 

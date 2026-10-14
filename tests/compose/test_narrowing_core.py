@@ -202,7 +202,7 @@ def test_isinstance_fact_against_the_base_union():
     ("when", "checks"),
     [
         ("isinstance(d.output, Buy)", [("d.output", "Buy")]),
-        ("x > 1 and isinstance(${d.output.leg}, Limit)", [("d.output.leg", "Limit")]),
+        ("x > 1 and isinstance(d.output.leg, Limit)", [("d.output.leg", "Limit")]),
         ("${isinstance(input.d, Buy) and isinstance(e.output, Text)}",
          [("input.d", "Buy"), ("e.output", "Text")]),
         ("isinstance(d.output, Buy) or x", []),

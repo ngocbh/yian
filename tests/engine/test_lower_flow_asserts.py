@@ -50,9 +50,9 @@ def _expressions(assertions: list[Assertion]) -> list[str]:
 
 # ---- PRE (boundary) asserts: rewrite `input.` -> `output.` (START's coerced output) ------
 
-def test_pre_mixed_spelling_rewrites_input_to_output():
-    r = _lower(["${input.age} >= 18"])
-    assert _expressions(r.start_pre) == ["${output.age} >= 18"]
+def test_pre_whole_span_rewrites_input_to_output():
+    r = _lower(["${input.age >= 18}"])
+    assert _expressions(r.start_pre) == ["${output.age >= 18}"]
     assert r.end_post == []
     assert r.synth_params == []
     assert r.synth_wiring == {}
@@ -68,7 +68,6 @@ def test_pre_bare_spelling_rewrites_input_to_output():
     ("source", "expected"),
     [
         ("age >= 18", "output.age >= 18"),
-        ("${age} >= 18", "${output.age} >= 18"),
         ("${age >= 18}", "${output.age >= 18}"),
     ],
 )

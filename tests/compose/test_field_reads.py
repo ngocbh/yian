@@ -160,7 +160,7 @@ def test_field_on_str_in_a_case_on_is_a_load_error():
     [
         "'note: ${step.output.order}'",          # embedded in a template
         "${step.output.order | input.s}",         # coalesce
-        "${input.s:-${step.output.order}}",       # default RHS
+        "${input.s :- step.output.order}",       # default RHS
     ],
 )
 def test_field_on_str_in_any_reference_form_is_a_load_error(binding):

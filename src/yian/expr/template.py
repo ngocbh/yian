@@ -608,7 +608,9 @@ def scan_template(text: str) -> list[TypedValue]:
             end = grammar.find_span_end(text, i + 2)  # reuse the shared brace/quote matcher
             if end is None:
                 raise ExpressionError(f"unbalanced '${{' in template {text!r}")
-            segments.append(Span(grammar.parse_expr(text[i + 2 : end])))
+            interior = text[i + 2 : end]
+            grammar.reject_nested_spans(interior, in_span=True)
+            segments.append(Span(grammar.parse_expr(interior)))
             i = end + 1
         else:
             buf.append(text[i])

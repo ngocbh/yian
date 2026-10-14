@@ -200,7 +200,7 @@ def test_a_plain_reference_chain_is_narrowed():
     ))
 
 
-@pytest.mark.parametrize("join", ["${b.output | s.output}", "${b.output:-${s.output}}"])
+@pytest.mark.parametrize("join", ["${b.output | s.output}", "${b.output :- s.output}"])
 def test_a_join_of_buy_and_sell_branches_narrows_to_both(join):
     branches = (
         _case("route", _ON, [("buy", "b"), ("sell", "s")], else_="e"),
@@ -623,7 +623,6 @@ def test_a_target_under_isinstance_reads_a_member_field():
         "isinstance(d.output, Buy) and input.s == 'x'",
         "input.s == 'x' and isinstance(d.output, Buy)",
         "${isinstance(d.output, Buy) and input.s == 'x'}",
-        "isinstance(${d.output}, Buy) and ${input.s} == 'x'",
     ],
 )
 def test_an_isinstance_and_conjunct_narrows(when):

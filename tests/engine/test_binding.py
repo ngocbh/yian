@@ -856,24 +856,21 @@ def test_quote_aware_literal_with_pipe_preserved():
     ) == {"d": "a:b"}
 
 
-def test_one_level_nested_default_resolves_two_level_raises():
-    # a `${x:-${y}}` default resolves ONE nested level; two levels is a loud error
-    # (use `|` for multi-way chains).
+def test_default_ref_resolves_and_a_nested_span_raises():
+    # `${input.as_of :- system.today}` falls back to the system date; a `${...}` written
+    # inside the expression is a loud error.
     pool = VariablePool(); pool.add_system("today", "2026-06-12")
-    # as_of unbound -> falls through to the nested ${system.today}
+    # as_of unbound -> falls through to system.today
     assert bind_inputs(
-        [InputBinding(name="d", source="${input.as_of:-${system.today}}")], pool
+        [InputBinding(name="d", source="${input.as_of :- system.today}")], pool
     ) == {"d": "2026-06-12"}
-    # as_of present -> wins; the nested default is not consulted
+    # as_of present -> wins; the default is not consulted
     pool.set(START_ID, {"as_of": "2026-01-01"})
     assert bind_inputs(
-        [InputBinding(name="d", source="${input.as_of:-${system.today}}")], pool
+        [InputBinding(name="d", source="${input.as_of :- system.today}")], pool
     ) == {"d": "2026-01-01"}
-    # two-level nesting -> loud error. The unified `WRAPPED_REF` terminal matches to the
-    # FIRST `}`, so `${x:-${system.today}` grabs the inner span and the dangling `}` makes
-    # the interior unparseable — still a rejected `BindingError` (use `|` for chains).
-    with pytest.raises(BindingError):
-        bind_inputs([InputBinding(name="d", source="${input.as_of:-${x:-${system.today}}}")], pool)
+    with pytest.raises(BindingError, match=r"write `\$\{input.as_of:-system.today\}`"):
+        bind_inputs([InputBinding(name="d", source="${input.as_of:-${system.today}}")], pool)
 
 
 def test_item_scope_combined_with_coalesce_and_default():

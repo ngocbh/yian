@@ -203,9 +203,10 @@ def test_plain_reference_unknown_or_none_raises():
         render_template_record("${t}", {"t": None})
 
 
-def test_nested_braces_are_scanned_as_one_call_span():
-    # The brace-aware scanner retains the nested reference inside the builtin call.
-    assert render_template_record("[${render_as_json(briefs)}]", _REC).startswith("[")
+def test_a_span_nested_in_a_call_shows_the_rewrite():
+    # Inside a span, a builtin's argument names the input directly.
+    with pytest.raises(ExpressionError, match=r"write `\$\{render_as_json\(briefs\)\}`"):
+        render_template_record("[${render_as_json(${briefs})}]", _REC)
 
 
 # --- prompt_refs (compile-time companion) ------------------------------------ #

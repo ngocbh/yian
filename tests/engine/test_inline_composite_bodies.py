@@ -2475,7 +2475,6 @@ output: ${repeat.output}
 @pytest.mark.parametrize(
     ("predicate", "predicate_kind"),
     [
-        ("while: not ${exited}", "while"),
         ("until: ${exited}", "until"),
     ],
 )

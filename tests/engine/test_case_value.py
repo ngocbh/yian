@@ -177,18 +177,18 @@ def test_case_ref_in_default_is_loud():
         expand_case_outputs(descs, None, [])
 
 
-def test_case_ref_in_nested_default_value_is_loud():
-    # ${x:-${gate.output}} — a case ref as the nested-default VALUE (inside an enclosing
-    # span) must be LOUD, not silently expanded (a regression caught in review).
-    descs = {"gate": _gate(), "c": _code("c", v="${x:-${gate.output}}")}
+def test_case_ref_in_default_value_is_loud():
+    # ${x :- gate.output} — a case ref as the default VALUE must be LOUD, not silently
+    # expanded (a regression caught in review).
+    descs = {"gate": _gate(), "c": _code("c", v="${x :- gate.output}")}
     with pytest.raises(LoadError, match="a case value can't be read in"):
         expand_case_outputs(descs, None, [])
 
 
 def test_case_ref_in_required_message_is_loud():
-    # ${input.t:?${gate.output}} — the :? message is a full expression,
+    # ${input.t :? gate.output} — the :? message is a full expression,
     # so a case ref in it is a genuine ref and must be LOUD (parallel to the :- default).
-    descs = {"gate": _gate(), "c": _code("c", v="${input.t:?${gate.output}}")}
+    descs = {"gate": _gate(), "c": _code("c", v="${input.t :? gate.output}")}
     with pytest.raises(LoadError, match="a case value can't be read in"):
         expand_case_outputs(descs, None, [])
 

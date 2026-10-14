@@ -128,18 +128,17 @@ def parse_condition(expression: str) -> "Tree | Token":
     """Parse an expression-field value (`when:`/`on:`/an `asserts:` entry) via the ONE
     unified grammar, honouring the both-spellings entry rule.
 
-    An expression field may be written three ways, all of which must PARSE (and later
-    evaluate) IDENTICALLY:
+    An expression field may be written two ways, which PARSE (and later evaluate)
+    IDENTICALLY:
       - a bare expression `a > 5` (no braces) — canonical,
-      - a legacy `${a} > 5` (braces around a ref, operators outside),
       - a whole `${a > 5}` (braces around the whole expression).
     If the WHOLE trimmed value is a single `${...}` span, strip the outer braces and
-    parse the interior; otherwise parse the whole value directly. The grammar's ref atom
-    already admits a `${...}`-wrapped ref, so the mixed `${a} > 5` form parses as-is.
+    parse the interior; otherwise parse the whole value directly. A `${...}` inside the
+    expression (`${a} > 5`) is an error that shows the bare rewrite.
 
     Args:
         expression (`str`):
-            The field value, in any of the three spellings.
+            The field value, in either spelling.
 
     Returns:
         `Tree | Token`:
@@ -147,7 +146,7 @@ def parse_condition(expression: str) -> "Tree | Token":
 
     Raises:
         `ExpressionError`:
-            Raised when the value does not parse.
+            Raised when the value does not parse or holds a `${...}` inside it.
     """
     from yian.expr.grammar import parse_expr, whole_span_interior
 
@@ -160,11 +159,11 @@ def condition_refs(expression: str) -> list[str]:
 
     The condition analog of the template ref-walk ([`expr_refs_of`][yian.expr.template.expr_refs_of])
     and the prompt ref-walk ([`prompt_refs`][yian.expr.template.prompt_refs]): parse the
-    WHOLE value as ONE expression (via `parse_condition`, honouring all three spellings — bare
-    `a > 5`, mixed `${a} > 5`, whole `${a > 5}`) and collect its reference leaves via the shared
+    WHOLE value as ONE expression (via `parse_condition`, honouring both spellings — bare
+    `a > 5` and whole `${a > 5}`) and collect its reference leaves via the shared
     [`expr_refs`][yian.expr.expressions.expr_refs]. Every compile-time consumer of a
     condition's refs (flow/node `asserts:`, a loop `while:`/`until:` predicate, a searched `case`
-    `when:`) routes here, so the three spellings extract IDENTICALLY — unlike a flat `${...}` regex,
+    `when:`) routes here, so both spellings extract IDENTICALLY — unlike a flat `${...}` regex,
     which reads a whole-span as one bogus path and a bare form as no refs at all.
 
     Args:
@@ -210,15 +209,14 @@ def evaluate_when(
     the public pool-based path. Record-scoped CASE and LOOP predicates use
     `evaluate_when_record` instead.
 
-    The value may be written three ways, all evaluating IDENTICALLY: a bare expression
-    `a > 5`, a legacy `${a} > 5` (braces on the ref), or a whole `${a > 5}` (braces around
-    the whole thing). A bare reference with no comparison operator is a TRUTHINESS test
+    The value may be written two ways, evaluating IDENTICALLY: a bare expression `a > 5`
+    or a whole `${a > 5}` (braces around the whole thing). A bare reference with no comparison operator is a TRUTHINESS test
     (coerced to bool), not an error.
 
     Args:
         expression (`str`):
-            The `when:` source — any expression the unified grammar accepts, in any of the
-            three brace spellings above.
+            The `when:` source — any expression the unified grammar accepts, in either
+            spelling above.
         pool (`VariablePool`):
             The variable pool each reference resolves against (`node`/`system` namespaces).
             A reference that resolves to `None` participates as a falsy value.
@@ -237,7 +235,7 @@ def evaluate_when(
 
     Example:
         ```python
-        evaluate_when("${score.output} >= 0.5 and ${flag.output}", pool)
+        evaluate_when("score.output >= 0.5 and flag.output", pool)
         ```
     """
     return _evaluate(expression, lambda path: resolve_reference(path, pool), types)
@@ -259,11 +257,11 @@ def evaluate_when_record(
 ) -> bool:
     """Evaluate a strict-CASE `when:` against the node's bound input record.
 
-    `${name}` / `${name.path}` resolve against `record`; a miss -> None, compared as a
+    `name` / `name.path` resolve against `record`; a miss -> None, compared as a
     plain value: `==` and ordered comparisons against a non-null value are false, and
-    `!=` is true. A bare `${name}` miss is falsy, which gives `when:` its
+    `!=` is true. A bare `name` miss is falsy, which gives `when:` its
     missing-is-falsy behavior. A None left side of `in`/`not in` is an ordinary value
-    (`${miss} in [...]` is false); a None right side raises, since None is no container.
+    (`miss in [...]` is false); a None right side raises, since None is no container.
     Bare local-input refs only; pool namespaces are not in scope (they belong in the
     node's input `from:` bindings).
 
@@ -419,9 +417,7 @@ class _EvalExpr:
         return handler(node)
 
     def _token(self, tok: Token) -> Any:
-        """A lone atom that inlined up to a top-level token: `${...}`, or a literal."""
-        if tok.type == "WRAPPED_REF":
-            return self._reference(str(tok)[2:-1])
+        """A lone literal that inlined up to a top-level token."""
         if tok.type == "NUMBER":
             s = str(tok)
             return float(s) if "." in s else int(s)
@@ -635,7 +631,7 @@ class _EvalExpr:
 
     # --- boolean combinators --- #
     # The operator KEYWORD tokens interleaved among the operands. A value operand may ALSO
-    # be a top-level `Token` (a bare `${ref}` WRAPPED_REF, or a bare NUMBER/STRING/BOOL/NULL),
+    # be a top-level `Token` (a bare NUMBER/STRING/BOOL/NULL literal),
     # so a blanket "drop every Token" filter would wrongly discard the operand — only these
     # keyword token TYPES are the operators to skip.
     _OP_TOKEN_TYPES = frozenset({"NOT", "AND", "OR"})
@@ -833,8 +829,8 @@ def infer_expr_type(
 ) -> "Type | None":
     """Return the statically proven type of one parsed expression, if any.
 
-    Inference is deliberately conservative: literal tokens, exact references
-    (including the wrapped back-compat spelling), comparisons, boolean
+    Inference is deliberately conservative: literal tokens, exact references,
+    comparisons, boolean
     combinators, and `isinstance(x, T)` have fixed result types. Other forms remain
     unknown until their runtime value semantics can be modeled without guessing.
     Reference lookup is injected so this source-neutral expression layer does not
@@ -863,8 +859,6 @@ def infer_expr_type(
         ```
     """
     if isinstance(tree, Token):
-        if tree.type == "WRAPPED_REF":
-            return ref_type_fn(str(tree)[2:-1])
         if tree.type == "NUMBER":
             kind = ValueKind.NUMBER if "." in str(tree) else ValueKind.INTEGER
             return Type.scalar(kind)
@@ -999,7 +993,7 @@ def expr_refs(tree: "Tree | Token") -> list[str]:
     CALL: the callee name contributes NO ref, but each `arg` VALUE's refs ARE
     collected (recursively). `isinstance(x, T)` collects only `x`'s refs; `T` is a
     type name. Literals contribute nothing. Coalesce / default /
-    required refs are all collected, including the nested-default ref.
+    required refs are all collected, including a default's refs.
 
     `item`-headed refs ARE collected here — matching the evaluator, which resolves
     them from the MAP-body-local scope. The CALLER (compose `_ref_producer`,
@@ -1025,11 +1019,7 @@ def expr_refs(tree: "Tree | Token") -> list[str]:
 def _collect_expr_refs(node: "Tree | Token", refs: list[str]) -> None:
     """Recursive walk collecting reference paths into `refs` (source order, no dedupe)."""
     if isinstance(node, Token):
-        # A lone atom that inlined to a top-level token: only a `${...}` wrapped-ref
-        # names a reference; a bare NUMBER / STRING / BOOL / NULL contributes nothing.
-        if node.type == "WRAPPED_REF":
-            refs.append(str(node)[2:-1])
-        return
+        return  # a lone NUMBER / STRING / BOOL / NULL literal names no reference
     if node.data == "refcall":
         # KEEP IN SYNC with `_do_refcall`'s refcall decomposition — both duplicate this
         # call_suffix-finding + path-join (leading NAME + trailer segments) logic.
@@ -1057,7 +1047,7 @@ def _collect_expr_refs(node: "Tree | Token", refs: list[str]) -> None:
 # passes that re-namespace a source (call/loop/map inlining) or rebind refs to node-local
 # params (searched `case`) route through the shared parse tree: only the
 # reference LEAVES move, every operator / literal / builtin-callee / whitespace stays
-# verbatim (spliced by source position), and all three spellings rewrite identically.
+# verbatim (spliced by source position), and both condition spellings rewrite identically.
 # --------------------------------------------------------------------------- #
 
 
@@ -1065,14 +1055,13 @@ def rewrite_expr_refs(text: str, rename: Callable[[str], "str | None"]) -> str:
     """Rewrite the reference-leaf PATHS of ONE unified `${...}` expression `text`.
 
     The rewrite analog of [`expr_refs`][yian.expr.expressions.expr_refs]: it walks
-    the SAME parse tree (`refcall` reference / `WRAPPED_REF` / builtin-call args), but instead
+    the SAME parse tree (`refcall` reference / builtin-call args), but instead
     of collecting each reference path it asks `rename(path)` for a replacement and splices it
     in by source position. `rename` returns the new dotted path, or `None` to leave that
     reference untouched. Everything that is NOT a reference leaf — operators, numbers, string
     and list literals, a builtin CALL's callee name, parentheses, whitespace — is preserved
-    verbatim, as is the type name of an `isinstance(x, T)`. A bare `refcall` (`a.b`) is
-    replaced with the bare new path; a `${a}` `WRAPPED_REF` leaf is replaced with the braced
-    `${new}` (its wrapping preserved).
+    verbatim, as is the type name of an `isinstance(x, T)`. A `refcall` (`a.b`) is
+    replaced with the new path.
 
     Args:
         text (`str`): the expression source (a bare expression, or a span interior).
@@ -1101,14 +1090,10 @@ def _collect_ref_edits(
     edits: "list[tuple[int, int, str]]",
 ) -> None:
     """Walk `node` collecting `(start, end, replacement)` splices for each renamed
-    reference leaf. KEEP IN SYNC with `_collect_expr_refs` — same refcall/WRAPPED_REF/
-    builtin-arg decomposition, but capturing token source positions to edit in place."""
+    reference leaf. KEEP IN SYNC with `_collect_expr_refs` — same refcall/builtin-arg
+    decomposition, but capturing token source positions to edit in place."""
     if isinstance(node, Token):
-        if node.type == "WRAPPED_REF":
-            new = rename(str(node)[2:-1])
-            if new is not None:
-                edits.append((node.start_pos, node.end_pos, "${" + new + "}"))
-        return
+        return  # a lone literal holds no reference
     if node.data == "refcall":
         children = node.children
         call_suffix = next(
@@ -1134,11 +1119,11 @@ def _collect_ref_edits(
 
 def rewrite_condition_refs(expression: str, rename: Callable[[str], "str | None"]) -> str:
     """Rewrite the reference leaves of a condition-field value (`when:`/`until:`/`while:`/
-    `asserts:`/searched-`case` `when:`), honouring all three spellings.
+    `asserts:`/searched-`case` `when:`), honouring both spellings.
 
     The rewrite analog of [`condition_refs`][yian.expr.expressions.condition_refs]:
-    a whole-span `${a > 5}` keeps its outer braces and rewrites the interior; a mixed
-    `${a} > 5` / bare `a > 5` are rewritten in place. `rename(path)` returns the replacement
+    a whole-span `${a > 5}` keeps its outer braces and rewrites the interior; a bare
+    `a > 5` is rewritten in place. `rename(path)` returns the replacement
     path (or `None` to keep). The value is trimmed first (matching `parse_condition`)."""
     from yian.expr.grammar import whole_span_interior
 

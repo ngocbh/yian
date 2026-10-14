@@ -11,7 +11,7 @@ Two subtleties mirror the representation-neutral collector:
 - **Prompt scope**: an AGENT `prompt:` or `system_prompt:` may interpolate this node's inputs
   and variables as bare `${name}`; a `${<id>.output}`/`${input.X}`/`${system.X}` in either is a
   located error.
-- **Case node-local refs**: the desugared CASE `when:` strings use `${__rN}`/`__on`,
+- **Case node-local refs**: the desugared CASE `when:` strings use `__rN`/`__on`,
   which resolve against the bound input record — they are EXCLUDED here (only the
   `__rN`/`__on` SOURCES are classified, against the pool; mirrors the strict CASE check).
 
@@ -322,7 +322,7 @@ def validate_references(
         # Each node input `from:` source, read from the flow-owned wiring. For a
         # desugared CASE these are the `__rN`/`__on` SOURCES (the original
         # `${<id>.output}` refs) — validated against the pool. The rewritten node-local
-        # `${__rN}`/`__on` live in `node.cases` `when:` and are EXCLUDED here
+        # `__rN`/`__on` live in `node.cases` `when:` and are EXCLUDED here
         # (they resolve against the record).
         # Anchor each error on the OFFENDING ENTRY, not the whole `input:` mapping: the parse
         # loop stamps a per-binding `("input", name)` range for every kind, and a desugar stamps

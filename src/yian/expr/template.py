@@ -12,8 +12,9 @@ The interior of a `${...}` uses the unified expression grammar: references such 
 `node.output.field` and `input.name`, literals, arithmetic/boolean operators, pure
 builtins, coalesce (`|`), default (`:-`), and required (`:?`).
 
-Nesting is ONE level: `${x:-${y}}` is allowed; `${x:-${y:-${z}}}` is an error
-(use `|` for multi-way chains: `${x | y | z}`).
+A `${...}` can't appear inside another one's expression: inside a span, values are
+named directly and grouped with parentheses (`${x :- (y :- "lit")}`, `${x | y | z}`).
+`scan_template` rejects a nested span with an error that shows the fixed span.
 
 Pure parse/eval (no pool): `eval_binding` takes a `resolve` callable so this stays
 a leaf both `nodes` (runtime bind) and `compile` (the compile-time reference walk)
@@ -304,7 +305,7 @@ def rewrite_template_refs(source: str, rename: Callable[[str], "str | None"]) ->
     `source` for its `${...}` spans (brace/quote aware, `$$` escapes preserved verbatim) and
     rewrite each span's interior via
     [`rewrite_expr_refs`][yian.expr.expressions.rewrite_expr_refs] — so a whole-span
-    `${x.output}`, an embedded `"pre ${a} post"`, and a nested `${x :- ${y}}` are all handled
+    `${x.output}`, an embedded `"pre ${a} post"`, and a computed `${x :- y}` are all handled
     uniformly. `rename(path)` returns the replacement path (or `None` to keep). Literal text
     between spans is preserved exactly (unlike `scan_template`, which collapses `$$` -> `$`,
     this rewriter re-emits `$$` and every literal char verbatim, since it produces SOURCE).
@@ -362,18 +363,16 @@ def binding_co_skips(source: Any) -> bool:
 def _operand_co_skips(node: "Tree | Token") -> bool:
     """Does one parsed-expression operand co-skip (a pure ref / ref-default group)?
 
-    True for: a bare reference (`refcall` with no `call_suffix`), a `${...}`-wrapped ref
-    (`WRAPPED_REF` token), a `coalesce` whose EVERY operand co-skips, and a `default_expr`
-    whose fallback is itself a co-skipping operand (`:-${y}` / `:-b.output`). False for a
+    True for: a bare reference (`refcall` with no `call_suffix`), a `coalesce` whose EVERY
+    operand co-skips, and a `default_expr` whose fallback is itself a co-skipping operand
+    (`:-b.output`). False for a
     literal token, a builtin-call `refcall`, a `required_expr` (`:?`), and any computed node
     (arithmetic / comparison / boolean / list) — none of which are a pure ref dependency.
     """
-    from lark import Token as _Token, Tree as _Tree
+    from lark import Tree as _Tree
 
-    if isinstance(node, _Token):
-        return node.type == "WRAPPED_REF"  # a `${ref}` token co-skips; a literal token doesn't
     if not isinstance(node, _Tree):
-        return False
+        return False  # a literal token
     if node.data == "refcall":
         # a reference co-skips; a builtin call (has a `call_suffix`) is a computed value.
         return not any(isinstance(c, _Tree) and c.data == "call_suffix" for c in node.children)
@@ -434,7 +433,7 @@ def render_template_record(text: str, record: dict) -> str:
     Render a strict AGENT / HUMAN_INPUT prompt against its bound input `record`.
 
     Each `${...}` span is a unified expression (`expr.grammar`): a plain dotted reference
-    (`${name}` / `${name.path}`), a builtin call (`${ render_as_json(${name}, 4) }`,
+    (`${name}` / `${name.path}`), a builtin call (`${ render_as_json(name, 4) }`,
     optionally `.field` on the result), or arithmetic / string / list ops over them
     (`${a + 1}`). A reference resolves against `record` (a node's declared inputs); a call
     invokes the named `expr.builtins.TEMPLATE_FNS` formatter over its resolved args. Bare

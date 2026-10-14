@@ -279,11 +279,9 @@ def _expander(
 ):
     """A `value -> value` binding transform: expand each clean case-output span to the
     typed case's result-node ref (cases in `case_types`) or the untyped case's branch coalesce;
-    reject a case ref in any non-clean position. Scans TOP-LEVEL
-    `${…}` spans only — a case ref NESTED inside an enclosing span (e.g. a `:-` default
-    value `${x:-${gate.output}}`) is caught as a non-clean ref of that span, and a `:?`
-    message literal (`${x:?${gate.output}}` — not a ref) is left untouched (no
-    rewrite/corruption)."""
+    reject a case ref in any non-clean position. Scans each `${…}` span — a case ref inside
+    a larger expression (a `:-` default `${x :- gate.output}`, a `:?` message, arithmetic)
+    is caught as a non-clean ref of that span."""
 
     def expand(value: str) -> str:
         # Singular only: detect `.output` marker.

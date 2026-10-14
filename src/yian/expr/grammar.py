@@ -8,15 +8,18 @@ Evaluation deliberately lives in `expr.expressions`.
 
 - References: bare `a`, dotted `a.b.c`, and — for the runtime graph-expansion
   separators — segments containing `#` / `/` (`node#0.output`, `def/child.output`).
-- The `${...}`-wrapped back-compat ref form (`${a}`), so old sources keep parsing.
 - Arithmetic (`+ - * / %` and `**`), unary minus, comparisons
   (`== != < <= > >=`), `and` / `or` / `not`, `in` / `not in`.
 - List literals (`[1, "x"]`) and parenthesised sub-expressions.
 - Pure builtin calls (`upper(name)`, `join(items, ", ")`), with dotted access on
   the result (`fn(x).field`) — mirroring the prompt call form.
-- Coalesce (`a | b | c`), default (`a :- d`), required (`a :? "msg"`), including a
-  wrapped-ref default RHS (`a :- ${b}`).
+- Coalesce (`a | b | c`), default (`a :- d`), required (`a :? "msg"`).
 - The `isinstance(x, T)` special form, whose second argument is a bare type name.
+
+`${...}` marks an expression inside a YAML string, so it never appears inside one:
+values are named directly and grouped with parentheses. `parse_expr` rejects a
+`${...}` outside a string literal with an error that shows the rewrite
+(`a :- ${b}` -> `a :- b`).
 
 ## Shared terminal design for references and calls
 
@@ -107,7 +110,6 @@ _GRAMMAR = r"""
 ?atom: refcall
      | NUMBER | STRING | BOOL | NULL
      | list_lit
-     | WRAPPED_REF
      | "(" coalesce ")"
 
 // One shared NAME terminal disambiguates references from builtin calls:
@@ -125,7 +127,6 @@ arg: [NAME "="] coalesce
 list_lit: "[" [coalesce ("," coalesce)*] "]"
 
 COMP_OP: "==" | "!=" | "<=" | ">=" | "<" | ">"
-WRAPPED_REF: /\$\{[^}]+\}/
 STRING: /"[^"]*"/ | /'[^']*'/
 NUMBER: /\d+(\.\d+)?/
 
@@ -285,43 +286,28 @@ def reject_nested_spans(text: str, *, in_span: bool = False) -> None:
     raise ExpressionError(message)
 
 
-def _raise_if_reserved_reference_root(path: str) -> None:
-    """Reject an exact operator word at the root of one reference path."""
-    root = path.strip().split(".", 1)[0].strip()
-    if root in _RESERVED_REFERENCE_ROOTS:
-        raise ExpressionError(
-            f"reserved expression keyword {root!r} cannot be used as a reference root"
-        )
-
-
 def _reject_reserved_reference_roots(tree: Tree | Token) -> None:
     """Reject operator words parsed contextually as reference roots.
 
     A `refcall` with a `call_suffix` is a builtin call rather than a reference, so
     its callee is outside this rule. Trailer segments and keyword-argument labels
-    are likewise not roots. `WRAPPED_REF` is a single token, so inspect its path
-    explicitly both at the top level and when nested inside a larger expression.
+    are likewise not roots.
     """
-    if isinstance(tree, Token):
-        wrapped_refs = (tree,) if tree.type == "WRAPPED_REF" else ()
-    else:
-        for node in tree.iter_subtrees():
-            if node.data != "refcall":
-                continue
-            if any(
-                isinstance(child, Tree) and child.data == "call_suffix"
-                for child in node.children
-            ):
-                continue
-            head = node.children[0]
-            if isinstance(head, Token) and head.type == "NAME":
-                _raise_if_reserved_reference_root(str(head))
-        wrapped_refs = tree.scan_values(
-            lambda value: isinstance(value, Token) and value.type == "WRAPPED_REF"
-        )
-
-    for token in wrapped_refs:
-        _raise_if_reserved_reference_root(str(token)[2:-1])
+    if not isinstance(tree, Tree):
+        return
+    for node in tree.iter_subtrees():
+        if node.data != "refcall":
+            continue
+        if any(
+            isinstance(child, Tree) and child.data == "call_suffix"
+            for child in node.children
+        ):
+            continue
+        head = node.children[0]
+        if isinstance(head, Token) and head.type == "NAME" and head in _RESERVED_REFERENCE_ROOTS:
+            raise ExpressionError(
+                f"reserved expression keyword {str(head)!r} cannot be used as a reference root"
+            )
 
 
 def _reject_dotted_callee(tree: Tree | Token) -> None:
@@ -334,7 +320,7 @@ def _reject_dotted_callee(tree: Tree | Token) -> None:
     so the guard checks for a trailer appearing BEFORE the suffix in the child
     order.
 
-    A lone atom (e.g. `${a}`, a bare `NUMBER`/`STRING`) inlines all the way up to
+    A lone atom (e.g. a bare `NUMBER`/`STRING`) inlines all the way up to
     a top-level `Token` now that no spurious `coalesce` wraps it — such a top has
     no subtrees to check, so it is trivially accepted.
     """
@@ -373,7 +359,7 @@ def _validate_isinstance(tree: Tree | Token) -> None:
     """Require every `isinstance(...)` call to be `isinstance(<expr>, <TypeName>)`.
 
     The second argument names a type, so it must be a bare `NAME`: no dotted path,
-    call, literal, or `${...}` wrapping. Keyword arguments and dotted access on the
+    call, or literal. Keyword arguments and dotted access on the
     boolean result (`isinstance(x, T).f`) are not accepted.
     """
     if not isinstance(tree, Tree):
@@ -421,16 +407,17 @@ def parse_expr(text: str) -> Tree | Token:
             The Lark parse tree. Its shape is the grammar above: `refcall` for a
             ref-or-call, `call_suffix` marking a call, `coalesce` (present ONLY
             when a `|` actually appears) / `default_expr` / `required_expr` at the
-            top, and the arithmetic/boolean chain below. A LONE atom — a bare
-            `${a}` wrapped-ref, or a bare `NUMBER` / `STRING` — inlines all the
-            way up and comes back as a top-level `Token` (no wrapper node), since
-            no spurious one-child `coalesce` is inserted.
+            top, and the arithmetic/boolean chain below. A LONE literal — a bare
+            `NUMBER`, `STRING`, `BOOL`, or `NULL` — inlines all the way up and comes
+            back as a top-level `Token` (no wrapper node), since no spurious
+            one-child `coalesce` is inserted.
 
     Raises:
         `ExpressionError`:
-            If `text` does not parse, is a dotted-callee builtin call, uses a
-            reserved operator word as a reference root, or calls `isinstance`
-            with anything but a value and a bare type name.
+            If `text` holds a `${...}` (see `reject_nested_spans`), does not parse,
+            is a dotted-callee builtin call, uses a reserved operator word as a
+            reference root, or calls `isinstance` with anything but a value and a
+            bare type name.
     """
     reject_nested_spans(text)
     try:

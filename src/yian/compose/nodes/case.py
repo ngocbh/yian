@@ -13,8 +13,8 @@ carries no inputs and no leaf Node; `.build()` returns a `BuildResult` whose `no
 no new node kind. Two surface forms:
 
 - **searched** (`cases: [{when: "<bool>", then: <t>}]`, `else: <e>`): scan each `when:` for its
-  distinct `${...}` refs -> allocate one `CaseNode` input `__rN` per distinct ref -> rewrite the
-  `when:` to the bare local `${__rN}`. Each case routes to its `then:` (the edge handle); `else:`
+  distinct refs -> allocate one `CaseNode` input `__rN` per distinct ref -> rewrite each ref in
+  the `when:` to its bare local `__rN`. Each case routes to its `then:` (the edge handle); `else:`
   routes to the internal else handle (`ELSE_HANDLE`).
 
 - **`on:`** (`on: ${ref}`, `cases: [{when: <value>, then: <t>}]`): one input `__on = ${ref}`;
@@ -61,7 +61,6 @@ from yian.expr import (
     isinstance_subject,
     isinstance_type_names,
     parse_condition,
-    parse_expr,
     rewrite_condition_refs,
 )
 from yian.nodes.case import ELSE_HANDLE, Case, CaseNode
@@ -477,8 +476,8 @@ def _data_edges(node_id: str, wiring: dict[str, Any]) -> list[Edge]:
                     from_=producer,
                     to=node_id,
                     input_group=name,
-                    # a `when:`/`on:` ref can carry an escape (`:-`/`:?`); a
-                    # co-skipping condition would otherwise wrongly skip-flood the gate.
+                    # an `on:` value is a whole binding that can carry an escape (`:-`/`:?`);
+                    # a co-skipping condition would otherwise wrongly skip-flood the gate.
                     optional=not binding_co_skips(source),
                 )
             )
@@ -584,12 +583,6 @@ IsinstanceCheck = tuple[str, str]
 def _isinstance_check(conjunct: Tree | Token) -> Optional[IsinstanceCheck]:
     """The check a conjunct makes when it is `isinstance(<direct ref>, T)`, else `None`."""
     subject = isinstance_subject(conjunct)
-    if isinstance(subject, Token) and subject.type == "WRAPPED_REF":
-        # The mixed spelling `isinstance(${d.output}, T)` wraps the reference in braces.
-        try:
-            subject = parse_expr(str(subject)[2:-1])
-        except ExpressionError:
-            return None
     if subject is None:
         return None
     parts = direct_reference_parts(subject)
@@ -664,7 +657,7 @@ def _searched_params(desc: CaseDescriptor, diagnostics: LoadDiagnostics) -> _Sea
                 f"case node {desc.id!r}: `when:` {when!r} is not a valid boolean expression: {exc}",
                 range=when_range,
             ) from exc
-        # Parsing the whole value once covers all three spellings, matching `_rewrite_when`.
+        # Parsing the whole value once covers both spellings, matching `_rewrite_when`.
         for ref in expr_refs(tree):
             if ref not in ref_to_local:
                 local = f"__r{len(ref_to_local)}"
@@ -769,7 +762,7 @@ def _desugar_searched(
     desc: CaseDescriptor,
     diagnostics: LoadDiagnostics,
 ) -> tuple[CaseNode, dict[str, Any], list[Edge], list[Edge], dict, dict[str, str]]:
-    """Searched form -> one `__rN` input per distinct `${...}` ref; `when:` rewritten.
+    """Searched form -> one `__rN` input per distinct ref; `when:` rewritten.
 
     Returns `(node, wiring, data_edges, control_edges, param_ranges, param_labels)` — the last
     two locate each synth `__rN` at the `cases[N].when` it was first seen in and label it
@@ -830,9 +823,8 @@ def _desugar_searched(
 
 
 def _rewrite_when(when: str, ref_to_local: dict[str, str]) -> str:
-    """Rewrite each reference in `when` to its bare local `__rN`, honouring all three
-    condition spellings. A `${<ref>}` (mixed) becomes `${__rN}`, a bare `<ref>`
-    (whole-span / bare) becomes `__rN`; the surrounding expression is preserved. A ref
+    """Rewrite each reference in `when` to its bare local `__rN`, in either condition
+    spelling (bare, or one whole `${...}`); the surrounding expression is preserved. A ref
     with no allocated local is left untouched. `rewrite_condition_refs` parses the value
     like `parse_condition`, so extraction in `_searched_params` and rewrite see the SAME
     leaves."""

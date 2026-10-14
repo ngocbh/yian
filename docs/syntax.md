@@ -243,17 +243,19 @@ Arithmetic is Python's. `+` concatenates text and lists (`${xs + [item]}`), `*` 
 them (`${"ab" * 3}`), and `%` with text on the left formats (`${"%.2f" % price}`). A bool
 counts as 0/1 (`${true + 1}` is `2`), but a CASE's `on:` never equates a bool with a
 number. There are no cost limits. Float overflow in `+ - * /` gives `inf`; an operator
-Python can't complete (`**` overflow, a repetition count too large, a missing
-`%(key)s`) fails like any other expression error. See
+Python can't complete (`**` overflow, an int too large to mix with a float as in
+`${10 ** 400 / 3}`, a repetition count too large, a missing `%(key)s`) fails like any
+other expression error. See
 [Expressions → Arithmetic follows Python](expressions.md#arithmetic-follows-python).
 
 A whole-string `${expr}` resolves to the **typed value** (a number stays a
-number, a list a list); embedded in surrounding text it is stringified. An int too
-long to render as text (past 4300 digits by default) fails like any other expression
-error: a binding fails with `binding.evaluate`, and a prompt fails its node.
+number, a list a list); embedded in surrounding text it is stringified. A value holding
+an int too long to render as text (past 4300 digits by default) fails like any other
+expression error: a binding fails with `binding.evaluate`, and a prompt fails its node.
 
-Changed: an operator Python can't complete, or an embedded value too long to render,
-used to raise out of `run_flow`; now the run fails like any other expression error.
+Changed: an operator Python can't complete, or a value too long to render as text
+(embedded in text, or a whole prompt), used to raise out of `run_flow`; now the run
+fails like any other expression error.
 
 NaN and infinity are not yian values. A binding whose value is NaN or infinity at
 any depth, whether an expression result, a literal, or a default, fails its node with `binding.evaluate`. The message names the

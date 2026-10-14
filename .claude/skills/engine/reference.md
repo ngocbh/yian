@@ -1115,8 +1115,8 @@ boolean/arithmetic, prompt builtin-call) are unified. Three modules, one pipelin
   `x`. `RequiredError` (a `${x:?"msg"}` over an unbound ref) lives here, its
   natural home now that the evaluator raises it. Operators apply Python semantics to
   resolved values; `ValueError`, `OverflowError` and `KeyError` from an operator, and a
-  `ValueError` rendering an embedded span (in `template.py`), become `ExpressionError`,
-  so the run fails instead of raising.
+  `ValueError` rendering a value as text (an embedded span, or a whole prompt; `_as_text`
+  in `template.py`), become `ExpressionError`, so the run fails instead of raising.
 - **`template.py` — the string surface.** `scan_template` splits literal text from
   `${...}` spans; `eval_binding` renders a binding value; `render_template_record`
   renders a strict prompt; `$$` is the scanner's universal escape (a prompt `$$`

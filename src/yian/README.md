@@ -410,7 +410,9 @@ config is a load error and host config fails before the run starts. Every run-lo
 no opt-in. So a node output fails `contract.output` at the field path (`output at
 stats.a: ...`), selecting the declared field's origin, and a growth seed fails as a
 growth rejection (`contract.growth`). Nothing is recorded as null in its place. An int
-too large for a float in a `float` slot fails the type check at its path.
+too large for a float in a `float` slot fails the type check at its path. An operator
+Python can't complete, or a value too long to render as text, fails like any other
+expression error (`binding.evaluate` in a binding, `node.execute` for a prompt).
 
 Numeric `Type` values may retain an inclusive `bounds` pair for INTEGER or
 NUMBER. Shape validation rejects malformed, reversed, or incompatible

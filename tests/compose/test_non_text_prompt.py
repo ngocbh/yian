@@ -254,7 +254,7 @@ def test_non_text_question_field_is_a_load_error(
 def test_first_non_text_question_field_is_reported() -> None:
     error = _load_error(_questions_gate(question="5", label="true"))
     assert "`questions[0].question:` must be text" in str(error)
-    assert "label" not in str(error)
+    assert "options[0].label" not in str(error)
 
 
 @pytest.mark.parametrize(

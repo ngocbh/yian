@@ -266,7 +266,7 @@ the member first with `isinstance(r, <Type>) and ...`
 
 Changed: a non-text `prompt:` used to crash the loader with a raw `TypeError` (AGENT, an
 adaptive brief), load silently (AGENT `0`, `false`, `[]`, `{}`; `human_input` lists and
-mappings), or load and fail when the gate ran (`human_input` numbers). A non-text
+mappings), or load and fail when the gate ran (other `human_input` values). A non-text
 question field was a raw validation dump at `questions:`. Now each is a load error at
 the value; quote it.
 

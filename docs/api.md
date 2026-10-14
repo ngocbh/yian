@@ -1248,6 +1248,13 @@ every AGENT flow has a new fingerprint.
 
 The fingerprint covers the flow as written: its nodes, wiring, types, prompts,
 inline `code:` bodies, granted tool, group, and skill names, and static child flows.
+It covers every value written in the flow, including literals under any name and URL
+or connection text. Nothing is redacted, so editing any literal fails the fingerprint
+check. Secrets stay out of flow files (see
+[Secrets stay out of flow files](syntax.md#secrets-stay-out-of-flow-files)): pass a
+model key as `run_flow(..., llm_config={"provider": ..., "api_key": ...})`, and
+other credentials as input values (which the run log records, as the warning above
+says) or through host tools.
 It does not cover what the host supplies. A reference-mode CODE node
 (`code: pkg.mod:fn`) contributes only its `module:function` text, not the
 function's source, so editing that function between a crash and `resume_flow`

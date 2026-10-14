@@ -4,6 +4,10 @@ The manifest is deliberately explicit: every execution-relevant IR field is name
 and every known diagnostic/cache field is named as ignored. A new instance field therefore
 fails loudly until its identity policy is decided, instead of silently changing program
 semantics without changing the fingerprint.
+
+Every authored value, including a literal under any name, is part of the manifest: the
+manifest never guesses at secrets, since flow files are kept free of literal secrets when
+they load.
 """
 
 from __future__ import annotations
@@ -11,20 +15,14 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import re
 import struct
 from dataclasses import fields, is_dataclass
 from datetime import date, datetime
 from enum import Enum
 from typing import Any
-from urllib.parse import unquote_plus
-
-from lark import Token, Tree
 
 from yian.compile.model import CompiledFlow, Edge, Flow, FlowOutput, validate_growth_metadata
 from yian.diagnostics import OriginRef
-from yian.expr import ExpressionError, expr_refs, scan_template
-from yian.expr.template import Literal, Span
 from yian.memory.contracts import (
     DeclSite,
     MemoryDecl,
@@ -196,133 +194,6 @@ _CASE_IGNORED_FIELDS = frozenset({"origin"})
 _MEMORY_DECL_CANONICAL_FIELDS = frozenset({"name", "type", "_config", "site"})
 _MEMORY_DECL_IGNORED_FIELDS = frozenset({"origin"})
 
-# Config secrets are intentionally absent from identity. Exact names and high-confidence
-# compound suffixes are credentials in every config spelling. Generic auth/token/signature
-# suffixes are credentials in flat config only when authored like environment variables; URI
-# parameters use the stricter suffix policy regardless of case.
-_CREDENTIAL_NAMES = frozenset(
-    {
-        "api_key",
-        "access_token",
-        "auth",
-        "auth_token",
-        "authorization",
-        "basic_auth",
-        "bearer_token",
-        "client_secret",
-        "connection_string",
-        "credential",
-        "credentials",
-        "databricks_token",
-        "docker_auth_config",
-        "google_application_credentials",
-        "github_token",
-        "hf_token",
-        "id_token",
-        "mysql_pwd",
-        "npm_token",
-        "password",
-        "passphrase",
-        "pgpassword",
-        "private_key",
-        "proxy_auth",
-        "refresh_token",
-        "secret",
-        "secret_access_key",
-        "secret_key",
-        "session_token",
-        "shared_access_key",
-        "shared_access_signature",
-        "sig",
-        "signature",
-        "slack_bot_token",
-        "sslpassword",
-        "token",
-        "webhook_signature",
-        "webhook_url",
-        "x_amz_security_token",
-        "x_amz_signature",
-        "x_goog_signature",
-    }
-)
-_HIGH_CONFIDENCE_CREDENTIAL_SUFFIXES = (
-    "_api_key",
-    "_api_token",
-    "_account_key",
-    "_access_token",
-    "_access_key",
-    "_access_key_id",
-    "_auth_token",
-    "_authorization",
-    "_bearer_token",
-    "_credential",
-    "_credentials",
-    "_application_credentials",
-    "_connection_string",
-    "_password",
-    "_passphrase",
-    "_private_key",
-    "_refresh_token",
-    "_secret",
-    "_secret_access_key",
-    "_secret_key",
-    "_session_cookie",
-    "_session_token",
-    "_shared_access_key",
-    "_shared_access_signature",
-    "_subscription_key",
-    "_webhook_url",
-)
-_AMBIGUOUS_CREDENTIAL_SUFFIXES = ("_auth", "_signature", "_token")
-_CREDENTIAL_COMPACT_NAMES = frozenset(
-    name.replace("_", "") for name in _CREDENTIAL_NAMES
-)
-_ENVIRONMENT_VARIABLE_KEY = re.compile(r"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$")
-_URI_CREDENTIAL_PARAM_NAMES = frozenset({"key", "user", "user_name", "username"})
-_CONNECTION_PROPERTY_CREDENTIAL_NAMES = frozenset(
-    {
-        "pwd",
-        "uid",
-        "user",
-        "user_id",
-        "user_name",
-        "username",
-    }
-)
-_DSN_IDENTITY_PROPERTY_NAMES = frozenset(
-    {
-        "account_endpoint",
-        "account_name",
-        "addr",
-        "address",
-        "database",
-        "database_name",
-        "data_source",
-        "dbname",
-        "default_endpoints_protocol",
-        "driver",
-        "endpoint",
-        "endpoint_suffix",
-        "entity_path",
-        "host",
-        "hostname",
-        "initial_catalog",
-        "network_address",
-        "port",
-        "server",
-        "service",
-        "shared_access_key_name",
-        "sid",
-        "sslmode",
-        "transport_type",
-    }
-)
-_URI_PREFIX = re.compile(r"^\s*(?:[A-Za-z][A-Za-z0-9+.-]*:)+//")
-_JDBC_SQLSERVER_PREFIX = re.compile(r"^\s*jdbc:sqlserver://", re.IGNORECASE)
-_JDBC_ORACLE_THIN_PREFIX = re.compile(r"^\s*jdbc:oracle:thin:", re.IGNORECASE)
-_REDACTED_URI_CREDENTIAL = "__redacted__"
-_REDACTED_BINDING_PREFIX = "__redacted_binding__:"
-_SAFE_HTTP_AUTH_SCHEMES = frozenset({"basic", "bearer", "digest", "negotiate"})
 _MISSING = object()
 
 
@@ -465,638 +336,29 @@ def _check_node_fields(node: Node, path: str) -> None:
         raise ValueError(f"{path}: missing canonical field(s): {missing}")
 
 
-def _normalized_key_spellings(key: str) -> tuple[str, str]:
-    """Return separator-preserving and compact forms of one authored key."""
-    separated = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", key.strip())
-    separated = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", separated)
-    normalized = re.sub(r"[^A-Za-z0-9]+", "_", separated).strip("_").lower()
-    return normalized, normalized.replace("_", "")
+def _sorted_mapping(value: dict, ctx: _ManifestContext, path: str) -> dict[str, Any]:
+    """Canonicalize a string-keyed mapping as sorted typed key/value entries.
 
+    Args:
+        value (`dict`): The authored mapping, such as `env:`, wiring or memory config.
+        ctx (`_ManifestContext`): Recursion stacks for cycle detection.
+        path (`str`): Location used in error messages.
 
-def _matches_suffixes(
-    normalized: str,
-    suffixes: tuple[str, ...],
-) -> bool:
-    """Whether a separator-preserving key spelling ends in one named suffix."""
-    return any(
-        normalized == suffix[1:] or normalized.endswith(suffix)
-        for suffix in suffixes
-    )
+    Returns:
+        `dict[str, Any]`: The `{"entries": [...], "type": "mapping"}` record.
 
-
-def _matches_known_credential(normalized: str, compact: str) -> bool:
-    """Whether normalized spellings match exact or high-confidence credential names."""
-    return (
-        normalized in _CREDENTIAL_NAMES
-        or compact in _CREDENTIAL_COMPACT_NAMES
-        or _matches_suffixes(
-            normalized,
-            _HIGH_CONFIDENCE_CREDENTIAL_SUFFIXES,
-        )
-    )
-
-
-def _matches_ambiguous_credential_suffix(normalized: str) -> bool:
-    """Whether a normalized spelling ends in generic auth/token/signature vocabulary."""
-    return _matches_suffixes(
-        normalized,
-        _AMBIGUOUS_CREDENTIAL_SUFFIXES,
-    )
-
-
-def _credential_key(key: str) -> bool:
-    """Whether a flat config key carries a credential rather than program semantics."""
-    normalized, compact = _normalized_key_spellings(key)
-    return _matches_known_credential(normalized, compact) or (
-        _ENVIRONMENT_VARIABLE_KEY.fullmatch(key.strip()) is not None
-        and _matches_ambiguous_credential_suffix(normalized)
-    )
-
-
-def _connection_string_key(key: str) -> bool:
-    """Whether a key explicitly identifies a URI or DSN connection string."""
-    normalized, compact = _normalized_key_spellings(key)
-    return (
-        normalized == "connection_string"
-        or normalized.endswith("_connection_string")
-        or compact == "connectionstring"
-    )
-
-
-def _uri_credential_key(key: str) -> bool:
-    """Whether a URI parameter carries a credential, including the URI-specific `key`."""
-    normalized, compact = _normalized_key_spellings(key)
-    return (
-        normalized in _URI_CREDENTIAL_PARAM_NAMES
-        or compact in _URI_CREDENTIAL_PARAM_NAMES
-        or _matches_known_credential(normalized, compact)
-        or _matches_ambiguous_credential_suffix(normalized)
-    )
-
-
-def _connection_property_credential_key(key: str) -> bool:
-    """Whether a URI/DSN property identifies connection authentication material."""
-    normalized, compact = _normalized_key_spellings(key)
-    return (
-        normalized in _CONNECTION_PROPERTY_CREDENTIAL_NAMES
-        or _matches_known_credential(normalized, compact)
-    )
-
-
-def _redacted_expression_shape(node: Tree | Token) -> dict[str, Any]:
-    """Encode expression structure without retaining literal operand values."""
-    if isinstance(node, Token):
-        token_type = str(node.type)
-        shape: dict[str, Any] = {"token": token_type}
-        if token_type in {"NAME", "COMP_OP"}:
-            shape["value"] = str(node)
-        return shape
-    return {
-        "children": [_redacted_expression_shape(child) for child in node.children],
-        "rule": str(node.data),
-    }
-
-
-def _credential_binding_marker(
-    value: str,
-    *,
-    preserve_http_auth_scheme: bool = False,
-) -> str | None:
-    """Return a secret-free identity marker for a credential template with references.
-
-    Reference paths and expression structure affect execution and therefore identity.
-    Literal template runs and literal operands contribute only their shape. The sole
-    exception is an exact, known HTTP scheme in an authorization slot: that vocabulary
-    is non-secret and changes how the dynamic credential is interpreted.
+    Raises:
+        TypeError: If a key is not a string.
     """
-    try:
-        segments = scan_template(value)
-    except ExpressionError:
-        return None
-
-    references: list[str] = []
-    shape: list[dict[str, Any]] = []
-    for segment in segments:
-        if isinstance(segment, Literal):
-            literal_shape = {"segment": "literal"}
-            scheme = segment.text.strip().casefold()
-            if preserve_http_auth_scheme and scheme in _SAFE_HTTP_AUTH_SCHEMES:
-                literal_shape["http_auth_scheme"] = scheme
-            shape.append(literal_shape)
-            continue
-        if not isinstance(segment, Span):  # pragma: no cover - closed template sum
-            raise TypeError(f"unsupported template segment {type(segment).__name__}")
-        references.extend(expr_refs(segment.tree))
-        shape.append(
-            {
-                "expression": _redacted_expression_shape(segment.tree),
-                "segment": "expression",
-            }
-        )
-    if not references:
-        return None
-    identity = {"references": references, "shape": shape}
-    return f"{_REDACTED_BINDING_PREFIX}{_digest(identity)}"
-
-
-def _redacted_credential_value(
-    value: str,
-    *,
-    preserve_binding_identity: bool = False,
-) -> str:
-    """Redact a credential, retaining template identity only at the wiring boundary."""
-    if preserve_binding_identity:
-        marker = _credential_binding_marker(value)
-        if marker is not None:
-            return marker
-    return _REDACTED_URI_CREDENTIAL
-
-
-def _redact_uri_params(
-    value: str,
-    *,
-    preserve_binding_identity: bool = False,
-) -> str:
-    """Replace credential parameter values while preserving spelling and ordering."""
-    redacted_parts: list[str] = []
-    for part in value.split("&"):
-        raw_key, separator, raw_value = part.partition("=")
-        if separator and _uri_credential_key(unquote_plus(raw_key)):
-            replacement = _redacted_credential_value(
-                raw_value,
-                preserve_binding_identity=preserve_binding_identity,
-            )
-            part = f"{raw_key}={replacement}"
-        redacted_parts.append(part)
-    return "&".join(redacted_parts)
-
-
-def _redact_uri_tail_params(
-    value: str,
-    *,
-    preserve_binding_identity: bool = False,
-) -> str:
-    """Redact credential query/fragment parameters in a URI-like tail."""
-    fragment_start = value.find("#")
-    if fragment_start == -1:
-        before_fragment = value
-        fragment = None
-    else:
-        before_fragment = value[:fragment_start]
-        fragment = value[fragment_start + 1 :]
-
-    query_start = before_fragment.find("?")
-    if query_start != -1:
-        before_fragment = (
-            before_fragment[: query_start + 1]
-            + _redact_uri_params(
-                before_fragment[query_start + 1 :],
-                preserve_binding_identity=preserve_binding_identity,
-            )
-        )
-    redacted_tail = before_fragment
-    if fragment is not None:
-        redacted_tail += "#" + _redact_uri_params(
-            fragment,
-            preserve_binding_identity=preserve_binding_identity,
-        )
-    return redacted_tail
-
-
-def _redact_hierarchical_uri(
-    value: str,
-    *,
-    preserve_binding_identity: bool = False,
-) -> str | None:
-    """Sanitize a hierarchical URI while retaining its endpoint and path spelling."""
-    prefix = _URI_PREFIX.match(value)
-    if prefix is None:
-        return None
-
-    authority_start = prefix.end()
-    delimiters = (
-        index
-        for delimiter in "/?#"
-        if (index := value.find(delimiter, authority_start)) != -1
-    )
-    authority_end = min(delimiters, default=len(value))
-    authority = value[authority_start:authority_end]
-    if "@" in authority:
-        userinfo, host = authority.rsplit("@", 1)
-        replacement = _redacted_credential_value(
-            userinfo,
-            preserve_binding_identity=preserve_binding_identity,
-        )
-        authority = f"{replacement}@{host}"
-    tail = _redact_uri_tail_params(
-        value[authority_end:],
-        preserve_binding_identity=preserve_binding_identity,
-    )
-    return value[:authority_start] + authority + tail
-
-
-def _semicolon_property_spans(
-    value: str, start: int
-) -> list[tuple[int, int, int, str]] | None:
-    """Parse semicolon properties, honoring braced and quoted delimiter values."""
-    spans: list[tuple[int, int, int, str]] = []
-    cursor = start
-    while cursor < len(value):
-        delimiter = value.find(";", cursor)
-        equal = value.find("=", cursor)
-        if equal == -1 or (delimiter != -1 and delimiter < equal):
-            return None
-        key = value[cursor:equal].strip()
-        if not key:
-            return None
-
-        scan = equal + 1
-        while scan < len(value) and value[scan].isspace():
-            scan += 1
-        if scan < len(value) and value[scan] == "{":
-            scan += 1
-            while scan < len(value):
-                if value[scan] != "}":
-                    scan += 1
-                    continue
-                if scan + 1 < len(value) and value[scan + 1] == "}":
-                    scan += 2
-                    continue
-                scan += 1
-                break
-            else:
-                return None
-            while scan < len(value) and value[scan].isspace():
-                scan += 1
-            if scan < len(value) and value[scan] != ";":
-                return None
-            end = scan
-        elif scan < len(value) and value[scan] in {"'", '"'}:
-            quote = value[scan]
-            scan += 1
-            while scan < len(value):
-                if value[scan] != quote:
-                    scan += 1
-                    continue
-                if scan + 1 < len(value) and value[scan + 1] == quote:
-                    scan += 2
-                    continue
-                scan += 1
-                break
-            else:
-                return None
-            while scan < len(value) and value[scan].isspace():
-                scan += 1
-            if scan < len(value) and value[scan] != ";":
-                return None
-            end = scan
-        else:
-            end = delimiter if delimiter != -1 else len(value)
-            unquoted_value = value[scan:end]
-            if re.search(r"\s+[A-Za-z_][A-Za-z0-9_]*\s*=", unquoted_value):
-                # Whitespace-separated assignments belong to libpq conninfo. Without
-                # this check, its first semicolon is mistaken for a DSN delimiter and
-                # credential fields remain buried inside the first property value.
-                return None
-
-        spans.append((cursor, end, equal, key))
-        if end == len(value):
-            break
-        cursor = end + 1
-        if cursor == len(value):
-            break
-    return spans
-
-
-def _redact_semicolon_properties(
-    value: str,
-    start: int,
-    *,
-    preserve_binding_identity: bool = False,
-) -> tuple[str, frozenset[str]] | None:
-    """Redact credential fields in one fully parsed semicolon property sequence."""
-    spans = _semicolon_property_spans(value, start)
-    if not spans:
-        return None
-
-    replacements: list[tuple[int, int, str]] = []
-    normalized_keys: set[str] = set()
-    for _, end, equal, key in spans:
-        normalized, _ = _normalized_key_spellings(key)
-        normalized_keys.add(normalized)
-        if _connection_property_credential_key(key):
-            replacements.append(
-                (
-                    equal + 1,
-                    end,
-                    _redacted_credential_value(
-                        value[equal + 1 : end],
-                        preserve_binding_identity=preserve_binding_identity,
-                    ),
-                )
-            )
-
-    redacted = value
-    for value_start, value_end, replacement in reversed(replacements):
-        redacted = (
-            redacted[:value_start]
-            + replacement
-            + redacted[value_end:]
-        )
-    return redacted, frozenset(normalized_keys)
-
-
-def _redact_jdbc_sqlserver_credentials(
-    value: str,
-    *,
-    preserve_binding_identity: bool = False,
-) -> str | None:
-    """Sanitize standard SQL Server JDBC semicolon properties."""
-    prefix = _JDBC_SQLSERVER_PREFIX.match(value)
-    if prefix is None:
-        return None
-    property_delimiter = value.find(";", prefix.end())
-    if property_delimiter == -1:
-        return (
-            _redact_hierarchical_uri(
-                value,
-                preserve_binding_identity=preserve_binding_identity,
-            )
-            or value
-        )
-    parsed = _redact_semicolon_properties(
-        value,
-        property_delimiter + 1,
-        preserve_binding_identity=preserve_binding_identity,
-    )
-    if parsed is None:
-        return _REDACTED_URI_CREDENTIAL
-    redacted, _ = parsed
-    return (
-        _redact_hierarchical_uri(
-            redacted,
-            preserve_binding_identity=preserve_binding_identity,
-        )
-        or redacted
-    )
-
-
-def _redact_jdbc_oracle_thin_credentials(
-    value: str,
-    *,
-    preserve_binding_identity: bool = False,
-) -> str | None:
-    """Sanitize Oracle thin inline credentials while preserving service/SID identity."""
-    prefix = _JDBC_ORACLE_THIN_PREFIX.match(value)
-    if prefix is None:
-        return None
-    rest = value[prefix.end() :]
-    at = rest.rfind("@")
-    if at == -1:
-        return _redact_uri_tail_params(
-            value,
-            preserve_binding_identity=preserve_binding_identity,
-        )
-    endpoint = _redact_uri_tail_params(
-        rest[at + 1 :],
-        preserve_binding_identity=preserve_binding_identity,
-    )
-    if at == 0:
-        return value[: prefix.end()] + "@" + endpoint
-    credential = _redacted_credential_value(
-        rest[:at],
-        preserve_binding_identity=preserve_binding_identity,
-    )
-    return (
-        value[: prefix.end()]
-        + f"{credential}/{credential}@"
-        + endpoint
-    )
-
-
-def _redact_semicolon_dsn_credentials(
-    value: str,
-    *,
-    preserve_binding_identity: bool = False,
-) -> str | None:
-    """Sanitize a recognized key/value DSN without normalizing semantic fields."""
-    parsed = _redact_semicolon_properties(
-        value,
-        0,
-        preserve_binding_identity=preserve_binding_identity,
-    )
-    if parsed is None:
-        return None
-    redacted, keys = parsed
-    if keys.isdisjoint(_DSN_IDENTITY_PROPERTY_NAMES):
-        return None
-    return redacted
-
-
-def _libpq_property_spans(
-    value: str,
-) -> list[tuple[int, int, str]] | None:
-    """Parse libpq keyword/value fields, including quoted and escaped values."""
-    spans: list[tuple[int, int, str]] = []
-    cursor = 0
-    while cursor < len(value):
-        while cursor < len(value) and value[cursor].isspace():
-            cursor += 1
-        if cursor == len(value):
-            break
-
-        key_start = cursor
-        while (
-            cursor < len(value)
-            and not value[cursor].isspace()
-            and value[cursor] != "="
-        ):
-            cursor += 1
-        key = value[key_start:cursor]
-        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) is None:
-            return None
-        while cursor < len(value) and value[cursor].isspace():
-            cursor += 1
-        if cursor == len(value) or value[cursor] != "=":
-            return None
-        cursor += 1
-        while cursor < len(value) and value[cursor].isspace():
-            cursor += 1
-
-        value_start = cursor
-        if cursor < len(value) and value[cursor] == "'":
-            cursor += 1
-            while cursor < len(value):
-                if value[cursor] == "\\":
-                    if cursor + 1 == len(value):
-                        return None
-                    cursor += 2
-                elif value[cursor] == "'":
-                    cursor += 1
-                    break
-                else:
-                    cursor += 1
-            else:
-                return None
-            if cursor < len(value) and not value[cursor].isspace():
-                return None
-        else:
-            while cursor < len(value) and not value[cursor].isspace():
-                if value[cursor] == "\\":
-                    if cursor + 1 == len(value):
-                        return None
-                    cursor += 2
-                else:
-                    cursor += 1
-        spans.append((value_start, cursor, key))
-    return spans
-
-
-def _redact_libpq_conninfo_credentials(
-    value: str,
-    *,
-    require_credential: bool = False,
-    preserve_binding_identity: bool = False,
-) -> str | None:
-    """Sanitize a recognized libpq keyword/value connection string."""
-    spans = _libpq_property_spans(value)
-    if not spans:
-        return None
-    normalized_keys = {
-        _normalized_key_spellings(key)[0] for _, _, key in spans
-    }
-    if normalized_keys.isdisjoint(_DSN_IDENTITY_PROPERTY_NAMES):
-        return None
-    if require_credential and not any(
-        _connection_property_credential_key(key) for _, _, key in spans
-    ):
-        return None
-
-    redacted = value
-    for value_start, value_end, key in reversed(spans):
-        if _connection_property_credential_key(key):
-            replacement = _redacted_credential_value(
-                value[value_start:value_end],
-                preserve_binding_identity=preserve_binding_identity,
-            )
-            redacted = (
-                redacted[:value_start]
-                + replacement
-                + redacted[value_end:]
-            )
-    return redacted
-
-
-def _redact_connection_credentials(
-    value: str,
-    *,
-    preserve_binding_identity: bool = False,
-) -> tuple[str, bool]:
-    """Return a sanitized recognized URI/DSN and whether its structure was recognized."""
-    sqlserver = _redact_jdbc_sqlserver_credentials(
-        value,
-        preserve_binding_identity=preserve_binding_identity,
-    )
-    if sqlserver is not None:
-        return sqlserver, True
-    oracle = _redact_jdbc_oracle_thin_credentials(
-        value,
-        preserve_binding_identity=preserve_binding_identity,
-    )
-    if oracle is not None:
-        return oracle, True
-    uri = _redact_hierarchical_uri(
-        value,
-        preserve_binding_identity=preserve_binding_identity,
-    )
-    if uri is not None:
-        return uri, True
-    if ";" in value:
-        dsn = _redact_semicolon_dsn_credentials(
-            value,
-            preserve_binding_identity=preserve_binding_identity,
-        )
-        if dsn is not None:
-            return dsn, True
-        # A malformed semicolon DSN can resemble one giant libpq property. Only
-        # accept the fallback when libpq parsed a credential as its own field;
-        # otherwise exclude the ambiguous value rather than risk retaining a secret.
-        conninfo = _redact_libpq_conninfo_credentials(
-            value,
-            require_credential=True,
-            preserve_binding_identity=preserve_binding_identity,
-        )
-    else:
-        conninfo = _redact_libpq_conninfo_credentials(
-            value,
-            preserve_binding_identity=preserve_binding_identity,
-        )
-    if conninfo is not None:
-        return conninfo, True
-    return value, False
-
-
-def _redact_uri_credentials(
-    value: str,
-    *,
-    preserve_binding_identity: bool = False,
-) -> str:
-    """Remove recognized URI/JDBC/DSN credentials without normalizing semantics."""
-    redacted, _ = _redact_connection_credentials(
-        value,
-        preserve_binding_identity=preserve_binding_identity,
-    )
-    return redacted
-
-
-def _sorted_mapping(
-    value: dict,
-    ctx: _ManifestContext,
-    path: str,
-    *,
-    redact_credentials: bool = False,
-    preserve_binding_identity: bool = False,
-) -> dict[str, Any]:
-    """Canonicalize a string-keyed mapping, using typed entries when redacting."""
     bad_key = next((key for key in value if not isinstance(key, str)), _MISSING)
     if bad_key is not _MISSING:
         raise TypeError(
             f"{path}: mapping keys must be strings, got {type(bad_key).__name__}"
         )
-    if redact_credentials:
-        return _canonical_mapping(
-            value,
-            ctx,
-            path,
-            redact_credentials=True,
-            preserve_binding_identity=preserve_binding_identity,
-        )
-
-    object_id = id(value)
-    if object_id in ctx.values:
-        raise ValueError(f"{path}: cyclic value is not manifestable")
-    ctx.values.add(object_id)
-    try:
-        out: dict[str, Any] = {}
-        for key in sorted(value):
-            out[key] = _canonical_value(
-                value[key],
-                ctx,
-                f"{path}.{key}",
-            )
-        return out
-    finally:
-        ctx.values.remove(object_id)
+    return _canonical_mapping(value, ctx, path)
 
 
-def _canonical_sequence(
-    value: Any,
-    ctx: _ManifestContext,
-    path: str,
-    *,
-    redact_credentials: bool = False,
-    redact_connection_properties: bool = False,
-) -> list[Any]:
+def _canonical_sequence(value: Any, ctx: _ManifestContext, path: str) -> list[Any]:
     """Canonicalize an ordered list/tuple while preserving element order."""
     object_id = id(value)
     if object_id in ctx.values:
@@ -1104,213 +366,54 @@ def _canonical_sequence(
     ctx.values.add(object_id)
     try:
         return [
-            _canonical_value(
-                item,
-                ctx,
-                f"{path}[{index}]",
-                redact_credentials=redact_credentials,
-                redact_connection_properties=redact_connection_properties,
-            )
+            _canonical_value(item, ctx, f"{path}[{index}]")
             for index, item in enumerate(value)
         ]
     finally:
         ctx.values.remove(object_id)
 
 
-def _canonical_set(
-    value: Any,
-    ctx: _ManifestContext,
-    path: str,
-    *,
-    redact_credentials: bool = False,
-    redact_connection_properties: bool = False,
-) -> list[Any]:
+def _canonical_set(value: Any, ctx: _ManifestContext, path: str) -> list[Any]:
     """Canonicalize unordered members by each member's canonical JSON spelling."""
     object_id = id(value)
     if object_id in ctx.values:
         raise ValueError(f"{path}: cyclic value is not manifestable")
     ctx.values.add(object_id)
     try:
-        items = [
-            _canonical_value(
-                item,
-                ctx,
-                f"{path}[]",
-                redact_credentials=redact_credentials,
-                redact_connection_properties=redact_connection_properties,
-            )
-            for item in value
-        ]
+        items = [_canonical_value(item, ctx, f"{path}[]") for item in value]
         return sorted(items, key=_canonical_json)
     finally:
         ctx.values.remove(object_id)
 
 
-def _canonical_connection_value(
-    value: Any,
-    ctx: _ManifestContext,
-    path: str,
-    *,
-    preserve_binding_identity: bool = False,
-) -> Any:
-    """Canonicalize only a safely recognized connection string or structured mapping."""
-    if isinstance(value, str):
-        sanitized, recognized = _redact_connection_credentials(
-            value,
-            preserve_binding_identity=preserve_binding_identity,
-        )
-        if recognized:
-            return {"type": "str", "value": sanitized}
-    elif isinstance(value, dict):
-        return _canonical_value(
-            value,
-            ctx,
-            path,
-            redact_credentials=True,
-            redact_connection_properties=True,
-        )
-    return _MISSING
-
-
-def _canonical_mapping(
-    value: dict,
-    ctx: _ManifestContext,
-    path: str,
-    *,
-    redact_credentials: bool = False,
-    redact_connection_properties: bool = False,
-    preserve_binding_identity: bool = False,
-) -> dict[str, Any]:
+def _canonical_mapping(value: dict, ctx: _ManifestContext, path: str) -> dict[str, Any]:
     """Canonicalize an arbitrary-key mapping as sorted typed key/value entries."""
     object_id = id(value)
     if object_id in ctx.values:
         raise ValueError(f"{path}: cyclic value is not manifestable")
     ctx.values.add(object_id)
     try:
-        entries: list[dict[str, Any]] = []
-        for index, (key, item) in enumerate(value.items()):
-            # A URI used AS a mapping key is semantic endpoint identity, not a credential
-            # field name. Retain it and redact only its userinfo/query values below.
-            canonical_item: Any = _MISSING
-            redacted_string_key = (
-                redact_credentials
-                and isinstance(key, str)
-                and _URI_PREFIX.match(key) is None
-            )
-            redacted_credential_key = redacted_string_key and (
-                _connection_string_key(key)
-                or _credential_key(key)
-                or (
-                    redact_connection_properties
-                    and _connection_property_credential_key(key)
-                )
-            )
-            binding_marker = (
-                _credential_binding_marker(
-                    item,
-                    preserve_http_auth_scheme=(
-                        _normalized_key_spellings(key)[0]
-                        in {"authorization", "proxy_authorization"}
-                    ),
-                )
-                if (
-                    preserve_binding_identity
-                    and redacted_credential_key
-                    and isinstance(item, str)
-                )
-                else None
-            )
-            if redacted_string_key and _connection_string_key(key):
-                canonical_item = _canonical_connection_value(
-                    item,
-                    ctx,
-                    f"{path}.values[{index}]",
-                    preserve_binding_identity=preserve_binding_identity,
-                )
-                if canonical_item is _MISSING:
-                    if binding_marker is None:
-                        continue
-                    canonical_item = _canonical_value(
-                        binding_marker,
-                        ctx,
-                        f"{path}.values[{index}]",
-                    )
-            elif binding_marker is not None:
-                # Dynamic source identity is safe to retain even when the target
-                # slot is credential-named; the marker contains no literal operand.
-                canonical_item = _canonical_value(
-                    binding_marker,
-                    ctx,
-                    f"{path}.values[{index}]",
-                )
-            elif redacted_string_key and (
-                _credential_key(key)
-                or (
-                    redact_connection_properties
-                    and _connection_property_credential_key(key)
-                )
-            ):
-                normalized_key, _ = _normalized_key_spellings(key)
-                if isinstance(item, dict) and normalized_key == "auth":
-                    canonical_item = _canonical_value(
-                        item,
-                        ctx,
-                        f"{path}.values[{index}]",
-                        redact_credentials=True,
-                        redact_connection_properties=True,
-                    )
-                else:
-                    continue
-            entry = {
-                "key": _canonical_value(
-                    key,
-                    ctx,
-                    f"{path}.keys[{index}]",
-                    redact_credentials=redact_credentials,
-                    redact_connection_properties=redact_connection_properties,
-                ),
-                "value": (
-                    canonical_item
-                    if canonical_item is not _MISSING
-                    else _canonical_value(
-                        item,
-                        ctx,
-                        f"{path}.values[{index}]",
-                        redact_credentials=redact_credentials,
-                        redact_connection_properties=redact_connection_properties,
-                        preserve_binding_identity=preserve_binding_identity,
-                    )
-                ),
+        entries = [
+            {
+                "key": _canonical_value(key, ctx, f"{path}.keys[{index}]"),
+                "value": _canonical_value(item, ctx, f"{path}.values[{index}]"),
             }
-            entries.append(entry)
+            for index, (key, item) in enumerate(value.items())
+        ]
         entries.sort(key=_canonical_json)
         return {"entries": entries, "type": "mapping"}
     finally:
         ctx.values.remove(object_id)
 
 
-def _canonical_value(
-    value: Any,
-    ctx: _ManifestContext,
-    path: str,
-    *,
-    redact_credentials: bool = False,
-    redact_connection_properties: bool = False,
-    preserve_binding_identity: bool = False,
-) -> Any:
+def _canonical_value(value: Any, ctx: _ManifestContext, path: str) -> Any:
     """Encode one value as a deterministic, type-discriminated JSON record."""
     if isinstance(value, Enum):
         enum_type = type(value)
         return {
             "class": f"{enum_type.__module__}.{enum_type.__qualname__}",
             "type": "enum",
-            "value": _canonical_value(
-                value.value,
-                ctx,
-                path,
-                redact_credentials=redact_credentials,
-                redact_connection_properties=redact_connection_properties,
-            ),
+            "value": _canonical_value(value.value, ctx, path),
         }
     if value is None:
         return {"type": "null"}
@@ -1321,11 +424,6 @@ def _canonical_value(
     if isinstance(value, float):
         return {"type": "float", "value": struct.pack("!d", value).hex()}
     if isinstance(value, str):
-        if redact_credentials:
-            value = _redact_uri_credentials(
-                value,
-                preserve_binding_identity=preserve_binding_identity,
-            )
         return {"type": "str", "value": value}
     if isinstance(value, bytes):
         return {
@@ -1337,57 +435,15 @@ def _canonical_value(
     if isinstance(value, date):
         return {"type": "date", "value": value.isoformat()}
     if isinstance(value, dict):
-        return _canonical_mapping(
-            value,
-            ctx,
-            path,
-            redact_credentials=redact_credentials,
-            redact_connection_properties=redact_connection_properties,
-        )
+        return _canonical_mapping(value, ctx, path)
     if isinstance(value, list):
-        return {
-            "items": _canonical_sequence(
-                value,
-                ctx,
-                path,
-                redact_credentials=redact_credentials,
-                redact_connection_properties=redact_connection_properties,
-            ),
-            "type": "list",
-        }
+        return {"items": _canonical_sequence(value, ctx, path), "type": "list"}
     if isinstance(value, tuple):
-        return {
-            "items": _canonical_sequence(
-                value,
-                ctx,
-                path,
-                redact_credentials=redact_credentials,
-                redact_connection_properties=redact_connection_properties,
-            ),
-            "type": "tuple",
-        }
+        return {"items": _canonical_sequence(value, ctx, path), "type": "tuple"}
     if isinstance(value, set):
-        return {
-            "items": _canonical_set(
-                value,
-                ctx,
-                path,
-                redact_credentials=redact_credentials,
-                redact_connection_properties=redact_connection_properties,
-            ),
-            "type": "set",
-        }
+        return {"items": _canonical_set(value, ctx, path), "type": "set"}
     if isinstance(value, frozenset):
-        return {
-            "items": _canonical_set(
-                value,
-                ctx,
-                path,
-                redact_credentials=redact_credentials,
-                redact_connection_properties=redact_connection_properties,
-            ),
-            "type": "frozenset",
-        }
+        return {"items": _canonical_set(value, ctx, path), "type": "frozenset"}
     raise TypeError(
         f"{path}: unsupported non-JSON value of type {type(value).__module__}."
         f"{type(value).__qualname__}"
@@ -1434,33 +490,6 @@ def _type_manifest(value: Type | None, ctx: _ManifestContext, path: str) -> Any:
         return manifest
     finally:
         ctx.types.remove(object_id)
-
-
-def _declaration_default_manifest(
-    name: str,
-    default: Any,
-    ctx: _ManifestContext,
-    path: str,
-) -> Any:
-    """Canonicalize one declaration default under the credential-redaction policy."""
-    if _connection_string_key(name):
-        default = _canonical_connection_value(
-            default,
-            ctx,
-            path,
-        )
-        if default is _MISSING:
-            default = {"type": "redacted"}
-    elif _credential_key(name):
-        default = {"type": "redacted"}
-    else:
-        default = _canonical_value(
-            default,
-            ctx,
-            path,
-            redact_credentials=True,
-        )
-    return default
 
 
 def _value_contract_manifest(
@@ -1539,12 +568,7 @@ def _parameter_manifest(
     return {
         "coerce_strings": value.coerce_strings,
         "contract": contract,
-        "default": _declaration_default_manifest(
-            value.name,
-            value.default,
-            ctx,
-            f"{path}.default",
-        ),
+        "default": _canonical_value(value.default, ctx, f"{path}.default"),
         "has_default": value.has_default,
         "name": value.name,
         "required": value.required,
@@ -1592,12 +616,7 @@ def _memory_decl_manifest(
             raise TypeError(f"{path}.origin: expected OriginRef or None")
         OriginRef(value.origin.key)
     return {
-        "config": _sorted_mapping(
-            value.config,
-            ctx,
-            f"{path}.config",
-            redact_credentials=True,
-        ),
+        "config": _sorted_mapping(value.config, ctx, f"{path}.config"),
         "name": value.name,
         "site": {
             "node": site.node,
@@ -1695,7 +714,7 @@ def _node_manifest(
         )
     manifest: dict[str, Any] = {
         "commit_as": _canonical_value(node.commit_as, ctx, f"{path}.commit_as"),
-        "env": _sorted_mapping(node.env, ctx, f"{path}.env", redact_credentials=True),
+        "env": _sorted_mapping(node.env, ctx, f"{path}.env"),
         "id": node.id,
         "kind": node.kind.value,
         "origin_id": _canonical_value(node.origin_id, ctx, f"{path}.origin_id"),
@@ -1770,10 +789,7 @@ def _node_manifest(
                 "retries": node.retries,
                 "tools": _canonical_sequence(node.tools, ctx, f"{path}.tools"),
                 "own_llm_config": _sorted_mapping(
-                    node.own_llm_config,
-                    ctx,
-                    f"{path}.own_llm_config",
-                    redact_credentials=True,
+                    node.own_llm_config, ctx, f"{path}.own_llm_config"
                 ),
             }
         )
@@ -1975,11 +991,7 @@ def _flow_manifest(
                 f"{path}.wiring.{node_id}",
             )
             wiring[node_id] = _sorted_mapping(
-                binding_sources,
-                ctx,
-                f"{path}.wiring.{node_id}",
-                redact_credentials=True,
-                preserve_binding_identity=True,
+                binding_sources, ctx, f"{path}.wiring.{node_id}"
             )
             node_types = {}
             for param in sorted(node_wiring):
@@ -2031,10 +1043,7 @@ def _flow_manifest(
                     flow.memories, ctx, f"{path}.memories"
                 )
             manifest["flow_llm_config"] = _sorted_mapping(
-                flow.flow_llm_config,
-                ctx,
-                f"{path}.flow_llm_config",
-                redact_credentials=True,
+                flow.flow_llm_config, ctx, f"{path}.flow_llm_config"
             )
             manifest["outputs"] = [
                 _output_manifest(output, ctx, f"{path}.outputs[{index}]")

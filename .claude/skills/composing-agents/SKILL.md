@@ -102,6 +102,16 @@ a `case` value, `steerable:`, or `inherit:` that needs a `bool` fails with
 "`yes` is text; write `true`". Under a `bool` `on:`, write `when: true`: a
 `when: yes` there is a load error with the same fix.
 
+Never write a secret in a flow file: every written value is part of the flow's
+fingerprint. Under a secret name (`password`, `passwd`, `secret`, `client_secret`,
+`private_key`, `access_token`, `refresh_token`, `api_key`, or a name ending in
+`_api_key`, `_password`, `_secret`; case, camelCase, and `-`/`_` ignored) the value
+must be `${input.x}` (text around it is fine) or `null`; anything else fails at load,
+in bindings, outputs, case values, `call(...)` arguments, defaults, `variables:`,
+`env:`, and keys nested in literal mappings. Credentials come from flow inputs or the
+host (`llm_config.api_key` only from the host). See `docs/syntax.md`, "Secrets stay
+out of flow files".
+
 ### Compact mode — when the flow is a single node
 
 For the "one flow, one node" case, drop the `nodes:` map and the redundant
@@ -954,4 +964,5 @@ starts, and a `human_input` node fails when it asks. There is no authored
 - [ ] Every CALL/MAP/LOOP has exactly one child form: named `call:`, or non-empty inline `nodes:` plus an `output:` key; inline parent/item dependencies cross through outer `input:`.
 - [ ] A child-flow call is written `call(f, ...)` as a whole value, never `${flow(args)}`; string `:-` defaults and `:?` messages are quoted.
 - [ ] Every binding whose text contains ` = ` is quoted unless it is a typed binding (`name: Type = value`).
+- [ ] No secret is written in the file: every secret-named slot holds `${input.x}` or `null`.
 - [ ] It loads cleanly (`yian run` / `load_flow`) before you wire a model.

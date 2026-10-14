@@ -467,6 +467,18 @@ def test_agent_mode_field_is_removed_and_located():
     assert _only_error_range(err).start_line == 13
 
 
+def test_e44_literal_secret_located():
+    # A literal under a secret name is rejected at its input line (L16). The message names
+    # the slot and the input to pass instead, and never repeats the value.
+    err = _load_error("e44-literal-secret.yaml")
+    message = str(err)
+    assert "node 'login': input 'password'" in message
+    assert "secret name" in message
+    assert "${input.password}" in message
+    assert "hunter2" not in message
+    assert _only_error_range(err).start_line == 16
+
+
 def test_structured_output_origin_is_exact():
     # Canonical diagnosis selects the exact failing contract path without runtime coordinates.
     flow = _ERRORS / "e41-structured-output-no-range.yaml"

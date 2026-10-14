@@ -404,6 +404,14 @@ Most are just the functional model (above) made enforceable:
   migrating them, and preserve canonical bytes through preparation, replay,
   trace, and append checks. Do not rewrite accepted prefixes. The run log holds
   no conversation records; session history lives only in the backend.
+- **Every authored value is flow identity** — `flow_manifest`/`flow_fingerprint`
+  include every value written in the flow, under any name, so an edited literal
+  fails the resume check. Never redact, mask, or drop a value because its name or
+  text looks like a credential. Keep secrets out of flow files instead: compose
+  rejects a literal under a secret name at load (list in `secret_names.py`, walker
+  and messages in `compose/helpers/secret_literals.py`, binding pre-pass in
+  `compose/validate/secret_literals.py`), with an error that never echoes the
+  value; credentials come from inputs or the host.
 - **Blocking authorable effects return ordinary outputs** — an AGENT node's
   explicitly granted `ask_user` tool and HUMAN_INPUT call the run's own handler
   (passed as `tools={"ask_user": ...}`) inside their live invocation. A group

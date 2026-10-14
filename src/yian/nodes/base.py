@@ -235,6 +235,14 @@ def _validate_declared_names(names: tuple[str, ...], field_name: str) -> None:
         raise ValueError(f"{field_name} must contain unique names")
 
 
+def _parse_named_condition(expression: str, subject: str) -> None:
+    """Parse a condition expression, prefixing its parse error with `subject`."""
+    try:
+        parse_condition(expression)
+    except ExpressionError as exc:
+        raise ExpressionError(f"{subject} is not a valid boolean expression: {exc}") from exc
+
+
 def _validate_input_output_paths(data: dict[str, Any], input_names: tuple[str, ...]) -> None:
     """Validate optional source-neutral paths from declared inputs into the output."""
     if "input_output_paths" not in data:
@@ -917,16 +925,34 @@ class Node(ABC):
     def validate_execution_setup(self) -> None:
         """Reject malformed node-owned execution setup before entering the body stage.
 
-        The base implementation requires a concrete ``forward`` and rejects an
-        assertion whose expression doesn't parse, so a malformed post-assert is
-        reported before the body has effects. Composite kinds extend this hook for
-        invariants such as requiring their compiled child flow.
+        The base implementation requires a concrete ``forward`` and rejects any
+        condition whose expression doesn't parse (assertions, and a kind's own
+        predicates through ``validate_conditions``), so a malformed post-assert or
+        predicate is reported before the body has effects. Composite kinds extend
+        this hook for invariants such as requiring their compiled child flow.
         """
         if type(self).forward is Node.forward:
             raise NotImplementedError(
                 f"node {self.id!r} ({type(self).__name__}) defines no forward"
             )
-        self.validate_assertions()
+        self.validate_conditions()
+
+    def validate_conditions(self, *, path: str | None = None) -> None:
+        """Parse every condition this node evaluates.
+
+        The base parses the node's assertions; a kind that evaluates its own
+        predicate (CASE `when`, LOOP `while`/`until`) extends this.
+
+        Args:
+            path (`str`, *optional*, defaults to `None`):
+                The static node path to name in the error instead of the node's id,
+                used by a pre-run check over a whole flow.
+
+        Raises:
+            `ExpressionError`: If a condition's expression doesn't parse; the message
+                names the node, the field, and the expression.
+        """
+        self.validate_assertions(path=path)
 
     def validate_assertions(self, *, path: str | None = None) -> None:
         """Parse every pre-assert and post-assert expression on this node.
@@ -947,22 +973,16 @@ class Node(ABC):
 
     def _parse_assertion(self, label: str, assertion: Assertion, where: str | None = None) -> None:
         """Parse one assertion's expression, naming the node and assertion when it doesn't parse."""
-        try:
-            parse_condition(assertion.expression)
-        except ExpressionError as exc:
-            shown = repr(assertion.display)
-            if assertion.expression != assertion.display:
-                shown += f" (`{assertion.expression}`)"
-            raise ExpressionError(
-                f"node {(where or self.id)!r} {label} {shown} "
-                f"is not a valid boolean expression: {exc}"
-            ) from exc
+        shown = repr(assertion.display)
+        if assertion.expression != assertion.display:
+            shown += f" (`{assertion.expression}`)"
+        _parse_named_condition(assertion.expression, f"node {(where or self.id)!r} {label} {shown}")
 
     def run(self, inputs: dict[str, Any], **caps: Any) -> "NodeResult":
         """Run the node's complete pure-execution template.
 
         Declared defaults are filled first, node-owned setup (including that every
-        assertion parses) is validated, pre-asserts run against the bound record,
+        assertion and kind predicate parses) is validated, pre-asserts run against the bound record,
         ``forward`` executes, and post-asserts inspect an ``Output`` against the
         pristine inputs. The method returns exactly ``Output | Route | Grow`` or a
         streaming generator with one of those terminal values. Narrow effects are

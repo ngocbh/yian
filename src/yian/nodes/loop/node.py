@@ -27,7 +27,8 @@ from yian.diagnostics import OriginRef
 from yian.expr.expressions import evaluate_when_record
 from yian.expr.lineage import FeedbackValue
 from yian.nodes.base import (
-    BackwardContext, BackwardResult, Grow, Node, NodeKind, Output, _project_structural_feedback,
+    BackwardContext, BackwardResult, Grow, Node, NodeKind, Output, _parse_named_condition,
+    _project_structural_feedback,
 )
 from yian.nodes.contracts import (
     ExecutionPosition,
@@ -142,6 +143,24 @@ class LoopNode(Node):
         super().validate_execution_setup()
         if self.child is None:
             raise RuntimeError(f"loop node {self.id!r} was not baked with a body child")
+
+    def validate_conditions(self, *, path: str | None = None) -> None:
+        """Parse the node's assertions, then its `while`/`until` predicate.
+
+        Args:
+            path (`str`, *optional*, defaults to `None`):
+                The static node path to name in the error instead of the node's id.
+
+        Raises:
+            `ExpressionError`: If an assertion or the predicate doesn't parse; the message names
+                the node, the keyword (`while:`/`until:`), and the expression.
+        """
+        super().validate_conditions(path=path)
+        if self.predicate_kind in ("while", "until") and isinstance(self.predicate, str):
+            _parse_named_condition(
+                self.predicate,
+                f"node {(path or self.id)!r} `{self.predicate_kind}:` {self.predicate!r}",
+            )
 
     def forward(self, inputs: dict[str, Any], **caps: Any):
         """Own the WHOLE loop policy (no engine `_loop_step`): decide continue-vs-stop on the

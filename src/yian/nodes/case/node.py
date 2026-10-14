@@ -19,7 +19,7 @@ from typing import Callable, Iterator, Optional
 
 from yian.diagnostics import OriginRef
 from yian.expr.expressions import evaluate_when_record
-from yian.nodes.base import ELSE_HANDLE, Node, NodeKind, Route
+from yian.nodes.base import ELSE_HANDLE, Node, NodeKind, Route, _parse_named_condition
 from yian.nodes.contracts import _map_origin, _validate_optional_origin
 
 
@@ -94,6 +94,26 @@ class CaseNode(Node):
                     f"node {self.id!r} case {case.handle!r} `when` must be a string"
                 )
 
+    def validate_conditions(self, *, path: str | None = None) -> None:
+        """Parse the node's assertions, then every case's `when` expression.
+
+        Args:
+            path (`str`, *optional*, defaults to `None`):
+                The static node path to name in the error instead of the node's id.
+
+        Raises:
+            `ExpressionError`: If an assertion or a `when` doesn't parse; the message names the
+                node, the case handle, and the expression.
+        """
+        super().validate_conditions(path=path)
+        for case in self.cases:
+            # A missing or non-string `when` is rejected by `validate_execution_setup`.
+            if isinstance(case.when, str):
+                _parse_named_condition(
+                    case.when,
+                    f"node {(path or self.id)!r} case {case.handle!r} `when:` {case.when!r}",
+                )
+
     def iter_local_origins(
         self,
         *,
@@ -161,7 +181,7 @@ class CaseNode(Node):
 
     def forward(self, inputs: dict) -> Route:
         # Strict CASE: route on the bound input record only — each `when:`
-        # interpolates this node's declared inputs as bare `${name}`, not the pool.
+        # reads this node's declared inputs by bare name, not the pool.
         # Routing-only: returns a Route carrying the chosen case handle (no value).
         for case in self.cases:
             if evaluate_when_record(case.when, inputs, self.types):

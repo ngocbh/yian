@@ -607,7 +607,7 @@ def test_python_built_unparseable_assert_fails_before_resume_appends(tmp_path, m
         raise _HostStop()
 
     with monkeypatch.context() as m:
-        m.setattr(yian.run, "_check_assertions", lambda flow: None)
+        m.setattr(yian.run, "_check_conditions", lambda flow: None)
         m.setattr(fns, "double", stop)  # node `a` stops after its durable start
         with pytest.raises(_HostStop):
             run_flow(flow, {"v": 1}, log=path)

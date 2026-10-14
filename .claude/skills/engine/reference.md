@@ -228,7 +228,7 @@ Runtime and compile validation read these node members instead of branching on
 | `binds_per_item: bool` | read boundary (`eval_node`): bind PER ELEMENT via a `bind_item` cap vs bind `params` once | `False` → `True` on `map` |
 | `bind_reserved(wiring, pool) -> dict` | read boundary: reserved keys pre-resolved into the record before `run` | `{}` → `wait` `{"until": ts}`, `map` `{"over": [...]}` |
 | `reserved_wiring_keys() -> set` | load-time (compile passes: `check_wiring_parity`, ref-scan): the NAMES of those reserved keys so validation gates on traits, not `node.kind` | `∅` → `wait` `{"until"}`, `map` `{"over"}` |
-| `validate_execution_setup()` | base run wrapper: reject malformed node-owned setup before assertions/body | concrete `forward` → baked child on call/map/loop; complete predicates on case |
+| `validate_execution_setup()` | base run wrapper: reject malformed node-owned setup before assertions/body | concrete `forward` and every condition parses (`validate_conditions`: assertions, CASE `when`, LOOP `while`/`until`) → baked child on call/map/loop; complete predicates on case |
 | `exception_origin(exc)` | evaluator body boundary: select the best operation origin | authored node origin → CODE wrapped line, CASE active predicate, generated-schema path in the AGENT node |
 | `failure_trace(operation_origin=None)` | evaluator, dispatcher, and terminal-unreachable producers: combine generated ancestry with the best local origin | `origin_context + (operation origin or node origin)`; omit only an absent local suffix |
 | `skipped_output_target() -> str` | route reducer and growth validation: select the logical output whose out-edges receive this physical node's absence | baked `commit_as` or own id → LOOP `origin_id` |

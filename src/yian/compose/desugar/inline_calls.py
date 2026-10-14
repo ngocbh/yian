@@ -394,7 +394,8 @@ def _desugar_descriptor(
             style=style_at(field, key) if style_at is not None else None,
             # Quoting a typed binding would drop its type, so no quoting fix is offered.
             quotable=not (field == "inputs" and key in desc.input_types),
-            owner=f"node {host!r}",
+            # A value entry names its one input `value entry '<id>'`.
+            owner=desc.field_labels.get(f"input {key!r}", f"node {host!r}"),
             type_names=type_names,
             diagnostics=diagnostics,
         )

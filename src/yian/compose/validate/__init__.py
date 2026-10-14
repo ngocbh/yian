@@ -6,8 +6,12 @@ results, the derived edges, and the flow-owned wiring, this package runs the pas
 reject an ill-formed flow before it is compiled:
 
 - `secret_literals.py` — `check_authored_bindings`: no node binding, flow output, or
-  case value holds a literal value under a secret name; runs on authored values, before the
-  tagged-binding read and desugars that may echo a value.
+  case branch holds a literal value under a secret name; runs on authored values, before
+  the tagged-binding read, the case-branch check, and desugars that may echo a value.
+- `case_branches.py` — `check_case_branches`: a `case` branch names a node or calls a
+  flow, and a `case` has no `output:`; a value branch, an unknown bare word, and a case
+  `output:` are load errors that show the value entry or tag to write. Runs before the
+  desugars, on the authored branches.
 - `references.py` — `validate_references`: every `${...}` ref resolves to a real
   producer/input + a valid record field.
 - `cycles.py` — `reject_cycles`: the graph is acyclic.
@@ -32,9 +36,6 @@ reject an ill-formed flow before it is compiled:
 - `narrowing.py` — `compute_narrowing`: the union narrowing facts each node gets from
   the CASE branches that route it, and the per-node views of the producer and
   flow-input contracts with each narrowed base rebuilt (`Narrowing.for_node`).
-- `case_values.py` — `check_case_values`: every branch of a typed `case` can produce its
-  `output:` type (a literal value exactly; a node, call, or inner case unless its type is
-  disjoint, leaving a narrower one to the case's runtime check).
 - `typed_bindings.py` — `check_typed_inputs` / `check_typed_outputs`: a typed node
   input or flow output can fit its declared type (literal text exactly; a reference
   unless its inferred type is disjoint, leaving a narrower one to the runtime check);

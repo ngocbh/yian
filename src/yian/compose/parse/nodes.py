@@ -1,33 +1,54 @@
 """Graph-stage: parse the `nodes:` mapping into typed per-kind descriptors.
 
 The first cross-node assembly pass. Consumes a source cursor over the flow's
-`nodes:` mapping and dispatches each node body to its kind's `parse` via the
-`KINDS` table.
+`nodes:` mapping and classifies each entry by its YAML tag: a tagged entry is a value
+(`total: !int ${a.output + b.output}`) handed to the caller's `read_value` reader, and an
+untagged mapping with `kind:` is a node body dispatched to its kind's `parse` via the
+`KINDS` table. Any other entry is a located error that says to add `kind:` for a node or
+a tag for a value.
 
-Only the generic, kind-independent pre-checks live here (body-is-mapping, node id shape and
-reserved ids, the `input:`/`output:` -> plural back-map, `kind:` resolution); each kind's own
-`parse` owns its field legality (allowed/required/asserts/env) and its descriptor-local
-`SourceRange` recording (each field tagged `("field", name)`). Two kind-blind enrichments
-run after every kind parse: each `input:` binding's own range is stamped into the
-descriptor's `field_ranges` under `("input", name)`, and each `asserts:` item range is
-appended positionally to its `assert_ranges`. This metadata remains inside Compose;
-`_finish()` copies node/field locations to `BuildResult` for validation, while runtime
-diagnosis uses only opaque semantic-carrier origins. Source-order origin registration keeps
-duplicate assertions distinct without an aligned range list on the semantic node.
+Only the generic, kind-independent pre-checks live here (node id shape and reserved ids,
+entry classification, the `input:`/`output:` -> plural back-map, `kind:` resolution);
+each kind's own `parse` owns its field legality (allowed/required/asserts/env) and its
+descriptor-local `SourceRange` recording (each field tagged `("field", name)`). Two
+kind-blind enrichments run after every kind parse: each `input:` binding's own range is
+stamped into the descriptor's `field_ranges` under `("input", name)`, and each `asserts:`
+item range is appended positionally to its `assert_ranges`. This metadata remains inside
+Compose; `_finish()` copies node/field locations to `BuildResult` for validation, while
+runtime diagnosis uses only opaque semantic-carrier origins. Source-order origin
+registration keeps duplicate assertions distinct without an aligned range list on the
+semantic node.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import datetime
+import math
 import re
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Callable, NoReturn
 
 from yian.compile.model import END_ID, START_ID
+from yian.compose.helpers.directives import CALL_HEAD
 from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.helpers.secret_literals import (
+    is_binding_text,
+    secret_literal_message,
+    secret_literal_path,
+)
+from yian.compose.helpers.source import one_line_text
+from yian.compose.helpers.tags import QUOTED_STYLES, suggest_tag, yaml_quoted
 from yian.compose.nodes import KINDS, REMOVED_KINDS
-from yian.compose.source import SourceAccessError, SourceCursor
+from yian.compose.source import (
+    SourceAccessError,
+    SourceCursor,
+    SourceSyntaxError,
+    parse_yaml_literal,
+)
 from yian.expr.grammar import EXPRESSION_KEYWORDS
+from yian.typesys import TypeCheckError, build_value
+from yian.typesys.values import Type, ValueKind, list_kind_for_element
 
 # Singular source keys are projected onto the descriptor dataclasses' plural
 # field names while retaining their original child sources.
@@ -39,6 +60,14 @@ _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _NON_IDENTIFIER_CHAR = re.compile(r"[^A-Za-z0-9_]")
 
 IDENTIFIER_RULE = "ASCII letters, digits, and _, not starting with a digit"
+
+# Shown after an example tagged `!<type>` for a list whose items share no type.
+MIXED_LIST_NOTE = "no tag holds a list of mixed items; give its items one type"
+# Item types a list of numbers joins to `float`.
+_INT = Type(kind=ValueKind.INTEGER)
+_FLOAT = Type(kind=ValueKind.NUMBER)
+# A null while list items are joined: its type is the other items' type, made optional.
+_NULL = Type(kind=ValueKind.NONE, nullable=True)
 
 
 def is_identifier(name: object) -> bool:
@@ -69,12 +98,46 @@ def identifier_suggestion(name: str) -> str:
     return suggestion
 
 
-def parse_nodes(nodes_cursor: SourceCursor) -> dict[str, Any]:
-    """Parse one source cursor into typed per-kind descriptors.
+_NODE_OR_VALUE = (
+    "node {node_id!r}: an entry in `nodes:` is a node or a value; add `kind:` for a "
+    "node, or a tag (`!object`, `!Buy`, ...) for a value"
+)
+
+
+# Reads one tagged `nodes:` entry: `(entry id, entry cursor) -> descriptor`.
+ValueReader = Callable[[str, SourceCursor], Any]
+
+
+def parse_nodes(
+    nodes_cursor: SourceCursor,
+    *,
+    read_value: ValueReader | None = None,
+) -> dict[str, Any]:
+    """Parse one `nodes:` source cursor into typed per-kind descriptors.
 
     The source is physical for a full graph, source-aligned for compact/def
-    projections, or virtual for a programmatic/test mapping. Returns descriptors
-    in source order with Compose-only ranges whenever an authored source exists.
+    projections, or virtual for a programmatic/test mapping. A tagged entry is a
+    value and is read by `read_value`; every other entry must be a node body with
+    `kind:`.
+
+    Args:
+        nodes_cursor (`SourceCursor`):
+            Cursor over the `nodes:` mapping. A non-mapping value parses to no nodes.
+        read_value (`ValueReader | None`, *optional*, defaults to `None`):
+            Reads one tagged entry, given its id and cursor, into its descriptor.
+            `None` is only valid for a mapping with no tagged entry.
+
+    Returns:
+        `dict[str, Any]`:
+            The descriptors keyed by entry id, in source order, each anchored on its
+            entry's key line whenever an authored source exists.
+
+    Raises:
+        `LoadError`:
+            Raised at the entry for a bad or reserved id, an untagged entry that is
+            not a node body, or a node body that fails its kind's parse.
+        `TypeError`:
+            Raised when a tagged entry is found and `read_value` is `None`.
     """
     diagnostics = LoadDiagnostics.from_cursor(nodes_cursor)
     out: dict[str, Any] = {}
@@ -83,7 +146,7 @@ def parse_nodes(nodes_cursor: SourceCursor) -> dict[str, Any]:
         if not isinstance(nodes, Mapping):
             return out
         for node_id in list(nodes):
-            desc = _parse_node(node_id, nodes_cursor.child(node_id))
+            desc = _parse_node(node_id, nodes_cursor.child(node_id), read_value)
             # Anchor the descriptor's node-level `.range` on the node's HEADER line (its
             # `key:` token), not its body/value block. The header is the node-level
             # diagnostic anchor a cycle, an unresolved ref, or a namespaced runtime failure
@@ -97,23 +160,34 @@ def parse_nodes(nodes_cursor: SourceCursor) -> dict[str, Any]:
     return out
 
 
-def _parse_node(node_id: str, cursor: SourceCursor) -> Any:
-    """Read one keyed-map node body into its typed per-kind descriptor (located)."""
+def _parse_node(
+    node_id: str, cursor: SourceCursor, read_value: ValueReader | None
+) -> Any:
+    """Read one `nodes:` entry into its descriptor (located).
+
+    A tagged entry goes to `read_value`; an untagged one must be a node body with
+    `kind:` and is dispatched to its kind's `parse`.
+    """
     diagnostics = LoadDiagnostics.from_cursor(cursor)
+    _reject_reserved_node_id(node_id, cursor)
+    # A tag makes the entry a value even when its mapping has a `kind:` key.
+    if cursor.tag is not None:
+        if read_value is None:
+            raise TypeError(
+                f"node {node_id!r} is a tagged value entry; parse_nodes needs "
+                "read_value to read it"
+            )
+        return read_value(node_id, cursor)
     body = cursor._value_view()
     if not isinstance(body, Mapping):
-        raise diagnostics.error(
-            f"node {node_id!r}: body must be a mapping, got {type(body).__name__}",
-            range=cursor.range,
-        )
-    _reject_reserved_node_id(node_id, cursor)
+        _reject_untagged_value(node_id, cursor, diagnostics)
     cursor = normalize_node_signature_cursor(cursor)
 
     kind = cursor.get("kind")
     if kind is None:
         raise diagnostics.error(
-            f"node {node_id!r}: missing `kind`",
-            range=cursor.range,
+            _NODE_OR_VALUE.format(node_id=node_id),
+            range=cursor.range or cursor.key_range,
         )
     if kind in REMOVED_KINDS:
         raise diagnostics.error(
@@ -154,6 +228,220 @@ def _parse_node(node_id: str, cursor: SourceCursor) -> Any:
     if isinstance(assert_ranges, list):
         assert_ranges.extend(cursor.item_range_list("asserts"))
     return desc
+
+
+def _reject_untagged_value(
+    node_id: str, cursor: SourceCursor, diagnostics: LoadDiagnostics
+) -> NoReturn:
+    """Reject an untagged scalar, list, or null entry, showing the tag to write.
+
+    A literal gets an example of the entry with its tag. A `${...}` or `call(...)`
+    value is not a literal, so it gets no example. Under a secret name a literal is
+    rejected as a secret literal instead, so the message never echoes it.
+
+    Args:
+        node_id (`str`): The entry id.
+        cursor (`SourceCursor`): The entry's value.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
+
+    Raises:
+        `LoadError`: Always, at the entry.
+    """
+    value = cursor.value
+    rng = cursor.range or cursor.key_range
+    message = _NODE_OR_VALUE.format(node_id=node_id)
+    if _is_reference(value, cursor.scalar_style):
+        raise diagnostics.error(message, range=rng)
+    path = secret_literal_path(node_id, value)
+    if path is not None:
+        raise diagnostics.error(
+            secret_literal_message(f"value entry {node_id!r}", node_id, path),
+            range=rng,
+        )
+    if not _writable(value):
+        raise diagnostics.error(message, range=rng)
+    typ = example_type(value)
+    if typ is not None:
+        message += f", e.g. {suggest_tag(node_id, typ, _example_text(value, cursor))}"
+    elif isinstance(value, list):
+        message += (
+            f", e.g. `{node_id}: !<type> {_example_text(value, cursor)}` "
+            f"({MIXED_LIST_NOTE})"
+        )
+    raise diagnostics.error(message, range=rng)
+
+
+def _is_reference(value: Any, style: str | None) -> bool:
+    """Report whether an untagged value is a `${...}` template or a `call(...)` directive."""
+    if not isinstance(value, str):
+        return False
+    if is_binding_text(value):
+        return True
+    # A quoted `call(...)` is text, as in a binding.
+    return style not in QUOTED_STYLES and CALL_HEAD.match(value.strip()) is not None
+
+
+def example_type(value: Any) -> Type | None:
+    """Return the widened type of a value to tag it with in an example.
+
+    Args:
+        value (`Any`): An authored YAML value that does not contain itself.
+
+    Returns:
+        `Type | None`: `Optional(str)` for null, `date` or `datetime` for an unquoted
+            date, `object` for a mapping, a list of its items' joined type, else the
+            widened type of the value; `None` for a list whose items share no type, a
+            number that is not finite, or a value no type holds. Items join
+            recursively: a null makes the type optional, ints and floats join to
+            `float`, and an empty list joins any list, so `[[1], [null]]` is
+            `list(list(Optional(int)))` and `[[], [1]]` is `list(list(int))`. A list
+            of nulls only is `list(Optional(str))`.
+    """
+    typ = _item_type(value)
+    return None if typ is None else _settled(typ)
+
+
+def _item_type(value: Any) -> Type | None:
+    """Return `example_type(value)`, but with `_NULL` for a null left to be joined."""
+    if value is None:
+        return _NULL
+    # YAML reads an unquoted `2024-01-01` as a date, which no value type holds.
+    if isinstance(value, datetime.datetime):
+        return Type(kind=ValueKind.DATETIME)
+    if isinstance(value, datetime.date):
+        return Type(kind=ValueKind.DATE)
+    if isinstance(value, dict):
+        return Type(kind=ValueKind.OBJECT)
+    if isinstance(value, list) and value:
+        element = _item_type(value[0])
+        for item in value[1:]:
+            typ = _item_type(item)
+            if element is None or typ is None:
+                return None
+            element = _joined(element, typ)
+        return None if element is None else _list_of(element)
+    try:
+        # An empty list is `list(Any)` with no element type, which joins any list.
+        return Type.scalar(build_value(value).kind)
+    except TypeCheckError:
+        return None
+
+
+def _joined(first: Type, second: Type) -> Type | None:
+    """Return the one type two item types widen to, or `None` when there is none."""
+    if first.kind is ValueKind.NONE:
+        return dataclasses.replace(second, nullable=True)
+    if second.kind is ValueKind.NONE:
+        return dataclasses.replace(first, nullable=True)
+    nullable = first.nullable or second.nullable
+    first = dataclasses.replace(first, nullable=False)
+    second = dataclasses.replace(second, nullable=False)
+    if first == second:
+        joined = first
+    elif first in (_INT, _FLOAT) and second in (_INT, _FLOAT):
+        joined = _FLOAT
+    elif first.kind.is_list() and second.kind.is_list():
+        if first.element is None or second.element is None:
+            joined = second if first.element is None else first
+        else:
+            element = _joined(first.element, second.element)
+            if element is None:
+                return None
+            joined = _list_of(element)
+    else:
+        return None
+    return dataclasses.replace(joined, nullable=True) if nullable else joined
+
+
+def _settled(typ: Type) -> Type:
+    """Return `typ` with each `_NULL` left in it read as `Optional(str)`."""
+    if typ.kind is ValueKind.NONE:
+        return Type(kind=ValueKind.STRING, nullable=True)
+    if typ.element is None:
+        return typ
+    element = _settled(typ.element)
+    return dataclasses.replace(
+        typ, kind=list_kind_for_element(element), element=element
+    )
+
+
+def _list_of(element: Type) -> Type:
+    """Return the list type of an element type."""
+    return Type(kind=list_kind_for_element(element), element=element)
+
+
+def _writable(value: Any) -> bool:
+    """Report whether a value entry can hold a value: no non-finite number, no cycle.
+
+    Args:
+        value (`Any`): An authored YAML value.
+
+    Returns:
+        `bool`: False when a number is `.inf`, `-.inf` or `.nan`, or a mapping or list
+            holds itself through a YAML alias.
+    """
+    return not contains_itself(value) and _finite(value)
+
+
+def _finite(value: Any) -> bool:
+    """Report whether every number in a value that doesn't contain itself is finite."""
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, dict):
+        return all(_finite(item) for item in value.values())
+    if isinstance(value, list):
+        return all(_finite(item) for item in value)
+    return True
+
+
+def contains_itself(value: Any, *, active: frozenset[int] = frozenset()) -> bool:
+    """Report whether a mapping or list holds itself through a YAML alias (`&R [*R]`).
+
+    Args:
+        value (`Any`): An authored YAML value or a part of one.
+        active (`frozenset[int]`, *optional*, defaults to `frozenset()`): The `id()`s
+            of the mappings and lists enclosing `value`.
+
+    Returns:
+        `bool`: True when a mapping or list holds itself at some depth.
+    """
+    if not isinstance(value, (dict, list)):
+        return False
+    if id(value) in active:
+        return True
+    items = value.values() if isinstance(value, dict) else value
+    inner = active | {id(value)}
+    return any(contains_itself(item, active=inner) for item in items)
+
+
+def _example_text(value: Any, cursor: SourceCursor) -> str:
+    """Spell an untagged entry's value for its example.
+
+    A value written over several lines (a block list) is shown as `...`. A date is
+    quoted, since a tag reads only a quoted date, and so is text that YAML would not
+    read back as the same text (`!!str 3` is shown as `"3"`).
+    """
+    if value is None:
+        return "null"
+    if isinstance(value, str):
+        text = cursor.scalar_text
+        if cursor.scalar_style == "plain" and text is not None and _reads_as(text, value):
+            return text
+        return yaml_quoted(value)
+    text = cursor.scalar_text
+    if isinstance(value, datetime.date) and text is not None:
+        return yaml_quoted(text)
+    if text is not None:
+        return text
+    return one_line_text(cursor.document, cursor.range) or "..."
+
+
+def _reads_as(text: str, value: str) -> bool:
+    """Report whether the plain scalar `text` reads back as the string `value`."""
+    try:
+        return parse_yaml_literal(text) == value
+    except SourceSyntaxError:
+        return False
 
 
 def _reject_reserved_node_id(node_id: str, cursor: SourceCursor) -> None:

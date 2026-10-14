@@ -142,8 +142,8 @@ is fine: only the binding's final value is checked, so the embedded template
 `"v=${x * 10}"` is the text `v=inf`. Flows that used to pass an infinite value along
 now fail. To fix one, keep the value in range before it reaches the binding (guard it
 with a `case`, such as checking the base is not negative before `**`, or compute it in
-a `code` node), or return null explicitly: a `case` value branch `then: null` (with
-`output: Optional(...)`), or a `code` node that returns `None`.
+a `code` node), or return null explicitly: a `case` that routes to a value entry
+`no_value: !Optional(float) null`, or a `code` node that returns `None`.
 
 A list literal adds a level of nesting (`${[x]}` is one level deeper than `x`), and
 a binding whose final value nests deeper than 100 levels fails its node

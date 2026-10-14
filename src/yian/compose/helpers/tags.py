@@ -57,7 +57,8 @@ if TYPE_CHECKING:
     from yian.compose.source.catalog import _SourceCatalogBuilder
 
 _HEAD_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-_CLOSE_MATCH_CUTOFF = 0.6
+# The `difflib` ratio a name must reach to be offered as a close match.
+CLOSE_MATCH_CUTOFF = 0.6
 _FLOW_INDICATORS = frozenset("[]{}")
 # The characters PyYAML reads into a tag, minus YAML 1.2's flow indicators, `!`, and
 # the `%` that starts an escape: text made only of these reads back as one tag.
@@ -335,7 +336,7 @@ def close_type_name(text: str, registry: TypeRegistry) -> str | None:
     if head is None or head.group() in names:
         return None
     matches = difflib.get_close_matches(
-        head.group(), sorted(names), n=1, cutoff=_CLOSE_MATCH_CUTOFF
+        head.group(), sorted(names), n=1, cutoff=CLOSE_MATCH_CUTOFF
     )
     if matches:
         return matches[0]
@@ -345,7 +346,7 @@ def close_type_name(text: str, registry: TypeRegistry) -> str | None:
     for name in sorted(names):
         by_lower.setdefault(name.lower(), name)
     matches = difflib.get_close_matches(
-        head.group().lower(), sorted(by_lower), n=1, cutoff=_CLOSE_MATCH_CUTOFF
+        head.group().lower(), sorted(by_lower), n=1, cutoff=CLOSE_MATCH_CUTOFF
     )
     return by_lower[matches[0]] if matches else None
 
@@ -377,12 +378,7 @@ def suggest_tag(
             spell (an unnamed record or union, or anything needing a `,` or quotes),
             advice to name the type in `typedefs:` and tag with its name.
     """
-    if type_text is not None and _writable_as_tag(type_text):
-        text: str | None = type_text
-    elif typ is not None:
-        text = _tag_text(typ, registry or {})
-    else:
-        text = None
+    text = tag_text(typ, registry=registry, type_text=type_text)
     if text is None:
         if type_text is None:
             assert typ is not None, "suggest_tag needs a type or its text"
@@ -391,6 +387,34 @@ def suggest_tag(
     if value is None:
         return f"`{name}: !{text}`"
     return f"`{name}: !{text} {value}`"
+
+
+def tag_text(
+    typ: Type | None,
+    *,
+    registry: TypeRegistry | None = None,
+    type_text: str | None = None,
+) -> str | None:
+    """Spell a type as the text after `!`, or return `None` when no tag can spell it.
+
+    Args:
+        typ (`Type | None`): The type, or `None` when its text names no type.
+        registry (`TypeRegistry | None`, *optional*, defaults to `None`): The flow's
+            typedefs; a typedef that resolves to `typ` (or to its list element or
+            non-null form) is spelled by its name.
+        type_text (`str | None`, *optional*, defaults to `None`): The authored
+            spelling of `typ`, used as written when a tag can write it.
+
+    Returns:
+        `str | None`: Such as `"list(int)"` or `"Reply"`, or `None` for a type a tag
+            can't spell (an unnamed record or union, or anything needing a `,` or
+            quotes).
+    """
+    if type_text is not None and _writable_as_tag(type_text):
+        return type_text
+    if typ is None:
+        return None
+    return _tag_text(typ, registry or {})
 
 
 def _tag_text(typ: Type, registry: TypeRegistry) -> str | None:
@@ -927,11 +951,11 @@ def reject_unread_tags(
 ) -> None:
     """Reject the first tag in `document` that no slot reader consumed.
 
-    A tag types a flow input, a binding, a flow output, an agent variable, or a
-    value inside one; anywhere else it would be silently ignored. Tags reached
-    only through top-level `x-*` keys are exempt. Tags under `typedefs:` and on
-    mapping keys get their own messages. Keys are spelled as written, so `on:`
-    stays `on:` although YAML reads it as `True`.
+    A tag types a flow input, a binding, a flow output, an agent variable, a value
+    entry in `nodes:`, or a value inside one; anywhere else it would be silently
+    ignored. Tags reached only through top-level `x-*` keys are exempt. Tags under
+    `typedefs:` and on mapping keys get their own messages. Keys are spelled as
+    written, so `on:` stays `on:` although YAML reads it as `True`.
 
     Args:
         document (`SourceDocument`): The loaded document.
@@ -966,7 +990,8 @@ def reject_unread_tags(
         where = f"`{key}:`" if key is not None else "the document root"
         raise diagnostics.error(
             "a tag types a value — a flow input, a binding, a flow output, an agent "
-            f"variable, or a value inside one; {where} is not one",
+            f"variable, a value entry in `nodes:`, or a value inside one; {where} is "
+            "not one",
             range=node.range,
         )
 

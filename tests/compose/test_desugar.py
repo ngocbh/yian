@@ -15,7 +15,6 @@ import pytest
 from yian.compose.desugar.adaptive_questions import desugar_adaptive_questions
 from yian.compose.desugar.case_outputs import expand_case_outputs
 from yian.compose.desugar.case_targets import desugar_case_call_targets
-from yian.compose.desugar.case_values import desugar_case_values
 from yian.compose.desugar.inline_calls import (
     _synth_id_gen,
     desugar_inline_calls,
@@ -376,72 +375,3 @@ def test_case_map_scalar_over_does_not_use_input_named_over_range():
         )
 
     assert _only_frame(caught.value).range == scalar_range
-
-
-def test_desugar_case_values_lifts_a_record_value_to_a_code_node():
-    then_range = SourceRange(12, 15, 12, 40)
-    gate = CaseDescriptor(
-        id="gate",
-        cases=[{"when": "s.output > 1", "then": {"a": 1, "b": "${x.output}"}}],
-        outputs="object",
-        then_ranges=[then_range],
-    )
-    descriptors = {
-        "gate": gate,
-        "s": CodeDescriptor(id="s", code="m:f"),
-        "x": CodeDescriptor(id="x", code="m:f"),
-    }
-
-    new = desugar_case_values(descriptors, diagnostics=_diagnostics())
-
-    synth = new["__value_0"]
-    assert isinstance(synth, CodeDescriptor)
-    assert synth.inputs == {"v0": "${x.output}"}
-    assert synth.code == "return {'a': 1, 'b': inputs['v0']}"
-    assert synth.node_name == "gate then[0]"
-    assert synth.range == then_range
-    assert synth.field_ranges == {("input", "v0"): then_range}
-    assert new["gate"].cases == [{"when": "s.output > 1", "then": "__value_0"}]
-    assert new["gate"].value_branches == {"__value_0": {"a": 1, "b": "${x.output}"}}
-    assert new["s"] is descriptors["s"] and new["x"] is descriptors["x"]
-
-
-def test_desugar_case_values_writes_scalars_as_python_literals():
-    import datetime
-
-    gate = CaseDescriptor(
-        id="gate",
-        cases=[
-            {"when": "s.output > 1", "then": -1.5},
-            {"when": "s.output > 2", "then": datetime.date(2026, 1, 2)},
-            {"when": "s.output > 3", "then": ["costs $$5", None, True]},
-        ],
-        else_=0,
-        outputs="object",
-    )
-    new = desugar_case_values(
-        {"gate": gate, "s": CodeDescriptor(id="s", code="m:f")},
-        diagnostics=_diagnostics(),
-    )
-
-    assert new["__value_0"].code == "return -1.5"
-    assert new["__value_1"].code == "return '2026-01-02'"
-    assert new["__value_2"].code == "return ['costs $5', None, True]"
-    assert new["__value_3"].code == "return 0"
-    assert new["__value_3"].node_name == "gate else"
-    assert all(new[f"__value_{n}"].inputs == {} for n in range(4))
-    assert new["gate"].else_ == "__value_3"
-
-
-@pytest.mark.parametrize("number", [float("inf"), float("-inf"), float("nan")])
-def test_desugar_case_values_rejects_non_finite_numbers(number):
-    gate = CaseDescriptor(
-        id="gate",
-        cases=[{"when": "s.output > 1", "then": {"a": [number]}}],
-        outputs="object",
-    )
-    with pytest.raises(LoadError, match="case node 'gate' then: numbers must be finite"):
-        desugar_case_values(
-            {"gate": gate, "s": CodeDescriptor(id="s", code="m:f")},
-            diagnostics=_diagnostics(),
-        )

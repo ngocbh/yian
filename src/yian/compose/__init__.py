@@ -82,7 +82,6 @@ from yian.compose.nodes.resolver import (
 )
 from yian.compose.desugar.inline_calls import desugar_inline_calls
 from yian.compose.desugar.case_outputs import expand_case_outputs
-from yian.compose.desugar.case_values import desugar_case_values
 from yian.compose.helpers.errors import LoadError
 from yian.compose.loader import ComposedFlow, load_flow
 from yian.compose.skills import default_skill_roots, load_skills
@@ -123,7 +122,6 @@ __all__ = [
     "infer_data_edges",
     "synthesize_boundary_graph",
     "expand_case_outputs",
-    "desugar_case_values",
     "check_case_handles",
     "reject_cycles",
     "validate_references",

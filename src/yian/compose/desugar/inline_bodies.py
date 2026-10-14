@@ -2,7 +2,8 @@
 
 Extraction projects immutable source cursors. Each alias occurrence therefore
 gets its own masked view while the document graph stays unchanged, and retained
-child cursors keep their original paths and ranges.
+child cursors keep their original paths and ranges. A tagged `nodes:` entry is a
+value, never an inline body, even when its mapping has a `kind:` key.
 """
 
 from __future__ import annotations
@@ -93,7 +94,8 @@ def extract_inline_bodies(
     for node_id in list(nodes):
         body_cursor = nodes_cursor.child(node_id)
         raw_body = body_cursor._value_view()
-        if not isinstance(raw_body, Mapping):
+        # A tagged entry is a value, even a mapping with `kind: call`.
+        if not isinstance(raw_body, Mapping) or body_cursor.tag is not None:
             projected[node_id] = (nodes_snapshot[node_id], body_cursor)
             continue
         if raw_body.get("kind") not in _INLINE_COMPOSITE_KINDS:
@@ -187,7 +189,7 @@ def _reject_authored_private_call_targets(nodes_cursor: SourceCursor) -> None:
     for node_id in nodes:
         body_cursor = nodes_cursor.child(node_id)
         raw_body = body_cursor._value_view()
-        if not isinstance(raw_body, Mapping):
+        if not isinstance(raw_body, Mapping) or body_cursor.tag is not None:
             continue
         if raw_body.get("kind") not in _INLINE_COMPOSITE_KINDS:
             continue

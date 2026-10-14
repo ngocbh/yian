@@ -3,7 +3,9 @@
 A tag types a flow input, a binding, a flow output, an agent variable, or a value
 inside one. A tag anywhere else (on `kind:`, a node's `output:` declaration, a
 typedef, a mapping key, ...) would be silently ignored, so it is a located load
-error. Tags under top-level `x-*` keys are exempt unless used in a slot.
+error. Tags under top-level `x-*` keys are exempt unless used in a slot. A tag on a
+CASE branch makes the branch a value, even a word naming a node, so its error shows the
+value entry to write.
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ def _generic(key: str) -> str:
     """Return the message for a tag at `key:`, which is not a typed slot."""
     return (
         "a tag types a value — a flow input, a binding, a flow output, an agent "
-        f"variable, or a value inside one; `{key}:` is not one"
+        f"variable, a value entry in `nodes:`, or a value inside one; `{key}:` is not one"
     )
 
 
@@ -170,7 +172,7 @@ def test_tag_on_nodes_is_rejected_at_its_line():
     _assert_error(text, _generic("nodes"), "nodes: !Nodes")
 
 
-def test_tag_on_a_case_branch_target_is_rejected_at_its_line():
+def test_a_tagged_case_branch_naming_a_node_is_a_value():
     text = """\
 id: f
 name: f
@@ -194,7 +196,14 @@ nodes:
     output: str
 output: ${hot.output | cold.output}
 """
-    _assert_error(text, _generic("then"), "        then: !str hot")
+    # The tag makes the branch the text `hot`, as in a value entry, not the node.
+    _assert_error(
+        text,
+        "case node 'route' then: a branch names a node or calls a flow; put the value "
+        "in its own entry in `nodes:` and name it: `route_then_0: !str hot` and "
+        "`then: route_then_0`",
+        "        then: !str hot",
+    )
 
 
 def test_tag_on_map_over_is_rejected_at_its_line():
@@ -262,8 +271,17 @@ nodes:
     on: ${input.score}
     cases:
       - when: high
-        then: 1
-    else: 2
+        then: one
+    else: two
+  one:
+    kind: code
+    code: |
+      return 1
+    output: int
+  two:
+    kind: code
+    code: |
+      return 2
     output: int
 output: ${route.output}
 """
@@ -391,14 +409,20 @@ nodes:
     on: ${input.score}
     cases:
       - when: high
-        then: 1
-    else: 2
+        then: one
+    else: one
     output: !int
+  one:
+    kind: code
+    code: |
+      return 1
+    output: int
 output: ${route.output}
 """
     _assert_error(
         text,
-        "`output:` declares a type; write `output: int`, without a tag",
+        "case node 'route': a `case` routes and has no `output:`; tag its result where "
+        "you read it, e.g. `x: !int ${route.output}`",
         "    output: !int",
     )
 

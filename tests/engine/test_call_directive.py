@@ -462,11 +462,12 @@ def _binding_node(binding: str) -> str:
 
 
 def _case_node(target: str) -> str:
-    """A `route` case node whose only branch targets `target`, and the output."""
+    """A `route` case node whose `then:` targets `target`, an `other` node, and the output."""
     return (
-        "  route:\n    kind: case\n    on: ${input.cmd}\n    output: str\n"
+        "  route:\n    kind: case\n    on: ${input.cmd}\n"
         f"    cases:\n      - when: a\n        then: {target}\n"
-        '    else: "other"\n'
+        "    else: other\n"
+        "  other:\n    kind: code\n    output: str\n    code: |\n      return 'other'\n"
         "output: ${route.output}\n"
     )
 

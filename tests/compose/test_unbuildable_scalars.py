@@ -69,8 +69,10 @@ def test_a_typed_binding_literal(kind, value, reason):
 def test_a_case_when():
     text = (
         "id: f\nname: f\ninput:\n  d: !date\nnodes:\n  route:\n    kind: case\n"
-        "    on: ${input.d}\n    output: str\n    cases:\n      - when: 2026-13-45\n"
-        '        then: "x"\n    else: "y"\noutput: ${route.output}\n'
+        "    on: ${input.d}\n    cases:\n      - when: 2026-13-45\n"
+        "        then: x\n    else: x\n"
+        "  x:\n    kind: code\n    output: str\n    code: |\n      return 'x'\n"
+        "output: ${route.output}\n"
     )
     error = _load_error(text)
     assert "not a valid date" in str(error) and _FIX in str(error)

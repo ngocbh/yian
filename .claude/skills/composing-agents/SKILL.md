@@ -92,6 +92,10 @@ either. In compact mode the flow `id:`, and for a single-node `defs:` entry the 
 name, also names the node and must be an identifier; a full-form flow id or a
 multi-node def name may keep hyphens.
 
+A `nodes:` entry is a node (a mapping with `kind:`) or a **value entry**, a tagged value
+such as `total: !int ${a.output + b.output}` (see "Values in `nodes:`" under Typed
+slots). An untagged entry without `kind:` is a load error.
+
 A mapping can't repeat a key (two nodes with one id, a field written twice): it's
 a load error at the second key. Keys a `<<:` merge brings in may still be overridden.
 
@@ -102,7 +106,7 @@ text; `2026-10-14` is a date. An unquoted date-shaped value that is not a real
 date (`2026-13-45`, `2026-01-01T10:00:00+05:99`) is a load error at the value;
 quote it to keep it as text. A bare `call(...)` argument reads the same way, as
 one scalar (`x=None` is text; write `x=null`). A `yes` in a tagged binding or
-default, a call input, a `case` value, `steerable:`, or `inherit:` that needs a
+default, a call input, a value entry, `steerable:`, or `inherit:` that needs a
 `bool` fails with "`yes` is text; write `true`". Under a `bool` `on:`, write
 `when: true`: a `when: yes` there is a load error with the same fix.
 
@@ -111,7 +115,7 @@ fingerprint. Under a secret name (`password`, `passwd`, `secret`, `client_secret
 `private_key`, `access_token`, `refresh_token`, `api_key`, or a name ending in
 `_api_key`, `_password`, `_secret`; case, camelCase, and `-`/`_` ignored) the value
 must be `${input.x}` (text around it is fine) or `null`; anything else fails at load,
-in bindings, outputs, case values, `call(...)` arguments, defaults, `variables:`,
+in bindings, outputs, value entries, `call(...)` arguments, defaults, `variables:`,
 `env:`, and keys nested in literal mappings. Credentials come from flow inputs or the
 host (`llm_config.api_key` only from the host). See `docs/syntax.md`, "Secrets stay
 out of flow files".
@@ -238,8 +242,8 @@ counting as unbounded (an `int(0..)` source into `int(0..100)` needs a tag).
 A `float` is finite: a binding whose value is NaN, infinity, or complex (say an
 overflowing `${x * 10}`, or `${(0 - 8) ** 0.5}`) fails its node with
 `binding.evaluate`, so keep the value in range (a `case` guard or a `code` clamp)
-or return null explicitly (a `case` value branch `then: null` under
-`output: Optional(...)`, or a `code` node returning `None`). An `int` computed by an
+or return null explicitly (a `case` routed to a value entry
+`no_value: !Optional(float) null`, or a `code` node returning `None`). An `int` computed by an
 expression or node, or supplied as an input, may have any number of digits and is
 recorded exactly. An int literal written in the YAML may have at most Python's limit
 (4300 digits by default), else it is a load error; rendering an int that long as
@@ -297,7 +301,7 @@ not null. Full rules: [`docs/syntax.md`](../../../docs/syntax.md#typed-slots-yam
 **Where.** Flow inputs (root, `defs:`, single-node defs, compact flows); node `input:`
 bindings, including LOOP seeds, HUMAN_INPUT context, and CALL/MAP/inline-body
 arguments; flow `output:` fields and a single `output: !T ${...}`; agent
-`variables:`; and records or lists nested in any of these.
+`variables:`; value entries in `nodes:`; and records or lists nested in any of these.
 
 **Flow inputs.** Every entry is a tag with an optional default:
 
@@ -387,6 +391,31 @@ and each field keeps its type. `$$` is a literal `$` at any depth. A nested
 producer was skipped is skipped; a flow output gives null at that nested position. A
 literal list with `${` under MAP `over:` or WAIT `until:` is a load error; write the
 list as an expression `${[a, b]}`.
+
+**Values in `nodes:`.** A tagged `nodes:` entry is a value, read like a typed binding;
+other nodes read it as `${<id>.output}`:
+
+```yaml
+nodes:
+  count: !int 3                              # scalars are tagged too
+  greeting: !str Hello, ${input.name}
+  total: !int ${a.output + b.output}
+  exit_result: !object {exited: true, reply: ""}
+  decision: !Buy                             # a block record, checked as a Buy
+    action: buy                              # the tag never fills this in
+    conviction: ${score.output}
+```
+
+A tagged entry is always a value, even with a `kind:` key inside. An untagged mapping
+without `kind:`, scalar, or list is a load error that says to add `kind:` or a tag. A
+span-free literal is checked at load; nested `${...}` and tags work, `$$` is a `$`, and
+a top-level unquoted `call(f, ...)` calls the flow (a quoted `!str "call(f)"` is text).
+A written-out `!object` mapping keeps its record, so reading a field it doesn't have is
+a load error; `!object ${x.output}` stays unchecked. The entry lowers to a CODE node
+with its id (in traces, failures, and the run log like any node) and runs like one:
+on its branch when a `case` routes to it, else when its inputs are ready. A runtime
+type miss fails it with `binding.type`. A secret-named id or nested key holding a
+literal is rejected; an entry that reads itself is a cycle.
 
 **Constructors.** Inside `${...}` there are no YAML tags, so a typedef name builds or
 checks a typed value: `${Buy(action="buy", qty=size.output)}` builds a record from
@@ -677,10 +706,9 @@ It takes one branch; the other targets skip, and so does every node that plainly
 reads (or `depends_on`) a skipped one. A searched `case` that reads a node only under
 a default that keeps a binding running (`(a.output :- 0)`) runs when that node is
 skipped, like the binding would; `(a.output :- b.output)` skips it only when both are. Read the taken branch's result
-with `${route.output}` (or `${route.output.field}`). A routing-only `case` (no `output:`,
-no value branch, never read via `${route.output}`) may take none when no `when:`
-matches and there is no `else:`; over a `Literal` node output or flow input it still
-needs a `when:` for every tag.
+with `${route.output}` (or `${route.output.field}`). A routing-only `case` (never read
+via `${route.output}`) may take none when no `when:` matches and there is no `else:`;
+over a `Literal` node output or flow input it still needs a `when:` for every tag.
 ```yaml
 route:
   kind: case
@@ -710,36 +738,36 @@ compares exactly: `when: 1` doesn't match the text `"1"`. Two `when:`s with the 
 value (`when: 1` and `when: 1.0`; not `1`, `true` and `"1"`) are a load error at the
 later one.
 
-**Branches.** A `then:`/`else:` is a sibling node (an unquoted word), a child call
-(an unquoted `call(...)` as the whole value), or a **value**. Any node name works as a
-target, including `default`. An unquoted word always names a node; one that names no
-node is a load error (``then: `replyy` names no node. Did you mean `reply`? If you
-meant the text "replyy", quote it: `then: "replyy"` ``).
-A quoted branch is always a value: `then: "reply"` is the text, and `"call(f)"` is
-text too. Values are text, numbers, bools, `null`, lists, and block-mapping records,
-with `${...}` spans anywhere inside; nested words are text and `$$` is a `$`. A tag on
-a branch is a load error; the CASE's `output:` gives the type.
+**Branches.** A `case` only routes. A `then:`/`else:` is a sibling node (an untagged
+unquoted word) or a child call (an unquoted `call(...)` as the whole value). Any node
+name works as a target, including `default` and a value entry. For a fixed or computed
+result, route to a value entry:
 ```yaml
+exited: !Turn                  # a value entry: the exit record itself
+  transcript: ${input.transcript}
+  exited: true
 route:
   kind: case
   on: ${ask.output}
-  output: Turn                 # required with a value branch; readers see Turn
   cases:
     - when: /exit
-      then:                    # a value branch: the record itself
-        transcript: ${input.transcript}
-        exited: true
+      then: exited
   else: call(respond, transcript=${input.transcript}, message=${ask.output})
 ```
-A value branch needs `output:`. Every branch must fit it: disjoint is a load error,
-narrower is checked at runtime (`binding.type`, at the synthetic result node
-`__case_<id>`), on every run even if unread. `null` needs `Optional(...)`. A CASE
-that produces a value (`output:`, a value branch, or read via `${case.output}`) needs
-`else:` or an `on:` Literal with every tag listed, or a non-nullable `bool` with
-`when: true` and `when: false`. `${case.output}` works as a whole
-binding or inside text, not in a coalesce, `:-` default, expression, `when:`/`on:`, or assert. A
-span that reads a node that may be skipped needs `:-`; a value may not read its own
-CASE or plainly read another of its branches.
+A value in a branch (a tagged value such as `!str reply`, quoted text, a number, a bool,
+`null` or an empty `else:`, a date, a mapping, a list, unquoted text with `${`) is a load
+error that shows the rewrite (``case node 'route' then: a branch names a node or calls a
+flow; put the value in its own entry in `nodes:` and name it:
+`route_then_0: !str approve` and `then: route_then_0` ``). An unquoted word that names
+no node suggests the nearest node and a value entry (``Did you mean `reply`? For the
+text, add a value entry and name it: `replyy_text: !str replyy` ``). A `case` has no
+`output:` (a load error: tag the result where you read it). `${route.output}` reads
+whichever branch ran; type it with a tag where you read it
+(`output: !Turn ${route.output}`). A CASE read through
+`${case.output}` (or routed to by one) needs `else:` or an `on:` Literal with every tag
+listed, or a non-nullable `bool` with `when: true` and `when: false`. `${case.output}`
+works as a whole binding or inside text, not in a coalesce, `:-` default, expression,
+`when:`/`on:`, or assert.
 
 **Skipped branches in a flow output.** An output field that reads only nodes a `case`
 may skip (`${order.output}`, `${a.output | b.output}`, `${a.output :- b.output}`)
@@ -955,14 +983,14 @@ optional for `while:`/`until:` but **redundant and rejected** with `times:`. A
 `while:`/`until:` is an expression string; `while: true` or `until: 1` is a load error.
 
 #### Conversational REPL — the `loop` shape used by `yian chat`
-A chat is a `loop` whose body blocks each turn at `ask` (`human_input`), then a
-typed `case` (`output: Turn`, the carried `{transcript: str, exited: bool}` record)
-returns the turn's record. Exact `/exit` and `/quit` are value branches that keep the
-transcript and set `exited: true`; `else:` calls a `respond` def whose `reply` AGENT
+A chat is a `loop` whose body blocks each turn at `ask` (`human_input`), then a `case`
+picks the turn's record (the carried `{transcript: str, exited: bool}` `Turn`). Exact
+`/exit` and `/quit` route to `exited: !Turn {...}`, a value entry that keeps the
+transcript and sets `exited: true`; `else:` calls a `respond` def whose `reply` AGENT
 node and transcript fold return the same record. The body's output is
-`${route.output}`. Typed exit is flow-owned — a host must not intercept it — while
-terminal EOF may be normalized to `/exit`. See
-[`templates/chat.yaml`](templates/chat.yaml).
+`!Turn ${route.output}`: the tag types whichever branch ran as the carried record.
+Typed exit is flow-owned — a host must not intercept it — while terminal EOF may be
+normalized to `/exit`. See [`templates/chat.yaml`](templates/chat.yaml).
 
 ## Run-ordering without data (`depends_on` / `runs_after`)
 Both gate a node on another **settling** even when no value flows. `depends_on:
@@ -1091,7 +1119,7 @@ starts, and a `human_input` node fails when it asks. There is no authored
 - [ ] Every `prompt:` and `system_prompt:` references local inputs or, for an AGENT, its own declared variables.
 - [ ] Every variable has a tagged default (`n: !int 4`) and a name distinct from local inputs.
 - [ ] Every `long_term_memory:` declaration is on a full flow or `agent`, uses one of the three forms with only allowlisted built-in config keys (or a custom type a Python host builds), and puts each `session` on exactly one AGENT.
-- [ ] Each `case` whose result is used has an `else:`, lists every tag of a non-nullable `Literal` `on:`, or is a non-nullable `bool` `on:` with `when: true` and `when: false`; its result is read with `${case.output}`, and a value branch has the CASE's `output:` type.
+- [ ] Each `case` whose result is used has an `else:`, lists every tag of a non-nullable `Literal` `on:`, or is a non-nullable `bool` `on:` with `when: true` and `when: false`; its result is read with `${case.output}` and tagged where read; every branch names a node (a value entry for a fixed result) or calls a flow.
 - [ ] `tool` ids are registered or passed per run with `tools=` (AGENT `tools:` may name a host-filled group); a `code` `module:function` is importable (or an inline `code: |` body `return`s a value); `call`/`uses:` targets resolve on the search path.
 - [ ] Every CALL/MAP/LOOP has exactly one child form: named `call:`, or non-empty inline `nodes:` plus an `output:` key; inline parent/item dependencies cross through outer `input:`.
 - [ ] A child-flow call is written `call(f, ...)` as a whole value, never `${flow(args)}`; string `:-` defaults and `:?` messages are quoted.

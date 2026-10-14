@@ -23,7 +23,10 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   │                          tag with an optional default, `qty: !int` or
   │                          `lookback: !int 30`; read_flow_inputs is the
   │                          source-free form: type text only, no defaults)
-  ├─ parse_nodes           → one frozen DESCRIPTOR per node (per-kind, source-ordered)
+  ├─ parse_nodes           → one frozen DESCRIPTOR per node (per-kind, source-ordered);
+  │                          a tagged entry (a value entry) lowers to a CODE descriptor
+  │                          with the entry's id that returns its one typed input, and
+  │                          an untagged entry without `kind:` is a load error
   ├─ stamp authored headers → optional Node origins in one document-local catalog
   ├─ stamp kind-owned sites → descriptor hook; CODE scalar/lines + CASE predicates/`on:`
   ├─ read tagged slots     → each node input and flow output is read through
@@ -31,14 +34,15 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   │                          ValueContract; nested `${...}` or nested tags make a
   │                          ValueTemplate; a tag anywhere else is a load error
   │
-  ├─ desugar_case_values         ┐  rewrite author sugar into core nodes and
-  ├─ desugar_inline_calls        │  carrierize flow assertions by source order.
-  ├─ desugar_adaptive_questions  │  Mint synthetic nodes where needed.
-  ├─ desugar_case_call_targets   │  After this, only core kinds remain.
-  ├─ expand_case_outputs         ┘
-  │    desugar_case_values classifies each CASE branch (node, call, or value) and
-  │    lifts each value to a `__value_N` CODE node; expand_case_outputs adds a
-  │    `__case_<id>` result node for each typed CASE (one with `output:`)
+  ├─ check_case_branches   → a CASE branch names a node or calls a flow; a value
+  │                          branch or a CASE `output:` is a load error that shows
+  │                          the value entry or tag to write
+  ├─ desugar_inline_calls        ┐  rewrite author sugar into core nodes and
+  ├─ desugar_adaptive_questions  │  carrierize flow assertions by source order.
+  ├─ desugar_case_call_targets   │  Mint synthetic nodes where needed.
+  ├─ expand_case_outputs         ┘  After this, only core kinds remain.
+  │    expand_case_outputs rewrites each `${case.output}` read to a coalesce over
+  │    the CASE's branch targets
   │
   ├─ build (per kind, via KINDS) → a runtime NODE + its flow-owned WIRING/EDGES;
   │                                Compose-only node/field ranges stay on BuildResult
@@ -54,8 +58,6 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   │                            and data gates on the host's other inputs
   ├─ compute_narrowing      → each node's view of union contracts under the CASE
   │                            branches (`on:` tag, `isinstance`) that route it
-  ├─ check case values      → a branch of a typed CASE that can never produce its
-  │                            `output:` type is rejected at the branch
   ├─ check typed inputs     → a typed node input whose inferred type (read against
   │                            its node's narrowed view) is disjoint from its declared
   │                            type is rejected, before the call/loop type checks
@@ -461,9 +463,8 @@ the pipeline only ever sees a small set of kinds:
 | `call(f, x=...)` as a binding's whole value | a synthetic `call` node; the binding rewritten to `${synth.output}` |
 | `human_input` with `adaptive_questions:` | a synthetic composer AGENT node + the rewritten gate |
 | `case` branch `then: call(child, ...)` | a synthetic `call` node as the branch target |
-| `case` value branch (`else: "approve"`) | a synthetic `code` node `__value_N` as the branch target |
-| typed `case` (`output:`) | a synthetic `code` result node `__case_<id>`; `${case.output}` reads it |
-| `${some_case.output}` of an untyped `case` | a coalesce over the case's branch targets |
+| a tagged `nodes:` entry (`total: !int ${a.output + b.output}`) | a `code` node with the entry's id that returns the value |
+| `${some_case.output}` | a coalesce over the case's branch targets |
 
 Because desugaring is a descriptor-level rewrite, the synthetic nodes flow through `build`,
 edge inference, validation, and the DAG check like hand-written ones. The one difference is
@@ -479,10 +480,11 @@ left out, so they don't wait on each other; a required input read from one of th
 through to that node's own inputs, and each host up the chain is visited the same way. One
 case is not exact: when an author reads a lifted id in a coalesce or defaulted host input,
 that input's other producers only make the lifted node wait, so it may run while the host is
-skipped (see `compose/edges/hosts.py`). A branch target itself (a `then: call(...)`, a
-`__value_N`), a `__case_<id>` result node, and a call in the flow `output:`/`asserts:` have
-no host. The synthetic nodes remain origin-free because no authored node header corresponds
-to them; authored nodes inside retained inline bodies are stamped normally.
+skipped (see `compose/edges/hosts.py`). A branch target itself (a `then: call(...)`), a value
+entry, and a call in the flow `output:`/`asserts:` have no host; a value entry is an authored
+node, routed by a `case` that names it. A value entry also keeps its entry's origin, while the
+synthetic nodes remain origin-free because no authored node header corresponds to them;
+authored nodes inside retained inline bodies are stamped normally.
 
 ---
 

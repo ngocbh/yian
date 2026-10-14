@@ -151,8 +151,8 @@ def secret_literal_message(
     Args:
         slot (`str`): The slot as the message names it, e.g. `"input 'password'"`.
         name (`str | None`): The slot's name, used for the suggested input reference
-            and the nested path. `None` for a slot without a name (a case value
-            branch), whose message suggests no reference.
+            and the nested path. `None` for a slot without a name (a former case
+            value branch), whose message suggests no reference.
         path (`tuple[str | int, ...]`): The result of `secret_literal_path`: `()`
             for the slot itself, else the position of the nested secret key.
         owner (`str | None`, *optional*, defaults to `None`): The slot's owner, e.g.

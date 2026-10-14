@@ -2,8 +2,8 @@
 
 A lifted node's `host` is the node whose text it was written in. A later edge step gives the
 lifted node its host's CASE routes, `depends_on`, and `runs_after`. A node that is itself a route
-target (a branch `call(...)`, a value branch), or that comes from the flow `output:`/`asserts:`,
-has no host.
+target (a branch `call(...)`), a value entry, or a node that comes from the flow
+`output:`/`asserts:` has no host.
 """
 
 import pytest
@@ -11,10 +11,12 @@ import pytest
 from yian.compose import LoadError, load_flow
 from yian.compose.desugar.adaptive_questions import desugar_adaptive_questions
 from yian.compose.desugar.case_targets import desugar_case_call_targets
-from yian.compose.desugar.case_values import desugar_case_values
 from yian.compose.desugar.inline_calls import _synth_id_gen, desugar_inline_calls
+from yian.compose.desugar.value_entries import read_value_entry
+from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.parse.nodes import parse_nodes
 from yian.compose.source import SourceDocument
+from yian.compose.source.catalog import _SourceCatalogBuilder
 
 
 def _descriptors(nodes_yaml: str) -> dict:
@@ -120,14 +122,21 @@ def test_adaptive_composer_records_the_gate_as_host():
     assert new["ask"].host is None
 
 
-def test_value_branch_node_has_no_host():
-    descriptors = _descriptors(
-        "  gate:\n    kind: case\n    output: str\n    cases:\n"
-        "      - when: ${input.go}\n"
-        '        then: "yes"\n'
-        '    else: "no"\n'
-    )
-    new = desugar_case_values(descriptors)
-    values = [d for nid, d in new.items() if nid.startswith("__value_")]
-    assert len(values) == 2
-    assert all(d.host is None for d in values)
+def test_value_entry_has_no_host():
+    nodes = SourceDocument.parse(
+        "id: f\nname: f\nnodes:\n  verdict: !str approve\n"
+    ).root.child("nodes")
+    builder = _SourceCatalogBuilder()
+
+    def read_value(node_id, cursor):
+        return read_value_entry(
+            node_id,
+            cursor,
+            registry={},
+            owner=("f",),
+            catalog_builder=builder,
+            diagnostics=LoadDiagnostics.from_cursor(cursor),
+        )
+
+    descriptors = parse_nodes(nodes, read_value=read_value)
+    assert descriptors["verdict"].host is None

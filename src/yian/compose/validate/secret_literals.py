@@ -1,4 +1,5 @@
-"""Reject a literal value under a secret name in node bindings, case values and outputs.
+"""Reject a literal value under a secret name in node bindings, value entries, case
+branches and outputs.
 
 Runs on the authored values, before tagged bindings are read or anything is desugared,
 because those later passes may echo a value in their own errors. A tag is not part of
@@ -6,8 +7,11 @@ the value, so a tagged binding (`api_key: !str ...`) is checked on the value aft
 tag. In a binding position a whole-value `call(...)` directive also counts as a binding.
 A directive's own keyword arguments are
 held to the same rule (`SecretArgumentError`), so a directive under a secret name that
-passes a literal secret is reported as that argument. A `case` value branch has no name
-of its own, so only secret keys nested in a mapping or list branch are checked.
+passes a literal secret is reported as that argument. A `case` branch that holds a value
+is a load error whose message shows the value entry to write, so a secret key nested in a
+mapping or list branch is rejected here first and the value is never echoed. A value
+entry in `nodes:` (`api_key: !str ...`) is held to the binding rule under its id, before
+its value is read.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ from yian.compose.desugar.inline_calls import (
     SecretArgumentError,
     desugar_call_directives,
 )
+from yian.compose.desugar.value_entries import ValueEntryDescriptor
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.secret_literals import (
     is_binding_text,
@@ -29,6 +34,7 @@ from yian.compose.helpers.directives import CALL_HEAD
 from yian.compose.helpers.tags import QUOTED_STYLES
 from yian.compose.nodes import BINDING_FIELDS
 from yian.compose.nodes.case import CaseDescriptor
+from yian.compose.source import SourceCursor
 from yian.diagnostics import SourceRange
 from yian.expr import ExpressionError
 
@@ -45,7 +51,9 @@ def check_authored_bindings(
     output_range: Callable[[Any], SourceRange | None],
     diagnostics: LoadDiagnostics,
 ) -> None:
-    """Reject a literal under a secret name in a node binding, case value or flow output.
+    """Reject a literal under a secret name in a node binding, branch or flow output.
+
+    A branch here is a former case value branch: a value written as a `then:`/`else:`.
 
     Args:
         descriptors (`dict[str, Any]`): Authored node descriptors keyed by node id.
@@ -65,6 +73,8 @@ def check_authored_bindings(
             literal value under a secret name, in authored order.
     """
     for node_id, desc in descriptors.items():
+        if isinstance(desc, ValueEntryDescriptor):
+            continue  # checked by `check_value_entry` before its value was read
         owner = f"node {node_id!r}"
         for field in BINDING_FIELDS.get(desc.kind, ()):
             current = getattr(desc, field, None)
@@ -130,10 +140,49 @@ def check_authored_bindings(
             )
 
 
+def check_value_entry(
+    node_id: str, cursor: SourceCursor, diagnostics: LoadDiagnostics
+) -> None:
+    """Reject a literal under a secret name in one tagged `nodes:` entry.
+
+    The entry is held to the node-input binding rule, with its id as the binding's
+    name: under a secret id the value must be a `${...}` binding, an unquoted
+    `call(...)` directive, or null, and a secret key nested in its value must hold a
+    binding. Runs on the authored value, before the tag is read, because reading it
+    may echo the value in an error.
+
+    Args:
+        node_id (`str`): The entry id.
+        cursor (`SourceCursor`): The entry's tagged value.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
+
+    Raises:
+        `LoadError`: Raised at the entry for the first literal under a secret name,
+            or a `call(...)` passing a literal under a secret keyword.
+    """
+    slot = f"value entry {node_id!r}"
+    site = cursor.range or cursor.key_range
+    path = _binding_path(
+        node_id,
+        cursor.value,
+        cursor.scalar_style,
+        owner=slot,
+        range=site,
+        diagnostics=diagnostics,
+    )
+    if path is not None:
+        raise diagnostics.error(
+            secret_literal_message(slot, node_id, path), range=site
+        )
+
+
 def _check_case_values(
     desc: CaseDescriptor, *, owner: str, diagnostics: LoadDiagnostics
 ) -> None:
-    """Reject a secret key with a literal value nested in a case's value branches.
+    """Reject a secret key with a literal value nested in a case's `then:`/`else:` branches.
+
+    A branch that holds a value is a load error whose message shows the value entry to
+    write; this runs first, so that message never echoes a secret.
 
     Args:
         desc (`CaseDescriptor`): The authored case.

@@ -147,6 +147,10 @@ class MapNode(Node):                   # SPAWNER — apply a child flow per item
         return Grow(seed=records)       # compile.build_grow clones + wires the child flow
 ```
 
+A value entry in `nodes:` (`total: !int ${a.output + b.output}`, see
+[Values in `nodes:`](syntax.md#values-in-nodes)) is not a kind of its own: it lowers at
+load to a CODE node with the entry's id whose code returns its one input.
+
 Notice what is **not** here: no node reads the pool, emits an event, or checks its own
 success/failure plumbing. A spawner also never imports compile or constructs graph
 topology. Each kind expresses only its own logic.

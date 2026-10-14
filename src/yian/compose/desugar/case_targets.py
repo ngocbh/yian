@@ -6,13 +6,13 @@ A `case` branch may route to a FRESH owned call instead of a placed node id:
 target is rewritten to that synth id (which is then both the CaseNode handle and
 the control-edge target, exactly like a plain `then: id`). Accepted grammar: a
 whole-value `call(...)` directive — a route target resolves to exactly one node id, so
-any other text starting with `call(` is a located LoadError naming the problem. Value
-branches (quoted text, `${...}` templates, non-string values) were already lifted to synth
-`__value_<n>` nodes by `desugar_case_values`, so this pass sees node ids, those synth ids,
-and unquoted calls. The outer synth call is the route target, so the case-route veto
-skip-floods it on a branch not taken. A nested directive's inner calls are lifted too; each
-records the outer call as its `host`, so the host-edge step gives it the outer call's route
-and gates it on the outer call's other arguments; it is skipped with it.
+any other text starting with `call(` is a located LoadError naming the problem. A branch
+that holds a value (quoted text, a `${...}` template, a non-string value) was already
+rejected by `check_case_branches`, so this pass sees node ids and unquoted calls. The
+outer synth call is the route target, so the case-route veto skip-floods it on a branch
+not taken. A nested directive's inner calls are lifted too; each records the outer call
+as its `host`, so the host-edge step gives it the outer call's route and gates it on the
+outer call's other arguments; it is skipped with it.
 
 Runs in `_assemble` AFTER `desugar_inline_calls` (sharing its `next_id` minter — else
 the ids collide) and BEFORE `expand_case_outputs`, so the synth call's args (which may
@@ -25,8 +25,8 @@ lifted from — the case descriptor's positional `then_ranges[N]` for a `then:`,
 own range when a span is unavailable.
 
 Imports flow down/peer only: `compose.parse.file` (CaseDescriptor), `compose.desugar.inline_calls`
-(the shared `call(...)` recognizer + synth-node factory), `compose.helpers.errors`. Only the loader
-imports this back.
+(the shared `call(...)` recognizer + synth-node factory), `compose.helpers.errors`,
+`compose.helpers.source` (positional metadata). Only the loader imports this back.
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ from typing import Any, Callable, Optional
 from yian.diagnostics import SourceRange
 from yian.expr import ExpressionError
 from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.helpers.source import nth
 from yian.compose.parse.file import CaseDescriptor
 from yian.compose.desugar.inline_calls import (
     SecretArgumentError,
@@ -75,7 +76,7 @@ def desugar_case_call_targets(
                     mint,
                     synth,
                     host=f"case node {nid!r} then:",
-                    range=_nth(desc.then_ranges, ci) or rng,
+                    range=nth(desc.then_ranges, ci) or rng,
                     diagnostics=diagnostics,
                 ),
             }
@@ -97,11 +98,6 @@ def desugar_case_call_targets(
         new_descriptors[nid] = replace(desc, cases=new_cases, else_=new_else)
     new_descriptors.update(synth)
     return new_descriptors
-
-
-def _nth(seq: list, i: int) -> Optional[SourceRange]:
-    """The i-th positional range, or None when absent (a spanless flow, or a short list)."""
-    return seq[i] if 0 <= i < len(seq) else None
 
 
 def _lift_case_target(
@@ -127,8 +123,8 @@ def _lift_case_target(
         return target  # None (handled by the caller) or a native literal
     # A whole-value `call(...)` directive: recognized BEFORE the plain-id passthrough,
     # since a directive carries no `${` and would otherwise look like a bare node id.
-    # The loader's `desugar_case_values` rejects a malformed branch call first, with its
-    # quoting fix; this keeps a direct caller's error located too.
+    # The loader's `check_case_branches` rejects a malformed branch call first, with the
+    # value entry to write for the text; this keeps a direct caller's error located too.
     try:
         new_value, calls = desugar_call_directives(target, mint)
     except SecretArgumentError as exc:

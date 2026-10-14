@@ -338,6 +338,40 @@ def _tree_contract(
     return ValueContract(typ if exact_literals else _widened(typ))
 
 
+def literal_contract(value: Any) -> OutputContract | None:
+    """Infer the contract of a span-free plain literal, as written out.
+
+    A mapping is a closed record of its keys' contracts, a list is a list of its
+    items' joined type (as in `template_contract`), and a scalar has its kind's
+    widened type. A nested mapping with an unproven field, or a list whose items
+    don't join, is opaque as a whole, since a partial record can't nest. Every
+    string is `str`: the value is already read, so `$$` escapes are undone and a
+    string is never scanned for `${...}` spans.
+
+    Args:
+        value (`Any`): The literal, with no template or binding inside it.
+
+    Returns:
+        `OutputContract | None`: The exact or partial contract, or `None` when the
+            value's shape is unproven (a non-text key, which only a programmatic
+            caller can pass, a non-finite number, a list whose items don't join).
+    """
+    # Not `_tree_contract`: it would undo `$$` escapes a second time and read a `${...}`
+    # left by an escape as a span, but this value's strings are final text.
+    if type(value) is dict:
+        # A loaded flow's mapping keys are text; this serves programmatic callers, whose
+        # mapping may have another key that no record field could name.
+        if any(type(key) is not str for key in value):
+            return None
+        return combine_output_contracts(
+            {key: literal_contract(item) for key, item in value.items()}
+        )
+    if type(value) is list:
+        return _list_contract([literal_contract(item) for item in value])
+    typ = literal_type(value)
+    return None if typ is None else ValueContract(_widened(typ))
+
+
 def _list_contract(items: list[OutputContract | None]) -> ValueContract | None:
     """Return the list contract of exact items with one joined type, else `None`."""
     # Unlike an inline body's strict element join, this leaves a list it can't join

@@ -3,7 +3,8 @@
 `_assemble` is the pipeline shared by the top-level flow AND every in-file `defs:`
 callable:
 
-  flow parameters + authored parameter/contract/default origins -> build every node
+  flow parameters + authored parameter/contract/default origins -> parse nodes, lowering
+  each tagged `nodes:` entry to a CODE node -> build every node
   kind-blind (`desc.build(ctx)`; physical node-output contracts compile at their
   existing leaf-owned build position; a case lowers
   in its own build) -> cross-flow type check + case exhaustiveness -> infer data
@@ -71,6 +72,7 @@ from yian.compose.desugar.inline_bodies import (
 )
 from yian.compose.desugar.inline_calls import _synth_id_gen, desugar_inline_calls
 from yian.compose.desugar.case_outputs import case_output_reads, expand_case_outputs
+from yian.compose.desugar.value_entries import ValueEntryDescriptor, read_value_entry
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.isinstance_types import (
     collect_constructor_names,
@@ -81,6 +83,7 @@ from yian.compose.helpers.isinstance_types import (
     resolve_isinstance_type,
 )
 from yian.compose.helpers.output_contracts import resolve_output_binding_contract
+from yian.compose.helpers.source import nth, one_line_text
 from yian.compose.helpers.tags import (
     QUOTED_STYLES,
     old_form_suggestion,
@@ -92,13 +95,12 @@ from yian.compose.helpers.tags import (
 )
 from yian.compose.desugar.adaptive_questions import QPARAM, desugar_adaptive_questions
 from yian.compose.desugar.case_targets import desugar_case_call_targets
-from yian.compose.desugar.case_values import desugar_case_values
 from yian.compose.validate.case_exhaustive import (
     check_case_exhaustive,
     check_case_when_values,
     exhaustive_cases,
 )
-from yian.compose.validate.case_values import check_case_values
+from yian.compose.validate.case_branches import check_case_branches
 from yian.compose.validate.cycles import reject_cycles
 from yian.compose.validate.human_questions import validate_human_questions
 from yian.compose.validate.loop_types import check_loop_type_contract
@@ -107,7 +109,10 @@ from yian.compose.edges.hosts import host_control_edges
 from yian.compose.edges.ordering import infer_ordering_edges
 from yian.compose.validate.call_types import check_call_map_types
 from yian.compose.validate.references import validate_references
-from yian.compose.validate.secret_literals import check_authored_bindings
+from yian.compose.validate.secret_literals import (
+    check_authored_bindings,
+    check_value_entry,
+)
 from yian.compose.validate.skips import (
     SkipModel,
     check_skipped_arithmetic,
@@ -126,7 +131,6 @@ from yian.compose.helpers.types import (
     read_flow_inputs,
     read_source_flow_inputs,
     read_source_parameters,
-    read_type,
     read_value_contract,
 )
 from yian.compose.validate.handles import check_case_handles
@@ -556,7 +560,8 @@ def _stamp_node_wiring_origins(
     Desugaring has already produced each final binding source, while
     ``nodes_cursor`` still retains the original occurrence. Each ordinary input
     entry contributes two meanings: its key owns the formal ``Parameter`` and
-    its value owns the flow ``Binding``. A reserved MAP ``over`` or WAIT
+    its value owns the flow ``Binding``; a value entry's one input is the entry
+    itself, so a runtime type failure points at it. A reserved MAP ``over`` or WAIT
     ``until`` field contributes only a flow-owned ``Binding`` origin. For names
     absent from the retained cursor, Compose mints no origin and preserves any
     existing carrier origin.
@@ -588,44 +593,45 @@ def _stamp_node_wiring_origins(
         try:
             if not nodes_cursor.has(node_id):
                 continue
-            node_cursor = normalize_node_signature_cursor(
-                nodes_cursor.child(node_id)
-            )
-
-            for key in sorted(node.reserved_wiring_keys()):
-                if key not in wiring or not node_cursor.has(key):
-                    continue
-                binding_origin = catalog_builder.register(
-                    (*owner, "node", node_id, "reserved", key, "binding"),
-                    node_cursor.child(key),
+            if isinstance(descriptor, ValueEntryDescriptor):
+                input_cursors = {node_id: nodes_cursor.child(node_id)}
+            else:
+                node_cursor = normalize_node_signature_cursor(
+                    nodes_cursor.child(node_id)
                 )
-                if binding_origin is not None:
-                    wiring[key] = replace(
-                        as_binding(wiring[key]),
-                        origin=binding_origin,
-                    )
 
-            if (
-                not descriptor.inputs
-                or node.params is None
-                or not node_cursor.has("inputs")
-            ):
+                for key in sorted(node.reserved_wiring_keys()):
+                    if key not in wiring or not node_cursor.has(key):
+                        continue
+                    binding_origin = catalog_builder.register(
+                        (*owner, "node", node_id, "reserved", key, "binding"),
+                        node_cursor.child(key),
+                    )
+                    if binding_origin is not None:
+                        wiring[key] = replace(
+                            as_binding(wiring[key]),
+                            origin=binding_origin,
+                        )
+
+                if not descriptor.inputs or not node_cursor.has("inputs"):
+                    continue
+                inputs_cursor = node_cursor.child("inputs")
+                input_cursors = {
+                    name: inputs_cursor.child(name)
+                    for name in descriptor.inputs
+                    if inputs_cursor.has(name)
+                }
+            if node.params is None:
                 continue
-            inputs_cursor = node_cursor.child("inputs")
             parameter_indexes = {
                 parameter.name: index
                 for index, parameter in enumerate(node.params)
             }
             parameters = list(node.params)
             parameters_changed = False
-            for name in descriptor.inputs:
-                if (
-                    name not in parameter_indexes
-                    or name not in wiring
-                    or not inputs_cursor.has(name)
-                ):
+            for name, entry_cursor in input_cursors.items():
+                if name not in parameter_indexes or name not in wiring:
                     continue
-                entry_cursor = inputs_cursor.child(name)
                 parameter_origin = catalog_builder.register(
                     (*owner, "node", node_id, "input", name, "parameter"),
                     entry_cursor,
@@ -774,7 +780,8 @@ def _split_typed_inputs(
         diagnostics (`LoadDiagnostics`): Factory for located load errors.
 
     Returns:
-        `dict[str, NodeDescriptor]`: The descriptors, with typed inputs split.
+        `dict[str, NodeDescriptor]`: The descriptors, with typed inputs split; a value
+            entry, already read through its tag, is returned unchanged.
 
     Raises:
         `LoadError`: Raised when a typed binding's type or value is malformed, a
@@ -783,7 +790,8 @@ def _split_typed_inputs(
     """
     split: dict[str, NodeDescriptor] = {}
     for node_id, descriptor in descriptors.items():
-        if not descriptor.inputs:
+        # A value entry's one input was read through its tag when it was parsed.
+        if not descriptor.inputs or isinstance(descriptor, ValueEntryDescriptor):
             split[node_id] = descriptor
             continue
         try:
@@ -832,15 +840,19 @@ def _binding_style(
     field: str,
     key: str,
     *,
+    value_entries: frozenset[str],
     diagnostics: LoadDiagnostics,
 ) -> str | None:
     """Return the authored YAML scalar style of one node binding.
+
+    A value entry's one binding is the entry itself, so its style is the entry's.
 
     Args:
         nodes_cursor (`SourceCursor`): Retained view of the flow's node mapping.
         node_id (`str`): The node that owns the binding.
         field (`str`): The binding field (`inputs`, or a scalar field such as `over`).
         key (`str`): The binding name in a mapping field; equals `field` for a scalar one.
+        value_entries (`frozenset[str]`): The ids of the flow's value entries.
         diagnostics (`LoadDiagnostics`): Factory for located load errors.
 
     Returns:
@@ -852,6 +864,10 @@ def _binding_style(
     try:
         if not nodes_cursor.has(node_id):
             return None
+        if node_id in value_entries:
+            if (field, key) != ("inputs", node_id):
+                return None
+            return nodes_cursor.child(node_id).scalar_style
         cursor = normalize_node_signature_cursor(nodes_cursor.child(node_id))
         if not cursor.has(field):
             return None
@@ -892,6 +908,35 @@ def _output_style(
         if not outputs_cursor.has(key):
             return None
         return outputs_cursor.child(key).scalar_style
+    except SourceAccessError as exc:
+        raise diagnostics.error(str(exc), range=exc.range) from exc
+
+
+def _case_output_cursor(
+    nodes_cursor: SourceCursor,
+    node_id: str,
+    *,
+    diagnostics: LoadDiagnostics,
+) -> SourceCursor | None:
+    """Return the authored `output:` of one node, or `None` when it has none.
+
+    Args:
+        nodes_cursor (`SourceCursor`): Retained view of the flow's node mapping.
+        node_id (`str`): The case node's id.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
+
+    Returns:
+        `SourceCursor | None`: The `output:` value, or `None` for a synthesized node or a
+        node without `output:`.
+
+    Raises:
+        `LoadError`: Raised when the retained cursor cannot be traversed.
+    """
+    try:
+        if not nodes_cursor.has(node_id):
+            return None
+        cursor = normalize_node_signature_cursor(nodes_cursor.child(node_id))
+        return cursor.child("outputs") if cursor.has("outputs") else None
     except SourceAccessError as exc:
         raise diagnostics.error(str(exc), range=exc.range) from exc
 
@@ -950,11 +995,7 @@ def _check_output_names(
         authored = str(key)
         if outputs_cursor is not None and outputs_cursor.has(key):
             key_range = outputs_cursor.child(key).key_range
-            document = outputs_cursor.document
-            if key_range is not None and document is not None:
-                if key_range.start_line == key_range.end_line:
-                    line = document.text.splitlines()[key_range.start_line - 1]
-                    authored = line[key_range.start_col - 1 : key_range.end_col - 1]
+            authored = one_line_text(outputs_cursor.document, key_range) or authored
         raise diagnostics.error(
             f"flow output name `{authored}` reads as {key!r} ({type(key).__name__}), "
             f"not a string; quote the key: `'{authored}':`",
@@ -1177,11 +1218,6 @@ def _site_range(
     return item or field_ranges.get(("field", field)) or node_range
 
 
-def _nth_range(ranges: list[SourceRange | None], index: int) -> SourceRange | None:
-    """Return `ranges[index]`, or `None` past the end."""
-    return ranges[index] if index < len(ranges) else None
-
-
 # The `isinstance` type names and the constructor names one expression site uses.
 TypeNames = tuple[list[str], list[str]]
 
@@ -1339,7 +1375,7 @@ def _fill_type_tables(
         assert_ranges = list(getattr(desc, "assert_ranges", None) or [])
         for index, expression in enumerate(authored):
             where = f"node {nid!r} assert {expression!r}"
-            rng = _site_range(_nth_range(assert_ranges, index), franges, "asserts", node_range)
+            rng = _site_range(nth(assert_ranges, index), franges, "asserts", node_range)
             names = names_in(expression, condition=True)
             types.update(checked(names, expression, where, rng, condition=True))
         if node.kind in (NodeKind.START, NodeKind.END):
@@ -1350,7 +1386,7 @@ def _fill_type_tables(
         when_ranges = list(getattr(desc, "when_ranges", None) or [])
         for index, case in enumerate(getattr(node, "cases", None) or ()):
             where = f"case node {nid!r} cases[{index}].when"
-            rng = _site_range(_nth_range(when_ranges, index), franges, "cases", node_range)
+            rng = _site_range(nth(when_ranges, index), franges, "cases", node_range)
             names = names_in(case.when, condition=True)
             types.update(checked(names, case.when, where, rng, condition=True))
         predicate = getattr(node, "predicate", None)
@@ -1366,8 +1402,8 @@ def _fill_type_tables(
 def _value_cases(descriptors: dict, read: frozenset[str]) -> frozenset[str]:
     """Return the ids of the cases that produce a value.
 
-    A case produces a value when it declares `output:` or is in `read`; a case that is a
-    `then:`/`else:` target of a value-producing case produces one too.
+    A case produces a value when it is in `read`; a case that is a `then:`/`else:` target
+    of a value-producing case produces one too.
 
     Args:
         descriptors (`dict`): Node descriptors keyed by node id.
@@ -1379,9 +1415,7 @@ def _value_cases(descriptors: dict, read: frozenset[str]) -> frozenset[str]:
     cases = {
         nid: d for nid, d in descriptors.items() if isinstance(d, CaseDescriptor)
     }
-    pending = [
-        nid for nid, d in cases.items() if d.outputs is not None or nid in read
-    ]
+    pending = [nid for nid in cases if nid in read]
     found: set[str] = set()
     while pending:
         nid = pending.pop()
@@ -1422,10 +1456,12 @@ def _assemble(
     """Assemble parsed sections into a `ComposedFlow` — the post-parse pipeline shared by
     the top-level flow and every in-file def:
 
-      flow parameters -> split tagged node inputs and flow outputs
-      into value + declared contract -> desugar (case value branches to synth CODE nodes,
-      inline calls, adaptive questions, case call targets, `${case.output}` with one synth
-      result node per typed case) -> build
+      flow parameters -> parse nodes (a tagged entry lowers to a CODE node returning its
+      value, after a secret-literal check) -> split tagged node inputs and flow outputs
+      into value + declared contract -> check case branches (a node or a call; a value or
+      a case `output:` is a load error showing the value entry) -> desugar (inline calls,
+      adaptive questions, case call targets, `${case.output}` to a coalesce over the
+      case's branch targets) -> build
       every node kind-blind
       (`desc.build(ctx)`; physical node-output contracts compile at their existing
       leaf-owned position; a case lowers in its own build) -> attach declared input
@@ -1537,7 +1573,7 @@ def _assemble(
     ) -> tuple[OriginRef | None, SourceRange | None] | None:
         """Return the origin and range from one authored assertion cursor."""
         try:
-            if not authored_nodes_cursor.has(node_id):
+            if node_id in value_entries or not authored_nodes_cursor.has(node_id):
                 return None
             node_cursor = normalize_node_signature_cursor(
                 authored_nodes_cursor.child(node_id)
@@ -1574,7 +1610,7 @@ def _assemble(
             `LoadError`: Raised when source traversal or type compilation fails.
         """
         try:
-            if not nodes_cursor.has(node_id):
+            if node_id in value_entries or not nodes_cursor.has(node_id):
                 return None
             node_cursor = normalize_node_signature_cursor(nodes_cursor.child(node_id))
             if not node_cursor.has("outputs"):
@@ -1598,7 +1634,7 @@ def _assemble(
     ) -> list[Parameter] | None:
         """Compile one physical node's variables through its normalized cursor."""
         try:
-            if not nodes_cursor.has(node_id):
+            if node_id in value_entries or not nodes_cursor.has(node_id):
                 return None
             node_cursor = normalize_node_signature_cursor(nodes_cursor.child(node_id))
             if not node_cursor.has("variables"):
@@ -1667,7 +1703,27 @@ def _assemble(
     # Static inference types a `T(...)` constructor by this flow's own typedefs.
     constructor_type = constructor_type_fn(registry)
     flow_inputs = {parameter.name for parameter in inputs}
-    descriptors = parse_nodes(nodes_cursor)
+
+    def read_value(node_id: str, cursor: SourceCursor) -> ValueEntryDescriptor:
+        """Lower one tagged `nodes:` entry, after rejecting a secret literal in it."""
+        check_value_entry(node_id, cursor, diagnostics)
+        return read_value_entry(
+            node_id,
+            cursor,
+            registry=registry,
+            owner=owner,
+            catalog_builder=catalog_builder,
+            diagnostics=diagnostics,
+        )
+
+    descriptors = parse_nodes(nodes_cursor, read_value=read_value)
+    # Value entries have no node body, so every pass below that re-reads a node's body
+    # from `nodes_cursor` skips them or reads the entry itself.
+    value_entries = frozenset(
+        node_id
+        for node_id, descriptor in descriptors.items()
+        if isinstance(descriptor, ValueEntryDescriptor)
+    )
     try:
         located_descriptors: dict[str, NodeDescriptor] = {}
         for node_id, descriptor in descriptors.items():
@@ -1681,6 +1737,9 @@ def _assemble(
                     anchor="key",
                 ),
             )
+            if node_id in value_entries:
+                located_descriptors[node_id] = located
+                continue
             located_descriptors[node_id] = located.with_source_origins(
                 normalize_node_signature_cursor(authored_cursor),
                 site_path=node_path,
@@ -1718,7 +1777,12 @@ def _assemble(
         descriptors,
         outputs_section,
         binding_style_at=lambda node_id, field, key: _binding_style(
-            nodes_cursor, node_id, field, key, diagnostics=diagnostics
+            nodes_cursor,
+            node_id,
+            field,
+            key,
+            value_entries=value_entries,
+            diagnostics=diagnostics,
         ),
         output_style_at=lambda key: _output_style(
             outputs_cursor, key, diagnostics=diagnostics
@@ -1728,10 +1792,13 @@ def _assemble(
     )
 
     # A node's `output:` is a type declaration; a tag there is rejected before a
-    # declaration with nothing after its tag reads as no output at all.
+    # declaration with nothing after its tag reads as no output at all. A case has no
+    # `output:`; the case-branch check below rejects it, tagged or not, with the rewrite.
     try:
-        for node_id in descriptors:
-            if nodes_cursor.has(node_id):
+        for node_id, descriptor in descriptors.items():
+            if isinstance(descriptor, CaseDescriptor):
+                continue
+            if node_id not in value_entries and nodes_cursor.has(node_id):
                 node_cursor = normalize_node_signature_cursor(nodes_cursor.child(node_id))
                 if node_cursor.has("outputs"):
                     reject_tagged_output(node_cursor.child("outputs"), diagnostics)
@@ -1758,24 +1825,16 @@ def _assemble(
         diagnostics=diagnostics,
     )
 
-    # Compile each typed case's `output:` once: its synth result node checks every taken
-    # branch against this contract, located at the case's `output:` (source-free: none).
-    # Compiled before branch classification, whose "names no node" error offers the
-    # boolean to write for a `yes`/`no` word only when the case's type takes it.
-    case_types: dict[str, ValueContract] = {}
-    for node_id, descriptor in descriptors.items():
-        if isinstance(descriptor, CaseDescriptor) and descriptor.outputs is not None:
-            case_types[node_id] = read_authored_node_output(
-                node_id, descriptor.outputs
-            ) or ValueContract(
-                read_type(descriptor.outputs, registry, diagnostics=diagnostics)
-            )
-
-    # Classify `case` branches and lift each value branch to a synth CODE node. Runs
-    # BEFORE the inline-call desugar so a value's `${...}` input bindings are walked by it
-    # and by the `${case.output}` expansion like any authored CODE input.
-    descriptors = desugar_case_values(
-        descriptors, case_types=case_types, registry=registry, diagnostics=diagnostics
+    # A case branch names a node or calls a flow, and a case has no `output:`. Runs
+    # BEFORE the inline-call desugar so a branch's text is still as authored.
+    check_case_branches(
+        descriptors,
+        registry=registry,
+        input_types=flow_input_types,
+        output_at=lambda node_id: _case_output_cursor(
+            nodes_cursor, node_id, diagnostics=diagnostics
+        ),
+        diagnostics=diagnostics,
     )
 
     # Desugar inline `${ f(...) }` call expressions: each becomes a synth `call`
@@ -1791,7 +1850,12 @@ def _assemble(
         assertion_range_at=flow_assertion_range_at,
         assertion_origin_at=flow_assertion_origin_at,
         binding_style_at=lambda node_id, field, key: _binding_style(
-            nodes_cursor, node_id, field, key, diagnostics=diagnostics
+            nodes_cursor,
+            node_id,
+            field,
+            key,
+            value_entries=value_entries,
+            diagnostics=diagnostics,
         ),
         output_style_at=lambda key: _output_style(
             outputs_cursor, key, diagnostics=diagnostics
@@ -1840,7 +1904,6 @@ def _assemble(
         outputs_range=outputs_range,
         assertion_range_at=flow_assertion_range_at,
         diagnostics=diagnostics,
-        case_types=case_types,
     )
 
     descriptor_cache: _DescriptorBuildCache | None = None
@@ -2089,18 +2152,6 @@ def _assemble(
     # Runs before every pass that reads narrowing, so a typo'd tag is reported first.
     check_case_when_values(
         descriptors,
-        producers,
-        flow_input_contracts,
-        narrowing=narrowing,
-        diagnostics=diagnostics,
-    )
-
-    # Branches of a typed case that can never produce its `output:` type. Runs before the
-    # typed-input check so a disjoint branch is reported at the branch, not at the case's
-    # result node.
-    check_case_values(
-        descriptors,
-        case_types,
         producers,
         flow_input_contracts,
         narrowing=narrowing,

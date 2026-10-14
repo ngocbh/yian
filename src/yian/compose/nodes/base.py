@@ -263,20 +263,23 @@ class NodeDescriptor:
     def output_contract(
         self,
         ctx: BuildContext,
-    ) -> Optional[ValueContract]:
+    ) -> OutputContract | None:
         """Return the declared ``output:`` as one canonical contract.
 
         The optional Compose reader runs at this existing build position so
         source compilation cannot move ahead of kind-owned validation. Direct
-        descriptor builds omit it and retain the source-free type reader.
+        descriptor builds omit it and retain the source-free type reader. A
+        subclass whose output is inferred rather than declared may return a
+        partial record.
 
         Args:
             ctx (`BuildContext`):
                 Registry, diagnostics, and optional authored-contract reader.
 
         Returns:
-            `ValueContract | None`:
-                Canonical declared contract, or ``None`` when no output exists.
+            `OutputContract | None`:
+                Canonical declared contract (an exact ``ValueContract`` here), or
+                ``None`` when no output exists.
 
         Raises:
             `LoadError`:

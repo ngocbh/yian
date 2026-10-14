@@ -162,6 +162,33 @@ def test_reject_cycles_reports_a_self_dependency() -> None:
     )
 
 
+def test_reject_cycles_names_a_gate_edge_by_its_host_input() -> None:
+    edges = [
+        Edge(id="spy->c#0", from_="spy", to="c", input_group="publish.notes"),
+        Edge(id="c->spy#0", from_="c", to="spy", input_group="x"),
+    ]
+
+    with pytest.raises(LoadError) as caught:
+        reject_cycles(edges, {"c", "spy"}, gate_ids=frozenset({"spy->c#0"}))
+
+    assert set(caught.value.diagnostic.notes) == {
+        "c depends on spy (gate: publish.input.notes)",
+        "spy depends on c (spy.input.x)",
+    }
+
+
+def test_reject_cycles_keeps_a_dotted_group_that_is_not_a_gate() -> None:
+    edges = [
+        Edge(id="spy->c#0", from_="spy", to="c", input_group="k.v"),
+        Edge(id="c->spy#0", from_="c", to="spy", input_group="x"),
+    ]
+
+    with pytest.raises(LoadError) as caught:
+        reject_cycles(edges, {"c", "spy"})
+
+    assert "c depends on spy (c.input.k.v)" in caught.value.diagnostic.notes
+
+
 def test_validate_references_diag_has_range():
     # A node input binding that references an unknown node (`${ghost.output}`) is a dangling
     # ref. The aggregate LoadError anchors its `range` on the OFFENDING ENTRY — the per-binding

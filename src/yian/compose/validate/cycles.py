@@ -31,6 +31,7 @@ def reject_cycles(
     *,
     node_ranges: "dict[str, SourceRange] | None" = None,
     diagnostics: LoadDiagnostics | None = None,
+    gate_ids: frozenset[str] = frozenset(),
 ) -> None:
     """Raise a `LoadError` if the inferred (real-node) graph has a directed cycle.
 
@@ -45,6 +46,9 @@ def reject_cycles(
     The error also carries a "why" legend (`Diagnostic.notes`): one line per dependency edge
     *inside* the loop — "<consumer> depends on <producer> (<consumer>.input.<group>)" — so the
     author sees which reference closes the cycle, not just which nodes are in it.
+
+    `gate_ids` names the data gates a lifted node got from its host (group
+    `<node>.<group>`); their notes cite the host's input, "(gate: <node>.input.<group>)".
     """
     diagnostics = diagnostics or LoadDiagnostics()
     ranges = node_ranges or {}
@@ -68,7 +72,7 @@ def reject_cycles(
             for _, _, _, source_range in authored
             if (frame := diagnostics.frame(source_range)) is not None
         )
-        notes = _cycle_notes(edges, components)
+        notes = _cycle_notes(edges, components, gate_ids=gate_ids)
         raise diagnostics.error(
             f"flow has a cycle involving {sorted(cycle_nodes)}; flows must be acyclic",
             frames=frames,
@@ -79,13 +83,17 @@ def reject_cycles(
 def _cycle_notes(
     edges: list[Edge],
     components: tuple[frozenset[str], ...],
+    *,
+    gate_ids: frozenset[str] = frozenset(),
 ) -> list[str]:
     """Return one note per dependency edge within a cyclic component.
 
     Each loop-internal edge `from_ -> to` reads as "`to` consumes `from_`", i.e. the
     consumer depends on the producer. An edge connecting two separate cycles is not
     itself cyclic and is omitted. A data edge cites `to.input.<group>`; a pure ordering
-    edge (`depends_on`/`runs_after`, no data) is labelled as such. Notes are sorted and
+    edge (`depends_on`/`runs_after`, no data) is labelled as such. An edge whose id is in
+    `gate_ids` is a lifted node's data gate, whose group is `<node>.<group>`: it cites
+    `gate: <node>.input.<group>`, the host input it mirrors. Notes are sorted and
     de-duplicated for deterministic presentation.
     """
     component_by_node = {
@@ -98,7 +106,14 @@ def _cycle_notes(
     for e in edges:
         component = component_by_node.get(e.from_)
         if component is not None and component_by_node.get(e.to) == component:
-            via = f"{e.to}.input.{e.input_group}" if e.input_group else "ordering"
+            if e.id in gate_ids and e.input_group:
+                # Only gate ids are split: an authored input key may itself contain a `.`.
+                node, _, group = e.input_group.partition(".")
+                via = f"gate: {node}.input.{group}"
+            elif e.input_group:
+                via = f"{e.to}.input.{e.input_group}"
+            else:
+                via = "ordering"
             key = (e.to, e.from_, via)
             if key not in seen:
                 seen.add(key)

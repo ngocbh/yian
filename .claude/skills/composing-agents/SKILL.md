@@ -682,8 +682,8 @@ then defaults to `object`. `prompt:` is optional; `questions:` and
 `adaptive_questions:` are mutually exclusive. The gate itself never chooses or
 calls an LLM: `adaptive_questions:` is LOAD-TIME sugar that lowers to a
 synthetic composer AGENT node + gate; the composer carries the gate's `case` routes,
-`depends_on:`, and `runs_after:`, so no LLM call happens on a branch the gate isn't on. The
-gate only calls the host's installed interaction tool.
+`depends_on:`, and `runs_after:`, and waits for the gate's other inputs, so the composer makes
+no LLM call when the gate can't run. The gate only calls the host's installed interaction tool.
 ```yaml
 ask:                                  # static questions list
   kind: human_input
@@ -887,12 +887,16 @@ and flow outputs. It is a load error in prompts and `questions:`, WAIT `until:`,
 `then:`/`else:` target) desugars at load into an anonymous `call` node; the host
 becomes `${<synth>.output}`. Every authored node `input:` mapping participates,
 including HUMAN_INPUT context and LOOP carried-record seeds. Keyword args only, each at
-most once; nesting is allowed (`call(a, x=call(b, y=1))`). The synth node is routed and
-ordered like the node it is written in (its host): it carries the host's `case` routes,
-`depends_on:`, and `runs_after:` (a nested branch call's inner calls carry the branch), so
-it never runs on a branch its host isn't on; it doesn't wait on the host's other inputs. A
-call in the flow `output:`/`asserts:` has no host. An **unquoted** value whose
-trimmed text starts with `call(` must be **exactly one** well-formed directive, else a load
+most once; nesting is allowed (`call(a, x=call(b, y=1))`). The synth node runs only when
+the node it is written in (its host) can: it carries the host's `case` routes,
+`depends_on:`, and `runs_after:` (a nested branch call's inner calls carry the branch), and
+waits for the host's other inputs, skipping whenever a skipped input skips the host (a
+`:-`-defaulted input only makes it wait). Calls in the same node don't wait on each other
+unless one reads the other, and a nested call also carries its outer call's other
+arguments (in `call(f, x=call(g), y=${a.output})`, `g` waits for `a` and is skipped with
+it). A call in
+the flow `output:`/`asserts:` has no host. An **unquoted** value whose trimmed text starts
+with `call(` must be **exactly one** well-formed directive, else a load
 error names the problem (unbalanced parens, trailing text after `)`, flow id not a bare name
 / missing comma, positional or repeated keyword, a keyword value that reads as two keywords
 like `a=1 b=2`). A **quoted** value (`"call(f) tail"`, or a quoted arg `x="call(g)"`) is

@@ -3,8 +3,10 @@
 Each lifting desugar pass records the node it lifted from as the host: an inline `call(...)`
 in a node's binding, the inner calls of a nested branch `call(...)`, and an adaptive gate's
 composer AGENT. The lifted node carries the host's CASE route edges (the else route included),
-`depends_on:` (co-skip), and `runs_after:` (order). So no call, side effect, or LLM call happens
-on a branch the host isn't on, and the taken branch runs as before.
+`depends_on:` (co-skip), and `runs_after:` (order). It also waits for the host's other data
+inputs and is skipped when one of them would skip the host; a defaulted input (`:-`) only makes
+it wait, and sibling calls lifted from one host still run in parallel. So no call, side effect,
+or LLM call happens on a branch the host isn't on, and the taken branch runs as before.
 """
 
 import pytest
@@ -16,9 +18,34 @@ from yian.events import NodeSkipped, NodeStarted, NodeSucceeded
 from yian.nodes.case import ELSE_HANDLE
 from yian.run import run_flow
 
-# `side` records its tag when it runs; `wrap` and `items` feed a branch call and a MAP.
+# `side` records its tag when it runs; `wrap` and `items` feed a branch call and a MAP;
+# `pair` joins two strings; `meet` is `side` that runs only alongside another `meet`.
 _DEFS = """
 defs:
+  pair:
+    input:
+      x: str
+      y: str
+    nodes:
+      j:
+        kind: code
+        input:
+          x: ${input.x}
+          y: ${input.y}
+        output: str
+        code: return inputs["x"] + inputs["y"]
+    output: ${j.output}
+  meet:
+    input:
+      tag: str
+    nodes:
+      fx:
+        kind: code
+        code: tests.engine._compose_codefns:meet
+        input:
+          tag: ${input.tag}
+        output: str
+    output: ${fx.output}
   side:
     input:
       tag: str
@@ -132,6 +159,13 @@ def _starts_after(result, first: str, then: str) -> bool:
         i for i, e in enumerate(events) if isinstance(e, NodeStarted) and e.node_id == then
     )
     return done < start
+
+
+def _index(result, kind, node_id: str) -> int:
+    """The position of the first ``kind`` event for ``node_id``."""
+    return next(
+        i for i, e in enumerate(result.events) if isinstance(e, kind) and e.node_id == node_id
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -593,3 +627,155 @@ def test_reading_a_lifted_node_in_the_hosts_runs_after_is_a_cycle():
 """
     with pytest.raises(LoadError, match="cycle"):
         load_flow(_flow(nodes, output="  r: ${router.output}\n"))
+
+
+# --------------------------------------------------------------------------- #
+# data gates: the host's other data inputs.
+# --------------------------------------------------------------------------- #
+
+_PUBLISH_NOTES = """
+  publish:
+    kind: code
+    input:
+      draft: call(side, tag="draft")
+      notes: ${maybe.output}
+    output: str
+    code: return inputs["draft"] + inputs["notes"]
+"""
+_PUBLISH_OUT = "  r: ${publish.output}\n"
+
+
+def test_inline_call_is_skipped_with_a_host_data_input():
+    flow, result = _run(_flow(_MAYBE + _PUBLISH_NOTES, output=_PUBLISH_OUT), other=False)
+    assert _never_ran(result, "__call_0")
+    assert _compose_codefns.RECORDED == []
+    assert result.output == {"r": None}
+    edge = _edge(flow, "maybe->__call_0#0")
+    assert edge.input_group == "publish.notes"
+    assert edge.optional is False
+
+
+def test_inline_call_waits_for_a_host_data_input_on_the_taken_path():
+    _, result = _run(_flow(_MAYBE + _PUBLISH_NOTES, output=_PUBLISH_OUT), other=True)
+    assert _compose_codefns.RECORDED == ["draft"]
+    assert result.output == {"r": "draftm"}
+    assert _starts_after(result, "maybe", "__call_0")
+
+
+def test_inline_call_only_waits_for_a_defaulted_host_input():
+    publish = _PUBLISH_NOTES.replace("${maybe.output}", '${maybe.output :- "none"}')
+    flow, result = _run(_flow(_MAYBE + publish, output=_PUBLISH_OUT), other=False)
+    assert _compose_codefns.RECORDED == ["draft"]
+    assert result.output == {"r": "draftnone"}
+    assert _edge(flow, "maybe->__call_0#0").optional is True
+    assert _index(result, NodeSkipped, "maybe") < _index(result, NodeStarted, "__call_0")
+
+
+_PUBLISH_TWO = """
+  publish:
+    kind: code
+    input:
+      a: call(meet, tag="a")
+      b: call(meet, tag="b")
+      notes: ${maybe.output}
+    output: str
+    code: return inputs["a"] + inputs["b"] + inputs["notes"]
+"""
+
+
+def test_sibling_calls_from_one_host_run_in_parallel():
+    _compose_codefns.MEET.reset()
+    flow, _ = _run(_flow(_MAYBE + _PUBLISH_TWO, output=_PUBLISH_OUT), other=True)
+    assert sorted(_compose_codefns.RECORDED) == ["a", "b"]
+    assert not [
+        e for e in flow.compiled.edges if {e.from_, e.to} == {"__call_0", "__call_1"}
+    ]
+
+
+def test_sibling_calls_from_one_host_are_skipped_with_a_host_data_input():
+    _compose_codefns.MEET.reset()
+    _run(_flow(_MAYBE + _PUBLISH_TWO, output=_PUBLISH_OUT), other=False)
+    assert _compose_codefns.RECORDED == []
+
+
+# Calls mint inner-first: the inner `side` call is `__call_0`, the outer `pair` is `__call_1`.
+_PUBLISH_NESTED = """
+  publish:
+    kind: code
+    input:
+      draft: call(pair, x=call(side, tag="inner"), y=${maybe.output})
+    output: str
+    code: return inputs["draft"]
+"""
+
+
+@pytest.mark.parametrize("other, ran, out", [(False, [], None), (True, ["inner"], "innerm")])
+def test_nested_inline_call_looks_through_to_its_siblings_inputs(other, ran, out):
+    _, result = _run(_flow(_MAYBE + _PUBLISH_NESTED, output=_PUBLISH_OUT), other=other)
+    assert _compose_codefns.RECORDED == ran
+    assert result.output == {"r": out}
+    if not other:
+        assert _never_ran(result, "__call_0") and _never_ran(result, "__call_1")
+
+
+_NESTED_PAIR = """
+  gate:
+    kind: case
+    cases:
+      - when: ${input.go}
+        then: call(pair, x=call(side, tag="inner"), y=${maybe.output})
+    else: b
+  b:
+    kind: code
+    output: str
+    code: return "B"
+"""
+
+
+@pytest.mark.parametrize("other, ran, out", [(False, [], None), (True, ["inner"], "innerm")])
+def test_nested_branch_inner_call_is_skipped_with_the_branch_calls_data_input(other, ran, out):
+    _, result = _run(_flow(_MAYBE + _NESTED_PAIR), go=True, other=other)
+    assert _compose_codefns.RECORDED == ran
+    assert result.output == {"r": out}
+    if not other:
+        assert _never_ran(result, "__call_0")
+
+
+_ADAPTIVE_NOTE = _MAYBE + _ADAPTIVE.replace(
+    "      ctx: ${input.go}\n", '      ctx: call(side, tag="ctx")\n      note: ${maybe.output}\n'
+)
+
+
+def test_adaptive_lifted_nodes_are_skipped_with_a_gate_data_input(monkeypatch):
+    _, result, calls, asked = _adaptive(monkeypatch, _ADAPTIVE_NOTE, go=True, other=False)
+    assert (calls, asked, _compose_codefns.RECORDED) == ([], [], [])
+    assert _never_ran(result, "__call_0") and _never_ran(result, "ask__compose")
+
+
+def test_adaptive_lifted_nodes_wait_for_a_gate_data_input(monkeypatch):
+    _, _, calls, _ = _adaptive(monkeypatch, _ADAPTIVE_NOTE, go=True, other=True)
+    assert _compose_codefns.RECORDED == ["ctx"]
+    assert calls == ["compose"]
+
+
+def test_reading_a_lifted_node_from_a_host_input_is_a_cycle():
+    # `spy` reads the call, and `publish` reads `spy`: the call now waits on `spy`.
+    nodes = """
+  spy:
+    kind: code
+    input:
+      v: ${__call_0.output}
+    output: str
+    code: return inputs["v"]
+  publish:
+    kind: code
+    input:
+      draft: call(side, tag="d")
+      notes: ${spy.output}
+    output: str
+    code: return inputs["draft"] + inputs["notes"]
+"""
+    with pytest.raises(LoadError, match="cycle") as caught:
+        load_flow(_flow(nodes, output=_PUBLISH_OUT))
+    assert "__call_0" in str(caught.value) and "spy" in str(caught.value)
+    assert "__call_0 depends on spy (gate: publish.input.notes)" in caught.value.diagnostic.notes

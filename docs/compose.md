@@ -46,7 +46,8 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   ├─ infer_data_edges       → read every ${...} and add the corresponding data edges;
   │                            append each case's own data+control edges from its build
   ├─ host_control_edges     → each node lifted out of an authored node (its host) gets
-  │                            copies of the host's case routes and depends_on/runs_after
+  │                            copies of the host's case routes and depends_on/runs_after,
+  │                            and data gates on the host's other inputs
   ├─ compute_narrowing      → each node's view of union contracts under the CASE
   │                            branches (`on:` tag, `isinstance`) that route it
   ├─ check case values      → a branch of a typed CASE that can never produce its
@@ -403,17 +404,24 @@ the pipeline only ever sees a small set of kinds:
 | typed `case` (`output:`) | a synthetic `code` result node `__case_<id>`; `${case.output}` reads it |
 | `${some_case.output}` of an untyped `case` | a coalesce over the case's branch targets |
 
-Because desugaring is a descriptor-level rewrite, the synthetic nodes flow through
-`build`, edge inference, validation, and the DAG check like hand-written ones. The one
-difference is control: a pass that lifts a node out of an authored node (an inline call in
-a node's binding, the inner calls of a nested branch call, an adaptive composer) records
-that node as the synthetic node's `host`, and `host_control_edges` gives it the host's case
-route edges and `depends_on`/`runs_after` ordering edges, so it runs only on the host's
-branches and in the host's order. The host's data inputs are not copied: a lifted node
-doesn't wait on them. A branch target itself (a `then: call(...)`, a
+Because desugaring is a descriptor-level rewrite, the synthetic nodes flow through `build`,
+edge inference, validation, and the DAG check like hand-written ones. The one difference is
+control: a pass that lifts a node out of an authored node (an inline call in a node's
+binding, the inner calls of a nested branch call, an adaptive composer) records that node as
+the synthetic node's `host`, and `host_control_edges` gives it the host's case route edges
+and `depends_on`/`runs_after` ordering edges, so it runs only on the host's branches and in
+the host's order. It also gets *data gates*: a data edge from each producer of the host's
+other inputs, in an input group named `<node>.<group>` (the node whose input it is, then
+that input's group), so the runtime join applies the host's co-skip rule: it is skipped when
+those inputs skip the host and otherwise only waits. Nodes lifted out of the same host are
+left out, so they don't wait on each other; a required input read from one of them is looked
+through to that node's own inputs, and each host up the chain is visited the same way. One
+case is not exact: when an author reads a lifted id in a coalesce or defaulted host input,
+that input's other producers only make the lifted node wait, so it may run while the host is
+skipped (see `compose/edges/hosts.py`). A branch target itself (a `then: call(...)`, a
 `__value_N`), a `__case_<id>` result node, and a call in the flow `output:`/`asserts:` have
-no host. The synthetic nodes remain origin-free because no authored node header
-corresponds to them; authored nodes inside retained inline bodies are stamped normally.
+no host. The synthetic nodes remain origin-free because no authored node header corresponds
+to them; authored nodes inside retained inline bodies are stamped normally.
 
 ---
 

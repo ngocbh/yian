@@ -29,6 +29,15 @@ def _nest(n: int, leaf: Any = 1) -> Any:
     return value
 
 
+def _types(value: Any) -> Any:
+    """Return `value` with each scalar replaced by its type, keeping lists and dicts."""
+    if isinstance(value, dict):
+        return {key: _types(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_types(item) for item in value]
+    return type(value)
+
+
 @pytest.mark.parametrize(
     ("value", "carrier", "stored"),
     [
@@ -86,21 +95,44 @@ def test_any_rejects_a_non_json_value_at_its_path(value, message, path):
     assert caught.value.path == path
 
 
-def test_any_rejects_an_over_deep_value():
-    with pytest.raises(TypeCheckError, match="nests deeper than 100 levels"):
-        build_value_as(ANY, _nest(150))
-
-
-def test_any_accepts_a_value_at_the_nesting_limit():
-    assert type(build_value_as(ANY, _nest(100))) is ListAnyValue
+def test_any_leaves_the_nesting_limit_to_the_boundaries():
+    assert build_value_as(ANY, _nest(150)).value == _nest(150)
 
 
 def test_any_ends_a_cyclic_value():
     cyclic: dict = {}
-    cyclic["self"] = cyclic
+    cyclic["self"] = {"items": [1, cyclic]}
 
-    with pytest.raises(TypeCheckError):
+    with pytest.raises(TypeCheckError) as caught:
         build_value_as(ANY, cyclic)
+
+    assert str(caught.value) == "value contains itself"
+    assert caught.value.path == ("self", "items", 1)
+
+
+def test_any_accepts_a_shared_value_that_is_not_a_cycle():
+    shared = [1, 2]
+
+    assert build_value_as(ANY, {"a": shared, "b": shared}).value == {"a": [1, 2], "b": [1, 2]}
+
+
+def test_any_path_unwraps_a_str_subclass_key():
+    class Key(str):
+        pass
+
+    with pytest.raises(TypeCheckError, match="is not a JSON value") as caught:
+        build_value_as(ANY, {Key("k"): {1}})
+
+    assert caught.value.path == ("k",)
+    assert type(caught.value.path[0]) is str
+
+
+def test_any_reports_the_first_bad_part_in_order():
+    with pytest.raises(TypeCheckError) as caught:
+        build_value_as(ANY, {"a": [1, {2}], 1: "b"})
+
+    assert str(caught.value) == "{2} is not a JSON value"
+    assert caught.value.path == ("a", 1)
 
 
 def test_optional_any_accepts_none():
@@ -178,7 +210,18 @@ def test_record_with_optional_any_field_accepts_absent_and_null():
 
 @pytest.mark.parametrize(
     "value",
-    ["hello", 3, 2**80, 2.5, True, {"a": [1, None]}, [1, "two", None], [1, 2.5], (1, 2)],
+    [
+        "hello",
+        3,
+        2**80,
+        2.5,
+        True,
+        {"a": [1, None, 2.5, True]},
+        [1, "two", None],
+        [1, 2.5],
+        (1, 2),
+        [True, {"b": [1, 2.0]}],
+    ],
 )
 def test_any_value_round_trips_through_the_wire(value):
     typed = build_value_as(ANY, value)
@@ -189,13 +232,7 @@ def test_any_value_round_trips_through_the_wire(value):
 
     assert type(decoded) is type(typed)
     assert decoded.value == typed.value
-    assert [type(item) for item in _items(decoded.value)] == [
-        type(item) for item in _items(typed.value)
-    ]
-
-
-def _items(value: Any) -> list:
-    return value if isinstance(value, list) else [value]
+    assert _types(decoded.value) == _types(typed.value)
 
 
 def test_any_type_shape_is_valid():

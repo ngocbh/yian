@@ -1365,10 +1365,10 @@ def _json_value_error(
     """Return why `value` is not a JSON value, or `None` when it is.
 
     A JSON value is `None`, a `bool`, `int`, `float` or `str`, a `dict` with only
-    `str` keys and JSON values, or a `list`/`tuple` of JSON values. Each `dict`,
-    `list` and `tuple` is one level, counted as `reject_deep_nesting` counts them;
-    a value past `MAX_VALUE_NESTING` levels, a cyclic one included, is rejected.
-    Non-finite numbers are left to `reject_nonfinite`.
+    `str` keys and JSON values, or a `list`/`tuple` of JSON values. The walk checks
+    structure only: nesting depth and non-finite numbers are left to
+    `reject_deep_nesting` and `reject_nonfinite` at the boundaries, so a recorded
+    value replays. A container inside itself is rejected.
 
     Args:
         value (`Any`):
@@ -1381,35 +1381,66 @@ def _json_value_error(
             The error for the first bad part, depth-first and in order, with its
             path, or `None` when ``value`` is a JSON value.
     """
-    # An explicit stack, not recursion, so a deep or cyclic value ends at the level limit
-    # instead of the interpreter's recursion limit.
-    stack: list[tuple[Any, tuple[str | int, ...], int]] = [(value, path, 1)]
+    if _is_json_scalar(value):
+        return None
+    entries = _json_entries(value)
+    if entries is None:
+        return TypeCheckError(f"{value_repr(value)} is not a JSON value", path=path)
+    # An explicit stack, not recursion, so the walk does not depend on the caller's stack
+    # depth or the configured recursion limit.
+    # Each frame holds its entries iterator, the container, and its key in the parent;
+    # the path is built only when rejecting.
+    stack: list[tuple[Iterator[tuple[Any, Any]], Any, Any]] = [(entries, value, None)]
+    active = {id(value)}
+
+    def path_to(*keys: Any) -> tuple[str | int, ...]:
+        frame_keys = [frame_key for _, _, frame_key in stack[1:]]
+        # `TypeCheckError` paths hold exact `str` segments, so a `str` subclass key is
+        # unwrapped.
+        return path + tuple(
+            str.__str__(key) if isinstance(key, str) else key for key in (*frame_keys, *keys)
+        )
+
     while stack:
-        item, item_path, level = stack.pop()
-        if item is None or isinstance(item, (str, int, float)):
+        iterator, container, _ = stack[-1]
+        entry = next(iterator, None)
+        if entry is None:
+            stack.pop()
+            active.discard(id(container))
             continue
-        if isinstance(item, dict):
-            for key in item:
-                if not isinstance(key, str):
-                    return TypeCheckError(
-                        f"object keys must be text, got {value_repr(key)}", path=item_path
-                    )
-            # `TypeCheckError` paths hold exact `str` segments, so a `str` subclass key
-            # is unwrapped.
-            children = [
-                (child, item_path + (str.__str__(key),)) for key, child in item.items()
-            ]
-        elif isinstance(item, (list, tuple)):
-            children = [(child, item_path + (index,)) for index, child in enumerate(item)]
-        else:
-            return TypeCheckError(f"{value_repr(item)} is not a JSON value", path=item_path)
-        if level > MAX_VALUE_NESTING:
+        key, child = entry
+        if isinstance(container, dict) and not isinstance(key, str):
             return TypeCheckError(
-                f"value nests deeper than {MAX_VALUE_NESTING} levels, "
-                "the limit for a yian value (each record and list is a level)",
-                path=item_path,
+                f"object keys must be text, got {value_repr(key)}", path=path_to()
             )
-        stack.extend((child, child_path, level + 1) for child, child_path in reversed(children))
+        if _is_json_scalar(child):
+            continue
+        if id(child) in active:
+            return TypeCheckError("value contains itself", path=path_to(key))
+        child_entries = _json_entries(child)
+        if child_entries is None:
+            return TypeCheckError(f"{value_repr(child)} is not a JSON value", path=path_to(key))
+        stack.append((child_entries, child, key))
+        active.add(id(child))
+    return None
+
+
+def _is_json_scalar(value: Any) -> bool:
+    """Whether `value` is `None`, a `bool`, `int`, `float` or `str`."""
+    # The exact-type lookup is the fast path; `isinstance` admits subclasses.
+    return (
+        value is None
+        or type(value) in _NESTING_SCALARS
+        or isinstance(value, (str, int, float))
+    )
+
+
+def _json_entries(value: Any) -> Optional[Iterator[tuple[Any, Any]]]:
+    """Return a `dict`'s items or a `list`/`tuple`'s indexed items, else `None`."""
+    if isinstance(value, dict):
+        return iter(value.items())
+    if isinstance(value, (list, tuple)):
+        return enumerate(value)
     return None
 
 
@@ -1761,8 +1792,7 @@ def _build_scalar_or_list(
         items = list(value)
         element = declared.element_kind
         if element is None:
-            for index, item in enumerate(items):
-                _require_json_value(item, path + (index,))
+            _require_json_value(items, path)
         else:
             for index, item in enumerate(items):
                 if not _scalar_matches(element, item):

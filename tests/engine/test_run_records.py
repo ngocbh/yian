@@ -951,6 +951,18 @@ def test_typed_object_output_rejects_a_non_json_member(member, shown):
     assert caught.value.path == ("nested", "at")
 
 
+def test_recorded_object_past_the_nesting_limit_still_replays():
+    value: Any = "leaf"
+    for _ in range(150):
+        value = {"a": value}
+    recorded = ANY_VALUE_ADAPTER.validate_python({"kind": "object", "value": value})
+
+    wire, decoded = canonical_typed(recorded, ValueKind.OBJECT)
+
+    assert wire == {"kind": "object", "value": value}
+    assert decoded == recorded
+
+
 def test_typed_object_output_canonicalizes_a_tuple():
     wire, decoded = canonical_typed({"items": (1, 2)}, ValueKind.OBJECT)
 

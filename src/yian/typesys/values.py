@@ -829,7 +829,7 @@ def _json_string(value: str) -> str:
 
 # The type tokenizer's NAME token; a `Literal` member printed bare must match it.
 _NAME_PATTERN = r"[^\W\d]\w*"
-_NAME = re.compile(_NAME_PATTERN)
+_NAME_TOKEN = re.compile(_NAME_PATTERN)
 
 # Names the type parser reads as constants, never as `Literal` members.
 _BUILTIN_CONSTANTS = ("True", "False", "None")
@@ -859,7 +859,7 @@ def _literal_member(tag: str) -> str:
     """Spell one `Literal` member bare when it reads back as a name, else quoted."""
     # The tokenizer's NAME and `str.isidentifier` disagree on a few Unicode characters;
     # a bare member must pass both to read back as the same single name.
-    if _NAME.fullmatch(tag) and tag.isidentifier() and tag not in _BUILTIN_CONSTANTS:
+    if _NAME_TOKEN.fullmatch(tag) and tag.isidentifier() and tag not in _BUILTIN_CONSTANTS:
         return tag
     return json.dumps(tag, ensure_ascii=False)
 

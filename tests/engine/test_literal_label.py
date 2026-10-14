@@ -18,6 +18,8 @@ def _lit(*tags):
         (("a b", "z", "é"), 'Literal("a b", z, é)'),
         (("True", "x-y", "1a", 'say "hi"'), 'Literal("1a", "True", "say \\"hi\\"", "x-y")'),
         (("a,b",), 'Literal("a,b")'),
+        # a NAME token that `str.isidentifier` rejects must be quoted to read back
+        (("a²",), 'Literal("a²")'),
     ],
 )
 def test_canonical_label_spells_literal_in_the_parenthesized_form(tags, label):

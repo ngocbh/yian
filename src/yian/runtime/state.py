@@ -1029,7 +1029,7 @@ def prepare_expanded(
     Raises:
         `GrowthRejected`:
             The node-produced prune set or seed, returned fragment constraints,
-            growth budget/depth ceiling, or requested prune policy is invalid.
+            growth budget, or requested prune policy is invalid.
         `TypeError`:
             A host/setup carrier or builder has the wrong type, or the builder does
             not return a `Flow`.

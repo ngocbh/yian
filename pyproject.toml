@@ -35,7 +35,7 @@ dependencies = [
 
 [project.optional-dependencies]
 anthropic = ["langchain-anthropic>=0.3.15"]
-# Request/stream hooks are covered against this version; verify before upgrading.
+# langchain-openai's request/stream hooks are covered against 1.6.2; verify before upgrading.
 # openai 3.4.0 is the first release that drops Azure's `api-key` header on a redirect to
 # another origin; this floor holds when yian is installed with the `openai` or `all` extra.
 openai = ["langchain-openai==1.6.2", "openai>=3.4.0"]

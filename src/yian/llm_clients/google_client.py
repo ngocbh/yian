@@ -172,6 +172,10 @@ class GoogleClient(BaseLLMClient):
     def get_llm(self) -> Any:
         """Return configured ChatGoogleGenerativeAI instance.
 
+        Returns:
+            `NormalizedChatGoogleGenerativeAI`:
+                The chat model for `self.model`, on the given ``base_url`` and host clients.
+
         Raises:
             `TypeError`:
                 Raised when a given ``http_client`` / ``http_async_client`` is not an httpx

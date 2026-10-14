@@ -101,7 +101,8 @@ class OllamaClient(BaseLLMClient):
             "block": self.kwargs.get("block") or {},
         }
         # Generation settings come only from the block; other client kwargs such as
-        # `max_retries` are not ChatOllama fields and are ignored.
+        # `max_retries` are not ChatOllama fields and are ignored; the HTTP clients are
+        # rejected above.
         return NormalizedChatOllama(**kwargs)
 
     def validate_model(self) -> bool:

@@ -1,13 +1,22 @@
 """Untyped values that cross a JSON boundary are checked as JSON values."""
 
 from datetime import date
+import json
+from pathlib import Path
 import re
+import textwrap
 from typing import Any
 
 import pytest
-from yian.runtime.log import canonical_typed
+from yian.compose import load_flow
+from yian.events import NodeStarted
+from yian.nodes.contracts import PartialRecordContract, ValueContract
+from yian.run import resume_flow, run_flow
+from yian.runtime.log import canonical_typed, decode_record
+from yian.runtime.state import _canonical_output_value
 from yian.typesys.values import (
     FileRef,
+    Type,
     TypeCheckError,
     ValueKind,
     build_value,
@@ -140,3 +149,282 @@ def test_canonical_typed_reports_the_type_check_for_typed_values(value, declared
 def test_canonical_typed_still_rejects_lone_surrogates(value, declared):
     with pytest.raises(ValueError, match="^Unicode surrogate is not valid canonical JSON$"):
         canonical_typed(value, declared)
+
+
+# --------------------------------------------------------------------------- #
+# Flows: an untyped output crosses the same boundary
+# --------------------------------------------------------------------------- #
+
+_FILE = "__import__('yian.typesys.values', fromlist=['FileRef']).FileRef(uri='f')"
+_FILE_WIRE = {"uri": "f", "mime": None, "name": None}
+
+
+def _flow(code: str, *, output: str | None = None) -> str:
+    """Return a flow whose CODE node `mk` returns `code`, typed `output`, as the flow output.
+
+    Args:
+        code (`str`): The Python expression `mk` returns.
+        output (`str | None`, *optional*, defaults to `None`): The `output:` type of `mk`,
+            or `None` for an untyped node.
+    """
+    typed = "" if output is None else f"    output: {output}\n"
+    return (
+        "id: p\nname: p\n"
+        "input:\n  s: !str\n"
+        "nodes:\n"
+        "  mk:\n"
+        "    kind: code\n"
+        "    input:\n"
+        "      s: ${input.s}\n"
+        + typed
+        + f"    code: |\n      return {code}\n"
+        "output: ${mk.output}\n"
+    )
+
+
+def _run(text: str, **kwargs: Any):
+    """Load and run `text` with `s: "x"`."""
+    return run_flow(load_flow(text), {"s": "x"}, **kwargs)
+
+
+def _ok(text: str) -> Any:
+    """Run `text` and return its output, asserting it succeeded."""
+    result = _run(text)
+    assert result.status == "succeeded", result.failure
+    return result.output
+
+
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        (
+            '{"d": __import__("datetime").date(2026, 1, 1)}',
+            "output at d: datetime.date(2026, 1, 1) is not a JSON value",
+        ),
+        (
+            '{"d": __import__("datetime").datetime(2026, 1, 1)}',
+            "output at d: datetime.datetime(2026, 1, 1, 0, 0) is not a JSON value",
+        ),
+        (
+            '[1, __import__("datetime").date(2026, 1, 1)]',
+            "output at [1]: datetime.date(2026, 1, 1) is not a JSON value",
+        ),
+        ('{"s": {1, 2}}', "output at s: {1, 2} is not a JSON value"),
+        ('{"a": {1: "a"}}', "output at a: object keys must be text, got 1"),
+        (
+            '{"x": __import__("decimal").Decimal("1")}',
+            "output at x: Decimal('1') is not a JSON value",
+        ),
+    ],
+)
+def test_an_untyped_output_rejects_a_non_json_part_with_its_path(code, message):
+    result = _run(_flow(code))
+    assert result.status == "failed"
+    assert result.failure.code == "contract.output"
+    assert result.failure.node_id == "mk"
+    assert result.failure.message == message
+
+
+@pytest.mark.parametrize(
+    ("code", "value"),
+    [
+        ('{"t": (1, 2)}', {"t": [1, 2]}),
+        ("(1, 2)", [1, 2]),
+        ("2**80", 2**80),
+        ("None", None),
+        ('"x"', "x"),
+        ('[1, "a", {"k": 2.5}]', [1, "a", {"k": 2.5}]),
+    ],
+)
+def test_an_untyped_output_accepts_json_values(code, value):
+    assert _ok(_flow(code)) == value
+
+
+def test_an_untyped_output_accepts_a_file():
+    assert _ok(_flow(_FILE)) == FileRef(uri="f")
+
+
+def _partial_record_nodes(indent: str = "  ") -> str:
+    """Return nodes `a` (a typed `file`) and `b` (untyped), indented under `nodes:`."""
+    return textwrap.indent(
+        "a:\n"
+        "  kind: code\n"
+        "  input:\n    s: ${input.s}\n"
+        "  output: file\n"
+        f"  code: |\n    return {_FILE}\n"
+        "b:\n"
+        "  kind: code\n"
+        "  input:\n    s: ${input.s}\n"
+        "  code: |\n    return [1]\n",
+        indent,
+    )
+
+
+_PARTIAL_RECORD_FLOW = (
+    "id: p\nname: p\n"
+    "input:\n  s: !str\n"
+    "nodes:\n"
+    + _partial_record_nodes()
+    + "output:\n  f: ${a.output}\n  g: ${b.output}\n"
+)
+
+_PARTIAL_RECORD_BODY = (
+    "defs:\n"
+    "  body:\n"
+    "    input:\n      s: !str\n"
+    "    nodes:\n"
+    + _partial_record_nodes("      ")
+    + "    output:\n      f: ${a.output}\n      g: ${b.output}\n"
+)
+
+
+def test_a_partial_record_output_holds_a_file():
+    assert _ok(_PARTIAL_RECORD_FLOW) == {"f": _FILE_WIRE, "g": [1]}
+
+
+def test_a_call_body_returns_a_partial_record_holding_a_file():
+    text = (
+        "id: p\nname: p\n"
+        "input:\n  s: !str\n"
+        + _PARTIAL_RECORD_BODY
+        + "nodes:\n"
+        "  c:\n    kind: call\n    call: body\n    input:\n      s: ${input.s}\n"
+        "output: ${c.output}\n"
+    )
+    assert _ok(text) == {"f": _FILE_WIRE, "g": [1]}
+
+
+def test_a_map_body_returns_a_partial_record_holding_a_file():
+    text = (
+        "id: p\nname: p\n"
+        "input:\n  s: !str\n"
+        + _PARTIAL_RECORD_BODY
+        + "nodes:\n"
+        "  m:\n    kind: map\n    over: ['x', 'y']\n    call: body\n"
+        "    input:\n      s: ${item}\n"
+        "output: ${m.output}\n"
+    )
+    assert _ok(text) == [{"f": _FILE_WIRE, "g": [1]}] * 2
+
+
+def test_a_partial_record_output_holds_an_untyped_file():
+    text = (
+        "id: p\nname: p\n"
+        "input:\n  s: !str\n"
+        "nodes:\n"
+        "  u:\n    kind: code\n    input:\n      s: ${input.s}\n"
+        f"    code: |\n      return {_FILE}\n"
+        "  b:\n    kind: code\n    input:\n      s: ${input.s}\n"
+        "    code: |\n      return 1\n"
+        "output:\n  f: ${u.output}\n  g: ${b.output}\n"
+    )
+    assert _ok(text) == {"f": _FILE_WIRE, "g": 1}
+
+
+def test_a_map_body_returns_an_untyped_file():
+    text = (
+        "id: p\nname: p\n"
+        "input:\n  s: !str\n"
+        "defs:\n"
+        "  body:\n"
+        "    input:\n      s: !str\n"
+        "    nodes:\n"
+        "      u:\n        kind: code\n        input:\n          s: ${input.s}\n"
+        f"        code: |\n          return {_FILE}\n"
+        "    output: ${u.output}\n"
+        "nodes:\n"
+        "  m:\n    kind: map\n    over: ['x', 'y']\n    call: body\n"
+        "    input:\n      s: ${item}\n"
+        "output: ${m.output}\n"
+    )
+    assert _ok(text) == [_FILE_WIRE] * 2
+
+
+def _literal_flow(g: str) -> str:
+    """Return a flow whose untyped output record is `{g: <g>, h: ${b.output}}`."""
+    return (
+        "id: p\nname: p\n"
+        "input:\n  s: !str\n"
+        "nodes:\n"
+        "  b:\n    kind: code\n    input:\n      s: ${input.s}\n"
+        "    code: |\n      return 1\n"
+        f"output:\n  g: {g}\n  h: ${{b.output}}\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("g", "message"),
+    [
+        ("2026-01-01", "output at g: datetime.date(2026, 1, 1) is not a JSON value"),
+        ("{d: 2026-01-01}", "output at g.d: datetime.date(2026, 1, 1) is not a JSON value"),
+    ],
+)
+def test_an_unquoted_date_literal_in_an_untyped_output_fails_at_the_end(g, message):
+    result = _run(_literal_flow(g))
+    assert result.status == "failed"
+    assert result.failure.code == "contract.output"
+    assert result.failure.node_id == "__end__"
+    assert result.failure.message == message
+
+
+def test_a_quoted_date_literal_in_an_untyped_output_stays_text():
+    assert _ok(_literal_flow('"2026-01-01"')) == {"g": "2026-01-01", "h": 1}
+
+
+def _partial_file_contract() -> PartialRecordContract:
+    """Return a partial record with a typed `file` field `f` and an opaque field `g`."""
+    return PartialRecordContract(
+        fields=(("f", ValueContract(type=Type.scalar(ValueKind.FILE))), ("g", None))
+    )
+
+
+def test_a_partial_record_checks_its_opaque_field_as_json():
+    contract = _partial_file_contract()
+    wire, _ = _canonical_output_value({"f": FileRef(uri="f"), "g": [1]}, contract, None)
+    assert wire["value"] == {"f": _FILE_WIRE, "g": [1]}
+
+    with pytest.raises(TypeCheckError) as caught:
+        _canonical_output_value({"f": FileRef(uri="f"), "g": {1, 2}}, contract, None)
+    assert str(caught.value) == "output at g: {1, 2} is not a JSON value"
+    assert caught.value.path == ("g",)
+
+
+# --------------------------------------------------------------------------- #
+# Replay: a recorded untyped value re-crosses the boundary unchanged
+# --------------------------------------------------------------------------- #
+
+
+def _committed(path: Path) -> dict[str, dict]:
+    """Return each node's committed wire value from the log at `path`."""
+    values: dict[str, dict] = {}
+    for line in path.read_text().splitlines():
+        decode_record(line)  # every record still validates
+        raw = json.loads(line)
+        if raw["kind"] == "node_succeeded":
+            values[raw["payload"]["node_id"]] = raw["payload"]["value"]
+    return values
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (_flow('{"a": [1, None], "t": (1, 2)}'), {"a": [1, None], "t": [1, 2]}),
+        (_PARTIAL_RECORD_FLOW, {"f": _FILE_WIRE, "g": [1]}),
+    ],
+    ids=["untyped", "partial-record"],
+)
+def test_resuming_a_finished_run_replays_untyped_values(tmp_path: Path, text, expected):
+    path = tmp_path / "run.jsonl"
+    first = _run(text, log=path)
+    assert first.status == "succeeded", first.failure
+    assert first.output == expected
+    committed = _committed(path)
+    before = path.read_bytes()
+
+    resumed = resume_flow(load_flow(text), log=path)
+
+    assert resumed.status == "succeeded", resumed.failure
+    assert resumed.output == expected
+    assert not [event for event in resumed.events if isinstance(event, NodeStarted)]
+    assert path.read_bytes() == before
+    assert _committed(path) == committed

@@ -267,12 +267,9 @@ def _union(members: list[Type | None]) -> Type | None:
                 others.append(part)
     if not others:
         return Type.scalar(ValueKind.NONE)
-    if len(others) > 1 and len({other.kind for other in others}) == 1 and others[0].kind in (
-        ValueKind.INTEGER,
-        ValueKind.NUMBER,
-    ):
+    if {other.kind for other in others} in ({ValueKind.INTEGER}, {ValueKind.NUMBER}):
         # Members of one numeric kind differ only by range; one range covering
-        # them all is wider than their union, so the check stays sound.
+        # them all is at least as wide as their union, so the check stays sound.
         others = [_hull(others)]
     if len(others) == 1:
         return replace(others[0], nullable=nullable)

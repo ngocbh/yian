@@ -632,7 +632,7 @@ def test_a_literal_inside_a_one_sided_minimum_runs():
     assert result.output == "placed 0"
 
 
-def test_an_unproven_int_into_a_one_sided_minimum_starts():
+def test_an_unproven_int_into_a_one_sided_minimum_is_left_to_the_tool():
     # `int` overlaps `int(0..)`; the tool validates each call.
     flow = load_flow(_typed_flow("${input.n}", flow_inputs="input:\n  n: !int"))
 

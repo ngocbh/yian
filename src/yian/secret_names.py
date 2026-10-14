@@ -58,7 +58,5 @@ def is_secret_name(name: str) -> bool:
         `bool`: ``True`` when the normalized name, ignoring leading and trailing
         underscores, is in `SECRET_NAMES` or ends with one of `SECRET_SUFFIXES`.
     """
-    normalized = normalize_name(name)
-    return normalized.strip("_") in SECRET_NAMES or normalized.endswith(
-        SECRET_SUFFIXES
-    )
+    normalized = normalize_name(name).strip("_")
+    return normalized in SECRET_NAMES or normalized.endswith(SECRET_SUFFIXES)

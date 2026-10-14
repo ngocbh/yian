@@ -44,6 +44,7 @@ def test_the_list_is_the_documented_short_list() -> None:
         "refresh-token",
         "HTTPProxyPassword",
         "_api_key",
+        "db_password_",
     ],
 )
 def test_secret_names_match_exact_suffixed_and_respelled(name: str) -> None:

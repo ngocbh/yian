@@ -427,7 +427,6 @@ output: ${ask.output}
     assert flow_fingerprint(effective) == baseline
 
 
-
 # Every authored literal is identity: the manifest never guesses which values are secrets,
 # so editing any literal written in a flow changes its fingerprint.
 
@@ -545,8 +544,10 @@ def test_flow_without_formerly_redacted_values_keeps_its_fingerprint():
     )
 
 
-# Each pair differs in one literal that a name- or shape-based guess once dropped from
-# the manifest, either whole or inside a URI, DSN or JDBC string.
+# Each pair differs in one literal under a name or in a shape that a guess once treated as a
+# credential: the whole value under a credential-like name, or a part of a URI, DSN or JDBC
+# string. Plain `key`, `user` and `page_token` were redacted only as URI query parameters;
+# they stay here to pin that a slot of that name is identity too.
 _FORMERLY_REDACTED_LITERALS = [
     ("signature", "q -> a", "q -> s"),
     ("sig", "first-value", "second-value"),

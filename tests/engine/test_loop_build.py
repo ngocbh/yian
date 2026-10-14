@@ -1549,6 +1549,7 @@ def test_reference_seed_is_checked_even_when_a_while_loop_never_runs():
         ("int", "${input.m :- 0}", 3),
         ("int", "${input.m | 0}", 3),
         ("str", '"x${input.i}"', "x2"),
+        # A non-null literal fills a strict input whatever its tag, as for a CALL argument.
         ("int", "!Optional(int) 5", 5),
     ],
 )

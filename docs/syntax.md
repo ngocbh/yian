@@ -2736,7 +2736,8 @@ returns the whole carried record.
   fit an `int` input, and `null`, `${null}`, or an `Optional` reference fits only an
   `Optional` input (tag a value you know is set: `n: !int ${input.m}`). This holds
   even when a `while:` loop would run zero times, so a seed the `while:` keeps out of
-  the body when it is null still needs an `Optional` body input.
+  the body when it is null still needs an `Optional` body input; tag it inside the body
+  where a strict value is needed.
 - **`call:` / `nodes:`** names a reusable body or defines a one-off body inline.
   The body's `output:` returns a **subset** of the carried record: at least one
   carried field, and any number of them. Each field the body omits keeps its value

@@ -264,6 +264,12 @@ the member first with `isinstance(r, <Type>) and ...`
     all of them, so an unknown name, a pool reference, an unknown function, or a
     span that doesn't parse is a load error at that text.
 
+Changed: a non-text `prompt:` used to crash the loader with a raw `TypeError` (AGENT, an
+adaptive brief), load silently (AGENT `0`, `false`, `[]`, `{}`; `human_input` lists and
+mappings), or load and fail when the gate ran (`human_input` numbers). A non-text
+question field was a raw validation dump at `questions:`. Now each is a load error at
+the value; quote it.
+
 ### Operators inside `${...}`
 
 A `${...}` is **one expression**. The same grammar works everywhere `${...}`
@@ -898,6 +904,16 @@ classify:
     Classify the sentiment of: ${text}
     Answer with exactly one of: positive, neutral, negative.
 ```
+
+`prompt:` must be text. A value YAML reads as a number, boolean, date, list, or
+mapping is a load error at that value; quote it:
+
+```
+node 'classify' (kind=agent): `prompt:` must be text, but YAML read it as an integer; put it in quotes
+```
+
+A `null` `prompt:` still counts as an absent `prompt:`. This used to load or crash differently; see
+the note under [References](#references-naming-a-value).
 
 An AGENT with `tools:` or `skills:` runs the tool loop; without them it makes one
 model call (text, or structured for a typed `output:`).
@@ -1809,6 +1825,12 @@ ask:
 they read the gate's `input:` names, bare. `header` is not a template. A pool
 reference is a load error at that string, with a hint to bind the value in `input:`:
 `node 'ask' questions[0].options[1].label: ${input.proj} is not a declared input`.
+
+`prompt:`, `adaptive_questions.prompt:`, and each question's `question`, `header`,
+`label`, and `description` must be text. A value YAML reads as non-text is a load error
+at that value, as for an AGENT `prompt:`; quote it. A blank question field says
+``node 'ask' (kind=human_input): `questions[0].header:` must be text, but it is empty;
+write the text``.
 
 Changed: most `human_input` prompt or question text with an unknown name, a pool
 reference, an unknown function, or a span that doesn't parse used to load and fail the

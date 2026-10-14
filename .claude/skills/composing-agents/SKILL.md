@@ -370,6 +370,8 @@ or infinity in the reply included. A root `Literal[...]`
 returns its bare tag to the flow. A union returns the matching member's record; each
 member's schema pins its tag and rejects unknown fields.
 Use a downstream `code` node only for deterministic post-processing.
+`prompt:` must be text: quote a number, boolean, or a value starting with `[` or `{`;
+otherwise it is a load error at the value.
 An AGENT with `tools:` or `skills:` runs the tool loop; without them it makes one model
 call (text, or structured for a typed `output:`). `mode:` was removed; writing it is a
 load error.
@@ -712,6 +714,8 @@ read the gate's `input:` names bare and are checked at load; `header` is not a t
 `questions:` is a list or exactly one `${name}` naming a declared input;
 anything else (a mapping, a number, text around the ref, `${a.b}`, a call) is a
 load error. Put free text in `prompt:`.
+The prompt, the adaptive brief, and each question's `question`, `header`, `label`, and
+`description` must be text: quote a number, boolean, or a value starting with `[` or `{`.
 
 ### `wait` — block until an absolute UTC deadline
 ```yaml

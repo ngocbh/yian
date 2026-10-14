@@ -543,6 +543,7 @@ def _detail(data: dict) -> tuple | None:
 def test_not_text_detail_reads_the_first_string_error():
     assert _detail({"name": 5}) == ("name", 5)
     assert _detail({"name": "n", "uses": {"lib": [1]}}) == ("uses.lib", [1])
+    assert _detail({"name": "n", "uses": {"str": 5}}) == ("uses.str", 5)
     assert _detail({"name": None}) == ("name", None)
     assert _detail({}) is None
     # A union field takes more than text, so its error is not a text-field error.
@@ -564,7 +565,9 @@ nodes:
     code: "return 'x'"
 output: ${a.output}
 """
-    lines = [f"{field}: @V" if line.startswith(f"{field}: ") else line for line in text.splitlines()]
+    lines = [
+        f"{field}: @V" if line.startswith(f"{field}: ") else line for line in text.splitlines()
+    ]
     return "\n".join(lines).replace("@V", v) + "\n"
 
 
@@ -714,15 +717,17 @@ def test_nested_llm_config_text_field(builder, prefix):
 
 
 @pytest.mark.parametrize(
-    "value",
-    ["{provider: 5}", "{provider: azure, azure: {stop: 5}}", "{provider: azure, azure: {stop: [5]}}"],
+    ("value", "count"),
+    [
+        ("{provider: 5}", "1 validation error"),
+        ("{provider: azure, azure: {stop: 5}}", "2 validation errors"),
+        ("{provider: azure, azure: {stop: [5]}}", "2 validation errors"),
+    ],
 )
 @pytest.mark.parametrize(("builder", "prefix"), _LLM_SITES, ids=_LLM_SITE_IDS)
-def test_other_llm_config_errors_are_unchanged(builder, prefix, value):
+def test_other_llm_config_errors_are_unchanged(builder, prefix, value, count):
     message = str(_error(builder.replace("@V", value)))
-    assert prefix + "1 validation error for LLMConfig" in message or (
-        prefix + "2 validation errors for LLMConfig" in message
-    )
+    assert prefix + count + " for LLMConfig" in message
 
 
 def _def_asserts(v: str) -> str:

@@ -1208,7 +1208,8 @@ def _check_def_asserts(
     """
     if asserts is None:
         return
-    field_range = def_cursor.range_of("asserts") if def_cursor is not None else None
+    asserts_cursor = _source_child(def_cursor, "asserts")
+    field_range = asserts_cursor.range if asserts_cursor is not None else None
     if not isinstance(asserts, list):
         raise diagnostics.error(
             f"defs entry {name!r}: `asserts:` must be a list of strings", range=field_range
@@ -1217,11 +1218,12 @@ def _check_def_asserts(
         if isinstance(item, str):
             continue
         item_range = None
-        if def_cursor is not None:
+        # `_source_child` selects mapping keys only (`has` is False for a sequence index).
+        if asserts_cursor is not None:
             try:
-                item_range = def_cursor.child("asserts").child(i).range
+                item_range = asserts_cursor.child(i).range
             except SourceAccessError:
-                item_range = None
+                pass
         raise diagnostics.error(
             f"defs entry {name!r}: " + not_text_error(f"asserts[{i}]", item),
             range=item_range or field_range,

@@ -82,6 +82,8 @@ is. `output: {name: ${x}, ...}` always returns a record, even with one field
 `output: !Size ${x}`, or a field `size: !Size ${x}` under a block `output:`.
 `output: !T {...}` is one typed value, not a record of fields.
 Every key in a flow must be text: quote a `true`/`1`/`null`/date key (`'true': ${x}`).
+Text fields (`code:`, `tool_id:`, `call:`, `on:`, `kind:`, `node_name:`, asserts, `uses:` refs)
+must be text: quote a number, boolean, date, or a value starting with `[` or `{`.
 A scalar literal (`output: 5`, a field `x: 5`) is returned as written.
 
 Node IDs are the keys under `nodes:`. A node id must be an identifier: ASCII

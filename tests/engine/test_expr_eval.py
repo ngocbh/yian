@@ -97,8 +97,10 @@ class _Boom:
 
 
 def test_float_power_overflow_is_an_expression_error():
-    with pytest.raises(ExpressionError, match=r"\*\*"):
+    with pytest.raises(ExpressionError, match=r"\*\*") as info:
         _eval("2.0 ** n", _from({"n": 5000}))
+    assert "Result too large" in str(info.value)
+    assert "(34" not in str(info.value)
 
 
 def test_int_too_large_for_float_division_is_an_expression_error():
@@ -117,32 +119,31 @@ def test_bad_format_directive_is_an_expression_error():
 
 
 def test_missing_format_key_is_an_expression_error():
-    with pytest.raises(ExpressionError):
+    with pytest.raises(ExpressionError, match="missing key 'k'"):
         _eval('"%(k)s" % r', _from({"r": {"j": 1}}))
 
 
 @needs_digit_limit
 def test_type_error_with_a_huge_int_names_the_operand_type():
-    with pytest.raises(ExpressionError) as info:
+    with pytest.raises(ExpressionError, match="<int too large to display>"):
         _eval('n + "a"', _from({"n": 10**5000}))
-    assert "int" in str(info.value)
 
 
 @needs_digit_limit
 def test_division_by_zero_with_a_huge_int():
-    with pytest.raises(ExpressionError, match="division by zero"):
+    with pytest.raises(ExpressionError, match="division by zero: <int too large to display>"):
         _eval("n / 0", _from({"n": 10**5000}))
 
 
 @needs_digit_limit
 def test_comparison_type_error_with_a_huge_int():
-    with pytest.raises(ExpressionError):
+    with pytest.raises(ExpressionError, match="<int too large to display>"):
         _eval('n < "a"', _from({"n": 10**5000}))
 
 
 @needs_digit_limit
 def test_unary_minus_on_a_list_holding_a_huge_int():
-    with pytest.raises(ExpressionError, match="unary minus"):
+    with pytest.raises(ExpressionError, match="unary minus on non-number <list too large"):
         _eval("-xs", _from({"xs": [10**5000]}))
 
 

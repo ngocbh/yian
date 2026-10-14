@@ -692,7 +692,14 @@ class _EvalExpr:
         except TypeError as exc:
             l, r = _operand_repr(lhs), _operand_repr(rhs)
             raise ExpressionError(f"type error evaluating {l} {symbol} {r}: {exc}") from exc
-        except (ValueError, OverflowError, KeyError) as exc:
+        except OverflowError as exc:
+            l, r = _operand_repr(lhs), _operand_repr(rhs)
+            # Float `**` overflow carries an (errno, message) pair; args[-1] is the message.
+            raise ExpressionError(f"cannot compute {l} {symbol} {r}: {exc.args[-1]}") from exc
+        except KeyError as exc:
+            l, r = _operand_repr(lhs), _operand_repr(rhs)
+            raise ExpressionError(f"cannot compute {l} {symbol} {r}: missing key {exc}") from exc
+        except ValueError as exc:
             l, r = _operand_repr(lhs), _operand_repr(rhs)
             raise ExpressionError(f"cannot compute {l} {symbol} {r}: {exc}") from exc
         if self._trace and symbol == "+" and type(lhs) is list and type(rhs) is list:

@@ -3,6 +3,7 @@
 control edges (the case's lowering is its own `.build(ctx)`, no leaf Node).
 """
 
+import re
 import textwrap
 
 import pytest
@@ -318,16 +319,20 @@ def test_case_descriptor_rejects_misaligned_or_nonopaque_origins():
         descriptor.build(BuildContext({}))
 
 
-@pytest.mark.parametrize("malformed_cases", ["[{then: done}]", "[{when: 1}]"])
+@pytest.mark.parametrize(
+    ("malformed_cases", "message"),
+    [
+        ("[{then: done}]", "case node 'gate' then: `done` names no node"),
+        ("[{when: 1}]", "case 'gate' has no resolvable branch value"),
+    ],
+)
 def test_source_attachment_does_not_preempt_malformed_case_validation(
-    malformed_cases,
+    malformed_cases, message
 ):
     """The origin hook stays inert for malformed shapes until the normal phases."""
     text = f"""\
 id: malformed-case
 name: malformed-case
-uses:
-  child: absent
 nodes:
   gate:
     kind: case
@@ -335,11 +340,8 @@ nodes:
 output: ${{gate.output}}
     """
 
-    def fail_resolver(_path, _version=None):
-        raise RuntimeError("resolver reached")
-
-    with pytest.raises(RuntimeError, match="resolver reached"):
-        load_flow(text, child_resolver=fail_resolver)
+    with pytest.raises(LoadError, match=re.escape(message)):
+        load_flow(text)
 
 
 def test_named_definition_case_failure_keeps_child_predicate_origin():

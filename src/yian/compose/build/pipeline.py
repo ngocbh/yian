@@ -2329,8 +2329,8 @@ def _assemble(
         narrowing=narrowing,
         type_fn=constructor_type,
     )
-    # cross-flow type check: each `call` binding's source type vs the callable
-    # input type (needs producers, so it runs after all nodes are built).
+    # cross-flow type check: each call/map binding's and loop seed's source type vs the
+    # child input type (needs producers, so it runs after all nodes are built).
     check_call_map_types(
         build_results,
         producers,

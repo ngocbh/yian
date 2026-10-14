@@ -734,7 +734,8 @@ An inline call's `CallDescriptor.call_site` records the authored binding it was 
 argument bindings and the synth node share that binding's origin, so a failing argument
 points at it and it is the outer frame of a child-flow failure.
 Inline child bodies and LOOP seeds are typed while nodes build, before the pass, so they
-see unnarrowed types. Runtime routing is unchanged.
+see unnarrowed types. The load check of a LOOP seed against its body's input, like a CALL
+argument's, uses the narrowed view. Runtime routing is unchanged.
 
 Physical Compose declarations derive exact `ValueContract`s. Output binding derivation,
 builders, child signatures, producer maps, and validators retain the complete

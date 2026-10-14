@@ -773,14 +773,16 @@ Consumers see the tag's type, not the inferred one. This is how an opaque value 
 typed.
 
 - A CALL, MAP, or LOOP parent sees a child's declared output type.
-- A CALL checks a tagged argument's type against the child's parameter.
+- A CALL or LOOP checks a tagged argument's or seed's type against the child's or
+  body's parameter.
 - An inline body's parameter takes the tag's type, so a value the loader can't
   type (arithmetic, an empty list) works without a named `defs:` body.
 - A tagged LOOP seed checks the starting value. A field the body omits keeps the
   seed's declared type; a field the body returns follows the body's output type.
-- An untyped nullable source into a strict child parameter is still a load error,
-  including a child output that is `Optional` because a `case` may skip its node.
-  A tag (`x: !int ${maybe.output}`) accepts the narrowing and checks it at runtime.
+- An untyped nullable source into a strict child or LOOP body parameter is still a
+  load error, including a child output that is `Optional` because a `case` may skip
+  its node. A tag (`x: !int ${maybe.output}`) accepts the narrowing and checks it at
+  runtime.
 
 Declared types are part of the flow fingerprint, so a run can't resume after a
 type changes. Recorded flow outputs are re-validated on resume.
@@ -2439,10 +2441,9 @@ child's `output:` is a record, even of one field, the MAP returns a list of reco
 the run's `num_workers`, while collection order remains the `over:` order.
 
 Each argument must fit the child's input type, checked at load. Nothing is coerced,
-because a `call`/`map` edge is not a flow boundary. An untyped
-[`loop`](#loop-re-run-a-body-under-a-predicate-or-a-fixed-count) seed that reads no
-reference is checked the same way against a named body's input. Each argument is
-checked as follows:
+because a `call`/`map` edge is not a flow boundary. A
+[`loop`](#loop-re-run-a-body-under-a-predicate-or-a-fixed-count) seed is checked the
+same way against the body's input. Each argument is checked as follows:
 
 - A reference is compared by its type. A MAP's `${item}` or `${item.field}` is typed
   from the element type of `over:`; over a literal `over:` list, each element is
@@ -2487,16 +2488,24 @@ for an `int`, `float`, or `bool` input. These used to run and now fail at load:
   the binding).
 
 Text from a source the loader can't type, such as an untyped `code` output, is no
-longer converted when the child starts either: it fails with `contract.input`. The same
-holds for a `loop` seed that reads a reference or is typed: it is not checked against
-the body's input at load (a returned field is checked against the body's output), so a
-mismatch fails with `contract.input` when the body starts. Type the source, or convert
-the value in the producing node.
+longer converted when the child starts either: it fails with `contract.input`. Type the
+source, or convert the value in the producing node.
 
 Changed: a literal `loop` seed that doesn't fit a named body's input, such as `n: "1"`
 into an `int` input, used to fail when the body started, or not at all when the loop
 never ran. It now fails at load. So does a `${...}` seed that reads no reference, such
 as `${null}`, for a field the body doesn't return.
+
+Changed: a `loop` seed that reads a reference or is tagged used to be checked against
+the body's input only when the body started. It is now checked at load like a `call`
+argument, so these fail at load: a seed whose type doesn't fit, such as `n: ${input.s}`
+or `n: !str "abc"` into an `int` input, and an `Optional` reference such as
+`n: ${input.m}` into a strict input, which used to run whenever the value was set. Tag
+a value you know is set: `n: !int ${input.m}`. A seed that may be null, such as a
+pagination cursor that `while: cursor != null` keeps out of the body, needs an
+`Optional` body input (`cursor: !Optional(str)`); tag it inside the body where a strict
+value is needed. A tag on the seed doesn't help there: the seed is evaluated even when
+the loop runs zero times, so a null fails the tag.
 
 #### Inline child bodies — skip a one-off `defs:` entry
 
@@ -2721,11 +2730,14 @@ returns the whole carried record.
 - **`input:`** is the seed carried record — its field names and types define `'a`.
   A tagged seed (`n: !int 0`) checks the starting value. A field the body omits
   keeps the seed's declared type; a returned field follows the body's output type.
-  An untyped seed that reads no reference is checked against a named body's input
-  like a [`call` argument](#call-map-composition-over-child-flows), and nothing is
-  coerced: `n: "1"` into an `int` input is a load error (write `1`), and `null` or
-  `${null}` fits only an `Optional` input. This holds even when a `while:` loop would
-  run zero times.
+  Every seed, tagged or not, is checked against the body's input like a
+  [`call` argument](#call-map-composition-over-child-flows), and nothing is coerced:
+  `n: "1"` into an `int` input is a load error (write `1`), a `str` reference does not
+  fit an `int` input, and `null`, `${null}`, or an `Optional` reference fits only an
+  `Optional` input (tag a value you know is set: `n: !int ${input.m}`). This holds
+  even when a `while:` loop would run zero times, so a seed the `while:` keeps out of
+  the body when it is null still needs an `Optional` body input; tag it inside the body
+  where a strict value is needed.
 - **`call:` / `nodes:`** names a reusable body or defines a one-off body inline.
   The body's `output:` returns a **subset** of the carried record: at least one
   carried field, and any number of them. Each field the body omits keeps its value

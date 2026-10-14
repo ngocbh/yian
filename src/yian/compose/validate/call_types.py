@@ -4,7 +4,7 @@ A loader post-build pass (run after the flow's leaves + child signatures are ass
 Each binding's SOURCE contract is resolved from its reference over the PARENT producer +
 flow-input contracts (a MAP's `${item...}` from the element type of `over:`), then its
 `Type` is checked with `types_compatible` against the CHILD input's declared `Type` (a
-LOOP's body input for a seed). A LOOP has only its untyped seeds that read no reference
+LOOP's body input for a seed). Only a LOOP's untyped seeds that read no reference are
 checked. A literal, a constant operand of a `:-`/`|` escape, or each element of a literal
 `over:` list read through `${item...}`, is validated by value instead, as the child's
 start validates it: a CALL/MAP/LOOP edge is not a flow boundary, so text is never
@@ -116,7 +116,7 @@ def check_call_map_types(
         node = result.node
         # CALL/MAP/LOOP carry `child_inputs` to type-check against. A LOOP's seeds fill its
         # body's START like CALL arguments; only an untyped seed that reads no reference is
-        # checked, since its value is known at load and so a mismatch is certain.
+        # checked, since its value or type is fixed at load, so a mismatch is certain.
         # A leaf has no `child_inputs` attr, and a zero-input child gives [] (falsy), so skip.
         if not getattr(node, "child_inputs", None):
             continue

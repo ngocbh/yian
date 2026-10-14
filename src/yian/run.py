@@ -102,7 +102,12 @@ from yian.tools.types import tool_types
 from yian.typesys import Type, ValueKind, canonical_type_label
 from yian.typesys.pool import VariablePool
 from yian.typesys.seeding import default_run_id, seed_system_clock
-from yian.typesys.values import reject_deep_nesting, reject_nonfinite, value_repr
+from yian.typesys.values import (
+    reject_deep_nesting,
+    reject_non_text_keys,
+    reject_nonfinite,
+    value_repr,
+)
 
 
 EventHook = Callable[[Any], None]
@@ -421,8 +426,9 @@ def run_flow(
             object without `drain`/`interrupted`.
         `ValueError`:
             An `inputs` key names no declared input, an `inputs` value nests
-            deeper than `MAX_VALUE_NESTING` levels or holds a NaN, infinity, or
-            complex number at any depth, or identity, worker count,
+            deeper than `MAX_VALUE_NESTING` levels, holds a NaN, infinity, or
+            complex number at any depth, or holds a mapping with a non-text key;
+            identity, worker count,
             model configuration, or prepared run state violates its contract,
             an AGENT has no provider or model (no layer, environment default,
             or saved login sets one; there is no built-in default),
@@ -578,6 +584,7 @@ def _run_flow_controlled(
     for name, value in coerced.items():
         reject_deep_nesting(value, f"input {name!r}")
         reject_nonfinite(value, f"input {name!r}")
+        reject_non_text_keys(value, f"input {name!r}")
     pool = VariablePool(start_id=private_flow.start_id)
     pool.set(private_flow.start_id, copy.deepcopy(coerced))
     seed_system_clock(pool)

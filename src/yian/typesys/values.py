@@ -203,16 +203,43 @@ def reject_deep_nesting(value: Any, where: str, *, enclosing_levels: int = 0) ->
     limit = MAX_VALUE_NESTING
     while isinstance(value, TypedValue):
         value = value.to_object()
+    if 1 + enclosing_levels > limit and _nesting_children(value) is not None:
+        raise _too_deep(where, (), limit)
+    for stack, key, descends in _walk_nesting(value):
+        if descends and len(stack) + 1 + enclosing_levels > limit:
+            path = _frame_path(stack) + (_nesting_segment(stack[-1][1], key),)
+            raise _too_deep(where, path, limit)
+
+
+_Frame = tuple[Iterator[tuple[Any, Any]], Any, Any]
+"""A walk frame: the container's children iterator, the container, and its key in the parent."""
+
+
+def _walk_nesting(value: Any) -> Iterator[tuple[list[_Frame], Any, bool]]:
+    """Yield each entry of a value's containers, depth-first and in order.
+
+    Unwraps a `TypedValue` wherever it sits. Each yield is ``(stack, key, descends)``:
+    the frames of the containers on the current path, root first, with the entry's
+    container last; the entry's key in that container; and whether the walk goes into
+    the entry next, which it does for a container not already on the path. A caller
+    reads the stack before resuming the walk, which changes it.
+
+    Args:
+        value (`Any`):
+            The value to walk; a leaf yields nothing.
+
+    Yields:
+        `tuple[list[_Frame], Any, bool]`: The frame stack, the entry's key, and
+            whether the walk descends into the entry.
+    """
+    while isinstance(value, TypedValue):
+        value = value.to_object()
     children = _nesting_children(value)
     if children is None:
         return
-    if 1 + enclosing_levels > limit:
-        raise _too_deep(where, (), limit)
     # An explicit stack, not recursion, so the walk does not depend on the caller's stack
     # depth or the configured recursion limit.
-    # Each frame holds its children iterator, the container, and its key in the parent;
-    # the path is built only when rejecting.
-    stack: list[tuple[Iterator[tuple[Any, Any]], Any, Any]] = [(iter(children), value, None)]
+    stack: list[_Frame] = [(iter(children), value, None)]
     active = {id(value)}
     while stack:
         iterator, container, _ = stack[-1]
@@ -222,23 +249,24 @@ def reject_deep_nesting(value: Any, where: str, *, enclosing_levels: int = 0) ->
             active.discard(id(container))
             continue
         key, child = entry
-        if child is None or type(child) in _NESTING_SCALARS:
-            continue
-        while isinstance(child, TypedValue):
-            child = child.to_object()
-        if id(child) in active:
-            continue
-        grandchildren = _nesting_children(child)
-        if grandchildren is None:
-            continue
-        if len(stack) + 1 + enclosing_levels > limit:
-            path = tuple(
-                _nesting_segment(parent, frame_key)
-                for (_, parent, _), (_, _, frame_key) in zip(stack, stack[1:])
-            ) + (_nesting_segment(container, key),)
-            raise _too_deep(where, path, limit)
-        stack.append((iter(grandchildren), child, key))
-        active.add(id(child))
+        grandchildren = None
+        if child is not None and type(child) not in _NESTING_SCALARS:
+            while isinstance(child, TypedValue):
+                child = child.to_object()
+            if id(child) not in active:
+                grandchildren = _nesting_children(child)
+        yield stack, key, grandchildren is not None
+        if grandchildren is not None:
+            stack.append((iter(grandchildren), child, key))
+            active.add(id(child))
+
+
+def _frame_path(stack: list[_Frame]) -> tuple[str | int, ...]:
+    """Return the path from the root to the last frame's container."""
+    return tuple(
+        _nesting_segment(parent, frame_key)
+        for (_, parent, _), (_, _, frame_key) in zip(stack, stack[1:])
+    )
 
 
 _NESTING_SCALARS = frozenset({str, int, float, bool})
@@ -267,6 +295,34 @@ def _nesting_segment(container: Any, key: Any) -> str | int:
     return key
 
 
+def reject_non_text_keys(value: Any, where: str) -> None:
+    """Raise if a value holds a mapping with a key that is not text.
+
+    Walks the containers `reject_deep_nesting` walks, depth-first and in order, and
+    unwraps a `TypedValue`. A container already on the current path is skipped; the
+    canonical codecs reject cycles.
+
+    Args:
+        value (`Any`):
+            The value to check.
+        where (`str`):
+            Names the boundary for the message, e.g. ``"input 'x'"``.
+
+    Raises:
+        `TypeCheckError`:
+            A mapping has a non-text key; ``path`` locates the mapping and the message
+            reads ``<where>[ at <path>]: object keys must be text, got <repr>``.
+    """
+    for stack, key, _ in _walk_nesting(value):
+        container = stack[-1][1]
+        if isinstance(container, dict) and not isinstance(key, str):
+            path = _frame_path(stack)
+            location = f"{where} at {_render_value_path(path)}" if path else where
+            raise TypeCheckError(
+                f"{location}: object keys must be text, got {value_repr(key)}", path=path
+            )
+
+
 def _too_deep(where: str, path: tuple[str | int, ...], limit: int) -> TypeCheckError:
     """Build the error for a container past the nesting limit at `path`."""
     location = f"{where} at {_render_value_path(path)}" if path else where
@@ -288,6 +344,11 @@ class ValueKind(str, Enum):
     `.value` IS the one Python-surface vocabulary: it is simultaneously the serialized
     discriminator tag, the author-written `type:` token, and the displayed name (so there
     is no second "engine name" to translate — `str`, never `string`).
+
+    Every kind but `ANY` is a storage tag and wire discriminator. `ANY` is type-only: no
+    carrier stores it, and an `Any` value persists under its natural kind (`str`,
+    `object`, `list[Any]`, ...). The list kinds keep the bracket storage spelling
+    (`list[str]`); type labels spell them `list(str)`.
     """
 
     NONE = "None"
@@ -299,6 +360,7 @@ class ValueKind(str, Enum):
     BOOLEAN = "bool"
     OBJECT = "object"
     FILE = "file"  # reserved: never auto-inferred, not authorable yet
+    ANY = "Any"  # type-only: any non-null JSON value, stored in its natural carrier
 
     LIST_ANY = "list[Any]"
     LIST_STRING = "list[str]"
@@ -533,7 +595,11 @@ class Type:
       - union:   kind=OBJECT,   variants=(record member, ...)   (a `Union[...]` of records)
     A refined specialized list uses the element's matching storage tag;
     `LIST_ANY` is the generic carrier and may refine any element type.
-    A plain scalar / flat list uses only `kind` (see `Type.scalar`).
+    A plain scalar / flat list uses only `kind` (see `Type.scalar`). A `LIST_ANY`
+    with no `element` is a list whose items weren't proven (a tool's untyped array,
+    a mixed or empty literal); it is labelled `list(Optional(Any))` and its items
+    read as `Optional(Any)`. `kind=ANY` is type-only: an `Any` value is stored
+    under its natural kind.
     Despite the name, `variants` holds union members, not the string tags of a
     "variant" above. Members are non-nullable records; a nullable union sets
     `nullable` on the union itself.
@@ -746,8 +812,8 @@ def list_kind_for_element(element: Type) -> ValueKind:
     """Return the list storage kind the type resolver picks for an element type.
 
     A `Literal` element stores as `list[str]`, a record or union element as
-    `list[object]`, a scalar element as its own list kind, and anything else as
-    `list[Any]`.
+    `list[object]`, a scalar element as its own list kind, and anything else
+    (`Any` and `Optional(Any)` included) as `list[Any]`.
 
     Args:
         element (`Type`): The list's element type.
@@ -781,7 +847,8 @@ def canonical_type_label(typ: Type) -> str:
     Record keys use compact JSON quoting; variant tags print bare when they read back
     as names, else JSON-quoted (`Literal(go, "no go")`). Structurally refined
     lists render from their element; a valid flat-list type renders from its
-    storage kind (`list(str)`). A union lists its members in canonical order.
+    storage kind (`list(str)`), and a `LIST_ANY` with no element as
+    `list(Optional(Any))`. A union lists its members in canonical order.
 
     Args:
         typ (`Type`): The resolved structural type to label.
@@ -830,6 +897,9 @@ def _canonical_nonnullable_label(typ: Type) -> tuple[str, str]:
 
     if typ.kind.is_list():
         if typ.element is None:
+            if typ.kind is ValueKind.LIST_ANY:
+                # Items not proven may be any JSON value, null included.
+                return "list(Optional(Any))", "list[Optional[Any]]"
             return _kind_label(typ.kind), typ.kind.value
         label, key = _labels(typ.element)
         return f"list({label})", f"list[{key}]"
@@ -850,10 +920,11 @@ def _canonical_nonnullable_label(typ: Type) -> tuple[str, str]:
 def _kind_label(kind: ValueKind) -> str:
     """Spell a list storage kind as a type for messages, e.g. `list(str)` for `LIST_STRING`.
 
+    `LIST_ANY` reads `list(Optional(Any))`, since its items may be any JSON value.
     `ValueKind` values are stored and sent as they are (`"list[str]"`).
     """
     element = kind.element_kind
-    return f"list({'Any' if element is None else element.value})"
+    return f"list({'Optional(Any)' if element is None else element.value})"
 
 
 def _json_string(value: str) -> str:
@@ -1195,6 +1266,60 @@ def _admits_none(typ: Type) -> bool:
     return typ.nullable or typ.kind is ValueKind.NONE
 
 
+def has_file(typ: Type) -> bool:
+    """Whether `file` appears anywhere in `typ`: itself, a field, the element, or a member.
+
+    A type without `file` holds only JSON values, so every value of it is an `Any` value.
+
+    Args:
+        typ (`Type`):
+            The type to search.
+
+    Returns:
+        `bool`:
+            `True` when some value of `typ` may hold a file.
+    """
+    if typ.kind is ValueKind.FILE:
+        return True
+    if typ.element is not None and has_file(typ.element):
+        return True
+    if typ.fields is not None and any(has_file(field) for field in typ.fields.values()):
+        return True
+    return typ.variants is not None and any(has_file(member) for member in typ.variants)
+
+
+def requires_file(typ: Type) -> bool:
+    """Whether every non-null value of `typ` holds a file, so none is an `Any` value.
+
+    A list counts when its element is a non-nullable type that requires a file: the
+    empty list is shared by every list type and is not counted as a shared value. A
+    record counts when a required, non-nullable field requires a file; a union when
+    every member does.
+
+    Args:
+        typ (`Type`):
+            The type to check.
+
+    Returns:
+        `bool`:
+            `True` when no non-null value of `typ` is a JSON value.
+    """
+    if typ.kind is ValueKind.FILE:
+        return True
+    if typ.variants is not None:
+        return all(requires_file(member) for member in typ.variants)
+    if typ.kind.is_list():
+        element = typ.element
+        return element is not None and not element.nullable and requires_file(element)
+    if typ.fields is not None:
+        required = typ.required or frozenset()
+        return any(
+            name in required and not field.nullable and requires_file(field)
+            for name, field in typ.fields.items()
+        )
+    return False
+
+
 def _is_plain_object(typ: Type) -> bool:
     """Whether `typ` is `object` with no record or union refinement."""
     return typ.kind is ValueKind.OBJECT and typ.fields is None and typ.variants is None
@@ -1225,7 +1350,8 @@ def types_overlap(a: Type, b: Type) -> bool:
 
     The check is conservative: it may say two types overlap when no value
     satisfies both, but never the reverse. It decides whether an untagged union's
-    members can be told apart from the data alone.
+    members can be told apart from the data alone. `Any` overlaps every type
+    except `None` and a bare `file`.
 
     Args:
         a (`Type`):
@@ -1243,6 +1369,12 @@ def types_overlap(a: Type, b: Type) -> bool:
     """
     if _admits_none(a) and _admits_none(b):
         return True
+    if a.kind is ValueKind.ANY or b.kind is ValueKind.ANY:
+        other = b if a.kind is ValueKind.ANY else a
+        # Only a bare `file` is excluded: a container that holds files can still share
+        # a value with `Any` (an empty list, say), and this check may only err towards
+        # overlap.
+        return other.kind not in (ValueKind.NONE, ValueKind.FILE)
     if a.variants is not None:
         return any(types_overlap(member, b) for member in a.variants)
     if b.variants is not None:
@@ -1353,6 +1485,98 @@ def _widen_int(value: int, path: tuple[str | int, ...]) -> float:
         raise TypeCheckError("int is too large for float", path=path) from None
 
 
+def _json_value_error(
+    value: Any, path: tuple[str | int, ...]
+) -> Optional[TypeCheckError]:
+    """Return why `value` is not a JSON value, or `None` when it is.
+
+    A JSON value is `None`, a `bool`, `int`, `float` or `str`, a `dict` with only
+    `str` keys and JSON values, or a `list`/`tuple` of JSON values. The walk checks
+    structure only: nesting depth and non-finite numbers are left to
+    `reject_deep_nesting` and `reject_nonfinite` at the boundaries, so a recorded
+    value replays. A container inside itself is rejected.
+
+    Args:
+        value (`Any`):
+            The value to check.
+        path (`tuple[str | int, ...]`):
+            Field/index path from the contract root to ``value``.
+
+    Returns:
+        `Optional[TypeCheckError]`:
+            The error for the first bad part, depth-first and in order, with its
+            path, or `None` when ``value`` is a JSON value.
+    """
+    if _is_json_scalar(value):
+        return None
+    entries = _json_entries(value)
+    if entries is None:
+        return TypeCheckError(f"{value_repr(value)} is not a JSON value", path=path)
+    # An explicit stack, not recursion, so the walk does not depend on the caller's stack
+    # depth or the configured recursion limit.
+    # Each frame holds its entries iterator, the container, and its key in the parent;
+    # the path is built only when rejecting.
+    stack: list[tuple[Iterator[tuple[Any, Any]], Any, Any]] = [(entries, value, None)]
+    active = {id(value)}
+
+    def path_to(*keys: Any) -> tuple[str | int, ...]:
+        frame_keys = [frame_key for _, _, frame_key in stack[1:]]
+        # `TypeCheckError` paths hold exact `str` segments, so a `str` subclass key is
+        # unwrapped.
+        return path + tuple(
+            str.__str__(key) if isinstance(key, str) else key for key in (*frame_keys, *keys)
+        )
+
+    while stack:
+        iterator, container, _ = stack[-1]
+        entry = next(iterator, None)
+        if entry is None:
+            stack.pop()
+            active.discard(id(container))
+            continue
+        key, child = entry
+        if isinstance(container, dict) and not isinstance(key, str):
+            return TypeCheckError(
+                f"object keys must be text, got {value_repr(key)}", path=path_to()
+            )
+        if _is_json_scalar(child):
+            continue
+        if id(child) in active:
+            return TypeCheckError("value contains itself", path=path_to(key))
+        child_entries = _json_entries(child)
+        if child_entries is None:
+            return TypeCheckError(f"{value_repr(child)} is not a JSON value", path=path_to(key))
+        stack.append((child_entries, child, key))
+        active.add(id(child))
+    return None
+
+
+def _is_json_scalar(value: Any) -> bool:
+    """Whether `value` is `None`, a `bool`, `int`, `float` or `str`."""
+    # The exact-type lookup is the fast path; `isinstance` admits subclasses.
+    return (
+        value is None
+        or type(value) in _NESTING_SCALARS
+        or isinstance(value, (str, int, float))
+    )
+
+
+def _json_entries(value: Any) -> Optional[Iterator[tuple[Any, Any]]]:
+    """Return a `dict`'s items or a `list`/`tuple`'s indexed items, else `None`."""
+    if isinstance(value, dict):
+        return iter(value.items())
+    if isinstance(value, (list, tuple)):
+        return enumerate(value)
+    return None
+
+
+def _require_json_value(value: Any, path: tuple[str | int, ...]) -> None:
+    """Raise the `_json_value_error` for `value` at `path`, if any."""
+    error = _json_value_error(value, path)
+    if error is not None:
+        raise error
+
+
 # --------------------------------------------------------------------------- #
 # Constructors
 # --------------------------------------------------------------------------- #
@@ -1420,6 +1644,11 @@ def build_value_as(declared: "ValueKind | Type", value: Any) -> TypedValue:
     than silently downstream. The only coercion is widening: an `int` fills a `float`
     slot at any depth (a record field, a list item, a union member's field).
 
+    `Any` accepts any non-null JSON value and stores it unchanged in its natural
+    carrier (a list as `list[Any]`). An `object` value, a `list(object)` item, and a
+    `list[Any]` item must be JSON values: a `dict` with only `str` keys, a list or
+    tuple, `None`, `bool`, `int`, `float`, or `str`, nested.
+
     Args:
         declared (`ValueKind | Type`):
             The target type. A bare `ValueKind` is a scalar or flat list; a structural
@@ -1437,8 +1666,9 @@ def build_value_as(declared: "ValueKind | Type", value: Any) -> TypedValue:
         `TypeCheckError`:
             The value does not satisfy `declared` — wrong scalar type, a non-member
             variant tag, an out-of-bounds number, a record with missing/unknown fields,
-            a union value with a missing/unknown tag or matching no member, or a bad
-            list element.
+            a union value with a missing/unknown tag or matching no member, a bad
+            list element, or a non-JSON value (a non-text key, a date object, a set,
+            ...) where a JSON value is required.
     """
     typ = Type.scalar(declared) if isinstance(declared, ValueKind) else declared
     if isinstance(value, TypedValue):
@@ -1556,7 +1786,7 @@ def _build_for_type(
     if typ.kind.is_list() and typ.element is not None:
         if not isinstance(value, (list, tuple)):
             raise TypeCheckError(
-                f"{value_repr(value)} is not a list for declared {_kind_label(typ.kind)}",
+                f"{value_repr(value)} is not a list for declared {canonical_type_label(typ)}",
                 path=path,
             )
         items = [
@@ -1568,6 +1798,16 @@ def _build_for_type(
             for index, item in enumerate(value)
         ]
         return _LIST_VALUE_CLASS[typ.kind](value=items)
+
+    if typ.kind is ValueKind.ANY:
+        if value is None:
+            raise TypeCheckError(
+                f"None does not match declared type {typ.kind.value}", path=path
+            )
+        _require_json_value(value, path)
+        if isinstance(value, (list, tuple)):
+            return ListAnyValue(value=list(value))
+        return _SCALAR_VALUE_CLASS[_infer_scalar_type(value)](value=value)
 
     # plain scalar / flat list — the original behavior
     return _build_scalar_or_list(typ.kind, value, path=path)
@@ -1683,7 +1923,9 @@ def _build_scalar_or_list(
             )
         items = list(value)
         element = declared.element_kind
-        if element is not None:
+        if element is None:
+            _require_json_value(value, path)
+        else:
             for index, item in enumerate(items):
                 if not _scalar_matches(element, item):
                     raise TypeCheckError(
@@ -1691,6 +1933,8 @@ def _build_scalar_or_list(
                         f"(declared {_kind_label(declared)})",
                         path=path + (index,),
                     )
+                if element is ValueKind.OBJECT:
+                    _require_json_value(item, path + (index,))
             items = [
                 _coerce_scalar(element, item, path + (index,))
                 for index, item in enumerate(items)
@@ -1702,4 +1946,6 @@ def _build_scalar_or_list(
         if declared in _TEMPORAL_PARSERS and isinstance(value, str):
             message += f": {_temporal_error(declared, value)}"
         raise TypeCheckError(message, path=path)
+    if declared is ValueKind.OBJECT:
+        _require_json_value(value, path)
     return _SCALAR_VALUE_CLASS[declared](value=_coerce_scalar(declared, value, path))

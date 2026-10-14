@@ -367,3 +367,105 @@ def test_nullable_record_root_is_wrapped_so_it_can_be_null():
     assert _unwrap(model.model_validate({"value": {"x": 1}}), typ) == {"x": 1}
     strict = type_to_schema(type_for("Point", registry))
     assert _unwrap(strict.model_validate({"x": 1}), type_for("Point", registry)) == {"x": 1}
+
+
+def test_any_schema_accepts_every_non_null_json_value_unchanged():
+    from yian.nodes.agent.structured import _unwrap
+
+    typ = Type.scalar(ValueKind.ANY)
+    model = type_to_schema(typ)
+    assert model.__name__ == "ScalarWrapper"
+    for value in ("x", 3, 2**80, 2.5, 1.0, True, "3", {"a": 1}, [1, "a"], {"a": 1.0, "b": True}):
+        out = _unwrap(model.model_validate({"value": value}), typ)
+        assert out == value and type(out) is type(value)
+    with pytest.raises(ValidationError):
+        model.model_validate({"value": None})
+
+
+def test_any_schema_lists_the_json_types_and_optional_any_adds_null():
+    def json_types(expression):
+        model = type_to_schema(type_for(expression, {}))
+        return {arm.get("type") for arm in model.model_json_schema()["properties"]["value"]["anyOf"]}
+
+    kinds = {"object", "array", "string", "integer", "number", "boolean"}
+    assert json_types("Any") == kinds
+    assert json_types("Optional(Any)") == kinds | {"null"}
+
+    typ = type_for("Optional(Any)", {})
+    from yian.nodes.agent.structured import _unwrap
+    assert _unwrap(type_to_schema(typ).model_validate({"value": None}), typ) is None
+
+
+def test_list_of_any_items_reject_null_and_list_of_optional_any_items_accept_it():
+    strict = type_to_schema(type_for("list(Any)", {}))
+    assert strict.model_validate({"items": [1, "a", {"k": [None]}]}).items == [1, "a", {"k": [None]}]
+    with pytest.raises(ValidationError):
+        strict.model_validate({"items": [1, None]})
+    loose = type_to_schema(type_for("list(Optional(Any))", {}))
+    assert loose.model_validate({"items": [1, None]}).items == [1, None]
+
+
+class _Replies:
+    """A fake native-structured model that answers every call with one payload."""
+
+    def __init__(self, payload):
+        self.payload = payload
+
+    def with_structured_output(self, schema):
+        payload = self.payload
+
+        class _Bound:
+            def invoke(self, _messages):
+                return schema.model_validate(payload)
+
+        return _Bound()
+
+
+_NATIVE = {"provider": "openai", "model": "gpt-4o"}
+
+
+@pytest.mark.parametrize("expression,payload,path", [
+    ("Box", {"v": None}, ("v",)),
+    ("Any", {"value": None}, ()),
+    ("list(Any)", {"items": [1, None]}, (1,)),
+])
+def test_null_at_an_any_position_is_reported_at_that_position(expression, payload, path):
+    from yian.nodes.agent.structured import _structured_validation_path, generate_structured
+
+    typ = type_for(expression, read_typedefs({"Box": {"v": "Any"}}))
+    with pytest.raises(ValidationError) as caught:
+        generate_structured(_Replies(payload), [], typ, max_retries=0, llm_config=_NATIVE)
+    assert _structured_validation_path(caught.value, typ) == path
+
+
+def test_absent_optional_any_record_field_reads_none():
+    from yian.nodes.agent.structured import generate_structured
+
+    typ = type_for("Box", read_typedefs({"Box": {"v": "Optional(Any)", "n": "int"}}))
+    assert generate_structured(_Replies({"n": 1}), [], typ, llm_config=_NATIVE) == {
+        "v": None, "n": 1,
+    }
+
+
+_ANY_AGENT_FLOW = """
+id: guess
+name: guess
+nodes:
+  a:
+    kind: agent
+    prompt: say anything
+    output: Any
+output: ${a.output}
+"""
+
+
+@pytest.mark.parametrize("value", ["hello", 3, True, {"a": [1, None]}, [1, "a"]])
+def test_agent_with_any_output_loads_and_returns_the_value(monkeypatch, value):
+    import yian.llm_clients as llm_clients_mod
+    from yian.compose.loader import load_flow
+    from yian.run import run_flow
+
+    monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda _c: _Replies({"value": value}))
+    result = run_flow(load_flow(_ANY_AGENT_FLOW), {})
+    assert result.status == "succeeded", result.failure
+    assert result.output == value and type(result.output) is type(value)

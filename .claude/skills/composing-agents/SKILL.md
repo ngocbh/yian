@@ -167,8 +167,8 @@ record doesn't declare. This covers `${input.X...}`, `${node.output...}`, and a 
 `${item...}` in bindings, `case` conditions, and flow outputs, and the carried fields a
 LOOP `while:`/`until:` predicate reads. Reading a declared field
 through an `Optional(...)` record still gives `null` when the whole value is null, and
-values whose type isn't known at load (`object`, an untyped output, or anything below
-them) aren't checked.
+values whose type isn't known at load (`object`, `Any`, an untyped output, or anything
+below them) aren't checked.
 
 On a `Union(...)`, a field every member has reads anywhere (one type if the members
 agree, the merged `Literal` if every member's field is a string `Literal`, else
@@ -188,7 +188,7 @@ with `isinstance(r, <Type>) and ...`.
 | `${a + b}`, `${a * b + 1}` | arithmetic — `+ - * / % **`, unary minus |
 | `${a == b}`, `${x in [1, 2]}` | comparisons / membership / `and`/`or`/`not` |
 | `${[a, b]}`, `${upper(x)}` | list literal / pure builtin call (null or wrong-typed args fail: `${upper(x :- "")}`) |
-| `${isinstance(x, Buy)}` | type test; `T` is a `typedefs:` name or `str`/`int`/`float`/`bool`/`date`/`datetime`/`object` |
+| `${isinstance(x, Buy)}` | type test; `T` is a `typedefs:` name or `str`/`int`/`float`/`bool`/`date`/`datetime`/`object` (not `Any`) |
 | `${Buy(action="buy", qty=n)}`, `${Buy(x)}` | constructor: build a typedef record from exactly these fields, or check and narrow `x` (like `!Buy ${x}`) |
 | `${X:-default}` | value, else `default` if absent |
 | `${X:?"msg"}` | required — fail with the literal `msg` if absent (quote the message) |
@@ -222,12 +222,21 @@ including when `while:` stops before the first iteration or a run is replayed.
 
 ## Types
 
-Scalars: `str`, `int`, `float`, `bool`, `date`, `datetime`, `object`, `None`. Forms
-use parentheses: `list(X)`, `Optional(X)`, `Literal(a, b)` (an enum of tags), named
-**records**, `Union(A, B, ...)` of records, and `dict(K, V)`. Brackets
+Scalars: `str`, `int`, `float`, `bool`, `date`, `datetime`, `object`, `Any`, `None`.
+Forms use parentheses: `list(X)`, `Optional(X)`, `Literal(a, b)` (an enum of tags),
+named **records**, `Union(A, B, ...)` of records, and `dict(K, V)`. Brackets
 (`Optional[str]`, `int[1, 12]`) are a load error that shows the new spelling.
 `date` is `YYYY-MM-DD`; `datetime` is `YYYY-MM-DDTHH:MM[:SS[.fff]][Z|±HH:MM]` (a
 space may replace `T`; `.fff` is 1–6 digits); other forms are rejected.
+
+`Any` is any JSON value except null (object, list, text, number, bool); `Optional(Any)`
+adds null, and `list(Optional(Any))` is a list that may hold null (`list(Any)` can't).
+Write `Any`, never `any` (load error). An `Any` value fills only an `Any` input: tag the
+slot (`n: !int ${x.output}`, checked at runtime) or narrow it with `isinstance` in a
+`case`. `object` is a JSON object: text keys and JSON values only, so a dict with a
+non-text key, a date object, or a set fails the node. A list the loader can't type (a
+tool's untyped array, a mixed or empty literal) is `list(Optional(Any))`; its items are
+checked at runtime when passed on.
 
 Use `int(1..12)` or `float(0.0..1.0)` for inclusive numeric ranges. Either end may
 be open: `int(0..)` is 0 or more, `int(..100)` is at most 100; `int(..)` is an error
@@ -322,7 +331,9 @@ not evaluated, a null default needs an `Optional` type, and nothing is coerced
 compatible default keeps its authored value, so `!float 30` stays the integer `30`.
 Only values supplied at a flow boundary may be string-coerced. An inline record type
 (`cfg: {a: int}`) is a load error: name the record in `typedefs:` and tag the input
-(`cfg: !Cfg`). `!object` is an unstructured mapping. Agent variables always need a
+(`cfg: !Cfg`). `!object` is an unstructured mapping (any JSON object); `!Any` takes
+any JSON value but null. An `--input` value for an `Any` input stays text; use
+`--inputs` for a structure. Agent variables always need a
 value (`num: !int(1..12) 4`).
 
 **Bindings and outputs.**
@@ -362,7 +373,8 @@ output:
 - **Load:** the declared type is compared with the inferred one. Disjoint is a load
   error (a `str` declared `int`; records are closed, so an extra required field
   is disjoint). Narrower (non-Optional over Optional, a `Literal` or range subset, a
-  record over `object`, a union member over the union) loads and is checked at
+  record over `object`, an `Any` value into another type (not `None` or `file`), a
+  union member over the union) loads and is checked at
   runtime, as is a value with no inferred type (arithmetic, builtin calls, untyped
   producers).
 - **Values:** YAML 1.2 core rules plus unquoted dates apply and quoted values stay
@@ -414,11 +426,11 @@ without `kind:`, scalar, or list is a load error that says to add `kind:` or a t
 span-free literal is checked at load; nested `${...}` and tags work, `$$` is a `$`, and
 a top-level unquoted `call(f, ...)` calls the flow (a quoted `!str "call(f)"` is text).
 A written-out `!object` mapping keeps its record, so reading a field it doesn't have is
-a load error; `!object ${x.output}` stays unchecked. The entry lowers to a CODE node
-with its id (in traces, failures, and the run log like any node) and runs like one:
-on its branch when a `case` routes to it, else when its inputs are ready. A runtime
-type miss fails it with `binding.type`. A secret-named id or nested key holding a
-literal is rejected; an entry that reads itself is a cycle.
+a load error; `!object ${x.output}` and a `!Any {...}` entry stay unchecked. The entry
+lowers to a CODE node with its id (in traces, failures, and the run log like any node)
+and runs like one: on its branch when a `case` routes to it, else when its inputs are
+ready. A runtime type miss fails it with `binding.type`. A secret-named id or nested key
+holding a literal is rejected; an entry that reads itself is a cycle.
 
 **Constructors.** Inside `${...}` there are no YAML tags, so a typedef name builds or
 checks a typed value: `${Buy(action="buy", qty=size.output)}` builds a record from
@@ -455,7 +467,9 @@ JSON fallback for providers that lack it), validated at the write boundary and
 retried up to `retries:` times (default 2, a non-negative integer) on deviation, a NaN
 or infinity in the reply or a value nested deeper than 100 levels included. A root
 `Literal(...)` returns its bare tag to the flow. A union returns the matching member's record; each
-member's schema pins its tag and rejects unknown fields.
+member's schema pins its tag and rejects unknown fields. An `object` or `Any` output is
+an open mapping or any JSON value, which a provider's strict JSON-schema mode (OpenAI's)
+rejects; such an output may need a non-strict provider path.
 Use a downstream `code` node only for deterministic post-processing.
 `prompt:` must be text: quote a number, boolean, date, or a value starting with `[` or `{`;
 otherwise it is a load error at the value.

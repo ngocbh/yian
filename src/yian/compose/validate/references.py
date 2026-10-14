@@ -118,8 +118,8 @@ def _item_contract(
 
     Returns:
         `ValueContract | None`:
-            The exact contract of one element, or `None` when `over:` is not a proven list
-            or its element type is unknown (`list[Any]`).
+            The exact contract of one element, or `None` when `over:` is not a list or
+            is an unproven one (whose items are unknown, labelled `list(Optional(Any))`).
 
     Raises:
         `TypeError`:

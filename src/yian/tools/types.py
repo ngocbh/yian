@@ -121,7 +121,8 @@ def _translate(
         return _union([sub({**schema, "type": member}) for member in json_type])
     if json_type == "array":
         items = schema.get("items")
-        # Tuple positions have no yian spelling; `list[Any]` accepts every tuple.
+        # Tuple positions have no yian spelling; a list with no element type
+        # (`list(Optional(Any))`) accepts every tuple.
         element = None if "prefixItems" in schema or not isinstance(items, Mapping) else sub(items)
         if element is None:
             return Type.scalar(ValueKind.LIST_ANY)

@@ -414,8 +414,8 @@ class AgentDescriptor(NodeDescriptor):
                 raise ctx.diagnostics.error(
                     f"node {self.id!r}: an AGENT can't produce this `output:`; a model "
                     "generates only str, int, float, bool, date, datetime, Literal, record, "
-                    "union, and list values, not `file` or `None`. Produce the value in a CODE "
-                    "node.",
+                    "union, object, Any, and list values, not `file` or `None`. Produce "
+                    "the value in a CODE node.",
                     range=self.field_ranges.get(("field", "outputs")) or self.range,
                 ) from exc
         if self.steerable and not is_text_output(node.output_contract):

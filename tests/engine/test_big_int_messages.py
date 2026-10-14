@@ -82,7 +82,7 @@ def test_value_repr_names_the_type_of_a_value_too_long_to_display():
         Type(kind=ValueKind.LIST_OBJECT, element=rec(a=INT)),
         BIG,
         (),
-        f"{PLACEHOLDER} is not a list for declared list(object)",
+        f"{PLACEHOLDER} is not a list for declared list({{\"a\":int}})",
     ),
     (
         union(rec(a=INT), rec(b=INT)),

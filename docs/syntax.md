@@ -245,8 +245,8 @@ record doesn't declare. This covers `${input.X...}`, `${node.output...}`, and a 
 `${item...}` in bindings, `case` conditions, and flow outputs, and the carried fields a
 LOOP `while:`/`until:` predicate reads. Reading a declared field
 through an `Optional(...)` record still gives `null` when the whole value is null, and
-values whose type isn't known at load (`object`, an untyped output, or anything below
-them) aren't checked.
+values whose type isn't known at load (`object`, `Any`, an untyped output, or anything
+below them) aren't checked.
 
 On a [union](#unions-of-records-union), a field every member has can be read anywhere. Its
 type is the members' type when they agree, the merged `Literal` when every member's field
@@ -422,9 +422,32 @@ length.
 ## Types
 
 The type vocabulary follows Python typing, written with parentheses. Scalars: `str`,
-`int`, `float`, `bool`, `date`, `datetime`, `object`, `None`. Containers/forms:
+`int`, `float`, `bool`, `date`, `datetime`, `object`, `Any`, `None`. Containers/forms:
 `list(X)`, `Optional(X)`, `Literal(...)` (an enum of tags), named **records**
 (dataclass-style), and `Union(A, B, ...)` of records.
+
+`Any` is any JSON value except null: an object, a list, text, a number, or a boolean.
+`Optional(Any)` also allows null. `list(Any)` is a list of such values; write
+`list(Optional(Any))` for a list that may hold null. The loader doesn't check field
+reads on an `Any` value, as with `object`. An `Any` value fills only an `Any` input; to
+pass it to a narrower one, tag the slot (`n: !int ${x.output}`), which checks it at
+runtime, or narrow it with `isinstance` in a `case`. `object` is a JSON object: a
+mapping with text keys and JSON values. A dict with a non-text key, or holding a set,
+a date object, or any other non-JSON value, fails the check. Write `Any`, not `any`:
+`unknown type 'any'; write Any`.
+
+When the loader can't type a list's items (a tool's untyped array, a mixed or empty
+literal list), the list is a `list(Optional(Any))`, and its items are checked at
+runtime when passed on, such as a MAP's `${item}`.
+
+Changed: `object` values used to accept some non-JSON values, such as a date object or
+a set, which the run log turned into text or a list, so the next node saw a different
+value than the log recorded. In node outputs and bindings, an `object` value, a
+`list(object)` item, or an item of a list the loader couldn't type now fails when it
+holds one. Flow inputs are still converted to JSON when the run starts, so a date inside an
+`!object` input arrives as text, but a run input holding a mapping with a non-text key
+now makes `run_flow` raise before the run (`input 'o': object keys must be text, got
+1`). `Any` used to mean `object`, and the lowercase `any` is no longer a type.
 
 One rule says where a type goes. A **type definition** is written as a type: a
 `typedefs:` entry, and the `output:` of an AGENT, CODE, TOOL, HUMAN_INPUT, or `case`
@@ -479,7 +502,7 @@ such as ``types use parentheses: `Literal(buy)` ``.
 
 Typed storage for `list(Optional(X))` accepts actual null items because its
 refined element type is nullable. When `X` has a specialized list storage kind,
-those items remain `None` without lowering that kind to `list[Any]`. Cross-flow
+those items remain `None` without falling back to the generic list storage. Cross-flow
 bindings compare element contracts too: `list(X)` may fill
 `list(Optional(X))`, but the nullable source cannot fill the strict sink.
 
@@ -493,6 +516,9 @@ A supplied string coerces to `int` or `float` when it parses as one. For `bool`,
 `off` become false, ignoring case and surrounding whitespace. Any other string
 is left as text, so the declared type rejects it: `--input approved=ture` fails
 with `input 'approved': 'ture' does not match declared type bool`.
+
+A string is never coerced for an `Any` input: `--input x=3` gives the text `"3"`. Pass a
+number, a list, or an object to an `Any` input in an `--inputs` file.
 
 ### Unions of records — `Union(...)`
 
@@ -644,7 +670,8 @@ to quote. Compatible payloads keep their authored representation, so `!float 30`
 the integer `30`. String coercion applies only to values supplied at a flow boundary.
 
 A record input names its record in `typedefs:` and tags the input with it
-(`cfg: !Cfg`). `!object` is an unstructured mapping.
+(`cfg: !Cfg`). `!object` is an unstructured mapping: any JSON object. `!Any` takes any
+JSON value except null.
 
 An AGENT's `variables:` take the same form, and every variable needs a value:
 `num: !int(1..12) 4` (see [Agent-owned variables](#agent-owned-variables)).
@@ -742,8 +769,9 @@ The loader compares the tag's type with the type it infers for the value:
   Records are closed, so a record with a required field the declared record lacks
   is disjoint.
 - A **narrower** type loads and is checked at runtime: non-Optional over Optional, a
-  `Literal` or range subset, a record over `object`, or a union member over the union
-  (explicit narrowing, e.g. `buy: !Buy ${decision.output}`). A flow output over a node a
+  `Literal` or range subset, a record over `object`, an `Any` value into another type (not
+  `None` or `file`; `n: !int ${x.output}`), or a union member over the union (explicit narrowing, e.g.
+  `buy: !Buy ${decision.output}`). A flow output over a node a
   `case` may skip is `Optional`, so `order: !str ${order.output}` loads and fails with
   `binding.type` when `order` is skipped.
 - Unions compare member by member: a member declared as its union fits, and a
@@ -794,6 +822,9 @@ typed.
   load error, including a child output that is `Optional` because a `case` may skip
   its node. A tag (`x: !int ${maybe.output}`) accepts the narrowing and checks it at
   runtime.
+- An untagged `Any` source fills only an `Any` or `Optional(Any)` parameter. Into any
+  other one it is a load error that says to tag the slot (`x: !str ${...}`) or to narrow
+  the value with `isinstance` in a `case`.
 
 Declared types are part of the flow fingerprint, so a run can't resume after a
 type changes. Recorded flow outputs are re-validated on resume.
@@ -871,7 +902,9 @@ output:
 - A tagged entry is always a value, even a mapping with a `kind:` key. Keys a node body
   treats specially (`kind:`, `input:`, `depends_on:`) are plain fields in a value.
 - An untagged entry without `kind:` is a load error at the entry. For a literal, the
-  error shows the tag to write:
+  error shows the tag to write; a list of mixed items gets `!list(Any)`
+  (`!list(Optional(Any))` when an item is null), and one holding an unquoted date gets
+  `!<type>` and a note to quote its dates:
 
 ```text
 node 'x': an entry in `nodes:` is a node or a value; add `kind:` for a node, or a tag (`!object`, `!Buy`, ...) for a value, e.g. `x: !int 5`
@@ -934,7 +967,7 @@ flow has unresolved references:
   that type is unknown, the field is open (any read of it loads).
 - A nested untagged mapping is inferred the same way. One with a field of unknown type,
   or a list whose items don't share a type, is open as a whole.
-- A nested tagged `!object` stays open.
+- A nested tagged `!object` stays open, and so does a `!Any {...}` entry.
 - `!object ${x.output}`, and any `object` from outside (a flow input, an AGENT, a tool),
   stays unchecked.
 - A record field can't be named `""`, so an empty key in the record is a load error at
@@ -1254,7 +1287,9 @@ for providers that lack it). A root `Literal(...)` is constrained internally as 
 single `value` field and returned to the flow as the bare tag. `Optional(X)` allows
 null in the schema wherever it appears: at the root, as a list element, or as a
 record field. A root `Optional(str)` stays a text producer, so it never returns
-null. The result is
+null. An `object` or `Any` output asks for an open mapping or any JSON value; a
+provider's strict JSON-schema mode (OpenAI's, for one) rejects an open mapping, so such
+an output may need a provider path that isn't strict. The result is
 validated while its canonical success record is prepared, like every other node
 output.
 
@@ -1828,7 +1863,9 @@ Inline notes:
   int literal longer than Python's digit limit in `code:` is a load error (Python's syntax
   error); write it in hex or compute it.
 - **Output must be JSON-representable** (`str` / `int` / `float` / `bool` / `list` /
-  `object` / typedefs); a non-serializable return — even nested — fails at the node.
+  `object` / `Any` / typedefs); a non-serializable return — even nested — fails at
+  the node. An `object` or `Any` output holding a date object, a set, or a non-text
+  key fails too (see the `Changed:` note in [Types](#types)).
 - **Imports** resolve against the process `sys.path` (cwd + `PYTHONPATH`), same as the
   reference form. A dotted token with no colon (`pkg.mod.helper`) is treated as a likely
   typo'd reference and rejected at load with a "did you mean `pkg.mod:helper`?" hint.
@@ -1886,8 +1923,8 @@ replayed.
 Changed: a `when:` in the `on:` form used to be compared as text, so `when: 1` and
 `when: true` never matched an int or bool `on:`; it is now a typed literal of the `on:`
 type. `when: 1` on a `str` `on:` used to match `"1"`; it is now a load error that says to
-quote it. Where the `on:` type isn't known at load (an untyped output, `object`, an
-expression whose type isn't proven, e.g. `${input.n + 1}`), the runtime comparison is
+quote it. Where the `on:` type isn't known at load (an untyped output, `object`, `Any`,
+an expression whose type isn't proven, e.g. `${input.n + 1}`), the runtime comparison is
 exact too: `when: 1` no longer matches the text `"1"`, so type the producer or quote the
 value. A `when:` that can't be a value of the `on:` type (a typo'd tag, a wrong scalar
 type) is a load error even with an `else:`. An unquoted datetime `when:` is a load error;
@@ -2047,8 +2084,9 @@ tagged with the `case`'s old `output:` type when a tag can spell it and the valu
 it (a lone `${input.x}` or `${node.output}` fits when its type does), else with the type
 of that lone reference, else with a tag that fits the value (`!int 3`,
 `!Optional(str) null`, `!object {...}`, `!list(list(Optional(int))) [[1], [null]]`). A
-lone span of another type shows `!<type>` for you to fill in, and so does a list of
-mixed items, which no tag holds.
+list of mixed items gets `!list(Any)` (`!list(Optional(Any))` when an item is null),
+and a date in it is shown quoted, as text. A lone span of another type shows `!<type>`
+for you to fill in.
 
 A value no entry can hold is its own error at the branch: a number that is not finite, a
 value that contains itself through a YAML alias, a mapping with an empty key that would
@@ -2099,6 +2137,9 @@ nodes:
     else: call(respond, transcript=${input.transcript}, message=${ask.output})
 output: !Turn ${route.output}
 ```
+
+When the branches give different types, `x: !Any ${route.output}` takes whichever value
+ran, as long as it isn't null.
 
 #### Exhaustiveness
 

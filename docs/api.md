@@ -378,7 +378,7 @@ follows the same rules:
 | `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` | a range: `int(a..b)` / `float(a..b)`, or one-sided `int(a..)` / `int(..b)` (likewise `float`) when only one end is kept; an exclusive end becomes the nearest inclusive `int`, or the same value made inclusive for `float` (wider); a `float` end that isn't an exact double is dropped |
 | string `enum` or `const` | `Literal(...)` |
 | `format` (`date`, `uri`, …) | `str` |
-| `array` with `items` | `list(...)`; tuples give `list(Any)` |
+| `array` | `list(...)` from `items`; an `array` without `items`, and tuples, give `list(Optional(Any))` |
 | `object` with `properties` | input: `object`, unless `additionalProperties: false` makes it a record; output: a record, unless it allows extra keys |
 | `anyOf`/`oneOf` with `null` | `Optional(...)` |
 | `anyOf`/`oneOf` of records | `Union(...)` |

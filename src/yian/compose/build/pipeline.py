@@ -2338,6 +2338,7 @@ def _assemble(
         flow_wiring,
         narrowing=narrowing,
         type_fn=constructor_type,
+        registry=registry,
         diagnostics=diagnostics,
     )
     # loop `'a -> 'a` type contract (types): each field the body returns is compared with

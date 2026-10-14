@@ -35,7 +35,7 @@ from yian.runtime.log import (
     encode_record,
 )
 from yian.typesys import FileRef, ValueKind, VariablePool
-from yian.typesys.values import ANY_VALUE_ADAPTER, build_value
+from yian.typesys.values import ANY_VALUE_ADAPTER, TypeCheckError, build_value
 
 
 # Fixed writer output for the source-free causal-route graph.
@@ -932,29 +932,41 @@ def test_decode_record_rejects_excessive_nesting_as_a_value_error():
         decode_record(wire)
 
 
-def test_typed_output_canonicalizes_tuple_date_and_file_ref():
-    value = {
-        "items": (1, 2),
-        "day": date(2026, 8, 13),
-        "at": datetime(2026, 8, 13, 9, 30, tzinfo=timezone.utc),
-        "file": FileRef(uri="s3://bucket/report", mime="text/plain", name="report.txt"),
-    }
+@pytest.mark.parametrize(
+    ("member", "shown"),
+    [
+        (date(2026, 8, 13), "datetime.date(2026, 8, 13)"),
+        (
+            datetime(2026, 8, 13, 9, 30, tzinfo=timezone.utc),
+            "datetime.datetime(2026, 8, 13, 9, 30, tzinfo=datetime.timezone.utc)",
+        ),
+        (FileRef(uri="s3://bucket/report"), "FileRef("),
+    ],
+)
+def test_typed_object_output_rejects_a_non_json_member(member, shown):
+    with pytest.raises(TypeCheckError, match="is not a JSON value") as caught:
+        canonical_typed({"items": (1, 2), "nested": {"at": member}}, ValueKind.OBJECT)
 
-    wire, decoded = canonical_typed(value, ValueKind.OBJECT)
+    assert shown in str(caught.value)
+    assert caught.value.path == ("nested", "at")
 
-    assert wire == {
-        "kind": "object",
-        "value": {
-            "at": "2026-08-13T09:30:00Z",
-            "day": "2026-08-13",
-            "file": {
-                "mime": "text/plain",
-                "name": "report.txt",
-                "uri": "s3://bucket/report",
-            },
-            "items": [1, 2],
-        },
-    }
+
+def test_recorded_object_past_the_nesting_limit_still_replays():
+    value: Any = "leaf"
+    for _ in range(150):
+        value = {"a": value}
+    recorded = ANY_VALUE_ADAPTER.validate_python({"kind": "object", "value": value})
+
+    wire, decoded = canonical_typed(recorded, ValueKind.OBJECT)
+
+    assert wire == {"kind": "object", "value": value}
+    assert decoded == recorded
+
+
+def test_typed_object_output_canonicalizes_a_tuple():
+    wire, decoded = canonical_typed({"items": (1, 2)}, ValueKind.OBJECT)
+
+    assert wire == {"kind": "object", "value": {"items": [1, 2]}}
     assert decoded.to_object() == wire["value"]
     assert canonical_typed(decoded, ValueKind.OBJECT)[0] == wire
 

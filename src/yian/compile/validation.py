@@ -20,7 +20,15 @@ from typing import Literal
 from dataclasses import replace
 
 from yian.compile.model import END_ID, START_ID
-from yian.typesys.values import TypeCheckError, ValueKind, Type, build_value_as, numeric_interval
+from yian.typesys.values import (
+    TypeCheckError,
+    ValueKind,
+    Type,
+    build_value_as,
+    has_file,
+    numeric_interval,
+    requires_file,
+)
 
 _CLOSED_HEADS = ()              # `outputs` is no longer a head; node-first head dispatch
 # The ONLY valid ${system.X} ambients, each with its scalar type label:
@@ -86,13 +94,16 @@ def types_compatible(source: Type, sink: Type) -> bool:
     `None` source may fill any nullable sink; records match structurally (every field the
     sink REQUIRES is present + compatible); enums by tag-subset (source tags within the
     sink's accepted tags, so an untagged source cannot fill an enum sink); list elements
-    recurse, treating a bare specialized list as its non-null scalar element contract; a
-    nullable source cannot fill a non-nullable sink.
+    recurse, treating a bare specialized list as its non-null scalar element contract and
+    an unproven `list(Optional(Any))` as `Optional(Any)` items; a nullable source cannot
+    fill a non-nullable sink.
     A bounded numeric sink (either end may be open) requires a source interval
     contained within it.
     A source union fits a sink union when each of its members fits some sink member; a
     record fits a union when it fits some member; a union fits `object` but never a
     record, and `object` never fits a union.
+    Every non-null type without a `file` in it fits `Any`; `Any` fits only `Any` (and
+    `Optional(Any)`), since load can't tell which JSON value it holds.
 
     Args:
         source (`Type`): Type guaranteed by the producer.
@@ -105,19 +116,16 @@ def types_compatible(source: Type, sink: Type) -> bool:
         return sink.kind is ValueKind.NONE or sink.nullable
     if source.nullable and not sink.nullable:
         return False
+    if sink.kind is ValueKind.ANY:
+        return not has_file(source)
+    if source.kind is ValueKind.ANY:
+        return False
     source_is_list = source.kind.is_list()
     sink_is_list = sink.kind.is_list()
     if source_is_list or sink_is_list:
         if not (source_is_list and sink_is_list):
             return False
-        source_element = _list_element(source)
-        sink_element = _list_element(sink)
-        if sink_element is None:
-            return True
-        return source_element is not None and types_compatible(
-            source_element,
-            sink_element,
-        )
+        return types_compatible(_list_element(source), _list_element(sink))
     if source.kind != sink.kind:
         if not (sink.kind == ValueKind.NUMBER and source.kind == ValueKind.INTEGER):
             return False
@@ -185,7 +193,11 @@ def type_relation(inferred: Type, declared: Type) -> TypeRelation:
     `date` or `datetime` only through tags that are valid ISO strings of that kind.
     Unions are compared member-wise: each inferred member takes its best relation
     against the declared members, so a union member over the union is narrower and
-    a record matching no member is disjoint.
+    a record matching no member is disjoint. A type without a `file` in it fits
+    `Any` (narrower when nullable); one whose every non-null value holds a `file` is
+    disjoint from it, and one that only may hold a `file` is narrower. `Any` is
+    narrower than every other type except `None` and types whose every non-null value
+    holds a `file`, which are disjoint from it.
 
     Args:
         inferred (`Type`): Type the producing expression is inferred to have.
@@ -214,17 +226,27 @@ def _weakest(*relations: TypeRelation) -> TypeRelation:
     return min(relations, key=_RELATION_RANK.__getitem__)
 
 
-def _list_element(typ: Type) -> "Type | None":
-    """Return a list type's element contract, or `None` for an unrefined list."""
+def _list_element(typ: Type) -> Type:
+    """Return a list type's element contract.
+
+    A flat list reads as its non-null scalar items; a `LIST_ANY` with no element (an
+    unproven list) reads as `Optional(Any)` items, since they may be any JSON value.
+    """
     if typ.element is not None:
         return typ.element
     if typ.kind.element_kind is not None:
         return Type.scalar(typ.kind.element_kind)
-    return None
+    return Type(kind=ValueKind.ANY, nullable=True)
 
 
 def _relate_non_null(inferred: Type, declared: Type) -> TypeRelation:
     """Classify the non-null values of ``inferred`` against ``declared``."""
+    if declared.kind is ValueKind.ANY:
+        if not has_file(inferred):
+            return "fits"
+        return "disjoint" if requires_file(inferred) else "narrower"
+    if inferred.kind is ValueKind.ANY:
+        return "disjoint" if requires_file(declared) else "narrower"
     if inferred.variants is not None or declared.variants is not None:
         return _relate_union(inferred, declared)
     inferred_is_list = inferred.kind.is_list()
@@ -232,14 +254,8 @@ def _relate_non_null(inferred: Type, declared: Type) -> TypeRelation:
     if inferred_is_list or declared_is_list:
         if not (inferred_is_list and declared_is_list):
             return "disjoint"
-        declared_element = _list_element(declared)
-        if declared_element is None:
-            return "fits"
-        inferred_element = _list_element(inferred)
-        if inferred_element is None:
-            return "narrower"
         # The empty list is shared by every pair of list types; it is not overlap.
-        return type_relation(inferred_element, declared_element)
+        return type_relation(_list_element(inferred), _list_element(declared))
 
     relation = _relate_kinds(inferred.kind, declared.kind)
     if relation == "disjoint":

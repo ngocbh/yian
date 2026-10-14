@@ -74,7 +74,7 @@ class UnionExpr:
 TypeExpr = Union[ScalarExpr, ListExpr, RefExpr, OptionalExpr, EnumExpr, DictExpr, UnionExpr]
 
 _SCALAR_KEYWORDS = {
-    "str", "int", "float", "bool", "date", "datetime", "object", "file", "None", "none",
+    "str", "int", "float", "bool", "date", "datetime", "object", "file", "None", "none", "Any",
 }
 
 # Names a typedef must not shadow (typing constructors + the generic builtins).
@@ -89,7 +89,8 @@ def parse_type(s: str) -> TypeExpr:
     """Parse an authored type expression into a `TypeExpr` AST.
 
     The vocabulary is `str`/`int`/`float`/`bool`/`Any`/`date`/`datetime`/`object`/
-    `file`/`None`, inclusive ranges `int(1..12)`/`float(0.0..1.0)`, and the
+    `file`/`None`, where `Any` is any JSON value except null and `object` is a JSON
+    object, inclusive ranges `int(1..12)`/`float(0.0..1.0)`, and the
     constructors `list(X)`/`Optional(X)`/`dict(K, V)`/`Literal(a, "b c")`/
     `Union(A, B, ...)`, plus the `topics` alias. A bare name that is neither a
     scalar nor a constructor is a registry reference. `Union(...)` members are only
@@ -110,10 +111,11 @@ def parse_type(s: str) -> TypeExpr:
         `TypeCheckError`:
             The string is not a valid expression (including unbalanced parentheses, a
             lone Unicode surrogate, or an empty `Literal` member), uses an unknown
-            constructor, gives a numeric range with no end, no `..`, or as two arguments,
-            spells a union as `A | B` (the hint suggests `Union(A, B)`), or lists `None`
-            as a `Union(...)` member (the hint suggests `Optional(Union(...))`), or holds
-            a `[` outside a quoted string (the message shows the parenthesized spelling).
+            constructor or the lowercase `any`, gives a numeric range with no end, no
+            `..`, or as two arguments, spells a union as `A | B` (the hint suggests
+            `Union(A, B)`), or lists `None` as a `Union(...)` member (the hint suggests
+            `Optional(Union(...))`), or holds a `[` outside a quoted string (the message
+            shows the parenthesized spelling).
 
     Example:
         `parse_type("Union(Buy, Sell)")` gives
@@ -441,8 +443,10 @@ def _valid_bounds(ctor: str, bounds: tuple) -> bool:
 
 def _named_type(name: str) -> TypeExpr:
     """Read a bare type name: a scalar keyword, an alias, or a registry reference."""
-    if name in ("Any", "any"):
-        return ScalarExpr("object")
+    if name == "any":
+        # `any` stays a builtin name (the expression function), so it never reads as a
+        # registry reference.
+        raise TypeCheckError("unknown type 'any'; write Any")
     if name == "topics":
         return ListExpr(ScalarExpr("str"))  # domain alias (to be retired)
     if name == "none":
@@ -634,6 +638,7 @@ _SCALAR_SEG = {
     "object": ValueKind.OBJECT,
     "None": ValueKind.NONE,
     "file": ValueKind.FILE,
+    "Any": ValueKind.ANY,
 }
 
 _LIST_SEG_FOR_ELEMENT = {

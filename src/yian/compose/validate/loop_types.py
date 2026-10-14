@@ -30,7 +30,7 @@ from typing import Any, Optional
 from yian.compile.validation import types_compatible
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.isinstance_types import constructor_type_fn
-from yian.compose.helpers.tags import suggest_tag
+from yian.compose.helpers.tags import any_source_hint, suggest_tag
 from yian.compose.helpers.output_contracts import (
     resolve_output_binding_contract,
 )
@@ -98,8 +98,9 @@ def check_loop_type_contract(
             for located load errors.
 
     Raises:
-        `LoadError`: A returned field does not keep its carried type, or an inline body
-            returns a field that cannot fit its generated parameter.
+        `LoadError`: A returned field does not keep its carried type (with advice to
+            tag the seed or narrow it with `isinstance` when it is `Any`), or an inline
+            body returns a field that cannot fit its generated parameter.
         `TypeError`: A producer, flow input, or loop contract has an unexpected type."""
     diagnostics = diagnostics or LoadDiagnostics()
     type_fn = constructor_type_fn(registry) if registry is not None else None
@@ -187,13 +188,16 @@ def check_loop_type_contract(
                     result.field_ranges.get(("field", "inputs"))
                     or result.node_range
                 )
-                raise diagnostics.error(
+                message = (
                     f"loop node {nid!r}: carried field {field_name!r} — body output is "
                     f"{canonical_type_label(body_field)!r}, carried source is "
                     f"{canonical_type_label(source)!r} "
-                    "(a returned field must keep its carried type)",
-                    range=rng,
+                    "(a returned field must keep its carried type)"
                 )
+                hint = any_source_hint(field_name, source, body_field, registry=registry)
+                if hint is not None:
+                    message += f"; {hint}"
+                raise diagnostics.error(message, range=rng)
         if nid in inline_loops:
             _check_inline_returned_fields(
                 result,

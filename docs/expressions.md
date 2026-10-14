@@ -269,7 +269,8 @@ reference: a `typedefs:` name, or one of `str`, `int`, `float`, `bool`, `date`,
 alias in `typedefs:` first. Each flow resolves the names against its own `typedefs:`
 (a `uses:` child against its own, and a parent can't name a child's type). An unknown name
 is a located load error: `unknown type 'list'; isinstance takes a typedefs: name or one of
-str, int, float, bool, date, datetime, object`. The call must be exactly
+str, int, float, bool, date, datetime, object`. `Any` is not a target, since it would
+only test for null. The call must be exactly
 `isinstance(<expr>, <TypeName>)`: two positional arguments, and no field read on the
 result.
 

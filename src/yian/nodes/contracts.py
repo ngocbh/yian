@@ -693,9 +693,9 @@ def output_contract_type(contract: OutputContract | None) -> Type | None:
     )
 
 
-# Kinds a field read is not checked on: `object` is opaque unless it declares fields, and
-# `file` is the reserved file reference.
-_UNCHECKED_FIELD_KINDS = frozenset({ValueKind.OBJECT, ValueKind.FILE})
+# Kinds a field read is not checked on: `object` is opaque unless it declares fields, an
+# `Any` value may be an object, and `file` is the reserved file reference.
+_UNCHECKED_FIELD_KINDS = frozenset({ValueKind.OBJECT, ValueKind.ANY, ValueKind.FILE})
 
 
 def _member_only_field_error(

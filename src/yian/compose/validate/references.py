@@ -146,7 +146,8 @@ def validate_references(
     binding by the parse loop for every kind), else the enclosing block (`("field", "inputs")`
     / `("field", "prompt")`), else the node header. A HUMAN_INPUT question-text error anchors on
     its `("text", "questions[i]...")` string range, else the `questions:` block. `outputs_range`
-    is the authored output value/block range when the caller retains it. The aggregate carries the first retained range.
+    is the authored output value/block range when the caller retains it. The aggregate carries
+    the first retained range.
 
     With `narrowing`, each node's references (a CASE's own sources included) are checked
     against that node's view of the producer and flow-input contracts, so a branch can

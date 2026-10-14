@@ -36,7 +36,7 @@ from yian.expr.template import Span, scan_template
 from yian.nodes.contracts import ValueContract
 from yian.nodes.human_input import HumanInputNode
 from yian.nodes.human_input.node import site_label, template_sites
-from yian.typesys.values import Type, ValueKind
+from yian.typesys.values import Type, ValueKind, value_repr
 
 # The keys the adaptive desugar reads from an `adaptive_questions:` block.
 _ADAPTIVE_KEYS = frozenset({"prompt", "llm_config", "retries"})
@@ -267,7 +267,7 @@ class HumanInputDescriptor(NodeDescriptor):
             raise diagnostics.error(
                 f"node {self.id!r} (kind=human_input): `questions:` must be a list of "
                 f"questions (each item `- question: ...`) or exactly `${{name}}` naming a "
-                f"declared input, got {type(questions).__name__} {questions!r}",
+                f"declared input, got {type(questions).__name__} {value_repr(questions)}",
                 range=questions_range,
             )
         return HumanInputNode(self.id, prompt=self.prompt or "", title=self.node_name)

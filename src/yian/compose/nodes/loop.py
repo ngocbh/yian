@@ -27,6 +27,7 @@ from yian.nodes.contracts import (
 from yian.nodes.loop import LoopNode
 from yian.typesys import TypeCheckError
 from yian.typesys.types import TypeRegistry
+from yian.typesys.values import value_repr
 from yian.compose.helpers.isinstance_types import resolve_isinstance_type
 from yian.compose.helpers.output_contracts import (
     combine_output_contracts,
@@ -106,7 +107,7 @@ class LoopDescriptor(NodeDescriptor):
             if value is not None and not isinstance(value, str):
                 raise diagnostics.error(
                     f"loop node {node_id!r}: `{key}:` must be an expression string over the "
-                    f"carried record, such as `{example}` (got {value!r})",
+                    f"carried record, such as `{example}` (got {value_repr(value)})",
                     range=ranges.get(("field", key)) or own_range,
                 )
         super()._validate_fields(node_id, kwargs, ranges, own_range, diagnostics)
@@ -212,7 +213,7 @@ class LoopDescriptor(NodeDescriptor):
                     # `< 1` compare or the runtime guard, and a YAML bool (an int subclass in
                     # Python) would silently read as 0/1. Reject any non-int type.
                     errors.append(
-                        f"loop node {self.id!r}: `max:` must be an integer (got {self.max!r})"
+                        f"loop node {self.id!r}: `max:` must be an integer (got {value_repr(self.max)})"
                     )
                 elif self.max < 1:
                     # A limit below 1 is nonsensical: `max:` bounds the iteration COUNT, so it
@@ -220,7 +221,7 @@ class LoopDescriptor(NodeDescriptor):
                     # letting `max: 0` run one iteration and then fail with a confusing
                     # "exceeded max (0)".
                     errors.append(
-                        f"loop node {self.id!r}: `max:` must be >= 1 (got {self.max})"
+                        f"loop node {self.id!r}: `max:` must be >= 1 (got {value_repr(self.max)})"
                     )
         elif present[0] == "times":
             # `times: N` is a fixed count: exactly N runs, no predicate. `max_iters` doubles as
@@ -232,11 +233,11 @@ class LoopDescriptor(NodeDescriptor):
             node.max_iters = self.times
             if not isinstance(self.times, int) or isinstance(self.times, bool):
                 errors.append(
-                    f"loop node {self.id!r}: `times:` must be an integer (got {self.times!r})"
+                    f"loop node {self.id!r}: `times:` must be an integer (got {value_repr(self.times)})"
                 )
             elif self.times < 1:
                 errors.append(
-                    f"loop node {self.id!r}: `times:` must be >= 1 (got {self.times})"
+                    f"loop node {self.id!r}: `times:` must be >= 1 (got {value_repr(self.times)})"
                 )
             if self.max is not None:
                 errors.append(

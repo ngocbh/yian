@@ -72,7 +72,7 @@ from yian.expr import (
 from yian.nodes.case import ELSE_HANDLE, Case, CaseNode
 from yian.nodes.contracts import Binding, Parameter, binding_source, iter_source_strings
 from yian.typesys import TypeCheckError
-from yian.typesys.values import reject_nonfinite
+from yian.typesys.values import reject_nonfinite, value_repr
 from yian.compose.helpers.errors import LoadDiagnostics, source_text
 from yian.compose.helpers.output_contracts import direct_reference_parts
 from yian.compose.helpers.tags import yaml_quoted
@@ -240,7 +240,7 @@ class CaseDescriptor(NodeDescriptor):
             hint = "; start each case with `- `" if isinstance(desc.cases, Mapping) else ""
             raise diagnostics.error(
                 f"{where}: `cases:` must be a list of {{when:, then:}} mappings "
-                f"(got {desc.cases!r}){hint}",
+                f"(got {value_repr(desc.cases)}){hint}",
                 range=desc.field_ranges.get(("field", "cases")) or desc.range,
             )
         cases_cursor = cursor.child("cases")
@@ -248,7 +248,7 @@ class CaseDescriptor(NodeDescriptor):
             if not isinstance(item, Mapping):
                 raise diagnostics.error(
                     f"{where}: `cases[{index}]` must be a {{when:, then:}} mapping "
-                    f"(got {item!r})",
+                    f"(got {value_repr(item)})",
                     range=cases_cursor.child(index).range or desc.range,
                 )
 

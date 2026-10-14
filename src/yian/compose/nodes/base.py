@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional
 from yian.nodes.base import Node
 from yian.nodes.contracts import OutputContract, Parameter, ValueContract
 from yian.typesys.types import TypeRegistry
+from yian.typesys.values import value_repr
 from yian.compile.model import Edge
 from yian.compose.helpers.types import read_type
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
@@ -441,7 +442,7 @@ class NodeDescriptor:
         elif value is None:
             got = "null"
         else:
-            got = f"{type(value).__name__} {value!r}"
+            got = f"{type(value).__name__} {value_repr(value)}"
         message = (
             f"node {node_id!r} (kind={cls.kind}): `{key}:` must be a list of node ids "
             f"(got {got})"

@@ -48,7 +48,7 @@ from yian.compose.source import (
 )
 from yian.expr.grammar import EXPRESSION_KEYWORDS
 from yian.typesys import TypeCheckError, build_value
-from yian.typesys.values import Type, ValueKind, list_kind_for_element
+from yian.typesys.values import Type, ValueKind, list_kind_for_element, value_repr
 
 # Singular source keys are projected onto the descriptor dataclasses' plural
 # field names while retaining their original child sources.
@@ -197,7 +197,7 @@ def _parse_node(
     cls = KINDS.get(kind)
     if cls is None:
         raise diagnostics.error(
-            f"node {node_id!r}: unknown kind {kind!r} "
+            f"node {node_id!r}: unknown kind {value_repr(kind)} "
             f"(allowed: {', '.join(sorted(KINDS))})",
             range=cursor.range_of("kind"),
         )

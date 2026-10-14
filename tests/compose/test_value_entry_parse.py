@@ -5,8 +5,9 @@ among the nodes, and rejects an untagged entry that has no `kind:` with a locate
 saying to add `kind:` for a node or a tag for a value. The error for an untagged scalar,
 list or date shows the tag to write (with `...` for a value written over several
 lines), and the example loads when pasted in. There is no example for a value no tag
-can hold (one that contains itself or holds a number that is not finite). An untagged `${...}` or `call(...)` value
-is not a literal, so it gets no example. Reserved node ids apply to value entries too.
+can hold (one that contains itself or holds a number that is not finite). An untagged
+`${...}` or `call(...)` value is not a literal, so it gets no example. Reserved node ids
+apply to value entries too.
 """
 
 import re

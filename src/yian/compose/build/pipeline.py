@@ -1602,10 +1602,9 @@ def _assemble(
       flow parameters -> parse nodes (a tagged entry lowers to a CODE node returning its
       value) -> split tagged node inputs and flow outputs into value + declared
       contract -> check case branches (a node or a call; a value or a case `output:` is
-      a load error showing the value entry) -> desugar (inline calls,
-      adaptive questions, case call targets, `${case.output}` to a coalesce over the
-      case's branch targets) -> build
-      every node kind-blind
+      a load error showing the value entry) -> desugar (inline calls, adaptive
+      questions, case call targets, `${case.output}` to a coalesce over the case's
+      branch targets) -> build every node kind-blind
       (`desc.build(ctx)`; physical node-output contracts compile at their existing
       leaf-owned position; a case lowers in its own build) -> attach declared input
       contracts to the node wiring -> cross-flow type check + case exhaustiveness ->

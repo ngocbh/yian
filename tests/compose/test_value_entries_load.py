@@ -247,14 +247,11 @@ def test_an_entry_under_a_credential_name_loads():
 
 
 def test_a_mistyped_literal_under_a_credential_name_gets_the_ordinary_error():
-    plain = _load_error(_flow("  x: !int sk-live-123\n"))
     text = _flow("  api_key: !int sk-live-123\n", output="${api_key.output}")
 
     error = _load_error(text)
 
-    assert str(error) == str(plain).replace("'x'", "'api_key'").replace(
-        "`x:", "`api_key:"
-    )
+    assert str(error) == "'api_key': `sk-live-123` is not a valid int"
     assert _error_line(error) == _line_of(text, "api_key:")
 
 

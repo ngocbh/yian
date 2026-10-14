@@ -181,7 +181,7 @@ def template_sites(
 
 
 def site_label(path: tuple[str | int, ...]) -> str:
-    """`path` from `template_sites` written as an author reads it: `questions[0].options[1].label`.
+    """A key path written as an author reads it, such as `questions[0].options[1].label`.
 
     Args:
         path (`tuple[str | int, ...]`):

@@ -13,11 +13,12 @@ origins. Registered into `KINDS`/`BINDING_FIELDS` at import so the shared dispat
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
-from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
+from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor, reject_non_text
 from yian.compose.source import SourceCursor
-from yian.diagnostics import OriginRef
+from yian.diagnostics import OriginRef, SourceRange
 from yian.nodes.code import CodeNode, select_inline_code_origin
 
 if TYPE_CHECKING:
@@ -29,10 +30,10 @@ class CodeDescriptor(NodeDescriptor):
 
     Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
     the Compose-only `range`/`field_ranges` parse metadata) from `NodeDescriptor`, along with the `input:`
-    call-arg map and the template `parse` (no custom parse hook — code's field legality is the
-    default allowed/required key check + the asserts-list check). The code-specific semantic
-    fields (`code`, `asserts`) and diagnostic origin carriers (`code_origin`,
-    `code_line_origins`) are declared here; `inputs`/`outputs` come from the base.
+    call-arg map and the template `parse`; its `_validate_fields` hook rejects a `code:` YAML
+    read as non-text (including `null`), then runs the base asserts-list check. The
+    code-specific semantic fields (`code`, `asserts`) and diagnostic origin carriers
+    (`code_origin`, `code_line_origins`) are declared here; `inputs`/`outputs` come from the base.
 
     Class attrs: `kind="code"`; `allowed` adds `code`, normalized `inputs`/`outputs`, and `asserts` to the
     commons; `required` is `{"code"}` (the one mandatory flat field); `binding_fields=("inputs",)`
@@ -58,6 +59,27 @@ class CodeDescriptor(NodeDescriptor):
             raise TypeError("CODE line origins must be a tuple")
         if not all(isinstance(origin, OriginRef) for origin in self.code_line_origins):
             raise TypeError("CODE line origins must contain only OriginRef values")
+
+    @classmethod
+    def _validate_fields(
+        cls,
+        node_id: str,
+        kwargs: dict[str, Any],
+        ranges: dict[tuple[str, str], SourceRange],
+        own_range: Optional[SourceRange],
+        diagnostics: LoadDiagnostics,
+    ) -> None:
+        """Reject a non-text `code:`, then run the base checks."""
+        reject_non_text(
+            cls.kind,
+            node_id,
+            "code",
+            kwargs.get("code"),
+            ranges.get(("field", "code")) or own_range,
+            diagnostics,
+            required=True,
+        )
+        super()._validate_fields(node_id, kwargs, ranges, own_range, diagnostics)
 
     def with_source_origins(
         self,

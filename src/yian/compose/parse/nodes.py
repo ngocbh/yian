@@ -35,6 +35,7 @@ from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.source import one_line_text
 from yian.compose.helpers.tags import QUOTED_STYLES, suggest_tag, tag_text, yaml_quoted
 from yian.compose.nodes import KINDS, REMOVED_KINDS
+from yian.compose.nodes.base import not_text_error
 from yian.compose.source import (
     SourceAccessError,
     SourceCursor,
@@ -132,7 +133,8 @@ def parse_nodes(
     Raises:
         `LoadError`:
             Raised at the entry for a bad or reserved id, an untagged entry that is
-            not a node body, or a node body that fails its kind's parse.
+            not a node body, or a node body that fails its kind's parse; a non-text
+            or unknown `kind:` is raised at the `kind:` value.
         `TypeError`:
             Raised when a tagged entry is found and `read_value` is `None`.
     """
@@ -185,6 +187,12 @@ def _parse_node(
         raise diagnostics.error(
             _NODE_OR_VALUE.format(node_id=node_id),
             range=cursor.range or cursor.key_range,
+        )
+    if not isinstance(kind, str):
+        raise diagnostics.error(
+            f"node {node_id!r}: "
+            + not_text_error("kind", kind, fix=f"write one of {', '.join(sorted(KINDS))}"),
+            range=cursor.range_of("kind"),
         )
     if kind in REMOVED_KINDS:
         raise diagnostics.error(

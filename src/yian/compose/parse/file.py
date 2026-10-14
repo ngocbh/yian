@@ -32,6 +32,7 @@ from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.yaml_words import yaml_read_as
 from yian.compose.helpers.source import is_extension_key
 from yian.compose.nodes import REMOVED_KINDS
+from yian.compose.nodes.base import not_text_detail, not_text_error
 from yian.compose.parse.nodes import IDENTIFIER_RULE, identifier_suggestion, is_identifier
 from yian.compose.source import (
     SourceAccessError,
@@ -260,11 +261,20 @@ def _desugar_compact(body: dict, root: SourceCursor) -> dict:
       `llm_config:`/`long_term_memory:`) is the node body.
 
     The returned dict is the canonical compose body (with a `nodes:` map) the strict
-    `ComposeFile` schema then validates unchanged. Raises `LoadError` on a removed
-    kind, a non-leaf kind, or a missing or non-identifier flow `id:`.
+    `ComposeFile` schema then validates unchanged. Raises `LoadError` on a `kind:` YAML
+    read as non-text (`null` included), a removed kind, a non-leaf kind, a flow `id:` YAML
+    read as non-text, or a missing, null, empty, or non-identifier flow `id:`.
     """
     diagnostics = LoadDiagnostics.from_cursor(root)
     kind = body["kind"]
+    if not isinstance(kind, str):
+        raise diagnostics.error(
+            "compact (single-node) flow: "
+            + not_text_error(
+                "kind", kind, fix=f"write one of {', '.join(sorted(_COMPACT_KINDS))}"
+            ),
+            range=root.range_of("kind"),
+        )
     if kind in REMOVED_KINDS:
         raise diagnostics.error(
             f"compact (single-node) flow: kind {kind!r} was removed; {REMOVED_KINDS[kind]}",
@@ -278,7 +288,12 @@ def _desugar_compact(body: dict, root: SourceCursor) -> dict:
             range=root.range_of("kind"),
         )
     flow_id = body.get("id")
-    if not isinstance(flow_id, str) or not flow_id:
+    if flow_id is not None and not isinstance(flow_id, str):
+        raise diagnostics.error(
+            "compact (single-node) flow: " + not_text_error("id", flow_id),
+            range=root.range_of("id"),
+        )
+    if not flow_id:
         raise diagnostics.error(
             "compact (single-node) flow: a top-level `id:` is required — it names the "
             "single node",
@@ -465,7 +480,10 @@ def parse_file(source: str | SourceDocument) -> ComposeFile:
 
     Raises `LoadError` on malformed YAML, a non-mapping document, an unknown
     top-level key (after stripping `x-*`), a retired `inputs:`/`outputs:` key in a
-    node or def body, or any schema violation.
+    node or def body, or any schema violation. A text field YAML read as non-text (flow
+    `id:`/`name:`/`description:`/`version:`, a `uses:` ref, a flow `asserts:` item) is
+    reported by `not_text_error`, naming the field; any other schema violation keeps
+    pydantic's message.
     """
     document = (
         parse_source_document(source, "<flow>") if isinstance(source, str) else source
@@ -513,8 +531,9 @@ def parse_file(source: str | SourceDocument) -> ComposeFile:
     except LoadError:
         raise
     except ValidationError as exc:
+        detail = not_text_detail(exc)
         raise diagnostics.error(
-            str(exc),
+            not_text_error(*detail) if detail is not None else str(exc),
             range=_validation_error_range(exc, root),
         ) from exc
     except Exception as exc:

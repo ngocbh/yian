@@ -16,11 +16,16 @@ corresponding authored fields continue to reject them.
 Like `nodes/base.py`, this base imports only the dependencies its contract needs —
 `typesys` (TypeRegistry), `nodes.contracts` (OutputContract/Parameter/ValueContract),
 `compose.helpers.types` (read_type), `compose.helpers.errors` (LoadError),
-`compose.helpers.tags` (has_span), and `compose.source` (SourceCursor) for parse
-navigation, `diagnostics` (SourceRange) — all
-earlier layers on the ladder, so it stays a leaf of the nodes package: it never imports any
-sibling kind or `nodes/__init__`. Every kind module imports it at module top level without
-cycling; `parse/file.py` re-exports it as the descriptor base type for its importers.
+`compose.helpers.tags` (has_span), `compose.helpers.yaml_words` (yaml_read_as), `pydantic`
+(ValidationError), `nodes.human_input.node` (site_label, a runtime leaf that imports no
+`yian.compose` module), and `compose.source` (SourceCursor) for parse navigation,
+`diagnostics` (SourceRange) — all earlier layers on the ladder, so it stays a leaf of the
+nodes package: it never imports any sibling kind or `nodes/__init__`. Every kind module
+imports it at module top level without cycling; `parse/file.py` re-exports it as the
+descriptor base type for its importers.
+
+It also owns the shared message for a text field whose value YAML read as non-text, so every
+kind reports that mistake in the same words.
 """
 
 from __future__ import annotations
@@ -29,14 +34,18 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional
 
+from pydantic import ValidationError
+
 from yian.nodes.base import Node
 from yian.nodes.contracts import OutputContract, Parameter, ValueContract
+from yian.nodes.human_input.node import site_label
 from yian.typesys.types import TypeRegistry
 from yian.typesys.values import value_repr
 from yian.compile.model import Edge
 from yian.compose.helpers.types import read_type
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.tags import has_span
+from yian.compose.helpers.yaml_words import yaml_read_as
 from yian.compose.source import SourceCursor
 from yian.diagnostics import DiagnosticFrame, OriginRef, SourceRange
 
@@ -71,6 +80,108 @@ def reject_container_spans(
         raise diagnostics.error(
             f"{kind} node {node_id!r} {key}: a value holding ${{...}} can't be a list or "
             "mapping; write the list as an expression, e.g. `${[a.output, b.output]}`",
+            range=range,
+        )
+
+
+def not_text_error(field: str, value: Any, fix: str | None = None) -> str:
+    """Return the load error message for a text field whose value YAML read as non-text.
+
+    Args:
+        field (`str`):
+            The field's path as authored, such as `prompt` or `questions[0].header`.
+        value (`Any`):
+            The field's value as YAML read it.
+        fix (`str`, *optional*, defaults to `None`):
+            What the author should write instead. `None` uses "write the text" for an empty
+            value and "put it in quotes" otherwise.
+
+    Returns:
+        `str`:
+            The message, naming what YAML read the value as and the fix.
+
+    Example:
+        `not_text_error("prompt", 5)` is
+        ``"`prompt:` must be text, but YAML read it as an integer; put it in quotes"``;
+        `not_text_error("questions[0].header", None)` is
+        ``"`questions[0].header:` must be text, but it is empty; write the text"``;
+        `not_text_error("kind", [1], fix="write one of a, b")` is
+        ``"`kind:` must be text, but YAML read it as a list; write one of a, b"``.
+    """
+    if value is None:
+        return f"`{field}:` must be text, but it is empty; {fix or 'write the text'}"
+    return (
+        f"`{field}:` must be text, but YAML read it as {yaml_read_as(value)}; "
+        f"{fix or 'put it in quotes'}"
+    )
+
+
+def not_text_detail(exc: ValidationError) -> tuple[str, Any] | None:
+    """Return the field and value of a pydantic error that is a text field read as non-text.
+
+    Only the first error is read, so the field named agrees with the range the caller locates
+    from that same first error.
+
+    Args:
+        exc (`ValidationError`):
+            The pydantic validation error.
+
+    Returns:
+        `tuple[str, Any] | None`:
+            The field's path as authored (such as `uses.lib` or `asserts[1]`) and its value,
+            for `not_text_error`; `None` when the first error is not a `string_type` failure,
+            or is the `str` member of a union field, which takes more than text.
+    """
+    errors = exc.errors()
+    first = errors[0]
+    if first["type"] != "string_type":
+        return None
+    loc = tuple(first["loc"])
+    if loc[-1] == "str":
+        # A union reports one error per member, the `str` member first; any other error under
+        # the same parent (a list member's item error extends it) marks a field that takes more than text.
+        parent = loc[:-1]
+        if any(
+            error is not first and tuple(error["loc"][: len(parent)]) == parent
+            for error in errors
+        ):
+            return None
+    return site_label(loc), first["input"]
+
+
+def reject_non_text(
+    kind: str,
+    node_id: str,
+    key: str,
+    value: Any,
+    range: Optional[SourceRange],
+    diagnostics: LoadDiagnostics,
+    *,
+    required: bool = False,
+    fix: str | None = None,
+) -> None:
+    """Reject a text or expression field whose value YAML read as non-text.
+
+    Args:
+        kind (`str`): The node kind, for the message.
+        node_id (`str`): The node id, for the message.
+        key (`str`): The authored field name.
+        value (`Any`): The field's authored value.
+        range (`SourceRange | None`): Where the error points.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
+        required (`bool`, *optional*, defaults to `False`):
+            Whether the field needs a value. `False` lets `None` through as an absent field;
+            `True` rejects it as empty.
+        fix (`str`, *optional*, defaults to `None`):
+            What the author should write instead; `None` uses `not_text_error`'s default.
+
+    Raises:
+        `LoadError`: Raised when `value` is not a `str` and is not `None`, or is `None` while
+            `required` is set.
+    """
+    if not isinstance(value, str) and (value is not None or required):
+        raise diagnostics.error(
+            f"node {node_id!r} (kind={kind}): " + not_text_error(key, value, fix),
             range=range,
         )
 
@@ -391,17 +502,20 @@ class NodeDescriptor:
         are mutated IN PLACE (the accumulators the template passes to the descriptor
         constructor). `env:` is validated to be a mapping with string keys, and `depends_on:`/
         `runs_after:` to be lists of strings — a bad shape raises a located `LoadError` naming
-        `cls.kind`. `node_name` is copied through untouched; whether each ordering target names
+        `cls.kind`. A `node_name:` YAML read as non-text is a located `LoadError` (`null` stays
+        absent); otherwise it is copied through untouched. Whether each ordering target names
         a real node is checked later by the loader edge pass."""
         diagnostics = LoadDiagnostics.from_cursor(cursor)
         body = cursor._value_view()
         for key in ("node_name", "depends_on", "runs_after"):
             if key in body:
                 value = cursor.get(key)
-                if key != "node_name":
+                rng = cursor.range_of(key)
+                if key == "node_name":
+                    reject_non_text(cls.kind, node_id, key, value, rng, diagnostics)
+                else:
                     cls._check_ordering_field(node_id, key, value, cursor, diagnostics)
                 kwargs[key] = value
-                rng = cursor.range_of(key)
                 if rng is not None:
                     ranges[("field", key)] = rng
         if "env" in body:
@@ -508,8 +622,8 @@ class NodeDescriptor:
         `own_range` (the node body's range, for anchoring an error about an ABSENT field, which
         has no per-field range). Default: if an `asserts:` field is present, it must be a `list`
         of `str` — a bad shape raises a located `LoadError` naming `cls.kind`. Presence-guarded:
-        absent `asserts` is a no-op, so kinds that never author `asserts` are unaffected. Only
-        `human_input` overrides this (running its one-of-three check, then `super()` for asserts).
+        absent `asserts` is a no-op, so kinds that never author `asserts` are unaffected. Kinds
+        override it for their own fields and call `super()`.
         """
         asserts = kwargs.get("asserts")
         if asserts is not None and not (

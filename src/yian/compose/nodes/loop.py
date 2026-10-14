@@ -34,7 +34,7 @@ from yian.compose.helpers.output_contracts import (
     project_output_contract,
 )
 from yian.compose.helpers.errors import LoadDiagnostics
-from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
+from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor, reject_non_text
 from yian.compose.nodes.case import IsinstanceCheck, guarded_refs
 from yian.compose.nodes.resolver import (
     _callable_display,
@@ -54,12 +54,12 @@ class LoopDescriptor(NodeDescriptor):
     while/until iterations. `while`/`until` are Python keywords, so they land here as
     `while_`/`until_`.
 
-    Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
-    the Compose-only `range`/`field_ranges` parse metadata) and the template `parse` from `NodeDescriptor`.
-    Its `_validate_fields` hook rejects a non-string `while:`/`until:` and runs the base
-    asserts-list check; all its deeper legality lives in `build`. Only the loop-specific fields
-    are declared here; the normalized `inputs` field comes from the base, and a loop has no
-    authored `output:` field.
+    Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + the
+    Compose-only `range`/`field_ranges` parse metadata) and the template `parse` from
+    `NodeDescriptor`. Its `_validate_fields` hook rejects a non-text `call:` and a non-string
+    `while:`/`until:` and runs the base asserts-list check; all its deeper legality lives in
+    `build`. Only the loop-specific fields are declared here; the normalized `inputs` field comes
+    from the base, and a loop has no authored `output:` field.
     `child_label` is compiler-owned diagnostic metadata for an anonymous inline child. It is
     deliberately absent from `allowed`, never authorable, and excluded from descriptor equality.
 
@@ -98,10 +98,19 @@ class LoopDescriptor(NodeDescriptor):
         own_range: Optional[SourceRange],
         diagnostics: LoadDiagnostics,
     ) -> None:
-        """Reject a non-string `while:`/`until:`, then run the base asserts-list check.
+        """Reject a non-text `call:` or `while:`/`until:`, then run the base asserts check.
 
-        A YAML bool, number, or list would otherwise crash the predicate ref check, or, when
-        falsy (`while: false`), skip it and fail only at runtime."""
+        A YAML bool, number, or list would otherwise crash the callable resolution or the
+        predicate ref check, or, when falsy (`while: false`), skip it and fail only at runtime."""
+        reject_non_text(
+            cls.kind,
+            node_id,
+            "call",
+            kwargs.get("call"),
+            ranges.get(("field", "call")) or own_range,
+            diagnostics,
+            required=True,
+        )
         for key, example in (("while", "while: not done"), ("until", "until: done")):
             value = kwargs.get(cls.keyword_remap[key])
             if value is not None and not isinstance(value, str):

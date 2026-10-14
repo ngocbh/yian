@@ -149,6 +149,32 @@ others); every such key now fails at the key with the error above. Keys that use
 load, such as `1:` in an `x-*` block or in a written-out record value, now fail too;
 quote them.
 
+Every field that takes text or an expression must be text after YAML reads it:
+`code:`, `tool_id:`, `call:`, CASE `on:`, `kind:`, `node_name:`, the flow's `id:`,
+`name:`, `description:`, and `version:`, `uses:` refs, flow and `defs:` entry
+`asserts:` items, and `llm_config` text fields such as `model:`. `prompt:` and
+question text are covered with their nodes. A number, boolean, date, list, or mapping
+there is a load error at the value (for an `llm_config` field, at the `llm_config:`
+block); quote it:
+
+```
+node 'a' (kind=code): `code:` must be text, but YAML read it as an integer; put it in quotes
+```
+
+CASE `on:` takes a reference, so its error says "write a reference such as
+`on: ${input.x}`"; `kind:` lists the kind names. `null` on an optional field (`on:`,
+`node_name:`, `description:`, `version:`) means absent; on a required one it is a load
+error, such as "`code:` must be text, but it is empty; write the text". MAP `over:`,
+WAIT `until:`, and the flow `output:` are values, not text.
+
+Changed: a non-text value in these fields used to crash with a raw Python error
+(`code:`, CASE `on:`, `call:`, a list or mapping `kind:`, a `defs:` assert), load
+silently (`tool_id:`, `node_name:`, a list or empty-mapping `on:`, a `defs:` entry's
+`asserts: false`, `0`, `''`, or `{}`), give an internal message (a bare-string `defs:`
+`asserts:`), or print a raw validation dump (flow fields, `uses:` refs, flow asserts,
+`llm_config`). Each now fails as above; a `defs:` `asserts:` that is not
+a list says "`asserts:` must be a list of strings".
+
 Changed: yian used to read values with YAML 1.1's rules: an unquoted `yes`, `no`,
 `on`, or `off` was a boolean, `1:30` was the number 90, `1_000` was 1000, and `017`
 was octal 15, while `1e3` was text. Write `true`/`false` for a boolean, `90` or

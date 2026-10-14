@@ -98,7 +98,9 @@ def extract_inline_bodies(
         if not isinstance(raw_body, Mapping) or body_cursor.tag is not None:
             projected[node_id] = (nodes_snapshot[node_id], body_cursor)
             continue
-        if raw_body.get("kind") not in _INLINE_COMPOSITE_KINDS:
+        kind = raw_body.get("kind")
+        # A non-text kind is left for node dispatch, which reports it at the value.
+        if not (isinstance(kind, str) and kind in _INLINE_COMPOSITE_KINDS):
             projected[node_id] = (nodes_snapshot[node_id], body_cursor)
             continue
 
@@ -191,7 +193,9 @@ def _reject_authored_private_call_targets(nodes_cursor: SourceCursor) -> None:
         raw_body = body_cursor._value_view()
         if not isinstance(raw_body, Mapping) or body_cursor.tag is not None:
             continue
-        if raw_body.get("kind") not in _INLINE_COMPOSITE_KINDS:
+        kind = raw_body.get("kind")
+        # A non-text kind is left for node dispatch, which reports it at the value.
+        if not (isinstance(kind, str) and kind in _INLINE_COMPOSITE_KINDS):
             continue
         call_target = raw_body.get("call")
         if not isinstance(call_target, str) or not call_target.startswith(

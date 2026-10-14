@@ -42,6 +42,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from pydantic import ValidationError
+
 from yian.compile.memory_layout import (
     resolve_memory_layout,
     scope_memory_declarations,
@@ -59,6 +61,7 @@ from yian.typesys.values import TypeCheckError, value_repr
 from yian.typesys.types import read_typedefs
 from yian.compose.build.pipeline import _assemble, ComposedFlow
 from yian.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
+from yian.compose.nodes.base import not_text_detail, not_text_error
 from yian.compose.nodes.resolver import ChildResolver, call_nesting_scope
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.memory import parse_memory_declarations
@@ -668,7 +671,9 @@ def _validate_authored_llm_config(
     """Check a flow- or def-level ``llm_config`` the way an AGENT node's own is checked.
 
     The layer must be a mapping of `LLMConfig` fields without ``api_key``, or
-    ``base_url`` other than beside ``provider: azure``, which only the host sets.
+    ``base_url`` other than beside ``provider: azure``, which only the host sets. A text
+    field YAML read as non-text (such as ``model: 5``) is named by `not_text_error`; any
+    other violation keeps pydantic's message.
     """
     if llm_config is None:
         return
@@ -684,6 +689,13 @@ def _validate_authored_llm_config(
         raise diagnostics.error(f"{where}: {message}", range=source_range)
     try:
         LLMConfig(**llm_config)
+    except ValidationError as exc:
+        detail = not_text_detail(exc)
+        raise diagnostics.error(
+            f"{where}: llm_config: "
+            + (not_text_error(*detail) if detail is not None else str(exc)),
+            range=source_range,
+        ) from exc
     except Exception as exc:
         raise diagnostics.error(f"{where}: llm_config: {exc}", range=source_range) from exc
 
@@ -1173,6 +1185,51 @@ class _CallableScope:
             self.resolve(name)
 
 
+def _check_def_asserts(
+    name: str,
+    asserts: Any,
+    def_cursor: SourceCursor | None,
+    diagnostics: LoadDiagnostics,
+) -> None:
+    """Reject a multi-node `defs:` entry's `asserts:` that is not a list of strings.
+
+    A def body is not validated by `ComposeFile`, so its `asserts:` is checked here, in the
+    same words as a node's.
+
+    Args:
+        name (`str`): The `defs:` entry name, for the message.
+        asserts (`Any`): The authored `asserts:` value; `None` means absent.
+        def_cursor (`SourceCursor | None`): The authored def body, when retained.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
+
+    Raises:
+        `LoadError`: Raised at the field when `asserts:` is set but not a list, and at the
+            item for the first item YAML read as non-text.
+    """
+    if asserts is None:
+        return
+    asserts_cursor = _source_child(def_cursor, "asserts")
+    field_range = asserts_cursor.range if asserts_cursor is not None else None
+    if not isinstance(asserts, list):
+        raise diagnostics.error(
+            f"defs entry {name!r}: `asserts:` must be a list of strings", range=field_range
+        )
+    for i, item in enumerate(asserts):
+        if isinstance(item, str):
+            continue
+        item_range = None
+        # `_source_child` selects mapping keys only (`has` is False for a sequence index).
+        if asserts_cursor is not None:
+            try:
+                item_range = asserts_cursor.child(i).range
+            except SourceAccessError:
+                pass
+        raise diagnostics.error(
+            f"defs entry {name!r}: " + not_text_error(f"asserts[{i}]", item),
+            range=item_range or field_range,
+        )
+
+
 def _load_def(
     name: str,
     body,
@@ -1185,7 +1242,8 @@ def _load_def(
     Supports both a multi-node child flow (`{input?, nodes, output?, asserts?}`)
     and a flat single-node body (`{kind, ...}`). Both share the file's typedef
     registry and callable scope. ``def_cursor`` is the occurrence-local authored
-    body: it retains absolute locations used by assembly and source diagnosis.
+    body: it retains absolute locations used by assembly and source diagnosis. A
+    multi-node body's ``asserts:`` must be a list of strings, else a located `LoadError`.
     """
     diagnostics = scope.diagnostics
     if not isinstance(body, dict):
@@ -1239,6 +1297,7 @@ def _load_def(
             f"defs entry {name!r}: `env:` must be a mapping with string keys",
             range=(def_cursor.range_of("env") if def_cursor is not None else None),
         )
+    _check_def_asserts(name, body.get("asserts"), def_cursor, diagnostics)
     nodes_cursor = _def_assembly_cursor(def_cursor, body["nodes"])
     try:
         def_memories = (

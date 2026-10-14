@@ -11,8 +11,11 @@ concrete ranges on the Compose-owned `BuildResult`. Registered into
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any, Optional
 
-from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
+from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor, reject_non_text
+from yian.diagnostics import SourceRange
 from yian.nodes.tool import ToolNode
 
 
@@ -23,8 +26,8 @@ class ToolDescriptor(NodeDescriptor):
     Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
     the Compose-only `range`/`field_ranges` parse metadata), the normalized `inputs` binding
     carrier, the optional normalized `outputs` declaration, and the template `parse` from
-    `NodeDescriptor` (no custom parse hook — tool's field legality is the default
-    allowed/required key check + the asserts-list check). Only the tool-specific fields
+    `NodeDescriptor`; its `_validate_fields` hook rejects a `tool_id:` YAML read as non-text
+    (including `null`), then runs the base asserts-list check. Only the tool-specific fields
     (`tool_id`, `asserts`) are declared here; a tool's authored `input:` is stored in the
     base's `inputs` map, the same binding surface every value-shaped leaf kind uses.
 
@@ -43,6 +46,27 @@ class ToolDescriptor(NodeDescriptor):
 
     tool_id: str
     asserts: list[str] = field(default_factory=list)
+
+    @classmethod
+    def _validate_fields(
+        cls,
+        node_id: str,
+        kwargs: dict[str, Any],
+        ranges: dict[tuple[str, str], SourceRange],
+        own_range: Optional[SourceRange],
+        diagnostics: LoadDiagnostics,
+    ) -> None:
+        """Reject a non-text `tool_id:`, then run the base checks."""
+        reject_non_text(
+            cls.kind,
+            node_id,
+            "tool_id",
+            kwargs.get("tool_id"),
+            ranges.get(("field", "tool_id")) or own_range,
+            diagnostics,
+            required=True,
+        )
+        super()._validate_fields(node_id, kwargs, ranges, own_range, diagnostics)
 
     def build(self, ctx: BuildContext) -> BuildResult:
         """Construct the runtime `ToolNode` (+ wiring) for this `ToolDescriptor`.

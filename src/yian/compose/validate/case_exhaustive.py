@@ -211,9 +211,7 @@ def _check_duplicate_whens(desc: CaseDescriptor, diagnostics: LoadDiagnostics) -
             first_range=first_range,
             first_index=first,
         )
-        raise diagnostics.error(
-            f"case node {desc.id!r}: {message}", range=when_range or desc.range
-        )
+        raise diagnostics.error(f"case node {desc.id!r}: {message}", range=when_range or desc.range)
 
 
 def _when_range(desc: CaseDescriptor, index: int) -> SourceRange | None:
@@ -261,7 +259,6 @@ def _duplicate_when_message(
         f"`when: {shown}` duplicates `when: {first_shown}` ({where}), "
         "so it never matches; remove one"
     )
-
 
 
 def _authored_or_spelling(value: Any, src: str | None) -> str:

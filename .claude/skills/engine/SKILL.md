@@ -265,9 +265,8 @@ this model whenever you design anything:
   is a located load error, even next to an `else:`. It also rejects a `when:` equal to
   an earlier one (typed equality: `1` and `1.0` are equal), at the later one, for any
   `on:`. Routing-only enum coverage reads `Literal` flow inputs as well as node outputs.
-  Load-time desugar lifts each CASE
-  value branch to a `__value_N` CODE node and gives a typed CASE a `__case_<id>` result
-  node; the runtime is unchanged. Python-authored nodes pass `output_contract=`; there is
+  Load-time desugar lifts each CASE value branch to a `__value_N` CODE node and gives a
+  typed CASE a `__case_<id>` result node; the runtime is unchanged. Python-authored nodes pass `output_contract=`; there is
   no parallel output-Type API. Authored `output:` syntax (the descriptor's normalized
   `outputs` field) stays unchanged. Compose injects an optional source-aware reader
   through `BuildContext`; `NodeDescriptor.output_contract()` invokes it only at each

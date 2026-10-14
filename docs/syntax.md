@@ -1480,10 +1480,9 @@ output: ${gate.output}         # bullish's output or cautious's output
 ```
 
 Routing on a `Literal` node output or flow input (a LOOP body's carried field, a child
-flow's input) is **exhaustiveness-checked**: omitting a tag
-with no `else:` is a load error. A routing-only `case` over any other value may
-match nothing; then no branch runs. A `case` that
-[produces a value](#exhaustiveness) must always match.
+flow's input) is **exhaustiveness-checked**: omitting a tag with no `else:` is a
+load error. A routing-only `case` over any other value may match nothing; then no
+branch runs. A `case` that [produces a value](#exhaustiveness) must always match.
 
 #### Branches
 

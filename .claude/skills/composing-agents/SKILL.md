@@ -584,8 +584,8 @@ It takes one branch; the other targets skip, and so does every node that plainly
 reads (or `depends_on`) a skipped one. Read the taken branch's result with
 `${route.output}` (or `${route.output.field}`). A routing-only `case` (no `output:`,
 no value branch, never read via `${route.output}`) may take none when no `when:`
-matches and there is no `else:`; over a `Literal` `on:` it still needs a `when:` for
-every tag.
+matches and there is no `else:`; over a `Literal` node output or flow input it still
+needs a `when:` for every tag.
 ```yaml
 route:
   kind: case

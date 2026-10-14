@@ -315,9 +315,10 @@ list) when the `case` declares `output:`; quote text, since an unquoted word nam
 node. A `case` whose result is used needs an `else:`, every tag of a non-nullable
 `Literal` `on:`, or `when: true` and `when: false` on a non-nullable `bool` `on:`;
 routing on a `Literal` node output or flow input is always exhaustiveness-checked. A
-routing-only `case` takes none when nothing matches and there is no `else:`. A flow output field that
-reads only nodes a `case` may skip returns `null` when they were skipped (typed
-`Optional[T]`, as if `:- null` were written), in root, `defs:`, and inline bodies; a join
+routing-only `case` takes none when nothing matches and there is no `else:`. A flow
+output field that reads only nodes a `case` may skip returns `null` when they were
+skipped (typed `Optional[T]`, as if `:- null` were written), in root, `defs:`, and
+inline bodies; a join
 over an exhaustive `case` never does. A LOOP body field like that sets the carried field
 to null. Templates and comparisons keep their null behavior; arithmetic needs a `:-`
 default.

@@ -2540,11 +2540,20 @@ One `${...}` grammar serves every context — the difference is what each contex
   identically (an expression field is already in expression mode, so the wrapper
   is a redundant no-op), but bare is the form used throughout the docs and seeds.
   Braces on a ref inside the expression (`${a.output} > 5`) are a `${...}` inside
-  an expression: a load error that shows the rewrite.
+  an expression: a load error that shows the rewrite. A condition may call a builtin
+  (see [Expressions → builtins](expressions.md#builtins-pure-expression-functions))
+  or `isinstance`; calling any other function, or a builtin with arguments it doesn't
+  take, is a load error at that condition, even where the call would never run.
 - **Prompts**: free text with embedded `${...}` spans (each stringified into the
   text); spans may use the full grammar, but reference only the node's own declared
   inputs. `isinstance` is the exception: compute it in an input binding (see
   [Expressions → `isinstance`](expressions.md#isinstance-the-type-test)).
+
+Changed: a condition that called an unknown function, or a builtin with arguments it
+doesn't take, used to load and fail when evaluated (an assert reported "pre-assert
+failed" or "post-assert failed"; a `case` or `loop` failed its node), or never fail
+when `and`/`or` skipped the call. It is now a load error; fix the name or the
+arguments. `yian.evaluate_when` raises for such a condition too.
 
 > Bindings wire, conditions test, nodes compute.
 

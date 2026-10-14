@@ -11,6 +11,7 @@ operator is a truthiness test (not an error). `isinstance(x, T)` checks a value 
 type named in the `types` table every evaluation entry point accepts.
 """
 
+import inspect
 import re
 from dataclasses import dataclass, field, replace
 from enum import Enum
@@ -137,6 +138,10 @@ def parse_condition(expression: str) -> "Tree | Token":
     parse the interior; otherwise parse the whole value directly. A `${...}` inside the
     expression (`${a} > 5`) is an error that shows the bare rewrite.
 
+    Every call in the parsed expression must name a builtin (`TEMPLATE_FNS`, or the
+    `isinstance` special form) that takes its arguments. The check is static: it applies
+    even to a call `and`/`or` would never evaluate.
+
     Args:
         expression (`str`):
             The field value, in either spelling.
@@ -147,12 +152,83 @@ def parse_condition(expression: str) -> "Tree | Token":
 
     Raises:
         `ExpressionError`:
-            Raised when the value does not parse or holds a `${...}` inside it.
+            Raised when the value does not parse or holds a `${...}` inside it, calls a
+            function that isn't a builtin, or calls a builtin with arguments it doesn't take.
     """
     from yian.expr.grammar import parse_expr, whole_span_interior
 
     interior = whole_span_interior(expression)
-    return parse_expr(expression.strip() if interior is None else interior)
+    tree = parse_expr(expression.strip() if interior is None else interior)
+    _check_condition_calls(tree)
+    return tree
+
+
+def _check_condition_calls(tree: "Tree | Token") -> None:
+    """Require every call in a parsed condition to name a builtin that takes its arguments.
+
+    `isinstance` is skipped: the grammar already checks its shape.
+
+    Args:
+        tree (`Tree | Token`): A tree from `parse_expr`.
+
+    Raises:
+        `ExpressionError`: If a callee is not a builtin, or a builtin's signature can't bind
+            the call's positional count and keyword names.
+    """
+    from yian.expr.builtins import TEMPLATE_FNS
+
+    if not isinstance(tree, Tree):
+        return
+    for node in tree.iter_subtrees_topdown():
+        if node.data != "refcall":
+            continue
+        call_suffix = next(
+            (c for c in node.children if isinstance(c, Tree) and c.data == "call_suffix"), None
+        )
+        callee = str(node.children[0])
+        if call_suffix is None or callee == ISINSTANCE:
+            continue
+        fn = TEMPLATE_FNS.get(callee)
+        if fn is None:
+            raise ExpressionError(f"unknown expression function {callee!r}")
+        try:
+            signature = inspect.signature(fn)
+        except (TypeError, ValueError):
+            continue  # e.g. a C builtin a host registered; it is checked when called
+        positional = [arg for arg in call_suffix.children if len(arg.children) == 1]
+        keywords = [str(arg.children[0]) for arg in call_suffix.children if len(arg.children) == 2]
+        repeated = next((k for i, k in enumerate(keywords) if k in keywords[:i]), None)
+        if repeated is not None:  # the grammar accepts `f(a=1, a=2)`; binding would collapse it
+            raise ExpressionError(f"expression function {callee!r} got keyword {repeated!r} twice")
+        try:
+            signature.bind(*([None] * len(positional)), **dict.fromkeys(keywords))
+        except TypeError as exc:
+            raise ExpressionError(
+                f"expression function {callee!r} takes ({_parameter_list(signature)}): {exc}"
+            ) from None
+
+
+def _parameter_list(signature: inspect.Signature) -> str:
+    """Render a builtin's parameters for a message: `value, indent=2`.
+
+    Args:
+        signature (`inspect.Signature`): The builtin's signature.
+
+    Returns:
+        `str`: The parameter names, comma-separated, with `name=<repr default>` for optional
+            ones and `*name`/`**name` for variadics.
+    """
+    parts = []
+    for p in signature.parameters.values():
+        if p.kind is p.VAR_POSITIONAL:
+            parts.append(f"*{p.name}")
+        elif p.kind is p.VAR_KEYWORD:
+            parts.append(f"**{p.name}")
+        elif p.default is p.empty:
+            parts.append(p.name)
+        else:
+            parts.append(f"{p.name}={p.default!r}")
+    return ", ".join(parts)
 
 
 def condition_refs(expression: str) -> list[str]:
@@ -174,7 +250,9 @@ def condition_refs(expression: str) -> list[str]:
         `list[str]`: the reference paths (dotted, `#`/`/` preserved) in source order, NOT deduped.
 
     Raises:
-        `ExpressionError`: on a malformed condition (the caller frames it as a located load error).
+        `ExpressionError`: on a malformed condition, or one that calls a function that isn't a
+            builtin or calls a builtin with arguments it doesn't take (the caller frames it as a
+            located load error).
     """
     return expr_refs(parse_condition(expression))
 
@@ -232,7 +310,9 @@ def evaluate_when(
         `ExpressionError`:
             If the expression is malformed, references an invalid path, applies an
             operator Python rejects for its operand types (e.g. `"a" + 1`) or can't
-            complete (overflow), or names a type absent from `types`.
+            complete (overflow), or names a type absent from `types`. A call to a
+            function that isn't a builtin, or to a builtin with arguments it doesn't take,
+            raises even where `and`/`or` would not evaluate the call.
 
     Example:
         ```python
@@ -272,6 +352,9 @@ def evaluate_when_record(
     validate dotted paths at compile time (the head is checked today, not the path).
 
     `types` is the table `isinstance(x, T)` looks `T` up in (`None` means no types).
+
+    A call to a function that isn't a builtin, or to a builtin with arguments it doesn't take,
+    raises `ExpressionError` even where `and`/`or` would not evaluate the call.
     """
     return _evaluate(expression, lambda path: _resolve_in_record(path, record), types)
 

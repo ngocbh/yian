@@ -407,7 +407,8 @@ the lowered flow carriers.
 `Node.run` evaluates the expression, reports the display text, and diagnoses a
 failure through that exact `Assertion.origin`. Manifests include expression,
 display, order, and duplicate count while excluding origin.
-An expression that doesn't parse is malformed setup, not a failed assertion:
+An expression that doesn't parse, or calls an unknown function or a builtin with
+arguments it doesn't take, is malformed setup, not a failed assertion:
 Compose rejects it in YAML with a located `LoadError`; for a carrier set in Python,
 `run_flow` and `resume_flow` (of an unfinished run) raise `ExpressionError` (a
 `ValueError`) before writing any record, and `Node.run` raises it from setup

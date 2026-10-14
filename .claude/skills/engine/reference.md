@@ -805,10 +805,11 @@ arbitrary precision; NUMBER endpoints must have a finite, lossless float
 representation. Runtime checks retain nested `TypeCheckError.path`; compatibility
 checks interval containment through `typesys.values.numeric_interval` (an open end
 is infinite), including integer-to-number widening. Inline canonicalization
-preserves the pair, and generated numeric schemas carry `minimum` and/or `maximum` for the ends that are
-present, recursively through lists and records. Canonical labels and manifests
-include present bounds (a manifest writes an open end as `null`); absent bounds
-remain omitted from manifests to preserve unbounded identities.
+preserves the pair, and generated numeric schemas carry `minimum` and/or `maximum`
+for the ends that are present, recursively through lists and records. Canonical
+labels and manifests include present bounds (a manifest writes an open end as
+`null`); absent bounds remain omitted from manifests to preserve unbounded
+identities.
 
 NaN, infinity, and complex numbers are not yian values.
 `typesys.values.reject_nonfinite(value, where)` walks dicts, lists, tuples,

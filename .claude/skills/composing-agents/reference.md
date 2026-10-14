@@ -212,7 +212,7 @@ parentheses; bracket spellings are a load error that shows the new one.
 | nullable | `Optional(str)` | may be `null` |
 | enum | `Literal(go, no_go, wait)` | one of these tags |
 | bounded integer | `int(1..12)`, `int(0..)`, `int(..100)` | inclusive range; either end may be open, not both |
-| bounded float | `float(0.0..1.0)`, `float(0.0..)` | inclusive finite range; either end may be open |
+| bounded float | `float(0.0..1.0)`, `float(0.0..)` | inclusive finite range; either end may be open, not both |
 | mapping | `dict(str, int)` | |
 | alias | `Basket: list(str)` | aliases compose |
 | record | (see below) | fields recurse |

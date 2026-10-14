@@ -81,8 +81,8 @@ def test_flow_input_default_above_an_open_range_is_a_load_error():
 # --- node input tags and bindings ------------------------------------------- #
 
 
-def _tagged_literal_flow(value: str) -> str:
-    """Return a flow whose code node input is the tagged literal `!int(0..) value`."""
+def _tagged_literal_flow(value: str, tag: str = "int(0..)") -> str:
+    """Return a flow whose code node input is the tagged literal `!<tag> value`."""
     return f"""
 id: tagged_literal
 name: tagged_literal
@@ -90,7 +90,7 @@ nodes:
   use:
     kind: code
     input:
-      x: !int(0..) {value}
+      x: !{tag} {value}
     code: |
       return inputs["x"]
     output: int
@@ -104,7 +104,7 @@ def test_tagged_literal_outside_an_open_range_is_a_load_error():
     assert "'x': `-1` is not a valid int(0..)" in message
 
 
-def test_tagged_literal_inside_an_open_range_loads():
+def test_tagged_literal_inside_an_open_range_runs():
     assert _output(_tagged_literal_flow("5")) == 5
 
 
@@ -166,7 +166,10 @@ def test_tagged_binding_disjoint_from_an_open_range_is_a_load_error():
 
 
 def _typedef_flow(qty: int) -> str:
-    """Return a flow whose code node returns an `Order` record with `qty`."""
+    """Return a flow whose code node returns an `Order` record with `qty`.
+
+    The price is 1.0 plus the `counts` items and `maybe`, so tests can see those inputs.
+    """
     return f"""
 id: open_typedefs
 name: open_typedefs
@@ -185,7 +188,8 @@ nodes:
       counts: ${{input.counts}}
       maybe: ${{input.maybe}}
     code: |
-      return {{"qty": {qty}, "price": 1.0}}
+      extra = sum(inputs["counts"]) + (inputs["maybe"] or 0)
+      return {{"qty": {qty}, "price": 1.0 + extra}}
     output: Order
 output: ${{order.output}}
 """
@@ -203,9 +207,9 @@ def test_record_with_open_range_fields_runs():
 
 
 def test_list_and_optional_of_an_open_range_alias_accept_their_values():
-    output = _output(_typedef_flow(2), {"counts": [0, 5], "maybe": None})
+    output = _output(_typedef_flow(2), {"counts": [0, 5], "maybe": 4})
 
-    assert output == {"qty": 2, "price": 1.0}
+    assert output == {"qty": 2, "price": 10.0}
 
 
 def test_list_of_an_open_range_alias_rejects_a_negative_item():
@@ -319,7 +323,7 @@ def test_case_when_outside_an_open_range_is_a_load_error():
     assert "-1 is below the inclusive int minimum 0" in message
 
 
-def test_case_when_inside_an_open_range_loads():
+def test_case_when_inside_an_open_range_runs():
     assert _output(_case_flow("3"), {"n": 3}) == "hit"
 
 
@@ -344,7 +348,7 @@ output: ${use.output}
 
 
 def test_no_ends_in_a_tag_is_a_load_error():
-    assert "write int" in _load_error(_tagged_literal_flow("1").replace("!int(0..)", "!int(..)"))
+    assert "write int" in _load_error(_tagged_literal_flow("1", tag="int(..)"))
 
 
 # --- AGENT structured output -------------------------------------------------- #
@@ -401,4 +405,5 @@ def test_agent_reply_below_an_open_range_fails_structured_output(monkeypatch):
 
     assert failure.code == "node.execute"
     assert failure.cause_type == "ValidationError"
-    assert "qty\n  Input should be greater than or equal to 1" in failure.message
+    assert "qty" in failure.message
+    assert "greater than or equal to 1" in failure.message

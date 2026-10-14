@@ -533,11 +533,11 @@ Authored types use one parenthesized grammar: `Optional(str)`, `list(Buy)`,
 of which may be open (`int(1..12)`, `float(0.0..1.0)`, `int(0..)`, `int(..100)`).
 `typesys/types.py` parses it with a hand-written tokenizer and recursive-descent parser
 (`0..1` reads as a range) into the unchanged `TypeExpr` AST, so resolution does not
-depend on the spelling. Canonical labels
-and messages print this spelling. The bracket spelling (`Optional[str]`, `int[1, 12]`) is
-a load error that shows the new one; a private legacy reader exists only to spell that
-fix. Wire values are not authored syntax and keep their names: `ValueKind` values such as
-`"list[str]"` in run records and manifests, and HUMAN_INPUT `answer_schema` types.
+depend on the spelling. Canonical labels and messages print this spelling. The bracket
+spelling (`Optional[str]`, `int[1, 12]`) is a load error that shows the new one; a
+private legacy reader exists only to spell that fix. Wire values are not authored syntax
+and keep their names: `ValueKind` values such as `"list[str]"` in run records and
+manifests, and HUMAN_INPUT `answer_schema` types.
 
 Numeric `Type` values may retain an inclusive `bounds` pair for INTEGER or
 NUMBER; an open end is `None` (`(None, None)` is invalid). Shape validation rejects

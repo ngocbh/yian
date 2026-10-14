@@ -196,10 +196,10 @@ registry name, `Union(A, B, ...)`) and inclusive numeric ranges (`int(1..12)`,
 `float(0.0..1.0)`, `int(0..)`, `int(..100)`; either end may be open). `parse_type` is a
 hand-written tokenizer and recursive-descent parser that reads `0..1` as a range, not as
 `0.` and `.1`. It builds the same `TypeExpr` AST as before, so resolution is unchanged,
-and `format_type_expr` prints the parenthesized spelling. The old bracket spelling (`Optional[str]`, `int[1, 12]`) is a load
-error that shows the new spelling; a private legacy parser reads it only to print that
-message. Wire values keep their own names: a `ValueKind` such as `list[str]` is a storage
-tag, not authored syntax.
+and `format_type_expr` prints the parenthesized spelling. The old bracket spelling
+(`Optional[str]`, `int[1, 12]`) is a load error that shows the new spelling; a private
+legacy parser reads it only to print that message. Wire values keep their own names: a
+`ValueKind` such as `list[str]` is a storage tag, not authored syntax.
 
 A type definition (a typedef, or a node's `output:`) is written as a type. A slot's type
 is a YAML tag on its value, read by `compose/helpers/tags.py` with the same parser (see

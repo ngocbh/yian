@@ -1206,18 +1206,58 @@ def _admits_none(typ: Type) -> bool:
     return typ.nullable or typ.kind is ValueKind.NONE
 
 
-def _has_file(typ: Type) -> bool:
+def has_file(typ: Type) -> bool:
     """Whether `file` appears anywhere in `typ`: itself, a field, the element, or a member.
 
-    A type without `file` holds only JSON values, so it is the set `Any` draws from.
+    A type without `file` holds only JSON values, so every value of it is an `Any` value.
+
+    Args:
+        typ (`Type`):
+            The type to search.
+
+    Returns:
+        `bool`:
+            `True` when some value of `typ` may hold a file.
     """
     if typ.kind is ValueKind.FILE:
         return True
-    if typ.element is not None and _has_file(typ.element):
+    if typ.element is not None and has_file(typ.element):
         return True
-    if typ.fields is not None and any(_has_file(field) for field in typ.fields.values()):
+    if typ.fields is not None and any(has_file(field) for field in typ.fields.values()):
         return True
-    return typ.variants is not None and any(_has_file(member) for member in typ.variants)
+    return typ.variants is not None and any(has_file(member) for member in typ.variants)
+
+
+def requires_file(typ: Type) -> bool:
+    """Whether every non-null value of `typ` holds a file, so none is an `Any` value.
+
+    A list counts when its element is a non-nullable type that requires a file: the
+    empty list is shared by every list type and is not counted as a shared value. A
+    record counts when a required, non-nullable field requires a file; a union when
+    every member does.
+
+    Args:
+        typ (`Type`):
+            The type to check.
+
+    Returns:
+        `bool`:
+            `True` when no non-null value of `typ` is a JSON value.
+    """
+    if typ.kind is ValueKind.FILE:
+        return True
+    if typ.variants is not None:
+        return all(requires_file(member) for member in typ.variants)
+    if typ.kind.is_list():
+        element = typ.element
+        return element is not None and not element.nullable and requires_file(element)
+    if typ.fields is not None:
+        required = typ.required or frozenset()
+        return any(
+            name in required and not field.nullable and requires_file(field)
+            for name, field in typ.fields.items()
+        )
+    return False
 
 
 def _is_plain_object(typ: Type) -> bool:
@@ -1251,7 +1291,7 @@ def types_overlap(a: Type, b: Type) -> bool:
     The check is conservative: it may say two types overlap when no value
     satisfies both, but never the reverse. It decides whether an untagged union's
     members can be told apart from the data alone. `Any` overlaps every type
-    except `None` and types holding a `file`.
+    except `None` and types whose every non-null value holds a `file`.
 
     Args:
         a (`Type`):
@@ -1271,7 +1311,7 @@ def types_overlap(a: Type, b: Type) -> bool:
         return True
     if a.kind is ValueKind.ANY or b.kind is ValueKind.ANY:
         other = b if a.kind is ValueKind.ANY else a
-        return other.kind is not ValueKind.NONE and not _has_file(other)
+        return other.kind is not ValueKind.NONE and not requires_file(other)
     if a.variants is not None:
         return any(types_overlap(member, b) for member in a.variants)
     if b.variants is not None:

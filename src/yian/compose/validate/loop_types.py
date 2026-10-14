@@ -46,7 +46,7 @@ from yian.nodes.contracts import (
 )
 from yian.typesys import canonical_type_label
 from yian.typesys.types import TypeRegistry
-from yian.typesys.values import Type, ValueKind, value_repr
+from yian.typesys.values import Type, value_repr
 
 
 def check_loop_type_contract(
@@ -194,8 +194,8 @@ def check_loop_type_contract(
                     f"{canonical_type_label(source)!r} "
                     "(a returned field must keep its carried type)"
                 )
-                if source.kind is ValueKind.ANY:
-                    hint = any_source_hint(field_name, body_field, registry=registry)
+                hint = any_source_hint(field_name, source, body_field, registry=registry)
+                if hint is not None:
                     message += f"; {hint}"
                 raise diagnostics.error(message, range=rng)
         if nid in inline_loops:

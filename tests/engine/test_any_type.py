@@ -25,6 +25,8 @@ from yian.typesys.values import (
     build_value_as,
     canonical_type_label,
     canonical_union_order,
+    has_file,
+    requires_file,
     types_overlap,
 )
 
@@ -534,47 +536,171 @@ def test_an_untagged_union_of_any_and_int_fields_does_not_resolve():
         read_typedefs({"A": {"v": "Any"}, "B": {"v": "int"}, "U": "Union(A, B)"})
 
 
-_ANY_INTO_CALL = """\
-id: p
-name: p
-defs:
-  child:
-    input:
-      t: !str
-    nodes:
-      n:
-        kind: code
-        input:
-          t: ${input.t}
-        output: str
-        code: return inputs["t"]
-    output: ${n.output}
-nodes:
-  step:
-    kind: code
-    output: Any
-    code: return "hello"
-  c:
-    kind: call
-    call: child
-    input:
-      t: BINDING
-output: ${c.output}
-"""
+_FILE_TYPEDEFS = {
+    "F": {"f": "file"},
+    "N": {"n": "int"},
+    "U": "Union(F, N)",
+    "OF": {"f": "Optional(file)", "n": "int"},
+}
+
+
+def test_any_is_narrower_than_a_union_with_one_file_member_and_back():
+    reg = read_typedefs(_FILE_TYPEDEFS)
+    union = type_for("U", reg)
+
+    assert type_relation(ANY, union) == "narrower"
+    assert type_relation(union, ANY) == "narrower"
+    assert types_overlap(ANY, union)
+    assert types_overlap(union, ANY)
+
+
+def test_any_is_narrower_than_a_record_whose_file_field_may_be_null():
+    reg = read_typedefs(_FILE_TYPEDEFS)
+
+    assert type_relation(ANY, type_for("OF", reg)) == "narrower"
+    assert type_relation(type_for("OF", reg), ANY) == "narrower"
+
+
+@pytest.mark.parametrize(
+    "typ",
+    [
+        FILE,
+        Type(kind=ValueKind.FILE, nullable=True),
+        LIST_FILE,
+        FILE_RECORD,
+        Type(kind=ValueKind.OBJECT, variants=(FILE_RECORD, FILE_RECORD)),
+    ],
+)
+def test_requires_file_when_every_non_null_value_holds_one(typ):
+    assert requires_file(typ)
+    assert has_file(typ)
+
+
+@pytest.mark.parametrize("text", ["U", "OF"])
+def test_a_type_that_may_hold_a_file_does_not_require_one(text):
+    typ = type_for(text, read_typedefs(_FILE_TYPEDEFS))
+
+    assert has_file(typ)
+    assert not requires_file(typ)
+
+
+def test_requires_file_needs_a_non_null_list_element_and_a_required_field():
+    optional_file = Type(kind=ValueKind.FILE, nullable=True)
+    optional_field = Type(kind=ValueKind.OBJECT, fields={"f": FILE}, required=frozenset())
+
+    assert not requires_file(Type(kind=ValueKind.LIST_ANY, element=optional_file))
+    assert not requires_file(optional_field)
+    assert not requires_file(ANY)
+
+
+def test_an_untagged_union_of_any_and_a_union_with_a_file_member_does_not_resolve():
+    typedefs = {**_FILE_TYPEDEFS, "A": {"v": "Any"}, "B": {"v": "U"}, "W": "Union(A, B)"}
+
+    with pytest.raises(TypeCheckError, match="can match the same value"):
+        read_typedefs(typedefs)
+
+
+def test_tagging_an_any_output_as_a_union_with_a_file_member_loads():
+    load_flow(
+        "id: p\nname: p\n"
+        "typedefs:\n  F:\n    f: file\n  N:\n    n: int\n  U: Union(F, N)\n"
+        "nodes:\n"
+        "  step:\n    kind: code\n    output: Any\n    code: return dict(n=1)\n"
+        "  use:\n    kind: code\n    input:\n      x: !U ${step.output}\n"
+        "    output: str\n    code: return 'ok'\n"
+        "output: ${use.output}\n"
+    )
+
+
+def _call_flow(
+    child_type: str,
+    binding: str,
+    *,
+    step_output: str | None = "Any",
+    over: bool = False,
+) -> str:
+    """Return a flow whose `c` node calls `child`, taking `t: <child_type>`, with `binding`.
+
+    Args:
+        child_type (`str`): The child's input tag text.
+        binding (`str`): The parent's binding for `t`.
+        step_output (`str | None`, *optional*, defaults to `"Any"`): The producer's
+            `output:` type, or `None` for an untyped producer.
+        over (`bool`, *optional*, defaults to `False`): Whether `c` maps over
+            `${step.output}` instead of calling once.
+    """
+    output = "" if step_output is None else f"    output: {step_output}\n"
+    node = "    kind: map\n    over: ${step.output}\n" if over else "    kind: call\n"
+    return (
+        "id: p\nname: p\n"
+        "typedefs:\n  Rec:\n    a: int\n  F:\n    f: file\n"
+        "defs:\n"
+        "  child:\n"
+        f"    input:\n      t: !{child_type}\n"
+        "    nodes:\n"
+        "      n:\n        kind: code\n        input:\n          t: ${input.t}\n"
+        "        output: str\n        code: return repr(inputs['t'])\n"
+        "    output: ${n.output}\n"
+        "nodes:\n"
+        f"  step:\n    kind: code\n{output}    code: return 'hello'\n"
+        f"  c:\n{node}    call: child\n    input:\n      t: {binding}\n"
+        "output: ${c.output}\n"
+    )
+
+
+def _load_error(text: str) -> str:
+    """Return the message of the load error `text` raises."""
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    return str(caught.value)
 
 
 def test_any_into_a_child_str_input_suggests_a_tag_or_isinstance():
-    with pytest.raises(LoadError) as caught:
-        load_flow(_ANY_INTO_CALL.replace("BINDING", "${step.output}"))
+    message = _load_error(_call_flow("str", "${step.output}"))
 
-    message = str(caught.value)
     assert "child expects 'str', source is 'Any'" in message
     assert "`t: !str ${...}`" in message
     assert "isinstance" in message
 
 
+def test_the_any_hint_names_the_typedef_of_a_child_record_input():
+    message = _load_error(_call_flow("Rec", "${step.output}"))
+
+    assert "`t: !Rec ${...}`" in message
+
+
+def test_optional_any_into_a_child_any_input_is_a_plain_nullability_error():
+    message = _load_error(_call_flow("Any", "${step.output}", step_output="Optional(Any)"))
+
+    assert "child expects 'Any', source is 'Optional(Any)'" in message
+    assert "isinstance" not in message
+
+
+def test_any_into_a_child_input_that_requires_a_file_gets_no_hint():
+    message = _load_error(_call_flow("F", "${step.output}"))
+
+    assert "source is 'Any'" in message
+    assert "isinstance" not in message
+
+
 def test_a_tagged_any_binding_into_a_child_str_input_loads():
-    load_flow(_ANY_INTO_CALL.replace("BINDING", "!str ${step.output}"))
+    load_flow(_call_flow("str", "!str ${step.output}"))
+
+
+def test_an_untyped_source_into_a_child_any_input_is_left_to_runtime():
+    load_flow(_call_flow("Any", "${step.output}", step_output=None))
+
+
+def test_a_map_over_a_list_of_any_into_a_child_str_input_suggests_a_tag():
+    message = _load_error(_call_flow("str", "${item}", step_output="list(Any)", over=True))
+
+    assert "child expects 'str', source is 'Any'" in message
+    assert "`t: !str ${...}`" in message
+    assert "isinstance" in message
+
+
+def test_a_map_over_a_list_of_any_into_a_child_any_input_loads():
+    load_flow(_call_flow("Any", "${item}", step_output="list(Any)", over=True))
 
 
 _ANY_INTO_LOOP = """\
@@ -616,3 +742,7 @@ def test_any_into_a_loop_carried_int_suggests_a_tag_or_isinstance():
     assert "carried source is 'Any'" in message
     assert "`n: !int ${...}`" in message
     assert "isinstance" in message
+
+
+def test_a_tagged_loop_seed_over_an_any_output_loads():
+    load_flow(_ANY_INTO_LOOP.replace("SEED", "!int ${seed.output}"))

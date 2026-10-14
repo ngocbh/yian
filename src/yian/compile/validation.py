@@ -24,9 +24,10 @@ from yian.typesys.values import (
     TypeCheckError,
     ValueKind,
     Type,
-    _has_file,
     build_value_as,
+    has_file,
     numeric_interval,
+    requires_file,
 )
 
 _CLOSED_HEADS = ()              # `outputs` is no longer a head; node-first head dispatch
@@ -116,7 +117,7 @@ def types_compatible(source: Type, sink: Type) -> bool:
     if source.nullable and not sink.nullable:
         return False
     if sink.kind is ValueKind.ANY:
-        return not _has_file(source)
+        return not has_file(source)
     if source.kind is ValueKind.ANY:
         return False
     source_is_list = source.kind.is_list()
@@ -192,9 +193,11 @@ def type_relation(inferred: Type, declared: Type) -> TypeRelation:
     `date` or `datetime` only through tags that are valid ISO strings of that kind.
     Unions are compared member-wise: each inferred member takes its best relation
     against the declared members, so a union member over the union is narrower and
-    a record matching no member is disjoint. Every type without a `file` in it fits
-    `Any` (narrower when nullable), and `Any` is narrower than every other type it
-    shares a value with.
+    a record matching no member is disjoint. A type without a `file` in it fits
+    `Any` (narrower when nullable); one whose every non-null value holds a `file` is
+    disjoint from it, and one that only may hold a `file` is narrower. `Any` is
+    narrower than every other type except `None` and types whose every non-null value
+    holds a `file`, which are disjoint from it.
 
     Args:
         inferred (`Type`): Type the producing expression is inferred to have.
@@ -239,9 +242,11 @@ def _list_element(typ: Type) -> Type:
 def _relate_non_null(inferred: Type, declared: Type) -> TypeRelation:
     """Classify the non-null values of ``inferred`` against ``declared``."""
     if declared.kind is ValueKind.ANY:
-        return "disjoint" if _has_file(inferred) else "fits"
+        if not has_file(inferred):
+            return "fits"
+        return "disjoint" if requires_file(inferred) else "narrower"
     if inferred.kind is ValueKind.ANY:
-        return "disjoint" if _has_file(declared) else "narrower"
+        return "disjoint" if requires_file(declared) else "narrower"
     if inferred.variants is not None or declared.variants is not None:
         return _relate_union(inferred, declared)
     inferred_is_list = inferred.kind.is_list()

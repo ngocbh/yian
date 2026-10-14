@@ -64,7 +64,8 @@ from yian.nodes.contracts import (
     ValueContract,
     binding_source,
 )
-from yian.typesys import Type, TypeCheckError, ValueKind, build_value_as, canonical_type_label
+from yian.typesys import Type, TypeCheckError, build_value_as, canonical_type_label
+from yian.typesys.types import TypeRegistry
 
 
 def check_call_map_types(
@@ -75,6 +76,7 @@ def check_call_map_types(
     *,
     narrowing: Narrowing | None = None,
     type_fn: TypeFn | None = None,
+    registry: TypeRegistry | None = None,
     diagnostics: LoadDiagnostics | None = None,
 ) -> None:
     """Cross-flow type check for every `call`/`map` binding and `loop` seed (a loader pass).
@@ -89,7 +91,9 @@ def check_call_map_types(
     `input:` mapping range, else its authored node range. Iterates the WIRING (not the
     params) so a mis-named binding still surfaces here when its child decl is absent
     rather than being silently skipped. A LOOP's seeds are checked the same way against
-    its body's inputs. ``type_fn`` types a `T(...)` constructor source as `T`."""
+    its body's inputs. ``type_fn`` types a `T(...)` constructor source as `T`;
+    ``registry`` (the flow's typedefs) spells the tag suggested for an `Any` source by a
+    typedef name."""
     diagnostics = diagnostics or LoadDiagnostics()
     for label, contracts in (
         ("output producer", producers),
@@ -131,6 +135,7 @@ def check_call_map_types(
             item_contract(result, wiring, node_producers, node_inputs),
             _literal_items(result, wiring),
             type_fn,
+            registry,
         )
         for param, src in wiring.items():
             decl = child_decls.get(param)
@@ -161,6 +166,8 @@ class _Scope:
         items (`tuple[Any, ...] | None`): The elements of a MAP's literal `over:`
             list, which `${item}` reads by value, else `None`.
         type_fn (`TypeFn | None`): Types a `T(...)` constructor source as `T`.
+        registry (`TypeRegistry | None`): The flow's typedefs, which spell a suggested
+            tag by a typedef name.
     """
 
     producers: dict[str, OutputContract]
@@ -168,6 +175,7 @@ class _Scope:
     item: ValueContract | None
     items: tuple[Any, ...] | None
     type_fn: TypeFn | None = None
+    registry: TypeRegistry | None = None
 
 
 def _literal_items(result: BuildResult, wiring: dict[str, Any]) -> tuple[Any, ...] | None:
@@ -237,6 +245,7 @@ def _binding_mismatch(src: Any, decl: Parameter, scope: _Scope) -> str | None:
         ),
         decl,
         non_null=not binding_co_skips(source),
+        registry=scope.registry,
     )
 
 
@@ -331,10 +340,14 @@ def _reference_mismatch(
     head, *fields = path.split(".")
     if head != "item":
         contract = reference_contract(path, scope.producers, scope.flow_inputs)
-        return _contract_mismatch(contract, decl, non_null=non_null)
+        return _contract_mismatch(
+            contract, decl, non_null=non_null, registry=scope.registry
+        )
     if scope.item is not None:
         contract = project_output_contract(scope.item, fields)
-        return _contract_mismatch(contract, decl, non_null=non_null)
+        return _contract_mismatch(
+            contract, decl, non_null=non_null, registry=scope.registry
+        )
     for element in scope.items or ():
         value = element
         for field in fields:
@@ -351,17 +364,24 @@ def _reference_mismatch(
 
 
 def _contract_mismatch(
-    contract: OutputContract | None, decl: Parameter, *, non_null: bool
+    contract: OutputContract | None,
+    decl: Parameter,
+    *,
+    non_null: bool,
+    registry: TypeRegistry | None = None,
 ) -> str | None:
     """Return why a source contract can't fill the child input `decl`, else `None`.
 
-    An `Any` source gets advice to tag the binding or narrow it with `isinstance`.
+    An `Any` source gets advice to tag the binding or narrow it with `isinstance` when
+    that can help (see `any_source_hint`).
 
     Args:
         contract (`OutputContract | None`): The source's resolved contract.
         decl (`Parameter`): The child input, with a declared contract.
         non_null (`bool`): Whether the binding guarantees a non-null value, so a
             nullable source is compared without its null.
+        registry (`TypeRegistry | None`, *optional*, defaults to `None`): The flow's
+            typedefs, which spell a suggested tag by a typedef name.
 
     Returns:
         `str | None`: The mismatch, or `None` when it fits or is unproven (`None`
@@ -384,8 +404,9 @@ def _contract_mismatch(
         f"child expects {canonical_type_label(child_type)!r}, source is "
         f"{canonical_type_label(source)!r}"
     )
-    if source.kind is ValueKind.ANY:
-        message += f"; {any_source_hint(decl.name, child_type)}"
+    hint = any_source_hint(decl.name, source, child_type, registry=registry)
+    if hint is not None:
+        message += f"; {hint}"
     return message
 
 

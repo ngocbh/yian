@@ -51,7 +51,7 @@ from yian.typesys import (
     type_for,
 )
 from yian.typesys.types import EnumExpr, format_type_expr, legacy_respelling, parse_type
-from yian.typesys.values import Type, canonical_type_label, value_repr
+from yian.typesys.values import Type, ValueKind, canonical_type_label, requires_file, value_repr
 
 if TYPE_CHECKING:
     from yian.compose.source.catalog import _SourceCatalogBuilder
@@ -389,23 +389,30 @@ def suggest_tag(
     return f"`{name}: !{text} {value}`"
 
 
-def any_source_hint(name: str, typ: Type, *, registry: TypeRegistry | None = None) -> str:
-    """Advise how to fill a slot of type `typ` from an `Any` source.
+def any_source_hint(
+    name: str, source: Type, sink: Type, *, registry: TypeRegistry | None = None
+) -> str | None:
+    """Advise how to fill a slot of type `sink` from an `Any` source, when that can work.
 
-    Load can't tell which JSON value an `Any` holds, so the value is checked at runtime
-    through a tag or narrowed by a `case`.
+    Load can't tell which JSON value an `Any` holds, so a tag checks it at runtime or a
+    `case` narrows it. There is no advice when the source isn't `Any`, the slot is `Any`
+    or `Optional(Any)` (only nullability failed), or every non-null value of the slot
+    holds a file (no `Any` value fits).
 
     Args:
         name (`str`): The slot's name.
-        typ (`Type`): The slot's type.
+        source (`Type`): The source's type.
+        sink (`Type`): The slot's type.
         registry (`TypeRegistry | None`, *optional*, defaults to `None`): The flow's
-            typedefs, used to spell the tag.
+            typedefs, used to spell the tag by a typedef name.
 
     Returns:
-        `str`: Advice to tag the slot with `typ` or to narrow the value with
-            `isinstance` in a `case`.
+        `str | None`: Advice to tag the slot with `sink` or to narrow the value with
+            `isinstance` in a `case`, or `None` when neither can help.
     """
-    tag = suggest_tag(name, typ, "${...}", registry=registry)
+    if source.kind is not ValueKind.ANY or sink.kind is ValueKind.ANY or requires_file(sink):
+        return None
+    tag = suggest_tag(name, sink, "${...}", registry=registry)
     return (
         f"tag the slot ({tag}) to check it at runtime, or narrow it with `isinstance` "
         "in a `case`"

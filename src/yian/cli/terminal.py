@@ -54,6 +54,9 @@ class PromptRequest:
         init=False,
         repr=False,
     )
+    # Set when this request failed with the EOF that closes the broker, so its
+    # failure outranks any stop its worker sees after it.
+    _closed_broker: bool = field(default=False, init=False, repr=False)
 
     @property
     def cancelled(self) -> bool:
@@ -92,12 +95,23 @@ class PromptRequest:
             self._completed.set()
             return True
 
-    def _fail(self, exception: BaseException) -> bool:
-        """Publish one prompt failure unless another terminal state already won."""
+    def _fail(self, exception: BaseException, *, closes_broker: bool = False) -> bool:
+        """Publish one prompt failure unless another terminal state already won.
+
+        Args:
+            exception (`BaseException`):
+                The failure the waiting worker raises.
+            closes_broker (`bool`, *optional*, defaults to `False`):
+                Whether this failure is the EOF that closes the broker.
+
+        Returns:
+            `bool`: Whether this failure became the request's terminal state.
+        """
         with self._lock:
             if self._future.done():
                 return False
             self._cancel_callback = None
+            self._closed_broker = closes_broker
             self._future.set_exception(exception)
             self._completed.set()
             return True
@@ -282,19 +296,23 @@ class TerminalBroker:
         The caller already occupies a controller worker, so it polls from that same
         thread instead of creating a broker-owned watcher. Detecting a stop closes the
         broker, cancels every waiter, and invokes the active main-thread prompt hook.
+        A stop raises ``CancelledError`` unless this request's own EOF closed the
+        broker, in which case that EOF is raised.
         """
         if self._stop_event is None:
             return request.result()
 
         while True:
-            if self._stop_event.is_set():
+            if self._stop_event.is_set() and not request._closed_broker:
                 self.cancel_all()
                 raise CancelledError()
             if request._wait(_STOP_POLL_SECONDS):
                 # The stop may have arrived while the handler was producing an
                 # answer. Recheck before returning so that late answer is discarded
-                # even when completion and cancellation race within one poll.
-                if self._stop_event.is_set():
+                # even when completion and cancellation race within one poll. An
+                # EOF that closed the broker is kept, since it was published before
+                # any stop it caused and must outrank the siblings' cancellations.
+                if self._stop_event.is_set() and not request._closed_broker:
                     self.cancel_all()
                     raise CancelledError()
                 return request.result()
@@ -305,7 +323,7 @@ class TerminalBroker:
             answer = self._prompt_handler(request)
         except EOFError as exception:
             if self._eof_value is _PROPAGATE_EOF:
-                request._fail(exception)
+                request._fail(exception, closes_broker=True)
                 self.cancel_all()
             else:
                 request._resolve(self._eof_value)

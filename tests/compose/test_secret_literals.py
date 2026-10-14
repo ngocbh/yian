@@ -208,7 +208,12 @@ def test_quoted_typed_looking_text_under_an_ordinary_name_loads():
     load_flow(_flow(f"conn: 'dict = {{password: {_SECRET}}}'"))
 
 
-def test_a_literal_map_over_list_holding_a_secret_key_is_rejected():
+@pytest.mark.parametrize(
+    "over",
+    [f"    over:\n      - api_key: {_SECRET}\n", f"    over:\n      api_key: {_SECRET}\n"],
+    ids=["list", "mapping"],
+)
+def test_a_literal_map_over_holding_a_secret_key_is_rejected(over):
     text = (
         "id: p\nname: p\n"
         "defs:\n"
@@ -224,9 +229,8 @@ def test_a_literal_map_over_list_holding_a_secret_key_is_rejected():
         "nodes:\n"
         "  m:\n"
         "    kind: map\n"
-        "    over:\n"
-        f"      - api_key: {_SECRET}\n"
-        "    call: leaf\n"
+        + over
+        + "    call: leaf\n"
         "    input:\n      x: ${item}\n"
         "output: ${m.output}\n"
     )

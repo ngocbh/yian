@@ -72,11 +72,12 @@ def check_authored_bindings(
         owner = f"node {node_id!r}"
         for field in BINDING_FIELDS.get(desc.kind, ()):
             current = getattr(desc, field, None)
-            if isinstance(current, dict):
-                is_input = field == _TYPED_FIELD
+            # `input:` names one binding per key; any other field (MAP's `over:`) is one
+            # binding whose value may itself be a mapping.
+            if field == _TYPED_FIELD and isinstance(current, dict):
                 for key, value in current.items():
                     site = (
-                        (desc.field_ranges.get(("input", key)) if is_input else None)
+                        desc.field_ranges.get(("input", key))
                         or desc.field_ranges.get(("field", field))
                         or desc.range
                     )
@@ -84,7 +85,7 @@ def check_authored_bindings(
                         key,
                         value,
                         binding_style_at(node_id, field, key),
-                        typed=is_input,
+                        typed=True,
                         owner=owner,
                         range=site,
                         diagnostics=diagnostics,
@@ -93,10 +94,7 @@ def check_authored_bindings(
                         continue
                     raise diagnostics.error(
                         secret_literal_message(
-                            f"{'input' if is_input else field} {str(key)!r}",
-                            str(key),
-                            path,
-                            owner=owner,
+                            f"input {str(key)!r}", str(key), path, owner=owner
                         ),
                         range=site,
                     )

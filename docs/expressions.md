@@ -90,6 +90,19 @@ non-strict, so an embedded null contributes an empty string.
 (no arbitrary callable is reachable). Arithmetic runs on the resolved *values* with Python
 semantics — `str + str` concatenates, `list + list` extends (`${xs + [item]}`).
 
+### Non-finite results
+
+NaN and infinity are not yian values. Float arithmetic that overflows gives `inf`
+(`${input.x * 10}` with `x` = `1e308`), and a binding whose final value holds NaN or
+infinity at any depth fails its node with `binding.evaluate`, naming the input and
+path (`input 'y' at a[1]: non-finite number inf is not a yian value`). A temporary
+inside an expression is fine: only the binding's final value is checked, so the
+embedded template `"v=${x * 10}"` is the text `v=inf`. Flows that used to pass an
+infinite value along now fail. To fix one, keep the value in range before it reaches
+the binding (guard it with a `case`, or clamp it in a `code` node), or return null
+explicitly: a `case` value branch `then: null` (with `output: Optional[...]`), or a
+`code` node that returns `None`.
+
 **Compile-time companions** (never evaluate): `infer_expr_type(tree, ref_type_fn)` returns
 a type only for statically fixed results: scalar literals, exact references,
 comparisons/membership, `not`/`and`/`or`, and `isinstance`. Other expressions remain

@@ -678,6 +678,35 @@ def test_partial_output_shape_failure_falls_back_to_node_origin(
     assert "unknown fields" in failures[0].message
 
 
+def test_nonfinite_output_at_the_root_uses_the_contract_default_origin(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A non-finite root output has the empty path and keeps the root fallback origin."""
+    root_origin = OriginRef("nodes/work/output")
+    unrelated_origin = OriginRef("nodes/work/output/unrelated")
+    node = _ActionNode(
+        "work",
+        lambda: float("nan"),
+        output_contract=ValueContract(
+            Type.scalar(ValueKind.NUMBER),
+            ContractOrigins(
+                default=root_origin,
+                entries=((("unrelated",), unrelated_origin),),
+            ),
+        ),
+    )
+    state, log = _initialized(_flow([node]), num_workers=0)
+    failures = _capture_semantic_failures(monkeypatch)
+
+    list(_dispatcher(state, log, num_workers=0).run())
+
+    assert len(failures) == 1
+    assert failures[0].code == "contract.output"
+    assert failures[0].cause_type == "TypeCheckError"
+    assert failures[0].message == "output: non-finite number nan is not a yian value"
+    assert failures[0].trace == (root_origin,)
+
+
 def test_non_type_output_failure_uses_the_contract_default_origin(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -686,9 +715,9 @@ def test_non_type_output_failure_uses_the_contract_default_origin(
     unrelated_origin = OriginRef("nodes/work/output/unrelated")
     node = _ActionNode(
         "work",
-        lambda: float("nan"),
+        lambda: "\ud800",
         output_contract=ValueContract(
-            Type.scalar(ValueKind.NUMBER),
+            Type.scalar(ValueKind.STRING),
             ContractOrigins(
                 default=root_origin,
                 entries=((("unrelated",), unrelated_origin),),

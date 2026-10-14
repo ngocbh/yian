@@ -135,28 +135,12 @@ def test_retained_agent_canonicalizes_supported_file_variable_without_changing_d
 
 
 @pytest.mark.parametrize("number", [float("inf"), float("-inf"), float("nan")])
-def test_render_capture_rejects_nonfinite_variable_defaults_without_changing_capture_off(monkeypatch, number):
-    from yian.nodes.contracts import ValueContract
-    from yian.runtime.eval_node import eval_node
-    from yian.typesys import Type, ValueKind, VariablePool
-
-    node = AgentNode("writer", prompt="ready", variables=[
-        Parameter("score", ValueContract(Type(ValueKind.NUMBER)), has_default=True, default=number),
-    ])
-    calls = []
-    monkeypatch.setattr(agent_module, "run_agent", lambda ctx: calls.append(ctx.prompt) or Output(ctx.prompt))
-    assert eval_node(node, None, VariablePool()).outcome == Output("ready")
-    with pytest.raises(ValueError, match="non-finite"):
-        eval_node(node, None, VariablePool(), capture_bindings=True)
-    assert calls == ["ready"]
-
-
-@pytest.mark.parametrize("number", [float("inf"), float("-inf"), float("nan")])
-def test_retained_agent_rejects_nonfinite_variable_model_extras_before_acceptance(monkeypatch, number):
+def test_retained_agent_fails_on_nonfinite_variable_model_extras(monkeypatch, number):
     from pydantic import BaseModel, ConfigDict
     from yian.compile.model import START_ID, END_ID
+    from yian.nodes.binding import BindingError
     from yian.nodes.contracts import ValueContract
-    from yian.runtime.log import NodeStartedRecord
+    from yian.runtime.log import NodeFailedRecord
     from yian.typesys import Type, ValueKind
     from tests.engine._graph_builder import _engine, _graph
 
@@ -169,13 +153,15 @@ def test_retained_agent_rejects_nonfinite_variable_model_extras_before_acceptanc
     ])
     calls = []
     monkeypatch.setattr(agent_module, "run_agent", lambda ctx: calls.append(ctx.prompt) or Output(ctx.prompt))
-    assert node.forward({}) == Output("ready")
+    with pytest.raises(BindingError, match="non-finite"):
+        node.forward({})
     engine = _engine(_graph([node], [(START_ID, "writer"), ("writer", END_ID)]), learnable=True)
-    with pytest.raises(ValueError, match="non-finite"):
-        list(engine.run())
-    assert calls == ["ready"]
-    assert tuple(engine.log)[-1].record == NodeStartedRecord("writer")
-    assert all(item.node_id != "writer" for item in engine.state.trace.occurrences)
+    list(engine.run())
+    assert calls == []
+    failed = [envelope.record for envelope in engine.log
+              if isinstance(envelope.record, NodeFailedRecord)]
+    assert [record.failure.node_id for record in failed] == ["writer"]
+    assert failed[0].failure.code == "node.execute"
 
 
 @pytest.mark.parametrize("phase", ["domains", "copy"])

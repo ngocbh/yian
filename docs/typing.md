@@ -56,6 +56,19 @@ anywhere else.
 
 `file` is a reserved placeholder (not yet authorable).
 
+A `float` is finite. NaN and infinity are not yian values, at any depth. The first
+boundary that sees one rejects it and names where it sits:
+
+- a run input: `run_flow` raises `ValueError` before the log exists;
+- a binding's value (expression result, literal, or default): the node
+  fails with `binding.evaluate`;
+- a node output: the node fails with `contract.output`, naming the field path;
+- an `llm_config` value: a load error, or `ValueError` before the run for a host config;
+- the run-log codecs (`canonical_typed`, `canonical_seed`, `encode_pool`): `TypeCheckError`
+  with a path. Nothing is recorded as `null` in its place.
+
+A temporary inside an expression may be infinite; only a binding's final value is checked.
+
 ## `TypedValue` — self-describing, losslessly serializable
 
 Each value is a frozen pydantic model pinning its `ValueKind` as a `Literal`
@@ -85,6 +98,7 @@ build_value_as(declared, v)  → wrap v as `declared`, RAISE on mismatch (check)
 run log's `canonical_typed` success-record boundary. It raises `TypeCheckError` on a
 mismatch; the only coercion is widening (`int` fills a `float` slot at any depth:
 a record field, a list item, or a union member's field).
+An `int` too large for a float fails at its path (`int is too large for float`).
 `TypeCheckError.path` is an immutable tuple relative to the declared type: string
 segments name record fields and integer segments are actual list indices. A
 mismatch at the checked root uses `()`; a nested container mismatch keeps its

@@ -868,7 +868,7 @@ def eval_node(
         config = effective_llm_by_static_path[key]
         if type(config) is not dict:
             raise TypeError("recorded effective model configuration must be a dictionary")
-        effective_config = canonical_seed(config, reject_nonfinite=True)[1]
+        effective_config = canonical_seed(config)[1]
 
     def capture_inputs(inputs):
         """Snapshot completed inputs and static material before the body can mutate them."""
@@ -896,7 +896,7 @@ def eval_node(
                 raise TypeError("render capture must be a dictionary")
             if "effective_llm_config" in data:
                 raise ValueError("effective_llm_config belongs to recorded runtime authority")
-            snapshot = canonical_seed(data, reject_nonfinite=True)[1]
+            snapshot = canonical_seed(data)[1]
             static_data = backward_capture.node_data
             if static_data.keys() & snapshot.keys():
                 raise ValueError("render capture cannot replace static node data")

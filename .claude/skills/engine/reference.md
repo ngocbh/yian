@@ -788,6 +788,19 @@ generated numeric schemas carry `minimum`/`maximum` recursively through lists
 and records. Canonical labels and manifests include present bounds; absent bounds
 remain omitted from manifests to preserve unbounded identities.
 
+NaN and infinity are not yian values. `typesys.values.reject_nonfinite(value, where)`
+walks dicts, lists, tuples, `TypedValue` payloads, pydantic models, and dataclasses
+and raises `TypeCheckError` with the path of the first one
+(`<where> at <path>: non-finite number inf is not a yian value`). The first boundary
+rejects it: the binder fails a resolved value, filled default, or MAP
+`over` list with `binding.evaluate` at the binding or default origin (temporaries
+inside an expression are not checked); an AGENT variable default fails
+`node.execute`; `run_flow` raises `ValueError` for a run input before the log
+exists; `LLMConfig` sets `allow_inf_nan=False`. `canonical_typed`, `canonical_seed`,
+and `encode_pool` always reject one, so a node output fails `contract.output` at the
+field path and a growth seed fails `contract.growth`; nothing is recorded as null.
+Widening an int too large for a float raises `TypeCheckError` at its path.
+
 `Type.variants` refines OBJECT into a union: a tuple of two or more non-nullable record
 members, in canonical order (by tag, else by `canonical_type_label`) and deduplicated by
 `==`, never `set()`, since `Type` holds dicts. `Optional[Union[...]]` sets `nullable` on

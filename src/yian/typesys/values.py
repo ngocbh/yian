@@ -19,7 +19,8 @@ in `yian.typesys.temporal`; otherwise it is the leaf.
 
 import json
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, is_dataclass, replace
+from dataclasses import fields as _dataclass_fields
 from enum import Enum
 from math import isfinite
 from typing import Annotated, Any, Literal, Optional, Union
@@ -59,6 +60,91 @@ class TypeCheckError(ValueError):
                 )
         super().__init__(*args)
         self.path = path
+
+
+def reject_nonfinite(value: Any, where: str) -> None:
+    """Raise if a value contains a NaN or infinity at any depth.
+
+    Walks `dict` values, `list`/`tuple` items, `TypedValue` payloads, pydantic
+    models, and dataclass instances, depth-first and in order. It walks declared
+    fields and extras only; a non-str key renders as its repr. A container
+    already on the current path is skipped; the canonical codecs reject cycles.
+
+    Args:
+        value (`Any`):
+            The value to check.
+        where (`str`):
+            Names the boundary for the message, e.g. ``"input 'x'"``.
+
+    Raises:
+        `TypeCheckError`:
+            A non-finite float was found; ``path`` locates it and the message reads
+            ``<where>[ at <path>]: non-finite number <repr> is not a yian value``.
+    """
+    found = _find_nonfinite(value, (), set())
+    if found is None:
+        return
+    path, number = found
+    location = f"{where} at {_render_value_path(path)}" if path else where
+    raise TypeCheckError(
+        f"{location}: non-finite number {number!r} is not a yian value",
+        path=path,
+    )
+
+
+def _find_nonfinite(
+    value: Any,
+    path: tuple[str | int, ...],
+    active: set[int],
+) -> tuple[tuple[str | int, ...], float] | None:
+    """Return the path to and value of the first non-finite float, or `None`."""
+    if isinstance(value, float):
+        return None if isfinite(value) else (path, value)
+    if id(value) in active:
+        return None
+    # `TypedValue` subclasses `BaseModel`; unwrap it first so paths gain no `value` segment.
+    if isinstance(value, TypedValue):
+        children = [(value.to_object(), path)]
+    elif isinstance(value, BaseModel):
+        children = [(getattr(value, name), path + (name,)) for name in type(value).model_fields]
+        children.append((value.model_extra or {}, path))
+    elif isinstance(value, dict):
+        # `TypeCheckError` paths hold exact `str` segments, so a `str` subclass key is unwrapped.
+        children = [
+            (item, path + (str.__str__(key) if isinstance(key, str) else repr(key),))
+            for key, item in value.items()
+        ]
+    elif isinstance(value, (list, tuple)):
+        children = [(item, path + (index,)) for index, item in enumerate(value)]
+    elif is_dataclass(value) and not isinstance(value, type):
+        children = [
+            (getattr(value, field.name), path + (field.name,))
+            for field in _dataclass_fields(value)
+        ]
+    else:
+        return None
+    active.add(id(value))
+    try:
+        for child, child_path in children:
+            found = _find_nonfinite(child, child_path, active)
+            if found is not None:
+                return found
+        return None
+    finally:
+        active.discard(id(value))
+
+
+def _render_value_path(path: tuple[str | int, ...]) -> str:
+    """Render a path as ``a[1].b``, quoting a non-identifier key as ``['my key']``."""
+    parts = []
+    for segment in path:
+        if isinstance(segment, int):
+            parts.append(f"[{segment}]")
+        elif segment.isidentifier():
+            parts.append(f".{segment}" if parts else segment)
+        else:
+            parts.append(f"[{segment!r}]")
+    return "".join(parts)
 
 
 # --------------------------------------------------------------------------- #
@@ -1020,11 +1106,20 @@ def _scalar_matches(declared: ValueKind, value: Any) -> bool:
     return False
 
 
-def _coerce_scalar(declared: ValueKind, value: Any) -> Any:
-    # Only widening: an int may fill a NUMBER slot as a float.
+def _coerce_scalar(declared: ValueKind, value: Any, path: tuple[str | int, ...]) -> Any:
+    """Widen an int filling a `float` slot; return any other value unchanged."""
     if declared == ValueKind.NUMBER and isinstance(value, int) and not isinstance(value, bool):
-        return float(value)
+        return _widen_int(value, path)
     return value
+
+
+def _widen_int(value: int, path: tuple[str | int, ...]) -> float:
+    """Widen an int to a float, raising `TypeCheckError` at `path` on overflow."""
+    try:
+        return float(value)
+    except OverflowError:
+        # No repr of the int: `str()` of a huge int hits Python's digit limit.
+        raise TypeCheckError("int is too large for float", path=path) from None
 
 
 # --------------------------------------------------------------------------- #
@@ -1077,7 +1172,10 @@ def _infer_list(items: list[Any]) -> TypedValue:
     if element_types == {ValueKind.INTEGER}:
         return ListIntegerValue(value=items)
     if element_types <= {ValueKind.INTEGER, ValueKind.NUMBER}:
-        return ListNumberValue(value=[float(x) for x in items])
+        return ListNumberValue(value=[
+            _widen_int(x, (index,)) if isinstance(x, int) else float(x)
+            for index, x in enumerate(items)
+        ])
     if element_types == {ValueKind.OBJECT}:
         return ListObjectValue(value=items)
     return ListAnyValue(value=items)
@@ -1348,7 +1446,10 @@ def _build_scalar_or_list(
                         f"(declared {declared.value})",
                         path=path + (index,),
                     )
-            items = [_coerce_scalar(element, item) for item in items]
+            items = [
+                _coerce_scalar(element, item, path + (index,))
+                for index, item in enumerate(items)
+            ]
         return _LIST_VALUE_CLASS[declared](value=items)
 
     if not _scalar_matches(declared, value):
@@ -1356,4 +1457,4 @@ def _build_scalar_or_list(
         if declared in _TEMPORAL_PARSERS and isinstance(value, str):
             message += f": {_temporal_error(declared, value)}"
         raise TypeCheckError(message, path=path)
-    return _SCALAR_VALUE_CLASS[declared](value=_coerce_scalar(declared, value))
+    return _SCALAR_VALUE_CLASS[declared](value=_coerce_scalar(declared, value, path))

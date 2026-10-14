@@ -98,7 +98,8 @@ class LLMConfig(BaseModel):
         google_thinking_level (`str`, *optional*, defaults to `None`):
             Google thinking level; ignored for other providers.
         temperature (`float`, *optional*, defaults to `None`):
-            Sampling temperature; `None` leaves the provider default.
+            Sampling temperature, which must be finite; `None` leaves the provider
+            default.
         api_key (`SecretStr`, *optional*, defaults to `None`):
             Provider API key supplied by the host. It takes precedence over the provider's
             key environment variable and saved OpenAI connection. It is masked in `repr`
@@ -151,7 +152,10 @@ class LLMConfig(BaseModel):
     # `temperature`) loud at LOAD time, not silent. hide_input_in_errors keeps
     # config values, including the key, out of validation error messages.
     model_config = ConfigDict(
-        protected_namespaces=(), extra="forbid", hide_input_in_errors=True
+        protected_namespaces=(),
+        extra="forbid",
+        hide_input_in_errors=True,
+        allow_inf_nan=False,
     )
 
     @model_validator(mode="before")

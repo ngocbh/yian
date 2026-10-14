@@ -184,18 +184,19 @@ def test_render_capture_preserves_original_host_exception_and_closes(monkeypatch
     expected = MemoryError("capture allocation failed")
     closed = []
     canonical = evaluator.canonical_seed
+    payload = {}
 
-    def fail_dynamic(value, **kwargs):
-        if kwargs.get("reject_nonfinite"):
+    def fail_dynamic(value):
+        if value is payload:
             raise expected
-        return canonical(value, **kwargs)
+        return canonical(value)
 
     class Capturing(Node):
         needs_render_capture = True
 
         def forward(self, inputs, *, capture_render):
             closed.append(capture_render)
-            capture_render({})
+            capture_render(payload)
             return Output("must not run")
 
     monkeypatch.setattr(evaluator, "canonical_seed", fail_dynamic)

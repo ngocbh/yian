@@ -121,3 +121,8 @@ def reply_fold(inputs: dict) -> dict:
     # loop body 'a -> 'a over {transcript, exited}: append this turn's agent reply.
     return {"transcript": inputs["transcript"] + "|" + inputs["reply"],
             "exited": bool(inputs["exited"])}
+
+
+def huge_float_list(inputs: dict) -> list:
+    # a mixed int/float list whose int widens past float's range (no `output:` declared).
+    return [0.5, 10**400]

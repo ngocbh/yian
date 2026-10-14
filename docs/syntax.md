@@ -242,6 +242,13 @@ asks for a `:-` default, such as `${(order.output.qty :- 0) + 1}` (see
 A whole-string `${expr}` resolves to the **typed value** (a number stays a
 number, a list a list); embedded in surrounding text it is stringified.
 
+NaN and infinity are not yian values. A binding whose value is NaN or infinity at
+any depth, whether an expression result, a literal, or a default, fails its node with `binding.evaluate`. The message names the
+input and the path, like `input 'y' at a[1]: non-finite number inf is not a yian
+value`; a default reads `default for 'x': ...`. A temporary inside an expression is
+fine: the embedded template `"v=${x * 10}"` is the text `v=inf`. Only a binding's
+final value is checked. See [Expressions → Non-finite results](expressions.md#non-finite-results).
+
 !!! note "Flow calls are not expressions"
     A `${...}` computes over values — it does **not** invoke a flow. To call a
     child flow inline, use the `call(...)` directive (see [`call` / `map`](#call-map-composition-over-child-flows)),
@@ -779,9 +786,10 @@ nodes:
 
 Every `llm_config:` in a flow file (node, `defs:` entry, or top level) is checked
 when the flow loads: an unknown key such as `modle:`, a bad value such as
-`temperature: hot`, or an unknown provider fails at that `llm_config:`. `inherit:`
-is valid only in a node's `llm_config:`. A host `run_flow(..., llm_config=...)`
-layer with an unknown key fails before any node runs.
+`temperature: hot`, a non-finite number such as `temperature: .nan`, or an unknown
+provider fails at that `llm_config:`. `inherit:` is valid only in a node's
+`llm_config:`. A host `run_flow(..., llm_config=...)` layer with an unknown key
+fails before any node runs.
 
 A flow file cannot set `api_key` at any level, nor `base_url` except beside
 `provider: azure`; loading such a flow fails. A library host passes the provider
@@ -856,7 +864,8 @@ Variable names must be unique and cannot overlap the node's input names. Default
 are validated while loading, including bounds and enum choices. Nullable variables
 still require an explicit default, such as `Optional[str] = null`; a quoted empty
 string is a valid `str` default. Default strings are literal text, so `${...}`
-inside a default is not evaluated as a binding.
+inside a default is not evaluated as a binding. A NaN or infinity default fails the
+node when it runs.
 
 Each invocation starts with a fresh copy of these defaults. Repeated `${name}`
 references read the same local value. A variable belongs to its authored AGENT

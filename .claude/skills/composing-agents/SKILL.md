@@ -201,6 +201,11 @@ without rounding. Booleans are invalid.
 Bounds compose with lists, records, aliases, and nullable types. Defaults and
 supplied values are checked; cross-flow sources must fit the destination domain.
 
+A `float` is finite: a binding whose value is NaN or infinity (say an overflowing
+`${x * 10}`) fails its node with `binding.evaluate`, so keep the value in range
+(a `case` guard or a `code` clamp) or return null explicitly (a `case` value
+branch `then: null` under `output: Optional[...]`, or a `code` node returning `None`).
+
 An explicit `Optional[int] = null` is a present default, distinct from no `=`;
 null is invalid for a non-nullable type, and an empty `=` is invalid. The default
 RHS is a YAML literal validated at load and never string-coerced: write
@@ -365,7 +370,8 @@ A node may pin its model via `llm_config:`; otherwise the process defaults captu
 once when the run initializes apply. `inherit: false` skips authored flow/parent/CLI
 layers but still receives those provider/model defaults.
 Node, `defs:`, and flow `llm_config:` are all checked at load against the same
-fields; `inherit:` is node-only.
+fields; `inherit:` is node-only. A non-finite number (`temperature: .nan`) is a
+load error.
 OpenAI subscription and API-key connections both use `provider: openai`;
 select the method and default model with `yian auth openai`.
 Never put `api_key` in a flow's `llm_config:`, nor `base_url` except beside
@@ -402,10 +408,10 @@ writer:
 
 Every variable needs an explicit, valid default, including nullable variables.
 Names cannot overlap inputs. Defaults are literal values; `${...}` inside a
-default string stays text. Each invocation receives a fresh copy and repeated
-prompt references read the same local value. Ownership follows the authored
-AGENT path plus name across MAP items and LOOP iterations. These declarations
-create no data edges. Model settings still belong in `llm_config:` even when a
+default string stays text. A NaN or infinity default fails the node when it
+runs. Each invocation receives a fresh copy and repeated prompt references read
+the same local value. Ownership follows the authored AGENT path plus name across
+MAP items and LOOP iterations. These declarations create no data edges. Model settings still belong in `llm_config:` even when a
 variable has the same name, such as `temperature`.
 
 ### Agent memory — `long_term_memory:`

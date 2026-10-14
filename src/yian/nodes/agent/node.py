@@ -141,6 +141,11 @@ class AgentNode(Node):
         if type(steerable) is not bool:
             raise TypeError(f"AGENT node {node_id!r}: steerable must be a bool")
         self.steerable = steerable
+        # `self.llm_config_label`: the author-facing phrase naming this agent's `llm_config` when
+        #   a desugar synthesized the agent from another node's text (e.g.
+        #   `node 'ask' adaptive_questions.llm_config`). Render-only and absent from run records
+        #   and the manifest. `None` for an authored agent, whose messages name its path.
+        self.llm_config_label: str | None = None
 
     @property
     def needs_steering(self) -> bool:

@@ -398,6 +398,7 @@ class AgentDescriptor(NodeDescriptor):
                 f"node {self.id!r}: {exc}",
                 range=skills_range if isinstance(exc, SkillError) else tools_range,
             ) from exc
+        node.llm_config_label = self.field_labels.get("llm_config")
 
         override = self.output_contract_override
         node.output_contract = (

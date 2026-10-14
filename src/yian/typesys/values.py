@@ -267,6 +267,62 @@ def _nesting_segment(container: Any, key: Any) -> str | int:
     return key
 
 
+def reject_non_text_keys(value: Any, where: str) -> None:
+    """Raise if a value holds a mapping with a key that is not text.
+
+    Walks the containers `reject_deep_nesting` walks, depth-first and in order, and
+    unwraps a `TypedValue`. A container already on the current path is skipped; the
+    canonical codecs reject cycles.
+
+    Args:
+        value (`Any`):
+            The value to check.
+        where (`str`):
+            Names the boundary for the message, e.g. ``"input 'x'"``.
+
+    Raises:
+        `TypeCheckError`:
+            A mapping has a non-text key; ``path`` locates the mapping and the message
+            reads ``<where>[ at <path>]: object keys must be text, got <repr>``.
+    """
+    while isinstance(value, TypedValue):
+        value = value.to_object()
+    children = _nesting_children(value)
+    if children is None:
+        return
+    # An explicit stack, as in `reject_deep_nesting`, so deep values don't recurse.
+    stack: list[tuple[Iterator[tuple[Any, Any]], Any, Any]] = [(iter(children), value, None)]
+    active = {id(value)}
+    while stack:
+        iterator, container, _ = stack[-1]
+        entry = next(iterator, None)
+        if entry is None:
+            stack.pop()
+            active.discard(id(container))
+            continue
+        key, child = entry
+        if isinstance(container, dict) and not isinstance(key, str):
+            path = tuple(
+                _nesting_segment(parent, frame_key)
+                for (_, parent, _), (_, _, frame_key) in zip(stack, stack[1:])
+            )
+            location = f"{where} at {_render_value_path(path)}" if path else where
+            raise TypeCheckError(
+                f"{location}: object keys must be text, got {value_repr(key)}", path=path
+            )
+        if child is None or type(child) in _NESTING_SCALARS:
+            continue
+        while isinstance(child, TypedValue):
+            child = child.to_object()
+        if id(child) in active:
+            continue
+        grandchildren = _nesting_children(child)
+        if grandchildren is None:
+            continue
+        stack.append((iter(grandchildren), child, key))
+        active.add(id(child))
+
+
 def _too_deep(where: str, path: tuple[str | int, ...], limit: int) -> TypeCheckError:
     """Build the error for a container past the nesting limit at `path`."""
     location = f"{where} at {_render_value_path(path)}" if path else where

@@ -72,7 +72,7 @@ from yian.memory import (
 from yian.memory_host import MemoryRegistry
 from yian.nodes.base import Steering
 from yian.nodes.binding import coerce_inputs
-from yian.nodes.contracts import HostToolCall, binding_source
+from yian.nodes.contracts import HostToolCall, iter_source_strings
 from yian.runtime.engine import FlowEngine
 from yian.runtime.eval_node import require_steering
 from yian.runtime.backward import drive_backward
@@ -887,10 +887,11 @@ def _check_conditions(flow: CompiledFlow) -> None:
 def _check_templates(flow: Any, path: tuple[str, ...] = ()) -> None:
     """Reject a binding or prompt span that can't run, before any record is written.
 
-    Checks every static flow level: each wiring source (END's is the flow's output) must
-    parse and call only builtins with arguments they take, and each node checks its
-    prompts. A YAML flow can't hold such a span (Compose rejects it at load); this catches
-    values set in Python.
+    Checks every static flow level: each template string of a wiring source (END's is
+    the flow's output) must parse, pass each builtin arguments it takes, and name only
+    constructors in the reading node's type table; each node checks its prompts. A YAML
+    flow can't hold such a span (Compose rejects it at load); this catches values set in
+    Python.
 
     Args:
         flow (`Any`):
@@ -915,21 +916,19 @@ def _check_templates(flow: Any, path: tuple[str, ...] = ()) -> None:
                 subject = f"node {node_path!r} map input {key!r}"
             else:
                 subject = f"node {node_path!r} {node.wiring_ref_label(key).rstrip(':')}"
-            _check_template_source(binding, subject)
+            _check_template_source(binding, subject, node.types)
         node.validate_prompts(path=node_path)
         for child in node.origin_children():
             _check_templates(child, (*path, node_id))
 
 
-def _check_template_source(binding: Any, subject: str) -> None:
-    """Check one wiring source's `${...}` spans, prefixing an error with `subject`."""
-    source = binding_source(binding)
-    if not isinstance(source, str):
-        return
-    try:
-        check_template_calls(source)
-    except ExpressionError as exc:
-        raise ExpressionError(f"{subject}: {exc}") from exc
+def _check_template_source(binding: Any, subject: str, types: Mapping[str, Any]) -> None:
+    """Check each template string of one wiring source, prefixing an error with `subject`."""
+    for _, text in iter_source_strings(binding):
+        try:
+            check_template_calls(text, types)
+        except ExpressionError as exc:
+            raise ExpressionError(f"{subject}: {exc}") from exc
 
 
 def _check_tool_types(flow: CompiledFlow, tools: ToolSet) -> None:

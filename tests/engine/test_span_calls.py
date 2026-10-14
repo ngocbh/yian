@@ -8,7 +8,7 @@ import yian.run
 from yian.compose import LoadError, load_flow
 from yian.expr import ExpressionError
 from yian.nodes.base import _HostStop
-from yian.nodes.contracts import Binding
+from yian.nodes.contracts import Binding, ValueTemplate
 from yian.run import resume_flow, run_flow
 
 _UPPER = "expression function 'upper' takes (s): too many positional arguments"
@@ -217,6 +217,7 @@ _SITES = {
     "node-input": (_fill(_CODE, **{**_GOOD_CODE, "n": "${upper(input.v, 1)}"}), "node 'x' input 'n' from: "),
     "node-input-embedded": (_fill(_CODE, **{**_GOOD_CODE, "n": "hi ${upper(input.v, 1)}"}), "node 'x' input 'n' from: "),
     "node-input-default": (_fill(_CODE, **{**_GOOD_CODE, "n": "${input.v :- upper(input.v, 1)}"}), "node 'x' input 'n' from: "),
+    "nested-value": (_fill(_CODE, **{**_GOOD_CODE, "n": "x"}).replace("{n: 'x'}", "{n: {a: ['${upper(input.v, 1)}']}}"), "node 'x' input 'n' from: "),
     "ref-free": (_fill(_CODE, **{**_GOOD_CODE, "n": '${upper("a", 1)}'}), "node 'x' input 'n' from: "),
     "typed-binding": (_fill(_TYPED, n="${upper(input.v, 1)}"), "node 'x' input 'n' from: "),
     "tool-input": (_fill(_TOOL, n="${upper(input.v, 1)}"), "node 't' input 'n' from: "),
@@ -342,6 +343,12 @@ def test_python_built_binding_calling_an_unknown_function_fails_before_the_run(t
     _run_raises(flow, r"^node 'x' input 'n': unknown expression function 'nosuchfn'$", tmp_path)
 
 
+def test_python_built_nested_binding_mis_calling_a_builtin_fails_before_the_run(tmp_path):
+    flow = load_flow(_fill(_CODE, **_GOOD_CODE))
+    flow.compiled.wiring["x"]["n"] = Binding(ValueTemplate({"a": ["${upper(input.v, 1)}"]}))
+    _run_raises(flow, rf"^node 'x' input 'n': {_UPPER_RUN}", tmp_path)
+
+
 def test_a_well_called_python_built_binding_still_runs():
     flow = load_flow(_fill(_CODE, **_GOOD_CODE))
     flow.compiled.wiring["x"]["n"] = Binding("${upper(input.v)}")
@@ -352,7 +359,7 @@ _TWO_NODES = """
 id: f
 name: f
 input:
-  v: int
+  v: !int
 nodes:
   a:
     kind: code

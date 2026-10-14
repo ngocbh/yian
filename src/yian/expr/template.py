@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, Union
 
 from yian.expr import grammar
 from yian.expr.builtins import TEMPLATE_FNS
@@ -776,24 +776,29 @@ def flow_call_callees_in_spans(text: str, type_names: frozenset[str] = frozenset
     return out
 
 
-def check_template_calls(text: str) -> None:
-    """Require every call in `text`'s `${...}` spans to name a builtin that takes its arguments.
+def check_template_calls(text: str, types: "Mapping[str, Any] | None" = None) -> None:
+    """Require every builtin call in `text`'s `${...}` spans to pass arguments it takes.
 
     The loader runs this on every binding and flow output; a prompt gets the same check
-    through `prompt_refs`.
+    through `prompt_refs`. Any other callee except `isinstance` is a `T(...)` constructor:
+    with `types` it must name a type in it; without, its name is left to the caller.
 
     Args:
         text (`str`):
             A binding or template value: literal text with `${...}` spans.
+        types (`Mapping[str, Any] | None`, *optional*, defaults to `None`):
+            The type table constructor names must be in, or `None` to leave them to the
+            caller.
 
     Raises:
         `ExpressionError`:
-            Raised when a span doesn't parse, calls a function that isn't a builtin, or calls
-            a builtin with arguments it doesn't take.
+            Raised when a span doesn't parse, calls a builtin with arguments it doesn't
+            take, or, with `types`, calls a function that is neither a builtin nor a type
+            in `types`.
     """
     for seg in scan_template(text):
         if isinstance(seg, Span):
-            _check_calls(seg.tree)
+            _check_calls(seg.tree, types)
 
 
 def eval_template(

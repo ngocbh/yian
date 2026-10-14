@@ -5,8 +5,7 @@
 # body promotes to a `module:function` by copy-paste. The source is author-written and
 # static (it lives in this version-controlled YAML), shipped WITH the flow, under the
 # author == operator trust model. The return is validated against `output:` by the same
-# write boundary reference mode uses (plus a deep serialize-once check), so inline outputs
-# must be JSON-representable.
+# write boundary reference mode uses, so inline outputs must be JSON values (or files).
 
 id: inline-code
 name: inline_code

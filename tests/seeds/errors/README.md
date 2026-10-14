@@ -81,7 +81,7 @@ just what can.
 | `e26-three-level-raise.yaml` | a CODE callable that raises three levels deep (call → def → def, `outer/via/boom`) | ordered canonical diagnostics with at least three frames |
 | `e27-inline-code-raises.yaml` | an inline `code:` body that raises (run `topic: X`) | inline analogue of e20 (in-process raise → `RunFailed`) |
 | `e28-inline-wrong-type.yaml` | an inline `code:` body returns the wrong type for its `output:` | typed write boundary (reused, not reinvented) |
-| `e29-inline-nonserializable.yaml` | an inline `code:` body returns a nested non-serializable value | node's deep serialize-once check → fails AT the node |
+| `e29-inline-nonserializable.yaml` | an inline `code:` body returns a nested non-JSON value | the output boundary rejects the non-JSON member → `contract.output` |
 | `e41-structured-output-no-range.yaml` | a structured `output:` whose ONE bad field fails validation | canonical contract-path origin resolves the exact bad field |
 
 ## Unsupported checks (`_future/errors/`)

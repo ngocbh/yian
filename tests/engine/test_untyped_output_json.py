@@ -226,6 +226,43 @@ def test_an_untyped_output_rejects_a_non_json_part_with_its_path(code, message):
 
 
 @pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        ('{1: "a"}', r"output: object keys must be text, got 1"),
+        ("{1, 2}", r"output: \{1, 2\} is not a JSON value"),
+        ("object()", r"output: <object object at .*> is not a JSON value"),
+        (
+            '__import__("datetime").date(2026, 1, 1)',
+            r"output: datetime\.date\(2026, 1, 1\) is not a JSON value",
+        ),
+        ('{"o": object()}', r"output at o: <object object at .*> is not a JSON value"),
+    ],
+)
+def test_an_untyped_inline_return_fails_at_the_output(code, message):
+    result = _run(_flow(code))
+    assert result.status == "failed"
+    assert result.failure.code == "contract.output"
+    assert result.failure.node_id == "mk"
+    assert re.fullmatch(message, result.failure.message)
+
+
+@pytest.mark.parametrize(
+    ("output", "message"),
+    [
+        ("object", "object keys must be text, got 1"),
+        ("Any", "object keys must be text, got 1"),
+        ("str", "{1: 'a'} does not match declared type str"),
+    ],
+)
+def test_a_typed_inline_return_with_a_non_text_key_fails_at_the_output(output, message):
+    result = _run(_flow('{1: "a"}', output=output))
+    assert result.status == "failed"
+    assert result.failure.code == "contract.output"
+    assert result.failure.node_id == "mk"
+    assert result.failure.message == message
+
+
+@pytest.mark.parametrize(
     ("code", "value"),
     [
         ('{"t": (1, 2)}', {"t": [1, 2]}),

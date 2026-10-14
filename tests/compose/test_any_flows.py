@@ -148,11 +148,12 @@ def test_an_object_output_rejects_a_date_member():
     assert "is not a JSON value" in result.failure.message
 
 
-def test_an_object_output_rejects_a_non_text_key_at_the_node():
+def test_an_object_output_rejects_a_non_text_key_at_the_output():
     result = _run(_flow("object", code='{1: "a"}'))
     assert result.status == "failed"
-    assert result.failure.code == "node.execute"
+    assert result.failure.code == "contract.output"
     assert result.failure.node_id == "mk"
+    assert result.failure.message == "object keys must be text, got 1"
 
 
 # --------------------------------------------------------------------------- #

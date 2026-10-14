@@ -172,47 +172,166 @@ def test_controller_stop_links_to_child_without_reverse_propagation() -> None:
         assert host_cancelled.is_set()
 
 
-def test_sigint_deferred_at_thread_launch_still_joins_before_cleanup(
+@pytest.mark.skipif(not hasattr(signal, "pthread_kill"), reason="needs pthread_kill")
+def test_sigint_during_thread_launch_stops_and_joins_the_controller(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A pending SIGINT delivered on mask restore sees a launched, tracked controller."""
+    """Ctrl-C handled inside Thread.start still stops and joins the tracked controller."""
 
-    expected = KeyboardInterrupt()
-    calls = []
-    registry_seen: list[bool] = []
+    tripped = Event()
+    controller_done = Event()
+    saw_stop: list[bool] = []
+    real_start = Thread.start
 
-    def fake_pthread_sigmask(how, mask):
-        calls.append((current_thread(), how, mask))
-        if current_thread() is main_thread() and how == signal.SIG_BLOCK:
-            return {signal.SIGTERM}
-        if current_thread() is main_thread() and how == signal.SIG_SETMASK:
-            raise expected
-        return set()
+    def start_then_take_sigint(self: Thread) -> None:
+        real_start(self)
+        if self.name == "ac-controller":
+            # The main thread runs the pending handler here, before start returns.
+            assert tripped.wait(_TIMEOUT)
+            time.sleep(0.01)
 
-    monkeypatch.setattr(signal, "pthread_sigmask", fake_pthread_sigmask)
+    monkeypatch.setattr(Thread, "start", start_then_take_sigint)
 
     def controller(stop_event, on_event, ask_user, render):
-        registry_seen.append("ask_user" in TOOL_REGISTRY)
-        return _success("done")
+        signal.pthread_kill(current_thread().ident, signal.SIGINT)
+        tripped.set()
+        saw_stop.append(stop_event.wait(_TIMEOUT))
+        # A slow drain, so a helper that skips the join returns before this ends.
+        time.sleep(0.1)
+        controller_done.set()
+        return _success("stopped")
 
-    with pytest.raises(KeyboardInterrupt) as caught:
+    with pytest.raises(KeyboardInterrupt):
         run_cli._run_with_terminal_controller(
             controller,
             prompt_handler=lambda request: "unused",
             reporter=None,
         )
 
-    assert caught.value is expected
-    main_calls = [call for call in calls if call[0] is main_thread()]
-    assert [call[1] for call in main_calls] == [signal.SIG_BLOCK, signal.SIG_SETMASK]
-    assert any(call[0] is not main_thread() and call[1] == signal.SIG_SETMASK for call in calls)
-    assert registry_seen == [False]
+    assert controller_done.is_set()
+    assert saw_stop == [True]
+    assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
     assert not any(thread.name == "ac-controller" for thread in enumerate_threads())
     assert "ask_user" not in TOOL_REGISTRY
 
 
-def test_controller_restores_caller_signal_mask_before_spawning_workers() -> None:
-    """Controller and descendants do not inherit the launch-only SIGINT block."""
+@pytest.mark.skipif(not hasattr(signal, "pthread_kill"), reason="needs pthread_kill")
+def test_sigint_on_the_controller_thread_stops_and_joins_before_raising() -> None:
+    """A SIGINT the OS hands to the controller thread still stops the run gracefully."""
+
+    controller_done = Event()
+    saw_stop: list[bool] = []
+
+    def controller(stop_event, on_event, ask_user, render):
+        signal.pthread_kill(current_thread().ident, signal.SIGINT)
+        saw_stop.append(stop_event.wait(_TIMEOUT))
+        time.sleep(0.1)
+        controller_done.set()
+        return _success("stopped")
+
+    with pytest.raises(KeyboardInterrupt):
+        run_cli._run_with_terminal_controller(
+            controller,
+            prompt_handler=lambda request: "unused",
+            reporter=None,
+        )
+
+    assert controller_done.is_set()
+    assert saw_stop == [True]
+    assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+
+
+def test_sigint_deferred_at_launch_is_replayed_through_the_callers_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The launch-time handler hands a recorded Ctrl-C to the handler it replaced."""
+
+    calls: list[int] = []
+    real_start = Thread.start
+
+    def start_then_signal(self: Thread) -> None:
+        real_start(self)
+        if self.name == "ac-controller":
+            signal.raise_signal(signal.SIGINT)
+            assert calls == []  # deferred, not yet delivered to the caller
+
+    def caller_handler(signum, frame):
+        calls.append(signum)
+
+    monkeypatch.setattr(Thread, "start", start_then_signal)
+    previous = signal.signal(signal.SIGINT, caller_handler)
+    try:
+        try:
+            observed = run_cli._run_with_terminal_controller(
+                lambda stop_event, on_event, ask_user, render: _success("done"),
+                prompt_handler=lambda request: "unused",
+                reporter=None,
+            )
+        except KeyboardInterrupt:
+            # Report a wrong replay as one failure instead of aborting the session.
+            pytest.fail("the replay bypassed the caller's SIGINT handler")
+        assert signal.getsignal(signal.SIGINT) is caller_handler
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+    assert observed.output == "done"
+    assert calls == [signal.SIGINT]
+
+
+def test_sigint_deferred_at_launch_stays_ignored_for_an_ignoring_caller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A caller with SIGINT ignored gets no KeyboardInterrupt from the replay."""
+
+    real_start = Thread.start
+
+    def start_then_signal(self: Thread) -> None:
+        real_start(self)
+        if self.name == "ac-controller":
+            signal.raise_signal(signal.SIGINT)
+
+    monkeypatch.setattr(Thread, "start", start_then_signal)
+    previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        try:
+            observed = run_cli._run_with_terminal_controller(
+                lambda stop_event, on_event, ask_user, render: _success("done"),
+                prompt_handler=lambda request: "unused",
+                reporter=None,
+            )
+        except KeyboardInterrupt:
+            # Report a wrong replay as one failure instead of aborting the session.
+            pytest.fail("the replay raised KeyboardInterrupt for an ignoring caller")
+        restored = signal.getsignal(signal.SIGINT)
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+    assert observed.output == "done"
+    assert restored == signal.SIG_IGN
+
+
+def test_launch_leaves_a_non_python_sigint_handler_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no restorable SIGINT handler the controller starts directly."""
+
+    def refuse(*args: Any) -> None:
+        raise AssertionError("signal.signal must not be called")
+
+    monkeypatch.setattr(signal, "getsignal", lambda signum: None)
+    monkeypatch.setattr(signal, "signal", refuse)
+
+    observed = run_cli._run_with_terminal_controller(
+        lambda stop_event, on_event, ask_user, render: _success("done"),
+        prompt_handler=lambda request: "unused",
+        reporter=None,
+    )
+
+    assert observed.output == "done"
+
+
+def test_controller_and_workers_keep_the_callers_signal_mask() -> None:
+    """The controller and its workers run with the caller's signal mask."""
 
     caller_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
     observed_masks = []

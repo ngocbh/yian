@@ -53,12 +53,18 @@ def test_think_is_sent_as_written(think):
     assert body["think"] == think
 
 
-def test_options_and_keep_alive_are_sent_as_written():
-    body, _ = _call(
-        {"ollama": {"options": {"num_ctx": 8192, "temperature": 0.2}, "keep_alive": "5m"}}
-    )
-    assert body["options"] == {"num_ctx": 8192, "temperature": 0.2}
-    assert body["keep_alive"] == "5m"
+# provider -> a block whose every field must reach the request body.
+BODY_CASES = {
+    "ollama": {"block": {"options": {"num_ctx": 8192, "temperature": 0.2}, "keep_alive": "5m"}},
+}
+
+
+@pytest.mark.parametrize("provider", sorted(BODY_CASES))
+def test_block_fields_are_sent_as_written(provider):
+    block = BODY_CASES[provider]["block"]
+    body, _ = _call({provider: block})
+    for key, value in block.items():
+        assert body[key] == value, key
 
 
 def test_block_options_merge_into_langchain_options():

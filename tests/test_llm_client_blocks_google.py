@@ -64,12 +64,30 @@ def test_no_temperature_is_sent_without_one(bodies):
     assert "temperature" not in bodies[-1].get("generationConfig", {})
 
 
-def test_safety_settings_pass_through(bodies):
-    safety = [{"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"}]
+# provider -> a model id and a block whose fields must reach the request body.
+BODY_CASES = {
+    "google": {
+        "model": "gemini-2.5-flash",
+        "block": {
+            "safetySettings": [
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"}
+            ],
+            "generationConfig": {"topK": 5, "maxOutputTokens": 64},
+        },
+    },
+}
 
-    _model("gemini-2.5-flash", {"safetySettings": safety}).invoke([HumanMessage("hi")])
 
-    assert bodies[-1]["safetySettings"] == safety
+@pytest.mark.parametrize("provider", sorted(BODY_CASES))
+def test_block_reaches_the_body_as_written(bodies, provider):
+    case = BODY_CASES[provider]
+
+    _model(case["model"], case["block"]).invoke([HumanMessage("hi")])
+
+    body = bodies[-1]
+    assert body["safetySettings"] == case["block"]["safetySettings"]
+    for key, value in case["block"]["generationConfig"].items():
+        assert body["generationConfig"][key] == value, key
 
 
 def test_streaming_carries_the_block(bodies):

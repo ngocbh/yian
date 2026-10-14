@@ -92,7 +92,12 @@ def create_llm_client(
         base_url (`str`, *optional*, defaults to `None`):
             Override the provider's API endpoint; `None` uses the provider default.
         **kwargs:
-            Additional provider-specific arguments forwarded to the client.
+            Client arguments forwarded to the client: ``block`` (`dict`), the provider's
+            block shaped like its API request body and sent into every request as
+            written, plus connection settings such as ``api_key``, ``timeout``,
+            ``max_retries`` and ``callbacks``. Generation settings (``temperature``,
+            ``max_tokens``, reasoning effort, …) are no longer taken as keyword
+            arguments and are ignored; put them in ``block``.
 
     Returns:
         `BaseLLMClient`: A configured client whose `get_llm()` yields the chat model.

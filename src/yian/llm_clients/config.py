@@ -543,9 +543,9 @@ def merge_llm_config(specific: dict, base: dict) -> dict:
     to a mapping: ``specific``'s non-``None`` fields win, ``base`` fills the rest, and a
     value inside a field (e.g. ``thinking: {...}``) is replaced whole. A block that is
     not a mapping is kept over the other layer's block, whichever layer sets it (the
-    ``specific`` one when both are), so it reaches validation instead of being hidden. Every other key, including
-    ``_connection``, is replaced whole. Filtering ``None`` keeps the merge associative,
-    so a cascade can be grouped without changing its result.
+    ``specific`` one when both are), so it reaches validation instead of being hidden.
+    Every other key, including ``_connection``, is replaced whole. Filtering ``None``
+    keeps the merge associative, so a cascade can be grouped without changing its result.
 
     Args:
         specific (`dict`):
@@ -562,9 +562,13 @@ def merge_llm_config(specific: dict, base: dict) -> dict:
         ```python
         merge_llm_config(
             {"anthropic": {"output_config": {"effort": "high"}}},
-            {"provider": "anthropic", "anthropic": {"max_tokens": 8000, "output_config": {"effort": "low"}}},
+            {
+                "provider": "anthropic",
+                "anthropic": {"max_tokens": 8000, "output_config": {"effort": "low"}},
+            },
         )
-        # {"provider": "anthropic", "anthropic": {"max_tokens": 8000, "output_config": {"effort": "high"}}}
+        # {"provider": "anthropic",
+        #  "anthropic": {"max_tokens": 8000, "output_config": {"effort": "high"}}}
         ```
     """
     out = {key: _unset_dropped(key, value) for key, value in base.items() if value is not None}

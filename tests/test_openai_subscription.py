@@ -251,14 +251,22 @@ def test_async_uses_same_completion_guard(terminal):
     assert server.streams[0].closed
 
 
-def test_openai_block_is_sent_beside_the_subscription_protocol_settings():
+# provider -> a model id and a block sent through the subscription transport.
+BODY_CASES = {
+    "openai": {
+        "model": "gpt-5.5",
+        "block": {"reasoning": {"effort": "high"}, "text": {"verbosity": "low"}},
+    },
+}
+
+
+@pytest.mark.parametrize("provider", sorted(BODY_CASES))
+def test_openai_block_is_sent_beside_the_subscription_protocol_settings(provider):
+    case = BODY_CASES[provider]
     server = ResponsesServer()
     with httpx.Client(transport=httpx.MockTransport(server)) as client:
         model = create_subscription_model(
-            "gpt-5.5",
-            access_source=_access,
-            http_client=client,
-            block={"reasoning": {"effort": "high"}, "text": {"verbosity": "low"}},
+            case["model"], access_source=_access, http_client=client, block=case["block"]
         )
         model.invoke("Hi")
     body = server.bodies[0]

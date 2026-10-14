@@ -7,7 +7,14 @@ import pytest
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 
+from tests import (
+    test_llm_client_blocks_anthropic,
+    test_llm_client_blocks_google,
+    test_llm_client_blocks_ollama,
+    test_openai_subscription,
+)
 from yian.llm_clients.azure_client import AzureOpenAIClient
+from yian.llm_clients.config import SUPPORTED_LLM_PROVIDERS
 from yian.llm_clients.factory import model_from_config
 from yian.llm_clients.openai_client import OpenAIClient
 
@@ -25,11 +32,27 @@ BLOCK_CASES = {
     "vllm": {"model": "served-model", "block": {"top_k": 20, "max_tokens": 32}},
 }
 
+_AZURE_ENDPOINT = "https://res.openai.azure.com/"
+
+# provider -> a model id, a block, and the endpoint path of a client with its own API.
+DIRECT_CASES = {
+    "openai": {
+        "model": "gpt-5.5",
+        "block": {"reasoning": {"effort": "high"}, "text": {"verbosity": "low"}},
+        "path": "/v1/responses",
+    },
+    "azure": {
+        "model": "my-deployment",
+        "block": {"max_tokens": 100, "reasoning_effort": "low"},
+        "base_url": _AZURE_ENDPOINT,
+        "path": "/openai/deployments/my-deployment/chat/completions",
+    },
+}
+
 _ENV_KEYS = (
     "OPENAI_API_KEY", "OPENAI_BASE_URL", "AZURE_OPENAI_API_KEY", "VLLM_API_KEY",
     "VLLM_BASE_URL", "YIAN_DEFAULT_PROVIDER", "YIAN_DEFAULT_MODEL",
 )
-_AZURE_ENDPOINT = "https://res.openai.azure.com/"
 
 
 @pytest.fixture
@@ -91,12 +114,15 @@ def _config(provider, model, block=None, **fields):
     return config
 
 
-def test_openai_block_reaches_the_responses_body(server):
-    block = {"reasoning": {"effort": "high"}, "text": {"verbosity": "low"}}
-    model_from_config(_config("openai", "gpt-5.5", block)).invoke([HumanMessage("hi")])
-    assert server.requests[0].url.path == "/v1/responses"
-    assert server.bodies[0]["reasoning"] == {"effort": "high"}
-    assert server.bodies[0]["text"] == {"verbosity": "low"}
+@pytest.mark.parametrize("provider", sorted(DIRECT_CASES))
+def test_direct_block_reaches_the_body_unchanged(server, provider):
+    case = DIRECT_CASES[provider]
+    endpoint = {"base_url": case["base_url"]} if "base_url" in case else {}
+    config = _config(provider, case["model"], case["block"], **endpoint)
+    model_from_config(config).invoke([HumanMessage("hi")])
+    assert server.requests[0].url.path == case["path"]
+    for key, value in case["block"].items():
+        assert server.bodies[0][key] == value
 
 
 def test_openai_text_block_sits_beside_the_structured_output_format(server):
@@ -114,14 +140,11 @@ def test_openai_text_block_sits_beside_the_structured_output_format(server):
 
 
 def test_azure_block_is_sent_without_renaming(server):
-    block = {"max_tokens": 100, "reasoning_effort": "low"}
-    config = _config("azure", "my-deployment", block, base_url=_AZURE_ENDPOINT)
+    config = _config("azure", "my-deployment", {"max_tokens": 100}, base_url=_AZURE_ENDPOINT)
     model_from_config(config).invoke([HumanMessage("hi")])
-    assert server.requests[0].url.path.endswith("/chat/completions")
     body = server.bodies[0]
     assert body["max_tokens"] == 100
     assert "max_completion_tokens" not in body
-    assert body["reasoning_effort"] == "low"
 
 
 def test_deepseek_block_sends_thinking_and_max_tokens(server):
@@ -193,3 +216,15 @@ def test_without_a_block_the_body_is_unchanged(server, provider, model, path, ex
     model_from_config(_config(provider, model)).invoke([HumanMessage("hi")])
     assert server.requests[0].url.path == path
     assert server.bodies[0] == expected
+
+
+def test_every_supported_provider_has_a_request_body_case():
+    covered = {
+        *BLOCK_CASES,
+        *DIRECT_CASES,
+        *test_llm_client_blocks_anthropic.BODY_CASES,
+        *test_llm_client_blocks_google.BODY_CASES,
+        *test_llm_client_blocks_ollama.BODY_CASES,
+        *test_openai_subscription.BODY_CASES,
+    }
+    assert covered == set(SUPPORTED_LLM_PROVIDERS)

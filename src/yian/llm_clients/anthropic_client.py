@@ -86,6 +86,34 @@ class NormalizedChatAnthropic(ChatAnthropic):
     def invoke(self, input, config=None, **kwargs):
         return self.normalize_reply(super().invoke(input, config, **kwargs))
 
+    def with_structured_output(self, schema, *, method=None, **kwargs):
+        """Bind `schema` as structured output, in a form the block's thinking allows.
+
+        langchain-anthropic picks its method from the model's own ``thinking`` field,
+        which a block's ``thinking`` does not set, so it would force a tool call beside
+        thinking, a pair the Messages API rejects. With thinking on in the block and no
+        `method` given, this uses the JSON-schema output format (``output_config.format``).
+
+        Args:
+            schema (`dict` or `type`):
+                The output schema.
+            method (`str`, *optional*, defaults to `None`):
+                ``"function_calling"`` or ``"json_schema"``; `None` picks
+                ``"json_schema"`` when the block turns thinking on, else
+                ``"function_calling"``.
+            **kwargs:
+                Passed to `ChatAnthropic.with_structured_output`.
+
+        Returns:
+            `Runnable`:
+                A runnable that returns outputs matching `schema`.
+        """
+        if method is None:
+            thinking = self.block.get("thinking")
+            thinking_on = isinstance(thinking, dict) and thinking.get("type") != "disabled"
+            method = "json_schema" if thinking_on else "function_calling"
+        return super().with_structured_output(schema, method=method, **kwargs)
+
     def _get_request_payload(self, input_, *, stop=None, **kwargs):
         """Return langchain's request payload with `block` merged into the call options.
 

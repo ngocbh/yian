@@ -1111,6 +1111,9 @@ A few providers need a note:
   agent.
 - `google` uses the REST names and enum spellings: camelCase keys and upper-case
   levels, such as `google: {generationConfig: {thinkingConfig: {thinkingLevel: HIGH}}}`.
+- `anthropic` with `thinking` on (any `type` other than `disabled`) gets structured
+  output through the JSON-schema output format (`output_config.format`), because the
+  Messages API refuses thinking beside a forced tool call.
 - `ollama` takes what the Ollama client sends: `think` (`true`, `false`, or a level),
   `options` (`temperature`, `num_ctx`, …), `keep_alive`, `logprobs`, and
   `top_logprobs`. It has no default `think`, so the model's own default applies.

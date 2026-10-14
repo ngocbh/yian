@@ -139,10 +139,16 @@ def test_full_block_covers_every_field():
     AnthropicMessagesBlock.model_validate(FULL_BLOCK)
 
 
-def test_every_block_field_is_sent(server):
-    _model(FULL_BLOCK).invoke([HumanMessage("hi")])
+# provider -> a model id and a block whose every field must reach the request body.
+BODY_CASES = {"anthropic": {"model": "claude-sonnet-4-5", "block": FULL_BLOCK}}
+
+
+@pytest.mark.parametrize("provider", sorted(BODY_CASES))
+def test_every_block_field_is_sent(server, provider):
+    case = BODY_CASES[provider]
+    _model(case["block"], model=case["model"]).invoke([HumanMessage("hi")])
     body = server.bodies[0]
-    for key, value in FULL_BLOCK.items():
+    for key, value in case["block"].items():
         assert body[key] == value, key
 
 
@@ -180,3 +186,38 @@ def test_without_a_block_the_body_is_unchanged(server):
         "messages": [{"content": "hi", "role": "user"}],
         "model": "claude-sonnet-4-5",
     }
+
+
+@pytest.mark.parametrize("thinking", [
+    {"type": "adaptive"},
+    {"type": "enabled", "budget_tokens": 2048},
+])
+@pytest.mark.parametrize("include_raw", [False, True])
+def test_structured_output_with_block_thinking_uses_the_output_format(
+    server, thinking, include_raw
+):
+    # The Messages API rejects thinking beside a forced tool call.
+    server.text = '{"answer": "ok"}'
+    model = _model({"thinking": thinking, "max_tokens": 4096})
+    result = model.with_structured_output(Answer, include_raw=include_raw).invoke("hi")
+    assert (result["parsed"] if include_raw else result) == Answer(answer="ok")
+    body = server.bodies[0]
+    assert body["thinking"] == thinking
+    assert body["output_config"]["format"]["type"] == "json_schema"
+    assert "tool_choice" not in body
+    assert "tools" not in body
+
+
+def test_structured_output_with_block_thinking_keeps_an_explicit_method(server):
+    model = _model({"thinking": {"type": "adaptive"}})
+    model.with_structured_output(Answer, method="function_calling").invoke("hi")
+    assert "output_config" not in server.bodies[0]
+    assert server.bodies[0]["tools"][0]["name"] == "Answer"
+
+
+@pytest.mark.parametrize("block", [None, {"top_k": 5}, {"thinking": {"type": "disabled"}}])
+def test_structured_output_without_block_thinking_forces_the_tool(server, block):
+    _model(block).with_structured_output(Answer).invoke("hi")
+    body = server.bodies[0]
+    assert body["tool_choice"] == {"type": "tool", "name": "Answer"}
+    assert "output_config" not in body

@@ -77,11 +77,36 @@ _TAGGED_UNION = {
         ({"type": "integer", "minimum": 1, "exclusiveMaximum": 10}, "int(1..9)"),
         ({"type": "integer", "exclusiveMinimum": 0, "maximum": 5}, "int(1..5)"),
         ({"type": "integer", "minimum": 0.5, "maximum": 3.7}, "int(1..3)"),
-        ({"type": "integer", "minimum": 1}, "int"),
-        ({"type": "integer", "maximum": 1}, "int"),
+        ({"type": "integer", "minimum": 1}, "int(1..)"),
+        ({"type": "integer", "maximum": 1}, "int(..1)"),
+        ({"type": "integer", "exclusiveMinimum": 0}, "int(1..)"),
+        ({"type": "integer", "exclusiveMaximum": 10}, "int(..9)"),
+        ({"type": "integer", "minimum": 0.5}, "int(1..)"),
+        ({"type": "integer", "maximum": -0.5}, "int(..-1)"),
+        ({"type": "integer", "minimum": 0, "exclusiveMinimum": 3}, "int(4..)"),
         ({"type": "number", "minimum": 0, "maximum": 1.5}, "float(0..1.5)"),
-        ({"type": "number", "exclusiveMinimum": 0, "maximum": 1}, "float"),
-        ({"type": "number", "minimum": 0}, "float"),
+        ({"type": "number", "exclusiveMinimum": 0, "maximum": 1}, "float(0..1)"),
+        ({"type": "number", "exclusiveMinimum": 0}, "float(0..)"),
+        ({"type": "number", "exclusiveMaximum": 2.5}, "float(..2.5)"),
+        ({"type": "number", "minimum": 1, "exclusiveMinimum": 3}, "float(3..)"),
+        ({"type": "number", "exclusiveMinimum": 2**53 + 1}, "float"),
+        ({"type": "number", "minimum": 0}, "float(0..)"),
+        ({"type": "number", "maximum": 2.5}, "float(..2.5)"),
+        ({"type": "number", "minimum": 2**53 + 1, "maximum": 1e300}, "float(..1e+300)"),
+        ({"type": "integer", "minimum": 0.5, "maximum": 0.7}, "int"),
+        ({"type": "integer", "minimum": float("inf")}, "int"),
+        ({"type": "integer", "minimum": True}, "int"),
+        ({"type": ["integer", "null"], "minimum": 0}, "Optional(int(0..))"),
+        ({"type": "array", "items": {"type": "integer", "maximum": 9}}, "list(int(..9))"),
+        ({"anyOf": [{"type": "integer", "minimum": 0}, {"type": "integer"}]}, "int"),
+        ({"anyOf": [{"type": "integer", "minimum": 0}, {"type": "integer", "maximum": -5}]}, "int"),
+        ({"anyOf": [{"type": "integer", "minimum": 0, "maximum": 3},
+                    {"type": "integer", "minimum": 5, "maximum": 9}]}, "int(0..9)"),
+        ({"anyOf": [{"type": "integer", "minimum": 5}, {"type": "integer", "minimum": 0},
+                    {"type": "null"}]}, "Optional(int(0..))"),
+        ({"anyOf": [{"type": "number", "maximum": 1}, {"type": "number", "maximum": 2.5}]},
+         "float(..2.5)"),
+        ({"anyOf": [{"type": "integer", "minimum": 0}, {"type": "number"}]}, None),
         ({"type": "boolean"}, "bool"),
         ({"type": "null"}, "None"),
         ({"type": "array", "items": {"type": "integer"}}, "list(int)"),
@@ -316,6 +341,11 @@ _INT = Type.scalar(ValueKind.INTEGER)
          Type.scalar(ValueKind.LIST_INTEGER)),
         ({"type": "integer"}, True, Type.scalar(ValueKind.NUMBER)),
         ({"type": "integer", "minimum": 0, "maximum": 9}, True, Type.scalar(ValueKind.NUMBER)),
+        ({"type": "integer", "minimum": 0}, True, Type.scalar(ValueKind.NUMBER)),
+        ({"type": "number", "maximum": 0}, True, Type.scalar(ValueKind.INTEGER)),
+        ({"type": "number", "exclusiveMinimum": 0}, True, Type.scalar(ValueKind.INTEGER)),
+        ({"anyOf": [{"type": "integer", "minimum": 0}, {"type": "integer", "maximum": -5}]},
+         True, Type.scalar(ValueKind.INTEGER)),
     ],
 )
 def test_translation_never_reports_an_accepted_value_as_disjoint(
@@ -336,11 +366,13 @@ def test_pydantic_union_of_a_model_and_a_scalar_has_no_type(closed: bool) -> Non
     [
         ({"type": "integer", "minimum": 10**400, "maximum": 10**401},
          f"int({10**400}..{10**401})"),
-        ({"type": "number", "minimum": 0, "maximum": 10**400}, "float"),
+        ({"type": "number", "minimum": 0, "maximum": 10**400}, "float(0..)"),
         ({"type": "integer", "minimum": 0, "exclusiveMaximum": 10**400},
          f"int(0..{10**400 - 1})"),
+        ({"type": "integer", "minimum": 10**400}, f"int({10**400}..)"),
+        ({"type": "number", "maximum": -(10**400)}, "float"),
     ],
-    ids=["integer", "number", "exclusive-integer"],
+    ids=["integer", "number", "exclusive-integer", "one-sided-integer", "one-sided-number"],
 )
 def test_huge_bounds_never_raise(schema: dict[str, Any], expected: str) -> None:
     assert _label(schema) == expected
@@ -428,7 +460,7 @@ def _registered_place() -> BaseTool:
 def test_function_tool_types(build, restore_tool_registry) -> None:
     types = tool_types(build())
 
-    assert _input_labels(types) == {"sym": "str", "qty": "int", "mode": 'Literal(a, b)'}
+    assert _input_labels(types) == {"sym": "str", "qty": "int(1..)", "mode": 'Literal(a, b)'}
     assert types.required == frozenset({"sym", "qty"})
     assert types.output == _FILLED
 
@@ -572,6 +604,23 @@ def test_inputs_with_custom_validation_are_unchecked() -> None:
     }
     # `Optional[int]` with no default is still required.
     assert types.required == frozenset(types.inputs)
+
+
+class _ClosedLimits(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    qty: Annotated[int, Field(ge=0)]
+    price: Annotated[float, Field(gt=0)]
+
+
+def _with_closed_limits(order: _ClosedLimits) -> str:
+    """Take a closed model with one-sided limits."""
+    return "ok"
+
+
+def test_one_sided_limits_inside_a_closed_input_model_are_kept() -> None:
+    types = tool_types(StructuredTool.from_function(_with_closed_limits))
+
+    assert _input_labels(types) == {"order": '{"price":float(0..),"qty":int(0..)}'}
 
 
 class _StrOrInt:

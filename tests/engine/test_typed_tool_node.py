@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Literal, Optional, Union
+from typing import Annotated, Literal, Optional, Union
 
 import pytest
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict
 
 from yian.compose import load_flow
@@ -605,6 +605,88 @@ def test_a_json_schema_tool_with_a_disjoint_binding_fails_at_run_start():
 
     with pytest.raises(ValueError, match=r"input 'qty'.*takes int, but the binding is str$"):
         run_flow(flow, {"s": "x"}, tools={"place_order": _JsonSchemaTool()})
+
+
+def place_non_negative(qty: Annotated[int, Field(ge=0)]) -> str:
+    _calls.append({"qty": qty})
+    return f"placed {qty}"
+
+
+def test_a_literal_below_a_one_sided_minimum_fails_at_run_start(tmp_path: Path):
+    path = tmp_path / "run.jsonl"
+
+    with pytest.raises(ValueError, match=re.escape(
+        "TOOL node 'place' input 'qty': tool 'place_order' takes int(0..), "
+        "but the binding is -1 (int)"
+    )):
+        run_flow(load_flow(_typed_flow("-1")), {}, log=path,
+                 tools={"place_order": place_non_negative})
+    assert not path.exists()
+    assert _calls == []
+
+
+def test_a_literal_inside_a_one_sided_minimum_runs():
+    result = run_flow(load_flow(_typed_flow("0")), {}, tools={"place_order": place_non_negative})
+
+    assert result.status == "succeeded", result.failure
+    assert result.output == "placed 0"
+
+
+def test_an_unproven_int_into_a_one_sided_minimum_starts():
+    # `int` overlaps `int(0..)`; the tool validates each call.
+    flow = load_flow(_typed_flow("${input.n}", flow_inputs="input:\n  n: !int"))
+
+    result = run_flow(flow, {"n": -1}, tools={"place_order": place_non_negative})
+
+    assert result.status == "failed"
+    assert result.failure.node_id == "place"
+    assert _calls == []
+
+
+def test_a_tagged_binding_disjoint_from_a_json_schema_maximum_fails_at_run_start():
+    class _CappedTool(_JsonSchemaTool):
+        args_schema: dict = {
+            "type": "object",
+            "properties": {"qty": {"type": "integer", "maximum": 100}},
+            "required": ["qty"],
+        }
+
+    flow = load_flow(_typed_flow("${input.n}", flow_inputs="input:\n  n: !int(101..)"))
+
+    with pytest.raises(
+        ValueError, match=r"takes int\(\.\.100\), but the binding is int\(101\.\.\)$"
+    ):
+        run_flow(flow, {"n": 200}, tools={"place_order": _CappedTool()})
+
+
+class Counted(TypedDict):
+    n: Annotated[int, Field(ge=0)]
+
+
+def place_counted(qty: int) -> Counted:
+    return {"n": qty}
+
+
+_COUNTED_FLOW = """
+id: counting
+name: counting
+typedefs:
+  Short: {n: int(..-1)}
+nodes:
+  place:
+    kind: tool
+    tool_id: place_order
+    input:
+      qty: 5
+    output: Short
+output: ${place.output}
+"""
+
+
+def test_an_output_disjoint_from_a_one_sided_return_field_fails_at_run_start():
+    with pytest.raises(ValueError, match=r"output: declared .*, but tool 'place_order' returns "
+                       r"\{\"n\":int\(0\.\.\)\}$"):
+        run_flow(load_flow(_COUNTED_FLOW), {}, tools={"place_order": place_counted})
 
 
 _ASK_FLOW = """

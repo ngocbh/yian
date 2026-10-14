@@ -165,8 +165,8 @@ def _string_tags(schema: Mapping[str, Any]) -> frozenset[str] | None:
 
 def _bounds(
     schema: Mapping[str, Any], kind: ValueKind
-) -> tuple[int | float, int | float] | None:
-    """Return inclusive bounds when both ends are known, else `None`."""
+) -> tuple[int | float | None, int | float | None] | None:
+    """Return inclusive bounds with `None` for an open end, or `None` when both are open."""
 
     def endpoint(keyword: str) -> int | float | None:
         value = schema.get(keyword)
@@ -175,28 +175,36 @@ def _bounds(
         return None
 
     low, high = endpoint("minimum"), endpoint("maximum")
+    exclusive_low, exclusive_high = endpoint("exclusiveMinimum"), endpoint("exclusiveMaximum")
     if kind is ValueKind.INTEGER:
         lows = [] if low is None else [ceil(low)]
         highs = [] if high is None else [floor(high)]
-        exclusive_low, exclusive_high = endpoint("exclusiveMinimum"), endpoint("exclusiveMaximum")
         if exclusive_low is not None:
             lows.append(floor(exclusive_low) + 1)
         if exclusive_high is not None:
             highs.append(ceil(exclusive_high) - 1)
-        if not lows or not highs:
-            return None
-        bounds = (max(lows), min(highs))
     else:
-        if low is None or high is None:
-            return None
-        # Float bounds must survive a float round trip; dropping them widens.
-        try:
-            if float(low) != low or float(high) != high:
-                return None
-        except OverflowError:
-            return None
-        bounds = (low, high)
-    return bounds if bounds[0] <= bounds[1] else None
+        # yian float ends are inclusive, so an exclusive end widens to the same
+        # value; an end that is not an exact double is dropped, which also widens.
+        lows = [end for end in (low, exclusive_low) if _exact_float(end)]
+        highs = [end for end in (high, exclusive_high) if _exact_float(end)]
+    bounds = (max(lows, default=None), min(highs, default=None))
+    if bounds == (None, None):
+        return None
+    # Crossed ends accept no number at all; unbounded is the widening fallback.
+    if None not in bounds and bounds[0] > bounds[1]:
+        return None
+    return bounds
+
+
+def _exact_float(value: int | float | None) -> bool:
+    """Return whether `value` is a number a float holds exactly."""
+    if value is None:
+        return False
+    try:
+        return float(value) == value
+    except OverflowError:
+        return False
 
 
 def _object(
@@ -241,7 +249,10 @@ def _object(
 
 
 def _union(members: list[Type | None]) -> Type | None:
-    """Combine `anyOf` members into one type, or `None` when yian has no spelling."""
+    """Combine `anyOf` members into one type, or `None` when yian has no spelling.
+
+    Numeric ranges of one kind combine into their hull.
+    """
     if any(member is None for member in members):
         return None
     nullable = any(member.nullable for member in members)
@@ -256,6 +267,13 @@ def _union(members: list[Type | None]) -> Type | None:
                 others.append(part)
     if not others:
         return Type.scalar(ValueKind.NONE)
+    if len(others) > 1 and len({other.kind for other in others}) == 1 and others[0].kind in (
+        ValueKind.INTEGER,
+        ValueKind.NUMBER,
+    ):
+        # Members of one numeric kind differ only by range; one range covering
+        # them all is wider than their union, so the check stays sound.
+        others = [_hull(others)]
     if len(others) == 1:
         return replace(others[0], nullable=nullable)
     if any(other.kind is not ValueKind.OBJECT for other in others):
@@ -267,6 +285,15 @@ def _union(members: list[Type | None]) -> Type | None:
         variants=canonical_union_order(others),
         nullable=nullable,
     )
+
+
+def _hull(ranges: list[Type]) -> Type:
+    """Return the smallest range of the members' kind that holds every member's range."""
+    lows = [None if typ.bounds is None else typ.bounds[0] for typ in ranges]
+    highs = [None if typ.bounds is None else typ.bounds[1] for typ in ranges]
+    low = None if None in lows else min(lows)
+    high = None if None in highs else max(highs)
+    return Type(kind=ranges[0].kind, bounds=None if low is None and high is None else (low, high))
 
 
 # Validators that run on the raw input can accept values the JSON Schema

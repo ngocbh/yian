@@ -2551,9 +2551,9 @@ One `${...}` grammar serves every context — the difference is what each contex
 
 Changed: a condition that called an unknown function, or a builtin with arguments it
 doesn't take, used to load and fail when evaluated (an assert reported "pre-assert
-failed" or "post-assert failed"; a `case` or `loop` failed its node), or never fail when `and`/`or` skipped
-the call. It is now a load error; fix the name or the arguments.
-`yian.evaluate_when` raises for such a condition too.
+failed" or "post-assert failed"; a `case` or `loop` failed its node), or never fail
+when `and`/`or` skipped the call. It is now a load error; fix the name or the
+arguments. `yian.evaluate_when` raises for such a condition too.
 
 > Bindings wire, conditions test, nodes compute.
 

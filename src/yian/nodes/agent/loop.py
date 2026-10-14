@@ -242,7 +242,7 @@ def run_agent(ctx: AgentRunContext) -> Output:
             messages.append(result_message)
 
 
-def _reject_nonfinite_arguments(reply: object) -> None:
+def _reject_nonfinite_arguments(reply: BaseMessage) -> None:
     """Raise `TypeCheckError` if any tool call of a reply has a NaN or infinity in its arguments."""
     for call in getattr(reply, "tool_calls", None) or []:
         reject_nonfinite(call.get("args"), f"tool call {call.get('name')!r} arguments")

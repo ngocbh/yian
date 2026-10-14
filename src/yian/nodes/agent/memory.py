@@ -580,7 +580,8 @@ def invoke_model(
     New messages are the actual input delta, not the full provider context.
     A surfaced reply is persisted before stop or caller-owned parsing, unless
     `check_reply` rejects it or it holds a non-finite number: such a reply is
-    recorded `failed` and is not persisted. Request and successful observation
+    not persisted, and the effect is recorded `failed` (or `interrupted`, raising
+    `_HostStop`, when a stop is pending). Request and successful observation
     failures remain outside the provider-error catch.
 
     Args:
@@ -594,9 +595,9 @@ def invoke_model(
         purpose (`str`): Request purpose; defaults to ordinary `chat` generation.
         raw_reply (`Callable | None`): Extract a raw message from a native structured
             carrier. Omission treats the returned value as the raw message.
-        check_reply (`Callable | None`): Called with the provider's return as soon
-            as it surfaces, with or without a transcript; it raises to reject the
-            reply before anything is persisted.
+        check_reply (`Callable | None`): Called with the provider's return before
+            it is persisted or returned (after the stop check when there is no
+            transcript); it raises to reject the reply.
 
     Returns:
         `Any`: The actual provider return, before caller-owned parsing.

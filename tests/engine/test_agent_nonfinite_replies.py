@@ -19,6 +19,9 @@ from tests.engine.test_agent_session_tools import _TOOL_FLOW, _Chat, _Tool
 from tests.engine.test_agent_steering import Inbox, _flow as _steer_flow, _recorder
 
 
+_SESSION_LINE = "    long_term_memory: session\n"
+
+
 class _FloatArguments(BaseModel):
     x: float
 
@@ -31,7 +34,7 @@ class _FloatTool(_Tool):
 
 
 def _flow(session):
-    text = _TOOL_FLOW if session else _TOOL_FLOW.replace("    long_term_memory: session\n", "")
+    text = _TOOL_FLOW if session else _TOOL_FLOW.replace(_SESSION_LINE, "")
     return load_flow(text), ({"session": SessionMemory()} if session else None)
 
 
@@ -74,7 +77,7 @@ def test_a_nonfinite_argument_in_a_later_call_stops_every_call_of_the_reply(monk
 
 
 def test_a_nonfinite_reply_is_recorded_as_a_failed_model_effect(monkeypatch):
-    _, chat = _setup(monkeypatch, [_call(math.nan)])
+    _setup(monkeypatch, [_call(math.nan), AIMessage(content="second")])
     flow, memory = _flow(True)
     assert run_flow(flow, {"question": "q"}, memory=memory).status == "failed"
     view = _view(memory["session"])
@@ -82,7 +85,6 @@ def test_a_nonfinite_reply_is_recorded_as_a_failed_model_effect(monkeypatch):
     assert view.effects[0].failure.code == "api.model.failed"
     # Only the request's input items are stored; the bad reply is not.
     assert [item.payload["message"]["type"] for item in view.items] == ["system", "human"]
-    chat.replies = iter([AIMessage(content="second")])
     assert run_flow(flow, {"question": "again"}, memory=memory).output == "second"
 
 
@@ -105,7 +107,7 @@ def test_metadata_nan_is_ignored_without_memory_and_fails_with_memory(monkeypatc
         )
 
     monkeypatch.setattr(llm_clients, "model_from_config", lambda _: _Model([reply(), reply()]))
-    plain = load_flow(_FLOW.replace("    long_term_memory: session\n", ""))
+    plain = load_flow(_FLOW.replace(_SESSION_LINE, ""))
     assert run_flow(plain, {"question": "q"}).output == "hi"
     memory = SessionMemory()
     result = run_flow(load_flow(_FLOW), {"question": "q"}, memory={"session": memory})

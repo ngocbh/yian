@@ -2,21 +2,23 @@
 
 A tagged entry lowers to a CODE node that returns its value, so a flow output, another
 node, or a CASE route reads it as `${<id>.output}`. These runs cover literal and
-template entries, named and nested tags, keys a node body would treat specially, `$$`
-escapes, top-level `call(...)` entries, value entries inside `defs:`, inline CALL, LOOP
-and MAP bodies, and YAML anchors, aliases and merge keys on value entries.
+template entries (a span in a nested list too), named and nested tags, keys a node body
+would treat specially, `$$` escapes, top-level `call(...)` entries, value entries inside
+`defs:`, inline CALL, LOOP and MAP bodies, and YAML anchors, aliases and merge keys on
+value entries.
 
 An entry is skipped like any node: when a CASE routes away from it, or when a whole-span
 read names a skipped node, while an embedded span renders a skipped read as empty text
 and an entry with no reads always runs. A routed `call(...)` entry skips its lifted call
-with it, and a resumed log replays an entry's recorded output.
+with it, and a resumed log replays an entry's recorded output. A routed entry reads a
+union member field its branch selects; a field its branch excludes is a load error.
 """
 
 from pathlib import Path
 
 import pytest
 
-from yian.compose import load_flow
+from yian.compose import LoadError, load_flow
 from yian.events import NodeSkipped, NodeStarted
 from yian.nodes.base import _HostStop
 from yian.run import resume_flow, run_flow
@@ -87,6 +89,12 @@ def test_a_value_entry_runs_to_its_value(entry, expected):
 
     assert output == expected
     assert type(output) is type(expected)
+
+
+def test_a_nested_list_with_a_span_runs():
+    text = _flow('  x: !object\n    items:\n      - "${input.name}"\n      - x\n')
+
+    assert _run(text, {"name": "Ada"}) == {"items": ["Ada", "x"]}
 
 
 def test_a_named_type_entry_runs_with_a_span():
@@ -411,6 +419,65 @@ def test_entries_reading_a_routed_node():
     assert result.status == "succeeded", result.failure
     assert result.output == {"whole": {"a": "m"}, "embedded": "got m", "lone": 7}
     assert {"maybe", "whole", "embedded", "lone"} <= _started(result)
+
+
+def _union_flow(*, buy: str, other: str) -> str:
+    """Return a flow whose CASE on a `Union(Buy, Sell)` tag routes `buy` to `buy`."""
+    return (
+        "id: f\n"
+        "name: f\n"
+        "typedefs:\n"
+        "  Buy:\n"
+        "    action: Literal(buy)\n"
+        "    qty: int\n"
+        "  Sell:\n"
+        "    action: Literal(sell)\n"
+        "    price: float\n"
+        "input:\n"
+        "  kind: !str\n"
+        "nodes:\n"
+        "  d:\n"
+        "    kind: code\n"
+        "    input:\n"
+        "      kind: ${input.kind}\n"
+        "    code: |\n"
+        '      if inputs["kind"] == "buy":\n'
+        '          return {"action": "buy", "qty": 3}\n'
+        '      return {"action": "sell", "price": 1.5}\n'
+        "    output: Union(Buy, Sell)\n"
+        "  route:\n"
+        "    kind: case\n"
+        "    on: ${d.output.action}\n"
+        "    cases:\n"
+        "      - when: buy\n"
+        "        then: buy\n"
+        "    else: other\n"
+        f"  buy: !object\n    qty: {buy}\n"
+        f"  other: !object\n    qty: {other}\n"
+        "output: ${route.output}\n"
+    )
+
+
+def test_a_routed_entry_reads_a_union_member_field_its_branch_selects():
+    flow = load_flow(_union_flow(buy='"${d.output.qty}"', other="0"))
+
+    assert run_flow(flow, {"kind": "buy"}).output == {"qty": 3}
+    assert run_flow(flow, {"kind": "sell"}).output == {"qty": 0}
+
+
+def test_a_routed_entry_reading_a_field_its_branch_excludes_is_a_load_error():
+    text = _union_flow(buy="0", other='"${d.output.qty}"')
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+
+    assert str(caught.value) == (
+        "flow has unresolved references:\n  value entry 'other' from: reference "
+        "${d.output.qty} reads unknown field 'qty' on record"
+    )
+    frame = caught.value.diagnostic.frames[-1]
+    line = text.splitlines().index('    qty: "${d.output.qty}"') + 1
+    assert frame.range.start_line == line
 
 
 _CALL_FLOW = _F_DEF + """

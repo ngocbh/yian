@@ -1,5 +1,5 @@
-"""Reject a literal value under a secret name in node bindings, value entries, case values
-and outputs.
+"""Reject a literal value under a secret name in node bindings, value entries, case
+branches and outputs.
 
 Runs on the authored values, before tagged bindings are read or anything is desugared,
 because those later passes may echo a value in their own errors. A tag is not part of
@@ -7,8 +7,9 @@ the value, so a tagged binding (`api_key: !str ...`) is checked on the value aft
 tag. In a binding position a whole-value `call(...)` directive also counts as a binding.
 A directive's own keyword arguments are
 held to the same rule (`SecretArgumentError`), so a directive under a secret name that
-passes a literal secret is reported as that argument. A `case` value branch has no name
-of its own, so only secret keys nested in a mapping or list branch are checked. A value
+passes a literal secret is reported as that argument. A `case` branch that holds a value
+is a load error whose message shows the value entry to write, so a secret key nested in a
+mapping or list branch is rejected here first and the value is never echoed. A value
 entry in `nodes:` (`api_key: !str ...`) is held to the binding rule under its id, before
 its value is read.
 """
@@ -176,7 +177,10 @@ def check_value_entry(
 def _check_case_values(
     desc: CaseDescriptor, *, owner: str, diagnostics: LoadDiagnostics
 ) -> None:
-    """Reject a secret key with a literal value nested in a case's value branches.
+    """Reject a secret key with a literal value nested in a case's `then:`/`else:` branches.
+
+    A branch that holds a value is a load error whose message shows the value entry to
+    write; this runs first, so that message never echoes a secret.
 
     Args:
         desc (`CaseDescriptor`): The authored case.

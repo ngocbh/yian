@@ -4,18 +4,25 @@ A branch target may be an inline call (a fresh owned call) instead of a placed n
 desugars to a synth `__call_<n>` node and the then:/else: is rewritten to that synth id, so the
 case veto skip-floods it when the branch is not taken (a nested call's inner calls follow it).
 Accepted grammar: a whole-value `call(...)` directive (a route target is one node id). A
-`${...}` branch is a value, so a flow call inside its span is the retired inline
-`${flow(args)}` form, a LoadError.
+`${...}` or quoted branch is a value, a LoadError that shows the value entry to write.
 """
+
+import re
 
 import pytest
 
 from yian.compose import LoadError, load_flow
 from yian.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
+from yian.compose.helpers.tags import yaml_quoted
 from yian.run import run_flow
 
-# The retired inline `${flow(args)}` form's message.
-_SPAN_FLOW_CALL = r"a flow call 'take' inside \$\{\.\.\.\} is not supported"
+
+def _value_branch(label: str, entry: str, shown: str) -> str:
+    """Return the full message for a value branch, as a `pytest.raises` match pattern."""
+    return re.escape(
+        f"case node 'gate' {label}: a branch names a node or calls a flow; put the value in "
+        f"its own entry in `nodes:` and name it: `{entry}: {shown}` and `{label}: {entry}`"
+    ) + "$"
 
 # An in-file `take` def (the branch callable): echoes its stance via the `took` CODE fn.
 _TAKE_DEF = """
@@ -35,8 +42,7 @@ defs:
 
 
 def test_non_bare_then_call_is_rejected():
-    # a `${...}` branch is a value; a flow call inside its span is the retired inline
-    # `${flow(args)}` form -> loud, pointing at the call(...) directive.
+    # a `${...}` branch is a value, so it is a load error showing the value entry.
     text = f"""
 id: bad
 name: bad
@@ -46,14 +52,16 @@ input:
 nodes:
   gate:
     kind: case
-    output: str
     cases:
       - when: "input.score >= 0.5"
         then: ${{ take(stance="a") | take(stance="b") }}
     else: call(take, stance="c")
 output: ${{gate.output}}
 """
-    with pytest.raises(LoadError, match=_SPAN_FLOW_CALL):
+    match = _value_branch(
+        "then", "gate_then_0", '!str ${ take(stance="a") | take(stance="b") }'
+    )
+    with pytest.raises(LoadError, match=match):
         load_flow(text)
 
 
@@ -217,7 +225,11 @@ output: ${{gate.output}}
     message = str(caught.value)
     assert f"case node 'gate' {label}:" in message
     assert problem in message
-    assert "If you meant the text, quote it:" in message
+    entry = "gate_then_0" if label == "then" else "gate_else"
+    assert message.endswith(
+        f". For the text, add a value entry and name it: `{entry}: !str "
+        f"{yaml_quoted(target)}`"
+    )
     line = next(
         number
         for number, source in enumerate(text.splitlines(), start=1)
@@ -226,25 +238,23 @@ output: ${{gate.output}}
     assert caught.value.diagnostic.frames[-1].range.start_line == line
 
 
-def test_quoted_malformed_branch_call_is_a_text_value():
+def test_quoted_malformed_branch_call_is_a_value_branch():
     text = f"""
-id: ok
-name: ok
+id: bad
+name: bad
 input:
   score: !float
 nodes:
   gate:
     kind: case
-    output: str
     cases:
       - when: "input.score >= 0.5"
         then: 'call(take'
     else: "call(take) tail"
 output: ${{gate.output}}
 """
-    flow = load_flow(text)
-    assert run_flow(flow, {"score": 0.9}).output == "call(take"
-    assert run_flow(flow, {"score": 0.1}).output == "call(take) tail"
+    with pytest.raises(LoadError, match=_value_branch("then", "gate_then_0", '!str "call(take"')):
+        load_flow(text)
 
 
 def test_inline_binding_and_then_call_directive_share_minter_no_collision():
@@ -395,7 +405,7 @@ output: ${{gate.output}}
 
 
 def test_then_span_flow_call_target_is_rejected():
-    # the retired inline `${flow(args)}` case branch is a LoadError pointing at call(...).
+    # the retired inline `${flow(args)}` case branch is a value branch, a LoadError.
     text = f"""
 id: bad
 name: bad
@@ -405,19 +415,19 @@ input:
 nodes:
   gate:
     kind: case
-    output: str
     cases:
       - when: "input.score >= 0.5"
         then: ${{ take(stance="pro") }}
     else: call(take, stance="con")
 output: ${{gate.output}}
 """
-    with pytest.raises(LoadError, match=_SPAN_FLOW_CALL):
+    match = _value_branch("then", "gate_then_0", '!str ${ take(stance="pro") }')
+    with pytest.raises(LoadError, match=match):
         load_flow(text)
 
 
-def test_malformed_branch_call_holding_a_span_offers_no_quoting_fix():
-    # quoting a span-bearing call is its own load error, so the message does not suggest it.
+def test_malformed_branch_call_holding_a_span_offers_no_text_rewrite():
+    # quoted call text holding a span is its own load error, so no value entry is shown.
     text = f"""
 id: bad
 name: bad
@@ -438,4 +448,4 @@ output: ${{gate.output}}
     message = str(caught.value)
     assert "case node 'gate' then: a branch target must be a node id or a single call" in message
     assert "`call(` is never closed" in message
-    assert "If you meant the text" not in message
+    assert "For the text" not in message

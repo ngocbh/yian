@@ -5,8 +5,8 @@ Two coverage laws for `case` nodes:
 - Enum coverage, for every case: when an `on:` ref resolves to an ENUM node output or flow
   input, every enum tag must be covered by a case `when:` value OR by a present `else:`. A
   missing tag with no `else:` is a `LoadError`.
-- Value-producing cases: a case that produces a value (it declares `output:`, is read
-  through `${<case>.output}`, or is a branch target of such a case) must be exhaustive. It
+- Value-producing cases: a case that produces a value (it is read through
+  `${<case>.output}`, or is a branch target of such a case) must be exhaustive. It
   has an `else:`, or it is an `on:` form whose `on:` type is non-nullable and fully listed
   by its `when:` values: an enum with every tag, or a `bool` with both `true` and `false`.
   `when:` values compare as typed values, so the text `"true"` does not cover `true`. Its

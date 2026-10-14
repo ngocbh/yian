@@ -491,33 +491,6 @@ def _parse_case(body):
     return parse_nodes(SourceDocument.parse(text).root.child("nodes"))["g"]
 
 
-def test_case_parse_accepts_output_type():
-    desc = _parse_case(
-        """\
-        kind: case
-        output: str
-        cases:
-          - when: "${a.output}"
-            then: b
-        """
-    )
-    assert desc.outputs == "str"
-
-
-def test_case_parse_accepts_output_mapping():
-    desc = _parse_case(
-        """\
-        kind: case
-        output:
-          a: int
-        cases:
-          - when: "${a.output}"
-            then: b
-        """
-    )
-    assert desc.outputs == {"a": "int"}
-
-
 def test_case_parse_keeps_then_styles_aligned_with_cases():
     desc = _parse_case(
         """\
@@ -625,12 +598,11 @@ def test_case_parse_keeps_then_null_key():
     assert desc.then_styles == ["plain"]
 
 
-def test_case_parse_on_form_keeps_output_and_styles():
+def test_case_parse_on_form_keeps_styles():
     desc = _parse_case(
         """\
         kind: case
         on: ${a.output}
-        output: str
         cases:
           - when: x
             then: "b"
@@ -638,7 +610,6 @@ def test_case_parse_on_form_keeps_output_and_styles():
         """
     )
     assert desc.on == "${a.output}"
-    assert desc.outputs == "str"
     assert desc.then_styles == ["double"]
     assert desc.else_style == "single"
 

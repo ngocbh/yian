@@ -262,8 +262,17 @@ nodes:
     on: ${input.score}
     cases:
       - when: high
-        then: 1
-    else: 2
+        then: one
+    else: two
+  one:
+    kind: code
+    code: |
+      return 1
+    output: int
+  two:
+    kind: code
+    code: |
+      return 2
     output: int
 output: ${route.output}
 """
@@ -391,14 +400,20 @@ nodes:
     on: ${input.score}
     cases:
       - when: high
-        then: 1
-    else: 2
+        then: one
+    else: one
     output: !int
+  one:
+    kind: code
+    code: |
+      return 1
+    output: int
 output: ${route.output}
 """
     _assert_error(
         text,
-        "`output:` declares a type; write `output: int`, without a tag",
+        "case node 'route': a `case` routes and has no `output:`; tag its result where "
+        "you read it, e.g. `x: !int ${route.output}`",
         "    output: !int",
     )
 

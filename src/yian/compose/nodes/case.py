@@ -87,11 +87,12 @@ class CaseDescriptor(NodeDescriptor):
     """kind=case — branch routing (searched `when:` or `on:`-value form).
 
     A `case` carries no authored `input:` (the lowering maps it onto the inputs-bearing
-    `CaseNode`). It may declare `output:` (normalized to `outputs`): the type of the value it
-    produces. `else_` is the `else:` fallback.
+    `CaseNode`) and routes only: it produces no value of its own. `else_` is the `else:`
+    fallback. An authored `output:` still parses (normalized to `outputs`) so the loader can
+    reject it with the rewrite.
 
-    `then_styles` (aligned 1:1 with `cases`), `else_style`, and `has_else` exist so branch
-    classification can tell an unquoted node name from quoted text, and `else: null` from no
+    `then_styles` (aligned 1:1 with `cases`), `else_style`, and `has_else` exist so the
+    branch check can tell an unquoted node name from quoted text, and `else: null` from no
     `else:` at all. A style is the YAML scalar style of the authored value (non-string scalars
     report ``"plain"``; mappings, lists, missing values, and strings read through a source-free
     cursor report None). Downstream treats an unknown (None) style as unquoted (plain).
@@ -116,6 +117,7 @@ class CaseDescriptor(NodeDescriptor):
     """
 
     kind = "case"
+    # `outputs` is kept so the loader can say how to migrate an old CASE `output:`.
     allowed = NodeDescriptor.allow("cases", "else", "on", "outputs")
     required = NodeDescriptor.require("cases")
     binding_fields = ()
@@ -145,9 +147,6 @@ class CaseDescriptor(NodeDescriptor):
     # Out of equality like the ranges: a directly constructed descriptor has no source styles.
     then_styles: list[Optional[str]] = field(default_factory=list, compare=False)
     else_style: Optional[str] = field(default=None, compare=False)
-    # Synthetic value-node id -> the authored branch value it was lifted from, filled by
-    # `desugar_case_values` so later checks can read the value a branch produces.
-    value_branches: dict[str, Any] = field(default_factory=dict, compare=False)
     # Source-neutral sites follow the same positional identity as the Compose-only ranges.
     # An empty tuple means direct/source-free construction; otherwise it aligns 1:1
     # with `cases`. `on_origin` belongs to the generated `__on` binding, not a Case.

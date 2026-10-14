@@ -519,13 +519,18 @@ _NOT_EXHAUSTIVE = (
 
 
 def _value_flow(whens: list[tuple[str, str]], on_type: str) -> str:
-    """Return a flow whose value case `route` maps `${input.n}` to text per `whens`, no else."""
+    """Return a flow whose read case `route` routes `${input.n}` per `whens`, no else.
+
+    Each `(when, value)` routes to a value entry `v<i>: !str <value>`.
+    """
     text = (
         f"id: f\nname: f\n{_declare_n(on_type)}nodes:\n"
-        "  route:\n    kind: case\n    on: ${input.n}\n    output: str\n    cases:\n"
+        "  route:\n    kind: case\n    on: ${input.n}\n    cases:\n"
     )
-    for when, value in whens:
-        text += f'      - when: {when}\n        then: "{value}"\n'
+    for index, (when, _) in enumerate(whens):
+        text += f"      - when: {when}\n        then: v{index}\n"
+    for index, (_, value) in enumerate(whens):
+        text += f'  v{index}: !str "{value}"\n'
     return text + "output: ${route.output}\n"
 
 

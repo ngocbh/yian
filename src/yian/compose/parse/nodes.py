@@ -244,7 +244,7 @@ def _reject_untagged_value(
             secret_literal_message(f"value entry {node_id!r}", node_id, path),
             range=rng,
         )
-    typ = _example_type(value)
+    typ = example_type(value)
     if typ is not None:
         message += f", e.g. {suggest_tag(node_id, typ, _example_text(value, cursor))}"
     raise diagnostics.error(message, range=rng)
@@ -260,8 +260,17 @@ def _is_reference(value: Any, style: str | None) -> bool:
     return style not in QUOTED_STYLES and CALL_HEAD.match(value.strip()) is not None
 
 
-def _example_type(value: Any) -> Type | None:
-    """Return the widened type of an untagged entry's value, or `None` for none."""
+def example_type(value: Any) -> Type | None:
+    """Return the widened type of a value to tag it with in an example.
+
+    Args:
+        value (`Any`): An authored YAML value.
+
+    Returns:
+        `Type | None`: `Optional(str)` for null, `date` or `datetime` for an unquoted
+            date, else the widened type of the value (`list(int)` for `[1, 2]`, `object`
+            for a mapping), or `None` when no value type holds it.
+    """
     if value is None:
         return Type(kind=ValueKind.STRING, nullable=True)
     # YAML reads an unquoted `2024-01-01` as a date, which no value type holds.

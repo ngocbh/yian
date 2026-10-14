@@ -95,13 +95,12 @@ from yian.compose.helpers.tags import (
 )
 from yian.compose.desugar.adaptive_questions import QPARAM, desugar_adaptive_questions
 from yian.compose.desugar.case_targets import desugar_case_call_targets
-from yian.compose.desugar.case_values import desugar_case_values
 from yian.compose.validate.case_exhaustive import (
     check_case_exhaustive,
     check_case_when_values,
     exhaustive_cases,
 )
-from yian.compose.validate.case_values import check_case_values
+from yian.compose.validate.case_branches import check_case_branches
 from yian.compose.validate.cycles import reject_cycles
 from yian.compose.validate.human_questions import validate_human_questions
 from yian.compose.validate.loop_types import check_loop_type_contract
@@ -132,7 +131,6 @@ from yian.compose.helpers.types import (
     read_flow_inputs,
     read_source_flow_inputs,
     read_source_parameters,
-    read_type,
     read_value_contract,
 )
 from yian.compose.validate.handles import check_case_handles
@@ -914,6 +912,35 @@ def _output_style(
         raise diagnostics.error(str(exc), range=exc.range) from exc
 
 
+def _case_output_cursor(
+    nodes_cursor: SourceCursor,
+    node_id: str,
+    *,
+    diagnostics: LoadDiagnostics,
+) -> SourceCursor | None:
+    """Return the authored `output:` of one node, or `None` when it has none.
+
+    Args:
+        nodes_cursor (`SourceCursor`): Retained view of the flow's node mapping.
+        node_id (`str`): The node, a case when the loader asks.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
+
+    Returns:
+        `SourceCursor | None`: The `output:` value, or `None` for a synthesized node or a
+        node without `output:`.
+
+    Raises:
+        `LoadError`: Raised when the retained cursor cannot be traversed.
+    """
+    try:
+        if not nodes_cursor.has(node_id):
+            return None
+        cursor = normalize_node_signature_cursor(nodes_cursor.child(node_id))
+        return cursor.child("outputs") if cursor.has("outputs") else None
+    except SourceAccessError as exc:
+        raise diagnostics.error(str(exc), range=exc.range) from exc
+
+
 def _attach_input_contracts(
     descriptors: dict[str, NodeDescriptor],
     flow_wiring: dict[str, dict],
@@ -1380,8 +1407,8 @@ def _fill_type_tables(
 def _value_cases(descriptors: dict, read: frozenset[str]) -> frozenset[str]:
     """Return the ids of the cases that produce a value.
 
-    A case produces a value when it declares `output:` or is in `read`; a case that is a
-    `then:`/`else:` target of a value-producing case produces one too.
+    A case produces a value when it is in `read`; a case that is a `then:`/`else:` target
+    of a value-producing case produces one too.
 
     Args:
         descriptors (`dict`): Node descriptors keyed by node id.
@@ -1393,9 +1420,7 @@ def _value_cases(descriptors: dict, read: frozenset[str]) -> frozenset[str]:
     cases = {
         nid: d for nid, d in descriptors.items() if isinstance(d, CaseDescriptor)
     }
-    pending = [
-        nid for nid, d in cases.items() if d.outputs is not None or nid in read
-    ]
+    pending = [nid for nid in cases if nid in read]
     found: set[str] = set()
     while pending:
         nid = pending.pop()
@@ -1438,9 +1463,10 @@ def _assemble(
 
       flow parameters -> parse nodes (a tagged entry lowers to a CODE node returning its
       value, after a secret-literal check) -> split tagged node inputs and flow outputs
-      into value + declared contract -> desugar (case value branches to synth CODE nodes,
-      inline calls, adaptive questions, case call targets, `${case.output}` with one synth
-      result node per typed case) -> build
+      into value + declared contract -> check case branches (a node or a call; a value or
+      a case `output:` is a load error showing the value entry) -> desugar (inline calls,
+      adaptive questions, case call targets, `${case.output}` to a coalesce over the
+      case's branch targets) -> build
       every node kind-blind
       (`desc.build(ctx)`; physical node-output contracts compile at their existing
       leaf-owned position; a case lowers in its own build) -> attach declared input
@@ -1771,9 +1797,12 @@ def _assemble(
     )
 
     # A node's `output:` is a type declaration; a tag there is rejected before a
-    # declaration with nothing after its tag reads as no output at all.
+    # declaration with nothing after its tag reads as no output at all. A case has no
+    # `output:`; the case-branch check below rejects it, tagged or not, with the rewrite.
     try:
-        for node_id in descriptors:
+        for node_id, descriptor in descriptors.items():
+            if isinstance(descriptor, CaseDescriptor):
+                continue
             if node_id not in value_entries and nodes_cursor.has(node_id):
                 node_cursor = normalize_node_signature_cursor(nodes_cursor.child(node_id))
                 if node_cursor.has("outputs"):
@@ -1801,24 +1830,15 @@ def _assemble(
         diagnostics=diagnostics,
     )
 
-    # Compile each typed case's `output:` once: its synth result node checks every taken
-    # branch against this contract, located at the case's `output:` (source-free: none).
-    # Compiled before branch classification, whose "names no node" error offers the
-    # boolean to write for a `yes`/`no` word only when the case's type takes it.
-    case_types: dict[str, ValueContract] = {}
-    for node_id, descriptor in descriptors.items():
-        if isinstance(descriptor, CaseDescriptor) and descriptor.outputs is not None:
-            case_types[node_id] = read_authored_node_output(
-                node_id, descriptor.outputs
-            ) or ValueContract(
-                read_type(descriptor.outputs, registry, diagnostics=diagnostics)
-            )
-
-    # Classify `case` branches and lift each value branch to a synth CODE node. Runs
-    # BEFORE the inline-call desugar so a value's `${...}` input bindings are walked by it
-    # and by the `${case.output}` expansion like any authored CODE input.
-    descriptors = desugar_case_values(
-        descriptors, case_types=case_types, registry=registry, diagnostics=diagnostics
+    # A case branch names a node or calls a flow, and a case has no `output:`. Runs
+    # BEFORE the inline-call desugar so a branch's text is still as authored.
+    check_case_branches(
+        descriptors,
+        registry=registry,
+        output_at=lambda node_id: _case_output_cursor(
+            nodes_cursor, node_id, diagnostics=diagnostics
+        ),
+        diagnostics=diagnostics,
     )
 
     # Desugar inline `${ f(...) }` call expressions: each becomes a synth `call`
@@ -1888,7 +1908,6 @@ def _assemble(
         outputs_range=outputs_range,
         assertion_range_at=flow_assertion_range_at,
         diagnostics=diagnostics,
-        case_types=case_types,
     )
 
     descriptor_cache: _DescriptorBuildCache | None = None
@@ -2137,18 +2156,6 @@ def _assemble(
     # Runs before every pass that reads narrowing, so a typo'd tag is reported first.
     check_case_when_values(
         descriptors,
-        producers,
-        flow_input_contracts,
-        narrowing=narrowing,
-        diagnostics=diagnostics,
-    )
-
-    # Branches of a typed case that can never produce its `output:` type. Runs before the
-    # typed-input check so a disjoint branch is reported at the branch, not at the case's
-    # result node.
-    check_case_values(
-        descriptors,
-        case_types,
         producers,
         flow_input_contracts,
         narrowing=narrowing,

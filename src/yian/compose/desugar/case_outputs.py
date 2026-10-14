@@ -1,17 +1,10 @@
-"""Desugar pass: `${<case>.output}` binding refs -> the case's result.
+"""Desugar pass: `${<case>.output}` binding refs -> branch coalesce over case leaves.
 
 `expand_case_outputs` (below) walks every binding field (any node's `input:` /
 mapped-call `over:`) and the flow `output:` bindings, and rewrites each top-level
-case-output span `${<case>.output[.path]}`, whole or embedded in text:
-
-- an untyped case: to a coalesce `${t1.output[.path] | t2.output… }` over the case's LEAF
-  branch targets (an untyped inner case is flattened to its own leaves; a typed inner
-  case is one leaf, its result node);
-- a typed case (one that declares `output: T`): to `${__case_<case>.output[.path]}`. The
-  pass adds that synth CODE result node once per typed case, read or not. Its one input,
-  named after the case id, binds the leaf coalesce with T as its declared contract, so
-  the binder checks every taken branch against T (`binding.type`), and its `output:` is T,
-  so readers see T through the ordinary producer contract.
+case-output span `${<case>.output[.path]}`, whole or embedded in text, to a coalesce
+`${t1.output[.path] | t2.output… }` over the case's LEAF branch targets (an inner case
+is flattened to its own leaves).
 
 `case_output_reads` lists the cases those same bindings read, before the rewrite, so the
 validate phase can require every value-producing case to be exhaustive.
@@ -27,9 +20,8 @@ target here) and, like the other desugars, BEFORE the build loop.
 
 Imports flow DOWN/peer only: `expr` (the ref-walk), `compose.nodes.bindings` (the
 kind-blind binding-field walk), `compose.desugar.inline_calls` (the `output:` walk —
-within-phase peer), `compose.desugar.case_values` (the reserved result-node prefix —
-within-phase peer), `compose.helpers.errors`, `compose.parse.file` (CaseDescriptor,
-CodeDescriptor), and `nodes.contracts`.
+within-phase peer), `compose.helpers.errors`, `compose.parse.file` (CaseDescriptor), and
+`nodes.contracts`.
 Only the loader (and the compose package root re-export) import this back.
 """
 
@@ -41,11 +33,10 @@ from typing import Any, Callable, Optional
 from yian.diagnostics import SourceRange
 from yian.expr import ExpressionError, condition_refs, expr_refs_of
 from yian.compose.nodes.bindings import map_binding_strings
-from yian.compose.desugar.case_values import CASE_PREFIX
 from yian.compose.desugar.inline_calls import map_outputs_strings
 from yian.compose.helpers.errors import LoadDiagnostics
-from yian.compose.parse.file import CaseDescriptor, CodeDescriptor
-from yian.nodes.contracts import Assertion, ValueContract, iter_source_strings
+from yian.compose.parse.file import CaseDescriptor
+from yian.nodes.contracts import Assertion, iter_source_strings
 
 
 # A clean whole-span case-output ref INTERIOR. Singular only:
@@ -64,15 +55,12 @@ def expand_case_outputs(
     outputs_range: Optional[SourceRange] = None,
     assertion_range_at: Optional[Callable[[int], Optional[SourceRange]]] = None,
     diagnostics: LoadDiagnostics | None = None,
-    case_types: Optional[dict[str, ValueContract]] = None,
 ) -> tuple:
-    """Expand every `${<case>.output}` binding ref to the case's result.
+    """Expand every `${<case>.output}` binding ref to a coalesce over the case's branch
+    targets.
 
     Walks every binding field (any node's `input:` / a mapped call's `over:`) and the
-    flow `output:` bindings. A ref to an untyped case becomes the coalesce over its leaf
-    branch targets; a ref to a typed case becomes `${__case_<case>.output[.path]}`, and
-    each typed case gains that synth CODE result node (see the module docstring).
-    Rejects (located `LoadError`) a case-value ref in a coalesce or default operand, or
+    flow `output:` bindings. Rejects (located `LoadError`) a case-value ref in a coalesce or default operand, or
     in a `case` condition (`on:`/`when:`) or an `assert` — those are not bindings.
 
     Args:
@@ -83,28 +71,20 @@ def expand_case_outputs(
         assertion_range_at (`Optional[Callable[[int], Optional[SourceRange]]]`):
             Locates a bad ref in the flow assertion at an index.
         diagnostics (`LoadDiagnostics | None`): Source ownership for located errors.
-        case_types (`Optional[dict[str, ValueContract]]`): Case id -> the contract of its
-            declared `output:` type, for each typed case. A case absent here keeps the
-            coalesce.
 
     Returns:
         `tuple`: `(new_descriptors, new_outputs)`. A flow with no `case` node returns its
         inputs unchanged.
 
     Raises:
-        `LoadError`: A case-value ref sits in an unsupported position, or a read or typed
-            case has no resolvable branch value.
+        `LoadError`: A case-value ref sits in an unsupported position, or a read case has
+            no resolvable branch value.
     """
     diagnostics = diagnostics or LoadDiagnostics()
     case_ids = {nid for nid, d in descriptors.items() if isinstance(d, CaseDescriptor)}
     if not case_ids:
         return descriptors, outputs_section  # fast path
-    case_types = {cid: t for cid, t in (case_types or {}).items() if cid in case_ids}
-    targets = _case_leaf_targets(descriptors, case_ids, case_types)
-    results = {
-        cid: _result_node(cid, descriptors[cid], targets[cid], contract, diagnostics)
-        for cid, contract in case_types.items()
-    }
+    targets = _case_leaf_targets(descriptors, case_ids)
 
     new_descriptors = {}
     for nid, descriptor in descriptors.items():
@@ -121,22 +101,18 @@ def expand_case_outputs(
             return _expander(
                 case_ids,
                 targets,
-                case_types,
                 f"node {_nid!r}",
                 range=binding_range,
                 diagnostics=diagnostics,
             )(value)
 
         new_descriptors[nid] = map_binding_strings(descriptor, expand_binding)
-    for result in results.values():
-        new_descriptors[result.id] = result
 
     new_outputs = map_outputs_strings(
         outputs_section,
         _expander(
             case_ids,
             targets,
-            case_types,
             "flow outputs",
             range=outputs_range,
             diagnostics=diagnostics,
@@ -280,15 +256,13 @@ def _when_range(descriptor: Any, index: int) -> Optional[SourceRange]:
 def _expander(
     case_ids: set,
     targets: dict,
-    case_types: dict,
     host: str,
     *,
     range: Optional[SourceRange] = None,
     diagnostics: LoadDiagnostics,
 ):
     """A `value -> value` binding transform: expand each clean case-output span to the
-    typed case's result-node ref (cases in `case_types`) or the untyped case's branch coalesce;
-    reject a case ref in any non-clean position. Scans each `${…}` span — a case ref inside
+    case's branch coalesce; reject a case ref in any non-clean position. Scans each `${…}` span — a case ref inside
     a larger expression (a `:-` default `${x :- gate.output}`, a `:?` message, arithmetic)
     is caught as a non-clean ref of that span."""
 
@@ -312,7 +286,6 @@ def _expander(
                         value[i + 2 : j],
                         case_ids,
                         targets,
-                        case_types,
                         host,
                         range=range,
                         diagnostics=diagnostics,
@@ -331,7 +304,6 @@ def _expand_span(
     interior: str,
     case_ids: set,
     targets: dict,
-    case_types: dict,
     host: str,
     *,
     range: Optional[SourceRange] = None,
@@ -339,8 +311,7 @@ def _expand_span(
 ) -> str:
     """One TOP-LEVEL `${…}` span (its interior) -> the replacement `${…}` text.
 
-    A clean case-output interior `<case>.output[.path]` of a typed case (`<case>` in `case_types`)
-    -> `${__case_<case>.output[.path]}`; of an untyped case -> the branch coalesce over the
+    A clean case-output interior `<case>.output[.path]` -> the branch coalesce over the
     case's LEAF (non-case) targets (the path suffix re-applied per branch; a case-of-case is
     flattened by `_case_leaf_targets`). Any OTHER interior that reads a case value (via a nested
     ref / coalesce / default operand) -> a located `LoadError`. Everything else (a non-case ref,
@@ -350,8 +321,6 @@ def _expand_span(
         # Singular only: group 1 = <case>, group 2 = dotted suffix.
         cid = m.group(1)
         suffix = m.group(2) or ""
-        if cid in case_types:
-            return "${" + f"{CASE_PREFIX}{cid}.output{suffix}" + "}"
         if cid in case_ids:
             leaves = targets[cid]
             if (
@@ -372,53 +341,6 @@ def _expand_span(
         diagnostics=diagnostics,
     )  # non-clean read -> loud
     return "${" + interior + "}"
-
-
-def _result_node(
-    case_id: str,
-    case: CaseDescriptor,
-    leaves: list,
-    contract: ValueContract,
-    diagnostics: LoadDiagnostics,
-) -> CodeDescriptor:
-    """Build the synth CODE node that checks and exposes a typed case's result.
-
-    Args:
-        case_id (`str`): The case node id.
-        case (`CaseDescriptor`): The case, whose `output:` type and ranges the node reuses.
-        leaves (`list`): The case's leaf branch targets.
-        contract (`ValueContract`): The contract of the case's `output:` type.
-        diagnostics (`LoadDiagnostics`): Source ownership for located errors.
-
-    Returns:
-        `CodeDescriptor`: The node `__case_<case_id>`. Its one input is named after the case
-        id so a runtime type failure reads `binding '<case_id>': ...`.
-
-    Raises:
-        `LoadError`: The case has no resolvable branch value.
-    """
-    if not leaves:
-        raise diagnostics.error(
-            f"case node {case_id!r} declares `output:` but has no resolvable branch value "
-            f"(a case needs a `then:` or `else:`, and its targets must not form a cycle)",
-            range=case.range,
-        )
-    output_range = (case.field_ranges or {}).get(("field", "outputs")) or case.range
-    field_ranges = (
-        {("input", case_id): output_range, ("field", "outputs"): output_range}
-        if output_range
-        else {}
-    )
-    return CodeDescriptor(
-        id=f"{CASE_PREFIX}{case_id}",
-        node_name=f"{case_id} result",
-        code=f"return inputs[{case_id!r}]",
-        inputs={case_id: "${" + " | ".join(f"{t}.output" for t in leaves) + "}"},
-        input_types={case_id: contract},
-        outputs=case.outputs,
-        range=case.range,
-        field_ranges=field_ranges,
-    )
 
 
 def _span_end(s: str, start: int) -> Optional[int]:
@@ -492,15 +414,13 @@ def _source_refs(source: Any, *, condition: bool = False) -> list[str]:
     return refs
 
 
-def _case_leaf_targets(descriptors: dict, case_ids: set, case_types: dict) -> dict:
+def _case_leaf_targets(descriptors: dict, case_ids: set) -> dict:
     """case id -> its branch targets, flattened to LEAF (non-case) node ids.
 
-    Direct targets are each `then:` (case order) then the `else:`; a target that is itself an
-    untyped `case` is flattened to ITS leaf targets (recursive, cycle-guarded — a case-target
+    Direct targets are each `then:` (case order) then the `else:`; a target that is itself a
+    `case` is flattened to ITS leaf targets (recursive, cycle-guarded — a case-target
     cycle drops that arm and surfaces as an empty-leaves `LoadError` here, or a graph cycle at
-    DAG validation). A target that is a typed `case` (in `case_types`) is its result node
-    `__case_<id>`, so an enclosing case reads the inner value only after it passed the inner
-    type check. Duplicates removed preserving order. Sound via the case-route veto: the nested
+    DAG validation). Duplicates removed preserving order. Sound via the case-route veto: the nested
     gate skip-floods when the outer branch loses, so only the taken leaf is non-null in the
     coalesce.
     """
@@ -516,11 +436,7 @@ def _case_leaf_targets(descriptors: dict, case_ids: set, case_types: dict) -> di
         out: list = []
         for t in raw.get(cid, []):
             if t in case_ids:
-                if t in seen:
-                    continue
-                if t in case_types:
-                    out.append(f"{CASE_PREFIX}{t}")
-                else:
+                if t not in seen:
                     out.extend(leaves(t, seen | {t}))
             else:
                 out.append(t)

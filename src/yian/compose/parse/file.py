@@ -32,6 +32,7 @@ from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.yaml_words import yaml_read_as
 from yian.compose.helpers.source import is_extension_key
 from yian.compose.nodes import REMOVED_KINDS
+from yian.compose.nodes.base import not_text_error
 from yian.compose.parse.nodes import IDENTIFIER_RULE, identifier_suggestion, is_identifier
 from yian.compose.source import (
     SourceAccessError,
@@ -260,11 +261,20 @@ def _desugar_compact(body: dict, root: SourceCursor) -> dict:
       `llm_config:`/`long_term_memory:`) is the node body.
 
     The returned dict is the canonical compose body (with a `nodes:` map) the strict
-    `ComposeFile` schema then validates unchanged. Raises `LoadError` on a removed
-    kind, a non-leaf kind, or a missing or non-identifier flow `id:`.
+    `ComposeFile` schema then validates unchanged. Raises `LoadError` on a `kind:` YAML
+    read as non-text (`null` included), a removed kind, a non-leaf kind, or a missing or
+    non-identifier flow `id:`.
     """
     diagnostics = LoadDiagnostics.from_cursor(root)
     kind = body["kind"]
+    if not isinstance(kind, str):
+        raise diagnostics.error(
+            "compact (single-node) flow: "
+            + not_text_error(
+                "kind", kind, fix=f"write one of {', '.join(sorted(_COMPACT_KINDS))}"
+            ),
+            range=root.range_of("kind"),
+        )
     if kind in REMOVED_KINDS:
         raise diagnostics.error(
             f"compact (single-node) flow: kind {kind!r} was removed; {REMOVED_KINDS[kind]}",

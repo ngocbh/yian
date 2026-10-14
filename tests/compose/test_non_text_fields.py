@@ -406,3 +406,99 @@ def test_already_located_fields_are_unchanged(text, marker, fragment):
     error = _error(text)
     assert fragment in str(error)
     assert _start_line(error) == _line(text, marker)
+
+
+def _kind(v: str) -> str:
+    """A flow whose `nodes:` entry `a` has `kind: <v>`."""
+    return """\
+id: f
+name: f
+nodes:
+  a:
+    kind: @V
+    prompt: hi
+output: ${a.output}
+""".replace("@V", v)
+
+
+def _compact_kind(v: str) -> str:
+    """A compact (single-node) flow with `kind: <v>`."""
+    return """\
+id: f
+name: f
+output: int
+kind: @V
+code: return 1
+""".replace("@V", v)
+
+
+@pytest.mark.parametrize(("value", "phrase"), NON_TEXT)
+def test_non_text_kind_is_a_load_error(value, phrase):
+    text = _kind(value)
+    error = _error(text)
+    assert (
+        f"node 'a': `kind:` must be text, but YAML read it as {phrase}; "
+        "write one of agent, call, case, code, human_input, loop, map, tool, wait"
+    ) in str(error)
+    assert _start_line(error) == _line(text, "kind: ")
+
+
+@pytest.mark.parametrize(
+    ("value", "phrase"),
+    [(value, f"YAML read it as {phrase}") for value, phrase in NON_TEXT]
+    + [("null", "it is empty")],
+)
+def test_non_text_compact_kind_is_a_load_error(value, phrase):
+    text = _compact_kind(value)
+    error = _error(text)
+    assert (
+        f"compact (single-node) flow: `kind:` must be text, but {phrase}; "
+        "write one of agent, code, human_input, tool"
+    ) in str(error)
+    assert _start_line(error) == _line(text, "kind: ")
+
+
+_KIND_IN_DEF = """\
+id: f
+name: f
+defs:
+  sub:
+    kind: [a]
+    output: str
+    code: "return 'x'"
+nodes:
+  a:
+    kind: call
+    call: sub
+output: ${a.output}
+"""
+
+_KIND_IN_INLINE_BODY = """\
+id: f
+name: f
+nodes:
+  a:
+    kind: call
+    nodes:
+      echo:
+        kind: [a]
+        output: str
+        code: "return 'x'"
+    output: ${echo.output}
+output: ${a.output}
+"""
+
+
+@pytest.mark.parametrize("text", [_KIND_IN_DEF, _KIND_IN_INLINE_BODY], ids=["def", "inline-body"])
+def test_non_text_kind_in_a_def_and_inline_body(text):
+    error = _error(text)
+    assert "`kind:` must be text" in str(error)
+    assert _start_line(error) == _line(text, "kind: [a]")
+
+
+@pytest.mark.parametrize(
+    ("value", "fragment"),
+    [("null", "add `kind:` for a node"), ("llm", "unknown kind"), ("''", "unknown kind")],
+)
+def test_null_and_text_kinds_are_unchanged(value, fragment):
+    assert fragment in str(_error(_kind(value)))

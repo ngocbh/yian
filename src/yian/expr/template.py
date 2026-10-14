@@ -715,7 +715,15 @@ def eval_template(
         else:  # a Span embedded in surrounding text -> stringified
             evaluated = eval_span(seg)
             v = evaluated.value if trace else evaluated
-            parts.append("" if v is None else str(v))
+            try:
+                text = "" if v is None else str(v)
+            except ValueError as exc:
+                # str() of an int past Python's digit limit raises; the run must fail, not crash.
+                raise ExpressionError(
+                    f"cannot render the {type(v).__name__} value of an embedded ${{...}} "
+                    f"as text: {exc}"
+                ) from exc
+            parts.append(text)
             if trace:
                 routes.append(evaluated.route)
                 spans.append((offset, offset + len(parts[-1])))

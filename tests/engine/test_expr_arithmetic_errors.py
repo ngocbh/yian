@@ -54,6 +54,12 @@ def test_a_type_error_on_a_huge_int_fails_the_run():
     assert "type error" in failure.message
 
 
+@needs_digit_limit
+def test_an_embedded_int_too_large_for_text_fails_the_run():
+    failure = _failed("n: int", "'x=${10 ** input.n}'", {"n": 5000})
+    assert "text" in failure.message
+
+
 def test_a_missing_format_key_fails_the_run():
     failure = _failed("r: object", '${"%(k)s" % input.r}', {"r": {"j": 1}})
     assert "cannot compute" in failure.message

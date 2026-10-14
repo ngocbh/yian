@@ -287,8 +287,8 @@ written bare, or as one whole `${...}` (see
   so the `case` still ran when `a` was skipped. The rewrite
   `(a.output :- 0) >= 1` reads `a` like any bare condition: the `case` is skipped
   with `a`. The default still covers a null value or an absent flow input.
-- Each `on:` match now lowers to `__on == "<value>"` instead of
-  `${__on} == "<value>"`. So every flow with an `on:` `case` gets a new fingerprint,
+- Each `on:` match now lowers to a condition on a bare `__on` (`__on == "<value>"`)
+  instead of `${__on}`. So every flow with an `on:` `case` gets a new fingerprint,
   and resuming an old run log of one fails with a fingerprint error.
 - A case value read in a bare condition or assert (`gate.output == "x"`) used to
   load, and could route wrong. It is now the same load error as the braced

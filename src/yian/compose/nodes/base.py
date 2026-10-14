@@ -472,14 +472,12 @@ class NodeDescriptor:
         for key in ("node_name", "depends_on", "runs_after"):
             if key in body:
                 value = cursor.get(key)
+                rng = cursor.range_of(key)
                 if key == "node_name":
-                    reject_non_text(
-                        cls.kind, node_id, key, value, cursor.range_of(key), diagnostics
-                    )
+                    reject_non_text(cls.kind, node_id, key, value, rng, diagnostics)
                 else:
                     cls._check_ordering_field(node_id, key, value, cursor, diagnostics)
                 kwargs[key] = value
-                rng = cursor.range_of(key)
                 if rng is not None:
                     ranges[("field", key)] = rng
         if "env" in body:

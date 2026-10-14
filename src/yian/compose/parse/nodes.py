@@ -133,7 +133,8 @@ def parse_nodes(
     Raises:
         `LoadError`:
             Raised at the entry for a bad or reserved id, an untagged entry that is
-            not a node body, or a node body that fails its kind's parse.
+            not a node body, or a node body that fails its kind's parse; a non-text
+            or unknown `kind:` is raised at the `kind:` value.
         `TypeError`:
             Raised when a tagged entry is found and `read_value` is `None`.
     """

@@ -242,11 +242,11 @@ _BRANCH_GATE_FLOW = """
 id: bg
 name: bg
 typedefs:
-  Buy: {action: 'Literal[buy]', limit: float}
-  Sell: {action: 'Literal[sell]'}
-  Decision: Union[Buy, Sell]
+  Buy: {action: 'Literal(buy)', limit: float}
+  Sell: {action: 'Literal(sell)'}
+  Decision: Union(Buy, Sell)
 input:
-  s: str
+  s: !str
 nodes:
   d:
     kind: code

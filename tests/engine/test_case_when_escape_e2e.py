@@ -16,8 +16,8 @@ _FLOW = """
 id: when_escape
 name: when_escape
 input:
-  score: float
-  topic: str
+  score: !float
+  topic: !str
 nodes:
   gate:
     kind: case

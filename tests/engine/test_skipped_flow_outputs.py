@@ -835,11 +835,11 @@ def test_plain_arithmetic_in_a_searched_when_loads():
 _UNION_FLOW = """id: f
 name: f
 typedefs:
-  Buy: {action: 'Literal[buy]', qty: int}
-  Sell: {action: 'Literal[sell]', qty: int}
-  Decision: Union[Buy, Sell]
+  Buy: {action: 'Literal(buy)', qty: int}
+  Sell: {action: 'Literal(sell)', qty: int}
+  Decision: Union(Buy, Sell)
 input:
-  approve: bool
+  approve: !bool
 nodes:
   gate:
     kind: case

@@ -12,7 +12,7 @@ import sys
 
 import pytest
 
-from yian.json_codec import _encode, dumps, int_text, loads, parse_int
+import yian.json_codec as json_codec
 
 
 BIG = 10**4999 + 12345  # 5000 digits, past Python's default 4300-digit limit
@@ -44,30 +44,31 @@ class _Level(enum.IntEnum):
 )
 def test_int_text_and_parse_int_round_trip(number: int) -> None:
     """Every int converts to decimal text and back unchanged."""
-    assert parse_int(int_text(number)) == number
+    assert json_codec.parse_int(json_codec.int_text(number)) == number
 
 
 @pytest.mark.parametrize("number", [0, -1, 2**63, 10**600])
 def test_int_text_matches_str_for_small_ints(number: int) -> None:
     """Ints under the limit get Python's own spelling."""
-    assert int_text(number) == str(number)
+    assert json_codec.int_text(number) == str(number)
 
 
 def test_int_text_of_a_long_int_matches_decimal() -> None:
     """A 5000-digit int is written in full, without changing the limit."""
-    assert int_text(BIG) == format(Decimal(BIG), "f")
-    assert int_text(-BIG) == "-" + format(Decimal(BIG), "f")
+    assert json_codec.int_text(BIG) == format(Decimal(BIG), "f")
+    assert json_codec.int_text(-BIG) == "-" + format(Decimal(BIG), "f")
 
 
 def test_int_text_of_an_int_subclass_is_its_value() -> None:
     """An `IntEnum` member is written as its int value, not its name."""
-    assert int_text(_Level.HIGH) == "7"
+    assert json_codec.int_text(_Level.HIGH) == "7"
 
 
 def test_parse_int_follows_the_int_grammar() -> None:
     """Signs, underscore groups and surrounding whitespace are accepted."""
-    assert parse_int(" +1_000 ") == 1000
-    assert parse_int("1" * 5000) == int(Decimal("1" * 5000))
+    assert json_codec.parse_int(" +1_000 ") == 1000
+    assert json_codec.parse_int("1" * 5000) == int(Decimal("1" * 5000))
+    assert json_codec.parse_int(" \n" + "1" * 700 + "\t") == int(Decimal("1" * 700))
 
 
 @pytest.mark.parametrize(
@@ -76,23 +77,26 @@ def test_parse_int_follows_the_int_grammar() -> None:
 def test_parse_int_rejects_long_non_int_text(text: str) -> None:
     """Long text that `int()` would reject fails without echoing the text."""
     with pytest.raises(ValueError, match="invalid literal for int") as caught:
-        parse_int(text)
+        json_codec.parse_int(text)
     assert len(str(caught.value)) < 100
 
 
 def test_dumps_and_loads_round_trip_a_long_int() -> None:
     """A document holding long ints is written in full and read back equal."""
     value = {"a": [BIG, -BIG, 1.5, "x", None, True]}
-    digits = int_text(BIG)
+    digits = json_codec.int_text(BIG)
 
-    text = dumps(value, sort_keys=True, separators=(",", ":"))
+    text = json_codec.dumps(value, sort_keys=True, separators=(",", ":"))
 
     assert text == '{"a":[' + digits + ",-" + digits + ',1.5,"x",null,true]}'
-    assert loads(text) == value
-    assert loads(text.encode()) == value
+    assert json_codec.loads(text) == value
+    assert json_codec.loads(text.encode()) == value
 
+
+_SHARED = [1]
 
 _VALUES = [
+    [_SHARED, _SHARED, {"a": _SHARED}],
     {"b": [1, 2.5, {"c": None}], "a": {"d": [True, False, []]}},
     [1, (2, 3), ("x", ["y", ()])],
     {"text": "héllo ☃ \U0001f600 \"quoted\" \\ \n\t"},
@@ -135,7 +139,7 @@ def _outcome(encode, value, options):
 )
 def test_slow_path_encoder_matches_json_dumps(value, options) -> None:
     """The long-int encoder writes the same bytes, or raises the same error, as `json.dumps`."""
-    assert _outcome(_encode, value, options) == _outcome(json.dumps, value, options)
+    assert _outcome(json_codec._encode, value, options) == _outcome(json.dumps, value, options)
 
 
 def test_slow_path_comparison_covers_successful_encodings() -> None:
@@ -153,36 +157,36 @@ def test_dumps_raises_value_error_for_nan_and_cycles() -> None:
     cycle.append(cycle)
 
     with pytest.raises(ValueError):
-        dumps(float("nan"), allow_nan=False)
+        json_codec.dumps(float("nan"), allow_nan=False)
     with pytest.raises(ValueError, match="Circular reference detected"):
-        dumps(cycle)
+        json_codec.dumps(cycle)
     with pytest.raises(ValueError, match="Circular reference detected"):
-        dumps([BIG, cycle])
+        json_codec.dumps([BIG, cycle])
     with pytest.raises(ValueError):
-        dumps([BIG, float("nan")], allow_nan=False)
+        json_codec.dumps([BIG, float("nan")], allow_nan=False)
 
 
 def test_dumps_raises_type_error_for_unserializable_objects() -> None:
     """Objects json can't encode fail as in `json.dumps`, with or without a long int."""
     with pytest.raises(TypeError, match="not JSON serializable"):
-        dumps(object())
+        json_codec.dumps(object())
     with pytest.raises(TypeError, match="not JSON serializable"):
-        dumps([BIG, object()])
+        json_codec.dumps([BIG, object()])
     with pytest.raises(TypeError, match="keys must be"):
-        dumps({(1,): BIG})
+        json_codec.dumps({(1,): BIG})
 
 
 def test_dumps_writes_long_int_keys_and_default_results() -> None:
     """Long int keys are quoted digits, and `default` results may hold long ints."""
-    digits = int_text(BIG)
+    digits = json_codec.int_text(BIG)
 
-    assert dumps({BIG: 1}) == '{"' + digits + '": 1}'
-    assert dumps([object()], default=lambda _obj: BIG) == "[" + digits + "]"
+    assert json_codec.dumps({BIG: 1}) == '{"' + digits + '": 1}'
+    assert json_codec.dumps([object()], default=lambda _obj: BIG) == "[" + digits + "]"
 
 
 def test_loads_forwards_hooks_on_a_document_with_a_long_int() -> None:
     """Caller hooks still fire when the document holds a long int."""
-    digits = int_text(BIG)
+    digits = json_codec.int_text(BIG)
 
     def reject_duplicates(pairs):
         keys = [key for key, _ in pairs]
@@ -194,9 +198,9 @@ def test_loads_forwards_hooks_on_a_document_with_a_long_int() -> None:
         raise ValueError(f"constant {name}")
 
     with pytest.raises(ValueError, match="duplicate key"):
-        loads('{"a": ' + digits + ', "a": 1}', object_pairs_hook=reject_duplicates)
+        json_codec.loads('{"a": ' + digits + ', "a": 1}', object_pairs_hook=reject_duplicates)
     with pytest.raises(ValueError, match="constant NaN"):
-        loads("[" + digits + ", NaN]", parse_constant=reject_constant)
+        json_codec.loads("[" + digits + ", NaN]", parse_constant=reject_constant)
 
 
 def test_json_codec_module_imports_only_the_standard_library() -> None:

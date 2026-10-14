@@ -3,8 +3,10 @@
 Python limits how many digits an int may have when it is converted to or from
 text (`sys.set_int_max_str_digits`). That limit is process-wide, so yian never
 changes it; this module converts long ints itself and otherwise defers to the
-standard `json` module. It imports only the standard library and sits below
-every yian package.
+standard `json` module. Converting a long int either way takes time quadratic
+in its digit count (about 0.2 s each way at 100,000 digits), and yian sets no
+limit on that cost. This module imports only the standard library and sits
+below every yian package.
 """
 
 from __future__ import annotations
@@ -76,6 +78,8 @@ def dumps(
     encoder writes the same text with one Python frame per nesting level, so a
     value nested near the recursion limit that also holds a long int raises
     `RecursionError`; callers that bound nesting map that to their depth error.
+    When the fast path raises `ValueError`, `default` runs again for the same
+    objects, so it should have no side effects.
 
     Args:
         value (`Any`): The value to encode.

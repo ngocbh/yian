@@ -344,8 +344,8 @@ The type vocabulary is Python typing. Scalars: `str`, `int`, `float`, `bool`,
 
 Numeric domains may add inclusive bounds: `int[1, 12]` or `float[0.0, 1.0]`.
 Both endpoints are required and the lower endpoint must not exceed the upper.
-Integer bounds are exact, up to Python's digit limit (4300 digits by default). Float bounds must be finite; integer endpoints
-used in a float domain must convert without rounding. Booleans and computed
+Integer bounds are exact, up to Python's digit limit (4300 digits by default).
+Float bounds must be finite; integer endpoints used in a float domain must convert without rounding. Booleans and computed
 endpoint expressions are invalid. Bounds work inside aliases, records, lists,
 and `Optional[...]`.
 Defaults and supplied values must satisfy them. Cross-flow wiring requires the

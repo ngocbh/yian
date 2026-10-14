@@ -53,8 +53,8 @@ this model whenever you design anything:
   from manifests so unbounded declarations keep their identity.
 - NaN, infinity, and complex numbers are not yian values.
   `typesys.values.reject_nonfinite(value, where)` finds one at any depth and
-  raises `TypeCheckError` with its path; the first boundary rejects it. The binder fails a resolved value or filled default
-  with `binding.evaluate` (temporaries inside an expression are not
+  raises `TypeCheckError` with its path; the first boundary rejects it. The
+  binder fails a resolved value or filled default with `binding.evaluate` (temporaries inside an expression are not
   checked); `run_flow` raises `ValueError` for a run input before the log exists;
   `LLMConfig` rejects a non-finite value. Every run-log codec (`canonical_typed`,
   `canonical_seed`, `encode_pool`) rejects one, with no opt-in, so a node output

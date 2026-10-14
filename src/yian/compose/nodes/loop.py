@@ -54,12 +54,12 @@ class LoopDescriptor(NodeDescriptor):
     while/until iterations. `while`/`until` are Python keywords, so they land here as
     `while_`/`until_`.
 
-    Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
-    the Compose-only `range`/`field_ranges` parse metadata) and the template `parse` from `NodeDescriptor`.
-    Its `_validate_fields` hook rejects a non-text `call:` and a non-string `while:`/`until:`
-    and runs the base asserts-list check; all its deeper legality lives in `build`. Only the loop-specific fields
-    are declared here; the normalized `inputs` field comes from the base, and a loop has no
-    authored `output:` field.
+    Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + the
+    Compose-only `range`/`field_ranges` parse metadata) and the template `parse` from
+    `NodeDescriptor`. Its `_validate_fields` hook rejects a non-text `call:` and a non-string
+    `while:`/`until:` and runs the base asserts-list check; all its deeper legality lives in
+    `build`. Only the loop-specific fields are declared here; the normalized `inputs` field comes
+    from the base, and a loop has no authored `output:` field.
     `child_label` is compiler-owned diagnostic metadata for an anonymous inline child. It is
     deliberately absent from `allowed`, never authorable, and excluded from descriptor equality.
 

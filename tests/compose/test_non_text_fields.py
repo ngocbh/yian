@@ -142,7 +142,7 @@ defs:
       one:
         kind: code
         output: str
-        code: tests.engine._compose_codefns:echo
+        code: "return 'x'"
       two:
         kind: code
         output: str

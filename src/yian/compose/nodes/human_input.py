@@ -27,7 +27,13 @@ from typing import Any, Optional
 
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.nodes.agent import MODE_REMOVED_FIX, retries_error
-from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor, not_text_error
+from yian.compose.nodes.base import (
+    BuildContext,
+    BuildResult,
+    NodeDescriptor,
+    not_text_error,
+    reject_non_text,
+)
 from yian.compose.source import SourceAccessError, SourceCursor
 from yian.diagnostics import SourceRange
 from yian.expr import ExpressionError
@@ -212,12 +218,14 @@ class HumanInputDescriptor(NodeDescriptor):
                     f"`adaptive_questions.retries:` {problem}",
                     range=ranges.get(("field", "adaptive_questions")),
                 )
-        prompt = kwargs.get("prompt")
-        if prompt is not None and not isinstance(prompt, str):
-            raise diagnostics.error(
-                f"node {node_id!r} (kind=human_input): " + not_text_error("prompt", prompt),
-                range=ranges.get(("field", "prompt")) or own_range,
-            )
+        reject_non_text(
+            cls.kind,
+            node_id,
+            "prompt",
+            kwargs.get("prompt"),
+            ranges.get(("field", "prompt")) or own_range,
+            diagnostics,
+        )
         super()._validate_fields(node_id, kwargs, ranges, own_range, diagnostics)
 
     def _build_gate(self, diagnostics: LoadDiagnostics) -> HumanInputNode:

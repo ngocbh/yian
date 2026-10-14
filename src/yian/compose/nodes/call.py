@@ -58,11 +58,12 @@ class CallDescriptor(NodeDescriptor):
     no longer an instance field. The two SYNTH paths (inline-call + case desugar) mint plain
     `CallDescriptor`s (single call, `over=None`).
 
-    Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
-    the Compose-only `range`/`field_ranges` parse metadata) and normalized `inputs` carrier from `NodeDescriptor`; only the
-    call/map-specific fields are declared here. Its `_validate_fields` hook rejects a `call:`
-    YAML read as non-text (including `null`), then runs the base asserts-list check. `over`/`parallel` are fields on the shared base
-    class (a plain `call` leaves them at `None`/`False`); only `map` lists them in its `allowed`.
+    Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + the
+    Compose-only `range`/`field_ranges` parse metadata) and normalized `inputs` carrier from
+    `NodeDescriptor`; only the call/map-specific fields are declared here. Its `_validate_fields`
+    hook rejects a `call:` YAML read as non-text (including `null`), then runs the base asserts-list
+    check. `over`/`parallel` are fields on the shared base class (a plain `call` leaves them at
+    `None`/`False`); only `map` lists them in its `allowed`.
     `child_label` is compiler-owned diagnostic metadata for an anonymous inline child. It is
     deliberately absent from `allowed`, never authorable, and excluded from descriptor equality.
     `call_site` is likewise compiler-owned: the address of the authored binding a synth

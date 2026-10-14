@@ -80,4 +80,3 @@ output: ${ask.output}
     with pytest.raises(LoadError, match=message) as caught:
         load_flow(text)
     assert caught.value.diagnostic.frames[-1].range.start_line == 7
-

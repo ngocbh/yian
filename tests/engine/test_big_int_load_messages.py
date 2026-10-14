@@ -13,6 +13,7 @@ from yian.compose.helpers.errors import LoadDiagnostics
 from yian.llm_clients import LLMConfig
 from yian.nodes.agent import AgentNode
 from yian.run import run_flow
+from yian.tools import ToolSet
 
 
 BIG = 10**4999 + 12345  # 5000 digits, past Python's default 4300-digit limit
@@ -321,6 +322,16 @@ def test_a_tool_binding_label_shows_a_long_int_as_a_placeholder():
     assert "set_int_max_str_digits" not in msg
     assert re.search(r"[0-9]{600}", msg) is None
     assert msg.endswith("but the binding is " + PLACEHOLDER + " (int)")
+
+
+def test_an_unknown_long_int_tool_id_shows_a_placeholder():
+    tools = ToolSet({"place_order": lambda qty: qty})
+    with pytest.raises(ValueError) as info:
+        tools.invoke(ONES, {"qty": 1})
+    msg = str(info.value)
+    assert f"unknown tool id {PLACEHOLDER}" in msg
+    assert "set_int_max_str_digits" not in msg
+    assert re.search(r"[0-9]{600}", msg) is None
 
 
 def test_a_tool_receives_a_long_int_input():

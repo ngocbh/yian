@@ -19,7 +19,7 @@ from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.memory import parse_memory_declarations
 from yian.compose.helpers.types import read_variables
 from yian.compose.helpers.yaml_words import former_boolean_fix
-from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor, not_text_error
+from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor, reject_non_text
 from yian.compose.source import SourceCursor
 from yian.diagnostics import SourceRange
 from yian.llm_clients import LLMConfig
@@ -228,12 +228,14 @@ class AgentDescriptor(NodeDescriptor):
         diagnostics: LoadDiagnostics,
     ) -> None:
         """Check the `prompt:`, `system_prompt:`, `tools:`, `skills:`, `retries:`, and `steerable:` shapes and parse a present named policy."""
-        prompt = kwargs.get("prompt")
-        if prompt is not None and not isinstance(prompt, str):
-            raise diagnostics.error(
-                f"node {node_id!r} (kind={cls.kind}): " + not_text_error("prompt", prompt),
-                range=ranges.get(("field", "prompt")) or own_range,
-            )
+        reject_non_text(
+            cls.kind,
+            node_id,
+            "prompt",
+            kwargs.get("prompt"),
+            ranges.get(("field", "prompt")) or own_range,
+            diagnostics,
+        )
         if "system_prompt" in kwargs:
             system_prompt = kwargs["system_prompt"]
             if not isinstance(system_prompt, str) or not system_prompt:

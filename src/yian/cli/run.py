@@ -60,10 +60,12 @@ from rich.text import Text
 from yian.compile.model import END_ID, START_ID
 from yian.cli.memory import MemoryOptionError, build_cli_memories
 from yian.cli.terminal import PromptRequest, TerminalBroker
+from yian.cli.utils import displayable
 from yian.compose.helpers.errors import LoadError
 from yian.compose.loader import load_flow
 from yian.compose.skills import default_skill_roots, load_skills
 from yian.diagnostics import Diagnostic
+import yian.json_codec as json_codec
 from yian.memory.contracts import MemoryOperationError
 from yian.run import (
     RunResult,
@@ -363,7 +365,7 @@ class _ProgressReporter:
 
     def _emit_output(self, output: Any) -> None:
         """Print a node's produced value, indented under its check (verbose only)."""
-        body = output if isinstance(output, str) else repr(output)
+        body = output if isinstance(output, str) else repr(displayable(output))
         for line in body.splitlines() or [""]:
             self._emit(Text(f"    {line}", style="dim"))
 
@@ -604,7 +606,7 @@ def _read_inputs_json(path: Path) -> Dict[str, Any]:
     except UnicodeDecodeError:
         raise typer.BadParameter("is not UTF-8 text", param_hint="--inputs") from None
     try:
-        parsed = json.loads(text)
+        parsed = json_codec.loads(text)
     except json.JSONDecodeError as exc:
         raise typer.BadParameter(
             f"invalid JSON at line {exc.lineno}, column {exc.colno}: {exc.msg}",
@@ -728,7 +730,7 @@ def _parse_structured_input(
         `TypeError`: ``typ`` is not a list or object contract.
     """
     try:
-        parsed = json.loads(raw)
+        parsed = json_codec.loads(raw)
     except json.JSONDecodeError as exc:
         raise _StructuredInputError(
             f"Invalid JSON at line {exc.lineno}, column {exc.colno}: {exc.msg}"
@@ -1809,7 +1811,7 @@ def run(
         if isinstance(out, str) and out.strip():
             console.print(Markdown(out))
         else:
-            console.print(out)
+            console.print(displayable(out))
     else:
         # The loaded front end projects authored origins to source frames; failures
         # without presentable origins retain their semantic message.

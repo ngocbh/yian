@@ -39,7 +39,7 @@ import re
 from typing import Any, Callable, Optional
 
 from yian.diagnostics import SourceRange
-from yian.expr import ExpressionError, expr_refs_of
+from yian.expr import ExpressionError, condition_refs, expr_refs_of
 from yian.compose.nodes.bindings import map_binding_strings
 from yian.compose.desugar.case_values import CASE_PREFIX
 from yian.compose.desugar.inline_calls import map_outputs_strings
@@ -155,6 +155,7 @@ def expand_case_outputs(
                     range=condition_range,
                     diagnostics=diagnostics,
                 )
+                continue  # an `on:` case's `when:` values are match values, not conditions
             for index, case in enumerate(d.cases):
                 condition_range = _when_range(d, index)
                 _reject_case_refs(
@@ -163,6 +164,7 @@ def expand_case_outputs(
                     f"case node {nid!r} condition",
                     range=condition_range,
                     diagnostics=diagnostics,
+                    condition=True,
                 )
     for index, assertion in enumerate(asserts_section or []):
         assertion_range = (
@@ -174,6 +176,7 @@ def expand_case_outputs(
             "assert",
             range=assertion_range,
             diagnostics=diagnostics,
+            condition=True,
         )
 
     return new_descriptors, new_outputs
@@ -439,16 +442,18 @@ def _reject_case_refs(
     *,
     range: Optional[SourceRange] = None,
     diagnostics: LoadDiagnostics,
+    condition: bool = False,
 ) -> None:
-    """Raise a located `LoadError` if any string reads a `${<case>.output}` value
+    """Raise a located `LoadError` if any string reads a `<case>.output` value
     (`<case>` a case node id) — the floor for the non-clean / condition / assert
-    positions where the value-case is not supported."""
+    positions where the value-case is not supported. With `condition`, each string is
+    a condition (bare or one whole `${...}`); otherwise it is a binding template."""
     for value in strings:
         s = value.expression if isinstance(value, Assertion) else value
         if not isinstance(s, str):
             continue
         try:
-            refs = expr_refs_of(s)
+            refs = condition_refs(s) if condition else expr_refs_of(s)
         except ExpressionError:
             continue  # malformed -> surfaced (located) by the relevant downstream pass
         for ref in refs:

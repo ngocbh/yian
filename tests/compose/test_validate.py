@@ -499,6 +499,29 @@ def test_check_loop_type_contract_moved():
     assert exc.value.diagnostic.frames[0].range == rng
 
 
+def test_check_loop_type_contract_tolerates_a_loop_without_child_inputs():
+    # A bare `LoopNode` has no body signature; a carried field whose seed matches the body
+    # output has nothing else to compare, so the check passes.
+    from yian.compose.validate.loop_types import check_loop_type_contract
+    from yian.nodes.contracts import ValueContract
+    from yian.nodes.loop import LoopNode
+    from yian.typesys.values import Type, ValueKind
+
+    node = LoopNode("lp", flow_id="body")
+    node.output_contract = ValueContract(
+        Type(kind=ValueKind.OBJECT, fields={"n": Type.scalar(ValueKind.INTEGER)})
+    )
+    result = BuildResult(node=node, wiring={"n": "${src.output}"})
+    producers = {"src": ValueContract(Type.scalar(ValueKind.INTEGER))}
+    check_loop_type_contract(
+        {"lp": result},
+        producers,
+        {},
+        {"lp": {"n": "${src.output}"}},
+        diagnostics=_range_diagnostics(),
+    )
+
+
 def test_type_validators_reject_noncanonical_contract_maps_before_walking():
     """Direct validator calls enforce the same exact-carrier boundary as the pipeline."""
     from yian.compose.validate.call_types import check_call_map_types

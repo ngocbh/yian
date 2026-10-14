@@ -950,7 +950,10 @@ the call-type and exhaustiveness checks read; the reference check reads `for_par
 falls back to `for_node`. Flow outputs use the unnarrowed maps. Build-time seams (inline
 child input inference, LOOP seeds) run before the pass and see unnarrowed types. The load
 check of a LOOP seed against its body's input, like a CALL argument's, uses the narrowed
-view.
+view. `compose/validate/loop_types.py` then checks each returned LOOP field against the
+parameter the next iteration binds it to: a named body's input or an inline body's
+generated parameter. Over a typed seed, a nullable returned field whose non-null type fits
+is left to the runtime input check.
 
 Compose output derivation, builders, child signatures, and producer maps retain the
 complete output-contract sum. `ChildSignature.declared_outputs` retains ordered

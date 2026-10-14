@@ -10,8 +10,9 @@ body omits carries over unchanged, so it has nothing to compare. The node's cano
 contract already retains independently proven body fields when no sound exact aggregate
 exists. This pass carries a range anchor from
 `BuildResult.field_ranges[("field", "inputs")]` (the coarse `input:` mapping span).
-For an inline body, whose parameters are generated from the seeds, each proven returned
-field must also fit its generated parameter; that error points at the seed binding.
+Each proven returned field must also fit the body parameter it is bound to on the next
+iteration (a named body's declared input, or the parameter an inline body generates from
+its seed); that error points at the seed binding.
 A literal seed stays lenient here (its contract is not inferred); `check_call_map_types`
 checks every seed against the body's declared input.
 
@@ -30,7 +31,7 @@ from typing import Any, Optional
 from yian.compile.validation import types_compatible
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.isinstance_types import constructor_type_fn
-from yian.compose.helpers.tags import any_source_hint, suggest_tag
+from yian.compose.helpers.tags import any_source_hint, suggest_tag, tag_text
 from yian.compose.helpers.output_contracts import (
     resolve_output_binding_contract,
 )
@@ -46,7 +47,7 @@ from yian.nodes.contracts import (
 )
 from yian.typesys import canonical_type_label
 from yian.typesys.types import TypeRegistry
-from yian.typesys.values import Type, value_repr
+from yian.typesys.values import Type, ValueKind, value_repr
 
 
 def check_loop_type_contract(
@@ -80,9 +81,11 @@ def check_loop_type_contract(
     (else the Compose-owned node range) on a
     same-names/different-TYPES mismatch.
 
-    An inline body's parameters are generated from the seeds, and each returned field is
-    bound to its parameter again on the next iteration, so for a loop in `inline_loops`
-    every statically proven returned field must also fit its generated parameter.
+    Each returned field is bound to the body's parameter again on the next iteration (a
+    named body's declared input, or the parameter an inline body generates from its seed),
+    so every statically proven returned field must also fit that parameter. Over a typed
+    seed, a nullable returned field whose non-null type fits is left to the runtime input
+    check.
 
     Args:
         build_results (`dict[str, BuildResult]`): The built nodes keyed by node id.
@@ -90,7 +93,8 @@ def check_loop_type_contract(
         flow_inputs (`dict[str, ValueContract]`): The flow's declared input contracts.
         flow_wiring (`dict[str, dict[str, Any]]`): Each node's `param -> source` bindings.
         inline_loops (`Collection[str]`, *optional*, defaults to `()`): The ids of loop
-            nodes whose body is written inline.
+            nodes whose body is written inline; it selects the wording of the error for
+            a returned field that does not fit its parameter.
         registry (`TypeRegistry | None`, *optional*, defaults to `None`): The flow's
             typedefs, used to spell a suggested seed tag by a typedef name and to type
             a `T(...)` constructor seed as `T`.
@@ -99,8 +103,8 @@ def check_loop_type_contract(
 
     Raises:
         `LoadError`: A returned field does not keep its carried type (with advice to
-            tag the seed or narrow it with `isinstance` when it is `Any`), or an inline
-            body returns a field that cannot fit its generated parameter.
+            tag the seed or narrow it with `isinstance` when it is `Any`), or the body
+            returns a field that cannot fit the parameter it is bound to next.
         `TypeError`: A producer, flow input, or loop contract has an unexpected type."""
     diagnostics = diagnostics or LoadDiagnostics()
     type_fn = constructor_type_fn(registry) if registry is not None else None
@@ -198,45 +202,50 @@ def check_loop_type_contract(
                 if hint is not None:
                     message += f"; {hint}"
                 raise diagnostics.error(message, range=rng)
-        if nid in inline_loops:
-            _check_inline_returned_fields(
-                result,
-                carried_fields,
-                flow_wiring.get(nid, {}),
-                registry or {},
-                diagnostics,
-            )
+        _check_returned_fields(
+            result,
+            carried_fields,
+            flow_wiring.get(nid, {}),
+            registry or {},
+            diagnostics,
+            inline=nid in inline_loops,
+        )
 
 
-def _check_inline_returned_fields(
+def _check_returned_fields(
     result: BuildResult,
     carried_fields: dict[str, Type],
     wiring: dict[str, Any],
     registry: TypeRegistry,
     diagnostics: LoadDiagnostics,
+    *,
+    inline: bool,
 ) -> None:
-    """Require each returned field of an inline loop body to fit its generated parameter.
+    """Require each returned field of a loop body to fit the parameter it is bound to next.
 
-    Over a typed seed, a nullable returned field whose non-null type fits the declared
-    parameter is accepted; a null it returns fails the next iteration's input check.
+    The parameter is the body's declared input for a named body, or the one generated
+    from the seed for an inline body. Over a typed seed, a nullable returned field whose
+    non-null type fits the parameter is accepted; a null it returns fails the next
+    iteration's input check.
 
     Args:
         result (`BuildResult`): The built loop node and its source ranges.
         carried_fields (`dict[str, Type]`): The statically proven carried field types;
             a returned field's entry is the body's own field type.
         wiring (`dict[str, Any]`): The loop's seed bindings keyed by carried field.
-        registry (`TypeRegistry`): The flow's typedefs, for the suggested seed tag.
+        registry (`TypeRegistry`): The flow's typedefs, for the suggested types and tags.
         diagnostics (`LoadDiagnostics`): Factory for located load errors.
+        inline (`bool`): Whether the body is written inline, which selects the wording.
 
     Raises:
-        `LoadError`: A returned field's type cannot fit the parameter generated from its
-            seed; the error names both types and suggests typing the seed.
+        `LoadError`: A returned field's type cannot fit its parameter; the error names
+            both types and says how to make them agree.
     """
     node = result.node
     returned = node.returned_fields
     parameters = {
         parameter.name: parameter.contract
-        for parameter in node.child_inputs
+        for parameter in node.child_inputs or ()
         if parameter.contract is not None
     }
     for field_name, seed in wiring.items():
@@ -245,29 +254,54 @@ def _check_inline_returned_fields(
         body_field = carried_fields.get(field_name)
         parameter = parameters.get(field_name)
         if body_field is None or parameter is None:
-            continue  # an opaque returned field has nothing proven to compare
+            continue  # opaque on either side, or not a body input: nothing to compare
         if types_compatible(body_field, parameter.type):
             continue
         typed = isinstance(seed, Binding) and seed.contract is not None
+        non_null_fits = types_compatible(replace(body_field, nullable=False), parameter.type)
         # The next iteration's input check rejects a null.
-        if typed and types_compatible(replace(body_field, nullable=False), parameter.type):
+        if typed and non_null_fits:
             continue
         returned_label = canonical_type_label(body_field)
-        raise diagnostics.error(
-            f"loop node {node.id!r}: the body returns {field_name!r} as {returned_label}, "
-            "but the carried field is "
-            + (
-                f"declared {canonical_type_label(parameter.type)}"
-                if typed
-                else f"typed {canonical_type_label(parameter.type)} from its seed"
+        parameter_label = canonical_type_label(parameter.type)
+        seed_text = _seed_text(binding_source(seed))
+        if inline:
+            message = (
+                f"loop node {node.id!r}: the body returns {field_name!r} as {returned_label}, "
+                "but the carried field is "
+                + (
+                    f"declared {parameter_label}"
+                    if typed
+                    else f"typed {parameter_label} from its seed"
+                )
+                + "; declare the seed's type: "
+                + suggest_tag(field_name, body_field, seed_text, registry=registry)
             )
-            + "; declare the seed's type: "
-            + suggest_tag(
-                field_name,
-                body_field,
-                _seed_text(binding_source(seed)),
-                registry=registry,
-            ),
+        else:
+            message = (
+                f"loop node {node.id!r}: the body {node.flow_id!r} returns {field_name!r} "
+                f"as {returned_label}, but takes {field_name!r} as {parameter_label}; "
+            )
+            if non_null_fits:
+                # Only an untyped seed gets here, so tagging it is a real alternative.
+                nullable = replace(parameter.type, nullable=True)
+                nullable_label = tag_text(
+                    nullable, registry=registry
+                ) or canonical_type_label(nullable)
+                message += (
+                    f"make the input {nullable_label}, or tag the seed to leave the check "
+                    "to runtime: "
+                    + suggest_tag(field_name, parameter.type, seed_text, registry=registry)
+                )
+            elif body_field.kind is ValueKind.ANY:
+                message += (
+                    "narrow it in the body with isinstance in a case, "
+                    "or declare its producer's type"
+                )
+            else:
+                message += "change the body's input or output type so they agree"
+        raise diagnostics.error(
+            message,
             range=result.field_ranges.get(("input", field_name))
             or result.field_ranges.get(("field", "inputs"))
             or result.node_range,

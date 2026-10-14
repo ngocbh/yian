@@ -199,13 +199,14 @@ def test_declared_seed_type_is_compared_with_the_returned_field():
     """A seed declared `str` cannot carry a field the body returns as `int`.
 
     The producer is untyped, so only the declaration gives the seed a type: the same
-    seed written without one loads. The body takes `n: str`, so the seed fits its input.
+    seed written without one loads. The body takes `n: Any`, so both the seed and the
+    returned `int` fit its input.
     """
-    load_flow(_loop_flow("${opaque.output}", producer=_opaque("1"), body_input="!str"))
+    load_flow(_loop_flow("${opaque.output}", producer=_opaque("1"), body_input="!Any"))
 
     with pytest.raises(LoadError, match="carried field 'n'.*carried source is 'str'"):
         load_flow(
-            _loop_flow("!str ${opaque.output}", producer=_opaque("1"), body_input="!str")
+            _loop_flow("!str ${opaque.output}", producer=_opaque("1"), body_input="!Any")
         )
 
 

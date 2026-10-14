@@ -48,7 +48,7 @@ with validated defaults and reference them in prompts as `${name}`.
 - **Readable:** the flow is the plan. Humans and models can inspect the same
   artifact before it runs.
 - **Composable:** typed nodes build flows; CALL, MAP, and LOOP apply child flows
-  recursively within the runtime depth limit.
+  recursively.
 - **Predictable:** data references determine the data edges, and the LLM never
   changes the authored call graph.
 - **Recoverable:** every accepted transition is appended before it is applied,

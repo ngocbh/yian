@@ -86,8 +86,7 @@ Adopt the monorepo. For a small team the simpler cross-project refactors and sin
   fix stays fixed.
 - **An agent is a typed transformation** — it can be represented by one node, a
   flow, or a child flow. The LLM-backed `kind: agent` is one concrete node kind.
-- **Flows compose** — CALL, MAP, and LOOP apply child flows recursively within
-  the runtime depth limit.
+- **Flows compose** — CALL, MAP, and LOOP apply child flows recursively.
 - **Pure at the boundary** — a node *returns* an outcome and the engine records
   and applies it; a node never mutates shared state. Values are typed, losslessly
   serializable, and copied at node boundaries.

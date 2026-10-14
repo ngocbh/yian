@@ -191,8 +191,8 @@ deduplication.
 explicit malformed seed after selecting a legal CALL/MAP/LOOP kind. Unsupported
 kinds and arbitrary builder, compiler, spawner/fragment-copy, digest,
 topology-materialization, reducer, append, or log faults propagate raw. Runtime
-classifies only explicit seed, validated-fragment, budget, depth, and
-prune-policy rejection as `contract.growth`.
+classifies only explicit seed, validated-fragment, budget, and prune-policy
+rejection as `contract.growth`.
 
 **Capabilities (`caps`)** are narrow, engine-owned effects passed as keyword args to
 `run`; each is gated by a node trait. A mapped call gets `caps['bind_item']`
@@ -232,7 +232,7 @@ Runtime and compile validation read these node members instead of branching on
 | `exception_origin(exc)` | evaluator body boundary: select the best operation origin | authored node origin → CODE wrapped line, CASE active predicate, generated-schema path in the AGENT node |
 | `failure_trace(operation_origin=None)` | evaluator, dispatcher, and terminal-unreachable producers: combine generated ancestry with the best local origin | `origin_context + (operation origin or node origin)`; omit only an absent local suffix |
 | `skipped_output_target() -> str` | route reducer and growth validation: select the logical output whose out-edges receive this physical node's absence | baked `commit_as` or own id → LOOP `origin_id` |
-| `grow_depth_delta: int\|None` | growth core: nested-call depth increment stamped on the spliced spawners + terminal (positive bounded by `MAX_REF_DEPTH`) | `None` non-spawner → `0` loop (inherit) → `1` call/map |
+| `grow_depth_delta: int\|None` | growth core: nested-call depth increment stamped on the spliced spawners + terminal | `None` non-spawner → `0` loop (inherit) → `1` call/map |
 | `is_loop: bool` | growth reducer: gate the origin-keyed single-live-expansion invariant (the driver self-respawns, so each iteration's grow is attributed to `origin_id` and supersedes the prior expansion) | `False` → `True` on `loop` |
 | `needs_stop_event: bool` | read boundary (`eval_node`): pass the exact cooperative run-stop event | `False` → `True` on agent/wait |
 | `needs_tools: bool` | read boundary (`eval_node`): pass the run's `ToolSet` as `caps['tools']` | `False` → `True` on tool/human_input/agent |
@@ -525,7 +525,7 @@ not delete external provider history or files.
 | a flow | a function `'a -> 'b` | typed in, typed out; composes |
 | an agent | a composable transformation `'a -> 'b` | conceptual umbrella represented by a node, flow, or child flow |
 | an AGENT node | an effectful leaf computation | concrete LLM-backed node; no separate flow contract |
-| `call:` / `uses:` | function application / a module ref | nests recursively within the runtime depth limit |
+| `call:` / `uses:` | function application / a module ref | nests recursively |
 | the variable pool bind | `let (node_id, key) = ...` | immutable, no mutation |
 | `NodeKind` + `match` | a variant + exhaustive `match` | closed set, no registry; runtime matches on worker-result/record variants and traits, while compile's `build_grow` interprets spawner seeds by kind |
 | `Output \| Route \| Grow` | a sum type (the node result) | failure is a `raise`, not a case |
@@ -551,9 +551,9 @@ model made enforceable.
   the conceptual umbrella for that composable transformation, not another runtime
   contract.
 - **Composable / recursive** — CALL/MAP/LOOP nodes apply child flows
-  (`call:`/`uses:`) recursively within the runtime depth limit. Never flatten an
-  applied child flow; preserve recursion through compile + run; run-record replay
-  must rebuild and verify recorded growth.
+  (`call:`/`uses:`) recursively. Never flatten an applied child flow; preserve
+  recursion through compile + run; run-record replay must rebuild and verify
+  recorded growth.
 - **Privileges no output type or domain** — prefer the most general primitive that
   composes over a use-case-specific feature.
 - **Node never writes the pool** (purity); **typed, losslessly-serializable state**

@@ -60,7 +60,7 @@ A `float` is finite. NaN and infinity are not yian values, at any depth. The fir
 boundary that sees one rejects it and names where it sits:
 
 - a run input: `run_flow` raises `ValueError` before the log exists;
-- a binding's value (expression result, literal, default, coerced string): the node
+- a binding's value (expression result, literal, or default): the node
   fails with `binding.evaluate`;
 - a node output: the node fails with `contract.output`, naming the field path;
 - an `llm_config` value: a load error, or `ValueError` before the run for a host config;

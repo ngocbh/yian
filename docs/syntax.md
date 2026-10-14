@@ -243,8 +243,7 @@ A whole-string `${expr}` resolves to the **typed value** (a number stays a
 number, a list a list); embedded in surrounding text it is stringified.
 
 NaN and infinity are not yian values. A binding whose value is NaN or infinity at
-any depth, whether an expression result, a literal, a default, or a string coerced
-for a typed input, fails its node with `binding.evaluate`. The message names the
+any depth, whether an expression result, a literal, or a default, fails its node with `binding.evaluate`. The message names the
 input and the path, like `input 'y' at a[1]: non-finite number inf is not a yian
 value`; a default reads `default for 'x': ...`. A temporary inside an expression is
 fine: the embedded template `"v=${x * 10}"` is the text `v=inf`. Only a binding's

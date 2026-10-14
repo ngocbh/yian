@@ -792,7 +792,7 @@ NaN and infinity are not yian values. `typesys.values.reject_nonfinite(value, wh
 walks dicts, lists, tuples, `TypedValue` payloads, pydantic models, and dataclasses
 and raises `TypeCheckError` with the path of the first one
 (`<where> at <path>: non-finite number inf is not a yian value`). The first boundary
-rejects it: the binder fails a resolved value, filled default, coerced string, or MAP
+rejects it: the binder fails a resolved value, filled default, or MAP
 `over` list with `binding.evaluate` at the binding or default origin (temporaries
 inside an expression are not checked); an AGENT variable default fails
 `node.execute`; `run_flow` raises `ValueError` for a run input before the log

@@ -400,8 +400,7 @@ is discarded, so the payload reaches the node unconverted. A miss is `binding.ty
 
 NaN and infinity are not yian values; `typesys.values.reject_nonfinite(value, where)`
 finds one at any depth and raises `TypeCheckError` with its path. The first boundary
-that sees one rejects it. The binder checks each resolved value, filled default, and
-coerced string, and fails `binding.evaluate` at the binding or default origin
+that sees one rejects it. The binder checks each resolved value and filled default, and fails `binding.evaluate` at the binding or default origin
 (`input 'y' at a[1]: non-finite number inf is not a yian value`); temporaries inside
 an expression are not checked. MAP checks its `over` list the same way, and an AGENT
 variable default fails `node.execute` at the default. `run_flow` raises `ValueError` for

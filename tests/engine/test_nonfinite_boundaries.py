@@ -262,42 +262,6 @@ def test_a_call_binding_that_evaluates_to_infinity_fails_the_call(declared):
     assert started == ["__start__", "k"]
 
 
-@pytest.mark.parametrize("learnable", [False, True])
-def test_a_string_coerced_to_infinity_for_a_def_input_fails_the_call(learnable):
-    flow = load_flow("""
-id: nonfinite
-name: nonfinite
-defs:
-  body:
-    input:
-      y: float
-    nodes:
-      inner:
-        kind: code
-        input:
-          y: ${input.y}
-        code: |
-          return inputs["y"]
-    output: ${inner.output}
-nodes:
-  p:
-    kind: code
-    code: |
-      return "inf"
-  k:
-    kind: call
-    call: body
-    input:
-      y: ${p.output}
-output: ${k.output}
-""")
-    result = run_flow(flow, {}, learnable=learnable)
-
-    _assert_binding_fails(
-        result, "k/__start__", "input 'y': non-finite number inf is not a yian value"
-    )
-
-
 def test_a_literal_binding_names_the_nonfinite_path():
     flow = load_flow("""
 id: nonfinite

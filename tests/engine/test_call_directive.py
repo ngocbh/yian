@@ -487,6 +487,17 @@ def test_an_unreadable_keyword_value_is_a_located_load_error(node):
     assert caught.value.diagnostic.frames[-1].range is not None
 
 
+def test_an_out_of_range_offset_keyword_value_is_a_located_load_error():
+    with pytest.raises(LoadError) as caught:
+        load_flow(_g_flow(_binding_node("call(g, d=2026-01-01T10:00:00+05:99)")))
+    message = str(caught.value)
+    assert (
+        "keyword 'd' value can't be read as YAML (not a valid datetime: UTC offset minutes "
+        "must be under 60); quote it to keep it as text"
+    ) in message
+    assert "+06:39" not in message
+
+
 @pytest.mark.parametrize("d_type", ["str", "date"])
 def test_bare_and_quoted_dates_into_call_inputs(d_type):
     load_flow(_g_flow(_binding_node("call(g, d='2026-10-14')"), d_type))

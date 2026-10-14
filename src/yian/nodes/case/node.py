@@ -181,7 +181,7 @@ class CaseNode(Node):
 
     def forward(self, inputs: dict) -> Route:
         # Strict CASE: route on the bound input record only — each `when:`
-        # interpolates this node's declared inputs as bare `${name}`, not the pool.
+        # reads this node's declared inputs by bare name, not the pool.
         # Routing-only: returns a Route carrying the chosen case handle (no value).
         for case in self.cases:
             if evaluate_when_record(case.when, inputs, self.types):

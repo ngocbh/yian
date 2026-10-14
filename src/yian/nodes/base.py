@@ -982,7 +982,7 @@ class Node(ABC):
         """Run the node's complete pure-execution template.
 
         Declared defaults are filled first, node-owned setup (including that every
-        assertion parses) is validated, pre-asserts run against the bound record,
+        assertion and kind predicate parses) is validated, pre-asserts run against the bound record,
         ``forward`` executes, and post-asserts inspect an ``Output`` against the
         pristine inputs. The method returns exactly ``Output | Route | Grow`` or a
         streaming generator with one of those terminal values. Narrow effects are

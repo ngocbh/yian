@@ -1,5 +1,7 @@
 """A CASE `when` or LOOP predicate set in Python that doesn't parse is a setup error."""
 
+import traceback
+
 import pytest
 
 from yian.expr import ExpressionError
@@ -29,6 +31,7 @@ def test_case_when_evaluation_error_still_fails_in_forward():
         node.run({"x": {"a": 1}})
 
     assert "is not a valid boolean expression" not in str(excinfo.value)
+    assert any(frame.name == "forward" for frame in traceback.extract_tb(excinfo.tb))
 
 
 @pytest.mark.parametrize("kind", ["while", "until"])

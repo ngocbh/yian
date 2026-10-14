@@ -476,8 +476,9 @@ retried up to `retries:` times (default 2, a non-negative integer) on deviation,
 or infinity in the reply or a value nested deeper than 100 levels included. A root
 `Literal(...)` returns its bare tag to the flow. A union returns the matching member's record; each
 member's schema pins its tag and rejects unknown fields. An `object` or `Any` output is
-an open mapping or any JSON value, which a provider's strict JSON-schema mode (OpenAI's)
-rejects; such an output may need a non-strict provider path.
+an open mapping or any JSON value; where structured output is strict (Azure, the OpenAI
+Responses API, Anthropic with `thinking` on) yian asks for that whole schema through a
+non-strict or unforced tool instead, and still validates and retries the reply.
 Use a downstream `code` node only for deterministic post-processing.
 `prompt:` must be text: quote a number, boolean, date, or a value starting with `[` or `{`;
 otherwise it is a load error at the value.

@@ -1271,11 +1271,28 @@ for providers that lack it). A root `Literal(...)` is constrained internally as 
 single `value` field and returned to the flow as the bare tag. `Optional(X)` allows
 null in the schema wherever it appears: at the root, as a list element, or as a
 record field. A root `Optional(str)` stays a text producer, so it never returns
-null. An `object` or `Any` output asks for an open mapping or any JSON value; a
-provider's strict JSON-schema mode (OpenAI's, for one) rejects an open mapping, so such
-an output may need a provider path that isn't strict. The result is
-validated while its canonical success record is prepared, like every other node
-output.
+null. An `object` or `Any` output asks for an open mapping or any JSON value. Where a
+provider's structured output is strict, yian asks for such a schema without strict
+constraints, so the provider doesn't constrain the open part:
+
+- `azure` gets a forced function tool that isn't strict, instead of its strict
+  JSON-schema mode.
+- A request on the Responses API (`openai`, a ChatGPT subscription, or a model the client
+  library routes there, such as an OpenRouter `*-codex` model or a Responses-routed Azure
+  deployment) sends the tool with `strict: false`.
+- `anthropic` with `thinking` on gets a tool the model may call; see
+  [Provider blocks](#provider-blocks-request-settings).
+- `google`, `ollama`, the other Chat Completions providers, and `anthropic` without
+  thinking are unchanged.
+
+The choice is per schema: one open part makes the whole schema non-strict, its closed
+fields included. yian still checks every field and retries a reply that doesn't fit.
+The result is validated while its canonical success record is prepared, like every
+other node output.
+
+Changed: an AGENT `output:` holding `object` or `Any` used to fail on Azure, whose strict
+JSON-schema mode rejects an open part, and to come back as `{}` on Anthropic with
+`thinking` on. It now works on every provider.
 
 A [union](#unions-of-records-union) `output:` asks for one of the members: each member's
 schema forbids unknown fields and pins its tag with a `const`. The node returns the
@@ -1454,7 +1471,10 @@ A few providers need a note:
   levels, such as `google: {generationConfig: {thinkingConfig: {thinkingLevel: HIGH}}}`.
 - `anthropic` with `thinking` on (any `type` other than `disabled`) gets structured
   output through the JSON-schema output format (`output_config.format`), because the
-  Messages API refuses thinking beside a forced tool call.
+  Messages API refuses thinking beside a forced tool call. An output with an open part
+  (`object`, `Any`) can't go through that format, whose grammar closes every mapping, so
+  it goes as a tool the model may call; a reply without that tool call is corrected and
+  retried under `retries:`.
 - `ollama` takes what the Ollama client sends: `think` (`true`, `false`, or a level),
   `options` (`temperature`, `num_ctx`, …), `keep_alive`, `logprobs`, and
   `top_logprobs`. It has no default `think`, so the model's own default applies.

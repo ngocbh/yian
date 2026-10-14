@@ -56,7 +56,6 @@ from yian.compose.parse.file import CaseDescriptor, CodeDescriptor
 from yian.diagnostics import SourceRange
 from yian.expr import ExpressionError, eval_binding, expr_refs_of
 from yian.nodes.contracts import ValueContract
-from yian.typesys import TypeCheckError, build_value_as
 from yian.typesys.values import Type
 
 VALUE_PREFIX = "__value_"
@@ -358,12 +357,10 @@ def _boolean_hint(word: str, case_type: Optional[Type]) -> str:
         `str`:
             Such as `", or write `true` for the boolean"`, or `""`.
     """
-    fix = former_boolean_fix(word)
-    if fix is None or case_type is None:
+    if case_type is None:
         return ""
-    try:
-        build_value_as(case_type, fix[0])
-    except TypeCheckError:
+    fix = former_boolean_fix(word, case_type)
+    if fix is None:
         return ""
     return f", or write `{'true' if fix[0] else 'false'}` for the boolean"
 

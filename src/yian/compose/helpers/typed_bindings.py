@@ -190,8 +190,8 @@ def _literal_mismatch_message(
     if error.path:
         message += f" ({error})"
     if isinstance(parsed, str):
-        fix = former_boolean_fix(parsed)
-        if fix is not None and _fits(declared, fix[0]):
+        fix = former_boolean_fix(parsed, declared)
+        if fix is not None:
             message += f"; {fix[1]}"
         return message
     # Quoting only helps when YAML read the text as a non-string and the text

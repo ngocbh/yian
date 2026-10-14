@@ -264,14 +264,8 @@ def _former_boolean_hint(declared: Type, default: Any) -> str:
         `str`:
             `"; "` and the fix, such as ``"; `no` is text; write `false`"``, or `""`.
     """
-    fix = former_boolean_fix(default)
-    if fix is None:
-        return ""
-    try:
-        build_value_as(declared, fix[0])
-    except TypeCheckError:
-        return ""
-    return f"; {fix[1]}"
+    fix = former_boolean_fix(default, declared)
+    return "" if fix is None else f"; {fix[1]}"
 
 
 def _read_flow_parameter(

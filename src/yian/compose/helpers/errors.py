@@ -219,6 +219,29 @@ class LoadDiagnostics:
         return LoadError(diagnostic)
 
 
+def source_text(diagnostics: LoadDiagnostics, range: SourceRange | None) -> str | None:
+    """Return the authored text a one-line range covers.
+
+    Args:
+        diagnostics (`LoadDiagnostics`):
+            The context owning the source text the range indexes.
+        range (`SourceRange | None`):
+            A span in that text.
+
+    Returns:
+        `str | None`:
+            The covered text, stripped, or `None` when the source or range is absent, the
+            range spans several lines, or it covers only whitespace.
+    """
+    text = diagnostics.text
+    if text is None or range is None or range.start_line != range.end_line:
+        return None
+    lines = text.splitlines()
+    if not 1 <= range.start_line <= len(lines):
+        return None
+    return lines[range.start_line - 1][range.start_col - 1 : range.end_col - 1].strip() or None
+
+
 class LoadError(ValueError):
     """A Compose flow cannot be loaded, expressed as one canonical diagnostic."""
 

@@ -116,7 +116,7 @@ Changed: yian used to read values with YAML 1.1's rules: an unquoted `yes`, `no`
 was octal 15, while `1e3` was text. Write `true`/`false` for a boolean, `90` or
 `1000` for those numbers, `0o17` for octal, and quote a value you mean as text. A
 `when: yes` on a `Literal[yes, no]` `on:` now matches the text `yes`; under a `bool`
-`on:` it no longer matches `true` and loads without an error, so write `when: true`.
+`on:` it is a load error, so write `when: true`.
 A CASE key spelled `On:` or `ON:` used to mean `on:`; write `on:`.
 
 ### Compact mode — when the flow *is* one node
@@ -1256,6 +1256,16 @@ resuming an old run log of one, or of a `case` that matched nothing, fails with 
 fingerprint, digest, or replay error. Stored memory episodes keep `default`; they are not
 replayed.
 
+Changed: a `when:` in the `on:` form used to be compared as text, so `when: 1` and
+`when: true` never matched an int or bool `on:`; it is now a typed literal of the `on:`
+type. `when: 1` on a `str` `on:` used to match `"1"`; it is now a load error that says to
+quote it. Where the `on:` type isn't known at load (an untyped output, `object`, an
+expression whose type isn't proven, e.g. `${input.n + 1}`), the runtime comparison is
+exact too: `when: 1` no longer matches the text `"1"`, so type the producer or quote the
+value. A `when:` that can't be a value of the `on:` type (a typo'd tag, a wrong scalar
+type) is a load error even with an `else:`. An unquoted datetime `when:` is a load error;
+quote it. Flows with a number or bool `when:` get new fingerprints.
+
 Simple form — match a value:
 
 ```yaml
@@ -1268,6 +1278,22 @@ route:
     - when: no_go
       then: no_go_brief
   else: more_info_brief        # runs when no `when:` matches
+```
+
+Matching:
+
+- Each `when:` is a value of the `on:` type: text, a number, or a bool. An unquoted date
+  is its ISO text; quote a datetime.
+- Ints and floats compare numerically (`when: 2` matches `2.0`), a bool never equals a
+  number, and quoted values are text (`when: "1"` matches only the text `1`).
+- A `when: yes` (or `no`, `on`, `off`, `y`, `n`) on a `bool` `on:` is text, so it is a
+  load error that says to write `true` or `false`.
+- Where the `on:` type is known (node outputs, flow inputs, a LOOP body's carried fields,
+  a child flow's inputs), a `when:` it can't hold is a load error, even with an `else:`:
+
+```text
+case node 'route': `when: 1` is an int but `on: ${input.n}` is `str`; quote it: `when: "1"`
+case node 'route': `when: nogo` is not a tag of `on: ${synth.output}` (`Literal["go","no_go"]`); use one of: go, no_go
 ```
 
 Searched form — first true `when:` wins (a boolean expression, no `on:`):
@@ -1398,20 +1424,22 @@ asserts.
 A `case` produces a value when it declares `output:`, has a value branch, or is
 read through `${case.output}`. A `case` that such a `case` routes to produces one
 too. It must always match: it needs an `else:`, or an `on:` whose type is a
-non-nullable `Literal` with every tag listed in a `when:`. A flow input counts
+non-nullable `Literal` with every tag listed in a `when:`, or a non-nullable `bool` with
+`when: true` and `when: false`. A flow input counts
 as an `on:` type, and inside a narrowing branch only the tags that reach the
 `case` count. Otherwise loading fails:
 
 ```text
-case node 'gate' produces a value, so it must be exhaustive: add an `else:` (on: ${input.x} is str, not a Literal)
+case node 'gate' produces a value, so it must be exhaustive: add an `else:` (on: ${input.x} is str, not a Literal or bool)
 ```
 
 The reason in parentheses is one of:
 
-- `on: ... is str, not a Literal`: the `on:` type has no tags;
+- `on: ... is str, not a Literal or bool`: the `on:` type has no tags and isn't `bool`;
 - `a searched case needs an else:`;
 - `${input.choice} may be null`: the `on:` type is `Optional[...]`;
-- `enum tag(s) ['b'] not covered`: a tag has no `when:`.
+- `enum tag(s) ['b'] not covered`: a tag has no `when:`;
+- `bool value(s) [false] not covered`: a `bool` `on:` lacks `when: false`.
 
 A routing-only `case` keeps "no match, nothing runs", and routing on a `Literal`
 node output is still checked for missing tags.
@@ -1463,8 +1491,9 @@ output:
   in `depends_on`), under some combination of `case` choices. A node that names the
   `case` itself in `depends_on` runs on every branch the `case` takes. A `case` that
   runs takes one branch, or none unless it is exhaustive: it has `else:`, or its `on:`
-  is a non-nullable `Literal` node output or flow input with every tag listed (a null
-  `on:` value matches nothing).
+  is a non-nullable `Literal` node output or flow input with every tag listed, or a
+  non-nullable `bool` with `when: true` and `when: false` (a null `on:` value matches
+  nothing).
   So a join over an exhaustive `case`'s branches (`${bullish.output | cautious.output}`,
   or `${gate.output}`) is never null. Conditions of different `case`s are
   treated as independent.
@@ -1523,8 +1552,9 @@ place_buy:
   non-optional one unnarrowed.
 - `on:` must be one direct reference to a tag field: `${node.output[.field...].tag}` or
   `${input.x[.field...].tag}`. A coalesce or embedded text doesn't narrow.
-- A `when:` that isn't a tag is a load error: `when: buyy is not a tag of the union at
-  ${decide.output.action} (tags: buy, hold, sell)`. Without `else:` every tag needs a
+- A `when:` that isn't a tag is a load error: ``case node 'route': `when: buyy` is not a
+  tag of `on: ${decide.output.action}` (`Literal["buy","hold","sell"]`); use one of: buy,
+  hold, sell``. Without `else:` every tag needs a
   `when:` (`enum tag(s) ['hold'] not covered`).
 - Narrowing follows the branch target's chain: a node that reads it through a plain
   reference, or names it in `depends_on`, sees the same members. A join

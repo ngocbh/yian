@@ -79,7 +79,11 @@ from yian.compose.helpers.typed_bindings import split_typed_binding
 from yian.compose.desugar.adaptive_questions import desugar_adaptive_questions
 from yian.compose.desugar.case_targets import desugar_case_call_targets
 from yian.compose.desugar.case_values import desugar_case_values
-from yian.compose.validate.case_exhaustive import check_case_exhaustive, exhaustive_cases
+from yian.compose.validate.case_exhaustive import (
+    check_case_exhaustive,
+    check_case_when_values,
+    exhaustive_cases,
+)
 from yian.compose.validate.case_values import check_case_values
 from yian.compose.validate.cycles import reject_cycles
 from yian.compose.validate.human_questions import validate_human_questions
@@ -1915,6 +1919,13 @@ def _assemble(
         producers,
         flow_input_contracts,
         registry=registry,
+    )
+    # Runs before every pass that reads narrowing, so a typo'd tag is reported first.
+    check_case_when_values(
+        descriptors,
+        producers,
+        flow_input_contracts,
+        narrowing=narrowing,
         diagnostics=diagnostics,
     )
 

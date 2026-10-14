@@ -303,14 +303,15 @@ value.
 nodes that plainly read them. Read the taken branch's result with `${route.output}`
 (see `branching.yaml`). A branch may also be a value (`else: "approve"`, a record, a
 list) when the `case` declares `output:`; quote text, since an unquoted word names a
-node. A `case` whose result is used needs an `else:` or every tag of a non-nullable
-`Literal` `on:`; routing on a `Literal` node output is always exhaustiveness-checked.
-A routing-only `case` takes none when nothing matches and there is no `else:`. A flow
-output field that reads only nodes a `case` may skip returns `null` when they were
-skipped (typed `Optional[T]`, as if `:- null` were written), in root, `defs:`, and
-inline bodies; a join over an exhaustive `case` never does. A LOOP body field like
-that sets the carried field to null. Templates and comparisons keep their null
-behavior; arithmetic needs a `:-` default.
+node. A `case` whose result is used needs an `else:`, every tag of a non-nullable
+`Literal` `on:`, or `when: true` and `when: false` on a non-nullable `bool` `on:`;
+routing on a `Literal` node output is always exhaustiveness-checked. A routing-only
+`case` takes none when nothing matches and there is no `else:`. A flow output field that
+reads only nodes a `case` may skip returns `null` when they were skipped (typed
+`Optional[T]`, as if `:- null` were written), in root, `defs:`, and inline bodies; a join
+over an exhaustive `case` never does. A LOOP body field like that sets the carried field
+to null. Templates and comparisons keep their null behavior; arithmetic needs a `:-`
+default.
 
 **Branch on a union.** Route with `on: ${d.output.action}` (the tag field). Each
 `when:` target, nodes chained to it by plain refs or `depends_on`, and inline `call(...)`s
@@ -452,8 +453,9 @@ that change; a field it omits keeps its value. This is the shape
   and MAP `over:` reject it.
 - **A member-only union field fails to load outside its branch.** `${d.output.qty}`
   where only `Buy` has `qty` must sit under `when: buy` (or an `isinstance` case).
-  A `when:` value that isn't a tag of the union is a load error, and inline child
-  bodies are typed before narrowing.
+  A `when:` value that isn't a tag of the union is a load error (``case node 'route':
+  `when: buyy` is not a tag of `on: ${d.output.action}` (`Literal["buy","sell"]`); use one
+  of: buy, sell``), and inline child bodies are typed before narrowing.
 - **Flow-level `asserts:` read `input.X` (boundary, before any node) or `node.output`
   (post, after the terminal).** An exact unqualified input name is shorthand (`age`
   means `input.age`) and takes precedence over a same-named node; dotted input reads

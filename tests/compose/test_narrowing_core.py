@@ -13,6 +13,7 @@ from yian.compose.nodes.case import (
     isinstance_conjuncts,
     searched_param_guards,
 )
+from yian.compose.validate.case_exhaustive import check_case_when_values
 from yian.compose.validate.narrowing import (
     Exact,
     Members,
@@ -94,7 +95,7 @@ def _data(src: str, dst: str, group: str = "x", *, optional: bool = False) -> Ed
     )
 
 
-def _compute(nodes, edges, producers, inputs=None, *, diagnostics=None):
+def _compute(nodes, edges, producers, inputs=None):
     """Run the narrowing pass over hand-built nodes and edges."""
     descriptors = {}
     all_edges = list(edges)
@@ -111,7 +112,6 @@ def _compute(nodes, edges, producers, inputs=None, *, diagnostics=None):
         producers,
         inputs or {},
         registry=_REGISTRY,
-        diagnostics=diagnostics,
     )
 
 
@@ -642,6 +642,28 @@ def test_defensive_else_over_a_nullable_base_sees_none():
     assert _view_type(narrowing, "e").kind is ValueKind.NONE
 
 
+def _descriptors(nodes) -> dict[str, NodeDescriptor]:
+    """The descriptors `_compute` builds from `nodes`, by id."""
+    descriptors = {}
+    for item in nodes:
+        desc = item[0] if isinstance(item, tuple) else item
+        descriptors[desc.id] = desc
+    return descriptors
+
+
+def test_a_when_value_that_is_not_a_tag_narrows_its_branch_to_nothing():
+    """Narrowing tolerates a typo'd tag: its branch gets an empty member set."""
+    nodes = [
+        _node("d"),
+        _case("c", "${d.output.action}", [("buyy", "b")], "h"),
+        _node("b"),
+        _node("h"),
+    ]
+    narrowing = _compute(nodes, [], {"d": _decision_contract()})
+
+    assert narrowing.environment("b") == {"d.output": Members(())}
+
+
 def test_a_when_value_that_is_not_a_tag_is_a_load_error():
     """A typo'd tag on a union base is rejected with the union's tags."""
     nodes = [
@@ -650,12 +672,15 @@ def test_a_when_value_that_is_not_a_tag_is_a_load_error():
         _node("b"),
         _node("h"),
     ]
+    producers = {"d": _decision_contract()}
+    narrowing = _compute(nodes, [], producers)
     with pytest.raises(LoadError) as caught:
-        _compute(nodes, [], {"d": _decision_contract()})
-    assert str(caught.value).startswith(
-        "when: buyy is not a tag of the union at ${d.output.action} "
-        "(tags: buy, hold, sell)"
+        check_case_when_values(_descriptors(nodes), producers, {}, narrowing=narrowing)
+    message = str(caught.value)
+    assert message.startswith(
+        "case node 'c': `when: buyy` is not a tag of `on: ${d.output.action}` ("
     )
+    assert message.endswith("); use one of: buy, hold, sell")
 
 
 def test_the_tag_error_points_at_the_when_value():
@@ -672,9 +697,17 @@ def test_the_tag_error_points_at_the_when_value():
         _node("b"),
         _node("s"),
     ]
+    producers = {"d": _decision_contract()}
+    narrowing = _compute(nodes, [], producers)
     diagnostics = LoadDiagnostics(label="flow.yaml", text="line\n" * 10)
     with pytest.raises(LoadError) as caught:
-        _compute(nodes, [], {"d": _decision_contract()}, diagnostics=diagnostics)
+        check_case_when_values(
+            _descriptors(nodes),
+            producers,
+            {},
+            narrowing=narrowing,
+            diagnostics=diagnostics,
+        )
     assert caught.value.diagnostic.frames[-1].range == ranges[1]
 
 
@@ -687,12 +720,15 @@ def test_a_tag_error_on_a_base_only_the_branch_view_has():
         _node("l"),
         _node("h"),
     ]
+    producers = {"d": _decision_contract()}
+    narrowing = _compute(nodes, [], producers)
     with pytest.raises(LoadError) as caught:
-        _compute(nodes, [], {"d": _decision_contract()})
-    assert str(caught.value).startswith(
-        "when: limt is not a tag of the union at ${d.output.leg.type} "
-        "(tags: limit, market)"
+        check_case_when_values(_descriptors(nodes), producers, {}, narrowing=narrowing)
+    message = str(caught.value)
+    assert message.startswith(
+        "case node 'c2': `when: limt` is not a tag of `on: ${d.output.leg.type}` ("
     )
+    assert message.endswith("); use one of: limit, market")
 
 
 # --------------------------------------------------------------------------- #

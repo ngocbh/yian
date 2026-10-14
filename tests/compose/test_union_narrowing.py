@@ -553,9 +553,11 @@ def test_a_when_that_is_not_a_tag_is_a_located_error():
     text = _flow(_case("route", _ON, [("buyy", "b")], else_="e"), _code("b"), _code("e"))
     with pytest.raises(LoadError) as caught:
         load_flow(text)
-    assert (
-        "when: buyy is not a tag of the union at ${d.output.action} (tags: buy, hold, sell)"
-    ) in str(caught.value)
+    message = str(caught.value)
+    assert message.startswith(
+        "case node 'route': `when: buyy` is not a tag of `on: ${d.output.action}` ("
+    )
+    assert message.endswith("); use one of: buy, hold, sell")
     line = next(n for n, row in enumerate(text.splitlines(), 1) if "when: buyy" in row)
     assert caught.value.diagnostic.frames[-1].range.start_line == line
 

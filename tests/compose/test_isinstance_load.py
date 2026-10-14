@@ -557,12 +557,13 @@ output: ${b.output | o.output}
 
 
 def test_isinstance_in_a_case_on():
-    # `on:` matches its value against each `when:` as a string, so a bool `on:` value only
-    # reaches `else:`. The run succeeding shows the `on:` binding evaluated with the table.
+    # The bool `on:` value matches `when: true`, so a buy routes to `b`; the run evaluates
+    # the `on:` binding with the table.
     flow = load_flow(_ON_FLOW)
-    assert flow.compiled.nodes["route"].types == {"Buy": BUY}
+    assert flow.compiled.nodes["route"].types == {"Buy": BUY, "bool": type_for("bool", {})}
     result = run_flow(flow, {"order": A_BUY})
     assert result.status == "succeeded", result.failure
+    assert result.output == "buy"
     flow.compiled.nodes["route"].types = {}
     failed = run_flow(flow, {"order": A_BUY})
     assert failed.status == "failed"

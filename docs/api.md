@@ -180,7 +180,9 @@ raises it for an unfinished run before appending any record.
   An empty key is rejected. The key never enters the run log, events, results, or
   manifests, and validation errors do not echo it. When a provider rejects the key
   and echoes it, in full or masked like `sk-abc****wxyz`, the key and those
-  fragments are replaced with `[REDACTED]` before the failure is recorded. The log
+  fragments are replaced with `[REDACTED]` before the failure is recorded. The same
+  applies to whichever credential the call used instead: the provider's saved login
+  or its key environment variable. The log
   records only a nonsecret marker on those agents, so pass the key again as
   `resume_flow(..., api_key=key)` or `result.backward(..., api_key=key)`; without
   it, agents marked for the key fail when they call their model instead of reading

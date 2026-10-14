@@ -752,6 +752,23 @@ def test_model_answers_reports_a_missing_extra(monkeypatch):
     assert "pip install" in problem
 
 
+def test_model_answers_scrubs_the_azure_ad_token(monkeypatch, tmp_path):
+    monkeypatch.setenv("YIAN_AUTH_FILE", str(tmp_path / "auth.json"))
+    token, key = "private-ad-token-k7qz", "private-azure-key-m2vd"
+    monkeypatch.setenv("AZURE_OPENAI_AD_TOKEN", token)
+    model = StubModel()
+    model.failure = RuntimeError(f"bad token {token} key {key}")
+
+    class Client:
+        def get_llm(self):
+            return model
+
+    monkeypatch.setattr(auth_cli, "create_llm_client", lambda *a, **k: Client())
+    problem = auth_cli._model_answers("azure", "dep", key, "https://r.openai.azure.com/")
+    assert "[REDACTED]" in problem
+    assert token not in problem and key not in problem
+
+
 def test_env_override_note_agrees_with_the_number_of_variables(monkeypatch, setup_auth):
     store, service = setup_auth
     result = runner.invoke(app, ["auth"])

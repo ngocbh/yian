@@ -1,15 +1,17 @@
-"""Remove a host API key from provider errors before anything records them.
+"""Remove API keys and tokens from provider errors before anything records them.
 
 Providers can echo a rejected key in their error text, in full or masked with a
 visible prefix and suffix (OpenAI's 401 says ``Incorrect API key provided:
-sk-abc****wxyz``). Callers that hold a host key scrub the exceptions their model
-calls raise, so failure messages and tracebacks never carry any part of it.
+sk-abc****wxyz``). Callers scrub the exceptions their model calls raise of every
+credential the call may send, so failure messages and tracebacks never carry
+any part of one.
 """
 
 from __future__ import annotations
 
 import functools
 import re
+from collections.abc import Iterable
 from typing import Optional, Union
 
 from pydantic import SecretStr
@@ -96,22 +98,62 @@ def redact_key(text: str, key: Union[str, SecretStr, None]) -> str:
     return _masked_pattern(extra).sub(masked, text)
 
 
+def redact_keys(text: str, keys: Iterable[Union[str, SecretStr, None]]) -> str:
+    """Replace every key in ``keys`` and masked echoes of each in ``text``, longest first.
+
+    Args:
+        text (`str`): Text that may contain the keys.
+        keys (`Iterable[str | SecretStr | None]`): The keys; `None` and empty
+            entries are ignored.
+
+    Returns:
+        `str`: ``text`` without the keys or their masked fragments.
+    """
+    return _redact_plains(text, _plains(keys))
+
+
+def _plains(keys: Iterable[Union[str, SecretStr, None]]) -> tuple[str, ...]:
+    """Return the distinct nonempty plain keys, longest first."""
+    return tuple(sorted({plain for plain in map(_plain, keys) if plain}, key=len, reverse=True))
+
+
+def _redact_plains(text: str, plains: tuple[str, ...]) -> str:
+    """Redact each of ``plains`` from ``text`` in order."""
+    for plain in plains:
+        text = redact_key(text, plain)
+    return text
+
+
 def scrub_key(exc: BaseException, key: Union[str, SecretStr, None]) -> None:
     """Redact ``key`` in place from ``exc``, its chained causes, and group members.
+
+    The same as `scrub_keys` with one key.
+
+    Args:
+        exc (`BaseException`): The raised exception.
+        key (`str | SecretStr | None`): The key; `None` or empty does nothing.
+    """
+    scrub_keys(exc, (key,))
+
+
+def scrub_keys(exc: BaseException, keys: Iterable[Union[str, SecretStr, None]]) -> None:
+    """Redact every key in place from ``exc``, its chained causes, and group members.
 
     On ``exc``, every ``__cause__`` and ``__context__``, and every exception
     group member, this rewrites string ``args``, a writable string ``message``
     attribute, and ``__notes__``. Other attributes, such as an SDK error's
     response body, are not rewritten. An exception group's own message is
     read-only and stays as raised. An exception that cannot be rewritten is
-    skipped.
+    skipped. Keys are redacted longest first, so a key that contains another is
+    removed whole.
 
     Args:
         exc (`BaseException`): The raised exception.
-        key (`str | SecretStr | None`): The key; `None` or empty does nothing.
+        keys (`Iterable[str | SecretStr | None]`): The keys; `None` and empty
+            entries are ignored.
     """
-    plain = _plain(key)
-    if not plain:
+    plains = _plains(keys)
+    if not plains:
         return
     seen: set[int] = set()
     pending: list[BaseException] = [exc]
@@ -122,27 +164,31 @@ def scrub_key(exc: BaseException, key: Union[str, SecretStr, None]) -> None:
         seen.add(id(current))
         # A rewrite that fails must neither stop the walk nor replace the provider error.
         try:
-            _rewrite(current, plain)
+            _rewrite(current, plains)
         except Exception:
             pass
         pending.extend(_linked(current))
 
 
-def _rewrite(exc: BaseException, plain: str) -> None:
+def _rewrite(exc: BaseException, plains: tuple[str, ...]) -> None:
     """Redact one exception's string ``args``, ``message``, and ``__notes__``."""
     try:
-        exc.args = tuple(redact_key(arg, plain) if isinstance(arg, str) else arg for arg in exc.args)
+        exc.args = tuple(
+            _redact_plains(arg, plains) if isinstance(arg, str) else arg for arg in exc.args
+        )
     except Exception:
         pass
     try:
         message = getattr(exc, "message", None)
         if isinstance(message, str):
-            exc.message = redact_key(message, plain)
+            exc.message = _redact_plains(message, plains)
     except Exception:
         pass
     notes = getattr(exc, "__notes__", None)
     if isinstance(notes, list):
-        notes[:] = [redact_key(note, plain) if isinstance(note, str) else note for note in notes]
+        notes[:] = [
+            _redact_plains(note, plains) if isinstance(note, str) else note for note in notes
+        ]
 
 
 def _linked(exc: BaseException) -> list[BaseException]:

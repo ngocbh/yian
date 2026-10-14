@@ -17,8 +17,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 import yian.json_codec as json_codec
 from yian.llm_clients import model_from_config
 from yian.llm_clients.config import pop_host_credentials
-from yian.llm_clients.connection import resolve_model_config
-from yian.llm_clients.redact import scrub_key
+from yian.llm_clients.connection import resolve_model_config, scrub_call_credentials
 from yian.memory.contracts import (
     JsonObject,
     JsonValue,
@@ -350,22 +349,22 @@ class _ProfileSession:
             raise _read_error("learn", exc) from exc
         messages = [SystemMessage(content=_SYSTEM),
                     HumanMessage(content=self._material(context, current_text, current_version))]
+        config = dict(memory._llm_config)
+        if memory._api_key is not None:
+            config["api_key"] = memory._api_key
+        if memory._base_url is not None:
+            config["base_url"] = memory._base_url
         try:
-            config = dict(memory._llm_config)
-            if memory._api_key is not None:
-                config["api_key"] = memory._api_key
-            if memory._base_url is not None:
-                config["base_url"] = memory._base_url
             model = model_from_config(resolve_model_config(config))
         except Exception as exc:
-            scrub_key(exc, memory._api_key)
+            scrub_call_credentials(exc, config)
             raise _error("learn", "profile.model_construction",
                          "profile learner model construction failed") from exc
         try:
             reply = model.invoke(messages)
         except Exception as exc:
-            # Providers may echo a rejected key; the chained cause must not carry it.
-            scrub_key(exc, memory._api_key)
+            # Providers may echo any credential the call sent; the chained cause must not carry it.
+            scrub_call_credentials(exc, config)
             raise _error("learn", "profile.provider", "profile learner invocation failed",
                          retryable=True) from exc
         text = _parse_reply(reply, current_text, memory.max_chars)

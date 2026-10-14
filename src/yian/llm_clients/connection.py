@@ -5,7 +5,8 @@ There is no built-in provider or model: defaults come only from the environment
 storage owns credentials and refresh. This module resolves selection, records
 on every keyed agent which connection it uses (the saved login or the
 provider's key environment variable; OpenAI also a host key, subscription, or
-missing key), and provides injected credential callables to model transports.
+missing key), provides injected credential callables to model transports, and
+lists the credentials a call sends so its errors can be scrubbed of them.
 Recorded metadata is internal, never a YAML option, and never contains a token
 or API key. Compilation may use the detached snapshot without authentication
 effects.
@@ -20,8 +21,9 @@ import os
 from typing import Any
 from urllib.parse import urlsplit
 
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
+from .api_key_env import get_api_key_env
 from .auth import (
     ApiKeyCredentials,
     AuthError,
@@ -39,6 +41,7 @@ from .config import (
     validate_base_url,
 )
 from .provider_blocks import block_schema
+from .redact import scrub_keys
 
 _API_ENDPOINT = "https://api.openai.com/v1"
 _SUBSCRIPTION_ENDPOINT = "https://chatgpt.com/backend-api/codex"
@@ -63,6 +66,12 @@ _HOST_KEY_MISSING = (
     "This run's {provider} API key came from the host's llm_config.api_key and is not "
     "recorded; pass api_key to resume_flow or RunResult.backward"
 )
+# Key variables a provider SDK reads after the provider's own, and only when yian
+# passes it no key.
+_KEY_ENV_FALLBACKS = {"google": ("GEMINI_API_KEY",), "azure": ("OPENAI_API_KEY",)}
+# Token variables a provider SDK may read and send whatever key yian passes it
+# (older Anthropic SDKs send ANTHROPIC_AUTH_TOKEN beside the key).
+_ALWAYS_SENT_ENV = {"azure": ("AZURE_OPENAI_AD_TOKEN",), "anthropic": ("ANTHROPIC_AUTH_TOKEN",)}
 
 
 def missing_model_message(
@@ -707,3 +716,90 @@ def connection_credentials(
             "The OpenAI environment API key changed since this run started; start a new run"
         )
     return ApiKeyCredentials(key)
+
+
+def call_credentials(config: dict[str, Any] | LLMConfig | None) -> tuple[str, ...]:
+    """Return every credential the model call built from ``config`` may send.
+
+    This follows the precedence of `model_from_config` and the provider SDKs. A
+    config ``api_key`` is sent in place of any saved login or key variable.
+    Otherwise a ``store`` connection sends its provider's saved login, read
+    without refresh, so expired subscription tokens count too. Otherwise (an
+    ``environment`` or ``legacy_environment`` connection, or none) the client
+    reads the first set variable of the provider's key variable, then the SDK
+    fallbacks. An ``azure`` or ``anthropic`` call may also send
+    ``AZURE_OPENAI_AD_TOKEN`` or ``ANTHROPIC_AUTH_TOKEN`` when set. A config without connection metadata is resolved first, as
+    `model_from_config` does; `None` resolves like ``{}``. Each step is guarded,
+    so a failing one still leaves the others' credentials.
+
+    Args:
+        config (`dict[str, Any] | LLMConfig | None`): The config the model call
+            was built from.
+
+    Returns:
+        `tuple[str, ...]`: The distinct plain credentials, possibly empty. Never raises.
+    """
+    found: list[str] = []
+    provider = host_key = connection = None
+    try:
+        if config is None:
+            config = {}
+        if isinstance(config, LLMConfig):
+            provider, host_key = config.provider, config.api_key
+        elif isinstance(config, dict):
+            provider, host_key = config.get("provider"), config.get("api_key")
+            connection = config.get("_connection")
+        if isinstance(host_key, SecretStr):
+            host_key = host_key.get_secret_value()
+        if isinstance(host_key, str) and host_key:
+            found.append(host_key)
+        else:
+            host_key = None
+    except Exception:
+        pass
+    if connection is None and (host_key is None or provider is None):
+        try:
+            resolved = resolve_model_config(config)
+            provider, connection = resolved.get("provider"), resolved.get("_connection")
+        except Exception:
+            pass
+    if not isinstance(provider, str):
+        return tuple(dict.fromkeys(found))
+    provider = provider.lower()
+    if host_key is None:
+        try:
+            source = None if connection is None else connection["source"]
+            if source == "store":
+                found.extend(AuthStore(connection["store_path"]).saved_secrets(provider))
+            elif source in (None, "environment", "legacy_environment"):
+                names = (get_api_key_env(provider), *_KEY_ENV_FALLBACKS.get(provider, ()))
+                values = (os.environ.get(name) for name in names if name)
+                key = next((value for value in values if value), None)
+                if key:
+                    found.append(key)
+        except Exception:
+            pass
+    try:
+        for name in _ALWAYS_SENT_ENV.get(provider, ()):
+            if os.environ.get(name):
+                found.append(os.environ[name])
+    except Exception:
+        pass
+    return tuple(dict.fromkeys(found))
+
+
+def scrub_call_credentials(
+    exc: BaseException, config: dict[str, Any] | LLMConfig | None
+) -> None:
+    """Redact every credential `call_credentials` finds for ``config`` from ``exc`` in place.
+
+    Args:
+        exc (`BaseException`): The exception the model call raised.
+        config (`dict[str, Any] | LLMConfig | None`): The config the model call
+            was built from.
+    """
+    try:
+        scrub_keys(exc, call_credentials(config))
+    except Exception:
+        # Scrubbing is best effort; the provider error must survive it.
+        pass

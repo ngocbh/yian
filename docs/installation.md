@@ -83,7 +83,9 @@ first node, naming the variable.
 
 An agent's credential comes from, highest first: a Python host's
 `llm_config.api_key`, the provider's saved login, then the provider's key variable
-(`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, ...). Endpoints still come from
+(`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, ...). Whatever its source, a credential
+that a provider echoes in an error is replaced with `[REDACTED]` before the failure
+is recorded or printed. Endpoints still come from
 environment variables at run time (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`,
 `VLLM_BASE_URL`, `OLLAMA_BASE_URL`, ...); a saved login stores only the key, plus
 the endpoint for Azure. Azure's API version always comes from `OPENAI_API_VERSION`.

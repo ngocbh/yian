@@ -15,7 +15,7 @@ from pydantic import SecretStr
 
 import yian.json_codec as json_codec
 import yian.llm_clients as llm_clients
-from yian.llm_clients.connection import legacy_connection_config
+from yian.llm_clients.connection import legacy_connection_config, scrub_call_credentials
 from yian.expr.lineage import FeedbackValue, has_feedback, validate_feedback
 from yian.nodes.agent.text import text_of
 from yian.nodes.base import BackwardContext, BackwardResult
@@ -127,7 +127,8 @@ def backward_agent(
     Raises:
         `TypeError`: Context, feedback, capture fields, or response channels are malformed.
         `ValueError`: Feedback shape, required capture, or response JSON is invalid.
-            Model exceptions propagate unchanged; there is no correction or retry loop.
+            Model exceptions propagate with every credential the call sent
+            scrubbed; there is no correction or retry loop.
     """
     if type(context) is not BackwardContext or type(feedback) is not tuple:
         raise TypeError("AGENT backward requires a BackwardContext and a feedback tuple")
@@ -158,6 +159,11 @@ def backward_agent(
     config = legacy_connection_config(data["effective_llm_config"])
     if api_key is not None:
         config["api_key"] = api_key
-    model = llm_clients.model_from_config(config)
-    response = model.invoke([SystemMessage(content=_SYSTEM), HumanMessage(content=prompt)])
+    try:
+        model = llm_clients.model_from_config(config)
+        response = model.invoke([SystemMessage(content=_SYSTEM), HumanMessage(content=prompt)])
+    except BaseException as exc:
+        # Providers may echo any credential the call sent; the failure record must not carry it.
+        scrub_call_credentials(exc, config)
+        raise
     return _parse_result(text_of(response))

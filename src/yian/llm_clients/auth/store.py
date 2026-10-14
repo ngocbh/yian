@@ -258,6 +258,33 @@ class AuthStore:
             (item for item in state.selections if item.provider == provider), None
         )
 
+    def saved_secrets(self, provider: str) -> tuple[str, ...]:
+        """Return a provider's saved secrets as stored, without refresh or writes.
+
+        Reads without the lock and returns expired subscription tokens as they
+        are, so callers can scrub every secret the login may send.
+
+        Args:
+            provider (`str`): Saved provider name.
+
+        Returns:
+            `tuple[str, ...]`: ``(api_key,)`` for an API-key login,
+                ``(access_token, refresh_token)`` for a subscription, and ``()``
+                for a login without a credential or no login.
+
+        Raises:
+            `AuthError`: The store is malformed or cannot be read.
+        """
+        self._check_stopped()
+        with self._directory() as directory:
+            _, providers = self._load(directory)
+        credentials = providers.get(provider, (None, None))[1]
+        if isinstance(credentials, ApiKeyCredentials):
+            return (credentials.api_key,)
+        if isinstance(credentials, OAuthCredentials):
+            return (credentials.access_token, credentials.refresh_token)
+        return ()
+
     def save(
         self,
         provider: str,

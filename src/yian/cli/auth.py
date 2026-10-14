@@ -21,9 +21,10 @@ from yian.llm_clients.api_key_env import (
     PROVIDER_API_KEY_ENV,
 )
 from yian.llm_clients.config import SUPPORTED_LLM_PROVIDERS, validate_base_url
+from yian.llm_clients.connection import call_credentials
 from yian.llm_clients.factory import create_llm_client
 from yian.llm_clients.model_list import ModelListError, list_models
-from yian.llm_clients.redact import redact_key, scrub_key
+from yian.llm_clients.redact import redact_keys, scrub_keys
 
 _KINDS = {"api_key": "api-key", "subscription": "subscription", "none": "none"}
 _CANCELLED = "Authentication cancelled; the previous login is unchanged"
@@ -307,7 +308,8 @@ def _model_answers(
 
     Returns:
         `str | None`: `None` when the model replied; otherwise the error type and
-        a short message without the key, or the install hint for a missing extra.
+        a short message without any credential the call sent, or the install
+        hint for a missing extra.
     """
     # The Ollama client ignores timeout and max_retries.
     options: dict = {"max_retries": 0, "timeout": 30}
@@ -328,10 +330,13 @@ def _model_answers(
     except ImportError as error:
         return str(error)
     except Exception as error:
-        scrub_key(error, key)
+        # Besides the key, an SDK may send a token variable (AZURE_OPENAI_AD_TOKEN). A
+        # keyless check sends no saved or ambient key, so none is looked up.
+        secrets = () if key is None else call_credentials({"provider": provider, "api_key": key})
+        scrub_keys(error, secrets)
         # Some errors, such as pydantic's ValidationError, build their text from
-        # fields scrub_key does not rewrite, so the text is redacted again.
-        text = " ".join(redact_key(str(error), key).split())
+        # fields scrub_keys does not rewrite, so the text is redacted again.
+        text = " ".join(redact_keys(str(error), secrets).split())
         return f"{type(error).__name__}: {text[:200]}"
     return None
 

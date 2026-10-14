@@ -98,6 +98,32 @@ def redact_key(text: str, key: Union[str, SecretStr, None]) -> str:
     return _masked_pattern(extra).sub(masked, text)
 
 
+def redact_keys(text: str, keys: Iterable[Union[str, SecretStr, None]]) -> str:
+    """Replace every key in ``keys`` and masked echoes of each in ``text``, longest first.
+
+    Args:
+        text (`str`): Text that may contain the keys.
+        keys (`Iterable[str | SecretStr | None]`): The keys; `None` and empty
+            entries are ignored.
+
+    Returns:
+        `str`: ``text`` without the keys or their masked fragments.
+    """
+    return _redact_plains(text, _plains(keys))
+
+
+def _plains(keys: Iterable[Union[str, SecretStr, None]]) -> tuple[str, ...]:
+    """Return the distinct nonempty plain keys, longest first."""
+    return tuple(sorted({plain for plain in map(_plain, keys) if plain}, key=len, reverse=True))
+
+
+def _redact_plains(text: str, plains: tuple[str, ...]) -> str:
+    """Redact each of ``plains`` from ``text`` in order."""
+    for plain in plains:
+        text = redact_key(text, plain)
+    return text
+
+
 def scrub_key(exc: BaseException, key: Union[str, SecretStr, None]) -> None:
     """Redact ``key`` in place from ``exc``, its chained causes, and group members.
 
@@ -126,7 +152,7 @@ def scrub_keys(exc: BaseException, keys: Iterable[Union[str, SecretStr, None]]) 
         keys (`Iterable[str | SecretStr | None]`): The keys; `None` and empty
             entries are ignored.
     """
-    plains = tuple(sorted({plain for plain in map(_plain, keys) if plain}, key=len, reverse=True))
+    plains = _plains(keys)
     if not plains:
         return
     seen: set[int] = set()
@@ -144,30 +170,25 @@ def scrub_keys(exc: BaseException, keys: Iterable[Union[str, SecretStr, None]]) 
         pending.extend(_linked(current))
 
 
-def _redact_all(text: str, plains: tuple[str, ...]) -> str:
-    """Redact each of ``plains`` from ``text`` in order."""
-    for plain in plains:
-        text = redact_key(text, plain)
-    return text
 
 
 def _rewrite(exc: BaseException, plains: tuple[str, ...]) -> None:
     """Redact one exception's string ``args``, ``message``, and ``__notes__``."""
     try:
         exc.args = tuple(
-            _redact_all(arg, plains) if isinstance(arg, str) else arg for arg in exc.args
+            _redact_plains(arg, plains) if isinstance(arg, str) else arg for arg in exc.args
         )
     except Exception:
         pass
     try:
         message = getattr(exc, "message", None)
         if isinstance(message, str):
-            exc.message = _redact_all(message, plains)
+            exc.message = _redact_plains(message, plains)
     except Exception:
         pass
     notes = getattr(exc, "__notes__", None)
     if isinstance(notes, list):
-        notes[:] = [_redact_all(note, plains) if isinstance(note, str) else note for note in notes]
+        notes[:] = [_redact_plains(note, plains) if isinstance(note, str) else note for note in notes]
 
 
 def _linked(exc: BaseException) -> list[BaseException]:

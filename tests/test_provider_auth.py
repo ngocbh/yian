@@ -185,6 +185,7 @@ def test_saved_secrets_returns_each_kind_without_refresh(tmp_path, monkeypatch):
     assert missing.saved_secrets("anthropic") == ()
     assert not missing.path.parent.exists()
 
+
 def test_remove_provider_and_default(tmp_path):
     store = AuthStore(tmp_path / "auth" / "auth.json")
     store.save("openai", ApiKeyCredentials("k-open"), "gpt")

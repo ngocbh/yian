@@ -24,7 +24,7 @@ from yian.llm_clients.config import SUPPORTED_LLM_PROVIDERS, validate_base_url
 from yian.llm_clients.connection import call_credentials
 from yian.llm_clients.factory import create_llm_client
 from yian.llm_clients.model_list import ModelListError, list_models
-from yian.llm_clients.redact import redact_key, scrub_keys
+from yian.llm_clients.redact import redact_keys, scrub_keys
 
 _KINDS = {"api_key": "api-key", "subscription": "subscription", "none": "none"}
 _CANCELLED = "Authentication cancelled; the previous login is unchanged"
@@ -330,16 +330,13 @@ def _model_answers(
     except ImportError as error:
         return str(error)
     except Exception as error:
-        # Besides the key, an Azure client also sends AZURE_OPENAI_AD_TOKEN.
-        secrets = call_credentials({"provider": provider, "api_key": key})
+        # Besides the key, an Azure client also sends AZURE_OPENAI_AD_TOKEN. A
+        # keyless check sends no saved or ambient key, so none is looked up.
+        secrets = () if key is None else call_credentials({"provider": provider, "api_key": key})
         scrub_keys(error, secrets)
         # Some errors, such as pydantic's ValidationError, build their text from
         # fields scrub_keys does not rewrite, so the text is redacted again.
-        text = str(error)
-        # Longest first, as scrub_keys does, so a secret containing another goes whole.
-        for secret in sorted(secrets, key=len, reverse=True):
-            text = redact_key(text, secret)
-        text = " ".join(text.split())
+        text = " ".join(redact_keys(str(error), secrets).split())
         return f"{type(error).__name__}: {text[:200]}"
     return None
 

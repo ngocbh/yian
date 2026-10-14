@@ -24,7 +24,6 @@ from urllib.parse import urlsplit
 from pydantic import SecretStr, ValidationError
 
 from .api_key_env import get_api_key_env
-
 from .auth import (
     ApiKeyCredentials,
     AuthError,

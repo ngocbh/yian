@@ -152,6 +152,19 @@ output: ${ask.output}
     assert _line(error) == 6
 
 
+def test_adaptive_questions_mode_past_a_recursive_alias_is_located() -> None:
+    source = """\
+id: gate
+name: gate
+nodes:
+  ask: &a {kind: human_input, mode: plain, adaptive_questions: *a}
+output: ${ask.output}
+"""
+    error = _load_error(source)
+    assert ADAPTIVE in str(error)
+    assert _line(error) == 4
+
+
 def test_adaptive_questions_mode_wins_over_an_unknown_key() -> None:
     source = """\
 id: gate

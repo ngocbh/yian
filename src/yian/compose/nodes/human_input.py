@@ -56,8 +56,8 @@ class HumanInputDescriptor(NodeDescriptor):
     Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
     the Compose-only `range`/`field_ranges` parse metadata), the `input:`/`output:` signature surface, and the
     template `parse` from `NodeDescriptor`, which it wraps to reject the removed
-    `adaptive_questions.mode:` key, any other `adaptive_questions:` key but `prompt`/
-    `llm_config`/`retries`, a non-text `adaptive_questions.prompt:` brief, and a
+    `adaptive_questions.mode:` key, any `adaptive_questions:` key other than `prompt`,
+    `llm_config`, or `retries`, a non-text `adaptive_questions.prompt:` brief, and a
     non-text `question`/`header`/option `label`/`description` in a literal `questions:` list,
     and to add a `("text", "questions[i]...")` range for each question string and a
     `("text", "adaptive_questions.prompt")` range for the adaptive brief to `field_ranges`. It
@@ -86,7 +86,7 @@ class HumanInputDescriptor(NodeDescriptor):
 
     @classmethod
     def parse(cls, node_id: str, cursor: SourceCursor) -> "HumanInputDescriptor":
-        """Reject unknown `adaptive_questions:` keys and non-text brief or question text; range it.
+        """Reject unknown `adaptive_questions:` keys and non-text brief or question text; range text.
 
         After the template `parse`, rejects the first `question`/`header`/option `label`/
         `description` in a literal `questions:` list that is present but not a string, at that
@@ -99,19 +99,20 @@ class HumanInputDescriptor(NodeDescriptor):
 
         Raises:
             `LoadError`: The `adaptive_questions:` block authors `mode:` or a key other than
-                `prompt`, `llm_config`, `retries`, its `prompt:` brief is
-                not text (YAML read it as a number, boolean, date, list, or mapping), the
+                `prompt`/`llm_config`/`retries`, its `prompt:` brief is not text (YAML read
+                it as a number, boolean, date, list, or mapping), the
                 template `parse` rejects the node, or a literal question's `question`,
                 `header`, option `label`, or option `description` is present but not text.
         """
         adaptive = cursor.get("adaptive_questions")
-        if isinstance(adaptive, dict) and "mode" in adaptive:
-            raise LoadDiagnostics.from_cursor(cursor).error(
-                f"node {node_id!r} (kind=human_input): `adaptive_questions.mode:` was removed: "
-                f"{MODE_REMOVED_FIX}",
-                range=cursor.child("adaptive_questions").key_range_of("mode"),
-            )
         if isinstance(adaptive, dict):
+            if "mode" in adaptive:
+                raise LoadDiagnostics.from_cursor(cursor).error(
+                    f"node {node_id!r} (kind=human_input): `adaptive_questions.mode:` was "
+                    f"removed: {MODE_REMOVED_FIX}",
+                    range=_key_range(cursor.child("adaptive_questions"), "mode")
+                    or cursor.key_range_of("adaptive_questions"),
+                )
             for key in adaptive:
                 if key not in _ADAPTIVE_KEYS:
                     raise LoadDiagnostics.from_cursor(cursor).error(

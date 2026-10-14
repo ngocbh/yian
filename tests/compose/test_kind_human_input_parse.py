@@ -395,6 +395,8 @@ nodes:
 """
     error = _parse_error(flow)
     assert _unknown_adaptive(1) in str(error)
+    rng = error.diagnostic.frames[-1].range
+    assert (rng.start_line, rng.start_col) == (6, 7)
 
 
 def test_human_input_parse_rejects_a_merged_unknown_adaptive_key():

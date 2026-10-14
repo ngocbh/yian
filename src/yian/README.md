@@ -38,6 +38,7 @@ know the shape of it:
 
 ```
 diagnostics.py semantic failures, resolved presentation, origins/resolver routing [leaf]
+json_codec.py JSON text for values holding ints of any size; stdlib only     [leaf]
 typesys/      typed value system (values) + variable pool                 [leaf]
 events.py     transient run/node observer vocabulary; imports diagnostics
 expr/         one ${...} grammar: parse -> AST -> evaluate / infer type / ref-walk
@@ -71,6 +72,8 @@ contracts, but never imports `compile.expand` or `compose`. Its `common.py`
 module owns the scheduler-state vocabulary used by the reducer.
 Compose imports `SourceRange` directly from `diagnostics`; `events` does not
 re-export that front-end presentation coordinate.
+`json_codec` imports only the standard library and sits below every package; any
+layer that reads or writes value JSON may import it.
 The package facade lazy-loads its declared root exports, so importing a leaf
 submodule does not bootstrap those higher layers.
 Package-root `run.py` sits above `compose`, `compile.expand`, and `runtime`: it
@@ -398,9 +401,10 @@ or its contract accepts null (a nullable or `None`-kind type). A present typed
 `build_value_as` validates the value against `Binding.contract` and the built value
 is discarded, so the payload reaches the node unconverted. A miss is `binding.type`.
 
-NaN and infinity are not yian values; `typesys.values.reject_nonfinite(value, where)`
-finds one at any depth and raises `TypeCheckError` with its path. The first boundary
-that sees one rejects it. The binder checks each resolved value and filled default, and fails `binding.evaluate` at the binding or default origin
+NaN, infinity, and complex numbers are not yian values;
+`typesys.values.reject_nonfinite(value, where)` finds one at any depth and raises
+`TypeCheckError` with its path (`... complex number <repr> is not a yian value` for a
+complex). The first boundary that sees one rejects it. The binder checks each resolved value and filled default, and fails `binding.evaluate` at the binding or default origin
 (`input 'y' at a[1]: non-finite number inf is not a yian value`); temporaries inside
 an expression are not checked. MAP checks its `over` list the same way, and an AGENT
 variable default fails `node.execute` at the default. `run_flow` raises `ValueError` for
@@ -409,10 +413,20 @@ config is a load error and host config fails before the run starts. Every run-lo
 (`canonical_typed`, `canonical_seed`, `encode_pool`) rejects one with a path; there is
 no opt-in. So a node output fails `contract.output` at the field path (`output at
 stats.a: ...`), selecting the declared field's origin, and a growth seed fails as a
-growth rejection (`contract.growth`). Nothing is recorded as null in its place. An int
-too large for a float in a `float` slot fails the type check at its path. An operator
-Python can't complete, or a value too long to render as text, fails like any other
-expression error (`binding.evaluate` in a binding, `node.execute` for a prompt).
+growth rejection (`contract.growth`). Nothing is recorded as null in its place. A
+top-level complex returned by a CODE node fails `contract.output` like NaN. An int
+too large for a float in a `float` slot fails the type check at its path.
+
+Ints of any size are values. Run-log JSON goes through `yian.json_codec`, which
+writes and reads ints of any size without changing Python's process-wide
+`sys.set_int_max_str_digits`; yian never calls it. Value bytes decode through
+`runtime.log.decode_typed_json`: pydantic's strict JSON path first, and the codec for
+a document with an int past the digit limit. Converting a long int costs time
+quadratic in its digits (about 0.2 s each way at 100,000 digits). Type-check messages
+show such an int as `<int too large to display>`. Rendering one as text (template
+interpolation, prompt text) still fails like any other expression error, as does an
+operator Python can't complete (`binding.evaluate` in a binding, `node.execute` for a
+prompt).
 
 An AGENT checks what the model sends back. `run_agent` passes `invoke_model` a
 `check_reply` that rejects a tool call whose arguments hold a NaN or infinity, before any call of
@@ -962,8 +976,8 @@ and `effective_llm_config`. Locals established before a later failure remain
 available; unresolved variables or an unrendered prompt are explicitly `None`,
 distinct from an empty record/string. The evaluator immediately detaches the
 snapshot, rejects repeated or post-close writes, and keeps capture faults as host
-faults. Supported values use canonical seed conversion, which rejects NaN and
-infinity like every codec; static capture validation is unchanged. Model configuration comes
+faults. Supported values use canonical seed conversion, which rejects NaN,
+infinity, and complex numbers like every codec; static capture validation is unchanged. Model configuration comes
 only from the accepted RunStarted map entry selected by the authored execution
 path, never a dynamic ID or mutable ambient/node config. No default or prompt is
 evaluated a second time to capture it.

@@ -57,8 +57,8 @@ anywhere else.
 
 `file` is a reserved placeholder (not yet authorable).
 
-A `float` is finite. NaN and infinity are not yian values, at any depth. The first
-boundary that sees one rejects it and names where it sits:
+A `float` is finite. NaN, infinity, and `complex` numbers are not yian values, at any
+depth. The first boundary that sees one rejects it and names where it sits:
 
 - a run input: `run_flow` raises `ValueError` before the log exists;
 - a binding's value (expression result, literal, or default): the node
@@ -76,7 +76,14 @@ boundary that sees one rejects it and names where it sits:
   structured AGENT retries, spending `retries:` even on a metadata NaN the model
   can't fix.
 
-A temporary inside an expression may be infinite; only a binding's final value is checked.
+A temporary inside an expression may be infinite or complex; only a binding's final
+value is checked.
+
+An `int` has no size limit. The run log and the run's outputs record it exactly,
+however many digits it has, and `resume_flow` reads it back unchanged. Rendering one
+as text (embedded in a string or in prompt text) still follows Python's digit limit;
+see
+[Expressions → Arithmetic follows Python](expressions.md#arithmetic-follows-python).
 
 ## `TypedValue` — self-describing, losslessly serializable
 

@@ -1427,7 +1427,8 @@ def canonical_typed(
     Raises:
         `TypeCheckError`:
             The live value does not satisfy ``declared``, has no supported inferred type,
-            or contains a NaN or infinity; ``path`` locates the rejected value.
+            or contains a NaN, infinity, or complex number; ``path`` locates the
+            rejected value.
         `ValueError`:
             The typed value contains data that cannot be represented as canonical JSON.
     """
@@ -1460,8 +1461,9 @@ def canonical_seed(value: Any) -> tuple[Any, Any]:
 
     Raises:
         `TypeCheckError`:
-            The value contains a NaN or infinity; checked before JSON mode can turn
-            it into ``null``. ``path`` locates the rejected number.
+            The value contains a NaN, infinity, or complex number; checked before
+            JSON mode can turn a NaN or infinity into ``null``. ``path`` locates the
+            rejected number.
         `ValueError`:
             The value is not canonicalizable.
     """
@@ -1488,7 +1490,7 @@ def encode_pool(pool: VariablePool) -> dict[str, Any]:
 
     Raises:
         `TypeCheckError`:
-            A stored or system value contains a NaN or infinity.
+            A stored or system value contains a NaN, infinity, or complex number.
         `ValueError`:
             A nested typed value cannot cross the JSON boundary.
     """

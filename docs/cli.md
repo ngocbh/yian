@@ -190,6 +190,9 @@ A fresh flow declares typed `input:` fields. Explicit inputs layer in this order
    A default applied by START was already validated at load and is not
    string-coerced.
 
+An `int` input may have any number of digits, from `--inputs`, `-i`/`--input`, or the
+interactive prompt.
+
 Every key must name a declared input: an unknown name (such as a typo) is a bad
 parameter (exit 2) that lists the declared inputs. When stdin is an interactive
 TTY, `yian` then prompts for each declaration still missing.
@@ -317,7 +320,8 @@ does not cancel the surrounding conversation.
 ## Output and progress
 
 - The terminal output is rendered as Markdown when it is a non-empty string,
-  otherwise printed as-is (e.g. a multi-field object).
+  otherwise printed as-is (e.g. a multi-field object). An int prints every digit,
+  however long, here and in `--verbose` node output.
 - **Per-node progress** is printed to **stderr** as the flow advances. On a real
   terminal each running node shows an animated spinner that is rewritten in place
   as a green `✓ node_id` on success, or a red `✗ node_id` (with the error on the

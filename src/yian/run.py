@@ -414,7 +414,7 @@ def run_flow(
             object without `drain`/`interrupted`.
         `ValueError`:
             An `inputs` key names no declared input, an `inputs` value holds a
-            NaN or infinity at any depth, or identity, worker count,
+            NaN, infinity, or complex number at any depth, or identity, worker count,
             model configuration, or prepared run state violates its contract,
             ``llm_config.api_key`` lacks ``llm_config.provider``,
             ``llm_config.base_url`` lacks

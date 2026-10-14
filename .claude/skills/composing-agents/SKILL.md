@@ -227,10 +227,13 @@ without rounding. Booleans are invalid.
 Bounds compose with lists, records, aliases, and nullable types. Defaults and
 supplied values are checked; cross-flow sources must fit the destination domain.
 
-A `float` is finite: a binding whose value is NaN or infinity (say an overflowing
-`${x * 10}`) fails its node with `binding.evaluate`, so keep the value in range
-(a `case` guard or a `code` clamp) or return null explicitly (a `case` value
-branch `then: null` under `output: Optional[...]`, or a `code` node returning `None`).
+A `float` is finite: a binding whose value is NaN, infinity, or complex (say an
+overflowing `${x * 10}`, or `${(0 - 8) ** 0.5}`) fails its node with
+`binding.evaluate`, so keep the value in range (a `case` guard or a `code` clamp)
+or return null explicitly (a `case` value branch `then: null` under
+`output: Optional[...]`, or a `code` node returning `None`). An `int` may have any
+number of digits and is recorded exactly; only rendering one too long as text (in
+a template or a prompt) fails.
 
 An explicit `Optional[int] = null` is a present default, distinct from no `=`;
 null is invalid for a non-nullable type, and an empty `=` is invalid. The default

@@ -117,23 +117,31 @@ compute fails like any other expression error:
 - a value holding an int too long to render as text (past Python's limit, 4300 digits
   by default), embedded in text or anywhere in a prompt: `"v=${10 ** 5000}"`.
 
+An int of any size is a value: a whole-string `${10 ** 5000}` binds the int, and the
+run log, outputs, and `resume_flow` keep every digit. Only rendering it as text fails.
+`render_as_json` writes all the digits, so `${render_as_json(big)}` is text you can
+embed or put in a prompt.
+
 The failure is `binding.evaluate` in a binding, `node.execute` at the CASE node in a
 searched `when:`, `assertion.failed` in a node or flow `asserts:`, and `node.execute` at the
 AGENT or HUMAN_INPUT node whose prompt can't render.
 
 ### Non-finite results
 
-NaN and infinity are not yian values. Float `+`, `-`, `*` and `/` that overflow give
-`inf` (`${input.x * 10}` with `x` = `1e308`; `**` and int-to-float overflow fail instead,
-see [Arithmetic follows Python](#arithmetic-follows-python)), and a binding whose final
-value holds NaN or infinity at any depth fails its node with `binding.evaluate`, naming
-the input and path (`input 'y' at a[1]: non-finite number inf is not a yian value`). A temporary
-inside an expression is fine: only the binding's final value is checked, so the
-embedded template `"v=${x * 10}"` is the text `v=inf`. Flows that used to pass an
-infinite value along now fail. To fix one, keep the value in range before it reaches
-the binding (guard it with a `case`, or clamp it in a `code` node), or return null
-explicitly: a `case` value branch `then: null` (with `output: Optional[...]`), or a
-`code` node that returns `None`.
+NaN, infinity, and complex numbers are not yian values. Float `+`, `-`, `*` and `/`
+that overflow give `inf` (`${input.x * 10}` with `x` = `1e308`; `**` and int-to-float
+overflow fail instead, see [Arithmetic follows Python](#arithmetic-follows-python)), and
+`**` with a negative base and a fractional exponent gives a complex number
+(`${(0 - 8) ** 0.5}`). A binding whose final value holds NaN, infinity, or a complex
+number at any depth fails its node with `binding.evaluate`, naming the input and path
+(`input 'y' at a[1]: non-finite number inf is not a yian value`,
+`input 'v': complex number (…) is not a yian value`). A temporary inside an expression
+is fine: only the binding's final value is checked, so the embedded template
+`"v=${x * 10}"` is the text `v=inf`. Flows that used to pass an infinite value along
+now fail. To fix one, keep the value in range before it reaches the binding (guard it
+with a `case`, such as checking the base is not negative before `**`, or compute it in
+a `code` node), or return null explicitly: a `case` value branch `then: null` (with
+`output: Optional[...]`), or a `code` node that returns `None`.
 
 **Compile-time companions** (never evaluate): `infer_expr_type(tree, ref_type_fn)` returns
 a type only for statically fixed results: scalar literals, exact references,

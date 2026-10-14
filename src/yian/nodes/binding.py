@@ -182,7 +182,7 @@ def _source_origin(source: Any) -> OriginRef | None:
 
 
 def _reject_nonfinite_binding(value: Any, where: str, origin: OriginRef | None) -> None:
-    """Raise a ``binding.evaluate`` `BindingError` if ``value`` holds a NaN or infinity."""
+    """Raise a ``binding.evaluate`` `BindingError` if ``value`` holds NaN, infinity, or complex."""
     try:
         reject_nonfinite(value, where)
     except TypeCheckError as exc:
@@ -289,7 +289,8 @@ def apply_defaults(
 
     Raises:
         `BindingError`: With ``failure_code="binding.evaluate"`` when a default holds a
-            NaN or infinity at any depth or violates its parameter's contract.
+            NaN, infinity, or complex number at any depth or violates its parameter's
+            contract.
     """
     _validate_parameters(params)
     output = dict(inputs)
@@ -451,7 +452,7 @@ def bind_params(
 
     Raises:
         `BindingError`: On expression/default/required evaluation failure, a resolved value
-            or filled default holding a NaN or infinity at any depth, typed binding
+            or filled default holding a NaN, infinity, or complex number at any depth, typed binding
             rejection, or supplied input contract rejection; ``failure_code`` identifies
             the stage.
     """

@@ -133,7 +133,7 @@ def template_sites(
         prompt (`str`, *optional*):
             The node's authored prompt; a site only when it is a `str`.
         questions (`list`, *optional*):
-            The node's literal question list; non-list values and non-mapping items
+            The node's literal question list; non-list values and non-dict items
             contribute no sites.
 
     Returns:

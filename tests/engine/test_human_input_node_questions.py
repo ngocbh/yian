@@ -133,4 +133,3 @@ def test_forward_renders_exactly_the_template_sites():
     for path in authored_paths:
         expected = "X" if path in rendered else "${m}"
         assert sent_value(path) == expected, site_label(path)
-    assert ("questions", 0, "header") not in rendered

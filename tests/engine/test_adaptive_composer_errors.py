@@ -44,7 +44,13 @@ def _line(error: LoadError) -> int:
             "{inherit: 'false'}",
             ["adaptive_questions.llm_config `inherit:` must be true or false, got 'false'"],
         ),
-        ("{model: 5}", ["adaptive_questions.llm_config: 1 validation error for LLMConfig"]),
+        (
+            "{model: 5}",
+            [
+                "adaptive_questions.llm_config: `model:` must be text, "
+                "but YAML read it as an integer"
+            ],
+        ),
         ("{temparature: 1}", ["temparature", "extra_forbidden"]),
         ("5", ["adaptive_questions.llm_config must be a mapping"]),
         ("{api_key: x}", ["adaptive_questions.llm_config.api_key is a host credential"]),

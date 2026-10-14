@@ -607,3 +607,96 @@ def test_other_flow_schema_errors_are_unchanged():
     error = _error("id: f\nname: f\noutput: x\n")
     assert "validation error for ComposeFile" in str(error)
     assert "nodes" in str(error)
+
+
+_LLM_ON_NODE = """\
+id: f
+name: f
+nodes:
+  a:
+    kind: agent
+    prompt: hi
+    llm_config: @V
+output: ${a.output}
+"""
+
+_LLM_ON_FLOW = """\
+id: f
+name: f
+llm_config: @V
+nodes:
+  a:
+    kind: agent
+    prompt: hi
+output: ${a.output}
+"""
+
+_LLM_ON_DEF = """\
+id: f
+name: f
+defs:
+  sub:
+    llm_config: @V
+    nodes:
+      b:
+        kind: agent
+        prompt: hi
+    output: ${b.output}
+nodes:
+  a:
+    kind: call
+    call: sub
+output: ${a.output}
+"""
+
+_LLM_ON_GATE = """\
+id: f
+name: f
+input:
+  proj: !str
+nodes:
+  ask:
+    kind: human_input
+    input: {proj: '${input.proj}'}
+    adaptive_questions:
+      prompt: "Q ${proj}"
+      llm_config: @V
+output: ${ask.output}
+"""
+
+_LLM_SITES = [
+    (_LLM_ON_NODE, "node 'a': llm_config: "),
+    (_LLM_ON_FLOW, "flow: llm_config: "),
+    (_LLM_ON_DEF, "defs entry 'sub': llm_config: "),
+    (_LLM_ON_GATE, "adaptive_questions.llm_config: "),
+]
+_LLM_SITE_IDS = ["node", "flow", "def", "adaptive"]
+
+
+@pytest.mark.parametrize(("builder", "prefix"), _LLM_SITES, ids=_LLM_SITE_IDS)
+def test_non_text_llm_config_field_is_a_load_error(builder, prefix):
+    text = builder.replace("@V", "{model: 5}")
+    error = _error(text)
+    assert (
+        prefix + "`model:` must be text, but YAML read it as an integer; put it in quotes"
+    ) in str(error)
+    assert "validation error for LLMConfig" not in str(error)
+    assert _start_line(error) == _line(text, "llm_config: ")
+
+
+@pytest.mark.parametrize(("builder", "prefix"), _LLM_SITES, ids=_LLM_SITE_IDS)
+def test_nested_llm_config_text_field(builder, prefix):
+    error = _error(builder.replace("@V", "{provider: openai, openai: {user: 5}}"))
+    assert prefix + "`openai.user:` must be text" in str(error)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["{provider: 5}", "{provider: azure, azure: {stop: 5}}", "{provider: azure, azure: {stop: [5]}}"],
+)
+@pytest.mark.parametrize(("builder", "prefix"), _LLM_SITES, ids=_LLM_SITE_IDS)
+def test_other_llm_config_errors_are_unchanged(builder, prefix, value):
+    message = str(_error(builder.replace("@V", value)))
+    assert prefix + "1 validation error for LLMConfig" in message or (
+        prefix + "2 validation errors for LLMConfig" in message
+    )

@@ -42,6 +42,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from pydantic import ValidationError
+
 from yian.compile.memory_layout import (
     resolve_memory_layout,
     scope_memory_declarations,
@@ -59,6 +61,7 @@ from yian.typesys.values import TypeCheckError, value_repr
 from yian.typesys.types import read_typedefs
 from yian.compose.build.pipeline import _assemble, ComposedFlow
 from yian.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
+from yian.compose.nodes.base import not_text_detail, not_text_error
 from yian.compose.nodes.resolver import ChildResolver, call_nesting_scope
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.memory import parse_memory_declarations
@@ -668,7 +671,9 @@ def _validate_authored_llm_config(
     """Check a flow- or def-level ``llm_config`` the way an AGENT node's own is checked.
 
     The layer must be a mapping of `LLMConfig` fields without ``api_key``, or
-    ``base_url`` other than beside ``provider: azure``, which only the host sets.
+    ``base_url`` other than beside ``provider: azure``, which only the host sets. A text
+    field YAML read as non-text (such as ``model: 5``) is named by `not_text_error`; any
+    other violation keeps pydantic's message.
     """
     if llm_config is None:
         return
@@ -684,6 +689,13 @@ def _validate_authored_llm_config(
         raise diagnostics.error(f"{where}: {message}", range=source_range)
     try:
         LLMConfig(**llm_config)
+    except ValidationError as exc:
+        detail = not_text_detail(exc)
+        raise diagnostics.error(
+            f"{where}: llm_config: "
+            + (not_text_error(*detail) if detail is not None else str(exc)),
+            range=source_range,
+        ) from exc
     except Exception as exc:
         raise diagnostics.error(f"{where}: llm_config: {exc}", range=source_range) from exc
 

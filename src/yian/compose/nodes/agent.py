@@ -15,11 +15,20 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Optional
 
+from pydantic import ValidationError
+
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.memory import parse_memory_declarations
 from yian.compose.helpers.types import read_variables
 from yian.compose.helpers.yaml_words import former_boolean_fix
-from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor, reject_non_text
+from yian.compose.nodes.base import (
+    BuildContext,
+    BuildResult,
+    NodeDescriptor,
+    not_text_detail,
+    not_text_error,
+    reject_non_text,
+)
 from yian.compose.source import SourceCursor
 from yian.diagnostics import SourceRange
 from yian.llm_clients import LLMConfig
@@ -93,7 +102,8 @@ def _validate_llm_config(
     Raises:
         `LoadError`: The config is not a mapping, sets a non-boolean `inherit`, sets
             `api_key`, sets `base_url` other than beside `provider: azure`, or
-            violates `LLMConfig`.
+            violates `LLMConfig`. A text field YAML read as non-text (such as `model: 5`)
+            is named by `not_text_error`; any other violation keeps pydantic's message.
     """
     diagnostics = diagnostics or LoadDiagnostics()
     if cfg is None:
@@ -122,6 +132,12 @@ def _validate_llm_config(
         raise diagnostics.error(message, range=source_range)
     try:
         LLMConfig(**cfg)
+    except ValidationError as exc:
+        detail = not_text_detail(exc)
+        raise diagnostics.error(
+            f"{prefix}: " + (not_text_error(*detail) if detail is not None else str(exc)),
+            range=source_range,
+        ) from exc
     except Exception as exc:
         raise diagnostics.error(
             f"{prefix}: {exc}",

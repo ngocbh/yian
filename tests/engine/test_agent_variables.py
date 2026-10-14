@@ -143,34 +143,20 @@ def test_retained_agent_canonicalizes_supported_file_variable_without_changing_d
     assert decode_record(encode_record(envelope)) == envelope
 
 
-@pytest.mark.parametrize("number", [float("inf"), float("-inf"), float("nan")])
-def test_retained_agent_fails_on_nonfinite_variable_model_extras(monkeypatch, number):
+def test_an_object_variable_default_holding_a_model_is_rejected():
     from pydantic import BaseModel, ConfigDict
-    from yian.compile.model import START_ID, END_ID
-    from yian.nodes.binding import BindingError
     from yian.nodes.contracts import ValueContract
-    from yian.runtime.log import NodeFailedRecord
-    from yian.typesys import Type, ValueKind
-    from tests.engine._graph_builder import _engine, _graph
+    from yian.typesys import Type, TypeCheckError, ValueKind
 
     class Extras(BaseModel):
         model_config = ConfigDict(extra="allow")
 
-    node = AgentNode("writer", prompt="ready", variables=[
-        Parameter("settings", ValueContract(Type(ValueKind.OBJECT)), has_default=True,
-                  default={"nested": Extras(child=Extras(lost=number))}),
-    ])
-    calls = []
-    monkeypatch.setattr(agent_module, "run_agent", lambda ctx: calls.append(ctx.prompt) or Output(ctx.prompt))
-    with pytest.raises(BindingError, match="non-finite"):
-        node.forward({})
-    engine = _engine(_graph([node], [(START_ID, "writer"), ("writer", END_ID)]), learnable=True)
-    list(engine.run())
-    assert calls == []
-    failed = [envelope.record for envelope in engine.log
-              if isinstance(envelope.record, NodeFailedRecord)]
-    assert [record.failure.node_id for record in failed] == ["writer"]
-    assert failed[0].failure.code == "node.execute"
+    # An `object` holds JSON values only, so a model inside one fails before any run.
+    with pytest.raises(TypeCheckError, match="is not a JSON value"):
+        AgentNode("writer", prompt="ready", variables=[
+            Parameter("settings", ValueContract(Type(ValueKind.OBJECT)), has_default=True,
+                      default={"nested": Extras(child=Extras(lost=1.0))}),
+        ])
 
 
 @pytest.mark.parametrize("phase", ["domains", "copy"])

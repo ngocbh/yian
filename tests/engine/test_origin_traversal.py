@@ -123,7 +123,8 @@ _CompositeFactory = Callable[[CompiledFlow, Parameter], Node]
 
 
 def test_agent_variable_origins_rewrite_shared_carriers_once_without_walking_defaults():
-    payload_origin = _origin("payload-only")
+    # An `object` default holds JSON values only, so the payload is the text of a key.
+    payload_origin = "payload-only"
     contract = ValueContract(
         Type.scalar(ValueKind.OBJECT),
         ContractOrigins(_origin("type"), ((('leaf',), _origin("nested-type")),)),

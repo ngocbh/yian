@@ -88,6 +88,36 @@ def test_provider_without_model_names_that_provider(monkeypatch, tmp_path):
         run_flow(nested, {})
 
 
+def _gate_flow(adaptive_questions):
+    return load_flow(
+        "id: f\nname: f\ninput: {proj: !str }\nnodes:\n  ask:\n    kind: human_input\n"
+        "    input: {proj: '${input.proj}'}\n"
+        f"    adaptive_questions: {adaptive_questions}\n"
+        "output: ${ask.output}\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("adaptive_questions", "subject"),
+    [
+        (
+            "{prompt: 'Q ${proj}', llm_config: {provider: anthropic}}",
+            "has no model for provider 'anthropic'",
+        ),
+        ("{prompt: 'Q ${proj}'}", "has no provider or model"),
+    ],
+)
+def test_synthesized_agent_without_model_names_its_llm_config(
+    monkeypatch, tmp_path, adaptive_questions, subject
+):
+    _forbid_model(monkeypatch)
+    with pytest.raises(ValueError) as caught:
+        run_flow(_gate_flow(adaptive_questions), {"proj": "x"}, log=tmp_path / "r.jsonl")
+    message = str(caught.value)
+    assert message.startswith(f"Node 'ask' adaptive_questions.llm_config {subject}; ")
+    assert "ask__compose" not in message
+
+
 @pytest.mark.parametrize(
     ("env", "layer", "flow_config", "expected"),
     [

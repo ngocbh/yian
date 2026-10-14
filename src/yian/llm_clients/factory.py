@@ -95,11 +95,12 @@ def create_llm_client(
             Client arguments forwarded to the client: ``block`` (`dict`), the provider's
             block shaped like its API request body and sent into every request as
             written, plus connection settings such as ``api_key``, ``timeout``,
-            ``max_retries`` and ``callbacks``; the OpenAI-compatible, Azure, and
-            Anthropic clients also take ``http_client`` / ``http_async_client``, the
-            SDK's own HTTP clients. Generation settings (``temperature``,
-            ``max_tokens``, reasoning effort, …) are no longer taken as keyword
-            arguments and are ignored; put them in ``block``.
+            ``max_retries`` and ``callbacks``; the OpenAI-compatible, Azure, Anthropic
+            and Google clients also take ``http_client`` / ``http_async_client``, the
+            SDK's own HTTP clients (beside a ``base_url``, Anthropic's and Google's
+            must not follow redirects); the Ollama client rejects them. Generation
+            settings (``temperature``, ``max_tokens``, reasoning effort, …) are no
+            longer taken as keyword arguments and are ignored; put them in ``block``.
 
     Returns:
         `BaseLLMClient`: A configured client whose `get_llm()` yields the chat model.

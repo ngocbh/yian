@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dis
 import os
 import signal
 import sys
@@ -1017,6 +1018,9 @@ def _helper_code_objects() -> set[types.CodeType]:
     return codes
 
 
+_NO_SIGNAL_OPCODES = frozenset({"PUSH_EXC_INFO", "POP_EXCEPT"})
+
+
 def _run_with_sigint_at_opcode(index: int, *, first_cause: str) -> dict[str, Any]:
     """Run the helper, tripping SIGINT at the index-th helper opcode after tracing starts.
 
@@ -1033,7 +1037,13 @@ def _run_with_sigint_at_opcode(index: int, *, first_cause: str) -> dict[str, Any
     state: dict[str, Any] = {"seen": 0, "trip": None}
 
     def local_trace(frame, event, arg):
-        if event == "opcode" and state["trip"] is None:
+        if (
+            event == "opcode"
+            and state["trip"] is None
+            # These neither raise nor run signal handlers; an exception there would
+            # unbalance the interpreter's handled-exception stack.
+            and dis.opname[frame.f_code.co_code[frame.f_lasti]] not in _NO_SIGNAL_OPCODES
+        ):
             if state["seen"] == index:
                 helper_frame = frame
                 while helper_frame.f_code is not helper_code:
@@ -1110,6 +1120,8 @@ def _run_with_sigint_at_opcode(index: int, *, first_cause: str) -> dict[str, Any
         sys.settrace(previous_trace)
         restored = signal.getsignal(signal.SIGINT)
         signal.signal(signal.SIGINT, previous_handler)
+    # A trip must leave no exception marked as being handled.
+    assert sys.exc_info()[1] is None
     if first_cause == "render":
         first: Any = expected
     elif first_cause == "sigint":

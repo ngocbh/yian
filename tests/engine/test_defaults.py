@@ -74,6 +74,7 @@ def test_bad_value_names_the_variable(value: str) -> None:
     message = str(caught.value)
     assert "YIAN_MAX_VALUE_NESTING" in message
     assert value[:30] in message
+    assert "=" + repr(value if len(value) <= 40 else value[:37] + "...") in message
     assert "from 1 to 150" in message
     assert len(message) < 300
     assert "Exceeds the limit" not in message
@@ -97,7 +98,16 @@ def test_each_minimum_and_maximum(entry: defaults.Entry) -> None:
         assert _accepts(entry, entry.maximum)
         assert not _accepts(entry, entry.maximum + 1)
     elif not entry.maximum_from_interpreter:
-        assert _accepts(entry, 10**17)
+        assert _accepts(entry, 10**18 - 1)
+        assert not _accepts(entry, 10**18)
+
+
+def test_an_unbounded_entry_stops_at_18_digits() -> None:
+    entry = _entry("MAX_TOTAL_NODES")
+    assert read({entry.variable: str(10**18 - 1)}).max_total_nodes == 10**18 - 1
+    with pytest.raises(DefaultsError) as caught:
+        read({entry.variable: str(10**18)})
+    assert f"from 1 to {10**18 - 1}" in str(caught.value)
 
 
 def test_reflective_budgets_have_a_floor_of_256() -> None:
@@ -126,14 +136,22 @@ def test_int_digits_cannot_exceed_the_interpreter_limit() -> None:
     entry = _entry("MAX_INT_DIGITS")
     assert entry.maximum_from_interpreter
     assert read({entry.variable: str(limit)}).max_int_digits == limit
-    with pytest.raises(DefaultsError, match="YIAN_MAX_INT_DIGITS"):
+    with pytest.raises(DefaultsError, match="YIAN_MAX_INT_DIGITS") as caught:
         read({entry.variable: str(limit + 1)})
+    assert f"from 1 to {limit}" in str(caught.value)
 
 
 def test_int_digits_has_no_upper_bound_without_an_interpreter_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(sys, "get_int_max_str_digits", lambda: 0, raising=False)
+    assert read({"YIAN_MAX_INT_DIGITS": "100000"}).max_int_digits == 100_000
+
+
+def test_int_digits_has_no_upper_bound_on_an_interpreter_without_the_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delattr(sys, "get_int_max_str_digits", raising=False)
     assert read({"YIAN_MAX_INT_DIGITS": "100000"}).max_int_digits == 100_000
 
 
@@ -202,6 +220,7 @@ def test_check_recorded(set_defaults) -> None:
     check_recorded({"MAX_TOTAL_NODES": 20_000})
     with pytest.raises(DefaultsMismatchError) as caught:
         check_recorded({"MAX_TOTAL_NODES": 5000})
+    assert isinstance(caught.value, ValueError)
     message = str(caught.value)
     assert "YIAN_MAX_TOTAL_NODES is 20000 here" in message
     assert "started with 5000" in message
@@ -222,7 +241,6 @@ def test_check_recorded(set_defaults) -> None:
 
     with pytest.raises(DefaultsMismatchError, match="YIAN_NOT_AN_ENTRY"):
         check_recorded({"NOT_AN_ENTRY": 1})
-    assert isinstance(DefaultsMismatchError("x"), ValueError)
 
 
 def test_every_test_starts_from_builtin_values() -> None:

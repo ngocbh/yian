@@ -419,8 +419,6 @@ def test_defaults_leaf_imports_only_stdlib() -> None:
         f"{path.relative_to(SOURCE_ROOT)}:{line}: {statement} -> {target}"
         for line, target, statement in _import_targets(path)
         if target.split(".")[0] not in sys.stdlib_module_names
-        and target != "__future__"
-        and not target.startswith("__future__.")
     ]
     assert not violations, "defaults must stay a stdlib leaf:\n" + "\n".join(
         violations

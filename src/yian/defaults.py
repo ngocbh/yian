@@ -18,7 +18,6 @@ This module imports only the standard library, so any layer may import it.
 from __future__ import annotations
 
 from collections.abc import Mapping
-import dataclasses
 from dataclasses import dataclass
 import os
 import re
@@ -36,7 +35,8 @@ class Entry:
         description (`str`): One line saying what the value controls.
         group (`str`): `"limit"`, `"setting"`, or `"input cap"`.
         minimum (`int`): Smallest value accepted from the environment.
-        maximum (`int | None`): Largest value accepted, or `None` for no upper bound.
+        maximum (`int | None`): Largest value accepted, or `None` for any value of
+            up to 18 digits.
         no_limit (`int | None`): A value accepted outside the range that means no cap.
         maximum_from_interpreter (`bool`): Whether a set value must also not exceed
             the interpreter's int digit limit (`sys.get_int_max_str_digits()`).
@@ -59,272 +59,275 @@ class Entry:
 
 ENTRIES: tuple[Entry, ...] = (
     # Language safety limits.
+    # Deeper nested call expressions measured a raw RecursionError with reduced stack
+    # headroom; 150 levels passed.
     Entry(
         "MAX_VALUE_NESTING",
-        100,
-        "Deepest nesting a value may have; also bounds expression nesting",
-        "limit",
-        1,
-        # Deeper nested call expressions measured a raw RecursionError with reduced
-        # stack headroom; 150 levels passed.
-        150,
+        default=100,
+        description="Deepest nesting a value may have; also bounds expression nesting",
+        group="limit",
+        minimum=1,
+        maximum=150,
     ),
+    # Deeper types are rejected before they can exhaust Python's recursion limit, and
+    # 150 levels still parse with reduced stack headroom.
     Entry(
         "MAX_TYPE_NESTING",
-        100,
-        "Deepest nesting a type expression may have",
-        "limit",
-        1,
-        # Deeper types are rejected before they can exhaust Python's recursion limit.
-        150,
+        default=100,
+        description="Deepest nesting a type expression may have",
+        group="limit",
+        minimum=1,
+        maximum=150,
     ),
+    # Twice a value's 100 levels: a value at that limit fits inside a flow's own
+    # structure, and composing and walking a document this deep from a shallow caller
+    # stays within Python's default recursion limit.
     Entry(
         "MAX_YAML_NESTING",
-        # Twice a value's 100 levels: a value at that limit fits inside a flow's own
-        # structure, and composing and walking a document this deep from a shallow
-        # caller stays within Python's default recursion limit.
-        200,
-        "Deepest nesting of a YAML document yian reads",
-        "limit",
-        1,
-        200,
+        default=200,
+        description="Deepest nesting of a YAML document yian reads",
+        group="limit",
+        minimum=1,
+        maximum=200,
     ),
     Entry(
         "MAX_TOTAL_NODES",
-        10_000,
-        "Most live nodes a run's graph may grow to",
-        "limit",
-        1,
-        None,
+        default=10_000,
+        description="Most live nodes a run's graph may grow to",
+        group="limit",
+        minimum=1,
+        maximum=None,
     ),
     Entry(
         "MAX_SKIP_WORLDS",
-        10_000,
-        "Most branch combinations the skip check explores before giving up",
-        "limit",
-        1,
-        None,
+        default=10_000,
+        description="Most branch combinations the skip check explores before giving up",
+        group="limit",
+        minimum=1,
+        maximum=None,
     ),
+    # The default is Python's own int digit limit. A set value above the interpreter's
+    # limit could never be honoured; the built-in value is not checked, so a lower
+    # PYTHONINTMAXSTRDIGITS applies first.
     Entry(
         "MAX_INT_DIGITS",
-        # Python's own default int digit limit.
-        4300,
-        "Most decimal digits an int may have when read or written as text",
-        "limit",
-        1,
-        None,
-        # A set value above the interpreter's limit could never be honoured; the
-        # built-in value is not checked, so a lower PYTHONINTMAXSTRDIGITS applies first.
+        default=4300,
+        description="Most decimal digits an int may have when read or written as text",
+        group="limit",
+        minimum=1,
+        maximum=None,
         maximum_from_interpreter=True,
     ),
     # Defaults for settings a flow author can set.
     Entry(
         "AGENT_RETRIES",
-        2,
-        "AGENT retries after a failed model call when the node sets none",
-        "setting",
-        0,
-        None,
+        default=2,
+        description="AGENT retries after a failed model call when the node sets none",
+        group="setting",
+        minimum=0,
+        maximum=None,
     ),
     Entry(
         "AGENT_MAX_TOOL_ITERATIONS",
-        -1,
-        "AGENT model turns with tool calls when the node sets none; -1 is no cap",
-        "setting",
-        1,
-        None,
+        default=-1,
+        description="AGENT tool-call turns when the node sets none; -1 is no cap",
+        group="setting",
+        minimum=1,
+        maximum=None,
         no_limit=-1,
     ),
     Entry(
         "EPISODIC_MAX_EPISODES",
-        100,
-        "Episodes an episodic memory keeps when it sets no limit",
-        "setting",
-        1,
-        None,
+        default=100,
+        description="Episodes an episodic memory keeps when it sets no limit",
+        group="setting",
+        minimum=1,
+        maximum=None,
     ),
     Entry(
         "EPISODIC_RECALL_LIMIT",
-        10,
-        "Episodes an episodic memory recalls when it sets no limit",
-        "setting",
-        1,
-        None,
+        default=10,
+        description="Episodes an episodic memory recalls when it sets no limit",
+        group="setting",
+        minimum=1,
+        maximum=None,
     ),
     Entry(
         "REFLECTIVE_MAX_ITEMS",
-        100,
-        "Lessons a reflective memory keeps when it sets no limit",
-        "setting",
-        1,
-        None,
+        default=100,
+        description="Lessons a reflective memory keeps when it sets no limit",
+        group="setting",
+        minimum=1,
+        maximum=None,
     ),
     Entry(
         "REFLECTIVE_RECALL_LIMIT",
-        20,
-        "Lessons a reflective memory recalls when it sets no limit",
-        "setting",
-        1,
-        None,
+        default=20,
+        description="Lessons a reflective memory recalls when it sets no limit",
+        group="setting",
+        minimum=1,
+        maximum=None,
     ),
     # The three reflective budgets floor at 256: material over budget is cut to a
     # summary with a 64-char digest that is about 142 chars whatever the budget.
     Entry(
         "REFLECTIVE_MAX_LESSON_CHARS",
-        8_000,
-        "Characters of current lessons shown to the reflection model",
-        "setting",
-        256,
-        None,
+        default=8_000,
+        description="Characters of current lessons shown to the reflection model",
+        group="setting",
+        minimum=256,
+        maximum=None,
     ),
     Entry(
         "REFLECTIVE_MAX_EPISODE_CHARS",
-        20_000,
-        "Characters of the episode shown to the reflection model",
-        "setting",
-        256,
-        None,
+        default=20_000,
+        description="Characters of the episode shown to the reflection model",
+        group="setting",
+        minimum=256,
+        maximum=None,
     ),
     Entry(
         "REFLECTIVE_MAX_LIMIT_CHARS",
-        256,
-        "Characters of the memory limits shown to the reflection model",
-        "setting",
-        256,
-        None,
+        default=256,
+        description="Characters of the memory limits shown to the reflection model",
+        group="setting",
+        minimum=256,
+        maximum=None,
     ),
     Entry(
         "SESSION_HISTORY_BUDGET_CHARS",
-        32_000,
-        "Characters of history a session memory sends to the model",
-        "setting",
-        1,
-        None,
+        default=32_000,
+        description="Characters of history a session memory sends to the model",
+        group="setting",
+        minimum=1,
+        maximum=None,
     ),
     Entry(
         "SESSION_RECENT_TURNS",
-        4,
-        "Recent turns a session memory always keeps whole",
-        "setting",
-        0,
-        None,
+        default=4,
+        description="Recent turns a session memory always keeps whole",
+        group="setting",
+        minimum=0,
+        maximum=None,
     ),
     Entry(
         "PROFILE_MAX_CHARS",
-        32_000,
-        "Characters a profile memory may hold",
-        "setting",
-        1,
-        None,
+        default=32_000,
+        description="Characters a profile memory may hold",
+        group="setting",
+        minimum=1,
+        maximum=None,
     ),
     Entry(
         "PROFILE_INPUT_BUDGET_CHARS",
-        24_000,
-        "Characters of run material a profile memory sends to its learner model",
-        "setting",
-        1,
-        None,
+        default=24_000,
+        description="Characters of run material sent to a profile memory's learner",
+        group="setting",
+        minimum=1,
+        maximum=None,
     ),
     # Input-size caps.
     Entry(
         "MAX_AUTH_RESPONSE_BYTES",
-        1024 * 1024,
-        "Largest response body read from a sign-in server",
-        "input cap",
-        1,
-        None,
+        default=1024 * 1024,
+        description="Largest response body read from a sign-in server",
+        group="input cap",
+        minimum=1,
+        maximum=None,
     ),
     Entry(
         "MAX_AUTH_STORE_BYTES",
-        1024 * 1024,
-        "Largest auth store file read",
-        "input cap",
-        1,
-        None,
+        default=1024 * 1024,
+        description="Largest auth store file read",
+        group="input cap",
+        minimum=1,
+        maximum=None,
     ),
     Entry(
         "MAX_OAUTH_CALLBACK_BYTES",
-        16 * 1024,
-        "Largest request header block read from the sign-in callback",
-        "input cap",
-        1,
-        None,
+        default=16 * 1024,
+        description="Largest request header block read from the sign-in callback",
+        group="input cap",
+        minimum=1,
+        maximum=None,
     ),
+    # OpenRouter's listing carries a description and pricing for every model.
     Entry(
         "MAX_MODEL_LIST_BYTES",
-        # OpenRouter's listing carries a description and pricing for every model.
-        16 * 1024 * 1024,
-        "Largest model listing read from a provider",
-        "input cap",
-        1,
-        None,
+        default=16 * 1024 * 1024,
+        description="Largest model listing read from a provider",
+        group="input cap",
+        minimum=1,
+        maximum=None,
     ),
     Entry(
         "MAX_BASE_URL_CHARS",
-        2048,
-        "Longest provider base URL accepted",
-        "input cap",
-        1,
-        None,
+        default=2048,
+        description="Longest provider base URL accepted",
+        group="input cap",
+        minimum=1,
+        maximum=None,
     ),
     Entry(
         "MAX_SKILL_FILE_BYTES",
-        256 * 1024,
-        "Largest SKILL.md or bundled skill file returned to a model",
-        "input cap",
-        1,
-        None,
+        default=256 * 1024,
+        description="Largest SKILL.md or bundled skill file returned to a model",
+        group="input cap",
+        minimum=1,
+        maximum=None,
     ),
     Entry(
         "MAX_SKILL_NAME_CHARS",
-        64,
-        "Longest skill name accepted",
-        "input cap",
-        1,
-        None,
+        default=64,
+        description="Longest skill name accepted",
+        group="input cap",
+        minimum=1,
+        maximum=None,
     ),
+    # A cut keeps one character less than the cap and adds an ellipsis, so the
+    # minimum is 2.
     Entry(
         "MAX_SKILL_DESCRIPTION_CHARS",
-        1024,
-        "Longest skill description shown in the skill listing",
-        "input cap",
-        # A cut keeps one character less than the cap and adds an ellipsis.
-        2,
-        None,
+        default=1024,
+        description="Longest skill description shown in the skill listing",
+        group="input cap",
+        minimum=2,
+        maximum=None,
     ),
     Entry(
         "MAX_QUESTION_OPTIONS",
-        6,
-        "Most options a question to the user may offer",
-        "input cap",
-        1,
-        None,
+        default=6,
+        description="Most options a question to the user may offer",
+        group="input cap",
+        minimum=1,
+        maximum=None,
     ),
+    # A cut keeps one character less than the cap and adds an ellipsis, so the
+    # minimum is 2.
     Entry(
         "MAX_QUESTION_OPTION_CHARS",
-        80,
-        "Longest question option shown to the user",
-        "input cap",
-        # A cut keeps one character less than the cap and adds an ellipsis.
-        2,
-        None,
+        default=80,
+        description="Longest question option shown to the user",
+        group="input cap",
+        minimum=2,
+        maximum=None,
     ),
+    # A non-interactive caller feeding empty input forever can't hang; 3 mirrors
+    # sudo's `passwd_tries` default.
     Entry(
         "MAX_KEY_PROMPTS",
-        # A non-interactive caller feeding empty input forever can't hang; 3 mirrors
-        # sudo's `passwd_tries` default.
-        3,
-        "Times the CLI asks for an API key before giving up",
-        "input cap",
-        1,
-        None,
+        default=3,
+        description="Times the CLI asks for an API key before giving up",
+        group="input cap",
+        minimum=1,
+        maximum=None,
     ),
 )
 
 _BY_NAME: dict[str, Entry] = {entry.name: entry for entry in ENTRIES}
 
-# Memory wraps a run value a few levels deeper; 28 keeps the 128 levels memory
-# allowed before the value limit was configurable.
+# Memory wraps a run value a few levels deeper; 28 keeps the default memory bound at
+# 128, the bound existing memory stores were written under.
 _MEMORY_WRAPPER_LEVELS = 28
 
 
@@ -413,30 +416,27 @@ class DefaultsMismatchError(ValueError):
 
 
 _CANONICAL_INT = re.compile(r"0|-?[1-9][0-9]*")
-# Checked before int() so a huge string never reaches Python's own digit limit.
+# Values have at most 18 digits, checked before int() so a huge string never reaches
+# Python's own digit limit; an entry with no upper bound stops at the largest of them.
 _MAX_DIGITS = 18
+_LARGEST = 10**_MAX_DIGITS - 1
 _SHOWN_CHARS = 40
 
 
-def _maximum(entry: Entry) -> int | None:
+def _maximum(entry: Entry) -> int:
     """Return the largest value `entry` accepts from the environment now."""
-    if not entry.maximum_from_interpreter:
-        return entry.maximum
-    # The function is missing before Python 3.10.7; 0 means the limit is off.
-    interpreter = getattr(sys, "get_int_max_str_digits", lambda: 0)()
-    if not interpreter:
-        return entry.maximum
-    if entry.maximum is None:
-        return interpreter
-    return min(entry.maximum, interpreter)
+    maximum = _LARGEST if entry.maximum is None else entry.maximum
+    if entry.maximum_from_interpreter:
+        # The function is missing before Python 3.10.7; 0 means the limit is off.
+        interpreter = getattr(sys, "get_int_max_str_digits", lambda: 0)()
+        if interpreter:
+            maximum = min(maximum, interpreter)
+    return maximum
 
 
-def _range_text(entry: Entry, maximum: int | None) -> str:
+def _range_text(entry: Entry, maximum: int) -> str:
     """Describe the values `entry` accepts."""
-    if maximum is None:
-        text = f"an integer of at least {entry.minimum}"
-    else:
-        text = f"an integer from {entry.minimum} to {maximum}"
+    text = f"an integer from {entry.minimum} to {maximum}"
     if entry.no_limit is not None:
         text += f", or {entry.no_limit} for no cap"
     return text
@@ -456,7 +456,7 @@ def _parse(entry: Entry, raw: str) -> int:
         DefaultsError: If `raw` is not a canonical decimal integer in range.
     """
     maximum = _maximum(entry)
-    shown = raw if len(raw) <= _SHOWN_CHARS else raw[:_SHOWN_CHARS] + "..."
+    shown = raw if len(raw) <= _SHOWN_CHARS else raw[: _SHOWN_CHARS - 3] + "..."
     advice = f"use {_range_text(entry, maximum)}, or unset it"
     if not _CANONICAL_INT.fullmatch(raw):
         raise DefaultsError(f"{entry.variable}={shown!r} is not an integer; {advice}")
@@ -464,7 +464,7 @@ def _parse(entry: Entry, raw: str) -> int:
     value = int(raw) if digits <= _MAX_DIGITS else None
     in_range = value is not None and (
         value == entry.no_limit
-        or (value >= entry.minimum and (maximum is None or value <= maximum))
+        or entry.minimum <= value <= maximum
     )
     if not in_range:
         raise DefaultsError(f"{entry.variable}={shown!r} is out of range; {advice}")

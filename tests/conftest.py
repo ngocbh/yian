@@ -45,7 +45,10 @@ class _SetDefaults:
         return defaults._reload()
 
     def unchecked(self, **values):
-        """Replace attributes of the current values with no range check."""
+        """Replace attributes of the current values with no range check.
+
+        A later `set_defaults(...)` call re-reads the environment and discards them.
+        """
         replaced = dataclasses.replace(defaults.current(), **values)
         defaults._install(replaced)
         return replaced
@@ -59,5 +62,4 @@ def set_defaults(monkeypatch):
     check applies; `set_defaults.unchecked(max_value_nesting=200_000)` installs a value
     outside any range.
     """
-    yield _SetDefaults(monkeypatch)
-    defaults._forget()
+    return _SetDefaults(monkeypatch)

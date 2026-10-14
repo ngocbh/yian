@@ -215,9 +215,9 @@ def model_from_config(config) -> BaseChatModel:
     if config.api_key is not None:
         # A host-supplied key wins over the environment and any saved connection.
         kwargs["api_key"] = config.api_key
-        if connection is not None and connection["method"] == "api_key":
+        if provider == "openai" and connection is not None and connection["method"] == "api_key":
             kwargs["base_url"] = connection["endpoint"]
-    elif connection is not None:
+    elif provider == "openai" and connection is not None:
         # The SDK calls this per request, so re-login cannot redirect an existing
         # model instance to a different account between tool iterations.
         kwargs["api_key"] = lambda: connection_credentials(connection).api_key

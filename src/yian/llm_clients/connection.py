@@ -25,12 +25,23 @@ from .config import (
     RETIRED_LLM_CONFIG_KEYS,
     LLMConfig,
     SUPPORTED_LLM_PROVIDERS,
+    azure_resource_endpoint,
+    validate_base_url,
 )
 from .provider_blocks import block_schema
 
 _API_ENDPOINT = "https://api.openai.com/v1"
 _SUBSCRIPTION_ENDPOINT = "https://chatgpt.com/backend-api/codex"
 _FIELDS = {"method", "source", "credential_id", "endpoint", "store_path"}
+# Providers whose agents authenticate with a key and so carry a connection.
+_KEYED = frozenset(SUPPORTED_LLM_PROVIDERS) - {"ollama"}
+_ENVIRONMENT_CONNECTION = {
+    "method": "api_key",
+    "source": "environment",
+    "credential_id": None,
+    "endpoint": None,
+    "store_path": None,
+}
 # Recorded on each agent that authenticates with a key the host supplies outside
 # the record, so a later model call without that key fails instead of falling
 # back to the environment.
@@ -237,10 +248,34 @@ def connection_snapshot() -> ConnectionSnapshot:
     )
 
 
-def validate_connection(value: Any) -> dict[str, Any]:
-    """Validate the exact nonsecret metadata schema before use or replay."""
+def validate_connection(value: Any, provider: str | None = "openai") -> dict[str, Any]:
+    """Validate the exact nonsecret metadata schema before use or replay.
+
+    An OpenAI connection records its endpoint and may be a subscription, a host
+    key, or a missing or legacy environment key. Another keyed provider's
+    connection is an API key, either a saved login (``store``, pinned by
+    credential id and store path, with the resource endpoint for ``azure``) or
+    the provider's key environment variable (``environment``, unpinned).
+
+    Args:
+        value (`Any`): The candidate metadata.
+        provider (`str | None`, *optional*, defaults to ``"openai"``): The
+            provider of the config that carries it.
+
+    Returns:
+        `dict[str, Any]`: A deep copy of ``value``.
+
+    Raises:
+        `ValueError`: The metadata does not fit the schema for ``provider``, or
+            ``provider`` takes no connection. Errors never echo values.
+    """
+    if not isinstance(provider, str) or provider not in _KEYED:
+        name = provider if isinstance(provider, str) else None
+        raise ValueError(f"Internal connection metadata is not used for provider {name}")
     if type(value) is not dict or set(value) != _FIELDS:
         raise ValueError("Invalid internal connection metadata fields")
+    if provider != "openai":
+        return _validate_keyed_connection(value, provider)
     method, source = value["method"], value["source"]
     if method not in ("api_key", "subscription") or source not in (
         "store",
@@ -289,6 +324,43 @@ def validate_connection(value: Any) -> dict[str, Any]:
     return copy.deepcopy(value)
 
 
+def _validate_keyed_connection(value: dict[str, Any], provider: str) -> dict[str, Any]:
+    """Validate a non-OpenAI keyed provider's connection fields.
+
+    Args:
+        value (`dict[str, Any]`): Metadata with exactly the connection fields.
+        provider (`str`): A keyed provider other than ``openai``.
+
+    Returns:
+        `dict[str, Any]`: A deep copy of ``value``.
+
+    Raises:
+        `ValueError`: The method, source, identity, or endpoint is invalid.
+    """
+    if value["method"] != "api_key" or value["source"] not in ("store", "environment"):
+        raise ValueError("Invalid internal connection method or source")
+    identity, path, endpoint = value["credential_id"], value["store_path"], value["endpoint"]
+    if value["source"] == "environment":
+        if identity is not None or path is not None or endpoint is not None:
+            raise ValueError("Invalid environment connection identity")
+        return copy.deepcopy(value)
+    if (
+        type(identity) is not str
+        or not identity
+        or type(path) is not str
+        or not os.path.isabs(path)
+    ):
+        raise ValueError("Invalid stored connection identity")
+    if provider == "azure":
+        try:
+            validate_base_url(endpoint)
+        except ValueError:
+            raise ValueError("Invalid stored Azure connection endpoint") from None
+    elif endpoint is not None:
+        raise ValueError("Invalid stored connection endpoint")
+    return copy.deepcopy(value)
+
+
 def split_model_config(
     config: dict[str, Any] | LLMConfig,
 ) -> tuple[LLMConfig, dict[str, Any] | None]:
@@ -296,8 +368,9 @@ def split_model_config(
 
     Raises:
         `AuthError`: The config carries ``HOST_KEY_MARKER`` but no ``api_key``.
-        `ValueError`: A public field or the metadata is invalid, or ``base_url``
-            differs from the endpoint of its pinned host connection.
+        `ValueError`: A public field or the metadata is invalid, an OpenAI
+            ``base_url`` differs from the endpoint of its pinned host connection,
+            or an Azure ``base_url`` names another resource than its saved login.
     """
     if isinstance(config, LLMConfig):
         raw = config.model_dump(exclude_none=True)
@@ -314,10 +387,17 @@ def split_model_config(
     metadata = raw.pop("_connection", None)
     validated = LLMConfig(**raw)
     if metadata is not None:
-        if validated.provider != "openai":
-            raise ValueError("Internal connection metadata requires provider openai")
-        metadata = validate_connection(metadata)
-        if validated.base_url is not None and (
+        metadata = validate_connection(metadata, validated.provider)
+        if (
+            validated.provider == "azure"
+            and validated.base_url is not None
+            and metadata["source"] == "store"
+            and azure_resource_endpoint(validated.base_url)
+            != azure_resource_endpoint(metadata["endpoint"])
+        ):
+            # The saved key belongs to one resource; never send it to another.
+            raise ValueError("llm_config.base_url names another Azure resource than its saved login")
+        if validated.provider == "openai" and validated.base_url is not None and (
             metadata["source"] != "host" or metadata["endpoint"] != validated.base_url
         ):
             # A base_url serves only the host key; it must match the pinned route.
@@ -394,10 +474,10 @@ def resolve_model_config(
     raw = validated.model_dump(exclude_none=True)
     if validated.api_key is not None:
         raw["api_key"] = validated.api_key
-    if validated.provider and validated.model and validated.provider != "openai":
-        return raw
     if metadata is not None and validated.model:
         raw["_connection"] = metadata
+        return raw
+    if validated.provider and validated.model and validated.provider != "openai":
         return raw
     snapshot = snapshot or connection_snapshot()
     provider = validated.provider or snapshot.defaults.get("provider")
@@ -417,7 +497,12 @@ def resolve_model_config(
 
 
 def legacy_connection_config(config: dict[str, Any]) -> dict[str, Any]:
-    """Pin old OpenAI records to their original API-key route without I/O."""
+    """Pin old records to their original route without I/O.
+
+    An old OpenAI record gets its legacy environment API-key route. Another keyed
+    provider's record, unless its key came from the host, gets the environment
+    connection: those records always read the provider's key variable.
+    """
     result = copy.deepcopy(config)
     # Old records serialized every optional public field, including these empty
     # retired defaults (sandbox/cwd, and the keys now written in provider blocks).
@@ -437,6 +522,12 @@ def legacy_connection_config(config: dict[str, Any]) -> dict[str, Any]:
             "endpoint": _API_ENDPOINT,
             "store_path": None,
         }
+    elif (
+        result.get("provider") in _KEYED
+        and "_connection" not in result
+        and HOST_KEY_MARKER not in result
+    ):
+        result["_connection"] = copy.deepcopy(_ENVIRONMENT_CONNECTION)
     return result
 
 

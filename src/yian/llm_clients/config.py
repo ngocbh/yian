@@ -424,6 +424,28 @@ def validate_base_url(value: Any) -> str:
     return value
 
 
+def azure_resource_endpoint(url: str) -> str:
+    """Return the base Azure resource URL, stripping an OpenAI-v1 suffix.
+
+    Some Azure portals hand out the ``…/openai/v1`` (OpenAI-compatible) surface.
+    LangChain's AzureChatOpenAI appends its own ``/openai/deployments/…`` path,
+    so that suffix yields a 404 ("Resource not found"). Strip it back to the
+    base resource URL.
+
+    Args:
+        url (`str`): An Azure endpoint, with or without the suffix.
+
+    Returns:
+        `str`: The resource URL without a trailing slash.
+    """
+    base = url.rstrip("/")
+    for suffix in ("/openai/v1", "/openai"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    return base.rstrip("/")
+
+
 # Fields only the host's run layer may set. Authored layers reach the recorded
 # effective map, and a flow-level base_url could send the host key elsewhere.
 # Each message starts with `llm_config.`: the AGENT load check swaps that for its own prefix.

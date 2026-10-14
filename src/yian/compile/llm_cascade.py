@@ -399,6 +399,4 @@ def _validate_layer(config: dict[str, Any]) -> None:
             f"(allowed: {', '.join(sorted(LLM_CONFIG_KEYS))})"
         )
     if "_connection" in config:
-        if config.get("provider") != "openai":
-            raise ValueError("Internal connection metadata requires provider openai")
-        validate_connection(config["_connection"])
+        validate_connection(config["_connection"], config.get("provider"))

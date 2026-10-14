@@ -1426,32 +1426,22 @@ def test_growth_treats_corrupt_stored_depth_as_a_host_invariant_error():
     assert _snapshot(state) == before
 
 
-def test_growth_enforces_positive_reference_depth_and_stamps_the_boundary():
-    rejected, _ = _initialized_spawner()
-    rejected.depth["spawn"] = state_module.MAX_REF_DEPTH
-    with pytest.raises(GrowthRejected, match="MAX_REF_DEPTH") as caught:
-        prepare_expanded(
-            rejected,
-            "spawn",
-            Grow(seed={}),
-            lambda node, seed: _fragment(node.id),
-        )
-    assert type(caught.value.original) is ValueError
-
-    accepted, log = _initialized_spawner()
-    accepted.depth["spawn"] = state_module.MAX_REF_DEPTH - 1
+def test_growth_stamps_positive_reference_depth_on_the_boundary():
+    # Depth is bookkeeping, not a cap: a spawner already 7 levels deep grows an 8th level.
+    state, log = _initialized_spawner()
+    state.depth["spawn"] = 7
     commit_prepared(
         log,
-        accepted,
+        state,
         prepare_expanded(
-            accepted,
+            state,
             "spawn",
             Grow(seed={}),
             lambda node, seed: _fragment(node.id),
         ),
     )
 
-    assert accepted.depth["spawn/child/end"] == state_module.MAX_REF_DEPTH
+    assert state.depth["spawn/child/end"] == 8
 
 
 def test_growth_prunes_only_named_settled_dynamic_overlay_coordinates():

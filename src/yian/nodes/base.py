@@ -662,11 +662,10 @@ class Node(ABC):
     # None means the node has no recorded source collection for the local scope.
     item_source_key: ClassVar[str | None] = None
     # Nested-call depth policy for the engine's growth core. The depth stamped on a grow's subgraph
-    # spawners + its terminal is `parent_depth + grow_depth_delta`; a positive delta is also
-    # bounded by MAX_REF_DEPTH. Possible values:
+    # spawners + its terminal is `parent_depth + grow_depth_delta`. Possible values:
     #   None  — a non-spawner; the core does no depth work.
     #   0     — LOOP inherits its parent's call depth without consuming another level.
-    #   1     — a nested call, +1 and bounded (CALL/MAP: each child is one deeper level).
+    #   1     — a nested call, one level deeper (CALL/MAP: each child is one deeper level).
     # Overridden by LOOP (0) and CALL/MAP (1); the default None fits non-spawners.
     grow_depth_delta: ClassVar[Optional[int]] = None
     # Declares "I am the self-respawning fixpoint-iteration driver" (LOOP). The growth reducer

@@ -51,7 +51,7 @@ class CallNode(Node):
 
     kind = NodeKind.CALL
     is_spawner: ClassVar[bool] = True  # grows the graph: run() returns a seed-first Grow
-    grow_depth_delta: ClassVar[int] = 1  # each child is one call level deeper (bounded by MAX_REF_DEPTH)
+    grow_depth_delta: ClassVar[int] = 1  # each child is one call level deeper
 
     def __init__(self, node_id: str, *, flow_id: str, flow_version: Optional[int] = None,
                  child: Any = None, child_inputs: Optional[list[Parameter]] = None,

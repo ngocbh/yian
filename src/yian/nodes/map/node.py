@@ -64,7 +64,7 @@ class MapNode(Node):
     is_spawner: ClassVar[bool] = True  # grows the graph: run() returns a seed-first Grow
     binds_per_item: ClassVar[bool] = True  # binds call-args PER ELEMENT via `bind_item`, not up front
     item_source_key: ClassVar[str] = "over"
-    grow_depth_delta: ClassVar[int] = 1  # each child is one call level deeper (bounded by MAX_REF_DEPTH)
+    grow_depth_delta: ClassVar[int] = 1  # each child is one call level deeper
 
     def __init__(self, node_id: str, *, flow_id: str, parallel: bool = False,
                  flow_version: Optional[int] = None, child: Any = None,

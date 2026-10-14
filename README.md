@@ -78,9 +78,11 @@ one only when it contains an AGENT node.
 Yian has no built-in provider or model. Save a login with `yian auth <provider>`,
 such as `yian auth anthropic --model claude-sonnet-4-5` or `yian auth openai`
 (ChatGPT subscription or API key). It saves the credential and model, and becomes
-the default provider when none is saved yet. `yian auth` lists saved logins. A flow's
-`llm_config`, `--provider`/`--model`, and `YIAN_DEFAULT_PROVIDER`/`YIAN_DEFAULT_MODEL`
-all take precedence over the saved login. See
+the default provider when none is saved yet. `yian auth` lists saved logins.
+`yian auth <provider> --default` switches the default; `--remove` deletes a login.
+A flow's `llm_config`, `--provider`/`--model`, and
+`YIAN_DEFAULT_PROVIDER`/`YIAN_DEFAULT_MODEL` all take precedence over the saved
+login. See
 [choosing a provider and model](docs/installation.md#choosing-a-provider-and-model).
 
 ## Run a flow

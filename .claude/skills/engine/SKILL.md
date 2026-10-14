@@ -773,7 +773,8 @@ Most are just the functional model (above) made enforceable:
   only from that pinned identity (OpenAI per request, others per model build);
   refresh preserves identity, while re-authentication or removal cannot silently
   redirect recovery or backward calls. Old records without connection metadata
-  retain environment API-key semantics. Runtime and SessionMemory stay unaware of authentication methods.
+  retain environment API-key semantics. Runtime and SessionMemory stay unaware of
+  authentication methods.
   A run-layer `llm_config.api_key` (needs `provider`) never enters the effective
   map: `run_flow` pops it before the cascade; the map marks that provider's
   agents `_host_key: true` (OpenAI also records a nonsecret `host` connection),

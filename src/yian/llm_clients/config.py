@@ -101,10 +101,11 @@ class LLMConfig(BaseModel):
     Every field is optional: an unset `provider`/`model` comes from
     `YIAN_DEFAULT_PROVIDER`/`YIAN_DEFAULT_MODEL`, then the login saved by `yian auth`;
     with neither, building the model fails, since no provider or model is built in.
-    Only the block named by the selected provider is sent. `extra="forbid"` makes a mistyped `llm_config:` key loud at load time, and a
-    retired key (`temperature`, `anthropic_effort`, ...) fails with its new form (see
-    `retired_key_error`). Validation errors never echo the input values, so a rejected
-    config cannot leak `api_key`.
+    Only the block named by the selected provider is sent. `extra="forbid"` makes a
+    mistyped `llm_config:` key loud at load time, and a retired key (`temperature`,
+    `anthropic_effort`, ...) fails with its new form (see `retired_key_error`).
+    Validation errors never echo the input values, so a rejected config cannot leak
+    `api_key`.
 
     Attributes:
         provider (`str`, *optional*, defaults to `None`):

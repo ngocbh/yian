@@ -38,19 +38,23 @@ saved choice, and never prints a secret.
 
 - `--api-key-env NAME` names the variable holding the API key; the default is the
   provider's own (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, ...). An unset variable
-  gives a hidden prompt in a terminal. `ollama` takes no key; `vllm`'s is optional.
+  gives a hidden prompt in a terminal. `ollama` takes no key; `vllm`'s is optional
+  unless `--api-key-env` names its variable.
 - `--endpoint URL` (azure only) is the resource endpoint, such as
-  `https://<resource>.openai.azure.com/`; `--model` is then the deployment.
+  `https://<resource>.openai.azure.com/`; `--model` is then the deployment. Azure
+  also needs `OPENAI_API_VERSION` set.
 - `--method` and `--login` (openai only) choose ChatGPT subscription or API-key
   access, and browser or device sign-in. Device login works over SSH.
 - `--model MODEL` names the model; a terminal prompts when it is omitted. Off a
-  terminal, supply the model and, for openai, the method and login mode.
+  terminal, supply the model; for openai, the method and login mode; for azure,
+  `--endpoint`; and set the key variable for a provider that needs a key.
 
 The model is accepted when the provider's model listing has it; otherwise (an alias
 the listing does not show, or Azure, which has no listing) one short request to the
-model must succeed. Setup changes nothing until sign-in and the model check succeed;
-a failed or cancelled setup keeps the previous login. The provider becomes the
-default only when no default is saved yet.
+model must succeed. OpenAI accepts only a model in the account's catalog. Setup
+changes nothing until sign-in and the model check succeed; a failed or cancelled
+setup keeps the previous login. The provider becomes the default only when no
+default is saved yet.
 
 `--default` makes an already-saved provider the default without signing in again.
 `--remove` deletes that provider's saved login; removing the default leaves no
@@ -94,16 +98,16 @@ and `--log` before input prompts or provider setup. After repairing any incomple
 tail, an already terminal log gets no new records and prints its recorded result.
 
 Before an unfinished log appends its resume segment, `--resume` checks the
-credentials of every recorded model configuration, as a fresh run does: every
-saved login an agent recorded, of any provider (one that was replaced by running
-`yian auth PROVIDER` again, removed, or whose method changed fails, naming
-`yian auth PROVIDER`); the recorded OpenAI environment key (an `OPENAI_API_KEY`
-that is missing or differs from the key the run started with); and the key
-environment variable of every other agent. In a terminal it prompts for a missing
-key; a typed OpenAI key must be the one the run started with. Otherwise it exits 1:
-for a missing or changed key it asks you to set the key and resume again, and a
-replaced or removed saved login needs a new run. A
-failed check appends nothing, so the log stays resumable. A run started from Python with
+credentials of every recorded model configuration, as a fresh run does. Every saved
+login an agent recorded, of any provider, must still be the same login. One that
+was replaced by running `yian auth PROVIDER` again, removed, or whose method changed
+fails, naming `yian auth PROVIDER`. A recorded OpenAI environment key fails when
+`OPENAI_API_KEY` is missing or differs from the key the run started with. Every
+other agent's key variable is checked as well. In a terminal it prompts for a
+missing key; a typed OpenAI key must be the one the run started with. Otherwise it
+exits 1: for a missing or changed key it asks you to set the key and resume again,
+and a replaced or removed saved login needs a new run. A failed check appends
+nothing, so the log stays resumable. A run started from Python with
 `llm_config.api_key` can only be resumed from Python, with
 `resume_flow(..., api_key=...)`.
 

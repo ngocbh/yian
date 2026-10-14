@@ -86,7 +86,7 @@ An agent's credential comes from, highest first: a Python host's
 (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, ...). Endpoints still come from
 environment variables at run time (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`,
 `VLLM_BASE_URL`, `OLLAMA_BASE_URL`, ...); a saved login stores only the key, plus
-the endpoint for Azure.
+the endpoint for Azure. Azure's API version always comes from `OPENAI_API_VERSION`.
 
 A Python host can instead pass the key in `run_flow(..., llm_config={"provider": ...,
 "api_key": key})`, which takes precedence over the saved login and the variable and
@@ -136,8 +136,8 @@ Setup saves the provider's credential and its model together:
 `--model M` names the model; in a terminal, setup asks when it is omitted. The model
 is accepted when the provider's model listing has it. Otherwise, such as an alias the
 listing does not show, or Azure, which has no listing, one short request to the
-model must succeed. A failed or cancelled setup saves nothing and leaves the
-previous login in place.
+model must succeed. OpenAI accepts only a model in the account's catalog. A failed
+or cancelled setup saves nothing and leaves the previous login in place.
 
 Setting up a provider makes it the default only when no default is saved yet.
 `yian auth PROVIDER --default` switches the default to another saved provider
@@ -205,9 +205,11 @@ llm_config:
   base_url: https://<resource>.openai.azure.com/  # the resource endpoint
 ```
 
-A saved Azure login fills both for Azure agents that set none:
+A saved Azure login fills whichever of `base_url` and `model` an Azure agent leaves
+unset:
 
 ```console
+export OPENAI_API_VERSION=<version>
 yian auth azure --endpoint https://<resource>.openai.azure.com/ --model <deployment>
 ```
 
@@ -218,12 +220,12 @@ and an `/openai` or `/openai/v1` suffix.
 
 A flow file may set `base_url` only beside `provider: azure`. An `/openai` or
 `/openai/v1` suffix is stripped. An Azure agent that ends up without a `base_url`
-fails before the run's first node, saying to set it. Without a saved login, the key
-and API version stay in the environment (`AZURE_OPENAI_API_KEY`,
-`OPENAI_API_VERSION`); a Python host can pass the key as `api_key` instead, and then
-must pass `base_url` beside it. `AZURE_OPENAI_ENDPOINT` and
-`AZURE_OPENAI_DEPLOYMENT_NAME` are not read: move their values into `base_url` and
-`model`, or save them with `yian auth azure`.
+fails before the run's first node, saying to set it. The API version always comes
+from `OPENAI_API_VERSION`, for runs and for `yian auth azure`'s model check. Without
+a saved login, the key stays in `AZURE_OPENAI_API_KEY`; a Python host can pass the
+key as `api_key` instead, and then must pass `base_url` beside it.
+`AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_DEPLOYMENT_NAME` are not read: move their
+values into `base_url` and `model`, or save them with `yian auth azure`.
 
 ### Local models with Ollama
 

@@ -1045,13 +1045,20 @@ def _run_with_sigint_at_opcode(index: int, *, first_cause: str) -> dict[str, Any
             and dis.opname[frame.f_code.co_code[frame.f_lasti]] not in _NO_SIGNAL_OPCODES
         ):
             if state["seen"] == index:
-                helper_frame = frame
-                while helper_frame.f_code is not helper_code:
-                    helper_frame = helper_frame.f_back
+                installed = signal.getsignal(signal.SIGINT)
+                # Read the helper's flag through its handler's closure: touching the
+                # frame's f_locals from a trace function writes stale values back.
+                cells = dict(
+                    zip(
+                        getattr(installed, "__code__", helper_code).co_freevars,
+                        getattr(installed, "__closure__", None) or (),
+                    )
+                )
                 state["trip"] = {
                     # The caller's own handler is back: cleanup has finished.
-                    "after_restore": signal.getsignal(signal.SIGINT) is caller_handler,
-                    "deferring": helper_frame.f_locals.get("defer_sigint", False),
+                    "after_restore": installed is caller_handler,
+                    "deferring": "defer_sigint" in cells
+                    and cells["defer_sigint"].cell_contents,
                 }
                 signal.raise_signal(signal.SIGINT)
             state["seen"] += 1
@@ -1141,6 +1148,10 @@ def _run_with_sigint_at_opcode(index: int, *, first_cause: str) -> dict[str, Any
 
 @pytest.mark.skipif(not hasattr(signal, "pthread_kill"), reason="needs pthread_kill")
 @pytest.mark.skipif(sys.gettrace() is not None, reason="replaces the active tracer")
+@pytest.mark.skipif(
+    sys.version_info < (3, 11),
+    reason="3.10 writes a frame's locals back after each trace call, undoing the handler's stores",
+)
 @pytest.mark.parametrize("first_cause", ["sigint", "render", "none"])
 def test_sigint_at_any_cleanup_opcode_still_joins_and_stops(first_cause: str) -> None:
     """A Ctrl-C at any helper bytecode after the first cause never cuts cleanup short."""
@@ -1158,7 +1169,7 @@ def test_sigint_at_any_cleanup_opcode_still_joins_and_stops(first_cause: str) ->
             kept = True
         elif first_cause == "none":
             # This Ctrl-C is the first one: it raises, now or after cleanup.
-            kept = isinstance(outcome, KeyboardInterrupt) or getattr(outcome, "output", None) == "done"
+            kept = isinstance(outcome, KeyboardInterrupt)
         elif first_cause == "render" and not trip["deferring"]:
             # Handled before the helper's except turned deferral on: it raises once
             # through the caller's handler, as if it came just before the failure.

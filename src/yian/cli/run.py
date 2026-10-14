@@ -438,8 +438,10 @@ def _run_with_terminal_controller(
     ``eof_value`` optionally normalizes prompt EOF to a caller-owned value; omitted
     EOF keeps the broker's exception policy. While it runs, the helper's own handler
     is the process SIGINT handler (on the main thread, when the caller's handler is a
-    Python callable): the first Ctrl-C reaches the caller's handler, and later ones
-    are replayed through it once cleanup ends.
+    Python callable). A Ctrl-C while the controller launches, after the run stopped
+    or completed, or during cleanup is recorded, and one recorded Ctrl-C is replayed
+    through the caller's handler once cleanup ends; any other Ctrl-C reaches the
+    caller's handler directly.
     """
 
     broker: TerminalBroker
@@ -490,7 +492,6 @@ def _run_with_terminal_controller(
             broker.controller_complete(result=result)
         finally:
             # The main thread waits on this explicit target-lifecycle bit before joining.
-            # A SIGINT-interrupted Thread.join can report a still-running thread as stopped.
             controller_finished.set()
 
     controller_thread = threading.Thread(target=drive, name="ac-controller")

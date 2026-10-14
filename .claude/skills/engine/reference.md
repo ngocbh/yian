@@ -562,9 +562,16 @@ model made enforceable.
 - **Node never writes the pool** (purity); **typed, losslessly-serializable state**
   (`TypedValue` / `VariablePool` — the basis for canonical record payloads + `${...}` refs).
   For a refined specialized list, `Type.element.nullable` permits `None`; bare and
-  non-nullable specialized lists still reject it, while existing `LIST_ANY` and
-  explicit `None`-element semantics remain unchanged. The specialized `LIST_*`
-  discriminator and carrier preserve `None` across canonical round-trips.
+  non-nullable specialized lists still reject it. An authored `list(Any)` /
+  `list(Optional(Any))` is `LIST_ANY` with an `Any` / `Optional(Any)` element; a
+  `LIST_ANY` with no element is an unproven list, labelled `list(Optional(Any))`, whose
+  items compatibility reads as `Optional(Any)` and MAP checks at runtime.
+  `ValueKind.ANY` is type-only: an `Any` value (any non-null JSON value) is stored under
+  its natural kind. `object`, `list(object)` items, and `LIST_ANY` items must be JSON
+  values (text keys; no date objects, sets, or `FileRef`s). An `Any` source fits only
+  `Any`/`Optional(Any)` in wiring, and `type_relation` treats it as narrower than other
+  types. The specialized `LIST_*` discriminator and carrier preserve `None` across
+  canonical round-trips.
   Cross-flow compatibility recursively applies the nullable-source-to-strict-sink
   rule to list elements.
 - **Append-only durable authority** — `RunStartedRecord` captures complete initial
@@ -886,12 +893,14 @@ dicts. `Optional(Union(...))` sets `nullable` on the union. Tag fields are deriv
 untagged union with two members that `types_overlap`, and `read_typedefs` resolves every typedef union eagerly. Value checks pick the member by the
 first tag field (or the one untagged member the value satisfies) and keep
 `TypeCheckError.path`. `types_compatible` is member by member: a union never fits a record
-sink, a union fits `object`, and `object` never fits a union. Structured generation maps a
-union to a plain pydantic `Union[...]` of `extra='forbid'` member models inside the
-`value` wrapper (`anyOf` + `const` tags, no `discriminator`), and maps a validation error
-at a union position to the member its tag selects. Manifests emit `"union": [...]` in
-canonical order only when present. `union_field` (read a field: shared, partial, or
-absent) and `restrict_union` (keep some members) serve the load-time checks.
+sink, a union fits `object`, and `object` never fits a union. An AGENT `output: Any`
+maps to a strict union of the JSON types inside the `value` wrapper. Structured
+generation maps a union to a plain pydantic `Union[...]` of `extra='forbid'` member
+models inside the `value` wrapper (`anyOf` + `const` tags, no `discriminator`), and
+maps a validation error at a union position to the member its tag selects. Manifests
+emit `"union": [...]` in canonical order only when present. `union_field` (read a
+field: shared, partial, or absent) and `restrict_union` (keep some members) serve the
+load-time checks.
 
 AGENT's local `variables` field uses an ordered `list[Parameter]`, with an exact
 `ValueContract` and mandatory typed default for every entry. Compose reuses its
@@ -914,11 +923,12 @@ Compose and runtime growth reference validation both call the source-neutral clo
 walk in `nodes/contracts.py`; exact nested records and partial root name sets therefore
 reject the same provably absent paths without importing Compose into runtime.
 The walk, `output_contract_field_error`, also rejects any field on a scalar or list
-type; an opaque `object` (no declared fields) and `file` stay unchecked. On a union it
-continues with a shared field's type and rejects a field only some members have (naming
-the tag to `case` on, or `isinstance` for an untagged union). Runtime growth passes
-`partial_union_fields=True`: fragments come from flows the loader already checked under
-narrowing, which the fragment does not record. Node asserts use the same walk.
+type; an opaque `object` (no declared fields), `Any`, and `file` stay unchecked. On a
+union it continues with a shared field's type and rejects a field only some members
+have (naming the tag to `case` on, or `isinstance` for an untagged union). Runtime
+growth passes `partial_union_fields=True`: fragments come from flows the loader already
+checked under narrowing, which the fragment does not record. Node asserts use the same
+walk.
 
 Compose's narrowing pass (`compose/validate/narrowing.py`) runs after the CASE desugar and
 node builds. A fact for a base path (`<node>.output[.path]`, `input.<name>[.path]`) is

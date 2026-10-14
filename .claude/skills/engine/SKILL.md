@@ -280,7 +280,7 @@ this model whenever you design anything:
   algorithms. Compose and runtime growth reference validation share the source-neutral
   closed-field walk from `nodes/contracts.py` (`output_contract_field_error`): it
   rejects a provably absent record field and any field on a scalar or list type;
-  an opaque `object` (no declared fields) and `file` stay unchecked. On a union it
+  an opaque `object` (no declared fields), `Any`, and `file` stay unchecked. On a union it
   reads a field every member has and rejects a member-only field; runtime growth passes
   `partial_union_fields=True` because loader-time narrowing is not recorded on the
   fragment. Compose's narrowing pass (`compose/validate/narrowing.py`) gives each node a
@@ -427,8 +427,14 @@ Most are just the functional model (above) made enforceable:
   `TypedValue` / `VariablePool`; the basis for canonical run-record payloads and
   `${...}` references. Within a refined specialized list,
   `Type.element.nullable` permits `None`; bare and non-nullable specialized lists
-  still reject it, while existing `LIST_ANY` and explicit `None`-element semantics
-  remain unchanged. The specialized `LIST_*` discriminator and carrier preserve
+  still reject it. An authored `list(Any)` / `list(Optional(Any))` is `LIST_ANY` with
+  an `Any` / `Optional(Any)` element; a `LIST_ANY` with no element is an unproven list,
+  labelled `list(Optional(Any))`, whose items compatibility reads as `Optional(Any)`
+  and MAP checks at runtime. `ValueKind.ANY` is type-only (any non-null JSON value,
+  stored under its natural kind); `object`, `list(object)` items, and `LIST_ANY` items
+  must be JSON values (text keys, no date objects, sets, or `FileRef`s). In wiring an
+  `Any` source fits only `Any`/`Optional(Any)`; `type_relation` treats it as narrower.
+  The specialized `LIST_*` discriminator and carrier preserve
   `None` through canonical round-trips. Cross-flow compatibility recursively
   applies the nullable-source-to-strict-sink rule to list elements. A union is
   `Type(kind=OBJECT, variants=(record, ...))`: non-nullable record members in

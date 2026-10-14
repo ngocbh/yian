@@ -331,15 +331,18 @@ one responsibility:
 | `PartialRecordContract` | one closed record shape with optional field-local value contracts |
 | `ContractOrigins` | immutable root/nested origin lookup for a value contract |
 
-For a refined specialized list, `Type.element.nullable` permits `None` alongside
-the element's ordinary values; a bare or non-nullable specialized list still
-rejects it. Existing `LIST_ANY` and explicit `None`-element semantics remain
-unchanged. The nullable specialized list retains its `LIST_*` discriminator and
-carrier through canonical value, pool, and run-record round-trips. Cross-flow
-compatibility recursively applies the same nullable-source-to-strict-sink rule
-to list elements. The singleton `None` source is compatible with every nullable
-sink, matching runtime coercion, but remains incompatible with a strict non-`None`
-sink.
+For a refined specialized list, `Type.element.nullable` permits `None` alongside the
+element's ordinary values; a bare or non-nullable specialized list still rejects it.
+An authored `list(Any)` is `LIST_ANY` with an `Any` element and `list(Optional(Any))`
+one with an `Optional(Any)` element. A `LIST_ANY` with no element holds items that
+weren't proven (a tool's untyped array, a mixed or empty literal); it is labelled
+`list(Optional(Any))`, compatibility reads its items as `Optional(Any)`, and MAP
+items over it are checked at runtime. The nullable specialized list retains its
+`LIST_*` discriminator and carrier through canonical value, pool, and run-record
+round-trips. Cross-flow compatibility recursively applies the same
+nullable-source-to-strict-sink rule to list elements. The singleton `None` source is
+compatible with every nullable sink, matching runtime coercion, but remains
+incompatible with a strict non-`None` sink.
 
 All origins are optional, so Python-authored values default to source-free and
 may supply an opaque origin explicitly. The carriers are frozen only at their
@@ -483,8 +486,9 @@ complex). The first boundary that sees one rejects it. The binder checks each re
 an expression are not checked. MAP checks its `over` list the same way, and an AGENT
 variable default fails `node.execute` at the default. `run_flow` raises `ValueError` for
 a run input before the log exists. `run_flow` also rejects a run input holding a mapping
-with a non-text key (`input 'o': object keys must be text, got 1`). `LLMConfig` rejects a non-finite value, so authored
-config is a load error and host config fails before the run starts. Every run-log codec
+with a non-text key (`input 'o': object keys must be text, got 1`). `LLMConfig` rejects
+a non-finite value, so authored config is a load error and host config fails before
+the run starts. Every run-log codec
 (`canonical_typed`, `canonical_seed`, `encode_pool`) rejects one with a path; there is
 no opt-in. So a node output fails `contract.output` at the field path (`output at
 stats.a: ...`), selecting the declared field's origin, and a growth seed fails as a
@@ -572,7 +576,16 @@ depend on the spelling. Canonical labels and messages print this spelling. The b
 spelling (`Optional[str]`, `int[1, 12]`) is a load error that shows the new one; a
 private legacy reader exists only to spell that fix. Wire values are not authored syntax
 and keep their names: `ValueKind` values such as `"list[str]"` in run records and
-manifests, and HUMAN_INPUT `answer_schema` types.
+manifests, and HUMAN_INPUT `answer_schema` types (`"Any"` for an `Any` answer).
+
+`Any` is any JSON value except null and `object` is a JSON object (text keys, JSON
+values). `ValueKind.ANY` is type-only: `build_value_as` stores an `Any` value under its
+natural kind, and checks that `object` values, `list(object)` items, and `LIST_ANY`
+items are JSON values, failing with the path of a non-text key or a non-JSON value.
+Load doesn't check field reads on an `Any` value. In wiring, an `Any` source fits only
+`Any` and `Optional(Any)`; a tagged slot treats it as narrower than any other type and
+checks it at runtime. The lowercase `any` is a load error (`unknown type 'any'; write
+Any`).
 
 Numeric `Type` values may retain an inclusive `bounds` pair for INTEGER or
 NUMBER; an open end is `None` (`(None, None)` is invalid). Shape validation rejects

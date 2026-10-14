@@ -595,7 +595,11 @@ class Type:
       - union:   kind=OBJECT,   variants=(record member, ...)   (a `Union[...]` of records)
     A refined specialized list uses the element's matching storage tag;
     `LIST_ANY` is the generic carrier and may refine any element type.
-    A plain scalar / flat list uses only `kind` (see `Type.scalar`).
+    A plain scalar / flat list uses only `kind` (see `Type.scalar`). A `LIST_ANY`
+    with no `element` is a list whose items weren't proven (a tool's untyped array,
+    a mixed or empty literal); it is labelled `list(Optional(Any))` and its items
+    read as `Optional(Any)`. `kind=ANY` is type-only: an `Any` value is stored
+    under its natural kind.
     Despite the name, `variants` holds union members, not the string tags of a
     "variant" above. Members are non-nullable records; a nullable union sets
     `nullable` on the union itself.
@@ -808,8 +812,8 @@ def list_kind_for_element(element: Type) -> ValueKind:
     """Return the list storage kind the type resolver picks for an element type.
 
     A `Literal` element stores as `list[str]`, a record or union element as
-    `list[object]`, a scalar element as its own list kind, and anything else as
-    `list[Any]`.
+    `list[object]`, a scalar element as its own list kind, and anything else
+    (`Any` and `Optional(Any)` included) as `list[Any]`.
 
     Args:
         element (`Type`): The list's element type.
@@ -1640,6 +1644,11 @@ def build_value_as(declared: "ValueKind | Type", value: Any) -> TypedValue:
     than silently downstream. The only coercion is widening: an `int` fills a `float`
     slot at any depth (a record field, a list item, a union member's field).
 
+    `Any` accepts any non-null JSON value and stores it unchanged in its natural
+    carrier (a list as `list[Any]`). An `object` value, a `list(object)` item, and a
+    `list[Any]` item must be JSON values: a `dict` with only `str` keys, a list or
+    tuple, `None`, `bool`, `int`, `float`, or `str`, nested.
+
     Args:
         declared (`ValueKind | Type`):
             The target type. A bare `ValueKind` is a scalar or flat list; a structural
@@ -1657,8 +1666,9 @@ def build_value_as(declared: "ValueKind | Type", value: Any) -> TypedValue:
         `TypeCheckError`:
             The value does not satisfy `declared` — wrong scalar type, a non-member
             variant tag, an out-of-bounds number, a record with missing/unknown fields,
-            a union value with a missing/unknown tag or matching no member, or a bad
-            list element.
+            a union value with a missing/unknown tag or matching no member, a bad
+            list element, or a non-JSON value (a non-text key, a date object, a set,
+            ...) where a JSON value is required.
     """
     typ = Type.scalar(declared) if isinstance(declared, ValueKind) else declared
     if isinstance(value, TypedValue):

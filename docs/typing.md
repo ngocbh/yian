@@ -35,7 +35,14 @@ author token, wire tag, and display name at once (it is `str`, never `string`):
 ```
 scalars   None  str  int  float  bool  date  datetime  object  file
 lists     list[Any]  list[str]  list[int]  list[float]  list[bool]  list[object]
+type-only Any
 ```
+
+`ANY` is type-only: no value is stored as `Any`. An `Any` value is any JSON value except
+null, and it keeps its natural kind (`str`, `int`, `object`, `list[Any]`, ...), so the run
+log records `"hello"` as a `str`. Type labels spell the list kinds with parentheses:
+`list[str]` is the type `list(str)`, and `list[Any]` holds a `list(Any)` or a
+`list(Optional(Any))`.
 
 `date`/`datetime` are strings in one fixed form, never auto-inferred:
 
@@ -163,7 +170,17 @@ build_value_as(declared, v)  → wrap v as `declared`, RAISE on mismatch (check)
 `build_value_as` is the declared-type check used by both `VariablePool.set` and the
 run log's `canonical_typed` success-record boundary. It raises `TypeCheckError` on a
 mismatch; the only coercion is widening (`int` fills a `float` slot at any depth:
-a record field, a list item, or a union member's field).
+a record field, a list item, or a union member's field). An `Any` value is stored
+as given: an int stays an int and `True` stays a bool.
+
+`object`, `Any`, `list(object)` items, and `list[Any]` items must be JSON values: `None`,
+a `bool`, `int`, `float`, or `str`, a `dict` with only `str` keys and JSON values, or a
+list or tuple of JSON values. The check walks the value without recursion and fails at
+the bad part's path: a non-text key with `object keys must be text, got 1` at the
+mapping, anything else (a date object, a set, a pydantic model, a dataclass, a
+`FileRef`) with `<value> is not a JSON value`, and a container inside itself with
+`value contains itself`. Depth and non-finite numbers are left to the boundary checks
+above, so a recorded value replays.
 An `int` too large for a float fails at its path (`int is too large for float`).
 `TypeCheckError.path` is an immutable tuple relative to the declared type: string
 segments name record fields and integer segments are actual list indices. A
@@ -185,15 +202,20 @@ dataclass whose `kind` is the storage tag, with optional refining fields:
 | **typed list** | `kind=LIST_*`, `element=<Type>` |
 | **union** | `kind=OBJECT`, `variants=(record, ...)`: two or more non-nullable records |
 | **Optional(X)** | X's `Type` with `nullable=True` |
+| **Any** | `kind=ANY` only (type-only; the value keeps its natural kind) |
 
-For a refined specialized list, `Type.element.nullable` permits `None` alongside
-the element's ordinary values; a bare or non-nullable specialized list still
-rejects it. The existing `LIST_ANY` and explicit `None`-element semantics remain
-unchanged. A nullable specialized list retains its `LIST_*` discriminator and
-carrier, so `AnyValue` and `VariablePool` round-trips preserve null items without
-lowering it to `LIST_ANY`. Cross-flow compatibility applies the same structural
-check recursively: a strict element source may fill a nullable element sink, but
-not the reverse.
+For a refined specialized list, `Type.element.nullable` permits `None` alongside the
+element's ordinary values; a bare or non-nullable specialized list still rejects it. An
+authored `list(Any)` is `LIST_ANY` with an `Any` element, and `list(Optional(Any))` is
+`LIST_ANY` with an `Optional(Any)` element. A `LIST_ANY` with no element is a list whose
+items weren't proven: a tool's untyped array or tuple, or a mixed or empty literal. It
+has the same values and label, `list(Optional(Any))`, and compatibility reads its items
+as `Optional(Any)`, but MAP items over it are checked at runtime and an inline body's
+parameter still needs a proven element. A nullable specialized list retains its `LIST_*`
+discriminator and carrier, so `AnyValue` and `VariablePool` round-trips preserve null
+items without lowering it to `LIST_ANY`. Cross-flow compatibility applies the same
+structural check recursively: a strict element source may fill a nullable element sink,
+but not the reverse.
 
 Authors write types in yian's own grammar: Python typing's vocabulary, spelled with
 parentheses (`list(X)`, `Optional(X)`, `Literal(...)`, `dict(K, V)`, a bare PascalCase
@@ -252,12 +274,13 @@ narrows: it never fills in a field and never converts a value.
   usual runtime one.
 - **narrower** — some inferred values may miss the declared type (Optional into
   non-Optional, `str` into a `Literal`, an unbounded or wider-ranged number into a
-  bounded one, an `object` value into a record, a union into one of its members); the
-  binding loads and the binder checks it at runtime with `build_value_as`, failing with
-  `binding.type`.
+  bounded one, an `object` value into a record, a union into one of its members, or an
+  `Any` value into any other type); the binding loads and the binder checks it at
+  runtime with `build_value_as`, failing with `binding.type`.
 - **disjoint** — no non-null inferred value fits; loading fails. Records count as
   closed, so an extra required field makes them disjoint, and sharing only `None`
-  is not overlap.
+  is not overlap. A type whose every non-null value holds a `file` is disjoint from
+  `Any`, and so is `None`.
 
 Unions compare member-wise: each inferred member takes its best relation against the
 declared members (a non-union side counts as one member), and the results combine to
@@ -268,8 +291,15 @@ This relation agrees with `types_compatible`, the check for wiring, on what fits
 two differences. It treats records as closed, so a record fits only when its fields are
 a subset of the declared fields at every level. It lets `date` and `datetime` fit
 `str`, since they are stored as strings. Where wiring rejects a source that is only
-narrower, such as a plain `str` into a `Literal`, a tagged slot accepts it and
-checks the value at runtime. Downstream readers see the tag's type.
+narrower, such as a plain `str` into a `Literal` or an `Any` value into an `int`, a
+tagged slot accepts it and checks the value at runtime. Downstream readers see the tag's
+type.
+
+In wiring, every non-null type without a `file` in it fits `Any`, and a nullable one
+fits `Optional(Any)`. An `Any` source fits only `Any` and `Optional(Any)`, since load
+can't tell which JSON value it holds; the CALL and LOOP errors say to tag the slot or
+narrow the value with `isinstance` in a `case`. `types_overlap` treats `Any` as
+overlapping every type except `None` and a bare `file`.
 
 A value with `${...}` nested in a record or list is inferred structurally, field by
 field, so each field keeps its type. A record that omits a required single-value

@@ -202,12 +202,15 @@ Contract:
 
 ## Type forms
 
-Scalars: `str`, `int`, `float`, `bool`, `date`, `datetime`, `object`, `None`. Forms use
-parentheses; bracket spellings are a load error that shows the new one.
+Scalars: `str`, `int`, `float`, `bool`, `date`, `datetime`, `object`, `Any`, `None`. Forms
+use parentheses; bracket spellings are a load error that shows the new one. `Any` is any
+JSON value except null (`any` is a load error); `object` is a JSON object (text keys,
+JSON values).
 
 | Form | Example | Notes |
 |------|---------|-------|
 | list | `list(str)` | |
+| any JSON value | `Any`, `list(Any)`, `list(Optional(Any))` | `Any` fills only `Any`; tag or `isinstance` to narrow it |
 | nullable | `Optional(str)` | may be `null` |
 | enum | `Literal(go, no_go, wait)` | one of these tags |
 | bounded integer | `int(1..12)`, `int(0..)`, `int(..100)` | inclusive range; either end may be open, not both |
@@ -501,10 +504,10 @@ only the fields that change; a field it omits keeps its value. This is the shape
   A `call`/`loop` node's own asserts can't use `isinstance` (they run on the child's
   `end`); assert inside the child flow.
 - **`isinstance(x, T)` takes a bare type name** — a `typedefs:` name or
-  `str`/`int`/`float`/`bool`/`date`/`datetime`/`object`. `list(...)`/`Optional(...)` need
-  an alias. Constructors `${T(...)}` take only typedef names (`${int(x)}` is an unknown
-  function). It is not a prompt function: compute it in an input binding. WAIT `until:`
-  and MAP `over:` reject it.
+  `str`/`int`/`float`/`bool`/`date`/`datetime`/`object` (not `Any`). `list(...)`/
+  `Optional(...)` need an alias. Constructors `${T(...)}` take only typedef names
+  (`${int(x)}` is an unknown function). It is not a prompt function: compute it in an
+  input binding. WAIT `until:` and MAP `over:` reject it.
 - **A member-only union field fails to load outside its branch.** `${d.output.qty}`
   where only `Buy` has `qty` must sit under `when: buy` (or an `isinstance` case).
   A `when:` value that isn't a tag of the union is a load error (``case node 'route':

@@ -223,7 +223,8 @@ A fresh flow declares typed `input:` fields. Explicit inputs layer in this order
 2. **`--input k=v`** — one input, repeatable. This is a string/scalar surface:
    values arrive as strings and are coerced, where supported, against scalar input
    types at the run boundary (see [syntax.md](syntax.md) for the accepted `bool`
-   spellings). It does not parse list/object JSON or explicit null.
+   spellings). It does not parse list/object JSON or explicit null. An `Any` input
+   stays text (`--input x=3` gives `"3"`); pass a number or a structure in `--inputs`.
    A default applied by START was already validated at load and is not
    string-coerced.
 

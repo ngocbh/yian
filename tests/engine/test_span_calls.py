@@ -156,19 +156,13 @@ nodes:
 output: ${hot.output | cold.output}
 """
 
-_CASE_VALUE = """
+_VALUE_ENTRY = """
 id: f
 name: f
 input: {v: !str }
 nodes:
-  g:
-    kind: case
-    output: str
-    cases:
-      - when: input.v == 'a'
-        then: "<then>"
-    else: "x"
-output: ${g.output}
+  e: !str "<value>"
+output: ${e.output}
 """
 
 _AGENT = """
@@ -232,7 +226,7 @@ _SITES = {
     "loop-seed": (_fill(_LOOP, n="${upper(input.v, 1)}"), "node 'r' input 'n' from: "),
     "wait-until": (_fill(_WAIT, until="${upper(input.d, 1)}"), "node 'w' wait until: "),
     "case-on": (_fill(_CASE_ON, on="${upper(input.v, 1)}"), "node 'g' on: from: "),
-    "case-value": (_fill(_CASE_VALUE, then="${upper(input.v, 1)}"), "node '__value_0' input 'v0' from: "),
+    "value-entry": (_fill(_VALUE_ENTRY, value="${upper(input.v, 1)}"), "value entry 'e' from: "),
     "agent-prompt": (_fill(_AGENT, prompt="Say ${upper(t, 1)}", system="S"), "node 'a' prompt: "),
     "agent-system-prompt": (_fill(_AGENT, prompt="Say", system="S ${upper(t, 1)}"), "node 'a' system_prompt: "),
     "adaptive-brief": (_fill(_ADAPTIVE, prompt="Ask about ${upper(t, 1)}"), "node 'ask' adaptive_questions.prompt: "),

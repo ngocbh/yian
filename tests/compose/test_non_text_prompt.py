@@ -203,3 +203,92 @@ def test_text_prompts_still_load(builder, value: str) -> None:
 @pytest.mark.parametrize("value", ["null", "''"])
 def test_empty_agent_prompt_is_unchanged(value: str) -> None:
     load_flow(_agent(value))
+
+
+QUESTION_FIELDS = [
+    ("question", "questions[0].question", 7),
+    ("header", "questions[0].header", 8),
+    ("label", "questions[0].options[0].label", 10),
+    ("description", "questions[0].options[0].description", 11),
+]
+
+NON_TEXT_QUESTION_VALUES = [
+    ("5", "YAML read it as an integer; put it in quotes"),
+    ("[a]", "YAML read it as a list; put it in quotes"),
+    ("null", "it is empty; write the text"),
+    ("", "it is empty; write the text"),
+]
+
+
+def _questions_gate(
+    question: str = "Q", header: str = "H", label: str = "L", description: str = "D"
+) -> str:
+    """A HUMAN_INPUT flow with one literal question on lines 7-11."""
+    return f"""\
+id: f
+name: f
+nodes:
+  ask:
+    kind: human_input
+    questions:
+      - question: {question}
+        header: {header}
+        options:
+          - label: {label}
+            description: {description}
+output: ${{ask.output}}
+"""
+
+
+@pytest.mark.parametrize(("field", "label", "line"), QUESTION_FIELDS)
+@pytest.mark.parametrize(("value", "tail"), NON_TEXT_QUESTION_VALUES)
+def test_non_text_question_field_is_a_load_error(
+    field: str, label: str, line: int, value: str, tail: str
+) -> None:
+    error = _load_error(_questions_gate(**{field: value}))
+    assert (
+        f"node 'ask' (kind=human_input): `{label}:` must be text, but {tail}"
+    ) in str(error)
+    assert "validation error for QuestionSpec" not in str(error)
+    assert _line(error) == line
+
+
+def test_first_non_text_question_field_is_reported() -> None:
+    error = _load_error(_questions_gate(question="5", label="true"))
+    assert "`questions[0].question:` must be text" in str(error)
+    assert "label" not in str(error)
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "      - question: Which?\n        options: [{label: A, description: a}]\n",
+        "      - question: Which?\n        header: H\n        options: [plain]\n",
+    ],
+)
+def test_question_shape_errors_are_unchanged(question: str) -> None:
+    text = (
+        "id: f\nname: f\nnodes:\n  ask:\n    kind: human_input\n    questions:\n"
+        + question
+        + "output: ${ask.output}\n"
+    )
+    error = _load_error(text)
+    assert "question[0] is invalid" in str(error)
+    assert "must be text" not in str(error)
+
+
+def test_flow_style_question_field_is_located() -> None:
+    error = _load_error("""\
+id: f
+name: f
+nodes:
+  ask:
+    kind: human_input
+    questions:
+      - question: Which?
+        header: H
+        options: [{label: 1, description: D}]
+output: ${ask.output}
+""")
+    assert "`questions[0].options[0].label:` must be text" in str(error)
+    assert _line(error) == 9

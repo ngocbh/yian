@@ -383,8 +383,8 @@ def test_a_when_branch_and_else_into_one_target_join_to_every_member():
     assert narrowing.for_node("x")[0]["d"].type == DECISION
 
 
-def test_a_then_target_named_default_carries_no_fact():
-    """A `then: default` node shares the else handle, so it is not narrowed."""
+def test_a_then_target_named_default_is_narrowed_like_any_node():
+    """A `then:` node named `default` sees its member; the name is not reserved."""
     nodes = [
         _node("d"),
         _case("c", "${d.output.action}", [("buy", "b"), ("sell", "default")]),
@@ -394,11 +394,11 @@ def test_a_then_target_named_default_carries_no_fact():
     narrowing = _compute(nodes, [], {"d": _decision_contract()})
 
     assert _view_type(narrowing, "b") == BUY
-    assert narrowing.environment("default") == {}
+    assert _view_type(narrowing, "default") == SELL
 
 
-def test_a_then_target_named_default_and_an_else_carry_no_fact():
-    """With `then: default` the else target shares the handle and is not narrowed either."""
+def test_a_then_target_named_default_leaves_the_else_target_the_unlisted_members():
+    """With `then: default` and `else: h`, `h` still sees the unlisted member."""
     nodes = [
         _node("d"),
         _case("c", "${d.output.action}", [("buy", "b"), ("sell", "default")], "h"),
@@ -409,8 +409,8 @@ def test_a_then_target_named_default_and_an_else_carry_no_fact():
     narrowing = _compute(nodes, [], {"d": _decision_contract()})
 
     assert _view_type(narrowing, "b") == BUY
-    assert narrowing.environment("default") == {}
-    assert narrowing.environment("h") == {}
+    assert _view_type(narrowing, "default") == SELL
+    assert _view_type(narrowing, "h") == HOLD
 
 
 def test_else_keeps_nullability_from_a_nullable_path_segment():

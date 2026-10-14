@@ -412,7 +412,7 @@ def test_handles_align_with_control_edges():
     edge_handles = {e.source_handle for e in control_edges}
     # every case handle has an outgoing edge.
     assert case_handles <= edge_handles
-    # every edge handle is a case handle or the default.
+    # every edge handle is a case handle or the else handle.
     assert edge_handles <= case_handles | {ELSE_HANDLE}
 
 

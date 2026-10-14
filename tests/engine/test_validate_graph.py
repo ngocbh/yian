@@ -258,11 +258,11 @@ def test_case_without_outgoing_edge_rejected():
     assert "positive" in str(exc.value)
 
 
-def test_default_handle_always_allowed():
+def test_else_handle_always_allowed():
     node_ids, edges, nodes = _build("02-case.yaml")
     # the else: -> else handle is on a control edge; it must not trip the check.
-    default_edges = [
+    else_edges = [
         e for e in edges if e.from_ == "gate" and e.source_handle == ELSE_HANDLE
     ]
-    assert default_edges  # seed 02 has an else:
+    assert else_edges  # seed 02 has an else:
     check_case_handles(nodes, edges)  # no raise

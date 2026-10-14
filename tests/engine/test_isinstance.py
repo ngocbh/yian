@@ -10,6 +10,7 @@ from dataclasses import replace
 import pytest
 
 from yian.compose.loader import load_flow
+from yian.events import NodeStarted
 from yian.expr.expressions import (
     ExpressionError,
     ResolveMode,
@@ -534,3 +535,53 @@ def test_a_read_guarded_by_isinstance_routes_a_non_member_to_else(decision, expe
     result = run_flow(load_flow(GUARDED_FLOW), {"decision": decision})
     assert result.status == "succeeded", result.failure
     assert result.output == expected
+
+
+NARROWED_DEFAULT_FLOW = """
+id: narrowed-default
+name: narrowed_default
+typedefs:
+  Buy: {action: 'Literal[buy]', qty: int}
+  Hold: {action: 'Literal[hold]', note: str}
+  Decision: Union[Buy, Hold]
+input:
+  decision: object
+nodes:
+  d:
+    kind: code
+    input:
+      decision: ${input.decision}
+    code: |
+      return inputs["decision"]
+    output: Decision
+  route:
+    kind: case
+    cases:
+      - when: isinstance(d.output, Buy)
+        then: default
+    else: other
+  default:
+    kind: code
+    input:
+      qty: ${d.output.qty}
+    code: |
+      return inputs["qty"]
+    output: int
+  other:
+    kind: code
+    code: |
+      return 0
+    output: int
+output: ${default.output | other.output}
+"""
+
+
+def test_a_then_target_named_default_is_narrowed_by_a_searched_isinstance():
+    # `default` is an ordinary node name, so its branch carries the `Buy` fact and may
+    # read the `Buy`-only `qty`.
+    decision = {"action": "buy", "qty": 3}
+    result = run_flow(load_flow(NARROWED_DEFAULT_FLOW), {"decision": decision})
+    assert result.status == "succeeded", result.failure
+    assert result.output == 3
+    started = {e.node_id for e in result.events if isinstance(e, NodeStarted)}
+    assert "default" in started and "other" not in started

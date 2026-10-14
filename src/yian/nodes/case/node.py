@@ -36,8 +36,10 @@ class Case:
     origin: OriginRef | None = None
 
     def __post_init__(self) -> None:
-        """Require source-neutral predicate provenance."""
+        """Require source-neutral predicate provenance and a non-else handle."""
         _validate_optional_origin(self.origin, "CASE predicate origin")
+        if self.handle == ELSE_HANDLE:
+            raise ValueError(f"CASE handle {self.handle!r} is reserved for the else route")
 
 
 class CaseNode(Node):
@@ -46,8 +48,8 @@ class CaseNode(Node):
 
     Cases are tried in order; the first whose `when:` is truthy (evaluated against the bound
     input record) wins and its handle is returned on the result. If none match, the reserved
-    else handle (`ELSE_HANDLE`) is taken. The node writes no value — the engine's `_branch` does the
-    skip-flood off the chosen handle.
+    else handle (`ELSE_HANDLE`) is taken. The node writes no value — the engine's `_branch`
+    does the skip-flood off the chosen handle.
 
     Args:
         node_id (`str`):
@@ -75,6 +77,11 @@ class CaseNode(Node):
         super().validate_execution_setup()
         for case in self.cases:
             _validate_optional_origin(case.origin, "CASE predicate origin")
+            if case.handle == ELSE_HANDLE:
+                raise ValueError(
+                    f"node {self.id!r} case handle {case.handle!r} is reserved for the "
+                    "else route"
+                )
             if case.when is None:
                 raise ValueError(
                     f"node {self.id!r} case {case.handle!r} has no `when` expression"

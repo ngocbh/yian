@@ -92,8 +92,9 @@ class Route:
 
 
 # The handle a router takes when no labeled branch matches. Unlike any other handle it may
-# have no outgoing edge.
-ELSE_HANDLE = "default"
+# have no outgoing edge. A `then:` handle is its target's node id, and no node id may hold
+# `#`, so no branch can share the else route.
+ELSE_HANDLE = "#else"
 
 
 @dataclass(frozen=True)

@@ -6,6 +6,7 @@ from yian.compile.model import Edge
 from yian.compose.parse.file import CaseDescriptor
 from yian.compose.validate.case_exhaustive import case_is_exhaustive, exhaustive_cases
 from yian.compose.validate.skips import SkipModel
+from yian.nodes.base import ELSE_HANDLE
 from yian.nodes.contracts import ValueContract
 from yian.typesys.values import Type, ValueKind
 
@@ -133,7 +134,7 @@ def test_node_targeted_by_a_sole_branch_of_an_exhaustive_case_never_skips():
 
 def test_depends_on_a_case_runs_on_every_branch():
     """An ordering edge from a CASE is not a branch: it skips only when the CASE is skipped."""
-    edges = [ctl("gate", "then", "a"), ctl("gate", "default", "b"), order("gate", "after")]
+    edges = [ctl("gate", "then", "a"), ctl("gate", ELSE_HANDLE, "b"), order("gate", "after")]
     m = model("gate a b after", edges, {"gate"})
     assert not m.may_all_skip({"after"})
     assert m.may_skip_while_running({"a"}, "after")
@@ -149,7 +150,7 @@ def test_depends_on_a_skipped_case_skips():
 
 def test_runs_after_a_case_never_skips():
     """An optional ordering edge from a CASE never skips its node."""
-    edges = [ctl("gate", "then", "a"), ctl("gate", "default", "b")]
+    edges = [ctl("gate", "then", "a"), ctl("gate", ELSE_HANDLE, "b")]
     m = model("gate a b after", [*edges, order("gate", "after", optional=True)], {"gate"})
     assert not m.may_all_skip({"after"})
 

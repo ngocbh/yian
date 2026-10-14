@@ -505,11 +505,6 @@ def _on_case_facts(
         handle: {base: _members_fact(reference, members, False)}
         for handle, members in by_handle.items()
     }
-    if any(case.get("then") == ELSE_HANDLE for case in desc.cases):
-        # A `then:` node named like the else handle shares its edges: routing to it, or
-        # matching nothing, fires every edge with that handle, so it carries no fact.
-        facts.pop(ELSE_HANDLE, None)
-        return facts
     if desc.else_ is not None:
         unlisted = [
             member for member in union.variants if not member.fields[tag_field].tags & listed
@@ -557,8 +552,7 @@ def _searched_case_facts(
 ) -> dict[str, Env]:
     """The facts each handle of a searched CASE carries.
 
-    Cases routing to one target join by union. The `else:` handle carries no fact,
-    including when a `then:` target shares its name.
+    Cases routing to one target join by union. The `else:` handle carries no fact.
     """
     by_handle: dict[str, list[Env]] = {}
     for case in desc.cases:
@@ -570,7 +564,6 @@ def _searched_case_facts(
             _checks_env(checks, producers, inputs, registry)
         )
     facts = {handle: _union_envs(envs) for handle, envs in by_handle.items()}
-    facts.pop(ELSE_HANDLE, None)
     return {handle: env for handle, env in facts.items() if env}
 
 

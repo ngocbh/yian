@@ -15,6 +15,7 @@ import pytest
 from yian.events import NodeRouted, NodeSucceeded, RunFailed, RunSucceeded
 from yian.compile.model import END_ID, START_ID, Edge, CompiledFlow, FlowOutput
 from yian.runtime.common import NodeState
+from yian.nodes.base import ELSE_HANDLE
 from yian.nodes.end import EndNode
 from yian.nodes.start import StartNode
 from yian.runtime.log import NodeRoutedRecord
@@ -91,7 +92,7 @@ def test_case_skip_under_workers():
     log: list = []
     g = _graph(
         [BranchNode("cond", "yes"), RecordNode("b", log), RecordNode("c", log)],
-        [(START_ID, "cond"), ("cond", "b", "yes"), ("cond", "c", "default"), ("b", END_ID), ("c", END_ID)],
+        [(START_ID, "cond"), ("cond", "b", "yes"), ("cond", "c", ELSE_HANDLE), ("b", END_ID), ("c", END_ID)],
     )
     engine = _engine(g, num_workers=4)
     _run(engine)

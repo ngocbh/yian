@@ -29,7 +29,7 @@ from yian.events import (
     RunFailed,
     RunSucceeded,
 )
-from yian.nodes.base import Grow, Node, NodeKind
+from yian.nodes.base import ELSE_HANDLE, Grow, Node, NodeKind
 from yian.nodes.code import CodeNode
 from yian.nodes.contracts import PartialRecordContract, ValueContract
 from yian.nodes.end import EndNode
@@ -234,11 +234,11 @@ def test_route_derives_skip_closure_without_skip_record():
 @pytest.mark.parametrize(
     ("selected", "matching_handles"),
     [
-        ("default", (None, None)),
+        (ELSE_HANDLE, (None, None)),
         ("go", ("go", "go")),
     ],
 )
-def test_route_takes_every_edge_matching_default_or_named_handle(
+def test_route_takes_every_edge_matching_else_or_named_handle(
     selected: str,
     matching_handles: tuple[str | None, str | None],
 ):

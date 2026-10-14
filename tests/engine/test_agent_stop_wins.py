@@ -2,12 +2,13 @@
 
 from threading import Event
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 import pytest
 
 import yian.llm_clients as llm_clients
 import yian.tools as tools
 from yian.memory.session import SessionMemory
+from yian.nodes.agent.memory import invoke_model, invoke_tool_effect
 from yian.nodes.base import _HostStop
 from yian.run import _run_flow_controlled
 from tests.engine.test_agent_nonfinite_replies import _flow, _setup
@@ -27,9 +28,10 @@ def test_a_stop_during_a_failing_model_call_stops_the_run(monkeypatch, session):
 
     _setup(monkeypatch, [stop_then_raise])
     flow, memory = _flow(session)
-    with pytest.raises(_HostStop):
+    with pytest.raises(_HostStop) as caught:
         _run_flow_controlled(flow, {"question": "q"}, memory=memory, stop_event=stop)
     if session:
+        assert str(caught.value.__context__) == "provider boom"
         view = _view(memory["session"])
         assert [effect.status for effect in view.effects] == ["interrupted"]
         assert view.effects[0].failure.code == "api.model.interrupted"
@@ -50,9 +52,10 @@ def test_a_stop_during_a_failing_tool_call_stops_the_run(monkeypatch, session):
         llm_clients, "model_from_config", lambda _: _Chat([_call(), AIMessage(content="done")])
     )
     flow, memory = _flow(session)
-    with pytest.raises(_HostStop):
+    with pytest.raises(_HostStop) as caught:
         _run_flow_controlled(flow, {"question": "q"}, memory=memory, stop_event=stop)
     if session:
+        assert str(caught.value.__context__) == "tool boom"
         view = _view(memory["session"])
         assert [effect.status for effect in view.effects] == ["completed", "interrupted"]
         assert view.effects[1].failure.code == "api.tool.interrupted"
@@ -60,7 +63,7 @@ def test_a_stop_during_a_failing_tool_call_stops_the_run(monkeypatch, session):
 
 
 def test_a_stop_during_a_failing_structured_call_stops_the_run(monkeypatch):
-    """Structured generation calls the same helper, so a pending stop wins there too."""
+    """A stop pending when a structured model call fails records the call interrupted."""
     stop = Event()
 
     def stop_then_raise(messages):
@@ -76,3 +79,45 @@ def test_a_stop_during_a_failing_structured_call_stops_the_run(monkeypatch):
     view = _view(memory)
     assert [effect.status for effect in view.effects] == ["interrupted"]
     assert view.closed_invocations[-1].status == "interrupted"
+
+
+class _StopOnObserve:
+    """A turn that records the observation, then raises a stop that arrived meanwhile."""
+
+    def __init__(self):
+        self.observed = []
+
+    def request(self, operation, payload, items=()):
+        return 1
+
+    def observe(self, ordinal, status, *, items=(), failure=None):
+        self.observed.append(status)
+        raise _HostStop()
+
+
+class _BadStr:
+    def __str__(self):
+        raise RuntimeError("cannot represent")
+
+
+def _fail():
+    raise RuntimeError("boom")
+
+
+@pytest.mark.parametrize(
+    ("call", "observed"),
+    [("model", ["failed"]), ("tool", ["failed"]), ("representation", ["completed"])],
+)
+def test_a_stop_raised_while_observing_a_failure_wins(call, observed):
+    """A stop honored after a failed call is recorded still stops the run."""
+    turn = _StopOnObserve()
+
+    with pytest.raises(_HostStop):
+        if call == "model":
+            invoke_model(turn, _fail, new_messages=[HumanMessage("q")], check_stopped=lambda: None)
+        else:
+            invoke_tool_effect(
+                turn, _fail if call == "tool" else _BadStr, name="lookup", arguments={},
+                model_exchange_id="e", call_index=0, tool_call_id="t", check_stopped=lambda: None,
+            )
+    assert turn.observed == observed

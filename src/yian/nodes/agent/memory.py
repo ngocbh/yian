@@ -659,16 +659,20 @@ def _observe_preserving_error(turn, ordinal, status, primary, *, failure=None):
     """Preserve initiating identity while marking publication faults non-retryable.
 
     Ordinary errors use the existing evaluator-unwrapped capability carrier when
-    publication also fails. BaseException cancellation and existing carriers retain
-    their control identity; in particular `_HostStop.primary` must stay visible.
+    publication also fails, except that a stop `turn.observe` honors after
+    publishing wins and is raised. BaseException cancellation and existing carriers
+    retain their control identity; in particular `_HostStop.primary` must stay visible.
     """
     try:
         turn.observe(ordinal, status, failure=failure)
     except BaseException as secondary:
+        # `turn.observe` raises a pending stop only after publishing, so the
+        # observation did not fail and the stop must not be lost.
+        stopped = isinstance(secondary, _HostStop)
         original = (
             primary.original if isinstance(primary, _CapabilityFault) else primary
         )
-        if secondary is not primary and secondary is not original:
+        if not stopped and secondary is not primary and secondary is not original:
             try:
                 if hasattr(original, "add_note"):
                     original.add_note(
@@ -679,22 +683,23 @@ def _observe_preserving_error(turn, ordinal, status, primary, *, failure=None):
         if isinstance(primary, Exception) and not isinstance(
             primary, (_CapabilityFault, _HostStop)
         ):
+            if stopped:
+                raise
             raise _CapabilityFault(primary) from secondary
 
 
 def _observe_failure(turn, ordinal, operation, primary, check_stopped):
-    """Record a sanitized external-effect failure, preserving its exact exception.
+    """Record a sanitized external-effect failure; a pending stop wins over an ordinary error.
 
-    A pending stop wins over an ordinary error: the effect is recorded
-    `interrupted` and the stop is raised, with `primary` as its context.
-    Otherwise the caller re-raises `primary`.
+    With a stop pending, the effect is recorded `interrupted` and the stop is
+    raised, with `primary` as its context. Otherwise the caller re-raises `primary`.
     """
     interrupted = isinstance(
         primary, (_HostStop, AsyncCancelledError, FutureCancelledError)
     ) or not isinstance(primary, Exception)
     if not interrupted:
-        # `turn.observe` itself raises a pending stop, which would wrap `primary`
-        # as a host fault, so the stop is checked and recorded first.
+        # `turn.observe` honors a pending stop only after recording `failed`,
+        # so the stop is checked first to record the effect `interrupted`.
         try:
             check_stopped()
         except BaseException as stop:
@@ -821,7 +826,8 @@ def invoke_tool_effect(
     Raises:
         `_CapabilityFault`: Encoding or memory access fails.
         `_HostStop`: Cooperative cancellation occurs, including when the tool fails
-            while a stop is pending; the effect is then recorded `interrupted`.
+            while a stop is pending (the effect is then recorded `interrupted`) or
+            when representing its result fails while a stop is pending.
             Otherwise tool and representation errors propagate unchanged; a
             representation error does not mark execution failed.
     """

@@ -273,6 +273,11 @@ def test_terminal_resume_is_read_only_and_skips_fresh_side_effects(
         "_ensure_provider_keys",
         _fail_if_called("provider", calls),
     )
+    monkeypatch.setattr(
+        run_cli,
+        "_check_resume_credentials",
+        _fail_if_called("resume credentials", calls),
+    )
 
     result = runner.invoke(
         app,

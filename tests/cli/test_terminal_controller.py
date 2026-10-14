@@ -258,7 +258,7 @@ def test_sigint_on_the_controller_thread_stops_and_joins_before_raising(
 def test_sigint_deferred_at_launch_is_replayed_through_the_callers_handler(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The launch-time handler hands a recorded Ctrl-C to the handler it replaced."""
+    """The helper's handler hands a Ctrl-C recorded at launch to the caller's handler."""
 
     calls: list[int] = []
     real_start = Thread.start
@@ -295,7 +295,7 @@ def test_sigint_deferred_at_launch_is_replayed_through_the_callers_handler(
 def test_sigint_deferred_at_launch_stays_ignored_for_an_ignoring_caller(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A caller with SIGINT ignored gets no KeyboardInterrupt from the replay."""
+    """A caller with SIGINT ignored gets no KeyboardInterrupt from a Ctrl-C at launch."""
 
     real_start = Thread.start
 
@@ -941,10 +941,7 @@ def test_sigint_during_reporter_stop_lets_it_finish_and_keeps_the_first_cause(
 
     expected = LookupError("observer failed")
 
-    class _FailingSigintOnStopReporter(_SigintOnStopReporter):
-        pass
-
-    reporter = _FailingSigintOnStopReporter(failure=expected)
+    reporter = _SigintOnStopReporter(failure=expected)
     controller_threads: list[Thread] = []
 
     def controller(stop_event, on_event, ask_user, render):
@@ -1044,7 +1041,7 @@ def _run_with_sigint_at_opcode(index: int, *, first_cause: str) -> dict[str, Any
                 state["trip"] = {
                     # The caller's own handler is back: cleanup has finished.
                     "after_restore": signal.getsignal(signal.SIGINT) is caller_handler,
-                    "deferring": helper_frame.f_locals["defer_sigint"],
+                    "deferring": helper_frame.f_locals.get("defer_sigint", False),
                 }
                 signal.raise_signal(signal.SIGINT)
             state["seen"] += 1
@@ -1069,7 +1066,7 @@ def _run_with_sigint_at_opcode(index: int, *, first_cause: str) -> dict[str, Any
 
     def caller_handler(signum, frame):
         exc = KeyboardInterrupt()
-        if not raised:
+        if first_cause == "sigint" and not raised:
             start_tracing()
         raised.append(exc)
         raise exc
@@ -1149,7 +1146,7 @@ def test_sigint_at_any_cleanup_opcode_still_joins_and_stops(first_cause: str) ->
             kept = True
         elif first_cause == "none":
             # This Ctrl-C is the first one: it raises, now or after cleanup.
-            kept = isinstance(outcome, KeyboardInterrupt) or outcome.output == "done"
+            kept = isinstance(outcome, KeyboardInterrupt) or getattr(outcome, "output", None) == "done"
         elif first_cause == "render" and not trip["deferring"]:
             # Handled before the helper's except turned deferral on: it raises once
             # through the caller's handler, as if it came just before the failure.
@@ -1169,6 +1166,7 @@ def test_sigint_at_any_cleanup_opcode_still_joins_and_stops(first_cause: str) ->
 
     assert index > 20
     assert failures == []
+
 
 @pytest.mark.skipif(not hasattr(signal, "pthread_kill"), reason="needs pthread_kill")
 def test_a_non_raising_caller_handler_gets_each_ctrl_c_while_serving() -> None:

@@ -93,6 +93,7 @@ from yian.compose.edges.hosts import host_control_edges
 from yian.compose.edges.ordering import infer_ordering_edges
 from yian.compose.validate.call_types import check_call_map_types
 from yian.compose.validate.references import validate_references
+from yian.compose.validate.secret_literals import check_authored_bindings
 from yian.compose.validate.skips import (
     SkipModel,
     check_skipped_arithmetic,
@@ -1574,6 +1575,30 @@ def _assemble(
     # Source order, so the first broken alias is the one reported, the same on every run.
     for alias in uses_aliases:
         scope.resolve(alias)
+
+    def output_range(name: Any) -> SourceRange | None:
+        """One flow output's authored range, else the whole `output:` range."""
+        try:
+            if outputs_cursor is not None and outputs_cursor.has(name):
+                return outputs_cursor.child(name).range
+        except SourceAccessError:
+            pass  # a bare `output:` value has no named children
+        return outputs_range
+
+    # Reject a literal under a secret name while values are still as authored: the
+    # typed split and the desugars below may echo a value in their own errors.
+    check_authored_bindings(
+        descriptors,
+        outputs_section,
+        binding_style_at=lambda node_id, field, key: _binding_style(
+            nodes_cursor, node_id, field, key, diagnostics=diagnostics
+        ),
+        output_style_at=lambda key: _output_style(
+            outputs_cursor, key, diagnostics=diagnostics
+        ),
+        output_range=output_range,
+        diagnostics=diagnostics,
+    )
 
     # Split `name: Type = value` input and output bindings before any desugar reads
     # their values, so an inline `call(...)` or `${case.output}` on the right side

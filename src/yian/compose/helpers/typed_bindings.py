@@ -101,20 +101,10 @@ def split_typed_binding(
             malformed YAML, or a literal right side does not fit the type.
         `ValueError`: `style` is not a known style name.
     """
-    if style is not None and style not in _STYLES:
-        raise ValueError(f"unknown YAML scalar style {style!r}")
-    if style in QUOTED_STYLES or not isinstance(value, str):
+    parts = typed_binding_parts(value, style)
+    if parts is None:
         return None
-    # A `call(...)` directive may hold ` = ` in its arguments (`call(f, a = 1)`).
-    if CALL_HEAD.match(value.strip()):
-        return None
-    if _SEPARATOR in value:
-        left, right = value.split(_SEPARATOR, 1)
-    elif value.endswith(_TRAILING_SEPARATOR):
-        left, right = value[: -len(_TRAILING_SEPARATOR)], ""
-    else:
-        return None
-    left, right = left.strip(), right.strip()
+    left, right = parts
 
     try:
         declared = type_for(left, registry)
@@ -127,13 +117,8 @@ def split_typed_binding(
         raise diagnostics.error(
             f"binding {binding_label!r}: the value after `{left} =` is empty", range=range
         )
-    # A quoted or bracketed right side is a YAML scalar or collection, so it is read
-    # as YAML before the template check: quotes never become part of the value, and
-    # strings nested in a literal collection stay literal text.
-    if not right.startswith(_YAML_FIRST_STARTS) and _is_template(right):
-        return TypedBindingText(type_text=left, value=right)
     try:
-        parsed = parse_yaml_literal(right)
+        parsed = read_typed_value(right)
     except SourceSyntaxError as exc:
         raise diagnostics.error(
             f"binding {binding_label!r}: bad value {right!r}: {exc}", range=range
@@ -148,6 +133,66 @@ def split_typed_binding(
             range=range,
         ) from None
     return TypedBindingText(type_text=left, value=parsed)
+
+
+def typed_binding_parts(value: Any, style: str | None) -> tuple[str, str] | None:
+    """Split binding text written `Type = value` into its two stripped halves.
+
+    Purely syntactic: the left side is not checked to be a type and the right side is
+    not read. The value is typed when it is a string of plain or unknown style
+    containing ` = ` (or ending in ` =`) that does not start with `call(`.
+
+    Args:
+        value (`Any`): The authored binding value.
+        style (`str | None`): The scalar's YAML style: `"plain"`, `"single"`,
+            `"double"`, `"literal"`, `"folded"`, or `None` when unknown. Unknown
+            follows the plain rule.
+
+    Returns:
+        `tuple[str, str] | None`: The type text and the right-side text (empty when
+            the value ends in ` =`), or `None` when the value is not typed.
+
+    Raises:
+        `ValueError`: `style` is not a known style name.
+    """
+    if style is not None and style not in _STYLES:
+        raise ValueError(f"unknown YAML scalar style {style!r}")
+    if style in QUOTED_STYLES or not isinstance(value, str):
+        return None
+    # A `call(...)` directive may hold ` = ` in its arguments (`call(f, a = 1)`).
+    if CALL_HEAD.match(value.strip()):
+        return None
+    if _SEPARATOR in value:
+        left, right = value.split(_SEPARATOR, 1)
+    elif value.endswith(_TRAILING_SEPARATOR):
+        left, right = value[: -len(_TRAILING_SEPARATOR)], ""
+    else:
+        return None
+    return left.strip(), right.strip()
+
+
+def read_typed_value(right: str) -> Any:
+    """Read the right side of a typed binding into its binding value.
+
+    A right side that starts with a quote or a bracket is read as YAML; any other
+    right side holding `${` or starting with `call(` is kept as written, and the rest
+    is read as YAML.
+
+    Args:
+        right (`str`): The stripped right-side text.
+
+    Returns:
+        `Any`: The template or directive text, or the right side read as YAML.
+
+    Raises:
+        `SourceSyntaxError`: The right side is malformed YAML.
+    """
+    # A quoted or bracketed right side is a YAML scalar or collection, so it is read
+    # as YAML before the template check: quotes never become part of the value, and
+    # strings nested in a literal collection stay literal text.
+    if not right.startswith(_YAML_FIRST_STARTS) and _is_template(right):
+        return right
+    return parse_yaml_literal(right)
 
 
 def _is_template(text: str) -> bool:

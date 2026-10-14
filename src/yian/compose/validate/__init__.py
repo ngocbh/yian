@@ -5,6 +5,9 @@ desugar <- edges <- validate <- build <- loader`). Given the Compose-owned build
 results, the derived edges, and the flow-owned wiring, this package runs the passes that
 reject an ill-formed flow before it is compiled:
 
+- `secret_literals.py` — `check_authored_bindings`: no node binding or flow output
+  holds a literal value under a secret name; runs on authored values, before the
+  typed split and desugars that may echo a value.
 - `references.py` — `validate_references`: every `${...}` ref resolves to a real
   producer/input + a valid record field.
 - `cycles.py` — `reject_cycles`: the graph is acyclic.

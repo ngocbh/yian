@@ -15,6 +15,8 @@ Modules:
   - `output_contracts` the template-aware output-binding contract resolver: exact or
                   partial direct-reference projection, source-free proven expression
                   results, closed-record assembly, and closed-path validation.
+  - `secret_literals` `secret_literal_path`: the first literal value under a secret
+                  name, walking nested containers; plus the shared message wording.
   - `source`      parse-free boundary-input range projection over an existing
                   `SourceCursor`; compatibility metadata, never a YAML parser. Assertion
                   origin/range pairs come from one retained item cursor in the build
@@ -22,7 +24,8 @@ Modules:
   - `typed_bindings` `split_typed_binding`: recognizes plain-style `Type = value`
                   binding text, resolving the type and reading the value (a literal
                   value is checked against the type); quoted and block scalars stay
-                  plain text.
+                  plain text. `typed_binding_parts` and `read_typed_value` are its
+                  purely syntactic steps.
   - `types`       one recursive type-shape reader: `read_type`, `read_flow_inputs`,
                   and `read_variables` are source-free; `read_value_contract` and
                   `read_source_parameters` compile retained input/variable cursors into

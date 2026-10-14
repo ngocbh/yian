@@ -126,3 +126,13 @@ def reply_fold(inputs: dict) -> dict:
 def huge_float_list(inputs: dict) -> list:
     # a mixed int/float list whose int widens past float's range (no `output:` declared).
     return [0.5, 10**400]
+
+
+# Tags `record` saw, in call order; a test clears it before running a flow.
+RECORDED: list = []
+
+
+def record(inputs: dict) -> str:
+    # a side-effect probe: notes that its node ran, then echoes its tag.
+    RECORDED.append(inputs["tag"])
+    return inputs["tag"]

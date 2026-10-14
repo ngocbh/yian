@@ -1,0 +1,496 @@
+"""A node lifted out of an authored node runs on its host's routes and ordering.
+
+Each lifting desugar pass records the node it lifted from as the host: an inline `call(...)`
+in a node's binding, the inner calls of a nested branch `call(...)`, and an adaptive gate's
+composer AGENT. The lifted node carries the host's CASE route edges (the else route included),
+`depends_on:` (co-skip), and `runs_after:` (order). So no call, side effect, or LLM call happens
+on a branch the host isn't on, and the taken branch runs as before.
+"""
+
+import pytest
+
+import yian.llm_clients as llm_clients_mod
+from tests.engine import _compose_codefns
+from yian.compose import load_flow
+from yian.events import NodeSkipped, NodeStarted, NodeSucceeded
+from yian.nodes.case import ELSE_HANDLE
+from yian.run import run_flow
+
+# `side` records its tag when it runs; `wrap` and `items` feed a branch call and a MAP.
+_DEFS = """
+defs:
+  side:
+    input:
+      tag: str
+    nodes:
+      fx:
+        kind: code
+        code: tests.engine._compose_codefns:record
+        input:
+          tag: ${input.tag}
+        output: str
+    output: ${fx.output}
+  wrap:
+    input:
+      x: str
+    nodes:
+      w:
+        kind: code
+        input:
+          x: ${input.x}
+        output: str
+        code: return "wrapped " + inputs["x"]
+    output: ${w.output}
+  items:
+    input:
+      tag: str
+    nodes:
+      fx:
+        kind: code
+        code: tests.engine._compose_codefns:record
+        input:
+          tag: ${input.tag}
+        output: str
+      ls:
+        kind: code
+        input:
+          t: ${fx.output}
+        output: list[str]
+        code: return [inputs["t"]]
+    output: ${ls.output}
+  echo:
+    input:
+      item: str
+    nodes:
+      e:
+        kind: code
+        input:
+          v: ${input.item}
+        output: str
+        code: return inputs["v"]
+    output: ${e.output}
+"""
+
+_HEAD = "id: t\nname: t\ninput:\n  go: bool\n  other: bool\n"
+
+# `prep` records `prep`; `pick` routes `maybe` only when `other` is true.
+_PREP = """
+  prep:
+    kind: code
+    code: tests.engine._compose_codefns:record
+    input:
+      tag: prep
+    output: str
+"""
+_MAYBE = """
+  pick:
+    kind: case
+    cases:
+      - when: ${input.other}
+        then: maybe
+  maybe:
+    kind: code
+    output: str
+    code: return "m"
+"""
+
+
+def _flow(nodes: str, output: str = "  r: ${gate.output}\n") -> str:
+    return _HEAD + _DEFS + "nodes:\n" + nodes + "output:\n" + output
+
+
+def _run(text: str, go: bool = False, other: bool = False, **kwargs):
+    """Load and run a flow with the recorder cleared; return the flow and the result."""
+    _compose_codefns.RECORDED.clear()
+    flow = load_flow(text)
+    result = run_flow(flow, {"go": go, "other": other}, **kwargs)
+    assert result.status == "succeeded", result.failure
+    return flow, result
+
+
+def _edge(flow, edge_id: str):
+    [edge] = [e for e in flow.compiled.edges if e.id == edge_id]
+    return edge
+
+
+def _never_ran(result, node_id: str) -> bool:
+    started = {e.node_id for e in result.events if isinstance(e, NodeStarted)}
+    skipped = {e.node_id for e in result.events if isinstance(e, NodeSkipped)}
+    return node_id not in started and node_id in skipped
+
+
+def _starts_after(result, first: str, then: str) -> bool:
+    events = list(result.events)
+    done = next(i for i, e in enumerate(events) if isinstance(e, NodeSucceeded) and e.node_id == first)
+    start = next(i for i, e in enumerate(events) if isinstance(e, NodeStarted) and e.node_id == then)
+    return done < start
+
+
+# --------------------------------------------------------------------------- #
+# inline_calls: `call(...)` in a node's binding.
+# --------------------------------------------------------------------------- #
+
+_PUBLISH = """
+  publish:
+    kind: code
+    input:
+      draft: call(side, tag="publish")
+    output: str
+    code: return "published " + inputs["draft"]
+"""
+_SKIP_IT = """
+  skip_it:
+    kind: code
+    output: str
+    code: return "skipped"
+"""
+_GATE = """
+  gate:
+    kind: case
+    cases:
+      - when: ${input.go}
+        then: publish
+    else: skip_it
+"""
+
+
+def test_inline_call_does_not_run_on_an_untaken_route():
+    flow, result = _run(_flow(_GATE + _PUBLISH + _SKIP_IT), go=False)
+    assert _compose_codefns.RECORDED == []
+    assert _never_ran(result, "__call_0")
+    assert result.output == {"r": "skipped"}
+    assert _edge(flow, "gate->__call_0#0").source_handle == "publish"
+
+
+def test_inline_call_runs_on_the_taken_route():
+    _flow_, result = _run(_flow(_GATE + _PUBLISH + _SKIP_IT), go=True)
+    assert _compose_codefns.RECORDED == ["publish"]
+    assert result.output == {"r": "published publish"}
+
+
+def test_inline_call_runs_after_the_host_runs_after():
+    publish = _PUBLISH.replace("    kind: code\n", "    kind: code\n    runs_after: [prep]\n", 1)
+    flow, result = _run(_flow(_GATE + _PREP + publish + _SKIP_IT), go=True)
+    edge = _edge(flow, "prep~>__call_0#0")
+    assert edge.ordering and edge.optional
+    assert _compose_codefns.RECORDED == ["prep", "publish"]
+    assert _starts_after(result, "prep", "__call_0")
+
+
+def test_inline_call_is_skipped_with_a_host_depends_on():
+    publish = _PUBLISH.replace("    kind: code\n", "    kind: code\n    depends_on: [maybe]\n", 1)
+    flow, result = _run(_flow(_GATE + _MAYBE + publish + _SKIP_IT), go=True, other=False)
+    edge = _edge(flow, "maybe~>__call_0#0")
+    assert edge.ordering and not edge.optional
+    assert _compose_codefns.RECORDED == []
+    assert _never_ran(result, "__call_0")
+
+
+@pytest.mark.parametrize("go, ran", [(False, ["publish"]), (True, [])])
+def test_inline_call_follows_the_else_route(go, ran):
+    gate = _GATE.replace("then: publish", "then: skip_it").replace("else: skip_it", "else: publish")
+    flow, _result = _run(_flow(gate + _PUBLISH + _SKIP_IT), go=go)
+    assert _edge(flow, "gate->__call_0#0").source_handle == ELSE_HANDLE
+    assert _compose_codefns.RECORDED == ran
+
+
+@pytest.mark.parametrize("go", [False, True])
+def test_inline_call_of_a_then_and_else_host_runs_on_both_routes(go):
+    gate = _GATE.replace("else: skip_it", "else: publish")
+    flow, _result = _run(_flow(gate + _PUBLISH, output="  r: ${publish.output}\n"), go=go)
+    handles = [e.source_handle for e in flow.compiled.edges if e.to == "__call_0" and e.source_handle]
+    assert handles == ["publish", ELSE_HANDLE]
+    assert _compose_codefns.RECORDED == ["publish"]
+
+
+@pytest.mark.parametrize("go, other, ran", [(False, False, []), (False, True, ["publish"])])
+def test_inline_call_of_a_join_target_runs_when_any_route_reaches_it(go, other, ran):
+    gates = """
+  c1:
+    kind: case
+    cases:
+      - when: ${input.go}
+        then: publish
+  c2:
+    kind: case
+    cases:
+      - when: ${input.other}
+        then: publish
+"""
+    flow, _result = _run(
+        _flow(gates + _PUBLISH, output='  r: ${publish.output :- "none"}\n'), go=go, other=other
+    )
+    sources = [e.from_ for e in flow.compiled.edges if e.to == "__call_0" and e.source_handle]
+    assert sources == ["c1", "c2"]
+    assert _compose_codefns.RECORDED == ran
+
+
+def test_map_over_call_does_not_run_on_an_untaken_route():
+    nodes = """
+  gate:
+    kind: case
+    cases:
+      - when: ${input.go}
+        then: m
+    else: skip_it
+  m:
+    kind: map
+    call: echo
+    over: call(items, tag="items")
+    input:
+      item: ${item}
+""" + _SKIP_IT
+    _flow_, _result = _run(_flow(nodes), go=False)
+    assert _compose_codefns.RECORDED == []
+    _flow_, _result = _run(_flow(nodes), go=True)
+    assert _compose_codefns.RECORDED == ["items"]
+
+
+def test_loop_seed_call_does_not_run_on_an_untaken_route():
+    nodes = """
+  gate:
+    kind: case
+    cases:
+      - when: ${input.go}
+        then: lp
+    else: skip_it
+  lp:
+    kind: loop
+    times: 1
+    input:
+      s: call(side, tag="seed")
+    nodes:
+      k:
+        kind: code
+        input:
+          s: ${input.s}
+        output:
+          s: str
+        code: |
+          return {"s": inputs["s"]}
+    output: ${k.output}
+""" + _SKIP_IT
+    _flow_, _result = _run(_flow(nodes, output='  r: ${skip_it.output :- "none"}\n'), go=False)
+    assert _compose_codefns.RECORDED == []
+    _flow_, _result = _run(_flow(nodes, output='  r: ${skip_it.output :- "none"}\n'), go=True)
+    assert _compose_codefns.RECORDED == ["seed"]
+
+
+# The h1 pattern as a child flow, called per run and per MAP element.
+_CHILD_DEF = """
+  child:
+    input:
+      go: bool
+    nodes:
+      gate:
+        kind: case
+        cases:
+          - when: ${input.go}
+            then: publish
+        else: skip_it
+      publish:
+        kind: code
+        input:
+          draft: call(side, tag="child")
+        output: str
+        code: return inputs["draft"]
+      skip_it:
+        kind: code
+        output: str
+        code: return "skipped"
+    output: ${gate.output}
+"""
+
+
+def test_inline_call_in_a_called_child_flow_follows_the_child_route():
+    text = (
+        _HEAD + _DEFS + _CHILD_DEF
+        + "nodes:\n  c:\n    kind: call\n    call: child\n    input:\n      go: ${input.go}\n"
+        + "output:\n  r: ${c.output}\n"
+    )
+    _flow_, result = _run(text, go=False)
+    assert _compose_codefns.RECORDED == []
+    assert result.output == {"r": "skipped"}
+
+
+def test_inline_call_in_a_mapped_child_flow_runs_once_per_taken_element():
+    text = (
+        _HEAD + _DEFS + _CHILD_DEF
+        + "nodes:\n  m:\n    kind: map\n    call: child\n"
+        + "    over: ${[input.go, input.other]}\n    input:\n      go: ${item}\n"
+        + "output:\n  r: ${m.output}\n"
+    )
+    _flow_, result = _run(text, go=True, other=False)
+    assert _compose_codefns.RECORDED == ["child"]
+    assert result.output == {"r": ["child", "skipped"]}
+
+
+def test_flow_output_call_has_no_host_and_runs():
+    nodes = _GATE + _PUBLISH + _SKIP_IT
+    _flow_, result = _run(_flow(nodes, output='  r: ${gate.output}\n  o: call(side, tag="out")\n'))
+    assert _compose_codefns.RECORDED == ["out"]
+    assert result.output["o"] == "out"
+
+
+# --------------------------------------------------------------------------- #
+# case_targets: the inner calls of a nested branch `call(...)`.
+# --------------------------------------------------------------------------- #
+
+# Calls mint inner-first: the inner `side` call is `__call_0`, the outer `wrap` is `__call_1`.
+_NESTED = """
+  gate:
+    kind: case
+    cases:
+      - when: ${input.go}
+        then: call(wrap, x=call(side, tag="inner"))
+    else: b
+  b:
+    kind: code
+    output: str
+    code: return "B"
+"""
+
+
+def test_nested_branch_call_does_not_run_its_inner_call_on_an_untaken_route():
+    flow, result = _run(_flow(_NESTED), go=False)
+    assert _compose_codefns.RECORDED == []
+    assert _never_ran(result, "__call_0")
+    assert result.output == {"r": "B"}
+    assert _edge(flow, "gate->__call_0#0").source_handle == "__call_1"
+    assert not [e for e in flow.compiled.edges if e.from_ == "__start__" and e.to == "__call_0"]
+
+
+def test_nested_branch_call_runs_on_the_taken_route():
+    _flow_, result = _run(_flow(_NESTED), go=True)
+    assert _compose_codefns.RECORDED == ["inner"]
+    assert result.output == {"r": "wrapped inner"}
+
+
+def test_nested_branch_call_is_skipped_with_the_case_depends_on():
+    nested = _NESTED.replace("    kind: case\n", "    kind: case\n    depends_on: [maybe]\n", 1)
+    _flow_, result = _run(_flow(_MAYBE + nested), go=True, other=False)
+    assert _compose_codefns.RECORDED == []
+    assert _never_ran(result, "__call_0")
+
+
+def test_nested_branch_call_runs_after_the_case_runs_after():
+    nested = _NESTED.replace("    kind: case\n", "    kind: case\n    runs_after: [prep]\n", 1)
+    _flow_, result = _run(_flow(_PREP + nested), go=True)
+    assert _compose_codefns.RECORDED == ["prep", "inner"]
+    assert _starts_after(result, "prep", "__call_0")
+
+
+# --------------------------------------------------------------------------- #
+# adaptive_questions: the composer AGENT `<gate>__compose`.
+# --------------------------------------------------------------------------- #
+
+_COMPOSED = [
+    {
+        "question": "Which database?",
+        "header": "DB",
+        "options": [{"label": "Postgres", "description": "Relational."}],
+        "multi_select": False,
+    }
+]
+
+
+class _ComposeChat:
+    """A fake structured-output chat that counts composer calls, or fails them."""
+
+    def __init__(self, calls: list, fail: bool = False):
+        self.calls = calls
+        self.fail = fail
+
+    def bind_tools(self, tools):
+        return self
+
+    def invoke(self, messages):
+        raise AssertionError("structured path expected, not a plain-text invoke")
+
+    def with_structured_output(self, schema):
+        chat = self
+
+        class _Bound:
+            def invoke(self, messages):
+                chat.calls.append("compose")
+                if chat.fail:
+                    raise RuntimeError("the composer must not run here")
+                return schema.model_validate({"items": _COMPOSED})
+
+        return _Bound()
+
+
+_ADAPTIVE = """
+  router:
+    kind: case
+    cases:
+      - when: ${input.go}
+        then: ask
+    else: done
+  ask:
+    kind: human_input
+    input:
+      ctx: ${input.go}
+    adaptive_questions:
+      prompt: "Design one question for: ${ctx}"
+  done:
+    kind: code
+    output: str
+    code: return "done"
+"""
+
+
+def _adaptive(monkeypatch, nodes: str, go: bool, other: bool = False, fail: bool = False):
+    """Run an adaptive flow; return the flow, result, composer calls, and human asks."""
+    calls: list = []
+    asked: list = []
+    monkeypatch.setattr(
+        llm_clients_mod, "model_from_config", lambda cfg: _ComposeChat(calls, fail)
+    )
+    flow, result = _run(
+        _flow(nodes, output="  r: ${router.output}\n"),
+        go=go,
+        other=other,
+        tools={"ask_user": lambda **request: asked.append(request) or {"DB": "Postgres"}},
+    )
+    return flow, result, calls, asked
+
+
+def test_adaptive_composer_does_not_run_on_an_untaken_route(monkeypatch):
+    flow, result, calls, asked = _adaptive(monkeypatch, _ADAPTIVE, go=False)
+    assert (calls, asked) == ([], [])
+    assert result.output == {"r": "done"}
+    assert _edge(flow, "router->ask__compose#0").source_handle == "ask"
+
+
+def test_adaptive_composer_failure_on_an_untaken_route_does_not_fail_the_run(monkeypatch):
+    _flow_, result, calls, _asked = _adaptive(monkeypatch, _ADAPTIVE, go=False, fail=True)
+    assert calls == []
+    assert result.output == {"r": "done"}
+
+
+def test_adaptive_composer_runs_on_the_taken_route(monkeypatch):
+    _flow_, result, calls, asked = _adaptive(monkeypatch, _ADAPTIVE, go=True)
+    assert calls == ["compose"]
+    assert [q["header"] for q in asked[0]["questions"]] == ["DB"]
+    assert result.output == {"r": {"DB": "Postgres"}}
+
+
+def test_adaptive_composer_runs_after_the_gate_runs_after(monkeypatch):
+    nodes = _PREP + _ADAPTIVE.replace(
+        "    kind: human_input\n", "    kind: human_input\n    runs_after: [prep]\n"
+    )
+    flow, result, calls, _asked = _adaptive(monkeypatch, nodes, go=True)
+    edge = _edge(flow, "prep~>ask__compose#0")
+    assert edge.ordering and edge.optional
+    assert calls == ["compose"]
+    assert _starts_after(result, "prep", "ask__compose")
+
+
+def test_adaptive_composer_is_skipped_with_the_gate_depends_on(monkeypatch):
+    nodes = _MAYBE + _ADAPTIVE.replace(
+        "    kind: human_input\n", "    kind: human_input\n    depends_on: [maybe]\n"
+    )
+    _flow_, result, calls, asked = _adaptive(monkeypatch, nodes, go=True, other=False)
+    assert (calls, asked) == ([], [])
+    assert _never_ran(result, "ask__compose")

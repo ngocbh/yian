@@ -31,7 +31,7 @@ Copy, rename, and edit.
 | [`map-fanout.yaml`](templates/map-fanout.yaml) | `map` a child over a list and collect in source order |
 | [`inline-composites.yaml`](templates/inline-composites.yaml) | provider-free inline CALL, MAP, and LOOP child bodies (no `defs:`) |
 | [`loop.yaml`](templates/loop.yaml) | `loop` a body until a predicate goes false — chat-shaped blocking turn |
-| [`chat.yaml`](templates/chat.yaml) | a conversational REPL — HUMAN_INPUT → typed CASE (exit value branch, else a reply call), with flow-owned exit, the shape `yian chat` runs |
+| [`chat.yaml`](templates/chat.yaml) | a conversational REPL — HUMAN_INPUT → CASE (exit routes to a `!Turn` value entry, else a reply call), with flow-owned exit, the shape `yian chat` runs |
 | [`llm-config-cascade.yaml`](templates/llm-config-cascade.yaml) | flow-level `llm_config:`, per-node override, `inherit: false` |
 | [`node-env-config.yaml`](templates/node-env-config.yaml) | flow-level `env:` default + per-node override (node wins), e.g. `max_tool_iterations` |
 
@@ -290,7 +290,7 @@ left) is plain text.
 NaN, infinity, and complex numbers (`${(0 - 8) ** 0.5}`) are not yian values. A
 binding whose value holds one at any depth fails its node with `binding.evaluate`;
 a temporary inside an expression is fine. Keep the value in range or return null
-explicitly: a `case` value branch `then: null` under `output: Optional(...)`, or a
+explicitly: a `case` routed to a value entry `no_value: !Optional(float) null`, or a
 `code` node returning `None`. An int of any size is a value and is recorded
 exactly; rendering one past Python's digit limit as text still fails, and an int
 literal written in the YAML past that limit is a load error.
@@ -335,10 +335,11 @@ value.
 nodes that plainly read them. A searched `case` whose `when:` reads a node only under
 a default that keeps a binding running (`(score.output :- 0) >= 0.5`) still runs when
 that node is skipped. Read the taken branch's result with `${route.output}`
-(see `branching.yaml`). A branch may also be a value (`else: "approve"`, a record, a
-list) when the `case` declares `output:`; quote text, since an unquoted word names a
-node. A `case` whose result is used needs an `else:`, every tag of a non-nullable
-`Literal` `on:`, or `when: true` and `when: false` on a non-nullable `bool` `on:`;
+(see `branching.yaml`); tag it where you read it (`!Turn ${route.output}`). A branch
+names a node or calls a flow; for a fixed or computed result, route to a value entry
+(`approve: !str approve`, a `!object` or typed record). A value in a branch, or a
+`case` `output:`, is a load error that shows the rewrite. A `case` whose result is
+used needs an `else:`, every tag of a non-nullable `Literal` `on:`, or `when: true` and `when: false` on a non-nullable `bool` `on:`;
 routing on a `Literal` node output or flow input is always exhaustiveness-checked. A
 routing-only `case` takes none when nothing matches and there is no `else:`. A flow
 output field that reads only nodes a `case` may skip returns `null` when they were
@@ -412,11 +413,12 @@ is checked before pruning; it limits one iteration's size, not the iteration cou
 `loop.yaml`.
 
 **Conversational REPL (LOOP + human_input).** A chat is a `loop` whose body blocks at
-`ask` (`human_input`), then a typed CASE (`output: Turn`) returns the carried 2-field
-record `{transcript: str, exited: bool}` (`'a -> 'a`). Exact `/exit` and `/quit` are
-value branches that keep the transcript and set `exited: true`; `else:` calls a
-`respond` def whose `reply` (`agent`) and fold CODE node append the message and reply.
-The body's output is `${route.output}`. Typed exit is flow-owned; only terminal EOF is
+`ask` (`human_input`), then a CASE picks the carried 2-field record
+`{transcript: str, exited: bool}` (`'a -> 'a`). Exact `/exit` and `/quit` route to
+`exited: !Turn {...}`, a value entry that keeps the transcript and sets `exited: true`;
+`else:` calls a `respond` def whose `reply` (`agent`) and fold CODE node append the
+message and reply. The body's output is `!Turn ${route.output}`; the tag is required, as
+it types whichever branch ran as the carried record. Typed exit is flow-owned; only terminal EOF is
 normalized by the bundled host. The loop body's `output:` may return only the fields
 that change; a field it omits keeps its value. This is the shape
 `yian chat` runs; see `chat.yaml` (and `examples/chat.yaml` for a runnable copy).

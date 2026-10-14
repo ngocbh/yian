@@ -1,9 +1,9 @@
 # chat — a turn-by-turn conversational REPL (agent without tools; deterministic transcript).
 #
 # The turn boundary is STRUCTURAL: HUMAN_INPUT feeds a CASE that picks the turn's record.
-# Exact exit text routes to `exited`, a value entry that keeps the transcript and sets
-# `exited`. Anything else calls `respond`, where the AGENT fills the reply and a CODE node
-# folds it into the transcript. The LLM only fills the reply.
+# Exact exit text routes to the `exited` value entry, which keeps the transcript and sets
+# `exited: true`. Anything else calls `respond`, where the AGENT fills the reply and a CODE
+# node folds it into the transcript. The LLM only fills the reply.
 # Run it with:  yian chat examples/chat.yaml
 id: chat
 name: chat

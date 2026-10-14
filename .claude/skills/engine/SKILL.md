@@ -283,7 +283,7 @@ this model whenever you design anything:
   that route it; the reference, call-type, and exhaustiveness checks read
   `Narrowing.for_node` (the reference check uses `for_param` for `isinstance`-guarded
   searched-CASE params). Runtime routing does not change. A value-producing CASE
-  (`output:`, a value branch, or read as `${case.output}`) must be exhaustive (an
+  (read as `${case.output}`, or routed to by one) must be exhaustive (an
   `else:`, every tag of a non-nullable enum `on:`, or `true` and `false` for a
   non-nullable `bool` `on:`, compared as typed values), with a flow-input `on:` resolved
   for it. `case_exhaustive.py`'s `check_case_when_values` runs right after narrowing: an
@@ -291,8 +291,9 @@ this model whenever you design anything:
   is a located load error, even next to an `else:`. It also rejects a `when:` equal to
   an earlier one (typed equality: `1` and `1.0` are equal), at the later one, for any
   `on:`. Routing-only enum coverage reads `Literal` flow inputs as well as node outputs.
-  Load-time desugar lifts each CASE value branch to a `__value_N` CODE node and gives a
-  typed CASE a `__case_<id>` result node; the runtime is unchanged. Python-authored nodes pass `output_contract=`; there is
+  A CASE only routes (a branch names a node or calls a flow; a value branch or CASE
+  `output:` is a load error). A tagged `nodes:` entry (a value entry) lowers at load to a
+  CODE node with the entry's id; the runtime is unchanged. Python-authored nodes pass `output_contract=`; there is
   no parallel output-Type API. Authored `output:` syntax (the descriptor's normalized
   `outputs` field) stays unchanged. Compose injects an optional source-aware reader
   through `BuildContext`; `NodeDescriptor.output_contract()` invokes it only at each

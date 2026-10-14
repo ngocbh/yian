@@ -683,9 +683,8 @@ group joins its producers by union, and all contributions meet by intersection. 
 groups and `runs_after` contribute nothing; nodes on a cycle get no facts and are left for
 `reject_cycles`. The call-type and CASE-exhaustiveness checks read
 `Narrowing.for_node(id)`, and the reference and typed-input checks read `for_param`, which
-falls back to it; flow outputs are checked unnarrowed. A CASE that produces a value (it
-declares `output:`, has a value branch, or is read as `${case.output}`) must be
-exhaustive: an `else:`, every tag of a non-nullable enum `on:`, or `true` and `false` for
+falls back to it; flow outputs are checked unnarrowed. A CASE that produces a value (it is
+read as `${case.output}`, or such a CASE routes to it) must be exhaustive: an `else:`, every tag of a non-nullable enum `on:`, or `true` and `false` for
 a non-nullable `bool` `on:`, with a flow-input `on:` resolved for it too; `when:` values
 compare as typed values, not text. An `on:` CASE's `when:` values are typed literals, and
 `compose/validate/case_exhaustive.py` (`check_case_when_values`) runs one membership check
@@ -694,10 +693,11 @@ a wrong scalar type) is a located load error, even next to an `else:`. Before th
 rejects a `when:` equal to an earlier one (typed equality: `1` and `1.0` are equal; `1`,
 `true` and `"1"` are not) at the later one, for any `on:`. A routing-only CASE over a
 `Literal` node output or flow input (a LOOP body's carried field, a child flow's input)
-needs a `when:` for every tag unless it has an `else:`. Compose lifts each
-CASE value branch to a synthetic `__value_N` CODE node and gives a typed CASE one
-`__case_<id>` CODE result node that checks the taken branch; this is load-time desugar,
-and the runtime is unchanged. A node a desugar pass lifts out of an authored node (an
+needs a `when:` for every tag unless it has an `else:`. A CASE only routes: a branch
+names a node or calls a flow, and `compose/validate/case_branches.py` rejects a value
+branch or a CASE `output:` with the rewrite. A tagged `nodes:` entry (a value entry) lowers
+in `compose/desugar/value_entries.py` to a CODE node with the entry's id that returns its
+one typed input; this is load-time desugar, and the runtime is unchanged. A node a desugar pass lifts out of an authored node (an
 inline `call(...)` in its binding, an inner call of a nested branch call, an adaptive
 composer) records that node as its `host`, and `compose/edges/hosts.py` copies the host's
 CASE route edges and `depends_on`/`runs_after` ordering edges onto it, so it runs only on
@@ -1773,8 +1773,8 @@ while CASE identity includes predicate handle/expression semantics but excludes
 each predicate origin. Thus source formatting, origin rebasing, and Python object
 identity cannot change program or expansion identity. Because every authored value is
 identity, compose rejects a literal value under a secret name at load:
-`compose/validate/secret_literals.py` checks node bindings, case values, and flow
-outputs before tagged bindings are read, `compose/helpers/secret_literals.py` holds the
+`compose/validate/secret_literals.py` checks node bindings, value entries, case
+branches, and flow outputs before tagged bindings are read, `compose/helpers/secret_literals.py` holds the
 walker and messages that defaults, `env:`, and `call(...)` arguments share, and the one
 list of secret names is the stdlib-only leaf `secret_names.py`. `resolve_llm_cascade` returns a
 complete map keyed by slash-separated paths of static AGENT nodes. The run boundary reads

@@ -1,13 +1,14 @@
 # Conversational REPL — the same turn-by-turn LOOP shape used by `yian chat`.
 # The turn boundary is STRUCTURAL: HUMAN_INPUT feeds a CASE that picks the turn's record.
-# Exact exit text routes to `exited`, a value entry that keeps the transcript and sets
-# `exited`. Anything else calls `respond`, where an AGENT node fills the reply and a CODE
-# node folds it into the transcript. The LLM only fills the reply.
+# Exact exit text routes to the `exited` value entry, which keeps the transcript and sets
+# `exited: true`. Anything else calls `respond`, where an AGENT node fills the reply and a
+# CODE node folds it into the transcript. The LLM only fills the reply.
 #
 # Carried record ('a): {transcript: str, exited: bool} — threaded turn to turn ('a -> 'a).
 # A tagged `nodes:` entry such as `exited: !Turn` is a value: its tag checks the fields
-# written out under it. `${route.output}` reads whichever branch ran; `!Turn` on the
-# body's output types that as the carried record.
+# written out under it. `${route.output}` reads whichever branch ran, so the CASE must be
+# exhaustive (`else:` here). `!Turn` on the body's output is required: it types the
+# branch result as the carried record.
 
 id: chat
 name: chat

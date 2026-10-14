@@ -888,6 +888,9 @@ settle:
 are UTC; aware values are normalized to UTC. A past/current deadline returns
 immediately. Otherwise WAIT holds one worker until the remaining wall-clock
 duration elapses, then returns `None` as an ordinary node output.
+An `until:` that can never be a date or datetime fails at load: a literal that is not a
+YAML date/datetime or date text, or a reference typed `int`, `bool`, `list(...)`, etc.
+(a `str` reference loads and is parsed at run).
 
 ### `call` / `map` — composition over child flows
 A child is itself a flow. `call` runs it once; `map` runs it per list element
@@ -908,6 +911,8 @@ search path, by filename; `alias@v1` adds a version guard). A CALL's record fiel
 are available as `${one.output.field}`; a MAP returns a list at `${each.output}`,
 so project element fields in a downstream CODE/MAP step. `parallel:` is accepted
 but currently inert; run-level `num_workers` controls MAP concurrency.
+`over:` must be a list: a non-list literal (quoted `call(...)` text included) or a
+reference whose type is not a list or `Any` (nullability aside) fails at load.
 
 Each argument must fit the child's input type at load: a reference by its type
 (`${item...}` through the `over:` element type, or each element of a literal `over:`

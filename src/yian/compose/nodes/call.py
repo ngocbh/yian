@@ -3,9 +3,9 @@
 One of the two-axis `compose/nodes/<kind>.py` modules. `call` and `map` share the resolve-and-bake
 `build` (which branches on `isinstance(self, MapDescriptor)`: a `map` -> `MapNode`, else `CallNode`);
 `map.py`'s `MapDescriptor` subclasses `CallDescriptor`, adding only the map field surface
-(`over`/`parallel`) and the `kind="map"` class attr. Both inherit the template `parse` from
-`NodeDescriptor`; `_finish` retains concrete ranges on the Compose-owned `BuildResult` and
-stamps only the descriptor's opaque origin onto the runtime node. Registered into
+(`over`/`parallel`) and the `kind="map"` class attr. `call` inherits the template `parse` from
+`NodeDescriptor` and `map` wraps it; `_finish` retains concrete ranges on the Compose-owned
+`BuildResult` and stamps only the descriptor's opaque origin onto the runtime node. Registered into
 `KINDS`/`BINDING_FIELDS` at import so the shared dispatch routes here.
 """
 

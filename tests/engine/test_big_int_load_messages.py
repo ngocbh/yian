@@ -12,8 +12,11 @@ from yian.compose import LoadError, load_flow
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.llm_clients import LLMConfig
 from yian.nodes.agent import AgentNode
+from yian.nodes.binding import BindingError
+from yian.nodes.map import MapNode
 from yian.run import run_flow
 from yian.tools import ToolSet
+from yian.typesys.pool import VariablePool
 
 
 BIG = 10**4999 + 12345  # 5000 digits, past Python's default 4300-digit limit
@@ -379,17 +382,27 @@ _MAP_CHILD = (
 )
 
 
-@pytest.mark.parametrize("over", [D, f"{{a: {D}}}"], ids=["int", "record"])
-def test_a_map_over_a_long_int_literal_fails_with_a_placeholder(over):
-    flow = load_flow(
+@pytest.mark.parametrize(
+    ("over", "read_as"), [(D, "an integer"), (f"{{a: {D}}}", "a mapping")], ids=["int", "record"]
+)
+def test_a_map_over_a_long_int_literal_is_a_load_error(over, read_as):
+    msg = assert_load_message(
         "id: p\nname: p\n" + _MAP_CHILD + "nodes:\n  c:\n    kind: map\n"
         f"    over: {over}\n    call: child\n    input:\n      n: ${{item}}\n"
-        "output: ${c.output}\n"
+        "output: ${c.output}\n",
+        placeholder=False,
     )
-    result = run_flow(flow, {})
-    assert result.status == "failed"
-    assert result.failure.code == "contract.input"
-    msg = result.failure.message
+    assert f"`over:` must be a list, but YAML read it as {read_as}" in msg
+
+
+@pytest.mark.parametrize("over", [ONES, {"a": ONES}], ids=["int", "record"])
+def test_a_map_over_a_long_int_source_fails_with_a_placeholder(over):
+    # The loader rejects such a literal, so the run-time message is reached through the node.
+    with pytest.raises(BindingError) as caught:
+        MapNode("c", flow_id="child").bind_reserved({"over": over}, VariablePool())
+    msg = str(caught.value)
+    assert caught.value.failure_code == "contract.input"
+    assert "did not resolve to a list" in msg
     assert "too large to display>" in msg
     assert "set_int_max_str_digits" not in msg
     assert re.search(r"[0-9]{600}", msg) is None
@@ -410,12 +423,9 @@ def test_a_long_int_provider_gives_a_load_error_without_the_hint(where):
     assert re.search(r"[0-9]{600}", msg) is None
 
 
-def test_a_wait_until_long_int_fails_with_a_placeholder():
-    result = run_flow(load_flow(_flow(f"  c:\n    kind: wait\n    until: {D}\n")), {})
-    msg = result.failure.message
-    assert "set_int_max_str_digits" not in msg
-    assert re.search(r"[0-9]{600}", msg) is None
-    assert f"wait `until` ({PLACEHOLDER}) did not resolve to a date/datetime: {PLACEHOLDER}" in msg
+def test_a_wait_until_long_int_literal_is_a_load_error():
+    msg = assert_load_message(_flow(f"  c:\n    kind: wait\n    until: {D}\n"), placeholder=False)
+    assert "`until:` must be a date or datetime, but YAML read it as an integer" in msg
 
 
 _MEMORY_KEYS = """id: root

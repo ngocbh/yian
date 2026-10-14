@@ -109,6 +109,7 @@ from yian.compose.edges.hosts import host_control_edges
 from yian.compose.edges.ordering import infer_ordering_edges
 from yian.compose.validate.call_types import check_call_map_types
 from yian.compose.validate.references import validate_references
+from yian.compose.validate.reserved_sources import check_reserved_sources
 from yian.compose.validate.skips import (
     SkipModel,
     check_skipped_arithmetic,
@@ -2532,6 +2533,18 @@ def _assemble(
         outputs_range,
         registry,
         diagnostics,
+    )
+    # After the type tables, so `isinstance` in `over:`/`until:` keeps its own error.
+    check_reserved_sources(
+        build_results,
+        flow_wiring,
+        producers,
+        flow_input_contracts,
+        narrowing=narrowing,
+        type_fn=constructor_type,
+        registry=registry,
+        resolve_origin=catalog_builder.resolve_registered,
+        diagnostics=diagnostics,
     )
 
     # A cycle spans nodes; every actual member contributes its authored range.

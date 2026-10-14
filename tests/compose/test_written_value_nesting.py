@@ -259,7 +259,8 @@ _BINDING_SITES: dict[str, tuple[_Flow, _Form, _Form, str, str, bool]] = {
         "    over:",
         True,
     ),
-    # A literal `until:` isn't a date, so it fails when it runs.
+    # A list `until:` isn't a date: at the limit it is a type error at load, and past the
+    # limit the nesting error comes first.
     "wait-until": (
         _wait_flow, _list, _list_alias, "node 'w' field 'until' at ", "    until:", False,
     ),
@@ -305,10 +306,18 @@ _BINDING_SITES: dict[str, tuple[_Flow, _Form, _Form, str, str, bool]] = {
 
 @pytest.mark.parametrize("site", list(_BINDING_SITES))
 @pytest.mark.parametrize("aliased", [False, True], ids=["text", "alias"])
-def test_binding_at_the_limit_loads(site: str, aliased: bool) -> None:
+def test_binding_at_the_limit_passes_the_nesting_check(site: str, aliased: bool) -> None:
     flow, text_form, alias_form, _, _, runs = _BINDING_SITES[site]
     header, value = (alias_form if aliased else text_form)(MAX_VALUE_NESTING)
 
+    if site == "wait-until":
+        # Past the nesting check, a list `until:` meets the type check.
+        with pytest.raises(LoadError) as caught:
+            load_flow(flow(header, value))
+        assert "`until:` must be a date or datetime, but YAML read it as a list" in str(
+            caught.value
+        )
+        return
     loaded = load_flow(flow(header, value))
 
     if runs:

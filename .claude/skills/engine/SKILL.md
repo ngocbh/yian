@@ -228,6 +228,7 @@ this model whenever you design anything:
   An expression that doesn't parse is malformed setup, not a failed assertion:
   `run_flow` and `resume_flow` (unfinished run) raise `ExpressionError` before any
   record is written, and `Node.run` raises it from setup validation before the body.
+  The same holds for a CASE `when` and a LOOP `while`/`until` set in Python.
   Do not add another assertion text/origin map or positional range list.
 - Compiled `Node.params` has one shape: ordered exact `Parameter` carriers. The
   flow owns their `Binding` sources; parameter contracts/default presence/

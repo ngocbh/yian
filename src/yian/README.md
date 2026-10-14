@@ -391,7 +391,8 @@ Compose rejects it in YAML with a located `LoadError`; for a carrier set in Pyth
 `run_flow` and `resume_flow` (of an unfinished run) raise `ExpressionError` (a
 `ValueError`) before writing any record, and `Node.run` raises it from setup
 validation before the body runs. One that parses but raises while evaluating still
-does not hold.
+does not hold. A CASE `when:` and a LOOP `while:`/`until:` set in Python follow the
+same rule; the error names the case handle or the predicate keyword.
 
 `Node.params` has one compiled shape too: an ordered list of exact `Parameter`
 carriers (or `None` for a directly constructed no-input node). The flow still owns each

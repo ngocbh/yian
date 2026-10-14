@@ -275,7 +275,7 @@ narrows: it never fills in a field and never converts a value.
 - **narrower** — some inferred values may miss the declared type (Optional into
   non-Optional, `str` into a `Literal`, an unbounded or wider-ranged number into a
   bounded one, an `object` value into a record, a union into one of its members, or an
-  `Any` value into any other type); the binding loads and the binder checks it at
+  `Any` value into another type); the binding loads and the binder checks it at
   runtime with `build_value_as`, failing with `binding.type`.
 - **disjoint** — no non-null inferred value fits; loading fails. Records count as
   closed, so an extra required field makes them disjoint, and sharing only `None`

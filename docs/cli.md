@@ -279,6 +279,8 @@ missing. The widget follows its resolved type:
   omit/default when allowed, `Set null`, and `Enter value`,
 - a non-null-capable list → a direct JSON-array text editor,
 - a non-null-capable object or record → a direct JSON-object text editor,
+- an `Any` input → the free-text editor; the answer stays text (`3` gives `"3"`), so
+  pass a number or a structure in `--inputs`,
 - any other non-null-capable scalar → the existing free-text editor.
 
 `Enter value` opens the existing scalar editor or the typed JSON editor. List/object

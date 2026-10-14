@@ -373,7 +373,7 @@ output:
 - **Load:** the declared type is compared with the inferred one. Disjoint is a load
   error (a `str` declared `int`; records are closed, so an extra required field
   is disjoint). Narrower (non-Optional over Optional, a `Literal` or range subset, a
-  record over `object`, an `Any` value into another type, a union member over the
+  record over `object`, an `Any` value into another type (not `None` or `file`), a union member over the
   union) loads and is checked at
   runtime, as is a value with no inferred type (arithmetic, builtin calls, untyped
   producers).

@@ -583,8 +583,9 @@ values). `ValueKind.ANY` is type-only: `build_value_as` stores an `Any` value un
 natural kind, and checks that `object` values, `list(object)` items, and `LIST_ANY`
 items are JSON values, failing with the path of a non-text key or a non-JSON value.
 Load doesn't check field reads on an `Any` value. In wiring, an `Any` source fits only
-`Any` and `Optional(Any)`; a tagged slot treats it as narrower than any other type and
-checks it at runtime. The lowercase `any` is a load error (`unknown type 'any'; write
+`Any` and `Optional(Any)`; a tagged slot treats it as narrower than any other type except
+`None` and a type whose every value holds a `file` (both disjoint), and checks it at
+runtime. The lowercase `any` is a load error (`unknown type 'any'; write
 Any`).
 
 Numeric `Type` values may retain an inclusive `bounds` pair for INTEGER or

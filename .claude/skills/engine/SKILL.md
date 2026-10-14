@@ -433,7 +433,8 @@ Most are just the functional model (above) made enforceable:
   and MAP checks at runtime. `ValueKind.ANY` is type-only (any non-null JSON value,
   stored under its natural kind); `object`, `list(object)` items, and `LIST_ANY` items
   must be JSON values (text keys, no date objects, sets, or `FileRef`s). In wiring an
-  `Any` source fits only `Any`/`Optional(Any)`; `type_relation` treats it as narrower.
+  `Any` source fits only `Any`/`Optional(Any)`; `type_relation` treats it as narrower than every type except `None` and
+  a type whose every value holds a `file`, which are disjoint.
   The specialized `LIST_*` discriminator and carrier preserve
   `None` through canonical round-trips. Cross-flow compatibility recursively
   applies the nullable-source-to-strict-sink rule to list elements. A union is

@@ -570,7 +570,7 @@ model made enforceable.
   its natural kind. `object`, `list(object)` items, and `LIST_ANY` items must be JSON
   values (text keys; no date objects, sets, or `FileRef`s). An `Any` source fits only
   `Any`/`Optional(Any)` in wiring, and `type_relation` treats it as narrower than other
-  types. The specialized `LIST_*` discriminator and carrier preserve `None` across
+  types except `None` and a type whose every value holds a `file`, which are disjoint. The specialized `LIST_*` discriminator and carrier preserve `None` across
   canonical round-trips.
   Cross-flow compatibility recursively applies the nullable-source-to-strict-sink
   rule to list elements.
@@ -894,7 +894,9 @@ untagged union with two members that `types_overlap`, and `read_typedefs` resolv
 first tag field (or the one untagged member the value satisfies) and keep
 `TypeCheckError.path`. `types_compatible` is member by member: a union never fits a record
 sink, a union fits `object`, and `object` never fits a union. An AGENT `output: Any`
-maps to a strict union of the JSON types inside the `value` wrapper. Structured
+maps to a union of the JSON types inside the `value` wrapper: strict `bool`/`int`/`float`/`str`
+members, so a reply is stored as given, plus an open `dict` and `list`. Like `output:
+object`, a provider's strict JSON-schema mode rejects it. Structured
 generation maps a union to a plain pydantic `Union[...]` of `extra='forbid'` member
 models inside the `value` wrapper (`anyOf` + `const` tags, no `discriminator`), and
 maps a validation error at a union position to the member its tag selects. Manifests

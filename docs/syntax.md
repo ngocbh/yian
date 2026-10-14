@@ -769,8 +769,8 @@ The loader compares the tag's type with the type it infers for the value:
   Records are closed, so a record with a required field the declared record lacks
   is disjoint.
 - A **narrower** type loads and is checked at runtime: non-Optional over Optional, a
-  `Literal` or range subset, a record over `object`, an `Any` value into any other type
-  (`n: !int ${x.output}`), or a union member over the union (explicit narrowing, e.g.
+  `Literal` or range subset, a record over `object`, an `Any` value into another type (not
+  `None` or `file`; `n: !int ${x.output}`), or a union member over the union (explicit narrowing, e.g.
   `buy: !Buy ${decision.output}`). A flow output over a node a
   `case` may skip is `Optional`, so `order: !str ${order.output}` loads and fails with
   `binding.type` when `order` is skipped.

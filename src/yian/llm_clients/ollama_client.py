@@ -82,15 +82,26 @@ class OllamaClient(BaseLLMClient):
     provider = "ollama"
 
     def get_llm(self) -> Any:
-        """Return a `NormalizedChatOllama` on the native endpoint carrying the `ollama` block."""
+        """Return a `NormalizedChatOllama` on the native endpoint carrying the `ollama` block.
+
+        Raises:
+            `ValueError`:
+                Raised when an ``http_client`` or ``http_async_client`` is given.
+        """
         self.warn_if_unknown_model()
+        for key in ("http_client", "http_async_client"):
+            if self.kwargs.get(key) is not None:
+                raise ValueError(
+                    f"the ollama client can't use {key}: the Ollama SDK builds its own "
+                    "httpx client"
+                )
         kwargs: dict[str, Any] = {
             "model": self.model,
             "base_url": _resolve_base_url(self.base_url),
             "block": self.kwargs.get("block") or {},
         }
         # Generation settings come only from the block; other client kwargs such as
-        # `max_retries` are not ChatOllama fields.
+        # `max_retries` are not ChatOllama fields and are ignored.
         return NormalizedChatOllama(**kwargs)
 
     def validate_model(self) -> bool:

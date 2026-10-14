@@ -127,3 +127,20 @@ def test_google_rejects_a_host_client_of_the_wrong_type(clean_env, key, kind):
     # The accepted classes depend on whether httpx2 is installed; httpx's is always one.
     with pytest.raises(TypeError, match=rf"{key} must be an httpx\.{kind}\b.*, got object$"):
         _google(**{key: object()})
+
+
+@pytest.mark.parametrize("key", ["http_client", "http_async_client"])
+def test_ollama_rejects_a_host_client(clean_env, key):
+    client = httpx.Client() if key == "http_client" else httpx.AsyncClient()
+    try:
+        with pytest.raises(ValueError, match=f"the ollama client can't use {key}"):
+            create_llm_client("ollama", "qwen3", **{key: client}).get_llm()
+    finally:
+        if key == "http_client":
+            client.close()
+        else:
+            asyncio.run(client.aclose())
+
+
+def test_ollama_takes_none_for_the_host_clients(clean_env):
+    create_llm_client("ollama", "qwen3", http_client=None, http_async_client=None).get_llm()

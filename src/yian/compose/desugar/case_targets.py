@@ -9,8 +9,10 @@ whole-value `call(...)` directive — a route target resolves to exactly one nod
 any other text starting with `call(` is a located LoadError naming the problem. Value
 branches (quoted text, `${...}` templates, non-string values) were already lifted to synth
 `__value_<n>` nodes by `desugar_case_values`, so this pass sees node ids, those synth ids,
-and unquoted calls. Sound because the case-route veto skip-floods the non-chosen synth
-branch even when its call args carry data edges.
+and unquoted calls. The outer synth call is the route target, so the case-route veto
+skip-floods it on a branch not taken. A nested directive's inner calls are lifted too; each
+records the outer call as its `host`, so the host-edge step gives it the outer call's route
+and it is skipped with it.
 
 Runs in `_assemble` AFTER `desugar_inline_calls` (sharing its `next_id` minter — else
 the ids collide) and BEFORE `expand_case_outputs`, so the synth call's args (which may
@@ -134,9 +136,12 @@ def _lift_case_target(
         outer = calls[-1]
         if new_value.strip() == f"${{{outer.id}.output}}":
             for c in calls:
+                # The outer call is the route target and gets the route edge; each inner call
+                # only feeds it, so the outer call is its host and passes that route on.
                 synth[c.id] = _to_call_descriptor(
                     c,
                     host=host,
+                    host_id=None if c is outer else outer.id,
                     range=range,
                     diagnostics=diagnostics,
                 )

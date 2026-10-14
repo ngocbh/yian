@@ -245,8 +245,9 @@ def test_an_optional_group_does_not_propagate_the_branch():
     assert f"node 'c' input 'l' from: {_LIMIT_ERROR}" in msg
 
 
-def test_a_nested_inline_call_in_a_branch_target_is_not_narrowed():
-    msg = _load_error(_flow(
+def test_a_nested_inline_call_in_a_branch_target_is_narrowed():
+    # `inner` is lifted out of the routed `outer`, so it carries the same route.
+    _loads(_flow(
         _case(
             "route",
             _ON,
@@ -255,8 +256,15 @@ def test_a_nested_inline_call_in_a_branch_target_is_not_narrowed():
         ),
         _code("e"),
     ))
-    # `inner` reads `qty` as a data producer of `outer`; only `outer` is routed.
-    assert f"input 'y' from: {_QTY_ERROR}" in msg
+
+
+def test_an_inline_call_in_a_routed_node_input_is_narrowed():
+    # The call is lifted out of `b`, so it carries `b`'s route.
+    _loads(_flow(
+        _case("route", _ON, [("buy", "b")], else_="e"),
+        _code("b", {"r": "call(place, order=${d.output})"}),
+        _code("e"),
+    ))
 
 
 # --- routing --- #

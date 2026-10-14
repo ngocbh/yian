@@ -93,7 +93,7 @@ class NodeDescriptor:
     """The base every `compose/nodes/<kind>.py` descriptor inherits — the fields common to
     all nodes, so no kind redeclares them.
 
-    Four field groups:
+    Five field groups:
     - **Author-surface commons** (`id` + `node_name`/`depends_on`/`runs_after`/`env`): `id` is
       the node's keyed-map key (no default); `node_name` the display title; `depends_on`/
       `runs_after` are RUN-ORDERING edges (no data flows — both gate on the source settling,
@@ -106,6 +106,10 @@ class NodeDescriptor:
     - **Declared input types** (`input_types`): `param -> ValueContract` for each typed
       `input:` binding (`qty: int = ${size.output.qty}`). Compose fills it at load when it
       splits the type off the binding value; it is not a YAML key, so `parse` never reads it.
+    - **Lift host** (`host`): the id of the node a desugar pass lifted this synth node out of
+      (the node whose binding held an inline `call(...)`, an adaptive gate, the outer call of a
+      nested branch call), or `None`. It is not a YAML key. The host-edge step gives a lifted
+      node its host's CASE routes, `depends_on`, and `runs_after`.
     - **Located-parse metadata** (`origin`/`range`/`field_ranges`): the opaque authored node
       identity, node body's `SourceRange`, and each present field's `SourceRange`. `compare=False`
       keeps them out of `==`, so a descriptor still equals an identically-configured one built
@@ -161,6 +165,9 @@ class NodeDescriptor:
     inputs: dict[str, Any] = field(default_factory=dict)
     outputs: Any = None
     input_types: dict[str, ValueContract] = field(default_factory=dict)
+    # Set only by desugar on a synth node, so the lifted node runs on its host's routes and
+    # ordering; part of `==` because it changes the compiled graph.
+    host: Optional[str] = None
     origin: OriginRef | None = field(default=None, compare=False)
     range: Optional[SourceRange] = field(default=None, compare=False)
     # `(kind, key) -> SourceRange` for each authored named site. Stamped here at parse and

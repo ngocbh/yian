@@ -7,7 +7,8 @@ callable:
   kind-blind (`desc.build(ctx)`; physical node-output contracts compile at their
   existing leaf-owned build position; a case lowers
   in its own build) -> cross-flow type check + case exhaustiveness -> infer data
-  edges + append each case's own edges -> validate references + classify asserts
+  edges + append each case's own edges + copy each host's route/ordering edges onto
+  the nodes lifted out of it -> validate references + classify asserts
   -> attach authored assertion/flow-output binding origins -> synthesize the START_ID/END_ID
   boundary over ALL edges -> resolve each node's `isinstance` type table -> reject cycles +
   check if/else handles -> CompiledFlow.from_parts. One retained assertion item cursor
@@ -84,6 +85,7 @@ from yian.compose.validate.cycles import reject_cycles
 from yian.compose.validate.human_questions import validate_human_questions
 from yian.compose.validate.loop_types import check_loop_type_contract
 from yian.compose.validate.narrowing import compute_narrowing
+from yian.compose.edges.hosts import host_control_edges
 from yian.compose.edges.ordering import infer_ordering_edges
 from yian.compose.validate.call_types import check_call_map_types
 from yian.compose.validate.references import validate_references
@@ -1299,8 +1301,9 @@ def _assemble(
       (`desc.build(ctx)`; physical node-output contracts compile at their existing
       leaf-owned position; a case lowers in its own build) -> attach declared input
       contracts to the node wiring -> cross-flow type check + case exhaustiveness ->
-      infer data edges + append each case's own edges -> validate references + classify
-      asserts -> attach authored flow-output binding origins + declared output contracts
+      infer data edges + append each case's own edges + copy each host's route/ordering
+      edges onto the nodes lifted out of it -> validate references + classify asserts ->
+      attach authored flow-output binding origins + declared output contracts
       -> synthesize roots/terminals -> resolve `isinstance` type tables -> reject cycles +
       check if/else handles -> CompiledFlow.from_parts.
 
@@ -1897,10 +1900,14 @@ def _assemble(
     # Data edges — the projection of flow.wiring (leaf + WAIT + call/map); a case owns its own
     # data+control edges (`case_edges`, from each `CaseDescriptor.build`), appended below.
     data_edges = infer_data_edges(descriptors, flow_wiring)
+    # A node lifted out of an authored node (an inline `call(...)`, an adaptive composer) runs
+    # only on its host's routes and after its host's ordering, so it gets copies of them here,
+    # before narrowing and the skip model read the graph.
+    host_edges = host_control_edges(descriptors, data_edges + case_edges)
     # What each node may assume about union values from the CASE branches that route it.
     narrowing = compute_narrowing(
         descriptors,
-        data_edges + case_edges,
+        data_edges + case_edges + host_edges,
         producers,
         flow_input_contracts,
         registry=registry,
@@ -1986,7 +1993,7 @@ def _assemble(
         diagnostics=diagnostics,
     )
 
-    reconciled = data_edges + case_edges
+    reconciled = data_edges + case_edges + host_edges
 
     # Reference + assert validation over the built flow. Errors locate
     # at the node's line (a bad node-input ref) or the `output:` section line (a

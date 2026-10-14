@@ -932,7 +932,9 @@ contribute nothing; unordered (cycle) nodes get no facts so
 `reject_cycles` reports the cycle. `Narrowing.for_node(id)` returns the node's view, which
 the call-type and exhaustiveness checks read; the reference check reads `for_param`, which
 falls back to `for_node`. Flow outputs use the unnarrowed maps. Build-time seams (inline
-child input inference, LOOP seeds) run before the pass and see unnarrowed types.
+child input inference, LOOP seeds) run before the pass and see unnarrowed types. The load
+check of a LOOP seed against its body's input, like a CALL argument's, uses the narrowed
+view.
 
 Compose output derivation, builders, child signatures, and producer maps retain the
 complete output-contract sum. `ChildSignature.declared_outputs` retains ordered

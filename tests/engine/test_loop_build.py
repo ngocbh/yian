@@ -1499,6 +1499,8 @@ _SEEDED_INPUTS = _SEEDED.replace(
 def _seeded_inputs(
     n_type: str, seed: str, driver: str = "times: 1", extra: str = '"abc"'
 ) -> str:
+    """Return `_SEEDED_INPUTS` with the body's `n` type, the `n` seed, the driver, and the
+    `extra` seed filled in."""
     return _SEEDED_INPUTS.format(n_type=n_type, seed=seed, driver=driver, extra=extra)
 
 

@@ -60,7 +60,13 @@ this model whenever you design anything:
   `canonical_seed`, `encode_pool`) rejects one, with no opt-in, so a node output
   fails `contract.output` at the field path and a growth seed fails
   `contract.growth`. Never record null in its place. An int too large for a
-  float slot fails the type check at its path.
+  float slot fails the type check at its path. A model reply is a boundary too:
+  `run_agent`'s `check_reply` fails a tool call's non-finite arguments with
+  `node.execute` before any call runs; structured `float` slots set
+  `allow_inf_nan=False` and freeform values are checked after `_unwrap`, so the
+  reply self-corrects under `retries:`; with a transcript `invoke_model` rejects a
+  non-finite raw reply (metadata included) before storing it and observes the
+  effect `failed` instead of crashing the codec.
 - `AgentNode.variables` reuses ordered `Parameter` declarations, each with an
   exact contract and explicit typed default. Reject duplicate names and input
   collisions. Resolve a detached default record once per invocation, then render
@@ -640,7 +646,10 @@ Most are just the functional model (above) made enforceable:
   ledger, checkpoint callback, or reconciliation channel. It recalls each key of
   the stack once and admits a transcript only from a key whose recorded
   `MemorySpec.conversation_eligible` is true; an ineligible or second transcript
-  raises `MemoryRecallError`. It
+  raises `MemoryRecallError`. A model reply that isn't finite JSON is never
+  stored: `invoke_model` observes that effect `failed` and raises a located
+  error (a structured AGENT retries it, spending `retries:` even on a
+  metadata NaN the model can't fix). It
   then binds authored scope plus accepted run/start identity into one lazy
   evaluator-owned `MemoryContext`. Notes stay ordered outer-to-local. Use
   `needs_memory_context` and `open_memory_context(system, prompt, compatibility)`;

@@ -802,6 +802,15 @@ exists; `LLMConfig` sets `allow_inf_nan=False`. `canonical_typed`, `canonical_se
 and `encode_pool` always reject one, so a node output fails `contract.output` at the
 field path and a growth seed fails `contract.growth`; nothing is recorded as null.
 Widening an int too large for a float raises `TypeCheckError` at its path.
+A model reply is checked too. A tool call whose arguments hold one fails the AGENT
+with `node.execute` before any call of the reply runs (`tool call 'lookup' arguments
+at x: ...`), with or without memory. A structured reply's NaN or infinity is a schema
+deviation retried under `retries:`: `float` slots set `allow_inf_nan=False`
+(`finite_number`, origin at the declared field once retries are spent) and freeform
+values fail `structured output at <path>`. With session memory, `invoke_model`
+rejects a raw reply holding one anywhere, provider metadata included, before storing
+it; the model effect is observed `failed` and the reply is not kept. Without memory,
+metadata is not checked.
 
 `Type.variants` refines OBJECT into a union: a tuple of two or more non-nullable record
 members, in canonical order (by tag, else by `canonical_type_label`) and deduplicated by

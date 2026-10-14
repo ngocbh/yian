@@ -208,6 +208,7 @@ def test_typed_input_mismatch_names_the_gate():
     message = str(error)
     assert "node 'ask' input 'proj': declared list[int], but the value is str" in message
     assert "ask__compose" not in message
+    assert _line(error) == 12
 
 
 def test_skipped_operand_arithmetic_names_the_gate():
@@ -243,6 +244,7 @@ output: ${ask.output}
         in message
     )
     assert "ask__compose" not in message
+    assert _line(error) == 19
 
 
 def test_defs_body_input_error_names_the_gate():

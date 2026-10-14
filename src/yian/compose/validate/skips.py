@@ -437,8 +437,8 @@ def check_skipped_arithmetic(
                 fallback = (
                     own or result.field_ranges.get(("field", "inputs")) or result.node_range
                 )
-                # A synthetic param's label may already end in a colon (`on:`); strip it
-                # before the lookup so an `input 'p'` label matches its site key.
+                # A synthetic param's label may already end in a colon (`on:`); the
+                # message adds one.
                 where = result.site_name(node_id, label.rstrip(":"))
             raise _located_error(
                 f"{where}: {_arithmetic_message(binding, *found)}",

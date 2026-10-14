@@ -922,8 +922,15 @@ retain derived ranges; `NodeDescriptor._finish()` copies them to Compose-only
 synth node's fields and inputs to `BuildResult.field_labels`, for post-build validation.
 Assembly discards all three before `CompiledFlow`, so semantic nodes have no YAML range or
 aligned assertion-range fields; only a synth AGENT's `llm_config` label survives, as the
-render-only `AgentNode.llm_config_label` for run-start messages. A labelled synth node is
-reported as its host in a cycle error unless the cycle runs through an author's read of it.
+render-only `AgentNode.llm_config_label` for run-start messages. Compose also fills
+`Node.binding_labels` (param -> the phrase a runtime binding error starts with, such as
+`node 'g' on`, `value entry 'v'`, or `flow output 'r'`; not part of node identity or the
+manifest) from those labels and `wiring_labels`, and for END. A synth call records its
+authored binding as `CallDescriptor.call_site`; its argument bindings and the node share that
+binding's origin, so an argument error reads `<site> call(f) argument 'y'` at that binding.
+In a cycle error a labelled synth node with a host, inline calls included, gets a
+`<synth> is generated from node '<host>'` note. Only an adaptive composer whose generated
+wire into the gate alone closes the cycle is reported as its host; an inline call never is.
 Never reparse a source slice or mutate
 anchors/aliases/merges.
 An unchanged source-backed string cursor exposes `ScalarSource`: its whole range and,

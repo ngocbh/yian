@@ -374,6 +374,10 @@ default, fails its node with `binding.evaluate`. The message names the input and
 path, like `input 'y' at a[1]: non-finite number inf is not a yian value`; a default
 reads `default for 'x': ...`. A negative base to a fractional power is complex:
 `v: ${(0 - 8) ** 0.5}` fails with `input 'v': complex number (…) is not a yian value`.
+A binding you didn't write as an input is named by where you wrote it: `node 'g' on`,
+`value entry 'v'`, `flow output`, or `flow output 'r'`, like
+`node 'g' on: non-finite number inf is not a yian value`. A `call(...)` argument is
+named `<site> call(f) argument 'y'` and located at the binding the call is written in.
 A temporary inside an expression is fine: the embedded template `"v=${x * 10}"` is
 the text `v=inf`. Only a binding's final value is checked. See [Expressions → Non-finite results](expressions.md#non-finite-results).
 
@@ -879,7 +883,7 @@ A narrower type is checked when the entry runs, and a failure fails the entry wi
 `x: !str ${p.output}` fails:
 
 ```text
-binding 'x': 5 does not match declared type str
+value entry 'x': 5 does not match declared type str
 ```
 
 A tag only checks; it never fills in a field. `!Buy` names `action: Literal(buy)`, but a
@@ -2632,7 +2636,18 @@ Rules:
   `call(f, x=call(g), y=${a.output})`, `g` waits for `a` and is skipped when `a` is. A
   call in the flow `output:` or `asserts:` has no host. A node that reads the call's output by
   id (`${__call_0.output}`) is skipped with it, and if the host also reads that node or
-  names it in `depends_on:` or `runs_after:`, the flow has a cycle (a load error).
+  names it in `depends_on:` or `runs_after:`, the flow has a cycle (a load error), as it
+  does when an argument reads the host. The cycle error names `__call_0` with a note
+  that it is generated from the host (`__call_0 is generated from node 'brief'`).
+- **Errors name the argument.** A load or run error in an argument names the binding
+  the call is written in, the callee, and the argument, and a run failure is located at
+  that binding (a `case` branch call at its `then:` or `else:`). For
+  `a: call(child, y=${input.s})` on node `n`, where `s` is a `str` input and `child`
+  takes `y: int`:
+
+  ```text
+  node 'n' input 'a' call(child) argument 'y' — child expects 'int', source is 'str'
+  ```
 - **In a flow `asserts:` item** a value starting with `call(` follows the same rule,
   quoted or not: an assert is an expression, so quoting it does not make it text.
 - **A flow call inside `${...}` is retired.** The old `${flow(args)}` form (a flow

@@ -33,10 +33,9 @@ this model whenever you design anything:
   **agent** is the conceptual umbrella for a composable transformation represented
   by a node, a flow, or a child flow. The concrete **AGENT node** (`kind: agent`)
   is the LLM-backed leaf.
-- Flows **compose**: CALL/MAP/LOOP apply child flows recursively within the
-  runtime depth limit. Their `nodes:` + `output:` form is front-end sugar for
-  the same application: Compose
-  lowers it to a file-private child flow; it does not introduce a runtime kind.
+- Flows **compose**: CALL/MAP/LOOP apply child flows recursively. Their `nodes:` +
+  `output:` form is front-end sugar for the same application: Compose lowers it
+  to a file-private child flow; it does not introduce a runtime kind.
 - Computation is **pure at the boundary**: a node returns one `Output | Route |
   Grow`; the engine records and applies that outcome. Only `Output` binds a value.
 - Source-neutral semantic operations live in `nodes/contracts.py`: `Binding`,
@@ -356,8 +355,8 @@ Most are just the functional model (above) made enforceable:
   concrete AGENT node gets no special graph contract.
 - **Hierarchical / composable** *(function composition)* — a composite node can
   apply another flow (a `call:`/`uses:` reference → a child subgraph seeded from
-  the parent's pool), recursively within the runtime depth limit. This is how one
-  agent composes another and how composite nodes are built. One-off inline composite bodies must
+  the parent's pool), recursively. This is how one agent composes another and how
+  composite nodes are built. One-off inline composite bodies must
   lower to that same child contract with stable lexical identity and a closed
   generated-input scope. A spawner returns only a canonical
   `Grow(seed, prune)`; the compile-owned `build_grow` interprets that seed after the

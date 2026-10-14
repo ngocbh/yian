@@ -17,8 +17,8 @@ know the shape of it:
   be represented by one node, a flow, or a child flow. The concrete **AGENT
   node** (`kind: agent`) is the LLM-backed leaf.
 - Flows **compose**. CALL, MAP, and LOOP apply child flows, so a large
-  transformation is built recursively from small ones within the runtime depth
-  limit—function composition, not a monolith.
+  transformation is built recursively from small ones—function composition, not
+  a monolith.
 - Computation is **pure at the boundary**: a node returns an outcome and the
   engine binds it; a node never receives or mutates the variable pool. Each kind
   implements `forward`; the base `Node.run` template applies defaults and fires
@@ -884,8 +884,8 @@ growth match lives in `compile.expand.build_grow`, outside runtime.
 `compile.model.GrowthRejected` crosses that boundary only when a legal
 CALL/MAP/LOOP kind supplies a malformed seed. Unsupported kinds and builder or
 compiler helper faults remain raw; runtime marks only explicit seed, fragment,
-budget, depth, and prune-policy rejection as expected growth data. The kind
-census test keeps runtime's `NodeKind`/expansion dispatch count at zero.
+budget, and prune-policy rejection as expected growth data. The kind census
+test keeps runtime's `NodeKind`/expansion dispatch count at zero.
 
 ## One append-only authority
 

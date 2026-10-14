@@ -102,9 +102,6 @@ from yian.typesys.values import (
 MAX_TOTAL_NODES = 10_000
 """Maximum live topology size before same-transition pruning."""
 
-MAX_REF_DEPTH = 5
-"""Maximum positive graph-growth nesting depth."""
-
 GrowBuilder = Callable[[Node, Any], Flow]
 """Injected kind-aware interpreter from a spawner and canonical seed to a fragment."""
 
@@ -1032,7 +1029,7 @@ def prepare_expanded(
     Raises:
         `GrowthRejected`:
             The node-produced prune set or seed, returned fragment constraints,
-            growth budget/depth ceiling, or requested prune policy is invalid.
+            growth budget, or requested prune policy is invalid.
         `TypeError`:
             A host/setup carrier or builder has the wrong type, or the builder does
             not return a `Flow`.
@@ -3081,15 +3078,7 @@ def _validated_growth_depth(state: RunState, spawner_id: str) -> int | None:
     parent_depth = state.depth.get(spawner_id, 0)
     if type(parent_depth) is not int or parent_depth < 0:
         raise ValueError(f"spawner {spawner_id!r} has an invalid parent depth")
-    depth = parent_depth + delta
-    if delta > 0 and depth > MAX_REF_DEPTH:
-        _raise_growth_rejected(
-            ValueError(
-                f"expansion exceeded MAX_REF_DEPTH ({MAX_REF_DEPTH}) at "
-                f"{spawner_id!r}"
-            )
-        )
-    return depth
+    return parent_depth + delta
 
 
 def _node_names(node_id: str, node: Node, wiring: dict[str, Any]) -> tuple[str, ...]:
@@ -4745,7 +4734,6 @@ def _apply_growth(
 
 __all__ = [
     "GrowBuilder",
-    "MAX_REF_DEPTH",
     "MAX_TOTAL_NODES",
     "PreparedTransition",
     "RunStartData",

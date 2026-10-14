@@ -2,7 +2,7 @@
 
 Covers the live CALL Grow path through the engine's generic `_apply_grow` (clone the child
 namespaced, substitute the spawner's value via the `commit_as` filler, fire its out-edges) plus
-the runtime bounds (MAX_TOTAL_NODES / MAX_REF_DEPTH). The `eval_node` -> `NodeExpanded` routing
+the runtime node budget (MAX_TOTAL_NODES). The `eval_node` -> `NodeExpanded` routing
 (spawner Grow grows the graph; a non-spawner Grow fails loud) is pinned in `test_eval_node_grow.py`.
 """
 
@@ -175,7 +175,7 @@ def test_call_grow_clones_namespaced_and_substitutes_spawner(num_workers):
     assert eng.state.flow.nodes["sp/__end__"].commit_as == "sp"
 
 
-# --- runtime bounds (MAX_TOTAL_NODES + MAX_REF_DEPTH) + CALL-inside-MAP nesting proof ------ #
+# --- runtime node budget (MAX_TOTAL_NODES), deep static nesting, CALL-inside-MAP nesting ---- #
 
 from yian.compose import load_flow
 
@@ -242,10 +242,12 @@ def test_call_inside_map_expands_and_runs_uniformly(num_workers):
     assert any(nid.startswith("each#1/inner/") for nid in eng.state.flow.nodes)
 
 
-def _call_chain_flow(depth: int):
-    """A static CALL -> CALL -> ... -> CODE leaf chain `depth` defs deep (a genuine chain,
-    NOT a wide fan-out): `step0` calls `step1` calls ... `step{depth-1}` calls the `leaf`.
-    Drives the depth bound independently of the node budget."""
+def _mixed_chain_source(levels: int) -> str:
+    """A static chain `levels` CALL/MAP levels deep ending in a CODE leaf.
+
+    The root CALLs `step1`; odd steps MAP over a one-element list and even steps CALL,
+    so CALL and MAP alternate. Each level is a distinct def, so the chain is a genuine
+    nesting (not a wide fan-out) and the loader accepts it as finite."""
     lines = [
         "id: chain",
         "name: chain",
@@ -264,52 +266,86 @@ def _call_chain_flow(depth: int):
         "        code: tests.seeds.fns:confirm_action",
         "    output: ${e.output}",
     ]
-    for k in range(depth):
-        callee = "leaf" if k == depth - 1 else f"step{k + 1}"
-        lines += [
-            f"  step{k}:",
-            "    input:",
-            "      v: str",
-            "    nodes:",
-            "      call_next:",
-            "        kind: call",
-            f"        call: {callee}",
-            "        input:",
-            "          v: ${input.v}",
-            "    output: ${call_next.output}",
-        ]
+    for k in range(1, levels):
+        callee = "leaf" if k == levels - 1 else f"step{k + 1}"
+        lines += [f"  step{k}:", "    input:", "      v: str", "    nodes:"]
+        if k % 2:
+            lines += [
+                "      next:",
+                "        kind: map",
+                # A whole-span list expression; a list literal would keep "${input.v}" as text.
+                "        over: ${[input.v]}",
+                f"        call: {callee}",
+                "        input:",
+                "          v: ${item}",
+            ]
+        else:
+            lines += [
+                "      next:",
+                "        kind: call",
+                f"        call: {callee}",
+                "        input:",
+                "          v: ${input.v}",
+            ]
+        lines += ["    output: ${next.output}"]
     lines += [
         "nodes:",
-        "  root_call:",
+        "  top:",
         "    kind: call",
-        "    call: step0",
+        "    call: step1",
         "    input:",
         "      v: ${input.v}",
-        "output: ${root_call.output}",
+        "output: ${top.output}",
     ]
-    return load_flow("\n".join(lines)).compiled
+    return "\n".join(lines)
+
+
+_DEEP_LEVELS = 8
+# 4 MAP levels (odd steps 1, 3, 5, 7) wrap the leaf's string in 4 one-element lists.
+_DEEP_OUTPUT = [[[["go"]]]]
 
 
 @pytest.mark.parametrize("num_workers", [0, 4])
-def test_deep_call_chain_trips_max_ref_depth(num_workers):
-    from yian.events import RunFailed
-    from yian.runtime.state import MAX_REF_DEPTH
-
-    # A CALL chain deeper than MAX_REF_DEPTH (a genuine chain,
-    # NOT a wide fan-out) -> the depth bound fires before MAX_TOTAL_NODES. The RuntimeError
-    # funnels to RunFailed via the dispatcher-thread wrap (NOT an uncaught raise out of run());
-    # the pooled path funnels identically.
-    parent = _call_chain_flow(depth=MAX_REF_DEPTH + 2)
-    events = list(
-        _engine(
-            parent,
-            run_inputs={"v": "go"},
-            num_workers=num_workers,
-            grow_builder=build_grow,
-        ).run()
+def test_deep_static_call_map_chain_loads_and_succeeds(num_workers):
+    # Nesting depth is static (the loader rejects recursion), so a chain deeper than any
+    # fixed cap runs to completion; the growth core still stamps each level's depth.
+    loaded = load_flow(_mixed_chain_source(_DEEP_LEVELS))
+    eng = _engine(
+        loaded.compiled,
+        run_inputs={"v": "go"},
+        num_workers=num_workers,
+        grow_builder=build_grow,
     )
-    assert isinstance(events[-1], RunFailed)            # status=="failed", not pytest.raises
-    assert "MAX_REF_DEPTH" in events[-1].failure.message
+    events = list(eng.run())
+    assert isinstance(events[-1], RunSucceeded), events[-1]
+    assert events[-1].output == _DEEP_OUTPUT
+    assert max(eng.state.depth.values()) == _DEEP_LEVELS
+
+
+def test_deep_static_call_map_chain_resumes_after_its_last_expansion(tmp_path):
+    # Record replay re-validates every recorded growth (depth included): cut the deep run's
+    # log right after its last `node_expanded` record, so resume must replay all 8
+    # expansions and then run the deepest leaf fresh.
+    import json
+
+    from yian.events import NodeStarted
+    from yian.run import resume_flow, run_flow
+
+    source = _mixed_chain_source(_DEEP_LEVELS)
+    path = tmp_path / "deep.jsonl"
+    first = run_flow(load_flow(source), {"v": "go"}, log=path, num_workers=0)
+    assert first.status == "succeeded", first.failure
+    lines = path.read_text().splitlines(keepends=True)
+    expanded = [i for i, line in enumerate(lines) if json.loads(line)["kind"] == "node_expanded"]
+    assert len(expanded) == _DEEP_LEVELS
+    path.write_text("".join(lines[: expanded[-1] + 1]))
+
+    resumed = resume_flow(load_flow(source), log=path)
+
+    assert resumed.status == "succeeded", resumed.failure
+    assert resumed.output == _DEEP_OUTPUT
+    started = {e.node_id for e in resumed.events if isinstance(e, NodeStarted)}
+    assert any(node_id.endswith("/e") for node_id in started)  # the leaf ran after replay
 
 
 def _wide_child(n: int) -> CompiledFlow:

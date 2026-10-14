@@ -409,7 +409,8 @@ difference is control: a pass that lifts a node out of an authored node (an inli
 a node's binding, the inner calls of a nested branch call, an adaptive composer) records
 that node as the synthetic node's `host`, and `host_control_edges` gives it the host's case
 route edges and `depends_on`/`runs_after` ordering edges, so it runs only on the host's
-branches and in the host's order. A branch target itself (a `then: call(...)`, a
+branches and in the host's order. The host's data inputs are not copied: a lifted node
+doesn't wait on them. A branch target itself (a `then: call(...)`, a
 `__value_N`), a `__case_<id>` result node, and a call in the flow `output:`/`asserts:` have
 no host. The synthetic nodes remain origin-free because no authored node header
 corresponds to them; authored nodes inside retained inline bodies are stamped normally.

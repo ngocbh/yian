@@ -1190,10 +1190,11 @@ Inline notes:
 
 A `case` node routes — it has no `input:`. It takes one branch; the other targets
 are skipped, and so is every node that plainly reads a skipped node or names it in
-`depends_on`, and every node the loader lifted out of a skipped target (an inline
-`call(...)` in its `input:`, an adaptive composer). A node that names the `case` itself
-in `depends_on:` or `runs_after:` is not on a branch: it runs whichever branch the
-`case` takes, and is skipped only when the `case` is. Read its result with `${case.output}`. A routing-only `case` may take
+`depends_on`. A node the loader lifted out of a target on an untaken branch (an inline
+`call(...)` in its `input:`, an adaptive composer) is skipped too. A node that names the
+`case` itself in `depends_on:` or `runs_after:` is not on a branch: it runs whichever
+branch the `case` takes, and is skipped only when the `case` is. Read its result with
+`${case.output}`. A routing-only `case` may take
 none when no `when:` matches and there is no `else:` (see
 [Exhaustiveness](#exhaustiveness)); a flow output that reads a skipped node returns
 null (see [Skipped branches and flow outputs](#skipped-branches-and-flow-outputs)).

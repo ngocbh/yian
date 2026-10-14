@@ -1150,7 +1150,8 @@ entire trimmed value, never embedded in a span): a binding's whole value, and a
 (`__call_N`) and the host is rewritten to `${<synth>.output}`. The synth node records
 that host (a nested branch call's inner calls record the outer call), and
 `compose/edges/hosts.py` gives it the host's CASE route edges and `depends_on`/`runs_after`
-edges; the adaptive composer gets its gate's edges the same way. A flow call inside
+edges; the adaptive composer gets its gate's edges the same way. The host's data inputs
+are not copied, so a lifted node doesn't wait on them. A flow call inside
 a span (`${flow(args)}`) is a hard `LoadError` — hoist an embedded call to a named
 node; a coalesce-of-calls (`${a() | b()}`) is likewise rejected. Pure builtins
 (`${upper(x)}`) and `isinstance` stay legal inside `${}`. A prompt rejects

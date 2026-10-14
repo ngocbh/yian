@@ -2,9 +2,10 @@
 
 A branch target may be an inline call (a fresh owned call) instead of a placed node id; it
 desugars to a synth `__call_<n>` node and the then:/else: is rewritten to that synth id, so the
-case veto skip-floods it when the branch is not taken (a nested call's inner calls follow it). Accepted grammar: a whole-value
-`call(...)` directive (a route target is one node id). A `${...}` branch is a value, so a
-flow call inside its span is the retired inline `${flow(args)}` form, a LoadError.
+case veto skip-floods it when the branch is not taken (a nested call's inner calls follow it).
+Accepted grammar: a whole-value `call(...)` directive (a route target is one node id). A
+`${...}` branch is a value, so a flow call inside its span is the retired inline
+`${flow(args)}` form, a LoadError.
 """
 
 import pytest

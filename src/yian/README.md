@@ -551,8 +551,9 @@ runtime is unchanged. A node a desugar pass lifts out of an authored node (an in
 `call(...)` in its binding, an inner call of a nested branch call, an adaptive composer)
 records that node as its `host`, and `compose/edges/hosts.py` copies the host's CASE route
 edges and `depends_on`/`runs_after` ordering edges onto it, so it runs only on the host's
-branches and in the host's order (not on the host's other inputs). Inline child bodies and LOOP seeds are typed while nodes build, before
-the pass, so they see unnarrowed types. Runtime routing is unchanged.
+branches and in the host's order. It doesn't wait on the host's other inputs. Inline child
+bodies and LOOP seeds are typed while nodes build, before the pass, so they see unnarrowed
+types. Runtime routing is unchanged.
 
 Physical Compose declarations derive exact `ValueContract`s. Output binding derivation,
 builders, child signatures, producer maps, and validators retain the complete

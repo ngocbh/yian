@@ -171,7 +171,7 @@ def test_inline_call_does_not_run_on_an_untaken_route():
 
 
 def test_inline_call_runs_on_the_taken_route():
-    _flow_, result = _run(_flow(_GATE + _PUBLISH + _SKIP_IT), go=True)
+    _, result = _run(_flow(_GATE + _PUBLISH + _SKIP_IT), go=True)
     assert _compose_codefns.RECORDED == ["publish"]
     assert result.output == {"r": "published publish"}
 
@@ -197,7 +197,7 @@ def test_inline_call_is_skipped_with_a_host_depends_on():
 @pytest.mark.parametrize("go, ran", [(False, ["publish"]), (True, [])])
 def test_inline_call_follows_the_else_route(go, ran):
     gate = _GATE.replace("then: publish", "then: skip_it").replace("else: skip_it", "else: publish")
-    flow, _result = _run(_flow(gate + _PUBLISH + _SKIP_IT), go=go)
+    flow, _ = _run(_flow(gate + _PUBLISH + _SKIP_IT), go=go)
     assert _edge(flow, "gate->__call_0#0").source_handle == ELSE_HANDLE
     assert _compose_codefns.RECORDED == ran
 
@@ -205,7 +205,7 @@ def test_inline_call_follows_the_else_route(go, ran):
 @pytest.mark.parametrize("go", [False, True])
 def test_inline_call_of_a_then_and_else_host_runs_on_both_routes(go):
     gate = _GATE.replace("else: skip_it", "else: publish")
-    flow, _result = _run(_flow(gate + _PUBLISH, output="  r: ${publish.output}\n"), go=go)
+    flow, _ = _run(_flow(gate + _PUBLISH, output="  r: ${publish.output}\n"), go=go)
     handles = [
         e.source_handle for e in flow.compiled.edges if e.to == "__call_0" and e.source_handle
     ]
@@ -227,7 +227,7 @@ def test_inline_call_of_a_join_target_runs_when_any_route_reaches_it(go, other, 
       - when: ${input.other}
         then: publish
 """
-    flow, _result = _run(
+    flow, _ = _run(
         _flow(gates + _PUBLISH, output='  r: ${publish.output :- "none"}\n'), go=go, other=other
     )
     sources = [e.from_ for e in flow.compiled.edges if e.to == "__call_0" and e.source_handle]
@@ -250,9 +250,9 @@ def test_map_over_call_does_not_run_on_an_untaken_route():
     input:
       item: ${item}
 """ + _SKIP_IT
-    _flow_, _result = _run(_flow(nodes), go=False)
+    _run(_flow(nodes), go=False)
     assert _compose_codefns.RECORDED == []
-    _flow_, _result = _run(_flow(nodes), go=True)
+    _run(_flow(nodes), go=True)
     assert _compose_codefns.RECORDED == ["items"]
 
 
@@ -280,9 +280,9 @@ def test_loop_seed_call_does_not_run_on_an_untaken_route():
           return {"s": inputs["s"]}
     output: ${k.output}
 """ + _SKIP_IT
-    _flow_, _result = _run(_flow(nodes, output='  r: ${skip_it.output :- "none"}\n'), go=False)
+    _run(_flow(nodes, output='  r: ${skip_it.output :- "none"}\n'), go=False)
     assert _compose_codefns.RECORDED == []
-    _flow_, _result = _run(_flow(nodes, output='  r: ${skip_it.output :- "none"}\n'), go=True)
+    _run(_flow(nodes, output='  r: ${skip_it.output :- "none"}\n'), go=True)
     assert _compose_codefns.RECORDED == ["seed"]
 
 
@@ -318,7 +318,7 @@ def test_inline_call_in_a_called_child_flow_follows_the_child_route():
         + "nodes:\n  c:\n    kind: call\n    call: child\n    input:\n      go: ${input.go}\n"
         + "output:\n  r: ${c.output}\n"
     )
-    _flow_, result = _run(text, go=False)
+    _, result = _run(text, go=False)
     assert _compose_codefns.RECORDED == []
     assert result.output == {"r": "skipped"}
 
@@ -330,16 +330,77 @@ def test_inline_call_in_a_mapped_child_flow_runs_once_per_taken_element():
         + "    over: ${[input.go, input.other]}\n    input:\n      go: ${item}\n"
         + "output:\n  r: ${m.output}\n"
     )
-    _flow_, result = _run(text, go=True, other=False)
+    _, result = _run(text, go=True, other=False)
     assert _compose_codefns.RECORDED == ["child"]
     assert result.output == {"r": ["child", "skipped"]}
 
 
 def test_flow_output_call_has_no_host_and_runs():
     nodes = _GATE + _PUBLISH + _SKIP_IT
-    _flow_, result = _run(_flow(nodes, output='  r: ${gate.output}\n  o: call(side, tag="out")\n'))
-    assert _compose_codefns.RECORDED == ["out"]
+    _, result = _run(_flow(nodes, output='  r: ${gate.output}\n  o: call(side, tag="out")\n'))
+    assert "out" in _compose_codefns.RECORDED
     assert result.output["o"] == "out"
+
+
+_TYPED_DEFS = """
+typedefs:
+  Buy: {action: 'Literal[buy]', qty: int}
+  Hold: {action: 'Literal[hold]'}
+  Decision: Union[Buy, Hold]
+"""
+_PLACE_DEF = """
+  place:
+    input:
+      order: Buy
+    nodes:
+      p:
+        kind: code
+        code: tests.engine._compose_codefns:record
+        input:
+          tag: ${input.order.action}
+        output: str
+    output: ${p.output}
+"""
+
+
+@pytest.mark.parametrize("action, ran", [("buy", ["buy"]), ("hold", [])])
+def test_inline_call_in_a_routed_node_reads_the_narrowed_member(action, ran):
+    # Under `when: buy` the call gets `b`'s route, so it may pass `d` where a `Buy` is needed.
+    nodes = """
+  d:
+    kind: code
+    input:
+      a: ${input.action}
+    output: Decision
+    code: |
+      return {"action": inputs["a"], "qty": 2} if inputs["a"] == "buy" else {"action": "hold"}
+  route:
+    kind: case
+    on: ${d.output.action}
+    cases:
+      - when: buy
+        then: b
+    else: e
+  b:
+    kind: code
+    input:
+      r: call(place, order=${d.output})
+    output: str
+    code: return inputs["r"]
+  e:
+    kind: code
+    output: str
+    code: return "held"
+"""
+    text = (
+        "id: t\nname: t\ninput:\n  action: str\n" + _TYPED_DEFS + _DEFS + _PLACE_DEF
+        + "nodes:\n" + nodes + "output:\n  r: ${route.output}\n"
+    )
+    _compose_codefns.RECORDED.clear()
+    result = run_flow(load_flow(text), {"action": action})
+    assert result.status == "succeeded", result.failure
+    assert _compose_codefns.RECORDED == ran
+    assert result.output == {"r": "buy" if ran else "held"}
 
 
 # --------------------------------------------------------------------------- #
@@ -371,21 +432,21 @@ def test_nested_branch_call_does_not_run_its_inner_call_on_an_untaken_route():
 
 
 def test_nested_branch_call_runs_on_the_taken_route():
-    _flow_, result = _run(_flow(_NESTED), go=True)
+    _, result = _run(_flow(_NESTED), go=True)
     assert _compose_codefns.RECORDED == ["inner"]
     assert result.output == {"r": "wrapped inner"}
 
 
 def test_nested_branch_call_is_skipped_with_the_case_depends_on():
     nested = _NESTED.replace("    kind: case\n", "    kind: case\n    depends_on: [maybe]\n", 1)
-    _flow_, result = _run(_flow(_MAYBE + nested), go=True, other=False)
+    _, result = _run(_flow(_MAYBE + nested), go=True, other=False)
     assert _compose_codefns.RECORDED == []
     assert _never_ran(result, "__call_0")
 
 
 def test_nested_branch_call_runs_after_the_case_runs_after():
     nested = _NESTED.replace("    kind: case\n", "    kind: case\n    runs_after: [prep]\n", 1)
-    _flow_, result = _run(_flow(_PREP + nested), go=True)
+    _, result = _run(_flow(_PREP + nested), go=True)
     assert _compose_codefns.RECORDED == ["prep", "inner"]
     assert _starts_after(result, "prep", "__call_0")
 
@@ -474,13 +535,13 @@ def test_adaptive_composer_does_not_run_on_an_untaken_route(monkeypatch):
 
 
 def test_adaptive_composer_failure_on_an_untaken_route_does_not_fail_the_run(monkeypatch):
-    _flow_, result, calls, _asked = _adaptive(monkeypatch, _ADAPTIVE, go=False, fail=True)
+    _, result, calls, _ = _adaptive(monkeypatch, _ADAPTIVE, go=False, fail=True)
     assert calls == []
     assert result.output == {"r": "done"}
 
 
 def test_adaptive_composer_runs_on_the_taken_route(monkeypatch):
-    _flow_, result, calls, asked = _adaptive(monkeypatch, _ADAPTIVE, go=True)
+    _, result, calls, asked = _adaptive(monkeypatch, _ADAPTIVE, go=True)
     assert calls == ["compose"]
     assert [q["header"] for q in asked[0]["questions"]] == ["DB"]
     assert result.output == {"r": {"DB": "Postgres"}}
@@ -490,7 +551,7 @@ def test_adaptive_composer_runs_after_the_gate_runs_after(monkeypatch):
     nodes = _PREP + _ADAPTIVE.replace(
         "    kind: human_input\n", "    kind: human_input\n    runs_after: [prep]\n"
     )
-    flow, result, calls, _asked = _adaptive(monkeypatch, nodes, go=True)
+    flow, result, calls, _ = _adaptive(monkeypatch, nodes, go=True)
     edge = _edge(flow, "prep~>ask__compose#0")
     assert edge.ordering and edge.optional
     assert calls == ["compose"]
@@ -501,6 +562,6 @@ def test_adaptive_composer_is_skipped_with_the_gate_depends_on(monkeypatch):
     nodes = _MAYBE + _ADAPTIVE.replace(
         "    kind: human_input\n", "    kind: human_input\n    depends_on: [maybe]\n"
     )
-    _flow_, result, calls, asked = _adaptive(monkeypatch, nodes, go=True, other=False)
+    _, result, calls, asked = _adaptive(monkeypatch, nodes, go=True, other=False)
     assert (calls, asked) == ([], [])
     assert _never_ran(result, "ask__compose")

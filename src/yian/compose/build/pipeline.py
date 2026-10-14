@@ -7,7 +7,8 @@ callable:
   kind-blind (`desc.build(ctx)`; physical node-output contracts compile at their
   existing leaf-owned build position; a case lowers
   in its own build) -> cross-flow type check + case exhaustiveness -> infer data
-  edges + append each case's own edges -> validate references + classify asserts
+  edges + append each case's own edges + copy each host's route/ordering edges onto
+  the nodes lifted out of it -> validate references + classify asserts
   -> attach authored assertion/flow-output binding origins -> synthesize the START_ID/END_ID
   boundary over ALL edges -> resolve each node's `isinstance` type table -> reject cycles +
   check if/else handles -> CompiledFlow.from_parts. One retained assertion item cursor
@@ -1300,8 +1301,9 @@ def _assemble(
       (`desc.build(ctx)`; physical node-output contracts compile at their existing
       leaf-owned position; a case lowers in its own build) -> attach declared input
       contracts to the node wiring -> cross-flow type check + case exhaustiveness ->
-      infer data edges + append each case's own edges -> validate references + classify
-      asserts -> attach authored flow-output binding origins + declared output contracts
+      infer data edges + append each case's own edges + copy each host's route/ordering
+      edges onto the nodes lifted out of it -> validate references + classify asserts ->
+      attach authored flow-output binding origins + declared output contracts
       -> synthesize roots/terminals -> resolve `isinstance` type tables -> reject cycles +
       check if/else handles -> CompiledFlow.from_parts.
 

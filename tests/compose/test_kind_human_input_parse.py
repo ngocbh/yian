@@ -323,6 +323,68 @@ def test_human_input_parse_without_adaptive_questions_has_no_brief_range():
     assert ("text", "adaptive_questions.prompt") not in desc.field_ranges
 
 
+def _llm_config_range(flow):
+    desc = HumanInputDescriptor.parse("ask", _reader_for(flow, "ask"))
+    return desc.field_ranges[("field", "adaptive_questions.llm_config")]
+
+
+def test_human_input_parse_records_a_flow_style_adaptive_llm_config_range():
+    flow = """\
+nodes:
+  ask:
+    kind: human_input
+    adaptive_questions:
+      prompt: Ask about ${x}
+      llm_config: {model: m}
+"""
+    rng = _llm_config_range(flow)
+    assert (rng.start_line, rng.start_col) == (6, 19)
+
+
+def test_human_input_parse_records_a_block_style_adaptive_llm_config_range():
+    flow = """\
+nodes:
+  ask:
+    kind: human_input
+    adaptive_questions:
+      prompt: Ask about ${x}
+      llm_config:
+        model: m
+"""
+    assert _llm_config_range(flow).start_line == 7
+
+
+def test_human_input_parse_ranges_a_merged_adaptive_llm_config_at_the_anchor():
+    flow = """\
+x-llm: &l
+  llm_config: {model: m}
+nodes:
+  ask:
+    kind: human_input
+    adaptive_questions:
+      <<: *l
+      prompt: Ask about ${x}
+"""
+    assert _llm_config_range(flow).start_line == 2
+
+
+def test_human_input_parse_without_adaptive_llm_config_has_no_llm_config_range():
+    flow = """\
+nodes:
+  ask:
+    kind: human_input
+    adaptive_questions:
+      prompt: Ask about ${x}
+"""
+    desc = HumanInputDescriptor.parse("ask", _reader_for(flow, "ask"))
+    assert ("field", "adaptive_questions.llm_config") not in desc.field_ranges
+
+
+def test_human_input_parse_without_adaptive_questions_has_no_llm_config_range():
+    desc = HumanInputDescriptor.parse("ask", _reader_for(_FLOW, "ask"))
+    assert ("field", "adaptive_questions.llm_config") not in desc.field_ranges
+
+
 ALLOWED = "(allowed: llm_config, prompt, retries)"
 
 

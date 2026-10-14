@@ -2029,6 +2029,9 @@ authored on an adaptive gate.
 The brief reads the gate's `input:` names, bare, and is checked at load like an AGENT
 prompt. An error names the gate and points at the brief:
 `node 'ask' adaptive_questions.prompt: ${nope} is not a declared input or variable`.
+An `llm_config:` error names `node 'ask' adaptive_questions.llm_config` and points at
+the `llm_config:` value. An error in the gate's `input:` is reported once, on the gate,
+as `node 'ask' input 'ctx' ...` at that input.
 
 ```yaml
 ask:
@@ -2046,8 +2049,10 @@ error at that key that lists the allowed keys. `adaptive_questions.mode:` was re
 writing it is a load error.
 
 Changed: a bad brief used to be reported on `node 'ask__compose' prompt` and point at
-the gate's `prompt:` line, or at the node when the gate had no `prompt:`. An unknown key
-in the block used to load and be ignored.
+the gate's `prompt:` line, or at the node when the gate had no `prompt:`. An
+`llm_config:` error and an input error also used to name `ask__compose`, the
+`llm_config:` one at the gate's first line, and a bad input was listed twice, once on
+`ask__compose` and once on `ask`. An unknown key in the block used to load and be ignored.
 
 **Upstream questions** — read the list from an author-written upstream node:
 

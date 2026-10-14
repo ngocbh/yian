@@ -20,9 +20,11 @@ Located parse metadata: each error anchors on the referencing field's `SourceRan
 from the transient Compose `BuildResult` (the coarse per-field span — e.g. the node's
 `input:` mapping for an input-binding ref, its `prompt:` or `system_prompt:` for a template ref).
 A HUMAN_INPUT question-text error anchors on its own `("text", "questions[i]...")` string
-range, else the `questions:` block. A field a desugar authored under another node is named by
-its `BuildResult.field_labels` entry: an adaptive gate's brief is reported as the gate's
-`adaptive_questions.prompt` and anchors on the brief.
+range, else the `questions:` block. A field or input a desugar authored under another node is
+named by its `BuildResult.field_labels` entry: an adaptive gate's brief is reported as the
+gate's `adaptive_questions.prompt` and anchors on the brief, and a gate input its composer
+copies is reported as the gate's input. A plain input binding whose site name, source, and
+range were already scanned is skipped, so such a copied binding is reported once.
 
 Imports flow down only: `compile.validation` (the leaf namespace checker), `expr` (the
 binding parser), `nodes` (Node/AgentNode/HumanInputNode behavior and the output-contract
@@ -150,9 +152,12 @@ def validate_references(
     binding by the parse loop for every kind), else the enclosing block (`("field", "inputs")`
     / `("field", "prompt")`), else the node header. A HUMAN_INPUT question-text error anchors on
     its `("text", "questions[i]...")` string range, else the `questions:` block. An AGENT prompt
-    site is named by its `BuildResult.field_labels` entry when a desugar authored the field under
-    another node (an adaptive gate's composer brief reads `node '<gate>' adaptive_questions.prompt`
-    and anchors on the brief), else `node '<id>' <field>`. `outputs_range` is the authored output
+    site and a plain input site are named by `BuildResult.site_name`: the `field_labels` entry
+    when a desugar authored the field or binding under another node (an adaptive gate's composer
+    brief reads `node '<gate>' adaptive_questions.prompt` and anchors on the brief; its copied
+    input reads `node '<gate>' input '<p>'`), else `node '<id>' <site>`. A plain input binding
+    whose site name, source text, and range match one already scanned is skipped, so a binding
+    a desugar copied onto a synth node is reported once. `outputs_range` is the authored output
     value/block range when the caller retains it. The aggregate carries the first retained range.
 
     With `narrowing`, each node's references (a CASE's own sources included) are checked
@@ -177,6 +182,8 @@ def validate_references(
                 f"got {type(contract).__name__} for {node_id!r}"
             )
     errors: list[tuple[str, Optional[SourceRange]]] = []
+    # `(site name, source, range)` of each plain input binding already scanned.
+    scanned: set[tuple[str, str, Optional[SourceRange]]] = set()
     unordered = narrowing.unordered if narrowing is not None else frozenset()
 
     def scan(
@@ -305,12 +312,8 @@ def validate_references(
             ):
                 if not template:
                     continue
-                where = (
-                    result.field_labels.get(field_name)
-                    or f"node {node_id!r} {field_name}"
-                )
                 check_template(
-                    where,
+                    result.site_name(node_id, field_name),
                     template,
                     declared,
                     franges.get(("field", field_name)) or node_range,
@@ -412,9 +415,18 @@ def validate_references(
                 site = narrowing.param_site(node_id, param)
                 if site is not None:
                     label, param_rng = site[0], site[1] or param_rng
+            where = f"{result.site_name(node_id, label)} from"
+            source = binding_source(src)
+            if isinstance(source, str):
+                # A desugar may copy an authored binding to a synth node, so check the
+                # authored site once.
+                key = (where, source, param_rng)
+                if key in scanned:
+                    continue
+                scanned.add(key)
             scan(
                 src,
-                f"node {node_id!r} {label} from",
+                where,
                 param_rng,
                 site_producers=param_producers,
                 site_inputs=param_inputs,

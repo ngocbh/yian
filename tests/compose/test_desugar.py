@@ -186,29 +186,48 @@ def test_desugar_adaptive_questions_preserves_ranges():
         "  ask:\n    kind: human_input\n"
         "    prompt: Pick one\n"
         "    adaptive_questions:\n      prompt: Ask about ${input.topic}\n"
+        "      llm_config: {model: m}\n"
         "    input:\n      topic: ${input.topic}\n"
         "output: ${ask.output}\n"
     )
     descriptors = parse_nodes(_nodes_reader(text))
     gate = descriptors["ask"]
     brief = gate.field_ranges[("text", "adaptive_questions.prompt")]
+    llm_config = gate.field_ranges[("field", "adaptive_questions.llm_config")]
     new_descriptors = desugar_adaptive_questions(descriptors)
     composer = new_descriptors["ask__compose"]
     assert composer.range == gate.range
+    assert composer.field_ranges[("field", "llm_config")] == llm_config
     assert composer.field_ranges == {
         **gate.field_ranges,
         ("field", "prompt"): brief,
+        ("field", "llm_config"): llm_config,
     }
     assert brief != gate.field_ranges[("field", "prompt")]
-    assert composer.field_labels == {"prompt": "node 'ask' adaptive_questions.prompt"}
+    assert composer.field_labels == {
+        "prompt": "node 'ask' adaptive_questions.prompt",
+        "llm_config": "node 'ask' adaptive_questions.llm_config",
+        "input 'topic'": "node 'ask' input 'topic'",
+    }
     assert new_descriptors["ask"].field_labels == {}
 
 
 def test_desugar_adaptive_questions_without_source():
-    gate = HumanInputDescriptor(id="ask", adaptive_questions={"prompt": "Q"})
-    composer = desugar_adaptive_questions({"ask": gate})["ask__compose"]
+    gate = HumanInputDescriptor(
+        id="ask",
+        inputs={"topic": "${input.topic}"},
+        adaptive_questions={"prompt": "Q", "llm_config": {"model": "m"}},
+    )
+    new_descriptors = desugar_adaptive_questions({"ask": gate})
+    composer = new_descriptors["ask__compose"]
     assert ("field", "prompt") not in composer.field_ranges
-    assert composer.field_labels["prompt"] == "node 'ask' adaptive_questions.prompt"
+    assert ("field", "llm_config") not in composer.field_ranges
+    assert composer.field_labels == {
+        "prompt": "node 'ask' adaptive_questions.prompt",
+        "llm_config": "node 'ask' adaptive_questions.llm_config",
+        "input 'topic'": "node 'ask' input 'topic'",
+    }
+    assert new_descriptors["ask"].field_labels == {}
 
 
 def test_desugar_case_call_targets_locate_at_their_target_line():

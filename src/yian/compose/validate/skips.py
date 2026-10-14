@@ -393,7 +393,8 @@ def check_skipped_arithmetic(
         model (`SkipModel`):
             The skip model of the same level.
         build_results (`Mapping[str, BuildResult]`):
-            The level's built nodes keyed by id, for the binding labels and fallback ranges.
+            The level's built nodes keyed by id, for the binding site names and fallback
+            ranges.
         value_mode (`bool`, *optional*, defaults to `False`):
             Whether the flow has a single `output:` value, named `output` in errors.
         outputs_range (`SourceRange | None`, *optional*, defaults to `None`):
@@ -424,7 +425,7 @@ def check_skipped_arithmetic(
             found = _skipped_operand(binding, model, node_id, known)
             if found is None:
                 continue
-            label, fallback = f"input {param!r}", None
+            where, fallback = f"node {node_id!r} input {param!r}", None
             if result is not None:
                 if param in reserved:
                     # A reserved key (`over`, `until`) is a kind field, not an input.
@@ -436,9 +437,11 @@ def check_skipped_arithmetic(
                 fallback = (
                     own or result.field_ranges.get(("field", "inputs")) or result.node_range
                 )
-            # A synthetic param's label may already end in a colon (`on:`).
+                # A synthetic param's label may already end in a colon (`on:`); the
+                # message adds one.
+                where = result.site_name(node_id, label.rstrip(":"))
             raise _located_error(
-                f"node {node_id!r} {label.rstrip(':')}: {_arithmetic_message(binding, *found)}",
+                f"{where}: {_arithmetic_message(binding, *found)}",
                 as_binding(binding),
                 fallback,
                 resolve_origin,

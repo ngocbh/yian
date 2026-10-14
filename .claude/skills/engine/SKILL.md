@@ -899,8 +899,8 @@ virtual cursors are defensive source-free snapshots, and projected cursors retai
 explicitly selected physical child sources while changing a view. Descriptors
 retain derived ranges; `NodeDescriptor._finish()` copies them to Compose-only
 `BuildResult.node_range` / `field_ranges`, and a desugar's author-facing names for a
-synth node's fields to `BuildResult.field_labels`, for post-build validation. Assembly
-discards all three before `CompiledFlow`, so semantic nodes have no YAML range or
+synth node's fields and inputs to `BuildResult.field_labels`, for post-build validation.
+Assembly discards all three before `CompiledFlow`, so semantic nodes have no YAML range or
 aligned assertion-range fields. Never reparse a source slice or mutate
 anchors/aliases/merges.
 An unchanged source-backed string cursor exposes `ScalarSource`: its whole range and,

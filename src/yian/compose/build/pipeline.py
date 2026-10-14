@@ -1134,7 +1134,7 @@ def _fill_type_tables(
         flow_wiring (`dict[str, dict[str, Any]]`):
             Each node's `param -> source` wiring.
         build_results (`dict[str, BuildResult]`):
-            The body nodes' build results, for their field ranges.
+            The body nodes' build results, for their field ranges and input site names.
         descriptors (`dict[str, NodeDescriptor]`):
             The body nodes' descriptors, for their authored asserts and ranges.
         flow_asserts (`list[Assertion]`):
@@ -1203,7 +1203,10 @@ def _fill_type_tables(
                 rng = output_range(param)
             else:
                 # A synthesized param's label may end in ':' (`on:`); the message adds one.
-                where = f"node {nid!r} {node.wiring_ref_label(param).removesuffix(':')}"
+                site = node.wiring_ref_label(param).removesuffix(":")
+                where = (
+                    result.site_name(nid, site) if result is not None else f"node {nid!r} {site}"
+                )
                 key = ("field", param) if param in reserved else ("input", param)
                 rng = _site_range(franges.get(key), franges, "inputs", node_range)
             names = names_in(source)

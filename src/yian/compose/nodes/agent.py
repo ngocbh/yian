@@ -90,7 +90,7 @@ def _former_boolean_hint(value: Any) -> str:
 
 def _validate_llm_config(
     cfg: Mapping[str, Any] | None,
-    node_id: str,
+    prefix: str,
     source_range: SourceRange | None = None,
     diagnostics: LoadDiagnostics | None = None,
 ) -> tuple[dict[str, Any], bool]:
@@ -106,7 +106,8 @@ def _validate_llm_config(
 
     Args:
         cfg (`Mapping[str, Any] | None`): Authored config, or `None` for defaults.
-        node_id (`str`): Node id included in load-error messages.
+        prefix (`str`): Message prefix naming the config, such as
+            ``"node 'a': llm_config"``.
         source_range (`SourceRange | None`): Authored config location, when retained.
 
     Returns:
@@ -122,7 +123,7 @@ def _validate_llm_config(
         return {}, True
     if not isinstance(cfg, Mapping):
         raise diagnostics.error(
-            f"node {node_id!r}: llm_config must be a mapping",
+            f"{prefix} must be a mapping",
             range=source_range,
         )
     cfg = dict(cfg)
@@ -131,18 +132,22 @@ def _validate_llm_config(
     inherit = cfg.pop("inherit", True)
     if type(inherit) is not bool:
         raise diagnostics.error(
-            f"node {node_id!r}: llm_config `inherit:` must be true or false, got "
+            f"{prefix} `inherit:` must be true or false, got "
             f"{inherit!r}{_former_boolean_hint(inherit)}",
             range=source_range,
         )
     host_only = host_only_field_error(cfg)
     if host_only is not None:
-        raise diagnostics.error(f"node {node_id!r}: {host_only}", range=source_range)
+        # Each host-only message starts with `llm_config.`, which the prefix replaces; a
+        # message that does not is kept whole after the prefix.
+        rest = host_only.removeprefix("llm_config")
+        message = prefix + rest if rest != host_only else f"{prefix}: {host_only}"
+        raise diagnostics.error(message, range=source_range)
     try:
         LLMConfig(**cfg)
     except Exception as exc:
         raise diagnostics.error(
-            f"node {node_id!r}: llm_config: {exc}",
+            f"{prefix}: {exc}",
             range=source_range,
         ) from exc
     return cfg, inherit
@@ -351,7 +356,7 @@ class AgentDescriptor(NodeDescriptor):
         llm_config_range = self.field_ranges.get(("field", "llm_config")) or self.range
         own_cfg, inherit = _validate_llm_config(
             self.llm_config,
-            self.id,
+            self.field_labels.get("llm_config") or f"node {self.id!r}: llm_config",
             llm_config_range,
             ctx.diagnostics,
         )

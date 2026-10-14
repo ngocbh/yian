@@ -27,9 +27,13 @@ gate's questions input. Authors do not write it.
 
 Located parse metadata: the synth composer agent inherits the gate descriptor's
 `range`/`field_ranges` (so its downstream errors locate at the gate), except that its
-`("field", "prompt")` range is the brief's own range, and its `field_labels` names its
-`prompt` as the gate's `adaptive_questions.prompt`, so a bad brief is reported on the gate
-at the brief. The rewritten gate keeps its own ranges via `replace`.
+`("field", "prompt")` range is the brief's own range and its `("field", "llm_config")` range
+is the block's `llm_config:` value range. Its `field_labels` names its `prompt` and
+`llm_config` as the gate's `adaptive_questions.prompt` and `adaptive_questions.llm_config`,
+so a bad brief or config is reported on the gate at the authored value, and names each
+copied `input 'p'` as the gate's `input 'p'`, so a bad binding reads exactly like the gate's
+own error at the same range and is reported once. The rewritten gate keeps its own ranges
+via `replace`.
 """
 
 from __future__ import annotations
@@ -103,8 +107,10 @@ def desugar_adaptive_questions(
         # The block IS the agent spec. Pass optional fields only when present so the
         # AgentDescriptor defaults (e.g. retries=2, llm_config={}) apply otherwise. The
         # synth agent inherits the gate's ranges so its downstream errors locate there,
-        # but its prompt is the brief, so a prompt error locates at the brief and names
-        # the gate's field. Its internal contract has no authorable type string.
+        # but its prompt and llm_config are the block's, so their errors locate at the
+        # block's values and name the gate's fields. Its copied inputs are named as the
+        # gate's, so their errors read as the gate's own. Its internal contract has no
+        # authorable type string.
         field_ranges = {
             k: v for k, v in desc.field_ranges.items() if k != ("field", "prompt")
         }
@@ -113,6 +119,11 @@ def desugar_adaptive_questions(
         ) or desc.field_ranges.get(("field", "adaptive_questions"))
         if brief_range is not None:
             field_ranges[("field", "prompt")] = brief_range
+        llm_config_range = desc.field_ranges.get(
+            ("field", "adaptive_questions.llm_config")
+        ) or desc.field_ranges.get(("field", "adaptive_questions"))
+        if llm_config_range is not None:
+            field_ranges[("field", "llm_config")] = llm_config_range
         agent_kwargs = {
             "id": synth_id,
             "prompt": auto["prompt"],
@@ -127,7 +138,12 @@ def desugar_adaptive_questions(
             "host": gid,
             "range": desc.range,
             "field_ranges": field_ranges,
-            "field_labels": {"prompt": f"node {gid!r} adaptive_questions.prompt"},
+            "field_labels": {
+                "prompt": f"node {gid!r} adaptive_questions.prompt",
+                "llm_config": f"node {gid!r} adaptive_questions.llm_config",
+                # Keyed like `Node.wiring_ref_label`'s default, which validators look up.
+                **{f"input {p!r}": f"node {gid!r} input {p!r}" for p in desc.inputs},
+            },
         }
         if "llm_config" in auto:
             agent_kwargs["llm_config"] = auto["llm_config"]

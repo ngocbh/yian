@@ -13,7 +13,8 @@ phases populate the package-private catalog builder; a package-private lookup ma
 resolve an already-registered site for a load failure without copying or freezing
 the table. The loader alone consumes the final frozen snapshot, and parser objects
 stay private. Isolated location-free literals may be parsed separately without
-creating a document. Plain scalars read with YAML 1.2 core-schema rules plus
+creating a document, and one plain scalar's text may be read on its own without
+parsing YAML structure. Plain scalars read with YAML 1.2 core-schema rules plus
 unquoted timestamps and ``<<`` merge keys, from one loader table shared by
 documents and isolated literals.
 
@@ -31,7 +32,7 @@ from yian.compose.source.common import (
 from yian.compose.source.catalog import SourceCatalog
 from yian.compose.source.cursor import SourceCursor
 from yian.compose.source.document import SourceDocument
-from yian.compose.source.literals import parse_yaml_literal
+from yian.compose.source.literals import parse_yaml_literal, read_plain_scalar
 
 __all__ = [
     "SourceAccessError",
@@ -41,4 +42,5 @@ __all__ = [
     "ScalarSource",
     "SourceSyntaxError",
     "parse_yaml_literal",
+    "read_plain_scalar",
 ]

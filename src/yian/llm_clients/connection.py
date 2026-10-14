@@ -363,6 +363,6 @@ def connection_credentials(
         )
     if source == "environment" and _key_identity(key) != connection["credential_id"]:
         raise AuthError(
-            "The OpenAI environment API key changed; restore it or start a new run"
+            "The OpenAI environment API key changed since this run started; start a new run"
         )
     return ApiKeyCredentials(key)

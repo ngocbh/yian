@@ -274,7 +274,7 @@ class AuthStore:
             pair = providers.get(provider)
             if pair is None or pair[0].credential_id != expected_credential_id:
                 raise AuthError(
-                    "The saved connection changed; start a new run or reconnect"
+                    "The saved connection changed"
                 )
             return pair
 

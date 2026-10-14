@@ -853,7 +853,7 @@ nodes:
   gate2:
     kind: case
     cases:
-      - when: "isinstance(d.output, Buy) and (d.output.qty :- 0) > 5"
+      - when: "isinstance(d.output, Buy) and ((d.output.qty + 1) :- 0) > 5"
         then: hot
     else: cold
   hot:
@@ -872,9 +872,10 @@ output:
 
 
 def test_isinstance_guard_in_a_searched_when_over_a_skippable_union_routes():
-    """A narrowed, defaulted field read loads and routes a Sell to `else:`.
+    """Arithmetic on a narrowed, defaulted field loads and routes a Sell to `else:`.
 
-    The plain `isinstance(d.output, Buy)` read skips `gate2` with `d`.
+    The plain `isinstance(d.output, Buy)` read skips `gate2` with `d`, so the arithmetic
+    never sees a skipped null.
     """
     assert _run(_UNION_FLOW, {"approve": True}) == {"v": "cold"}
     assert _run(_UNION_FLOW, {"approve": False}) == {"v": None}

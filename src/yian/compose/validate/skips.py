@@ -405,11 +405,13 @@ def check_skipped_arithmetic(
         searched_whens (`Mapping[str, Sequence[tuple[int, Any, OriginRef | None, SourceRange | None]]] | None`, *optional*, defaults to `None`):
             Each searched CASE's id mapped to one `(case index, authored when, origin,
             range)` per case: the origin is the preferred location, the range the fallback.
+            A `when:` is checked like a binding, without following `and`/`or`: arithmetic
+            behind a null guard is reported too.
 
     Raises:
         `LoadError`:
-            At the first such binding or `when:`, naming it, the operand and its producers, and asking
-            for a `:-` default.
+            At the first such binding or `when:`, naming it, the operand and its producers,
+            and asking for a `:-` default.
     """
     if not model.has_cases:
         return

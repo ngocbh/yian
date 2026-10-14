@@ -51,7 +51,9 @@ def check_authored_bindings(
     output_range: Callable[[Any], SourceRange | None],
     diagnostics: LoadDiagnostics,
 ) -> None:
-    """Reject a literal under a secret name in a node binding, case value or flow output.
+    """Reject a literal under a secret name in a node binding, branch or flow output.
+
+    A branch here is a former case value branch: a value written as a `then:`/`else:`.
 
     Args:
         descriptors (`dict[str, Any]`): Authored node descriptors keyed by node id.

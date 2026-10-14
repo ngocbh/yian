@@ -838,8 +838,8 @@ output:
 ```
 
 - Every value entry carries a tag, scalars included. The tag is the entry's type, and
-  readers see it (see [Downstream](#downstream)); a written-out `!object` keeps its
-  record (see [below](#object-and-its-record)).
+  readers see it (see [Downstream](#downstream)); a written-out bare `!object` mapping
+  keeps its record (see [below](#object-and-its-record)).
 - A tagged entry is always a value, even a mapping with a `kind:` key. Keys a node body
   treats specially (`kind:`, `input:`, `depends_on:`) are plain fields in a value.
 - An untagged entry without `kind:` is a load error at the entry. For a literal, the
@@ -860,12 +860,26 @@ A value entry is read like a [typed binding](#the-value):
 - An unquoted `call(f, ...)` as the whole value calls the flow, as in a binding:
   `brief: !str call(summarize, text=${input.text})`. A quoted `!str "call(f)"` is the
   text `call(f)`. A flow call inside `${...}` is an error, as anywhere.
-- The [load check](#load-check) compares the tag with the value's inferred type. A
-  disjoint type fails at the entry; a narrower one is checked when the entry runs, and
-  a failure fails the entry with `binding.type`, located at the entry:
+- A `call(...)` nested inside a record or list is an error; bind it at the top level.
+  `x: !object {a: call(f)}` fails:
+
+```text
+'x.a': a `call(...)` inside a value isn't supported; bind it at the top level, or reword the text
+```
+
+The [load check](#load-check) compares the tag with the value's inferred type. A
+disjoint type fails at the entry:
 
 ```text
 value entry 'x': declared str, but the value is float
+```
+
+A narrower type is checked when the entry runs, and a failure fails the entry with
+`binding.type`, located at the entry. When a CODE node `p` with no `output:` returns 5,
+`x: !str ${p.output}` fails:
+
+```text
+binding 'x': 5 does not match declared type str
 ```
 
 A tag only checks; it never fills in a field. `!Buy` names `action: Literal(buy)`, but a
@@ -877,9 +891,10 @@ A tag only checks; it never fills in a field. `!Buy` names `action: Literal(buy)
 
 ### `!object` and its record
 
-`!object` is the general record (the `object` type). A written-out `!object` mapping
-keeps the record it spells, so reading a field it doesn't have is a load error at the
-reader. For `exit_result: !object {exited: true, reply: ""}`, a node reading
+`!object` is the general record (the `object` type). A written-out bare `!object`
+mapping keeps the record it spells, so reading a field it doesn't have is a load error
+at the reader. `!Optional(object)`, `!list(object)`, and named types use the tag as
+declared. For `exit_result: !object {exited: true, reply: ""}`, a node reading
 `${exit_result.output.zz}` fails:
 
 ```text
@@ -1780,30 +1795,29 @@ Inline notes:
 
 ### `case` — branching
 
-A `case` node routes — it has no `input:` and no `output:`. It takes one branch; the other targets
-are skipped, and so is every node that plainly reads a skipped node or names it in
-`depends_on`. A node the loader lifted out of a skipped node (an inline `call(...)` in
-its `input:`, an adaptive composer) is skipped too, whether that node is a target on an
-untaken branch or is skipped through its inputs or `depends_on`. A node that names the
-`case` itself in `depends_on:` or `runs_after:` is not on a branch: it runs whichever
-branch the `case` takes, and is skipped only when the `case` is. A searched `case`
-that reads a node only under a default that keeps a binding running, such as
-`(a.output :- 0)`, is not skipped with it (see the [searched form](#searched-form)).
-Read its result with `${case.output}`. A routing-only `case` may take
-none when no `when:` matches and there is no `else:` (see
-[Exhaustiveness](#exhaustiveness)); a flow output that reads a skipped node returns
-null (see [Skipped branches and flow outputs](#skipped-branches-and-flow-outputs)).
+A `case` node routes — it has no `input:` and no `output:`. It takes one branch; the
+other targets are skipped, and so is every node that plainly reads a skipped node or
+names it in `depends_on`. A node the loader lifted out of a skipped node (an inline
+`call(...)` in its `input:`, an adaptive composer) is skipped too, whether that node is
+a target on an untaken branch or is skipped through its inputs or `depends_on`. A node
+that names the `case` itself in `depends_on:` or `runs_after:` is not on a branch: it
+runs whichever branch the `case` takes, and is skipped only when the `case` is. A
+searched `case` that reads a node only under a default that keeps a binding running,
+such as `(a.output :- 0)`, is not skipped with it (see the
+[searched form](#searched-form)). Read its result with `${case.output}`. A routing-only
+`case` may take none when no `when:` matches and there is no `else:` (see
+[Exhaustiveness](#exhaustiveness)); a flow output that reads a skipped node returns null
+(see [Skipped branches and flow outputs](#skipped-branches-and-flow-outputs)).
 
-Changed: reading `${case.output}` of a `case` that isn't
-[exhaustive](#exhaustiveness) used to load, and returned null when no branch ran; it is
-now a load error. Add an `else:`, or list every tag of a non-nullable `Literal` `on:`.
-An unquoted `then:` or `else:` word that names no node used to fail with a `KeyError`;
-it is now a load error that suggests the nearest node, or quoting. An empty `else:` used
-to mean no `else:`; it is now a load error unless the `case` declares an `Optional`
-`output:` (then it is the value `null`). Node ids may no
-longer start with `__value_` or `__case_`. Flows without value branches or a typed
-`case` keep their fingerprints. (Value branches, `case` `output:`, and the reserved
-prefixes were later removed; see the next paragraph.)
+Changed: reading `${case.output}` of a `case` that isn't [exhaustive](#exhaustiveness)
+used to load, and returned null when no branch ran; it is now a load error. Add an
+`else:`, or list every tag of a non-nullable `Literal` `on:`. An unquoted `then:` or
+`else:` word that names no node used to fail with a `KeyError`; it is now a load error
+that suggests the nearest node, or quoting. An empty `else:` used to mean no `else:`; it
+is now a load error unless the `case` declares an `Optional` `output:` (then it is the
+value `null`). Node ids may no longer start with `__value_` or `__case_`. Flows without
+value branches or a typed `case` keep their fingerprints. (Value branches, `case`
+`output:`, and the reserved prefixes were later removed; see [Branches](#branches).)
 
 Changed: a `case` routes only. A value branch (quoted text, a number, a bool, `null` or
 an empty `else:`, a date, a mapping, a list, or unquoted text holding `${`) and a `case`
@@ -1996,8 +2010,8 @@ spell it and the value fits it, else with the type of a lone `${input.x}` or
 A value no entry can hold is its own error at the branch: a number that is not finite, a
 value that contains itself through a YAML alias, a `call(...)` nested in a mapping or
 list, a flow call inside `${...}` (call the flow as the branch instead:
-`then: call(take, ...)`), and a span reading the case itself. A quoted `call(...)`
-holding `${...}` gets its own error too: drop the quotes to call the flow.
+`then: call(take, ...)`), a malformed span, and a span reading the case itself. A quoted
+`call(...)` holding `${...}` gets its own error too: drop the quotes to call the flow.
 
 An unquoted word always names a node. A word that names no node is a load error that
 suggests the nearest node and a value entry for the text:

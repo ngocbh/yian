@@ -338,16 +338,15 @@ that node is skipped. Read the taken branch's result with `${route.output}`
 (see `branching.yaml`); tag it where you read it (`!Turn ${route.output}`). A branch
 names a node or calls a flow; for a fixed or computed result, route to a value entry
 (`approve: !str approve`, a `!object` or typed record). A value in a branch, or a
-`case` `output:`, is a load error that shows the rewrite. A `case` whose result is
-used needs an `else:`, every tag of a non-nullable `Literal` `on:`, or `when: true` and `when: false` on a non-nullable `bool` `on:`;
-routing on a `Literal` node output or flow input is always exhaustiveness-checked. A
-routing-only `case` takes none when nothing matches and there is no `else:`. A flow
-output field that reads only nodes a `case` may skip returns `null` when they were
-skipped (typed `Optional(T)`, as if `:- null` were written), in root, `defs:`, and
-inline bodies; a join
-over an exhaustive `case` never does. A LOOP body field like that sets the carried field
-to null. Templates and comparisons keep their null behavior; arithmetic needs a `:-`
-default.
+`case` `output:`, is a load error that shows the rewrite. A `case` whose result is used
+needs an `else:`, every tag of a non-nullable `Literal` `on:`, or `when: true` and
+`when: false` on a non-nullable `bool` `on:`; routing on a `Literal` node output or flow
+input is always exhaustiveness-checked. A routing-only `case` takes none when nothing
+matches and there is no `else:`. A flow output field that reads only nodes a `case` may
+skip returns `null` when they were skipped (typed `Optional(T)`, as if `:- null` were
+written), in root, `defs:`, and inline bodies; a join over an exhaustive `case` never
+does. A LOOP body field like that sets the carried field to null. Templates and
+comparisons keep their null behavior; arithmetic needs a `:-` default.
 
 **Branch on a union.** Route with `on: ${d.output.action}` (the tag field). Each
 `when:` target, nodes chained to it by plain refs or `depends_on`, and inline `call(...)`s
@@ -418,9 +417,9 @@ is checked before pruning; it limits one iteration's size, not the iteration cou
 `exited: !Turn {...}`, a value entry that keeps the transcript and sets `exited: true`;
 `else:` calls a `respond` def whose `reply` (`agent`) and fold CODE node append the
 message and reply. The body's output is `!Turn ${route.output}`; the tag is required, as
-it types whichever branch ran as the carried record. Typed exit is flow-owned; only terminal EOF is
-normalized by the bundled host. The loop body's `output:` may return only the fields
-that change; a field it omits keeps its value. This is the shape
+it types whichever branch ran as the carried record. Typed exit is flow-owned; only
+terminal EOF is normalized by the bundled host. The loop body's `output:` may return
+only the fields that change; a field it omits keeps its value. This is the shape
 `yian chat` runs; see `chat.yaml` (and `examples/chat.yaml` for a runnable copy).
 
 ## Gotchas

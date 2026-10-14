@@ -480,9 +480,11 @@ left out, so they don't wait on each other; a required input read from one of th
 through to that node's own inputs, and each host up the chain is visited the same way. One
 case is not exact: when an author reads a lifted id in a coalesce or defaulted host input,
 that input's other producers only make the lifted node wait, so it may run while the host is
-skipped (see `compose/edges/hosts.py`). A branch target itself (a `then: call(...)`) and a call in the flow
-`output:`/`asserts:` have no host. The synthetic nodes remain origin-free because no authored node header corresponds
-to them; authored nodes inside retained inline bodies are stamped normally.
+skipped (see `compose/edges/hosts.py`). A branch target itself (a `then: call(...)`), a value
+entry, and a call in the flow `output:`/`asserts:` have no host; a value entry is an authored
+node, routed by a `case` that names it. A value entry also keeps its entry's origin, while the
+synthetic nodes remain origin-free because no authored node header corresponds to them;
+authored nodes inside retained inline bodies are stamped normally.
 
 ---
 

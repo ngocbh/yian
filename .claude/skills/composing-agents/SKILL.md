@@ -982,14 +982,14 @@ optional for `while:`/`until:` but **redundant and rejected** with `times:`. A
 `while:`/`until:` is an expression string; `while: true` or `until: 1` is a load error.
 
 #### Conversational REPL — the `loop` shape used by `yian chat`
-A chat is a `loop` whose body blocks each turn at `ask` (`human_input`), then a
-`case` picks the turn's record (the carried `{transcript: str, exited: bool}` `Turn`).
-Exact `/exit` and `/quit` route to `exited: !Turn {...}`, a value entry that keeps the
+A chat is a `loop` whose body blocks each turn at `ask` (`human_input`), then a `case`
+picks the turn's record (the carried `{transcript: str, exited: bool}` `Turn`). Exact
+`/exit` and `/quit` route to `exited: !Turn {...}`, a value entry that keeps the
 transcript and sets `exited: true`; `else:` calls a `respond` def whose `reply` AGENT
 node and transcript fold return the same record. The body's output is
-`!Turn ${route.output}`: the tag types whichever branch ran as the carried record. Typed exit is flow-owned — a host must not intercept it — while
-terminal EOF may be normalized to `/exit`. See
-[`templates/chat.yaml`](templates/chat.yaml).
+`!Turn ${route.output}`: the tag types whichever branch ran as the carried record.
+Typed exit is flow-owned — a host must not intercept it — while terminal EOF may be
+normalized to `/exit`. See [`templates/chat.yaml`](templates/chat.yaml).
 
 ## Run-ordering without data (`depends_on` / `runs_after`)
 Both gate a node on another **settling** even when no value flows. `depends_on:

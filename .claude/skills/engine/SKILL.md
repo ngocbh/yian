@@ -293,18 +293,18 @@ this model whenever you design anything:
   `on:`. Routing-only enum coverage reads `Literal` flow inputs as well as node outputs.
   A CASE only routes (a branch names a node or calls a flow; a value branch or CASE
   `output:` is a load error). A tagged `nodes:` entry (a value entry) lowers at load to a
-  CODE node with the entry's id; the runtime is unchanged. Python-authored nodes pass `output_contract=`; there is
-  no parallel output-Type API. Authored `output:` syntax (the descriptor's normalized
-  `outputs` field) stays unchanged. Compose injects an optional source-aware reader
-  through `BuildContext`; `NodeDescriptor.output_contract()` invokes it only at each
-  output-authoring leaf's established build position, so earlier kind-owned
-  validation and error ordering do not move. A physical declaration supplies the contract
-  root/default and exact nested record-field origins; scalar alias/list interiors fall back
-  through the nearest authored ancestor to the root. Compact roots and flat definitions
-  project their top-level declaration onto the synthesized leaf. Direct/source-free builds
-  and generated contracts without an
-  authorable type occurrence keep empty origins, while derived child contracts preserve
-  their carriers and external alias views use ordinary lexical rebasing.
+  CODE node with the entry's id; the runtime is unchanged. Python-authored nodes pass
+  `output_contract=`; there is no parallel output-Type API. Authored `output:` syntax
+  (the descriptor's normalized `outputs` field) stays unchanged. Compose injects an
+  optional source-aware reader through `BuildContext`; `NodeDescriptor.output_contract()`
+  invokes it only at each output-authoring leaf's established build position, so earlier
+  kind-owned validation and error ordering do not move. A physical declaration supplies
+  the contract root/default and exact nested record-field origins; scalar alias/list
+  interiors fall back through the nearest authored ancestor to the root. Compact roots
+  and flat definitions project their top-level declaration onto the synthesized leaf.
+  Direct/source-free builds and generated contracts without an authorable type occurrence
+  keep empty origins, while derived child contracts preserve their carriers and external
+  alias views use ordinary lexical rebasing.
 - `isinstance(x, T)` is an evaluator special form, not a `TEMPLATE_FNS` builtin: `T` is
   a bare type name looked up in the evaluating node's `Node.types` table, never a
   reference. Ref walks, rewrites, inference (`bool`), and flow-callee detection skip

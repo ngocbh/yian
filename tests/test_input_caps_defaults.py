@@ -24,6 +24,7 @@ from yian.llm_clients.auth.openai import OpenAIAuth
 from yian.llm_clients.auth.store import AuthStore
 from yian.llm_clients.config import validate_base_url
 from yian.llm_clients.model_list import ModelListError, list_models
+from yian.nodes.human_input.questions import QuestionSpecError, parse_questions
 from yian.skills import Skill, SkillError
 from yian.skills.catalog import check_skill_name
 from yian.skills.tool import system_prompt_with_skills
@@ -103,6 +104,15 @@ def test_skill_description_cap(set_defaults):
 def test_question_option_caps(set_defaults):
     set_defaults(MAX_QUESTION_OPTIONS=2, MAX_QUESTION_OPTION_CHARS=5)
     assert _normalize_options(["abcdefg", "b", "c"]) == ["abcd…", "b"]
+
+
+def test_question_count_cap(set_defaults):
+    questions = [{"question": "Which?", "header": h} for h in ("a", "b")]
+    assert len(parse_questions(questions)) == 2
+    set_defaults(MAX_QUESTIONS=1)
+    assert len(parse_questions(questions[:1])) == 1
+    with pytest.raises(QuestionSpecError, match=r"expected 1\.\.1 questions, got 2"):
+        parse_questions(questions)
 
 
 def test_key_prompt_cap(monkeypatch, set_defaults):

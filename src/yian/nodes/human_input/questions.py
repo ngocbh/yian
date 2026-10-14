@@ -3,11 +3,13 @@
 A *question* is one prompt the host shows a person: free-text by default, or a
 choice over `options` (single- or multi-select). `parse_questions` turns the raw
 YAML/JSON list authored in a flow into validated `QuestionSpec` objects, applying
-the engine's authoring constraints (1..4 questions, unique headers).
+the engine's authoring constraints (1 to `current().max_questions` questions, unique
+headers).
 """
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from yian.defaults import current
 from yian.typesys.values import Type, ValueKind
 
 
@@ -61,8 +63,9 @@ class QuestionSpecError(ValueError):
 def parse_questions(raw) -> list[QuestionSpec]:
     """Validate a raw question list and return the parsed `QuestionSpec` objects.
 
-    Enforces the engine's authoring constraints: the input is a list of 1..4
-    items, each item is a valid `QuestionSpec`, and every `header` is unique.
+    Enforces the engine's authoring constraints: the input is a list of 1 to
+    `current().max_questions` items, each item is a valid `QuestionSpec`, and every
+    `header` is unique.
 
     Args:
         raw (`list[dict]`):
@@ -75,13 +78,15 @@ def parse_questions(raw) -> list[QuestionSpec]:
 
     Raises:
         `QuestionSpecError`:
-            If `raw` is not a list, has fewer than 1 or more than 4 items, any
-            item fails `QuestionSpec` validation, or two items share a `header`.
+            If `raw` is not a list, has fewer than 1 or more than
+            `current().max_questions` items, any item fails `QuestionSpec`
+            validation, or two items share a `header`.
     """
     if not isinstance(raw, list):
         raise QuestionSpecError(f"questions must be a list, got {type(raw).__name__}")
-    if not (1 <= len(raw) <= 4):
-        raise QuestionSpecError(f"expected 1..4 questions, got {len(raw)}")
+    most = current().max_questions
+    if not (1 <= len(raw) <= most):
+        raise QuestionSpecError(f"expected 1..{most} questions, got {len(raw)}")
 
     questions: list[QuestionSpec] = []
     for i, item in enumerate(raw):

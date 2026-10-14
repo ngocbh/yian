@@ -15,6 +15,7 @@ from yian.run import resume_flow, run_flow
 from yian.typesys import TypeCheckError
 from yian.typesys.types import parse_type
 from yian.typesys.values import reject_deep_nesting
+from tests.compose.test_call_nesting_limit import _defs_chain
 from tests.compose.test_skip_model import _many_cases
 from tests.engine._memory_fakes import _Memory
 from tests.engine.test_value_nesting_boundaries import (
@@ -133,6 +134,18 @@ def test_yaml_nesting_follows_the_variable_and_names_the_value_limit(set_default
     assert (frame_range.start_line, frame_range.start_col) == (8, 15)
 
 
+def test_call_nesting_follows_the_variable(set_defaults):
+    set_defaults(MAX_CALL_NESTING=2)
+
+    load_flow(_defs_chain(2))
+    with pytest.raises(LoadError) as caught:
+        load_flow(_defs_chain(3))
+
+    assert "nests calls 3 levels deep, past the call nesting limit of 2" in str(
+        caught.value
+    )
+
+
 def test_skip_worlds_follow_the_variable(set_defaults):
     assert not _many_cases().may_all_skip({"a", "b"})
 
@@ -214,6 +227,17 @@ def test_learnable_run_at_the_expression_maximum_logs_and_resumes(set_defaults, 
     replayed = _with_less_stack(resume_flow, flow, log=path, memory={"test": backend})
 
     assert replayed.status == "succeeded" and replayed.output == "A"
+
+
+@pytest.mark.parametrize("num_workers", [0, 2])
+def test_call_nesting_maximum_runs_with_less_stack(set_defaults, num_workers):
+    levels = _maximum("MAX_CALL_NESTING")
+    set_defaults(MAX_CALL_NESTING=levels)
+
+    flow = _with_less_stack(load_flow, _defs_chain(levels))
+    result = _with_less_stack(run_flow, flow, {"x": "hi"}, num_workers=num_workers)
+
+    assert result.status == "succeeded" and result.output == "hi"
 
 
 def test_type_nesting_maximum_parses_with_less_stack(set_defaults):

@@ -92,6 +92,17 @@ ENTRIES: tuple[Entry, ...] = (
         minimum=1,
         maximum=200,
     ),
+    # Loading a body recurses through the loader, and a 50-level chain loads, runs,
+    # and resumes within 650 frames of stack headroom; deeper chains are not proven to
+    # fit, so the variable can only lower it.
+    Entry(
+        "MAX_CALL_NESTING",
+        default=50,
+        description="Deepest chain of call, map, and loop bodies a flow may nest",
+        group="limit",
+        minimum=1,
+        maximum=50,
+    ),
     Entry(
         "MAX_TOTAL_NODES",
         default=10_000,
@@ -300,6 +311,14 @@ ENTRIES: tuple[Entry, ...] = (
         maximum=None,
     ),
     Entry(
+        "MAX_QUESTIONS",
+        default=4,
+        description="Most questions a HUMAN_INPUT node may ask at once",
+        group="input cap",
+        minimum=1,
+        maximum=None,
+    ),
+    Entry(
         "MAX_QUESTION_OPTIONS",
         default=6,
         description="Most options a question to the user may offer",
@@ -343,6 +362,7 @@ class Defaults:
     max_value_nesting: int = 100
     max_type_nesting: int = 100
     max_yaml_nesting: int = 200
+    max_call_nesting: int = 50
     max_total_nodes: int = 10_000
     max_skip_worlds: int = 10_000
     max_int_digits: int = 4300
@@ -367,6 +387,7 @@ class Defaults:
     max_skill_file_bytes: int = 256 * 1024
     max_skill_name_chars: int = 64
     max_skill_description_chars: int = 1024
+    max_questions: int = 4
     max_question_options: int = 6
     max_question_option_chars: int = 80
     max_key_prompts: int = 3

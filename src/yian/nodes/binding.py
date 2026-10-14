@@ -658,7 +658,7 @@ def bind_params(
             used_default = False
             source = wiring.get(p.name)
             label = labels.get(p.name) if labels else None
-            input_where = label or f"input {p.name!r}"
+            input_where = label if label is not None else f"input {p.name!r}"
             value = _resolve_source(
                 source, pool, item, collector=collector if present else None,
                 name=p.name, label=label, source_resolver=source_resolver, types=types,

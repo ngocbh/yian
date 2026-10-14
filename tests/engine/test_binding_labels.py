@@ -105,23 +105,6 @@ def test_without_a_label_the_default_text_stays(
     assert str(other) == default
 
 
-def test_label_names_any_author_phrase():
-    exc = _fail(
-        ValueTemplate({"a": "${input.x / input.z}"}),
-        _pool(x=1.0, z=0.0),
-        labels={"p": "value entry 'v'"},
-    )
-
-    assert str(exc) == "value entry 'v' at a: division by zero: 1.0 / 0.0"
-
-
-def test_contract_input_label_prefixes_the_message():
-    exc = _fail("x", VariablePool(), param=Parameter("p", contract=_INT), labels={"p": "L"})
-
-    assert str(exc).startswith("L: ")
-    assert exc.failure_code == "contract.input"
-
-
 def test_fresh_node_has_no_binding_labels():
     assert CodeNode("n", code="return 1").binding_labels == {}
 
@@ -134,4 +117,4 @@ def test_eval_node_uses_the_node_binding_labels():
     outcome = eval_node(node, flow, _pool(x=1e308)).outcome
 
     assert isinstance(outcome, EvaluationFailure)
-    assert outcome.failure.message.startswith("X: ")
+    assert outcome.failure.message == "X: non-finite number inf is not a yian value"

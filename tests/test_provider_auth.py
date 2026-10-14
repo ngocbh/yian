@@ -165,6 +165,26 @@ def test_credentials_for_saved_kinds(tmp_path):
         store.credentials("ollama", saved["ollama"].credential_id)
 
 
+def test_saved_secrets_returns_each_kind_without_refresh(tmp_path, monkeypatch):
+    def no_refresh(*args, **kwargs):
+        raise AssertionError("saved_secrets must not refresh")
+
+    monkeypatch.setattr(OpenAIAuth, "refresh", no_refresh)
+    store = AuthStore(tmp_path / "auth" / "auth.json", clock=lambda: 10_000.0)
+    store.save("anthropic", ApiKeyCredentials("k-anth"), "claude-x")
+    store.save("openai", OAuthCredentials("access", "refresh", 900, "acct"), "gpt")
+    store.save("ollama", None, "llama3")
+    before = (store.path.stat().st_mtime_ns, store.path.read_bytes())
+    assert store.saved_secrets("anthropic") == ("k-anth",)
+    assert store.saved_secrets("openai") == ("access", "refresh")
+    assert store.saved_secrets("ollama") == ()
+    assert store.saved_secrets("google") == ()
+    assert (store.path.stat().st_mtime_ns, store.path.read_bytes()) == before
+
+    missing = AuthStore(tmp_path / "missing" / "auth.json")
+    assert missing.saved_secrets("anthropic") == ()
+    assert not missing.path.parent.exists()
+
 def test_remove_provider_and_default(tmp_path):
     store = AuthStore(tmp_path / "auth" / "auth.json")
     store.save("openai", ApiKeyCredentials("k-open"), "gpt")

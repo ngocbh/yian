@@ -1183,7 +1183,8 @@ and runtime:
   defs share the scope's in-progress guard, while the default file resolver's
   load context guards cross-file recursion. An injected resolver is responsible
   for any equivalent protection, so the baked call graph remains finite when
-  that seam honors the contract.
+  that seam honors the contract, and at most `MAX_CALL_NESTING` (50) deep,
+  checked in `_resolve_child` for any resolver.
 - `compose.build.pipeline` associates retained bodies with final descriptors.
   Outer `input:` bindings become generated `Parameter` values through
   `build.inline_inputs`' strict structural proof. Parent descriptors are built

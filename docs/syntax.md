@@ -408,6 +408,9 @@ level at any length. A deeper expression is a load error at its field; split it 
 smaller bindings or steps. See
 [Expressions → Expression nesting limit](expressions.md#expression-nesting-limit).
 
+CALL, MAP, and LOOP bodies nest at most 50 levels; see
+[Call nesting limit](#call-nesting-limit).
+
 Changed: an expression nested deeper than 100 levels used to load; it is now a load
 error. Split it into smaller bindings. A long operator chain such as
 `${a + b + c + ...}`, which used to crash with a `RecursionError`, now works at any
@@ -2578,17 +2581,17 @@ call node 'step': calling callable 'c51' nests calls more than 50 levels deep, p
 The first form counts the whole chain under the call. The second form fires on a longer
 chain before the loader goes any deeper, so it can't give the full depth. When the call
 that crosses the limit sits inside nested defs, the message starts with one
-`defs entry 'name': ` per enclosing def, and its last location is that `call:`. Which
-call reports depends on the chain's length and the order the defs are written. To fix
-it, flatten the chain: inline a short body into its caller, or run the deep part as
-separate steps. The limit exists because loading, run setup, and replay walk nested
-bodies recursively; 50 levels stays well inside Python's default recursion limit.
+`defs entry 'name': ` per enclosing def, and its last location is that `call:`. To fix
+it, flatten the chain: move a short body's nodes into its caller's graph, or run the
+deep part as separate steps. The limit exists because loading, run setup, and replay
+walk nested bodies recursively; 50 levels stays well inside Python's default recursion
+limit.
 
 Changed: a chain deeper than about 95 levels used to crash at load with a
 `RecursionError` or "could not resolve callable ...: maximum recursion depth exceeded".
 A chain of 51 to 95 levels used to load; it now fails at load. A broken `uses:` import
 is now reported at its alias before any def loads; it used to be reported inside the
-first `defs:` entry that called it.
+`defs:` entry that called it, if any.
 
 #### Inline child bodies — skip a one-off `defs:` entry
 
@@ -2823,9 +2826,9 @@ returns the whole carried record.
   where a strict value is needed.
 - **`call:` / `nodes:`** names a reusable body or defines a one-off body inline.
   The body is one level toward the [call nesting limit](#call-nesting-limit), however
-  many iterations run. The body's `output:` returns a **subset** of the carried record: at least one
-  carried field, and any number of them. Each field the body omits keeps its value
-  from the previous iteration; there is nothing to declare. A body output field
+  many iterations run. The body's `output:` returns a **subset** of the carried record:
+  at least one carried field, and any number of them. Each field the body omits keeps
+  its value from the previous iteration; there is nothing to declare. A body output field
   that is not a carried field is a load error (`body output field(s) [...] are not
   carried record fields [...]`). The body still reads only its carried record: the
   fields it reads (`${input.X}`) must be a subset of the carried names. This

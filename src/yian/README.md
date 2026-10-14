@@ -739,10 +739,10 @@ One loader class (`compose/source/scalars.py`) reads plain scalars with YAML 1.2
 core-schema rules plus unquoted timestamps and `<<` merge keys, for documents,
 for isolated literals (`parse_yaml_literal`), and for one bare plain scalar
 (`read_plain_scalar`, which reads an inline `call(...)` argument), without
-touching PyYAML's global resolver or constructor tables. A plain scalar its tag
-can't build, such as `2026-13-45`, is a located YAML error that says to quote
-it. Root text and each uncached external file are constructed once as
-`SourceDocument`s, whose public cursor interface is immutable and defensive.
+touching PyYAML's global resolver or constructor tables. A date-shaped plain
+scalar that isn't a real date, such as `2026-13-45`, is a located YAML error that
+says to quote it. Root text and each uncached external file are constructed once
+as `SourceDocument`s, whose public cursor interface is immutable and defensive.
 They retain the original text and label while keeping PyYAML's
 composed/constructed graph private. YAML aliases and merge mappings are
 interpreted without mutating that graph. Persistent pair/arc ropes keep merge

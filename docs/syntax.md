@@ -112,8 +112,8 @@ in a typed binding or default, a call input, a `case` value, `steerable:`, or
 `llm_config` `inherit:`, including inside a list or record.
 
 An unquoted value shaped like a date that isn't a real one (`2026-13-45`,
-`2026-02-30`, `2026-01-01T25:00:00`) is a load error at that value; quote it to
-keep it as text.
+`2026-02-30`, `2026-01-01T25:00:00`) is a located load error; quote it to keep
+it as text.
 
 Every mapping key in a flow file must be text after YAML reads it: node ids, input
 and output names, typedef names and fields, keys in a written-out record value, and

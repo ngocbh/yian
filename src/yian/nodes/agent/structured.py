@@ -126,9 +126,13 @@ def _non_null_py_type(typ: Type, *, closed: bool, position: str) -> Any:
     raise ValueError(f"type_to_schema: no structured mapping for segment type {seg!r}")
 
 
-def _scalar_annotation(kind: ValueKind, bounds: tuple[int | float, int | float] | None) -> Any:
+def _scalar_annotation(
+    kind: ValueKind,
+    bounds: tuple[int | float | None, int | float | None] | None,
+) -> Any:
     """Return the pydantic annotation of a scalar slot of `kind`, within inclusive `bounds`.
 
+    An open (`None`) end has no limit, so its schema has no `minimum` or `maximum`.
     A `float` slot rejects NaN and infinity, which are not yian values; the JSON
     schema is unchanged.
     """

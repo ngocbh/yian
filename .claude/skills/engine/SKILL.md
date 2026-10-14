@@ -698,7 +698,9 @@ Most are just the functional model (above) made enforceable:
   it. Acquire the FIFO lease before reading live
   history while keeping the run-opening snapshot pinned. Publish requests and
   observations directly in the backend; external calls and stop checks run outside
-  its condition lock. Preserve observations before honoring stop and keep unknown
+  its condition lock. Preserve observations before honoring stop; a call that
+  raises while a stop is pending is observed `interrupted` (or stays `failed` if
+  the stop is honored after recording it) and the run stops. Keep unknown
   requests pending across later invocations, never inventing success. Closing a
   run cancels its waiters but retains an active lease until its owner exits; no
   later turn may overlap the finishing external call. Released turns cannot write.

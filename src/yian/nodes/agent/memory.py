@@ -666,7 +666,7 @@ def _observe_preserving_error(turn, ordinal, status, primary, *, failure=None):
     try:
         turn.observe(ordinal, status, failure=failure)
     except BaseException as secondary:
-        # `turn.observe` raises a pending stop only after publishing, so the
+        # SessionMemory's turn raises a pending stop only after publishing, so the
         # observation did not fail and the stop must not be lost.
         stopped = isinstance(secondary, _HostStop)
         original = (

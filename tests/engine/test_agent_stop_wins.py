@@ -109,7 +109,7 @@ def _fail():
     [("model", ["failed"]), ("tool", ["failed"]), ("representation", ["completed"])],
 )
 def test_a_stop_raised_while_observing_a_failure_wins(call, observed):
-    """A stop honored after a failed call is recorded still stops the run."""
+    """A stop raised by `observe` after recording the outcome is raised instead of a host fault."""
     turn = _StopOnObserve()
 
     with pytest.raises(_HostStop):

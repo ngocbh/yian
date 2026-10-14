@@ -1413,7 +1413,10 @@ Its `request` and `observe` methods validate and publish directly and atomically
 in the backend. Provider/tool calls and stop callbacks run outside the condition
 lock. There is no checkpoint sink, prepared-apply callback, or reconciliation
 channel. Cooperative stop checks can cancel queued work; actual observations are
-retained before honoring a stop during an effect. Conversation progress is
+retained before honoring a stop during an effect. A model or tool call that
+raises while a stop is pending is observed `interrupted` and the run stops
+instead of failing. If the stop is honored only after the failure is recorded,
+the effect stays `failed` and the run still stops. Conversation progress is
 independent of `learnable`.
 
 API context preparation uses an optional concrete-turn `prepare_history`

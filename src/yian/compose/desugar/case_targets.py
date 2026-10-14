@@ -40,7 +40,6 @@ from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.source import nth
 from yian.compose.parse.file import CaseDescriptor
 from yian.compose.desugar.inline_calls import (
-    SecretArgumentError,
     _to_call_descriptor,
     desugar_call_directives,
 )
@@ -137,8 +136,6 @@ def _lift_case_target(
     # value entry to write for the text; this keeps a direct caller's error located too.
     try:
         new_value, calls = desugar_call_directives(target, mint)
-    except SecretArgumentError as exc:
-        raise diagnostics.error(exc.message_for(host), range=range) from exc
     except ExpressionError as exc:
         raise diagnostics.error(f"{host}: {exc}", range=range) from exc
     if calls:  # inner-first: the OUTER call is calls[-1] and names the branch target

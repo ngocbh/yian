@@ -6,8 +6,8 @@ checked while the entry is read, a span's inferred type must not be disjoint fro
 tag, and a nested tag checks its own value. A tag never fills in a missing field. These
 tests cover the located errors (a tag without a value, a mistyped literal, a spaced or
 unknown tag, a nested mismatch, a number that is not finite, a disjoint span or flow
-call, a span reading the entry itself, a flow call inside `${...}`), secret literals,
-which are rejected before any check could echo them, and the flow fingerprint.
+call, a span reading the entry itself, a flow call inside `${...}`) and the flow
+fingerprint.
 
 A bare `!object` over a written-out mapping keeps the record the mapping spells: reading
 a field it lacks is a load error, a `${...}` field has its producer's type, a nested
@@ -236,61 +236,29 @@ def test_an_entry_reading_itself_is_rejected():
     assert _error_line(error) == _line_of(text, "  x: !object")
 
 
-@pytest.mark.parametrize(
-    "entry", ["  api_key: !str sk-live-123\n", "  api_key: !int sk-live-123\n"]
-)
-def test_a_secret_named_entry_literal_is_rejected_without_echoing_it(entry):
-    text = _flow(entry, output="${api_key.output}")
+def test_an_entry_under_a_credential_name_loads():
+    load_flow(_flow("  api_key: !str sk-live-123\n", output="${api_key.output}"))
+    load_flow(
+        _flow(
+            "  cfg: !object\n    access_token: abc\n    x: ${s.output}\n",
+            output="${cfg.output}",
+        )
+    )
+
+
+def test_a_mistyped_literal_under_a_credential_name_gets_the_ordinary_error():
+    plain = _load_error(_flow("  x: !int sk-live-123\n"))
+    text = _flow("  api_key: !int sk-live-123\n", output="${api_key.output}")
 
     error = _load_error(text)
 
-    assert str(error) == (
-        "value entry 'api_key' is a secret name, so its value can't be written in the "
-        "flow file; pass it as an input (${input.api_key}) or from the host"
+    assert str(error) == str(plain).replace("'x'", "'api_key'").replace(
+        "`x:", "`api_key:"
     )
     assert _error_line(error) == _line_of(text, "api_key:")
 
 
-def test_a_nested_secret_literal_is_rejected_before_the_value_is_read():
-    text = _flow(
-        "  cfg: !object\n    access_token: abc\n    x: ${s.output}\n",
-        output="${cfg.output}",
-    )
-
-    error = _load_error(text)
-
-    assert str(error) == (
-        "value entry 'cfg' has key 'access_token' (a secret name) with a literal value; "
-        "pass the value as an input (${input.cfg}) or from the host"
-    )
-    assert "abc" not in str(error)
-
-
-def test_a_secret_call_argument_names_the_value_entry():
-    text = _flow(
-        '  x: !str call(g, api_key="abc")\n',
-        head=(
-            "defs:\n"
-            "  g:\n"
-            "    input:\n"
-            "      api_key: !str\n"
-            "    nodes:\n"
-            "      r: !str ok\n"
-            "    output: ${r.output}\n"
-        ),
-    )
-
-    error = _load_error(text)
-
-    assert str(error) == (
-        "value entry 'x': call(...) argument 'api_key' is a secret name, so its value "
-        "can't be written in the flow file; pass it as an input (${input.api_key}) or "
-        "from the host"
-    )
-    assert _error_line(error) == _line_of(text, "  x: !str")
-
-
-def test_a_nested_secret_binding_loads():
+def test_a_nested_binding_loads():
     load_flow(
         _flow("  cfg: !object\n    access_token: ${input.t}\n", output="${cfg.output}")
     )

@@ -4,9 +4,8 @@
 among the nodes, and rejects an untagged entry that has no `kind:` with a located error
 saying to add `kind:` for a node or a tag for a value. The error for an untagged scalar,
 list or date shows the tag to write (with `...` for a value written over several
-lines), and the example loads when pasted in. There is no example under a secret name,
-where the value is never echoed, or for a value no tag can hold (one that contains
-itself or holds a number that is not finite). An untagged `${...}` or `call(...)` value
+lines), and the example loads when pasted in. There is no example for a value no tag
+can hold (one that contains itself or holds a number that is not finite). An untagged `${...}` or `call(...)` value
 is not a literal, so it gets no example. Reserved node ids apply to value entries too.
 """
 
@@ -167,17 +166,16 @@ def test_untagged_block_list_shows_the_tag_with_a_placeholder_value():
     assert _error_line(info.value) == _line_of(text, "- 1")
 
 
-def test_untagged_secret_literal_is_rejected_without_echoing_it():
+def test_an_untagged_credential_named_literal_gets_the_example():
     text = _flow("  api_key: sk-live-123\n")
 
     with pytest.raises(LoadError) as info:
         load_flow(text)
 
     assert info.value.diagnostic.message == (
-        "value entry 'api_key' is a secret name, so its value can't be written in the "
-        "flow file; pass it as an input (${input.api_key}) or from the host"
+        _NODE_OR_VALUE.replace("node 'x'", "node 'api_key'")
+        + ", e.g. `api_key: !str sk-live-123`"
     )
-    assert "sk-live-123" not in str(info.value)
     assert _error_line(info.value) == _line_of(text, "api_key:")
 
 

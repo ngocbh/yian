@@ -9,8 +9,7 @@ down into it.
 Modules:
   - `directives`  `CALL_HEAD` and `match_call_directive`: recognizes a whole-value
                   `call(...)` directive in binding text, rejecting malformed text that
-                  starts with `call(`; `holds_secret_keyword` / `quoted_unless_secret`
-                  keep a secret keyword's text out of messages.
+                  starts with `call(`.
   - `errors`      the document-owned diagnostic factory plus `LoadError`, whose one
                   canonical `Diagnostic` is ready for direct boundary rendering.
   - `isinstance_types` the type names `isinstance(x, T)` calls name in a binding or

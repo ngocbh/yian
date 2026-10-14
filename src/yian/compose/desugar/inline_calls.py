@@ -52,16 +52,11 @@ node header — and owns an empty `field_ranges`, so a bad ref inside the direct
 directive rather than a host input that shares its param name. The flow `output:`/`asserts:`
 sections have no descriptor, so their inline calls use a supplied section/item range.
 
-A keyword argument under a secret name (`yian.secret_names`) must be a binding or
-`null`; a literal there raises `SecretArgumentError`, which every host formats with its
-own label and without echoing the value.
-
 Imports flow DOWN/peer only: `compose.parse.file` (descriptors), `compose.nodes.bindings` (the
-kind-blind binding-field walk) + `compose.helpers` (errors, secret literals, YAML style and
-quoting; peers), `compose.source` (a bare argument's plain-scalar reading), `expr` (the
-ref-walk + the span flow-call detector), `diagnostics` (SourceRange), `secret_names`. The
-loader, the case desugars, and `compose.validate` (the assert and secret-literal checks)
-import this back.
+kind-blind binding-field walk) + `compose.helpers` (errors, YAML style and quoting;
+peers), `compose.source` (a bare argument's plain-scalar reading), `expr` (the ref-walk +
+the span flow-call detector), `diagnostics` (SourceRange). The loader, the case desugars,
+and `compose.validate` (the assert check) import this back.
 """
 
 from __future__ import annotations
@@ -91,17 +86,8 @@ from yian.expr.template import (
 )
 from yian.compose.nodes.bindings import map_binding_sources
 from yian.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
-from yian.compose.helpers.directives import (
-    CALL_HEAD,
-    holds_secret_keyword,
-    match_call_directive,
-    quoted_unless_secret as _quoted,
-)
+from yian.compose.helpers.directives import CALL_HEAD, match_call_directive
 from yian.compose.helpers.errors import LoadDiagnostics
-from yian.compose.helpers.secret_literals import (
-    secret_literal_message,
-    secret_literal_path,
-)
 from yian.compose.helpers.tags import QUOTED_STYLES, yaml_quoted
 from yian.typesys.types import BUILTIN_TYPE_NAMES
 from yian.compose.parse.file import (
@@ -109,48 +95,12 @@ from yian.compose.parse.file import (
     NodeDescriptor,
 )
 from yian.compose.source import SourceSyntaxError, read_plain_scalar
-from yian.secret_names import is_secret_name
 
 # The reserved id prefix for synthesized inline-call nodes. A monotonic counter per
 # flow/def keeps them unique; the collision guard reserves the namespace from users.
 _SYNTH_PREFIX = "__call_"
 # Text before a lone `=` that ends in a separate word: `1 b` in `a=1 b=2`, a missing comma.
 _WORD_BEFORE_EQUALS = re.compile(r"\s([A-Za-z_][A-Za-z0-9_-]*)\s*$")
-
-
-class SecretArgumentError(ExpressionError):
-    """A `call(...)` keyword argument under a secret name holds a literal value.
-
-    Its message never includes the value. A host formats it with `message_for`,
-    which names the host and offers no quoting fix: quoting keeps the value literal.
-
-    Args:
-        name (`str`): The keyword argument's name.
-        path (`tuple[str | int, ...]`, *optional*, defaults to `()`): The position
-            of the literal, as `secret_literal_path` returns it.
-    """
-
-    def __init__(self, name: str, path: tuple[str | int, ...] = ()):
-        self.name = name
-        self.path = path
-        super().__init__(secret_literal_message(self._slot(), name, path))
-
-    def message_for(self, host: str) -> str:
-        """Return the message prefixed with `host`, without a trailing `:` of its own.
-
-        Args:
-            host (`str`): The host label, e.g. `"node 'b'"` or `"case node 'c' then:"`.
-
-        Returns:
-            `str`: The located message, e.g. `"node 'b': call(...) argument ..."`.
-        """
-        return secret_literal_message(
-            self._slot(), self.name, self.path, owner=host.rstrip(": ")
-        )
-
-    def _slot(self) -> str:
-        """The argument as the message names it."""
-        return f"call(...) argument {self.name!r}"
 
 
 class ArgumentValueError(ExpressionError):
@@ -419,8 +369,6 @@ def _desugar_descriptor(
             style=style_at(field, key) if style_at is not None else None,
             # Quoting a typed binding would drop its type, so no quoting fix is offered.
             quotable=not (field == "inputs" and key in desc.input_types),
-            # A value entry names its one input `value entry '<id>'`.
-            owner=desc.field_labels.get(f"input {key!r}", f"node {host!r}"),
             type_names=type_names,
             diagnostics=diagnostics,
         )
@@ -443,7 +391,6 @@ def _desugar_source(
     range: Optional[SourceRange] = None,
     style: Optional[str] = None,
     quotable: bool = True,
-    owner: Optional[str] = None,
     type_names: frozenset[str] = frozenset(),
     diagnostics: LoadDiagnostics,
 ) -> Any:
@@ -459,7 +406,6 @@ def _desugar_source(
             range=range,
             style=style,
             quotable=quotable,
-            owner=owner,
             type_names=type_names,
             diagnostics=diagnostics,
         )
@@ -478,7 +424,6 @@ def _desugar_source(
             calls,
             host,
             range=range,
-            owner=owner,
             type_names=type_names,
             diagnostics=diagnostics,
         ),
@@ -495,7 +440,6 @@ def _desugar_value(
     style: Optional[str] = None,
     quotable: bool = True,
     expression: bool = False,
-    owner: Optional[str] = None,
     type_names: frozenset[str] = frozenset(),
     diagnostics: LoadDiagnostics | None = None,
 ) -> str:
@@ -514,8 +458,7 @@ def _desugar_value(
     the text: not for an assert, a span-bearing value, a ``quotable=False`` (typed)
     binding, or an unreadable argument (`ArgumentValueError` says to quote that
     argument). Maps `ExpressionError` (a malformed directive or an unparseable span) to
-    a located `LoadError` at ``range``; a literal secret argument (`SecretArgumentError`)
-    is prefixed with ``owner`` (default ``host``) and gets no quoting fix."""
+    a located `LoadError` at ``range``."""
     diagnostics = diagnostics or LoadDiagnostics()
     quoted = not expression and style in QUOTED_STYLES
     is_call = CALL_HEAD.match(value.strip()) is not None
@@ -528,8 +471,6 @@ def _desugar_value(
     if is_call and not quoted:
         try:
             new_value, found = desugar_call_directives(value, mint)
-        except SecretArgumentError as exc:
-            raise diagnostics.error(exc.message_for(owner or host), range=range) from exc
         except ExpressionError as exc:
             hint = (
                 f". If you meant the text, quote the whole value: "
@@ -538,7 +479,6 @@ def _desugar_value(
                 and not expression
                 and not isinstance(exc, ArgumentValueError)
                 and "${" not in value
-                and not holds_secret_keyword(value)
                 else ""
             )
             raise diagnostics.error(f"{host}: {exc}{hint}", range=range) from exc
@@ -584,11 +524,8 @@ def desugar_call_directives(value: str, mint: Callable[[], str]) -> tuple:
     `call(` is not one directive: unbalanced parentheses, text after the close paren, a
     first arg that is not a bare flow id, a positional arg after the flow id (message
     mentions "keyword"), an unquoted `=` inside a keyword value (a missing comma), or a
-    keyword passed more than once. A keyword under a secret name whose value is a literal
-    raises `SecretArgumentError`, before any check that would echo the value. When the
-    text holds a keyword under a secret name (`holds_secret_keyword`), a malformed
-    directive's message does not quote any part of it. A bare keyword value the flow's
-    YAML rules can't build (an impossible date) raises `ArgumentValueError`."""
+    keyword passed more than once. A bare keyword value the flow's YAML rules can't build
+    (an impossible date) raises `ArgumentValueError`."""
     match = match_call_directive(value)
     if match is None:
         return value, []
@@ -601,28 +538,19 @@ def desugar_call_directives(value: str, mint: Callable[[], str]) -> tuple:
         parts = _split_calls_aware(pair, "=")
         if len(parts) < 2:
             raise ExpressionError(
-                f"call({flow_id}, ...) passes a positional argument"
-                f"{_quoted(pair.strip(), value)}; "
+                f"call({flow_id}, ...) passes a positional argument {pair.strip()!r}; "
                 "every argument after the flow id must be a keyword (name=value)"
             )
         name = parts[0].strip()
         if not name or any(ch.isspace() for ch in name):
             raise ExpressionError(
-                f"call({flow_id}, ...) argument{_quoted(pair.strip(), value)} needs one "
-                "name before "
+                f"call({flow_id}, ...) argument {pair.strip()!r} needs one name before "
                 f"`=`; {'add the missing comma' if name else 'write the keyword name'}"
             )
         arg_value = "=".join(parts[1:])
-        _check_secret_argument(name, arg_value)
-        inner_keywords = _inner_keywords(parts[1:])
-        if inner_keywords:
-            for inner_name, inner_value in inner_keywords:
-                if is_secret_name(inner_name):
-                    # Read as the comma had been there; a binding falls to the error below.
-                    _check_secret_argument(inner_name, inner_value)
+        if _inner_keywords(parts[1:]):
             raise ExpressionError(
-                f"call({flow_id}, ...) keyword {name!r} value"
-                f"{_quoted(arg_value.strip(), value)} looks "
+                f"call({flow_id}, ...) keyword {name!r} value {arg_value.strip()!r} looks "
                 "like two keywords; add the missing comma, or quote the value"
             )
         new_value, inner = desugar_call_directives(
@@ -640,44 +568,6 @@ def desugar_call_directives(value: str, mint: Callable[[], str]) -> tuple:
     cid = mint()
     calls.append(InlineCall(id=cid, callee=flow_id, args=args))
     return "${" + cid + ".output}", calls
-
-
-def _check_secret_argument(name: str, arg_value: str) -> None:
-    """Reject a literal keyword value under a secret name.
-
-    A value that can't be read under another name is left for the directive's own
-    read to report.
-
-    Args:
-        name (`str`): The keyword's name.
-        arg_value (`str`): Its raw value text.
-
-    Raises:
-        `SecretArgumentError`: `name` is a secret name and the value, read as the
-            directive reads it, is neither a binding nor `null`, or can't be read. A
-            nested directive is a binding only if it parses: its parse error could
-            quote the value.
-        `ArgumentValueError`: A nested directive under a secret name passes a bare
-            value that can't be read; its message does not echo the value.
-    """
-    if CALL_HEAD.match(arg_value.strip()):
-        if is_secret_name(name):
-            try:
-                desugar_call_directives(arg_value, lambda: "_")
-            except (SecretArgumentError, ArgumentValueError):
-                raise
-            except ExpressionError:
-                raise SecretArgumentError(name) from None
-        return  # its own arguments are checked when it is desugared
-    try:
-        value = _arg_source(arg_value)
-    except SourceSyntaxError:
-        if is_secret_name(name):
-            raise SecretArgumentError(name) from None
-        return
-    path = secret_literal_path(name, value)
-    if path is not None:
-        raise SecretArgumentError(name, path)
 
 
 def _arg_source(value: str) -> Any:

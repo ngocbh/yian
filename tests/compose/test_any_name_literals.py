@@ -8,7 +8,8 @@ import json
 import pytest
 
 from yian.compile.manifest import flow_fingerprint, flow_manifest
-from yian.compose import load_flow
+from yian.compose import LoadError, load_flow
+from yian.run import run_flow
 
 
 def _load(text: str):
@@ -150,3 +151,199 @@ def test_an_agent_variable_under_a_credential_name_loads():
         )
 
     _assert_identity(flow("hunter2"), flow("hunter3"), "hunter2")
+
+
+def _node_input_flow(*input_lines: str) -> str:
+    """Return a one-node flow whose `fetch` node has the given input lines."""
+    return (
+        "id: f\nname: f\nnodes:\n  fetch:\n    kind: code\n    input:\n"
+        + "\n".join(f"      {line}" for line in input_lines)
+        + "\n    output: str\n    code: |\n      return 'x'\n"
+        "output: ${fetch.output}\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "password",
+        "passwd",
+        "secret",
+        "client_secret",
+        "private_key",
+        "access_token",
+        "refresh_token",
+        "api_key",
+        "OPENAI_API_KEY",
+        "db_password",
+        "clientSecret",
+    ],
+)
+def test_a_node_input_literal_under_a_credential_name_is_identity(name):
+    _assert_identity(
+        _node_input_flow(f"{name}: hunter2"),
+        _node_input_flow(f"{name}: hunter3"),
+        "hunter2",
+    )
+
+
+def test_a_nested_key_under_a_credential_name_loads():
+    _assert_identity(
+        _node_input_flow("conn: {items: [{password: hunter2}]}"),
+        _node_input_flow("conn: {items: [{password: hunter3}]}"),
+        "hunter2",
+    )
+
+
+def test_a_typed_binding_under_a_credential_name_loads():
+    _assert_identity(
+        _node_input_flow("password: !str hunter2"),
+        _node_input_flow("password: !str hunter3"),
+        "hunter2",
+    )
+
+
+def test_a_map_over_literal_under_a_credential_name_loads():
+    def flow(value: str) -> str:
+        return (
+            "id: p\nname: p\n"
+            "defs:\n"
+            "  leaf:\n"
+            "    input:\n      x: !object\n"
+            "    nodes:\n"
+            "      up:\n"
+            "        kind: code\n"
+            "        input:\n          x: ${input.x}\n"
+            "        output: str\n"
+            "        code: return 'x'\n"
+            "    output: ${up.output}\n"
+            "nodes:\n"
+            "  m:\n"
+            "    kind: map\n"
+            f"    over: [{{password: {value}}}, {{password: b}}]\n"
+            "    call: leaf\n"
+            "    input:\n      x: ${item}\n"
+            "output: ${m.output}\n"
+        )
+
+    _assert_identity(flow("hunter2"), flow("hunter3"), "hunter2")
+
+
+def test_a_flow_output_under_a_credential_name_is_identity():
+    def flow(value: str) -> str:
+        return (
+            "id: f\nname: f\nnodes:\n  step:\n    kind: code\n    output: str\n"
+            "    code: |\n      return 'x'\n"
+            f"output:\n  step: ${{step.output}}\n  password: {value}\n"
+        )
+
+    _assert_identity(flow("hunter2"), flow("hunter3"), "hunter2")
+
+
+def test_a_value_entry_under_a_credential_name_is_identity():
+    def flow(value: str) -> str:
+        return (
+            f"id: f\nname: f\nnodes:\n  api_key: !str {value}\n"
+            "output: ${api_key.output}\n"
+        )
+
+    _assert_identity(flow("hunter2"), flow("hunter3"), "hunter2")
+    assert run_flow(_load(flow("hunter2")), {}).output == "hunter2"
+
+
+_G_DEF = (
+    "defs:\n"
+    "  g:\n"
+    "    input:\n"
+    "      password: !Optional(str) null\n"
+    "    nodes:\n"
+    "      run:\n"
+    "        kind: code\n"
+    "        output: str\n"
+    "        code: |\n"
+    "          return 'x'\n"
+    "    output: ${run.output}\n"
+)
+
+
+def _call_flow(binding: str) -> str:
+    """Return a flow whose `n` node binds input `x` to `binding`, with def `g`."""
+    return (
+        "id: f\nname: f\n" + _G_DEF + "nodes:\n  n:\n    kind: code\n"
+        f"    input:\n      x: {binding}\n    output: str\n"
+        "    code: |\n      return 'x'\n"
+        "output: ${n.output}\n"
+    )
+
+
+def test_a_call_argument_under_a_credential_name_is_identity():
+    _assert_identity(
+        _call_flow("call(g, password=hunter2)"),
+        _call_flow("call(g, password=hunter3)"),
+        "hunter2",
+    )
+
+
+def test_a_value_entry_call_argument_under_a_credential_name_loads():
+    _load(
+        "id: f\nname: f\n"
+        "defs:\n"
+        "  g:\n"
+        "    input:\n"
+        "      api_key: !str\n"
+        "    nodes:\n"
+        "      r: !str ok\n"
+        "    output: ${r.output}\n"
+        "nodes:\n"
+        '  x: !str call(g, api_key="abc")\n'
+        "output: ${x.output}\n"
+    )
+
+
+def test_a_case_call_target_with_a_credential_keyword_loads():
+    def flow(value: str) -> str:
+        return (
+            "id: f\nname: f\ninput:\n  score: !float\n" + _G_DEF + "nodes:\n"
+            "  c:\n    kind: case\n    cases:\n"
+            "      - when: input.score >= 0.5\n"
+            f"        then: call(g, password={value})\n"
+            "    else: call(g)\n"
+            "output: ${c.output}\n"
+        )
+
+    _assert_identity(flow("hunter2"), flow("hunter3"), "hunter2")
+
+
+def test_an_inline_call_flow_output_with_a_credential_keyword_loads():
+    def flow(value: str) -> str:
+        return (
+            "id: f\nname: f\n" + _G_DEF + "nodes:\n  step:\n    kind: code\n"
+            "    output: str\n    code: |\n      return 'x'\n"
+            f"output:\n  r: call(g, password={value})\n"
+        )
+
+    _assert_identity(flow("hunter2"), flow("hunter3"), "hunter2")
+
+
+def test_a_malformed_call_with_a_credential_keyword_quotes_its_text():
+    with pytest.raises(LoadError) as caught:
+        _load(_call_flow("call(g, password=a b=1)"))
+
+    assert str(caught.value) == (
+        "n: call(g, ...) keyword 'password' value 'a b=1' looks like two "
+        "keywords; add the missing comma, or quote the value. If you meant the text, "
+        'quote the whole value: `"call(g, password=a b=1)"`'
+    )
+
+
+def test_an_inline_call_in_a_node_assert_shows_the_assert_under_any_keyword():
+    text = (
+        "id: f\nname: f\n" + _G_DEF + "nodes:\n  b:\n    kind: code\n"
+        "    output: str\n    code: |\n      return 'x'\n"
+        "    asserts:\n      - call(g, password=x)\n"
+        "output: ${b.output}\n"
+    )
+    with pytest.raises(LoadError) as caught:
+        _load(text)
+
+    assert "assert 'call(g, password=x)'" in str(caught.value)

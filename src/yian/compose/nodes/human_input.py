@@ -5,7 +5,8 @@ frozen `HumanInputDescriptor`. It wraps the template `parse` from `NodeDescripto
 records each field's `SourceRange`) to reject the removed `adaptive_questions.mode:` key and
 record one `("text", "questions[i]...")` range per question string, overrides the
 `_validate_fields` hook to enforce the one-of-three question-surface legality, and overrides
-`build` (which constructs the runtime `HumanInputNode` and derives the answer schema).
+`build` (which constructs the runtime `HumanInputNode` and derives the answer schema). A
+`prompt:` or `adaptive_questions.prompt:` brief YAML read as non-text is rejected at that value.
 `_finish` stamps only the descriptor's opaque origin onto that node and keeps concrete ranges
 on the Compose-owned `BuildResult`. Registered into `KINDS`/`BINDING_FIELDS` at import so the
 shared dispatch routes here.
@@ -21,7 +22,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 
 from yian.compose.helpers.errors import LoadDiagnostics
-from yian.compose.nodes.agent import MODE_REMOVED_FIX, retries_error
+from yian.compose.nodes.agent import MODE_REMOVED_FIX, not_text_error, retries_error
 from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from yian.compose.source import SourceAccessError, SourceCursor
 from yian.diagnostics import SourceRange
@@ -49,10 +50,11 @@ class HumanInputDescriptor(NodeDescriptor):
     Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
     the Compose-only `range`/`field_ranges` parse metadata), the `input:`/`output:` signature surface, and the
     template `parse` from `NodeDescriptor`, which it wraps to reject the removed
-    `adaptive_questions.mode:` key and to add a `("text", "questions[i]...")` range for each
-    question string to `field_ranges`. It overrides the `_validate_fields` hook (the
-    one-of-three legality, calling `super()` first for the default asserts-list check); only the
-    human_input-specific fields are declared here.
+    `adaptive_questions.mode:` key and a non-text `adaptive_questions.prompt:` brief, and to add
+    a `("text", "questions[i]...")` range for each question string to `field_ranges`. It
+    overrides the `_validate_fields` hook (the one-of-three legality and a text `prompt:`,
+    calling `super()` for the default asserts-list check); only the human_input-specific fields
+    are declared here.
 
     Class attrs: `kind="human_input"`; `allowed` adds `prompt`/`questions`/`adaptive_questions`,
     normalized `inputs`/`outputs`, and `asserts` to the commons; `required` is empty (no single flat field is
@@ -75,7 +77,7 @@ class HumanInputDescriptor(NodeDescriptor):
 
     @classmethod
     def parse(cls, node_id: str, cursor: SourceCursor) -> "HumanInputDescriptor":
-        """Reject the removed `adaptive_questions.mode:` key, parse as usual, and range the text.
+        """Reject the removed `adaptive_questions.mode:` key and a non-text brief, parse, and range the text.
 
         On top of the template `parse`'s per-field ranges, records one
         `("text", site_label(path))` range for each string `template_sites` finds in a literal
@@ -83,8 +85,9 @@ class HumanInputDescriptor(NodeDescriptor):
         the string rather than the whole `questions:` block.
 
         Raises:
-            `LoadError`: The `adaptive_questions:` block authors `mode:`, or the template
-                `parse` rejects the node.
+            `LoadError`: The `adaptive_questions:` block authors `mode:`, its `prompt:` brief is
+                not text (YAML read it as a number, boolean, date, list, or mapping), or the
+                template `parse` rejects the node.
         """
         adaptive = cursor.get("adaptive_questions")
         if isinstance(adaptive, dict) and "mode" in adaptive:
@@ -92,6 +95,14 @@ class HumanInputDescriptor(NodeDescriptor):
                 f"node {node_id!r} (kind=human_input): `adaptive_questions.mode:` was removed: "
                 f"{MODE_REMOVED_FIX}",
                 range=cursor.child("adaptive_questions").key_range_of("mode"),
+            )
+        brief = adaptive.get("prompt") if isinstance(adaptive, dict) else None
+        if brief is not None and not isinstance(brief, str):
+            raise LoadDiagnostics.from_cursor(cursor).error(
+                f"node {node_id!r} (kind=human_input): "
+                + not_text_error("adaptive_questions.prompt", brief),
+                range=_range_at(cursor, ("adaptive_questions", "prompt"))
+                or cursor.key_range_of("adaptive_questions"),
             )
         desc = super().parse(node_id, cursor)
         if not isinstance(desc.questions, list):
@@ -123,7 +134,8 @@ class HumanInputDescriptor(NodeDescriptor):
         exclusive, and an adaptive block must itself be a dict carrying its own `prompt:` (the
         LLM brief). The "needs a question surface" error anchors on `own_range` (the node body)
         since no question field is present to carry a range; the other two anchor on the
-        `adaptive_questions:` field range where it exists."""
+        `adaptive_questions:` field range where it exists. Then a present `prompt:` must be text,
+        anchored on its own field range."""
         # One-of-three legality: needs a question surface, `questions`/`adaptive_questions` are
         # mutually exclusive, and an adaptive block needs its own `prompt:` (the LLM brief).
         has_q = kwargs.get("questions") is not None
@@ -154,6 +166,12 @@ class HumanInputDescriptor(NodeDescriptor):
                     f"`adaptive_questions.retries:` {problem}",
                     range=ranges.get(("field", "adaptive_questions")),
                 )
+        prompt = kwargs.get("prompt")
+        if prompt is not None and not isinstance(prompt, str):
+            raise diagnostics.error(
+                f"node {node_id!r} (kind=human_input): " + not_text_error("prompt", prompt),
+                range=ranges.get(("field", "prompt")) or own_range,
+            )
         super()._validate_fields(node_id, kwargs, ranges, own_range, diagnostics)
 
     def _build_gate(self, diagnostics: LoadDiagnostics) -> HumanInputNode:

@@ -245,7 +245,13 @@ class AgentDescriptor(NodeDescriptor):
         own_range: SourceRange | None,
         diagnostics: LoadDiagnostics,
     ) -> None:
-        """Check the `system_prompt:`, `tools:`, `skills:`, `retries:`, and `steerable:` shapes and parse a present named policy."""
+        """Check the `prompt:`, `system_prompt:`, `tools:`, `skills:`, `retries:`, and `steerable:` shapes and parse a present named policy."""
+        prompt = kwargs.get("prompt")
+        if prompt is not None and not isinstance(prompt, str):
+            raise diagnostics.error(
+                f"node {node_id!r} (kind={cls.kind}): " + not_text_error("prompt", prompt),
+                range=ranges.get(("field", "prompt")) or own_range,
+            )
         if "system_prompt" in kwargs:
             system_prompt = kwargs["system_prompt"]
             if not isinstance(system_prompt, str) or not system_prompt:

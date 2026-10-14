@@ -45,11 +45,17 @@ def test_flow_nested_600_levels_is_a_located_load_error() -> None:
     assert (frame_range.start_line, frame_range.start_col) == (8, 210)
 
 
-def test_flow_with_a_value_at_the_limit_loads() -> None:
-    """A value reaching document level 200 loads."""
+@pytest.mark.parametrize(
+    "topic",
+    ["[" * 196 + "1" + "]" * 196, "{a: " * 196 + "1" + "}" * 196],
+    ids=["list", "mapping"],
+)
+def test_flow_with_a_value_at_the_document_limit_parses(topic: str) -> None:
+    """A value reaching document level 200 parses; it then fails the value limit."""
+    with pytest.raises(LoadError, match="the limit for a yian value") as caught:
+        load_flow(_flow(topic))
 
-    load_flow(_flow("[" * 196 + "1" + "]" * 196))
-    load_flow(_flow("{a: " * 196 + "1" + "}" * 196))
+    assert "invalid YAML" not in str(caught.value)
 
 
 @pytest.mark.parametrize(

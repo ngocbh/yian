@@ -303,6 +303,11 @@ A value nests at most 100 levels, counting each record and list. A binding or MA
 `over` list nested deeper fails `binding.evaluate` and a node output fails
 `contract.output`, naming the path; `${[x]}`, a record flow output, or a MAP's result
 list around a 100-level value is one level too deep. A run input may nest 100 levels.
+A value written out in the flow file is checked at load with the same counting, YAML
+aliases included: a node input (LOOP seeds, MAP per-item inputs), MAP `over:`, WAIT
+`until:`, a value entry, an input or AGENT variable default, a CASE value branch, or a
+flow `output:` (a record output's fields sit one level in) nested deeper is a load
+error at that value; the value a `${...}` computes is checked when it runs.
 An expression nests at most 100 levels as well (each call, list, unary operator,
 comparison, `|`/`:-`/`:?`, and operator chain is one); a deeper one is a load error at
 its field. A flow file's YAML nests at most 200 levels (each mapping and list is one);

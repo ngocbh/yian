@@ -8,10 +8,9 @@ import pytest
 from langchain_core.messages import AIMessage
 
 import yian.llm_clients as llm_clients
-import yian.nodes.agent.node as agent_module
 from yian import load_flow, run_flow
+from yian.compose import LoadError
 from yian.memory_host import build_memories
-from yian.nodes.base import Output
 from yian.nodes.binding import BindingError, apply_defaults, bind_params
 from yian.nodes.contracts import Parameter
 from yian.run import resume_flow
@@ -829,16 +828,20 @@ def test_tool_arguments_over_the_limit_fail_the_agent_and_backward_still_learns(
     assert outcome.status == "succeeded"
 
 
+def _line_of(text: str, needle: str) -> int:
+    """Return the 1-based number of the first line of `text` containing `needle`."""
+    return next(number for number, line in enumerate(text.splitlines(), 1) if needle in line)
+
+
 def _flow_literal(levels: int) -> str:
     """Return a flow-style YAML literal nesting `{a: ...}` `levels` levels deep."""
     return "{a: " * levels + "1" + "}" * levels
 
 
-@pytest.mark.parametrize("learnable", [False, True])
-def test_an_agent_variable_default_over_the_limit_fails_the_agent(monkeypatch, learnable):
-    calls = []
-    monkeypatch.setattr(agent_module, "run_agent", lambda ctx: calls.append(ctx) or Output("x"))
-    flow = load_flow(f"""
+# A written-out default past the limit is a load error; `apply_defaults` and
+# `bind_params` above keep the run-time check covered for programmatic defaults.
+def test_an_agent_variable_default_over_the_limit_fails_at_load():
+    text = f"""
 id: nesting
 name: nesting
 llm_config: {{provider: ollama, model: test}}
@@ -850,20 +853,17 @@ nodes:
     prompt: go
     output: str
 output: ${{writer.output}}
-""")
-    result = run_flow(flow, {}, learnable=learnable)
+"""
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
 
-    assert result.status == "failed"
-    assert result.failure.code == "node.execute"
-    assert result.failure.node_id == "writer"
-    assert result.failure.message.startswith("default for 't' at a.a")
-    assert "deeper than 100 levels" in result.failure.message
-    assert result.failure.trace[0].key == "/s:root/s:node/s:writer/s:variables/s:t/s:default"
-    assert calls == []
+    assert "variable 't' default at a.a" in caught.value.diagnostic.message
+    assert "deeper than 100 levels" in caught.value.diagnostic.message
+    assert caught.value.diagnostic.frames[-1].range.start_line == _line_of(text, "t: !object")
 
 
-def test_a_start_default_over_the_limit_fails_start():
-    flow = load_flow(f"""
+def test_a_start_default_over_the_limit_fails_at_load():
+    text = f"""
 id: nesting
 name: nesting
 input:
@@ -876,8 +876,10 @@ nodes:
     code: |
       return 1
 output: ${{c.output}}
-""")
-    result = run_flow(flow, {})
+"""
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
 
-    _assert_binding_too_deep(result, "__start__", "default for 'x' at a.a")
-    assert result.failure.trace[0].key == "/s:root/s:input/s:x/s:default"
+    assert "input 'x' default at a.a" in caught.value.diagnostic.message
+    assert "deeper than 100 levels" in caught.value.diagnostic.message
+    assert caught.value.diagnostic.frames[-1].range.start_line == _line_of(text, "x: !object")

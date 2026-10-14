@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.helpers.value_nesting import check_written_value
 from yian.compose.nodes.base import (
     BuildContext,
     BuildResult,
@@ -54,13 +55,18 @@ class WaitDescriptor(NodeDescriptor):
         own_range: Optional[SourceRange],
         diagnostics: LoadDiagnostics,
     ) -> None:
-        """Reject a list or mapping holding `${...}` under `until:`, then run the base checks."""
+        """Reject `until:` nested past the limit or holding `${...}` in a list or mapping."""
+        site = ranges.get(("field", "until")) or own_range
+        # Before the span walk, which recurses through the value.
+        check_written_value(
+            kwargs.get("until"), f"node {node_id!r} field 'until'", site, diagnostics
+        )
         reject_container_spans(
             cls.kind,
             node_id,
             "until",
             kwargs.get("until"),
-            ranges.get(("field", "until")) or own_range,
+            site,
             diagnostics,
         )
         super()._validate_fields(node_id, kwargs, ranges, own_range, diagnostics)

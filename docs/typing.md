@@ -112,6 +112,14 @@ it is parsed; see
 A flow file's YAML has its own, larger bound of 200 levels; see
 [Syntax → YAML values](syntax.md#yaml-values).
 
+A value written out in a flow file (a node input, MAP `over:`, WAIT `until:`, a value
+entry, an input or AGENT variable default, a CASE value branch, a flow `output:`) is
+checked at load with the counting the run-time check would apply to it, so one nested
+deeper is a located load error, even when YAML aliases build its depth while the text
+stays shallow. A record flow output's fields count the record's level. `${...}` text
+counts as a scalar there, so the boundaries below still check computed values and
+values in a flow built in Python.
+
 The first boundary that sees a deeper value rejects it:
 
 - a run input may nest 100 levels; a deeper one makes `run_flow` raise `ValueError`
@@ -120,7 +128,8 @@ The first boundary that sees a deeper value rejects it:
   the node fails with `binding.evaluate` at the binding or default. `${[x]}` around a
   100-level `x` fails, and MAP items may nest 99 levels. An AGENT variable default
   fails `node.execute`. Only a binding's final value is checked, not temporaries
-  inside an expression;
+  inside an expression. A literal or default written out in the flow file never gets
+  here, since the load check rejects it first;
 - a node output, checked whole when the node succeeds: the node fails with
   `contract.output` at the field path. A flow output is its END's output, so
   `output: ${n.output}` carries a 100-level value, but a record flow output

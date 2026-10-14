@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.helpers.value_nesting import check_written_value
 from yian.compose.nodes.base import reject_container_spans
 from yian.compose.nodes.call import CallDescriptor
 from yian.diagnostics import SourceRange
@@ -47,13 +48,18 @@ class MapDescriptor(CallDescriptor):
         own_range: Optional[SourceRange],
         diagnostics: LoadDiagnostics,
     ) -> None:
-        """Reject a list or mapping holding `${...}` under `over:`, then run the base checks."""
+        """Reject `over:` nested past the limit or holding `${...}` in a list or mapping."""
+        site = ranges.get(("field", "over")) or own_range
+        # Before the span walk, which recurses through the value.
+        check_written_value(
+            kwargs.get("over"), f"node {node_id!r} field 'over'", site, diagnostics
+        )
         reject_container_spans(
             cls.kind,
             node_id,
             "over",
             kwargs.get("over"),
-            ranges.get(("field", "over")) or own_range,
+            site,
             diagnostics,
         )
         super()._validate_fields(node_id, kwargs, ranges, own_range, diagnostics)

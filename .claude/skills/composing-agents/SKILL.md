@@ -259,6 +259,9 @@ A value nests at most 100 levels (each record and list is one): a binding, MAP
 `over` list, or node output nested deeper fails its node, and wrapping a 100-level
 value (`${[x]}`, a record flow output, a MAP's result list) adds the level that fails.
 An AGENT's tool call whose arguments nest deeper fails the node before any call runs.
+A value written out in the flow file (a node input, MAP `over:`, WAIT `until:`, a value
+entry, a default, a CASE value branch, a flow `output:`) nested deeper is a located
+load error instead, YAML aliases included; a record output's fields may nest 99.
 An expression nests at most 100 levels too (each call, list, unary operator, comparison,
 `|`/`:-`/`:?`, and operator chain is one, so `a + b + ...` is one level at any length);
 a deeper one is a load error, so split it into smaller bindings.
@@ -581,9 +584,10 @@ writer:
 
 Every variable needs a tag and an explicit, valid default, including nullable
 variables (`note: !Optional(str) null`). Names cannot overlap inputs. Defaults are
-literal values; `${...}` inside a default string stays text. A NaN or infinity default,
-or one nested deeper than 100 levels, fails the node when it runs. Each invocation
-receives a fresh copy and repeated prompt references read the same local value.
+literal values; `${...}` inside a default string stays text. A default nested deeper
+than 100 levels is a load error; a NaN or infinity default fails the node when it
+runs. Each invocation receives a fresh copy and repeated prompt references read the
+same local value.
 Ownership follows the authored AGENT path plus name across MAP items and LOOP
 iterations. These declarations create no data edges. Model settings still belong in
 `llm_config:` even when a

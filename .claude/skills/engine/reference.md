@@ -1193,7 +1193,14 @@ boolean/arithmetic, prompt builtin-call) are unified. Three modules, one pipelin
   `|` coalesce). A post-parse guard reserves those four operator words as exact
   reference roots while allowing them as dotted fields, and requires every
   `isinstance` call to be exactly `isinstance(<expr>, <bare NAME>)` with no field read
-  on the result. No evaluation happens
+  on the result. A chain of same-precedence operators is one flat node (`sum`,
+  `product`, `power`; the evaluator folds left to right, `**` right to left). Before any
+  recursive walker, an iterative check rejects a tree nested deeper than
+  `MAX_EXPRESSION_NESTING` (`= typesys.values.MAX_VALUE_NESTING`, 100; each call, list,
+  unary operator, comparison, escape, and chain is a level). A traced chain keeps
+  two-child routes, so the run-record format is unchanged: a `+` chain of lists is a
+  balanced tree of `concat`s, and a `*` chain repeating one list is one `repeat` with a
+  count child. No evaluation happens
   here. The evaluator walks this **restricted AST** — there is no Python `eval`;
   a builtin call resolves only against the
   `TEMPLATE_FNS` whitelist, so a span can compute but cannot reach arbitrary code.

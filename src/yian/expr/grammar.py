@@ -9,7 +9,10 @@ Evaluation deliberately lives in `expr.expressions`.
 - References: bare `a`, dotted `a.b.c`, and — for the runtime graph-expansion
   separators — segments containing `#` / `/` (`node#0.output`, `def/child.output`).
 - Arithmetic (`+ - * / %` and `**`), unary minus, comparisons
-  (`== != < <= > >=`), `and` / `or` / `not`, `in` / `not in`.
+  (`== != < <= > >=`), `and` / `or` / `not`, `in` / `not in`. A chain of
+  same-precedence arithmetic operators is one flat node, like `and` / `or`:
+  `a + b - c` is one `sum`, `a * b / c` one `product`, `a ** b ** c` one `power`,
+  each holding its operator tokens between the operands.
 - List literals (`[1, "x"]`) and parenthesised sub-expressions.
 - Pure builtin calls (`upper(name)`, `join(items, ", ")`), with dotted access on
   the result (`fn(x).field`) — mirroring the prompt call form.
@@ -67,11 +70,12 @@ from lark.exceptions import LarkError
 # Reuse the existing expression error — `expressions.ExpressionError` is already
 # the base of `expressions.RequiredError`, so parse failures here stay in one family.
 from yian.expr.expressions import ISINSTANCE, ExpressionError
+from yian.typesys.values import MAX_VALUE_NESTING
 
 # The unified grammar. Precedence, lowest to highest:
 #   coalesce (`|`) -> default/required (`:-`/`:?`) -> or -> and -> not
-#   -> comparison (incl. in / not in) -> sum -> product -> unary minus
-#   -> power (`**`, right-assoc) -> atom.
+#   -> comparison (incl. in / not in) -> sum (`+ -`) -> product (`* / %`)
+#   -> unary minus -> power (`**`, folded right to left) -> atom.
 # `?rule` inlines a single-child parse to keep the tree flat (Lark convention).
 _GRAMMAR = r"""
 ?start: coalesce
@@ -96,19 +100,20 @@ _GRAMMAR = r"""
            | sum IN sum        -> compare_in
            | sum NOT_IN sum    -> compare_notin
 
-?sum: product
-    | sum "+" product   -> add
-    | sum "-" product   -> sub
-?product: unary
-        | product "*" unary   -> mul
-        | product "/" unary   -> div
-        | product "%" unary   -> mod
+// A chain of same-precedence operators is ONE flat node, like `and` / `or`:
+// `a + b - c` is `sum[a, +, b, -, c]`, with the operator tokens kept between the operands.
+// The evaluator folds `sum` and `product` left to right and `power` right to left, so a
+// long chain needs no recursion per operator.
+?sum: product (ADD_OP product)*
+?product: unary (MUL_OP unary)*
 // unary minus binds looser than `**` (Python: `-x ** 2` == `-(x ** 2)`).
 ?unary: power
       | "-" unary   -> neg
-// `**` is right-associative and binds tighter than unary minus.
-?power: atom
-      | atom "**" unary   -> power
+// `**` binds tighter than unary minus, yet its right operand may be negated
+// (`2 ** -a ** b` == `2 ** (-(a ** b))`). Only the last operand can be, so the rule
+// stays free of LALR conflicts.
+?power: atom (POW_OP atom)* (POW_OP neg_tail)?
+?neg_tail: "-" unary   -> neg
 
 ?atom: refcall
      | NUMBER | STRING | BOOL | NULL
@@ -129,6 +134,9 @@ arg: [NAME "="] coalesce
 // list literal: elements are full expressions (refs / literals / arithmetic).
 list_lit: "[" [coalesce ("," coalesce)*] "]"
 
+ADD_OP: "+" | "-"
+MUL_OP: "*" | "/" | "%"
+POW_OP: "**"
 COMP_OP: "==" | "!=" | "<=" | ">=" | "<" | ">"
 STRING: /"[^"]*"/ | /'[^']*'/
 NUMBER: /\d+(\.\d+)?/
@@ -155,6 +163,13 @@ NULL.3: /null\b/ | /none\b/
 # False so optional branches drop rather than inserting `None` placeholders into
 # the tree.
 _PARSER = Lark(_GRAMMAR, parser="lalr", maybe_placeholders=False)
+
+# One nesting bound for yian: an expression nests no deeper than a value, and the two
+# move together on purpose.
+MAX_EXPRESSION_NESTING = MAX_VALUE_NESTING
+
+# Parse nodes that only group the parts of a reference or call; they add no level.
+_WRAPPER_NODES = frozenset({"trailer", "call_suffix", "arg"})
 
 _RESERVED_REFERENCE_ROOTS = frozenset({"and", "or", "not", "in"})
 
@@ -200,10 +215,11 @@ _NAME_CHAR = re.compile(r"[A-Za-z0-9_#/]")
 
 
 def _parses(text: str) -> bool:
-    """True when `text` parses under the grammar (a rewrite worth suggesting)."""
+    """True when `text` parses under the grammar within the nesting limit (a rewrite worth
+    suggesting)."""
     try:
-        _PARSER.parse(text)
-    except LarkError:
+        _reject_deep_expression(_PARSER.parse(text))
+    except (LarkError, ExpressionError):
         return False
     return True
 
@@ -221,9 +237,12 @@ def _is_lone_atom(text: str) -> bool:
     )
 
 
-def _unwrap_spans(text: str) -> str | None:
+def _unwrap_spans(text: str, depth: int = 0) -> str | None:
     """`text` with each `${X}` outside a string literal replaced by `X`, or `(X)` when `X`
-    is more than one reference or literal; None when a `${` is unbalanced."""
+    is more than one reference or literal; None when a `${` is unbalanced or spans nest
+    deeper than `MAX_EXPRESSION_NESTING` (`depth` counts the spans around `text`)."""
+    if depth > MAX_EXPRESSION_NESTING:
+        return None
     out: list[str] = []
     quote, i, n = None, 0, len(text)
     while i < n:
@@ -239,7 +258,7 @@ def _unwrap_spans(text: str) -> str | None:
             i += 1
         elif c == "$" and text[i + 1 : i + 2] == "{":
             end = find_span_end(text, i + 2)
-            inner = None if end is None else _unwrap_spans(text[i + 2 : end])
+            inner = None if end is None else _unwrap_spans(text[i + 2 : end], depth + 1)
             if inner is None:
                 return None
             inner = inner.strip()
@@ -297,6 +316,45 @@ def reject_nested_spans(text: str, *, in_span: bool = False) -> None:
         rewrite = rewrite.strip()
         message += f"; write `{'${' + rewrite + '}' if in_span else rewrite}`"
     raise ExpressionError(message)
+
+
+def _reject_deep_expression(tree: Tree | Token) -> None:
+    """Raise if a parsed expression nests deeper than `MAX_EXPRESSION_NESTING` levels.
+
+    Each operator chain (`sum`, `product`, `power`, `and_expr`, `or_expr`), unary operator,
+    comparison, escape (`|`, `:-`, `:?`), list literal, and call is one level; a plain
+    reference and the parts of a reference or call add none, and parentheses make no node.
+    The walk is iterative, so it is safe on a tree deep enough to overflow a recursive one.
+
+    Args:
+        tree (`Tree | Token`):
+            A parse from `_PARSER`.
+
+    Raises:
+        `ExpressionError`:
+            If any path from the root passes more than `MAX_EXPRESSION_NESTING` levels.
+    """
+    stack: list[tuple[Tree | Token, int]] = [(tree, 0)]
+    while stack:
+        node, depth = stack.pop()
+        if not isinstance(node, Tree):
+            continue
+        if node.data not in _WRAPPER_NODES and (
+            node.data != "refcall"
+            or any(
+                isinstance(child, Tree) and child.data == "call_suffix"
+                for child in node.children
+            )
+        ):
+            depth += 1
+            if depth > MAX_EXPRESSION_NESTING:
+                raise ExpressionError(
+                    f"expression nests deeper than {MAX_EXPRESSION_NESTING} levels, the "
+                    "limit for a yian expression (each call, list, unary operator, "
+                    "comparison, and chain of operators is a level); split it into smaller "
+                    "bindings or steps"
+                )
+        stack.extend((child, depth) for child in node.children)
 
 
 def _reject_reserved_reference_roots(tree: Tree | Token) -> None:
@@ -439,23 +497,28 @@ def parse_expr(text: str) -> Tree | Token:
             The Lark parse tree. Its shape is the grammar above: `refcall` for a
             ref-or-call, `call_suffix` marking a call, `coalesce` (present ONLY
             when a `|` actually appears) / `default_expr` / `required_expr` at the
-            top, and the arithmetic/boolean chain below. A LONE literal — a bare
-            `NUMBER`, `STRING`, `BOOL`, or `NULL` — inlines all the way up and comes
-            back as a top-level `Token` (no wrapper node), since no spurious
-            one-child `coalesce` is inserted.
+            top, and the boolean chains below. An arithmetic chain is one flat
+            `sum`, `product` or `power` node whose operands alternate with their
+            `ADD_OP` / `MUL_OP` / `POW_OP` tokens. A LONE literal — a bare `NUMBER`,
+            `STRING`, `BOOL`, or `NULL` — inlines all the way up and comes back as a
+            top-level `Token` (no wrapper node), since no spurious one-child
+            `coalesce` is inserted.
 
     Raises:
         `ExpressionError`:
             If `text` holds a `${...}` (see `reject_nested_spans`), does not parse,
-            is a dotted-callee builtin call, uses a reserved operator word as a
-            reference root, calls `isinstance` with anything but a value and a bare
-            type name, or repeats a keyword argument.
+            nests deeper than `MAX_EXPRESSION_NESTING` levels, is a dotted-callee
+            builtin call, uses a reserved operator word as a reference root, calls
+            `isinstance` with anything but a value and a bare type name, or repeats a
+            keyword argument.
     """
     reject_nested_spans(text)
     try:
         tree = _PARSER.parse(text)
     except LarkError as exc:
         raise ExpressionError(f"could not parse expression {text!r}: {exc}") from exc
+    # First, so no later walk meets a tree deep enough to overflow it.
+    _reject_deep_expression(tree)
     _reject_dotted_callee(tree)
     # Before the reserved-root check, so `isinstance(x, in)` reports the type-name rule.
     _validate_isinstance(tree)

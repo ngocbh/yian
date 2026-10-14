@@ -299,9 +299,17 @@ class LoopDescriptor(NodeDescriptor):
             try:
                 tree = parse_condition(predicate_src)
             except ExpressionError as exc:
-                errors.append(
+                message = (
                     f"loop node {self.id!r}: `{pred_kw}:` is not a valid boolean expression: {exc}"
                 )
+                if not errors:
+                    # Alone, the error belongs to the field; beside other errors it joins
+                    # them at the node.
+                    raise ctx.diagnostics.error(
+                        message,
+                        range=self.field_ranges.get(("field", pred_kw)) or self.range,
+                    ) from exc
+                errors.append(message)
                 tree = None
             refs = expr_refs(tree) if tree is not None else []
             heads = {r.split(".", 1)[0] for r in refs}

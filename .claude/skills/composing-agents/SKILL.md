@@ -253,6 +253,9 @@ A value nests at most 100 levels (each record and list is one): a binding, MAP
 `over` list, or node output nested deeper fails its node, and wrapping a 100-level
 value (`${[x]}`, a record flow output, a MAP's result list) adds the level that fails.
 An AGENT's tool call whose arguments nest deeper fails the node before any call runs.
+An expression nests at most 100 levels too (each call, list, unary operator, comparison,
+`|`/`:-`/`:?`, and operator chain is one, so `a + b + ...` is one level at any length);
+a deeper one is a load error, so split it into smaller bindings.
 
 Only values supplied to the top-level flow (CLI, JSON inputs, `run_flow`) may undergo
 string coercion; a `call`, `map`, or `loop` edge is not a flow boundary.

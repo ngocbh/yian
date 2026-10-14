@@ -391,6 +391,17 @@ before the run starts. A record flow output such as `{t: ${n.output}}` adds a le
 so wrapping a 100-level output fails `contract.output` at `__end__`. See
 [Types → Nesting limit](typing.md#nesting-limit).
 
+An expression nests at most 100 levels too: each call, list, unary operator,
+comparison, `|`/`:-`/`:?`, and chain of operators is a level, so `a + b - c` is one
+level at any length. A deeper expression is a load error at its field; split it into
+smaller bindings or steps. See
+[Expressions → Expression nesting limit](expressions.md#expression-nesting-limit).
+
+Changed: an expression nested deeper than 100 levels used to load; it is now a load
+error. Split it into smaller bindings. A long operator chain such as
+`${a + b + c + ...}`, which used to crash with a `RecursionError`, now works at any
+length.
+
 !!! note "Flow calls are not expressions"
     A `${...}` computes over values — it does **not** invoke a flow. To call a
     child flow inline, use the `call(...)` directive (see [`call` / `map`](#call-map-composition-over-child-flows)),
@@ -2937,6 +2948,10 @@ One `${...}` grammar serves every context — the difference is what each contex
   binding (see [Expressions → `isinstance`](expressions.md#isinstance-the-type-test)).
   A span may call only a builtin, with arguments it takes; anything else is a load
   error at that prompt.
+
+In every context an expression nests at most 100 levels; a deeper one is a load error
+at its field (see
+[Expressions → Expression nesting limit](expressions.md#expression-nesting-limit)).
 
 Changed: a condition that called an unknown function, or a builtin with arguments it
 doesn't take, used to load and fail when evaluated (an assert reported "pre-assert

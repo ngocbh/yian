@@ -297,3 +297,33 @@ output: ${brief.output}
 
 def test_prompt_with_a_nested_span_fails_to_load_with_the_rewrite():
     assert "write `${upper(name)}`" in str(_load_error(_PROMPT))
+
+
+_DEEP_SPANS = "${" * 3000 + "x" + "}" * 3000
+
+
+def test_deeply_nested_spans_are_rejected_without_a_rewrite():
+    with pytest.raises(ExpressionError, match=r"can't appear inside an expression") as caught:
+        parse_expr(_DEEP_SPANS)
+    assert "write" not in str(caught.value)
+
+
+def test_deeply_nested_template_spans_are_rejected_without_a_rewrite():
+    with pytest.raises(ExpressionError, match=r"can't appear inside an expression") as caught:
+        scan_template(_DEEP_SPANS)
+    assert "write" not in str(caught.value)
+
+
+def test_a_rewrite_past_the_nesting_limit_is_not_suggested():
+    # The rewrite `not (not ... true)` would be 101 levels deep, so it would not parse.
+    with pytest.raises(ExpressionError, match=r"can't appear inside an expression") as caught:
+        parse_expr("not ${" + "not " * 100 + "true}")
+    assert "write" not in str(caught.value)
+
+
+def test_a_rewrite_at_the_nesting_limit_is_suggested():
+    with pytest.raises(ExpressionError) as caught:
+        parse_expr("not ${" + "not " * 99 + "true}")
+    assert str(caught.value) == (
+        "`${...}` can't appear inside an expression; write `not (" + "not " * 99 + "true)`"
+    )

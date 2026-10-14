@@ -13,6 +13,7 @@ type named in the `types` table every evaluation entry point accepts, and a cons
 """
 
 import inspect
+import operator
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
@@ -488,6 +489,155 @@ def _value_add(lhs: Any, rhs: Any) -> Any:
     return lhs + rhs
 
 
+# One step of an arithmetic chain, by operator symbol.
+_ARITH_STEPS: dict[str, Callable[[Any, Any], Any]] = {
+    "+": _value_add,
+    "-": operator.sub,
+    "*": operator.mul,
+    "/": operator.truediv,
+    "%": operator.mod,
+    "**": operator.pow,
+}
+
+# The operator tokens between the operands of a `sum` / `product` / `power` chain. A literal
+# operand is a `Token` too, so operators are told apart by these types, never by `Token`.
+_ARITH_OP_TOKEN_TYPES = frozenset({"ADD_OP", "MUL_OP", "POW_OP"})
+
+
+def _split_chain(node: Tree) -> tuple[list, list[str]]:
+    """Split an arithmetic chain node into its operands and operator symbols.
+
+    Args:
+        node (`Tree`):
+            A `sum`, `product` or `power` node from `parse_expr`.
+
+    Returns:
+        `tuple[list, list[str]]`:
+            The operand subtrees and tokens in source order, and the operator symbols
+            between them (one fewer than the operands).
+    """
+    operands, operators = [], []
+    for child in node.children:
+        if isinstance(child, Token) and child.type in _ARITH_OP_TOKEN_TYPES:
+            operators.append(str(child))
+        else:
+            operands.append(child)
+    return operands, operators
+
+
+def _chain_text(operators: list[str], routes: "list[ValueRoute] | tuple[ValueRoute, ...]") -> str:
+    """Describe a chain from its operand routes, e.g. `(a + b - c)`.
+
+    Args:
+        operators (`list[str]`):
+            The operator symbols between the operands.
+        routes (`list[ValueRoute] | tuple[ValueRoute, ...]`):
+            The operand routes, one more than `operators`.
+
+    Returns:
+        `str`:
+            The operand expressions joined by their operators, in parentheses.
+    """
+    parts = [routes[0].expression]
+    for symbol, route in zip(operators, routes[1:]):
+        parts += [symbol, route.expression]
+    return "(" + " ".join(parts) + ")"
+
+
+def _balanced_concat(routes: list[ValueRoute], sizes: list[int]) -> ValueRoute:
+    """Trace a `+` chain of lists as a balanced tree of two-child `concat` routes.
+
+    Two-child routes keep the run-record format of a single `left + right`, and the
+    balanced split keeps a long chain's route about `log2(n)` deep.
+
+    Args:
+        routes (`list[ValueRoute]`):
+            The operand routes, in order.
+        sizes (`list[int]`):
+            Each operand list's length.
+
+    Returns:
+        `ValueRoute`:
+            The lone route for one operand, else a `concat` of the two halves, whose
+            expression is the halves' operands joined by `+`.
+    """
+    if len(routes) == 1:
+        return routes[0]
+    middle = len(routes) // 2
+    return ValueRoute(
+        "concat",
+        children=(
+            _balanced_concat(routes[:middle], sizes[:middle]),
+            _balanced_concat(routes[middle:], sizes[middle:]),
+        ),
+        expression=_chain_text(["+"] * (len(routes) - 1), routes),
+        sizes=(sum(sizes[:middle]), sum(sizes[middle:])),
+    )
+
+
+def _repeat_route(
+    operators: list[str], values: list, running: list, routes: list[ValueRoute], expression: str,
+) -> "ValueRoute | None":
+    """Trace a `* / %` chain that repeats one list as a single two-child `repeat` route.
+
+    The chain repeats a list when exactly one operand is an exact `list`, every operator
+    from the one just before it onward is `*`, every later operand is an `int`, and the
+    running value before it (if any) is an `int`: then every binary step from the list
+    onward is a list times an `int`.
+
+    Args:
+        operators (`list[str]`):
+            The chain's operator symbols.
+        values (`list`):
+            The operand values, in order.
+        running (`list`):
+            The running value after each operand.
+        routes (`list[ValueRoute]`):
+            The operand routes, in order.
+        expression (`str`):
+            The whole chain's description.
+
+    Returns:
+        `ValueRoute | None`:
+            The `repeat` route, whose count child is the lone other operand's route or a
+            `scalar` over the other operands' routes valued at the effective count; or
+            `None` when the chain does not repeat a list.
+    """
+    lists = [index for index, value in enumerate(values) if type(value) is list]
+    if len(lists) != 1:
+        return None
+    at = lists[0]
+    if any(symbol != "*" for symbol in operators[max(at - 1, 0):]):
+        return None
+    if not all(isinstance(value, int) for value in values[at + 1:]):
+        return None
+    if at > 0 and not isinstance(running[at - 1], int):
+        return None
+    # `int.__int__` reads the value without calling an `int` subclass's conversion hooks.
+    others = [index for index in range(len(values)) if index != at]
+    if len(values) == 2:
+        count = int.__int__(values[others[0]])
+        count_route = routes[others[0]]
+    else:
+        # Python clamps a negative count at every step (`[x] * -1 * -1 == []`), so the
+        # count is the product of the clamped counts in evaluation order.
+        count = max(int.__int__(running[at - 1]), 0) if at > 0 else 1
+        for value in values[at + 1:]:
+            count *= max(int.__int__(value), 0)
+        count_routes = [routes[index] for index in others]
+        count_route = replace(
+            ValueRoute.literal(count), kind="scalar", children=tuple(count_routes),
+            expression=_chain_text([operators[index - 1] for index in others[1:]], count_routes),
+        )
+    content_index = 0 if at == 0 else 1
+    return ValueRoute(
+        "repeat",
+        children=(routes[at], count_route) if at == 0 else (count_route, routes[at]),
+        expression=expression, sizes=(len(values[at]),), count=count,
+        content_index=content_index,
+    )
+
+
 @dataclass
 class _TraceFrame:
     """Routes collected by the current expression evaluation frame."""
@@ -564,9 +714,10 @@ class _EvalExpr:
     def _describe(self, node: "Tree | Token", children: list[ValueRoute]) -> str:
         """Describe the evaluated operands without another expression walk."""
         kind = str(node.data)
+        if kind in ("sum", "product", "power"):
+            return _chain_text(_split_chain(node)[1], children)
         symbol = {
-            "add": "+", "sub": "-", "mul": "*", "div": "/", "mod": "%",
-            "power": "**", "or_expr": "or", "and_expr": "and",
+            "or_expr": "or", "and_expr": "and",
             "compare_in": "in", "compare_notin": "not in",
         }.get(kind)
         if kind == "compare":
@@ -908,11 +1059,27 @@ class _EvalExpr:
         return _eval_comparison("not in", self._as_value(self._walk(lhs)), self._as_value(self._walk(rhs)))
 
     # --- arithmetic — Python operators on resolved VALUES --- #
-    def _binop(self, node: Tree, op: Callable[[Any, Any], Any], symbol: str) -> Any:
-        lhs = self._as_value(self._walk(node.children[0]))
-        rhs = self._as_value(self._walk(node.children[1]))
+    def _apply_step(self, symbol: str, lhs: Any, rhs: Any) -> Any:
+        """Apply one operator of an arithmetic chain to two resolved values.
+
+        Args:
+            symbol (`str`):
+                The operator: `+`, `-`, `*`, `/`, `%` or `**`.
+            lhs (`Any`):
+                The left value: the running value of a left fold, or an operand.
+            rhs (`Any`):
+                The right value.
+
+        Returns:
+            `Any`:
+                Python's result of the operator.
+
+        Raises:
+            `ExpressionError`:
+                If Python raises; the message names the operator and both values.
+        """
         try:
-            value = op(lhs, rhs)
+            return _ARITH_STEPS[symbol](lhs, rhs)
         except ZeroDivisionError as exc:
             l, r = _operand_repr(lhs), _operand_repr(rhs)
             raise ExpressionError(f"division by zero: {l} {symbol} {r}") from exc
@@ -930,42 +1097,53 @@ class _EvalExpr:
         except ValueError as exc:
             l, r = _operand_repr(lhs), _operand_repr(rhs)
             raise ExpressionError(f"cannot compute {l} {symbol} {r}: {exc}") from exc
-        if self._trace and symbol == "+" and type(lhs) is list and type(rhs) is list:
-            self._frames[-1].route = ValueRoute(
-                "concat", children=tuple(self._frames[-1].children),
-                expression=self._describe(node, self._frames[-1].children), sizes=(len(lhs), len(rhs)),
-            )
-        elif self._trace and symbol == "*" and (
-            (type(lhs) is list and isinstance(rhs, int))
-            or (isinstance(lhs, int) and type(rhs) is list)
-        ):
-            content_index = 0 if type(lhs) is list else 1
-            content, count = (lhs, rhs) if content_index == 0 else (rhs, lhs)
-            self._frames[-1].route = ValueRoute(
-                "repeat", children=tuple(self._frames[-1].children),
-                expression=self._describe(node, self._frames[-1].children),
-                sizes=(len(content),), count=int.__int__(count),
-                content_index=content_index,
-            )
-        return value
 
-    def _do_add(self, node: Tree) -> Any:
-        return self._binop(node, _value_add, "+")
+    def _do_sum(self, node: Tree) -> Any:
+        """A `+ -` or `* / %` chain, folded left to right.
 
-    def _do_sub(self, node: Tree) -> Any:
-        return self._binop(node, lambda a, b: a - b, "-")
+        Each operand is walked just before its step is applied, so evaluation order,
+        error precedence and each step's message (naming the running value) are those
+        of the left-nested binary steps. The fold is a loop, so a chain of any length
+        adds no recursion.
+        """
+        operands, operators = _split_chain(node)
+        acc = self._as_value(self._walk(operands[0]))
+        # The operand values and running values, kept only when tracing (for the route).
+        values, running = [acc], [acc]
+        for symbol, operand in zip(operators, operands[1:]):
+            rhs = self._as_value(self._walk(operand))
+            acc = self._apply_step(symbol, acc, rhs)
+            if self._trace:
+                values.append(rhs)
+                running.append(acc)
+        if self._trace:
+            routes = list(self._frames[-1].children)
+            if node.data == "sum" and all(symbol == "+" for symbol in operators) and all(
+                type(value) is list for value in values
+            ):
+                self._frames[-1].route = _balanced_concat(routes, [len(v) for v in values])
+            elif node.data == "product":
+                route = _repeat_route(
+                    operators, values, running, routes, self._describe(node, routes),
+                )
+                if route is not None:
+                    self._frames[-1].route = route
+        return acc
 
-    def _do_mul(self, node: Tree) -> Any:
-        return self._binop(node, lambda a, b: a * b, "*")
-
-    def _do_div(self, node: Tree) -> Any:
-        return self._binop(node, lambda a, b: a / b, "/")
-
-    def _do_mod(self, node: Tree) -> Any:
-        return self._binop(node, lambda a, b: a % b, "%")
+    _do_product = _do_sum
 
     def _do_power(self, node: Tree) -> Any:
-        return self._binop(node, lambda a, b: a ** b, "**")
+        """A `**` chain: every operand walked left to right, then folded right to left.
+
+        This keeps the right-nested binary steps' order (`a ** (b ** c)`): a strict
+        miss in an earlier operand wins before a later one is walked, and the innermost
+        step's error comes first.
+        """
+        values = [self._as_value(self._walk(operand)) for operand in _split_chain(node)[0]]
+        acc = values[-1]
+        for lhs in reversed(values[:-1]):
+            acc = self._apply_step("**", lhs, acc)
+        return acc
 
     def _do_neg(self, node: Tree) -> Any:
         v = self._as_value(self._walk(node.children[0]))

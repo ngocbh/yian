@@ -93,6 +93,8 @@ this model whenever you design anything:
   value is a level deeper, so a MAP's result list or a record flow output can
   fail at its END. Only the kind-blind `commits_input_record` trait (START) may go one level
   over. Replay and the run-log codecs never apply the limit, so older logs replay.
+  An expression has the same bound (`expr.grammar.MAX_EXPRESSION_NESTING`), which
+  `parse_expr` checks iteratively before any other walk; an operator chain is one level.
 - `AgentNode.variables` reuses ordered `Parameter` declarations, each with an
   exact contract and explicit typed default. Reject duplicate names and input
   collisions. Resolve a detached default record once per invocation, then render

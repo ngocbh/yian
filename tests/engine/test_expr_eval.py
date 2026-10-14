@@ -419,14 +419,14 @@ def test_default_coalesce_grouping_falls_through_to_c():
 
 def test_coalesce_arithmetic_grouping_tree():
     # STRUCTURAL proof of `a | (b + 1)`: a `coalesce` whose second operand is an
-    # `add` node (arithmetic binds tighter than `|`), NOT `(a | b) + 1`.
+    # `sum` node (arithmetic binds tighter than `|`), NOT `(a | b) + 1`.
     from lark import Tree
 
     tree = parse_expr("a | b + 1")
     assert isinstance(tree, Tree) and tree.data == "coalesce"
     first, second = tree.children
     assert _ref_name(first) == "a"
-    assert isinstance(second, Tree) and second.data == "add"
+    assert isinstance(second, Tree) and second.data == "sum"
 
 
 def test_coalesce_arithmetic_grouping_value():

@@ -3,6 +3,7 @@
 The engine is three layers, all pool-agnostic (they take a `resolve` callable):
 - `grammar` (`parse_expr`) — PARSE ONLY: one Lark grammar for every `${...}`
   construct (refs, arithmetic, boolean, coalesce/default/required, builtin calls).
+  An expression nests at most `MAX_EXPRESSION_NESTING` (100) levels.
 - `expressions` (`eval_expr`, `infer_expr_type`, `expr_refs`) — evaluate a parsed
   tree against a `resolve`, conservatively infer its static type, and walk its
   reference leaves. Also the `when:`/`asserts:` condition surface
@@ -28,8 +29,9 @@ stdlib-only `yian.json_codec`, and stays independent of nodes, memory, and runti
 Flow invocation is NO LONGER a `${...}` construct — it is the compile-time
 whole-value `call(...)` directive (in `compose.desugar.inline_calls`), not part of this engine.
 
-Knows about:   `typesys` (the pool and value types, in `expressions`) and the
-               stdlib-only `yian.json_codec` (JSON text for ints of any size).
+Knows about:   `typesys` (the pool and value types, in `expressions`; the value
+               nesting bound, in `grammar`) and the stdlib-only `yian.json_codec`
+               (JSON text for ints of any size).
 Never imports: `nodes`, `compile`, or `runtime` (they import IT).
 """
 
@@ -51,7 +53,7 @@ from yian.expr.expressions import (
     rewrite_condition_refs,
     rewrite_expr_refs,
 )
-from yian.expr.grammar import parse_expr
+from yian.expr.grammar import MAX_EXPRESSION_NESTING, parse_expr
 from yian.expr.lineage import FeedbackValue, has_feedback, validate_feedback
 from yian.expr.template import (
     ConditionRead,
@@ -73,6 +75,7 @@ __all__ = [
     "ConstructorTypeError",
     "ExpressionError",
     "FeedbackValue",
+    "MAX_EXPRESSION_NESTING",
     "RequiredError",
     "binding_co_skips",
     "check_template_calls",

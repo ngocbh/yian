@@ -62,8 +62,8 @@ from yian.nodes.contracts import (
 
 _WORLD_LIMIT = 10_000
 
-# The grammar's arithmetic trees: `+ - * / % **` and unary minus.
-_ARITHMETIC = frozenset({"add", "sub", "mul", "div", "mod", "power", "neg"})
+# The grammar's arithmetic trees: the `+ -`, `* / %` and `**` chains and unary minus.
+_ARITHMETIC = frozenset({"sum", "product", "power", "neg"})
 
 
 @dataclass

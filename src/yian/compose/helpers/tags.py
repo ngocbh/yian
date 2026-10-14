@@ -377,12 +377,7 @@ def suggest_tag(
             spell (an unnamed record or union, or anything needing a `,` or quotes),
             advice to name the type in `typedefs:` and tag with its name.
     """
-    if type_text is not None and _writable_as_tag(type_text):
-        text: str | None = type_text
-    elif typ is not None:
-        text = _tag_text(typ, registry or {})
-    else:
-        text = None
+    text = tag_text(typ, registry=registry, type_text=type_text)
     if text is None:
         if type_text is None:
             assert typ is not None, "suggest_tag needs a type or its text"
@@ -391,6 +386,34 @@ def suggest_tag(
     if value is None:
         return f"`{name}: !{text}`"
     return f"`{name}: !{text} {value}`"
+
+
+def tag_text(
+    typ: Type | None,
+    *,
+    registry: TypeRegistry | None = None,
+    type_text: str | None = None,
+) -> str | None:
+    """Spell a type as the text after `!`, or return `None` when no tag can spell it.
+
+    Args:
+        typ (`Type | None`): The type, or `None` when its text names no type.
+        registry (`TypeRegistry | None`, *optional*, defaults to `None`): The flow's
+            typedefs; a typedef that resolves to `typ` (or to its list element or
+            non-null form) is spelled by its name.
+        type_text (`str | None`, *optional*, defaults to `None`): The authored
+            spelling of `typ`, used as written when a tag can write it.
+
+    Returns:
+        `str | None`: Such as `"list(int)"` or `"Reply"`, or `None` for a type a tag
+            can't spell (an unnamed record or union, or anything needing a `,` or
+            quotes).
+    """
+    if type_text is not None and _writable_as_tag(type_text):
+        return type_text
+    if typ is None:
+        return None
+    return _tag_text(typ, registry or {})
 
 
 def _tag_text(typ: Type, registry: TypeRegistry) -> str | None:

@@ -93,9 +93,10 @@ class CaseDescriptor(NodeDescriptor):
 
     `then_styles` (aligned 1:1 with `cases`), `else_style`, and `has_else` exist so the
     branch check can tell an unquoted node name from quoted text, and `else: null` from no
-    `else:` at all. A style is the YAML scalar style of the authored value (non-string scalars
-    report ``"plain"``; mappings, lists, missing values, and strings read through a source-free
-    cursor report None). Downstream treats an unknown (None) style as unquoted (plain).
+    `else:` at all; `then_tags` and `else_tag` let it keep a tagged value's tag. A style
+    is the YAML scalar style of the authored value (non-string scalars report ``"plain"``;
+    mappings, lists, missing values, and strings read through a source-free cursor report
+    None). Downstream treats an unknown (None) style as unquoted (plain).
 
     Inherits the common node fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` + the
     `range`/`field_ranges` parse metadata) and delegates common parsing to `NodeDescriptor`.
@@ -147,6 +148,10 @@ class CaseDescriptor(NodeDescriptor):
     # Out of equality like the ranges: a directly constructed descriptor has no source styles.
     then_styles: list[Optional[str]] = field(default_factory=list, compare=False)
     else_style: Optional[str] = field(default=None, compare=False)
+    # The local YAML tag on each `cases[N].then` value and on the `else:` value (None when
+    # untagged), so a tagged value branch keeps its tag in the value entry it suggests.
+    then_tags: list[Optional[str]] = field(default_factory=list, compare=False)
+    else_tag: Optional[str] = field(default=None, compare=False)
     # Source-neutral sites follow the same positional identity as the Compose-only ranges.
     # An empty tuple means direct/source-free construction; otherwise it aligns 1:1
     # with `cases`. `on_origin` belongs to the generated `__on` binding, not a Case.
@@ -193,8 +198,9 @@ class CaseDescriptor(NodeDescriptor):
         `sequence_field_ranges` does. `_desugar_searched` / `desugar_case_call_targets` read these
         to give a synth CASE param / call target its own caret.
 
-        It also records each `then:` value's YAML scalar style (aligned with `cases`), the
-        `else:` value's style, and whether `else:` was written at all. A `cases:` that is not a
+        It also records each `then:` value's YAML scalar style and tag (aligned with
+        `cases`), the `else:` value's style and tag, and whether `else:` was written at
+        all. A `cases:` that is not a
         list of mappings is a located load error before any of this runs."""
         desc = super().parse(node_id, cursor)
         cls._check_cases_shape(desc, cursor)
@@ -203,6 +209,7 @@ class CaseDescriptor(NodeDescriptor):
         updates: dict[str, Any] = {
             "has_else": has_else,
             "else_style": cursor.child("else").scalar_style if has_else else None,
+            "else_tag": cursor.child("else").tag if has_else else None,
         }
         when_ranges = cursor.sequence_field_ranges("cases", "when")
         then_ranges = cursor.sequence_field_ranges("cases", "then")
@@ -210,12 +217,14 @@ class CaseDescriptor(NodeDescriptor):
             updates["when_ranges"] = when_ranges
             updates["then_ranges"] = then_ranges
         cases_cursor = cursor.child("cases")
-        updates["then_styles"] = [
-            cases_cursor.child(index).child("then").scalar_style
-            if "then" in item
-            else None
+        thens = [
+            cases_cursor.child(index).child("then") if "then" in item else None
             for index, item in enumerate(desc.cases)
         ]
+        updates["then_styles"] = [
+            None if then is None else then.scalar_style for then in thens
+        ]
+        updates["then_tags"] = [None if then is None else then.tag for then in thens]
         return replace(desc, **updates)
 
     @staticmethod

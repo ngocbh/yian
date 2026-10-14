@@ -1985,11 +1985,19 @@ case node 'route' then: a branch names a node or calls a flow; put the value in 
 ```
 
 That covers quoted text (`then: "reply"` too, even when a node is named `reply`), `null`
-and an empty `else:`, numbers, bools, dates, mappings, lists, and unquoted text holding
-`${`. The entry is tagged with the `case`'s old `output:` type when a tag can spell it,
-else with a tag that fits the value (`!int 3`, `!Optional(str) null`, `!object {...}`).
-A quoted `call(...)` holding `${...}` gets its own error: drop the quotes to call the
-flow.
+and an empty `else:`, numbers, bools, dates, mappings, lists, unquoted text holding `${`,
+and a tagged value. The entry keeps a tagged branch's tag (`then: !int 3` gives
+`!int 3`). Otherwise it is tagged with the `case`'s old `output:` type when a tag can
+spell it and the value fits it, else with the type of a lone `${input.x}` or
+`${node.output}`, else with a tag that fits the value (`!int 3`, `!Optional(str) null`,
+`!object {...}`, `!list(list(int)) [[1], [2]]`). A lone span of another type shows
+`!<type>` for you to fill in, and so does a list of mixed items, which no tag holds.
+
+A value no entry can hold is its own error at the branch: a number that is not finite, a
+value that contains itself through a YAML alias, a `call(...)` nested in a mapping or
+list, a flow call inside `${...}` (call the flow as the branch instead:
+`then: call(take, ...)`), and a span reading the case itself. A quoted `call(...)`
+holding `${...}` gets its own error too: drop the quotes to call the flow.
 
 An unquoted word always names a node. A word that names no node is a load error that
 suggests the nearest node and a value entry for the text:

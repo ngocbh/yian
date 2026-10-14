@@ -1,18 +1,26 @@
 """Graph-stage: a `case` branch names a node or calls a flow, and a `case` has no `output:`.
 
-A `case` only routes. Each `then:`/`else:` is classified by its YAML scalar style:
+A `case` only routes. Each `then:`/`else:` is classified by its YAML tag and scalar style:
 
-- an unquoted string names a node unless it is a `call(...)`. A whole-value directive is
-  left for `desugar_case_call_targets`; any other text starting with `call(` is a load
-  error naming the problem. An unquoted bare word that names no node is a load error that
-  suggests the nearest node and the value entry to write for the text;
-- anything else is a value: quoted text (`"..."`, `'...'`, or a block `|`/`>`), `null` or
-  an empty `else:`, a number, a bool, a date, a mapping, a list, and unquoted text holding
-  `${`. A value branch is a load error that shows the rewrite: a value entry in `nodes:`
-  (`route_then_0: !str approve`) and the branch naming it. The entry is tagged with the
-  case's former `output:` type when a tag can spell it, else with a tag guessed from the
-  YAML value. A quoted `call(...)` holding a span is its own error, since quoting a call
-  makes it text and a value entry can't hold that text either.
+- an unquoted string starting with `call(` calls a flow. A whole-value directive is left
+  for `desugar_case_call_targets`; any other text starting with `call(` is a load error
+  naming the problem. Any other unquoted string without `${` that names a node names it
+  (a tag on it is rejected later, as on any untyped field). An untagged one that names
+  no node is a load error that suggests the nearest node and the value entry to write
+  for the text;
+- anything else is a value: a tagged value, quoted text (`"..."`, `'...'`, or a block
+  `|`/`>`), `null` or an empty `else:`, a number, a bool, a date, a mapping, a list, and
+  unquoted text holding `${`. A value branch is a load error that shows the rewrite: a
+  value entry in `nodes:` (`route_then_0: !str approve`) and the branch naming it. The
+  entry keeps the branch's own tag; else it takes the case's former `output:` type when
+  a tag can spell it and the value fits it; else the type of a lone `${input.x}` or
+  `${node.output}` reference, or a tag guessed from the YAML value; else a `!<type>`
+  placeholder (a lone span of another type, a list of mixed items).
+
+A value no entry can hold is its own load error instead of a rewrite: a number that is
+not finite, a value that contains itself, a `call(...)` nested in it, a flow call or a
+malformed span inside its `${...}`, a span reading the case itself, and a quoted
+`call(...)` holding a span (quoting a call makes it text).
 
 A case `output:` (`output: str`, or tagged `output: !str`) is a load error at the
 `output:` that says to tag the result where it is read (`x: !str ${route.output}`).
@@ -22,9 +30,9 @@ Runs in `_assemble` before `desugar_inline_calls`, so the branches are still as 
 and after `check_authored_bindings`, so a secret nested in a value branch is reported as a
 secret literal before a message here could echo it.
 
-Imports flow down/peer only: `compose.desugar.inline_calls` (the `call(...)` check and the
-synth call prefix), `compose.helpers` (errors, the `call(` head, YAML quoting, tag
-spelling), `compose.parse` (descriptors, identifiers, the example type of a value),
+Imports flow down/peer only: `compose.desugar` (the `call(...)` check and value entry
+descriptors), `compose.helpers` (errors, the `call(` head, YAML quoting, tag spelling,
+type reading), `compose.parse` (descriptors, identifiers, the example type of a value),
 `compose.source`, `diagnostics`, `expr`, and `typesys`. Only the loader pipeline imports
 this back.
 """
@@ -33,43 +41,60 @@ from __future__ import annotations
 
 import datetime
 import difflib
+import math
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Optional
 
 from yian.compose.desugar.inline_calls import (
-    _SYNTH_PREFIX,
     ArgumentValueError,
     SecretArgumentError,
     desugar_call_directives,
     holds_secret_keyword,
 )
+from yian.compose.desugar.value_entries import ValueEntryDescriptor
 from yian.compose.helpers.directives import CALL_HEAD
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError, source_text
 from yian.compose.helpers.tags import (
     QUOTED_STYLES,
+    has_span,
     old_form_suggestion,
     old_typed_text,
     resolve_type_text,
     suggest_tag,
     suggested_literal,
+    tag_text,
     yaml_quoted,
 )
 from yian.compose.helpers.types import read_type
 from yian.compose.parse.file import CaseDescriptor
-from yian.compose.parse.nodes import example_type, is_identifier
+from yian.compose.parse.nodes import (
+    MIXED_LIST_NOTE,
+    contains_itself,
+    example_type,
+    is_identifier,
+)
 from yian.compose.source import SourceCursor, SourceSyntaxError, parse_yaml_literal
 from yian.diagnostics import SourceRange
 from yian.expr import ExpressionError
-from yian.typesys import TypeCheckError
+from yian.expr.grammar import whole_span_interior
+from yian.expr.template import expr_refs_of, flow_call_callees_in_spans
+from yian.typesys import BUILTIN_TYPE_NAMES, TypeCheckError, build_value_as
 from yian.typesys.types import TypeRegistry
-from yian.typesys.values import Type, canonical_type_label
+from yian.typesys.values import Type
 
 _CLOSE_MATCH_CUTOFF = 0.6
 # A value longer than this is cut in a message; the author writes it as a block.
 _SHOWN_LIMIT = 60
 # Characters that end or nest a plain scalar inside a YAML flow mapping or list.
 _FLOW_SPECIAL = frozenset(",[]{}:#&*!|>'\"%@`")
+# The tag a branch's authored text starts with, such as `!int ` in `!int 3`.
+_TAG_PREFIX = re.compile(r"!\S*\s*")
+# A lone reference whose type is known before the build: `input.x` or `node.output`.
+_REFERENCE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)")
+# Shown after an entry tagged `!<type>` for a lone span whose type isn't known yet.
+_SPAN_TYPE_NOTE = "name its type for `<type>`"
 
 # Returns the authored `output:` of a case, or `None` when it has none.
 OutputReader = Callable[[str], Optional[SourceCursor]]
@@ -83,15 +108,18 @@ class _Branch:
         label (`str`): `"then:"` or `"else:"`.
         value (`Any`): The authored value.
         style (`Optional[str]`): Its YAML scalar style; `None` (unknown) reads as plain.
+        tag (`Optional[str]`): Its local YAML tag, such as `"int"`, or `None`.
         range (`Optional[SourceRange]`): The branch's range, else the case's range.
-        entry (`str`): The value entry id a rewrite suggests, such as `route_then_0`.
+        entry_base (`str`): The value entry id a rewrite suggests before it is made
+            unique among the node ids, such as `route_then_0`.
     """
 
     label: str
     value: Any
     style: Optional[str]
+    tag: Optional[str]
     range: Optional[SourceRange]
-    entry: str
+    entry_base: str
 
 
 @dataclass(frozen=True)
@@ -100,8 +128,8 @@ class _CaseOutput:
 
     Attributes:
         type (`Optional[Type]`): The declared type, or `None` when it does not resolve.
-        text (`Optional[str]`): The type as written when it is text (a tag or a type
-            name), else `None`.
+        text (`Optional[str]`): The type as written (a tag, a type name, or a record in
+            flow style); `None` only when `output:` is empty.
         range (`Optional[SourceRange]`): The `output:` range, else the case's range.
     """
 
@@ -113,52 +141,47 @@ class _CaseOutput:
 def check_case_branches(
     descriptors: Mapping[str, Any],
     *,
-    registry: TypeRegistry | None = None,
-    output_at: OutputReader | None = None,
-    diagnostics: LoadDiagnostics | None = None,
+    registry: TypeRegistry,
+    input_types: Mapping[str, Type],
+    output_at: OutputReader,
+    diagnostics: LoadDiagnostics,
 ) -> None:
     """Reject every `case` branch that is not a node or a call, and every case `output:`.
 
     Args:
         descriptors (`Mapping[str, Any]`): The flow's parsed descriptors, keyed by node
             id; branches are as authored.
-        registry (`TypeRegistry | None`, *optional*, defaults to `None`): The flow's
-            typedefs, for spelling a case's former `output:` type as a tag. `None` knows
-            the builtin types only.
-        output_at (`OutputReader | None`, *optional*, defaults to `None`): Returns a
-            case's authored `output:` by node id, or `None` when it has none. It sees a
-            tagged `output: !int`, which leaves the descriptor's `outputs` empty. `None`
-            reads `outputs` from the descriptor.
-        diagnostics (`LoadDiagnostics | None`, *optional*, defaults to `None`): Source
-            ownership for located errors; a fresh range-only owner when `None`.
+        registry (`TypeRegistry`): The flow's typedefs, for spelling a type as a tag.
+        input_types (`Mapping[str, Type]`): The flow's input types, which tag the value
+            entry of a lone `${input.x}` branch.
+        output_at (`OutputReader`): Returns a case's authored `output:` by node id, or
+            `None` when it has none. It sees a tagged `output: !int`, which leaves the
+            descriptor's `outputs` empty.
+        diagnostics (`LoadDiagnostics`): Source ownership for located errors.
 
     Raises:
-        `LoadError`: A branch holds a value, is an unquoted word that names no node, is
-            text starting with `call(` that is not one well-formed directive, or is a
-            quoted `call(...)` holding a span; or a case declares `output:`. Cases are
-            checked in order, each one's `then:` branches, its `else:`, then its
-            `output:`.
+        `LoadError`: A branch holds a value, is an unquoted word that names no node, or
+            is text starting with `call(` that is not one well-formed directive; or a
+            case declares `output:`. Cases are checked in order, each one's `then:`
+            branches, its `else:`, then its `output:`.
 
     Example:
         A case `route` with `then: "approve"` fails with ``case node 'route' then: a
         branch names a node or calls a flow; put the value in its own entry in `nodes:`
         and name it: `route_then_0: !str approve` and `then: route_then_0` ``.
     """
-    diagnostics = diagnostics or LoadDiagnostics()
-    registry = registry or {}
-    authored = [nid for nid in descriptors if not nid.startswith(_SYNTH_PREFIX)]
     for nid, desc in descriptors.items():
         if not isinstance(desc, CaseDescriptor):
             continue
-        output = _read_output(desc, output_at, registry)
+        output = _read_output(desc, output_at(desc.id), registry)
         for branch in _branches(desc):
             _check_branch(
                 branch,
                 case_id=nid,
                 output=output,
                 descriptors=descriptors,
-                authored=authored,
                 registry=registry,
+                input_types=input_types,
                 diagnostics=diagnostics,
             )
         if output is not None:
@@ -180,8 +203,9 @@ def _branches(desc: CaseDescriptor) -> list[_Branch]:
                 label="then:",
                 value=case["then"],
                 style=_nth(desc.then_styles, index),
+                tag=_nth(desc.then_tags, index),
                 range=_nth(desc.then_ranges, index) or desc.range,
-                entry=f"{desc.id}_then_{index}",
+                entry_base=f"{desc.id}_then_{index}",
             )
         )
     if desc.has_else:
@@ -190,8 +214,9 @@ def _branches(desc: CaseDescriptor) -> list[_Branch]:
                 label="else:",
                 value=desc.else_,
                 style=desc.else_style,
+                tag=desc.else_tag,
                 range=desc.field_ranges.get(("field", "else")) or desc.range,
-                entry=f"{desc.id}_else",
+                entry_base=f"{desc.id}_else",
             )
         )
     return branches
@@ -208,8 +233,8 @@ def _check_branch(
     case_id: str,
     output: Optional[_CaseOutput],
     descriptors: Mapping[str, Any],
-    authored: list[str],
     registry: TypeRegistry,
+    input_types: Mapping[str, Type],
     diagnostics: LoadDiagnostics,
 ) -> None:
     """Accept a node name or a `call(...)` branch; reject anything else with its rewrite.
@@ -218,11 +243,11 @@ def _check_branch(
         branch (`_Branch`): The branch.
         case_id (`str`): The case that owns it.
         output (`Optional[_CaseOutput]`): The case's former `output:`, which tags the value
-            entry a rewrite shows; `None` guesses the tag from the value.
+            entry a rewrite shows when the value fits it.
         descriptors (`Mapping[str, Any]`): The flow's descriptors; a bare word must name
             one, and a suggested entry id must not.
-        authored (`list[str]`): Authored node ids offered as close matches.
         registry (`TypeRegistry`): The flow's typedefs.
+        input_types (`Mapping[str, Type]`): The flow's input types.
         diagnostics (`LoadDiagnostics`): Source ownership for located errors.
 
     Raises:
@@ -234,23 +259,20 @@ def _check_branch(
         if CALL_HEAD.match(value.strip()) is not None:
             _check_call(branch, host, descriptors=descriptors, diagnostics=diagnostics)
             return
-        old = old_typed_text(value, registry)
+        old = old_typed_text(value, registry) if branch.tag is None else None
         if old is not None and old[2]:
             # The old `Type = value` text: the type it names tags the entry.
-            entry = _free_id(branch.entry, descriptors)
+            entry = _free_id(branch.entry_base, descriptors)
             shown = old_form_suggestion(
                 entry, old[0], old[1], old[2], registry=registry, placeholder=None
             )
             raise _value_error(host, branch, entry, shown, diagnostics)
-        if "${" not in value:
-            if value in descriptors:
-                return
+        if "${" not in value and value in descriptors:
+            # A tag on a node name is rejected later, as on any untyped field.
+            return
+        if branch.tag is None and "${" not in value:
             raise _unknown_word_error(
-                host,
-                branch,
-                descriptors=descriptors,
-                authored=authored,
-                diagnostics=diagnostics,
+                host, branch, descriptors=descriptors, diagnostics=diagnostics
             )
     elif isinstance(value, str) and CALL_HEAD.match(value.strip()) and "${" in value:
         raise diagnostics.error(
@@ -258,9 +280,23 @@ def _check_branch(
             "drop the quotes to call the flow, or reword the text",
             range=branch.range,
         )
-    entry = _free_id(branch.entry, descriptors)
+    _reject_unholdable(
+        value,
+        host=host,
+        branch=branch,
+        case_id=case_id,
+        type_names=frozenset(registry),
+        diagnostics=diagnostics,
+    )
+    entry = _free_id(branch.entry_base, descriptors)
     shown = _entry_text(
-        entry, branch, output=output, registry=registry, diagnostics=diagnostics
+        entry,
+        branch,
+        output=output,
+        descriptors=descriptors,
+        registry=registry,
+        input_types=input_types,
+        diagnostics=diagnostics,
     )
     raise _value_error(host, branch, entry, shown, diagnostics)
 
@@ -300,7 +336,7 @@ def _check_call(
         # keyword must not be echoed, so neither gets the text's rewrite.
         hint = ""
         if "${" not in value and not holds_secret_keyword(value):
-            entry = _free_id(branch.entry, descriptors)
+            entry = _free_id(branch.entry_base, descriptors)
             hint = (
                 ". For the text, add a value entry and name it: "
                 f"`{entry}: !str {_scalar_text(value.strip(), flow=False)}`"
@@ -316,7 +352,6 @@ def _unknown_word_error(
     branch: _Branch,
     *,
     descriptors: Mapping[str, Any],
-    authored: list[str],
     diagnostics: LoadDiagnostics,
 ) -> LoadError:
     """Build the error for an unquoted word that names no node.
@@ -324,9 +359,8 @@ def _unknown_word_error(
     Args:
         host (`str`): Message prefix naming the branch.
         branch (`_Branch`): The branch; its value is unquoted text without a span.
-        descriptors (`Mapping[str, Any]`): The flow's descriptors; a suggested entry id
-            must not name one.
-        authored (`list[str]`): Authored node ids offered as close matches.
+        descriptors (`Mapping[str, Any]`): The flow's descriptors, offered as close
+            matches; a suggested entry id must not name one.
         diagnostics (`LoadDiagnostics`): Source ownership for located errors.
 
     Returns:
@@ -335,15 +369,134 @@ def _unknown_word_error(
         an identifier, else after the branch.
     """
     word = branch.value
-    matches = difflib.get_close_matches(word, authored, n=1, cutoff=_CLOSE_MATCH_CUTOFF)
+    matches = difflib.get_close_matches(
+        word, list(descriptors), n=1, cutoff=_CLOSE_MATCH_CUTOFF
+    )
     suggestion = f" Did you mean `{matches[0]}`?" if matches else ""
-    base = f"{word}_text" if is_identifier(f"{word}_text") else branch.entry
+    base = f"{word}_text" if is_identifier(f"{word}_text") else branch.entry_base
     entry = _free_id(base, descriptors)
     return diagnostics.error(
         f"{host} `{word}` names no node.{suggestion} For the text, add a value entry and "
         f"name it: `{entry}: !str {_scalar_text(word, flow=False)}`",
         range=branch.range,
     )
+
+
+def _reject_unholdable(
+    value: Any,
+    *,
+    host: str,
+    branch: _Branch,
+    case_id: str,
+    type_names: frozenset[str],
+    diagnostics: LoadDiagnostics,
+    nested: bool = False,
+    active: frozenset[int] = frozenset(),
+) -> None:
+    """Reject a branch value, or a part of one, that no value entry can hold.
+
+    Args:
+        value (`Any`): The branch value or a part of one.
+        host (`str`): Message prefix naming the branch.
+        branch (`_Branch`): The branch, for its label and range.
+        case_id (`str`): The case that owns the branch.
+        type_names (`frozenset[str]`): The flow's typedef names; a call to one inside
+            `${...}` builds a record and is no flow call.
+        diagnostics (`LoadDiagnostics`): Source ownership for located errors.
+        nested (`bool`, *optional*, defaults to `False`): Whether `value` sits inside a
+            mapping or list.
+        active (`frozenset[int]`, *optional*, defaults to `frozenset()`): The `id()`s
+            of the mappings and lists enclosing `value`.
+
+    Raises:
+        `LoadError`: A nested string starts with `call(`, a span is malformed, calls a
+            flow, or reads the case, a number is not finite, or the value contains
+            itself.
+    """
+    if isinstance(value, str):
+        if nested and CALL_HEAD.match(value.strip()):
+            raise diagnostics.error(
+                f"{host} a `call(...)` nested in a value is not supported; write the call "
+                f"as the branch (`{branch.label} call(...)`) or in a node, or reword the "
+                "text",
+                range=branch.range,
+            )
+        if "${" in value:
+            _reject_span(
+                value,
+                host=host,
+                branch=branch,
+                case_id=case_id,
+                type_names=type_names,
+                diagnostics=diagnostics,
+            )
+        return
+    if isinstance(value, float) and not math.isfinite(value):
+        raise diagnostics.error(
+            f"{host} numbers must be finite (got {_scalar_text(value, flow=False)})",
+            range=branch.range,
+        )
+    if not isinstance(value, (dict, list)):
+        return
+    if id(value) in active:
+        raise diagnostics.error(
+            f"{host} a branch value can't contain itself", range=branch.range
+        )
+    for item in value.values() if isinstance(value, dict) else value:
+        _reject_unholdable(
+            item,
+            host=host,
+            branch=branch,
+            case_id=case_id,
+            type_names=type_names,
+            diagnostics=diagnostics,
+            nested=True,
+            active=active | {id(value)},
+        )
+
+
+def _reject_span(
+    text: str,
+    *,
+    host: str,
+    branch: _Branch,
+    case_id: str,
+    type_names: frozenset[str],
+    diagnostics: LoadDiagnostics,
+) -> None:
+    """Reject text whose `${...}` is malformed, calls a flow, or reads the case.
+
+    Args:
+        text (`str`): A string of the branch value holding `${`.
+        host (`str`): Message prefix naming the branch.
+        branch (`_Branch`): The branch, for its label and range.
+        case_id (`str`): The case that owns the branch.
+        type_names (`frozenset[str]`): The flow's typedef names.
+        diagnostics (`LoadDiagnostics`): Source ownership for located errors.
+
+    Raises:
+        `LoadError`: As `_reject_unholdable` says for a span.
+    """
+    try:
+        refs = expr_refs_of(text)
+        # A builtin type called like a function gets its own error at the entry.
+        callees = [
+            callee
+            for callee in flow_call_callees_in_spans(text, type_names)
+            if callee not in BUILTIN_TYPE_NAMES
+        ]
+    except ExpressionError as exc:
+        raise diagnostics.error(f"{host} {exc}", range=branch.range) from exc
+    if callees:
+        raise diagnostics.error(
+            f"{host} a flow call {callees[0]!r} inside `${{...}}` is not supported; call "
+            f"the flow as the branch: `{branch.label} call({callees[0]}, ...)`",
+            range=branch.range,
+        )
+    if any(ref.split(".", 1)[0] == case_id for ref in refs):
+        raise diagnostics.error(
+            f"{host} the value reads {case_id!r} itself", range=branch.range
+        )
 
 
 def _value_error(
@@ -373,7 +526,9 @@ def _entry_text(
     branch: _Branch,
     *,
     output: Optional[_CaseOutput],
+    descriptors: Mapping[str, Any],
     registry: TypeRegistry,
+    input_types: Mapping[str, Type],
     diagnostics: LoadDiagnostics,
 ) -> str:
     """Spell the value entry a value branch becomes, for its error message.
@@ -382,37 +537,45 @@ def _entry_text(
         entry (`str`): The entry id.
         branch (`_Branch`): The branch whose value the entry holds.
         output (`Optional[_CaseOutput]`): The case's former `output:`; its type tags the
-            entry when a tag can spell it.
+            entry when a tag can spell it and the value fits it.
+        descriptors (`Mapping[str, Any]`): The flow's descriptors, which type a lone
+            `${node.output}`.
         registry (`TypeRegistry`): The flow's typedefs.
+        input_types (`Mapping[str, Type]`): The flow's input types, which type a lone
+            `${input.x}`.
         diagnostics (`LoadDiagnostics`): Source ownership, for a scalar's authored text.
 
     Returns:
-        `str`: Such as `` `route_then_0: !str approve` ``. A value past
-        `_SHOWN_LIMIT` characters is cut with `…` and followed by `(write it as a block)`.
+        `str`: Such as `` `route_then_0: !str approve` ``, then any note in parentheses.
+        A value past `_SHOWN_LIMIT` characters is cut with `…` and followed by
+        `(write it as a block)`.
     """
     authored = _value_text(branch, diagnostics)
-    if output is not None and (output.type is not None or output.text is not None):
-        type_text = output.text
-        if type_text is None and output.type is not None:
-            type_text = canonical_type_label(output.type)
-        text, note = authored, None
-        if output.type is not None:
-            # Spelled to fit the type where that is cheap: `3` for `str` becomes `"3"`.
-            text, note = suggested_literal(text, output.type)
-        shown = suggest_tag(
-            entry, output.type, _cut(text), registry=registry, type_text=type_text
-        )
-        # Advice to name the type in `typedefs:` instead means no tag spells it.
-        if shown.startswith("`"):
-            return _with_notes(shown, text, note)
-    shown = suggest_tag(
-        entry, _guessed_type(branch.value), _cut(authored), registry=registry
+    if branch.tag is not None:
+        return _shown(entry, branch.tag, authored)
+    if output is not None:
+        tag = tag_text(output.type, registry=registry, type_text=output.text)
+        if output.type is not None and tag is not None:
+            text, note = authored, None
+            if branch.value is not None:
+                # Spelled to fit the type where that is cheap: `3` for `str` is `"3"`.
+                text, note = suggested_literal(text, output.type)
+            if _fits(text, output.type):
+                return _shown(entry, tag, text, note)
+    typ = _guessed_type(
+        branch.value, descriptors=descriptors, registry=registry, input_types=input_types
     )
-    return _with_notes(shown, authored, None)
+    tag = tag_text(typ, registry=registry)
+    if tag is None:
+        note = MIXED_LIST_NOTE if isinstance(branch.value, list) else _SPAN_TYPE_NOTE
+        return _shown(entry, "<type>", authored, note)
+    return _shown(entry, tag, authored)
 
 
-def _with_notes(shown: str, text: str, note: Optional[str]) -> str:
-    """Append to a shown entry the note on its literal and the advice for a cut value."""
+def _shown(entry: str, tag: str, text: str, note: Optional[str] = None) -> str:
+    """Spell a value entry in backticks, then the note and the advice for a cut value."""
+    cut = text if len(text) <= _SHOWN_LIMIT else text[:_SHOWN_LIMIT] + "…"
+    shown = f"`{entry}: !{tag} {cut}`"
     if note is not None:
         shown += f" ({note})"
     if len(text) > _SHOWN_LIMIT:
@@ -420,18 +583,56 @@ def _with_notes(shown: str, text: str, note: Optional[str]) -> str:
     return shown
 
 
-def _cut(text: str) -> str:
-    """Cut text past `_SHOWN_LIMIT` characters, ending it with `…`."""
-    return text if len(text) <= _SHOWN_LIMIT else text[:_SHOWN_LIMIT] + "…"
+def _fits(text: str, typ: Type) -> bool:
+    """Report whether a tag of type `typ` reads the YAML `text`; a span can't be told."""
+    if has_span(text):
+        return True
+    try:
+        build_value_as(typ, parse_yaml_literal(text))
+    except (SourceSyntaxError, TypeCheckError, ValueError):
+        return False
+    return True
 
 
-def _guessed_type(value: Any) -> Type:
-    """Return the tag type a value suggests: its YAML type, `object` for a mapping."""
-    typ = example_type(value)
-    if typ is None:
-        typ = example_type({})
-    assert typ is not None
-    return typ
+def _guessed_type(
+    value: Any,
+    *,
+    descriptors: Mapping[str, Any],
+    registry: TypeRegistry,
+    input_types: Mapping[str, Type],
+) -> Optional[Type]:
+    """Return the type a value suggests for its tag, or `None` when it suggests none.
+
+    Args:
+        value (`Any`): The branch value.
+        descriptors (`Mapping[str, Any]`): The flow's descriptors.
+        registry (`TypeRegistry`): The flow's typedefs.
+        input_types (`Mapping[str, Type]`): The flow's input types.
+
+    Returns:
+        `Optional[Type]`: For a lone `${...}` span, the type of the flow input or the
+        declared node output it reads, else `None`; for any other value its
+        `example_type`.
+    """
+    if not isinstance(value, str):
+        return example_type(value)
+    interior = whole_span_interior(value)
+    if interior is None:
+        return example_type(value)
+    found = _REFERENCE.fullmatch(interior.strip())
+    if found is None:
+        return None
+    head, name = found.groups()
+    if head == "input":
+        return input_types.get(name)
+    desc = descriptors.get(head)
+    if name != "output" or desc is None:
+        return None
+    if isinstance(desc, ValueEntryDescriptor):
+        return desc.tag.type
+    outputs = getattr(desc, "outputs", None)
+    resolved = resolve_type_text(outputs, registry) if isinstance(outputs, str) else None
+    return None if resolved is None else resolved[0]
 
 
 def _value_text(branch: _Branch, diagnostics: LoadDiagnostics) -> str:
@@ -440,13 +641,23 @@ def _value_text(branch: _Branch, diagnostics: LoadDiagnostics) -> str:
     Text is plain when plain YAML reads it back unchanged, else quoted; a number keeps
     its authored text; a date is quoted, since a tag reads only a quoted date; a mapping
     or list is written in flow style.
+
+    Args:
+        branch (`_Branch`): The branch; its value holds no non-finite number and does
+            not contain itself.
+        diagnostics (`LoadDiagnostics`): Source ownership, for a scalar's authored text.
+
+    Returns:
+        `str`: The value's YAML, without the branch's own tag.
     """
     value = branch.value
     if isinstance(value, str):
         return _scalar_text(value, flow=False)
     if isinstance(value, (dict, list)):
-        return _flow_text(value, active=set())
+        return _flow_text(value)
     authored = source_text(diagnostics, branch.range)
+    if authored and branch.tag is not None:
+        authored = _TAG_PREFIX.sub("", authored, count=1)
     if isinstance(value, (datetime.date, datetime.datetime)):
         return yaml_quoted(authored or value.isoformat())
     if isinstance(value, (int, float)) and not isinstance(value, bool) and authored:
@@ -454,35 +665,27 @@ def _value_text(branch: _Branch, diagnostics: LoadDiagnostics) -> str:
     return _scalar_text(value, flow=True)
 
 
-def _flow_text(value: Any, *, active: set[int]) -> str:
-    """Spell a mapping, list, or scalar in YAML flow style.
+def _flow_text(value: Any) -> str:
+    """Spell a mapping, list, or scalar that doesn't contain itself in YAML flow style.
 
     Args:
         value (`Any`): The value or a part of one.
-        active (`set[int]`): `id()`s of the containers enclosing `value`, so a YAML alias
-            that contains itself is shown as `…` instead of recursing forever.
 
     Returns:
         `str`: Flow-style YAML, such as `{reply: "${input.text}", exited: true}`.
     """
-    if not isinstance(value, (dict, list)):
-        return _scalar_text(value, flow=True)
-    if id(value) in active:
-        return "…"
-    active.add(id(value))
     if isinstance(value, dict):
-        text = (
+        return (
             "{"
             + ", ".join(
-                f"{_scalar_text(key, flow=True)}: {_flow_text(item, active=active)}"
+                f"{_scalar_text(key, flow=True)}: {_flow_text(item)}"
                 for key, item in value.items()
             )
             + "}"
         )
-    else:
-        text = "[" + ", ".join(_flow_text(item, active=active) for item in value) + "]"
-    active.discard(id(value))
-    return text
+    if isinstance(value, list):
+        return "[" + ", ".join(_flow_text(item) for item in value) + "]"
+    return _scalar_text(value, flow=True)
 
 
 def _scalar_text(value: Any, *, flow: bool) -> str:
@@ -494,13 +697,16 @@ def _scalar_text(value: Any, *, flow: bool) -> str:
             `}`, `[`, `]`, and `:` would end or nest it, so text holding them is quoted.
 
     Returns:
-        `str`: `null`, `true`/`false`, a number, a quoted date, or text: plain when
-        plain YAML reads it back unchanged and it is not a `call(...)`, else quoted.
+        `str`: `null`, `true`/`false`, a number (`.inf`, `-.inf`, `.nan` when not
+        finite), a quoted date, or text: plain when plain YAML reads it back unchanged
+        and it is not a `call(...)`, else quoted.
     """
     if value is None:
         return "null"
     if isinstance(value, bool):
         return "true" if value else "false"
+    if isinstance(value, float) and not math.isfinite(value):
+        return ".nan" if math.isnan(value) else (".inf" if value > 0 else "-.inf")
     if isinstance(value, (int, float)):
         return repr(value)
     if isinstance(value, (datetime.date, datetime.datetime)):
@@ -526,40 +732,34 @@ def _free_id(base: str, descriptors: Mapping[str, Any]) -> str:
 
 
 def _read_output(
-    desc: CaseDescriptor, output_at: OutputReader | None, registry: TypeRegistry
+    desc: CaseDescriptor, cursor: Optional[SourceCursor], registry: TypeRegistry
 ) -> Optional[_CaseOutput]:
     """Read the `output:` a case declares, or return `None` when it has none.
 
     Args:
         desc (`CaseDescriptor`): The case.
-        output_at (`OutputReader | None`): The authored `output:` reader, or `None` to
-            read the descriptor's `outputs`.
+        cursor (`Optional[SourceCursor]`): The case's authored `output:`, or `None`.
         registry (`TypeRegistry`): The flow's typedefs the type resolves against.
 
     Returns:
         `Optional[_CaseOutput]`: The declared type, as far as it resolves, and the
-        `output:` range.
+        `output:` range. An empty `output:`, or one that contains itself, has no text.
     """
-    cursor = output_at(desc.id) if output_at is not None else None
-    if cursor is not None:
-        value = cursor.value if cursor.has_value else None
-        spec = value if value not in (None, "") else cursor.tag
-        # The key line, which a block mapping's value range starts below.
-        rng = cursor.key_range or cursor.range or desc.range
-    elif desc.outputs is not None:
-        spec = desc.outputs
-        rng = desc.field_ranges.get(("field", "outputs")) or desc.range
-    else:
+    if cursor is None:
         return None
+    value = cursor.value if cursor.has_value else None
+    spec = value if value not in (None, "") else cursor.tag
+    # The key line, which a block mapping's value range starts below.
+    rng = cursor.key_range or cursor.range or desc.range
+    if spec is None or contains_itself(spec):
+        return _CaseOutput(type=None, text=None, range=rng)
     if isinstance(spec, str):
         resolved = resolve_type_text(spec, registry)
         if resolved is None:
             return _CaseOutput(type=None, text=spec.strip(), range=rng)
         return _CaseOutput(type=resolved[0], text=resolved[1], range=rng)
-    if spec is None:
-        return _CaseOutput(type=None, text=None, range=rng)
     # A record spelled as written (`{reply: str}`) reads better than its canonical label.
-    text = _flow_text(spec, active=set())
+    text = _flow_text(spec)
     try:
         return _CaseOutput(type=read_type(spec, registry), text=text, range=rng)
     except (LoadError, TypeCheckError):
@@ -575,14 +775,13 @@ def _read_example(case_id: str, output: _CaseOutput, registry: TypeRegistry) -> 
         registry (`TypeRegistry`): The flow's typedefs.
 
     Returns:
-        `str`: Such as ``, e.g. `x: !str ${route.output}` ``, or, for a type a tag can't
+        `str`: Such as `` , e.g. `x: !str ${route.output}` ``, or, for a type a tag can't
         spell, the advice to name it in `typedefs:`.
     """
     read = f"${{{case_id}.output}}"
-    if output.type is None and output.text is None:
-        return f", e.g. `x: !<Type> {read}`"
-    type_text = output.text
-    if type_text is None and output.type is not None:
-        type_text = canonical_type_label(output.type)
-    shown = suggest_tag("x", output.type, read, registry=registry, type_text=type_text)
-    return f", e.g. {shown}" if shown.startswith("`") else f"; {shown}"
+    if output.text is None:
+        return f", e.g. `x: !<type> {read}`"
+    shown = suggest_tag("x", output.type, read, registry=registry, type_text=output.text)
+    if tag_text(output.type, registry=registry, type_text=output.text) is None:
+        return f"; {shown}"
+    return f", e.g. {shown}"

@@ -21,6 +21,7 @@ import pytest
 from yian.compile.manifest import flow_fingerprint
 from yian.compose import LoadError, load_flow
 from yian.nodes.base import NodeKind
+from yian.run import run_flow
 
 _BUY = "typedefs:\n  Buy:\n    action: Literal(buy)\n    conviction: float\n"
 
@@ -448,3 +449,18 @@ def test_an_object_entry_not_over_a_bare_object_mapping_keeps_its_tag(entry):
     text = _record_flow(entry, "${o.output.zz}").replace("input:\n", _G_DEF + "input:\n", 1)
 
     load_flow(text)
+
+
+@pytest.mark.parametrize(
+    ("entry", "value"),
+    [
+        ('  r: !object {"": a}\n', {"": "a"}),
+        ('  r: !object {"": "${input.n}"}\n', {"": 3}),
+        ('  r: !object {a: {"": 1}}\n', {"a": {"": 1}}),
+    ],
+)
+def test_an_object_entry_with_an_empty_key_stays_object(entry, value):
+    # No record field can be named "", so the entry keeps its `object` tag.
+    flow = load_flow(_record_flow(entry, "${r.output}"))
+
+    assert run_flow(flow, {"n": 3}).output == value

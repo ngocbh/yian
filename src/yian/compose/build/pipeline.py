@@ -1835,6 +1835,7 @@ def _assemble(
     check_case_branches(
         descriptors,
         registry=registry,
+        input_types=flow_input_types,
         output_at=lambda node_id: _case_output_cursor(
             nodes_cursor, node_id, diagnostics=diagnostics
         ),

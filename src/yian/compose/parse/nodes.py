@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import math
 import re
 from collections.abc import Mapping
 from typing import Any, Callable, NoReturn
@@ -42,7 +43,7 @@ from yian.compose.nodes import KINDS, REMOVED_KINDS
 from yian.compose.source import SourceAccessError, SourceCursor
 from yian.expr.grammar import EXPRESSION_KEYWORDS
 from yian.typesys import TypeCheckError, build_value
-from yian.typesys.values import Type, ValueKind
+from yian.typesys.values import Type, ValueKind, list_kind_for_element
 
 # Singular source keys are projected onto the descriptor dataclasses' plural
 # field names while retaining their original child sources.
@@ -54,6 +55,12 @@ _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _NON_IDENTIFIER_CHAR = re.compile(r"[^A-Za-z0-9_]")
 
 IDENTIFIER_RULE = "ASCII letters, digits, and _, not starting with a digit"
+
+# Shown after an example tagged `!<type>` for a list whose items share no type.
+MIXED_LIST_NOTE = "no tag holds a list of mixed items; give its items one type"
+# Item types a list of numbers joins to `float`.
+_INT = Type(kind=ValueKind.INTEGER)
+_FLOAT = Type(kind=ValueKind.NUMBER)
 
 
 def is_identifier(name: object) -> bool:
@@ -247,6 +254,11 @@ def _reject_untagged_value(
     typ = example_type(value)
     if typ is not None:
         message += f", e.g. {suggest_tag(node_id, typ, _example_text(value, cursor))}"
+    elif isinstance(value, list) and _writable(value):
+        message += (
+            f", e.g. `{node_id}: !<type> {_example_text(value, cursor)}` "
+            f"({MIXED_LIST_NOTE})"
+        )
     raise diagnostics.error(message, range=rng)
 
 
@@ -268,9 +280,17 @@ def example_type(value: Any) -> Type | None:
 
     Returns:
         `Type | None`: `Optional(str)` for null, `date` or `datetime` for an unquoted
-            date, else the widened type of the value (`list(int)` for `[1, 2]`, `object`
-            for a mapping), or `None` when no value type holds it.
+            date, `object` for a mapping, a list of its items' joined type (`list(int)`
+            for `[1, 2]`, `list(list(int))` for `[[1], [2]]`, `list(Optional(int))` for
+            `[null, 1]`), else the widened type of the value; `None` for a list whose
+            items share no type or that contains itself, a number that is not finite,
+            or a value no type holds.
     """
+    return _example_type(value, active=frozenset())
+
+
+def _example_type(value: Any, *, active: frozenset[int]) -> Type | None:
+    """Return `example_type(value)`; `active` holds the `id()`s of enclosing lists."""
     if value is None:
         return Type(kind=ValueKind.STRING, nullable=True)
     # YAML reads an unquoted `2024-01-01` as a date, which no value type holds.
@@ -278,10 +298,85 @@ def example_type(value: Any) -> Type | None:
         return Type(kind=ValueKind.DATETIME)
     if isinstance(value, datetime.date):
         return Type(kind=ValueKind.DATE)
+    if isinstance(value, dict):
+        return Type(kind=ValueKind.OBJECT)
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, list) and value:
+        if id(value) in active:
+            return None
+        return _list_type(value, active=active | {id(value)})
     try:
         return Type.scalar(build_value(value).kind)
     except TypeCheckError:
         return None
+
+
+def _list_type(items: list, *, active: frozenset[int]) -> Type | None:
+    """Return the type of a non-empty list from its items' types, or `None`."""
+    present = []
+    for item in items:
+        if item is None:
+            continue
+        typ = _example_type(item, active=active)
+        if typ is None:
+            return None
+        present.append(typ)
+    if not present:
+        element = Type(kind=ValueKind.STRING)
+    elif all(typ == present[0] for typ in present):
+        element = present[0]
+    elif all(typ in (_INT, _FLOAT) for typ in present):
+        element = _FLOAT
+    else:
+        return None
+    if len(present) < len(items):
+        element = dataclasses.replace(element, nullable=True)
+    return Type(kind=list_kind_for_element(element), element=element)
+
+
+def _writable(value: Any) -> bool:
+    """Report whether a value entry can hold a value: no non-finite number, no cycle.
+
+    Args:
+        value (`Any`): An authored YAML value.
+
+    Returns:
+        `bool`: False when a number is `.inf`, `-.inf` or `.nan`, or a mapping or list
+            holds itself through a YAML alias.
+    """
+    return not contains_itself(value) and _finite(value)
+
+
+def _finite(value: Any) -> bool:
+    """Report whether every number in a value that doesn't contain itself is finite."""
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, dict):
+        return all(_finite(item) for item in value.values())
+    if isinstance(value, list):
+        return all(_finite(item) for item in value)
+    return True
+
+
+def contains_itself(value: Any, *, active: frozenset[int] = frozenset()) -> bool:
+    """Report whether a mapping or list holds itself through a YAML alias (`&R [*R]`).
+
+    Args:
+        value (`Any`): An authored YAML value or a part of one.
+        active (`frozenset[int]`, *optional*, defaults to `frozenset()`): The `id()`s
+            of the mappings and lists enclosing `value`.
+
+    Returns:
+        `bool`: True when a mapping or list holds itself at some depth.
+    """
+    if not isinstance(value, (dict, list)):
+        return False
+    if id(value) in active:
+        return True
+    items = value.values() if isinstance(value, dict) else value
+    inner = active | {id(value)}
+    return any(contains_itself(item, active=inner) for item in items)
 
 
 def _example_text(value: Any, cursor: SourceCursor) -> str:

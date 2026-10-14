@@ -76,6 +76,14 @@ def test_untagged_mapping_without_kind_says_add_kind_or_a_tag():
         ("  x: hello\n", "`x: !str hello`"),
         ('  x: "hi"\n', '`x: !str "hi"`'),
         ("  x: [1, 2]\n", "`x: !list(int) [1, 2]`"),
+        ("  x: [[1, 2], [3]]\n", "`x: !list(list(int)) [[1, 2], [3]]`"),
+        ("  x: [null, 1]\n", "`x: !list(Optional(int)) [null, 1]`"),
+        ("  x: [1, 2.5]\n", "`x: !list(float) [1, 2.5]`"),
+        (
+            "  x: [1, a]\n",
+            "`x: !<type> [1, a]` (no tag holds a list of mixed items; give its items "
+            "one type)",
+        ),
         ("  x:\n", "`x: !Optional(str) null`"),
         ("  x: 2024-01-01\n", '`x: !date "2024-01-01"`'),
         ("  x: 2024-01-01T10:00:00\n", '`x: !datetime "2024-01-01T10:00:00"`'),
@@ -88,6 +96,17 @@ def test_untagged_scalar_or_list_shows_the_tag_to_write(entry, example):
         load_flow(text)
 
     assert str(info.value.diagnostic.message) == f"{_NODE_OR_VALUE}, e.g. {example}"
+    assert _error_line(info.value) == _line_of(text, "  x:")
+
+
+@pytest.mark.parametrize("entry", ["  x: &R [*R]\n", "  x: .inf\n"])
+def test_an_untagged_value_no_tag_can_hold_gets_no_example(entry):
+    text = _flow(entry)
+
+    with pytest.raises(LoadError) as info:
+        load_flow(text)
+
+    assert str(info.value.diagnostic.message) == _NODE_OR_VALUE
     assert _error_line(info.value) == _line_of(text, "  x:")
 
 

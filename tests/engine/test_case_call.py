@@ -7,8 +7,6 @@ Accepted grammar: a whole-value `call(...)` directive (a route target is one nod
 `${...}` or quoted branch is a value, a LoadError that shows the value entry to write.
 """
 
-import re
-
 import pytest
 
 from yian.compose import LoadError, load_flow
@@ -18,11 +16,19 @@ from yian.run import run_flow
 
 
 def _value_branch(label: str, entry: str, shown: str) -> str:
-    """Return the full message for a value branch, as a `pytest.raises` match pattern."""
-    return re.escape(
+    """Return the full message for a value branch of `gate`."""
+    return (
         f"case node 'gate' {label}: a branch names a node or calls a flow; put the value in "
         f"its own entry in `nodes:` and name it: `{entry}: {shown}` and `{label}: {entry}`"
-    ) + "$"
+    )
+
+
+def _span_flow_call(label: str) -> str:
+    """Return the full message for a `take` call inside a `${...}` branch of `gate`."""
+    return (
+        f"case node 'gate' {label}: a flow call 'take' inside `${{...}}` is not supported; "
+        f"call the flow as the branch: `{label}: call(take, ...)`"
+    )
 
 # An in-file `take` def (the branch callable): echoes its stance via the `took` CODE fn.
 _TAKE_DEF = """
@@ -42,7 +48,8 @@ defs:
 
 
 def test_non_bare_then_call_is_rejected():
-    # a `${...}` branch is a value, so it is a load error showing the value entry.
+    # a flow call inside a `${...}` branch is the retired inline `${flow(args)}` form,
+    # which a value entry can't hold either: the error points at the call directive.
     text = f"""
 id: bad
 name: bad
@@ -58,11 +65,9 @@ nodes:
     else: call(take, stance="c")
 output: ${{gate.output}}
 """
-    match = _value_branch(
-        "then", "gate_then_0", '!str ${ take(stance="a") | take(stance="b") }'
-    )
-    with pytest.raises(LoadError, match=match):
+    with pytest.raises(LoadError) as caught:
         load_flow(text)
+    assert str(caught.value) == _span_flow_call("then")
 
 
 def test_inline_binding_and_then_call_share_minter_no_collision():
@@ -253,8 +258,9 @@ nodes:
     else: "call(take) tail"
 output: ${{gate.output}}
 """
-    with pytest.raises(LoadError, match=_value_branch("then", "gate_then_0", '!str "call(take"')):
+    with pytest.raises(LoadError) as caught:
         load_flow(text)
+    assert str(caught.value) == _value_branch("then", "gate_then_0", '!str "call(take"')
 
 
 def test_inline_binding_and_then_call_directive_share_minter_no_collision():
@@ -404,9 +410,7 @@ output: ${{gate.output}}
     assert resolved == []
 
 
-def test_then_span_flow_call_target_is_rejected():
-    # the retired inline `${flow(args)}` case branch is a value branch, a LoadError.
-    text = f"""
+_SPAN_CALL_FLOW = f"""
 id: bad
 name: bad
 input:
@@ -417,13 +421,42 @@ nodes:
     kind: case
     cases:
       - when: "input.score >= 0.5"
-        then: ${{ take(stance="pro") }}
-    else: call(take, stance="con")
+        then: THEN
+    else: ELSE
 output: ${{gate.output}}
 """
-    match = _value_branch("then", "gate_then_0", '!str ${ take(stance="pro") }')
-    with pytest.raises(LoadError, match=match):
+
+
+@pytest.mark.parametrize(
+    ("label", "branch"),
+    [
+        ("then", '${ take(stance="pro") }'),
+        ("else", '"${ take(stance=\'con\') }"'),
+        ("then", '{a: "${ take(stance=\'pro\') }"}'),
+    ],
+)
+def test_then_span_flow_call_target_is_rejected(label, branch):
+    # the retired inline `${flow(args)}` case branch is a LoadError pointing at call(...).
+    then, else_ = (branch, 'call(take, stance="con")')
+    if label == "else":
+        then, else_ = ('call(take, stance="pro")', branch)
+    text = _SPAN_CALL_FLOW.replace("THEN", then).replace("ELSE", else_)
+    with pytest.raises(LoadError) as caught:
         load_flow(text)
+    assert str(caught.value) == _span_flow_call(label)
+    line = next(
+        number
+        for number, source in enumerate(text.splitlines(), start=1)
+        if f"{label}: {branch}" in source
+    )
+    assert caught.value.diagnostic.frames[-1].range.start_line == line
+
+
+def test_the_call_directive_a_span_flow_call_points_at_loads():
+    text = _SPAN_CALL_FLOW.replace("THEN", 'call(take, stance="pro")').replace(
+        "ELSE", 'call(take, stance="con")'
+    )
+    assert run_flow(load_flow(text), {"score": 0.9}).output == "took:pro"
 
 
 def test_malformed_branch_call_holding_a_span_offers_no_text_rewrite():

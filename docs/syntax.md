@@ -1051,8 +1051,9 @@ in it is part of the flow's manifest and fingerprint (see
 as node inputs. So don't write a secret in a flow file, under any name. Pass a
 credential as a flow input, or have the host supply it. The run log records input
 values too, so keep logs access-controlled (see
-[Authoritative run logs](api.md#authoritative-run-logs)). An `llm_config.api_key`
-from the host is never recorded, and host tools are the other route.
+[Authoritative run logs](api.md#authoritative-run-logs)). What the host supplies is
+not recorded: a model key passed as `llm_config.api_key`, or a credential a host tool
+uses.
 
 No name is special: a literal under `password` or `api_key` is an ordinary value.
 Model keys have their own rule: a flow file can't set `llm_config.api_key` at all (see

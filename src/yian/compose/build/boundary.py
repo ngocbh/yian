@@ -86,6 +86,13 @@ def synthesize_boundary_graph(
     start = StartNode(START_ID, params=input_parameters)
     end = EndNode(END_ID, output_names=[o.name for o in outputs], value=not record)
     end.output_contract = _declared_output_contract(outputs, record=record)
+    # A single output's param name (`result`) is generated, so its errors say just
+    # `flow output`; a record field keeps its authored name.
+    end.binding_labels = (
+        {o.name: f"flow output {o.name!r}" for o in outputs}
+        if record
+        else {o.name: "flow output" for o in outputs}
+    )
     boundary_nodes: dict[str, Node] = {START_ID: start, END_ID: end}
 
     # END_ID producer edges — one per producer per output, keyed by the output NAME, with the

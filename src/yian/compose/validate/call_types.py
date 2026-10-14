@@ -151,10 +151,11 @@ def check_call_map_types(
                     result.field_ranges.get(("field", "inputs"))
                     or result.node_range
                 )
-                raise diagnostics.error(
-                    f"{kind} node {nid!r}: binding {param!r} — {message}",
-                    range=rng,
+                # An inline call's argument has a label naming it at its authored site.
+                subject = result.field_labels.get(f"input {param!r}") or (
+                    f"{kind} node {nid!r}: binding {param!r}"
                 )
+                raise diagnostics.error(f"{subject} — {message}", range=rng)
 
 
 @dataclass(frozen=True)

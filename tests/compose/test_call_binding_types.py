@@ -128,7 +128,8 @@ def test_inline_call_with_a_former_boolean_word_names_the_boolean_to_write():
         load_flow(text)
     message = str(exc.value).splitlines()[0]
     assert message.endswith(
-        "binding 't' — child expects 'bool', but the value \"yes\" does not fit; "
+        "node 'c' input 'x' call(child) argument 't' — child expects 'bool', but the value "
+        "\"yes\" does not fit; "
         "`yes` is text; write `true`"
     )
     assert "without quotes" not in message

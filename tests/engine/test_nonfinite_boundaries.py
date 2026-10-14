@@ -363,7 +363,7 @@ output: ${input.x * 10}
 
     assert result.status == "failed"
     assert result.failure.code == "binding.evaluate"
-    assert result.failure.message == "input 'result': non-finite number inf is not a yian value"
+    assert result.failure.message == "flow output: non-finite number inf is not a yian value"
 
 
 def test_a_nonfinite_temporary_inside_a_template_is_allowed():

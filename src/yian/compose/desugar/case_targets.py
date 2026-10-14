@@ -76,6 +76,8 @@ def desugar_case_call_targets(
                     mint,
                     synth,
                     host=f"case node {nid!r} then:",
+                    site=f"node {nid!r} cases[{ci}].then",
+                    call_site=("then", nid, ci),
                     range=nth(desc.then_ranges, ci) or rng,
                     diagnostics=diagnostics,
                 ),
@@ -89,6 +91,8 @@ def desugar_case_call_targets(
                 mint,
                 synth,
                 host=f"case node {nid!r} else:",
+                site=f"node {nid!r} else",
+                call_site=("else", nid),
                 range=else_rng,
                 diagnostics=diagnostics,
             )
@@ -106,6 +110,8 @@ def _lift_case_target(
     synth: dict,
     *,
     host: str,
+    site: Optional[str] = None,
+    call_site: Optional[tuple[str | int | None, ...]] = None,
     range: Optional[SourceRange] = None,
     diagnostics: LoadDiagnostics | None = None,
 ) -> Any:
@@ -117,7 +123,11 @@ def _lift_case_target(
     - a plain node id (no `${`, not a `call(...)` directive) -> passed through unchanged.
 
     Anything else — text starting with `call(` that is not exactly one directive, or any
-    `${...}` span — is a `LoadError`: a route target must resolve to exactly one node id."""
+    `${...}` span — is a `LoadError`: a route target must resolve to exactly one node id.
+
+    ``site`` (`node 'g' cases[0].then`, `node 'g' else`) and ``call_site`` (its address)
+    are passed to every lifted call, nested ones included, so their errors name the branch
+    they were written in."""
     diagnostics = diagnostics or LoadDiagnostics()
     if not isinstance(target, str):
         return target  # None (handled by the caller) or a native literal
@@ -140,6 +150,8 @@ def _lift_case_target(
                 synth[c.id] = _to_call_descriptor(
                     c,
                     host=host,
+                    site=site,
+                    call_site=call_site,
                     host_id=None if c is outer else outer.id,
                     range=range,
                     diagnostics=diagnostics,

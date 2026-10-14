@@ -51,9 +51,9 @@ output: ${done.output}
 
 
 def test_render_only_node_metadata_does_not_ride_run_log(tmp_path: Path):
-    """Render-only wiring labels must not ride the authoritative run log.
+    """Render-only wiring and binding labels must not ride the authoritative run log.
 
-    Recovery rebuilds topology from the supplied authored flow, so synthetic wiring labels
+    Recovery rebuilds topology from the supplied authored flow, so synthetic labels
     are neither execution identity nor durable state. The semantic node also remains free of
     Compose-owned range metadata before the run and after clean reconstruction.
     """
@@ -61,7 +61,10 @@ def test_render_only_node_metadata_does_not_ride_run_log(tmp_path: Path):
     loaded = load_flow(_RANGE_FLOW)
     node = loaded.compiled.nodes["done"]
     assert _REMOVED_FIELDS.isdisjoint(vars(node))
+    manifest = flow_manifest(loaded.compiled)
     node.wiring_labels = {"__r0": "cases[0].when"}  # a synth-param label — also render-only
+    node.binding_labels = {"__on": "on: value"}  # a binding-error label — also render-only
+    assert flow_manifest(loaded.compiled) == manifest
 
     res = run_flow(
         loaded,
@@ -76,6 +79,8 @@ def test_render_only_node_metadata_does_not_ride_run_log(tmp_path: Path):
     # The invariant: no render-only Node metadata leaked into authoritative records.
     assert "wiring_labels" not in blob
     assert "cases[0].when" not in blob  # the label value must not ride the blob either
+    assert "binding_labels" not in blob
+    assert "on: value" not in blob
 
     # Terminal recovery is read-only and reconstructs the same result from clean topology.
     before = path.read_bytes()

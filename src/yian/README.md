@@ -409,7 +409,8 @@ CASE carries one optional origin on each ordered `Case`, identifying that exact
 registers those indexed sites before lowering and preserves the origin on the
 rewritten predicate; searched CASE also assigns each generated input `Binding`
 the origin of the first predicate that introduced its read, while `on:`
-owns the generated `__on` binding origin. Searched lowering allocates one `__rN`
+owns the generated `__on` binding origin. A runtime binding error names the same site:
+`node 'g' on: ...` for `__on` and `node 'g' cases[0].when: ...` for an `__rN`. Searched lowering allocates one `__rN`
 per distinct read: a reference `${path}`, a node-output reference inside a
 `:-`/`:?`/`|` as `${path :- null}` (the same value on an optional edge), and, per
 co-skipping escape, an unread join input `${p1.output | p2.output}` over its
@@ -717,6 +718,10 @@ also gets data gates: data edges from the producers of the host's other inputs, 
 like the host's input (group `<node>.<group>`), so the runtime join skips it when those
 inputs skip the host and otherwise only makes it wait. Nodes lifted out of the same host
 don't gate each other, but a nested call is gated on its outer call's other arguments.
+An inline call's `CallDescriptor.call_site` records the authored binding it was written in
+(a node input, MAP `over:`, CASE `then:`/`else:`, flow output, or flow assert); its
+argument bindings and the synth node share that binding's origin, so a failing argument
+points at it and it is the outer frame of a child-flow failure.
 Inline child bodies and LOOP seeds are typed while nodes build, before the pass, so they
 see unnarrowed types. Runtime routing is unchanged.
 
@@ -824,8 +829,12 @@ for the built node to Compose-only `BuildResult.node_range` / `field_ranges`, an
 its `field_labels` (author-facing names a desugar sets for a synth node's fields and inputs) to
 `BuildResult.field_labels`. Post-build validators
 consume that metadata, and assembly drops it before `CompiledFlow`; the semantic
-node receives only the opaque origins and, for a synthesized AGENT, its render-only
-`llm_config_label`. No phase reparses text or touches parser
+node receives only the opaque origins, its `binding_labels`, and, for a synthesized
+AGENT, its render-only `llm_config_label`. `Node.binding_labels` maps a param the author
+didn't write as an input to the phrase its runtime binding error starts with (`node 'g'
+on`, `value entry 'v'`, `flow output 'r'`, `node 'n' input 'a' call(child) argument 'y'`);
+Compose fills it from the load-time labels, and it is not part of node identity or the
+manifest. No phase reparses text or touches parser
 objects.
 For an unchanged source-backed string, `SourceCursor.scalar_source` returns immutable
 `ScalarSource` metadata: the whole scalar range and exact zero-based constructed-line

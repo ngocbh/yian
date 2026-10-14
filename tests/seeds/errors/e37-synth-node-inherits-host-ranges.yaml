@@ -12,9 +12,9 @@
 # Retained origin data belongs to that synthesized binding, not the host descriptor.
 # This keeps like-named inputs on separate author-owned source sites.
 #
-# The failure is `node '__call_0' input 'topic'`.
+# The failure is `node 'summary' input 'news' call(enrich) argument 'topic'`.
 # The expected caret is L30, the `call(...)` directive's binding line.
-# The message names the synthesized call node and its `topic` input.
+# The message names the directive's `topic` argument, not the synth node.
 # The host's valid `topic:` binding on L29 remains unrelated.
 # Source positions are intentionally stable for the diagnostic assertion.
 #

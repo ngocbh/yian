@@ -62,6 +62,12 @@ class CallDescriptor(NodeDescriptor):
     class (a plain `call` leaves them at `None`/`False`); only `map` lists them in its `allowed`.
     `child_label` is compiler-owned diagnostic metadata for an anonymous inline child. It is
     deliberately absent from `allowed`, never authorable, and excluded from descriptor equality.
+    `call_site` is likewise compiler-owned: the address of the authored binding a synth
+    `call(...)` was written in — `("input", host_id, key)` for a node input (a value entry's
+    key is its id), `("field", host_id, field)` for a MAP `over:`, `("output", key)` for a
+    flow output (`key` is `None` for a single output), `("assert", index)` for a flow
+    `asserts:` item, and `("then", case_id, index)` / `("else", case_id)` for a CASE branch.
+    It is `None` on an authored node.
 
     Class attrs: `kind="call"`; `allowed` adds `call`, normalized `inputs`, and `asserts` to
     the commons; `required` is `{"call"}`; `binding_fields=("inputs","over")` — the call-arg
@@ -76,6 +82,7 @@ class CallDescriptor(NodeDescriptor):
 
     call: str
     child_label: str | None = field(default=None, compare=False)
+    call_site: tuple[str | int | None, ...] | None = field(default=None, compare=False)
     over: Optional[str] = None
     parallel: bool = False
     asserts: list[str] = field(default_factory=list)
@@ -171,6 +178,7 @@ class CallDescriptor(NodeDescriptor):
             sig,
             errors,
             self.child_label,
+            self.field_labels,
         )
         if errors:
             raise ctx.diagnostics.error("\n  ".join(errors), range=self.range)
@@ -198,22 +206,31 @@ def _check_child_bindings(
     sig: ChildSignature,
     errors: list[str],
     child_label: str | None = None,
+    labels: dict[str, str] | None = None,
 ) -> None:
     """Name/arity check a `call` node's PARAMS against the child SIGNATURE (the analogue of
     `compile.validation._check_ref_bindings`'s name + required-input checks, read off the
     signature). Reads the node-side `params` (the split); the deep cross-flow TYPE
-    check is `check_call_map_types`, a loader post-build pass over the flow wiring."""
+    check is `check_call_map_types`, a loader post-build pass over the flow wiring.
+
+    ``labels`` is the descriptor's `field_labels`: an inline call's `input '<p>'` entry
+    names its argument and its `call` entry names the call, in place of the synth node."""
+    labels = labels or {}
     declared = {d.name for d in sig.inputs}
     bound = set()
     for p in params:
         bound.add(p.name)
         if p.name not in declared:
-            errors.append(
-                f"call node {node_id!r}: binding {p.name!r} is not a declared "
-                f"input of {_callable_display(flow_id, child_label)}"
+            subject = labels.get(f"input {p.name!r}") or (
+                f"call node {node_id!r}: binding {p.name!r}"
             )
+            errors.append(
+                f"{subject} is not a declared input of "
+                f"{_callable_display(flow_id, child_label)}"
+            )
+    call_label = labels.get("call") or f"call node {node_id!r}"
     for decl in sig.inputs:
         if decl.required and decl.name not in bound:
             errors.append(
-                f"call node {node_id!r}: required callable input {decl.name!r} is unbound"
+                f"{call_label}: required callable input {decl.name!r} is unbound"
             )

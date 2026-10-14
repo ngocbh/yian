@@ -54,7 +54,13 @@ from yian.nodes.contracts import (
 )
 from yian.typesys import TypeCheckError, ValueKind, build_value_as
 from yian.typesys.pool import VariablePool
-from yian.typesys.values import Type, reject_deep_nesting, reject_nonfinite, value_repr
+from yian.typesys.values import (
+    Type,
+    _render_value_path,
+    reject_deep_nesting,
+    reject_nonfinite,
+    value_repr,
+)
 
 
 BindingFailureCode: TypeAlias = Literal[
@@ -340,6 +346,18 @@ def _path_label(name: str, path: ValuePath) -> str:
     )
 
 
+def _binding_where(name: str, path: ValuePath, label: str | None) -> str:
+    """Name a binding error's location: a parameter (or its label) and a path inside it.
+
+    Without a label this is ``binding 'p.b[0]'``. With one it is the label, followed by
+    `` at <path>`` when ``path`` is not empty, the path rendered as the non-finite check
+    renders it (``a[1].b``).
+    """
+    if label is None:
+        return f"binding {_path_label(name, path)!r}"
+    return f"{label} at {_render_value_path(path)}" if path else label
+
+
 class _SourceReader:
     """Evaluate template strings for one parameter, with or without route capture."""
 
@@ -393,12 +411,14 @@ class _SourceReader:
         name: str,
         template: ValueTemplate,
         origin: OriginRef | None,
+        label: str | None = None,
     ) -> tuple[Any, ValueRoute | None, bool]:
         """Evaluate one node of a template tree at ``path``.
 
         Each leaf string is a template; a nested typed ``Binding`` evaluates its
         source in place, then checks the result against its contract without
-        converting it. Other leaves are literals.
+        converting it. Other leaves are literals. ``label``, when set, names the
+        parameter in an error message in place of ``binding '<name>'``.
 
         Raises:
             BindingError: A leaf fails to evaluate (located at its registered
@@ -407,11 +427,13 @@ class _SourceReader:
         """
         if isinstance(node, Binding):
             value, route, evaluated = self.tree(
-                node.source, path, name, template, node.origin or origin
+                node.source, path, name, template, node.origin or origin, label
             )
             if node.contract is not None:
                 try:
-                    _check_binding_type(_path_label(name, path), node, node.contract, value)
+                    _check_binding_type(
+                        _binding_where(name, path, label), node, node.contract, value
+                    )
                 except BindingError as exc:
                     if exc.origin is None:
                         exc.origin = template.origin_at(path) or origin
@@ -422,7 +444,7 @@ class _SourceReader:
                 return self.string(node)
             except (RequiredError, ExpressionError) as exc:
                 raise BindingError(
-                    f"binding {_path_label(name, path)!r}: {exc}",
+                    f"{_binding_where(name, path, label)}: {exc}",
                     failure_code=_failure_code(exc),
                     origin=template.origin_at(path) or origin,
                 ) from exc
@@ -432,7 +454,7 @@ class _SourceReader:
             any_evaluated = False
             for key, child in node.items():
                 value, route, evaluated = self.tree(
-                    child, (*path, key), name, template, origin
+                    child, (*path, key), name, template, origin, label
                 )
                 values[key] = value
                 if route is not None:
@@ -449,7 +471,7 @@ class _SourceReader:
             any_evaluated = False
             for index, child in enumerate(node):
                 value, route, evaluated = self.tree(
-                    child, (*path, index), name, template, origin
+                    child, (*path, index), name, template, origin, label
                 )
                 items.append(value)
                 if route is not None:
@@ -475,6 +497,7 @@ def _resolve_source(
     *,
     collector: BindingCollector | None = None,
     name: str = "",
+    label: str | None = None,
     source_resolver: SourceResolver | None = None,
     types: dict[str, Type] | None = None,
 ) -> Any:
@@ -499,7 +522,8 @@ def _resolve_source(
     in one read. Without that injected resolver, capture records no producer identity.
     ``types`` is the table an ``isinstance(x, T)`` or a ``T(...)`` constructor looks ``T``
     up in (``None`` means no types); a failed constructor check is a ``binding.type``
-    failure.
+    failure. ``label``, when set, names the parameter in a template error message in place
+    of ``binding '<name>'``.
     """
     origin = _source_origin(source)
     source_value = binding_source(source)
@@ -516,7 +540,7 @@ def _resolve_source(
     )
     if isinstance(source_value, ValueTemplate):
         value, route, evaluated = reader.tree(
-            source_value.value, (), name, source_value, origin
+            source_value.value, (), name, source_value, origin, label
         )
     else:
         try:
@@ -540,7 +564,7 @@ def _failure_code(exc: ExpressionError) -> BindingFailureCode:
 
 
 def _check_binding_type(
-    name: str, binding: Binding, contract: ValueContract, value: Any
+    where: str, binding: Binding, contract: ValueContract, value: Any
 ) -> None:
     """Validate a resolved value against its typed binding's declared contract.
 
@@ -549,7 +573,7 @@ def _check_binding_type(
     an ``int``) and a string never satisfies a non-string declared type.
 
     Args:
-        name (`str`): The bound parameter name, used in the failure message.
+        where (`str`): Names the binding in the failure message, e.g. ``binding 'p'``.
         binding (`Binding`): The typed binding, whose origin is the fallback location.
         contract (`ValueContract`): The binding's declared contract.
         value (`Any`): The value the binding's source resolved to.
@@ -563,7 +587,7 @@ def _check_binding_type(
         build_value_as(contract.type, value)
     except TypeCheckError as exc:
         raise BindingError(
-            f"binding {name!r}: {exc}",
+            f"{where}: {exc}",
             failure_code="binding.type",
             origin=contract.origins.at(exc.path) or binding.origin,
         ) from exc
@@ -578,6 +602,7 @@ def bind_params(
     collector: BindingCollector | None = None,
     source_resolver: SourceResolver | None = None,
     types: dict[str, Type] | None = None,
+    labels: Mapping[str, str] | None = None,
     _finish_capture: bool = True,
 ) -> dict[str, Any]:
     """Resolve each declared `Parameter` into a typed record — the engine's read boundary.
@@ -605,6 +630,10 @@ def bind_params(
         types (`dict[str, Type]`, *optional*, defaults to `None`):
             The type table an `isinstance(x, T)` in a source looks `T` up in, keyed by type
             name (the node's `types`). `None` means no types.
+        labels (`Mapping[str, str]`, *optional*, defaults to `None`):
+            Param name -> author-facing phrase an error message uses in place of
+            `input '<param>'` / `binding '<param>'` (the node's `binding_labels`). A param
+            without one keeps the default text.
         _finish_capture (`bool`, *optional*, defaults to `True`):
             Internal evaluator seam. False retains routes while deferring the
             input snapshot until reserved values and wrapper defaults are complete.
@@ -628,13 +657,17 @@ def bind_params(
             present = p.name in wiring  # an absent edge (caller OMITTED) vs a present one (incl. bound-null)
             used_default = False
             source = wiring.get(p.name)
+            label = labels.get(p.name) if labels else None
+            input_where = label if label is not None else f"input {p.name!r}"
             value = _resolve_source(
                 source, pool, item, collector=collector if present else None,
-                name=p.name, source_resolver=source_resolver, types=types,
+                name=p.name, label=label, source_resolver=source_resolver, types=types,
             )
-            _reject_invalid_binding(value, f"input {p.name!r}", _source_origin(source))
+            _reject_invalid_binding(value, input_where, _source_origin(source))
             if present and isinstance(source, Binding) and source.contract is not None:
-                _check_binding_type(p.name, source, source.contract, value)
+                _check_binding_type(
+                    _binding_where(p.name, (), label), source, source.contract, value
+                )
             if value is None:
                 # Distinguish an OMITTED input (no wiring edge) from one BOUND-TO-NULL (an edge that
                 # resolves to None): only an omitted input fills its declared default / fails when
@@ -678,7 +711,7 @@ def bind_params(
                         failure_code = "contract.input"
                         origin = p.contract.origins.at(exc.path) or p.origin
                     raise BindingError(
-                        f"input {p.name!r}: {exc}",
+                        f"{input_where}: {exc}",
                         failure_code=failure_code,
                         origin=origin,
                     ) from exc

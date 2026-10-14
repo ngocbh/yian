@@ -1131,7 +1131,9 @@ After cursor-based extraction and parsing, descriptors carry derived ranges and
 `BuildResult.node_range` / `field_ranges`, and a desugar's author-facing names for a
 synth node's fields and inputs into `BuildResult.field_labels`. Post-build validators
 consume that metadata; assembly discards it before `CompiledFlow.from_parts`, so semantic
-nodes carry no YAML range fields. No phase reparses source fragments or inspects the
+nodes carry no YAML range fields. Before that, Compose copies those labels (and a CASE's
+`wiring_labels`) into `Node.binding_labels`, the phrase a runtime binding error starts with
+in place of `input '<param>'`; it is not part of node identity or the manifest. No phase reparses source fragments or inspects the
 private document graph. The default file resolver adds a separate successful
 `resolved Path -> ComposedFlow` cache, so aliases and diamond imports read, parse,
 and compile each external physical file once within a successful load graph.
@@ -1238,7 +1240,9 @@ compile-time directive recognized at TWO sites, by ONE whole-value rule (only th
 entire trimmed value, never embedded in a span): a binding's whole value, and a
 `case` `then:`/`else:` target. At load it desugars into an anonymous `call` node
 (`__call_N`) and the host is rewritten to `${<synth>.output}`. The synth node records
-that host (a nested branch call's inner calls record the outer call), and
+that host (a nested branch call's inner calls record the outer call) and, as `call_site`,
+the authored binding it was written in; its argument bindings and the node share that
+binding's origin, and its errors name `<site> call(<callee>) argument '<name>'`.
 `compose/edges/hosts.py` gives it the host's CASE route edges and `depends_on`/`runs_after`
 edges, plus data gates: data edges from the producers of the host's other inputs, grouped
 like the host's input (`<node>.<group>`), so it is skipped when those inputs skip the host and

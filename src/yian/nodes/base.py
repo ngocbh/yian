@@ -803,6 +803,13 @@ class Node(ABC):
         #   populated by the desugar that mints the param. Empty for every authored param (the
         #   default label below reproduces the plain `input '<param>'` text).
         self.wiring_labels: dict[str, str] = {}
+        # `self.binding_labels`: param -> the full phrase a runtime binding error starts with in
+        #   place of `input '<param>'` / `binding '<param>'` (e.g. `"node 'g' on"`), where
+        #   `wiring_labels` is only the load-time site phrase for a reference error (`"on:"`).
+        #   Not part of node identity or the manifest; filled by Compose for params the author
+        #   never wrote as inputs. Empty means the default text.
+        self.binding_labels: dict[str, str] = {}
+
     def failure_trace(
         self,
         operation_origin: OriginRef | None = None,

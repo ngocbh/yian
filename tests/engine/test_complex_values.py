@@ -139,7 +139,7 @@ output: ${(0 - 8) ** 0.5}
 
     assert result.status == "failed"
     assert result.failure.code == "binding.evaluate"
-    assert result.failure.message == f"input 'result': complex number {C!r} is not a yian value"
+    assert result.failure.message == f"flow output: complex number {C!r} is not a yian value"
 
 
 def test_a_complex_map_over_item_fails_the_map():

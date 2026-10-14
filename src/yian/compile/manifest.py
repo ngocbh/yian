@@ -80,6 +80,7 @@ _IGNORED_NODE_FIELDS = frozenset(
         "memory_scope",
         "execution_scope",
         "wiring_labels",
+        "binding_labels",
     }
 )
 

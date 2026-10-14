@@ -496,7 +496,9 @@ def test_synth_node_locates_at_its_call_directive_line():
     # the bad `topic` binding at L30 rather than the host node's like-named input on L29.
     err = _load_error("e37-synth-node-inherits-host-ranges.yaml")
     assert "unresolved references" in str(err)
-    assert "__call_0" in str(err) and "'topic'" in str(err)  # the SYNTH node's input, not the host's
+    # The directive's argument, not the host's like-named input.
+    assert "node 'summary' input 'news' call(enrich) argument 'topic' from:" in str(err)
+    assert "__call_" not in str(err)
     # The `call(...)` directive owns the failing binding.
     assert _only_error_range(err).start_line == 30
 

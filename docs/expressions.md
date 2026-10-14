@@ -218,11 +218,12 @@ evaluation, like arithmetic over null. Give a default when the value may be
 missing: `${upper(input.name :- "")}`. A null nested inside a `render_as_json`
 value still renders as `null`.
 
-New builtins register with `@register_template_fn()`.
+New builtins register with `@register_template_fn()`, before loading a flow that
+calls one.
 
-In a condition the loader checks every call: an unknown function, or arguments the
-builtin doesn't take, is a load error. Register a builtin with
-`@register_template_fn()` before loading a flow that calls it.
+In a condition every call is checked before it runs: an unknown function, or
+arguments the builtin doesn't take, is a load error (for a condition set in Python,
+`run_flow` raises `ExpressionError` before the run).
 
 ## `isinstance` — the type test
 

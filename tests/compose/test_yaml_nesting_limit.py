@@ -10,7 +10,7 @@ from yian.compose.source.scalars import MAX_YAML_NESTING
 from yian.diagnostics import SourceRange
 from yian.typesys.values import MAX_VALUE_NESTING
 
-_MESSAGE = "nests deeper than 200 levels, the limit for a YAML document"
+_MESSAGE = f"nests deeper than {MAX_YAML_NESTING} levels, the limit for a YAML document"
 
 
 def _flow(topic: str) -> str:
@@ -34,7 +34,7 @@ def test_limit_is_twice_the_value_limit_and_the_message_names_both() -> None:
 
 
 def test_flow_nested_600_levels_is_a_located_load_error() -> None:
-    """The issue's flow fails at the first list past the limit, not with RecursionError."""
+    """A 600-level flow fails at the first list past the limit, not with RecursionError."""
 
     with pytest.raises(LoadError, match=_MESSAGE) as caught:
         load_flow(_flow("[" * 600 + "1" + "]" * 600))
@@ -46,7 +46,7 @@ def test_flow_nested_600_levels_is_a_located_load_error() -> None:
 
 
 def test_flow_with_a_value_at_the_limit_loads() -> None:
-    """A value reaching document level 200 loads; the value nesting check rejects it when it runs."""
+    """A value reaching document level 200 loads."""
 
     load_flow(_flow("[" * 196 + "1" + "]" * 196))
     load_flow(_flow("{a: " * 196 + "1" + "}" * 196))

@@ -80,7 +80,7 @@ class ScalarValueError(ConstructorError):
 
 
 # Twice a yian value's 100 levels: a value at that limit fits inside a flow's own
-# structure, and composing and walking a document this deep stays well within
+# structure, and composing and walking a document this deep stays within
 # Python's default recursion limit.
 MAX_YAML_NESTING = 200
 """Deepest nesting of a YAML document yian reads; each mapping and list is a level."""
@@ -134,7 +134,7 @@ class _FlowLoader(yaml.SafeLoader):
                     None,
                     f"this {kind} nests deeper than {MAX_YAML_NESTING} levels, the limit "
                     "for a YAML document (each mapping and list is a level; a yian value "
-                    "nests at most 100)",
+                    "nests at most 100); flatten it",
                     event.start_mark,
                 )
         elif isinstance(event, yaml.CollectionEndEvent):

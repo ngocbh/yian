@@ -373,7 +373,7 @@ follows the same rules:
 | JSON Schema | yian type |
 | --- | --- |
 | `string`, `integer`, `number`, `boolean`, `null` | `str`, `int`, `float`, `bool`, `None` |
-| `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` | a range: `int(a..b)`, or one-sided `int(a..)` / `int(..b)` when only one end is given; an exclusive end becomes the nearest inclusive `int`, or the same value made inclusive for `float` (wider); a `float` end that isn't an exact double is dropped |
+| `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` | a range: `int(a..b)` / `float(a..b)`, or one-sided `int(a..)` / `int(..b)` (likewise `float`) when only one end is kept; an exclusive end becomes the nearest inclusive `int`, or the same value made inclusive for `float` (wider); a `float` end that isn't an exact double is dropped |
 | string `enum` or `const` | `Literal(...)` |
 | `format` (`date`, `uri`, …) | `str` |
 | `array` with `items` | `list(...)`; tuples give `list(Any)` |
@@ -394,7 +394,7 @@ alone) and an exclusive `number` limit used to be dropped. They are now kept, so
 binding that can never fit, such as a literal `-1` into a `Field(ge=0)` input, raises
 `ValueError` at run start instead of failing inside the tool call. A union of
 `integer`s (or of `number`s) with different limits, such as pydantic
-`Union[conint(le=3), conint(ge=5)]`, used to be unchecked; it is now checked
+`Union[conint(ge=0, le=3), conint(ge=5, le=9)]`, used to be unchecked; it is now checked
 against one range covering all its members.
 
 The return type is read from the annotation of the function behind the tool: a

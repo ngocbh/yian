@@ -1594,8 +1594,7 @@ converted by the tool on each call; it now fails at run start. Input names and
 missing inputs used to fail only when the node ran; they are now checked at run
 start, even for nodes that may never run. A value outside a tool's one-sided limit,
 such as `qty: -1` into an input declared `Field(ge=0)` (JSON Schema `minimum: 0`),
-used to start and fail inside the tool call; it now fails at run start. See
-[Typed tools](api.md#typed-tools).
+used to start and fail inside the tool call; it now fails at run start.
 
 A `code` node's `code:` field is one of two shapes:
 

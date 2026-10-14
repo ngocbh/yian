@@ -117,11 +117,30 @@ def test_a_type_mismatch_holding_a_huge_int_raises_a_located_type_error(
 
 def test_a_huge_int_key_becomes_a_placeholder_path_segment():
     with pytest.raises(TypeCheckError) as caught:
-        reject_nonfinite({10**4999: math.nan}, "output")
-    assert caught.value.path == ("<int too large to display>",)
+        reject_nonfinite({BIG: math.nan}, "output")
+    assert caught.value.path == (PLACEHOLDER,)
     assert str(caught.value) == (
-        "output at ['<int too large to display>']: non-finite number nan is not a yian value"
+        f"output at [{PLACEHOLDER!r}]: non-finite number nan is not a yian value"
     )
+
+
+@pytest.mark.parametrize("value, message", [
+    ({"a": 1, BIG: 1}, f"record has unknown fields: [{PLACEHOLDER}]"),
+    ({"a": 1, BIG: 1, "z": 2}, f"record has unknown fields: [{PLACEHOLDER}, 'z']"),
+], ids=["huge-key", "huge-and-str-keys"])
+def test_a_record_names_an_unknown_huge_int_key(value, message):
+    with pytest.raises(TypeCheckError) as caught:
+        build_value_as(rec(a=INT), value)
+    assert str(caught.value) == message
+    assert caught.value.path == ()
+
+
+def test_a_partial_record_contract_names_an_unknown_huge_int_key():
+    contract = PartialRecordContract(fields=(("a", None),))
+    with pytest.raises(TypeCheckError) as caught:
+        validate_output_contract(contract, {"a": 1, BIG: 1, "z": 2})
+    assert str(caught.value) == f"record has unknown fields: [{PLACEHOLDER}, 'z']"
+    assert caught.value.path == ()
 
 
 def test_a_partial_record_contract_names_a_huge_int_it_rejects():
@@ -172,3 +191,23 @@ output: ${w.output}
         "wait `until` ('${10 ** 4999}') did not resolve to a date/datetime: "
         f"{PLACEHOLDER}"
     )
+
+
+def test_a_huge_int_input_name_is_reported_as_unknown():
+    flow = load_flow("""
+id: big
+name: big
+input:
+  x: int
+nodes:
+  n:
+    kind: code
+    code: |
+      return 1
+output: ${n.output}
+""")
+
+    with pytest.raises(ValueError) as caught:
+        run_flow(flow, {BIG: 1})
+
+    assert str(caught.value) == f"unknown input {PLACEHOLDER}; declared inputs: x"

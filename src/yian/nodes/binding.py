@@ -42,7 +42,7 @@ from yian.expr.template import Span, eval_template, scan_template
 from yian.nodes.contracts import Binding, Parameter, ValueContract, binding_source
 from yian.typesys import TypeCheckError, ValueKind, build_value_as
 from yian.typesys.pool import VariablePool
-from yian.typesys.values import Type, reject_nonfinite
+from yian.typesys.values import Type, reject_nonfinite, value_repr
 
 
 BindingFailureCode: TypeAlias = Literal[
@@ -254,7 +254,7 @@ def check_input_names(params: list[Parameter], raw: Mapping[str, Any]) -> None:
             f"inputs must be a mapping of input names to values, got {type(raw).__name__}"
         )
     declared = [parameter.name for parameter in params]
-    unknown = sorted(repr(name) for name in raw if name not in declared)
+    unknown = sorted(value_repr(name) for name in raw if name not in declared)
     if unknown:
         noun = "input" if len(unknown) == 1 else "inputs"
         raise ValueError(

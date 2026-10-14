@@ -668,15 +668,16 @@ def validate_output_contract(
         except TypeError:
             ordered_unknown = sorted(
                 unknown,
-                key=lambda name: (type(name).__qualname__, repr(name)),
+                key=lambda name: (type(name).__qualname__, value_repr(name)),
             )
         path = (
             (ordered_unknown[0],)
             if all(type(name) is str for name in unknown)
             else ()
         )
+        shown = ", ".join(value_repr(name) for name in ordered_unknown)
         raise TypeCheckError(
-            f"record has unknown fields: {ordered_unknown!r}",
+            f"record has unknown fields: [{shown}]",
             path=path,
         )
     checked = dict(value)

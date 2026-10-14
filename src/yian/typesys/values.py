@@ -84,7 +84,8 @@ def reject_nonfinite(value: Any, where: str) -> None:
 
     Walks `dict` values, `list`/`tuple` items, `TypedValue` payloads, pydantic
     models, and dataclass instances, depth-first and in order. It walks declared
-    fields and extras only; a non-str key renders as its repr. A container
+    fields and extras only; a non-str key renders as its repr, or a
+    ``<type too large to display>`` placeholder. A container
     already on the current path is skipped; the canonical codecs reject cycles.
 
     Args:
@@ -1302,15 +1303,16 @@ def _build_for_type(
             except TypeError:
                 ordered_unknown = sorted(
                     unknown,
-                    key=lambda name: (type(name).__qualname__, repr(name)),
+                    key=lambda name: (type(name).__qualname__, value_repr(name)),
                 )
             unknown_path = (
                 path + (ordered_unknown[0],)
                 if all_string_keys
                 else path
             )
+            shown = ", ".join(value_repr(name) for name in ordered_unknown)
             raise TypeCheckError(
-                f"record has unknown fields: {ordered_unknown}",
+                f"record has unknown fields: [{shown}]",
                 path=unknown_path,
             )
         # Key by the declared name: an equal `str` subclass key must not leak into

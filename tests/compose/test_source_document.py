@@ -1,6 +1,7 @@
 """Tests for one-pass, privately retained YAML source documents."""
 
 from dataclasses import FrozenInstanceError
+from datetime import date, datetime
 
 import pytest
 import yaml
@@ -252,3 +253,111 @@ def test_custom_tagged_merge_source_can_force_a_value_tag_alias():
 def test_merge_sequence_reports_the_first_authored_source_error(text, message):
     with pytest.raises(SourceSyntaxError, match=message):
         SourceDocument.parse(text)
+
+
+def _non_text_key(text):
+    """Return the parsed document's first non-text key."""
+
+    return SourceDocument.parse(text).non_text_key
+
+
+def test_non_text_key_is_the_constructed_key_its_text_and_range():
+    found = _non_text_key("a: 1\nTrue: x\n")
+
+    assert found == (True, "True", SourceRange(2, 1, 2, 5))
+    assert type(found[0]) is bool
+
+
+@pytest.mark.parametrize(
+    ("raw", "key", "text"),
+    [
+        ("true", True, "true"),
+        ("FALSE", False, "FALSE"),
+        ("1", 1, "1"),
+        ("-3", -3, "-3"),
+        ("0x1F", 31, "0x1F"),
+        ("1.5", 1.5, "1.5"),
+        ("1e3", 1000.0, "1e3"),
+        ("null", None, "null"),
+        ("~", None, "~"),
+        ("2026-10-13", date(2026, 10, 13), "2026-10-13"),
+        ("2026-10-13 10:00:00", datetime(2026, 10, 13, 10, 0), "2026-10-13 10:00:00"),
+        ("!!binary aGVsbG8=", b"hello", "aGVsbG8="),
+        ('!!int "7"', 7, "7"),
+    ],
+)
+def test_non_text_key_reports_each_kind_of_scalar(raw, key, text):
+    found = _non_text_key(f"{raw}: x\n")
+
+    assert found is not None
+    assert found[0] == key and type(found[0]) is type(key)
+    assert found[1] == text
+    assert (found[2].start_line, found[2].start_col) == (1, 1)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["yes", "on", "off", "no", "1:30", "1_000", '"True"', "'1'", "!!str 1", "=", "!!value 1"],
+)
+def test_text_keys_are_not_reported(raw):
+    assert _non_text_key(f"{raw}: x\n") is None
+
+
+@pytest.mark.parametrize(
+    ("text", "key", "key_range"),
+    [
+        ("a:\n  - {1: x}\n", 1, SourceRange(2, 6, 2, 7)),
+        ("a: {b: {2.5: x}}\n", 2.5, SourceRange(1, 9, 1, 12)),
+        ("a:\n  b:\n    c:\n      null: x\n", None, SourceRange(4, 7, 4, 11)),
+        ("a: {2: x}\n3: y\n", 2, SourceRange(1, 5, 1, 6)),
+        ("1: x\nb: {2: y}\n", 1, SourceRange(1, 1, 1, 2)),
+        ("base: &b {1: x}\nc:\n  <<: *b\n", 1, SourceRange(1, 11, 1, 12)),
+        ("&k 1: a\nb: {*k : c}\n", 1, SourceRange(1, 1, 1, 5)),
+        ("a: &k 1\n*k : b\n", 1, SourceRange(1, 4, 1, 8)),
+    ],
+    ids=[
+        "sequence-item",
+        "flow-mapping-value",
+        "deep-value",
+        "earlier-value-beats-later-key",
+        "earlier-key-beats-later-value",
+        "merged-base-at-its-written-key",
+        "alias-of-a-key",
+        "alias-of-a-value",
+    ],
+)
+def test_non_text_key_is_found_anywhere_in_document_order(text, key, key_range):
+    found = _non_text_key(text)
+
+    assert found is not None
+    assert found[0] == key and type(found[0]) is type(key)
+    assert found[2] == key_range
+
+
+def test_merge_key_itself_is_not_reported():
+    assert _non_text_key("base: &b {a: x}\nc:\n  <<: *b\n  d: y\n") is None
+
+
+@pytest.mark.parametrize(
+    ("text", "key", "key_range"),
+    [
+        ('!!binary "": x\n', b"", SourceRange(1, 1, 1, 12)),
+        ("? \n: x\n", None, SourceRange(1, 2, 1, 2)),
+        ("{? : x}\n", None, SourceRange(1, 3, 1, 3)),
+    ],
+    ids=["tagged-empty", "explicit-empty", "flow-empty"],
+)
+def test_empty_key_is_reported_with_empty_text(text, key, key_range):
+    found = _non_text_key(text)
+
+    assert found is not None
+    assert found[0] == key and type(found[0]) is type(key)
+    assert found[1] == ""
+    assert found[2] == key_range
+
+
+def test_non_text_key_and_repeated_key_are_both_found():
+    document = SourceDocument.parse("017: a\n17: b\n")
+
+    assert document.non_text_key == (17, "017", SourceRange(1, 1, 1, 4))
+    assert document.repeated_key is not None

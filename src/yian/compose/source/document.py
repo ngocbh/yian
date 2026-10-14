@@ -369,6 +369,50 @@ def _first_repeated_key(
     return None
 
 
+def _first_non_text_key(
+    root_node: yaml.Node | None,
+    source_values: dict[int, Any],
+) -> tuple[Any, str, SourceRange] | None:
+    """Find the first mapping key, in document order, that YAML read as non-text.
+
+    Every own pair of every reachable mapping is checked; ``<<:`` merge keys are
+    skipped, and merged-in keys are checked where they are written. A key with
+    no constructed value is skipped too; only merge keys lack one. An alias key
+    is its anchored node, so it is reported at the anchor.
+
+    Returns:
+        `tuple[Any, str, SourceRange] | None`:
+            The constructed key, its scalar text, and its range, or ``None`` when
+            every key is text.
+    """
+
+    first: yaml.Node | None = None
+    stack = [root_node] if root_node is not None else []
+    seen: set[int] = set()
+    while stack:
+        node = stack.pop()
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        if isinstance(node, SequenceNode):
+            stack.extend(node.value)
+            continue
+        if not isinstance(node, MappingNode):
+            continue
+        for key_node, value_node in node.value:
+            stack.append(value_node)
+            if key_node.tag == "tag:yaml.org,2002:merge":
+                continue
+            key = source_values.get(id(key_node), _MISSING)
+            if key is _MISSING or isinstance(key, str):
+                continue
+            if first is None or key_node.start_mark.index < first.start_mark.index:
+                first = key_node
+    if first is None:
+        return None
+    return source_values[id(first)], first.value, _mark_to_range(first)
+
+
 _YAML_LINE_BREAKS = frozenset(("\r", "\n", "\x85", "\u2028", "\u2029"))
 _CONSTRUCTED_LINE_BREAKS = frozenset(("\n", "\u2028", "\u2029"))
 
@@ -759,6 +803,9 @@ class SourceDocument:
     _repeated_key: tuple[Any, SourceRange, SourceRange] | None = field(
         default=None, repr=False, compare=False
     )
+    _non_text_key: tuple[Any, str, SourceRange] | None = field(
+        default=None, repr=False, compare=False
+    )
 
     @property
     def root(self) -> SourceCursor:
@@ -776,6 +823,17 @@ class SourceDocument:
         """
 
         return self._repeated_key
+
+    @property
+    def non_text_key(self) -> tuple[Any, str, SourceRange] | None:
+        """Return the first mapping key, in document order, YAML read as non-text.
+
+        The tuple is the constructed key (a bool, number, null, date, or bytes),
+        its scalar text as written, and its range. Flow names must be text, so
+        Compose rejects the document.
+        """
+
+        return self._non_text_key
 
     def _resolve_occurrence(self, path: OccurrencePath) -> SourceCursor:
         """Replay one finite physical occurrence path through the definition DAG."""
@@ -815,6 +873,7 @@ class SourceDocument:
                 },
             )
             repeated_key = _first_repeated_key(root_node, loader._source_values)
+            non_text_key = _first_non_text_key(root_node, loader._source_values)
         except (yaml.YAMLError, yaml.reader.ReaderError) as exc:
             raise SourceSyntaxError(str(exc), _problem_range(exc, text)) from exc
         finally:
@@ -835,4 +894,5 @@ class SourceDocument:
             _definitions=definitions,
             _root_definition=root_definition,
             _repeated_key=repeated_key,
+            _non_text_key=non_text_key,
         )

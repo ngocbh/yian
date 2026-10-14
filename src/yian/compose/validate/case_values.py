@@ -46,7 +46,7 @@ from typing import Any, Mapping, Optional
 from yian.compile.validation import type_relation
 from yian.compose.desugar.case_values import ValuePath, prepared_literal, value_spans
 from yian.compose.desugar.inline_calls import _SYNTH_PREFIX
-from yian.compose.helpers.errors import LoadDiagnostics, LoadError
+from yian.compose.helpers.errors import LoadDiagnostics, LoadError, source_text
 from yian.compose.helpers.output_contracts import resolve_output_binding_contract
 from yian.compose.helpers.typed_bindings import yaml_quoted
 from yian.compose.helpers.yaml_words import former_boolean_fix
@@ -337,7 +337,7 @@ class _Checker:
             return f"; {fix[1]}"
         if not isinstance(value, (bool, int, float)):
             return ""
-        text = self._source_text(branch.range) or _shown(value)
+        text = source_text(self.diagnostics, branch.range) or _shown(value)
         try:
             build_value_as(expected, text)
         except TypeCheckError:
@@ -346,16 +346,6 @@ class _Checker:
         if isinstance(value, bool):
             hint += " (YAML reads unquoted true/false as booleans)"
         return hint
-
-    def _source_text(self, rng: Optional[SourceRange]) -> Optional[str]:
-        """Return the authored text a one-line range covers, or `None` when unknown."""
-        text = self.diagnostics.text
-        if text is None or rng is None or rng.start_line != rng.end_line:
-            return None
-        lines = text.splitlines()
-        if not 1 <= rng.start_line <= len(lines):
-            return None
-        return lines[rng.start_line - 1][rng.start_col - 1 : rng.end_col - 1].strip() or None
 
     def _error(self, branch: _Branch, message: str) -> LoadError:
         """Build the load error for `branch`, located at its range."""

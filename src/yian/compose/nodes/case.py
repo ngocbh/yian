@@ -18,7 +18,11 @@ no new node kind. Two surface forms:
   routes to the internal else handle (`ELSE_HANDLE`).
 
 - **`on:`** (`on: ${ref}`, `cases: [{when: <value>, then: <t>}]`): one input `__on = ${ref}`;
-  each `when: <value>` becomes `${__on} == "<value>"`.
+  each `when: <value>` is a typed literal compared exactly: text (quoted, or an unquoted date
+  as its ISO text) becomes `${__on} == "<value>"`, a number
+  `${__on} == <n> and not isinstance(${__on}, bool)`, a bool
+  `${__on} == true and isinstance(${__on}, bool)`. The `isinstance` guard keeps a bool from
+  equalling a number even when the `on:` type is unknown.
 
 Because the desugared `when:`s interpolate ONLY the node-local `__rN`/`__on` names, the strict
 `CaseNode` evaluates them via the EXISTING `evaluate_when_record` against its bound input record —
@@ -30,16 +34,19 @@ in `.build()`. `.build()` lowers unconditionally; the loader runs `check_case_ex
 validate phase.
 
 Imports flow down/peer only: `lark` (parse-tree types), `expr` (ref scan/rewrite and the
-`isinstance` tree helpers), `nodes` (Case/CaseNode/Parameter), `compile.model` (Edge), and
-the compose peers `source`/`helpers.errors`/`helpers.output_contracts`/`nodes.base`.
+`isinstance` tree helpers), `nodes` (Case/CaseNode/Parameter), `compile.model` (Edge),
+`typesys` (the non-finite check), and the compose peers
+`source`/`helpers.errors`/`helpers.output_contracts`/`helpers.typed_bindings`/`nodes.base`.
 It imports NOTHING from parse/desugar/edges/validate/build/loader (the ladder), so it stays a
 leaf of the nodes package.
 """
 
 from __future__ import annotations
 
+import datetime
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional
 
 from lark import Token, Tree
@@ -59,8 +66,11 @@ from yian.expr import (
 )
 from yian.nodes.case import ELSE_HANDLE, Case, CaseNode
 from yian.nodes.contracts import Binding, Parameter, binding_source
-from yian.compose.helpers.errors import LoadDiagnostics
+from yian.typesys import TypeCheckError
+from yian.typesys.values import reject_nonfinite
+from yian.compose.helpers.errors import LoadDiagnostics, source_text
 from yian.compose.helpers.output_contracts import direct_reference_parts
+from yian.compose.helpers.typed_bindings import yaml_quoted
 from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from yian.compose.source import SourceCursor
 
@@ -358,6 +368,84 @@ def _quote(
     )
 
 
+def on_match_value(value: Any) -> Any:
+    """Return the value an `on:`-form `when:` matches.
+
+    Args:
+        value (`Any`):
+            The authored `when:` value.
+
+    Returns:
+        `Any`:
+            A date as its ISO text, anything else unchanged. A datetime is returned
+            unchanged; `_match_condition` rejects it before matching.
+    """
+    if isinstance(value, datetime.date) and not isinstance(value, datetime.datetime):
+        return value.isoformat()
+    return value
+
+
+def _number_text(value: int | float) -> str:
+    """Return a number as expression-literal digits: no exponent, and a float keeps a `.`."""
+    # repr is the shortest round-tripping form; Decimal spells it positionally, since the
+    # NUMBER terminal has no exponent.
+    text = format(Decimal(repr(value)), "f")
+    if isinstance(value, float) and "." not in text:
+        text += ".0"
+    return text
+
+
+def _match_condition(
+    value: Any,
+    diagnostics: LoadDiagnostics,
+    *,
+    node_id: str,
+    index: int,
+    range: SourceRange | None,
+) -> str:
+    """Return the `${__on}` condition one `on:`-form `when:` value lowers to.
+
+    Text compares as a string literal; a number compares numerically and never with a bool;
+    a bool compares only with a bool.
+
+    Raises:
+        `LoadError`:
+            The value is a datetime (its text has several spellings, so it must be quoted),
+            a non-finite number, a list, a record, or text with both quote characters.
+    """
+    if isinstance(value, datetime.datetime):
+        text = source_text(diagnostics, range) or value.isoformat()
+        raise diagnostics.error(
+            f"case node {node_id!r}: quote a datetime when: to match its text exactly: "
+            f"`when: {yaml_quoted(text)}`",
+            range=range,
+        )
+    value = on_match_value(value)
+    if isinstance(value, str):
+        return f"${{__on}} == {_quote(value, diagnostics, range=range)}"
+    if isinstance(value, bool):
+        # Python's == has True == 1; the isinstance guard keeps a bool from equalling a number.
+        literal = "true" if value else "false"
+        return f"${{__on}} == {literal} and isinstance(${{__on}}, bool)"
+    if isinstance(value, (int, float)):
+        try:
+            reject_nonfinite(value, f"case node {node_id!r} cases[{index}].when")
+        except TypeCheckError as exc:
+            raise diagnostics.error(str(exc), range=range) from exc
+        return f"${{__on}} == {_number_text(value)} and not isinstance(${{__on}}, bool)"
+    if isinstance(value, list):
+        kind = "a list"
+    elif isinstance(value, Mapping):
+        kind = "a record"
+    else:
+        kind = type(value).__name__
+    raise diagnostics.error(
+        f"case node {node_id!r}: an on: case's when: takes text, a number, or a bool, "
+        f"got {kind}",
+        range=range,
+    )
+
+
 def _data_edges(node_id: str, wiring: dict[str, Any]) -> list[Edge]:
     """Reconciled data edges: one per `${<id>.output}` ref a `__rN`/`__on` source reads.
 
@@ -424,7 +512,10 @@ def _desugar_on(
     desc: CaseDescriptor,
     diagnostics: LoadDiagnostics,
 ) -> tuple[CaseNode, dict[str, Any], list[Edge], list[Edge], dict, dict[str, str]]:
-    """`on: ${ref}` form -> one `__on` param + a `${__on} == "<value>"` per case.
+    """`on: ${ref}` form -> one `__on` param + one typed `${__on}` match condition per case.
+
+    Each `when:` lowers through `_match_condition`, so it compares exactly with the `on:`
+    value: text as text, numbers numerically, bools only with bools.
 
     Returns `(node, wiring, data_edges, control_edges, param_ranges, param_labels)` — the last
     two locate the synth `__on` param at the `on:` line and label it `on:` (not `__on`).
@@ -452,7 +543,13 @@ def _desugar_on(
         cases.append(
             Case(
                 handle=then,
-                when=f"${{__on}} == {_quote(value, diagnostics, range=when_range or desc.range)}",
+                when=_match_condition(
+                    value,
+                    diagnostics,
+                    node_id=desc.id,
+                    index=index,
+                    range=when_range or desc.range,
+                ),
                 origin=(desc.when_origins[index] if desc.when_origins else None),
             )
         )

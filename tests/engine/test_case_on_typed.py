@@ -56,7 +56,7 @@ def _flow(
 ) -> str:
     """Return a flow whose `route` case matches `on:` against `whens` (`(when, then)` pairs).
 
-    With `on_type`, `on:` reads the flow input `n: <on_type>`; with `on_type=None` it reads an
+    With `on_type`, `on:` reads the flow input `n: <on_type>`; with `on_type=None` it reads a
     CODE producer `src` that runs `src_code` over the input `pick`, typed by `src_output`
     (untyped when `None`).
     """
@@ -264,11 +264,10 @@ def test_float_when_on_int_is_an_error():
 
 def test_out_of_bounds_int_when():
     text = _flow([("1", "one"), ("13", "two")], on_type="int[1, 12]")
-    message = _when_error(text, "13")
-    assert message.startswith(
-        "case node 'route': `when: 13` is an int but `on: ${input.n}` is `int[1,12]` ("
+    assert _when_error(text, "13") == (
+        "case node 'route': `when: 13` is not a value of `on: ${input.n}` (`int[1,12]`): "
+        "13 is outside inclusive int bounds (1, 12)"
     )
-    assert message.endswith(")")
 
 
 def test_typo_next_to_else_on_a_literal_node_output():
@@ -423,12 +422,15 @@ def test_integral_float_when_on_int():
 
 
 def test_no_drop_quotes_hint_for_text_yaml_reads_as_text():
+    # YAML 1.1 reads an unquoted 1e3 as text, YAML 1.2 as a float; both must hold up.
     text = _flow([("1e3", "one")], on_type="float")
     try:
         load_flow(text)
     except LoadError as error:
-        assert "is text but `on: ${input.n}` is `float`" in str(error)
-        assert "drop the quotes: `when: 1e3`" not in str(error)
+        assert "`when: 1e3` is text but `on: ${input.n}` is `float`" in str(error)
+        assert "drop the quotes" not in str(error)
+    else:
+        assert _route(text, {"n": 1000.0}) == "one"
 
 
 def test_invalid_date_text_hint_does_not_crash():
@@ -463,3 +465,19 @@ def test_expression_on_is_typed():
     )
     untyped = _flow([('"2"', "one")]).replace("on: ${input.n}", "on: ${input.n + 1}")
     load_flow(untyped)
+
+
+def test_quote_fix_skips_an_anchor_or_tag():
+    anchored = _flow([("&a 1", "one")], on_type="str")
+    assert _when_error(anchored, "&a 1").endswith('; quote it: `when: "1"`')
+    tagged = _flow([("!!float 1", "one")], on_type="str")
+    assert _when_error(tagged, "!!float 1").endswith('; quote it: `when: "1.0"`')
+
+
+def test_drop_quotes_fix_needs_quotes_and_strips_the_text():
+    tagged = _flow([("!!str 1", "one")])
+    assert _when_error(tagged, "!!str 1") == (
+        "case node 'route': `when: !!str 1` is text but `on: ${input.n}` is `int`"
+    )
+    padded = _flow([('" 1"', "one")])
+    assert _when_error(padded, '" 1"').endswith("; drop the quotes: `when: 1`")

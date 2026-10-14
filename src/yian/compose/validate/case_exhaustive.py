@@ -26,7 +26,7 @@ the validate phase, alongside the other cross-node checks.
 Imports flow down/peer only: `expr` (ref scan), `nodes.contracts` (the output-contract
 sum), `typesys` (Type and the strict value check), and the compose peers
 `helpers.output_contracts`/`errors`/`typed_bindings`, `nodes.case`, `source.literals`,
-`parse.file`, and `validate.narrowing`. Nothing in the engine imports this back.
+`parse.file`, and `validate.narrowing`/`typed_bindings`. Nothing in the engine imports this back.
 """
 
 from __future__ import annotations
@@ -52,6 +52,7 @@ from yian.compose.nodes.case import on_match_value
 from yian.compose.parse.file import CaseDescriptor, NodeDescriptor
 from yian.compose.source.literals import parse_yaml_literal
 from yian.compose.validate.narrowing import Narrowing
+from yian.compose.validate.typed_bindings import shown_literal
 
 
 def check_case_exhaustive(
@@ -159,7 +160,7 @@ def check_case_when_values(
 
 
 # The scalar kind of each `when:` value type, for "this value has the right kind but is
-# still not a member" (an out-of-bounds number, a non-tag text).
+# still not a member" (an out-of-bounds number).
 _VALUE_KINDS: dict[type, tuple[ValueKind, ...]] = {
     str: (ValueKind.STRING,),
     bool: (ValueKind.BOOLEAN,),
@@ -208,24 +209,47 @@ def _when_value_error(on: str, value: Any, typ: Type, src: str | None) -> str | 
         tags = ", ".join(_text_shown(tag) for tag in sorted(typ.tags))
         shown = src or _text_shown(value)
         return f"`when: {shown}` is not a tag of `on: {on}` (`{label}`); use one of: {tags}"
-    shown = src or _shown(value, match)
-    message = f"`when: {shown}` is {_VALUE_PHRASES[type(value)]} but `on: {on}` is `{label}`"
+    shown = src or _spelling(value)
     if typ.kind in _VALUE_KINDS[type(value)]:
-        return f"{message} ({error})"
-    return message + _when_fix(value, typ, shown)
+        return f"`when: {shown}` is not a value of `on: {on}` (`{label}`): {error}"
+    return (
+        f"`when: {shown}` is {_VALUE_PHRASES[type(value)]} but `on: {on}` is `{label}`"
+        + _when_fix(value, typ, src)
+    )
 
 
-def _when_fix(value: Any, typ: Type, written: str) -> str:
-    """Return the `; <fix>` suffix for a `when:` value of the wrong kind, or `""`."""
+def _when_fix(value: Any, typ: Type, src: str | None) -> str:
+    """Return the `; <fix>` suffix for a `when:` value of the wrong kind, or `""`.
+
+    Args:
+        value (`Any`):
+            The authored `when:` value.
+        typ (`Type`):
+            The resolved `on:` type.
+        src (`str | None`):
+            The authored source text of the `when:` scalar, when known.
+
+    Returns:
+        `str`:
+            A quote, write-as-an-int, or drop-the-quotes hint, or `""` when none applies.
+    """
     if not isinstance(value, str):
+        # An anchor, alias, or tag is not part of the value's spelling, so quoting the
+        # source would change the text; the value's own spelling is quoted instead.
+        authored = src is not None and not src.startswith(("&", "*", "!"))
+        written = src if authored else _spelling(value)
         if _fits(typ, written):
             return f"; quote it: `when: {yaml_quoted(written)}`"
         if isinstance(value, float) and value.is_integer() and _fits(typ, int(value)):
             return f"; write it as an int: `when: {int(value)}`"
         return ""
-    reading = _yaml_reading(value)
+    if src is not None and not src.startswith(("'", '"')):
+        # Text written without quotes (`!!str 1`) has no quotes to drop.
+        return ""
+    text = value.strip()
+    reading = _yaml_reading(text)
     if reading is not None and _fits(typ, reading):
-        return f"; drop the quotes: `when: {value}`"
+        return f"; drop the quotes: `when: {text}`"
     return ""
 
 
@@ -267,15 +291,9 @@ def _text_shown(text: str) -> str:
     return text if reads_back else yaml_quoted(text)
 
 
-def _shown(value: Any, match: Any) -> str:
+def _spelling(value: Any) -> str:
     """Return a `when:` value as YAML would spell it, for when its source text is unknown."""
-    if isinstance(value, str):
-        return _text_shown(value)
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, datetime.date):
-        return match
-    return repr(value)
+    return _text_shown(value) if isinstance(value, str) else shown_literal(value)
 
 
 def _check_value_exhaustive(

@@ -166,6 +166,18 @@ def _list() -> None:
         )
 
 
+def _check_endpoint(endpoint: str) -> None:
+    """Refuse an Azure endpoint that a config's `base_url` could not name.
+
+    Raises:
+        AuthError: The endpoint is invalid.
+    """
+    try:
+        validate_base_url(endpoint)
+    except ValueError as error:
+        raise AuthError(f"Invalid Azure endpoint: {error}") from None
+
+
 def _check_options(
     provider: str,
     *,
@@ -179,8 +191,11 @@ def _check_options(
 ) -> str:
     """Validate the option combination and return the provider name to use.
 
+    Azure setup also needs `OPENAI_API_VERSION` and a valid `endpoint`, when given.
+
     Raises:
-        AuthError: The provider or an option does not apply.
+        AuthError: The provider or an option does not apply, or Azure setup lacks
+            its API version or has an invalid endpoint.
     """
     setup = {
         "--method": method,
@@ -215,6 +230,14 @@ def _check_options(
         raise AuthError("Choose --login browser or --login device")
     if method == "api-key" and login is not None:
         raise AuthError("--login applies to subscription authentication")
+    if name == "azure" and not default:
+        # The Azure client reads the API version only from the environment.
+        if not os.environ.get("OPENAI_API_VERSION"):
+            raise AuthError(
+                "Azure needs OPENAI_API_VERSION set to its API version (runs read it too)"
+            )
+        if endpoint is not None:
+            _check_endpoint(endpoint)
     return name
 
 
@@ -329,20 +352,12 @@ def _setup_provider(
     Raises:
         AuthError: A value is missing or invalid, or the model did not answer.
     """
-    if provider == "azure":
-        # The Azure client reads the API version only from the environment.
-        if not os.environ.get("OPENAI_API_VERSION"):
-            raise AuthError(
-                "Azure needs OPENAI_API_VERSION set to its API version (runs read it too)"
-            )
-        endpoint = endpoint or _ask(
+    if provider == "azure" and endpoint is None:
+        endpoint = _ask(
             "Azure OpenAI endpoint (https://<resource>.openai.azure.com/):",
             option="--endpoint",
         )
-        try:
-            validate_base_url(endpoint)
-        except ValueError as error:
-            raise AuthError(f"Invalid Azure endpoint: {error}") from None
+        _check_endpoint(endpoint)
     key = None
     if provider != "ollama":
         key = _api_key(

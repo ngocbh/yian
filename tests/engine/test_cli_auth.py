@@ -638,6 +638,31 @@ def test_azure_setup_requires_the_api_version(monkeypatch, checks):
     assert fake.answers == [] and fake.listings == [] and not store.path.exists()
 
 
+@pytest.mark.parametrize(
+    ("version", "endpoint", "error"),
+    [
+        (None, "https://r.openai.azure.com/", "OPENAI_API_VERSION"),
+        ("2025-03-01-preview", "http://r.example.com", "Invalid Azure endpoint"),
+    ],
+)
+def test_azure_options_are_checked_before_the_store(
+    monkeypatch, checks, version, endpoint, error
+):
+    store, fake = checks
+    if version:
+        monkeypatch.setenv("OPENAI_API_VERSION", version)
+
+    def unread(*args, **kwargs):
+        raise AssertionError("the store was opened")
+
+    monkeypatch.setattr(auth_cli, "AuthStore", unread)
+    result = runner.invoke(app, ["auth", "azure", "--endpoint", endpoint, "--model", "dep"])
+    assert result.exit_code == 1
+    assert type(result.exception) is SystemExit, result.exception
+    assert error in result.output
+    assert fake.answers == [] and fake.listings == []
+
+
 class StubModel:
     def __init__(self, failure=None):
         self.prompts = []

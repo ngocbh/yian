@@ -57,7 +57,8 @@ own label and without echoing the value.
 Imports flow DOWN/peer only: `compose.parse.file` (descriptors), `compose.nodes.bindings` (the
 kind-blind binding-field walk) + `compose.helpers` (errors, secret literals, YAML style and
 quoting; peers), `expr` (the ref-walk + the span flow-call detector), `diagnostics`
-(SourceRange), `secret_names`. Only the loader imports this back.
+(SourceRange), `secret_names`. The loader, the case desugars, and `compose.validate` (the
+assert and secret-literal checks) import this back.
 """
 
 from __future__ import annotations

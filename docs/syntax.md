@@ -742,8 +742,9 @@ A default under a secret name fails with `input 'password': a secret name can't 
 a default value in the flow file; drop the default and pass the value when the flow
 runs`. The error for an `env:` entry points the value to a node's `input:`. Model keys
 have their own rule: a flow file can't set `llm_config.api_key` at all (see
-[`llm_config`](#llm_config-the-model-selection-cascade)). Memory config rejects
-`api_key` anywhere (see [Agent memory](#agent-memory-long_term_memory)).
+[`llm_config`](#llm_config-the-model-selection-cascade)). Memory config keeps its own,
+broader key rule: it rejects credential keys at any depth, whatever the value (see
+[Agent memory](#agent-memory-long_term_memory)).
 
 Changed: a literal value under a secret name used to load, and it was left out of the
 fingerprint. It now fails at load with the error above. Move the value to a flow input
@@ -751,7 +752,8 @@ or have the host supply it. The fingerprint also used to leave out or mask value
 guessed were credentials; it now covers every value written in the flow. Flows the
 old guess touched get a new fingerprint, so their earlier runs can't be resumed or
 replayed: a flow with any input, wiring key, or `env:` key named like a credential
-(`token`, `signature`, `auth`, `secret`, and similar), even with no literal value; any `${...}` under such a name; and any literal
+(`token`, `signature`, `auth`, `secret`, and similar), even with no literal value, or
+such a key nested in a literal mapping; any `${...}` under such a name; and any literal
 or mapping key holding URL userinfo (`https://user:pass@host`), credential-like query
 values (`key=`, `user=`, `sig=`, `*_token=`), or `host=… user=…`, `;`-separated, or
 JDBC connection text. Other flows keep their fingerprints.

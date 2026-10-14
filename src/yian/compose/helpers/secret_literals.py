@@ -95,6 +95,10 @@ def _walk(
             child_name = step if isinstance(value, dict) else None
             found = _walk(child_name, child, is_binding_text, on_walk=on_walk)
             if found is not None:
+                # Only a list position is an int step; a non-string mapping key is
+                # rendered as a key, not as an index.
+                if isinstance(value, dict) and not isinstance(step, str):
+                    step = str(step)
                 return (step, *found)
     finally:
         on_walk.discard(id(value))

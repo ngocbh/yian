@@ -174,6 +174,12 @@ def test_a_mapping_with_an_int_key_loads():
     load_flow(_flow("conn:", "  1: x"))
 
 
+def test_an_int_mapping_key_on_the_path_is_shown_as_a_key():
+    message = str(_secret_error(_flow("conn:", "  1:", f"    password: {_SECRET}")))
+
+    assert "conn.1.password" in message
+
+
 def test_a_recursive_alias_under_an_ordinary_name_does_not_crash():
     try:
         load_flow(_flow("conn: &x", "  host: db", "  self: *x"))

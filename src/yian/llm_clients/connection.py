@@ -45,6 +45,9 @@ _SUBSCRIPTION_ENDPOINT = "https://chatgpt.com/backend-api/codex"
 _FIELDS = {"method", "source", "credential_id", "endpoint", "store_path"}
 # Providers whose agents authenticate with a key and so carry a connection.
 _KEYED = frozenset(SUPPORTED_LLM_PROVIDERS) - {"ollama"}
+# Providers whose saved login may hold no credential: Ollama sends none, and vLLM
+# runs keyless unless its server was started with a key.
+_KEYLESS_LOGINS = frozenset({"ollama", "vllm"})
 _ENVIRONMENT_CONNECTION = {
     "method": "api_key",
     "source": "environment",
@@ -137,8 +140,8 @@ class ConnectionSnapshot:
     ) -> dict[str, dict[str, Any]]:
         """Attach selected connection identity without changing any input maps.
 
-        Every other keyed agent records its provider's connection from the
-        snapshot; an ``ollama`` agent records none. An ``azure`` agent with a
+        Every keyed agent without a host key records its provider's connection
+        from the snapshot; an ``ollama`` agent records none. An ``azure`` agent with a
         saved login and no ``base_url`` gets the login's endpoint as its
         ``base_url``; one whose ``base_url`` names another resource records the
         environment connection instead, since the saved key belongs to the saved
@@ -314,17 +317,18 @@ def _check_selection(selection: ProviderSelection) -> None:
         selection (`ProviderSelection`): A saved login of a supported provider.
 
     Raises:
-        `ValueError`: OpenAI has no credential; another provider has a
-            subscription; a provider other than Azure has an endpoint; Azure has
-            no key or no valid endpoint; or Ollama has a key.
+        `ValueError`: A provider other than Ollama or vLLM has no credential;
+            a provider other than OpenAI has a subscription; a provider other
+            than Azure has an endpoint; Azure has no valid endpoint; or Ollama
+            has a key.
     """
     provider, method, endpoint = selection.provider, selection.method, selection.endpoint
     invalid = (
-        (provider == "openai" and method == "none")
+        (method == "none" and provider not in _KEYLESS_LOGINS)
         or (provider != "openai" and method == "subscription")
         or (provider != "azure" and endpoint is not None)
-        or (provider == "azure" and (endpoint is None or method == "none"))
-        or (provider == "ollama" and method == "api_key")
+        or (provider == "azure" and endpoint is None)
+        or (provider == "ollama" and method != "none")
     )
     if not invalid and provider == "azure":
         try:
@@ -565,8 +569,9 @@ def resolve_model_config(
     it, including an Azure login's endpoint as ``base_url``.
 
     Raises:
-        `ValueError`: No layer sets the provider or its model, or the snapshot
-            cannot be read.
+        `ValueError`: No layer sets the provider or its model, or a saved login
+            is invalid.
+        `AuthError`: The credential store cannot be read.
     """
     validated, metadata = split_model_config(config)
     raw = validated.model_dump(exclude_none=True)

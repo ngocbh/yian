@@ -206,6 +206,7 @@ def test_snapshot_connections_per_provider(monkeypatch):
         ("azure", None, "https://r.openai.azure.com/"),
         ("azure", ApiKeyCredentials("k"), "http://r.openai.azure.com/"),
         ("ollama", ApiKeyCredentials("k"), None),
+        ("anthropic", None, None),
     ],
 )
 def test_snapshot_rejects_impossible_saved_logins(provider, credentials, endpoint):

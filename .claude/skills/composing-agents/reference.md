@@ -211,8 +211,8 @@ parentheses; bracket spellings are a load error that shows the new one.
 | list | `list(str)` | |
 | nullable | `Optional(str)` | may be `null` |
 | enum | `Literal(go, no_go, wait)` | one of these tags |
-| bounded integer | `int(1..12)` | inclusive range, both ends required |
-| bounded float | `float(0.0..1.0)` | inclusive finite range |
+| bounded integer | `int(1..12)`, `int(0..)`, `int(..100)` | inclusive range; either end may be open, not both |
+| bounded float | `float(0.0..1.0)`, `float(0.0..)` | inclusive finite range; either end may be open, not both |
 | mapping | `dict(str, int)` | |
 | alias | `Basket: list(str)` | aliases compose |
 | record | (see below) | fields recurse |
@@ -300,13 +300,15 @@ A value nests at most 100 levels, counting each record and list. A binding or MA
 `contract.output`, naming the path; `${[x]}`, a record flow output, or a MAP's result
 list around a 100-level value is one level too deep. A run input may nest 100 levels.
 
-Bounds require two ordered numeric literals and exclude booleans. Integer bounds
+Bounds are ordered numeric literals with at most one end left open (`int(0..)`,
+`int(..100)`; `int(..)` is an error) and exclude booleans. Integer bounds
 retain arbitrary precision. Float bounds must be finite; integer endpoints used
 in a float domain must convert without rounding. Bounds compose with other
 type forms and constrain defaults, supplied values, and generated schemas.
 Cross-flow wiring requires the source domain to fit inside the destination;
-an unbounded source does not prove a bounded destination safe, and a plain `str`
-does not prove a `Literal(...)` destination safe (its tags must be a subset).
+an unbounded source (or an open end) does not prove a bounded destination safe,
+and a plain `str` does not prove a `Literal(...)` destination safe (its tags must
+be a subset).
 A tag (`mode: !Mode ${input.s}`, with `Mode: Literal(a, b)` in `typedefs:`) accepts
 either and checks the value at run time.
 

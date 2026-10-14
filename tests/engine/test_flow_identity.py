@@ -1776,13 +1776,17 @@ def test_numeric_bounds_are_part_of_type_identity_only_when_present():
     assert "bounds" not in flow_manifest(plain)["nodes"]["body"]["output_type"]
     fingerprints = {flow_fingerprint(plain)}
     digests = {expansion_digest(plain)}
-    for bounds in ((1, 12), (2, 12), (1, 13)):
+    for bounds in ((1, 12), (2, 12), (1, 13), (1, None), (None, 12)):
         bounded = copy.deepcopy(plain)
         bounded.nodes["body"].output_contract = ValueContract(Type(ValueKind.INTEGER, bounds=bounds))
-        assert flow_manifest(bounded)["nodes"]["body"]["output_type"]["bounds"] == list(bounds)
+        manifest = flow_manifest(bounded)
+        # an open end is JSON null
+        assert manifest["nodes"]["body"]["output_type"]["bounds"] == list(bounds)
+        if bounds == (1, None):
+            assert '"bounds": [1, null]' in json.dumps(manifest)
         fingerprints.add(flow_fingerprint(bounded))
         digests.add(expansion_digest(bounded))
-    assert len(fingerprints) == len(digests) == 4
+    assert len(fingerprints) == len(digests) == 6
 
 
 def test_numeric_bounds_remain_in_nested_parameter_contract_identity():

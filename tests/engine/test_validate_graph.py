@@ -113,6 +113,20 @@ def test_acyclic_seed_passes_cycle_check():
     ("Optional(int)", "Optional(int(0..3))", False),
     ("None", "Optional(int(0..3))", True),
     ("None", "int(0..3)", False),
+    # an open end is unbounded on that side
+    ("int(5..)", "int(0..)", True),
+    ("int(0..10)", "int(0..)", True),
+    ("int(0..10)", "int(..100)", True),
+    ("int(0..)", "int(0..)", True),
+    ("int(0..)", "int(0..100)", False),
+    ("int(..5)", "int(0..)", False),
+    ("int", "int(0..)", False),
+    ("int(0..)", "int", True),
+    ("int(..5)", "int(..9)", True),
+    ("int(..9)", "int(..5)", False),
+    ("int(1..)", "float(0.5..)", True),
+    ("float(0.0..)", "int(0..)", False),
+    ("Optional(int(0..))", "Optional(int(-1..))", True),
 ])
 def test_numeric_domain_compatibility_requires_interval_containment(source, sink, compatible):
     from yian.typesys.types import type_for

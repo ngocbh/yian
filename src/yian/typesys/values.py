@@ -23,7 +23,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, is_dataclass, replace
 from dataclasses import fields as _dataclass_fields
 from enum import Enum
-from math import isfinite
+from math import inf, isfinite
 from typing import Annotated, Any, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
@@ -526,7 +526,8 @@ class Type:
       - record:  kind=OBJECT,   fields={name: Type}, required={names}
       - variant: kind=STRING,   tags={labels}   (a `Literal[...]` of strings)
       - list:    kind=LIST_*,   element=<element Type>
-      - number:  kind=INTEGER/NUMBER, bounds=(inclusive minimum, maximum)
+      - number:  kind=INTEGER/NUMBER, bounds=(inclusive minimum, maximum);
+                 `None` for an open end
       - union:   kind=OBJECT,   variants=(record member, ...)   (a `Union[...]` of records)
     A refined specialized list uses the element's matching storage tag;
     `LIST_ANY` is the generic carrier and may refine any element type.
@@ -542,7 +543,7 @@ class Type:
     tags: Optional[frozenset[str]] = None
     element: Optional["Type"] = None
     nullable: bool = False  # an Optional[X] slot — accepts None (present-None or absent)
-    bounds: tuple[int | float, int | float] | None = None
+    bounds: tuple[int | float | None, int | float | None] | None = None
     variants: Optional[tuple["Type", ...]] = None
 
     @classmethod
@@ -679,17 +680,26 @@ def _validate_type_shape(
     validated.add(identity)
 
 
-def _validate_numeric_bounds(kind: ValueKind, bounds: tuple[int | float, int | float]) -> None:
-    """Require inclusive bounds, with lossless finite endpoints for float storage."""
+def _validate_numeric_bounds(
+    kind: ValueKind, bounds: tuple[int | float | None, int | float | None]
+) -> None:
+    """Require inclusive bounds with at least one endpoint; `None` is an open end.
+
+    Present endpoints must be exact numbers, lossless and finite for float storage,
+    and ordered when both are present.
+    """
     if kind is not ValueKind.INTEGER and kind is not ValueKind.NUMBER:
         raise ValueError("only int and float types may declare bounds")
     if type(bounds) is not tuple or len(bounds) != 2:
         raise TypeError("type bounds must be a two-item tuple")
+    endpoints = [endpoint for endpoint in bounds if endpoint is not None]
+    if not endpoints:
+        raise ValueError("type bounds need at least one endpoint")
     allowed = (int,) if kind is ValueKind.INTEGER else (int, float)
-    if any(type(endpoint) not in allowed for endpoint in bounds):
+    if any(type(endpoint) not in allowed for endpoint in endpoints):
         raise TypeError(f"{kind.value} bounds require exact numeric endpoints, excluding bool")
     if kind is ValueKind.NUMBER:
-        for endpoint in bounds:
+        for endpoint in endpoints:
             try:
                 represented = float(endpoint)
             except OverflowError as exc:
@@ -698,8 +708,28 @@ def _validate_numeric_bounds(kind: ValueKind, bounds: tuple[int | float, int | f
                 raise ValueError("float bounds require finite endpoints")
             if represented != endpoint:
                 raise ValueError("float bounds require lossless float endpoints")
-    if bounds[0] > bounds[1]:
+    if len(endpoints) == 2 and bounds[0] > bounds[1]:
         raise ValueError("type bounds must be ordered from minimum to maximum")
+
+
+def numeric_interval(typ: Type) -> tuple[int | float, int | float]:
+    """Return a numeric type's inclusive interval, with open ends as infinities.
+
+    Args:
+        typ (`Type`):
+            The type whose `bounds` to read.
+
+    Returns:
+        `tuple[int | float, int | float]`: ``(low, high)``; an open end, or absent
+        bounds, is ``-math.inf`` / ``math.inf``.
+
+    Example:
+        ```python
+        numeric_interval(Type(ValueKind.INTEGER, bounds=(0, None)))  # (0, inf)
+        ```
+    """
+    low, high = typ.bounds if typ.bounds is not None else (None, None)
+    return (-inf if low is None else low, inf if high is None else high)
 
 
 def _validate_type_metadata_string(value: str) -> None:
@@ -804,10 +834,12 @@ def _canonical_nonnullable_label(typ: Type) -> tuple[str, str]:
 
     if typ.bounds is not None:
         _validate_numeric_bounds(typ.kind, typ.bounds)
-        endpoints = [json.dumps(value, allow_nan=False) for value in typ.bounds]
+        # An open end renders empty in the label (`int(0..)`) and as null in the key.
+        key_ends = [json.dumps(value, allow_nan=False) for value in typ.bounds]
+        label_ends = ["" if value is None else end for value, end in zip(typ.bounds, key_ends)]
         return (
-            f"{typ.kind.value}({'..'.join(endpoints)})",
-            f"{typ.kind.value}[{','.join(endpoints)}]",
+            f"{typ.kind.value}({'..'.join(label_ends)})",
+            f"{typ.kind.value}[{','.join(key_ends)}]",
         )
 
     return typ.kind.value, typ.kind.value
@@ -1177,8 +1209,8 @@ def _records_overlap(a: Type, b: Type) -> bool:
 
 def _bounds_intersect(a: Type, b: Type) -> bool:
     """Whether two numeric types' inclusive intervals share a point."""
-    a_low, a_high = a.bounds if a.bounds is not None else (float("-inf"), float("inf"))
-    b_low, b_high = b.bounds if b.bounds is not None else (float("-inf"), float("inf"))
+    a_low, a_high = numeric_interval(a)
+    b_low, b_high = numeric_interval(b)
     return max(a_low, b_low) <= min(a_high, b_high)
 
 
@@ -1435,12 +1467,21 @@ def _build_for_type(
     """
     if typ.bounds is not None:
         _validate_numeric_bounds(typ.kind, typ.bounds)
-        if _scalar_matches(typ.kind, value) and not typ.bounds[0] <= value <= typ.bounds[1]:
-            raise TypeCheckError(
-                f"{value_repr(value)} is outside inclusive {typ.kind.value} "
-                f"bounds {typ.bounds!r}",
-                path=path,
-            )
+        low, high = numeric_interval(typ)
+        # A one-sided range names the end a value fails; NaN compares false against
+        # both ends, so its message claims no direction.
+        if _scalar_matches(typ.kind, value) and not low <= value <= high:
+            kind = typ.kind.value
+            if None not in typ.bounds:
+                message = f"is outside inclusive {kind} bounds {typ.bounds!r}"
+            elif value < low:
+                message = f"is below the inclusive {kind} minimum {value_repr(low)}"
+            elif value > high:
+                message = f"is above the inclusive {kind} maximum {value_repr(high)}"
+            else:
+                label = _canonical_nonnullable_label(typ)[0]
+                message = f"is outside the inclusive range {label}"
+            raise TypeCheckError(f"{value_repr(value)} {message}", path=path)
 
     # nullable (Optional[X]) — a None value is accepted as NoneValue
     if value is None and typ.nullable:

@@ -403,20 +403,22 @@ node (`output: Optional(OrderResult)`). A **slot**, a place that holds a value, 
 type as a YAML tag on the value (`qty: !int ${size.output.qty}`); see
 [Typed slots](#typed-slots-yaml-tags).
 
-Numeric domains may add an inclusive range: `int(1..12)` or `float(0.0..1.0)`. Both
-ends are required and the lower end must not exceed the upper. The parser reads `0..1`
-as a range, not as `0.` and `.1`. Integer ends are exact, up to Python's digit limit (4300
-digits by default). Float ends must be
-finite; integer ends used in a float range must convert without rounding. Booleans and
-computed end expressions are invalid. Ranges work inside aliases, records, lists, and
-`Optional(...)`.
+Numeric domains may add an inclusive range: `int(1..12)` or `float(0.0..1.0)`. Either
+end may be left open: `int(0..)` (0 or more), `int(..100)` (at most 100), `float(0.0..)`.
+`int(..)` is an error; write `int`. The lower end must not exceed the upper. The parser
+reads `0..1` as a range, not as `0.` and `.1`. Integer ends are exact, up to Python's
+digit limit (4300 digits by default). Float ends must be finite; integer ends used in a
+float range must convert without rounding. Booleans and computed end expressions are
+invalid. Ranges work inside aliases, records, lists, and `Optional(...)`.
 Defaults and supplied values must satisfy them. Cross-flow wiring requires the
 source range to fit inside the destination range; an unbounded source cannot
-establish that guarantee for a bounded destination. Enums follow the same rule:
-a `Literal(...)` destination accepts a source whose tags are a subset of its own,
-not a plain `str`. To pass a wider source anyway, tag the destination slot, which
-checks the value at run time (`mode: !Mode ${input.s}`, where `Mode: Literal(a, b)` is
-named in `typedefs:`), or route the call under a `case` on `isinstance(input.s, Mode)`.
+establish that guarantee for a bounded destination. An open end counts as unbounded on
+that side, so an `int(0..)` source into an `int(0..100)` slot fails to load without a
+tag. Enums follow the same rule: a `Literal(...)` destination accepts a source whose
+tags are a subset of its own, not a plain `str`. To pass a wider source anyway, tag the
+destination slot, which checks the value at run time (`mode: !Mode ${input.s}`, where
+`Mode: Literal(a, b)` is named in `typedefs:`), or route the call under a `case` on
+`isinstance(input.s, Mode)`.
 
 Name reusable types in `typedefs:`:
 
@@ -620,7 +622,7 @@ An AGENT's `variables:` take the same form, and every variable needs a value:
 ### Writing a tag
 
 - Inside a tag, types use parentheses: `!Optional(str)`, `!list(Buy)`,
-  `!Optional(list(Buy))`, `!int(1..12)`, `!float(0.0..1.0)`.
+  `!Optional(list(Buy))`, `!int(1..12)`, `!int(0..)`, `!float(0.0..1.0)`.
 - A tag has no commas. Name a type with several arguments (a `Union`, a `Literal` with
   several values, a `dict(K, V)`) in `typedefs:` and tag the slot with its name:
   `Decision: Union(Buy, Sell)`, then `decision: !Decision ${d.output}`. One-argument

@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from yian.nodes.agent.structured import type_to_schema
+from yian.typesys.types import read_typedefs, type_for
 from yian.typesys.values import Type, ValueKind
 
 
@@ -101,6 +102,33 @@ def test_large_numeric_schema_bounds_match_resolved_type(kind, lower, upper, out
         build_value_as(typ, outside)
     with pytest.raises(ValidationError):
         model.model_validate({"value": outside})
+
+
+@pytest.mark.parametrize("expression,keyword,limit,inside,outside", [
+    ("int(0..)", "minimum", 0, 10**30, -1), ("int(..100)", "maximum", 100, -10**30, 101),
+    ("float(0.0..)", "minimum", 0.0, 1e300, -0.5), ("float(..1)", "maximum", 1, -2.5, 1.5)])
+def test_one_sided_schema_has_only_that_limit(expression, keyword, limit, inside, outside):
+    model = type_to_schema(type_for(expression, {}))
+    schema = model.model_json_schema()["properties"]["value"]
+    other = "maximum" if keyword == "minimum" else "minimum"
+    assert schema[keyword] == limit and other not in schema
+    assert model.model_validate({"value": inside}).value == inside
+    with pytest.raises(ValidationError):
+        model.model_validate({"value": outside})
+
+
+def test_one_sided_limit_survives_nested_records_and_lists():
+    registry = read_typedefs({
+        "Line": {"qty": "int(1..)"},
+        "Order": {"lines": "Optional(list(Line))"},
+    })
+    model = type_to_schema(type_for("Order", registry))
+    qty = model.model_json_schema()["$defs"]["lines_item"]["properties"]["qty"]
+    assert qty["minimum"] == 1 and "maximum" not in qty
+    with pytest.raises(ValidationError):
+        model.model_validate({"lines": [{"qty": 0}]})
+    model.model_validate({"lines": [{"qty": 10**30}]})
+    model.model_validate({"lines": None})
 
 
 def test_generic_list_schema_honors_existing_unbounded_element_refinements():

@@ -529,25 +529,26 @@ replay, and the run-log codecs never apply it; they see only values these entry
 checks bounded.
 
 Authored types use one parenthesized grammar: `Optional(str)`, `list(Buy)`,
-`dict(str, int)`, `Literal(a, b)`, `Union(Buy, Sell)`, and inclusive ranges
-`int(1..12)` / `float(0.0..1.0)` with both ends. `typesys/types.py` parses it with a
-hand-written tokenizer and recursive-descent parser (`0..1` reads as a range) into the
-unchanged `TypeExpr` AST, so resolution does not depend on the spelling. Canonical labels
-and messages print this spelling. The bracket spelling (`Optional[str]`, `int[1, 12]`) is
-a load error that shows the new one; a private legacy reader exists only to spell that
-fix. Wire values are not authored syntax and keep their names: `ValueKind` values such as
-`"list[str]"` in run records and manifests, and HUMAN_INPUT `answer_schema` types.
+`dict(str, int)`, `Literal(a, b)`, `Union(Buy, Sell)`, and inclusive ranges, either end
+of which may be open (`int(1..12)`, `float(0.0..1.0)`, `int(0..)`, `int(..100)`).
+`typesys/types.py` parses it with a hand-written tokenizer and recursive-descent parser
+(`0..1` reads as a range) into the unchanged `TypeExpr` AST, so resolution does not
+depend on the spelling. Canonical labels and messages print this spelling. The bracket
+spelling (`Optional[str]`, `int[1, 12]`) is a load error that shows the new one; a
+private legacy reader exists only to spell that fix. Wire values are not authored syntax
+and keep their names: `ValueKind` values such as `"list[str]"` in run records and
+manifests, and HUMAN_INPUT `answer_schema` types.
 
 Numeric `Type` values may retain an inclusive `bounds` pair for INTEGER or
-NUMBER. Shape validation rejects malformed, reversed, or incompatible
-refinements; integer endpoints remain arbitrary precision, and NUMBER endpoints
-require finite, lossless float representation. Value checks preserve the failing
-structural path. Cross-flow compatibility requires interval containment, including
-integer-to-number widening. Inline type copying, nested generated schemas, and
-canonical labels preserve bounds. Manifests include bounds only when present,
-preserving the identity of unbounded declarations. Enum (`tags`) compatibility
-follows the same rule: the source tags must be a subset of the sink's, and an
-untagged source cannot fill an enum sink.
+NUMBER; an open end is `None` (`(None, None)` is invalid). Shape validation rejects
+malformed, reversed, or incompatible refinements; integer endpoints remain arbitrary
+precision, and NUMBER endpoints require finite, lossless float representation. Value
+checks preserve the failing structural path. Cross-flow compatibility requires interval
+containment, with an open end as infinite, including integer-to-number widening. Inline
+type copying, nested generated schemas, and canonical labels preserve bounds. Manifests
+include bounds only when present, writing an open end as `null`, preserving the identity
+of unbounded declarations. Enum (`tags`) compatibility follows the same rule: the source
+tags must be a subset of the sink's, and an untagged source cannot fill an enum sink.
 
 A union is `Type(kind=OBJECT, variants=(member, ...))`: two or more non-nullable record
 members in canonical order (by tag, else by the canonical label in the older bracket

@@ -36,7 +36,7 @@ from yian.typesys.values import (
 @dataclass(frozen=True)
 class ScalarExpr:
     name: str  # a scalar keyword (see _SCALAR_KEYWORDS)
-    bounds: tuple[int | float, int | float] | None = None
+    bounds: tuple[int | float | None, int | float | None] | None = None
 
 
 @dataclass(frozen=True)
@@ -109,7 +109,7 @@ def parse_type(s: str) -> TypeExpr:
         `TypeCheckError`:
             The string is not a valid expression (including unbalanced parentheses, a
             lone Unicode surrogate, or an empty `Literal` member), uses an unknown
-            constructor, gives a numeric range without both ends or as two arguments,
+            constructor, gives a numeric range with no end, no `..`, or as two arguments,
             spells a union as `A | B` (the hint suggests `Union(A, B)`), or lists `None`
             as a `Union(...)` member (the hint suggests `Optional(Union(...))`), or holds
             a `[` outside a quoted string (the message shows the parenthesized spelling).
@@ -342,28 +342,31 @@ class _TypeParser:
         return args
 
     def _range(self, ctor: str) -> ScalarExpr:
-        """Read `lo..hi)` after `int(` or `float(`: an inclusive range with both ends."""
+        """Read `lo..hi)` after `int(` or `float(`: an inclusive range; either end may be open."""
         example = "int(1..12)" if ctor == "int" else "float(0.0..1.0)"
         low = self._endpoint()
         if self._peek() == ",":
             self._next()
             high = self._endpoint()
-            if low is not None and high is not None and _valid_bounds(ctor, (low, high)):
-                example = f"{ctor}({low}..{high})"
+            bounds = (low, high)
+            if bounds != (None, None) and _valid_bounds(ctor, bounds):
+                example = f"{ctor}({'' if low is None else low}..{'' if high is None else high})"
             raise self._malformed(f"write a range: {example}")
-        if self._peek() == "..":
+        dots = self._peek() == ".."
+        high = None
+        if dots:
             self._next()
             high = self._endpoint()
-        else:
-            high = None
         if self._peek() is None:
             raise self._ended()
         if self._peek() in (",", ".."):
             raise self._malformed(f"a range takes one lo..hi, e.g. {example}")
         if self._peek() != ")":
             raise TypeCheckError(f"numeric bounds require literal endpoints in {self.src!r}")
-        if low is None or high is None:
-            raise self._malformed(f"a numeric range needs both ends, e.g. {example}")
+        if not dots:
+            raise self._malformed(_range_needs_dots(ctor))
+        if low is None and high is None:
+            raise self._malformed(f"a range needs at least one end; write {ctor} for any {ctor}")
         self._expect(")")
         bounds = (low, high)
         try:
@@ -401,6 +404,15 @@ class _TypeParser:
                 continue
             self._expect(")")
             return tuple(tags)
+
+
+def _range_needs_dots(ctor: str) -> str:
+    """Spell the hint for a numeric range written without `..`."""
+    if ctor == "int":
+        examples = "int(1..12), int(0..), or int(..100)"
+    else:
+        examples = "float(0.0..1.0), float(0.0..), or float(..1.0)"
+    return f"a numeric range needs `..`, e.g. {examples}"
 
 
 def _valid_bounds(ctor: str, bounds: tuple) -> bool:
@@ -486,10 +498,8 @@ def _type_from_ast(node: "ast.expr", src: str) -> TypeExpr:
         sl = node.slice
         if ctor in ("int", "float"):
             if not isinstance(sl, ast.Tuple) or len(sl.elts) != 2:
-                example = "int(1..12)" if ctor == "int" else "float(0.0..1.0)"
                 raise TypeCheckError(
-                    f"malformed type expression {src!r}: a numeric range needs both ends, "
-                    f"e.g. {example}"
+                    f"malformed type expression {src!r}: {_range_needs_dots(ctor)}"
                 )
             bounds = tuple(_numeric_endpoint(endpoint, src) for endpoint in sl.elts)
             try:
@@ -793,7 +803,8 @@ def format_type_expr(t: TypeExpr) -> str:
     if isinstance(t, ScalarExpr):
         if t.bounds is None:
             return t.name
-        return f"{t.name}({t.bounds[0]}..{t.bounds[1]})"
+        low, high = ("" if end is None else end for end in t.bounds)
+        return f"{t.name}({low}..{high})"
     if isinstance(t, RefExpr):
         return t.name
     if isinstance(t, ListExpr):

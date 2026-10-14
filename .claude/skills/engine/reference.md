@@ -568,7 +568,8 @@ model made enforceable.
   items compatibility reads as `Optional(Any)` and MAP checks at runtime.
   `ValueKind.ANY` is type-only: an `Any` value (any non-null JSON value) is stored under
   its natural kind. `object`, `list(object)` items, and `LIST_ANY` items must be JSON
-  values (text keys; no date objects, sets, or `FileRef`s). An `Any` source fits only
+  values (text keys; no date objects, sets, or `FileRef`s). An untyped node output must
+  be JSON values or `FileRef`s, checked at `canonical_typed`. An `Any` source fits only
   `Any`/`Optional(Any)` in wiring, and `type_relation` treats it as narrower than other
   types except `None` and a type whose every value holds a `file`, which are disjoint.
   The specialized `LIST_*` discriminator and carrier preserve `None` across
@@ -720,8 +721,8 @@ wrapper and retains its recursive code-object tree. Its `exception_origin` walks
 outer-to-inner and keeps the deepest
 frame whose `f_code` is one of those objects by `is`; code-object equality, hash
 membership, and filenames are intentionally irrelevant. Wrapper line `n` maps to
-constructed slot `n - 2`, then falls back to the whole scalar and node. Failures after
-the authored body (such as serialization) use the whole scalar; reference mode uses
+constructed slot `n - 2`, then falls back to the whole scalar and node. Failures outside
+the authored body use the whole scalar; reference mode uses
 that scalar as its invocation site, then the base node fallback. Compose reuses the
 same selector for `SyntaxError.lineno`.
 `CaseNode` carries one optional origin on every ordered `Case`. Compose registers

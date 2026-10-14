@@ -233,7 +233,9 @@ adds null, and `list(Optional(Any))` is a list that may hold null (`list(Any)` c
 Write `Any`, never `any` (load error). An `Any` value fills only an `Any` input: tag the
 slot (`n: !int ${x.output}`, checked at runtime) or narrow it with `isinstance` in a
 `case`. `object` is a JSON object: text keys and JSON values only, so a dict with a
-non-text key, a date object, or a set fails the node. A list the loader can't type (a
+non-text key, a date object, or a set fails the node. A node output with no `output:`
+follows the same rule but may also hold files; a date, set, or non-text key in it fails
+`contract.output` with its path (`output at d: ...`). A list the loader can't type (a
 tool's untyped array, a mixed or empty literal) is `list(Optional(Any))`; its items are
 checked at runtime when passed on.
 
@@ -292,7 +294,7 @@ typedefs:
 ```
 
 A type definition is written as a plain type, with no tag: typedefs and the
-`output:` declaration of a node (AGENT, CODE, TOOL, CASE, HUMAN_INPUT) or of a compact flow.
+`output:` declaration of a node (AGENT, CODE, TOOL, HUMAN_INPUT) or of a compact flow.
 
 `Literal` tags and record field names are non-empty text. `Literal("", a)`, an empty
 field name (`"": int`), or a lone surrogate such as `"\uD800"` fails the load, the same

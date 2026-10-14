@@ -478,8 +478,10 @@ reads on an `Any` value, as with `object`. An `Any` value fills only an `Any` in
 pass it to a narrower one, tag the slot (`n: !int ${x.output}`), which checks it at
 runtime, or narrow it with `isinstance` in a `case`. `object` is a JSON object: a
 mapping with text keys and JSON values. A dict with a non-text key, or holding a set,
-a date object, or any other non-JSON value, fails the check. Write `Any`, not `any`:
-`unknown type 'any'; write Any`.
+a date object, or any other non-JSON value, fails the check. A node output with no
+`output:` type is checked by the same walk, except that it may also hold files (nested
+files come back as plain objects). Write `Any`, not `any`: `unknown type 'any'; write
+Any`.
 
 When the loader can't type a list's items (a tool's untyped array, a mixed or empty
 literal list), the list is a `list(Optional(Any))`, and its items are checked at
@@ -492,11 +494,19 @@ value than the log recorded. In node outputs and bindings, an `object` value, a
 holds one. Flow inputs are still converted to JSON when the run starts, so a date inside an
 `!object` input arrives as text, but a run input holding a mapping with a non-text key
 now makes `run_flow` raise before the run (`input 'o': object keys must be text, got
-1`). `Any` used to mean `object`, and the lowercase `any` is no longer a type.
+1`). `Any` used to mean `object`, and the lowercase `any` is no longer a type. An
+untyped CODE or TOOL output used to accept a date, a set, or another non-JSON value,
+which the run log turned into text or rejected without a path; it now fails
+`contract.output` naming the path (`output at d: datetime.date(2026, 1, 1) is not a
+JSON value`). So does an unquoted date in a flow output record without a type
+(`output: {as_of: 2026-01-01, ...}`); quote it. A returned dict with a non-text key
+fails `object keys must be text, got 1` for an untyped, `object`, or `Any` output, and
+an inline CODE return that isn't a JSON value fails `contract.output`, not
+`node.execute`.
 
 One rule says where a type goes. A **type definition** is written as a type: a
-`typedefs:` entry, and the `output:` of an AGENT, CODE, TOOL, HUMAN_INPUT, or `case`
-node (`output: Optional(OrderResult)`). A **slot**, a place that holds a value, takes its
+`typedefs:` entry, and the `output:` of an AGENT, CODE, TOOL, or HUMAN_INPUT node
+(`output: Optional(OrderResult)`). A **slot**, a place that holds a value, takes its
 type as a YAML tag on the value (`qty: !int ${size.output.qty}`); see
 [Typed slots](#typed-slots-yaml-tags).
 
@@ -1709,7 +1719,8 @@ flow that grants one needs a Python host. See [Tool groups](api.md#tool-groups).
 A TOOL node may declare `output:` of any type, including a union of records.
 Every value the tool returns is checked against it before downstream nodes see
 it. A mismatch fails the node with `contract.output`, located at `output:`.
-Without `output:`, any JSON-like value passes.
+Without `output:`, any JSON value or file passes; a date, set, or model fails
+`contract.output`.
 
 Expected outcomes are variants of the output type; route them with `case` on the
 tag:
@@ -1837,9 +1848,9 @@ Inline notes:
   int literal longer than Python's digit limit in `code:` is a load error (Python's syntax
   error); write it in hex or compute it.
 - **Output must be JSON-representable** (`str` / `int` / `float` / `bool` / `list` /
-  `object` / `Any` / typedefs); a non-serializable return — even nested — fails at
-  the node. An `object` or `Any` output holding a date object, a set, or a non-text
-  key fails too (see the `Changed:` note in [Types](#types)).
+  `object` / `Any` / typedefs); a non-JSON return — even nested — fails
+  `contract.output` with the path. An `object` or `Any` output holding a date object, a
+  set, or a non-text key fails too (see the `Changed:` note in [Types](#types)).
 - **Imports** resolve against the process `sys.path` (cwd + `PYTHONPATH`), same as the
   reference form. A dotted token with no colon (`pkg.mod.helper`) is treated as a likely
   typo'd reference and rejected at load with a "did you mean `pkg.mod:helper`?" hint.

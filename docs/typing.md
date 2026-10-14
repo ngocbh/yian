@@ -190,6 +190,10 @@ mapping, anything else (a date object, a set, a pydantic model, a dataclass, a
 `FileRef`) with `<value> is not a JSON value`, and a container inside itself with
 `value contains itself`. Depth and non-finite numbers are left to the boundary checks
 above, so a recorded value replays.
+A node output with no declared type (and each untyped field of a partial record output)
+goes through the same walk at `canonical_typed`, with `FileRef` leaves allowed at any
+depth; its message names the path (`output at d.x[1]: datetime.date(2026, 1, 1) is not a
+JSON value`). An already-built `TypedValue` (a replayed record) is not walked.
 An `int` too large for a float fails at its path (`int is too large for float`).
 `TypeCheckError.path` is an immutable tuple relative to the declared type: string
 segments name record fields and integer segments are actual list indices. A

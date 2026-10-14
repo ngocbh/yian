@@ -443,7 +443,8 @@ Most are just the functional model (above) made enforceable:
   labelled `list(Optional(Any))`, whose items compatibility reads as `Optional(Any)`
   and MAP checks at runtime. `ValueKind.ANY` is type-only (any non-null JSON value,
   stored under its natural kind); `object`, `list(object)` items, and `LIST_ANY` items
-  must be JSON values (text keys, no date objects, sets, or `FileRef`s). In wiring an
+  must be JSON values (text keys, no date objects, sets, or `FileRef`s). An untyped
+  node output must be JSON values or `FileRef`s, checked at `canonical_typed`. In wiring an
   `Any` source fits only `Any`/`Optional(Any)`; `type_relation` treats it as narrower
   than every type except `None` and a type whose every value holds a `file`, which are
   disjoint. The specialized `LIST_*` discriminator and carrier preserve

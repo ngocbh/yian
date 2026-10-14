@@ -67,7 +67,9 @@ lowered onto the synthesized `__start__`/`__end__` boundary nodes. A boundary as
 `__start__.post_asserts` through the ordinary inherited `Node.run` recipe. A post assert
 (`${node.output}`) similarly rides `__end__.post_asserts`. So `run.py` enforces no asserts
 itself; a false assert becomes a durable `NodeFailedRecord`, from which the reducer derives
-the `NodeFailed` and `RunFailed` observers.
+the `NodeFailed` and `RunFailed` observers. Before the run starts, `run_flow` and
+`resume_flow` only check that every static node's assertions parse; `Node.run` still
+evaluates them.
 
 ## `NodeResult` — the whole node result vocabulary
 

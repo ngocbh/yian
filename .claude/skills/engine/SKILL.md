@@ -211,6 +211,9 @@ this model whenever you design anything:
   flow/CALL lowering replace only the expression, while child cloning and LOOP
   respawn retain the carrier fields. START/END reuse the lowered flow carriers.
   `Node.run` diagnoses a failed assertion through that exact carrier's origin.
+  An expression that doesn't parse is malformed setup, not a failed assertion:
+  `run_flow`/`resume_flow` raise `ExpressionError` before any record, and `Node.run`
+  raises it from setup validation before the body.
   Do not add another assertion text/origin map or positional range list.
 - Compiled `Node.params` has one shape: ordered exact `Parameter` carriers. The
   flow owns their `Binding` sources; parameter contracts/default presence/

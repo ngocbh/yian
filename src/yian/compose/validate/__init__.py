@@ -46,9 +46,9 @@ reject an ill-formed flow before it is compiled:
 - `tool_inputs.py` — `stamp_tool_input_types`: each TOOL node records the proven
   inferred type of each input binding, for the run-start check against its tool.
 
-Post-build passes may consult `BuildResult.node_range` / `field_ranges`, and assertion
-validation may receive a temporary descriptor/callback range. Those coordinates stay in
-Compose and are discarded before `CompiledFlow`; field-local output evidence needed at
+Post-build passes may consult `BuildResult.node_range` / `field_ranges` / `field_labels`,
+and assertion validation may receive a temporary descriptor/callback range. Those
+coordinates and labels stay in Compose and are discarded before `CompiledFlow`; field-local output evidence needed at
 runtime lives only in the source-neutral `Node.output_contract` sum, while semantic nodes
 and assertion carriers keep only opaque origins.
 

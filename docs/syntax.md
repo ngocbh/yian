@@ -1867,6 +1867,9 @@ that reads `${<node>__compose.output}` can't also be read by the gate or be in i
 `depends_on:` or `runs_after:`: that is a cycle.
 The input name `__questions` is reserved for that generated wire and cannot be
 authored on an adaptive gate.
+The brief reads the gate's `input:` names, bare, and is checked at load like an AGENT
+prompt. An error names the gate and points at the brief:
+`node 'ask' adaptive_questions.prompt: ${nope} is not a declared input or variable`.
 
 ```yaml
 ask:
@@ -1880,6 +1883,9 @@ ask:
 ```
 
 `adaptive_questions.mode:` was removed; writing it is a load error.
+
+Changed: a bad brief used to be reported on `node 'ask__compose' prompt` and point at
+the gate's `prompt:` line, or at the node when the gate had no `prompt:`.
 
 **Upstream questions** — read the list from an author-written upstream node:
 

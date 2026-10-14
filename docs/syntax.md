@@ -654,13 +654,108 @@ The merge is **static, at build time** (`{**flow_env, **node_env}`) — there is
 runtime cascade and no per-field resolution across parent flows. It is also
 **flow-local**: a called child flow does *not* inherit its parent's flow `env:` —
 it has its own. A multi-node `defs:` entry sets its own `env:` at the same level as
-its `nodes:`. Values must be literals (no `${...}` refs).
+its `nodes:`. Values must be literals (no `${...}` refs). A key with a secret name
+can't hold a literal value (see
+[Secrets stay out of flow files](#secrets-stay-out-of-flow-files)).
 
 Keys in use today:
 
 | Key | Node kind | Meaning |
 |-----|-----------|---------|
 | `max_tool_iterations` | `agent` | Model turns the tool-calling loop runs before it gives up with an `AgentLoopError`. If the reply on the last allowed turn asks for tools, the node fails without running them, since no later model call could read their results. Default `-1` (**no cap** — run until a final answer). Set a positive int to bound it; any other value (`0`, other negatives, a non-int) fails at load, on the flow `env:` or the AGENT node's `env:`. |
+
+## Secrets stay out of flow files
+
+Every value written in a flow file is part of the flow's fingerprint (see
+[Durable recovery](api.md#durable-recovery-with-resume_flow)), so a credential
+doesn't belong there. Declare it as a flow input and pass the value when the flow
+runs, or have the host supply it.
+
+**Secret names.** `password`, `passwd`, `secret`, `client_secret`, `private_key`,
+`access_token`, `refresh_token`, `api_key`, and any name ending in `_api_key`,
+`_password`, or `_secret`. Matching ignores case, camelCase, `-` versus `_`, and
+leading or trailing `_`, so `clientSecret`, `Client-Secret`, `DB_PASSWORD`, and
+`OPENAI_API_KEY` match. `.` and spaces are not separators. Broader names such as
+`key`, `user`, `auth`, `token`, `sig`, `signature`, `page_token`, `secret_key`, and
+`apikey` are not on the list.
+
+**The rule.** Under a secret name the value must be a `${...}` reference or `null`.
+Anything else fails at load: text (even `''`), a number, a boolean, a list, a
+mapping, a `$${...}` escape (it is literal text), and malformed template text. Text
+around a reference is fine (`'Bearer ${input.token}'`). In a binding position, a
+whole-value [`call(...)` directive](#inline-call-a-flow-call-as-a-bindings-whole-value)
+counts as a binding, and its own keyword arguments follow the same rule.
+
+The rule applies to:
+
+- node `input:` and other binding fields, such as MAP `over:`, including the value
+  of a typed binding (`password: str = ${input.password}`);
+- flow `output:`;
+- `case` `then:` and `else:` values (a value branch has no name, so only secret keys
+  nested in it are checked);
+- `call(...)` keyword arguments;
+- declaration defaults (flow `input:`, `defs:` inputs) and AGENT `variables:`;
+- `env:` on a node, a flow, or a `defs:` entry.
+
+A secret key nested in a literal mapping or list under any other name is checked
+too, and the error gives its path, such as `conn.items[0].password`. In `env:`,
+defaults, and nested literal text, `${...}` is not evaluated: it stays text. It
+holds no secret, so it passes, but it doesn't bring a value in either; a value
+comes in through a node `input:` binding.
+
+The error names the slot and the fix, and never repeats the value. This flow fails
+at load:
+
+```yaml
+nodes:
+  login:
+    kind: code
+    input:
+      user: admin
+      password: hunter2
+    output: str
+    code: |
+      return inputs["user"]
+```
+
+```
+node 'login': input 'password' is a secret name, so its value can't be written in the flow file; pass it as an input (${input.password}) or from the host
+```
+
+Declare the input and pass the value when the flow runs:
+
+```yaml
+input:
+  password: str
+nodes:
+  login:
+    kind: code
+    input:
+      user: admin
+      password: ${input.password}
+    output: str
+    code: |
+      return inputs["user"]
+```
+
+A default under a secret name fails with `input 'password': a secret name can't have
+a default value in the flow file; drop the default and pass the value when the flow
+runs`. The error for an `env:` entry points the value to a node's `input:`. Model keys
+have their own rule: a flow file can't set `llm_config.api_key` at all (see
+[`llm_config`](#llm_config-the-model-selection-cascade)). Memory config rejects
+`api_key` anywhere (see [Agent memory](#agent-memory-long_term_memory)).
+
+Changed: a literal value under a secret name used to load, and it was left out of the
+fingerprint. It now fails at load with the error above. Move the value to a flow input
+or have the host supply it. The fingerprint also used to leave out or mask values it
+guessed were credentials; it now covers every value written in the flow. Flows the
+old guess touched get a new fingerprint, so their earlier runs can't be resumed or
+replayed: a flow with any input, wiring key, `env:` key, or `llm_config:` or memory
+config key named like a credential (`token`, `signature`, `auth`, `secret`, and
+similar), even with no literal value; any `${...}` under such a name; and any literal
+or mapping key holding URL userinfo (`https://user:pass@host`), credential-like query
+values (`key=`, `user=`, `sig=`, `*_token=`), or `host=… user=…`, `;`-separated, or
+JDBC connection text. Other flows keep their fingerprints.
 
 ## Agent memory — `long_term_memory:`
 

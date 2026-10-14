@@ -1584,7 +1584,8 @@ which nodes each owner grew. Commit applies the change to the live containers in
 after the record is appended.
 
 Compile also owns stable identity for the static program. `flow_manifest`
-canonicalizes execution semantics, `flow_fingerprint` hashes that manifest, and
+canonicalizes execution semantics, including every authored value under any name
+(nothing is redacted), `flow_fingerprint` hashes that manifest, and
 assertion identity includes executable and display text in list order while
 remaining origin-neutral. `expansion_digest` applies the same projection to
 dynamic fragments. CODE identity includes its executable `code` text (for a
@@ -1592,7 +1593,12 @@ reference, the `module:function` token, not the callable's source) but excludes
 `code_origin`, `code_line_origins`, and the retained compiled/owned-code caches,
 while CASE identity includes predicate handle/expression semantics but excludes
 each predicate origin. Thus source formatting, origin rebasing, and Python object
-identity cannot change program or expansion identity. `resolve_llm_cascade` returns a
+identity cannot change program or expansion identity. Because every authored value is
+identity, compose rejects a literal value under a secret name at load:
+`compose/validate/secret_literals.py` checks node bindings, case values, and flow
+outputs before typed bindings are split, `compose/helpers/secret_literals.py` holds the
+walker and messages that defaults, `env:`, and `call(...)` arguments share, and the one
+list of secret names is the stdlib-only leaf `secret_names.py`. `resolve_llm_cascade` returns a
 complete map keyed by slash-separated paths of static AGENT nodes. The run boundary reads
 process provider/model defaults and nonsecret connection selections once at fresh-run initialization;
 `apply_effective_llm_map` restores the

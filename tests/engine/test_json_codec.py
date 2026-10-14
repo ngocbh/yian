@@ -233,6 +233,63 @@ def test_loads_forwards_hooks_on_a_document_with_a_long_int() -> None:
         json_codec.loads("[" + digits + ", NaN]", parse_constant=reject_constant)
 
 
+def test_loads_reads_a_long_int_after_the_fast_path_fails() -> None:
+    """A document with a long int deep inside still loads, with hooks applied."""
+    digits = json_codec.int_text(BIG)
+    seen: list[str] = []
+
+    def record_constant(name):
+        seen.append(name)
+        return name
+
+    value = json_codec.loads(
+        '{"b": [1, ' + digits + '], "a": NaN}',
+        object_pairs_hook=lambda pairs: sorted(pairs),
+        parse_constant=record_constant,
+    )
+
+    assert value == [("a", "NaN"), ("b", [1, BIG])]
+    assert "NaN" in seen
+
+
+def test_loads_uses_hooks_on_documents_without_long_ints() -> None:
+    """The plain path forwards hooks too."""
+    value = json_codec.loads(
+        '{"b": 1, "a": NaN}',
+        object_pairs_hook=lambda pairs: sorted(pairs),
+        parse_constant=lambda name: name,
+    )
+
+    assert value == [("a", "NaN"), ("b", 1)]
+
+
+def test_loads_parses_short_ints_without_the_codec(monkeypatch) -> None:
+    """Documents without long ints take `json.loads` directly."""
+
+    def fail(text):
+        raise AssertionError("the long-int parser ran")
+
+    monkeypatch.setattr(json_codec, "parse_int", fail)
+
+    assert json_codec.loads('{"a": [1, -2, 3]}') == {"a": [1, -2, 3]}
+
+
+def test_loads_accepts_an_explicit_parse_int() -> None:
+    """A caller's `parse_int` replaces the default one."""
+    assert json_codec.loads("[1, 2]", parse_int=lambda text: text) == ["1", "2"]
+
+
+@pytest.mark.parametrize(
+    "text", ['{"a": 1,', "[1, 2", "nope"], ids=["object", "list", "bare"]
+)
+def test_loads_raises_json_decode_error_for_malformed_documents(text: str) -> None:
+    """Malformed JSON raises `JSONDecodeError`, with or without a long int."""
+    with pytest.raises(json.JSONDecodeError):
+        json_codec.loads(text)
+    with pytest.raises(json.JSONDecodeError):
+        json_codec.loads("[" + json_codec.int_text(BIG) + ", " + text)
+
+
 def test_json_codec_module_imports_only_the_standard_library() -> None:
     """The codec sits below every project package."""
     path = Path(__file__).parents[2] / "src" / "yian" / "json_codec.py"

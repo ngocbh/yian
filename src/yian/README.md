@@ -417,7 +417,8 @@ growth rejection (`contract.growth`). Nothing is recorded as null in its place. 
 top-level complex returned by a CODE node fails `contract.output` like NaN. An int
 too large for a float in a `float` slot fails the type check at its path.
 
-Ints of any size are values. Run-log JSON goes through `yian.json_codec`, which
+Ints of any size are values (an int literal in the YAML keeps Python's digit limit,
+a located load error past it). Run-log JSON goes through `yian.json_codec`, which
 writes and reads ints of any size without changing Python's process-wide
 `sys.set_int_max_str_digits`; yian never calls it. Value bytes decode through
 `runtime.log.decode_typed_json`: pydantic's strict JSON path first, and the codec for

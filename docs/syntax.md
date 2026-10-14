@@ -309,10 +309,11 @@ other expression error. See
 
 A whole-string `${expr}` resolves to the **typed value** (a number stays a
 number, a list a list); embedded in surrounding text it is stringified. A typed value
-may hold an int of any size, and the run records every digit. Only rendering it as
-text is limited: embedded in text or in a prompt, a value holding an int too long to
+may hold an int of any size, and the run records every digit. Rendering it as text
+is limited: embedded in text or in a prompt, a value holding an int too long to
 render (past 4300 digits by default) fails like any other expression error: a binding
-fails with `binding.evaluate`, and a prompt fails its node.
+fails with `binding.evaluate`, and a prompt fails its node. An int literal written in
+the YAML has the same limit; a longer one is a load error.
 
 Changed: an operator Python can't complete, or a value too long to render as text, in a
 binding or an `asserts:` used to raise out of `run_flow`; now the run fails like any
@@ -343,7 +344,7 @@ The type vocabulary is Python typing. Scalars: `str`, `int`, `float`, `bool`,
 
 Numeric domains may add inclusive bounds: `int[1, 12]` or `float[0.0, 1.0]`.
 Both endpoints are required and the lower endpoint must not exceed the upper.
-Integer bounds can be any size. Float bounds must be finite; integer endpoints
+Integer bounds are exact, up to Python's digit limit (4300 digits by default). Float bounds must be finite; integer endpoints
 used in a float domain must convert without rounding. Booleans and computed
 endpoint expressions are invalid. Bounds work inside aliases, records, lists,
 and `Optional[...]`.

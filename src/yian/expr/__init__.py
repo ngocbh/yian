@@ -17,13 +17,14 @@ The engine is three layers, all pool-agnostic (they take a `resolve` callable):
 source-relative feedback transfer. Optional tracing in the same evaluator walk
 retains selected value arms, container mappings, and opaque function boundaries.
 Routes reference accepted source identities; the caller supplies recorded values
-when transferring feedback. This leaf uses only the standard library and stays
-independent of nodes, memory, and runtime.
+when transferring feedback. This leaf uses only the standard library and the
+stdlib-only `yian.json_codec`, and stays independent of nodes, memory, and runtime.
 
 Flow invocation is NO LONGER a `${...}` construct — it is the compile-time
 whole-value `call(...)` directive (in `compose.desugar.inline_calls`), not part of this engine.
 
-Knows about:   `typesys` (the pool and value types, in `expressions`).
+Knows about:   `typesys` (the pool and value types, in `expressions`) and the
+               stdlib-only `yian.json_codec` (JSON text for ints of any size).
 Never imports: `nodes`, `compile`, or `runtime` (they import IT).
 """
 

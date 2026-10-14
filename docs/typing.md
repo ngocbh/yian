@@ -79,10 +79,12 @@ depth. The first boundary that sees one rejects it and names where it sits:
 A temporary inside an expression may be infinite or complex; only a binding's final
 value is checked.
 
-An `int` has no size limit. The run log and the run's outputs record it exactly,
-however many digits it has, and `resume_flow` reads it back unchanged. Rendering one
-as text (embedded in a string or in prompt text) still follows Python's digit limit;
-see
+An `int` computed by an expression or a node, or supplied as an input, has no size
+limit. The run log and the run's outputs record it exactly, however many digits it
+has, and `resume_flow` reads it back unchanged. An int literal written in the YAML
+may have at most Python's limit (4300 digits by default); a longer one is a load
+error. Rendering an int as text (embedded in a string or in prompt text) follows the
+same limit; see
 [Expressions → Arithmetic follows Python](expressions.md#arithmetic-follows-python).
 
 ## `TypedValue` — self-describing, losslessly serializable

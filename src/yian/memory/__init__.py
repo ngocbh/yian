@@ -27,7 +27,8 @@ Concrete session, episodic, reflection, and profile
 backends are imported from their own modules, never eagerly by this contracts-only
 facade.
 
-Knows about:   the standard library and yian.diagnostics.
+Knows about:   the standard library, yian.diagnostics, and the stdlib-only
+               yian.json_codec (in the backends and storage).
 Never imports: nodes, compile, compose, runtime, run, CLI, LangChain, Pydantic,
                llm_clients, or third-party persistence frameworks.
 """

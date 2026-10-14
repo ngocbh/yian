@@ -118,7 +118,9 @@ compute fails like any other expression error:
   by default), embedded in text or anywhere in a prompt: `"v=${10 ** 5000}"`.
 
 An int of any size is a value: a whole-string `${10 ** 5000}` binds the int, and the
-run log, outputs, and `resume_flow` keep every digit. Only rendering it as text fails.
+run log, outputs, and `resume_flow` keep every digit. Rendering it as text fails. An
+int literal written in the YAML may have at most Python's limit (4300 digits by
+default); a longer one is a load error.
 `render_as_json` writes all the digits, so `${render_as_json(big)}` is text you can
 embed or put in a prompt.
 

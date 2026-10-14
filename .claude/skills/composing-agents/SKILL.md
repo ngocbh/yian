@@ -231,9 +231,11 @@ A `float` is finite: a binding whose value is NaN, infinity, or complex (say an
 overflowing `${x * 10}`, or `${(0 - 8) ** 0.5}`) fails its node with
 `binding.evaluate`, so keep the value in range (a `case` guard or a `code` clamp)
 or return null explicitly (a `case` value branch `then: null` under
-`output: Optional[...]`, or a `code` node returning `None`). An `int` may have any
-number of digits and is recorded exactly; only rendering one too long as text (in
-a template or a prompt) fails.
+`output: Optional[...]`, or a `code` node returning `None`). An `int` computed by an
+expression or node, or supplied as an input, may have any number of digits and is
+recorded exactly. An int literal written in the YAML may have at most Python's limit
+(4300 digits by default), else it is a load error; rendering an int that long as
+text (in a template or a prompt) fails.
 
 An explicit `Optional[int] = null` is a present default, distinct from no `=`;
 null is invalid for a non-nullable type, and an empty `=` is invalid. The default

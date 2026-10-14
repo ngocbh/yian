@@ -77,7 +77,7 @@ def dumps(
     """Return the same JSON text as `json.dumps`, writing ints of any size in full.
 
     Values without long ints take `json.dumps` directly. Otherwise a slower
-    encoder writes the same text with one Python frame per nesting level.
+    encoder, which recurses in Python for each nesting level, writes the same text.
     When the fast path raises `ValueError`, `default` runs again for the same
     objects, so it should have no side effects.
 
@@ -122,14 +122,33 @@ def dumps(
 def loads(data: str | bytes, **kwargs: Any) -> Any:
     """Parse JSON text as `json.loads` does, reading ints of any size.
 
+    Documents without long ints take `json.loads` directly. When that raises a
+    `ValueError` other than `json.JSONDecodeError`, the document is parsed
+    again with `parse_int`, so hooks such as `object_pairs_hook` may run twice
+    for the same objects and should have no side effects.
+
     Args:
         data (`str | bytes`): The JSON document.
-        **kwargs: Further `json.loads` options, such as `object_pairs_hook`.
+        **kwargs: Further `json.loads` options, such as `object_pairs_hook`; an
+            explicit `parse_int` replaces this module's and disables the retry.
 
     Returns:
         `Any`: The parsed value.
+
+    Raises:
+        `json.JSONDecodeError`: The document is not valid JSON.
+        `ValueError`: A hook rejected a value.
     """
-    return json.loads(data, parse_int=parse_int, **kwargs)
+    if "parse_int" in kwargs:
+        return json.loads(data, **kwargs)
+    try:
+        return json.loads(data, **kwargs)
+    except json.JSONDecodeError:
+        # Malformed text fails at the same place on a second pass.
+        raise
+    except ValueError:
+        # Most likely the digit limit; a hook's own error is raised again below.
+        return json.loads(data, parse_int=parse_int, **kwargs)
 
 
 def _encode(

@@ -214,7 +214,9 @@ def test_snapshot_rejects_nesting_beyond_the_memory_limit() -> None:
         EpisodicMemory().open_run(snapshot=malformed)
     assert exc.value.code == "episodic.invalid_snapshot"
     cause = str(exc.value.__cause__)
-    assert cause.endswith("nests deeper than the memory limit of 128 levels")
+    assert cause.endswith(
+        "nests deeper than the memory limit of 128 levels (set by YIAN_MAX_VALUE_NESTING)"
+    )
 
 
 def test_empty_commit_idempotency_collision_and_staleness() -> None:
@@ -288,6 +290,7 @@ def test_module_imports_only_stdlib_and_lower_memory_modules() -> None:
         "types",
         "typing",
         "uuid",
+        "yian.defaults",
         "yian.json_codec",
         "yian.memory.contracts",
         "yian.memory.storage",

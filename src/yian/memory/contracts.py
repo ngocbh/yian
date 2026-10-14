@@ -12,6 +12,7 @@ import re
 from types import MappingProxyType, NoneType, TracebackType
 from typing import Callable, Iterator, Literal, Protocol, TypeAlias, runtime_checkable
 
+from yian.defaults import current
 from yian.diagnostics import OriginRef
 
 
@@ -19,12 +20,21 @@ JsonScalar: TypeAlias = NoneType | bool | int | float | str
 JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 JsonObject: TypeAlias = dict[str, JsonValue]
 
-_MAX_JSON_NESTING = 128
-"""Memory JSON nesting bound.
 
-A run value nests at most `MAX_VALUE_NESTING` (100) levels and memory wraps it
-only a few levels deeper, so run material always fits.
-"""
+def _memory_nesting_error(name: str, limit: int) -> ValueError:
+    """Return the error for memory JSON nested deeper than `limit` levels.
+
+    Args:
+        name (`str`): Path of the value that nests too deep.
+        limit (`int`): The memory JSON nesting bound in effect.
+
+    Returns:
+        `ValueError`: The error naming the bound and the variable that sets it.
+    """
+    return ValueError(
+        f"{name} nests deeper than the memory limit of {limit} levels "
+        "(set by YIAN_MAX_VALUE_NESTING)"
+    )
 
 
 class _FrozenJsonScalarKind(Enum):
@@ -247,8 +257,12 @@ def _freeze_json(
     name: str,
     active: set[int] | None = None,
     nesting: int = 0,
+    limit: int | None = None,
 ) -> _FrozenJson:
-    """Validate and snapshot one exact recursive JSON value."""
+    """Validate and snapshot one exact recursive JSON value.
+
+    `limit` is the memory JSON nesting bound; the top-level call reads it once.
+    """
     value_type = type(value)
     if value is None:
         return _FrozenJsonScalar(_FrozenJsonScalarKind.NULL, None)
@@ -266,10 +280,10 @@ def _freeze_json(
 
     if value_type not in (list, dict):
         raise TypeError(f"{name} must contain exact JSON values")
-    if nesting >= _MAX_JSON_NESTING:
-        raise ValueError(
-            f"{name} nests deeper than the memory limit of {_MAX_JSON_NESTING} levels"
-        )
+    if limit is None:
+        limit = current().memory_json_nesting
+    if nesting >= limit:
+        raise _memory_nesting_error(name, limit)
 
     active = set() if active is None else active
     identity = id(value)
@@ -285,6 +299,7 @@ def _freeze_json(
                         name=f"{name}[{index}]",
                         active=active,
                         nesting=nesting + 1,
+                        limit=limit,
                     )
                     for index, item in enumerate(value)
                 )
@@ -304,6 +319,7 @@ def _freeze_json(
                         name=f"{name}.{key}",
                         active=active,
                         nesting=nesting + 1,
+                        limit=limit,
                     ),
                 )
             )

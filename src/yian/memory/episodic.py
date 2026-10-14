@@ -17,6 +17,7 @@ from types import TracebackType
 from typing import Iterator, cast
 from uuid import uuid4
 
+from yian.defaults import current
 import yian.json_codec as json_codec
 from yian.memory.contracts import (
     JsonObject,
@@ -35,7 +36,7 @@ from yian.memory.contracts import (
     ToolCallInteraction,
     ToolResultInteraction,
     VisibleInteraction,
-    _MAX_JSON_NESTING,
+    _memory_nesting_error,
 )
 from yian.memory.storage import SQLiteStorage, check_storage_path
 
@@ -58,9 +59,6 @@ class _State:
 
     limits: _Limits
     episodes: tuple[JsonObject, ...]
-
-
-_DEFAULT_LIMITS = _Limits(100, 10)
 
 
 def _operation_error(stage: str, code: str, message: str) -> MemoryOperationError:
@@ -93,7 +91,11 @@ def _resolve_limits(
             "episodic.config_conflict",
             "configured limits differ from the recorded limits",
         )
-    base = _DEFAULT_LIMITS if recorded is None else recorded
+    if recorded is None:
+        values = current()
+        base = _Limits(values.episodic_max_episodes, values.episodic_recall_limit)
+    else:
+        base = recorded
     return _Limits(
         base.max_episodes if max_episodes is None else max_episodes,
         base.recall_limit if recall_limit is None else recall_limit,
@@ -119,8 +121,12 @@ def _copy_json(
     *,
     active: set[int] | None = None,
     nesting: int = 0,
+    limit: int | None = None,
 ) -> JsonValue:
-    """Validate and defensively copy one exact finite JSON value."""
+    """Validate and defensively copy one exact finite JSON value.
+
+    `limit` is the memory JSON nesting bound; the top-level call reads it once.
+    """
     value_type = type(value)
     if value is None or value_type in (bool, int):
         return cast(JsonValue, value)
@@ -132,10 +138,10 @@ def _copy_json(
         return value
     if value_type not in (list, dict):
         raise TypeError(f"{name} must contain exact JSON values")
-    if nesting >= _MAX_JSON_NESTING:
-        raise ValueError(
-            f"{name} nests deeper than the memory limit of {_MAX_JSON_NESTING} levels"
-        )
+    if limit is None:
+        limit = current().memory_json_nesting
+    if nesting >= limit:
+        raise _memory_nesting_error(name, limit)
     active = set() if active is None else active
     identity = id(value)
     if identity in active:
@@ -144,7 +150,13 @@ def _copy_json(
     try:
         if value_type is list:
             return [
-                _copy_json(item, f"{name}[{index}]", active=active, nesting=nesting + 1)
+                _copy_json(
+                    item,
+                    f"{name}[{index}]",
+                    active=active,
+                    nesting=nesting + 1,
+                    limit=limit,
+                )
                 for index, item in enumerate(value)
             ]
         copied: JsonObject = {}
@@ -153,7 +165,7 @@ def _copy_json(
                 raise TypeError(f"{name} JSON object keys must be strings")
             _json_string(key, f"{name} JSON object key")
             copied[key] = _copy_json(
-                item, f"{name}.{key}", active=active, nesting=nesting + 1
+                item, f"{name}.{key}", active=active, nesting=nesting + 1, limit=limit
             )
         return copied
     finally:
@@ -587,10 +599,10 @@ class EpisodicMemory:
         Args:
             max_episodes (`int | None`, defaults to `None`):
                 Maximum retained episodes. None adopts the stored or snapshot
-                value, else 100.
+                value, else `YIAN_EPISODIC_MAX_EPISODES` (100).
             recall_limit (`int | None`, defaults to `None`):
                 Maximum episodes returned by contextual recall. None adopts the
-                stored or snapshot value, else 10.
+                stored or snapshot value, else `YIAN_EPISODIC_RECALL_LIMIT` (10).
             storage (`str | PathLike[str] | None`, defaults to `None`):
                 Optional local SQLite file. Nothing is opened until the first
                 operation; this backend then owns the file until close. None is

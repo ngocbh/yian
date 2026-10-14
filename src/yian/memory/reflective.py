@@ -21,6 +21,7 @@ from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from yian.defaults import current
 import yian.json_codec as json_codec
 from yian.llm_clients.connection import (
     legacy_connection_config,
@@ -43,17 +44,13 @@ from yian.memory.contracts import (
     ToolCallInteraction,
     ToolResultInteraction,
     VisibleInteraction,
-    _MAX_JSON_NESTING,
+    _memory_nesting_error,
 )
 from yian.memory.storage import SQLiteStorage, check_storage_path
 
 _SNAPSHOT_FORMAT = "yian.reflective_memory"
 _SNAPSHOT_VERSION = 2
 _POLICY_NAME = "reflective"
-_MAX_REFLECTION_PROMPT_CHARS = 32_000
-_MAX_LIMIT_MATERIAL_CHARS = 256
-_MAX_LESSON_MATERIAL_CHARS = 8_000
-_MAX_EPISODE_MATERIAL_CHARS = 20_000
 _WORD = re.compile(r"\w+", re.UNICODE)
 
 
@@ -100,9 +97,6 @@ class _State:
     lessons: tuple[_Lesson, ...]
 
 
-_DEFAULT_LIMITS = _Limits(100, 20)
-
-
 def _operation_error(
     stage: str,
     code: str,
@@ -140,7 +134,11 @@ def _resolve_limits(
             "configured limits differ from the recorded limits",
             retryable=False,
         )
-    base = _DEFAULT_LIMITS if recorded is None else recorded
+    if recorded is None:
+        values = current()
+        base = _Limits(values.reflective_max_items, values.reflective_recall_limit)
+    else:
+        base = recorded
     return _Limits(
         base.max_items if max_items is None else max_items,
         base.recall_limit if recall_limit is None else recall_limit,
@@ -164,8 +162,12 @@ def _copy_json(
     *,
     active: set[int] | None = None,
     nesting: int = 0,
+    limit: int | None = None,
 ) -> JsonValue:
-    """Validate and defensively copy one exact finite JSON value."""
+    """Validate and defensively copy one exact finite JSON value.
+
+    `limit` is the memory JSON nesting bound; the top-level call reads it once.
+    """
     value_type = type(value)
     if value is None or value_type in (bool, int):
         return cast(JsonValue, value)
@@ -177,10 +179,10 @@ def _copy_json(
         return value
     if value_type not in (list, dict):
         raise TypeError(f"{name} must contain exact JSON values")
-    if nesting >= _MAX_JSON_NESTING:
-        raise ValueError(
-            f"{name} nests deeper than the memory limit of {_MAX_JSON_NESTING} levels"
-        )
+    if limit is None:
+        limit = current().memory_json_nesting
+    if nesting >= limit:
+        raise _memory_nesting_error(name, limit)
 
     active = set() if active is None else active
     identity = id(value)
@@ -195,6 +197,7 @@ def _copy_json(
                     f"{name}[{index}]",
                     active=active,
                     nesting=nesting + 1,
+                    limit=limit,
                 )
                 for index, item in enumerate(value)
             ]
@@ -208,6 +211,7 @@ def _copy_json(
                 f"{name}.{key}",
                 active=active,
                 nesting=nesting + 1,
+                limit=limit,
             )
         return copied
     finally:
@@ -503,7 +507,7 @@ def _bounded_episode_material(context: LearnContext) -> str:
         "episodes": [_episode_json(episode) for episode in context.episodes],
         "feedback": list(context.feedback),
     }
-    return _bounded_json_material(payload, _MAX_EPISODE_MATERIAL_CHARS)
+    return _bounded_json_material(payload, current().reflective_max_episode_chars)
 
 
 def _mutation_digest_payload(
@@ -612,10 +616,11 @@ class ReflectiveMemory:
                 accepted only beside ``provider: azure``, as the resource
                 endpoint.
             max_items (`int | None`, defaults to `None`): Maximum retained
-                lessons. None adopts the stored or snapshot value, else 100.
+                lessons. None adopts the stored or snapshot value, else
+                `YIAN_REFLECTIVE_MAX_ITEMS` (100).
             recall_limit (`int | None`, defaults to `None`): Maximum lessons
                 returned by contextual recall. None adopts the stored or snapshot
-                value, else 20.
+                value, else `YIAN_REFLECTIVE_RECALL_LIMIT` (20).
             storage (`str | PathLike[str] | None`, defaults to `None`): Optional
                 local SQLite file. Nothing is opened until the first operation;
                 this backend then owns the file until close. None keeps state
@@ -1321,13 +1326,14 @@ class _ReflectiveSession:
             }
             for lesson in self._lessons()
         ]
+        values = current()
         lesson_material = _bounded_json_material(
-            cast(JsonValue, lessons), _MAX_LESSON_MATERIAL_CHARS
+            cast(JsonValue, lessons), values.reflective_max_lesson_chars
         )
         episode_material = _bounded_episode_material(context)
         limit_material = _bounded_json_material(
             {"max_items": self._state.limits.max_items},
-            _MAX_LIMIT_MATERIAL_CHARS,
+            values.reflective_max_limit_chars,
         )
         return (
             f"Memory: {context.memory}\n"

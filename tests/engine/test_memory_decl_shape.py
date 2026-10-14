@@ -122,8 +122,9 @@ def test_builtin_config_rules_match_the_backends(
     with pytest.raises((TypeError, ValueError)):
         _builtin(type_name, {key: minimum - 1}, None, create_parent=False)
     if not nullable:
+        # A backend takes None as the yian default, but an authored null is refused.
         with pytest.raises((TypeError, ValueError)):
-            _builtin(type_name, {key: None}, None, create_parent=False)
+            check_memory_declaration("notes", type_name, {key: None})
 
 
 def test_builtin_config_rules_cover_the_allowlist() -> None:

@@ -13,7 +13,8 @@ from unittest.mock import patch
 
 import pytest
 
-from yian.memory.contracts import MemoryOperationError, _MAX_JSON_NESTING
+from yian import defaults
+from yian.memory.contracts import MemoryOperationError
 from yian.memory.storage import SQLiteStorage, check_storage_path
 
 
@@ -190,7 +191,7 @@ def test_envelope_depth_rejection_preserves_old_state_and_usable_handle(tmp_path
         statements = []
         store._connection.set_trace_callback(statements.append)
         with pytest.raises(MemoryOperationError) as caught:
-            store.save(_nested_object(_MAX_JSON_NESTING))
+            store.save(_nested_object(defaults.current().memory_json_nesting))
         _assert_error(caught.value, "invalid_state")
         assert statements == []
         store._connection.set_trace_callback(None)
@@ -209,7 +210,7 @@ def test_envelope_depth_rejection_preserves_old_state_and_usable_handle(tmp_path
 
 def test_maximum_valid_envelope_depth_roundtrips(tmp_path):
     path = tmp_path / "memory.sqlite"
-    value = _nested_object(_MAX_JSON_NESTING - 1)
+    value = _nested_object(defaults.current().memory_json_nesting - 1)
     store = SQLiteStorage(path, "session")
     try:
         store.save(value)

@@ -6,6 +6,7 @@ import copy
 
 import pytest
 
+from yian import defaults
 import yian.runtime.learning as learning_module
 import yian.runtime.state as state_module
 from yian.compile.expand import build_grow
@@ -361,7 +362,7 @@ def test_owner_context_error_identifies_receiver_without_changing_forward_accept
 
     # A low memory bound lets values well inside the yian value limit exceed it. The
     # contribution value fits in the episode but not in the deeper feedback contribution.
-    monkeypatch.setattr("yian.memory.contracts._MAX_JSON_NESTING", 10)
+    monkeypatch.setattr(defaults.Defaults, "memory_json_nesting", property(lambda self: 10))
     value = "leaf"
     for _ in range(20 if material == "episode" else 5):
         value = [value]

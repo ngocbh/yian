@@ -209,9 +209,9 @@ def test_runtime_never_imports_compile_expand() -> None:
 
 def _memory_leaf_violations(module: str, source: str) -> list[str]:
     """Check one declared memory leaf through the shared import target scanner."""
-    leaf = {
-        "contracts": "yian.diagnostics",
-        "conversation": "yian.memory.contracts",
+    leaves = {
+        "contracts": ("yian.diagnostics", "yian.defaults"),
+        "conversation": ("yian.memory.contracts",),
     }[module]
     targets = _parse_import_targets(
         source,
@@ -222,7 +222,7 @@ def _memory_leaf_violations(module: str, source: str) -> list[str]:
     for line, target, statement in targets:
         if target.split(".")[0] in sys.stdlib_module_names:
             continue
-        if target == leaf or target.startswith(f"{leaf}."):
+        if any(target == leaf or target.startswith(f"{leaf}.") for leaf in leaves):
             continue
         violations.append(f"memory/{module}.py:{line}: {statement} -> {target}")
     return violations
@@ -274,6 +274,7 @@ def test_memory_leaf_ratchet_accepts_only_declared_leaves_and_stdlib() -> None:
                 "from yian.diagnostics import OriginRef\n",
                 "from ..diagnostics import OriginRef\n",
                 "from yian import diagnostics\n",
+                "from yian.defaults import current\n",
             ),
         ),
         (

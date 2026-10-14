@@ -136,8 +136,10 @@ Setup saves the provider's credential and its model together:
 `--model M` names the model; in a terminal, setup asks when it is omitted. The model
 is accepted when the provider's model listing has it. Otherwise, such as an alias the
 listing does not show, or Azure, which has no listing, one short request to the
-model must succeed. OpenAI accepts only a model in the account's catalog. A failed
-or cancelled setup saves nothing and leaves the previous login in place.
+model must succeed. With a base-URL variable such as `ANTHROPIC_BASE_URL` set, setup
+skips the listing, so the key never goes to the public host, and checks the model with
+one request. OpenAI accepts only a model in the account's catalog. A failed or
+cancelled setup saves nothing and leaves the previous login in place.
 
 Setting up a provider makes it the default only when no default is saved yet.
 `yian auth PROVIDER --default` switches the default to another saved provider
@@ -216,7 +218,8 @@ yian auth azure --endpoint https://<resource>.openai.azure.com/ --model <deploym
 Its endpoint becomes the agent's `base_url` and its deployment the agent's `model`.
 Its key goes only to that resource: an agent whose `base_url` names another resource
 uses `AZURE_OPENAI_API_KEY`. Endpoints are compared after removing a trailing `/`
-and an `/openai` or `/openai/v1` suffix.
+and an `/openai` or `/openai/v1` suffix. Such an agent still gets the saved
+deployment as its `model` when it sets none, so it should set its own `model`.
 
 A flow file may set `base_url` only beside `provider: azure`. An `/openai` or
 `/openai/v1` suffix is stripped. An Azure agent that ends up without a `base_url`

@@ -51,10 +51,11 @@ saved choice, and never prints a secret.
 
 The model is accepted when the provider's model listing has it; otherwise (an alias
 the listing does not show, or Azure, which has no listing) one short request to the
-model must succeed. OpenAI accepts only a model in the account's catalog. Setup
-changes nothing until sign-in and the model check succeed; a failed or cancelled
-setup keeps the previous login. The provider becomes the default only when no
-default is saved yet.
+model must succeed. With a base-URL variable such as `ANTHROPIC_BASE_URL` set,
+`yian auth` skips the listing and checks the model with one request. OpenAI accepts
+only a model in the account's catalog. Setup changes nothing until sign-in and the
+model check succeed; a failed or cancelled setup keeps the previous login. The
+provider becomes the default only when no default is saved yet.
 
 `--default` makes an already-saved provider the default without signing in again.
 `--remove` deletes that provider's saved login; removing the default leaves no

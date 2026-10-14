@@ -1,10 +1,13 @@
-"""YAML 1.1 boolean spellings, which YAML 1.2 core rules read as text, and their fix."""
+"""YAML 1.1 boolean spellings, which YAML 1.2 core rules read as text, and their fix; and
+what YAML read a value as."""
 
 from __future__ import annotations
 
+from datetime import date, datetime
+
 import pytest
 
-from yian.compose.helpers.yaml_words import former_boolean_fix
+from yian.compose.helpers.yaml_words import former_boolean_fix, yaml_read_as
 from yian.typesys import type_for
 from yian.typesys.types import RecordDef, TypeRegistry
 
@@ -63,3 +66,22 @@ def test_fix_finds_the_rejected_word_inside_a_list_or_record(type_text, value, e
     registry = {"Rec": RecordDef(fields={"ok": "bool", "name": "str"})}
     declared = type_for(type_text, registry)
     assert former_boolean_fix(value, declared) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "phrase"),
+    [
+        (True, "a boolean"),
+        (5, "an integer"),
+        (1.5, "a float"),
+        (datetime(2026, 10, 14, 10, 0), "a date and time"),
+        (date(2026, 10, 14), "a date"),
+        (None, "null"),
+        (b"x", "binary data"),
+        ([1], "a list"),
+        ({"x": 1}, "a mapping"),
+        (object(), "a `object`"),
+    ],
+)
+def test_yaml_read_as_names_the_value(value, phrase):
+    assert yaml_read_as(value) == phrase

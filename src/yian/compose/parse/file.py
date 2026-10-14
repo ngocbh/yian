@@ -24,12 +24,12 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from datetime import date, datetime
 from typing import Any, Callable, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
+from yian.compose.helpers.yaml_words import yaml_read_as
 from yian.compose.nodes import REMOVED_KINDS
 from yian.compose.parse.nodes import IDENTIFIER_RULE, identifier_suggestion, is_identifier
 from yian.compose.source import (
@@ -355,33 +355,6 @@ def _validation_error_range(
     return root.range
 
 
-def _yaml_read_as(key: Any) -> str:
-    """Name what YAML read a non-text key as, for an error message.
-
-    Args:
-        key (`Any`): The constructed key.
-
-    Returns:
-        `str`: A phrase such as ``a boolean`` or ``a date``.
-    """
-    # A bool is an int and a datetime is a date, so the subclasses go first.
-    if isinstance(key, bool):
-        return "a boolean"
-    if isinstance(key, int):
-        return "an integer"
-    if isinstance(key, float):
-        return "a float"
-    if isinstance(key, datetime):
-        return "a date and time"
-    if isinstance(key, date):
-        return "a date"
-    if key is None:
-        return "null"
-    if isinstance(key, bytes):
-        return "binary data"
-    return f"a `{type(key).__name__}`"
-
-
 def _non_text_key_message(key: Any, text: str) -> str:
     """Explain that a key YAML read as non-text can't name anything, and the fix.
 
@@ -392,7 +365,7 @@ def _non_text_key_message(key: Any, text: str) -> str:
     Returns:
         `str`: The load error message.
     """
-    read_as = _yaml_read_as(key)
+    read_as = yaml_read_as(key)
     if not text:
         return (
             f"an empty key was read by YAML as {read_as}, but names in a flow must "

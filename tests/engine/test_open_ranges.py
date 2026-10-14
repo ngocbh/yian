@@ -1,9 +1,11 @@
 """One-sided numeric ranges: `int(0..)`, `int(..100)`, `float(0.0..)`."""
 
 import math
+import re
 
 import pytest
 
+from yian.typesys.types import format_type_expr, parse_type, read_typedefs, resolve_type, type_for
 from yian.typesys.values import (
     Type,
     TypeCheckError,
@@ -79,3 +81,29 @@ def test_overlap_with_open_ends():
     assert types_overlap(Type(INT, bounds=(0, None)), Type(INT, bounds=(None, 0)))
     assert not types_overlap(Type(INT, bounds=(1, None)), Type(INT, bounds=(None, 0)))
     assert types_overlap(Type(INT, bounds=(5, None)), Type(INT))
+
+
+@pytest.mark.parametrize("text", [
+    "int(0..)", "int(..100)", "float(0.0..)", "float(..-1.5)",
+    "Optional(int(0..))", "list(float(..1.0))",
+])
+def test_open_ranges_round_trip(text):
+    assert format_type_expr(parse_type(text)) == text
+    assert canonical_type_label(type_for(text, {})) == text
+
+
+def test_open_ranges_resolve_in_records_aliases_and_lists():
+    reg = read_typedefs({
+        "Count": "int(0..)",
+        "Order": {"qty": "int(1..)", "price": "float(..100.0)"},
+    })
+    assert resolve_type(parse_type("Count"), reg).bounds == (0, None)
+    order = resolve_type(parse_type("Order"), reg)
+    assert order.fields["qty"].bounds == (1, None)
+    assert order.fields["price"].bounds == (None, 100.0)
+    assert type_for("list(Optional(int(..3)))", {}).element.bounds == (None, 3)
+
+
+def test_neither_end_says_write_the_plain_type():
+    with pytest.raises(TypeCheckError, match=re.escape("write int")):
+        parse_type("int(..)")

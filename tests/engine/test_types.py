@@ -546,6 +546,12 @@ from yian.typesys.types import (  # noqa: E402
     ("int( 1 .. 12 )", ScalarExpr("int", (1, 12))),
     ("float(0.0..1.0)", ScalarExpr("float", (0.0, 1.0))),
     ("float(1e-3..2)", ScalarExpr("float", (0.001, 2))),
+    ("int(0..)", ScalarExpr("int", (0, None))),
+    ("int(..100)", ScalarExpr("int", (None, 100))),
+    ("int(-5..)", ScalarExpr("int", (-5, None))),
+    ("float(0.0..)", ScalarExpr("float", (0.0, None))),
+    ("float(..-1.5)", ScalarExpr("float", (None, -1.5))),
+    ("int( 0 .. )", ScalarExpr("int", (0, None))),
     ("dict(str, int)", DictExpr()),
     ("Dict(str, Buy)", DictExpr()),
     ("Any", ScalarExpr("object")),
@@ -558,8 +564,14 @@ def test_paren_syntax(text, expr):
 
 
 @pytest.mark.parametrize("text, fragment", [
-    ("int(1..)", "both ends"),
-    ("int(..3)", "both ends"),
+    ("int(..)", "write int"),
+    ("float(..)", "write float"),
+    ("int()", "needs `..`"),
+    ("int(1)", "needs `..`"),
+    ("int(1..2..)", "one lo..hi"),
+    ("float(..1e999)", "invalid bounds"),
+    ("int(1.5..)", "exact numeric endpoints"),
+    ("int(..1.0)", "exact numeric endpoints"),
     ("int(1, 12)", "int(1..12)"),
     ("int(3..1)", "invalid bounds"),
     ("Buy | Sell", "Union(Buy, Sell)"),
@@ -700,5 +712,8 @@ def test_two_argument_range_hint_suggests_only_a_valid_range():
 
 
 def test_bracket_single_endpoint_hint_uses_the_range_spelling():
-    with pytest.raises(TypeCheckError, match=re.escape("needs both ends, e.g. int(1..12)")):
+    with pytest.raises(
+        TypeCheckError,
+        match=re.escape("a numeric range needs `..`, e.g. int(1..12), int(0..), or int(..100)"),
+    ):
         parse_type("int[1]")

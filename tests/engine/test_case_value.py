@@ -218,7 +218,7 @@ def test_case_ref_in_assert_is_located():
 
 
 def test_case_ref_in_condition_is_loud():
-    # another case whose when: reads ${gate.output} (a case value) -> rejected.
+    # another case whose when: reads gate.output (a case value) -> rejected.
     other = CaseDescriptor(
         id="other", cases=[{"when": "gate.output == 1", "then": "z"}]
     )
@@ -233,14 +233,6 @@ def test_case_ref_in_assert_is_loud():
         expand_case_outputs(descs, None, ['gate.output != ""'])
 
 
-def test_case_ref_in_bare_condition_is_loud():
-    # The bare condition spelling reads the case value too, so it is rejected the same way.
-    other = CaseDescriptor(id="other", cases=[{"when": "gate.output == 1", "then": "z"}])
-    descs = {"gate": _gate(), "other": other}
-    with pytest.raises(LoadError, match="case node 'other' condition"):
-        expand_case_outputs(descs, None, [])
-
-
 def test_case_ref_in_whole_span_condition_is_loud():
     other = CaseDescriptor(id="other", cases=[{"when": "${gate.output == 1}", "then": "z"}])
     descs = {"gate": _gate(), "other": other}
@@ -248,10 +240,13 @@ def test_case_ref_in_whole_span_condition_is_loud():
         expand_case_outputs(descs, None, [])
 
 
-def test_case_ref_in_bare_assert_is_loud():
-    descs = {"gate": _gate()}
-    with pytest.raises(LoadError, match="assert"):
-        expand_case_outputs(descs, None, ['gate.output != ""'])
+def test_on_form_match_value_reading_a_case_value_is_loud():
+    other = CaseDescriptor(
+        id="other", on="${s.output}", cases=[{"when": "${gate.output}", "then": "z"}]
+    )
+    descs = {"gate": _gate(), "other": other}
+    with pytest.raises(LoadError, match="case node 'other' condition"):
+        expand_case_outputs(descs, None, [])
 
 
 def test_on_form_match_value_naming_a_case_is_not_a_read():

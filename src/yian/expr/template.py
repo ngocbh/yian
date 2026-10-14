@@ -608,6 +608,7 @@ def scan_template(text: str) -> list[TypedValue]:
             if end is None:
                 raise ExpressionError(f"unbalanced '${{' in template {text!r}")
             interior = text[i + 2 : end]
+            # Checked before parse_expr so the error shows the whole fixed span.
             grammar.reject_nested_spans(interior, in_span=True)
             segments.append(Span(grammar.parse_expr(interior)))
             i = end + 1

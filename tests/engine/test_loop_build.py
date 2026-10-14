@@ -23,7 +23,6 @@ from yian.run import run_flow
 from yian.typesys.values import ValueKind
 
 
-
 def _swap(src: str, old: str, new: str) -> str:
     """Replace `old` in a fixture, failing if it is absent (a stale needle)."""
     assert old in src, old

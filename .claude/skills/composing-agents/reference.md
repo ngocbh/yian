@@ -66,9 +66,10 @@ Inside an expression, name values directly and group with parentheses:
 (`${a :- ${b}}`, `when: "${a.output} > 5"`) is a load error that shows the rewrite.
 The `:-`/`:?` RHS is an expression, so a string default must be **quoted**
 (`${x:-"today"}`; bare `today` reads a variable). A whole-string `${ref}` resolves
-to the **typed value**; embedded in surrounding text it is **stringified**. A child-flow call is the
-whole-value `call(...)` directive (below), never a `${flow(args)}` span. Arithmetic on
-a value that is null when a `case` skips its node is a load error at that binding
+to the **typed value**; embedded in surrounding text it is **stringified**. A
+child-flow call is the whole-value `call(...)` directive (below), never a
+`${flow(args)}` span. Arithmetic on a value that is null when a `case` skips its
+node is a load error at that binding
 (`output 'q': ${order.output.qty + 1} does arithmetic on order.output.qty, which is null
 when node 'order' is skipped; give it a default with :-, e.g. (order.output.qty :- <default>)`).
 

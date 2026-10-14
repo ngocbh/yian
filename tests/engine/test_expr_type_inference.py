@@ -42,8 +42,6 @@ def test_exact_reference_uses_injected_dotted_path_type() -> None:
     assert paths == ["node#0.output.answer"]
 
 
-
-
 def test_unknown_exact_reference_stays_unknown() -> None:
     assert infer_expr_type(parse_expr("missing.output"), lambda _path: None) is None
 

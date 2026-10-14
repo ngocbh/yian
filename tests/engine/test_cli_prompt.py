@@ -1599,7 +1599,7 @@ def test_run_error_boxes_boundary_assert_line(monkeypatch):
     buf = _sink(monkeypatch)
     _render_run_error(result, loaded)
     out = buf.getvalue()
-    assert "e18-false-boundary-assert.yaml:15" in out   # the `${input.window} > 0` line
+    assert "e18-false-boundary-assert.yaml:15" in out   # the `input.window > 0` line
     assert "assert failed" in out
 
 

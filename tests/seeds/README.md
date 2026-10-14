@@ -189,8 +189,8 @@ named record is **type-checked at compile time** (`${analyze.output.rating.categ
 Inside an expression, name values directly and group with parentheses:
 `${a :- (b :- "lit")}` or `${a | b | "lit"}`; a `${...}` inside an expression is a
 load error that shows the rewrite. The `:-`/`:?` RHS is an expression, so a
-**string** default must be quoted (`${x:-"today"}`; bare `today` reads a variable). Rule of thumb: `:-` for *value-or-default*, `|` for
-*whichever-ran*.
+**string** default must be quoted (`${x:-"today"}`; bare `today` reads a variable).
+Rule of thumb: `:-` for *value-or-default*, `|` for *whichever-ran*.
 
 **Whole-string vs embedded:** a value that is *exactly* `${ref}` resolves to the **typed** value
 (could be a list/object); a `${ref}` embedded in surrounding text is **stringified**. So

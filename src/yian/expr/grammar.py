@@ -196,6 +196,15 @@ def whole_span_interior(text: str) -> str | None:
 _NAME_CHAR = re.compile(r"[A-Za-z0-9_#/]")
 
 
+def _parses(text: str) -> bool:
+    """True when `text` parses under the grammar (a rewrite worth suggesting)."""
+    try:
+        _PARSER.parse(text)
+    except LarkError:
+        return False
+    return True
+
+
 def _is_lone_atom(text: str) -> bool:
     """True when `text` parses as one reference or one literal (no operator or call)."""
     try:
@@ -274,13 +283,14 @@ def reject_nested_spans(text: str, *, in_span: bool = False) -> None:
 
     Raises:
         `ExpressionError`:
-            If `text` holds a `${...}` outside a string literal.
+            If `text` holds a `${...}` outside a string literal. The message shows the
+            rewrite when the unwrapped text parses.
     """
     if not _has_span(text):
         return
     message = "`${...}` can't appear inside an expression"
     rewrite = _unwrap_spans(text)
-    if rewrite is not None:
+    if rewrite is not None and _parses(rewrite):
         rewrite = rewrite.strip()
         message += f"; write `{'${' + rewrite + '}' if in_span else rewrite}`"
     raise ExpressionError(message)

@@ -47,7 +47,6 @@ def test_whole_span_rewrite_with_a_brace_in_a_string_literal():
         ("a :- ${b :- ${c}}", "a :- (b :- c)"),
         ("isinstance(x, ${Buy})", "isinstance(x, Buy)"),
         ("render_as_json(${briefs}, 4)", "render_as_json(briefs, 4)"),
-        ("a :- ${b +}", "a :- (b +)"),
         ("not${x}", "not x"),
         ("x :- ${and}", "x :- and"),
     ],
@@ -60,9 +59,10 @@ def test_nested_span_shows_the_rewrite(text, rewrite):
     )
 
 
-def test_unbalanced_nested_span_has_no_rewrite():
+@pytest.mark.parametrize("text", ["a :- ${b", "a :- ${b +}", "${}"])
+def test_nested_span_without_a_parsable_rewrite_shows_none(text):
     with pytest.raises(ExpressionError, match=r"can't appear inside an expression") as caught:
-        parse_expr("a :- ${b")
+        parse_expr(text)
     assert "write" not in str(caught.value)
 
 

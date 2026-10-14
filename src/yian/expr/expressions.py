@@ -210,8 +210,8 @@ def evaluate_when(
     `evaluate_when_record` instead.
 
     The value may be written two ways, evaluating IDENTICALLY: a bare expression `a > 5`
-    or a whole `${a > 5}` (braces around the whole thing). A bare reference with no comparison operator is a TRUTHINESS test
-    (coerced to bool), not an error.
+    or a whole `${a > 5}` (braces around the whole thing). A bare reference with no
+    comparison operator is a TRUTHINESS test (coerced to bool), not an error.
 
     Args:
         expression (`str`):

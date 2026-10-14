@@ -188,9 +188,10 @@ Inside an expression, name values directly and group with parentheses:
 `${a :- (b :- "lit")}` or `${a | b | "lit"}`. A `${...}` inside an expression
 (`${a :- ${b}}`, `when: "${a.output} > 5"`) is a load error that shows the rewrite.
 The `:-`/`:?` RHS is an expression, so a string default must be **quoted**
-(`${x:-"today"}`; bare `today` reads a variable). A child-flow call is the whole-value `call(...)` directive
-(see below), never a `${flow(args)}` span. Arithmetic on a value that is null when a
-`case` skips its node is a load error; give it a default: `${(o.output.qty :- 0) + 1}`.
+(`${x:-"today"}`; bare `today` reads a variable). A child-flow call is the
+whole-value `call(...)` directive (see below), never a `${flow(args)}` span.
+Arithmetic on a value that is null when a `case` skips its node is a load error;
+give it a default: `${(o.output.qty :- 0) + 1}`.
 
 For child-flow output contracts, a direct ref preserves its exact or partial contract;
 selecting a known partial-record field yields an exact type. A comparison/membership or

@@ -190,8 +190,8 @@ def test_record_condition_compares_a_miss_as_null():
     # A None left-hand side of `in` is just a value that isn't in the container; only a
     # None right-hand side (the container itself) raises.
     assert evaluate_when_record('x in ["a"]', {}) is False
-    with pytest.raises(ExpressionError):
-        evaluate_when_record('"a" in ${x}', {})
+    with pytest.raises(ExpressionError, match="not iterable"):
+        evaluate_when_record('"a" in x', {})
 
 
 def test_builtins_evaluate_in_conditions_and_bindings():
@@ -260,12 +260,12 @@ def test_evaluate_when_record_in_with_none_operand_raises():
     # fails the node, while equality and ordered comparisons remain falsy.
     from yian.expr.expressions import evaluate_when_record
 
-    with pytest.raises(ExpressionError):
-        evaluate_when_record("'x' in ${opts}", {"opts": None})   # None RHS
+    with pytest.raises(ExpressionError, match="not iterable"):
+        evaluate_when_record("'x' in opts", {"opts": None})   # None RHS
     with pytest.raises(ExpressionError):
         evaluate_when_record("x in 'abc'", {})                # None LHS (missing input)
-    with pytest.raises(ExpressionError):
-        evaluate_when_record("${x} not in 'abc'", {})
+    with pytest.raises(ExpressionError, match="not iterable"):
+        evaluate_when_record("x not in 'abc'", {})
 
 
 # --- CASE node end-to-end through the engine ----------------------------- #
@@ -273,7 +273,7 @@ def test_evaluate_when_record_in_with_none_operand_raises():
 
 def _branch_graph(cases):
     # Strict CASE: the router declares `score` (bound from the upstream node) and
-    # routes on the bare `${score}`. CaseNode gets its inputs via the base attribute
+    # routes on the bare `score`. CaseNode gets its inputs via the base attribute
     # the compiler threads — here set post-construction (no compiler in this unit test).
     # `.output` is a SKIP token; the upstream FuncNode emits the scalar value
     # directly, and `${score.output}` reads `pool.store["score"]` unwrapped.
@@ -312,7 +312,7 @@ def test_case_when_routes_default():
 
 def test_case_string_equality_routes():
     # The canonical pattern: an upstream node writes a label; the router declares it as
-    # an input and does a pure string comparison on the bare `${label}`.
+    # an input and does a pure string comparison on the bare `label`.
     log: list = []
     cond = CaseNode("cond", [Case(handle="is_high", when="label == 'POSITIVE'")])
     stamp_reads(cond, {"label": "${label.output}"})

@@ -155,7 +155,16 @@ def expand_case_outputs(
                     range=condition_range,
                     diagnostics=diagnostics,
                 )
-                continue  # an `on:` case's `when:` values are match values, not conditions
+                # An `on:` case's `when:` values are match values (text), not conditions.
+                for index, case in enumerate(d.cases):
+                    _reject_case_refs(
+                        [case.get("when")],
+                        case_ids,
+                        f"case node {nid!r} condition",
+                        range=_when_range(d, index),
+                        diagnostics=diagnostics,
+                    )
+                continue
             for index, case in enumerate(d.cases):
                 condition_range = _when_range(d, index)
                 _reject_case_refs(

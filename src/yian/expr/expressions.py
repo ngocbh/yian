@@ -174,7 +174,8 @@ def _apply_binop(op: Callable[[Any, Any], Any], symbol: str, lhs: Any, rhs: Any)
     except ValueError:
         if symbol != "%" or not isinstance(lhs, str) or json_codec.displayable(rhs) is rhs:
             raise
-    # Python's `%` refused because the right side holds an int past the digit limit.
+    # The right side holds a long int: retry without the digit limit
+    # (`format_text` gives Python's own error for anything else).
     return percent_format.format_text(lhs, rhs)
 
 

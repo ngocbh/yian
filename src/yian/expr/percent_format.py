@@ -16,11 +16,11 @@ from typing import Any
 import yian.json_codec as json_codec
 
 
-# CPython's conversion spec: optional `(key)`, flags, width, precision, an
-# ignored length modifier, then the conversion character.
+# The rest of CPython's conversion spec after `%` and any `(key)`: flags, width,
+# precision, an ignored length modifier, then the conversion character. CPython
+# reads only ASCII digits in a width or precision.
 _SPEC = re.compile(
-    r"%(?:\((?P<key>[^)]*)\))?(?P<flags>[-+ #0]*)(?P<width>\*|\d+)?"
-    r"(?:\.(?P<prec>\*|\d*))?[hlL]?(?P<conv>.)",
+    r"(?P<flags>[-+ #0]*)(?P<width>\*|[0-9]+)?(?:\.(?P<prec>\*|[0-9]*))?[hlL]?(?P<conv>.)",
     re.DOTALL,
 )
 _CONVERSIONS = frozenset("sradiuoxXeEfFgGc")
@@ -50,7 +50,7 @@ class _Arguments:
         if isinstance(args, tuple):
             self._args, self._length, self._index = args, len(args), 0
         else:
-            self._args, self._length, self._index = args, -1, -2
+            self._bind_one(args)
 
     def next(self) -> Any:
         """Return the next positional argument.
@@ -72,7 +72,13 @@ class _Arguments:
         """
         if self._mapping is None:
             raise _Mismatch
-        self._args, self._length, self._index = self._mapping[key], -1, -2
+        self._bind_one(self._mapping[key])
+
+    def _bind_one(self, value: Any) -> None:
+        """Make `value` the only argument left."""
+        # CPython's arglen/argidx for a lone argument: one `next` takes it
+        # (-2 < -1), a second finds none (-1 is not < -1).
+        self._args, self._length, self._index = value, -1, -2
 
     def all_used(self) -> bool:
         """Return whether formatting may end here without leaving arguments unused."""
@@ -115,13 +121,11 @@ def format_text(fmt: str, args: Any) -> str:
                 parts.append("%")
                 position = start + 2
                 continue
-            spec = _SPEC.match(fmt, start)
+            key, spec_start = _read_key(fmt, start + 1)
+            spec = _SPEC.match(fmt, spec_start)
             if spec is None or spec["conv"] not in _CONVERSIONS:
                 raise _Mismatch
-            if spec["key"] is not None and "(" in spec["key"]:
-                # CPython reads nested parentheses in a key; this scan doesn't.
-                return fmt % args
-            parts.append(_convert(spec, arguments))
+            parts.append(_convert(key, spec, arguments))
             position = spec.end()
         parts.append(fmt[position:])
         if not arguments.all_used():
@@ -131,10 +135,32 @@ def format_text(fmt: str, args: Any) -> str:
     return "".join(parts)
 
 
-def _convert(spec: re.Match[str], arguments: _Arguments) -> str:
+def _read_key(fmt: str, start: int) -> tuple[str | None, int]:
+    """Return the `(key)` at `start`, read as CPython does, and the index after it.
+
+    Parentheses nest: the key ends at the `)` that balances the opening one.
+    With no `(` at `start`, the key is `None` and the index is `start`.
+
+    Raises:
+        `_Mismatch`: The key's parentheses never balance.
+    """
+    if not fmt.startswith("(", start):
+        return None, start
+    depth = 0
+    for index in range(start, len(fmt)):
+        if fmt[index] == "(":
+            depth += 1
+        elif fmt[index] == ")":
+            depth -= 1
+            if depth == 0:
+                return fmt[start + 1 : index], index + 1
+    raise _Mismatch
+
+
+def _convert(key: str | None, spec: re.Match[str], arguments: _Arguments) -> str:
     """Return the text of one conversion spec, binding its arguments."""
-    if spec["key"] is not None:
-        arguments.select(spec["key"])
+    if key is not None:
+        arguments.select(key)
     stars = [arguments.next() for part in (spec["width"], spec["prec"]) if part == "*"]
     value = arguments.next()
     precision = "" if spec["prec"] is None else "." + spec["prec"]

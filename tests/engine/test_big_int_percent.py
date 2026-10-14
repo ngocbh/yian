@@ -17,6 +17,7 @@ from yian.expr.percent_format import format_text
 BIG = 10**4999 + 12345  # 5000 digits, past Python's default 4300-digit limit
 DIGITS = json_codec.int_text(BIG)
 SMALL = 10**12 + 7
+MEDIUM = 7 * 10**700 + 3  # over 2000 bits, so formatted here, yet Python can print it
 
 
 @pytest.fixture(autouse=True)
@@ -84,6 +85,23 @@ _ERRORS = [
     ("%s %s", lambda x: ("a", x, "c")),
     ("%d %d", lambda x: (x,)),
     ("%(k)s", lambda x: (x,)),
+    ("%((a)s", lambda x: {"(a)": x}),
+    ("x%\u0663d", lambda x: x),
+    ("%s %\u0663s", lambda x: (x, 5)),
+]
+
+_MEDIUM_FORMATS = [
+    *[(fmt, lambda x: (x,)) for fmt in (
+        "%s", "%r", "%a", "%10.3s", "%d", "%i", "%u", "%+d", "% d", "%.d", "%720d",
+        "%-720d|", "%0720d", "% 0720d", "%-+0720d|", "%.705d", "%+.705d", "%#.705d",
+        "%0720.705d",
+    )],
+    ("%(k)d", lambda x: {"k": x}),
+    ("%*d", lambda x: (720, x)),
+    ("%*d", lambda x: (-720, x)),
+    ("%.*d", lambda x: (705, x)),
+    ("%.*d", lambda x: (-3, x)),
+    ("%((a))d", lambda x: {"(a)": x}),
 ]
 
 
@@ -113,6 +131,21 @@ def test_format_text_raises_pythons_error(fmt, args):
         with pytest.raises(Exception) as info:
             format_text(fmt, args(x))
         assert (type(info.value), str(info.value)) == (expected_type, expected_text)
+
+
+@pytest.mark.parametrize("x", [MEDIUM, -MEDIUM], ids=["medium", "negative-medium"])
+@pytest.mark.parametrize(
+    ("fmt", "args"), _MEDIUM_FORMATS, ids=[f"{i}:{f[0]}" for i, f in enumerate(_MEDIUM_FORMATS)]
+)
+def test_format_text_matches_python_for_long_ints_python_can_print(fmt, args, x):
+    assert format_text(fmt, args(x)) == fmt % args(x)
+
+
+def test_format_text_reads_a_key_with_nested_parentheses():
+    assert format_text("%((a))d", {"(a)": BIG}) == DIGITS
+    assert format_text("%((a)b(c))s", {"(a)b(c)": BIG}) == DIGITS
+    with pytest.raises(OverflowError, match="^int too large to convert to float$"):
+        format_text("%((a))f %s", {"(a)": BIG})
 
 
 def test_format_text_keeps_a_list_as_the_mapping_and_the_single_argument():

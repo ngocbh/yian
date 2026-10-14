@@ -57,12 +57,35 @@ def test_a_type_error_on_a_huge_int_fails_the_run():
 @needs_digit_limit
 def test_an_embedded_int_too_large_for_text_fails_the_run():
     failure = _failed("n: int", "'x=${10 ** input.n}'", {"n": 5000})
-    assert "text" in failure.message
+    assert "as text" in failure.message
 
 
 def test_a_missing_format_key_fails_the_run():
     failure = _failed("r: object", '${"%(k)s" % input.r}', {"r": {"j": 1}})
     assert "cannot compute" in failure.message
+
+
+def test_an_int_to_float_overflow_fails_the_node_naming_the_binding():
+    flow = load_flow("""
+id: arith
+name: arith
+input:
+  x: int
+nodes:
+  c:
+    kind: code
+    input:
+      y: ${input.x * 1.0}
+    output: str
+    code: return "ok"
+output: ${c.output}
+""")
+    result = run_flow(flow, {"x": 10**400})
+    assert result.status == "failed"
+    assert result.failure.code == "binding.evaluate"
+    assert result.failure.node_id == "c"
+    assert "int too large to convert to float" in result.failure.message
+    assert "/s:input/s:y/" in result.failure.trace[0].key
 
 
 def test_an_overflow_in_a_flow_assert_fails_the_run():

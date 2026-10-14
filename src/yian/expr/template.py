@@ -44,6 +44,7 @@ from yian.expr.expressions import (
     ISINSTANCE,
     ExpressionError,
     ResolveMode,
+    _value_args,
     eval_expr,
     expr_refs,
     rewrite_expr_refs,
@@ -346,6 +347,145 @@ def _operand_co_skips(node: "Tree | Token") -> bool:
     if node.data == "default_expr":  # `head :- fallback` — fallback must be a ref too
         return _operand_co_skips(node.children[1])
     return False  # required_expr / arithmetic / comparison / list / ... -> not a pure ref
+
+
+# Sub-expressions that let a condition run on an absent reference (`|`, `:-`, `:?`).
+_ESCAPES = frozenset({"coalesce", "default_expr", "required_expr"})
+
+
+@dataclass(frozen=True)
+class ConditionRead:
+    """One reference occurrence in a parsed condition.
+
+    Args:
+        path (`str`):
+            The reference path.
+        escape (`int | None`):
+            Source-order index of the outermost `:-` / `:?` / `|` sub-expression around it,
+            or `None` outside any. Every outermost escape takes an index, with or without
+            references.
+        co_skips (`bool`):
+            That sub-expression co-skips as a binding (`binding_co_skips`); `False` outside
+            any.
+    """
+
+    path: str
+    escape: Optional[int]
+    co_skips: bool
+
+
+def _condition_read_leaves(tree: "Tree | Token") -> "list[tuple[Tree, ConditionRead]]":
+    """Each reference leaf of a parsed condition with its `ConditionRead`, in source order.
+
+    The one walk behind `condition_reads` and `rewrite_condition_reads`, so occurrence
+    indexes agree between them. Same reference/builtin-arg decomposition as
+    `_collect_expr_refs`: a builtin call's callee and an `isinstance` type name are not
+    reads; its argument values are.
+
+    Args:
+        tree (`Tree | Token`):
+            A parsed condition.
+
+    Returns:
+        `list[tuple[Tree, ConditionRead]]`:
+            Each reference `refcall` node paired with its read.
+    """
+    from lark import Tree as _Tree
+
+    leaves: list = []
+    escapes = 0
+
+    def walk(node: "Tree | Token", escape: Optional[int], co_skips: bool) -> None:
+        nonlocal escapes
+        if not isinstance(node, _Tree):
+            return  # a literal token
+        if escape is None and node.data in _ESCAPES:
+            escape, co_skips = escapes, _operand_co_skips(node)
+            escapes += 1
+        if node.data == "refcall":
+            children = node.children
+            call_suffix = next(
+                (c for c in children if isinstance(c, _Tree) and c.data == "call_suffix"), None
+            )
+            if call_suffix is None:
+                path = ".".join([str(children[0]), *(str(c.children[0]) for c in children[1:])])
+                leaves.append((node, ConditionRead(path, escape, co_skips)))
+                return
+            for arg in _value_args(str(children[0]), call_suffix):
+                walk(arg.children[-1], escape, co_skips)  # a kwarg's value is its last child
+            return
+        for child in node.children:
+            walk(child, escape, co_skips)
+
+    walk(tree, None, False)
+    return leaves
+
+
+def condition_reads(tree: "Tree | Token") -> list[ConditionRead]:
+    """Each reference occurrence of a parsed condition, in source order (not deduped).
+
+    Unlike `expr_refs`, each occurrence also says which outermost `:-` / `:?` / `|`
+    sub-expression it sits in and whether that sub-expression co-skips as a binding, so a
+    gate can take the same data edge a binding of that sub-expression would.
+
+    Args:
+        tree (`Tree | Token`):
+            A parsed condition (from `parse_condition`).
+
+    Returns:
+        `list[ConditionRead]`:
+            One read per reference occurrence.
+
+    Example:
+        ```python
+        condition_reads(parse_condition("a.output > 5 or (b.output | c.output) == 2"))
+        # [ConditionRead("a.output", None, False),
+        #  ConditionRead("b.output", 0, True), ConditionRead("c.output", 0, True)]
+        ```
+    """
+    return [read for _, read in _condition_read_leaves(tree)]
+
+
+def rewrite_condition_reads(
+    expression: str, rename: Callable[[int, ConditionRead], "str | None"]
+) -> str:
+    """Rewrite each reference leaf of a condition (either spelling) by occurrence.
+
+    The per-occurrence analog of `rewrite_condition_refs`: a whole `${...}` keeps its braces
+    and rewrites the interior; a bare value is trimmed and rewritten in place. Only reference
+    leaves move; everything else is spliced through verbatim.
+
+    Args:
+        expression (`str`):
+            The condition source, in either spelling.
+        rename (`Callable[[int, ConditionRead], str | None]`):
+            Gets the occurrence's index in `condition_reads` order and its read; returns the
+            replacement path, or `None` to keep it.
+
+    Returns:
+        `str`:
+            `expression` with the renamed reference leaves spliced in.
+
+    Raises:
+        `ExpressionError`:
+            If the condition does not parse.
+    """
+    from lark import Tree as _Tree
+
+    interior = grammar.whole_span_interior(expression)
+    text = expression.strip() if interior is None else interior
+    edits: list[tuple[int, int, str]] = []
+    for i, (node, read) in enumerate(_condition_read_leaves(grammar.parse_expr(text))):
+        new = rename(i, read)
+        if new is None:
+            continue
+        last = node.children[-1]  # the last trailer, or the leading NAME token itself
+        end = last.children[0].end_pos if isinstance(last, _Tree) else last.end_pos
+        edits.append((node.children[0].start_pos, end, new))
+    # Splice right-to-left so earlier offsets stay valid.
+    for start, end, new in sorted(edits, reverse=True):
+        text = text[:start] + new + text[end:]
+    return text if interior is None else "${" + text + "}"
 
 
 # --------------------------------------------------------------------------- #

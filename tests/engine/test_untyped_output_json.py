@@ -5,7 +5,14 @@ import re
 from typing import Any
 
 import pytest
-from yian.typesys.values import FileRef, TypeCheckError, reject_non_json
+from yian.runtime.log import canonical_typed
+from yian.typesys.values import (
+    FileRef,
+    TypeCheckError,
+    ValueKind,
+    build_value,
+    reject_non_json,
+)
 
 
 def _cyclic() -> list[Any]:
@@ -68,3 +75,60 @@ def test_reject_non_json_with_files_still_rejects_other_values():
 )
 def test_reject_non_json_accepts_json_values(value):
     assert reject_non_json(value, "output") is None
+
+
+@pytest.mark.parametrize(
+    ("value", "message", "path"),
+    [
+        (
+            {"d": date(2026, 1, 1)},
+            "output at d: datetime.date(2026, 1, 1) is not a JSON value",
+            ("d",),
+        ),
+        ({"s": {1, 2}}, "output at s: {1, 2} is not a JSON value", ("s",)),
+        ({1: "a"}, "output: object keys must be text, got 1", ()),
+        ({"a": {1: "a"}}, "output at a: object keys must be text, got 1", ("a",)),
+    ],
+)
+def test_canonical_typed_rejects_untyped_non_json_values(value, message, path):
+    with pytest.raises(TypeCheckError) as caught:
+        canonical_typed(value, None)
+    assert str(caught.value) == message
+    assert caught.value.path == path
+
+
+@pytest.mark.parametrize(
+    "value",
+    [{"f": FileRef(uri="f")}, [FileRef(uri="f")]],
+    ids=["field", "item"],
+)
+def test_canonical_typed_accepts_untyped_files(value):
+    canonical_typed(value, None)
+
+
+def test_canonical_typed_does_not_walk_a_built_value():
+    wire, _ = canonical_typed(build_value({"a": 1}), None)
+    assert wire == canonical_typed({"a": 1}, None)[0]
+
+
+@pytest.mark.parametrize(
+    ("value", "declared", "message"),
+    [
+        ({1: "a"}, ValueKind.OBJECT, "object keys must be text, got 1"),
+        ({"s": {1, 2}}, ValueKind.OBJECT, "{1, 2} is not a JSON value"),
+        ({1: "a"}, ValueKind.STRING, "does not match declared type str"),
+    ],
+)
+def test_canonical_typed_reports_the_type_check_for_typed_values(value, declared, message):
+    with pytest.raises(TypeCheckError, match=re.escape(message)):
+        canonical_typed(value, declared)
+
+
+@pytest.mark.parametrize(
+    ("value", "declared"),
+    [("\ud800", ValueKind.STRING), ({"k": "\ud800"}, ValueKind.OBJECT), ("\ud800", None)],
+    ids=["str", "object", "untyped"],
+)
+def test_canonical_typed_still_rejects_lone_surrogates(value, declared):
+    with pytest.raises(ValueError, match="^Unicode surrogate is not valid canonical JSON$"):
+        canonical_typed(value, declared)

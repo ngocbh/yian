@@ -75,6 +75,7 @@ from yian.typesys.values import (
     ValueKind,
     build_value,
     build_value_as,
+    reject_non_json,
     reject_nonfinite,
 )
 
@@ -1426,16 +1427,23 @@ def canonical_typed(
 
     Raises:
         `TypeCheckError`:
-            The live value does not satisfy ``declared``, has no supported inferred type,
-            or contains a NaN, infinity, or complex number; ``path`` locates the
-            rejected value.
+            The live value does not satisfy ``declared``, contains a NaN, infinity, or
+            complex number, or, with no ``declared`` type, is not made of JSON values
+            and `FileRef`s; ``path`` locates the rejected value. Without ``declared``
+            the message reads ``output[ at <path>]: <reason>``.
         `ValueError`:
             The typed value contains data that cannot be represented as canonical JSON.
     """
     try:
-        _reject_unordered_containers(value)
         reject_nonfinite(value, "output")
-        typed = build_value(value) if declared is None else build_value_as(declared, value)
+        if declared is None:
+            # A built value comes from decoded wire data, which is always JSON or files.
+            if not isinstance(value, TypedValue):
+                reject_non_json(value, "output", files=True)
+            typed = build_value(value)
+        else:
+            typed = build_value_as(declared, value)
+        _reject_unordered_containers(typed)
         dumped = ANY_VALUE_ADAPTER.dump_python(typed, mode="json", warnings="error")
         wire = _copy_json(dumped)
         if not isinstance(wire, dict):  # defensive: every AnyValue model is an object

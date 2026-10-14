@@ -1,8 +1,11 @@
 """A value nesting deeper than 100 levels fails where it enters a run, naming the path."""
 
+import sys
+
 import pytest
 
 from yian import load_flow, run_flow
+from yian.memory_host import build_memories
 from yian.nodes.binding import BindingError, apply_defaults, bind_params
 from yian.nodes.contracts import Parameter
 from yian.run import resume_flow
@@ -379,3 +382,62 @@ def test_replay_accepts_a_value_recorded_before_the_limit(monkeypatch, tmp_path)
     assert replayed.status == "succeeded"
     assert replayed.failure is None
     assert replayed.output == recorded.output == _nest_list(120)
+
+
+def _memory_flow(text: str):
+    """Return `text` loaded with episodic long-term memory declared on the flow."""
+    return load_flow(text.replace("name: nesting\n", "name: nesting\nlong_term_memory: episodic\n", 1))
+
+
+def _backward_with_less_stack(result, feedback):
+    """Run `result.backward(feedback)` with 300 fewer frames of recursion headroom.
+
+    A caller may already sit deep in its own stack, so learning from a value at the
+    limit must not need the remaining headroom of a shallow test frame.
+    """
+    limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(limit - 300)
+    try:
+        return result.backward(feedback)
+    finally:
+        sys.setrecursionlimit(limit)
+
+
+def _assert_learns(flow, inputs, feedback) -> None:
+    """Assert a memory run on `inputs` succeeds and learns from `feedback`."""
+    result = run_flow(flow, inputs, memory=build_memories(flow), learnable=True)
+    assert result.status == "succeeded"
+
+    outcome = _backward_with_less_stack(result, feedback)
+
+    assert outcome.status == "succeeded"
+    assert outcome.learning.status == "succeeded"
+
+
+def test_value_at_the_limit_learns_from_an_output():
+    _assert_learns(_memory_flow(_code_flow(_list_body(100))), {}, "good")
+
+
+def test_value_at_the_limit_learns_from_an_input():
+    flow = _memory_flow("""
+id: nesting
+name: nesting
+input:
+  x: object
+nodes:
+  echo:
+    kind: code
+    input:
+      x: ${input.x}
+    code: |
+      return inputs["x"]
+output: ${echo.output}
+""")
+    _assert_learns(flow, {"x": _nest_dict(100)}, "good")
+
+
+def test_value_at_the_limit_learns_from_a_record_output():
+    flow = _memory_flow(_code_flow(
+        _tree_body(99), output_line=_TREE_OUTPUT, flow_output="${deep.output.tree}",
+    ))
+    _assert_learns(flow, {}, {"a": "bad"})

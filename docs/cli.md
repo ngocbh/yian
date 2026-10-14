@@ -12,26 +12,55 @@ yian run FLOW.yaml --resume PATH [--memory-root DIR] [--memory-storage KEY=PATH]
 Commands below that use `examples/...` assume a repository clone and run from
 its root; those files are not installed with the Python package.
 
-Run `yian auth openai` to select subscription sign-in or API-key access and save a
-default model. Both methods use the same flow commands and `provider: openai`.
-See [authentication setup](installation.md#openai-authentication).
+A flow's AGENT nodes need a provider and model. There is no built-in default: they
+come from the flow's `llm_config`, then `--provider`/`--model`, then
+`YIAN_DEFAULT_PROVIDER`/`YIAN_DEFAULT_MODEL`, then the login saved by
+`yian auth <provider>`. See
+[Choosing a provider and model](installation.md#choosing-a-provider-and-model).
 
 ## Authentication
 
 ```console
-yian auth openai [--method subscription|api-key] [--login browser|device] [--model MODEL] [--api-key-env NAME]
+yian auth
+yian auth PROVIDER [--model MODEL] [--api-key-env NAME] [--endpoint URL] [--method subscription|api-key] [--login browser|device]
+yian auth PROVIDER --default
+yian auth PROVIDER --remove
 ```
 
-Interactive setup defaults to ChatGPT subscription access and lists models
-available to the account. Browser login uses a local callback; device login
-works over SSH. API-key setup reads `OPENAI_API_KEY` (or `--api-key-env NAME`)
-and uses a hidden prompt when needed. Off a terminal, supply the method, model,
-and subscription login mode explicitly.
+`yian auth` with no provider lists the saved logins: each provider, its kind
+(`api-key`, `subscription`, or `none`), its model, an Azure endpoint, and the
+default. It notes when `YIAN_DEFAULT_PROVIDER` or `YIAN_DEFAULT_MODEL` overrides the
+saved choice, and never prints a secret.
 
-Setup saves credentials, method, and default model together after successful
-authentication and model selection. Cancellation or failure preserves the
-previous selection. Saved subscription access takes precedence over an ambient
-API key; changing billing method requires running setup again.
+`yian auth PROVIDER` sets up one provider (`openai`, `anthropic`, `google`, `azure`,
+`ollama`, `vllm`, `xai`, `deepseek`, `qwen`, `qwen-cn`, `glm`, `glm-cn`, `minimax`,
+`minimax-cn`, or `openrouter`). It saves the credential and the model together:
+
+- `--api-key-env NAME` names the variable holding the API key; the default is the
+  provider's own (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, ...). An unset variable
+  gives a hidden prompt in a terminal. `ollama` takes no key; `vllm`'s is optional.
+- `--endpoint URL` (azure only) is the resource endpoint, such as
+  `https://<resource>.openai.azure.com/`; `--model` is then the deployment.
+- `--method` and `--login` (openai only) choose ChatGPT subscription or API-key
+  access, and browser or device sign-in. Device login works over SSH.
+- `--model MODEL` names the model; a terminal prompts when it is omitted. Off a
+  terminal, supply the model and, for openai, the method and login mode.
+
+The model is accepted when the provider's model listing has it; otherwise (an alias
+the listing does not show, or Azure, which has no listing) one short request to the
+model must succeed. Setup changes nothing until sign-in and the model check succeed;
+a failed or cancelled setup keeps the previous login. The provider becomes the
+default only when no default is saved yet.
+
+`--default` makes an already-saved provider the default without signing in again.
+`--remove` deletes that provider's saved login; removing the default leaves no
+default. Neither takes other options.
+
+A host `api_key` beats a saved login, and a saved login beats the provider's key
+variable, so a saved OpenAI subscription wins over an ambient `OPENAI_API_KEY`.
+`YIAN_DEFAULT_PROVIDER` and `YIAN_DEFAULT_MODEL` beat the saved default provider and
+model. Changing an account or billing method requires running setup again. See
+[Saved logins](installation.md#saved-logins-yian-auth).
 
 ## Durable logs and recovery
 
@@ -57,20 +86,23 @@ model configuration, and failure tracebacks. Treat it as sensitive data: do not
 commit or publish it.
 
 Recovery reads the original inputs, run identity, and resolved model map from the
-log, including the OpenAI connection identity and endpoint without credentials.
-Re-authentication cannot silently redirect an unfinished run to a new account.
+log, including each agent's connection identity (a saved login or the provider's key
+variable) and endpoint, without credentials. Re-authentication cannot silently
+redirect an unfinished run to a new account.
 `--resume` therefore rejects `--input`, `--inputs`, `--provider`, `--model`,
 and `--log` before input prompts or provider setup. After repairing any incomplete
 tail, an already terminal log gets no new records and prints its recorded result.
 
 Before an unfinished log appends its resume segment, `--resume` checks the
-credentials of every recorded model configuration, as a fresh run does: the
-recorded OpenAI connection (an `OPENAI_API_KEY` that is missing or differs from
-the key the run started with, or a saved credential that was replaced or whose
-method changed) and the key environment variable of every other provider. In a
-terminal it prompts for a missing key; a typed OpenAI key must be the one the run
-started with. Otherwise it exits 1: for a missing or changed key it asks you to
-set the key and resume again, and a replaced saved credential needs a new run. A
+credentials of every recorded model configuration, as a fresh run does: every
+saved login an agent recorded, of any provider (one that was replaced by running
+`yian auth PROVIDER` again, removed, or whose method changed fails, naming
+`yian auth PROVIDER`); the recorded OpenAI environment key (an `OPENAI_API_KEY`
+that is missing or differs from the key the run started with); and the key
+environment variable of every other agent. In a terminal it prompts for a missing
+key; a typed OpenAI key must be the one the run started with. Otherwise it exits 1:
+for a missing or changed key it asks you to set the key and resume again, and a
+replaced or removed saved login needs a new run. A
 failed check appends nothing, so the log stays resumable. A run started from Python with
 `llm_config.api_key` can only be resumed from Python, with
 `resume_flow(..., api_key=...)`.

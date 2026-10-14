@@ -1,8 +1,10 @@
 """The `yian` command-line interface — provider setup and a brokered run host.
 
-`yian auth openai` stages subscription or API-key authentication, presents available
-models, and saves the selected method and default model together. It owns prompts;
-provider services own the protocol and credential storage.
+`yian auth` lists the saved logins. `yian auth PROVIDER` signs in to any supported
+provider (an API key, OpenAI subscription, Azure endpoint plus key, or no credential),
+checks the model, and saves the credential and model together; `--default` and
+`--remove` choose the default provider or delete a login. It owns prompts; provider
+services own the protocol and credential storage.
 
 `yian run FLOW.yaml` loads a Compose flow, gathers fresh inputs from flags and an
 available interactive prompt, selects and reports a durable run-log path, and drives

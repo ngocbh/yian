@@ -344,8 +344,8 @@ def run_flow(
             is captured in the initialization record. An ``api_key`` entry (a
             `str` or `SecretStr`) is the provider key for this run and needs
             ``provider``. Every static AGENT whose effective provider matches
-            uses it in place of the provider's key environment variable or
-            saved OpenAI connection; agents of other providers are unaffected.
+            uses it in place of the provider's saved login or key environment
+            variable; agents of other providers are unaffected.
             An ``inherit: false`` agent of that provider uses it too. The key is
             never recorded; the log marks which agents use it, so pass it again
             to `resume_flow` or `RunResult.backward`, where those agents
@@ -424,6 +424,8 @@ def run_flow(
             deeper than `MAX_VALUE_NESTING` levels or holds a NaN, infinity, or
             complex number at any depth, or identity, worker count,
             model configuration, or prepared run state violates its contract,
+            an AGENT has no provider or model (no layer, environment default,
+            or saved login sets one; there is no built-in default),
             ``llm_config.api_key`` lacks ``llm_config.provider``,
             ``llm_config.base_url`` lacks
             ``llm_config.api_key`` or is not an allowed URL, an ``azure``

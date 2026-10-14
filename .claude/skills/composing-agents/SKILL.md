@@ -491,7 +491,7 @@ without `temperature`/`max_output_tokens`. Retired keys fail with their block fo
 `temperature` → `<provider>: {temperature: …}` (google `generationConfig.temperature`,
 ollama `options.temperature`).
 OpenAI subscription and API-key connections both use `provider: openai`;
-select the method and default model with `yian auth openai`.
+`yian auth openai` selects the method and saves the model.
 Never put `api_key` in a flow's `llm_config:`, nor `base_url` except beside
 `provider: azure` (there it is the resource endpoint, required, and `model` is
 the deployment name); loading fails. A
@@ -499,8 +499,12 @@ Python host passes them in `run_flow(..., llm_config={"provider": ...,
 "api_key": key, "base_url": url})`, and the key again to
 `resume_flow`/`result.backward` as `api_key=key`. They reach every AGENT of that
 provider, `inherit: false` ones included.
-OpenAI is the default provider. Environment defaults override saved defaults;
-model defaults apply only to their matching provider. Grant ordinary Yian
+No provider or model is built in. Process defaults are `YIAN_DEFAULT_PROVIDER`/
+`YIAN_DEFAULT_MODEL`, then the login saved by `yian auth <provider>` (one per
+provider, each with its model); a default model applies only to its provider. An
+agent that no layer gives a provider and model fails the run before any node runs:
+`Agent 'write' has no provider or model; set llm_config.provider/model, pass
+--provider/--model, or run 'yian auth <provider>'`. Grant ordinary Yian
 tools explicitly; retired `provider: codex`, `sandbox`, `cwd`, and `builtin_tools`
 settings are rejected.
 Tune a node's non-model behavior with a static `env:` block (flow-level default +

@@ -766,12 +766,14 @@ Most are just the functional model (above) made enforceable:
   a completed response before surfacing tool calls, and closes streams on failure
   or cooperative stop. It owns no login, credential store, tool loop, or history.
   Keep its request/stream hooks covered against the pinned OpenAI integration.
-  Fresh-run setup snapshots environment and saved provider-scoped defaults once,
-  then binds nonsecret connection identity into the effective model map. Resolve
-  credentials only through request-time callbacks; refresh preserves identity,
-  while re-authentication cannot silently redirect recovery or backward calls.
-  Old OpenAI records without connection metadata retain environment API-key
-  semantics. Runtime and SessionMemory stay unaware of authentication methods.
+  Fresh-run setup snapshots environment and saved provider-scoped defaults once
+  (no built-in provider or model; an agent no layer selects fails at run start,
+  naming its path), then binds nonsecret connection identity (saved login or key
+  variable) onto every keyed agent of the effective model map. Resolve credentials
+  only from that pinned identity (OpenAI per request, others per model build);
+  refresh preserves identity, while re-authentication or removal cannot silently
+  redirect recovery or backward calls. Old records without connection metadata
+  retain environment API-key semantics. Runtime and SessionMemory stay unaware of authentication methods.
   A run-layer `llm_config.api_key` (needs `provider`) never enters the effective
   map: `run_flow` pops it before the cascade; the map marks that provider's
   agents `_host_key: true` (OpenAI also records a nonsecret `host` connection),

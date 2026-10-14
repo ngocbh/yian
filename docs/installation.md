@@ -33,21 +33,64 @@ against that provider. Importing a provider you haven't installed raises a clear
 
 ## Choosing a provider and model
 
-OpenAI is the default provider. Run `yian auth openai` to choose authentication
-and a model. Environment variables can override the saved provider/model
-defaults; other providers use their own credential variables:
+There is no built-in provider or model. Each AGENT node takes its provider and
+model from the first of these that sets them:
+
+1. the flow's `llm_config` (the node, then its flow, then each parent flow);
+2. `yian run --provider/--model`, or the `llm_config` a Python host passes to
+   `run_flow`;
+3. the environment: `YIAN_DEFAULT_PROVIDER` and `YIAN_DEFAULT_MODEL`;
+4. the saved login from `yian auth <provider>`.
+
+Save a login once for each provider you use:
 
 ```console
-export YIAN_DEFAULT_PROVIDER=anthropic        # or openai / google / ollama
-export YIAN_DEFAULT_MODEL=claude-sonnet-4-5
-export ANTHROPIC_API_KEY=...                            # the provider's own key var
+yian auth openai
+yian auth anthropic --model claude-sonnet-4-5
+yian auth azure --endpoint https://<resource>.openai.azure.com/ --model <deployment>
+yian auth ollama --model llama3.2:3b
 ```
 
-A `YIAN_DEFAULT_PROVIDER` that names no supported provider fails the run before
-its first node, naming the variable.
+A provider you set up becomes the default when no default is saved yet. See
+[Saved logins](#saved-logins-yian-auth) for listing, switching, and removing them.
+
+Environment variables override the saved default provider and model:
+
+```console
+export YIAN_DEFAULT_PROVIDER=anthropic        # or openai / google / ollama / ...
+export YIAN_DEFAULT_MODEL=claude-sonnet-4-5
+export ANTHROPIC_API_KEY=...                  # the provider's own key variable
+```
+
+A default model belongs to its provider. `YIAN_DEFAULT_MODEL` applies to the
+default provider: `YIAN_DEFAULT_PROVIDER`, else the saved default. With no default
+provider it is ignored. Each saved login also supplies the model for its own
+provider, so a flow that sets `provider: anthropic` without a model uses the saved
+Anthropic model. Selecting a provider never borrows another provider's model.
+
+If no layer gives an agent a provider and model, the run fails before any node runs
+and before the log file is created. The error names the agent and the fixes:
+
+```text
+Agent 'write' has no provider or model; set llm_config.provider/model, pass --provider/--model, or run 'yian auth <provider>'
+```
+
+An agent with a provider but no model gets `Agent 'write' has no model for provider
+'anthropic'; ...`, ending in `run 'yian auth anthropic'`. When `YIAN_DEFAULT_MODEL`
+was ignored because no default provider is set, the error says so. A
+`YIAN_DEFAULT_PROVIDER` that names no supported provider fails the run before its
+first node, naming the variable.
+
+An agent's credential comes from, highest first: a Python host's
+`llm_config.api_key`, the provider's saved login, then the provider's key variable
+(`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, ...). Endpoints still come from
+environment variables at run time (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`,
+`VLLM_BASE_URL`, `OLLAMA_BASE_URL`, ...); a saved login stores only the key, plus
+the endpoint for Azure.
 
 A Python host can instead pass the key in `run_flow(..., llm_config={"provider": ...,
-"api_key": key})`, which takes precedence over the variable and is never recorded.
+"api_key": key})`, which takes precedence over the saved login and the variable and
+is never recorded.
 Pass it again to `resume_flow` and `RunResult.backward` with `api_key=key`; agents
 marked for the key never fall back to the variable. Add `"base_url": url` beside the
 key to send it to another endpoint, such as an Azure OpenAI resource's
@@ -57,29 +100,76 @@ deployment name as `model`; no Azure environment variables are needed. Without
 `OPENAI_BASE_URL`) decide where the key goes, so pass `base_url` with the key when
 the endpoint must be fixed.
 
-A flow can also pin its own provider and model per AGENT node. Defaults fill
-only fields left unset by the flow or CLI. A default model belongs to its
-provider: selecting another provider never borrows the OpenAI model. Without
-a matching saved or environment model, OpenAI uses `gpt-5.5` and Anthropic uses
-`claude-sonnet-4-5`; other providers require an explicit model.
-
 When you `yian run` a flow whose AGENT nodes need a provider key that isn't set, the CLI
 prompts for it up front (in an interactive terminal) and continues once entered —
 so a missing key surfaces as a prompt rather than a failure on the first model
 call. Off a terminal (CI, a pipe) a missing required key is a clean error before
-the run starts. Ollama is keyless; saved OpenAI authentication is checked through
-the selected connection method.
+the run starts. Ollama is keyless, and vLLM needs `VLLM_API_KEY` only when its
+server was started with a key. A saved login is checked through its stored
+credential, so it never prompts.
 
-### OpenAI authentication
+### Saved logins (`yian auth`) {#saved-logins-yian-auth}
+
+`yian auth` keeps one login per provider and an optional default provider:
+
+```console
+yian auth                       # list saved logins and the default
+yian auth PROVIDER [options]    # set up PROVIDER: credential and model
+yian auth PROVIDER --default    # make a saved provider the default
+yian auth PROVIDER --remove     # delete PROVIDER's saved login
+```
+
+The list shows each provider, its kind (`api-key`, `subscription`, or `none`), its
+model, an Azure endpoint, and which one is the default. It notes when
+`YIAN_DEFAULT_PROVIDER` or `YIAN_DEFAULT_MODEL` overrides the saved choice. It never
+prints a key or token.
+
+Setup saves the provider's credential and its model together:
+
+- An API-key provider reads its key variable (such as `ANTHROPIC_API_KEY`), or the
+  variable named by `--api-key-env NAME`, or asks for the key with a hidden prompt.
+- OpenAI can also use a ChatGPT subscription; see [OpenAI](#openai-authentication).
+- Azure takes the resource endpoint with `--endpoint URL` and a key.
+- Ollama saves no credential. vLLM saves its key only if you give one; without a
+  key the login's kind is `none`, and runs need no `VLLM_API_KEY`.
+
+`--model M` names the model; in a terminal, setup asks when it is omitted. The model
+is accepted when the provider's model listing has it. Otherwise, such as an alias the
+listing does not show, or Azure, which has no listing, one short request to the
+model must succeed. A failed or cancelled setup saves nothing and leaves the
+previous login in place.
+
+Setting up a provider makes it the default only when no default is saved yet.
+`yian auth PROVIDER --default` switches the default to another saved provider
+without signing in again. `yian auth PROVIDER --remove` deletes that provider's login;
+removing the default leaves no default provider.
+
+Credentials belong to Yian's private user-local store; keys and tokens never belong
+in flow YAML or run logs. A saved login's credential takes precedence over the
+provider's key variable, so a saved OpenAI subscription wins over an incidental
+`OPENAI_API_KEY`. Each run records which connection every agent of a keyed provider
+uses: a saved login, by its credential identity, or the provider's key variable.
+It never records the key. Re-running `yian auth PROVIDER` or removing the login makes
+an unfinished run that used it fail on resume, naming `yian auth PROVIDER`; it
+cannot silently switch accounts or billing methods. Ollama agents record no
+connection.
+
+The store is `$XDG_CONFIG_HOME/yian/auth.json`, falling back to
+`~/.config/yian/auth.json`. Set `YIAN_AUTH_FILE` to choose
+another private file. The store uses private filesystem permissions (mode `0600`)
+and atomic writes on POSIX hosts; it is not encrypted. Token refresh preserves the
+selected connection. Failed authentication never falls back to another credential.
+
+#### OpenAI {#openai-authentication}
 
 ```console
 yian auth openai
 ```
 
 Choose ChatGPT subscription sign-in (browser or device login for SSH) or an
-OpenAI API key, then select a model. Successful setup saves the method and model
-as the default together. Cancelled or failed setup leaves the previous selection
-intact. The `openai` extra supports both methods.
+OpenAI API key, then select a model from the account's catalog. The `openai`
+extra supports both methods. Selecting an API key uses separately billed API
+access.
 Subscription-backed nodes are checked at run start against the ChatGPT
 subscription endpoint's schema: the `openai` block of the Responses API without
 `temperature` and `max_output_tokens`. A run that sets either for such an agent
@@ -94,20 +184,7 @@ yian auth openai --method api-key --model gpt-5.5
 ```
 
 API-key setup reads `OPENAI_API_KEY`, or prompts without echoing the key in a
-terminal. `--api-key-env NAME` selects another environment variable. Model
-choices come from the selected account's authenticated catalog.
-
-Credentials belong to Yian's private user-local store; tokens never belong
-in flow YAML or run logs. Subscription selection takes precedence over an
-incidental `OPENAI_API_KEY`. Selecting an API key uses separately billed API
-access. Reconnecting changes the connection identity; an unfinished run cannot
-silently switch accounts or billing methods.
-
-The store is `$XDG_CONFIG_HOME/yian/auth.json`, falling back to
-`~/.config/yian/auth.json`. Set `YIAN_AUTH_FILE` to choose
-another private file. The store uses private filesystem permissions and atomic
-writes on POSIX hosts; it is not encrypted. Token refresh preserves the selected connection.
-Failed authentication never falls back to another billing method.
+terminal. `--api-key-env NAME` selects another environment variable.
 
 Migrate native flows to `provider: openai` and remove `sandbox`, `cwd`, and
 `builtin_tools`. Grant registered Yian tools explicitly. Use fresh memory
@@ -117,9 +194,9 @@ native execution requires the prior Yian version to resume.
 ### Azure OpenAI
 
 `provider: azure` takes everything that picks the deployment from `llm_config`:
-`model` is the deployment name and `base_url` is the resource endpoint. Neither has
-a default, and the run records both when it starts, so a resume calls the same
-deployment at the same endpoint:
+`model` is the deployment name and `base_url` is the resource endpoint. The run
+records both when it starts, so a resume calls the same deployment at the same
+endpoint:
 
 ```yaml
 llm_config:
@@ -128,24 +205,40 @@ llm_config:
   base_url: https://<resource>.openai.azure.com/  # the resource endpoint
 ```
 
+A saved Azure login fills both for Azure agents that set none:
+
+```console
+yian auth azure --endpoint https://<resource>.openai.azure.com/ --model <deployment>
+```
+
+Its endpoint becomes the agent's `base_url` and its deployment the agent's `model`.
+Its key goes only to that resource: an agent whose `base_url` names another resource
+uses `AZURE_OPENAI_API_KEY`. Endpoints are compared after removing a trailing `/`
+and an `/openai` or `/openai/v1` suffix.
+
 A flow file may set `base_url` only beside `provider: azure`. An `/openai` or
-`/openai/v1` suffix is stripped. An Azure agent without a `base_url` fails before the
-run's first node, saying to set it. The key and API version stay in the environment
-(`AZURE_OPENAI_API_KEY`, `OPENAI_API_VERSION`); a Python host can pass the key as
-`api_key` instead, and then must pass `base_url` beside it. `AZURE_OPENAI_ENDPOINT`
-and `AZURE_OPENAI_DEPLOYMENT_NAME` are not read: move their values into `base_url`
-and `model`.
+`/openai/v1` suffix is stripped. An Azure agent that ends up without a `base_url`
+fails before the run's first node, saying to set it. Without a saved login, the key
+and API version stay in the environment (`AZURE_OPENAI_API_KEY`,
+`OPENAI_API_VERSION`); a Python host can pass the key as `api_key` instead, and then
+must pass `base_url` beside it. `AZURE_OPENAI_ENDPOINT` and
+`AZURE_OPENAI_DEPLOYMENT_NAME` are not read: move their values into `base_url` and
+`model`, or save them with `yian auth azure`.
 
 ### Local models with Ollama
 
-No API key is needed — point at a running Ollama endpoint:
+No API key is needed. Save Ollama as a login, or set the defaults in the
+environment, and point at a running Ollama endpoint:
 
 ```console
-export YIAN_DEFAULT_PROVIDER=ollama
-export YIAN_DEFAULT_MODEL=llama3.2:3b
+yian auth ollama --model llama3.2:3b
+# or: export YIAN_DEFAULT_PROVIDER=ollama YIAN_DEFAULT_MODEL=llama3.2:3b
 export OLLAMA_BASE_URL=http://localhost:11434
 yian run hello.yaml --input name=Ada
 ```
+
+The endpoint always comes from `OLLAMA_BASE_URL` (default
+`http://localhost:11434`); the saved login stores only the model.
 
 `hello.yaml` is any flow file, for example this one-node flow:
 

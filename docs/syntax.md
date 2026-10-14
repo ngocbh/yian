@@ -1123,11 +1123,19 @@ layer outside it. Precedence, most specific first:
 3. the CLI `--provider` / `--model` flags (`yian run … --provider anthropic`)
 4. process provider/model defaults, read exactly once when the run initializes
 
-Process defaults use environment overrides, then saved authentication choices,
-then the provider's built-in fallback. OpenAI is the default provider. An unset
-model uses the selected provider's default; it never inherits another provider's
-saved or environment model. An explicit model in an authored layer still follows
-the per-field precedence above.
+Process defaults come from `YIAN_DEFAULT_PROVIDER` and `YIAN_DEFAULT_MODEL`, then
+the logins saved by `yian auth <provider>`. There is no built-in provider or model.
+An unset model uses the selected provider's own default (`YIAN_DEFAULT_MODEL` for
+the default provider, else that provider's saved model); it never inherits another
+provider's model. An explicit model in an authored layer still follows the per-field
+precedence above.
+
+If no layer gives an AGENT node a provider and model, the run fails before any node
+runs, naming the node and the fixes:
+
+```text
+Agent 'write' has no provider or model; set llm_config.provider/model, pass --provider/--model, or run 'yian auth <provider>'
+```
 
 A flow can set defaults for every AGENT node under it with a top-level `llm_config:`:
 
@@ -1162,7 +1170,9 @@ provider, including one with `inherit: false`.
 
 For `provider: azure`, `model` is the deployment name and `base_url` the resource
 endpoint, such as `https://<resource>.openai.azure.com/`. Both are ordinary
-`llm_config:` fields there, so a flow can set them at any level; the key stays in
+`llm_config:` fields there, so a flow can set them at any level. A saved Azure login
+(`yian auth azure`) supplies its endpoint and deployment to Azure agents that set
+neither, and its key goes only to that resource; otherwise the key stays in
 `AZURE_OPENAI_API_KEY`. An Azure agent whose resolved config has no `base_url`
 fails before the run's first node.
 
@@ -1284,17 +1294,22 @@ that shows its block form:
 | `google_thinking_level: high` | `google: {generationConfig: {thinkingConfig: {thinkingLevel: HIGH}}}` |
 | `temperature: 0.2` | `<provider>: {temperature: 0.2}`; `google: {generationConfig: {temperature: 0.2}}`; `ollama: {options: {temperature: 0.2}}` |
 
-#### OpenAI authentication
+#### Saved logins
 
-Run `yian auth openai` to select ChatGPT subscription sign-in or an OpenAI API key,
-then choose the default model. Both use `provider: openai`, one model call or
-the tool loop, explicit Yian tool grants, typed output, SessionMemory, and
-backward learning.
+Run `yian auth <provider>` to save a provider's credential and model, such as
+`yian auth anthropic --model claude-sonnet-4-5`. A saved login is the lowest layer
+of the cascade: it supplies the model for its provider, and the default provider
+when no environment variable sets one. Its credential beats the provider's key
+variable. Credentials never appear in flow files or run logs.
+
+For OpenAI, `yian auth openai` selects ChatGPT subscription sign-in or an OpenAI
+API key. Both use `provider: openai`, one model call or the tool loop, explicit
+Yian tool grants, typed output, SessionMemory, and backward learning.
 
 The retired `provider: codex`, `sandbox`, `cwd`, and `builtin_tools` settings
 must be removed when migrating. Native thread references cannot be resumed as
 message histories; use fresh SessionMemory. Yian tools execute on the host.
-See [authentication setup](installation.md#openai-authentication).
+See [Saved logins](installation.md#saved-logins-yian-auth).
 
 #### Agent-owned variables
 

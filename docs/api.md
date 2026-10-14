@@ -168,10 +168,15 @@ raises it for an unfinished run before appending any record.
   whitespace between content blocks. Without `on_stream`, AGENT calls `invoke`
   exactly as before.
 - `llm_config` — the outer authored layer of the configuration cascade for AGENT nodes.
-  The resolved map and process defaults are captured at initialization. An
+  The resolved map and process defaults (`YIAN_DEFAULT_PROVIDER`/`YIAN_DEFAULT_MODEL`,
+  then the logins saved by `yian auth`) are captured at initialization. There is no
+  built-in provider or model: when no layer gives an AGENT a provider and model,
+  `run_flow` raises `ValueError` before the log is created, naming the agent and the
+  fixes (`Agent 'write' has no provider or model; set llm_config.provider/model, pass
+  --provider/--model, or run 'yian auth <provider>'`). An
   `api_key` entry, which needs `provider`, is the provider key for this run: every
   AGENT whose effective provider matches, including an `inherit: false` one, uses
-  it instead of the provider's key environment variable or saved OpenAI connection.
+  it instead of the provider's saved login or key environment variable.
   An empty key is rejected. The key never enters the run log, events, results, or
   manifests, and validation errors do not echo it. When a provider rejects the key
   and echoes it, in full or masked like `sk-abc****wxyz`, the key and those
@@ -182,7 +187,8 @@ raises it for an unfinished run before appending any record.
   the environment. A key that marks no agent is ignored. The result of `run_flow`
   or `resume_flow` keeps the key in memory for its own `backward` calls. Flow files
   cannot set `api_key`. `ReflectiveMemory` rejects it, because its snapshots record
-  the model configuration, so it always uses environment credentials.
+  the model configuration, so it always uses the saved login or environment
+  credentials.
   `ProfileMemory` accepts one in its own `llm_config`, with `provider`, and does not
   record it.
 

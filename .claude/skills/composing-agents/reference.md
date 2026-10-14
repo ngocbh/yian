@@ -516,8 +516,11 @@ that change; a field it omits keeps its value. This is the shape
 
 ## Model selection — the `llm_config` cascade
 
-Use `yian auth openai` to select subscription or API-key authentication. Both use
-`provider: openai` and the same Yian execution and memory paths. A flow's
+Save a provider's credential and model with `yian auth <provider>` (`yian auth`
+lists them; `--default` picks the default provider; `--remove` deletes one). For
+OpenAI it selects subscription or API-key authentication; both use
+`provider: openai` and the same Yian execution and memory paths. A saved login's key
+beats the provider's key variable; a host `api_key` beats both. A flow's
 `llm_config:` cannot set `api_key`, nor `base_url` except beside `provider: azure`
 (the required Azure resource endpoint; `model` is the deployment name, and no
 Azure endpoint or deployment environment variable is read); a Python host passes the key in
@@ -533,7 +536,13 @@ it leaves unset from the layer outside it. Precedence (most specific first):
 1. the AGENT node's own `llm_config:`
 2. the enclosing flow's `llm_config:`, then each parent flow outward
 3. the CLI `--provider` / `--model` flags
-4. process provider/model defaults, read exactly once when the run initializes
+4. process provider/model defaults, read exactly once when the run initializes:
+   `YIAN_DEFAULT_PROVIDER`/`YIAN_DEFAULT_MODEL`, then the saved login
+
+There is no built-in provider or model. An unset model uses the selected provider's
+own default, never another provider's. An agent that no layer gives a provider and
+model fails the run before any node runs, naming the agent and the three fixes
+(`llm_config`, `--provider`/`--model`, `yian auth <provider>`).
 
 Set flow-wide defaults with a top-level `llm_config:`; override one field per node;
 opt a node out of the authored outer layers with `inherit: false` (a real boolean; own dict plus

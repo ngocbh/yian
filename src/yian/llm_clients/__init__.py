@@ -10,8 +10,10 @@ against the API actually called, then sent as written by the client wrappers.
 The direct OpenAI subscription transport accepts an injected access source and
 returns a normal chat model; it owns no login, credential persistence, or tool loop.
 Both OpenAI authentication methods use this model interface. `auth/` owns staged
-login, private atomic credential storage, and refresh. `connection` snapshots
-nonsecret selections for the host and resolves pinned credentials for requests.
+login, private atomic storage of one saved login per provider, and refresh.
+`connection` snapshots the environment and saved defaults (there is no built-in
+provider or model) and nonsecret connection identities for the host, and resolves
+pinned credentials for requests.
 OpenAI Responses messages retain their full continuation blocks; presentation
 extracts text without mutating the messages used for the next request.
 `list_models` lists the model ids a provider's host offers, using only the key

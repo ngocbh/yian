@@ -14,8 +14,7 @@ from .provider_blocks import merge_request_body
 from .validators import validate_model
 
 _PASSTHROUGH_KWARGS = (
-    "timeout", "max_retries", "api_key", "max_tokens",
-    "callbacks", "http_client", "http_async_client",
+    "timeout", "max_retries", "api_key", "callbacks", "http_client", "http_async_client",
 )
 
 

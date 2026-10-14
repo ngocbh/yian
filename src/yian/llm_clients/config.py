@@ -561,10 +561,10 @@ def merge_llm_config(specific: dict, base: dict) -> dict:
     Example:
         ```python
         merge_llm_config(
-            {"anthropic": {"temperature": 0.2}},
-            {"provider": "anthropic", "anthropic": {"max_tokens": 8000, "temperature": 1}},
+            {"anthropic": {"output_config": {"effort": "high"}}},
+            {"provider": "anthropic", "anthropic": {"max_tokens": 8000, "output_config": {"effort": "low"}}},
         )
-        # {"provider": "anthropic", "anthropic": {"max_tokens": 8000, "temperature": 0.2}}
+        # {"provider": "anthropic", "anthropic": {"max_tokens": 8000, "output_config": {"effort": "high"}}}
         ```
     """
     out = {key: _unset_dropped(key, value) for key, value in base.items() if value is not None}

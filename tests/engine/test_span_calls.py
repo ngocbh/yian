@@ -3,7 +3,13 @@ and before the run for one set in Python."""
 
 import pytest
 
+import tests.engine._compose_codefns as fns
+import yian.run
 from yian.compose import LoadError, load_flow
+from yian.expr import ExpressionError
+from yian.nodes.base import _HostStop
+from yian.nodes.contracts import Binding
+from yian.run import resume_flow, run_flow
 
 _UPPER = "expression function 'upper' takes (s): too many positional arguments"
 
@@ -264,3 +270,123 @@ def test_well_called_builtins_in_every_site_load():
     load_flow(_fill(_AGENT, prompt="Say ${upper(t)}", system='S ${join([t], sep="-")}'))
     load_flow(_fill(_HUMAN, **{**_GOOD_HUMAN, "question": "${upper(t)}"}))
     load_flow(_fill(_WAIT, until="${lower(input.d)}"))
+
+
+_UPPER_RUN = r"expression function 'upper' takes \(s\): too many positional arguments$"
+
+
+def _run_raises(flow, message, tmp_path, inputs=None):
+    path = tmp_path / "run.jsonl"
+    with pytest.raises(ExpressionError, match=message):
+        run_flow(flow, inputs or {"v": "a"}, log=path)
+    assert not path.exists()
+
+
+def test_python_built_binding_mis_calling_a_builtin_fails_before_the_run(tmp_path):
+    flow = load_flow(_fill(_CODE, **_GOOD_CODE))
+    flow.compiled.wiring["x"]["n"] = Binding("${upper(input.v, 1)}")
+    _run_raises(flow, rf"^node 'x' input 'n': {_UPPER_RUN}", tmp_path)
+
+
+def test_python_built_flow_output_mis_calling_a_builtin_fails_before_the_run(tmp_path):
+    flow = load_flow(_fill(_CODE, **_GOOD_CODE))
+    flow.compiled.wiring["__end__"]["result"] = Binding("${upper(x.output, 1)}")
+    _run_raises(flow, rf"^flow output 'result': {_UPPER_RUN}", tmp_path)
+
+
+def test_python_built_child_flow_output_names_its_owner(tmp_path):
+    flow = load_flow(_fill(_BODY, inner="${input.w}", w="${input.v}"))
+    flow.compiled.nodes["c"].child.wiring["__end__"]["result"] = Binding("${upper(s.output, 1)}")
+    _run_raises(flow, rf"^node 'c' flow output 'result': {_UPPER_RUN}", tmp_path)
+
+
+def test_python_built_child_binding_names_its_static_path(tmp_path):
+    flow = load_flow(_fill(_BODY, inner="${input.w}", w="${input.v}"))
+    flow.compiled.nodes["c"].child.wiring["s"]["n"] = Binding("${upper(input.w, 1)}")
+    _run_raises(flow, rf"^node 'c/s' input 'n': {_UPPER_RUN}", tmp_path)
+
+
+def test_python_built_case_on_and_map_item_use_their_site_labels(tmp_path):
+    case = load_flow(_fill(_CASE_ON, on="${input.v}"))
+    case.compiled.wiring["g"]["__on"] = Binding("${upper(input.v, 1)}")
+    _run_raises(case, rf"^node 'g' on: {_UPPER_RUN}", tmp_path)
+
+    mapped = load_flow(_fill(_MAP, over="${[input.v]}", item="${item}"))
+    mapped.compiled.wiring["m"]["item"] = Binding("${upper(item, 1)}")
+    _run_raises(mapped, rf"^node 'm' map input 'item': {_UPPER_RUN}", tmp_path)
+
+    waiting = load_flow(_fill(_WAIT, until="${input.d}"))
+    waiting.compiled.wiring["w"]["until"] = Binding("${upper(input.d, 1)}")
+    _run_raises(waiting, rf"^node 'w' wait until: {_UPPER_RUN}", tmp_path, {"d": "2026-01-01"})
+
+
+def test_python_built_agent_prompt_mis_calling_a_builtin_fails_before_the_run(tmp_path):
+    flow = load_flow(_fill(_AGENT, prompt="Say ${t}", system="S"))
+    flow.compiled.nodes["a"].prompt = "Say ${upper(t, 1)}"
+    _run_raises(flow, rf"^node 'a' prompt: {_UPPER_RUN}", tmp_path)
+
+
+def test_python_built_question_text_mis_calling_a_builtin_fails_before_the_run(tmp_path):
+    flow = load_flow(_fill(_HUMAN, **_GOOD_HUMAN))
+    flow.compiled.nodes["ask"].questions[0]["question"] = "${upper(t, 1)}"
+    _run_raises(flow, rf"^node 'ask' questions\[0\]\.question: {_UPPER_RUN}", tmp_path)
+
+
+def test_python_built_binding_calling_an_unknown_function_fails_before_the_run(tmp_path):
+    flow = load_flow(_fill(_CODE, **_GOOD_CODE))
+    flow.compiled.wiring["x"]["n"] = Binding("${nosuchfn(input.v)}")
+    _run_raises(flow, r"^node 'x' input 'n': unknown expression function 'nosuchfn'$", tmp_path)
+
+
+def test_a_well_called_python_built_binding_still_runs():
+    flow = load_flow(_fill(_CODE, **_GOOD_CODE))
+    flow.compiled.wiring["x"]["n"] = Binding("${upper(input.v)}")
+    assert run_flow(flow, {"v": "a"}).output == "A"
+
+
+_TWO_NODES = """
+id: f
+name: f
+input:
+  v: int
+nodes:
+  a:
+    kind: code
+    code: tests.engine._compose_codefns:double
+    input:
+      n: ${input.v}
+    output: int
+  b:
+    kind: code
+    code: tests.engine._compose_codefns:double
+    input:
+      n: ${a.output}
+    output: int
+output: ${b.output}
+"""
+
+
+def test_python_built_binding_mis_calling_a_builtin_fails_before_resume_appends(tmp_path, monkeypatch):
+    """The first run skips the pre-run check, as a run logged before the check existed did:
+    changing a binding after the run would change the flow fingerprint instead."""
+    flow = load_flow(_TWO_NODES)
+    flow.compiled.wiring["b"]["n"] = Binding("${render_as_json(a.output, 1, 2)}")
+    path = tmp_path / "run.jsonl"
+
+    def stop(inputs):
+        raise _HostStop()
+
+    with monkeypatch.context() as m:
+        m.setattr(yian.run, "_check_templates", lambda flow, path=(): None)
+        m.setattr(fns, "double", stop)  # node `a` stops after its durable start
+        with pytest.raises(_HostStop):
+            run_flow(flow, {"v": 1}, log=path)
+    lines = path.read_text().splitlines()
+
+    with pytest.raises(
+        ExpressionError,
+        match=r"^node 'b' input 'n': expression function 'render_as_json' takes \(value, indent=2\): "
+        r"too many positional arguments$",
+    ):
+        resume_flow(flow, log=path)
+    assert path.read_text().splitlines() == lines

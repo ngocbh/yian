@@ -60,6 +60,7 @@ from yian.events import (
     RunSucceeded,
     StreamChunk,
 )
+from yian.expr import ExpressionError, check_template_calls
 from yian.expr.lineage import FeedbackValue
 from yian.memory import (
     LearningResult,
@@ -71,7 +72,7 @@ from yian.memory import (
 from yian.memory_host import MemoryRegistry
 from yian.nodes.base import Steering
 from yian.nodes.binding import coerce_inputs
-from yian.nodes.contracts import HostToolCall
+from yian.nodes.contracts import HostToolCall, binding_source
 from yian.runtime.engine import FlowEngine
 from yian.runtime.eval_node import require_steering
 from yian.runtime.backward import drive_backward
@@ -504,6 +505,7 @@ def _run_flow_controlled(
     run_tools = ToolSet(tools)
     _check_tool_grants(flow.compiled, run_tools)
     _check_conditions(flow.compiled)
+    _check_templates(flow.compiled)
     _check_tool_types(flow.compiled, run_tools)
     skills = _check_skills(flow.compiled, skills)
     require_steering(steering)
@@ -781,6 +783,7 @@ def _resume_flow_controlled(
                                                               locator=retained_locator, api_key=api_key))
         _check_tool_grants(flow.compiled, run_tools)
         _check_conditions(flow.compiled)
+        _check_templates(flow.compiled)
         _check_tool_types(flow.compiled, run_tools)
         skills = _check_skills(flow.compiled, skills)
         _check_recorded_llm_fields(state.effective_llm_by_static_path)
@@ -879,6 +882,54 @@ def _check_conditions(flow: CompiledFlow) -> None:
     """
     for node_path, node in _static_nodes(flow):
         node.validate_conditions(path=node_path)
+
+
+def _check_templates(flow: Any, path: tuple[str, ...] = ()) -> None:
+    """Reject a binding or prompt span that can't run, before any record is written.
+
+    Checks every static flow level: each wiring source (END's is the flow's output) must
+    parse and call only builtins with arguments they take, and each node checks its
+    prompts. A YAML flow can't hold such a span (Compose rejects it at load); this catches
+    values set in Python.
+
+    Args:
+        flow (`Any`):
+            A compiled flow or a static child flow.
+        path (`tuple[str, ...]`, *optional*, defaults to `()`):
+            The static path of the node that owns `flow`; empty for the top level.
+
+    Raises:
+        `ExpressionError`:
+            Naming the node and binding, the flow output, or the prompt field.
+    """
+    owner = f"node {'/'.join(path)!r} " if path else ""
+    for node_id, node in flow.nodes.items():
+        node_path = "/".join((*path, node_id))
+        reserved = node.reserved_wiring_keys()
+        for key, binding in flow.wiring.get(node_id, {}).items():
+            if node_id == flow.end_id:
+                subject = f"{owner}flow output {key!r}"
+            elif key in reserved:
+                subject = f"node {node_path!r} {node.kind.value} {key}"
+            elif node.binds_per_item:
+                subject = f"node {node_path!r} map input {key!r}"
+            else:
+                subject = f"node {node_path!r} {node.wiring_ref_label(key).rstrip(':')}"
+            _check_template_source(binding, subject)
+        node.validate_prompts(path=node_path)
+        for child in node.origin_children():
+            _check_templates(child, (*path, node_id))
+
+
+def _check_template_source(binding: Any, subject: str) -> None:
+    """Check one wiring source's `${...}` spans, prefixing an error with `subject`."""
+    source = binding_source(binding)
+    if not isinstance(source, str):
+        return
+    try:
+        check_template_calls(source)
+    except ExpressionError as exc:
+        raise ExpressionError(f"{subject}: {exc}") from exc
 
 
 def _check_tool_types(flow: CompiledFlow, tools: ToolSet) -> None:

@@ -32,7 +32,7 @@ from yian.nodes.agent.memory import compatibility
 from yian.nodes.agent.backward import backward_agent
 from yian.nodes.agent.loop import MAX_TOOL_ITERATIONS, run_agent
 from yian.nodes.agent.structured import _structured_validation_path
-from yian.nodes.base import BackwardContext, BackwardResult, Node, NodeKind, Output, Steering, _CapabilityFault, _HostStop
+from yian.nodes.base import BackwardContext, BackwardResult, Node, NodeKind, Output, Steering, _CapabilityFault, _HostStop, _check_named_prompt
 from yian.nodes.binding import BindingError, apply_defaults
 from yian.nodes.contracts import (
     Parameter,
@@ -147,6 +147,24 @@ class AgentNode(Node):
         if self.steerable and not is_text_output(self.output_contract):
             # An interrupted node returns its text so far; a structured value can't be partial.
             raise ValueError(f"AGENT node {self.id!r}: steerable needs `str` output")
+
+    def validate_prompts(self, *, path: str | None = None) -> None:
+        """Check the prompt and system prompt templates.
+
+        Args:
+            path (`str`, *optional*, defaults to `None`):
+                The static node path to name in the error instead of the node's id,
+                used by a pre-run check over a whole flow.
+
+        Raises:
+            `ExpressionError`:
+                If a template's `${...}` span doesn't parse, calls a function that isn't a
+                builtin (or `isinstance`), or calls a builtin with arguments it doesn't take;
+                the message names the node and the field.
+        """
+        for field, text in (("prompt", self.prompt), ("system_prompt", self.system_prompt)):
+            if isinstance(text, str):
+                _check_named_prompt(text, f"node {(path or self.id)!r} {field}")
 
     def _validate_skills(self) -> None:
         """Require `all` or unique valid names."""

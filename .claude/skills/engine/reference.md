@@ -714,7 +714,7 @@ the exact indexed `cases[N].when` occurrences before lowering, so duplicate text
 remains distinct. `exception_origin` selects the active predicate from this node's
 own `forward` traceback frame and `Case` identity; other failures use the node
 fallback. Generated searched bindings inherit the first predicate occurrence that
-introduced their reference, while `on:` owns the generated `__on` binding. All of
+introduced their read, while `on:` owns the generated `__on` binding. All of
 these carriers are diagnostic-only and manifest-neutral.
 
 `AgentNode` adds no local origin slot for structured output. Its
@@ -761,10 +761,16 @@ on the sink `Parameter.origin` and their value on the corresponding `Binding.ori
 Source-backed reserved MAP `over:` and WAIT `until:`
 wiring receives a `Binding.origin` only; neither field is a formal `Parameter`.
 CASE lowering gives each generated searched binding the origin of the first predicate
-that introduced its reference, or gives `__on` the separate `on:` origin; generated
-CASE parameters remain source-free. Desugaring may replace `Binding.source` but
-retains that value origin. Without a retained
-source occurrence, Compose mints no origin and preserves any explicit programmatic origin;
+that introduced its read, or gives `__on` the separate `on:` origin; generated
+CASE parameters remain source-free. A read is a reference `${path}`, a node-output
+reference inside a `:-`/`:?`/`|` as `${path :- null}` (optional edge, same value), or an
+unread join input `${p1.output | p2.output}` over a co-skipping escape's producers
+(required group), so the binding co-skip rule gives each edge and the gate skips as a
+binding of each escape would. The `when:` stays lazy. `check_skipped_arithmetic` also
+checks each searched `when:` with the case as consumer, and reference validation skips a
+searched case's join input (its references are checked at the reads that introduced
+it). Desugaring may replace `Binding.source` but retains that value origin. Without a
+retained source occurrence, Compose mints no origin and preserves any explicit programmatic origin;
 source-backed projections inherit their backing site.
 Source-backed bare/mapped root, multi-node-definition, and inline-child
 output values stamp the final `FlowOutput.binding` after rewrites, and the synthesized END
@@ -911,7 +917,8 @@ the same `and` chain gets its own view (`Narrowing.param_views`, read through
 `for_param`). Facts propagate in Kahn's order over data, CASE, and `depends_on` edges:
 control edges union, each required data group unions its producers, and contributions
 intersect (`union_facts`/`intersect_facts`; losing information is always sound). Optional
-groups and `runs_after` contribute nothing; unordered (cycle) nodes get no facts so
+groups (including a searched CASE's read inside a `:-`/`:?`/`|`) and `runs_after`
+contribute nothing; unordered (cycle) nodes get no facts so
 `reject_cycles` reports the cycle. `Narrowing.for_node(id)` returns the node's view, which
 the call-type and exhaustiveness checks read; the reference check reads `for_param`, which
 falls back to `for_node`. Flow outputs use the unnarrowed maps. Build-time seams (inline

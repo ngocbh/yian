@@ -13,8 +13,11 @@ carries no inputs and no leaf Node; `.build()` returns a `BuildResult` whose `no
 no new node kind. Two surface forms:
 
 - **searched** (`cases: [{when: "<bool>", then: <t>}]`, `else: <e>`): scan each `when:` for its
-  distinct refs -> allocate one `CaseNode` input `__rN` per distinct ref -> rewrite each ref in
-  the `when:` to its bare local `__rN`. Each case routes to its `then:` (the edge handle); `else:`
+  reads -> allocate one `CaseNode` input `__rN` per distinct read: a reference (`${path}`), a
+  node-output reference inside a `:-`/`:?`/`|` (`${path :- null}`, an optional edge), plus a
+  join input over a co-skipping escape's producers (so the gate skips as a binding of that
+  escape would) -> rewrite each reference in the `when:` to its bare local `__rN`. The `when:`
+  itself stays lazily evaluated. Each case routes to its `then:` (the edge handle); `else:`
   routes to the internal else handle (`ELSE_HANDLE`).
 
 - **`on:`** (`on: ${ref}`, `cases: [{when: <value>, then: <t>}]`): one input `__on = ${ref}`;
@@ -54,14 +57,16 @@ from lark import Token, Tree
 from yian.compile.model import Edge
 from yian.diagnostics import OriginRef
 from yian.expr import (
+    ConditionRead,
     ExpressionError,
     binding_co_skips,
+    condition_reads,
     expr_refs,
     expr_refs_of,
     isinstance_subject,
     isinstance_type_names,
     parse_condition,
-    rewrite_condition_refs,
+    rewrite_condition_reads,
 )
 from yian.nodes.case import ELSE_HANDLE, Case, CaseNode
 from yian.nodes.contracts import Binding, Parameter, binding_source
@@ -502,8 +507,9 @@ def _data_edges(node_id: str, wiring: dict[str, Any]) -> list[Edge]:
                     from_=producer,
                     to=node_id,
                     input_group=name,
-                    # an `on:` value is a whole binding that can carry an escape (`:-`/`:?`);
-                    # a co-skipping condition would otherwise wrongly skip-flood the gate.
+                    # Each source carries a binding's stance: an `on:` value may carry an
+                    # escape, a searched node-output read inside one is `${path :- null}`
+                    # (optional), and a co-skipping escape's join input is required.
                     optional=not binding_co_skips(source),
                 )
             )
@@ -637,21 +643,79 @@ class _SearchedParams:
     """The `__rN` params of a searched case, from one parse of its `when:`s.
 
     Args:
-        ref_to_local (`dict[str, str]`):
-            Each distinct ref path and its local, in first-seen order.
+        source_to_local (`dict[str, str]`):
+            Each distinct binding source and its local, in first-seen order.
         local_case_index (`dict[str, int]`):
             The case index each local was first seen in (its caret / label site).
+        case_locals (`list[list[str]]`):
+            Per case, the local of each reference occurrence, in `condition_reads` order.
         guards (`dict[str, list[GuardedRead]]`):
             For each local, the case index of each occurrence and the checks guarding it.
+            A join input has no occurrences.
     """
 
-    ref_to_local: dict[str, str]
+    source_to_local: dict[str, str]
     local_case_index: dict[str, int]
+    case_locals: list[list[str]]
     guards: dict[str, list[GuardedRead]]
 
 
+def _read_source(read: ConditionRead) -> str:
+    """The binding source of one `when:` reference occurrence.
+
+    A node-output read inside an escape is `${path :- null}`: it reads the same value (a
+    miss is already null) but takes an optional edge, so the escape decides as it does in
+    a binding. Any other read (outside an escape, or of an input or `system.*`, which has
+    no producer edge) stays the plain `${path}`.
+
+    Args:
+        read (`ConditionRead`):
+            The reference occurrence.
+
+    Returns:
+        `str`:
+            Its binding source, also the dedupe key of its local.
+    """
+    if read.escape is None or _outputs_producer(read.path) is None:
+        return f"${{{read.path}}}"
+    return f"${{{read.path} :- null}}"
+
+
+def _join_sources(reads: list[ConditionRead]) -> list[str]:
+    """One join source per co-skipping escape that reads a node output, in source order.
+
+    A binding of such an escape skips only when all its producers skip; the join
+    `${<p1>.output | <p2>.output ...}` gives the gate that same required input group.
+
+    Args:
+        reads (`list[ConditionRead]`):
+            One `when:`'s reference occurrences, in `condition_reads` order.
+
+    Returns:
+        `list[str]`:
+            One join source per such escape, each producer listed once in first-read order.
+    """
+    producers: dict[int, list[str]] = {}
+    for read in reads:
+        producer = _outputs_producer(read.path)
+        if read.escape is None or not read.co_skips or producer is None:
+            continue
+        seen = producers.setdefault(read.escape, [])
+        if producer not in seen:
+            seen.append(producer)
+    return [
+        "${" + " | ".join(f"{producer}.output" for producer in group) + "}"
+        for group in producers.values()
+    ]
+
+
 def _searched_params(desc: CaseDescriptor, diagnostics: LoadDiagnostics) -> _SearchedParams:
-    """Allocate one `__rN` local per distinct ref across all searched `when:`s.
+    """Allocate one `__rN` local per distinct read across all searched `when:`s.
+
+    A read is a reference (`${path}`), a node-output reference inside a `:-`/`:?`/`|`
+    (`${path :- null}`), or, once per co-skipping escape that reads a node output, a join
+    input over its producers; its source is also its dedupe key. Per `when:`, its reference
+    reads are allocated before its join inputs.
 
     Locals and guards come from the same parse, so every guarded occurrence has a local.
     An occurrence inside a top-level `and` operand is guarded by the
@@ -661,9 +725,20 @@ def _searched_params(desc: CaseDescriptor, diagnostics: LoadDiagnostics) -> _Sea
         `LoadError`:
             A `when:` is not a string or does not parse.
     """
-    ref_to_local: dict[str, str] = {}
+    source_to_local: dict[str, str] = {}
     local_case_index: dict[str, int] = {}
+    case_locals: list[list[str]] = []
     guards: dict[str, list[GuardedRead]] = {}
+
+    def allocate(source: str, ci: int) -> str:
+        local = source_to_local.get(source)
+        if local is None:
+            local = f"__r{len(source_to_local)}"
+            source_to_local[source] = local
+            local_case_index[local] = ci
+            guards[local] = []
+        return local
+
     for ci, c in enumerate(desc.cases):
         when = c.get("when")
         when_range = (
@@ -684,15 +759,16 @@ def _searched_params(desc: CaseDescriptor, diagnostics: LoadDiagnostics) -> _Sea
                 range=when_range,
             ) from exc
         # Parsing the whole value once covers both spellings, matching `_rewrite_when`.
-        for ref in expr_refs(tree):
-            if ref not in ref_to_local:
-                local = f"__r{len(ref_to_local)}"
-                ref_to_local[ref] = local
-                local_case_index[local] = ci
-                guards[local] = []
-        for ref, checks in guarded_refs(tree):
-            guards[ref_to_local[ref]].append((ci, checks))
-    return _SearchedParams(ref_to_local, local_case_index, guards)
+        reads = condition_reads(tree)
+        locals_ = [allocate(_read_source(read), ci) for read in reads]
+        for source in _join_sources(reads):
+            allocate(source, ci)
+        # `guarded_refs` walks the same occurrences in the same order as `condition_reads`.
+        occurrences = guarded_refs(tree)
+        for local, (_, checks) in zip(locals_, occurrences, strict=True):
+            guards[local].append((ci, checks))
+        case_locals.append(locals_)
+    return _SearchedParams(source_to_local, local_case_index, case_locals, guards)
 
 
 def guarded_refs(tree: Tree | Token) -> list[tuple[str, tuple[IsinstanceCheck, ...]]]:
@@ -756,10 +832,11 @@ def isinstance_conjuncts(when: Any) -> list[IsinstanceCheck]:
 def searched_param_guards(desc: CaseDescriptor) -> dict[str, list[GuardedRead]]:
     """Return, per searched-case `__rN` param, each occurrence's case and guarding checks.
 
-    An occurrence of a param's ref inside a top-level `and` operand is guarded by the
-    `isinstance(<direct ref>, T)` operands before it in the same chain: `and`
+    An occurrence of a param's reference inside a top-level `and` operand is guarded by
+    the `isinstance(<direct ref>, T)` operands before it in the same chain: `and`
     short-circuits, so the read only runs once those checks pass. An occurrence anywhere
-    else has no guards. The params are allocated exactly as the build allocates them.
+    else has no guards. The params are allocated exactly as the build allocates them; a
+    join input over a co-skipping escape's producers has no occurrences.
 
     Args:
         desc (`CaseDescriptor`):
@@ -768,7 +845,7 @@ def searched_param_guards(desc: CaseDescriptor) -> dict[str, list[GuardedRead]]:
     Returns:
         `dict[str, list[GuardedRead]]`:
             For each local, one `(case index, guarding checks)` pair per occurrence,
-            across all `when:`s in source order.
+            across all `when:`s in source order (empty for a join input).
 
     Raises:
         `LoadError`:
@@ -788,17 +865,21 @@ def _desugar_searched(
     desc: CaseDescriptor,
     diagnostics: LoadDiagnostics,
 ) -> tuple[CaseNode, dict[str, Any], list[Edge], list[Edge], dict, dict[str, str]]:
-    """Searched form -> one `__rN` input per distinct ref; `when:` rewritten.
+    """Searched form -> one `__rN` input per distinct read; `when:` rewritten.
+
+    A read is a reference (`${path}`), a node-output reference inside a `:-`/`:?`/`|`
+    (`${path :- null}`), or a join input over a co-skipping escape's producers, which the
+    `when:` does not read but whose required edges skip the gate as that escape's binding
+    would skip.
 
     Returns `(node, wiring, data_edges, control_edges, param_ranges, param_labels)` — the last
     two locate each synth `__rN` at the `cases[N].when` it was first seen in and label it
     `cases[N].when` (not the synthetic `__rN`)."""
     params = _searched_params(desc, diagnostics)
-    ref_to_local, local_case_index = params.ref_to_local, params.local_case_index
+    source_to_local, local_case_index = params.source_to_local, params.local_case_index
 
     wiring: dict[str, Any] = {}
-    for ref, local in ref_to_local.items():
-        source = f"${{{ref}}}"
+    for source, local in source_to_local.items():
         case_index = local_case_index[local]
         origin = desc.when_origins[case_index] if desc.when_origins else None
         wiring[local] = source if origin is None else Binding(source, origin=origin)
@@ -817,7 +898,7 @@ def _desugar_searched(
                     else desc.field_ranges.get(("field", "cases")) or desc.range
                 ),
             )
-        rewritten = _rewrite_when(when, ref_to_local)
+        rewritten = _rewrite_when(when, params.case_locals[index])
         cases.append(
             Case(
                 handle=then,
@@ -830,7 +911,7 @@ def _desugar_searched(
         handle_targets.append((ELSE_HANDLE, desc.else_))
 
     node = CaseNode(desc.id, cases, title=desc.node_name)
-    node.params = [Parameter(name=local) for local in ref_to_local.values()]
+    node.params = [Parameter(name=local) for local in source_to_local.values()]
     param_ranges: dict = {}
     param_labels: dict[str, str] = {}
     for local, ci in local_case_index.items():
@@ -848,10 +929,22 @@ def _desugar_searched(
     )
 
 
-def _rewrite_when(when: str, ref_to_local: dict[str, str]) -> str:
-    """Rewrite each reference in `when` to its bare local `__rN`, in either condition
-    spelling (bare, or one whole `${...}`); the surrounding expression is preserved. A ref
-    with no allocated local is left untouched. `rewrite_condition_refs` parses the value
-    like `parse_condition`, so extraction in `_searched_params` and rewrite see the SAME
-    leaves."""
-    return rewrite_condition_refs(when, lambda path: ref_to_local.get(path))
+def _rewrite_when(when: str, locals_: list[str]) -> str:
+    """Rewrite each reference occurrence in `when` to its bare local `__rN`.
+
+    Works in either condition spelling (bare, or one whole `${...}`); the surrounding
+    expression is preserved, so the `when:` still evaluates lazily case by case.
+    `rewrite_condition_reads` walks the same occurrences as `condition_reads` in
+    `_searched_params`, so `locals_[i]` is the local of occurrence `i`.
+
+    Args:
+        when (`str`):
+            The authored `when:`.
+        locals_ (`list[str]`):
+            The local of each reference occurrence, in `condition_reads` order.
+
+    Returns:
+        `str`:
+            The `when:` over the case's locals.
+    """
+    return rewrite_condition_reads(when, lambda i, read: locals_[i])

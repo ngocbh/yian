@@ -2117,6 +2117,20 @@ def _assemble(
     flow_outputs = null_skipped_outputs(flow_outputs, skip_model)
     value_mode = outputs_section is not None and not isinstance(outputs_section, dict)
     # Arithmetic on such a value would fail at runtime with null; ask for a `:-` default.
+    # A searched `when:` is checked as authored: its wiring holds only its `__rN` reads.
+    searched_whens = {
+        node_id: [
+            (
+                index,
+                case.get("when"),
+                desc.when_origins[index] if index < len(desc.when_origins) else None,
+                desc.when_ranges[index] if index < len(desc.when_ranges) else None,
+            )
+            for index, case in enumerate(desc.cases)
+        ]
+        for node_id, desc in descriptors.items()
+        if isinstance(desc, CaseDescriptor) and desc.on is None
+    }
     check_skipped_arithmetic(
         flow_wiring,
         flow_outputs,
@@ -2126,6 +2140,7 @@ def _assemble(
         outputs_range=outputs_range,
         resolve_origin=catalog_builder.resolve_registered,
         diagnostics=diagnostics,
+        searched_whens=searched_whens,
     )
     # Typed flow outputs that can never fit their declared type (needs the output
     # contracts attached above).

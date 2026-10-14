@@ -186,17 +186,156 @@ def _a_to_gate(gate: str):
     return edges[0]
 
 
+def _a_to_gate_edges(gate: str):
+    from yian.compose import load_flow
+
+    flow = load_flow(_CASE_ESCAPE_FLOW.replace("<gate>", gate)).compiled
+    return [e for e in flow.edges if e.from_ == "a" and e.to == "gate"]
+
+
+def _searched_gate(when: str) -> str:
+    """The `gate` body of `_CASE_ESCAPE_FLOW` for one searched case reading `when`."""
+    return f"    cases:\n      - when: {when}\n        then: hot"
+
+
 def test_case_on_escape_marks_optional():
     # An `on:` value is a whole binding, so a `:-` escape makes the gate input optional.
     gate = '    on: ${a.output :- 0}\n    cases:\n      - when: 1\n        then: hot'
     assert _a_to_gate(gate).optional is True
 
 
-def test_searched_case_condition_reads_each_reference_plainly():
-    # A searched `when:` binds each reference as its own plain input, so the edge is
-    # required even under a `:-` default (the default still covers a null value).
-    gate = '    cases:\n      - when: "(a.output :- 0) >= 1"\n        then: hot'
-    assert _a_to_gate(gate).optional is False
+def test_searched_case_condition_default_marks_optional():
+    # A reference under `:-` takes the edge a binding of that default would: optional.
+    assert _a_to_gate(_searched_gate('"(a.output :- 0) >= 1"')).optional is True
+
+
+def test_searched_case_plain_reference_stays_required():
+    assert _a_to_gate(_searched_gate('"a.output >= 1"')).optional is False
+
+
+@pytest.mark.parametrize("when", ["\"(a.output | 0) >= 1\"", "'(a.output :? \"need a\") >= 1'"])
+def test_searched_case_literal_coalesce_and_required_mark_optional(when):
+    assert _a_to_gate(_searched_gate(when)).optional is True
+
+
+def test_searched_case_default_to_another_reference_also_joins():
+    # `a.output :- input.seed` co-skips as a binding: the value is read optionally, and a
+    # required join `${a.output}` skips the gate with `a`.
+    edges = _a_to_gate_edges(_searched_gate('"(a.output :- input.seed) >= 1"'))
+    assert sorted(e.optional for e in edges) == [False, True]
+
+
+def test_searched_case_plain_and_default_reads_of_one_output():
+    edges = _a_to_gate_edges(_searched_gate('"a.output > 5 or (a.output :- 0) < 1"'))
+    assert sorted(e.optional for e in edges) == [False, True]
+
+
+def test_searched_case_unparenthesized_default_covers_the_whole_condition():
+    # `:-` binds looser than `and`, so this is `(input.seed > 0 and a.output) :- false`: one
+    # escape around the whole condition, whose literal default does not co-skip.
+    edges = _a_to_gate_edges(_searched_gate('"input.seed > 0 and a.output :- false"'))
+    assert edges and all(e.optional for e in edges)
+
+
+# `router` sends a Buy decision to `a`; `gate` reads `a.output`, then routes to `hot`.
+_BRANCH_GATE_FLOW = """
+id: bg
+name: bg
+typedefs:
+  Buy: {action: 'Literal[buy]', limit: float}
+  Sell: {action: 'Literal[sell]'}
+  Decision: Union[Buy, Sell]
+input:
+  s: str
+nodes:
+  d:
+    kind: code
+    input:
+      s: ${input.s}
+    output: Decision
+    code: return None
+  router:
+    kind: case
+    on: ${d.output.action}
+    cases:
+      - when: buy
+        then: a
+    else: e
+  a:
+    kind: code
+    input:
+      s: ${input.s}
+    output: int
+    code: return 1
+  e:
+    kind: code
+    code: return 1
+  gate:
+    kind: case
+    cases:
+      - when: <when>
+        then: hot
+    else: cold
+  hot:
+    kind: code
+    input:
+      v: <hot>
+    code: return 1
+  cold:
+    kind: code
+    code: return 1
+output: ${hot.output | cold.output | e.output}
+"""
+
+
+def _branch_gate(when: str, hot: str) -> str:
+    return _BRANCH_GATE_FLOW.replace("<when>", when).replace("<hot>", hot)
+
+
+@pytest.mark.parametrize("hot", ["${d.output.limit}", "${a.output + 1}"])
+def test_a_plain_read_of_a_branch_keeps_the_gate_in_the_branch(hot):
+    from yian.compose import load_flow
+
+    load_flow(_branch_gate('"a.output >= 1"', hot))
+
+
+def test_a_default_read_of_a_branch_lets_the_gate_run_outside_it():
+    # The gate now runs when `a` is skipped, so its targets no longer see only Buy.
+    from yian.compose import LoadError, load_flow
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(_branch_gate('"(a.output :- 0) >= 1"', "${d.output.limit}"))
+    assert str(caught.value) == (
+        "flow has unresolved references:\n"
+        "  node 'hot' input 'v' from: reference ${d.output.limit} reads field 'limit', which "
+        "only union members with action buy have; read it inside a case on ${d.output.action}"
+    )
+
+
+def test_a_default_read_of_a_branch_rejects_arithmetic_on_it_downstream():
+    from yian.compose import LoadError, load_flow
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(_branch_gate('"(a.output :- 0) >= 1"', "${a.output + 1}"))
+    assert str(caught.value) == (
+        "node 'hot' input 'v': ${a.output + 1} does arithmetic on a.output, which is null "
+        "when node 'a' is skipped; give it a default with :-, e.g. (a.output :- <default>)"
+    )
+
+
+def test_a_guarded_read_inside_a_default_loads():
+    from yian.compose import load_flow
+
+    load_flow(
+        _branch_gate('"isinstance(d.output, Buy) and (d.output.limit :- 0) > 1"', "${input.s}")
+    )
+
+
+def test_a_co_skipping_default_keeps_the_gate_in_the_branch():
+    # The required join `${a.output}` still skips the gate with `a`, so `hot` sees only Buy.
+    from yian.compose import load_flow
+
+    load_flow(_branch_gate('"(a.output :- input.s) == 1"', "${d.output.limit}"))
 
 
 def test_searched_case_condition_with_a_nested_span_shows_the_rewrite():

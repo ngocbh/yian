@@ -772,6 +772,115 @@ def test_hint_replaces_a_null_default():
     assert message.endswith("e.g. (order.output.qty :- <default>)")
 
 
+# `a` is skippable (then: a / else: rejected); `gate2` is a searched case that reads it.
+_A = _gate("a", "rejected") + _code("a", '{"n": 2}', output="\n      n: int") + _code(
+    "rejected", '"no"'
+)
+
+
+def _searched_gate(when: str) -> str:
+    """Return the flow where searched case `gate2` routes to `hot` when `when` holds."""
+    nodes = (
+        _A
+        + f'  gate2:\n    kind: case\n    cases:\n      - when: "{when}"\n        then: hot\n'
+        "    else: cold\n"
+        + _code("hot", '"hot"')
+        + _code("cold", '"cold"')
+    )
+    return _flow(nodes, "\n  v: ${hot.output | cold.output}")
+
+
+def test_arithmetic_in_a_searched_when_under_a_default_is_a_load_error():
+    """A searched `when:` runs with `a` skipped under `:-`, so arithmetic inside is rejected."""
+    when = "((a.output.n + 1) :- 0) > 1"
+    text = _searched_gate(when)
+    error = _load_error(text)
+    assert str(error) == (
+        "node 'gate2' cases[0].when: ((a.output.n + 1) :- 0) > 1 does arithmetic on "
+        "a.output.n, which is null when node 'a' is skipped; give it a default with :-, "
+        "e.g. (a.output.n :- <default>)"
+    )
+    line = text.splitlines().index(f'      - when: "{when}"') + 1
+    assert _error_lines(error, text) == [line]
+
+
+def test_arithmetic_on_a_null_default_in_a_searched_when_is_a_load_error():
+    """`(a.output.n :- null) + 1` in a searched `when:` asks for a real default."""
+    message = str(_load_error(_searched_gate("(a.output.n :- null) + 1 > 1")))
+    assert message.startswith("node 'gate2' cases[0].when: (a.output.n :- null) + 1 > 1 ")
+    assert message.endswith("e.g. (a.output.n :- <default>)")
+
+
+def test_arithmetic_on_a_defaulted_value_in_a_searched_when_loads():
+    """`(a.output.n :- 0) + 1` in a searched `when:` gives the default and runs."""
+    text = _searched_gate("(a.output.n :- 0) + 1 > 1")
+    assert _run(text, {"approve": True}) == {"v": "hot"}
+    assert _run(text, {"approve": False}) == {"v": "cold"}
+
+
+def test_plain_arithmetic_in_a_searched_when_loads():
+    """A plain read skips `gate2` with `a`, so its arithmetic never sees a skipped null."""
+    text = _searched_gate("a.output.n + 1 > 1")
+    assert _run(text, {"approve": True}) == {"v": "hot"}
+    assert _run(text, {"approve": False}) == {"v": None}
+
+
+_UNION_FLOW = """id: f
+name: f
+typedefs:
+  Buy: {action: 'Literal[buy]', qty: int}
+  Sell: {action: 'Literal[sell]', qty: int}
+  Decision: Union[Buy, Sell]
+input:
+  approve: bool
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: ${input.approve}
+        then: d
+    else: rejected
+  d:
+    kind: code
+    output: Decision
+    code: |
+      return {"action": "sell", "qty": 9}
+  rejected:
+    kind: code
+    output: str
+    code: |
+      return "no"
+  gate2:
+    kind: case
+    cases:
+      - when: "isinstance(d.output, Buy) and ((d.output.qty + 1) :- 0) > 5"
+        then: hot
+    else: cold
+  hot:
+    kind: code
+    output: str
+    code: |
+      return "hot"
+  cold:
+    kind: code
+    output: str
+    code: |
+      return "cold"
+output:
+  v: ${hot.output | cold.output}
+"""
+
+
+def test_isinstance_guard_in_a_searched_when_over_a_skippable_union_routes():
+    """Arithmetic on a narrowed, defaulted field loads and routes a Sell to `else:`.
+
+    The plain `isinstance(d.output, Buy)` read skips `gate2` with `d`, so the arithmetic
+    never sees a skipped null.
+    """
+    assert _run(_UNION_FLOW, {"approve": True}) == {"v": "cold"}
+    assert _run(_UNION_FLOW, {"approve": False}) == {"v": None}
+
+
 _CHILD = (
     "defs:\n  child:\n    input:\n      n: int\n    nodes:\n      k:\n        kind: code\n"
     "        input:\n          n: ${input.n}\n        output: int\n        code: |\n"

@@ -372,10 +372,15 @@ CASE carries one optional origin on each ordered `Case`, identifying that exact
 `cases[N].when` occurrence even when predicate text is duplicated. Compose
 registers those indexed sites before lowering and preserves the origin on the
 rewritten predicate; searched CASE also assigns each generated input `Binding`
-the origin of the first predicate that introduced its reference, while `on:`
-owns the generated `__on` binding origin. `CaseNode.exception_origin()` locates
-its own active `forward` frame by code-object and node identity, then selects
-the active `Case` by identity. Failures outside predicate evaluation fall back
+the origin of the first predicate that introduced its read, while `on:`
+owns the generated `__on` binding origin. Searched lowering allocates one `__rN`
+per distinct read: a reference `${path}`, a node-output reference inside a
+`:-`/`:?`/`|` as `${path :- null}` (the same value on an optional edge), and, per
+co-skipping escape, an unread join input `${p1.output | p2.output}` over its
+producers (a required group). The binding co-skip rule then gives each edge, so the
+gate skips as a binding of each escape would; the `when:` itself stays lazy.
+`CaseNode.exception_origin()` locates its own active `forward` frame by
+code-object and node identity, then selects the active `Case` by identity. Failures outside predicate evaluation fall back
 to `Node.origin`. These origins participate in ordinary traversal and rebasing,
 but remain diagnostic-only and manifest-neutral.
 

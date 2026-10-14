@@ -152,6 +152,76 @@ def test_searched_when_all_spellings_desugar_equivalently(when, expect_when):
     assert ("score", "gate", "__r0") in data
 
 
+def _searched(*whens: str):
+    """Build a searched case `gate` with one case per `when:` -> its `BuildResult`."""
+    desc = CaseDescriptor(
+        id="gate",
+        cases=[{"when": when, "then": f"t{i}"} for i, when in enumerate(whens)],
+        else_="cautious",
+    )
+    return _build_case(desc)
+
+
+def _edge_stances(result) -> list[tuple[str, str, bool]]:
+    """Each data edge of a case build as `(from, input_group, optional)`, in order."""
+    data_edges, _ = _split(result)
+    return [(e.from_, e.input_group, e.optional) for e in data_edges]
+
+
+@pytest.mark.parametrize(
+    "when, expect_when",
+    [
+        ("(score.output :- 0) >= 0.5", "(__r0 :- 0) >= 0.5"),
+        ("${(score.output :- 0) >= 0.5}", "${(__r0 :- 0) >= 0.5}"),
+    ],
+)
+def test_searched_when_default_reads_through_an_optional_edge(when, expect_when):
+    result = _searched(when)
+    assert result.wiring == {"__r0": "${score.output :- null}"}
+    assert result.node.cases[0].when == expect_when
+    assert _edge_stances(result) == [("score", "__r0", True)]
+    # the rewrite evaluates as the authored condition: a missing score takes the default.
+    assert evaluate_when_record(result.node.cases[0].when, {"__r0": None}) is False
+    assert evaluate_when_record(result.node.cases[0].when, {"__r0": 0.7}) is True
+
+
+def test_searched_when_coalesce_adds_a_required_join_input():
+    result = _searched("(score.output | other.output) >= 0.5")
+    assert result.wiring == {
+        "__r0": "${score.output :- null}",
+        "__r1": "${other.output :- null}",
+        "__r2": "${score.output | other.output}",
+    }
+    assert [p.name for p in result.node.params] == ["__r0", "__r1", "__r2"]
+    assert result.node.cases[0].when == "(__r0 | __r1) >= 0.5"
+    assert _edge_stances(result) == [
+        ("score", "__r0", True),
+        ("other", "__r1", True),
+        ("score", "__r2", False),
+        ("other", "__r2", False),
+    ]
+
+
+def test_searched_when_join_reuses_a_plain_read():
+    result = _searched("score.output > 5 or (0 :- score.output) < 1")
+    assert result.wiring == {"__r0": "${score.output}", "__r1": "${score.output :- null}"}
+    assert result.node.cases[0].when == "__r0 > 5 or (0 :- __r1) < 1"
+    assert _edge_stances(result) == [("score", "__r0", False), ("score", "__r1", True)]
+
+
+def test_searched_when_input_read_inside_an_escape_stays_plain():
+    # `:- null` only changes a node-output read's edge; an input read has none to change.
+    result = _searched("(input.weight :- 0) > 1 and input.weight < 5")
+    assert result.wiring == {"__r0": "${input.weight}"}
+    assert result.node.cases[0].when == "(__r0 :- 0) > 1 and __r0 < 5"
+
+
+def test_searched_when_same_escape_in_two_cases_shares_locals():
+    result = _searched("(score.output | other.output) > 1", "(score.output | other.output) < 0")
+    assert list(result.wiring) == ["__r0", "__r1", "__r2"]
+    assert [c.when for c in result.node.cases] == ["(__r0 | __r1) > 1", "(__r0 | __r1) < 0"]
+
+
 def test_searched_when_malformed_is_loud():
     desc = CaseDescriptor(
         id="gate",

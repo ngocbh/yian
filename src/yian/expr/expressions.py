@@ -1105,7 +1105,8 @@ def _collect_expr_refs(node: "Tree | Token", refs: list[str]) -> None:
     if isinstance(node, Token):
         return  # a lone NUMBER / STRING / BOOL / NULL literal names no reference
     if node.data == "refcall":
-        # KEEP IN SYNC with `_do_refcall`'s refcall decomposition — both duplicate this
+        # KEEP IN SYNC with `_do_refcall`'s refcall decomposition (and the condition-read walk
+        # in `template._condition_read_leaves`) — all duplicate this
         # call_suffix-finding + path-join (leading NAME + trailer segments) logic.
         children = node.children
         call_suffix = next(
@@ -1174,7 +1175,8 @@ def _collect_ref_edits(
     edits: "list[tuple[int, int, str]]",
 ) -> None:
     """Walk `node` collecting `(start, end, replacement)` splices for each renamed
-    reference leaf. KEEP IN SYNC with `_collect_expr_refs` — same refcall/builtin-arg
+    reference leaf. KEEP IN SYNC with `_collect_expr_refs` (and `template._condition_read_leaves`,
+    which splices leaves the same way) — same refcall/builtin-arg
     decomposition, but capturing token source positions to edit in place."""
     if isinstance(node, Token):
         return  # a lone literal holds no reference

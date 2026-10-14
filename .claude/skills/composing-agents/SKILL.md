@@ -202,7 +202,8 @@ The `:-`/`:?` RHS is an expression, so a string default must be **quoted**
 (`${x:-"today"}`; bare `today` reads a variable). A child-flow call is the
 whole-value `call(...)` directive (see below), never a `${flow(args)}` span.
 Arithmetic on a value that is null when a `case` skips its node is a load error;
-give it a default: `${(o.output.qty :- 0) + 1}`.
+give it a default: `${(o.output.qty :- 0) + 1}`. This holds in a searched `when:` too:
+`(o.output.qty :- 0) + 1 > 1`, not `((o.output.qty + 1) :- 0) > 1`.
 
 For child-flow output contracts, a direct ref preserves its exact or partial contract;
 selecting a known partial-record field yields an exact type. A comparison/membership or
@@ -617,8 +618,10 @@ goes through a host tool (`kind: tool`); `kind: model` was removed.
 
 ### `case` — branching (no `input:`)
 It takes one branch; the other targets skip, and so does every node that plainly
-reads (or `depends_on`) a skipped one. Read the taken branch's result with
-`${route.output}` (or `${route.output.field}`). A routing-only `case` (no `output:`,
+reads (or `depends_on`) a skipped one. A searched `case` that reads a node only under
+a default that keeps a binding running (`(a.output :- 0)`) runs when that node is
+skipped, like the binding would; `(a.output :- b.output)` skips it only when both are. Read the taken branch's result
+with `${route.output}` (or `${route.output.field}`). A routing-only `case` (no `output:`,
 no value branch, never read via `${route.output}`) may take none when no `when:`
 matches and there is no `else:`; over a `Literal` node output or flow input it still
 needs a `when:` for every tag.
@@ -634,6 +637,9 @@ route:
   else: more_info_brief        # runs when no `when:` matches
 ```
 Searched form (first true `when:` wins, no `on:`): `when: "score.output >= 0.5"`.
+Each outermost `:-`/`:?`/`|` reads like its binding: `(score.output :- 0) >= 0.5` routes
+when `score` is skipped, `(a.output :- b.output) >= 1` is skipped only when both are.
+`:-` binds loosest, so parenthesize it: `x.output and (a.output :- false)`.
 `cases:` is a list of `{when:, then:}` mappings; any other shape is a load error.
 Routing on a `Literal` node output or flow input (a LOOP body's carried field, a child
 flow's input) is **exhaustiveness-checked** — omitting a tag with no `else:` is a load
@@ -696,7 +702,9 @@ ref to the tag (not a coalesce); a `when:` that isn't a tag is a load error (``c
 'route': `when: buyy` is not a tag of `on: ${d.output.action}` (`Literal["buy","sell"]`);
 use one of: buy, sell``). A searched `case`
 narrows with a top-level `and` part `isinstance(<ref>, T)`:
-`when: isinstance(d.output, Buy) and d.output.qty > 5`. Its `else:` doesn't narrow. Inline
+`when: isinstance(d.output, Buy) and d.output.qty > 5`. Its `else:` doesn't narrow.
+A searched `case` whose `when:` reads a node only under such a default doesn't pass
+that node's narrowing to its branches. Inline
 child bodies are typed before narrowing; read member fields in a branch node.
 
 ### `human_input` — a guaranteed human gate

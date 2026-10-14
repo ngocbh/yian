@@ -59,7 +59,7 @@ from yian.typesys.values import TypeCheckError, value_repr
 from yian.typesys.types import read_typedefs
 from yian.compose.build.pipeline import _assemble, ComposedFlow
 from yian.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
-from yian.compose.nodes.resolver import ChildResolver
+from yian.compose.nodes.resolver import ChildResolver, call_nesting_scope
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.secret_literals import check_env_secrets
 from yian.compose.helpers.memory import parse_memory_declarations
@@ -738,6 +738,16 @@ def _load_flow(
     search_paths,
     ctx: "_LoadCtx",
 ) -> ComposedFlow:
+    with call_nesting_scope():
+        return _load_flow_body(document, child_resolver, search_paths, ctx)
+
+
+def _load_flow_body(
+    document: SourceDocument,
+    child_resolver,
+    search_paths,
+    ctx: "_LoadCtx",
+) -> ComposedFlow:
     root = document.root
     diagnostics = LoadDiagnostics.from_document(document)
     f = parse_file(document)
@@ -801,6 +811,14 @@ def _load_flow(
         if root.has("nodes") and f.long_term_memory is not None
         else ()
     )
+    # Imports load before defs, from this file's base stack: a def calling an alias then
+    # hits the cache instead of loading the imported file at the bottom of its own chain.
+    # A collision is reported before a colliding alias's broken target.
+    collide = sorted(set(f.uses) & set(f.nodes))
+    if collide:
+        raise diagnostics.error(f"uses: alias {collide} collides with a node id")
+    for alias in f.uses:
+        callable_scope.resolve(alias)
     callable_scope.eager_load_defs()
 
     staged = _assemble(
@@ -1126,7 +1144,15 @@ class _CallableScope:
                         f"callable {flow_id!r} (uses: {self._uses[flow_id]!r}) needs a search "
                         f"path or child_resolver to resolve (load with search_paths=[...])"
                     )
-                child = self._external(ref.path, ref.version)
+                try:
+                    child = self._external(ref.path, ref.version)
+                except LoadError:
+                    raise
+                except Exception as exc:  # a resolver's own failure is a load error
+                    raise self._diagnostics.error(
+                        f"callable {flow_id!r} (uses: {self._uses[flow_id]!r}): could not "
+                        f"resolve: {exc}"
+                    ) from exc
                 loaded = _rebase_external_child(flow_id, child)
             except LoadError as exc:
                 alias_cursor = _source_child(self._uses_cursor, flow_id)

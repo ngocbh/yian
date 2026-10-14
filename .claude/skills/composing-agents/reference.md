@@ -307,6 +307,11 @@ An expression nests at most 100 levels as well (each call, list, unary operator,
 comparison, `|`/`:-`/`:?`, and operator chain is one); a deeper one is a load error at
 its field. A flow file's YAML nests at most 200 levels (each mapping and list is one);
 deeper is a located load error.
+CALL, MAP, and LOOP bodies nest at most 50 levels, counting `defs:`, inline,
+`call(...)`, and `uses:` bodies alike; a deeper chain is a load error at the `call:`
+that crosses the limit (`nests calls N levels deep, past the call nesting limit of 50`,
+or `nests calls more than 50 levels deep, ...` when the loader stops before the end of
+the chain).
 
 Bounds are ordered numeric literals with at most one end left open (`int(0..)`,
 `int(..100)`; `int(..)` is an error) and exclude booleans. Integer bounds

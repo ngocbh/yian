@@ -333,7 +333,7 @@ canonical physical source load and compiled flow.
 Its file-local callable scope owns authored `defs:`/`uses:`, compiler-private
 callables, and their shared success cache. Each external alias is a rebased graph copy;
 repeated calls through that alias reuse the copy without mutating the path cache. The
-loader resolves defs and uses eagerly; only compiler-private builders stay lazy.
+loader resolves uses, then defs, eagerly; only compiler-private builders stay lazy.
 Recursive local/private construction is
 guarded separately from cross-file recursion. A failed callable attempt rolls back
 new private builders, nested cache entries, and catalog sites together. These are

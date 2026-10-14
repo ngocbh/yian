@@ -18,6 +18,9 @@ symbol and no other kind module, so `call`/`loop`, `compose.__init__`, and `load
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
@@ -196,6 +199,70 @@ def _callable_display(flow_id: str, child_label: str | None = None) -> str:
     return child_label or f"callable {value_repr(flow_id)}"
 
 
+# A flow's call, map, and loop bodies nest at most this many levels.
+MAX_CALL_NESTING = 50
+
+# Calls being resolved around the current one in the file being loaded.
+_ACTIVE_CALLS: ContextVar[int] = ContextVar("_ACTIVE_CALLS", default=0)
+
+
+@contextmanager
+def call_nesting_scope() -> Iterator[None]:
+    """Count active calls from zero while one flow file loads.
+
+    Each file counts its own calls; a call into another file is checked against the
+    built callee's depth instead.
+
+    Yields:
+        `None`: Control to the file's load.
+    """
+    token = _ACTIVE_CALLS.set(0)
+    try:
+        yield
+    finally:
+        _ACTIVE_CALLS.reset(token)
+
+
+def call_nesting(flow: Any) -> int:
+    """Return the longest chain of static child flows under a compiled flow.
+
+    Kind-blind: child flows come from `Node.origin_children()`. The walk is iterative and
+    visits each flow object once, so a deep or shared child neither overflows the stack
+    nor costs one visit per path.
+
+    Args:
+        flow (`CompiledFlow`):
+            The flow to measure; duck-typed on `.nodes` and each node's
+            `origin_children()`.
+
+    Returns:
+        `int`:
+            The number of nested bodies on the longest chain; 0 for a flow with no child
+            flow.
+    """
+    # Keyed by id() and local to this walk, which holds every visited flow alive.
+    depths: dict[int, int] = {}
+    children: dict[int, list[Any]] = {}
+    stack: list[Any] = [flow]
+    while stack:
+        current = stack[-1]
+        key = id(current)
+        if key in depths:
+            stack.pop()
+            continue
+        if key not in children:
+            children[key] = [
+                child
+                for node in current.nodes.values()
+                for child in node.origin_children()
+            ]
+            stack.extend(c for c in children[key] if id(c) not in depths)
+            continue
+        stack.pop()
+        depths[key] = max((1 + depths[id(c)] for c in children[key]), default=0)
+    return depths[id(flow)]
+
+
 def _resolve_child(
     node_id: str,
     flow_id: str,
@@ -205,15 +272,60 @@ def _resolve_child(
     diagnostics: LoadDiagnostics | None = None,
     range: SourceRange | None = None,
 ) -> Any:
-    """Resolve a callable to its `ComposedFlow` via the resolver, loud on failure."""
+    """Resolve a callable to its `ComposedFlow` via the resolver, loud on failure.
+
+    Args:
+        node_id (`str`):
+            The calling node's id, named in messages.
+        flow_id (`str`):
+            The callable the node names.
+        resolver (`ChildResolver`):
+            The load-time child resolver.
+        child_label (`str | None`, *optional*, defaults to `None`):
+            Author-facing name of the callable; `None` names it by `flow_id`.
+        diagnostics (`LoadDiagnostics | None`, *optional*, defaults to `None`):
+            The context errors are raised in; `None` uses a fresh one.
+        range (`SourceRange | None`, *optional*, defaults to `None`):
+            Location of the call in the owning document.
+
+    Returns:
+        `ComposedFlow`:
+            The resolved child flow.
+
+    Raises:
+        `LoadError`:
+            Raised when the callable can't be resolved, or the call nests bodies deeper
+            than `MAX_CALL_NESTING` levels.
+    """
     diagnostics = diagnostics or LoadDiagnostics()
+    display = _callable_display(flow_id, child_label)
+
+    def too_deep(levels: str) -> LoadError:
+        return diagnostics.error(
+            f"call node {node_id!r}: calling {display} nests calls {levels} deep, past the "
+            f"call nesting limit of {MAX_CALL_NESTING} (each call, map, or loop body is a "
+            "level); flatten the chain",
+            range=range,
+        )
+
+    depth = _ACTIVE_CALLS.get()
+    # Checked before resolving: building the callee would recurse another level.
+    if depth >= MAX_CALL_NESTING:
+        raise too_deep(f"more than {MAX_CALL_NESTING} levels")
+    token = _ACTIVE_CALLS.set(depth + 1)
     try:
-        return resolver(flow_id, None)
+        child = resolver(flow_id, None)
     except LoadError:
         raise
     except Exception as exc:  # any resolver failure -> the callable is unknown
         raise diagnostics.error(
-            f"call node {node_id!r}: could not resolve "
-            f"{_callable_display(flow_id, child_label)}: {exc}",
+            f"call node {node_id!r}: could not resolve {display}: {exc}",
             range=range,
         ) from exc
+    finally:
+        _ACTIVE_CALLS.reset(token)
+    # A callee built earlier (a cached def, an imported file) never ran on this count.
+    levels = depth + 1 + call_nesting(child.compiled)
+    if levels > MAX_CALL_NESTING:
+        raise too_deep(f"{levels} levels")
+    return child

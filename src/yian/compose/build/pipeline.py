@@ -1897,15 +1897,15 @@ def _assemble(
         raise diagnostics.error(str(exc), range=exc.range) from exc
 
     # A `uses:` alias shares the callable namespace, so it must not collide with a node
-    # id (the resolver only sees a bare name; the author conflates them). Checked here, where
-    # node ids exist, and BEFORE eager resolution so the message is the precise collision.
+    # id (the resolver only sees a bare name; the author conflates them). The loader checks
+    # the authored node ids before it resolves aliases; this covers the assembled ids.
     collide = sorted(set(uses_aliases) & set(descriptors))
     if collide:
         raise diagnostics.error(f"uses: alias {collide} collides with a node id")
 
-    # Eager `uses:` resolution (mirrors eager defs): resolve every alias now so a
-    # declared-but-uncalled broken/`hub:`/missing target is loud at load, not at first call.
-    # Source order, so the first broken alias is the one reported, the same on every run.
+    # Every alias is resolved, so a declared-but-uncalled broken/`hub:`/missing target is
+    # loud at load. The loader already resolved them in source order before the defs, so
+    # this only hits its cache.
     for alias in uses_aliases:
         scope.resolve(alias)
 

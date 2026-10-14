@@ -567,6 +567,28 @@ two-child routes, so the run-record format is unchanged: a `+` chain of lists is
 balanced tree of `concat` routes, and a `* / %` chain that repeats one list is one
 `repeat` route with a count child.
 
+A flow's CALL, MAP, and LOOP bodies nest at most
+`compose.nodes.resolver.MAX_CALL_NESTING` (50) levels. Each `defs:` entry, inline body,
+`call(...)` directive, and `uses:` flow on a chain is one level. The baked graph is a
+tree of compiled flows, and loading, run setup (the `copy.deepcopy` of the compiled
+flow in `run.py` and the recursive compile walkers), and replay walk it recursively,
+about 10 frames per level. At 50 levels a load, run, or resume peaks near 535 frames,
+which leaves about 450 for the caller under the default limit of 1000.
+
+`_resolve_child` checks twice. Before resolving, it counts the calls active in the file
+being loaded (`_load_flow` resets the count with `call_nesting_scope`) and fails once
+that count reaches the limit, so the loader never recurses deeper; this message says
+"more than 50 levels". After resolving, it adds the built callee's depth
+(`call_nesting`, an iterative walk over `Node.origin_children()` that visits each flow
+once), which catches a callee built earlier: a cached def, a def written before its
+caller, or an imported file. Each file load resolves its `uses:` aliases in source
+order before its `defs:`, so an imported file loads at its importer's base stack, not
+at the bottom of a def chain. A broken alias is reported at the alias, and a resolver
+(the file resolver or a custom `child_resolver`) that raises anything but `LoadError`
+becomes a load error there.
+This load rule is unrelated to runtime growth depth (`state.depth`, stamped through
+`grow_depth_delta`; LOOP adds 0), which has no cap.
+
 Authored types use one parenthesized grammar: `Optional(str)`, `list(Buy)`,
 `dict(str, int)`, `Literal(a, b)`, `Union(Buy, Sell)`, and inclusive ranges, either end
 of which may be open (`int(1..12)`, `float(0.0..1.0)`, `int(0..)`, `int(..100)`).

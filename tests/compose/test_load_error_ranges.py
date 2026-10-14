@@ -150,52 +150,6 @@ output:
     assert caught.value.diagnostic.frames[-1].range == expected
 
 
-@pytest.mark.parametrize(
-    "definition",
-    [
-        """    nodes:
-      invoke:
-        kind: call
-        call: external
-    output: ${invoke.output}
-""",
-        """    kind: call
-    call: external
-""",
-    ],
-)
-def test_definition_wrapper_prepends_context_without_replacing_inner_location(
-    definition: str,
-) -> None:
-    """A def wrapper retains both its outer body and the precise inner uses site."""
-    text = f"""id: def-inner-line
-name: def_inner_line
-uses:
-  external: child.yaml
-defs:
-  local:
-{definition}nodes:
-  invoke:
-    kind: call
-    call: local
-output: ${{invoke.output}}
-"""
-
-    document = SourceDocument.parse(text)
-    expected = [
-        document.root.child("defs").child("local").range,
-        document.root.child("uses").child("external").range,
-    ]
-
-    def fail_resolver(_path: str, _version: str | None = None):
-        raise LoadDiagnostics().error("external failure")
-
-    with pytest.raises(LoadError, match="defs entry 'local'") as caught:
-        load_flow(text, child_resolver=fail_resolver)
-
-    assert [frame.range for frame in caught.value.diagnostic.frames] == expected
-
-
 def test_external_resolver_error_location_is_owned_by_each_source_document() -> None:
     """Locating a shared resolver exception never mutates or reuses its first site."""
     shared_error = LoadDiagnostics().error("external failure")

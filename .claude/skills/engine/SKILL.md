@@ -98,6 +98,13 @@ this model whenever you design anything:
 - Documents yian reads nest at most `compose.source.scalars.MAX_YAML_NESTING` (200)
   levels; `_FlowLoader.get_event` counts collection events and raises a located
   `ComposerError` past it, before PyYAML's recursive composer runs out of stack.
+- A flow's CALL, MAP, and LOOP bodies nest at most
+  `compose.nodes.resolver.MAX_CALL_NESTING` (50) levels, checked at load in
+  `_resolve_child`: before resolving, against the calls active in the file being
+  loaded (`call_nesting_scope` per `_load_flow`), and after, adding the built callee's
+  depth (`call_nesting`, iterative). Load, run setup, and replay walk the baked tree
+  recursively (about 10 frames per level), so the cap keeps a run inside the default
+  recursion limit. Runtime growth depth (`state.depth`) is unrelated and uncapped.
 - `AgentNode.variables` reuses ordered `Parameter` declarations, each with an
   exact contract and explicit typed default. Reject duplicate names and input
   collisions. Resolve a detached default record once per invocation, then render

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from copy import deepcopy
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -1365,14 +1366,14 @@ def test_growth_rejects_malformed_static_contract_as_a_host_invariant():
     assert log.next_sequence == sequence
 
 
-def test_growth_enforces_peak_node_budget_before_same_transition_pruning(monkeypatch):
+def test_growth_enforces_peak_node_budget_before_same_transition_pruning():
     state, _ = _initialized_spawner()
     old_ids = _install_settled_overlay(state)
     new_count = len(_fragment("spawn").nodes)
     final_count = len(state.flow.nodes) - len(old_ids) + new_count
     peak_count = len(state.flow.nodes) + new_count
     assert final_count < peak_count
-    monkeypatch.setattr(state_module, "MAX_TOTAL_NODES", peak_count - 1)
+    state.run_defaults = replace(state.run_defaults, max_total_nodes=peak_count - 1)
     before = _snapshot(state)
 
     with pytest.raises(GrowthRejected, match="node budget") as caught:
@@ -1387,14 +1388,12 @@ def test_growth_enforces_peak_node_budget_before_same_transition_pruning(monkeyp
     assert _snapshot(state) == before
 
 
-def test_growth_accepts_peak_node_count_equal_to_budget(monkeypatch):
+def test_growth_accepts_peak_node_count_equal_to_budget():
     state, log = _initialized_spawner()
     old_ids = _install_settled_overlay(state)
     new_count = len(_fragment("spawn").nodes)
-    monkeypatch.setattr(
-        state_module,
-        "MAX_TOTAL_NODES",
-        len(state.flow.nodes) + new_count,
+    state.run_defaults = replace(
+        state.run_defaults, max_total_nodes=len(state.flow.nodes) + new_count,
     )
 
     commit_prepared(

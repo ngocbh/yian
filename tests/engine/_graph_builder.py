@@ -80,8 +80,12 @@ def _engine(
     learnable: bool = False,
     memory_context_opener=None,
     tools=None,
+    defaults: Optional[dict[str, int]] = None,
 ) -> FlowEngine:
-    """Prepare one in-memory authority and return the final direct engine surface."""
+    """Prepare one in-memory authority and return the final direct engine surface.
+
+    ``defaults`` is recorded in ``RunStarted`` as the run's non-built-in values.
+    """
     inputs = dict(run_inputs or {})
     effective_llm = {}
     if learnable:
@@ -107,6 +111,7 @@ def _engine(
             memories=memories,
             memory_stacks=memory_stacks,
             learnable=learnable,
+            defaults=dict(defaults or {}),
         ),
     )
     commit_prepared(log, state, prepared)

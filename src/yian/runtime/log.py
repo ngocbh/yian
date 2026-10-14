@@ -9,6 +9,7 @@ logs without creating an authority cycle.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, fields, is_dataclass, replace
 import fcntl
 import json
@@ -114,6 +115,9 @@ class RunStartedRecord:
             Sorted memory key table; `None` when memory is disabled.
         memory_stacks (`tuple[MemoryStack, ...] | None`):
             Each scoped target's ordered key stack, sorted by locator.
+        defaults (`Mapping[str, int]`):
+            The `yian.defaults` values the run started with that differ from the
+            built-in ones, keyed by entry name; empty means all built-in values.
     """
 
     flow_fingerprint: str
@@ -125,12 +129,25 @@ class RunStartedRecord:
     learnable: bool = False
     memories: tuple[MemorySpec, ...] | None = None
     memory_stacks: tuple[MemoryStack, ...] | None = None
+    defaults: Mapping[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        """Validate the enabled-memory shape and its canonical key table."""
+        """Validate the enabled-memory shape, its key table, and recorded defaults."""
         _validate_run_memory_configuration(
             self.memories, self.memory_stacks, self.memory_snapshots, self.learnable,
         )
+        _validate_recorded_defaults(self.defaults)
+
+
+def _validate_recorded_defaults(recorded: Mapping[str, int]) -> None:
+    """Require a mapping of non-empty entry names to exact ints."""
+    if not isinstance(recorded, Mapping):
+        raise TypeError("RunStarted defaults must be a mapping")
+    for name, value in recorded.items():
+        if type(name) is not str or not name:
+            raise ValueError("RunStarted defaults names must be non-empty strings")
+        if type(value) is not int:
+            raise TypeError(f"RunStarted defaults value for {name!r} must be an int")
 
 
 @dataclass(frozen=True, slots=True)
@@ -909,6 +926,15 @@ class _RunStartedPayload(_StrictModel):
     learnable: bool
     memories: list[_MemorySpecPayload] | None
     memory_stacks: list[_MemoryStackPayload] | None
+    defaults: dict[str, int] = {}
+
+    @field_validator("defaults")
+    @classmethod
+    def _nonempty_default_names(cls, value: dict[str, int]) -> dict[str, int]:
+        """Require every recorded default to name an entry."""
+        if any(not name for name in value):
+            raise ValueError("recorded default names must be non-empty")
+        return value
 
 
 class _RunResumedPayload(_StrictModel):
@@ -2249,6 +2275,7 @@ def _revalidate_run_record(record: RunRecord) -> None:
             record.learnable,
             record.memories,
             record.memory_stacks,
+            record.defaults,
         )
         return
     if type(record) is RunResumedRecord:
@@ -2357,6 +2384,7 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
                 if record.memory_stacks is None
                 else [_memory_stack_payload(stack) for stack in record.memory_stacks]
             ),
+            "defaults": dict(sorted(record.defaults.items())),
         }
     elif isinstance(record, RunResumedRecord):
         raw = {
@@ -2453,6 +2481,10 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
         raise TypeError(f"unsupported run record: {type(record).__name__}")
 
     payload = _KIND_TO_MODEL[kind].model_validate(raw).model_dump(mode="json")
+    if kind == "run_started" and not payload["defaults"]:
+        # The dump re-adds the defaulted key; omitting it keeps all-default logs
+        # byte-identical to logs written before values were recorded.
+        del payload["defaults"]
     copied = _copy_json(payload)
     if not isinstance(copied, dict):  # defensive: every payload model is an object
         raise ValueError("run-record payload did not encode to a JSON object")
@@ -2493,6 +2525,7 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
                     _memory_stack_from_payload(stack) for stack in values["memory_stacks"]
                 )
             ),
+            defaults=values["defaults"],
         )
     if kind == "run_resumed":
         return RunResumedRecord(

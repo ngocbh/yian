@@ -14,6 +14,7 @@ from yian.memory_host import build_memories
 from yian.nodes.binding import BindingError, apply_defaults, bind_params
 from yian.nodes.contracts import Parameter
 from yian.run import resume_flow
+from yian.runtime.log import decode_record, encode_record
 from yian.typesys import TypeCheckError
 from yian.typesys.pool import VariablePool
 from yian.typesys.values import Type, ValueKind
@@ -401,6 +402,12 @@ def test_replay_accepts_a_value_recorded_before_the_limit(set_defaults, tmp_path
     set_defaults.unchecked(max_value_nesting=150)
     recorded = run_flow(flow, {}, log=path)
     assert recorded.status == "succeeded"
+    # A log from before the limit existed recorded no value for it.
+    lines = path.read_bytes().splitlines(keepends=True)
+    envelope = json.loads(lines[0])
+    assert envelope["payload"].pop("defaults") == {"MAX_VALUE_NESTING": 150}
+    lines[0] = encode_record(decode_record(json.dumps(envelope).encode())) + b"\n"
+    path.write_bytes(b"".join(lines))
     set_defaults()
 
     replayed = resume_flow(flow, log=path)

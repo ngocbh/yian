@@ -49,6 +49,7 @@ from yian.compile.memory_layout import (
     scope_memory_declarations,
 )
 from yian.compile.model import CompiledFlow
+from yian.defaults import current
 from yian.compile.origins import iter_flow_origins, rebase_flow_origins
 from yian.diagnostics import (
     DiagnosticFrame,
@@ -637,6 +638,10 @@ def load_flow(
         `LoadError`:
             On any malformed or inconsistent flow, located at the offending `.yaml`
             line when source provenance is available.
+        `DefaultsError`:
+            A `YIAN_<NAME>` variable holds a value its entry does not accept. This
+            is a host environment error, not a flow error, and is a `ValueError`
+            rather than a `LoadError`.
 
     Example:
         ```python
@@ -652,6 +657,8 @@ def load_flow(
         )
         ```
     """
+    # A bad YIAN_<NAME> value fails here, before any parsing.
+    current()
     if type(source_label) is not str:
         raise TypeError("source_label must be a string")
     document = parse_source_document(text, source_label)

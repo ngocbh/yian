@@ -604,15 +604,13 @@ def test_until_does_not_evaluate_predicate_on_seed():
     assert result.output == {"seen": ["a", "b"], "n": 2}
 
 
-def test_loop_budget_exceeded_in_step_fails_run(monkeypatch):
+def test_loop_budget_exceeded_in_step_fails_run(set_defaults):
     # The node-budget guard inside `_apply_grow` raises a RuntimeError; when a fresh driver's
     # grow (iteration >= 1, driven by `loop~1` off the body-END wiring) trips it, it must become a
     # failed run, not an uncaught escape. The COUNTER flow adds ~3 body nodes + 1 driver node per
     # iteration off a base of 3, so a budget of 6 lets iteration 0 grow and trips a later iteration
     # inside `_apply_grow` — exercising the grow boundary specifically.
-    import yian.runtime.state as state_module
-
-    monkeypatch.setattr(state_module, "MAX_TOTAL_NODES", 6)
+    set_defaults(MAX_TOTAL_NODES=6)
     result = run_flow(load_flow(COUNTER), {})
     assert result.status != "succeeded"
     assert "node budget" in result.failure.message
@@ -720,14 +718,12 @@ output: ${loop.output}
 """
 
 
-def test_long_loop_stays_within_node_budget(monkeypatch):
-    import yian.runtime.state as state_module
-
-    monkeypatch.setattr(state_module, "MAX_TOTAL_NODES", 40)
+def test_long_loop_stays_within_node_budget():
     engine = _engine(
         load_flow(TIMES_20).compiled,
         run_inputs={},
         grow_builder=build_grow,
+        defaults={"MAX_TOTAL_NODES": 40},
     )
     terminal = list(engine.run())[-1]
     from yian.events import RunSucceeded
@@ -1256,14 +1252,13 @@ def _finish_nested(shape, times, **engine_kwargs):
 
 @pytest.mark.parametrize("num_workers", [0, 2], ids=["serial", "pooled"])
 @pytest.mark.parametrize("shape", sorted(_NESTED_BODIES))
-def test_loop_with_nested_growth_keeps_one_iteration_resident(shape, num_workers, monkeypatch):
+def test_loop_with_nested_growth_keeps_one_iteration_resident(shape, num_workers):
     """Pruning an iteration also retires the nodes its nested CALL/MAP/LOOP grew."""
-    import yian.runtime.state as state_module
-
     resident = len(_finish_nested(shape, 3, num_workers=num_workers).state.flow.nodes)
     # A tight budget fails mid-run if any earlier iteration's nested nodes leak.
-    monkeypatch.setattr(state_module, "MAX_TOTAL_NODES", resident + 20)
-    engine = _finish_nested(shape, 20, num_workers=num_workers)
+    engine = _finish_nested(
+        shape, 20, num_workers=num_workers, defaults={"MAX_TOTAL_NODES": resident + 20},
+    )
     assert len(engine.state.flow.nodes) == resident
 
 
@@ -1441,15 +1436,14 @@ def test_loop_keeps_an_unfinished_body_node_live(num_workers, sleep):
     assert result.output == {"n": 4}
 
 
-def test_loop_retires_a_kept_body_node_once_settled(monkeypatch):
+def test_loop_retires_a_kept_body_node_once_settled():
     """A body node kept while unfinished is retired by a later prune once it has settled."""
     from yian.events import RunSucceeded
-    import yian.runtime.state as state_module
 
-    def finish(times):
+    def finish(times, defaults=None):
         source = _DIRECT_SIDE.replace("SLEEP", "0.05").replace("times: 4", f"times: {times}")
         engine = _engine(load_flow(source).compiled, run_inputs={},
-                         grow_builder=build_grow, num_workers=4)
+                         grow_builder=build_grow, num_workers=4, defaults=defaults)
         terminal = list(engine.run())[-1]
         assert isinstance(terminal, RunSucceeded), terminal
         assert terminal.output == {"n": times}
@@ -1457,8 +1451,7 @@ def test_loop_retires_a_kept_body_node_once_settled(monkeypatch):
 
     resident = len(finish(3).state.flow.nodes)
     # A few iterations' side chains may linger at once; leaking every one would add ~80.
-    monkeypatch.setattr(state_module, "MAX_TOTAL_NODES", resident + 40)
-    engine = finish(20)
+    engine = finish(20, defaults={"MAX_TOTAL_NODES": resident + 40})
     assert len(engine.state.flow.nodes) <= resident + 40
 
 

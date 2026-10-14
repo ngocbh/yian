@@ -55,6 +55,7 @@ from yian.compile.memory_layout import (
 from yian.compile.model import CompiledFlow
 from yian.compile.validation import type_relation
 from yian.compose.loader import ComposedFlow
+from yian.defaults import check_recorded, current
 from yian.diagnostics import Failure, OriginRef
 from yian.events import (
     RunFailed,
@@ -449,6 +450,8 @@ def run_flow(
             parse or calls a function it can't (a builtin with arguments it
             doesn't take, a name outside the node's type table, or in a prompt
             any non-builtin).
+        `DefaultsError`:
+            A `YIAN_<NAME>` variable holds a value its entry does not accept.
         `MemorySetupError`:
             Memory is enabled without a required memory implementation, cannot
             open an exact run snapshot, or has an invalid configuration.
@@ -528,6 +531,8 @@ def _run_flow_controlled(
     stop_event: threading.Event,
 ) -> RunResult:
     """Drive a fresh run with one host-owned cooperative stop event."""
+    # A bad YIAN_<NAME> value fails here, before any work.
+    run_defaults = current()
     if not isinstance(flow, ComposedFlow):
         raise TypeError("run_flow expects a ComposedFlow")
     if type(learnable) is not bool:
@@ -624,6 +629,7 @@ def _run_flow_controlled(
                 learnable=learnable,
                 memories=memory_table,
                 memory_stacks=memory_stack_set,
+                defaults=run_defaults.non_defaults(),
             ),
         )
 
@@ -754,6 +760,12 @@ def resume_flow(
             has a `${...}` span that doesn't parse or calls a function it can't
             (a builtin with arguments it doesn't take, a name outside the node's
             type table, or in a prompt any non-builtin).
+        `DefaultsError`:
+            A `YIAN_<NAME>` variable holds a value its entry does not accept.
+        `DefaultsMismatchError`:
+            The run started with `yian.defaults` values that differ from this
+            process's, or with an entry this version does not know; the message
+            names each variable and how to set it to resume.
         `MemorySetupError`:
             The recorded run needs memory but its mapping is absent, incomplete,
             or cannot reproduce the exact recorded snapshots.
@@ -800,6 +812,8 @@ def _resume_flow_controlled(
     it raises stops recovery and appends nothing. The CLI uses it to check
     provider credentials.
     """
+    # A bad YIAN_<NAME> value fails here, before the log is opened.
+    current()
     run_tools = ToolSet(tools)
     api_key = None if api_key is None else _secret_key(api_key)
     require_steering(steering)
@@ -1254,6 +1268,9 @@ def _replay_compiled_run_log(
     first = canonical[0]
     if not isinstance(first.record, RunStartedRecord):
         raise ValueError("the first run log record must be RunStarted")
+    # Values like AGENT_RETRIES change the loaded flow, so a mismatch checked after
+    # the fingerprint would surface as a fingerprint error instead of naming them.
+    check_recorded(first.record.defaults)
     actual_fingerprint = flow_fingerprint(flow)
     recorded_fingerprint = first.record.flow_fingerprint
     if actual_fingerprint != recorded_fingerprint:

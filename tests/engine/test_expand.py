@@ -378,9 +378,10 @@ def _wide_child(n: int) -> CompiledFlow:
 @pytest.mark.parametrize("num_workers", [0, 4])
 def test_over_budget_expansion_trips_max_total_nodes(num_workers):
     from yian.events import RunFailed
-    from yian.runtime.state import MAX_TOTAL_NODES
+    from yian.defaults import Defaults
 
-    parent = _parent_with_spawner(_wide_child(MAX_TOTAL_NODES + 10), {"x": 0})  # one clone busts it
+    budget = Defaults().max_total_nodes
+    parent = _parent_with_spawner(_wide_child(budget + 10), {"x": 0})  # one clone busts it
     events = list(
         _engine(
             parent,

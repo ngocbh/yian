@@ -4,7 +4,8 @@ Cross-node assembly pass. The analogue of `compile.validation._collect_reference
 walking the BUILT flow (not a `FlowSpec`): it CALLS the leaf checkers (`_classify_path`)
 directly — supplying the `valid_targets`/`flow_inputs` sets and a semantic-Type
 projection of the producer contracts — only reimplementing the per-node walk glue.
-Every located problem accumulates; one `LoadError` is raised carrying them all.
+Every located problem accumulates; one `LoadError` is raised carrying them all. Builtin
+calls are checked at every binding and prompt site.
 
 Two subtleties mirror the representation-neutral collector:
 
@@ -54,6 +55,7 @@ from yian.compose.validate.typed_bindings import ResolveOrigin
 from yian.diagnostics import SourceRange
 from yian.expr import (
     ExpressionError,
+    check_template_calls,
     condition_refs,
     expr_refs_of,
     prompt_refs,
@@ -189,6 +191,7 @@ def validate_references(
 
     With `registry`, every `${T(...)}` constructor call in a binding is checked too
     (`constructor_errors`), with each reference typed by the same contracts.
+Every builtin call in a binding or prompt must pass arguments the builtin takes.
 
     Accumulates ALL located errors and raises a single `LoadError`; passes silently
     on a clean flow. Reuses `_classify_path` (head-resolution + dotted walk)
@@ -269,7 +272,9 @@ def validate_references(
         partial_union_fields: bool,
         constructors: bool,
     ) -> None:
-        """Name-check every reference one template string reads; see `scan`."""
+        """Name-check every reference one template string reads; see `scan`.
+
+        A call to a builtin with arguments it doesn't take is one more error at `where`."""
         try:
             paths = expr_refs_of(text)
         except ExpressionError as exc:
@@ -339,6 +344,10 @@ def validate_references(
                 )
             if err is not None:
                 errors.append((f"{where}: {err}", rng))
+        try:
+            check_template_calls(text)
+        except ExpressionError as exc:
+            errors.append((f"{where}: {exc}", rng))
 
     def check_template(
         where: str,

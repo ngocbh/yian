@@ -202,12 +202,18 @@ def _concat_flow(terms: int):
     )
 
 
+# Past the old evaluator's recursion limit (about 250 terms); a longer learnable chain is
+# slow to run and resume (route validation and backward projection grow faster than its
+# length), a known cost to follow up.
+_LEARNABLE_CHAIN = 600
+
+
 def test_a_learnable_run_of_a_long_list_chain_logs_and_resumes(tmp_path) -> None:
-    flow = _concat_flow(_CHAIN)
+    flow = _concat_flow(_LEARNABLE_CHAIN)
     backend = _Memory()
     path = tmp_path / "long.jsonl"
     result = run_flow(flow, {"values": ["v"]}, log=path, learnable=True, memory={"test": backend})
-    assert result.status == "succeeded" and result.output == ["v"] * _CHAIN
+    assert result.status == "succeeded" and result.output == ["v"] * _LEARNABLE_CHAIN
     replayed = resume_flow(flow, log=path, memory={"test": backend})
     assert replayed.status == "succeeded" and replayed.output == result.output
 

@@ -29,8 +29,9 @@ stdlib-only `yian.json_codec`, and stays independent of nodes, memory, and runti
 Flow invocation is NO LONGER a `${...}` construct — it is the compile-time
 whole-value `call(...)` directive (in `compose.desugar.inline_calls`), not part of this engine.
 
-Knows about:   `typesys` (the pool and value types, in `expressions`) and the
-               stdlib-only `yian.json_codec` (JSON text for ints of any size).
+Knows about:   `typesys` (the pool and value types, in `expressions`; the value
+               nesting bound, in `grammar`) and the stdlib-only `yian.json_codec`
+               (JSON text for ints of any size).
 Never imports: `nodes`, `compile`, or `runtime` (they import IT).
 """
 

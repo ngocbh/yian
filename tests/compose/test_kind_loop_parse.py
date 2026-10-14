@@ -3,6 +3,8 @@ ranges and maps the Python-keyword surface keys `while:`/`until:` onto the `whil
 fields; the required flat field is `call` (the body subflow). `LoopDescriptor.build`, including
 predicate-reference validation, is exercised end-to-end via the `load_flow` suite."""
 
+from pathlib import Path
+
 import pytest
 
 from yian.compose.helpers.errors import LoadError
@@ -128,8 +130,6 @@ def test_loop_rejects_an_empty_predicate_at_load():
 
 def test_loop_reports_a_malformed_predicate_at_its_field():
     """A predicate that fails to parse is located at its `until:` line, not the node's."""
-    from pathlib import Path
-
     from yian.compose import load_flow
 
     seeds = Path(__file__).resolve().parents[1] / "seeds"

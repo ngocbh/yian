@@ -507,9 +507,10 @@ def parse_expr(text: str) -> Tree | Token:
     Raises:
         `ExpressionError`:
             If `text` holds a `${...}` (see `reject_nested_spans`), does not parse,
-            nests deeper than `MAX_EXPRESSION_NESTING` levels, is a dotted-callee builtin call, uses a reserved operator word as a
-            reference root, calls `isinstance` with anything but a value and a bare
-            type name, or repeats a keyword argument.
+            nests deeper than `MAX_EXPRESSION_NESTING` levels, is a dotted-callee
+            builtin call, uses a reserved operator word as a reference root, calls
+            `isinstance` with anything but a value and a bare type name, or repeats a
+            keyword argument.
     """
     reject_nested_spans(text)
     try:

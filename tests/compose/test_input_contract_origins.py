@@ -370,17 +370,27 @@ nodes: {}
 """
     document = SourceDocument.parse(text)
 
-    with pytest.raises(LoadError, match="record field names") as caught:
+    with pytest.raises(LoadError, match="names in a flow must be text") as caught:
         load_flow(text)
 
     expected = document.root.child("input").child("payload").child(True)
     assert caught.value.diagnostic.frames[-1].range == expected.key_range
 
 
-@pytest.mark.parametrize("key", ["true", "null", "1.5", "''"])
+@pytest.mark.parametrize(
+    ("key", "message"),
+    [
+        ("true", "names in a flow must be text"),
+        ("null", "names in a flow must be text"),
+        ("1.5", "names in a flow must be text"),
+        ("''", "flow input names"),
+    ],
+    ids=["true", "null", "1.5", "''"],
+)
 @pytest.mark.parametrize("compact", [False, True], ids=["multi-node", "compact"])
 def test_invalid_definition_input_name_is_a_located_load_error(
     key: str,
+    message: str,
     compact: bool,
 ):
     """Invalid nested signature keys never escape the Compose error boundary."""
@@ -408,7 +418,7 @@ defs:
     input_cursor = document.root.child("defs").child("child").child("input")
     invalid_name = next(iter(input_cursor.value))
 
-    with pytest.raises(LoadError, match="flow input names") as caught:
+    with pytest.raises(LoadError, match=message) as caught:
         load_flow(text)
 
     expected = input_cursor.child(invalid_name)

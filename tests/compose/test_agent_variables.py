@@ -152,8 +152,15 @@ output: ${{writer.output}}
     assert caught.value.diagnostic.frames[-1].range == cursor.range
 
 
-@pytest.mark.parametrize("key", ["''", "1", "true"])
-def test_invalid_variable_name_selects_its_declaration_key(key):
+@pytest.mark.parametrize(
+    ("key", "message"),
+    [
+        ("''", "names must be non-empty strings"),
+        ("1", "names in a flow must be text"),
+        ("true", "names in a flow must be text"),
+    ],
+)
+def test_invalid_variable_name_selects_its_declaration_key(key, message):
     text = f"""\
 id: invalid-variable-name
 name: invalid-variable-name
@@ -167,6 +174,6 @@ output: ${{writer.output}}
 """
     document = SourceDocument.parse(text)
     variables = document.root.child("nodes").child("writer").child("variables")
-    with pytest.raises(LoadError, match="names must be non-empty strings") as caught:
+    with pytest.raises(LoadError, match=message) as caught:
         load_flow(text)
     assert caught.value.diagnostic.frames[-1].range == variables.child(next(iter(variables.value))).key_range

@@ -118,7 +118,7 @@ output: ${a.output}
     assert caught.value.diagnostic.frames[-1].range.start_line == 6
 
 
-def test_keys_that_read_as_the_same_integer_are_repeated():
+def test_keys_that_read_as_the_same_integer_fail_as_non_text_first():
     text = """id: f
 name: f
 x-meta:
@@ -135,13 +135,15 @@ output: ${a.output}
     with pytest.raises(LoadError) as caught:
         load_flow(text, source_label="dup.yaml")
 
-    message = str(caught.value)
-    assert "duplicate key 17" in message
-    assert "first at line 4" in message
-    assert caught.value.diagnostic.frames[-1].range.start_line == 5
+    assert "the key `017` was read by YAML as an integer" in str(caught.value)
+    assert caught.value.diagnostic.frames[-1].range.start_line == 4
+    repeated = SourceDocument.parse(text).repeated_key
+    assert repeated is not None
+    assert repeated[0] == 17
+    assert (repeated[1].start_line, repeated[2].start_line) == (4, 5)
 
 
-def test_on_and_true_are_two_keys():
+def test_on_and_true_are_two_keys_and_true_is_not_text():
     text = """id: f
 name: f
 x-meta:
@@ -155,8 +157,10 @@ nodes:
 output: ${a.output}
 """
 
-    loaded = load_flow(text)
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
 
-    assert "a" in loaded.compiled.nodes
+    assert "the key `true` was read by YAML as a boolean" in str(caught.value)
+    assert caught.value.diagnostic.frames[-1].range.start_line == 5
     meta = SourceDocument.parse(text).root.child("x-meta").value
     assert meta == {"on": "a", True: "b"}

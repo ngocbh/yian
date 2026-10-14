@@ -724,10 +724,18 @@ def test_inline_body_shape_errors_are_located_without_private_ids(
     assert caught.value.diagnostic.frames[-1].range == expected_range
 
 
+# Through the loader a non-text input key fails earlier, at the key itself.
+_LOADER_SHAPE_CASES = [
+    (case, case_id)
+    for case, case_id in zip(_INLINE_SHAPE_CASES, _INLINE_SHAPE_IDS)
+    if case_id != "non-string-input-key"
+]
+
+
 @pytest.mark.parametrize(
     ("kind", "body", "range_key", "message"),
-    _INLINE_SHAPE_CASES,
-    ids=_INLINE_SHAPE_IDS,
+    [case for case, _case_id in _LOADER_SHAPE_CASES],
+    ids=[case_id for _case, case_id in _LOADER_SHAPE_CASES],
 )
 def test_inline_body_shape_matrix_flows_through_loader(
     kind: str,
@@ -753,6 +761,25 @@ def test_inline_body_shape_matrix_flows_through_loader(
     assert message in str(caught.value)
     assert INLINE_FLOW_PREFIX not in str(caught.value)
     assert caught.value.diagnostic.frames[-1].range == expected_range
+
+
+def test_inline_body_non_text_input_key_fails_at_the_key_through_loader():
+    source = (
+        "id: inline-shape-loader\n"
+        "name: inline_shape_loader\n"
+        "nodes:\n"
+        "  composite:\n"
+        "    kind: loop\n"
+        "    input:\n"
+        "      1: value\n"
+        "    " + _INLINE_CHILD + "    output: ${echo.output}\n"
+    )
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(source)
+
+    assert "the key `1` was read by YAML as an integer" in str(caught.value)
+    assert caught.value.diagnostic.frames[-1].range == SourceRange(7, 7, 7, 8)
 
 
 def test_loader_rejects_actual_sibling_private_digest_without_exposing_it():

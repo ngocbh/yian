@@ -643,7 +643,7 @@ output: ${emit.output}
 
     with pytest.raises(
         LoadError,
-        match="record field names must be non-empty strings",
+        match="the key `7` was read by YAML as an integer",
     ) as caught:
         load_flow(text, source_label="invalid-key.yaml")
 

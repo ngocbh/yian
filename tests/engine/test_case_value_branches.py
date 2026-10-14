@@ -362,7 +362,7 @@ def test_value_with_a_non_string_key_is_rejected():
     )
     with pytest.raises(LoadError) as caught:
         load_flow(text)
-    assert "case node 'route' then: record keys must be strings (got 1)" in str(caught.value)
+    assert "the key `1` was read by YAML as an integer" in str(caught.value)
 
 
 def test_value_reading_its_own_case_is_rejected():

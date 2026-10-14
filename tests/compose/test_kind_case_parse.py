@@ -198,7 +198,7 @@ def test_case_rejects_boolean_key_at_its_location():
         output: ${hot.output}
         """
     )
-    with pytest.raises(LoadError, match="field True is not allowed") as exc:
+    with pytest.raises(LoadError, match="the key `true` was read by YAML as a boolean") as exc:
         load_flow(flow)
 
     assert exc.value.diagnostic.frames[-1].range.start_line == 10

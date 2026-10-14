@@ -2,7 +2,7 @@
 
 This is the analogue of `manifest/parser.py`: inspect an existing document
 cursor, copy its semantic value into a strict Pydantic model, and raise
-`LoadError` on any violation. Three surface rules shape it:
+`LoadError` on any violation. Four surface rules shape it:
 
 - **Top-level sections only** (`id`/`name`/`description?`/`input`/`nodes`/
   `output`/`asserts`/`long_term_memory`/`typedefs`/`defs`/`uses`/`system`).
@@ -14,13 +14,17 @@ cursor, copy its semantic value into a strict Pydantic model, and raise
   custom metadata / YAML-anchor holders the engine ignores.
 - **YAML anchors** (`&` / `*` / `<<:` merge) are expanded by the source
   document's single safe construction pass before the strict schema sees it.
+- **Every mapping key is text**, anywhere in the file (`x-*` blocks included): a
+  key YAML reads as a bool, number, null, date, or bytes fails at the key first.
 
 `nodes` stays a raw `dict` here; `compose.parse.nodes` constructs per-kind descriptors.
 """
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
+from datetime import date, datetime
 from typing import Any, Callable, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -351,8 +355,61 @@ def _validation_error_range(
     return root.range
 
 
+def _yaml_read_as(key: Any) -> str:
+    """Name what YAML read a non-text key as, for an error message.
+
+    Args:
+        key (`Any`): The constructed key.
+
+    Returns:
+        `str`: A phrase such as ``a boolean`` or ``a date``.
+    """
+    # A bool is an int and a datetime is a date, so the subclasses go first.
+    if isinstance(key, bool):
+        return "a boolean"
+    if isinstance(key, int):
+        return "an integer"
+    if isinstance(key, float):
+        return "a float"
+    if isinstance(key, datetime):
+        return "a date and time"
+    if isinstance(key, date):
+        return "a date"
+    if key is None:
+        return "null"
+    if isinstance(key, bytes):
+        return "binary data"
+    return f"a `{type(key).__name__}`"
+
+
+def _non_text_key_message(key: Any, text: str) -> str:
+    """Explain that a key YAML read as non-text can't name anything, and the fix.
+
+    Args:
+        key (`Any`): The constructed key.
+        text (`str`): The key's scalar text as written.
+
+    Returns:
+        `str`: The load error message.
+    """
+    read_as = _yaml_read_as(key)
+    if not text:
+        return (
+            f"an empty key was read by YAML as {read_as}, but names in a flow must "
+            "be text. Write a name."
+        )
+    # json.dumps gives a valid YAML double-quoted scalar for any text.
+    return (
+        f"the key `{text}` was read by YAML as {read_as}, but names in a flow must "
+        f"be text. Quote it ({json.dumps(text)}) or choose another name."
+    )
+
+
 def parse_source_document(text: str, label: str) -> SourceDocument:
-    """Parse one owned source document; reject bad syntax and repeated keys once."""
+    """Parse one owned source document once.
+
+    Rejects bad syntax, a key YAML read as non-text, and repeated keys.
+    """
 
     try:
         document = SourceDocument.parse(text, label)
@@ -361,6 +418,12 @@ def parse_source_document(text: str, label: str) -> SourceDocument:
             f"invalid YAML: {exc}",
             range=exc.range,
         ) from exc
+    if document.non_text_key is not None:
+        key, key_text, key_range = document.non_text_key
+        raise LoadDiagnostics(label=label, text=text).error(
+            _non_text_key_message(key, key_text),
+            range=key_range,
+        )
     if document.repeated_key is not None:
         key, first, second = document.repeated_key
         raise LoadDiagnostics(label=label, text=text).error(

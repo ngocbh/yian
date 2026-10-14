@@ -352,11 +352,11 @@ def test_owner_context_error_identifies_receiver_without_changing_forward_accept
     from yian.runtime.backward import compute_backward
     from tests.engine._backward_fakes import RecordingBackwardNode
 
-    # The limit is raised so the live run produces a value deep enough to exceed the
-    # memory learn-context bound, which is what this test exercises.
-    monkeypatch.setattr("yian.typesys.values.MAX_VALUE_NESTING", 500)
+    # A low memory bound lets values well inside the yian value limit exceed it. The
+    # contribution value fits in the episode but not in the deeper feedback contribution.
+    monkeypatch.setattr("yian.memory.contracts._MAX_JSON_NESTING", 10)
     value = "leaf"
-    for _ in range(140 if material == "episode" else 123):
+    for _ in range(20 if material == "episode" else 5):
         value = [value]
     node = RecordingBackwardNode("work", lambda inputs: inputs["x"], lambda _c, f: BackwardResult({"x": f}),
                                  reads={"x": value})

@@ -1,9 +1,13 @@
-"""A node output nesting deeper than 100 levels fails the node, naming the path."""
+"""A value nesting deeper than 100 levels fails where it enters a run, naming the path."""
 
 import pytest
 
 from yian import load_flow, run_flow
+from yian.nodes.binding import BindingError, apply_defaults, bind_params
+from yian.nodes.contracts import Parameter
 from yian.run import resume_flow
+from yian.typesys import TypeCheckError
+from yian.typesys.pool import VariablePool
 
 
 def _code_flow(body: str, *, output_line: str = "", flow_output: str = "${deep.output}") -> str:
@@ -203,7 +207,10 @@ output: ${echo.output}
     assert result.output == value
 
 
-def test_a_run_input_record_over_the_limit_fails_at_start():
+# START's committed record may sit one level over the limit, so run_flow's input check is
+# what keeps a run input record from going further.
+@pytest.mark.parametrize("levels", [101, 1500])
+def test_a_run_input_over_the_limit_is_rejected_before_the_run_starts(tmp_path, levels):
     flow = load_flow("""
 id: nesting
 name: nesting
@@ -212,10 +219,151 @@ input:
 nodes: {}
 output: ${input.x}
 """)
-    result = run_flow(flow, {"x": _nest_dict(101)})
+    log = tmp_path / "r.jsonl"
 
-    _assert_too_deep(result, "__start__")
-    assert result.failure.message.startswith("output at x.a")
+    with pytest.raises(ValueError) as caught:
+        run_flow(flow, {"x": _nest_dict(levels)}, log=log)
+
+    assert isinstance(caught.value, TypeCheckError)
+    assert str(caught.value).startswith("input 'x' at a.a")
+    assert "deeper than 100 levels" in str(caught.value)
+    assert len(caught.value.path) == 100
+    assert not log.exists()
+
+
+def _assert_binding_too_deep(result, node_id: str, prefix: str) -> None:
+    """Assert `node_id` failed `binding.evaluate` on value depth with a `prefix` message."""
+    assert result.status == "failed"
+    assert result.failure.code == "binding.evaluate"
+    assert result.failure.node_id == node_id
+    assert result.failure.message.startswith(prefix)
+    assert "deeper than 100 levels" in result.failure.message
+
+
+_WRAPPED_BINDING_FLOW = """
+id: nesting
+name: nesting
+input:
+  x: object
+nodes:
+  c:
+    kind: code
+    input:
+      y: ${[input.x]}
+    code: |
+      return 1
+output: ${c.output}
+"""
+
+
+def test_a_binding_around_a_value_at_the_limit_fails_its_node():
+    result = run_flow(load_flow(_WRAPPED_BINDING_FLOW), {"x": _nest_dict(100)})
+
+    _assert_binding_too_deep(result, "c", "input 'y' at [0].a")
+    assert result.failure.trace[0].key == "/s:root/s:node/s:c/s:input/s:y/s:binding"
+
+
+def _call_flow(binding: str, declared: str) -> str:
+    """Return a flow whose `k` CALL node binds the def input `y: declared` to `binding`."""
+    return f"""
+id: nesting
+name: nesting
+input:
+  x: object
+defs:
+  body:
+    input:
+      y: {declared}
+    nodes:
+      inner:
+        kind: code
+        input:
+          y: ${{input.y}}
+        code: |
+          return 1
+    output: ${{inner.output}}
+nodes:
+  k:
+    kind: call
+    call: body
+    input:
+      y: {binding}
+output: ${{k.output}}
+"""
+
+
+def test_a_call_bound_to_a_value_at_the_limit_succeeds():
+    result = run_flow(load_flow(_call_flow("${input.x}", "object")), {"x": _nest_dict(100)})
+
+    assert result.status == "succeeded"
+    assert result.output == 1
+
+
+def test_a_call_bound_over_the_limit_fails_the_call_not_its_start():
+    result = run_flow(load_flow(_call_flow("${[input.x]}", "list[object]")), {"x": _nest_dict(100)})
+
+    _assert_binding_too_deep(result, "k", "input 'y' at [0].a")
+
+
+def test_a_map_over_list_around_a_value_at_the_limit_fails_the_map():
+    flow = load_flow("""
+id: nesting
+name: nesting
+input:
+  x: object
+nodes:
+  m:
+    kind: map
+    over: ${[input.x]}
+    input:
+      y: object = ${item}
+    nodes:
+      work:
+        kind: code
+        code: |
+          return 1
+    output: ${work.output}
+output: ${m.output}
+""")
+    result = run_flow(flow, {"x": _nest_dict(100)})
+
+    _assert_binding_too_deep(result, "m", "MAP node 'm': `over`")
+    assert result.failure.trace[0].key == "/s:root/s:node/s:m/s:reserved/s:over/s:binding"
+
+
+def test_apply_defaults_rejects_a_default_over_the_limit():
+    with pytest.raises(BindingError) as caught:
+        apply_defaults([Parameter("p", has_default=True, default=_nest_dict(101))], {})
+
+    assert caught.value.failure_code == "binding.evaluate"
+    assert str(caught.value).startswith("default for 'p' at a.a")
+    assert "deeper than 100 levels" in str(caught.value)
+
+
+def test_bind_params_rejects_a_filled_default_over_the_limit():
+    parameter = Parameter("p", has_default=True, default=_nest_dict(101))
+
+    with pytest.raises(BindingError) as caught:
+        bind_params([parameter], {}, VariablePool())
+
+    assert caught.value.failure_code == "binding.evaluate"
+    assert str(caught.value).startswith("default for 'p' at a.a")
+    assert "deeper than 100 levels" in str(caught.value)
+
+
+def test_backward_rejects_feedback_over_the_limit_and_stays_usable():
+    flow = load_flow(_code_flow(_list_body(1)))
+    result = run_flow(flow, {}, learnable=True)
+    assert result.status == "succeeded"
+
+    with pytest.raises(ValueError) as caught:
+        result.backward(_nest_list(1500, "bad"))
+
+    assert str(caught.value).startswith("feedback at [0][0]")
+    assert "deeper than 100 levels" in str(caught.value)
+    assert result.backward_outcome is None
+    outcome = result.backward("good")
+    assert outcome.status == "succeeded"
 
 
 def test_replay_accepts_a_value_recorded_before_the_limit(monkeypatch, tmp_path):

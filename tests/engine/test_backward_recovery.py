@@ -633,11 +633,11 @@ input:
 nodes: {}
 output: ${input.payload}
 """)
-    # The limit is raised so the live run produces a value deep enough to exceed the
-    # memory learn-context bound, which is what this test exercises.
-    monkeypatch.setattr("yian.typesys.values.MAX_VALUE_NESTING", 500)
+    # A low memory bound lets a value well inside the yian value limit exceed the
+    # learn-context bound.
+    monkeypatch.setattr("yian.memory.contracts._MAX_JSON_NESTING", 10)
     value = {"leaf": "retained"}
-    for _ in range(140):
+    for _ in range(20):
         value = {"next": value}
     backend = _Memory()
     path = tmp_path / "deep.jsonl"

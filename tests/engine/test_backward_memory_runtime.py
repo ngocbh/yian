@@ -249,11 +249,11 @@ def test_no_policy_backward_still_records_ready_and_finished_without_opening_res
 
 
 def test_context_depth_failure_keeps_completed_backward_without_calling_learners(monkeypatch):
-    # The limit is raised so the live run produces a value deep enough to exceed the
-    # memory learn-context bound, which is what this test exercises.
-    monkeypatch.setattr("yian.typesys.values.MAX_VALUE_NESTING", 500)
+    # A low memory bound lets a value well inside the yian value limit exceed the
+    # learn-context bound.
+    monkeypatch.setattr("yian.memory.contracts._MAX_JSON_NESTING", 10)
     value = "leaf"
-    for _ in range(140):
+    for _ in range(20):
         value = [value]
     engine, node = _terminal(value=value)
     memory = _Memory()

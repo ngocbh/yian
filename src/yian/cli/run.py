@@ -1422,10 +1422,11 @@ def _check_resume_credentials(
 ) -> None:
     """Check that the recorded model configs of a resumed run can authenticate.
 
-    Checks what a fresh run's preflight checks, an environment key for each
-    provider, plus that an OpenAI environment key is the one the run started
-    with. Only a missing key prompts. Every OpenAI connection then resolves its credentials, so a
-    replaced saved credential fails here instead of at the first model call.
+    Like a fresh run's preflight, it requires each provider's environment key;
+    it also requires an OpenAI environment key to be the one the run started
+    with. Only a missing key prompts. Every OpenAI connection then resolves its
+    credentials, so a replaced saved credential fails here instead of at the
+    first model call.
     Checks run once per distinct OpenAI connection and once per other provider;
     providers without a key variable are skipped.
 

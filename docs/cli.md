@@ -366,10 +366,10 @@ log before publishing the progress event that the CLI renders.
 | Flow failed to compile (bad YAML) | `1` (located error printed to stderr) |
 | Run-log creation or recovery failed | `1` (concise error printed to stderr) |
 | Memory setup failed (a custom memory type, a storage path that is not a local file, or a flow `id:` that cannot be a directory name) | `1` (concise error printed to stderr) |
-| Run cancelled at the input prompt or a resume key prompt | `1` |
+| Run cancelled at the input prompt, or input closed at a resume key prompt | `1` |
 | Resume key check failed (a missing, changed, or unavailable provider key) | `1` (error printed to stderr) |
 | Invalid CLI input (including a forbidden resume combination, a bad `--memory-root` or `--memory-storage` flag, an `--inputs` file that is not UTF-8 text, not valid JSON, or not a JSON object, an input the flow does not declare, or required inputs missing without a TTY) | `2` |
-| Run interrupted with Ctrl-C during execution | `130` |
+| Run interrupted with Ctrl-C during execution or at a resume key prompt | `130` |
 
 ## Compile errors
 

@@ -63,6 +63,7 @@ from yian.cli.terminal import PromptRequest, TerminalBroker
 from yian.compose.helpers.errors import LoadError
 from yian.compose.loader import load_flow
 from yian.compose.skills import default_skill_roots, load_skills
+from yian.defaults import current
 from yian.diagnostics import Diagnostic
 import yian.json_codec as json_codec
 from yian.memory.contracts import MemoryOperationError
@@ -1437,8 +1438,9 @@ def _resume_env_key(
     Raises:
         `_ResumeKeyError`:
             The key is set but differs from the recorded one, is missing with no
-            prompt available, is declined or left empty `MAX_KEY_PROMPTS` times,
-            or a typed key differs from the recorded one.
+            prompt available, is declined or left empty
+            `current().max_key_prompts` times, or a typed key differs from the
+            recorded one.
     """
     from yian.llm_clients.connection import key_identity
 
@@ -1455,12 +1457,10 @@ def _resume_env_key(
             f"provider {provider!r} needs an API key but ${env_var} is not set; "
             "set it and resume again"
         )
-    from yian.cli.utils import MAX_KEY_PROMPTS
-
     cancelled = (
         f"no API key provided for {provider!r} (${env_var}); set it and resume again"
     )
-    for _ in range(MAX_KEY_PROMPTS):
+    for _ in range(current().max_key_prompts):
         answer = ask_secret(f"Enter {env_var} for provider {provider!r}:")
         if answer is None:
             raise _ResumeKeyError(cancelled)

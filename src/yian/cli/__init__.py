@@ -24,17 +24,21 @@ drain. Storage paths stay host-only. A terminal resume never opens memory.
 Knows about: compose; compile metadata and LLM-cascade helpers; the package-root run
 boundary; the package-root memory host; memory contracts and built-in backends;
 events; node host-stop signals; typed values; tools; LLM API-key metadata;
-the default snapshot in ``llm_clients.connection``; and peer CLI modules. Never
-imports runtime scheduling internals or provider SDKs; owns no graph mutation.
+the default snapshot in ``llm_clients.connection``; `yian.defaults`; and peer CLI
+modules. Never imports runtime scheduling internals or provider SDKs; owns no
+graph mutation.
 """
 
 from __future__ import annotations
 
+from rich.text import Text
 import typer
 
 from yian.cli.chat.command import chat as _chat
 from yian.cli.auth import auth as _auth
+from yian.cli.run import err_console
 from yian.cli.run import run as _run
+from yian.defaults import DefaultsError, current
 
 app = typer.Typer(
     name="yian",
@@ -46,8 +50,21 @@ app = typer.Typer(
 
 @app.callback()
 def _root() -> None:
-    """Keep `run` a named subcommand (a single-command Typer app otherwise collapses
-    it, so `yian run flow.yaml` would read `run` as the flow path)."""
+    """Check the `YIAN_<NAME>` defaults before any command runs.
+
+    The callback also keeps `run` a named subcommand (a single-command Typer app
+    otherwise collapses it, so `yian run flow.yaml` would read `run` as the flow
+    path).
+
+    Raises:
+        `typer.Exit`: With code 1 when a `YIAN_<NAME>` variable holds a value its
+            default does not accept.
+    """
+    try:
+        current()
+    except DefaultsError as err:
+        err_console.print(Text(str(err), style="red"))
+        raise typer.Exit(code=1) from None
 
 
 app.command("run")(_run)

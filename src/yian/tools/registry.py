@@ -27,6 +27,7 @@ from typing import Annotated, Any, Callable
 from langchain_core.tools import BaseTool, InjectedToolArg, StructuredTool
 from pydantic import BeforeValidator, Field
 
+from yian.defaults import current
 import yian.json_codec as json_codec
 from yian.skills.tool import LOAD_SKILL
 from yian.typesys.values import value_repr
@@ -38,8 +39,6 @@ _REGISTRY_LOCK = RLock()
 _ASK_USER_ID = "ask_user"
 # Names a group tool may not take: the run's ask_user handler and the skills tool.
 _RESERVED_TOOL_NAMES = frozenset({_ASK_USER_ID, LOAD_SKILL})
-_MAX_OPTIONS = 6
-_MAX_OPTION_CHARS = 80
 
 
 def register_tool(tool_id: str) -> Callable:
@@ -113,8 +112,9 @@ def _normalize_options(value: Any) -> list[str] | None:
 
     A JSON list string is parsed; any other string is one label. Non-string items
     are dropped. Labels are stripped to one line, empty and case-insensitive
-    duplicate labels are dropped, long labels are truncated, and at most six are
-    kept. Returns `None` when no label is left.
+    duplicate labels are dropped, labels longer than
+    `current().max_question_option_chars` are truncated, and at most
+    `current().max_question_options` are kept. Returns `None` when no label is left.
     """
     if isinstance(value, str):
         try:
@@ -124,19 +124,20 @@ def _normalize_options(value: Any) -> list[str] | None:
         value = parsed if isinstance(parsed, list) else [value]
     if not isinstance(value, list):
         return None
+    caps = current()
     labels: list[str] = []
     seen: set[str] = set()
     for item in value:
         if not isinstance(item, str):
             continue
         label = " ".join(item.split())
-        if len(label) > _MAX_OPTION_CHARS:
-            label = label[: _MAX_OPTION_CHARS - 1] + "…"
+        if len(label) > caps.max_question_option_chars:
+            label = label[: caps.max_question_option_chars - 1] + "…"
         if not label or label.casefold() in seen:
             continue
         seen.add(label.casefold())
         labels.append(label)
-        if len(labels) == _MAX_OPTIONS:
+        if len(labels) == caps.max_question_options:
             break
     return labels or None
 

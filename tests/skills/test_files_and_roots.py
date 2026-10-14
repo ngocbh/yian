@@ -7,8 +7,9 @@ from pathlib import Path
 import pytest
 
 from yian.compose.skills import default_skill_roots
+from yian.defaults import current
 from yian.skills import Skill, SkillError
-from yian.skills.catalog import MAX_SKILL_FILE_BYTES, read_skill_file
+from yian.skills.catalog import read_skill_file
 
 
 @pytest.fixture
@@ -60,7 +61,7 @@ def test_read_skill_file_rejects_hidden_files(skill: Skill, path: str) -> None:
 def test_read_skill_file_rejects_missing_directories_binary_and_large(skill: Skill) -> None:
     assert skill.directory is not None
     (skill.directory / "blob.bin").write_bytes(b"\xff\xfe\x00")
-    (skill.directory / "big.txt").write_text("x" * (MAX_SKILL_FILE_BYTES + 1), encoding="utf-8")
+    (skill.directory / "big.txt").write_text("x" * (current().max_skill_file_bytes + 1), encoding="utf-8")
     with pytest.raises(SkillError, match="does not exist"):
         read_skill_file(skill, "references")
     with pytest.raises(SkillError, match="does not exist"):

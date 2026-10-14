@@ -22,6 +22,7 @@ from pydantic import (
     model_validator,
 )
 
+from yian.defaults import current
 from yian.llm_clients.provider_blocks import (
     PROVIDER_BLOCKS,
     AnthropicMessagesBlock,
@@ -80,7 +81,6 @@ AZURE_NEEDS_BASE_URL = (
     "provider: azure. AZURE_OPENAI_ENDPOINT is not read"
 )
 _LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
-_MAX_BASE_URL_LENGTH = 2048
 # RFC 3986 characters minus "?" and "#", since a query or fragment is refused anyway.
 # Everything else (whitespace, controls, non-ASCII) is something urlsplit or httpx
 # would strip, normalise, or encode, so the string sent would differ from the one
@@ -399,8 +399,9 @@ def validate_base_url(value: Any) -> str:
     """
     if not isinstance(value, str):
         raise ValueError("base_url must be a string")
-    if len(value) > _MAX_BASE_URL_LENGTH:
-        raise ValueError(f"base_url must be at most {_MAX_BASE_URL_LENGTH} characters")
+    limit = current().max_base_url_chars
+    if len(value) > limit:
+        raise ValueError(f"base_url must be at most {limit} characters")
     if not _URL_CHARACTERS.fullmatch(value):
         raise ValueError(
             "base_url may contain only ASCII URL characters, with no whitespace or "

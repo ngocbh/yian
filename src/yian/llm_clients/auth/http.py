@@ -26,9 +26,9 @@ from urllib.request import (
     build_opener,
 )
 
-from .common import HttpResponse
+from yian.defaults import current
 
-_BODY_LIMIT = 1024 * 1024
+from .common import HttpResponse
 
 
 class _RequestCancelled(Exception):
@@ -111,12 +111,15 @@ def _request(
     form=None,
     check_stopped=lambda: None,
     monotonic=time.monotonic,
-    body_limit=_BODY_LIMIT,
+    body_limit: int | None = None,
 ):
     """Read one response without leaking credentials through redirects or logs.
 
-    ``body_limit`` caps the bytes read from the body, 1 MiB by default.
+    ``body_limit`` caps the bytes read from the body; `None` means
+    `current().max_auth_response_bytes`.
     """
+    if body_limit is None:
+        body_limit = current().max_auth_response_bytes
     deadline = _Deadline(timeout, monotonic, check_stopped)
 
     class Response(HTTPResponse):

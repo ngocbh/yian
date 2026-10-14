@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 from yian.compose.skills import load_skill_dir, load_skills
+from yian.defaults import current
 from yian.skills import Skill, SkillError
-from yian.skills.catalog import MAX_SKILL_FILE_BYTES
 
 
 def write_skill(root: Path, dirname: str, frontmatter: str, body: str = "Do the thing.\n") -> Path:
@@ -69,7 +69,7 @@ def test_missing_and_oversized_skill_files_are_rejected(tmp_path: Path) -> None:
     (tmp_path / "empty").mkdir()
     with pytest.raises(SkillError, match="missing SKILL.md"):
         load_skill_dir(tmp_path / "empty")
-    big = write_skill(tmp_path, "big", "description: d\n", "x" * MAX_SKILL_FILE_BYTES)
+    big = write_skill(tmp_path, "big", "description: d\n", "x" * current().max_skill_file_bytes)
     with pytest.raises(SkillError, match="larger than"):
         load_skill_dir(big)
 

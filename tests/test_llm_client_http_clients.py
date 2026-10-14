@@ -1,6 +1,7 @@
 """A host's ``http_client`` / ``http_async_client`` become the SDK's transport or are rejected."""
 
 import asyncio
+import gc
 import json
 import warnings
 
@@ -83,7 +84,11 @@ def test_google_sends_every_request_through_the_host_clients(clean_env, gemini):
 def test_google_does_not_close_the_host_clients(clean_env, gemini):
     _, sync, async_ = gemini
     chat = _google(http_client=sync, http_async_client=async_)
-    asyncio.run(chat.aclose())
+    # Close the genai client directly: aclose() is new in 4.3.7; both cleanup paths make these calls.
+    chat.client.close()
+    asyncio.run(chat.client.aio.aclose())
+    del chat
+    gc.collect()
     assert not sync.is_closed and not async_.is_closed
 
 

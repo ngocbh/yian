@@ -36,7 +36,7 @@ from yian.compose.helpers.output_contracts import (
     reference_contract,
     resolve_output_binding_contract,
 )
-from yian.compose.helpers.tags import yaml_quoted
+from yian.compose.helpers.tags import any_source_hint, yaml_quoted
 from yian.compose.helpers.yaml_words import former_boolean_fix
 from yian.compose.nodes.base import BuildResult
 from yian.compose.validate.narrowing import Narrowing
@@ -64,7 +64,7 @@ from yian.nodes.contracts import (
     ValueContract,
     binding_source,
 )
-from yian.typesys import Type, TypeCheckError, build_value_as, canonical_type_label
+from yian.typesys import Type, TypeCheckError, ValueKind, build_value_as, canonical_type_label
 
 
 def check_call_map_types(
@@ -235,7 +235,7 @@ def _binding_mismatch(src: Any, decl: Parameter, scope: _Scope) -> str | None:
         resolve_output_binding_contract(
             src, scope.producers, scope.flow_inputs, type_fn=scope.type_fn
         ),
-        child_type,
+        decl,
         non_null=not binding_co_skips(source),
     )
 
@@ -331,10 +331,10 @@ def _reference_mismatch(
     head, *fields = path.split(".")
     if head != "item":
         contract = reference_contract(path, scope.producers, scope.flow_inputs)
-        return _contract_mismatch(contract, decl.contract.type, non_null=non_null)
+        return _contract_mismatch(contract, decl, non_null=non_null)
     if scope.item is not None:
         contract = project_output_contract(scope.item, fields)
-        return _contract_mismatch(contract, decl.contract.type, non_null=non_null)
+        return _contract_mismatch(contract, decl, non_null=non_null)
     for element in scope.items or ():
         value = element
         for field in fields:
@@ -351,13 +351,15 @@ def _reference_mismatch(
 
 
 def _contract_mismatch(
-    contract: OutputContract | None, child_type: Type, *, non_null: bool
+    contract: OutputContract | None, decl: Parameter, *, non_null: bool
 ) -> str | None:
-    """Return why a source contract can't fill `child_type`, else `None`.
+    """Return why a source contract can't fill the child input `decl`, else `None`.
+
+    An `Any` source gets advice to tag the binding or narrow it with `isinstance`.
 
     Args:
         contract (`OutputContract | None`): The source's resolved contract.
-        child_type (`Type`): The child input's declared type.
+        decl (`Parameter`): The child input, with a declared contract.
         non_null (`bool`): Whether the binding guarantees a non-null value, so a
             nullable source is compared without its null.
 
@@ -372,15 +374,19 @@ def _contract_mismatch(
             "resolved source contract must be ValueContract, "
             "PartialRecordContract, or None"
         )
+    child_type = decl.contract.type
     source = contract.type
     if source.nullable and not child_type.nullable and non_null:
         source = replace(source, nullable=False)
     if types_compatible(source, child_type):
         return None
-    return (
+    message = (
         f"child expects {canonical_type_label(child_type)!r}, source is "
         f"{canonical_type_label(source)!r}"
     )
+    if source.kind is ValueKind.ANY:
+        message += f"; {any_source_hint(decl.name, child_type)}"
+    return message
 
 
 def _value_mismatch(

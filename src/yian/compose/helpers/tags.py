@@ -389,6 +389,29 @@ def suggest_tag(
     return f"`{name}: !{text} {value}`"
 
 
+def any_source_hint(name: str, typ: Type, *, registry: TypeRegistry | None = None) -> str:
+    """Advise how to fill a slot of type `typ` from an `Any` source.
+
+    Load can't tell which JSON value an `Any` holds, so the value is checked at runtime
+    through a tag or narrowed by a `case`.
+
+    Args:
+        name (`str`): The slot's name.
+        typ (`Type`): The slot's type.
+        registry (`TypeRegistry | None`, *optional*, defaults to `None`): The flow's
+            typedefs, used to spell the tag.
+
+    Returns:
+        `str`: Advice to tag the slot with `typ` or to narrow the value with
+            `isinstance` in a `case`.
+    """
+    tag = suggest_tag(name, typ, "${...}", registry=registry)
+    return (
+        f"tag the slot ({tag}) to check it at runtime, or narrow it with `isinstance` "
+        "in a `case`"
+    )
+
+
 def tag_text(
     typ: Type | None,
     *,

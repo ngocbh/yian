@@ -20,7 +20,14 @@ from typing import Literal
 from dataclasses import replace
 
 from yian.compile.model import END_ID, START_ID
-from yian.typesys.values import TypeCheckError, ValueKind, Type, build_value_as, numeric_interval
+from yian.typesys.values import (
+    TypeCheckError,
+    ValueKind,
+    Type,
+    _has_file,
+    build_value_as,
+    numeric_interval,
+)
 
 _CLOSED_HEADS = ()              # `outputs` is no longer a head; node-first head dispatch
 # The ONLY valid ${system.X} ambients, each with its scalar type label:
@@ -94,6 +101,8 @@ def types_compatible(source: Type, sink: Type) -> bool:
     A source union fits a sink union when each of its members fits some sink member; a
     record fits a union when it fits some member; a union fits `object` but never a
     record, and `object` never fits a union.
+    Every non-null type without a `file` in it fits `Any`; `Any` fits only `Any` (and
+    `Optional(Any)`), since load can't tell which JSON value it holds.
 
     Args:
         source (`Type`): Type guaranteed by the producer.
@@ -105,6 +114,10 @@ def types_compatible(source: Type, sink: Type) -> bool:
     if source.kind is ValueKind.NONE:
         return sink.kind is ValueKind.NONE or sink.nullable
     if source.nullable and not sink.nullable:
+        return False
+    if sink.kind is ValueKind.ANY:
+        return not _has_file(source)
+    if source.kind is ValueKind.ANY:
         return False
     source_is_list = source.kind.is_list()
     sink_is_list = sink.kind.is_list()
@@ -179,7 +192,9 @@ def type_relation(inferred: Type, declared: Type) -> TypeRelation:
     `date` or `datetime` only through tags that are valid ISO strings of that kind.
     Unions are compared member-wise: each inferred member takes its best relation
     against the declared members, so a union member over the union is narrower and
-    a record matching no member is disjoint.
+    a record matching no member is disjoint. Every type without a `file` in it fits
+    `Any` (narrower when nullable), and `Any` is narrower than every other type it
+    shares a value with.
 
     Args:
         inferred (`Type`): Type the producing expression is inferred to have.
@@ -223,6 +238,10 @@ def _list_element(typ: Type) -> Type:
 
 def _relate_non_null(inferred: Type, declared: Type) -> TypeRelation:
     """Classify the non-null values of ``inferred`` against ``declared``."""
+    if declared.kind is ValueKind.ANY:
+        return "disjoint" if _has_file(inferred) else "fits"
+    if inferred.kind is ValueKind.ANY:
+        return "disjoint" if _has_file(declared) else "narrower"
     if inferred.variants is not None or declared.variants is not None:
         return _relate_union(inferred, declared)
     inferred_is_list = inferred.kind.is_list()

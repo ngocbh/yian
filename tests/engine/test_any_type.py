@@ -25,6 +25,7 @@ from yian.typesys.values import (
     build_value_as,
     canonical_type_label,
     canonical_union_order,
+    types_overlap,
 )
 
 ANY = Type.scalar(ValueKind.ANY)
@@ -395,3 +396,223 @@ def test_an_assert_reading_a_field_of_an_any_output_loads():
         "      - output.a.b == 1\n"
         "output: ${step.output}\n"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Compatibility with `Any`
+# --------------------------------------------------------------------------- #
+
+_REGISTRY = read_typedefs({
+    "Buy": {"action": "Literal(buy)", "qty": "int"},
+    "Sell": {"action": "Literal(sell)", "qty": "int"},
+    "Rec": {"a": "int"},
+})
+FILE = Type.scalar(ValueKind.FILE)
+LIST_FILE = Type(kind=ValueKind.LIST_ANY, element=FILE)
+FILE_RECORD = Type(kind=ValueKind.OBJECT, fields={"f": FILE}, required=frozenset({"f"}))
+
+
+def _t(text: str) -> Type:
+    """Resolve a type expression against the compatibility typedefs."""
+    return type_for(text, _REGISTRY)
+
+
+_JSON_TYPES = [
+    "str", "int", "float", "bool", "date", "datetime", "object", "Rec", "list(int)",
+    "list(Any)", "list(Optional(Any))", "Literal(a)", "int(1..3)", "int(0..)",
+    "Union(Buy, Sell)", "Any",
+]
+
+
+@pytest.mark.parametrize("text", _JSON_TYPES)
+def test_a_non_null_json_type_fits_any(text):
+    assert types_compatible(_t(text), ANY)
+    assert type_relation(_t(text), ANY) == "fits"
+
+
+def test_an_unproven_list_fits_any():
+    assert types_compatible(UNPROVEN_LIST, ANY)
+    assert type_relation(UNPROVEN_LIST, ANY) == "fits"
+
+
+@pytest.mark.parametrize("source", [_t("Optional(int)"), _t("None"), OPTIONAL_ANY])
+def test_a_nullable_source_does_not_fit_any(source):
+    assert not types_compatible(source, ANY)
+
+
+@pytest.mark.parametrize("source", [_t("Optional(int)"), _t("None"), OPTIONAL_ANY, ANY])
+def test_a_nullable_source_fits_optional_any(source):
+    assert types_compatible(source, OPTIONAL_ANY)
+
+
+@pytest.mark.parametrize(
+    "sink",
+    ["str", "int", "float", "object", "Rec", "Union(Buy, Sell)", "list(Any)", "list(str)",
+     "Literal(a)", "int(1..3)", "Optional(str)", "None"],
+)
+def test_any_fits_nothing_but_any(sink):
+    assert not types_compatible(ANY, _t(sink))
+
+
+@pytest.mark.parametrize("source", [FILE, LIST_FILE, FILE_RECORD])
+def test_a_type_holding_a_file_does_not_fit_any(source):
+    assert not types_compatible(source, ANY)
+    assert type_relation(source, ANY) == "disjoint"
+
+
+def test_a_list_fits_list_of_any_when_its_items_fit_any():
+    assert types_compatible(_t("list(int)"), LIST_ANY)
+    assert types_compatible(_t("list(Rec)"), LIST_ANY)
+    assert not types_compatible(_t("list(Optional(int))"), LIST_ANY)
+    assert not types_compatible(LIST_FILE, LIST_ANY)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [_t("list(int)"), _t("list(Optional(str))"), LIST_ANY, LIST_OPTIONAL_ANY, UNPROVEN_LIST],
+)
+def test_a_list_of_json_items_fits_list_of_optional_any(source):
+    assert types_compatible(source, LIST_OPTIONAL_ANY)
+
+
+@pytest.mark.parametrize("source", [LIST_OPTIONAL_ANY, UNPROVEN_LIST])
+@pytest.mark.parametrize("sink", [LIST_ANY, _t("list(str)")])
+def test_a_list_of_optional_any_does_not_fit_a_list_of_non_null_items(source, sink):
+    assert not types_compatible(source, sink)
+
+
+@pytest.mark.parametrize("inferred", [_t("Optional(int)"), OPTIONAL_ANY, _t("Optional(Rec)")])
+def test_a_nullable_json_type_is_narrower_than_any(inferred):
+    assert type_relation(inferred, ANY) == "narrower"
+
+
+@pytest.mark.parametrize(
+    "declared",
+    ["str", "int", "float(..2.5)", "int(1..3)", "int(0..)", "object", "Rec", "Buy",
+     "Union(Buy, Sell)", "list(str)", "list(Any)", "date", "Literal(a)", "Optional(str)"],
+)
+def test_any_is_narrower_than_any_other_type(declared):
+    assert type_relation(ANY, _t(declared)) == "narrower"
+
+
+@pytest.mark.parametrize("declared", [ANY, OPTIONAL_ANY])
+def test_any_fits_any_and_optional_any(declared):
+    assert types_compatible(ANY, declared)
+    assert type_relation(ANY, declared) == "fits"
+
+
+@pytest.mark.parametrize("declared", [FILE, _t("None")])
+def test_any_is_disjoint_from_file_and_none(declared):
+    assert type_relation(ANY, declared) == "disjoint"
+
+
+@pytest.mark.parametrize(
+    ("other", "expected"),
+    [
+        (_t("str"), True),
+        (_t("Rec"), True),
+        (_t("list(int)"), True),
+        (ANY, True),
+        (_t("None"), False),
+        (FILE, False),
+        (FILE_RECORD, False),
+    ],
+)
+def test_any_overlaps_every_type_but_none_and_file(other, expected):
+    assert types_overlap(ANY, other) is expected
+    assert types_overlap(other, ANY) is expected
+
+
+def test_a_record_with_an_any_field_overlaps_one_with_an_int_field():
+    reg = read_typedefs({"A": {"v": "Any"}, "B": {"v": "int"}})
+
+    assert types_overlap(type_for("A", reg), type_for("B", reg))
+
+
+def test_an_untagged_union_of_any_and_int_fields_does_not_resolve():
+    with pytest.raises(TypeCheckError, match="can match the same value"):
+        read_typedefs({"A": {"v": "Any"}, "B": {"v": "int"}, "U": "Union(A, B)"})
+
+
+_ANY_INTO_CALL = """\
+id: p
+name: p
+defs:
+  child:
+    input:
+      t: !str
+    nodes:
+      n:
+        kind: code
+        input:
+          t: ${input.t}
+        output: str
+        code: return inputs["t"]
+    output: ${n.output}
+nodes:
+  step:
+    kind: code
+    output: Any
+    code: return "hello"
+  c:
+    kind: call
+    call: child
+    input:
+      t: BINDING
+output: ${c.output}
+"""
+
+
+def test_any_into_a_child_str_input_suggests_a_tag_or_isinstance():
+    with pytest.raises(LoadError) as caught:
+        load_flow(_ANY_INTO_CALL.replace("BINDING", "${step.output}"))
+
+    message = str(caught.value)
+    assert "child expects 'str', source is 'Any'" in message
+    assert "`t: !str ${...}`" in message
+    assert "isinstance" in message
+
+
+def test_a_tagged_any_binding_into_a_child_str_input_loads():
+    load_flow(_ANY_INTO_CALL.replace("BINDING", "!str ${step.output}"))
+
+
+_ANY_INTO_LOOP = """\
+id: p
+name: p
+defs:
+  bump:
+    input:
+      n: !int
+    nodes:
+      step:
+        kind: code
+        input:
+          n: ${input.n}
+        output: int
+        code: return inputs["n"] + 1
+    output:
+      n: ${step.output}
+nodes:
+  seed:
+    kind: code
+    output: Any
+    code: return 1
+  loop:
+    kind: loop
+    times: 2
+    input:
+      n: SEED
+    call: bump
+output: ${loop.output}
+"""
+
+
+def test_any_into_a_loop_carried_int_suggests_a_tag_or_isinstance():
+    with pytest.raises(LoadError) as caught:
+        load_flow(_ANY_INTO_LOOP.replace("SEED", "${seed.output}"))
+
+    message = str(caught.value)
+    assert "carried source is 'Any'" in message
+    assert "`n: !int ${...}`" in message
+    assert "isinstance" in message

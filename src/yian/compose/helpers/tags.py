@@ -57,7 +57,8 @@ if TYPE_CHECKING:
     from yian.compose.source.catalog import _SourceCatalogBuilder
 
 _HEAD_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-_CLOSE_MATCH_CUTOFF = 0.6
+# The `difflib` ratio a name must reach to be offered as a close match.
+CLOSE_MATCH_CUTOFF = 0.6
 _FLOW_INDICATORS = frozenset("[]{}")
 # The characters PyYAML reads into a tag, minus YAML 1.2's flow indicators, `!`, and
 # the `%` that starts an escape: text made only of these reads back as one tag.
@@ -335,7 +336,7 @@ def close_type_name(text: str, registry: TypeRegistry) -> str | None:
     if head is None or head.group() in names:
         return None
     matches = difflib.get_close_matches(
-        head.group(), sorted(names), n=1, cutoff=_CLOSE_MATCH_CUTOFF
+        head.group(), sorted(names), n=1, cutoff=CLOSE_MATCH_CUTOFF
     )
     if matches:
         return matches[0]
@@ -345,7 +346,7 @@ def close_type_name(text: str, registry: TypeRegistry) -> str | None:
     for name in sorted(names):
         by_lower.setdefault(name.lower(), name)
     matches = difflib.get_close_matches(
-        head.group().lower(), sorted(by_lower), n=1, cutoff=_CLOSE_MATCH_CUTOFF
+        head.group().lower(), sorted(by_lower), n=1, cutoff=CLOSE_MATCH_CUTOFF
     )
     return by_lower[matches[0]] if matches else None
 

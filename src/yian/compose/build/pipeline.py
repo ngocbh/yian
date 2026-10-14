@@ -83,7 +83,7 @@ from yian.compose.helpers.isinstance_types import (
     resolve_isinstance_type,
 )
 from yian.compose.helpers.output_contracts import resolve_output_binding_contract
-from yian.compose.helpers.source import one_line_text
+from yian.compose.helpers.source import nth, one_line_text
 from yian.compose.helpers.tags import (
     QUOTED_STYLES,
     old_form_suggestion,
@@ -922,7 +922,7 @@ def _case_output_cursor(
 
     Args:
         nodes_cursor (`SourceCursor`): Retained view of the flow's node mapping.
-        node_id (`str`): The node, a case when the loader asks.
+        node_id (`str`): The case node's id.
         diagnostics (`LoadDiagnostics`): Factory for located load errors.
 
     Returns:
@@ -1218,11 +1218,6 @@ def _site_range(
     return item or field_ranges.get(("field", field)) or node_range
 
 
-def _nth_range(ranges: list[SourceRange | None], index: int) -> SourceRange | None:
-    """Return `ranges[index]`, or `None` past the end."""
-    return ranges[index] if index < len(ranges) else None
-
-
 # The `isinstance` type names and the constructor names one expression site uses.
 TypeNames = tuple[list[str], list[str]]
 
@@ -1380,7 +1375,7 @@ def _fill_type_tables(
         assert_ranges = list(getattr(desc, "assert_ranges", None) or [])
         for index, expression in enumerate(authored):
             where = f"node {nid!r} assert {expression!r}"
-            rng = _site_range(_nth_range(assert_ranges, index), franges, "asserts", node_range)
+            rng = _site_range(nth(assert_ranges, index), franges, "asserts", node_range)
             names = names_in(expression, condition=True)
             types.update(checked(names, expression, where, rng, condition=True))
         if node.kind in (NodeKind.START, NodeKind.END):
@@ -1391,7 +1386,7 @@ def _fill_type_tables(
         when_ranges = list(getattr(desc, "when_ranges", None) or [])
         for index, case in enumerate(getattr(node, "cases", None) or ()):
             where = f"case node {nid!r} cases[{index}].when"
-            rng = _site_range(_nth_range(when_ranges, index), franges, "cases", node_range)
+            rng = _site_range(nth(when_ranges, index), franges, "cases", node_range)
             names = names_in(case.when, condition=True)
             types.update(checked(names, case.when, where, rng, condition=True))
         predicate = getattr(node, "predicate", None)

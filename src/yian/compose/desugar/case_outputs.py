@@ -56,12 +56,12 @@ def expand_case_outputs(
     assertion_range_at: Optional[Callable[[int], Optional[SourceRange]]] = None,
     diagnostics: LoadDiagnostics | None = None,
 ) -> tuple:
-    """Expand every `${<case>.output}` binding ref to a coalesce over the case's branch
-    targets.
+    """Expand every `${<case>.output}` binding ref to a coalesce over its branch targets.
 
     Walks every binding field (any node's `input:` / a mapped call's `over:`) and the
-    flow `output:` bindings. Rejects (located `LoadError`) a case-value ref in a coalesce or default operand, or
-    in a `case` condition (`on:`/`when:`) or an `assert` — those are not bindings.
+    flow `output:` bindings. Rejects (located `LoadError`) a case-value ref in a
+    coalesce or default operand, or in a `case` condition (`on:`/`when:`) or an
+    `assert` — those are not bindings.
 
     Args:
         descriptors (`dict`): Node descriptors keyed by node id.
@@ -262,9 +262,10 @@ def _expander(
     diagnostics: LoadDiagnostics,
 ):
     """A `value -> value` binding transform: expand each clean case-output span to the
-    case's branch coalesce; reject a case ref in any non-clean position. Scans each `${…}` span — a case ref inside
-    a larger expression (a `:-` default `${x :- gate.output}`, a `:?` message, arithmetic)
-    is caught as a non-clean ref of that span."""
+    case's branch coalesce; reject a case ref in any non-clean position. Scans each
+    `${…}` span — a case ref inside a larger expression (a `:-` default
+    `${x :- gate.output}`, a `:?` message, arithmetic) is caught as a non-clean ref of
+    that span."""
 
     def expand(value: str) -> str:
         # Singular only: detect `.output` marker.

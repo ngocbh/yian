@@ -1,15 +1,16 @@
 """Parse-free source helpers for the Compose front end.
 
 This module projects synthesized boundary-input ranges from an existing source
-cursor and slices authored text out of a document. It never parses or calls
-`parse_nodes`/`parse_file`, keeping the helper layer below `parse`. Assertion
+cursor, slices authored text out of a document, and reads positional metadata. It
+never parses or calls `parse_nodes`/`parse_file`, keeping the helper layer below
+`parse`. Assertion
 origins and temporary ranges are deliberately absent: the build conductor derives
 both from one retained item cursor.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from yian.compose.source import SourceAccessError, SourceCursor, SourceDocument
@@ -26,6 +27,20 @@ def is_extension_key(key: Any) -> bool:
         `bool`: True when the key's text starts with `x-`.
     """
     return str(key).startswith("x-")
+
+
+def nth(items: Sequence[Any], index: int) -> Any:
+    """Return the `index`-th item of positional parse metadata, or `None` when absent.
+
+    Args:
+        items (`Sequence[Any]`): Metadata aligned with a list, such as a case's
+            `then_ranges`; empty or short for a source-free descriptor.
+        index (`int`): The position.
+
+    Returns:
+        `Any`: The item, or `None` past either end.
+    """
+    return items[index] if 0 <= index < len(items) else None
 
 
 def one_line_text(

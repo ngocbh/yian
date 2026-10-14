@@ -31,10 +31,10 @@ and after `check_authored_bindings`, so a secret nested in a value branch is rep
 secret literal before a message here could echo it.
 
 Imports flow down/peer only: `compose.desugar` (the `call(...)` check and value entry
-descriptors), `compose.helpers` (errors, the `call(` head, YAML quoting, tag spelling,
-type reading), `compose.parse` (descriptors, identifiers, the example type of a value),
-`compose.source`, `diagnostics`, `expr`, and `typesys`. Only the loader pipeline imports
-this back.
+descriptors), `compose.helpers` (errors, the `call(` head, positional metadata, YAML
+quoting, tag spelling, type reading), `compose.parse` (descriptors, identifiers, the
+example type of a value), `compose.source`, `diagnostics`, `expr`, and `typesys`. Only
+the loader pipeline imports this back.
 """
 
 from __future__ import annotations
@@ -56,7 +56,9 @@ from yian.compose.desugar.inline_calls import (
 from yian.compose.desugar.value_entries import ValueEntryDescriptor
 from yian.compose.helpers.directives import CALL_HEAD
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError, source_text
+from yian.compose.helpers.source import nth
 from yian.compose.helpers.tags import (
+    CLOSE_MATCH_CUTOFF,
     QUOTED_STYLES,
     has_span,
     old_form_suggestion,
@@ -84,7 +86,6 @@ from yian.typesys import BUILTIN_TYPE_NAMES, TypeCheckError, build_value_as
 from yian.typesys.types import TypeRegistry
 from yian.typesys.values import Type
 
-_CLOSE_MATCH_CUTOFF = 0.6
 # A value longer than this is cut in a message; the author writes it as a block.
 _SHOWN_LIMIT = 60
 # Characters that end or nest a plain scalar inside a YAML flow mapping or list.
@@ -202,9 +203,9 @@ def _branches(desc: CaseDescriptor) -> list[_Branch]:
             _Branch(
                 label="then:",
                 value=case["then"],
-                style=_nth(desc.then_styles, index),
-                tag=_nth(desc.then_tags, index),
-                range=_nth(desc.then_ranges, index) or desc.range,
+                style=nth(desc.then_styles, index),
+                tag=nth(desc.then_tags, index),
+                range=nth(desc.then_ranges, index) or desc.range,
                 entry_base=f"{desc.id}_then_{index}",
             )
         )
@@ -220,11 +221,6 @@ def _branches(desc: CaseDescriptor) -> list[_Branch]:
             )
         )
     return branches
-
-
-def _nth(seq: list, index: int) -> Any:
-    """Return the `index`-th item of a positional list, or None when it is absent."""
-    return seq[index] if 0 <= index < len(seq) else None
 
 
 def _check_branch(
@@ -370,7 +366,7 @@ def _unknown_word_error(
     """
     word = branch.value
     matches = difflib.get_close_matches(
-        word, list(descriptors), n=1, cutoff=_CLOSE_MATCH_CUTOFF
+        word, list(descriptors), n=1, cutoff=CLOSE_MATCH_CUTOFF
     )
     suggestion = f" Did you mean `{matches[0]}`?" if matches else ""
     base = f"{word}_text" if is_identifier(f"{word}_text") else branch.entry_base

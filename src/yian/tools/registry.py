@@ -551,8 +551,9 @@ def _printable_ints(value: Any) -> Any:
         `Any`: `value` itself when it holds no long int, else a copy.
     """
     # LangChain's `BaseTool.run` writes the whole input with `str()` for its
-    # callbacks, which fails past Python's digit limit; the tool's own pydantic
-    # validation still hands the function plain ints.
+    # callbacks, which fails past Python's digit limit. Pydantic validation hands
+    # an `int` parameter a plain int; an untyped (`Any`, `dict`, `object`) one
+    # sees this int subclass, which compares and computes like the int.
     if json_codec.displayable(value) is value:
         return value
     if isinstance(value, int) and not isinstance(value, bool):

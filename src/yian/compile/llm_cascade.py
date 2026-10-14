@@ -380,7 +380,10 @@ def _validate_layer(config: dict[str, Any]) -> None:
         raise ValueError(host_only)
     if HOST_KEY_MARKER in config:
         raise ValueError(f"llm_config.{HOST_KEY_MARKER} is internal to recorded runs")
-    if str(config.get("provider", "")).lower() == "codex" or any(key in config for key in ("sandbox", "cwd")):
+    provider = config.get("provider")
+    if (isinstance(provider, str) and provider.lower() == "codex") or any(
+        key in config for key in ("sandbox", "cwd")
+    ):
         LLMConfig(**config)
     retired = retired_key_error(config)
     if retired is not None:

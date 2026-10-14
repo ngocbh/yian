@@ -203,8 +203,9 @@ class LLMConfig(BaseModel):
     @classmethod
     def _reject_retired_options(cls, value):
         """Point native configuration at the unified OpenAI connection."""
+        provider = value.get("provider") if isinstance(value, dict) else None
         if isinstance(value, dict) and (
-            str(value.get("provider", "")).lower() == "codex"
+            (isinstance(provider, str) and provider.lower() == "codex")
             or "sandbox" in value or "cwd" in value
         ):
             raise ValueError(

@@ -338,6 +338,63 @@ def test_a_tool_receives_a_long_int_input():
     assert seen == [(int, BIG, [BIG])]
 
 
+def test_a_tool_with_an_untyped_parameter_receives_an_equal_int():
+    seen = []
+
+    def record(value: object) -> int:
+        """Record a value."""
+        seen.append(value)
+        return 1
+
+    flow = load_flow(
+        "id: p\nname: p\ninput:\n  x: !int\nnodes:\n  t:\n    kind: tool\n"
+        "    tool_id: record\n    input:\n      value: ${input.x}\noutput: ${t.output}\n"
+    )
+    result = run_flow(flow, {"x": BIG}, tools={"record": record})
+    assert result.status == "succeeded", result.failure
+    (value,) = seen
+    assert isinstance(value, int) and value == BIG and value + 1 == BIG + 1
+    assert str(value) == DIGITS
+
+
+_MAP_CHILD = (
+    "defs:\n  child:\n    input:\n      n: !str\n    nodes:\n      c:\n"
+    "        kind: code\n        input:\n          n: ${input.n}\n        code: |\n"
+    "          return inputs['n']\n    output: ${c.output}\n"
+)
+
+
+@pytest.mark.parametrize("over", [D, f"{{a: {D}}}"], ids=["int", "record"])
+def test_a_map_over_a_long_int_literal_fails_with_a_placeholder(over):
+    flow = load_flow(
+        "id: p\nname: p\n" + _MAP_CHILD + "nodes:\n  c:\n    kind: map\n"
+        f"    over: {over}\n    call: child\n    input:\n      n: ${{item}}\n"
+        "output: ${c.output}\n"
+    )
+    result = run_flow(flow, {})
+    assert result.status == "failed"
+    assert result.failure.code == "contract.input"
+    msg = result.failure.message
+    assert "too large to display>" in msg
+    assert "set_int_max_str_digits" not in msg
+    assert re.search(r"[0-9]{600}", msg) is None
+
+
+@pytest.mark.parametrize("where", ["node", "flow"])
+def test_a_long_int_provider_gives_a_load_error_without_the_hint(where):
+    config = f"llm_config: {{provider: {D}}}\n"
+    agent = "  c:\n    kind: agent\n    prompt: hi\n"
+    if where == "node":
+        text = "id: p\nname: p\nnodes:\n" + agent + "    " + config + "output: ${c.output}\n"
+    else:
+        text = "id: p\nname: p\n" + config + "nodes:\n" + agent + "output: ${c.output}\n"
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    msg = str(caught.value)
+    assert "set_int_max_str_digits" not in msg
+    assert re.search(r"[0-9]{600}", msg) is None
+
+
 def test_a_wait_until_long_int_fails_with_a_placeholder():
     result = run_flow(load_flow(_flow(f"  c:\n    kind: wait\n    until: {D}\n")), {})
     msg = result.failure.message

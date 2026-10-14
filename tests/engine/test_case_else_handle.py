@@ -19,8 +19,8 @@ from yian.events import NodeStarted
 from yian.nodes.base import ELSE_HANDLE
 from yian.nodes.case import Case, CaseNode
 from yian.runtime.common import NodeState
-from yian.runtime.state import commit_prepared, prepare_node_routed
 from yian.run import resume_flow, run_flow
+from yian.runtime.state import commit_prepared, prepare_node_routed
 
 
 _SEARCHED_FLOW = """
@@ -111,14 +111,15 @@ def test_a_then_target_named_default_does_not_run_on_no_match_without_else():
     assert "default" not in _started(result)
 
 
-@pytest.mark.parametrize("s, ran, skipped", [
-    ("a", "default", "other"),
-    ("z", "other", "default"),
+@pytest.mark.parametrize("s, ran, skipped, expected", [
+    ("a", "default", "other", "a"),
+    ("z", "other", "default", "other"),
 ])
-def test_an_on_case_target_named_default_runs_only_on_its_own_branch(s, ran, skipped):
+def test_an_on_case_target_named_default_runs_only_on_its_own_branch(s, ran, skipped, expected):
     result = run_flow(load_flow(_ON_FLOW), {"s": s})
 
     assert result.status == "succeeded", result.failure
+    assert result.output == expected
     assert ran in _started(result)
     assert skipped not in _started(result)
 
@@ -137,12 +138,12 @@ output: ${#else.output}
 
 
 def test_a_case_may_not_take_the_else_handle_as_a_branch():
-    with pytest.raises(ValueError, match="#else"):
+    with pytest.raises(ValueError, match="reserved for the else route"):
         Case(handle=ELSE_HANDLE, when="True")
 
     case = Case(handle="go", when="True")
     case.handle = ELSE_HANDLE
-    with pytest.raises(ValueError, match="#else"):
+    with pytest.raises(ValueError, match="reserved for the else route"):
         CaseNode("g", [case]).validate_execution_setup()
 
 

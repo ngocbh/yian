@@ -752,7 +752,7 @@ def eval_expr(
     literals, coalesce / default / required, pure builtin calls, and the
     `isinstance(x, T)` type test.
 
-    Three semantics support `case default` routing:
+    Three semantics support a CASE's `else:` routing:
     a missing reference is `None` (in the non-strict modes); arithmetic over that
     `None` raises a loud `ExpressionError` (a wrapped `TypeError`); an ordered
     comparison with a `None` operand is `False` (missing->falsy).

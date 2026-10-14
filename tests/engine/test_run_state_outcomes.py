@@ -234,7 +234,7 @@ def test_route_derives_skip_closure_without_skip_record():
 @pytest.mark.parametrize(
     ("selected", "matching_handles"),
     [
-        (ELSE_HANDLE, (None, None)),
+        (ELSE_HANDLE, (ELSE_HANDLE, ELSE_HANDLE)),
         ("go", ("go", "go")),
     ],
 )

@@ -39,7 +39,10 @@ class Case:
         """Require source-neutral predicate provenance and a non-else handle."""
         _validate_optional_origin(self.origin, "CASE predicate origin")
         if self.handle == ELSE_HANDLE:
-            raise ValueError(f"CASE handle {self.handle!r} is reserved for the else route")
+            raise ValueError(
+                f"CASE handle {self.handle!r} is reserved for the else route; name the "
+                "branch by its target node id"
+            )
 
 
 class CaseNode(Node):
@@ -80,7 +83,7 @@ class CaseNode(Node):
             if case.handle == ELSE_HANDLE:
                 raise ValueError(
                     f"node {self.id!r} case handle {case.handle!r} is reserved for the "
-                    "else route"
+                    "else route; name the branch by its target node id"
                 )
             if case.when is None:
                 raise ValueError(

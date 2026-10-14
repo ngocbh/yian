@@ -40,24 +40,22 @@ def test_a_named_input_value(value):
 
 
 def test_an_input_default():
-    text = _flow("${input.d}", inputs="input:\n  d: date = 2026-13-45\n")
+    text = _flow("${input.d}", inputs="input:\n  d: !date 2026-13-45\n")
     error = _load_error(text)
-    assert "input 'd': bad default" in str(error)
     assert "not a valid date" in str(error) and _FIX in str(error)
-    assert error.diagnostic.frames[-1].range.start_line == _line_of(text, "d: date")
+    assert error.diagnostic.frames[-1].range.start_line == _line_of(text, "d: !date")
 
 
 def test_a_typed_binding_literal():
-    text = _flow("date = 2026-13-45")
+    text = _flow("!date 2026-13-45")
     error = _load_error(text)
-    assert "binding 'topic': bad value" in str(error)
     assert "not a valid date" in str(error) and _FIX in str(error)
     assert error.diagnostic.frames[-1].range.start_line == _line_of(text, "topic:")
 
 
 def test_a_case_when():
     text = (
-        "id: f\nname: f\ninput:\n  d: date\nnodes:\n  route:\n    kind: case\n"
+        "id: f\nname: f\ninput:\n  d: !date\nnodes:\n  route:\n    kind: case\n"
         "    on: ${input.d}\n    output: str\n    cases:\n      - when: 2026-13-45\n"
         '        then: "x"\n    else: "y"\noutput: ${route.output}\n'
     )

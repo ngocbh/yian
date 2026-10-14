@@ -27,9 +27,12 @@ def _default_int_digit_limit():
         return
     before = get()
     sys.set_int_max_str_digits(4300)
-    yield
-    assert sys.get_int_max_str_digits() == 4300, "yian code changed the global digit limit"
-    sys.set_int_max_str_digits(before)
+    try:
+        yield
+        after = get()
+    finally:
+        sys.set_int_max_str_digits(before)
+    assert after == 4300, "yian code changed the global digit limit"
 
 
 class _Level(enum.IntEnum):
@@ -69,6 +72,13 @@ def test_parse_int_follows_the_int_grammar() -> None:
     assert json_codec.parse_int(" +1_000 ") == 1000
     assert json_codec.parse_int("1" * 5000) == int(Decimal("1" * 5000))
     assert json_codec.parse_int(" \n" + "1" * 700 + "\t") == int(Decimal("1" * 700))
+
+
+@pytest.mark.parametrize("text", ["١٢٣", "12.5", "1__0", "", " "])
+def test_parse_int_rejects_short_non_ascii_or_malformed_text(text: str) -> None:
+    """Short text follows the same ASCII-digit grammar as long text."""
+    with pytest.raises(ValueError, match="invalid literal for int"):
+        json_codec.parse_int(text)
 
 
 @pytest.mark.parametrize(
@@ -140,6 +150,20 @@ def _outcome(encode, value, options):
 def test_slow_path_encoder_matches_json_dumps(value, options) -> None:
     """The long-int encoder writes the same bytes, or raises the same error, as `json.dumps`."""
     assert _outcome(json_codec._encode, value, options) == _outcome(json.dumps, value, options)
+
+
+@pytest.mark.parametrize("options", _OPTIONS)
+def test_dumps_of_long_ints_matches_json_dumps_without_the_limit(options) -> None:
+    """Long ints as values, nested values and keys, and an `IntEnum`, match unlimited json."""
+    value = {BIG: [BIG, {"k": -BIG}], 3: _Level.HIGH}
+    before = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(0)
+    try:
+        expected = json.dumps(value, **options)
+    finally:
+        sys.set_int_max_str_digits(before)
+
+    assert json_codec.dumps(value, **options) == expected
 
 
 def test_slow_path_comparison_covers_successful_encodings() -> None:

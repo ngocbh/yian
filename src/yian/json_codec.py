@@ -17,8 +17,9 @@ import re
 from typing import Any, Callable
 
 
-# 2000 bits is about 603 decimal digits, below the smallest digit limit Python
-# allows (640), so `int.__repr__` can never hit the limit under this size.
+# 2000 bits is about 603 decimal digits and 600 characters hold at most 600
+# digits, both below the smallest digit limit Python allows (640), so
+# `int.__repr__` and `int()` can never hit the limit under these sizes.
 _SHORT_INT_BITS = 2000
 _SHORT_INT_TEXT = 600
 _INT_LITERAL = re.compile(r"[+-]?[0-9]+(?:_[0-9]+)*")
@@ -44,8 +45,8 @@ def parse_int(text: str) -> int:
     """Return the int that decimal text spells, at any length.
 
     Args:
-        text (`str`): Text in `int()`'s base-10 grammar: an optional sign, digits
-            in `_`-separated groups, and surrounding whitespace.
+        text (`str`): An optional sign and ASCII digits in `_`-separated groups,
+            with optional surrounding whitespace, as `int()` accepts them.
 
     Returns:
         `int`: The parsed value.
@@ -53,12 +54,12 @@ def parse_int(text: str) -> int:
     Raises:
         `ValueError`: The text is not a base-10 int literal.
     """
-    if len(text) <= _SHORT_INT_TEXT:
-        return int(text)
     stripped = text.strip()
     if _INT_LITERAL.fullmatch(stripped) is None:
         # Unlike int(), don't echo text that may be megabytes long.
         raise ValueError("invalid literal for int() with base 10")
+    if len(stripped) <= _SHORT_INT_TEXT:
+        return int(stripped)
     return int(Decimal(stripped.replace("_", "")))
 
 
@@ -75,9 +76,7 @@ def dumps(
     """Return the same JSON text as `json.dumps`, writing ints of any size in full.
 
     Values without long ints take `json.dumps` directly. Otherwise a slower
-    encoder writes the same text with one Python frame per nesting level, so a
-    value nested near the recursion limit that also holds a long int raises
-    `RecursionError`; callers that bound nesting map that to their depth error.
+    encoder writes the same text with one Python frame per nesting level.
     When the fast path raises `ValueError`, `default` runs again for the same
     objects, so it should have no side effects.
 
@@ -100,6 +99,9 @@ def dumps(
     Raises:
         `ValueError`: The value holds a disallowed NaN or infinity, or a cycle.
         `TypeError`: The value holds an object or key json can't encode.
+        `RecursionError`: The value holds a long int and is nested near the
+            recursion limit; callers that bound nesting map this to their depth
+            error.
     """
     options = dict(
         ensure_ascii=ensure_ascii,
@@ -145,6 +147,7 @@ def _encode(
     item_separator, key_separator = separators
     if isinstance(indent, int):
         indent = " " * indent
+    scalar_text = json.JSONEncoder(ensure_ascii=ensure_ascii, allow_nan=allow_nan).encode
     markers: set[int] = set()
     parts: list[str] = []
 
@@ -152,7 +155,7 @@ def _encode(
         if isinstance(key, str):
             return key
         if isinstance(key, float) or key is True or key is False or key is None:
-            return json.dumps(key, allow_nan=allow_nan)
+            return scalar_text(key)
         if isinstance(key, int):
             return int_text(key)
         raise TypeError(
@@ -166,7 +169,7 @@ def _encode(
 
     def write(obj: Any, level: int) -> None:
         if isinstance(obj, (str, float)) or obj is None or obj is True or obj is False:
-            parts.append(json.dumps(obj, ensure_ascii=ensure_ascii, allow_nan=allow_nan))
+            parts.append(scalar_text(obj))
         elif isinstance(obj, int):
             parts.append(int_text(obj))
         elif isinstance(obj, (list, tuple, dict)):
@@ -195,7 +198,7 @@ def _encode(
             for index, (key, item) in enumerate(items):
                 if index:
                     parts.append(between)
-                parts.append(json.dumps(key_text(key), ensure_ascii=ensure_ascii) + key_separator)
+                parts.append(scalar_text(key_text(key)) + key_separator)
                 write(item, level + 1)
         else:
             for index, item in enumerate(obj):

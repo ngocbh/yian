@@ -72,7 +72,9 @@ boundary that sees one rejects it and names where it sits:
   before any call of that reply runs (`tool call 'lookup' arguments at x: non-finite
   number nan is not a yian value`). With session memory a reply holding one anywhere,
   provider metadata included, can't be stored: that model call is recorded `failed`
-  and the reply is not kept.
+  and the reply is not kept, so a text or tool AGENT fails with `node.execute` and a
+  structured AGENT retries, spending `retries:` even on a metadata NaN the model
+  can't fix.
 
 A temporary inside an expression may be infinite; only a binding's final value is checked.
 

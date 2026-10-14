@@ -419,7 +419,8 @@ def _generate_native(
             check_stopped()
             last_err = err
             # Provider/binding errors can include credentials. An error raised once the
-            # reply surfaced is yian's own diagnostic of that reply, so it is sent in full.
+            # reply surfaced is a local diagnostic of that reply (yian's check or the
+            # client's parser), so it is sent in full.
             detail = (f"provider error ({type(err).__name__})"
                       if memory_context.transcript is not None and not reply_surfaced else err)
             correction = HumanMessage(

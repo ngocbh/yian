@@ -415,12 +415,14 @@ Python can't complete, or a value too long to render as text, fails like any oth
 expression error (`binding.evaluate` in a binding, `node.execute` for a prompt).
 
 An AGENT checks what the model sends back. `run_agent` passes `invoke_model` a
-`check_reply` that rejects a tool call whose arguments hold one, before any call of
+`check_reply` that rejects a tool call whose arguments hold a NaN or infinity, before any call of
 that reply runs, so the AGENT fails `node.execute` (`tool call 'lookup' arguments at
 x: ...`). Structured generation marks every `float` slot `allow_inf_nan=False` (the
 JSON schema is unchanged), so `{"score": NaN}` is a `finite_number` schema error that
 self-corrects under `retries:` and, once spent, selects the declared field's origin;
-a freeform slot is checked after unwrapping (`structured output at k: ...`). With a
+a freeform slot is checked after unwrapping (`structured output at k: ...`; on the
+native path with a transcript the raw check names it first, `model reply at
+tool_calls[0].args.value.k: ...`). With a
 transcript, `invoke_model` also rejects a raw reply holding one anywhere, provider
 metadata included, since only finite JSON can be stored: the model effect is observed
 `failed` (or `interrupted` when a stop is pending) and the reply is not stored. On the
@@ -1098,7 +1100,8 @@ interrupt cuts the streaming reply. At the top of each iteration `run_agent` che
 again before each tool call, and `stream_reply` checks it as each chunk after the
 first arrives, before showing it. A stream that runs out is never cut, so a
 single-chunk reply, or an interrupt that lands on the last chunk, returns the
-complete reply and the tool loop skips its calls. A mid-stream interrupt sends
+complete reply and the tool loop skips its calls (unless a call's arguments hold
+a NaN or infinity, which fails the node first). A mid-stream interrupt sends
 the `final=True` chunk and raises `ReplyInterrupted` (a leaf in
 `nodes/agent/interrupts.py`, shared by `live.py` and `memory.py`) with the visible
 text so far and `usage_of` the chunks received; `observe_model_call` reports that

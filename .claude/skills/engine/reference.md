@@ -807,7 +807,8 @@ with `node.execute` before any call of the reply runs (`tool call 'lookup' argum
 at x: ...`), with or without memory. A structured reply's NaN or infinity is a schema
 deviation retried under `retries:`: `float` slots set `allow_inf_nan=False`
 (`finite_number`, origin at the declared field once retries are spent) and freeform
-values fail `structured output at <path>`. With session memory, `invoke_model`
+values fail `structured output at <path>` (or `model reply at <raw path>` on the
+native path with session memory). With session memory, `invoke_model`
 rejects a raw reply holding one anywhere, provider metadata included, before storing
 it; the model effect is observed `failed` and the reply is not kept. Without memory,
 metadata is not checked.

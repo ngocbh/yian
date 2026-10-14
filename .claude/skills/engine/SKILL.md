@@ -646,12 +646,12 @@ Most are just the functional model (above) made enforceable:
   ledger, checkpoint callback, or reconciliation channel. It recalls each key of
   the stack once and admits a transcript only from a key whose recorded
   `MemorySpec.conversation_eligible` is true; an ineligible or second transcript
-  raises `MemoryRecallError`. A model reply that isn't finite JSON is never
-  stored: `invoke_model` observes that effect `failed` and raises a located
-  error (a structured AGENT retries it, spending `retries:` even on a
-  metadata NaN the model can't fix). It
+  raises `MemoryRecallError`. It
   then binds authored scope plus accepted run/start identity into one lazy
-  evaluator-owned `MemoryContext`. Notes stay ordered outer-to-local. Use
+  evaluator-owned `MemoryContext`. Notes stay ordered outer-to-local. A model
+  reply holding a NaN or infinity is never stored: `invoke_model` observes that
+  effect `failed` and raises a located error (a structured AGENT retries it,
+  spending `retries:` even on a metadata NaN the model can't fix). Use
   `needs_memory_context` and `open_memory_context(system, prompt, compatibility)`;
   do not reintroduce separate recall/conversation injection or backend detection. Capture that identity before
   observers/submission; never recover it from mutable state in a worker. Keep the

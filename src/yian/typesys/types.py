@@ -12,17 +12,19 @@ resolution. Runtime receives only the resolved ``Type`` values.
 from __future__ import annotations
 
 import ast
-import json
 import re
 from dataclasses import dataclass, replace
 from typing import Union
 
 from yian.typesys.values import (
+    _BUILTIN_CONSTANTS,
+    _NAME_PATTERN,
     TypeCheckError,
     ValueKind,
     Type,
     _validate_numeric_bounds,
     canonical_union_order,
+    literal_label,
     types_overlap,
     union_tag_fields,
 )
@@ -189,14 +191,12 @@ def _has_unquoted_bracket(s: str) -> bool:
 _TYPE_TOKEN = re.compile(
     r"""\s*(?:
         (?P<number>[+-]?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)
-      | (?P<name>[^\W\d]\w*)
+      | (?P<name>""" + _NAME_PATTERN + r""")
       | (?P<string>"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')
       | (?P<punct>\.\.|[(),|])
     )""",
     re.VERBOSE,
 )
-
-_BUILTIN_CONSTANTS = ("True", "False", "None")
 
 # Deeper types are rejected before they can exhaust Python's recursion limit.
 _MAX_TYPE_DEPTH = 100
@@ -742,7 +742,7 @@ def _overlap_error(label: str, a_name: str, b_name: str) -> TypeCheckError:
     return TypeCheckError(
         f"{label}: members {a_name!r} and {b_name!r} can match the same value; add a tag "
         f"field every member declares as a single-value Literal, with a different value "
-        f"in each member, e.g. kind: Literal({a_name.lower()})"
+        f"in each member, e.g. kind: {literal_label([a_name.lower()])}"
     )
 
 
@@ -801,19 +801,10 @@ def format_type_expr(t: TypeExpr) -> str:
     if isinstance(t, OptionalExpr):
         return f"Optional({format_type_expr(t.inner)})"
     if isinstance(t, EnumExpr):
-        return "Literal(" + ", ".join(_format_literal_tag(tag) for tag in t.tags) + ")"
+        return literal_label(t.tags)
     if isinstance(t, UnionExpr):
         return "Union(" + ", ".join(format_type_expr(m) for m in t.members) + ")"
     return "dict"
-
-
-def _format_literal_tag(tag: str) -> str:
-    """Spell a `Literal` member bare when it reads back as a name, else quoted."""
-    # The tokenizer's NAME and `str.isidentifier` disagree on a few Unicode characters;
-    # a bare member must pass both to read back as the same single name.
-    if _TYPE_TOKEN.fullmatch(tag) and tag.isidentifier() and tag not in _BUILTIN_CONSTANTS:
-        return tag
-    return json.dumps(tag, ensure_ascii=False)
 
 
 def _expr_label(t: TypeExpr) -> str:
@@ -1021,10 +1012,9 @@ def read_typedefs(raw: dict) -> TypeRegistry:
                 registry[name] = AliasDef(target=parsed)
         elif isinstance(value, (list, tuple)):
             if all(isinstance(m, str) for m in value):
-                members = ", ".join(str(m) for m in value)
                 raise TypeCheckError(
                     f"typedef {name!r}: a tag-only union must be a Literal(...) enum, not a "
-                    f"sequence (e.g. {name}: Literal({members}))",
+                    f"sequence (e.g. {name}: {literal_label(value)})",
                     path=(name,),
                 )
             raise TypeCheckError(

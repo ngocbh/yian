@@ -50,7 +50,7 @@ output: ${{t.output}}
         ('"${input.a}-${input.b}"', "str"),
         ("5", "int(5..5)"),
         ("true", "bool"),
-        ('"x"', 'Literal("x")'),
+        ('"x"', 'Literal(x)'),
         ("[1, 2]", "list(int)"),
         ("!float ${input.n}", "float"),
         ('""', "str"),

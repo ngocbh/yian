@@ -690,7 +690,7 @@ def test_a_union_return_with_no_shared_tag_fails_at_run_start():
 
     with pytest.raises(ValueError, match=(
         r"output: declared Union\(.*\), but tool 'place_order' returns "
-        r'Union\(\{"type":Literal\("cancelled"\)\},\{"reason":str,"type":Literal\("rejected"\)\}\)$'
+        r'Union\(\{"type":Literal\(cancelled\)\},\{"reason":str,"type":Literal\(rejected\)\}\)$'
     )):
         run_flow(load_flow(_ORDERS_FLOW), {}, tools={"place_order": place_refused})
 

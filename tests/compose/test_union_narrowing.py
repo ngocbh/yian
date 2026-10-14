@@ -179,7 +179,7 @@ def test_a_call_target_under_sell_fails_the_call_type_check():
         _code("e"),
     ))
     assert "binding 'order' — child expects" in msg
-    assert """source is '{"action":Literal("sell")""" in msg
+    assert """source is '{"action":Literal(sell)""" in msg
 
 
 def test_an_unrouted_call_of_the_whole_union_still_fails():
@@ -799,7 +799,7 @@ def test_isinstance_narrows_an_opaque_object_to_the_checked_type():
     _loads(flow("isinstance(x.output, Buy)"))
     msg = _load_error(flow("isinstance(x.output, Sell)"))
     assert "binding 'order' — child expects" in msg
-    assert """source is '{"action":Literal("sell")""" in msg
+    assert """source is '{"action":Literal(sell)""" in msg
 
 
 def test_isinstance_cases_on_unrelated_types_into_one_target_do_not_narrow():

@@ -110,7 +110,7 @@ def test_unprovable_fit_is_a_load_error(child, binding, over, message):
         ("str", "${input.m:-2026-01-01}", "child expects 'str', but the default 2024 does not fit"),
         ("str", "${input.m:-true}", "child expects 'str', but the default true does not fit; quote it to keep it as text"),
         ("int", "yes", "child expects 'int', but the value \"yes\" does not fit"),
-        ("AB", "no", "child expects 'Literal(\"a\",\"b\")', but the value \"no\" does not fit"),
+        ("AB", "no", "child expects 'Literal(a, b)', but the value \"no\" does not fit"),
     ],
 )
 def test_no_rewrite_hint_when_rewriting_cannot_help(child, binding, message):

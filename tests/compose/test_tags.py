@@ -80,7 +80,7 @@ def test_suggest_tag():
     assert suggest_tag("a", type_for("Literal(buy)", REG), "buy") == "`a: !Literal(buy) buy`"
     assert "typedefs:" in suggest_tag("d", type_for("Union(Buy, Sell)", REG), "${x}")
     assert suggest_tag("d", type_for("Literal(a, b)", REG), None) == (
-        'name `Literal("a","b")` in `typedefs:` and tag with its name'
+        'name `Literal(a, b)` in `typedefs:` and tag with its name'
     )
     assert "typedefs:" in suggest_tag("d", type_for("Buy", REG), None)
     assert "typedefs:" in suggest_tag("d", type_for('Literal("a b")', REG), None)

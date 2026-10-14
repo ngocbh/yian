@@ -4,6 +4,7 @@ import pytest
 
 from yian.compose.helpers.errors import LoadError
 from yian.compose.loader import load_flow
+from yian.compose.source import SourceDocument
 
 
 _NODE_ID = """id: f
@@ -157,3 +158,5 @@ output: ${a.output}
     loaded = load_flow(text)
 
     assert "a" in loaded.compiled.nodes
+    meta = SourceDocument.parse(text).root.child("x-meta").value
+    assert meta == {"on": "a", True: "b"}

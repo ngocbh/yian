@@ -5,6 +5,8 @@ one loader table; PyYAML's global SafeLoader keeps its YAML 1.1 rules.
 """
 
 import math
+import subprocess
+import sys
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -56,6 +58,9 @@ _ROWS = [
     ("NULL", None),
     ("=", "="),
     (".inf", float("inf")),
+    ("-.inf", float("-inf")),
+    ("+.Inf", float("inf")),
+    ("-.nan", "-.nan"),
 ]
 
 
@@ -92,8 +97,9 @@ def test_empty_plain_scalar_is_null(read):
 
 
 @ENTRY_POINTS
-def test_nan_is_a_float(read):
-    assert math.isnan(read("value: .nan\n")["value"])
+@pytest.mark.parametrize("text", [".nan", ".NaN"])
+def test_nan_is_a_float(read, text):
+    assert math.isnan(read(f"value: {text}\n")["value"])
 
 
 @ENTRY_POINTS
@@ -148,35 +154,61 @@ def test_explicit_tag_reads_a_core_form(read, text, expected):
 
 
 @ENTRY_POINTS
-@pytest.mark.parametrize("text", ["!!int 1_000", "!!int 1.0", "!!bool yes"])
-def test_explicit_tag_rejects_a_non_core_form(read, text):
+@pytest.mark.parametrize(
+    ("text", "found"),
+    [
+        ("!!int 1_000", "1_000"),
+        ("!!int 1.0", "1.0"),
+        ("!!bool yes", "yes"),
+        ("!!bool |\n  true\n", "true\n"),
+        ('!!float ".inf\\n"', ".inf\n"),
+    ],
+    ids=["int-underscore", "int-float", "bool-yes", "bool-block-newline", "float-newline"],
+)
+def test_explicit_tag_rejects_a_non_core_form(read, text, found):
     with pytest.raises(SourceSyntaxError) as caught:
         read(f"value: {text}\n")
 
-    assert repr(text.split()[1]) in str(caught.value)
+    assert repr(found) in str(caught.value)
     if read is _document_value:
         assert caught.value.range is not None
         assert caught.value.range.start_line == 1
 
 
-def test_pyyaml_globals_are_untouched():
-    resolvers_before = {
-        key: list(value) for key, value in yaml.SafeLoader.yaml_implicit_resolvers.items()
-    }
-    base_before = {
-        key: list(value)
-        for key, value in yaml.resolver.Resolver.yaml_implicit_resolvers.items()
-    }
+_RESOLVER_TAGS = (
+    "import yaml; "
+    "print(repr([sorted((key, [tag for tag, _ in value]) "
+    "for key, value in loader.yaml_implicit_resolvers.items()) "
+    "for loader in (yaml.SafeLoader, yaml.Loader, yaml.FullLoader)]))"
+)
 
+
+def test_pyyaml_globals_are_untouched():
     SourceDocument.parse("a: yes\nb: 017\n")
     parse_yaml_literal("c: on\n")
 
+    # A fresh interpreter that never imports yian gives PyYAML's own tables.
+    fresh = subprocess.run(
+        [sys.executable, "-c", _RESOLVER_TAGS],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    in_process = repr(
+        [
+            sorted(
+                (key, [tag for tag, _ in value])
+                for key, value in loader.yaml_implicit_resolvers.items()
+            )
+            for loader in (yaml.SafeLoader, yaml.Loader, yaml.FullLoader)
+        ]
+    )
+
+    assert in_process == fresh
     assert yaml.safe_load("yes") is True
     assert yaml.safe_load("1:30") == 90
     assert yaml.safe_load("017") == 15
     assert yaml.safe_load("!!bool yes") is True
-    assert yaml.SafeLoader.yaml_implicit_resolvers == resolvers_before
-    assert yaml.resolver.Resolver.yaml_implicit_resolvers == base_before
     assert _FlowLoader.yaml_implicit_resolvers is not yaml.SafeLoader.yaml_implicit_resolvers
     assert "yaml_implicit_resolvers" in _FlowLoader.__dict__
     assert "yaml_constructors" in _FlowLoader.__dict__

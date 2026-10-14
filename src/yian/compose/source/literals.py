@@ -16,13 +16,16 @@ def parse_yaml_literal(text: str) -> Any:
     value, not a graph.
 
     Args:
-        text (str): The YAML literal.
+        text (`str`):
+            The YAML literal.
 
     Returns:
-        Any: The constructed value.
+        `Any`:
+            The constructed value.
 
     Raises:
-        SourceSyntaxError: The text is not valid YAML for the flow loader.
+        `SourceSyntaxError`:
+            Raised when the text is not valid YAML for the flow loader.
     """
 
     try:

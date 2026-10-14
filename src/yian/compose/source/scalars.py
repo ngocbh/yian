@@ -41,7 +41,12 @@ def _pyyaml_timestamp_regex() -> re.Pattern[str]:
     """Return PyYAML's own implicit timestamp pattern.
 
     Returns:
-        re.Pattern[str]: The pattern PyYAML's resolver uses for unquoted dates.
+        `re.Pattern[str]`:
+            The pattern PyYAML's resolver uses for unquoted dates.
+
+    Raises:
+        `AssertionError`:
+            Raised when PyYAML's resolver has no implicit timestamp entry.
     """
 
     for resolvers in yaml.resolver.Resolver.yaml_implicit_resolvers.values():
@@ -66,13 +71,16 @@ class _FlowLoader(yaml.SafeLoader):
         """Construct a core-schema boolean.
 
         Args:
-            node (yaml.Node): Scalar node tagged ``bool``.
+            node (`yaml.Node`):
+                Scalar node tagged ``bool``.
 
         Returns:
-            bool: ``True`` or ``False``.
+            `bool`:
+                ``True`` or ``False``.
 
         Raises:
-            ConstructorError: The text is not a core-schema boolean.
+            `ConstructorError`:
+                Raised when the text is not a core-schema boolean.
         """
 
         text = self._core_text(node, _BOOL, "boolean")
@@ -82,35 +90,39 @@ class _FlowLoader(yaml.SafeLoader):
         """Construct a core-schema integer; leading zeros stay decimal.
 
         Args:
-            node (yaml.Node): Scalar node tagged ``int``.
+            node (`yaml.Node`):
+                Scalar node tagged ``int``.
 
         Returns:
-            int: The integer value.
+            `int`:
+                The integer value.
 
         Raises:
-            ConstructorError: The text is not a core-schema integer.
+            `ConstructorError`:
+                Raised when the text is not a core-schema integer.
         """
 
         text = self._core_text(node, _INT, "integer")
-        sign = -1 if text[0] == "-" else 1
-        digits = text.lstrip("+-")
-        if digits.startswith("0o"):
-            return sign * int(digits[2:], 8)
-        if digits.startswith("0x"):
-            return sign * int(digits[2:], 16)
-        return sign * int(digits, 10)
+        if text.startswith("0o"):
+            return int(text[2:], 8)
+        if text.startswith("0x"):
+            return int(text[2:], 16)
+        return int(text, 10)
 
     def construct_yaml_float(self, node: yaml.Node) -> float:
         """Construct a core-schema float, including ``.inf`` and ``.nan`` forms.
 
         Args:
-            node (yaml.Node): Scalar node tagged ``float``.
+            node (`yaml.Node`):
+                Scalar node tagged ``float``.
 
         Returns:
-            float: The float value.
+            `float`:
+                The float value.
 
         Raises:
-            ConstructorError: The text is not a core-schema float.
+            `ConstructorError`:
+                Raised when the text is not a core-schema float.
         """
 
         text = self._core_text(node, _FLOAT, "float")
@@ -125,19 +137,26 @@ class _FlowLoader(yaml.SafeLoader):
         """Return a scalar's text after checking it is a core-schema form.
 
         Args:
-            node (yaml.Node): Scalar node with an explicit or resolved tag.
-            pattern (re.Pattern[str]): The core-schema pattern for the tag.
-            kind (str): Name of the expected kind, for the error.
+            node (`yaml.Node`):
+                Scalar node with an explicit or resolved tag.
+            pattern (`re.Pattern[str]`):
+                The core-schema pattern for the tag.
+            kind (`str`):
+                Name of the expected kind, used in the error.
 
         Returns:
-            str: The scalar's text.
+            `str`:
+                The scalar's text.
 
         Raises:
-            ConstructorError: The text does not match ``pattern``.
+            `ConstructorError`:
+                Raised when the whole text does not match ``pattern``.
         """
 
         text = self.construct_scalar(node)
-        if not pattern.match(text):
+        # fullmatch: `$` alone would accept a trailing newline from a block or
+        # quoted scalar under an explicit tag.
+        if not pattern.fullmatch(text):
             raise ConstructorError(
                 None,
                 None,

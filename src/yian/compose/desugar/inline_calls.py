@@ -172,6 +172,7 @@ def desugar_inline_calls(
             synth[call.id] = _to_call_descriptor(
                 call,
                 host=f"node {nid!r}",
+                host_id=nid,
                 range=origins.get(call.id, rng),
                 diagnostics=diagnostics,
             )
@@ -578,6 +579,7 @@ def _to_call_descriptor(
     call: InlineCall,
     *,
     host: str,
+    host_id: Optional[str] = None,
     range: Optional[SourceRange] = None,
     diagnostics: LoadDiagnostics | None = None,
 ) -> CallDescriptor:
@@ -588,7 +590,31 @@ def _to_call_descriptor(
     carries its OWN provenance: `range` is the site it desugared from (a node input's binding
     line, a case `then:`/`else:` line, or a section item). It owns no authored fields, so
     `field_ranges` is empty and a bad ref inside the directive carets `range`, never a host
-    line."""
+    line.
+
+    Args:
+        call (`InlineCall`):
+            The recognized directive: synth id, callee, and keyword args.
+        host (`str`):
+            The site named in error messages (`node 'x'`, `flow outputs`, ...).
+        host_id (`str`, *optional*, defaults to `None`):
+            The node the call was lifted out of, recorded as the synth node's `host` so it
+            takes that node's CASE routes, `depends_on`, and `runs_after`. `None` for a call
+            with no host node (flow `output:`/`asserts:`, or a branch target).
+        range (`SourceRange`, *optional*, defaults to `None`):
+            The site the directive desugared from.
+        diagnostics (`LoadDiagnostics`, *optional*, defaults to `None`):
+            Locates load errors. `None` uses a range-only default.
+
+    Returns:
+        `CallDescriptor`:
+            The synth call node.
+
+    Raises:
+        `LoadError`:
+            Raised when the callee is in the private inline-flow namespace or an arg
+            captures `${item}`.
+    """
     diagnostics = diagnostics or LoadDiagnostics()
     if call.callee.startswith(INLINE_FLOW_PREFIX):
         raise diagnostics.error(
@@ -610,6 +636,7 @@ def _to_call_descriptor(
         call=call.callee,
         inputs=dict(call.args),
         over=None,
+        host=host_id,
         range=range,
         field_ranges={},
     )

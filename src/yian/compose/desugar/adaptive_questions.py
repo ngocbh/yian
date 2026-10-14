@@ -109,6 +109,8 @@ def desugar_adaptive_questions(
             "input_types": dict(desc.input_types),
             "output_contract_override": ValueContract(question_list_type()),
             "outputs": None,
+            # The composer runs on the gate's routes and ordering.
+            "host": gid,
             "range": desc.range,
             "field_ranges": dict(desc.field_ranges),
         }

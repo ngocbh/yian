@@ -972,7 +972,7 @@ One `${...}` grammar; the context decides what happens to the result:
   `|`, and pure builtins. A child-flow call is the whole-value `call(...)`
   directive, not a `${...}` span. A tag (`name: !T value`) declares the value's
   type (see "Typed slots"); `${T(...)}` builds or checks a typedef value inside
-  an expression.
+  an expression. A builtin called with arguments it doesn't take is a load error.
 - **`when:` / `asserts:`**: **tested** as a boolean — `== != < <= > >=`,
   `in`/`not in`, `and`/`or`/`not`, parens, arithmetic operands. Bare, or one
   whole `${...}`, are equivalent; braces on a ref inside (`${a} > 5`) are a load
@@ -985,7 +985,8 @@ One `${...}` grammar; the context decides what happens to the result:
   `input.profile.age`.
   `${system.X}` is **not** allowed there (it is ambient; a `system` ref is a
   LoadError — move the check into a body node).
-- **Prompts**: free text with embedded `${...}` spans (each stringified).
+- **Prompts**: free text with embedded `${...}` spans (each stringified). A span may
+  call only a builtin; a builtin called with arguments it doesn't take is a load error.
 
 `isinstance(x, T)` and constructors `T(...)` work in bindings, `when:`, node/flow
 asserts, LOOP `while:`/`until:`, and flow outputs. They are load errors in prompts and
@@ -1030,8 +1031,8 @@ block, written bare (`${name}`). An AGENT prompt also sees its own `variables:`.
 `${other.output}`) go in the `input:` block — bind there, then use the local name
 in the prompt. The same rule covers a `human_input` `prompt:` and its question text
 (`question`, option `label` and `description`); the loader checks all of them, so an
-unknown name, a pool reference, an unknown function, or a span that doesn't parse is a
-load error at that text.
+unknown name, a pool reference, an unknown function, a builtin called with arguments it
+doesn't take, or a span that doesn't parse is a load error at that text.
 
 ## Effects from inside an AGENT node — `ask_user`
 An AGENT node granted `tools: [ask_user]` can synchronously ask the human

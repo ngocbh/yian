@@ -229,11 +229,12 @@ value still renders as `null`.
 New builtins register with `@register_template_fn()`, before loading a flow that
 calls one.
 
-In a condition every call is checked before it runs: an unknown function, or
-arguments the builtin doesn't take, is a load error (for a condition set in Python,
-`run_flow` raises `ExpressionError` before the run). A `typedefs:` constructor
-`T(...)` is not an unknown function; set in Python, its name must be in the node's
-type table.
+Every call is checked before it runs, wherever it is written (bindings, flow outputs,
+conditions, prompts): an unknown function, or arguments the builtin doesn't take, is a
+load error. Set in Python, a condition with either fault, or a binding, flow output, or
+prompt that calls a builtin with arguments it doesn't take, makes `run_flow` raise
+`ExpressionError` before the run. A `typedefs:` constructor `T(...)` is not an unknown
+function; set in Python, its name must be in the node's type table.
 
 ## `isinstance` — the type test
 

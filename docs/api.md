@@ -133,7 +133,11 @@ assertion, CASE `when`, or LOOP `while`/`until` set in Python whose expression d
 parse (or calls an unknown function or a builtin with the wrong arguments) raises
 `ExpressionError` (a `ValueError`) naming the node and the field (assertion list and
 assertion, case handle, or predicate keyword), before the log is created;
-`resume_flow` raises it for an unfinished run before appending any record.
+`resume_flow` raises it for an unfinished run before appending any record. Likewise a
+binding, flow output, AGENT prompt, or `human_input` text set in Python whose `${...}`
+span doesn't parse or calls a builtin with the wrong arguments (or, in a prompt, calls
+any other function) raises `ExpressionError` naming the node and field before the log is
+created.
 
 - `log` — an optional JSONL path. `None` still uses the same record/reducer path
   with a process-local log. A path creates a new durable log exclusively; an

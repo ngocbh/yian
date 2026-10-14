@@ -275,8 +275,9 @@ the member first with `isinstance(r, <Type>) and ...`
     prompt. Bind it there, then refer to the local name in the prompt.
     The same rule covers a `human_input` `prompt:` and its question text
     (`question`, and each option's `label` and `description`). The loader checks
-    all of them, so an unknown name, a pool reference, an unknown function, or a
-    span that doesn't parse is a load error at that text.
+    all of them, so an unknown name, a pool reference, an unknown function, a builtin
+    called with arguments it doesn't take, or a span that doesn't parse is a load
+    error at that text.
 
 Changed: a non-text `prompt:` used to crash the loader with a raw `TypeError` (AGENT, an
 adaptive brief), load silently (AGENT `0`, `false`, `[]`, `{}`; `human_input` lists and
@@ -2706,7 +2707,8 @@ One `${...}` grammar serves every context — the difference is what each contex
   A binding may declare its value's type with a tag, `name: !T value` (see
   [Typed slots](#typed-slots-yaml-tags)). `${...}` nested in a record or list value is
   evaluated too, and a typedef name builds or checks a typed value
-  (`${Buy(x)}`, see [Constructors](expressions.md#constructors-t)).
+  (`${Buy(x)}`, see [Constructors](expressions.md#constructors-t)). Calling a builtin
+  with arguments it doesn't take is a load error at that binding.
 - **`when:` / `asserts:`**: the expression is **tested** as a boolean. Same
   operators. Write conditions in the canonical **bare** form (`a.output > 5`) — no
   `${}`. Braces around the whole expression (`${a.output > 5}`) load and evaluate
@@ -2722,12 +2724,19 @@ One `${...}` grammar serves every context — the difference is what each contex
   text); spans may use the full grammar, but reference only the node's own declared
   inputs. `isinstance` and constructors are the exception: compute them in an input
   binding (see [Expressions → `isinstance`](expressions.md#isinstance-the-type-test)).
+  A span may call only a builtin, with arguments it takes; anything else is a load
+  error at that prompt.
 
 Changed: a condition that called an unknown function, or a builtin with arguments it
 doesn't take, used to load and fail when evaluated (an assert reported "pre-assert
 failed" or "post-assert failed"; a `case` or `loop` failed its node), or never fail
 when `and`/`or` skipped the call. It is now a load error; fix the name or the
 arguments. `yian.evaluate_when` raises for such a condition too.
+
+Changed: a binding, flow output, or prompt that called a builtin with arguments it
+doesn't take used to load and fail when it ran (or never fail when the node didn't
+run). It is now a load error at that value; fix the arguments. For a flow built or
+changed in Python, `run_flow` raises `ExpressionError` before the run.
 
 > Bindings wire, conditions test, nodes compute.
 

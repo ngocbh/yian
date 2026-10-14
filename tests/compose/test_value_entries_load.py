@@ -8,6 +8,10 @@ tests cover the located errors (a tag without a value, a mistyped literal, a spa
 unknown tag, a nested mismatch, a disjoint span or flow call, a span reading the entry
 itself, a flow call inside `${...}`), secret literals, which are rejected before any
 check could echo them, and the flow fingerprint.
+
+A bare `!object` over a written-out mapping keeps the record the mapping spells: reading
+a field it lacks is a load error, a `${...}` field has its producer's type, and a nested
+tagged `!object` stays opaque. `!object ${x.output}` stays `object`.
 """
 
 import pytest
@@ -210,6 +214,17 @@ def test_a_flow_call_inside_a_span_keeps_its_error():
     assert _error_line(error) == _line_of(text, "  x: !str ${ f(")
 
 
+def test_entries_reading_each_other_are_rejected():
+    text = _flow(
+        "  x: !object\n    a: ${y.output}\n  y: !object\n    b: ${x.output}\n"
+    )
+
+    error = _load_error(text)
+
+    assert str(error) == "node build dependency cycle: x -> y -> x"
+    assert _error_line(error) == _line_of(text, "  y: !object")
+
+
 def test_an_entry_reading_itself_is_rejected():
     text = _flow("  x: !object\n    a: ${x.output}\n")
 
@@ -264,3 +279,131 @@ def test_fingerprint_is_stable_and_tracks_the_literal():
 
     assert first == second
     assert changed != first
+
+
+def _record_flow(entries: str, reader: str, *, head: str = "") -> str:
+    """Return a flow with `entries` and a CODE node `use` whose input `c` is `reader`."""
+    return (
+        "id: f\n"
+        "name: f\n"
+        f"{head}"
+        "input:\n"
+        "  n: !int\n"
+        "nodes:\n"
+        f"{entries}"
+        "  use:\n"
+        "    kind: code\n"
+        "    input:\n"
+        f"      c: {reader}\n"
+        "    code: |\n"
+        "      return inputs['c']\n"
+        "output: ${use.output}\n"
+    )
+
+
+_EXIT_RESULT = '  exit_result: !object {exited: true, reply: ""}\n'
+
+
+def test_a_written_out_object_entry_keeps_its_fields():
+    load_flow(_record_flow(_EXIT_RESULT, "${exit_result.output.reply}"))
+
+
+def test_a_written_out_object_entry_rejects_an_unknown_field_at_the_reader():
+    text = _record_flow(_EXIT_RESULT, "${exit_result.output.zz}")
+
+    error = _load_error(text)
+
+    assert str(error) == (
+        "flow has unresolved references:\n"
+        "  node 'use' input 'c' from: reference ${exit_result.output.zz} reads unknown "
+        "field 'zz' on record"
+    )
+    assert _error_line(error) == _line_of(text, "c: ${exit_result")
+
+
+def _producer(output: str) -> str:
+    """Return a CODE node `p` returning text, declaring `output` unless it is empty."""
+    declared = f"    output: {output}\n" if output else ""
+    return f"  p:\n    kind: code\n{declared}    code: |\n      return 'hi'\n"
+
+
+_SPAN_RECORD = "  r: !object\n    a: ${p.output}\n    b: 1\n"
+
+
+def test_a_span_field_takes_its_producer_type():
+    text = _record_flow(_producer("str") + _SPAN_RECORD, "!int ${r.output.a}")
+
+    error = _load_error(text)
+
+    assert str(error) == "node 'use' input 'c': declared int, but the value is str"
+    assert _error_line(error) == _line_of(text, "c: !int")
+
+
+@pytest.mark.parametrize("output", ["str", ""])
+def test_a_span_record_rejects_an_unknown_field(output):
+    text = _record_flow(_producer(output) + _SPAN_RECORD, "${r.output.c}")
+
+    error = _load_error(text)
+
+    assert str(error) == (
+        "flow has unresolved references:\n"
+        "  node 'use' input 'c' from: reference ${r.output.c} reads unknown field 'c' "
+        "on record"
+    )
+    assert _error_line(error) == _line_of(text, "c: ${r.output.c}")
+
+
+def test_a_span_from_an_untyped_producer_is_opaque():
+    load_flow(_record_flow(_producer("") + _SPAN_RECORD, "!int ${r.output.a}"))
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "  r: !object\n    a: ${p.output}\n    p: {q: 1}\n",
+        "  r: !object\n    p: {q: 1}\n",
+    ],
+)
+def test_a_nested_untagged_mapping_keeps_its_fields(entry):
+    text = _record_flow(_producer("str") + entry, "${r.output.p.zz}")
+
+    error = _load_error(text)
+
+    assert str(error) == (
+        "flow has unresolved references:\n"
+        "  node 'use' input 'c' from: reference ${r.output.p.zz} reads unknown field "
+        "'zz' on record"
+    )
+    assert _error_line(error) == _line_of(text, "c: ${r.output.p.zz}")
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "  r: !object\n    a: ${p.output}\n    p: !object {q: 1}\n",
+        "  r: !object\n    p: !object {q: 1}\n",
+    ],
+)
+def test_a_nested_tagged_object_is_opaque(entry):
+    load_flow(_record_flow(_producer("str") + entry, "${r.output.p.zz}"))
+
+
+def test_an_object_entry_over_an_outside_value_stays_object():
+    entries = (
+        "  x:\n"
+        "    kind: code\n"
+        "    output: {q: int}\n"
+        "    code: |\n"
+        "      return {'q': 1}\n"
+        "  o: !object ${x.output}\n"
+    )
+
+    load_flow(_record_flow(entries, "${o.output.zz}"))
+
+
+def test_an_escaped_span_in_an_object_entry_is_text():
+    text = _record_flow('  r: !object {a: "$${input.n}"}\n', "!int ${r.output.a}")
+
+    error = _load_error(text)
+
+    assert str(error) == "node 'use' input 'c': declared int, but the value is str"

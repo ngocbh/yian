@@ -251,3 +251,57 @@ def test_a_runtime_type_failure_points_at_the_entry():
     assert result.failure.node_id == "x"
     frame = flow.diagnose(result.failure).frames[-1]
     assert frame.range.covered_lines(text) == [8]
+
+
+def _producer(output: str) -> str:
+    """Return a CODE node `p` returning text, declaring `output` unless it is empty."""
+    declared = f"    output: {output}\n" if output else ""
+    return f"  p:\n    kind: code\n{declared}    code: |\n      return 'hi'\n"
+
+
+@pytest.mark.parametrize(
+    ("entries", "output", "expected"),
+    [
+        ("  r: !object {exited: true, reply: ''}\n", "${r.output.reply}", ""),
+        (
+            "  r: !object {exited: true, reply: ''}\n",
+            "${r.output}",
+            {"exited": True, "reply": ""},
+        ),
+        (
+            _producer("str") + "  r: !object\n    a: ${p.output}\n    b: 1\n",
+            "${r.output}",
+            {"a": "hi", "b": 1},
+        ),
+        (
+            _producer("") + "  r: !object\n    a: ${p.output}\n    b: 1\n",
+            "${r.output.a}",
+            "hi",
+        ),
+        (
+            _producer("str") + "  r: !object\n    a: ${p.output}\n    p: {q: 1}\n",
+            "${r.output.p.q}",
+            1,
+        ),
+        (
+            _producer("") + "  r: !object\n    a: ${p.output}\n    p: !object {q: 1}\n",
+            "${r.output.p}",
+            {"q": 1},
+        ),
+        ("  r: !object\n    p:\n      q: [1, 2]\n", "${r.output.p.q}", [1, 2]),
+        ("  r: !object {}\n", "${r.output}", {}),
+        ('  r: !object {a: "$${input.name}"}\n', "${r.output}", {"a": "${input.name}"}),
+        (
+            "  x:\n"
+            "    kind: code\n"
+            "    output: {q: int}\n"
+            "    code: |\n"
+            "      return {'q': 1}\n"
+            "  r: !object ${x.output}\n",
+            "${r.output}",
+            {"q": 1},
+        ),
+    ],
+)
+def test_a_written_out_object_entry_runs_with_its_record(entries, output, expected):
+    assert _run(_flow(entries, output=output), {"name": "Ada"}) == expected

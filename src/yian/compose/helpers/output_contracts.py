@@ -338,6 +338,35 @@ def _tree_contract(
     return ValueContract(typ if exact_literals else _widened(typ))
 
 
+def literal_contract(value: Any) -> OutputContract | None:
+    """Infer the contract of a span-free plain literal, as written out.
+
+    A mapping is a closed record of its keys' contracts, a list is a list of its
+    items' joined type (as in `template_contract`), and a scalar has its kind's
+    widened type. Every string is `str`: the value is already read, so `$$` escapes
+    are undone and a string is never scanned for `${...}` spans.
+
+    Args:
+        value (`Any`): The literal, with no template or binding inside it.
+
+    Returns:
+        `OutputContract | None`: The exact or partial contract, or `None` when the
+            value's shape is unproven (a non-text key, a non-finite number, a list
+            whose items don't join).
+    """
+    if type(value) is dict:
+        # A record names its fields by text, so a mapping with another key is unproven.
+        if any(type(key) is not str for key in value):
+            return None
+        return combine_output_contracts(
+            {key: literal_contract(item) for key, item in value.items()}
+        )
+    if type(value) is list:
+        return _list_contract([literal_contract(item) for item in value])
+    typ = literal_type(value)
+    return None if typ is None else ValueContract(_widened(typ))
+
+
 def _list_contract(items: list[OutputContract | None]) -> ValueContract | None:
     """Return the list contract of exact items with one joined type, else `None`."""
     # Unlike an inline body's strict element join, this leaves a list it can't join

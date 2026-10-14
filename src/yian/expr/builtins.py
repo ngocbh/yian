@@ -15,8 +15,9 @@ Never imports: `template`, `nodes`, `compile`, `runtime` (they sit above / besid
 
 from __future__ import annotations
 
-import json
 from typing import Any, Callable
+
+import yian.json_codec as json_codec
 
 # name -> a pure value->value formatter, called as `fn(*pos, **kw)` at prompt-render time.
 TEMPLATE_FNS: dict[str, Callable[..., Any]] = {}
@@ -61,10 +62,11 @@ def _text(fn: str, s: Any) -> str:
 @register_template_fn("render_as_json")
 def _render_as_json(value: Any, indent: int = 2) -> str:
     """Pretty-print `value` as JSON — the headline builtin (a list/dict input renders as a
-    JSON block instead of its Python repr). `default=str` keeps non-JSON values printable.
-    A null `value` is an error; a null nested inside it renders as `null`."""
+    JSON block instead of its Python repr). `default=str` keeps non-JSON values printable,
+    and ints of any size are written in full. A null `value` is an error; a null nested
+    inside it renders as `null`."""
     _reject_null("render_as_json", value)
-    return json.dumps(value, indent=indent, default=str, ensure_ascii=False)
+    return json_codec.dumps(value, indent=indent, default=str, ensure_ascii=False)
 
 
 @register_template_fn("join")

@@ -29,6 +29,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal, TypeAlias
 
+import yian.json_codec as json_codec
 from yian.diagnostics import OriginRef
 from yian.expr import (
     ExpressionError,
@@ -224,7 +225,7 @@ def coerce_param(parameter: Parameter, value: Any) -> Any:
     raw = value.strip()
     try:
         if parameter.contract.type.kind is ValueKind.INTEGER:
-            return int(raw)
+            return json_codec.parse_int(raw)
         if parameter.contract.type.kind is ValueKind.NUMBER:
             return float(raw)
         if parameter.contract.type.kind is ValueKind.BOOLEAN:

@@ -7,9 +7,9 @@ never import the runtime log, state, trace, driver, or public run boundary.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-import json
 from typing import Literal
 
+import yian.json_codec as json_codec
 from yian.diagnostics import Failure, OriginRef
 from yian.expr.lineage import (
     FeedbackValue, SourceRef, ValueRoute, validate_feedback,
@@ -120,9 +120,9 @@ def _validate_route(route: ValueRoute) -> None:
     if route.value_json is not None:
         if type(route.value_json) is not str:
             raise TypeError("route value_json must be a string or None")
-        result = json.loads(route.value_json, object_pairs_hook=_route_object_without_duplicates)
+        result = json_codec.loads(route.value_json, object_pairs_hook=_route_object_without_duplicates)
         _copy_backward_value(result, "route result")
-        json.dumps(result, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        json_codec.dumps(result, ensure_ascii=False, allow_nan=False).encode("utf-8")
     if route.result_type is not None and (type(route.result_type) is not str or not route.result_type):
         raise ValueError("route result_type must be a non-empty string or None")
     if route.kind in ("literal", "scalar", "opaque"):

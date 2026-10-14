@@ -18,6 +18,7 @@ from typing import Any, Callable
 
 from lark import Token, Tree
 
+import yian.json_codec as json_codec
 from yian.expr.lineage import ResolvedValue, SourceRef, TracedValue, ValueRoute
 from yian.typesys.pool import VariablePool
 from yian.typesys.values import Type, TypeCheckError, ValueKind, build_value_as
@@ -79,7 +80,7 @@ def _parse_literal(token: str) -> Any:
     if low in ("null", "none"):
         return None
     if _NUMBER_RE.match(t):
-        return float(t) if "." in t else int(t)
+        return float(t) if "." in t else json_codec.parse_int(t)
     if (t.startswith('"') and t.endswith('"')) or (t.startswith("'") and t.endswith("'")):
         return t[1:-1]
     raise ExpressionError(f"cannot parse literal {token!r}")
@@ -420,7 +421,7 @@ class _EvalExpr:
         """A lone literal that inlined up to a top-level token."""
         if tok.type == "NUMBER":
             s = str(tok)
-            return float(s) if "." in s else int(s)
+            return float(s) if "." in s else json_codec.parse_int(s)
         if tok.type == "STRING":
             return str(tok)[1:-1]
         if tok.type == "BOOL":

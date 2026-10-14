@@ -3,9 +3,9 @@
 One of the two-axis `compose/nodes/<kind>.py` modules: it owns the `human_input` node's
 frozen `HumanInputDescriptor`. It wraps the template `parse` from `NodeDescriptor` (which
 records each field's `SourceRange`) to reject the removed `adaptive_questions.mode:` key and
-record one `("text", "questions[i]...")` range per question string, overrides the `_validate_fields` hook to enforce the one-of-three question-surface legality,
-and overrides `build` (which constructs the runtime
-`HumanInputNode` and derives the answer schema). `_finish` stamps only the descriptor's opaque
+record one `("text", "questions[i]...")` range per question string, overrides the
+`_validate_fields` hook to enforce the one-of-three question-surface legality, and overrides
+`build` (which constructs the runtime `HumanInputNode` and derives the answer schema). `_finish` stamps only the descriptor's opaque
 origin onto that node and keeps concrete ranges on the Compose-owned `BuildResult`. Registered
 into `KINDS`/`BINDING_FIELDS` at import so the shared dispatch routes here.
 

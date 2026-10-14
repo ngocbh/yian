@@ -1,7 +1,7 @@
 """Builtins — pure functions an author may call inside a `${...}` expression.
 
 A `${...}` span may be a plain reference (`${name}`) OR a builtin call
-(`${ render_as_json(${briefs}, 4) }`). `TEMPLATE_FNS` maps a builtin name to a pure
+(`${ render_as_json(briefs, 4) }`). `TEMPLATE_FNS` maps a builtin name to a pure
 value->value function. The unified evaluator (`expr.expressions.eval_expr`) dispatches
 every call through it, so builtins work in prompts, bindings, and conditions; a prompt
 calls them against the node's already-bound declared inputs.

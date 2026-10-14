@@ -12,7 +12,7 @@ def test_ref_coalesce_co_skips():
 
 
 def test_ref_default_co_skips():
-    assert binding_co_skips("${a.output:-${b.output}}") is True  # default is a ref
+    assert binding_co_skips("${a.output :- b.output}") is True  # default is a ref
 
 
 def test_literal_default_does_not_co_skip():

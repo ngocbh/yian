@@ -180,8 +180,8 @@ def test_case_multiref_when_produces_no_infer_edge():
 
 def test_case_when_produces_no_infer_edge_in_every_spelling():
     # A searched `when:` in any spelling yields no infer_data_edges edge into the case node
-    # (the case build owns the score->gate edge). One flow, all three spellings.
-    for when in ("score.output >= 0.5", "${score.output} >= 0.5", "${score.output >= 0.5}"):
+    # (the case build owns the score->gate edge). One flow per spelling.
+    for when in ("score.output >= 0.5", "${score.output >= 0.5}"):
         text = (
             "id: f\nname: f\ninput:\n  x: float\nnodes:\n"
             "  score:\n    kind: code\n    input:\n      x: ${input.x}\n"

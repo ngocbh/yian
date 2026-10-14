@@ -268,7 +268,7 @@ nodes:
     input:
       n: 0
       exited: false
-    while: not ${exited}
+    while: not exited
     max: 5
 output: ${repeat.output}
 """

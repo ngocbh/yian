@@ -330,13 +330,13 @@ def _resolve_source(
     exactly one `${...}` yields the **typed** value of that reference
     (type preserved); a `${...}` embedded in surrounding text is **stringified** into
     it; a value with no `${...}` is a plain literal (after `$$` -> `$`). The interior
-    is a `|` coalesce, first-non-None, where an atom is a ref, a `:-` literal-or-
-    one-nested-`${...}` default, a `:?` required, or a literal. `${item}` / `${item.path}`
-    resolve from the MAP-body-local scope. A non-string `source` is a literal.
+    is one expression of the unified grammar (refs, literals, operators, `|` coalesce,
+    `:-` default, `:?` required). `${item}` / `${item.path}` resolve from the
+    MAP-body-local scope. A non-string `source` is a literal.
 
-    Parse/eval errors (malformed ref, two-level nesting, an unbound `:?`) surface as
-    `BindingError` — `expr`'s `ExpressionError`/`RequiredError` never leak across the
-    `nodes <- expr` boundary. ``collector`` optionally retains the selected route
+    Parse/eval errors (a malformed ref, a `${...}` inside the expression, an unbound `:?`)
+    surface as `BindingError` — `expr`'s `ExpressionError`/`RequiredError` never leak
+    across the `nodes <- expr` boundary. ``collector`` optionally retains the selected route
     under ``name``; ``source_resolver`` pairs values with accepted producer identities
     in one read. Without that injected resolver, capture records no producer identity.
     ``types`` is the table an ``isinstance(x, T)`` looks ``T`` up in (``None`` means no types).

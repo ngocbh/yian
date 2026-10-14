@@ -384,7 +384,7 @@ nodes:
     input:
       count: 0
       last: ""
-    while: ${count} < 1
+    while: count < 1
     max: 3
 output: ${again.output}
 """

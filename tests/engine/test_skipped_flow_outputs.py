@@ -115,9 +115,9 @@ def test_dotted_output_is_null():
 
 
 def test_ref_default_group_over_a_routing_only_case_is_null():
-    """`${a.output :- ${b.output}}` over a CASE that may match nothing returns null."""
-    text = _flow(_R2, "\n  v: ${a.output :- ${b.output}}", inputs=_R2_INPUTS)
-    assert _sources(text) == ["${(a.output :- ${b.output}) :- null}"]
+    """`${a.output :- b.output}` over a CASE that may match nothing returns null."""
+    text = _flow(_R2, "\n  v: ${a.output :- b.output}", inputs=_R2_INPUTS)
+    assert _sources(text) == ["${(a.output :- b.output) :- null}"]
     assert _run(text, {"approve": False, "other": False}) == {"v": None}
     assert _run(text, {"approve": True, "other": False}) == {"v": "A"}
 
@@ -205,7 +205,7 @@ def test_loop_node_target_is_null():
     nodes = (
         _gate("lp", "rejected")
         + "  lp:\n    kind: loop\n    call: bump\n    input:\n      n: 0\n"
-        "    while: ${n} < 2\n    max: 5\n"
+        "    while: n < 2\n    max: 5\n"
         + _code("rejected", '"no"')
     )
     text = _flow(nodes, "\n  v: ${lp.output}", defs=_BUMP)

@@ -85,7 +85,6 @@ def _error_line(error: LoadError) -> int:
         ("isinstance(x, Buy)", False, []),
         ("isinstance(x, Buy) or not isinstance(x, Sell)", True, ["Buy", "Sell"]),
         ("${isinstance(x, Order)}", True, ["Order"]),
-        ("${x} > 1", True, []),
         ("plain text", False, []),
         (3, False, []),
     ],

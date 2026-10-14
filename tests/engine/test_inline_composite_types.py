@@ -118,7 +118,6 @@ def test_embedded_or_multiple_template_spans_are_strings(source):
         "${left :- 1}",
         '${left :? "required"}',
         "${-1}",
-        "${${producer.output}}",
     ],
 )
 def test_lone_non_scalar_expression_is_rejected(source):
@@ -644,7 +643,6 @@ def test_zero_step_direct_walk_always_returns_a_fresh_type():
         "${producer()}",
         "${producer.output + 1}",
         '${upper("x")}',
-        "${${producer.output}}",
     ],
 )
 def test_unproven_direct_reference_is_a_located_named_def_error(source):

@@ -206,7 +206,7 @@ nodes:
     code: tests.engine._compose_codefns:echo
 output: ${emit.output}
 asserts:
-  - ${input.window} >= 1
+  - input.window >= 1
 """
 
 _CALL_PARENT_BD = """
@@ -228,7 +228,7 @@ output: ${research.output}
 
 def test_call_boundary_assert_sees_omitted_default():
     # `window`'s default (30) is omitted by the parent, yet the child's BOUNDARY
-    # assert `${input.window} >= 1` must see the EFFECTIVE input (30), not None — the eager
+    # assert `input.window >= 1` must see the EFFECTIVE input (30), not None — the eager
     # pre-run check mirrors START_ID's omitted-input defaulting (regression guard: a naive
     # driver-apply_defaults drop left the assert reading the raw, un-defaulted record).
     parent = load_flow(_CALL_PARENT_BD, child_resolver=_resolver(**{"child-bd": _CHILD_BOUNDARY_DEFAULT}))

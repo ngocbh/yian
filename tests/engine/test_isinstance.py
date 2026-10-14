@@ -160,7 +160,6 @@ def test_isinstance_takes_exactly_two_arguments(text):
 @pytest.mark.parametrize("text", [
     'isinstance(x, "Buy")',
     "isinstance(x, a.b)",
-    "isinstance(x, ${Buy})",
     "isinstance(x, f(Buy))",
     "isinstance(x, 3)",
     "isinstance(x, [Buy])",
@@ -169,6 +168,11 @@ def test_isinstance_takes_exactly_two_arguments(text):
 def test_the_second_argument_must_be_a_bare_type_name(text):
     with pytest.raises(ExpressionError, match="type name"):
         parse_expr(text)
+
+
+def test_a_wrapped_type_name_shows_the_bare_one():
+    with pytest.raises(ExpressionError, match=r"write `isinstance\(x, Buy\)`"):
+        parse_expr("isinstance(x, ${Buy})")
 
 
 @pytest.mark.parametrize("text", [

@@ -293,8 +293,8 @@ class LoopDescriptor(NodeDescriptor):
         predicate_src = self.while_ if self.while_ is not None else self.until_
         if predicate_src is not None:
             pred_kw = "while" if self.while_ is not None else "until"
-            # The unified condition ref-walk: works for any spelling (bare `score >= 0.8`,
-            # mixed `${score} >= 0.8`, whole `${score >= 0.8}`), unlike a flat `${...}` regex
+            # The unified condition ref-walk: works for either spelling (bare `score >= 0.8`,
+            # whole `${score >= 0.8}`), unlike a flat `${...}` regex
             # which read a whole-span predicate as one bogus head and a bare one as no heads.
             try:
                 tree = parse_condition(predicate_src)

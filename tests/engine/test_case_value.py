@@ -36,7 +36,7 @@ from yian.diagnostics import SourceRange
 
 def _gate(then="pro", else_="caut"):
     return CaseDescriptor(
-        id="gate", cases=[{"when": "${s.output} >= 0.5", "then": then}], else_=else_
+        id="gate", cases=[{"when": "s.output >= 0.5", "then": then}], else_=else_
     )
 
 
@@ -177,18 +177,18 @@ def test_case_ref_in_default_is_loud():
         expand_case_outputs(descs, None, [])
 
 
-def test_case_ref_in_nested_default_value_is_loud():
-    # ${x:-${gate.output}} — a case ref as the nested-default VALUE (inside an enclosing
-    # span) must be LOUD, not silently expanded (a regression caught in review).
-    descs = {"gate": _gate(), "c": _code("c", v="${x:-${gate.output}}")}
+def test_case_ref_in_default_value_is_loud():
+    # ${x :- gate.output} — a case ref as the default VALUE must be LOUD, not silently
+    # expanded (a regression caught in review).
+    descs = {"gate": _gate(), "c": _code("c", v="${x :- gate.output}")}
     with pytest.raises(LoadError, match="a case value can't be read in"):
         expand_case_outputs(descs, None, [])
 
 
 def test_case_ref_in_required_message_is_loud():
-    # ${input.t:?${gate.output}} — the :? message is a full expression,
+    # ${input.t :? gate.output} — the :? message is a full expression,
     # so a case ref in it is a genuine ref and must be LOUD (parallel to the :- default).
-    descs = {"gate": _gate(), "c": _code("c", v="${input.t:?${gate.output}}")}
+    descs = {"gate": _gate(), "c": _code("c", v="${input.t :? gate.output}")}
     with pytest.raises(LoadError, match="a case value can't be read in"):
         expand_case_outputs(descs, None, [])
 
@@ -210,7 +210,7 @@ def test_case_ref_in_assert_is_located():
         expand_case_outputs(
             descs,
             None,
-            ['${gate.output} != ""'],
+            ['gate.output != ""'],
             assertion_range_at=lambda _index: assertion_range,
             diagnostics=diagnostics,
         )
@@ -218,9 +218,9 @@ def test_case_ref_in_assert_is_located():
 
 
 def test_case_ref_in_condition_is_loud():
-    # another case whose when: reads ${gate.output} (a case value) -> rejected.
+    # another case whose when: reads gate.output (a case value) -> rejected.
     other = CaseDescriptor(
-        id="other", cases=[{"when": "${gate.output} == 1", "then": "z"}]
+        id="other", cases=[{"when": "gate.output == 1", "then": "z"}]
     )
     descs = {"gate": _gate(), "other": other}
     with pytest.raises(LoadError, match="condition"):
@@ -230,7 +230,32 @@ def test_case_ref_in_condition_is_loud():
 def test_case_ref_in_assert_is_loud():
     descs = {"gate": _gate()}
     with pytest.raises(LoadError, match="assert"):
-        expand_case_outputs(descs, None, ['${gate.output} != ""'])
+        expand_case_outputs(descs, None, ['gate.output != ""'])
+
+
+def test_case_ref_in_whole_span_condition_is_loud():
+    other = CaseDescriptor(id="other", cases=[{"when": "${gate.output == 1}", "then": "z"}])
+    descs = {"gate": _gate(), "other": other}
+    with pytest.raises(LoadError, match="case node 'other' condition"):
+        expand_case_outputs(descs, None, [])
+
+
+def test_on_form_match_value_reading_a_case_value_is_loud():
+    other = CaseDescriptor(
+        id="other", on="${s.output}", cases=[{"when": "${gate.output}", "then": "z"}]
+    )
+    descs = {"gate": _gate(), "other": other}
+    with pytest.raises(LoadError, match="case node 'other' condition"):
+        expand_case_outputs(descs, None, [])
+
+
+def test_on_form_match_value_naming_a_case_is_not_a_read():
+    # An `on:` case's `when:` is a match value (text), not a condition.
+    other = CaseDescriptor(
+        id="other", on="${s.output}", cases=[{"when": "gate.output", "then": "z"}]
+    )
+    descs = {"gate": _gate(), "other": other}
+    expand_case_outputs(descs, None, [])
 
 
 # --------------------------------------------------------------------------- #
@@ -254,7 +279,7 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: "${s.output} >= 0.5"
+      - when: "s.output >= 0.5"
         then: pro
     else: caut
   pro:
@@ -305,7 +330,7 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: "${s.output} >= 0.5"
+      - when: "s.output >= 0.5"
         then: pro
     else: caut
   pro:
@@ -359,13 +384,13 @@ nodes:
   outer:
     kind: case
     cases:
-      - when: "${input.a} >= 0.5"
+      - when: "input.a >= 0.5"
         then: inner
     else: x
   inner:
     kind: case
     cases:
-      - when: "${input.b} >= 0.5"
+      - when: "input.b >= 0.5"
         then: hi
     else: lo
   hi:
@@ -429,7 +454,7 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: "${s.output} >= 0.5"
+      - when: "s.output >= 0.5"
         then: pro
     else: caut
   pro:
@@ -482,7 +507,7 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: "${s.output} >= 0.5"
+      - when: "s.output >= 0.5"
         then: a
     else: b
   a:

@@ -260,7 +260,7 @@ def test_seed19_loads_clean():
         "backdrop": "${macro.output}",
         "claim": "${pro.output | con.output}",
         "detail": "${pro_detail.output:-null}",
-        "when": "${input.as_of:-${system.today}}",
+        "when": "${input.as_of :- system.today}",
         "topic": '${input.topic:?"a topic is required"}',
     }
     assert {name: binding.source for name, binding in sources.items()} == expected

@@ -55,7 +55,7 @@ class LoopNode(Node):
       child          the compiled body child flow (`'a -> 'a`) used by the injected growth builder.
       child_inputs   the body's canonical parameters (subset of the carried record).
       predicate_kind one of "while" | "until" | "times".
-      predicate      the boolean source for `while`/`until`, e.g. "not ${exited}" (bare =
+      predicate      the boolean source for `while`/`until`, e.g. "not exited" (bare =
                      carried-record scope); None for `times` (no predicate).
       times          the fixed run count when `predicate_kind == "times"`; None otherwise.
       max_iters      the runaway guard for `while`/`until` (None = no limit); for `times`, equals

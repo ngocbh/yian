@@ -1,7 +1,7 @@
 """End-to-end `while:` loop runs (Ollama-free, pure-CODE body).
 
 The loop carries `{n, exited}`, runs the body `bump` (`{n, exited} -> {n: n+1, exited: n+1>=3}`)
-while `not ${exited}`, and terminates when the predicate goes false. Covers the multi-iteration
+while `not exited`, and terminates when the predicate goes false. Covers the multi-iteration
 happy path, the turn-0 (0-iteration) case (seed already satisfies exit), the max-exceeded
 runaway guard, and the error boundary — a `while:` predicate that raises at runtime and a
 node-budget blowup both become failed runs, never uncaught escapes.
@@ -53,7 +53,7 @@ nodes:
     input:
       n: 0
       exited: false
-    while: not ${exited}
+    while: not exited
     max: 10
 output: ${loop.output}
 """
@@ -183,7 +183,7 @@ nodes:
     input:
       messages: []
       exited: false
-    while: not ${exited}
+    while: not exited
     max: 100
 output: ${loop.output}
 """
@@ -223,7 +223,7 @@ nodes:
     input:
       messages: []
       exited: ${input.initial_exited}
-    while: not ${exited}
+    while: not exited
     max: 10
 output: ${loop.output}
 """
@@ -482,7 +482,7 @@ def test_loop_feeding_downstream_node_commits_and_advances():
 # The `while:` predicate is evaluated INSIDE the driver's `run` (in `_should_stop_now`), which
 # `eval_node` wraps in its try/except. A predicate that raises at runtime must become a FAILED
 # run, never an uncaught escape from run(). Here the predicate divides by the carried `n`
-# (`10 / ${n} > 0`) and the body counts n down: the seed pre-check (n=2, on the compiled `L`) and
+# (`10 / n > 0`) and the body counts n down: the seed pre-check (n=2, on the compiled `L`) and
 # iteration-0 check (n=1, on `loop~1`) pass, then iteration-1's check divides by 0 -> the predicate
 # raises inside the driver's `run`.
 PREDICATE_RAISES = """
@@ -507,7 +507,7 @@ nodes:
     call: down
     input:
       n: 2
-    while: 10 / ${n} > 0
+    while: 10 / n > 0
     max: 10
 output: ${loop.output}
 """
@@ -523,9 +523,9 @@ def test_while_loop_predicate_runtime_error_fails_run():
 
 
 # `until:` is a DO-WHILE: the body must run AT LEAST once before the predicate is ever
-# consulted. Here the seed n=1 does NOT yet satisfy `until: ${n} <= 0`, so a `while`-style
+# consulted. Here the seed n=1 does NOT yet satisfy `until: n <= 0`, so a `while`-style
 # turn-0 pre-check would commit the seed unchanged with 0 runs ({n: 1}). Correct `until` grows
-# #0 unconditionally: the body counts down 1 -> 0, then the post-check `${n} <= 0` on {n:0} is
+# #0 unconditionally: the body counts down 1 -> 0, then the post-check `n <= 0` on {n:0} is
 # true and terminates at {n:0} after exactly one run.
 UNTIL_SEED_TRUE = """
 id: ust
@@ -549,7 +549,7 @@ nodes:
     call: countdown
     input:
       n: 1
-    until: ${n} <= 0
+    until: n <= 0
     max: 5
 output: ${loop.output}
 """
@@ -557,7 +557,7 @@ output: ${loop.output}
 
 def test_until_runs_body_at_least_once():
     # `until` is do-while: turn-0 grows #0 unconditionally even though the seed n=1 does NOT yet
-    # satisfy `until: ${n} <= 0`. Body counts down 1 -> 0, post-check `${n} <= 0` on {n:0} is
+    # satisfy `until: n <= 0`. Body counts down 1 -> 0, post-check `n <= 0` on {n:0} is
     # true -> stop after exactly one run. (A `while`-style pre-check would have committed the seed
     # with 0 runs, giving {n:1}.)
     result = run_flow(load_flow(UNTIL_SEED_TRUE), {})
@@ -647,8 +647,8 @@ output: ${loop.output}
 """
 
 
-# `until:` do-while over a countdown: seed n=3, stop once `${n} <= 0` is true. The body runs
-# 3 -> 2 -> 1 -> 0, then the post-check `${n} <= 0` on {n:0} is true and terminates at {n:0}.
+# `until:` do-while over a countdown: seed n=3, stop once `n <= 0` is true. The body runs
+# 3 -> 2 -> 1 -> 0, then the post-check `n <= 0` on {n:0} is true and terminates at {n:0}.
 UNTIL_COUNTDOWN = """
 id: uc
 name: uc
@@ -671,7 +671,7 @@ nodes:
     call: countdown
     input:
       n: 3
-    until: ${n} <= 0
+    until: n <= 0
     max: 10
 output: ${loop.output}
 """
@@ -683,7 +683,7 @@ def test_times_runs_exactly_n():
 
 
 def test_until_stops_when_predicate_becomes_true():
-    result = run_flow(load_flow(UNTIL_COUNTDOWN), {})   # {n: 3}, until: ${n} <= 0, max: 10
+    result = run_flow(load_flow(UNTIL_COUNTDOWN), {})   # {n: 3}, until: n <= 0, max: 10
     assert result.output == {"n": 0}            # 3 -> 2 -> 1 -> 0, then n<=0 true -> stop
 
 
@@ -955,13 +955,13 @@ def _with_loop_asserts(*asserts: str) -> str:
 
 def test_partial_loop_asserts_see_the_merged_record():
     post_ok = run_flow(
-        load_flow(_with_loop_asserts("${output.person.name} == 'Ada'")), PARTIAL_CHAT_INPUTS
+        load_flow(_with_loop_asserts("output.person.name == 'Ada'")), PARTIAL_CHAT_INPUTS
     )
     assert post_ok.status == "succeeded", post_ok.failure
     assert post_ok.output["person"] == {"name": "Ada"}
 
     post_bad = run_flow(
-        load_flow(_with_loop_asserts("${output.person.name} == 'Bob'")), PARTIAL_CHAT_INPUTS
+        load_flow(_with_loop_asserts("output.person.name == 'Bob'")), PARTIAL_CHAT_INPUTS
     )
     assert post_bad.status == "failed"
     assert post_bad.failure.cause_type == "NodeAssertFailed"
@@ -970,12 +970,12 @@ def test_partial_loop_asserts_see_the_merged_record():
     # A PRE assert reads the carried inputs; each respawned driver re-checks it against the
     # merged record, where the omitted `person` still holds its seed.
     pre_ok = run_flow(
-        load_flow(_with_loop_asserts("${person.name} == 'Ada'")), PARTIAL_CHAT_INPUTS
+        load_flow(_with_loop_asserts("person.name == 'Ada'")), PARTIAL_CHAT_INPUTS
     )
     assert pre_ok.status == "succeeded", pre_ok.failure
     assert pre_ok.output["n"] == 3
     # Respawned drivers do run PRE asserts: one on a returned field fails mid-loop.
-    pre_bad = run_flow(load_flow(_with_loop_asserts("${n} < 2")), PARTIAL_CHAT_INPUTS)
+    pre_bad = run_flow(load_flow(_with_loop_asserts("n < 2")), PARTIAL_CHAT_INPUTS)
     assert pre_bad.status == "failed"
     assert pre_bad.failure.node_id == "loop~2"
     assert "pre-assert failed" in pre_bad.failure.message

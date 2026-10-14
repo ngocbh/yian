@@ -20,7 +20,6 @@ Only the loader (and the compose package facade) import this back.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, replace
 from datetime import date
 from math import isfinite
@@ -65,9 +64,6 @@ from yian.nodes.contracts import (
     binding_source,
 )
 from yian.typesys import Type, TypeCheckError, build_value_as, canonical_type_label
-
-
-_PLAIN_PATH = re.compile(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*")
 
 
 def check_call_map_types(
@@ -247,12 +243,7 @@ def _lone_span(source: Any) -> Tree | Token | None:
 
 
 def _operand_path(node: Tree | Token) -> str | None:
-    """Return the dotted path of a plain reference operand (`a.b` or `${a.b}`), else `None`."""
-    if isinstance(node, Token):
-        if node.type != "WRAPPED_REF":
-            return None
-        path = str(node)[2:-1].strip()
-        return path if _PLAIN_PATH.fullmatch(path) else None
+    """Return the dotted path of a plain reference operand (`a.b`), else `None`."""
     parts = direct_reference_parts(node)
     return None if parts is None else ".".join(parts)
 

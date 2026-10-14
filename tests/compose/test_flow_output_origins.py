@@ -204,7 +204,7 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: ${score.output} > 0
+      - when: score.output > 0
         then: positive
     else: negative
   positive:

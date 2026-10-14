@@ -1,4 +1,4 @@
-# e34 — two IDENTICAL post-asserts on one node. RUNTIME: `${output} < 0` is false
+# e34 — two IDENTICAL post-asserts on one node. RUNTIME: `output < 0` is false
 # (output is 1), so both fail; the caret must point at the FIRST occurrence (located BY POSITION),
 # never collapse to the second occurrence. Run with no inputs.
 id: err-dup-assert
@@ -9,6 +9,6 @@ nodes:
     output: int
     code: tests.seeds.fns:const_one
     asserts:
-      - ${output} < 0
-      - ${output} < 0
+      - output < 0
+      - output < 0
 output: ${compute.output}

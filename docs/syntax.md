@@ -264,8 +264,35 @@ root name of a reference. They may still name a dotted field, for example
 
 The `:-` default and `:?` message RHS are themselves expressions, so a **string**
 default must be quoted: `${input.as_of:-"today"}`, not `:-today` (bare `today`
-would read a *variable* named `today`). Nesting a ref is allowed:
-`${a:-${b:-"lit"}}`.
+would read a *variable* named `today`).
+
+`${...}` marks an expression inside a YAML string, so it never appears inside an
+expression. Inside one, name values directly and group with parentheses: a default
+chain is `${a :- (b :- "lit")}` or `${a | b | "lit"}`, and a default that reads
+another value is `${input.as_of :- system.today}`. A `${...}` written inside an
+expression is a load error that names the location and shows the rewrite:
+
+```
+`${...}` can't appear inside an expression; write `${input.as_of :- system.today}`
+```
+
+Changed: a `${...}` inside an expression used to load in some places. `${a :- ${b}}`
+read `b` as a reference. A condition such as `when: "${a.output} > 5"` worked, but
+`${a :- ${b :- "lit"}}` failed with a misleading error about an unknown input. All
+of these are now load errors that show the rewrite (`a.output > 5`). A condition is
+written bare, or as one whole `${...}` (see
+[Expression contexts](#expression-contexts)).
+
+- A searched `case` condition `"${a.output:-0} >= 1"` gave its gate an optional input,
+  so the `case` still ran when `a` was skipped. The rewrite
+  `(a.output :- 0) >= 1` reads `a` like any bare condition: the `case` is skipped
+  with `a`. The default still covers a null value or an absent flow input.
+- Each `on:` match now lowers to a condition on a bare `__on` (`__on == "<value>"`)
+  instead of `${__on}`. So every flow with an `on:` `case` gets a new fingerprint,
+  and resuming an old run log of one fails with a fingerprint error.
+- A case value read in a bare condition or assert (`gate.output == "x"`) used to
+  load, and could route wrong. It is now the same load error as the braced
+  spelling.
 
 Arithmetic on a value that is null when a `case` skips its node is a load error that
 asks for a `:-` default, such as `${(order.output.qty :- 0) + 1}` (see
@@ -1456,7 +1483,7 @@ not start with the reserved prefixes `__value_` and `__case_`.
 
 A flow output field that reads only nodes a `case` may skip returns `null` when they
 were skipped. This covers a reference (`${order.output}`, `${order.output.qty}`), a
-coalesce (`${a.output | b.output}`), and a default chain (`${a.output :- ${b.output}}`),
+coalesce (`${a.output | b.output}`), and a default chain (`${a.output :- b.output}`),
 in a root flow, a `defs:` child, and an inline CALL/LOOP/MAP body. The loader reads it
 as if `:- null` were written: `${order.output}` becomes `${order.output:-null}`.
 
@@ -1909,7 +1936,7 @@ Rules:
   quoted or not: an assert is an expression, so quoting it does not make it text.
 - **A flow call inside `${...}` is retired.** The old `${flow(args)}` form (a flow
   call *inside* braces) is a load error that points at the `call(...)` directive.
-  An **embedded** flow call (`pe=${relevance(t=${x})}` — a call inside surrounding
+  An **embedded** flow call (`pe=${relevance(t=x)}` — a call inside surrounding
   text or a `${}` span) must be **hoisted** to a named `call` node and referenced
   by output. A **coalesce of calls** (`${a(x=1) | b(y=2)}`) has no whole-value form
   and is a load error — hoist each call to its own node, then coalesce the outputs.
@@ -2171,10 +2198,11 @@ One `${...}` grammar serves every context — the difference is what each contex
   contains ` = `.
 - **`when:` / `asserts:`**: the expression is **tested** as a boolean. Same
   operators. Write conditions in the canonical **bare** form (`a.output > 5`) — no
-  `${}`. Braces on a ref (`${a.output} > 5`) or around the whole expression
-  (`${a.output > 5}`) load and evaluate identically (an expression field is already
-  in expression mode, so the `${}` wrapper is a redundant no-op), but bare is the
-  form used throughout the docs and seeds.
+  `${}`. Braces around the whole expression (`${a.output > 5}`) load and evaluate
+  identically (an expression field is already in expression mode, so the wrapper
+  is a redundant no-op), but bare is the form used throughout the docs and seeds.
+  Braces on a ref inside the expression (`${a.output} > 5`) are a `${...}` inside
+  an expression: a load error that shows the rewrite.
 - **Prompts**: free text with embedded `${...}` spans (each stringified into the
   text); spans may use the full grammar, but reference only the node's own declared
   inputs. `isinstance` is the exception: compute it in an input binding (see
@@ -2199,7 +2227,7 @@ need a system-dependent check, put it in a body node's `asserts:` or a `case`.
 A flow-level post assert reads its producer over an **optional** edge (the assert
 must not deadlock the run when its producer sits behind an untaken `case` branch).
 So a producer that is **skipped** resolves to `null` for the assert: a check like
-`${maybe.output} == null` **silently passes** when `maybe` is skipped, rather than
+`maybe.output == null` **silently passes** when `maybe` is skipped, rather than
 failing. Assert on a value you know is produced, or gate the check behind the same
 branch as its producer. Arithmetic on such a producer in a flow-level assert is not
 checked at load.

@@ -499,11 +499,7 @@ def _null_groups(operand: Tree | Token, known: Set[str]) -> list[frozenset[str]]
             gives no sets.
     """
     if isinstance(operand, Token):
-        if operand.type == "NULL":
-            return [frozenset()]
-        if operand.type == "WRAPPED_REF":
-            return _reference_groups(str(operand)[2:-1].strip(), known)
-        return []
+        return [frozenset()] if operand.type == "NULL" else []
     if operand.data == "refcall":
         parts = direct_reference_parts(operand)
         return _reference_groups(".".join(parts), known) if parts is not None else []

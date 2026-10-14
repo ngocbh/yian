@@ -90,7 +90,7 @@ def _flow(child: str, binding: str, *, over: str | None = None) -> str:
         ("int", "${item.a}", '[{a: 2}, {a: "3"}]', "child expects 'int', but the element \"3\" does not fit; text is not converted between flows, so write 3 without quotes"),
         ("int", "${item:-3}", '[null, "1"]', "child expects 'int', but the element \"1\" does not fit"),
         ("int", '${input.n | "3"}', None, "child expects 'int', but the default \"3\" does not fit; text is not converted between flows, so write 3 without quotes"),
-        ("int", "${input.n:-${input.m}}", None, "child expects 'int', source is 'Optional[str]'"),
+        ("int", "${input.n :- input.m}", None, "child expects 'int', source is 'Optional[str]'"),
         ("str", "2026-01-01", None, "child expects 'str', but the value 2026-01-01 does not fit; quote it to keep it as text: \"2026-01-01\""),
         ("list[date]", "[2026-01-01]", None, "child expects 'list[date]', but the value [2026-01-01] does not fit (datetime.date(2026, 1, 1) does not match declared type date); quote each date to keep it as text"),
         ("str", "${input.m:-1.50}", None, "child expects 'str', but the default 1.50 does not fit; quote it to keep it as text: \"1.50\""),

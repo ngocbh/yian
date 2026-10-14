@@ -649,7 +649,7 @@ nodes:
       n: 0
       exited: false
       note: start
-    while: not ${exited}
+    while: not exited
     max: 10
     nodes:
       bump:
@@ -667,7 +667,7 @@ nodes:
           exited: bool
           note: str
         cases:
-          - when: "${bump.output.n} >= 2"
+          - when: "bump.output.n >= 2"
             then:
               n: ${bump.output.n}
               exited: true
@@ -700,7 +700,7 @@ nodes:
       n: 0
       exited: false
       note: start
-    while: not ${exited}
+    while: not exited
     max: 10
     nodes:
       bump:
@@ -717,7 +717,7 @@ nodes:
           n: int
           exited: bool
         cases:
-          - when: "${bump.output.n} >= 2"
+          - when: "bump.output.n >= 2"
             then:
               n: ${bump.output.n}
               exited: true
@@ -728,7 +728,7 @@ nodes:
         kind: case
         output: str
         cases:
-          - when: "${bump.output.n} >= 2"
+          - when: "bump.output.n >= 2"
             then: "done"
         else: 'more'
     output:
@@ -760,7 +760,7 @@ nodes:
     kind: case
     output: Literal[x]
     cases:
-      - when: "${input.cmd} == 'never'"
+      - when: "input.cmd == 'never'"
         then: "x"
     else: bad
   bad:
@@ -1238,7 +1238,7 @@ def test_expand_case_outputs_adds_the_result_node_for_a_typed_case():
     descriptors = {
         "gate": CaseDescriptor(
             id="gate",
-            cases=[{"when": "${s.output} >= 0.5", "then": "pro"}],
+            cases=[{"when": "s.output >= 0.5", "then": "pro"}],
             else_="caut",
             outputs="str",
         ),
@@ -1288,7 +1288,7 @@ nodes:
     kind: case
     output: str
     cases:
-      - when: "${input.cmd} == 'a'"
+      - when: "input.cmd == 'a'"
         then: "in-a"
     else: "in-else"
   other:
@@ -1655,7 +1655,7 @@ def _case_of_case_flow(inner_output: str, inner_then: str) -> str:
         "    kind: case\n"
         f"{inner_output}"
         "    cases:\n"
-        "      - when: \"${input.cmd} == 'b'\"\n"
+        "      - when: \"input.cmd == 'b'\"\n"
         f"        then: {inner_then}\n"
         "    else: num\n"
         f"{_int_node()}"
@@ -2073,7 +2073,7 @@ def test_typed_searched_case_without_else_is_rejected():
     text = _gate_flow(
         "    output: str\n"
         "    cases:\n"
-        "      - when: \"${input.x} == 'a'\"\n"
+        "      - when: \"input.x == 'a'\"\n"
         '        then: "A"\n'
     )
     with pytest.raises(LoadError) as caught:

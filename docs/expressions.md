@@ -143,9 +143,12 @@ paths an expression reads — this is how the compiler infers data edges.
 `rewrite_expr_refs` rewrites only the reference *leaves* by source position — how refs are
 re-namespaced when a child flow is inlined.
 
-**The condition surface** — `when:` / `until:` / `while:` / `asserts:` admit three
-spellings that parse and evaluate identically: bare `a > 5`, mixed `${a} > 5`, whole-span
-`${a > 5}`. All route through this one path, so they can never drift.
+**The condition surface** — `when:` / `until:` / `while:` / `asserts:` admit two
+spellings that parse and evaluate identically: bare `a > 5` and whole-span `${a > 5}`.
+Both route through this one path, so they can never drift. A `${...}` inside an
+expression (`${a} > 5`, `${x :- ${y}}`) is rejected by `parse_expr` with an error that
+shows the rewrite (`a > 5`, `x :- y`); `scan_template` reports a template span's whole
+fixed span (`${x :- y}`).
 
 ## Layer 3 — the `${...}` scanner
 

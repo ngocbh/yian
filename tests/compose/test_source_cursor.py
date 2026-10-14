@@ -884,18 +884,18 @@ def test_int_rejects_bool():
 def test_item_range_list_keeps_duplicate_positions():
     root = SourceDocument.parse(
         "asserts:\n"
-        "  - ${output} > 0\n"
-        "  - ${output} > 0\n"
+        "  - output > 0\n"
+        "  - output > 0\n"
     ).root
 
     ranges = root.item_range_list("asserts")
 
     assert ranges == [
-        SourceRange(2, 5, 2, 18),
-        SourceRange(3, 5, 3, 18),
+        SourceRange(2, 5, 2, 15),
+        SourceRange(3, 5, 3, 15),
     ]
     assert root.item_ranges("asserts") == {
-        "${output} > 0": SourceRange(3, 5, 3, 18),
+        "output > 0": SourceRange(3, 5, 3, 15),
     }
 
 
@@ -962,7 +962,7 @@ def test_renamed_range_helpers_delegate_to_child_sources():
         "input:\n"
         "  value: ${start.output}\n"
         "asserts:\n"
-        "  - ${output} > 0\n"
+        "  - output > 0\n"
         "cases:\n"
         "  - when: ready\n"
         "    then: finish\n"

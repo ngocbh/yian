@@ -173,9 +173,9 @@ def test_dotted_access_dict_key():
 
 
 def test_dotted_access_never_getattr():
-    # `${obj.__class__}` must MISS (dict has no key "__class__") — never reach the
+    # `obj.__class__` must MISS (dict has no key "__class__") — never reach the
     # Python attribute. Proves dotted access is dict-key lookup only.
-    assert _eval("${obj.__class__}", _from({"obj": {"a": 1}})) is None
+    assert _eval("obj.__class__", _from({"obj": {"a": 1}})) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -203,10 +203,6 @@ def test_condition_falsy_arith_over_none_is_loud():
 def test_strict_raise_missing_raises():
     with pytest.raises(ExpressionError):
         _eval("a", mode=ResolveMode.STRICT_RAISE)
-
-
-def test_binding_none_wrapped_ref_missing_is_none():
-    assert _eval("${a}", mode=ResolveMode.BINDING_NONE) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -238,9 +234,9 @@ def test_default_short_circuits_fallback():
     assert _eval("a :- 1 / 0", _from({"a": "present"})) == "present"
 
 
-def test_nested_default_wrapped_ref():
-    # `a :- ${b}`: the default RHS is itself a ref, resolved when `a` is missing.
-    assert _eval("a :- ${b}", _from({"b": "fallback"})) == "fallback"
+def test_default_ref():
+    # `a :- b`: the default RHS is itself a ref, resolved when `a` is missing.
+    assert _eval("a :- b", _from({"b": "fallback"})) == "fallback"
 
 
 def test_required_raises_when_missing():
@@ -461,19 +457,18 @@ def test_coalesce_nary_all_arms_reachable():
     assert _eval("a | b | c", _from({"a": 1, "b": 2, "c": 3})) == 1
 
 
-def test_nested_one_level_default_ref():
-    # `${x:-${y}}` — one level of nesting is allowed: `x` missing, `y`=9 -> 9.
+def test_binding_default_ref():
+    # `${x :- y}`: `x` missing, `y`=9 -> 9.
     from yian.expr.template import eval_binding
 
-    assert eval_binding("${x:-${y}}", _from({"y": 9})) == 9
+    assert eval_binding("${x :- y}", _from({"y": 9})) == 9
     # Both missing -> None in the binding (BINDING_NONE) mode.
-    assert eval_binding("${x:-${y}}", _from({})) is None
+    assert eval_binding("${x :- y}", _from({})) is None
 
 
-def test_two_level_nested_default_rejected():
-    # `${x:-${y:-${z}}}` — two levels of nesting is rejected by the scanner/grammar
-    # in the ExpressionError family.
+def test_nested_default_span_rejected():
+    # A `${...}` can't appear inside an expression, at any depth; group with parentheses.
     from yian.expr.template import scan_template
 
-    with pytest.raises(ExpressionError):
+    with pytest.raises(ExpressionError, match=r"write `\$\{x:-\(y:-z\)\}`"):
         scan_template("${x:-${y:-${z}}}")

@@ -41,14 +41,9 @@ def test_builtin_call_collects_arg_refs_not_callee_or_literal():
     assert _refs('join(items, ", ")') == ["items"]
 
 
-def test_wrapped_ref_atom():
-    # A lone `${a}` inlines to a bare WRAPPED_REF token; its path is collected.
-    assert _refs("${a}") == ["a"]
-
-
-def test_default_collects_head_and_nested_ref():
-    # `a :- ${b}`: both the head `a` and the nested-default ref `b`.
-    assert _refs("a :- ${b}") == ["a", "b"]
+def test_default_collects_head_and_default_ref():
+    # `a :- b`: both the head `a` and the default ref `b`.
+    assert _refs("a :- b") == ["a", "b"]
 
 
 def test_coalesce_collects_all_operands():

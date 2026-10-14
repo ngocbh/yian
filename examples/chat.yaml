@@ -84,5 +84,5 @@ nodes:
     input:
       transcript: ${input.opening}
       exited: false                 # the CASE's exit branch sets true for exact /exit or /quit
-    while: "not ${exited}"          # a carried-field predicate (verified to parse)
+    while: not exited               # a carried-field predicate
 output: ${chat.output.transcript}

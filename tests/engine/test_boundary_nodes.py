@@ -44,7 +44,7 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: "${score.output} >= 1"
+      - when: "score.output >= 1"
         then: kept
     else: cold
   kept:

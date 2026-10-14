@@ -39,7 +39,7 @@ import re
 from typing import Any, Callable, Optional
 
 from yian.diagnostics import SourceRange
-from yian.expr import ExpressionError, expr_refs_of
+from yian.expr import ExpressionError, condition_refs, expr_refs_of
 from yian.compose.nodes.bindings import map_binding_strings
 from yian.compose.desugar.case_values import CASE_PREFIX
 from yian.compose.desugar.inline_calls import map_outputs_strings
@@ -155,6 +155,16 @@ def expand_case_outputs(
                     range=condition_range,
                     diagnostics=diagnostics,
                 )
+                # An `on:` case's `when:` values are match values (text), not conditions.
+                for index, case in enumerate(d.cases):
+                    _reject_case_refs(
+                        [case.get("when")],
+                        case_ids,
+                        f"case node {nid!r} condition",
+                        range=_when_range(d, index),
+                        diagnostics=diagnostics,
+                    )
+                continue
             for index, case in enumerate(d.cases):
                 condition_range = _when_range(d, index)
                 _reject_case_refs(
@@ -163,6 +173,7 @@ def expand_case_outputs(
                     f"case node {nid!r} condition",
                     range=condition_range,
                     diagnostics=diagnostics,
+                    condition=True,
                 )
     for index, assertion in enumerate(asserts_section or []):
         assertion_range = (
@@ -174,6 +185,7 @@ def expand_case_outputs(
             "assert",
             range=assertion_range,
             diagnostics=diagnostics,
+            condition=True,
         )
 
     return new_descriptors, new_outputs
@@ -276,11 +288,9 @@ def _expander(
 ):
     """A `value -> value` binding transform: expand each clean case-output span to the
     typed case's result-node ref (cases in `case_types`) or the untyped case's branch coalesce;
-    reject a case ref in any non-clean position. Scans TOP-LEVEL
-    `${…}` spans only — a case ref NESTED inside an enclosing span (e.g. a `:-` default
-    value `${x:-${gate.output}}`) is caught as a non-clean ref of that span, and a `:?`
-    message literal (`${x:?${gate.output}}` — not a ref) is left untouched (no
-    rewrite/corruption)."""
+    reject a case ref in any non-clean position. Scans each `${…}` span — a case ref inside
+    a larger expression (a `:-` default `${x :- gate.output}`, a `:?` message, arithmetic)
+    is caught as a non-clean ref of that span."""
 
     def expand(value: str) -> str:
         # Singular only: detect `.output` marker.
@@ -439,16 +449,18 @@ def _reject_case_refs(
     *,
     range: Optional[SourceRange] = None,
     diagnostics: LoadDiagnostics,
+    condition: bool = False,
 ) -> None:
-    """Raise a located `LoadError` if any string reads a `${<case>.output}` value
+    """Raise a located `LoadError` if any string reads a `<case>.output` value
     (`<case>` a case node id) — the floor for the non-clean / condition / assert
-    positions where the value-case is not supported."""
+    positions where the value-case is not supported. With `condition`, each string is
+    a condition (bare or one whole `${...}`); otherwise it is a binding template."""
     for value in strings:
         s = value.expression if isinstance(value, Assertion) else value
         if not isinstance(s, str):
             continue
         try:
-            refs = expr_refs_of(s)
+            refs = condition_refs(s) if condition else expr_refs_of(s)
         except ExpressionError:
             continue  # malformed -> surfaced (located) by the relevant downstream pass
         for ref in refs:

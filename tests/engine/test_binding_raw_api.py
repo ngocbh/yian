@@ -4,7 +4,7 @@ and `expr_refs_of(source)`.
 The binding functions take a raw template string and scan it internally through the
 unified grammar. These tests cover:
 - binding semantics (typed whole-span, embedded stringify, `$$`,
-  coalesce `|`, `:-` default, `:?` required, one nested `${x:-${y}}`, `${item}` scope);
+  coalesce `|`, `:-` default, `:?` required, a default ref `${x :- y}`, `${item}` scope);
 - full expressions inside a binding span, including arithmetic and string/list operations.
 """
 
@@ -49,9 +49,9 @@ def test_default_and_required():
         eval_binding('${a :? "need a topic"}', _from({}))
 
 
-def test_one_level_nested_default():
-    # `${x:-${y}}`: the wrapped-ref default resolves when the head misses.
-    assert eval_binding("${a :- ${b}}", _from({"b": "fb"})) == "fb"
+def test_default_ref():
+    # `${a :- b}`: the default ref resolves when the head misses.
+    assert eval_binding("${a :- b}", _from({"b": "fb"})) == "fb"
 
 
 def test_item_scope():
@@ -84,8 +84,8 @@ def test_expr_refs_of_literal_text_contributes_nothing():
 
 
 def test_expr_refs_of_embedded_and_default_and_arith():
-    # embedded span + nested-default ref + arithmetic operands all collected.
-    assert expr_refs_of("n=${a :- ${b}} m=${x + y}") == ["a", "b", "x", "y"]
+    # embedded span + default ref + arithmetic operands all collected.
+    assert expr_refs_of("n=${a :- b} m=${x + y}") == ["a", "b", "x", "y"]
 
 
 def test_expr_refs_of_item_is_collected():

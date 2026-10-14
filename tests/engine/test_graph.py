@@ -1,5 +1,7 @@
 """Unit tests for the CompiledFlow topology model."""
 
+import pytest
+
 from yian.compile.model import END_ID, START_ID, Edge, Flow, CompiledFlow
 from yian.nodes.contracts import Binding
 from yian.nodes.end import EndNode
@@ -157,9 +159,7 @@ nodes:
     output: float
   gate:
     kind: case
-    cases:
-      - when: "${a.output:-0} >= 1"
-        then: hot
+<gate>
     else: cold
   hot:
     kind: code
@@ -177,13 +177,34 @@ output: ${gate.output}
 """
 
 
-def test_case_condition_escape_marks_optional():
+def _a_to_gate(gate: str):
     from yian.compose import load_flow
 
-    flow = load_flow(_CASE_ESCAPE_FLOW).compiled
-    a_to_gate = [e for e in flow.edges if e.from_ == "a" and e.to == "gate"]
-    assert len(a_to_gate) == 1
-    assert a_to_gate[0].optional is True  # `${a.output:-0}` in when: -> optional gate input
+    flow = load_flow(_CASE_ESCAPE_FLOW.replace("<gate>", gate)).compiled
+    edges = [e for e in flow.edges if e.from_ == "a" and e.to == "gate"]
+    assert len(edges) == 1
+    return edges[0]
+
+
+def test_case_on_escape_marks_optional():
+    # An `on:` value is a whole binding, so a `:-` escape makes the gate input optional.
+    gate = '    on: ${a.output :- 0}\n    cases:\n      - when: 1\n        then: hot'
+    assert _a_to_gate(gate).optional is True
+
+
+def test_searched_case_condition_reads_each_reference_plainly():
+    # A searched `when:` binds each reference as its own plain input, so the edge is
+    # required even under a `:-` default (the default still covers a null value).
+    gate = '    cases:\n      - when: "(a.output :- 0) >= 1"\n        then: hot'
+    assert _a_to_gate(gate).optional is False
+
+
+def test_searched_case_condition_with_a_nested_span_shows_the_rewrite():
+    from yian.compose import LoadError
+
+    gate = '    cases:\n      - when: "${a.output:-0} >= 1"\n        then: hot'
+    with pytest.raises(LoadError, match=r"write `\(a.output:-0\) >= 1`"):
+        _a_to_gate(gate)
 
 
 # --------------------------------------------------------------------------- #

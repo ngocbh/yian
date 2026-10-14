@@ -343,14 +343,11 @@ def _is_direct_reference(expression: Any) -> bool:
         expression (`Any`): The parsed tree of a template's single span.
 
     Returns:
-        `bool`: ``True`` for a wrapped or dotted reference with no call suffix.
+        `bool`: ``True`` for a bare or dotted reference with no call suffix.
     """
-    return getattr(expression, "type", None) == "WRAPPED_REF" or (
-        getattr(expression, "data", None) == "refcall"
-        and not any(
-            getattr(child, "data", None) == "call_suffix"
-            for child in getattr(expression, "children", ())
-        )
+    return getattr(expression, "data", None) == "refcall" and not any(
+        getattr(child, "data", None) == "call_suffix"
+        for child in getattr(expression, "children", ())
     )
 
 

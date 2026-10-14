@@ -30,7 +30,7 @@ nodes:
     code: tests.engine._compose_codefns:echo_x
 output: ${n.output}
 asserts:
-  - "${input.age} >= 18"
+  - "input.age >= 18"
 """
 
 
@@ -99,7 +99,7 @@ nodes:
     code: tests.engine._compose_codefns:echo_x
 output: ${echo.output}
 asserts:
-  - "${input.n} >= 5"
+  - "input.n >= 5"
 """
 
 
@@ -130,7 +130,7 @@ defs:
         output: int
     output: ${x.output}
     asserts:
-      - "${input.n} >= 0"
+      - "input.n >= 0"
 nodes:
   call_it:
     kind: call

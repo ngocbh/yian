@@ -124,4 +124,4 @@ output:                            # multi-output: the flow returns one object
   summary: ${finalize.output}
 
 asserts:
-  - ${synth.output} in ["go", "no_go", "needs_more_info"]
+  - synth.output in ["go", "no_go", "needs_more_info"]

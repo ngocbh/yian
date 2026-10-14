@@ -134,7 +134,7 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: "${input.x} > 0"
+      - when: "input.x > 0"
         then: pos
     else: neg
   pos:
@@ -225,7 +225,7 @@ def test_pool_heads_singular() -> None:
 
 # END_ID post-asserts evaluate record-scoped with `${output}` bound to the END value.
 def test_end_post_assert_reads_output() -> None:
-    """A direct EndNode evaluates `${output} > 0` through the `Node.run` wrapper."""
+    """A direct EndNode evaluates `output > 0` through the `Node.run` wrapper."""
     from yian.compile.model import CompiledFlow, END_ID, START_ID, Edge
     from yian.nodes.end import EndNode
     from yian.nodes.start import StartNode
@@ -246,14 +246,14 @@ def test_end_post_assert_reads_output() -> None:
         wiring[END_ID] = {"result": "${n.output}"}
         return CompiledFlow.from_parts(nodes, edges, wiring=wiring)
 
-    # Pass-case: `${output} > 0` holds since END_ID value = 5 (single-output → bare).
-    g_pass = _make_flow("${output} > 0")
+    # Pass-case: `output > 0` holds since END_ID value = 5 (single-output → bare).
+    g_pass = _make_flow("output > 0")
     events_pass = list(_engine(g_pass).run())
     assert type(events_pass[-1]).__name__ == "RunSucceeded", events_pass[-1]
     assert events_pass[-1].output == 5
 
-    # Fail-case: `${output} > 100` fails the END postcondition.
-    g_fail = _make_flow("${output} > 100")
+    # Fail-case: `output > 100` fails the END postcondition.
+    g_fail = _make_flow("output > 100")
     events_fail = list(_engine(g_fail).run())
     assert type(events_fail[-1]).__name__ == "RunFailed", events_fail[-1]
     assert "post-assert failed" in events_fail[-1].failure.message

@@ -588,7 +588,7 @@ defs:
         output: str
     output: ${x.output}
     asserts:
-      - ${x.output} != ""
+      - x.output != ""
 nodes:
   go:
     kind: call
@@ -602,7 +602,7 @@ output: ${go.output}
 def test_def_asserts_are_enforced_at_the_child_seam():
     # A def's `asserts:` is admitted and enforced at the CALL/MAP child seam.
     out = run_flow(load_flow(_DEF_WITH_ASSERTS), {"topic": "ACME"})
-    assert out.status == "succeeded"  # the def's post assert `${x.output} != ""` holds
+    assert out.status == "succeeded"  # the def's post assert `x.output != ""` holds
     assert out.output == "ACME"
 
 

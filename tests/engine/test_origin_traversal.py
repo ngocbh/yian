@@ -841,10 +841,10 @@ def _manifestable_flow() -> CompiledFlow:
     ]
     body.output_contract = output_contract
     body.pre_asserts = [
-        Assertion("${value} >= 0", "value >= 0", _origin("manifest/pre"))
+        Assertion("value >= 0", "value >= 0", _origin("manifest/pre"))
     ]
     body.post_asserts = [
-        Assertion("${output} >= 0", "output >= 0", _origin("manifest/post"))
+        Assertion("output >= 0", "output >= 0", _origin("manifest/post"))
     ]
     end = EndNode.value(END_ID, output_name="result")
     end.origin = _origin("manifest/end")

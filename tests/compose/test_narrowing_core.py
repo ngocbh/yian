@@ -202,7 +202,7 @@ def test_isinstance_fact_against_the_base_union():
     ("when", "checks"),
     [
         ("isinstance(d.output, Buy)", [("d.output", "Buy")]),
-        ("x > 1 and isinstance(${d.output.leg}, Limit)", [("d.output.leg", "Limit")]),
+        ("x > 1 and isinstance(d.output.leg, Limit)", [("d.output.leg", "Limit")]),
         ("${isinstance(input.d, Buy) and isinstance(e.output, Text)}",
          [("input.d", "Buy"), ("e.output", "Text")]),
         ("isinstance(d.output, Buy) or x", []),
@@ -444,7 +444,7 @@ def test_control_edges_join_by_union_and_an_edge_without_facts_unconstrains():
         _node("d"),
         _node("z"),
         _case("c", "${d.output.action}", [("buy", "x"), ("sell", "x"), ("hold", "y")]),
-        _case("g", None, [("${z.output} > 0", "y")]),
+        _case("g", None, [("z.output > 0", "y")]),
         _node("x"),
         _node("y"),
     ]

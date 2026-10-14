@@ -186,10 +186,11 @@ named record is **type-checked at compile time** (`${analyze.output.rating.categ
 | `${a \| b \| c}` | first-present among **peers** — n-ary coalesce (branch-joins) |
 | `$$` | a literal `$` (universal escape — in a prompt `$$` renders a single `$`) |
 
-Nesting a ref is allowed: `${a:-${b:-"lit"}}`. The `:-`/`:?` RHS is an
-expression, so a **string** default must be quoted (`${x:-"today"}`; bare
-`today` reads a variable). Rule of thumb: `:-` for *value-or-default*, `|` for
-*whichever-ran*.
+Inside an expression, name values directly and group with parentheses:
+`${a :- (b :- "lit")}` or `${a | b | "lit"}`; a `${...}` inside an expression is a
+load error that shows the rewrite. The `:-`/`:?` RHS is an expression, so a
+**string** default must be quoted (`${x:-"today"}`; bare `today` reads a variable).
+Rule of thumb: `:-` for *value-or-default*, `|` for *whichever-ran*.
 
 **Whole-string vs embedded:** a value that is *exactly* `${ref}` resolves to the **typed** value
 (could be a list/object); a `${ref}` embedded in surrounding text is **stringified**. So
@@ -210,7 +211,7 @@ One `${…}` grammar; the context decides what happens to the result:
 | Context | What it does |
 |---|---|
 | **Bindings** (`input:`/`output:` values) | **evaluated** to a typed value — refs / literals / arithmetic / lists / `:-` `:?` / `\|` / pure builtins. (A child-flow call is the whole-value `call(…)` directive, not a `${…}` span.) |
-| **`when:` / `asserts:`** | **tested** as a boolean — `== != < <= > >= in not in`, `and`/`or`/`not`, parens, arithmetic operands. Canonical **bare** form (no `${}`); `${…}`-wrapped spellings load and evaluate identically. |
+| **`when:` / `asserts:`** | **tested** as a boolean — `== != < <= > >= in not in`, `and`/`or`/`not`, parens, arithmetic operands. Canonical **bare** form (no `${}`); one whole `${…}` loads and evaluates identically; a `${…}` inside the expression is a load error. |
 | **Prompts** | free text with embedded `${…}` spans (each stringified). |
 
 "Bindings wire, conditions test, nodes compute."

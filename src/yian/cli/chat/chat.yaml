@@ -89,5 +89,5 @@ nodes:
     input:
       transcript: ${input.opening}
       exited: false
-    while: "not ${exited}"
+    while: not exited
 output: ${chat.output.transcript}

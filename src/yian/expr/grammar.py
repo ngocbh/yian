@@ -8,15 +8,18 @@ Evaluation deliberately lives in `expr.expressions`.
 
 - References: bare `a`, dotted `a.b.c`, and — for the runtime graph-expansion
   separators — segments containing `#` / `/` (`node#0.output`, `def/child.output`).
-- The `${...}`-wrapped back-compat ref form (`${a}`), so old sources keep parsing.
 - Arithmetic (`+ - * / %` and `**`), unary minus, comparisons
   (`== != < <= > >=`), `and` / `or` / `not`, `in` / `not in`.
 - List literals (`[1, "x"]`) and parenthesised sub-expressions.
 - Pure builtin calls (`upper(name)`, `join(items, ", ")`), with dotted access on
   the result (`fn(x).field`) — mirroring the prompt call form.
-- Coalesce (`a | b | c`), default (`a :- d`), required (`a :? "msg"`), including a
-  wrapped-ref default RHS (`a :- ${b}`).
+- Coalesce (`a | b | c`), default (`a :- d`), required (`a :? "msg"`).
 - The `isinstance(x, T)` special form, whose second argument is a bare type name.
+
+`${...}` marks an expression inside a YAML string, so it never appears inside one:
+values are named directly and grouped with parentheses. `parse_expr` rejects a
+`${...}` outside a string literal with an error that shows the rewrite
+(`a :- ${b}` -> `a :- b`).
 
 ## Shared terminal design for references and calls
 
@@ -52,6 +55,8 @@ is valid; `parse_expr` therefore rejects these four operator words as exact
 reference roots after parsing. Dotted field segments retain the ordinary `NAME`
 token and remain legal.
 """
+
+import re
 
 from lark import Lark, Token, Tree
 from lark.exceptions import LarkError
@@ -105,7 +110,6 @@ _GRAMMAR = r"""
 ?atom: refcall
      | NUMBER | STRING | BOOL | NULL
      | list_lit
-     | WRAPPED_REF
      | "(" coalesce ")"
 
 // One shared NAME terminal disambiguates references from builtin calls:
@@ -123,7 +127,6 @@ arg: [NAME "="] coalesce
 list_lit: "[" [coalesce ("," coalesce)*] "]"
 
 COMP_OP: "==" | "!=" | "<=" | ">=" | "<" | ">"
-WRAPPED_REF: /\$\{[^}]+\}/
 STRING: /"[^"]*"/ | /'[^']*'/
 NUMBER: /\d+(\.\d+)?/
 
@@ -156,13 +159,141 @@ _RESERVED_REFERENCE_ROOTS = frozenset({"and", "or", "not", "in"})
 EXPRESSION_KEYWORDS = _RESERVED_REFERENCE_ROOTS | {"true", "false", "null", "none"}
 
 
-def _raise_if_reserved_reference_root(path: str) -> None:
-    """Reject an exact operator word at the root of one reference path."""
-    root = path.strip().split(".", 1)[0].strip()
-    if root in _RESERVED_REFERENCE_ROOTS:
-        raise ExpressionError(
-            f"reserved expression keyword {root!r} cannot be used as a reference root"
-        )
+def find_span_end(s: str, start: int) -> int | None:
+    """Index of the `}` closing a `${...}` span whose interior begins at `start`
+    (brace-depth and quote aware), or None if unbalanced."""
+    depth, quote, i, n = 1, None, start, len(s)
+    while i < n:
+        c = s[i]
+        if quote is not None:
+            if c == quote:
+                quote = None
+        elif c in ("'", '"'):
+            quote = c
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return None
+
+
+def whole_span_interior(text: str) -> str | None:
+    """The interior of `text` when the trimmed text is exactly one `${...}` span, else None.
+
+    Quote aware, so `${x == "}"}` is one span and `${a} > ${b}` is not.
+    """
+    text = text.strip()
+    if not text.startswith("${"):
+        return None
+    end = find_span_end(text, 2)
+    return text[2:end] if end == len(text) - 1 else None
+
+
+# A character that would fuse with an unwrapped name: `not${x}` must become `not x`.
+_NAME_CHAR = re.compile(r"[A-Za-z0-9_#/]")
+
+
+def _parses(text: str) -> bool:
+    """True when `text` parses under the grammar (a rewrite worth suggesting)."""
+    try:
+        _PARSER.parse(text)
+    except LarkError:
+        return False
+    return True
+
+
+def _is_lone_atom(text: str) -> bool:
+    """True when `text` parses as one reference or one literal (no operator or call)."""
+    try:
+        tree = _PARSER.parse(text)
+    except LarkError:
+        return False
+    if isinstance(tree, Token):
+        return True
+    return tree.data == "refcall" and not any(
+        isinstance(child, Tree) and child.data == "call_suffix" for child in tree.children
+    )
+
+
+def _unwrap_spans(text: str) -> str | None:
+    """`text` with each `${X}` outside a string literal replaced by `X`, or `(X)` when `X`
+    is more than one reference or literal; None when a `${` is unbalanced."""
+    out: list[str] = []
+    quote, i, n = None, 0, len(text)
+    while i < n:
+        c = text[i]
+        if quote is not None:
+            out.append(c)
+            if c == quote:
+                quote = None
+            i += 1
+        elif c in ("'", '"'):
+            quote = c
+            out.append(c)
+            i += 1
+        elif c == "$" and text[i + 1 : i + 2] == "{":
+            end = find_span_end(text, i + 2)
+            inner = None if end is None else _unwrap_spans(text[i + 2 : end])
+            if inner is None:
+                return None
+            inner = inner.strip()
+            piece = inner if _is_lone_atom(inner) else f"({inner})"
+            if out and _NAME_CHAR.match(out[-1]):
+                piece = " " + piece
+            if _NAME_CHAR.match(text[end + 1 : end + 2]):
+                piece += " "
+            out.append(piece)
+            i = end + 1
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def _has_span(text: str) -> bool:
+    """True when `text` has a `${` outside a string literal."""
+    quote = None
+    for i, c in enumerate(text):
+        if quote is not None:
+            if c == quote:
+                quote = None
+        elif c in ("'", '"'):
+            quote = c
+        elif c == "$" and text[i + 1 : i + 2] == "{":
+            return True
+    return False
+
+
+def reject_nested_spans(text: str, *, in_span: bool = False) -> None:
+    """Raise if the expression `text` holds a `${...}`, showing the rewrite.
+
+    `${...}` marks an expression inside a YAML string, so inside an expression values are
+    named directly and grouped with parentheses. A `${...}` inside a quoted string literal
+    is text and allowed.
+
+    Args:
+        text (`str`):
+            One expression: a span interior or a bare condition.
+        in_span (`bool`, *optional*, defaults to `False`):
+            `text` is the interior of a template span, so the rewrite is shown as the whole
+            fixed span (`${a :- b}`) rather than the bare expression (`a :- b`).
+
+    Raises:
+        `ExpressionError`:
+            If `text` holds a `${...}` outside a string literal. The message shows the
+            rewrite when the unwrapped text parses.
+    """
+    if not _has_span(text):
+        return
+    message = "`${...}` can't appear inside an expression"
+    rewrite = _unwrap_spans(text)
+    if rewrite is not None and _parses(rewrite):
+        rewrite = rewrite.strip()
+        message += f"; write `{'${' + rewrite + '}' if in_span else rewrite}`"
+    raise ExpressionError(message)
 
 
 def _reject_reserved_reference_roots(tree: Tree | Token) -> None:
@@ -170,29 +301,23 @@ def _reject_reserved_reference_roots(tree: Tree | Token) -> None:
 
     A `refcall` with a `call_suffix` is a builtin call rather than a reference, so
     its callee is outside this rule. Trailer segments and keyword-argument labels
-    are likewise not roots. `WRAPPED_REF` is a single token, so inspect its path
-    explicitly both at the top level and when nested inside a larger expression.
+    are likewise not roots.
     """
-    if isinstance(tree, Token):
-        wrapped_refs = (tree,) if tree.type == "WRAPPED_REF" else ()
-    else:
-        for node in tree.iter_subtrees():
-            if node.data != "refcall":
-                continue
-            if any(
-                isinstance(child, Tree) and child.data == "call_suffix"
-                for child in node.children
-            ):
-                continue
-            head = node.children[0]
-            if isinstance(head, Token) and head.type == "NAME":
-                _raise_if_reserved_reference_root(str(head))
-        wrapped_refs = tree.scan_values(
-            lambda value: isinstance(value, Token) and value.type == "WRAPPED_REF"
-        )
-
-    for token in wrapped_refs:
-        _raise_if_reserved_reference_root(str(token)[2:-1])
+    if not isinstance(tree, Tree):
+        return
+    for node in tree.iter_subtrees():
+        if node.data != "refcall":
+            continue
+        if any(
+            isinstance(child, Tree) and child.data == "call_suffix"
+            for child in node.children
+        ):
+            continue
+        head = node.children[0]
+        if isinstance(head, Token) and head.type == "NAME" and head in _RESERVED_REFERENCE_ROOTS:
+            raise ExpressionError(
+                f"reserved expression keyword {str(head)!r} cannot be used as a reference root"
+            )
 
 
 def _reject_dotted_callee(tree: Tree | Token) -> None:
@@ -205,7 +330,7 @@ def _reject_dotted_callee(tree: Tree | Token) -> None:
     so the guard checks for a trailer appearing BEFORE the suffix in the child
     order.
 
-    A lone atom (e.g. `${a}`, a bare `NUMBER`/`STRING`) inlines all the way up to
+    A lone atom (e.g. a bare `NUMBER`/`STRING`) inlines all the way up to
     a top-level `Token` now that no spurious `coalesce` wraps it — such a top has
     no subtrees to check, so it is trivially accepted.
     """
@@ -244,7 +369,7 @@ def _validate_isinstance(tree: Tree | Token) -> None:
     """Require every `isinstance(...)` call to be `isinstance(<expr>, <TypeName>)`.
 
     The second argument names a type, so it must be a bare `NAME`: no dotted path,
-    call, literal, or `${...}` wrapping. Keyword arguments and dotted access on the
+    call, or literal. Keyword arguments and dotted access on the
     boolean result (`isinstance(x, T).f`) are not accepted.
     """
     if not isinstance(tree, Tree):
@@ -292,17 +417,19 @@ def parse_expr(text: str) -> Tree | Token:
             The Lark parse tree. Its shape is the grammar above: `refcall` for a
             ref-or-call, `call_suffix` marking a call, `coalesce` (present ONLY
             when a `|` actually appears) / `default_expr` / `required_expr` at the
-            top, and the arithmetic/boolean chain below. A LONE atom — a bare
-            `${a}` wrapped-ref, or a bare `NUMBER` / `STRING` — inlines all the
-            way up and comes back as a top-level `Token` (no wrapper node), since
-            no spurious one-child `coalesce` is inserted.
+            top, and the arithmetic/boolean chain below. A LONE literal — a bare
+            `NUMBER`, `STRING`, `BOOL`, or `NULL` — inlines all the way up and comes
+            back as a top-level `Token` (no wrapper node), since no spurious
+            one-child `coalesce` is inserted.
 
     Raises:
         `ExpressionError`:
-            If `text` does not parse, is a dotted-callee builtin call, uses a
-            reserved operator word as a reference root, or calls `isinstance`
-            with anything but a value and a bare type name.
+            If `text` holds a `${...}` (see `reject_nested_spans`), does not parse,
+            is a dotted-callee builtin call, uses a reserved operator word as a
+            reference root, or calls `isinstance` with anything but a value and a
+            bare type name.
     """
+    reject_nested_spans(text)
     try:
         tree = _PARSER.parse(text)
     except LarkError as exc:

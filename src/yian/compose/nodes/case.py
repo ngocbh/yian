@@ -13,15 +13,15 @@ carries no inputs and no leaf Node; `.build()` returns a `BuildResult` whose `no
 no new node kind. Two surface forms:
 
 - **searched** (`cases: [{when: "<bool>", then: <t>}]`, `else: <e>`): scan each `when:` for its
-  distinct `${...}` refs -> allocate one `CaseNode` input `__rN` per distinct ref -> rewrite the
-  `when:` to the bare local `${__rN}`. Each case routes to its `then:` (the edge handle); `else:`
+  distinct refs -> allocate one `CaseNode` input `__rN` per distinct ref -> rewrite each ref in
+  the `when:` to its bare local `__rN`. Each case routes to its `then:` (the edge handle); `else:`
   routes to the internal else handle (`ELSE_HANDLE`).
 
 - **`on:`** (`on: ${ref}`, `cases: [{when: <value>, then: <t>}]`): one input `__on = ${ref}`;
   each `when: <value>` is a typed literal compared exactly: text (quoted, or an unquoted date
-  as its ISO text) becomes `${__on} == "<value>"`, a number
-  `${__on} == <n> and not isinstance(${__on}, bool)`, a bool
-  `${__on} == true and isinstance(${__on}, bool)`. The `isinstance` guard keeps a bool from
+  as its ISO text) becomes `__on == "<value>"`, a number
+  `__on == <n> and not isinstance(__on, bool)`, a bool
+  `__on == true and isinstance(__on, bool)`. The `isinstance` guard keeps a bool from
   equalling a number even when the `on:` type is unknown.
 
 Because the desugared `when:`s interpolate ONLY the node-local `__rN`/`__on` names, the strict
@@ -61,7 +61,6 @@ from yian.expr import (
     isinstance_subject,
     isinstance_type_names,
     parse_condition,
-    parse_expr,
     rewrite_condition_refs,
 )
 from yian.nodes.case import ELSE_HANDLE, Case, CaseNode
@@ -346,7 +345,7 @@ def _quote(
     *,
     range: SourceRange | None = None,
 ) -> str:
-    """A `when:` match value quoted as a string literal for `${__on} == "<v>"`.
+    """A `when:` match value quoted as a string literal for `__on == "<v>"`.
 
     The `when:`/`asserts:` grammar's STRING terminal is `/"[^"]*"/ | /'[^']*'/` with
     NO escape support (the evaluator strips the outer quotes verbatim), so we cannot
@@ -403,7 +402,7 @@ def _match_condition(
     index: int,
     range: SourceRange | None,
 ) -> str:
-    """Return the `${__on}` condition one `on:`-form `when:` value lowers to.
+    """Return the `__on` condition one `on:`-form `when:` value lowers to.
 
     Text compares as a string literal; a number compares numerically and never with a bool;
     a bool compares only with a bool.
@@ -422,17 +421,17 @@ def _match_condition(
         )
     value = on_match_value(value)
     if isinstance(value, str):
-        return f"${{__on}} == {_quote(value, diagnostics, range=range)}"
+        return f"__on == {_quote(value, diagnostics, range=range)}"
     if isinstance(value, bool):
         # Python's == has True == 1; the isinstance guard keeps a bool from equalling a number.
         literal = "true" if value else "false"
-        return f"${{__on}} == {literal} and isinstance(${{__on}}, bool)"
+        return f"__on == {literal} and isinstance(__on, bool)"
     if isinstance(value, (int, float)):
         try:
             reject_nonfinite(value, f"case node {node_id!r} cases[{index}].when")
         except TypeCheckError as exc:
             raise diagnostics.error(str(exc), range=range) from exc
-        return f"${{__on}} == {_number_text(value)} and not isinstance(${{__on}}, bool)"
+        return f"__on == {_number_text(value)} and not isinstance(__on, bool)"
     if isinstance(value, list):
         kind = "a list"
     elif isinstance(value, Mapping):
@@ -477,8 +476,8 @@ def _data_edges(node_id: str, wiring: dict[str, Any]) -> list[Edge]:
                     from_=producer,
                     to=node_id,
                     input_group=name,
-                    # a `when:`/`on:` ref can carry an escape (`:-`/`:?`); a
-                    # co-skipping condition would otherwise wrongly skip-flood the gate.
+                    # an `on:` value is a whole binding that can carry an escape (`:-`/`:?`);
+                    # a co-skipping condition would otherwise wrongly skip-flood the gate.
                     optional=not binding_co_skips(source),
                 )
             )
@@ -512,7 +511,7 @@ def _desugar_on(
     desc: CaseDescriptor,
     diagnostics: LoadDiagnostics,
 ) -> tuple[CaseNode, dict[str, Any], list[Edge], list[Edge], dict, dict[str, str]]:
-    """`on: ${ref}` form -> one `__on` param + one typed `${__on}` match condition per case.
+    """`on: ${ref}` form -> one `__on` param + one typed `__on` match condition per case.
 
     Each `when:` lowers through `_match_condition`, so it compares exactly with the `on:`
     value: text as text, numbers numerically, bools only with bools.
@@ -584,12 +583,6 @@ IsinstanceCheck = tuple[str, str]
 def _isinstance_check(conjunct: Tree | Token) -> Optional[IsinstanceCheck]:
     """The check a conjunct makes when it is `isinstance(<direct ref>, T)`, else `None`."""
     subject = isinstance_subject(conjunct)
-    if isinstance(subject, Token) and subject.type == "WRAPPED_REF":
-        # The mixed spelling `isinstance(${d.output}, T)` wraps the reference in braces.
-        try:
-            subject = parse_expr(str(subject)[2:-1])
-        except ExpressionError:
-            return None
     if subject is None:
         return None
     parts = direct_reference_parts(subject)
@@ -664,7 +657,7 @@ def _searched_params(desc: CaseDescriptor, diagnostics: LoadDiagnostics) -> _Sea
                 f"case node {desc.id!r}: `when:` {when!r} is not a valid boolean expression: {exc}",
                 range=when_range,
             ) from exc
-        # Parsing the whole value once covers all three spellings, matching `_rewrite_when`.
+        # Parsing the whole value once covers both spellings, matching `_rewrite_when`.
         for ref in expr_refs(tree):
             if ref not in ref_to_local:
                 local = f"__r{len(ref_to_local)}"
@@ -769,7 +762,7 @@ def _desugar_searched(
     desc: CaseDescriptor,
     diagnostics: LoadDiagnostics,
 ) -> tuple[CaseNode, dict[str, Any], list[Edge], list[Edge], dict, dict[str, str]]:
-    """Searched form -> one `__rN` input per distinct `${...}` ref; `when:` rewritten.
+    """Searched form -> one `__rN` input per distinct ref; `when:` rewritten.
 
     Returns `(node, wiring, data_edges, control_edges, param_ranges, param_labels)` — the last
     two locate each synth `__rN` at the `cases[N].when` it was first seen in and label it
@@ -830,9 +823,8 @@ def _desugar_searched(
 
 
 def _rewrite_when(when: str, ref_to_local: dict[str, str]) -> str:
-    """Rewrite each reference in `when` to its bare local `__rN`, honouring all three
-    condition spellings. A `${<ref>}` (mixed) becomes `${__rN}`, a bare `<ref>`
-    (whole-span / bare) becomes `__rN`; the surrounding expression is preserved. A ref
+    """Rewrite each reference in `when` to its bare local `__rN`, in either condition
+    spelling (bare, or one whole `${...}`); the surrounding expression is preserved. A ref
     with no allocated local is left untouched. `rewrite_condition_refs` parses the value
     like `parse_condition`, so extraction in `_searched_params` and rewrite see the SAME
     leaves."""

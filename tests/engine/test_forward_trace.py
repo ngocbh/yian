@@ -98,7 +98,7 @@ nodes:
     code: return inputs['topic']
     output: str
 output: ${work.output}
-asserts: ["${work.output} != null"]
+asserts: ["work.output != null"]
 """).compiled
     engine = _engine(flow, learnable=True)
     original = copy.deepcopy(engine.state.flow)

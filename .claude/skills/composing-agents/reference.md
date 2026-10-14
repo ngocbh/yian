@@ -61,12 +61,15 @@ to render as text, fails like an expression error.
 `and`, `or`, `not`, and `in` are reserved operators, so none can be the root
 name of a reference. A dotted field may use those names (`${record.output.in}`).
 
-Nesting a ref is allowed: `${a:-${b:-"lit"}}`. The `:-`/`:?` RHS is an
-expression, so a string default must be **quoted** (`${x:-"today"}`; bare `today`
-reads a variable). A whole-string `${ref}` resolves to the **typed value**;
-embedded in surrounding text it is **stringified**. A child-flow call is the
-whole-value `call(...)` directive (below), never a `${flow(args)}` span. Arithmetic on
-a value that is null when a `case` skips its node is a load error at that binding
+Inside an expression, name values directly and group with parentheses:
+`${a :- (b :- "lit")}` or `${a | b | "lit"}`. A `${...}` inside an expression
+(`${a :- ${b}}`, `when: "${a.output} > 5"`) is a load error that shows the rewrite.
+The `:-`/`:?` RHS is an expression, so a string default must be **quoted**
+(`${x:-"today"}`; bare `today` reads a variable). A whole-string `${ref}` resolves
+to the **typed value**; embedded in surrounding text it is **stringified**. A
+child-flow call is the whole-value `call(...)` directive (below), never a
+`${flow(args)}` span. Arithmetic on a value that is null when a `case` skips its
+node is a load error at that binding
 (`output 'q': ${order.output.qty + 1} does arithmetic on order.output.qty, which is null
 when node 'order' is skipped; give it a default with :-, e.g. (order.output.qty :- <default>)`).
 
@@ -92,7 +95,7 @@ One `${...}` grammar; the context decides what happens to the result:
 | Context | Where | What it does |
 |---------|-------|--------------|
 | **Bindings** | `input:` / `output:` values | **evaluated** to a typed value — refs, literals, arithmetic, lists, `:-` / `:?` / `\|`, pure builtins. Child-flow call = `call(...)` directive. `name: Type = value` declares the type. |
-| **Conditions** | `when:` / `asserts:` | **tested** as a boolean: `== != < <= > >=`, `in`/`not in`, `and`/`or`/`not`, parens, arithmetic operands. Canonical **bare** form (no `${}`); `${...}`-wrapped spellings load and evaluate identically. |
+| **Conditions** | `when:` / `asserts:` | **tested** as a boolean: `== != < <= > >=`, `in`/`not in`, `and`/`or`/`not`, parens, arithmetic operands. Canonical **bare** form (no `${}`); one whole `${...}` loads and evaluates identically; a `${...}` inside the expression is a load error. |
 | **Prompts** | `prompt:` text | free text with embedded `${...}` spans (each stringified) |
 
 > Bindings wire, conditions test, nodes compute. A heavy transform still belongs

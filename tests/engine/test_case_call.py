@@ -48,7 +48,7 @@ nodes:
     kind: case
     output: str
     cases:
-      - when: "${{input.score}} >= 0.5"
+      - when: "input.score >= 0.5"
         then: ${{ take(stance="a") | take(stance="b") }}
     else: call(take, stance="c")
 output: ${{gate.output}}
@@ -98,7 +98,7 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: "${{input.score}} >= 0.5"
+      - when: "input.score >= 0.5"
         then: call(take, stance="pro")
     else: use
 output: ${{gate.output}}
@@ -125,7 +125,7 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: "${{input.score}} >= 0.5"
+      - when: "input.score >= 0.5"
         then: call(take, stance="pro")
     else: call(take, stance="con")
 output: ${{gate.output}}
@@ -168,7 +168,7 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: "${{input.score}} >= 0.5"
+      - when: "input.score >= 0.5"
         then: call(take, stance="a") | call(take, stance="b")
     else: call(take, stance="c")
 output: ${{gate.output}}
@@ -201,7 +201,7 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: "${{input.score}} >= 0.5"
+      - when: "input.score >= 0.5"
         then: {then_target}
     else: {else_target}
   nope:
@@ -237,7 +237,7 @@ nodes:
     kind: case
     output: str
     cases:
-      - when: "${{input.score}} >= 0.5"
+      - when: "input.score >= 0.5"
         then: 'call(take'
     else: "call(take) tail"
 output: ${{gate.output}}
@@ -288,7 +288,7 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: "${{input.score}} >= 0.5"
+      - when: "input.score >= 0.5"
         then: call(take, stance="pro")
     else: use
 output: ${{gate.output}}
@@ -325,7 +325,7 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: "${{input.score}} >= 0.5"
+      - when: "input.score >= 0.5"
         then: call(take, stance=call(take, stance="pro"))
     else: call(take, stance="con")
 output: ${{gate.output}}
@@ -407,7 +407,7 @@ nodes:
     kind: case
     output: str
     cases:
-      - when: "${{input.score}} >= 0.5"
+      - when: "input.score >= 0.5"
         then: ${{ take(stance="pro") }}
     else: call(take, stance="con")
 output: ${{gate.output}}
@@ -428,7 +428,7 @@ nodes:
   gate:
     kind: case
     cases:
-      - when: "${{input.score}} >= 0.5"
+      - when: "input.score >= 0.5"
         then: call(take, stance=${{input.score}}
     else: call(take, stance="c")
 output: ${{gate.output}}

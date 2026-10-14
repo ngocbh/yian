@@ -67,9 +67,7 @@ nodes:
 output: ${brief.output}
 
 asserts:                                                # any false fails the run
-  # A condition is ALWAYS a whole boolean expression, written in the canonical BARE
-  # spelling — no `${}`. The mixed `${ref} op literal` and whole-span `${entire expr}`
-  # spellings now load and evaluate identically (the loaders parse a condition as a full
-  # expression, not a regex-scanned reference), but bare is the one form shown throughout.
+  # A condition is ALWAYS a whole boolean expression, written bare (no `${}`) or as one
+  # whole `${...}` span; bare is the canonical form shown throughout.
   - input.base_weight * 100 <= 10 and not (input.base_weight < 0)   # arithmetic + not + parens
   - input.extra_bps in [0, 25, 50, 100] or input.extra_bps >= 0     # membership + or

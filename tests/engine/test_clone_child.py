@@ -244,9 +244,9 @@ def test_clone_child_lowered_post_asserts_survive_clone():
     # deleting the synth edge that gates the assert on its producer.
     child = _child([FlowOutput(name="out", binding="${tail.output}")])
     end = child.nodes[END_ID]
-    # Lower `${tail.output} != ''` onto END exactly as boundary synthesis does.
+    # Lower `tail.output != ''` onto END exactly as boundary synthesis does.
     origin = OriginRef("flow/asserts/0")
-    end.post_asserts = [Assertion("${__assert_tail} != ''", "${tail.output} != ''", origin)]
+    end.post_asserts = [Assertion("__assert_tail != ''", "tail.output != ''", origin)]
     end.params.append(Parameter(name="__assert_tail"))
     child.wiring[END_ID]["__assert_tail"] = Binding("${tail.output:-null}")
     child.edges.append(Edge(id=f"tail->{END_ID}#assert", from_="tail", to=END_ID,
@@ -256,7 +256,7 @@ def test_clone_child_lowered_post_asserts_survive_clone():
     ce = cloned.nodes["each/__end__"]
     # the lowered post-assert is node-local (it names a synth PARAM, not a node) -> UNCHANGED.
     assert ce.post_asserts == [
-        Assertion("${__assert_tail} != ''", "${tail.output} != ''", origin)
+        Assertion("__assert_tail != ''", "tail.output != ''", origin)
     ]
     assert ce.post_asserts[0].origin == origin
     # the synth wiring feeding the param is re-namespaced under the callsite.
@@ -275,7 +275,7 @@ def test_spawner_assert_append_preserves_child_and_spawner_origins():
     child_origin = OriginRef("child/asserts/0")
     spawner_origin = OriginRef("parent/nodes/call/asserts/0")
     child_end.post_asserts = [
-        Assertion("${output} != null", "child output exists", child_origin)
+        Assertion("output != null", "child output exists", child_origin)
     ]
 
     cloned = clone_child(
@@ -283,7 +283,7 @@ def test_spawner_assert_append_preserves_child_and_spawner_origins():
         callsite="each",
         record={"topic": "ACME"},
         post_asserts=[
-            Assertion("${output} != null", "call output exists", spawner_origin)
+            Assertion("output != null", "call output exists", spawner_origin)
         ],
     )
     cloned_end = cloned.nodes[cloned.end_id]
@@ -316,7 +316,7 @@ def _tail_assert_end():
     # modeled on the lowered shape in test_clone_child_lowered_post_asserts_survive_clone above.
     end = EndNode.value("each/__end__", output_name="out")
     end.post_asserts = [
-        Assertion("${__assert_tail} != ''", "${each/tail.output} != ''")
+        Assertion("__assert_tail != ''", "each/tail.output != ''")
     ]
     end.params.append(Parameter(name="__assert_tail"))
     return stamp_reads(

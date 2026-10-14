@@ -27,16 +27,18 @@ def test_one_open_end_is_a_valid_shape(kind, bounds):
     Type(kind, bounds=bounds).validate_shape()
 
 
-@pytest.mark.parametrize("kind,bounds", [
-    (INT, (None, None)), (NUM, (None, None)),
-    (INT, (None, 1.0)), (NUM, (None, float("inf"))),
-    (NUM, (10**400, None)),
+@pytest.mark.parametrize("kind,bounds,error", [
+    (INT, (None, None), ValueError),
+    (INT, (None, 1.0), TypeError),
+    (NUM, (None, float("inf")), ValueError),
+    (NUM, (10**400, None), ValueError),
 ])
-def test_open_end_shape_still_rejects_bad_metadata(kind, bounds):
+def test_open_end_shape_still_rejects_bad_metadata(kind, bounds, error):
     typ = Type(kind)
     object.__setattr__(typ, "bounds", bounds)
-    with pytest.raises((TypeError, ValueError)):
+    with pytest.raises(error) as caught:
         typ.validate_shape()
+    assert type(caught.value) is error
 
 
 def test_numeric_interval_maps_open_ends_to_infinity():
@@ -46,16 +48,13 @@ def test_numeric_interval_maps_open_ends_to_infinity():
     assert numeric_interval(Type(INT, bounds=(1, 2))) == (1, 2)
 
 
-@pytest.mark.parametrize("bounds,label", [
-    ((0, None), "int(0..)"), ((None, 100), "int(..100)"), ((-5, None), "int(-5..)"),
+@pytest.mark.parametrize("kind,bounds,label", [
+    (INT, (0, None), "int(0..)"), (INT, (None, 100), "int(..100)"), (INT, (-5, None), "int(-5..)"),
+    (NUM, (0.0, None), "float(0.0..)"),
 ])
-def test_label_spells_the_open_end_empty(bounds, label):
-    assert canonical_type_label(Type(INT, bounds=bounds)) == label
-    assert canonical_type_label(Type(INT, bounds=bounds, nullable=True)) == f"Optional({label})"
-
-
-def test_float_label():
-    assert canonical_type_label(Type(NUM, bounds=(0.0, None))) == "float(0.0..)"
+def test_label_spells_the_open_end_empty(kind, bounds, label):
+    assert canonical_type_label(Type(kind, bounds=bounds)) == label
+    assert canonical_type_label(Type(kind, bounds=bounds, nullable=True)) == f"Optional({label})"
 
 
 def test_value_check_one_sided():
@@ -65,7 +64,7 @@ def test_value_check_one_sided():
         build_value_as(Type(INT, bounds=(0, None)), -1)
     with pytest.raises(TypeCheckError, match=r"^101 is above the inclusive int maximum 100$"):
         build_value_as(Type(INT, bounds=(None, 100)), 101)
-    with pytest.raises(TypeCheckError, match=r"below the inclusive float minimum 0\.0"):
+    with pytest.raises(TypeCheckError, match=r"^-0\.5 is below the inclusive float minimum 0\.0$"):
         build_value_as(Type(NUM, bounds=(0.0, None)), -0.5)
     # the two-sided message is unchanged
     with pytest.raises(TypeCheckError, match=r"^13 is outside inclusive int bounds \(1, 12\)$"):
@@ -73,8 +72,10 @@ def test_value_check_one_sided():
 
 
 def test_value_check_one_sided_rejects_nan():
-    with pytest.raises(TypeCheckError):
+    with pytest.raises(TypeCheckError, match=r"^nan is outside the inclusive range float\(0\.0\.\.\)$"):
         build_value_as(Type(NUM, bounds=(0.0, None)), math.nan)
+    with pytest.raises(TypeCheckError, match=r"^nan is outside the inclusive range float\(\.\.1\)$"):
+        build_value_as(Type(NUM, bounds=(None, 1), nullable=True), math.nan)
 
 
 def test_overlap_with_open_ends():

@@ -1468,15 +1468,19 @@ def _build_for_type(
     if typ.bounds is not None:
         _validate_numeric_bounds(typ.kind, typ.bounds)
         low, high = numeric_interval(typ)
+        # A one-sided range names the end a value fails; NaN compares false against
+        # both ends, so its message claims no direction.
         if _scalar_matches(typ.kind, value) and not low <= value <= high:
             kind = typ.kind.value
             if None not in typ.bounds:
                 message = f"is outside inclusive {kind} bounds {typ.bounds!r}"
-            # A one-sided range fails on its present end (NaN fails either way).
-            elif typ.bounds[1] is None:
+            elif value < low:
                 message = f"is below the inclusive {kind} minimum {value_repr(low)}"
-            else:
+            elif value > high:
                 message = f"is above the inclusive {kind} maximum {value_repr(high)}"
+            else:
+                label = _canonical_nonnullable_label(typ)[0]
+                message = f"is outside the inclusive range {label}"
             raise TypeCheckError(f"{value_repr(value)} {message}", path=path)
 
     # nullable (Optional[X]) — a None value is accepted as NoneValue

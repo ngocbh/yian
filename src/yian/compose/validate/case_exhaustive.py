@@ -7,10 +7,12 @@ Two coverage laws for `case` nodes:
   with no `else:` is a `LoadError`.
 - Value-producing cases: a case that produces a value (it declares `output:`, is read
   through `${<case>.output}`, or is a branch target of such a case) must be exhaustive. It
-  has an `else:`, or it is an `on:` form whose `on:` type is a non-nullable enum with every
-  tag listed in a `when:`. Its `on:` resolves against node outputs and flow inputs, under
-  the case's narrowing view. Otherwise it is a `LoadError`. A routing-only case with no
-  match runs no branch, so only enum coverage applies to it.
+  has an `else:`, or it is an `on:` form whose `on:` type is non-nullable and fully listed
+  by its `when:` values: an enum with every tag, or a `bool` with both `true` and `false`.
+  `when:` values compare as typed values, so the text `"true"` does not cover `true`. Its
+  `on:` resolves against node outputs and flow inputs, under the case's narrowing view.
+  Otherwise it is a `LoadError`. A routing-only case with no match runs no branch, so only
+  enum coverage applies to it.
 
 One membership law for `on:`-form `when:` values (`check_case_when_values`): where the
 `on:` type is known, every `when:` value must be a possible member of it (compared exactly:
@@ -25,8 +27,9 @@ the validate phase, alongside the other cross-node checks.
 
 Imports flow down/peer only: `expr` (ref scan), `nodes.contracts` (the output-contract
 sum), `typesys` (Type and the strict value check), and the compose peers
-`helpers.output_contracts`/`errors`/`typed_bindings`, `nodes.case`, `source.literals`,
-`parse.file`, and `validate.narrowing`/`typed_bindings`. Nothing in the engine imports this back.
+`helpers.output_contracts`, `helpers.errors`, `helpers.typed_bindings`, `nodes.case`,
+`source.literals`, `parse.file`, `validate.narrowing`, and `validate.typed_bindings`.
+Nothing in the engine imports this back.
 """
 
 from __future__ import annotations
@@ -311,8 +314,9 @@ def _check_value_exhaustive(
         diagnostics (`LoadDiagnostics`): Source ownership for located errors.
 
     Raises:
-        `LoadError`: The case has no `else:` and its `on:` type is unknown, not an enum,
-            nullable, or has a tag no `when:` lists (or it is a searched case).
+        `LoadError`: The case has no `else:` and its `on:` type is unknown, neither an enum
+            nor a `bool`, nullable, or has a member no `when:` lists (or it is a searched
+            case).
     """
     if case_is_exhaustive(desc, producers, inputs):
         return
@@ -334,11 +338,21 @@ def _not_exhaustive_reason(
     typ = _resolve_on_type(desc.on, producers, inputs)
     if typ is None:
         return f"the type of on: {desc.on} is not known"
+    covered = _on_covered(desc)
+    if typ.kind is ValueKind.BOOLEAN and typ.tags is None:
+        if typ.nullable:
+            return f"{desc.on} may be null"
+        missing = [
+            name
+            for name, value in (("true", True), ("false", False))
+            if not any(v is value for v in covered)
+        ]
+        return f"bool value(s) [{', '.join(missing)}] not covered"
     if typ.tags is None:
-        return f"on: {desc.on} is {canonical_type_label(typ)}, not a Literal"
+        return f"on: {desc.on} is {canonical_type_label(typ)}, not a Literal or bool"
     if typ.nullable:
         return f"{desc.on} may be null"
-    return f"enum tag(s) {sorted(typ.tags - _on_covered(desc))} not covered"
+    return f"enum tag(s) {sorted(typ.tags - _covered_tags(covered))} not covered"
 
 
 def case_is_exhaustive(
@@ -360,17 +374,40 @@ def case_is_exhaustive(
     Returns:
         `bool`:
             True when the case has an `else:`, or it is the `on:` form over a non-nullable
-            `Literal` node output or flow input whose every tag is a `when:` value. A
-            searched case without `else:` is never exhaustive.
+            `Literal` or `bool` node output or flow input whose every member is a `when:`
+            value. A searched case without `else:` is never exhaustive.
     """
     if desc.else_ is not None:
         return True
     if desc.on is None:
         return False
     typ = _resolve_on_type(desc.on, producers, flow_inputs or {})
-    if typ is None or typ.tags is None or typ.nullable:
+    return typ is not None and _covers(typ, _on_covered(desc))
+
+
+def _covers(typ: Type, covered: list[Any]) -> bool:
+    """Return whether the typed `when:` values `covered` list every member of `typ`.
+
+    Args:
+        typ (`Type`):
+            The resolved `on:` type.
+        covered (`list[Any]`):
+            The case's typed `when:` match values.
+
+    Returns:
+        `bool`:
+            True when `typ` is non-nullable and is a `Literal` whose every tag is covered,
+            or a `bool` with both `true` and `false` covered.
+    """
+    if typ.nullable:
         return False
-    return typ.tags <= _on_covered(desc)
+    if typ.tags is not None:
+        return typ.tags <= _covered_tags(covered)
+    return (
+        typ.kind is ValueKind.BOOLEAN
+        and any(v is True for v in covered)
+        and any(v is False for v in covered)
+    )
 
 
 def exhaustive_cases(
@@ -406,11 +443,19 @@ def exhaustive_cases(
     return exhaustive
 
 
-def _on_covered(desc: CaseDescriptor) -> set[str]:
-    """The set of enum tags an on:-form case explicitly matches (its `when:` values)."""
+def _on_covered(desc: CaseDescriptor) -> list[Any]:
+    """Return the typed match values of an `on:`-form case's `when:`s (empty when searched).
+
+    A list, not a set: a set would merge `1` and `True`, which never match each other.
+    """
     if desc.on is None:
-        return set()
-    return {str(c.get("when")) for c in desc.cases if c.get("when") is not None}
+        return []
+    return [on_match_value(c["when"]) for c in desc.cases if c.get("when") is not None]
+
+
+def _covered_tags(covered: list[Any]) -> set[str]:
+    """Return the text values among typed `when:` values, the only ones a tag can equal."""
+    return {v for v in covered if isinstance(v, str)}
 
 
 def _resolve_on_type(
@@ -454,14 +499,14 @@ def _resolve_on_type(
 
 def _check_exhaustive(
     desc: CaseDescriptor,
-    covered: set[str],
+    covered: list[Any],
     producers: dict[str, OutputContract],
     diagnostics: LoadDiagnostics | None = None,
 ) -> None:
     """Enum-exhaustiveness for the `on:` form.
 
     Resolves the `on:` ref to a `Type`; if it carries `.tags` (an enum), every tag must
-    be a `when:` match value OR be covered by a present `else:`. A missing tag with no
+    be a text `when:` match value OR be covered by a present `else:`. A missing tag with no
     `else:` is a `LoadError`. A non-enum / unresolved producer is lenient (no check).
     """
     diagnostics = diagnostics or LoadDiagnostics()
@@ -470,7 +515,7 @@ def _check_exhaustive(
     typ = _resolve_on_type(desc.on, producers)
     if typ is None or typ.tags is None:
         return  # not a checked enum producer -> lenient
-    missing = sorted(typ.tags - covered)
+    missing = sorted(typ.tags - _covered_tags(covered))
     if missing:
         raise diagnostics.error(
             f"case node {desc.id!r} on {desc.on}: non-exhaustive — enum tag(s) "

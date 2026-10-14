@@ -2064,7 +2064,7 @@ def test_read_case_over_a_str_without_else_is_rejected():
     with pytest.raises(LoadError) as caught:
         load_flow(text)
     assert (
-        _EXHAUSTIVE.format(case="gate") + " (on: ${input.x} is str, not a Literal)"
+        _EXHAUSTIVE.format(case="gate") + " (on: ${input.x} is str, not a Literal or bool)"
     ) in str(caught.value)
     assert _error_line(caught.value) == _line_of(text, "  gate:")
 
@@ -2194,7 +2194,7 @@ def test_inner_case_of_a_value_producing_case_must_be_exhaustive():
     with pytest.raises(LoadError) as caught:
         load_flow(text)
     assert (
-        _EXHAUSTIVE.format(case="inner") + " (on: ${input.x} is str, not a Literal)"
+        _EXHAUSTIVE.format(case="inner") + " (on: ${input.x} is str, not a Literal or bool)"
     ) in str(caught.value)
     assert _error_line(caught.value) == _line_of(text, "  inner:")
 
@@ -2206,7 +2206,7 @@ def test_case_read_inside_text_must_be_exhaustive():
     with pytest.raises(LoadError) as caught:
         load_flow(text)
     assert (
-        _EXHAUSTIVE.format(case="gate") + " (on: ${input.x} is str, not a Literal)"
+        _EXHAUSTIVE.format(case="gate") + " (on: ${input.x} is str, not a Literal or bool)"
     ) in str(caught.value)
 
 

@@ -481,3 +481,60 @@ def test_drop_quotes_fix_needs_quotes_and_strips_the_text():
     )
     padded = _flow([('" 1"', "one")])
     assert _when_error(padded, '" 1"').endswith("; drop the quotes: `when: 1`")
+
+
+_NOT_EXHAUSTIVE = (
+    "case node 'route' produces a value, so it must be exhaustive: add an `else:` (%s)"
+)
+
+
+def _value_flow(whens: list[tuple[str, str]], on_type: str) -> str:
+    """Return a flow whose value case `route` maps `${input.n}` to text per `whens`, no else."""
+    text = (
+        f"id: f\nname: f\ninput:\n  n: {on_type}\nnodes:\n"
+        "  route:\n    kind: case\n    on: ${input.n}\n    output: str\n    cases:\n"
+    )
+    for when, value in whens:
+        text += f'      - when: {when}\n        then: "{value}"\n'
+    return text + "output: ${route.output}\n"
+
+
+def test_bool_value_case_with_true_and_false_needs_no_else():
+    text = _value_flow([("true", "yes"), ("false", "no")], "bool")
+    assert _route(text, {"n": True}) == "yes"
+    assert _route(text, {"n": False}) == "no"
+
+
+def test_bool_value_case_missing_false_is_not_exhaustive():
+    error = _load_error(_value_flow([("true", "yes")], "bool"))
+    assert str(error) == _NOT_EXHAUSTIVE % "bool value(s) [false] not covered"
+
+
+def test_optional_bool_is_not_exhaustive():
+    error = _load_error(_value_flow([("true", "yes"), ("false", "no")], "Optional[bool]"))
+    assert str(error) == _NOT_EXHAUSTIVE % "${input.n} may be null"
+
+
+def test_int_value_case_reason_names_literal_or_bool():
+    error = _load_error(_value_flow([("1", "one")], "int"))
+    assert str(error) == _NOT_EXHAUSTIVE % "on: ${input.n} is int, not a Literal or bool"
+
+
+def test_routing_only_bool_join_is_exhaustive():
+    text = (
+        "id: f\nname: f\ninput:\n  n: bool\nnodes:\n"
+        "  route:\n    kind: case\n    on: ${input.n}\n    cases:\n"
+        "      - when: true\n        then: one\n"
+        "      - when: false\n        then: two\n"
+        "  one:\n    kind: code\n    code: |\n      return 1\n    output: int\n"
+        "  two:\n    kind: code\n    code: |\n      return 2\n    output: int\n"
+        "output: ${(one.output | two.output) + 1}\n"
+    )
+    assert _route(text, {"n": True}) == 2
+    assert _route(text, {"n": False}) == 3
+
+
+def test_literal_value_case_listing_every_tag_needs_no_else():
+    text = _value_flow([("a", "A"), ("b", "B")], "Literal[a, b]")
+    assert _route(text, {"n": "a"}) == "A"
+    assert _route(text, {"n": "b"}) == "B"

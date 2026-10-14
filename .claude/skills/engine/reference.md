@@ -477,8 +477,10 @@ manager, where `transcript` is the `TranscriptSource` that recall returned.
 Its request/observe operations validate the complete candidate snapshot before
 atomic publication under the backend condition. Provider/tool execution and stop
 callbacks happen outside that lock. Observe completed truth before honoring stop;
-caught cancellation must not reactivate the turn. A failed or interrupted invocation
-may leave pending requests whose outcomes remain unknown. Later invocations may
+a call that raises while a stop is pending is observed `interrupted` and the run
+stops (a host callback fault still escapes). Caught cancellation must not
+reactivate the turn. A failed or interrupted invocation may leave pending
+requests whose outcomes remain unknown. Later invocations may
 continue, and successful closure checks only the current invocation's effects.
 Never fabricate successful results for older incomplete work.
 

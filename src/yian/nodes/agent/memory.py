@@ -589,7 +589,8 @@ def invoke_model(
             a transcript, invoke directly and check for cancellation.
         invoke (`Callable`): One model call, invoked outside the memory boundary.
         new_messages (`Sequence[BaseMessage]`): Only newly submitted input messages.
-        check_stopped (`Callable`): Cooperative stop check after reply publication.
+        check_stopped (`Callable`): Cooperative stop check after reply publication,
+            and before recording a failed call or rejected reply.
         exchange_id (`str | None`): Optional caller-owned correlation identity;
             omission generates one unique ID for this model exchange.
         purpose (`str`): Request purpose; defaults to ordinary `chat` generation.
@@ -604,8 +605,10 @@ def invoke_model(
 
     Raises:
         `_CapabilityFault`: Encoding or publishing messages fails.
-        `_HostStop`: Cooperative cancellation was requested. Provider exceptions
-            also propagate unchanged, including when failure publication fails.
+        `_HostStop`: Cooperative cancellation was requested, including when the
+            call fails or its reply is rejected while a stop is pending; the effect
+            is then recorded `interrupted`. Otherwise provider exceptions propagate
+            unchanged, including when failure publication fails.
         `ReplyInterrupted`: A host interrupt cut the streamed reply; the effect is
             recorded `interrupted` with the partial reply first.
         `TypeCheckError`: The stored reply would hold a NaN or infinity; the effect
@@ -633,7 +636,7 @@ def invoke_model(
             )
         raise
     except BaseException as primary:
-        _observe_failure(turn, ordinal, "model", primary)
+        _observe_failure(turn, ordinal, "model", primary, check_stopped)
         raise
     with _memory_boundary():
         raw = reply if raw_reply is None else raw_reply(reply)
@@ -643,14 +646,14 @@ def invoke_model(
         # Only finite JSON can be stored, so a non-finite number anywhere in the reply fails it.
         reject_nonfinite(raw, "model reply")
     except Exception as rejected:
-        # A stop that arrived during the call wins over the rejection. `turn.observe`
-        # itself raises a pending stop, which would wrap `rejected` as a host fault.
+        # Without a transcript the stop is checked before `check_reply`, so a pending
+        # stop wins over any rejection here too, a host fault included.
         try:
             check_stopped()
         except BaseException as stop:
-            _observe_failure(turn, ordinal, "model", stop)
+            _observe_failure(turn, ordinal, "model", stop, check_stopped)
             raise
-        _observe_failure(turn, ordinal, "model", rejected)
+        _observe_failure(turn, ordinal, "model", rejected, check_stopped)
         raise
     with _memory_boundary():
         turn.observe(ordinal, "completed", items=(encode_message(raw, exchange_id),))
@@ -662,16 +665,21 @@ def _observe_preserving_error(turn, ordinal, status, primary, *, failure=None):
     """Preserve initiating identity while marking publication faults non-retryable.
 
     Ordinary errors use the existing evaluator-unwrapped capability carrier when
-    publication also fails. BaseException cancellation and existing carriers retain
-    their control identity; in particular `_HostStop.primary` must stay visible.
+    publication also fails, except that a stop `turn.observe` honors after
+    publishing wins and is raised. A derived stop primary is replaced by the stop
+    `turn.observe` raised. BaseException cancellation, existing carriers and initiating
+    stops retain their control identity; in particular `_HostStop.primary` must stay visible.
     """
     try:
         turn.observe(ordinal, status, failure=failure)
     except BaseException as secondary:
+        # SessionMemory's turn raises a pending stop only after publishing, so the
+        # observation did not fail and the stop must not be lost.
+        stopped = isinstance(secondary, _HostStop)
         original = (
             primary.original if isinstance(primary, _CapabilityFault) else primary
         )
-        if secondary is not primary and secondary is not original:
+        if not stopped and secondary is not primary and secondary is not original:
             try:
                 if hasattr(original, "add_note"):
                     original.add_note(
@@ -679,17 +687,42 @@ def _observe_preserving_error(turn, ordinal, status, primary, *, failure=None):
                     )
             except BaseException:
                 pass
+        if stopped and isinstance(primary, _HostStop) and not primary.primary:
+            # The turn re-raises its own cached stop when it finishes; raising that
+            # same instance keeps it from being noted as a second, failed cleanup.
+            raise
         if isinstance(primary, Exception) and not isinstance(
             primary, (_CapabilityFault, _HostStop)
         ):
+            if stopped:
+                raise
             raise _CapabilityFault(primary) from secondary
 
 
-def _observe_failure(turn, ordinal, operation, primary):
-    """Record a sanitized external-effect failure, preserving its exact exception."""
+def _observe_failure(turn, ordinal, operation, primary, check_stopped):
+    """Record a sanitized external-effect failure; a pending stop wins over an ordinary error.
+
+    With a stop pending, the effect is recorded `interrupted` and the stop is
+    raised, with `primary` in its `__context__` chain. Otherwise, and always for a
+    host fault (`_CapabilityFault`), the caller re-raises `primary`.
+    """
     interrupted = isinstance(
         primary, (_HostStop, AsyncCancelledError, FutureCancelledError)
     ) or not isinstance(primary, Exception)
+    if not interrupted and not isinstance(primary, _CapabilityFault):
+        # SessionMemory's turn honors a pending stop only after recording `failed`,
+        # so the stop is checked first to record the effect `interrupted`. A host
+        # fault keeps priority over the stop, as it does without memory.
+        try:
+            check_stopped()
+        except BaseException as stop:
+            _record_failure(turn, ordinal, operation, stop, interrupted=True)
+            raise
+    _record_failure(turn, ordinal, operation, primary, interrupted=interrupted)
+
+
+def _record_failure(turn, ordinal, operation, primary, *, interrupted):
+    """Observe an effect `failed` or `interrupted` with a sanitized failure."""
     status = "interrupted" if interrupted else "failed"
     # External exception text may contain credentials or request headers.
     failure = MemoryOperationFailure(
@@ -797,15 +830,19 @@ def invoke_tool_effect(
         model_exchange_id (`str`): Unique model exchange that requested this call.
         call_index (`int`): Zero-based call position within that model reply.
         tool_call_id (`str`): Provider correlation ID, which may repeat across exchanges.
-        check_stopped (`Callable`): Cooperative stop check after publishing the result.
+        check_stopped (`Callable`): Cooperative stop check after publishing the result,
+            and before recording a failed call.
 
     Returns:
         `ToolMessage`: Actual represented result, already retained in session memory.
 
     Raises:
         `_CapabilityFault`: Encoding or memory access fails.
-        `_HostStop`: Cooperative cancellation occurs. Tool and representation errors
-            propagate unchanged; a representation error does not mark execution failed.
+        `_HostStop`: Cooperative cancellation occurs, including when the tool fails
+            while a stop is pending (the effect is then recorded `interrupted`) or
+            when representing its result fails while a stop is pending.
+            Otherwise tool and representation errors propagate unchanged; a
+            representation error does not mark execution failed.
     """
     if turn is None:
         result = invoke()
@@ -819,7 +856,7 @@ def invoke_tool_effect(
     try:
         result = invoke()
     except BaseException as primary:
-        _observe_failure(turn, ordinal, "tool", primary)
+        _observe_failure(turn, ordinal, "tool", primary, check_stopped)
         raise
     try:
         text = str(result)

@@ -667,7 +667,7 @@ AGENT_FLOW = """\
 id: cli_agent
 name: cli_agent
 input:
-  topic: str
+  topic: !str
 nodes:
   write:
     kind: agent

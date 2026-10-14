@@ -119,8 +119,9 @@ class NormalizedChatAnthropic(ChatAnthropic):
         which a block's ``thinking`` does not set, so it would force a tool call beside
         thinking, a pair the Messages API rejects. With thinking on in the block and no
         `method` given, this uses the JSON-schema output format (``output_config.format``),
-        except for a schema with an open part (`has_open_schema`), which that format's
-        grammar rejects: such a schema goes as an unforced tool (`_unforced_tool_output`).
+        except for a schema with an open part (`has_open_schema`), which that format can't
+        express (the SDK closes an open object and rejects an empty subschema): such a
+        schema goes as an unforced tool (`_unforced_tool_output`).
 
         Args:
             schema (`dict` or `type`):

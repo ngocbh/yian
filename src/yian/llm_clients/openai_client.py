@@ -46,8 +46,8 @@ def _strict_false_for_open_schema(
 ) -> None:
     """Set ``kwargs["strict"] = False`` for an open schema bound as a Responses function tool.
 
-    Responses function tools default to strict, which rejects a schema with an open part
-    (`has_open_schema`). Chat Completions tools are non-strict unless asked, and an
+    With ``strict`` omitted, the Responses API tries strict mode, which can't express a
+    schema with an open part (`has_open_schema`); an explicit ``False`` opts out. Chat Completions tools are non-strict unless asked, and an
     explicit ``strict`` is the caller's choice, so both are left alone.
 
     Args:

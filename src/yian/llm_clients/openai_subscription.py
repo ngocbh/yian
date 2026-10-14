@@ -94,9 +94,10 @@ class _SubscriptionChatOpenAI(RequestBlockMixin, ChatOpenAI):
     def with_structured_output(self, schema, *, method=None, **kwargs):
         """Use the subscription transport's ordinary function-tool protocol.
 
-        Every request is Responses-shaped, where function tools default to strict, so a
-        schema with an open part (`has_open_schema`) is sent with ``strict=False``;
-        strict mode rejects it. An explicit ``method`` or ``strict`` is respected.
+        Every request is Responses-shaped, where an omitted ``strict`` lets the API try
+        strict mode, which can't express an open part, so a schema with one
+        (`has_open_schema`) is sent with an explicit ``strict=False``. An explicit
+        ``method`` or ``strict`` is respected.
 
         Args:
             schema (`dict | type`):

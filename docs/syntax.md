@@ -1473,7 +1473,7 @@ A few providers need a note:
 - `anthropic` with `thinking` on (any `type` other than `disabled`) gets structured
   output through the JSON-schema output format (`output_config.format`), because the
   Messages API refuses thinking beside a forced tool call. An output with an open part
-  (`object`, `Any`) can't go through that format, which accepts only closed mappings, so
+  (`object`, `Any`) can't go through that format, which can't express an open part, so
   it goes as a tool the model may call; a reply without that tool call is corrected and
   retried under `retries:`.
 - `ollama` takes what the Ollama client sends: `think` (`true`, `false`, or a level),

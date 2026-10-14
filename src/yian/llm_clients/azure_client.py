@@ -30,9 +30,9 @@ class NormalizedAzureChatOpenAI(RequestBlockMixin, AzureChatOpenAI):
         Azure's default (``json_schema``, strict) rejects a schema with an open part
         (`has_open_schema`), so without an explicit ``method`` such a schema goes as a
         forced function tool without ``strict`` instead. When an open schema is bound as
-        a function tool on a deployment langchain routes to the Responses API, where
-        function tools default to strict, ``strict=False`` is sent unless the caller gave
-        ``strict``. Any other schema or method reaches langchain unchanged.
+        a function tool on a deployment langchain routes to the Responses API, where an
+        omitted ``strict`` lets the API try strict mode, ``strict=False`` is sent unless
+        the caller gave ``strict``. Any other schema or method reaches langchain unchanged.
 
         Args:
             schema (`dict | type | None`, *optional*, defaults to `None`):

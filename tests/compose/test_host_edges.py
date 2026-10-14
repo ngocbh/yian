@@ -149,6 +149,10 @@ def test_missing_host_or_host_cycle_is_a_compiler_bug():
         host_control_edges(_nodes(_code("L", host="nowhere")), [])
     with pytest.raises(ValueError, match="cycle"):
         host_control_edges(_nodes(_code("A", host="B"), _code("B", host="A")), [])
+    # A host's data producer whose own hosts cycle is met before that producer's own turn.
+    nodes = _nodes(_code("h"), _code("L", host="h"), _code("A", host="B"), _code("B", host="A"))
+    with pytest.raises(ValueError, match="cycle"):
+        host_control_edges(nodes, [_data("A", "h", "x")])
 
 
 def test_host_data_input_becomes_a_gate():

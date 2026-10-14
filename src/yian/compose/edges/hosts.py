@@ -21,8 +21,8 @@ wiring, so a gate never feeds a value.
 A producer is *family* when it is the lifted node, one of its hosts, or a node lifted out of one
 of those hosts. A group whose only producer is family gives no gate: siblings lifted from the
 same host don't wait on each other. A required group read from one family node is instead looked
-through: the lifted node gets that node's own data gates (unless the lifted node already reads
-it, so its inputs already gate the lifted node). Each ancestor host is visited the same way, so
+through: the lifted node gets that node's own data gates (unless the lifted node itself
+requires that node as an input, so its inputs already gate the lifted node). Each ancestor host is visited the same way, so
 transitive lifts gate on every host up the chain.
 
 A gate group is dropped as redundant when the lifted node already depends on all its producers
@@ -43,6 +43,7 @@ Only the loader pipeline imports this back.
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Mapping, Sequence
 from typing import NamedTuple, Optional
 
@@ -100,9 +101,12 @@ def host_control_edges(
         `Edge(id="maybe->__call_0#0", from_="maybe", to="__call_0", input_group="publish.notes")`.
     """
     routes_into: dict[str, list[Edge]] = {}
+    data_into: dict[str, list[Edge]] = {}
     for edge in edges:
         if edge.source_handle is not None:
             routes_into.setdefault(edge.to, []).append(edge)
+        elif not edge.ordering:
+            data_into.setdefault(edge.to, []).append(edge)
 
     memo: dict[str, list[_Gate]] = {}
 
@@ -131,11 +135,6 @@ def host_control_edges(
             gates += gating(checked_host(node_id, desc.host), (*chain, node_id))
         memo[node_id] = gates
         return gates
-
-    data_into: dict[str, list[Edge]] = {}
-    for edge in edges:
-        if edge.source_handle is None and not edge.ordering:
-            data_into.setdefault(edge.to, []).append(edge)
 
     def input_groups(node_id: str) -> list[list[Edge]]:
         """``node_id``'s incoming data edges grouped by input group, in edge order."""
@@ -167,7 +166,7 @@ def host_control_edges(
         chain = ancestors(node_id)
         hosts = set(chain)
         seen = {node_id, *chain}
-        queue = list(chain)
+        queue = deque(chain)
         gates: list[_Gate] = []
         sources: set[str] = set()
         required: list[frozenset[str]] = []
@@ -202,7 +201,7 @@ def host_control_edges(
             gates.extend(_Gate(source, None, False, optional, group) for source in producers)
 
         while queue:
-            current = queue.pop(0)
+            current = queue.popleft()
             for group in input_groups(current):
                 name = f"{current}.{group[0].input_group}"
                 optional = group[0].optional

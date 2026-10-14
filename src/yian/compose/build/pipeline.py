@@ -1307,8 +1307,9 @@ def _assemble(
       leaf-owned position; a case lowers in its own build) -> attach declared input
       contracts to the node wiring -> cross-flow type check + case exhaustiveness ->
       infer data edges + append each case's own edges + copy each host's route/ordering
-      edges and data gates onto the nodes lifted out of it -> validate references + classify asserts ->
-      attach authored flow-output binding origins + declared output contracts
+      edges and data gates onto the nodes lifted out of it -> validate references +
+      classify asserts -> attach authored flow-output binding origins + declared output
+      contracts
       -> synthesize roots/terminals -> resolve `isinstance` type tables -> reject cycles +
       check if/else handles -> CompiledFlow.from_parts.
 

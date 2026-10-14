@@ -131,8 +131,8 @@ class LLMConfig(BaseModel):
             allowed only for exactly `localhost`, `127.0.0.1`, and `[::1]`. It is
             checked and stored as written, so whitespace, control characters,
             non-ASCII characters (use a host's `xn--` form), a bad port, or more than
-            2048 characters are rejected rather than normalised (see
-            `validate_base_url`). The `ollama` provider rejects it. For
+            `YIAN_MAX_BASE_URL_CHARS` characters (default 2048) are rejected rather
+            than normalised (see `validate_base_url`). The `ollama` provider rejects it. For
             `provider="azure"` it is the Azure OpenAI resource endpoint, such as
             `https://<resource>.openai.azure.com/`, and is required when the model
             is called; it needs no `api_key`, since the key may come from
@@ -383,10 +383,11 @@ def validate_base_url(value: Any) -> str:
 
     The check runs on the exact string the client will use: it must be a lowercase
     ``https://`` URL (``http://`` only for exactly ``localhost``, ``127.0.0.1``, or
-    ``[::1]``) of a host, an optional port from 1 to 65535, and a path, at most 2048
-    characters long. Credentials, a query, a fragment, whitespace, control characters,
-    and non-ASCII characters are refused rather than normalised; write an
-    internationalised host in its ``xn--`` form. Errors never echo the value.
+    ``[::1]``) of a host, an optional port from 1 to 65535, and a path, at most
+    ``YIAN_MAX_BASE_URL_CHARS`` characters long (default 2048). Credentials, a query, a
+    fragment, whitespace, control characters, and non-ASCII characters are refused
+    rather than normalised; write an internationalised host in its ``xn--`` form.
+    Errors never echo the value.
 
     Args:
         value (`Any`): The candidate URL.

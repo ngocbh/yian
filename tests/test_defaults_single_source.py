@@ -7,6 +7,7 @@ before `yian.defaults` existed.
 from __future__ import annotations
 
 import ast
+import functools
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "yian"
@@ -89,7 +90,8 @@ class _Scanner(ast.NodeVisitor):
 
     An assignment counts when it binds a name at module or class level, including inside
     `if`, `try`, `with`, and loops at that level; a parameter default counts in every
-    function. Names are qualified by the enclosing classes and functions, so a method
+    function and lambda. Either counts when a flagged int appears anywhere in its
+    expression. Names are qualified by the enclosing classes and functions, so a method
     parameter is `Class.method.parameter`.
     """
 
@@ -109,11 +111,14 @@ class _Scanner(ast.NodeVisitor):
                 for name in _target_names(target):
                     self._record(name)
 
+    # Assignments recurse so a lambda in the assigned value has its defaults checked.
     def visit_Assign(self, node: ast.Assign) -> None:
         self._record_targets(node.targets, node.value)
+        self.generic_visit(node)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
         self._record_targets([node.target], node.value)
+        self.generic_visit(node)
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self._enter(node, in_function=False)
@@ -124,8 +129,19 @@ class _Scanner(ast.NodeVisitor):
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         self._visit_function(node)
 
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        self._record_defaults("<lambda>", node.args)
+        self._names.append("<lambda>")
+        self._in_function.append(True)
+        self.generic_visit(node)
+        self._in_function.pop()
+        self._names.pop()
+
     def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
-        args = node.args
+        self._record_defaults(node.name, node.args)
+        self._enter(node, in_function=True)
+
+    def _record_defaults(self, function: str, args: ast.arguments) -> None:
         positional = [*args.posonlyargs, *args.args]
         pairs = list(zip(positional[len(positional) - len(args.defaults) :], args.defaults))
         pairs += [
@@ -134,9 +150,8 @@ class _Scanner(ast.NodeVisitor):
             if default is not None
         ]
         for arg, default in pairs:
-            if _is_flagged_int(default):
-                self._record(f"{node.name}.{arg.arg}")
-        self._enter(node, in_function=True)
+            if any(_is_flagged_int(node) for node in ast.walk(default)):
+                self._record(f"{function}.{arg.arg}")
 
     def _enter(self, node: ast.AST, *, in_function: bool) -> None:
         self._names.append(node.name)  # type: ignore[attr-defined]
@@ -153,7 +168,8 @@ def _flagged_names(source: str) -> set[str]:
     return scanner.hits
 
 
-def _scan() -> set[tuple[str, str]]:
+@functools.cache
+def _scan() -> frozenset[tuple[str, str]]:
     """Return `(path relative to src/yian, name)` for every flagged binding."""
     hits: set[tuple[str, str]] = set()
     for path in sorted(SRC.rglob("*.py")):
@@ -162,7 +178,7 @@ def _scan() -> set[tuple[str, str]]:
             continue
         names = _flagged_names(path.read_text(encoding="utf-8"))
         hits.update((relative, name) for name in names)
-    return hits
+    return frozenset(hits)
 
 
 def test_scan_flags_each_shape_of_default() -> None:
@@ -187,6 +203,32 @@ class Model:
 
 def function(limit=10, flag=False):
     pass
+
+def product(n=256 * 1024, m=1 << 20, ok=None):
+    pass
+
+def positional(p=8, /, q=1):
+    pass
+
+async def fetch(timeout=30.0, attempts=3):
+    pass
+
+handler = lambda size=64: size
+call(lambda depth=-2: depth)
+
+@dataclass
+class Settings:
+    width: int = field(default=2)
+
+    class Inner:
+        depth = 12
+
+try:
+    TRIED = 6
+except ImportError:
+    pass
+with context():
+    WITHIN = 9
 """
     assert _flagged_names(source) == {
         "MAX_BYTES",
@@ -200,6 +242,17 @@ def function(limit=10, flag=False):
         "Model.method.c",
         "Model.method.inner.e",
         "function.limit",
+        "product.n",
+        "product.m",
+        "positional.p",
+        "fetch.attempts",
+        "handler",
+        "<lambda>.size",
+        "<lambda>.depth",
+        "Settings.width",
+        "Settings.Inner.depth",
+        "TRIED",
+        "WITHIN",
     }
 
 
@@ -224,6 +277,76 @@ def test_allowed_files_exist() -> None:
     assert not missing, f"ALLOWED_FILES entries that no longer exist: {missing}"
 
 
+_BINARY_OPS = {
+    ast.Add: lambda a, b: a + b,
+    ast.Sub: lambda a, b: a - b,
+    ast.Mult: lambda a, b: a * b,
+    ast.FloorDiv: lambda a, b: a // b,
+    ast.Pow: lambda a, b: a**b,
+    ast.LShift: lambda a, b: a << b,
+}
+
+
+def _constant_int(node: ast.AST) -> int | None:
+    """Return the int a constant expression of int literals evaluates to, else `None`."""
+    if isinstance(node, ast.Constant):
+        value = node.value
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        operand = _constant_int(node.operand)
+        return None if operand is None else -operand
+    if isinstance(node, ast.BinOp) and type(node.op) in _BINARY_OPS:
+        left, right = _constant_int(node.left), _constant_int(node.right)
+        if left is None or right is None:
+            return None
+        try:
+            return _BINARY_OPS[type(node.op)](left, right)
+        except (ArithmeticError, ValueError):
+            return None
+    return None
+
+
+def _parse(relative: str) -> ast.Module:
+    """Return the parsed module at `relative` under src/yian."""
+    return ast.parse((SRC / relative).read_text(encoding="utf-8"))
+
+
+def _compares_length_to(tree: ast.AST, value: int) -> bool:
+    """Return whether `tree` compares a `len(...)` call against a constant `value`."""
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare):
+            continue
+        operands = [node.left, *node.comparators]
+        has_length = any(
+            isinstance(operand, ast.Call)
+            and isinstance(operand.func, ast.Name)
+            and operand.func.id == "len"
+            for operand in operands
+        )
+        if has_length and any(_constant_int(operand) == value for operand in operands):
+            return True
+    return False
+
+
+def test_inline_cap_guards_flag_each_shape() -> None:
+    assert _constant_int(ast.parse("16 * 1024", mode="eval").body) == 16384
+    assert _constant_int(ast.parse("1 << 14", mode="eval").body) == 16384
+    assert _constant_int(ast.parse("2**14", mode="eval").body) == 16384
+    assert _constant_int(ast.parse("n * 1024", mode="eval").body) is None
+    assert _compares_length_to(ast.parse("if len(raw) > 4: pass"), 4)
+    assert _compares_length_to(ast.parse("ok = 1 <= len(raw) <= 2 + 2"), 4)
+    assert not _compares_length_to(ast.parse("ok = 1 <= len(raw) <= most"), 4)
+
+
 def test_oauth_callback_cap_is_not_inline() -> None:
-    source = (SRC / "llm_clients" / "auth" / "openai.py").read_text(encoding="utf-8")
-    assert "16384" not in source
+    tree = _parse("llm_clients/auth/openai.py")
+    inline = [
+        node.lineno  # type: ignore[attr-defined]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.expr) and _constant_int(node) == 16384
+    ]
+    assert not inline, f"OAuth callback cap written inline at lines {inline}"
+
+
+def test_question_count_cap_is_not_inline() -> None:
+    assert not _compares_length_to(_parse("nodes/human_input/questions.py"), 4)

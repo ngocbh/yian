@@ -426,6 +426,7 @@ def validate_base_url(value: Any) -> str:
 
 # Fields only the host's run layer may set. Authored layers reach the recorded
 # effective map, and a flow-level base_url could send the host key elsewhere.
+# Each message starts with `llm_config.`: the AGENT load check swaps that for its own prefix.
 _HOST_ONLY_FIELDS = {
     "api_key": (
         "llm_config.api_key is a host credential; pass it in the run's llm_config, "

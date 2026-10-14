@@ -183,9 +183,23 @@ def _hello_agent():
     return load_flow((_SEEDS / "00-hello-agent.yaml").read_text(), search_paths=[_SEEDS])
 
 
-def test_agent_providers_uses_default_when_unset(monkeypatch):
+def test_agent_providers_fails_when_nothing_sets_a_provider(monkeypatch):
     monkeypatch.delenv("YIAN_DEFAULT_PROVIDER", raising=False)
-    assert climod._agent_providers(_hello_agent(), {}) == ["openai"]
+    monkeypatch.delenv("YIAN_DEFAULT_MODEL", raising=False)
+    with pytest.raises(ValueError, match=r"Agent 'note' has no provider or model; .*--provider/--model"):
+        climod._agent_providers(_hello_agent(), {})
+
+
+def test_agent_providers_uses_the_environment_then_the_saved_provider(monkeypatch):
+    from yian.llm_clients.auth import ApiKeyCredentials, AuthStore
+
+    monkeypatch.setenv("YIAN_DEFAULT_PROVIDER", "anthropic")
+    monkeypatch.setenv("YIAN_DEFAULT_MODEL", "env-model")
+    assert climod._agent_providers(_hello_agent(), {}) == ["anthropic"]
+    monkeypatch.delenv("YIAN_DEFAULT_PROVIDER")
+    monkeypatch.delenv("YIAN_DEFAULT_MODEL")
+    AuthStore().save("xai", ApiKeyCredentials("key"), "saved-model")
+    assert climod._agent_providers(_hello_agent(), {}) == ["xai"]
 
 
 def test_agent_providers_cli_override_fills_gap():
@@ -194,13 +208,11 @@ def test_agent_providers_cli_override_fills_gap():
 
 
 def test_ensure_provider_keys_ok_when_present(monkeypatch):
-    monkeypatch.delenv("YIAN_DEFAULT_PROVIDER", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "sk-present")
     climod._ensure_provider_keys(_hello_agent(), {})  # no raise
 
 
 def test_ensure_provider_keys_raises_when_missing(monkeypatch):
-    monkeypatch.delenv("YIAN_DEFAULT_PROVIDER", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     _tty(monkeypatch, False)
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):

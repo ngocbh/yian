@@ -17,7 +17,7 @@ extracts text without mutating the messages used for the next request.
 `list_models` lists the model ids a provider's host offers, using only the key
 and base URL passed in.
 
-Knows about:   the package env-based defaults (`_settings`), langchain, provider SDKs.
+Knows about:   langchain, provider SDKs.
 Never imports: any other yian subpackage — it is a leaf (peer of state /
                events), so nodes/compose/runtime may import it, never the reverse.
 """

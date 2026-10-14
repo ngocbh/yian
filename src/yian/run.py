@@ -551,6 +551,7 @@ def _run_flow_controlled(
             run_llm_config,
             defaults=snapshot.defaults,
             provider_models=snapshot.provider_models,
+            stray_model=snapshot.stray_model,
         ),
         host_key_provider=None if api_key is None else run_llm_config["provider"],
         host_base_url=base_url,

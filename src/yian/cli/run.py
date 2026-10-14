@@ -1301,6 +1301,10 @@ def _agent_providers(loaded, cli_cfg: Dict[str, Any]) -> List[str]:
     Returns:
         `List[str]`:
             The distinct provider names, in first-seen order.
+
+    Raises:
+        `ValueError`:
+            No layer gives an agent a provider and model.
     """
     import copy
 
@@ -1310,7 +1314,11 @@ def _agent_providers(loaded, cli_cfg: Dict[str, Any]) -> List[str]:
     probe = copy.deepcopy(loaded.compiled)
     snapshot = connection_snapshot()
     effective = resolve_llm_cascade(
-        probe, dict(cli_cfg), defaults=snapshot.defaults, provider_models=snapshot.provider_models
+        probe,
+        dict(cli_cfg),
+        defaults=snapshot.defaults,
+        provider_models=snapshot.provider_models,
+        stray_model=snapshot.stray_model,
     )
 
     seen: List[str] = []

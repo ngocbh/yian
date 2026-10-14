@@ -28,7 +28,6 @@ from langchain_core.messages import (
     messages_from_dict,
 )
 
-from yian._settings import default_llm_provider
 from yian.memory import (
     ConversationInvocation,
     ConversationItem,
@@ -84,18 +83,25 @@ def compatibility(config) -> JsonObject:
 
     Args:
         config (`dict | LLMConfig | None`): Effective model configuration. An
-            absent provider uses the same environment default as the factory.
+            absent provider resolves as the factory resolves it.
 
     Returns:
         `JsonObject`: Provider and versioned message format, without credentials.
+
+    Raises:
+        `ValueError`: The provider is absent and no default sets one.
     """
     provider = (
         config.get("provider")
         if isinstance(config, dict)
         else getattr(config, "provider", None)
     )
+    if not provider:
+        from yian.llm_clients.connection import resolve_model_config
+
+        provider = resolve_model_config(config or {})["provider"]
     return {
-        "provider": (provider or default_llm_provider()).lower(),
+        "provider": provider.lower(),
         "message_format": MESSAGE_FORMAT,
     }
 

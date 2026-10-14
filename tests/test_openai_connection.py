@@ -50,21 +50,20 @@ def subscription():
     )
 
 
-def test_default_openai_and_provider_scoped_models():
-    assert resolve_model_config({})["provider"] == "openai"
-    assert resolve_model_config({})["model"] == "gpt-5.5"
-    assert (
-        resolve_model_config({"provider": "anthropic"})["model"] == "claude-sonnet-4-5"
-    )
-    with pytest.raises(ValueError, match="explicit model"):
-        resolve_model_config({"provider": "google"})
+def test_no_builtin_provider_or_model():
+    with pytest.raises(ValueError, match=r"^No model is set; .*'yian auth <provider>'"):
+        resolve_model_config({})
+    with pytest.raises(
+        ValueError, match=r"^No model is set for provider 'anthropic'; .*'yian auth anthropic'"
+    ):
+        resolve_model_config({"provider": "anthropic"})
 
 
 def test_azure_deployment_environment_is_not_a_model_default(monkeypatch):
     # The Azure deployment is always llm_config.model; no environment default fills it.
     monkeypatch.setenv("AZURE_OPENAI_DEPLOYMENT_NAME", "env-deployment")
     assert "azure" not in connection_snapshot().provider_models
-    with pytest.raises(ValueError, match="explicit model"):
+    with pytest.raises(ValueError, match="No model is set for provider 'azure'"):
         resolve_model_config({"provider": "azure"})
 
 
@@ -83,7 +82,8 @@ def test_authored_model_wins_saved_default():
     assert resolve_model_config({"model": "explicit"})["model"] == "explicit"
 
 
-def test_provider_only_cascade_uses_matching_fallback():
+def test_provider_only_cascade_uses_that_providers_saved_model():
+    AuthStore().save("anthropic", ApiKeyCredentials("key"), "saved-anthropic")
     snap = connection_snapshot()
     flow = load_flow(
         "id: test\nname: test\nnodes:\n  a: {kind: agent, prompt: hi, llm_config: {provider: anthropic}}\noutput: ${a.output}\n"
@@ -91,7 +91,7 @@ def test_provider_only_cascade_uses_matching_fallback():
     effective = resolve_llm_cascade(
         flow.compiled, {}, defaults=snap.defaults, provider_models=snap.provider_models
     )
-    assert effective["a"]["model"] == "claude-sonnet-4-5"
+    assert effective["a"]["model"] == "saved-anthropic"
 
 
 def test_authored_model_still_inherits_across_provider_fields():
@@ -116,7 +116,7 @@ def test_snapshot_does_not_follow_reconnect():
 
 def test_api_environment_identity_checked_on_every_request(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "first-secret")
-    config = resolve_model_config({})
+    config = resolve_model_config({"provider": "openai", "model": "gpt-5.5"})
     model = model_from_config(config)
     monkeypatch.setenv("OPENAI_API_KEY", "second-secret")
     with pytest.raises(RuntimeError, match="changed"):
@@ -149,7 +149,7 @@ def test_reconnected_store_credential_names_one_fix():
 
 
 def test_missing_identity_does_not_adopt_later_environment_key(monkeypatch):
-    config = resolve_model_config({})
+    config = resolve_model_config({"provider": "openai", "model": "gpt-5.5"})
     monkeypatch.setenv("OPENAI_API_KEY", "new-secret")
     model = model_from_config(config)
     with pytest.raises(RuntimeError, match="yian auth openai"):
@@ -170,7 +170,7 @@ def test_legacy_openai_cannot_select_subscription(monkeypatch):
 def test_internal_metadata_is_not_yaml_configuration():
     from yian.llm_clients.config import LLMConfig
 
-    config = resolve_model_config({})
+    config = resolve_model_config({"provider": "openai", "model": "gpt-5.5"})
     with pytest.raises(ValueError, match="Extra inputs"):
         LLMConfig(**config)
     config["_connection"]["token"] = "bad"
@@ -314,7 +314,7 @@ def test_unsupported_default_provider_environment_is_named(monkeypatch):
 
 def test_run_rejects_unsupported_default_provider_before_any_node(monkeypatch):
     monkeypatch.setenv("YIAN_DEFAULT_PROVIDER", "claude")
-    monkeypatch.setenv("YIAN_DEFAULT_MODEL", "claude-sonnet-4-5")
+    monkeypatch.setenv("YIAN_DEFAULT_MODEL", "claude-model")
     events = []
     with pytest.raises(ValueError, match="YIAN_DEFAULT_PROVIDER"):
         run_flow(

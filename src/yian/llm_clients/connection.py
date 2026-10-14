@@ -1,6 +1,8 @@
 """Snapshot model defaults and nonsecret connection identities at host boundaries.
 
-Auth storage owns credentials and refresh. This module resolves selection and
+There is no built-in provider or model: defaults come only from the environment
+(``YIAN_DEFAULT_PROVIDER``/``YIAN_DEFAULT_MODEL``) and the saved login. Auth
+storage owns credentials and refresh. This module resolves selection and
 provides injected credential callables to model transports. Recorded metadata is
 internal, never a YAML option, and never contains a token or API key. Compilation
 may use the detached snapshot without authentication effects.
@@ -17,7 +19,6 @@ from urllib.parse import urlsplit
 
 from pydantic import ValidationError
 
-from yian._settings import DEFAULT_PROVIDER, PROVIDER_DEFAULT_MODELS
 from .auth import ApiKeyCredentials, AuthError, AuthStore, OAuthCredentials, OpenAIAuth
 from .config import (
     AZURE_NEEDS_BASE_URL,
@@ -40,14 +41,68 @@ _HOST_KEY_MISSING = (
 )
 
 
+def missing_model_message(
+    path: str | None,
+    provider: str | None,
+    *,
+    stray_model: bool = False,
+    label: str | None = None,
+) -> str:
+    """Say which agent has no model and the three ways to set one.
+
+    Args:
+        path (`str | None`): The agent's static path, or `None` outside a flow.
+        provider (`str | None`): The selected provider, if one is set.
+        stray_model (`bool`, *optional*, defaults to `False`): Whether
+            ``YIAN_DEFAULT_MODEL`` is set without a default provider.
+        label (`str | None`, *optional*, defaults to `None`): The authored site of
+            a synthesized agent's ``llm_config``, named instead of its path.
+
+    Returns:
+        `str`: The error message.
+    """
+    if label is not None:
+        agent = label[:1].upper() + label[1:]
+    elif path:
+        agent = f"Agent {path!r}"
+    else:
+        agent = None
+    if provider is None:
+        subject = f"{agent} has no provider or model" if agent else "No model is set"
+        login = "<provider>"
+    else:
+        subject = (
+            f"{agent} has no model for provider {provider!r}"
+            if agent
+            else f"No model is set for provider {provider!r}"
+        )
+        login = provider
+    message = (
+        f"{subject}; set llm_config.provider/model, pass --provider/--model, "
+        f"or run 'yian auth {login}'"
+    )
+    if stray_model:
+        message += (
+            "; YIAN_DEFAULT_MODEL is set but names no provider; "
+            "set YIAN_DEFAULT_PROVIDER or run 'yian auth <provider>'"
+        )
+    return message
+
+
 @dataclass(frozen=True)
 class ConnectionSnapshot:
-    """One detached host selection shared across every static agent in a run."""
+    """One detached host selection shared across every static agent in a run.
+
+    ``defaults`` holds the selected default provider and its model, either of which
+    may be absent. ``stray_model`` records a ``YIAN_DEFAULT_MODEL`` that names no
+    provider, so an agent that needs a default can say why it was ignored.
+    """
 
     defaults: dict[str, Any]
     provider_models: dict[str, str]
     connections: dict[str, dict[str, Any]]
     api_endpoint: str = _API_ENDPOINT
+    stray_model: bool = False
 
     def bind(
         self,
@@ -106,24 +161,37 @@ def key_identity(key: str) -> str:
 
 
 def connection_snapshot() -> ConnectionSnapshot:
-    """Read saved choices and environment once, without resolving credentials."""
+    """Read saved choices and environment once, without resolving credentials.
+
+    The default provider is ``YIAN_DEFAULT_PROVIDER``, else the saved default, else
+    none. Each saved selection supplies its provider's model; ``YIAN_DEFAULT_MODEL``
+    overrides the default provider's.
+
+    Raises:
+        `ValueError`: ``YIAN_DEFAULT_PROVIDER`` or the saved default names an
+            unsupported provider.
+    """
     store = AuthStore()
     state = store.read()
     environment = dict(os.environ)
-    provider = (
-        environment.get("YIAN_DEFAULT_PROVIDER")
-        or state.default_provider
-        or DEFAULT_PROVIDER
-    ).lower()
-    if provider not in SUPPORTED_LLM_PROVIDERS:
-        # Only the environment can name an unknown provider; the store validates its own.
+    env_provider = environment.get("YIAN_DEFAULT_PROVIDER")
+    provider = (env_provider or state.default_provider or "").lower() or None
+    if env_provider and provider not in SUPPORTED_LLM_PROVIDERS:
         raise ValueError(
-            f"YIAN_DEFAULT_PROVIDER={environment['YIAN_DEFAULT_PROVIDER']!r} is not a "
+            f"YIAN_DEFAULT_PROVIDER={env_provider!r} is not a "
             f"supported provider; set it to one of: {', '.join(SUPPORTED_LLM_PROVIDERS)}"
         )
-    models = dict(PROVIDER_DEFAULT_MODELS)
+    models = {}
     connections = {}
     for selection in state.selections:
+        if selection.provider not in SUPPORTED_LLM_PROVIDERS:
+            if not env_provider and selection.provider == state.default_provider:
+                raise ValueError(
+                    f"The saved default provider {selection.provider!r} is not supported; "
+                    f"run 'yian auth {selection.provider} --remove'"
+                )
+            # A login for a provider this version no longer runs selects nothing.
+            continue
         models[selection.provider] = selection.model
         if selection.provider == "openai":
             connections[selection.provider] = {
@@ -137,8 +205,12 @@ def connection_snapshot() -> ConnectionSnapshot:
                 ),
                 "store_path": str(store.path),
             }
+    stray_model = False
     if environment.get("YIAN_DEFAULT_MODEL"):
-        models[provider] = environment["YIAN_DEFAULT_MODEL"]
+        if provider is None:
+            stray_model = True
+        else:
+            models[provider] = environment["YIAN_DEFAULT_MODEL"]
     if "openai" not in connections:
         key = environment.get("OPENAI_API_KEY")
         connections["openai"] = {
@@ -148,9 +220,11 @@ def connection_snapshot() -> ConnectionSnapshot:
             "endpoint": environment.get("OPENAI_BASE_URL") or _API_ENDPOINT,
             "store_path": None,
         }
-    defaults = {"provider": provider}
-    if provider in models:
-        defaults["model"] = models[provider]
+    defaults = {}
+    if provider is not None:
+        defaults["provider"] = provider
+        if provider in models:
+            defaults["model"] = models[provider]
     connections = {
         provider: validate_connection(value) for provider, value in connections.items()
     }
@@ -159,6 +233,7 @@ def connection_snapshot() -> ConnectionSnapshot:
         models,
         connections,
         environment.get("OPENAI_BASE_URL") or _API_ENDPOINT,
+        stray_model,
     )
 
 
@@ -308,7 +383,13 @@ def _block_error_text(provider: str, error: dict[str, Any]) -> str:
 def resolve_model_config(
     config: dict[str, Any] | LLMConfig, *, snapshot: ConnectionSnapshot | None = None
 ) -> dict[str, Any]:
-    """Resolve a fresh config, preserving any existing pinned connection."""
+    """Resolve a fresh config, preserving any existing pinned connection.
+
+    An unset provider or model comes from the snapshot's defaults and saved models.
+
+    Raises:
+        `ValueError`: No layer sets the provider or its model.
+    """
     validated, metadata = split_model_config(config)
     raw = validated.model_dump(exclude_none=True)
     if validated.api_key is not None:
@@ -319,11 +400,11 @@ def resolve_model_config(
         raw["_connection"] = metadata
         return raw
     snapshot = snapshot or connection_snapshot()
-    provider = validated.provider or snapshot.defaults["provider"]
-    model = validated.model or snapshot.provider_models.get(provider)
-    if not model:
+    provider = validated.provider or snapshot.defaults.get("provider")
+    model = validated.model or (snapshot.provider_models.get(provider) if provider else None)
+    if not provider or not model:
         raise ValueError(
-            f"Provider {provider!r} needs an explicit model; set llm_config.model or --model"
+            missing_model_message(None, provider, stray_model=snapshot.stray_model)
         )
     raw.update(provider=provider, model=model)
     if metadata is not None:

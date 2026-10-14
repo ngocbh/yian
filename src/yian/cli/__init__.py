@@ -22,8 +22,8 @@ drain. Storage paths stay host-only. A terminal resume never opens memory.
 Knows about: compose; compile metadata and LLM-cascade helpers; the package-root run
 boundary; the package-root memory host; memory contracts and built-in backends;
 events; node host-stop signals; typed values; tools; LLM API-key metadata;
-process defaults in ``_settings``; and peer CLI modules. Never imports runtime scheduling
-internals or provider SDKs; owns no graph mutation.
+the default snapshot in ``llm_clients.connection``; and peer CLI modules. Never
+imports runtime scheduling internals or provider SDKs; owns no graph mutation.
 """
 
 from __future__ import annotations

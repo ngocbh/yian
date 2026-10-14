@@ -20,7 +20,7 @@ from typing import Any, Callable
 
 import pytest
 
-import yian._settings as settings_module
+import yian.llm_clients.connection as connection_module
 import yian.llm_clients as llm_clients_module
 import yian.nodes.wait.node as wait_module
 import yian.run as run_module
@@ -701,8 +701,7 @@ def test_terminal_resume_is_read_only_silent_and_unlocks(
         raise AssertionError("terminal recovery consulted an ambient LLM default")
 
     monkeypatch.setattr(run_module, "connection_snapshot", forbidden_default)
-    monkeypatch.setattr(settings_module, "default_llm_provider", forbidden_default)
-    monkeypatch.setattr(settings_module, "default_llm_model", forbidden_default)
+    monkeypatch.setattr(connection_module, "connection_snapshot", forbidden_default)
 
     resumed = run_module.resume_flow(
         load_flow(source),
@@ -916,8 +915,7 @@ def test_nonterminal_resume_restores_recorded_llm_without_reading_defaults(
 
     monkeypatch.setattr(llm_clients_module, "model_from_config", model_from_config)
     monkeypatch.setattr(run_module, "connection_snapshot", forbidden_default)
-    monkeypatch.setattr(settings_module, "default_llm_provider", forbidden_default)
-    monkeypatch.setattr(settings_module, "default_llm_model", forbidden_default)
+    monkeypatch.setattr(connection_module, "connection_snapshot", forbidden_default)
 
     result = run_module.resume_flow(load_flow(_AGENT_FLOW), log=path)
 

@@ -10,8 +10,6 @@ itself, a flow call inside `${...}`), secret literals, which are rejected before
 check could echo them, and the flow fingerprint.
 """
 
-import re
-
 import pytest
 
 from yian.compile.manifest import flow_fingerprint
@@ -205,7 +203,10 @@ def test_a_flow_call_inside_a_span_keeps_its_error():
 
     error = _load_error(text)
 
-    assert "a flow call 'f' inside ${...} is not supported" in str(error)
+    assert str(error) == (
+        "x: a flow call 'f' inside ${...} is not supported — write it as the whole "
+        "value with the call(...) directive: call(f, ...)"
+    )
     assert _error_line(error) == _line_of(text, "  x: !str ${ f(")
 
 
@@ -243,8 +244,7 @@ def test_a_nested_secret_literal_is_rejected_before_the_value_is_read():
 
     assert str(error) == (
         "value entry 'cfg' has key 'access_token' (a secret name) with a literal value; "
-        "pass "
-        "the value as an input (${input.cfg}) or from the host"
+        "pass the value as an input (${input.cfg}) or from the host"
     )
     assert "abc" not in str(error)
 

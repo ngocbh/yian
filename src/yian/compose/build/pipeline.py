@@ -83,6 +83,7 @@ from yian.compose.helpers.isinstance_types import (
     resolve_isinstance_type,
 )
 from yian.compose.helpers.output_contracts import resolve_output_binding_contract
+from yian.compose.helpers.source import one_line_text
 from yian.compose.helpers.tags import (
     QUOTED_STYLES,
     old_form_suggestion,
@@ -967,11 +968,7 @@ def _check_output_names(
         authored = str(key)
         if outputs_cursor is not None and outputs_cursor.has(key):
             key_range = outputs_cursor.child(key).key_range
-            document = outputs_cursor.document
-            if key_range is not None and document is not None:
-                if key_range.start_line == key_range.end_line:
-                    line = document.text.splitlines()[key_range.start_line - 1]
-                    authored = line[key_range.start_col - 1 : key_range.end_col - 1]
+            authored = one_line_text(outputs_cursor.document, key_range) or authored
         raise diagnostics.error(
             f"flow output name `{authored}` reads as {key!r} ({type(key).__name__}), "
             f"not a string; quote the key: `'{authored}':`",

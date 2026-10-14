@@ -929,10 +929,9 @@ def reject_unread_tags(
 
     A tag types a flow input, a binding, a flow output, an agent variable, a value
     entry in `nodes:`, or a value inside one; anywhere else it would be silently
-    ignored. Tags reached
-    only through top-level `x-*` keys are exempt. Tags under `typedefs:` and on
-    mapping keys get their own messages. Keys are spelled as written, so `on:`
-    stays `on:` although YAML reads it as `True`.
+    ignored. Tags reached only through top-level `x-*` keys are exempt. Tags under
+    `typedefs:` and on mapping keys get their own messages. Keys are spelled as
+    written, so `on:` stays `on:` although YAML reads it as `True`.
 
     Args:
         document (`SourceDocument`): The loaded document.

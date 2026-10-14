@@ -11,7 +11,7 @@ tagged node input. The tag only checks the value; it never fills in a field.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.tags import read_tagged_value, suggest_tag
@@ -37,39 +37,25 @@ class ValueEntryDescriptor(CodeDescriptor):
     tag: ValueContract
 
     def __post_init__(self) -> None:
-        """Reject node-only fields, which a value entry can't author."""
+        """Reject node-only fields, which a value entry can't author.
+
+        Raises:
+            `ValueError`: The descriptor carries `asserts`, `depends_on`,
+                `runs_after`, or `env`.
+        """
         super().__post_init__()
         for name in ("asserts", "depends_on", "runs_after", "env"):
             if getattr(self, name):
                 raise ValueError(f"value entry {self.id!r} can't carry {name!r}")
 
-    def with_source_origins(
-        self,
-        cursor: SourceCursor,
-        *,
-        site_path: tuple[str | int, ...],
-        catalog_builder: "_SourceCatalogBuilder",
-    ) -> "ValueEntryDescriptor":
-        """Return this descriptor unchanged: a value entry has no `code:` field to locate.
-
-        Args:
-            cursor (`SourceCursor`): The entry's value.
-            site_path (`tuple[str | int, ...]`): Complete semantic node path.
-            catalog_builder (`_SourceCatalogBuilder`): File-owned origin registry.
-
-        Returns:
-            `ValueEntryDescriptor`: This descriptor.
-        """
-        return self
-
-    def output_contract(self, ctx: BuildContext) -> Optional[ValueContract]:
+    def output_contract(self, ctx: BuildContext) -> ValueContract:
         """Return the entry's tag as the node's output contract.
 
         Args:
             ctx (`BuildContext`): Unused; a value entry's type is its tag.
 
         Returns:
-            `ValueContract | None`: The tag's contract.
+            `ValueContract`: The tag's contract.
         """
         return self.tag
 
@@ -87,8 +73,10 @@ def read_value_entry(
 
     The value is read like a tagged node input named after the entry: a span-free
     literal is checked against its tag now, nested tags become typed bindings, and
-    a value holding a `${...}` span is kept as a template the binder resolves. Load
-    messages about the whole value name it `value entry '<id>'`.
+    a value holding a `${...}` span is kept as a template the binder resolves. An
+    error raised while the tag and value are read names the entry `'<id>':` (or
+    `'<id>.<path>':` for a nested value); a tag with nothing after it names it
+    `value entry '<id>'`, as later checks of the whole value do.
 
     Args:
         node_id (`str`): The entry id, also the node id and its input's name.
@@ -104,8 +92,11 @@ def read_value_entry(
             the tag and code returning that input.
 
     Raises:
-        `LoadError`: The tag is malformed or names no type, nothing follows it, or a
-            tagged literal does not fit its tag.
+        `LoadError`: A tag is malformed or names no type, a space splits a tag from
+            its arguments, nothing follows the entry's tag or a nested tag, a
+            template has a non-string record key, a nested string starts with
+            `call(`, a span-free tagged literal does not fit its tag, or the value
+            can't be walked (a recursive alias).
     """
     slot = read_tagged_value(
         cursor,

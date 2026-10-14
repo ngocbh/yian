@@ -8,9 +8,9 @@ untagged mapping with `kind:` is a node body dispatched to its kind's `parse` vi
 a tag for a value.
 
 Only the generic, kind-independent pre-checks live here (node id shape and reserved ids,
-entry classification, the `input:`/`output:` -> plural back-map, `kind:` resolution); each kind's own
-`parse` owns its field legality (allowed/required/asserts/env) and its descriptor-local
-`SourceRange` recording (each field tagged `("field", name)`). Two kind-blind enrichments
+entry classification, the `input:`/`output:` -> plural back-map, `kind:` resolution);
+each kind's own `parse` owns its field legality (allowed/required/asserts/env) and its
+descriptor-local `SourceRange` recording (each field tagged `("field", name)`). Two kind-blind enrichments
 run after every kind parse: each `input:` binding's own range is stamped into the
 descriptor's `field_ranges` under `("input", name)`, and each `asserts:` item range is
 appended positionally to its `assert_ranges`. This metadata remains inside Compose;
@@ -22,17 +22,21 @@ duplicate assertions distinct without an aligned range list on the semantic node
 from __future__ import annotations
 
 import dataclasses
+import datetime
 import re
 from collections.abc import Mapping
-from typing import Any, Callable
+from typing import Any, Callable, NoReturn
 
 from yian.compile.model import END_ID, START_ID
+from yian.compose.helpers.directives import CALL_HEAD
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.secret_literals import (
+    is_binding_text,
     secret_literal_message,
     secret_literal_path,
 )
-from yian.compose.helpers.tags import suggest_tag, yaml_quoted
+from yian.compose.helpers.source import one_line_text
+from yian.compose.helpers.tags import QUOTED_STYLES, suggest_tag, yaml_quoted
 from yian.compose.nodes import KINDS, REMOVED_KINDS
 from yian.compose.source import SourceAccessError, SourceCursor
 from yian.expr.grammar import EXPRESSION_KEYWORDS
@@ -77,6 +81,12 @@ def identifier_suggestion(name: str) -> str:
     if suggestion[:1].isdigit():
         suggestion = "_" + suggestion
     return suggestion
+
+
+_NODE_OR_VALUE = (
+    "node {node_id!r}: an entry in `nodes:` is a node or a value; add `kind:` for a "
+    "node, or a tag (`!object`, `!Buy`, ...) for a value"
+)
 
 
 # Reads one tagged `nodes:` entry: `(entry id, entry cursor) -> descriptor`.
@@ -205,19 +215,14 @@ def _parse_node(
     return desc
 
 
-_NODE_OR_VALUE = (
-    "node {node_id!r}: an entry in `nodes:` is a node or a value; add `kind:` for a "
-    "node, or a tag (`!object`, `!Buy`, ...) for a value"
-)
-
-
 def _reject_untagged_value(
     node_id: str, cursor: SourceCursor, diagnostics: LoadDiagnostics
-) -> None:
+) -> NoReturn:
     """Reject an untagged scalar, list, or null entry, showing the tag to write.
 
-    Under a secret name the value is rejected as a secret literal instead, so the
-    suggested spelling never echoes it.
+    A literal gets an example of the entry with its tag. A `${...}` or `call(...)`
+    value is not a literal, so it gets no example. Under a secret name a literal is
+    rejected as a secret literal instead, so the message never echoes it.
 
     Args:
         node_id (`str`): The entry id.
@@ -229,48 +234,62 @@ def _reject_untagged_value(
     """
     value = cursor.value
     rng = cursor.range or cursor.key_range
+    message = _NODE_OR_VALUE.format(node_id=node_id)
+    if _is_reference(value, cursor.scalar_style):
+        raise diagnostics.error(message, range=rng)
     path = secret_literal_path(node_id, value)
     if path is not None:
         raise diagnostics.error(
             secret_literal_message(f"value entry {node_id!r}", node_id, path),
             range=rng,
         )
-    message = _NODE_OR_VALUE.format(node_id=node_id)
     typ = _example_type(value)
     if typ is not None:
         message += f", e.g. {suggest_tag(node_id, typ, _example_text(value, cursor))}"
     raise diagnostics.error(message, range=rng)
 
 
+def _is_reference(value: Any, style: str | None) -> bool:
+    """Report whether an untagged value is a `${...}` template or a `call(...)` directive."""
+    if not isinstance(value, str):
+        return False
+    if is_binding_text(value):
+        return True
+    # A quoted `call(...)` is text, as in a binding.
+    return style not in QUOTED_STYLES and CALL_HEAD.match(value.strip()) is not None
+
+
 def _example_type(value: Any) -> Type | None:
     """Return the widened type of an untagged entry's value, or `None` for none."""
     if value is None:
         return Type(kind=ValueKind.STRING, nullable=True)
+    # YAML reads an unquoted `2024-01-01` as a date, which no value type holds.
+    if isinstance(value, datetime.datetime):
+        return Type(kind=ValueKind.DATETIME)
+    if isinstance(value, datetime.date):
+        return Type(kind=ValueKind.DATE)
     try:
         return Type.scalar(build_value(value).kind)
     except TypeCheckError:
         return None
 
 
-def _example_text(value: Any, cursor: SourceCursor) -> str | None:
-    """Spell an untagged entry's value as written, or `None` to leave it out.
+def _example_text(value: Any, cursor: SourceCursor) -> str:
+    """Spell an untagged entry's value for its example.
 
-    A block list keeps its lines under the tagged key, so only a value written on
-    one line is shown.
+    A value written over several lines (a block list) is shown as `...`. A date is
+    quoted, since a tag reads only a quoted date.
     """
     if value is None:
         return "null"
     if isinstance(value, str):
         return cursor.scalar_text if cursor.scalar_style == "plain" else yaml_quoted(value)
     text = cursor.scalar_text
+    if isinstance(value, datetime.date) and text is not None:
+        return yaml_quoted(text)
     if text is not None:
         return text
-    rng = cursor.range
-    document = cursor.document
-    if rng is None or document is None or rng.start_line != rng.end_line:
-        return None
-    line = document.text.splitlines()[rng.start_line - 1]
-    return line[rng.start_col - 1 : rng.end_col - 1]
+    return one_line_text(cursor.document, cursor.range) or "..."
 
 
 def _reject_reserved_node_id(node_id: str, cursor: SourceCursor) -> None:

@@ -2,9 +2,11 @@
 
 `parse_nodes` hands every tagged entry to its `read_value` callback, in source order
 among the nodes, and rejects an untagged entry that has no `kind:` with a located error
-saying to add `kind:` for a node or a tag for a value. The error for an untagged scalar
-or list shows the tag to write, except under a secret name, where the value is never
-echoed. Reserved node ids apply to value entries too.
+saying to add `kind:` for a node or a tag for a value. The error for an untagged scalar,
+list or date shows the tag to write (with `...` for a value written over several
+lines), except under a secret name, where the value is never echoed. An untagged
+`${...}` or `call(...)` value is not a literal, so it gets no example. Reserved node ids
+apply to value entries too.
 """
 
 import re
@@ -61,7 +63,7 @@ def _nodes_cursor(text: str):
 def test_untagged_mapping_without_kind_says_add_kind_or_a_tag():
     text = _flow("  x:\n    prompt: hi\n")
 
-    with pytest.raises(LoadError, match=re.escape(_NODE_OR_VALUE)) as info:
+    with pytest.raises(LoadError, match=f"^{re.escape(_NODE_OR_VALUE)}$") as info:
         load_flow(text)
 
     assert _error_line(info.value) == _line_of(text, "prompt: hi")
@@ -72,8 +74,11 @@ def test_untagged_mapping_without_kind_says_add_kind_or_a_tag():
     [
         ("  x: 5\n", "`x: !int 5`"),
         ("  x: hello\n", "`x: !str hello`"),
+        ('  x: "hi"\n', '`x: !str "hi"`'),
         ("  x: [1, 2]\n", "`x: !list(int) [1, 2]`"),
         ("  x:\n", "`x: !Optional(str) null`"),
+        ("  x: 2024-01-01\n", '`x: !date "2024-01-01"`'),
+        ("  x: 2024-01-01T10:00:00\n", '`x: !datetime "2024-01-01T10:00:00"`'),
     ],
 )
 def test_untagged_scalar_or_list_shows_the_tag_to_write(entry, example):
@@ -86,22 +91,60 @@ def test_untagged_scalar_or_list_shows_the_tag_to_write(entry, example):
     assert _error_line(info.value) == _line_of(text, "  x:")
 
 
+def test_untagged_block_list_shows_the_tag_with_a_placeholder_value():
+    text = _flow("  x:\n    - 1\n    - 2\n")
+
+    with pytest.raises(LoadError) as info:
+        load_flow(text)
+
+    assert str(info.value.diagnostic.message) == (
+        f"{_NODE_OR_VALUE}, e.g. `x: !list(int) ...`"
+    )
+    assert _error_line(info.value) == _line_of(text, "- 1")
+
+
 def test_untagged_secret_literal_is_rejected_without_echoing_it():
     text = _flow("  api_key: sk-live-123\n")
 
     with pytest.raises(LoadError) as info:
         load_flow(text)
 
-    message = info.value.diagnostic.message
-    assert "value entry 'api_key' is a secret name" in message
-    assert "${input.api_key}" in message
+    assert info.value.diagnostic.message == (
+        "value entry 'api_key' is a secret name, so its value can't be written in the "
+        "flow file; pass it as an input (${input.api_key}) or from the host"
+    )
     assert "sk-live-123" not in str(info.value)
     assert _error_line(info.value) == _line_of(text, "api_key:")
 
 
+@pytest.mark.parametrize(
+    ("entry", "node_id"),
+    [
+        ("  x: call(f)\n", "x"),
+        ("  api_key: call(f)\n", "api_key"),
+        ("  x: ${step.output}\n", "x"),
+    ],
+)
+def test_an_untagged_flow_call_or_span_gets_no_example(entry, node_id):
+    text = _flow(entry)
+
+    with pytest.raises(LoadError) as info:
+        load_flow(text)
+
+    assert info.value.diagnostic.message == _NODE_OR_VALUE.replace(
+        "node 'x'", f"node {node_id!r}"
+    )
+    assert _error_line(info.value) == _line_of(text, f"  {node_id}:")
+
+
 @pytest.mark.parametrize("entry", ["  input: !int 5\n", "  input:\n    kind: code\n"])
 def test_reserved_ids_apply_to_a_tagged_entry(entry):
-    with pytest.raises(LoadError, match=re.escape("node id 'input' is reserved")):
+    message = (
+        "node id 'input' is reserved (used as `${input.X}` as a resolver head — pick "
+        "a different node id)"
+    )
+
+    with pytest.raises(LoadError, match=f"^{re.escape(message)}$"):
         load_flow(_flow(entry))
 
 
@@ -142,5 +185,7 @@ def test_a_tagged_mapping_with_kind_is_still_a_value():
 
 
 def test_a_tagged_entry_without_a_reader_is_a_type_error():
-    with pytest.raises(TypeError, match="read_value"):
+    message = "node 'x' is a tagged value entry; parse_nodes needs read_value to read it"
+
+    with pytest.raises(TypeError, match=f"^{re.escape(message)}$"):
         parse_nodes(_nodes_cursor("nodes:\n  x: !int 5\n"))

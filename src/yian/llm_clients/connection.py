@@ -690,7 +690,7 @@ def connection_credentials(
             )
         return credentials
     if provider != "openai":
-        raise ValueError(f"A {provider} environment connection is read by the provider's client")
+        raise ValueError(f"An environment connection for {provider} is read by its client")
     if source == "host":
         raise AuthError(_HOST_KEY_MISSING.format(provider="openai"))
     if source == "missing":

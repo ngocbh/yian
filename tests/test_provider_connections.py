@@ -447,5 +447,5 @@ def test_connection_credentials_per_provider():
     AuthStore().remove("anthropic")
     with pytest.raises(AuthError, match="yian auth anthropic"):
         connection_credentials(pinned, "anthropic")
-    with pytest.raises(ValueError, match="read by the provider's client"):
+    with pytest.raises(ValueError, match="read by its client"):
         connection_credentials(ENVIRONMENT, "anthropic")

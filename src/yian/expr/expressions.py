@@ -236,26 +236,27 @@ def parse_condition(
 
     interior = whole_span_interior(expression)
     tree = parse_expr(expression.strip() if interior is None else interior)
-    _check_condition_calls(tree, types)
+    _check_calls(tree, types)
     return tree
 
 
-def _check_condition_calls(
-    tree: "Tree | Token", types: "Mapping[str, Any] | None" = None
-) -> None:
-    """Require every builtin call in a parsed condition to pass arguments it takes.
+def _check_calls(tree: "Tree | Token", types: "Mapping[str, Any] | None" = None) -> None:
+    """Require every builtin call in a parsed expression to pass arguments it takes.
 
     `isinstance` is skipped: the grammar already checks its shape. Any other callee that
     is no builtin is a `T(...)` constructor, checked against `types` when given.
 
     Args:
-        tree (`Tree | Token`): A tree from `parse_expr`.
-        types (`Mapping[str, Any] | None`, *optional*, defaults to `None`): The type table
-            constructor names must be in, or `None` to leave them to the caller.
+        tree (`Tree | Token`):
+            A tree from `parse_expr`.
+        types (`Mapping[str, Any] | None`, *optional*, defaults to `None`):
+            The type table constructor names must be in, or `None` to leave them to the
+            caller.
 
     Raises:
-        `ExpressionError`: If a builtin's signature can't bind the call's positional count
-            and keyword names, or, with `types`, a callee is neither a builtin nor in it.
+        `ExpressionError`:
+            Raised when a builtin's signature can't bind the call's positional count and
+            keyword names, or, with `types`, a callee is neither a builtin nor in it.
     """
     from yian.expr.builtins import TEMPLATE_FNS
 
@@ -295,10 +296,12 @@ def _parameter_list(signature: inspect.Signature) -> str:
     """Render a builtin's parameters for a message: `value, indent=2`.
 
     Args:
-        signature (`inspect.Signature`): The builtin's signature.
+        signature (`inspect.Signature`):
+            The builtin's signature.
 
     Returns:
-        `str`: The parameter names, comma-separated, with `name=<repr default>` for optional
+        `str`:
+            The parameter names, comma-separated, with `name=<repr default>` for optional
             ones and `*name`/`**name` for variadics.
     """
     parts = []

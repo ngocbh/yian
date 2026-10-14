@@ -254,7 +254,7 @@ evaluates with it. `isinstance` works in:
 
 It is a load error in:
 
-- prompts and HUMAN_INPUT `questions:`: `isinstance is not a prompt function; compute it
+- prompts and HUMAN_INPUT question text: `isinstance is not a prompt function; compute it
   in an input binding`;
 - WAIT `until:` and MAP `over:`: `isinstance is not supported in a wait node's until:`;
 - a `call` or `loop` node's own asserts, which run on the child flow's END:

@@ -97,10 +97,11 @@ a load error at the second key. Keys a `<<:` merge brings in may still be overri
 Unquoted values follow YAML 1.2's core rules plus unquoted dates and `<<:` merges:
 only `true`/`false` are booleans, so `yes`/`no`/`on`/`off` are text (CASE's `on:`
 key too); `017` is 17 (octal is `0o17`); `1e3` is a float; `1:30` and `1_000` are
-text; `2026-10-14` is a date. A `yes` in a typed binding or default, a call input,
-a `case` value, `steerable:`, or `inherit:` that needs a `bool` fails with
-"`yes` is text; write `true`". Under a `bool` `on:`, write `when: true`: a
-`when: yes` there is a load error with the same fix.
+text; `2026-10-14` is a date. A bare `call(...)` argument reads the same way, as
+one scalar (`x=None` is text; write `x=null`). A `yes` in a typed binding or
+default, a call input, a `case` value, `steerable:`, or `inherit:` that needs a
+`bool` fails with "`yes` is text; write `true`". Under a `bool` `on:`, write
+`when: true`: a `when: yes` there is a load error with the same fix.
 
 Never write a secret in a flow file: every written value is part of the flow's
 fingerprint. Under a secret name (`password`, `passwd`, `secret`, `client_secret`,
@@ -931,7 +932,8 @@ and flow outputs. It is a load error in prompts and `questions:`, WAIT `until:`,
 `then:`/`else:` target) desugars at load into an anonymous `call` node; the host
 becomes `${<synth>.output}`. Every authored node `input:` mapping participates,
 including HUMAN_INPUT context and LOOP carried-record seeds. Keyword args only, each at
-most once; nesting is allowed (`call(a, x=call(b, y=1))`). The synth node runs only when
+most once; a bare arg is one plain scalar under the YAML value rules above, and a quoted
+arg is text; nesting is allowed (`call(a, x=call(b, y=1))`). The synth node runs only when
 the node it is written in (its host) can: it carries the host's `case` routes,
 `depends_on:`, and `runs_after:` (a nested branch call's inner calls carry the branch), and
 waits for the host's other inputs, skipping whenever a skipped input skips the host (a
@@ -943,7 +945,7 @@ the flow `output:`/`asserts:` has no host. An **unquoted** value whose trimmed t
 with `call(` must be **exactly one** well-formed directive, else a load
 error names the problem (unbalanced parens, trailing text after `)`, flow id not a bare name
 / missing comma, positional or repeated keyword, a keyword value that reads as two keywords
-like `a=1 b=2`). A **quoted** value (`"call(f) tail"`, or a quoted arg `x="call(g)"`) is
+like `a=1 b=2`, a bare value YAML can't build like `d=2026-13-45`). A **quoted** value (`"call(f) tail"`, or a quoted arg `x="call(g)"`) is
 text — the escape for literal `call(` text; a quoted call holding `${...}` is a load error.
 A `call(` mid-value or inside `${...}` is literal text. A flow `asserts:` item follows the
 rule quoted or not (an assert is an expression, never text). The old

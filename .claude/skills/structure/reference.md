@@ -140,7 +140,7 @@ compose/source  <-  helpers  <-  nodes  <-  parse  <-  desugar  <-  edges/valida
 | Responsibility | Owner | Must not leak to |
 |---|---|---|
 | PyYAML construction and the private YAML node/occurrence graph | `compose/source` | every other compose phase, `compile`, `runtime` |
-| Plain-scalar rules (YAML 1.2 core plus timestamps and merge keys), one loader class for documents and isolated literals | `compose/source/scalars.py` | PyYAML's global resolver/constructor tables, or a second resolver table elsewhere |
+| Plain-scalar rules (YAML 1.2 core plus timestamps and merge keys), one loader class for documents, isolated literals (`parse_yaml_literal`), and one bare plain scalar (`read_plain_scalar`, the inline `call(...)` argument) | `compose/source/scalars.py` | PyYAML's global resolver/constructor tables, or a second resolver table elsewhere |
 | Stable location-aware navigation, immutable projections, and whole/exact-literal provenance | public `SourceDocument` / `SourceCursor` / `ScalarSource` contracts from `compose/source` | private document slots, PyYAML nodes/tokens, or another parse |
 | Immutable document-local origin resolution, semantic constructed-line selection, exact ownership, pre-finalization registered-site lookup, and Compose-private typed key/scoping policy | public `SourceCatalog` plus its package-private builder/encoder in `compose/source` | stored coordinates, parallel range maps, another YAML parse, parsing an opaque child key, per-node snapshots, or a premature cross-file resolver |
 | Source-free and cursor-aware recursive type/contract compilation | `compose/helpers/types.py` | cursor/catalog/YAML concepts below Compose or a duplicated type-shape traversal |

@@ -56,9 +56,10 @@ own label and without echoing the value.
 
 Imports flow DOWN/peer only: `compose.parse.file` (descriptors), `compose.nodes.bindings` (the
 kind-blind binding-field walk) + `compose.helpers` (errors, secret literals, YAML style and
-quoting; peers), `expr` (the ref-walk + the span flow-call detector), `diagnostics`
-(SourceRange), `secret_names`. The loader, the case desugars, and `compose.validate` (the
-assert and secret-literal checks) import this back.
+quoting; peers), `compose.source` (a bare argument's plain-scalar reading), `expr` (the
+ref-walk + the span flow-call detector), `diagnostics` (SourceRange), `secret_names`. The
+loader, the case desugars, and `compose.validate` (the assert and secret-literal checks)
+import this back.
 """
 
 from __future__ import annotations
@@ -76,7 +77,6 @@ from yian.expr import (
 )
 from yian.expr.template import (
     InlineCall,
-    _arg_source,
     _find_paren_end,
     _split_calls_aware,
     flow_call_callees_in_spans,
@@ -93,6 +93,7 @@ from yian.compose.parse.file import (
     CallDescriptor,
     NodeDescriptor,
 )
+from yian.compose.source import SourceSyntaxError, read_plain_scalar
 from yian.secret_names import is_secret_name
 
 # The reserved id prefix for synthesized inline-call nodes. A monotonic counter per
@@ -159,6 +160,24 @@ class SecretArgumentError(ExpressionError):
     def _slot(self) -> str:
         """The argument as the message names it."""
         return f"call(...) argument {self.name!r}"
+
+
+class ArgumentValueError(ExpressionError):
+    """A `call(...)` keyword argument's bare value can't be read as a YAML scalar.
+
+    Its message never repeats the authored text; quoting the value keeps it as text.
+
+    Args:
+        flow_id (`str`): The called flow's id.
+        name (`str`): The keyword argument's name.
+        reason (`str`): Why the value can't be read.
+    """
+
+    def __init__(self, flow_id: str, name: str, reason: str):
+        super().__init__(
+            f"call({flow_id}, ...) keyword {name!r} value can't be read as YAML "
+            f"({reason}); quote it to keep it as text"
+        )
 
 
 def _synth_id_gen() -> Callable[[], str]:
@@ -393,9 +412,10 @@ def _desugar_value(
     directive, and a quoted `call(...)` holding a span is a load error (its author most
     likely meant the call). ``expression`` is True for an assert, whose quoting does not
     make it text. A malformed directive's error suggests quoting only when that gives
-    the text: not for an assert, a span-bearing value, or a ``quotable=False`` (typed)
-    binding. Maps `ExpressionError` (a malformed directive or an unparseable span) to a
-    located `LoadError` at ``range``; a literal secret argument (`SecretArgumentError`)
+    the text: not for an assert, a span-bearing value, a ``quotable=False`` (typed)
+    binding, or an unreadable argument (`ArgumentValueError` says to quote that
+    argument). Maps `ExpressionError` (a malformed directive or an unparseable span) to
+    a located `LoadError` at ``range``; a literal secret argument (`SecretArgumentError`)
     is prefixed with ``owner`` (default ``host``) and gets no quoting fix."""
     diagnostics = diagnostics or LoadDiagnostics()
     quoted = not expression and style in QUOTED_STYLES
@@ -417,6 +437,7 @@ def _desugar_value(
                 f"`{yaml_quoted(value.strip())}`"
                 if quotable
                 and not expression
+                and not isinstance(exc, ArgumentValueError)
                 and "${" not in value
                 and not holds_secret_keyword(value)
                 else ""
@@ -448,8 +469,9 @@ def desugar_call_directives(value: str, mint: Callable[[], str]) -> tuple:
     leading `call`, balanced parens, and nothing non-whitespace after the close paren.
     Its FIRST arg is the POSITIONAL flow id (a bare identifier, may be hyphenated — flow
     ids allow `-`); every remaining arg is a `name=value` keyword, each at most once.
-    Each keyword value passes through `_arg_source` (so `window=30` -> int 30, a quoted
-    scalar unwraps to text, a `${…}`-bearing value stays a binding string). An unquoted
+    Each keyword value passes through `_arg_source`: a bare value reads like a named
+    `input:` value (`window=30` -> int 30, `1e3` -> float 1000.0), a quoted scalar
+    unwraps to text, and a `${…}`-bearing value stays a binding string. An unquoted
     arg value starting with `call(` is ITSELF a directive, under the same rule —
     desugared inner-first.
 
@@ -464,7 +486,8 @@ def desugar_call_directives(value: str, mint: Callable[[], str]) -> tuple:
     keyword passed more than once. A keyword under a secret name whose value is a literal
     raises `SecretArgumentError`, before any check that would echo the value. When the
     text holds a keyword under a secret name (`holds_secret_keyword`), a malformed
-    directive's message does not quote any part of it."""
+    directive's message does not quote any part of it. A bare keyword value the flow's
+    YAML rules can't build (an impossible date) raises `ArgumentValueError`."""
     match = _match_directive(value)
     if match is None:
         return value, []
@@ -509,7 +532,10 @@ def desugar_call_directives(value: str, mint: Callable[[], str]) -> tuple:
             raise ExpressionError(
                 f"call({flow_id}, ...) passes keyword {name!r} more than once"
             )
-        args[name] = _arg_source(new_value)
+        try:
+            args[name] = _arg_source(new_value)
+        except SourceSyntaxError as exc:
+            raise ArgumentValueError(flow_id, name, str(exc)) from None
     cid = mint()
     calls.append(InlineCall(id=cid, callee=flow_id, args=args))
     return "${" + cid + ".output}", calls
@@ -518,27 +544,65 @@ def desugar_call_directives(value: str, mint: Callable[[], str]) -> tuple:
 def _check_secret_argument(name: str, arg_value: str) -> None:
     """Reject a literal keyword value under a secret name.
 
+    A value that can't be read under another name is left for the directive's own
+    read to report.
+
     Args:
         name (`str`): The keyword's name.
         arg_value (`str`): Its raw value text.
 
     Raises:
         `SecretArgumentError`: `name` is a secret name and the value, read as the
-            directive reads it, is neither a binding nor `null`. A nested directive is
-            a binding only if it parses: its parse error could quote the value.
+            directive reads it, is neither a binding nor `null`, or can't be read. A
+            nested directive is a binding only if it parses: its parse error could
+            quote the value.
+        `ArgumentValueError`: A nested directive under a secret name passes a bare
+            value that can't be read; its message does not echo the value.
     """
     if CALL_HEAD.match(arg_value.strip()):
         if is_secret_name(name):
             try:
                 desugar_call_directives(arg_value, lambda: "_")
-            except SecretArgumentError:
+            except (SecretArgumentError, ArgumentValueError):
                 raise
             except ExpressionError:
                 raise SecretArgumentError(name) from None
         return  # its own arguments are checked when it is desugared
-    path = secret_literal_path(name, _arg_source(arg_value))
+    try:
+        value = _arg_source(arg_value)
+    except SourceSyntaxError:
+        if is_secret_name(name):
+            raise SecretArgumentError(name) from None
+        return
+    path = secret_literal_path(name, value)
     if path is not None:
         raise SecretArgumentError(name, path)
+
+
+def _arg_source(value: str) -> Any:
+    """Read one `call(...)` keyword value the way the named form reads its `input:`.
+
+    Args:
+        value (`str`): The keyword's raw value text.
+
+    Returns:
+        `Any`: For a fully quoted scalar (`"…"`/`'…'`), its inner text, a binding
+            template if it interpolates (`"hi ${name}"` -> `hi ${name}`); for an
+            unquoted `${…}`-bearing value, the binding string; else the trimmed text
+            read as one plain scalar like a named `input:` value (`30` -> int,
+            `1e3` -> float, `~` or an empty value -> `None`, `None` -> text). YAML
+            structure such as `[1]` stays text: a bare argument is one scalar.
+
+    Raises:
+        `SourceSyntaxError`: The bare text resolves to a type that can't build it,
+            such as an impossible date; the message does not echo the text.
+    """
+    stripped = value.strip()
+    if len(stripped) >= 2 and stripped[0] in ("'", '"') and stripped[-1] == stripped[0]:
+        return stripped[1:-1]  # a quoted scalar -> its inner text (template or literal)
+    if "${" in stripped:
+        return stripped
+    return read_plain_scalar(stripped)
 
 
 def _inner_keywords(parts: list[str]) -> list[tuple[str, str]]:

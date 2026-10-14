@@ -106,7 +106,8 @@ One `${...}` grammar; the context decides what happens to the result:
 A child-flow call written as a binding's **whole value** (or a `case`
 `then:`/`else:` target) — `call(f, arg=${ref}, k=lit)` — desugars at load into an
 anonymous `call` node; the host becomes `${<synth>.output}`. Keyword args only,
-each at most once;
+each at most once; a bare arg is one plain scalar read with the flow's YAML value
+rules (`x=1e3` is a float, `x=None` text), and a quoted arg is text;
 every authored node `input:` mapping participates, including HUMAN_INPUT context
 and LOOP carried-record seeds. Nesting is allowed (`call(a, x=call(b, y=1))`). The synth
 node runs only when its host node can: it carries the host's `case` routes, `depends_on:`,
@@ -117,7 +118,8 @@ nested call also carries its outer call's other arguments (in
 `call(f, x=call(g), y=${a.output})`, `g` waits for `a`).
 An **unquoted** value starting with `call(` must be exactly one well-formed
 directive, else a load error names the problem (unbalanced parens, trailing text,
-missing comma, positional or repeated keyword, a keyword without a name). A
+missing comma, positional or repeated keyword, a keyword without a name, a bare
+value YAML can't build like `d=2026-13-45`). A
 **quoted** value is text, so `"call(...)"` is the escape for literal text; a quoted
 call holding `${...}` is a load error. The old `${flow(args)}`
 (a flow call inside braces) is a load error: hoist an embedded flow call to a named

@@ -390,11 +390,45 @@ def test_a_literal_secret_call_argument_is_rejected():
         "call(g, password=${input.pw})",
         "call(g, password='${input.pw}')",
         "call(g, password=null)",
+        "call(g, password=~)",
+        "call(g, password=)",
         "call(g, x=1, password=call(g, x=2))",
     ],
 )
 def test_a_binding_call_argument_under_a_secret_name_loads(binding):
     load_flow(_call_flow(binding))
+
+
+@pytest.mark.parametrize("value", ["None", "2026-13-45"])
+def test_a_none_or_unreadable_secret_call_argument_is_rejected(value):
+    message = str(_secret_error(_call_flow(f"call(g, password={value})")))
+
+    assert "call(...) argument 'password' is a secret name" in message
+    assert value not in message
+
+
+def _unreadable_argument_error(text: str) -> str:
+    """Load `text`, asserting the unreadable-argument error for keyword `d`."""
+    with pytest.raises(LoadError) as exc_info:
+        load_flow(text)
+    message = str(exc_info.value)
+    assert "keyword 'd' value can't be read as YAML" in message, message
+    assert "quote it to keep it as text" in message, message
+    assert "secret name" not in message, message
+    assert "2026-13-45" not in message, message
+    return message
+
+
+def test_a_call_with_an_unreadable_argument_under_a_secret_name_is_that_error():
+    text = _flow("password: call(g, d=2026-13-45)").replace(
+        "nodes:\n", _G_DEF + "nodes:\n", 1
+    )
+
+    _unreadable_argument_error(text)
+
+
+def test_an_unreadable_argument_in_a_call_under_a_secret_keyword_is_that_error():
+    _unreadable_argument_error(_call_flow("call(g, password=call(g, d=2026-13-45))"))
 
 
 @pytest.mark.parametrize(

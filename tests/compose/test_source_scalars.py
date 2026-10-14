@@ -12,7 +12,12 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 import yaml
 
-from yian.compose.source import SourceDocument, SourceSyntaxError, parse_yaml_literal
+from yian.compose.source import (
+    SourceDocument,
+    SourceSyntaxError,
+    parse_yaml_literal,
+    read_plain_scalar,
+)
 from yian.compose.source.scalars import _FlowLoader
 
 
@@ -183,6 +188,42 @@ def test_an_integer_too_long_to_convert_is_a_located_syntax_error(read):
 
     if read is _document_value:
         assert caught.value.range is not None
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        *_ROWS,
+        ("", None),
+        ("None", "None"),
+        ("none", "none"),
+        ("NONE", "NONE"),
+        ("tRUE", "tRUE"),
+        ("<<", "<<"),
+    ],
+)
+def test_read_plain_scalar_follows_the_table(text, expected):
+    _assert_same(read_plain_scalar(text), expected)
+
+
+@pytest.mark.parametrize("text", [".nan", ".NaN"])
+def test_read_plain_scalar_nan(text):
+    assert math.isnan(read_plain_scalar(text))
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["a: b", "[1]", "{a: 1}", "- x", "a #b", "&a", "*a", "!x", "|", "hello world", "1\n"],
+)
+def test_read_plain_scalar_keeps_yaml_structure_as_text(text):
+    assert read_plain_scalar(text) == text
+
+
+def test_read_plain_scalar_rejects_an_unbuildable_form():
+    with pytest.raises(SourceSyntaxError) as caught:
+        read_plain_scalar("2026-13-45")
+
+    assert "2026-13-45" not in str(caught.value)
 
 
 _RESOLVER_TAGS = (

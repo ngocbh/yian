@@ -62,6 +62,19 @@ Re-authentication cannot silently redirect an unfinished run to a new account.
 `--resume` therefore rejects `--input`, `--inputs`, `--provider`, `--model`,
 and `--log` before input prompts or provider setup. After repairing any incomplete
 tail, an already terminal log gets no new records and prints its recorded result.
+
+Before an unfinished log appends its resume segment, `--resume` checks the
+credentials of every recorded model configuration, as a fresh run does: the
+recorded OpenAI connection (an `OPENAI_API_KEY` that is missing or differs from
+the key the run started with, or a saved credential that was replaced or whose
+method changed) and the key environment variable of every other provider. In a
+terminal it prompts for a missing key; a typed OpenAI key must be the one the run
+started with. Otherwise it exits 1: for a missing or changed key it asks you to
+set the key and resume again, and a replaced saved credential needs a new run. A
+failed check appends nothing, so the log stays resumable. A run started from Python with
+`llm_config.api_key` can only be resumed from Python, with
+`resume_flow(..., api_key=...)`.
+
 An eligible unfinished log appends a resume segment and retries nodes with a durable
 start but no durable outcome. Requests and tool actions may repeat; the run log neither reconstructs
 session memory nor provides exactly-once execution. See the
@@ -353,7 +366,8 @@ log before publishing the progress event that the CLI renders.
 | Flow failed to compile (bad YAML) | `1` (located error printed to stderr) |
 | Run-log creation or recovery failed | `1` (concise error printed to stderr) |
 | Memory setup failed (a custom memory type, a storage path that is not a local file, or a flow `id:` that cannot be a directory name) | `1` (concise error printed to stderr) |
-| Run cancelled at the input prompt | `1` |
+| Run cancelled at the input prompt or a resume key prompt | `1` |
+| Resume key check failed (a missing, changed, or unavailable provider key) | `1` (error printed to stderr) |
 | Invalid CLI input (including a forbidden resume combination, a bad `--memory-root` or `--memory-storage` flag, an `--inputs` file that is not UTF-8 text, not valid JSON, or not a JSON object, an input the flow does not declare, or required inputs missing without a TTY) | `2` |
 | Run interrupted with Ctrl-C during execution | `130` |
 

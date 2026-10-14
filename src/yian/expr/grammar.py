@@ -70,6 +70,7 @@ from lark.exceptions import LarkError
 # Reuse the existing expression error — `expressions.ExpressionError` is already
 # the base of `expressions.RequiredError`, so parse failures here stay in one family.
 from yian.expr.expressions import ISINSTANCE, ExpressionError
+from yian.typesys.values import MAX_VALUE_NESTING
 
 # The unified grammar. Precedence, lowest to highest:
 #   coalesce (`|`) -> default/required (`:-`/`:?`) -> or -> and -> not
@@ -163,6 +164,13 @@ NULL.3: /null\b/ | /none\b/
 # the tree.
 _PARSER = Lark(_GRAMMAR, parser="lalr", maybe_placeholders=False)
 
+# One nesting bound for yian: an expression nests no deeper than a value, and the two
+# move together on purpose.
+MAX_EXPRESSION_NESTING = MAX_VALUE_NESTING
+
+# Parse nodes that only group the parts of a reference or call; they add no level.
+_WRAPPER_NODES = frozenset({"trailer", "call_suffix", "arg"})
+
 _RESERVED_REFERENCE_ROOTS = frozenset({"and", "or", "not", "in"})
 
 # The keyword terminals in `_GRAMMAR` above; none of them can be a reference root.
@@ -207,10 +215,11 @@ _NAME_CHAR = re.compile(r"[A-Za-z0-9_#/]")
 
 
 def _parses(text: str) -> bool:
-    """True when `text` parses under the grammar (a rewrite worth suggesting)."""
+    """True when `text` parses under the grammar within the nesting limit (a rewrite worth
+    suggesting)."""
     try:
-        _PARSER.parse(text)
-    except LarkError:
+        _reject_deep_expression(_PARSER.parse(text))
+    except (LarkError, ExpressionError):
         return False
     return True
 
@@ -228,9 +237,12 @@ def _is_lone_atom(text: str) -> bool:
     )
 
 
-def _unwrap_spans(text: str) -> str | None:
+def _unwrap_spans(text: str, depth: int = 0) -> str | None:
     """`text` with each `${X}` outside a string literal replaced by `X`, or `(X)` when `X`
-    is more than one reference or literal; None when a `${` is unbalanced."""
+    is more than one reference or literal; None when a `${` is unbalanced or spans nest
+    deeper than `MAX_EXPRESSION_NESTING` (`depth` counts the spans around `text`)."""
+    if depth > MAX_EXPRESSION_NESTING:
+        return None
     out: list[str] = []
     quote, i, n = None, 0, len(text)
     while i < n:
@@ -246,7 +258,7 @@ def _unwrap_spans(text: str) -> str | None:
             i += 1
         elif c == "$" and text[i + 1 : i + 2] == "{":
             end = find_span_end(text, i + 2)
-            inner = None if end is None else _unwrap_spans(text[i + 2 : end])
+            inner = None if end is None else _unwrap_spans(text[i + 2 : end], depth + 1)
             if inner is None:
                 return None
             inner = inner.strip()
@@ -304,6 +316,45 @@ def reject_nested_spans(text: str, *, in_span: bool = False) -> None:
         rewrite = rewrite.strip()
         message += f"; write `{'${' + rewrite + '}' if in_span else rewrite}`"
     raise ExpressionError(message)
+
+
+def _reject_deep_expression(tree: Tree | Token) -> None:
+    """Raise if a parsed expression nests deeper than `MAX_EXPRESSION_NESTING` levels.
+
+    Each operator chain (`sum`, `product`, `power`, `and_expr`, `or_expr`), unary operator,
+    comparison, escape (`|`, `:-`, `:?`), list literal, and call is one level; a plain
+    reference and the parts of a reference or call add none, and parentheses make no node.
+    The walk is iterative, so it is safe on a tree deep enough to overflow a recursive one.
+
+    Args:
+        tree (`Tree | Token`):
+            A parse from `_PARSER`.
+
+    Raises:
+        `ExpressionError`:
+            If any path from the root passes more than `MAX_EXPRESSION_NESTING` levels.
+    """
+    stack: list[tuple[Tree | Token, int]] = [(tree, 0)]
+    while stack:
+        node, depth = stack.pop()
+        if not isinstance(node, Tree):
+            continue
+        if node.data not in _WRAPPER_NODES and (
+            node.data != "refcall"
+            or any(
+                isinstance(child, Tree) and child.data == "call_suffix"
+                for child in node.children
+            )
+        ):
+            depth += 1
+            if depth > MAX_EXPRESSION_NESTING:
+                raise ExpressionError(
+                    f"expression nests deeper than {MAX_EXPRESSION_NESTING} levels, the "
+                    "limit for a yian expression (each call, list, unary operator, "
+                    "comparison, and chain of operators is a level); split it into smaller "
+                    "bindings or steps"
+                )
+        stack.extend((child, depth) for child in node.children)
 
 
 def _reject_reserved_reference_roots(tree: Tree | Token) -> None:
@@ -456,7 +507,7 @@ def parse_expr(text: str) -> Tree | Token:
     Raises:
         `ExpressionError`:
             If `text` holds a `${...}` (see `reject_nested_spans`), does not parse,
-            is a dotted-callee builtin call, uses a reserved operator word as a
+            nests deeper than `MAX_EXPRESSION_NESTING` levels, is a dotted-callee builtin call, uses a reserved operator word as a
             reference root, calls `isinstance` with anything but a value and a bare
             type name, or repeats a keyword argument.
     """
@@ -465,6 +516,8 @@ def parse_expr(text: str) -> Tree | Token:
         tree = _PARSER.parse(text)
     except LarkError as exc:
         raise ExpressionError(f"could not parse expression {text!r}: {exc}") from exc
+    # First, so no later walk meets a tree deep enough to overflow it.
+    _reject_deep_expression(tree)
     _reject_dotted_callee(tree)
     # Before the reserved-root check, so `isinstance(x, in)` reports the type-name rule.
     _validate_isinstance(tree)

@@ -331,3 +331,73 @@ def test_name_terminal_excludes_hyphen_for_subtraction():
     assert "sum" in _kinds(tree)
     refcalls = [n for n in tree.iter_subtrees() if n.data == "refcall"]
     assert len(refcalls) == 2
+
+
+# --------------------------------------------------------------------------- #
+# Nesting limit
+# --------------------------------------------------------------------------- #
+
+_TOO_DEEP = r"expression nests deeper than 100 levels, the limit for a yian expression"
+
+
+def _alternating(n):
+    """`((1 + 1) * 2) + 1 ...`: each switch of precedence level is a level."""
+    text = "1 + 1"
+    for i in range(n - 1):
+        text = f"({text}) * 2" if i % 2 == 0 else f"({text}) + 1"
+    return text
+
+
+def _grouped(n):
+    """`((1 + 1) + 1) + 1 ...`: author parentheses make each `+` its own chain."""
+    text = "1 + 1"
+    for _ in range(n - 1):
+        text = f"({text}) + 1"
+    return text
+
+
+# kind -> a builder of an expression exactly `n` levels deep.
+_NESTED = {
+    "not": lambda n: "not " * n + "true",
+    "neg": lambda n: "-(" * n + "1" + ")" * n,
+    "list": lambda n: "[" * n + "1" + "]" * n,
+    "call": lambda n: "upper(" * n + "x" + ")" * n,
+    "and": lambda n: "true and (" * (n - 1) + "true and true" + ")" * (n - 1),
+    "coalesce": lambda n: "x | (" * (n - 1) + "x | 1" + ")" * (n - 1),
+    "default": lambda n: "x :- (" * (n - 1) + "x :- 1" + ")" * (n - 1),
+    "compare": lambda n: "(" * (n - 1) + "1 == 1" + ") == true" * (n - 1),
+    "alternating": _alternating,
+    "grouped": _grouped,
+}
+
+
+@pytest.mark.parametrize("kind", sorted(_NESTED))
+def test_an_expression_at_the_nesting_limit_parses(kind):
+    parse_expr(_NESTED[kind](100))
+
+
+@pytest.mark.parametrize("depth", [101, 3000])
+@pytest.mark.parametrize("kind", sorted(_NESTED))
+def test_an_expression_past_the_nesting_limit_is_an_expression_error(kind, depth):
+    with pytest.raises(ExpressionError, match=_TOO_DEEP):
+        parse_expr(_NESTED[kind](depth))
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "(" * 3000 + "x" + ")" * 3000,
+        " and ".join(["true"] * 3000),
+        " | ".join(["x"] * 3000),
+        " + ".join(["1"] * 3000),
+        " - ".join(["1"] * 3000),
+        " * ".join(["1"] * 3000),
+        " / ".join(["1"] * 3000),
+        " ** ".join(["1"] * 3000),
+        "a" + ".b" * 3000,
+        "[" + ", ".join(["1"] * 3000) + "]",
+    ],
+    ids=["parens", "and", "coalesce", "add", "sub", "mul", "div", "pow", "fields", "list"],
+)
+def test_long_but_shallow_expressions_parse(text):
+    parse_expr(text)

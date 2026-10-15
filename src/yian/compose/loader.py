@@ -68,6 +68,7 @@ from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.memory import parse_memory_declarations
 from yian.compose.helpers.tags import reject_unread_tags
 from yian.compose.helpers.uses import parse_uses_ref
+from yian.compose.helpers.value_nesting import check_env_values
 from yian.compose.helpers.source import _boundary_field_ranges
 from yian.compose.parse.file import (
     flow_nodes_cursor,
@@ -710,7 +711,11 @@ def _validate_authored_llm_config(
 def _validate_flow_env(
     env: dict[str, Any], *, diagnostics: LoadDiagnostics, cursor: SourceCursor,
 ) -> None:
-    """Refuse a flow `env:` default that every AGENT node would reject when it runs."""
+    """Refuse a flow `env:` value nested past the value limit, or a default that every
+    AGENT node would reject when it runs."""
+    check_env_values(
+        env, "flow ", cursor.child("env") if cursor.has("env") else None, diagnostics
+    )
     if "max_tool_iterations" in env and not is_max_tool_iterations(env["max_tool_iterations"]):
         raise diagnostics.error(
             "flow `env.max_tool_iterations` must be a positive int or -1 (no cap), "
@@ -1250,7 +1255,8 @@ def _load_def(
     and a flat single-node body (`{kind, ...}`). Both share the file's typedef
     registry and callable scope. ``def_cursor`` is the occurrence-local authored
     body: it retains absolute locations used by assembly and source diagnosis. A
-    multi-node body's ``asserts:`` must be a list of strings, else a located `LoadError`.
+    multi-node body's ``asserts:`` must be a list of strings, and its ``env:`` values must
+    nest within the value limit, else a located `LoadError`.
     """
     diagnostics = scope.diagnostics
     if not isinstance(body, dict):
@@ -1303,6 +1309,13 @@ def _load_def(
         raise diagnostics.error(
             f"defs entry {name!r}: `env:` must be a mapping with string keys",
             range=(def_cursor.range_of("env") if def_cursor is not None else None),
+        )
+    if def_env is not None:
+        check_env_values(
+            def_env,
+            f"defs entry {name!r}: ",
+            def_cursor.child("env") if def_cursor is not None else None,
+            diagnostics,
         )
     _check_def_asserts(name, body.get("asserts"), def_cursor, diagnostics)
     nodes_cursor = _def_assembly_cursor(def_cursor, body["nodes"])

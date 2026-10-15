@@ -50,6 +50,7 @@ from yian.compose.helpers.types import read_type
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.output_contracts import direct_reference_path
 from yian.compose.helpers.tags import has_span
+from yian.compose.helpers.value_nesting import check_env_values
 from yian.compose.helpers.yaml_words import yaml_read_as
 from yian.compose.source import SourceCursor
 from yian.diagnostics import DiagnosticFrame, OriginRef, SourceRange
@@ -567,9 +568,9 @@ class NodeDescriptor:
         Reads `node_name`/`depends_on`/`runs_after`/`env` from the cursor's read-only body
         into `kwargs`, recording each present field's `SourceRange` into `ranges`; both dicts
         are mutated IN PLACE (the accumulators the template passes to the descriptor
-        constructor). `env:` is validated to be a mapping with string keys, and `depends_on:`/
-        `runs_after:` to be lists of strings — a bad shape raises a located `LoadError` naming
-        `cls.kind`. A `node_name:` YAML read as non-text is a located `LoadError` (`null` stays
+        constructor). `env:` is validated to be a mapping with string keys whose values nest
+        within the value limit, and `depends_on:`/`runs_after:` to be lists of strings — a bad
+        shape raises a located `LoadError` naming `cls.kind`. A `node_name:` YAML read as non-text is a located `LoadError` (`null` stays
         absent); otherwise it is copied through untouched. Whether each ordering target names
         a real node is checked later by the loader edge pass."""
         diagnostics = LoadDiagnostics.from_cursor(cursor)
@@ -593,7 +594,11 @@ class NodeDescriptor:
                     f"with string keys",
                     range=cursor.range_of("env"),
                 )
-            kwargs["env"] = cursor.mapping("env")
+            # The body holds read-only views, which the nesting count doesn't descend;
+            # `mapping` copies to plain containers without recursing.
+            env = cursor.mapping("env")
+            check_env_values(env, f"node {node_id!r} ", cursor.child("env"), diagnostics)
+            kwargs["env"] = env
             rng = cursor.range_of("env")
             if rng is not None:
                 ranges[("field", "env")] = rng

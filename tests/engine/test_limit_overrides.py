@@ -5,17 +5,27 @@ maximum run with 300 fewer frames of recursion headroom, because a caller may al
 sit deep in its own stack.
 """
 
+import json
 import sys
+from pathlib import Path
 
+import httpx
 import pytest
+from langchain_core.messages import AIMessage
 
-from yian import defaults
+from yian import defaults, llm_clients
 from yian.compose import LoadError, load_flow
 from yian.run import resume_flow, run_flow
 from yian.typesys import TypeCheckError
 from yian.typesys.types import parse_type
 from yian.typesys.values import reject_deep_nesting
-from tests.compose.test_call_nesting_limit import _defs_chain
+from tests.compose.test_call_nesting_limit import (
+    _chain_texts,
+    _defs_chain,
+    _importing,
+    _stack_headroom,
+    _write_files,
+)
 from tests.compose.test_skip_model import _many_cases
 from tests.engine._memory_fakes import _Memory
 from tests.engine.test_value_nesting_boundaries import (
@@ -248,3 +258,117 @@ def test_type_nesting_maximum_parses_with_less_stack(set_defaults):
     _with_less_stack(parse_type, text)
     with pytest.raises(TypeCheckError, match=f"at most {levels} levels"):
         parse_type("list(" + text + ")")
+
+
+def _union_chain(levels: int) -> tuple[str, object]:
+    """Return `(typedefs, reply)` for `U<levels>`, an `Optional(Union(...))` at each level.
+
+    This is the costliest shape per level for structured-output schema generation.
+    """
+    lines = [
+        "typedefs:",
+        "  A1: {tag: Literal(a), k: int}",
+        "  B1: {tag: Literal(b), n: int}",
+        "  U1: Union(A1, B1)",
+    ]
+    reply: object = 1
+    for i in range(2, levels + 1):
+        lines += [
+            f"  A{i}: {{tag: Literal(a), k: 'Optional(U{i - 1})'}}",
+            f"  B{i}: {{tag: Literal(b), n: int}}",
+            f"  U{i}: Union(A{i}, B{i})",
+        ]
+    for _ in range(levels):
+        reply = {"tag": "a", "k": reply}
+    return "\n".join(lines) + "\n", reply
+
+
+def _deep_agent_flow(levels: int, llm_config: str) -> tuple[str, object]:
+    """Return `(flow, reply)`: an AGENT with the worst-shape output 50 calls deep.
+
+    `llm_config` holds the AGENT's `llm_config:` entries, one `key: value` per line.
+    """
+    typedefs, reply = _union_chain(levels)
+    config = "".join(f"          {line}\n" for line in llm_config.splitlines())
+    leaf = (
+        "  leaf:\n    input:\n      x: !str\n    nodes:\n      writer:\n"
+        "        kind: agent\n        prompt: hi\n        retries: 0\n"
+        f"        llm_config:\n{config}        output: U{levels}\n"
+        "    output: ${writer.output}\n"
+    )
+    chain = _defs_chain(49, last_calls="leaf")
+    return chain.replace("defs:\n", typedefs + "defs:\n" + leaf, 1), reply
+
+
+class _JsonReply:
+    """A chat model with no structured binding that answers with `reply` as JSON."""
+
+    def __init__(self, reply):
+        self.reply = reply
+
+    def invoke(self, _messages):
+        return AIMessage(content=json.dumps(self.reply))
+
+
+@pytest.mark.parametrize("num_workers", [0, 2])
+def test_agent_output_nesting_maximum_runs_with_less_stack_prompted(
+    set_defaults, monkeypatch, num_workers
+):
+    levels = _maximum("MAX_AGENT_OUTPUT_NESTING")
+    set_defaults(MAX_AGENT_OUTPUT_NESTING=levels)
+    # This model has no native structured output, so the reply is prompted for.
+    text, reply = _deep_agent_flow(levels, "provider: openai\nmodel: no-structured-sentinel")
+    # A union root is wrapped in a `value` field.
+    monkeypatch.setattr(
+        llm_clients, "model_from_config", lambda _config: _JsonReply({"value": reply})
+    )
+
+    flow = _with_less_stack(load_flow, text)
+    result = _with_less_stack(run_flow, flow, {"x": "hi"}, num_workers=num_workers)
+
+    assert result.status == "succeeded", result.failure
+    assert result.output == reply
+
+
+@pytest.mark.parametrize("num_workers", [0, 2])
+def test_agent_output_nesting_maximum_runs_with_less_stack_on_azure(
+    set_defaults, monkeypatch, num_workers
+):
+    pytest.importorskip("langchain_openai")
+    from tests.test_structured_open_schema import _ToolCallServer, _azure
+
+    levels = _maximum("MAX_AGENT_OUTPUT_NESTING")
+    set_defaults(MAX_AGENT_OUTPUT_NESTING=levels)
+    monkeypatch.setenv("OPENAI_API_VERSION", "2025-03-01-preview")
+    monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
+    # langchain sends `gpt-4` structured output as a tool call, after the client's
+    # `has_open_schema` check walks the schema.
+    text, reply = _deep_agent_flow(
+        levels, "provider: azure\nmodel: gpt-4\nbase_url: https://x.openai.azure.com/"
+    )
+    server = _ToolCallServer({"value": reply})
+    with httpx.Client(transport=httpx.MockTransport(server)) as http_client:
+        monkeypatch.setattr(
+            llm_clients,
+            "model_from_config",
+            lambda _config: _azure("gpt-4", http_client=http_client, max_retries=0),
+        )
+        flow = _with_less_stack(load_flow, text)
+        result = _with_less_stack(run_flow, flow, {"x": "hi"}, num_workers=num_workers)
+
+    assert result.status == "succeeded", result.failure
+    assert result.output == reply
+    (body,) = server.bodies
+    assert "tools" in body
+
+
+def test_agent_output_nesting_maximum_loads_under_the_deepest_import_chain(tmp_path: Path):
+    # The worst accepted load: 50 imports whose last file calls a 50-level chain, here
+    # ending in an AGENT whose output schema is built at load.
+    levels = _maximum("MAX_AGENT_OUTPUT_NESTING")
+    texts = _chain_texts(50, calls=False)
+    texts["u49"], _ = _deep_agent_flow(levels, "provider: openai\nmodel: gpt-5.5")
+    _write_files(tmp_path, texts)
+
+    with _stack_headroom(900):
+        load_flow(_importing("root", {"first": "u0"}), search_paths=[tmp_path])

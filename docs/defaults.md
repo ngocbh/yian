@@ -113,6 +113,12 @@ load, run, and resume with stack to spare:
   share its types, so record depth adds no stack at run setup. The limit also bounds
   each typedef's levels, the length of a chain of typedefs naming each other, and a
   type with its typedef names expanded.
+- `YIAN_MAX_AGENT_OUTPUT_NESTING` can only be lowered (maximum 16). Building a model's
+  structured reply schema takes about 28 frames per level for the costliest shape, an
+  `Optional(Union(...))` field at each level. With 300 frames to spare under 50 nested
+  calls, that shape runs 23 levels deep on Python 3.12 and 18 on 3.10 through every
+  structured-output path, and an AGENT at 16 levels under the deepest accepted load
+  (50 imports whose last file calls a 50-level chain) loads in about 850 frames.
 
 `YIAN_MAX_YAML_NODES` has no maximum, since counting a document's nodes takes no stack;
 raising it raises load time and run-log size in proportion.
@@ -136,6 +142,7 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | --- | --- | ---: | --- | --- |
 | `YIAN_MAX_VALUE_NESTING` | limit | 100 | 1 to 100 (can only be lowered) | Deepest nesting a value may have; also bounds expression nesting |
 | `YIAN_MAX_TYPE_NESTING` | limit | 100 | 1 to 125 | Deepest nesting a type may have, counting record levels |
+| `YIAN_MAX_AGENT_OUTPUT_NESTING` | limit | 16 | 1 to 16 (can only be lowered) | Deepest nesting an AGENT `output:` type may have (each record and list is a level) |
 | `YIAN_MAX_YAML_NESTING` | limit | 200 | 1 to 200 (can only be lowered) | Deepest nesting of a YAML document yian reads |
 | `YIAN_MAX_YAML_NODES` | limit | 100,000 | 1 or more | Most nodes a YAML document yian reads may expand to, counting each alias as a copy |
 | `YIAN_MAX_CALL_NESTING` | limit | 50 | 1 to 50 (can only be lowered) | Deepest chain of call, map, and loop bodies a flow may nest, and of uses: files it may import |

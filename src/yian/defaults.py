@@ -84,6 +84,24 @@ ENTRIES: tuple[Entry, ...] = (
         minimum=1,
         maximum=125,
     ),
+    # A model's structured reply schema is built by recursion, about 28 frames per level
+    # for the costliest shape, an `Optional(Union(...))` field at each level. With 300
+    # frames below the default recursion limit, under 50 nested calls, that shape passes
+    # 23 levels on Python 3.12 through every structured-output path, and 18 on 3.10
+    # through the prompted path. 16 is the smallest passing depth minus 2, a margin for
+    # the 3.10 provider-client paths that couldn't be measured offline. Under the worst
+    # accepted load, 50 `uses:` imports ending in a 50-level chain, an AGENT at 16 levels
+    # builds its schema well above the load's peak. The variable can only lower it.
+    Entry(
+        "MAX_AGENT_OUTPUT_NESTING",
+        default=16,
+        description=(
+            "Deepest nesting an AGENT `output:` type may have (each record and list is a level)"
+        ),
+        group="limit",
+        minimum=1,
+        maximum=16,
+    ),
     # Twice a value's 100 levels: a value at that limit fits inside a flow's own
     # structure, and composing and walking a document this deep from a shallow caller
     # stays within Python's default recursion limit.
@@ -390,6 +408,7 @@ class Defaults:
 
     max_value_nesting: int = 100
     max_type_nesting: int = 100
+    max_agent_output_nesting: int = 16
     max_yaml_nesting: int = 200
     max_yaml_nodes: int = 100_000
     max_call_nesting: int = 50

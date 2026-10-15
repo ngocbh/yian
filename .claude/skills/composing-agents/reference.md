@@ -328,6 +328,11 @@ Each typedef counts the same way, and a chain of typedefs each naming the next h
 most 100 (`bad typedefs: typedef 'A100': it ends a chain of 101 typedefs, ...`); any type
 with its typedef names expanded stays within 100 levels, so `list(T)` over a 100-level `T`
 is a load error.
+An AGENT's `output:` nests at most 16 levels (`YIAN_MAX_AGENT_OUTPUT_NESTING`, which can
+only lower it), counted the same way, since its reply schema is built by recursion;
+deeper is a load error at the `output:` field (``node 'a': this AGENT's `output:` nests
+17 levels, deeper than 16, the limit for a model's structured reply (each record and
+list is a level); flatten it, or build the deeper value in a CODE node``).
 An expression nests at most 100 levels as well (each call, list, unary operator,
 comparison, `|`/`:-`/`:?`, and operator chain is one); a deeper one is a load error at
 its field. A flow file's YAML nests at most 200 levels (`YIAN_MAX_YAML_NESTING`; each

@@ -286,6 +286,9 @@ Deeper is a load error: `type at r.k nests deeper than 100 levels, the limit for
 Each typedef counts the same way, a chain of typedefs each naming the next holds at most
 100, and any type stays within 100 levels with its typedef names expanded (so `list(T)`
 over a 100-level `T` fails), all at load.
+An AGENT's `output:` nests at most 16 levels, counted the same way; deeper is a load
+error (``this AGENT's `output:` nests 17 levels, deeper than 16, ...``), so flatten it or
+build the deeper value in a CODE node.
 An expression nests at most 100 levels too (each call, list, unary operator, comparison,
 `|`/`:-`/`:?`, and operator chain is one, so `a + b + ...` is one level at any length);
 a deeper one is a load error, so split it into smaller bindings.
@@ -303,9 +306,10 @@ bodies into their callers or split the work into separate steps.
 A chain of `uses:` files, each importing the next, is held to 50 files the same way,
 counted apart from call depth; a longer one fails at the alias that crosses it.
 These limits are the defaults of `YIAN_MAX_VALUE_NESTING` (which also sets expression
-nesting), `YIAN_MAX_YAML_NESTING`, and `YIAN_MAX_CALL_NESTING`; each can only be
-lowered. `YIAN_MAX_TYPE_NESTING` sets the type limit (at most 125), typedef chains
-included. `docs/defaults.md` lists every default and limit and its variable.
+nesting), `YIAN_MAX_YAML_NESTING`, `YIAN_MAX_CALL_NESTING`, and
+`YIAN_MAX_AGENT_OUTPUT_NESTING`; each can only be lowered. `YIAN_MAX_TYPE_NESTING`
+sets the type limit (at most 125), typedef chains included. `docs/defaults.md` lists
+every default and limit and its variable.
 
 Only values supplied to the top-level flow (CLI, JSON inputs, `run_flow`) may undergo
 string coercion; a `call`, `map`, or `loop` edge is not a flow boundary.

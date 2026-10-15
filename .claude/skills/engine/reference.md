@@ -649,7 +649,9 @@ model made enforceable.
   remote scheduler.
 - **AGENT node structured output** — only a plain `str` keeps an AGENT node on the text path.
   `type_to_schema` (`nodes/agent/structured.py`) derives a pydantic schema for supported
-  constrained outputs, and `generate_structured` produces a conforming value (native
+  constrained outputs (checked at load in `compose/nodes/agent.py`, after an authored
+  `output:`'s `type_levels` is held to `YIAN_MAX_AGENT_OUTPUT_NESTING`, 16, since schema
+  generation recurses per level), and `generate_structured` produces a conforming value (native
   `with_structured_output`, or a JSON prompt-injection fallback gated by
   `supports_native_structured(provider, model)`), with `retries:`-capped self-correction.
   A schema with an open part (`llm_clients.capabilities.has_open_schema`:

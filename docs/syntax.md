@@ -1444,6 +1444,19 @@ or `strict`; an older deployment that langchain sends as a function tool (`gpt-4
 reply, such as one with hand-written schema keywords or a pydantic v1 class. A strict
 request among them may still be rejected.
 
+An AGENT's `output:` nests at most 16 levels, counted as the type limit counts a record
+(each record and list is a level, a union counts as its deepest member, `Optional(...)`
+adds none), because building the model's reply schema recurses once per level.
+`YIAN_MAX_AGENT_OUTPUT_NESTING` can only lower it (see [Defaults and
+limits](defaults.md)). A deeper `output:` fails at load, at the `output:` field:
+
+```
+node 'a': this AGENT's `output:` nests 17 levels, deeper than 16, the limit for a model's structured reply (each record and list is a level); flatten it, or build the deeper value in a CODE node
+```
+
+Changed: an AGENT `output:` deeper than 16 levels used to load, and could crash at run
+inside schema generation.
+
 A [union](#unions-of-records-union) `output:` asks for one of the members: each member's
 schema forbids unknown fields and pins its tag with a `const`. The node returns the
 matching member's record. A bad reply's retry error points at a field of the member the

@@ -40,6 +40,7 @@ from yian.nodes.agent.node import is_max_tool_iterations, is_text_output
 from yian.nodes.agent.structured import type_to_schema
 from yian.nodes.contracts import Parameter, ValueContract
 from yian.skills import SkillError
+from yian.typesys.values import type_levels
 
 if TYPE_CHECKING:
     from yian.compose.source.catalog import _SourceCatalogBuilder
@@ -403,6 +404,19 @@ class AgentDescriptor(NodeDescriptor):
             else self.output_contract(ctx)
         )
         if type(node.output_contract) is ValueContract:
+            outputs_range = self.field_ranges.get(("field", "outputs")) or self.range
+            # Schema generation, here and at run, recurses per level; deeper types aren't
+            # proven to fit the stack. An engine-built output type is not the author's.
+            levels = type_levels(node.output_contract.type)
+            limit = current().max_agent_output_nesting
+            if override is None and levels > limit:
+                raise ctx.diagnostics.error(
+                    f"node {self.id!r}: this AGENT's `output:` nests {levels} levels, deeper "
+                    f"than {limit}, the limit for a model's structured reply (each record "
+                    "and list is a level); flatten it, or build the deeper value in a CODE "
+                    "node",
+                    range=outputs_range,
+                )
             try:
                 type_to_schema(node.output_contract.type)
             except ValueError as exc:
@@ -411,7 +425,7 @@ class AgentDescriptor(NodeDescriptor):
                     "generates only str, int, float, bool, date, datetime, Literal, record, "
                     "union, object, Any, and list values, not `file` or `None`. Produce "
                     "the value in a CODE node.",
-                    range=self.field_ranges.get(("field", "outputs")) or self.range,
+                    range=outputs_range,
                 ) from exc
         if self.steerable and not is_text_output(node.output_contract):
             # Checked here too so the error points at the `steerable:` line.

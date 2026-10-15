@@ -221,7 +221,7 @@ def local_field_error(
         fields (`list[str]`): The field names the reference reads below the name.
         path (`str`): The reference path without `${}`, for the message.
         source (`str | None`, *optional*, defaults to `None`): The pool path the name
-            is bound from when its binding is one whole-value reference, so a
+            is bound from when its binding's one span reads a single path, so a
             member-only field's fix names a union a case can route on.
         partial_union_fields (`bool`, *optional*, defaults to `False`): Whether a
             field only some union members have can be read.

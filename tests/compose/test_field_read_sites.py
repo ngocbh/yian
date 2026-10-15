@@ -289,6 +289,12 @@ def test_narrowed_input_reads_the_branch_member():
     assert f"node 'ag' prompt: reference ${{v.qty}} {_QTY_HINT}" in message
 
 
+def test_defaulted_union_binding_hint_names_the_bound_source():
+    nodes = _producer("d", "Order") + _agent({"v": '"${d.output :- null}"'}, "${v.qty}")
+    message = _load_error(_flow(nodes, "${ag.output}"))
+    assert f"node 'ag' prompt: reference ${{v.qty}} {_QTY_HINT}" in message
+
+
 def _code(
     inputs: dict[str, str], asserts: list[str], *, node_id: str = "c"
 ) -> str:

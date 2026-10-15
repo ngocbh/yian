@@ -62,6 +62,8 @@ from yian.compose.helpers.tags import named_type_label, path_label
 from yian.compose.nodes.base import BuildResult
 from yian.compose.validate.narrowing import Narrowing
 from yian.diagnostics import DiagnosticFrame, OriginRef, SourceRange
+from yian.expr import ExpressionError
+from yian.expr.template import Span, scan_template, template_refs
 from yian.nodes.contracts import (
     Binding,
     OutputContract,
@@ -89,9 +91,10 @@ class LocalInput:
     Attributes:
         alternatives (`tuple[OutputContract, ...]`): A read is an error only when every
             alternative rejects it.
-        source (`str | None`): The pool path the name is bound from when the binding
-            is one whole-value reference (`direct_reference_path`), else `None`; a
-            member-only union hint names it instead of the local name.
+        source (`str | None`): The pool path the name is bound from when the binding's
+            one `${...}` span reads exactly one reference path (`${d.output}`,
+            `${d.output :- null}`), else `None`; a member-only union hint names it
+            instead of the local name.
     """
 
     alternatives: tuple[OutputContract, ...]
@@ -346,10 +349,35 @@ def local_input_contracts(
                 if carried is None:
                     continue
                 alternatives = (*alternatives, carried)
-            names[name] = LocalInput(alternatives, direct_reference_path(binding))
+            names[name] = LocalInput(alternatives, _bound_source(binding))
         if names:
             contracts[node_id] = names
     return contracts
+
+
+def _bound_source(binding: Any) -> str | None:
+    """Return the one reference path a binding's whole-value span reads, else `None`.
+
+    Args:
+        binding (`Any`): A wiring binding, raw or a `Binding`.
+
+    Returns:
+        `str | None`: The path for a source that is one `${...}` span reading a single
+            path (`${d.output}`, `${d.output :- null}`), or `None` for a literal, a
+            value template, embedded text, malformed text, or a span reading several
+            paths.
+    """
+    source = binding_source(binding)
+    if not isinstance(source, str):
+        return None
+    try:
+        segments = scan_template(source)
+    except ExpressionError:
+        return None
+    if not (len(segments) == 1 and isinstance(segments[0], Span)):
+        return None
+    paths = set(template_refs(segments))
+    return paths.pop() if len(paths) == 1 else None
 
 
 def _binding_alternatives(

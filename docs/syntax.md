@@ -147,6 +147,19 @@ Changed: a file nested deeper than about 330 (mappings) to 490 (lists) levels us
 crash with a raw `RecursionError`; one between 201 levels and that depth used to load
 and is now a load error.
 
+Each YAML document yian reads (a flow file, each `uses:` file, a skill's frontmatter)
+expands to at most 100,000 nodes (`YIAN_MAX_YAML_NODES`); the limit applies to each
+document on its own. Each mapping, list, and scalar, mapping keys included, counts once
+per place it appears, so an alias counts every node it names again, and a `<<:` merge
+source counts in full even where the mapping overrides its keys. Aliases can make a
+short file expand to exponentially many nodes, and loading, the flow fingerprint, and
+the run log (JSON, which has no aliases) each cost time per expanded node. A larger
+document is an invalid-YAML error (a load error in a flow file) at the first mapping or
+list, in post-order, whose children each fit but which itself passes the limit; for an
+alias blow-up, that is the anchor whose copies blow up (`invalid YAML: this list holds more than 100000 YAML nodes,
+counting each alias as a copy of what it names; the limit for a YAML document is 100000
+(YIAN_MAX_YAML_NODES; each mapping, list, and scalar is a node)`).
+
 Every mapping key in a flow file must be text after YAML reads it: node ids, input
 and output names, typedef names and fields, keys in a written-out record value, and
 keys in `x-*` blocks alike, as in JSON. An unquoted `true`, `1`, `1.5`, `null`, or date

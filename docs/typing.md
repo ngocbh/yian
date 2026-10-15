@@ -145,8 +145,9 @@ fails. `reject_deep_nesting(value, where)` checks without recursion and raises
 
 An expression has the same bound, checked when it is parsed; see
 [Expressions → Expression nesting limit](expressions.md#expression-nesting-limit).
-A flow file's YAML has its own, larger bound of 200 levels (`YIAN_MAX_YAML_NESTING`);
-see [Syntax → YAML values](syntax.md#yaml-values).
+A flow file's YAML has its own, larger bound of 200 levels (`YIAN_MAX_YAML_NESTING`),
+and expands to at most 100,000 nodes, each alias counting as a copy of what it names
+(`YIAN_MAX_YAML_NODES`); see [Syntax → YAML values](syntax.md#yaml-values).
 
 A value written out in a flow file (a node input, MAP `over:`, WAIT `until:`, a value
 entry, an input or AGENT variable default, a CASE value branch, a flow `output:`, an

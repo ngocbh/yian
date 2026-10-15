@@ -114,6 +114,12 @@ this model whenever you design anything:
 - Documents yian reads nest at most `YIAN_MAX_YAML_NESTING` (default 200)
   levels; `_FlowLoader.get_event` counts collection events and raises a located
   `ComposerError` past it, before PyYAML's recursive composer runs out of stack.
+  They expand to at most `YIAN_MAX_YAML_NODES` (default 100,000) nodes;
+  `_FlowLoader.compose_document` counts the composed graph iteratively before
+  construction, each node once per place it appears (aliases and `<<` merge sources
+  in full), and raises a located `ComposerError` at the first mapping or list, in
+  post-order, past it, since every later walker, the fingerprint, and the run log cost
+  per expanded node. `read_plain_scalar` is not counted.
 - A flow's CALL, MAP, and LOOP bodies nest at most
   `YIAN_MAX_CALL_NESTING` (default 50) levels, checked at load in
   `_resolve_child`: before resolving, against the calls active in the file being

@@ -280,6 +280,11 @@ An expression nests at most 100 levels too (each call, list, unary operator, com
 a deeper one is a load error, so split it into smaller bindings.
 A flow file's YAML nests at most 200 levels (each mapping and list is one); deeper is a
 located load error.
+Each YAML document (a flow file, each `uses:` file) expands to at most 100,000 nodes
+(`YIAN_MAX_YAML_NODES`): each mapping, list, and scalar counts once per place it
+appears, so an alias counts every node it names again and a `<<:` merge source counts
+in full; more is a load error at the first mapping or list, in post-order, past the
+limit, so don't build big values by stacking aliases.
 CALL, MAP, and LOOP bodies nest at most 50 levels too (each body is one, whether a
 `defs:` entry, an inline `nodes:` body, a `call(...)` directive, or a `uses:` flow); a
 deeper chain is a load error at the `call:` that crosses the limit, so move short

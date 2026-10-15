@@ -77,7 +77,10 @@ counts its own `uses:` chain through `ComposedFlow.import_depth`; one built with
 `source_label` when `text` came from a file. Raises
 `LoadError` on a bad flow (compile-time errors surface here, not at run time);
 its immutable `.diagnostic` owns the message, notes, and every ordered
-`DiagnosticFrame`, including frames from imported files.
+`DiagnosticFrame`, including frames from imported files. A YAML document nested
+deeper than `YIAN_MAX_YAML_NESTING` (200) levels, or one that expands to more than
+`YIAN_MAX_YAML_NODES` (100,000) nodes when each alias counts as a copy of what it
+names, raises a located `LoadError` (see [Syntax → YAML values](syntax.md#yaml-values)).
 
 ```python
 from yian import LoadError

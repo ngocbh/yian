@@ -261,9 +261,9 @@ def test_native_carrier_without_a_parsed_value_and_a_nonfinite_raw_is_retried_un
 
 
 def test_native_carrier_without_a_parsed_value_and_a_deep_raw_is_retried_unstored():
-    from yian.typesys.values import MAX_VALUE_NESTING
+    from yian.defaults import current
     deep: dict = {}
-    for _ in range(MAX_VALUE_NESTING + 5):
+    for _ in range(current().max_value_nesting + 5):
         deep = {"x": deep}
     model = _Carriers([_unparsed_carrier(AIMessage(content="42", response_metadata=deep)), _valid_carrier])
     memory = SessionMemory()

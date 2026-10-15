@@ -340,6 +340,7 @@ def test_an_untagged_union_of_a_file_and_an_object_member_is_a_load_error():
 
     message = str(caught.value)
     assert "members 'XFile' and 'XObject' can match the same value" in message
+    assert "a `file` slot reads `{uri, mime, name}`, so `file` overlaps `object`" in message
     assert "add a tag field" in message
 
 
@@ -843,8 +844,10 @@ class _OverridingDict(dict):
         return False
 
 
-def test_field_of_reads_the_stored_value_of_a_dict_subclass_that_overrides_lookup():
-    assert field_of(_OverridingDict(a=1), "a") == (True, 1)
+def test_field_of_checks_presence_on_the_stored_keys_and_reads_through_get():
+    """Presence skips a subclass's `__contains__`; the value is read with `get`, as before."""
+    assert field_of(_OverridingDict(a=1), "a") == (True, "get")
+    assert field_of(_OverridingDict(a=1), "b") == (False, None)
 
 
 def test_field_of_misses_on_a_defaultdict_without_adding_the_key():
@@ -1248,7 +1251,6 @@ def test_a_partial_loop_compares_a_carried_file_the_body_does_not_take(learnable
     assert output == 1
 
 
-
 @pytest.mark.parametrize("learnable", [False, True])
 def test_a_loop_reads_a_file_in_a_carried_object_as_a_mapping_on_every_iteration(learnable):
     # The seed binds `f` from `r`'s live output, where `f.x` is a file; from the second
@@ -1415,10 +1417,62 @@ def test_a_source_entry_with_a_record_reading_type_is_hashable():
     assert entry != SourceEntry(None, 0, b"null")
 
 
-def test_a_file_default_is_fingerprinted_apart_from_its_mapping():
-    assert _canonical_value(REF, _ManifestContext(), "default") != _canonical_value(
+def test_a_file_default_is_fingerprinted_like_its_mapping():
+    assert _canonical_value(REF, _ManifestContext(), "default") == _canonical_value(
         dict(FORM), _ManifestContext(), "default"
     )
+
+
+_PARTIAL_LOOP_FILE_DEFAULT = f"""\
+    id: p
+    name: p
+    defs:
+      body:
+        input:
+          f: !file
+          n: !int
+        nodes:
+          c:
+            kind: code
+            input:
+              n: ${{input.n}}
+            output:
+              n: int
+            code: |
+              return dict(n=inputs['n'] + 1)
+        output: ${{c.output}}
+    nodes:
+      a:
+        kind: code
+        output: file
+        code: |
+          return {F}
+      l:
+        kind: loop
+        times: 3
+        call: body
+        input:
+          f: ${{a.output}}
+          n: 0
+    output: ${{l.output.n}}
+    """
+
+
+def test_a_log_whose_loop_default_was_digested_as_a_mapping_still_resumes(
+    tmp_path, monkeypatch
+):
+    """A partial LOOP's respawned driver once defaulted an omitted file to its mapping."""
+    flow = textwrap.dedent(_PARTIAL_LOOP_FILE_DEFAULT)
+    path = tmp_path / "run.jsonl"
+    with monkeypatch.context() as patch:
+        patch.setattr(LoopNode, "_carried_value", lambda self, name, value: value)
+        first = run_flow(load_flow(flow), {}, log=path)
+    assert first.status == "succeeded", first.failure
+
+    resumed = resume_flow(load_flow(flow), log=path)
+
+    assert resumed.status == "succeeded", resumed.failure
+    assert resumed.output == first.output == 3
 
 
 # --- the run result reads its files through the flow's output type --- #

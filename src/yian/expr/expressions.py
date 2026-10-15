@@ -848,7 +848,12 @@ class _EvalExpr:
                 value = _MISSING
             for step in parts[1:]:
                 if self._trace and source is not None:
-                    present = present and field_of(value, step)[0]
+                    # A dict's presence is read off its stored keys, so the subclass `get`
+                    # that `_dotted_step` calls runs once per step and nothing else does.
+                    present = present and (
+                        dict.__contains__(value, step) if isinstance(value, dict)
+                        else field_of(value, step)[0]
+                    )
                 value = self._dotted_step(value, step)
             if self._trace and source is None:
                 self._frames[-1].route = replace(

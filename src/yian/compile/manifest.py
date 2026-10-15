@@ -517,8 +517,9 @@ def _canonical_value(value: Any, ctx: _ManifestContext, path: str) -> Any:
     if isinstance(value, date):
         return {"type": "date", "value": value.isoformat()}
     if type(value) is FileRef:
-        # A partial LOOP driver's default for an omitted `file` field.
-        return {"type": "file", "value": _canonical_mapping(value.model_dump(), ctx, path)}
+        # A partial LOOP driver's default for an omitted `file` field encodes as its JSON
+        # form, the mapping a log recorded before files kept their type digested.
+        return _canonical_mapping(value.model_dump(), ctx, path)
     if isinstance(value, dict):
         return _canonical_mapping(value, ctx, path)
     if isinstance(value, list):

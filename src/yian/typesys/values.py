@@ -872,10 +872,11 @@ def field_of(value: Any, name: str) -> tuple[bool, Any]:
         `field_of(FileRef(uri="a"), "__class__")` returns `(False, None)`.
     """
     if isinstance(value, dict):
-        # `dict`'s own lookup, so a subclass's `get` / `__getitem__` / `__contains__` never runs.
-        if dict.__contains__(value, name):
-            return True, dict.__getitem__(value, name)
-        return False, None
+        # Presence uses `dict`'s own lookup, so a subclass's `__contains__` never runs; the
+        # value is read with `get`, as a dotted read always has been.
+        if not dict.__contains__(value, name):
+            return False, None
+        return True, value.get(name)
     if isinstance(value, FileRef) and name in _FILE_FIELDS:
         return True, getattr(value, name)
     return False, None
@@ -2033,6 +2034,14 @@ def _is_file_form(value: Any) -> bool:
 
     That is a `dict` with exactly the keys `uri` (`str`), `mime` and `name` (each `str`
     or `None`).
+
+    Args:
+        value (`Any`):
+            The value to test.
+
+    Returns:
+        `bool`:
+            `True` when a `file` slot would read `value` as a `FileRef`.
     """
     return (
         isinstance(value, dict)
@@ -2699,6 +2708,14 @@ def _reads_files(typ: Type) -> bool:
 
     Unlike `has_file`, it also counts plain `object` and flat `list(object)`, whose
     nested `FileRef`s are read as mappings.
+
+    Args:
+        typ (`Type`):
+            The type a value is read through.
+
+    Returns:
+        `bool`:
+            `True` when reading a value through `typ` may change how a file is held.
     """
     if typ.kind is ValueKind.FILE or _is_plain_object(typ):
         return True
@@ -2718,6 +2735,16 @@ def _union_member_of(typ: Type, value: Any) -> Optional[Type]:
     no member. A tagged union's member comes from `_tagged_member`, as in
     `_build_for_union`. For an untagged union it builds the value against each member
     again, deliberately: the first member it satisfies is the one the write check took.
+
+    Args:
+        typ (`Type`):
+            A union type (its `variants` set).
+        value (`Any`):
+            A value that passed `build_value_as(typ, value)`.
+
+    Returns:
+        `Optional[Type]`:
+            The member `value` was checked against, or `None` as above.
     """
     if not isinstance(value, dict):
         return None

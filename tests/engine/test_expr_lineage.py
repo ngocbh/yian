@@ -932,6 +932,26 @@ def test_item_tracing_preserves_get_without_extra_subclass_hooks():
     assert reads == ["answer", "answer"]
 
 
+def test_sourced_item_tracing_reads_get_once_per_step():
+    reads = []
+
+    class Item(dict):
+        def __contains__(self, key):
+            raise RuntimeError("contains hook")
+
+        def get(self, key):
+            reads.append(key)
+            return super().get(key)
+
+    item = ResolvedValue(Item(answer="ok"), True, SourceRef("run", 7, ("items", 0)))
+    traced = eval_binding(
+        "${item.answer}", lambda path: ResolvedValue(None, False), item=item, trace=True
+    )
+    assert traced.value == "ok"
+    assert traced.route.source == SourceRef("run", 7, ("items", 0, "answer"))
+    assert reads == ["answer"]
+
+
 @pytest.mark.parametrize("container, depth", [("list", 33), ("dict", 40)])
 def test_json_compatible_nested_results_keep_complete_feedback_shape(
     monkeypatch, container, depth

@@ -213,6 +213,14 @@ class LoopNode(Node):
         typed field through the contract the record is committed under makes each `file`
         position a `FileRef` and each `object` position's nested files mappings, so the
         predicate reads every iteration alike. Untyped fields are read as given.
+
+        Args:
+            carried (`dict[str, Any]`):
+                The carried record, keyed by the loop's input field names.
+
+        Returns:
+            `dict[str, Any]`:
+                The record with each typed field's files held as the contract reads them.
         """
         contract = self.output_contract
         if type(contract) is ValueContract:
@@ -352,6 +360,16 @@ class LoopNode(Node):
         The driver's own params have no contract, so the body's START parameter gives the
         field's type; a `file` position turns the file's JSON form back into a `FileRef`.
         An untyped or unknown field is returned as given.
+
+        Args:
+            name (`str`):
+                The carried field's name, matched against the body's input parameters.
+            value (`Any`):
+                The field's carried value.
+
+        Returns:
+            `Any`:
+                The value with its files held as the body's typed input `name` reads them.
         """
         for parameter in self.child_inputs or ():
             if parameter.name == name and parameter.contract is not None:

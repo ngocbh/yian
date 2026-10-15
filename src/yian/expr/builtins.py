@@ -75,7 +75,16 @@ def _render_as_json(value: Any, indent: int = 2) -> str:
 
 
 def _json_default(value: Any) -> Any:
-    """Return a file's mapping, or the `str` of any other value JSON can't write."""
+    """Return a file's mapping, or the `str` of any other value JSON can't write.
+
+    Args:
+        value (`Any`):
+            A value `json.dumps` has no encoding for.
+
+    Returns:
+        `Any`:
+            A `FileRef`'s `{uri, mime, name}` mapping, else `str(value)`.
+    """
     return value.model_dump() if isinstance(value, FileRef) else str(value)
 
 

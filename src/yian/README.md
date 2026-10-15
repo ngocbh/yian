@@ -540,7 +540,24 @@ binds a forced function tool without `strict`, a request routed to the Responses
 makes the whole schema non-strict; other clients and closed schemas are unchanged. The
 same unforced-tool binding (`_unforced_tool_output`) serves, for every schema, Anthropic
 models that refuse a forced tool (`_forces_tool(model)` false: Opus 5.5, Sonnet 5.5,
-Fable 5.1) when block thinking is off and no explicit `method="json_schema"` is given.
+Fable 5.1, and Mythos 5.1 through `_NO_FORCED_TOOL_PREFIXES`, which langchain doesn't list
+yet) when block thinking is off and no explicit `method="json_schema"` is given.
+
+Two clients rewrite a closed schema their provider can't take. Azure's strict mode rejects
+the keywords in `azure_client._AZURE_STRICT_UNSUPPORTED` (`minimum`, `maximum`,
+`multipleOf`, `minLength`, `maxLength`, `pattern`, `format`, and object and array bounds
+such as `minItems`). A closed pydantic schema holding one, given without `method` or
+`strict`, is bound as the SDK's strict `json_schema` format with those keywords moved into
+each subschema's `description` as `{minimum: 0, maximum: 10}` (`_strict_schema_without`),
+on Chat Completions (`response_format`) and Responses-routed deployments (`text.format`)
+alike. The reply is parsed with the pydantic class, which still enforces them, so a value
+out of range is an `OutputParserException` corrected under `retries:`. Reflective memory's
+reflection call (`actions` has `minItems: 1`) takes this path. Dict schemas and an
+explicit `method` or `strict` reach Azure unchanged; open schemas keep the non-strict
+function tool. Gemini's `responseJsonSchema` lacks `const`, so
+`NormalizedChatGoogleGenerativeAI._prepare_request` sends a copy of the request schema
+with every `const: v` (union member tags, a one-value `Literal`) as `enum: [v]`
+(`_const_as_enum`); the bound schema and the reply's parse are unchanged.
 
 A reply with no tool call is the correctable deviation `base_client.missing_tool_call`, a
 `MissingToolCallError` (`OutputParserException`) whose message names the tool. The guard

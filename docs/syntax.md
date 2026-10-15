@@ -1303,8 +1303,8 @@ constraints, so the provider doesn't constrain the open part:
 - `anthropic` with `thinking` on gets a tool the model may call; see
   [Provider blocks](#provider-blocks-request-settings).
 - `google`, `ollama`, and the other Chat Completions providers are unchanged, and so is
-  `anthropic` without thinking, except Claude Opus 5.5, Sonnet 5.5 and Fable 5.1, which get
-  a tool the model may call for every schema; see
+  `anthropic` without thinking, except Claude Opus 5.5, Sonnet 5.5, Fable 5.1 and Mythos 5.1,
+  which get a tool the model may call for every schema; see
   [Provider blocks](#provider-blocks-request-settings).
 
 The choice is per schema: one open part makes the whole schema non-strict, its closed
@@ -1316,6 +1316,21 @@ Changed: an AGENT `output:` holding `object` or `Any` used to fail on Azure, who
 JSON-schema mode rejects an open part. On Anthropic with `thinking` on, an `object` came
 back as `{}` and an `Any` failed before the request was sent. Both now go through a tool
 call that isn't strict.
+
+Two providers also need a closed schema rewritten. Azure's strict mode, on Chat
+Completions and Responses-routed deployments alike, rejects range and length keywords:
+an `int(0..10)` slot's `minimum` and `maximum`, `minLength`, `maxLength`, `pattern`,
+`format`, `multipleOf`, and array and object bounds such as `minItems`. yian moves them
+into the slot's description (`{minimum: 0, maximum: 10}`), so the model still reads them,
+and checks the reply against the full type, so a value out of range is corrected and
+retried under `retries:`. Gemini doesn't support `const`, so a union member's tag or a
+one-value `Literal` goes as a one-value `enum`, which means the same; the reply is still
+checked against the declared type.
+
+Changed: an AGENT `output:` with a range, such as `int(0..10)`, used to reach Azure with
+keywords its strict mode rejects. Those keywords now go in the description. A host that
+passes the client a JSON-schema dict, or an explicit `method` or `strict`, still reaches
+Azure unchanged, so Azure may reject it.
 
 A [union](#unions-of-records-union) `output:` asks for one of the members: each member's
 schema forbids unknown fields and pins its tag with a `const`. The node returns the
@@ -1500,9 +1515,9 @@ A few providers need a note:
   Messages API refuses thinking beside a forced tool call. An output with an open part
   (`object`, `Any`) can't go through that format, which can't express an open part, so
   it goes as a tool the model may call; a reply without that tool call is corrected and
-  retried under `retries:`. Claude Opus 5.5, Sonnet 5.5, and Fable 5.1 refuse a forced
-  tool call, so without `thinking` they also get a tool the model may call, corrected and
-  retried the same way.
+  retried under `retries:`. Claude Opus 5.5, Sonnet 5.5, Fable 5.1, and Mythos 5.1 refuse
+  a forced tool call, so without `thinking` they also get a tool the model may call,
+  corrected and retried the same way.
 - `ollama` takes what the Ollama client sends: `think` (`true`, `false`, or a level),
   `options` (`temperature`, `num_ctx`, …), `keep_alive`, `logprobs`, and
   `top_logprobs`. It has no default `think`, so the model's own default applies.

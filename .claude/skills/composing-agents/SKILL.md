@@ -479,13 +479,14 @@ switches it to **structured generation** — the engine derives a schema from
 `output:` and the model emits a conforming value (native structured output, or a
 JSON fallback for providers that lack it), validated at the write boundary and
 retried up to `retries:` times (default 2, `YIAN_AGENT_RETRIES`; a non-negative integer)
-on deviation, a NaN or infinity in the reply or a value nested deeper than 100 levels
-included. A root `Literal(...)` returns its bare tag to the flow. A union returns the
-matching member's record; each member's schema pins its tag and rejects unknown fields.
-An `object` or `Any` output is an open mapping or any JSON value; where structured output
-is strict (Azure, the OpenAI Responses API, Anthropic with `thinking` on) yian asks for
-that whole schema through a non-strict or unforced tool instead, and still validates and
-retries the reply. Use a downstream `code` node only for deterministic post-processing.
+on deviation, a NaN or infinity in the reply, a value nested deeper than 100 levels, or a
+reply that skips the structured-output tool call included. A root `Literal(...)` returns
+its bare tag to the flow. A union returns the matching member's record; each member's
+schema pins its tag and rejects unknown fields. An `object` or `Any` output is an open
+mapping or any JSON value; where structured output is strict (Azure, the OpenAI Responses
+API, Anthropic with `thinking` on) yian asks for that whole schema through a non-strict or
+unforced tool instead, and still validates and retries the reply. Use a downstream `code`
+node only for deterministic post-processing.
 `prompt:` must be text: quote a number, boolean, date, or a value starting with `[` or `{`;
 otherwise it is a load error at the value.
 An AGENT with `tools:` or `skills:` runs the tool loop; without them it makes one model

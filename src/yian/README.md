@@ -536,9 +536,16 @@ Structured generation asks for a schema with an open part
 (`llm_clients.capabilities.has_open_schema`, from an `object`, `Any`, or elementless-list
 output) without strict constraints, chosen per client in `with_structured_output`: Azure
 binds a forced function tool without `strict`, a request routed to the Responses API sends
-`strict: false`, and Anthropic with block thinking binds an unforced tool whose reply
-without that call is an `OutputParserException` the retry corrects. One open part makes
-the whole schema non-strict; other clients and closed schemas are unchanged.
+`strict: false`, and Anthropic with block thinking binds an unforced tool. One open part
+makes the whole schema non-strict; other clients and closed schemas are unchanged. The
+same unforced-tool binding (`_unforced_tool_output`) serves, for every schema, Anthropic
+models that refuse a forced tool (`_forces_tool(model)` false: Opus 5.5, Sonnet 5.5,
+Fable 5.1) when block thinking is off. A reply with no tool call, whether that guard
+raises it or a tool parser returns no result (`_generate_native` treats `None`, or a
+carrier with `parsed: None, parsing_error: None`, the same way), is the correctable
+deviation `base_client.missing_tool_call`: a `MissingToolCallError`
+(`OutputParserException`) whose message names the tool, fed back under `retries:` and
+raised as `node.execute` once they're spent.
 
 An AGENT checks what the model sends back. `run_agent` passes `invoke_model` a
 `check_reply` that rejects a tool call whose arguments hold a NaN or infinity, before any call of

@@ -1296,7 +1296,8 @@ constraints, so the provider doesn't constrain the open part:
 - `anthropic` with `thinking` on gets a tool the model may call; see
   [Provider blocks](#provider-blocks-request-settings).
 - `google`, `ollama`, the other Chat Completions providers, and `anthropic` without
-  thinking are unchanged.
+  thinking are unchanged. Without thinking, the Claude models that refuse a forced tool
+  call already get a tool the model may call for every schema.
 
 The choice is per schema: one open part makes the whole schema non-strict, its closed
 fields included. yian still checks every field and retries a reply that doesn't fit.
@@ -1329,7 +1330,9 @@ extract:
 If the model deviates from the schema, the engine feeds the error back and retries
 up to `retries:` times (default 2, `YIAN_AGENT_RETRIES`; see [Defaults and
 limits](defaults.md)). A NaN or infinity in the reply (`{"score": NaN}`),
-or a value nested deeper than 100 levels, is a deviation too. `retries:` must be a
+or a value nested deeper than 100 levels, is a deviation too. So is a reply that skips
+the structured-output tool call; once retries are spent, the AGENT fails with an error
+naming the tool it didn't call. `retries:` must be a
 non-negative integer (`0` means no retry); anything else fails at load:
 
 ```yaml
@@ -1489,7 +1492,9 @@ A few providers need a note:
   Messages API refuses thinking beside a forced tool call. An output with an open part
   (`object`, `Any`) can't go through that format, which can't express an open part, so
   it goes as a tool the model may call; a reply without that tool call is corrected and
-  retried under `retries:`.
+  retried under `retries:`. Claude Opus 5.5, Sonnet 5.5, and Fable 5.1 refuse a forced
+  tool call, so without `thinking` they also get a tool the model may call, corrected and
+  retried the same way.
 - `ollama` takes what the Ollama client sends: `think` (`true`, `false`, or a level),
   `options` (`temperature`, `num_ctx`, …), `keep_alive`, `logprobs`, and
   `top_logprobs`. It has no default `think`, so the model's own default applies.

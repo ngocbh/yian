@@ -139,7 +139,6 @@ def test_retry_exhausted_raises():
         generate_structured(_Always(), [], typ, max_retries=2)
 
 
-
 def test_missing_tool_call_error_reads_cleanly():
     error = missing_tool_call("Answer")
     assert isinstance(error, OutputParserException)

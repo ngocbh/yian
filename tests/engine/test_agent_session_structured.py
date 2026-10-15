@@ -204,7 +204,7 @@ class _Carriers:
 
 def _unparsed_carrier(raw=None):
     """Build a carrier for a reply with no call to the schema's tool."""
-    return lambda schema: {"raw": raw or AIMessage(content="42"), "parsed": None, "parsing_error": None}
+    return lambda schema: {"raw": raw if raw is not None else AIMessage(content="42"), "parsed": None, "parsing_error": None}
 
 
 def _valid_carrier(schema):
@@ -240,10 +240,15 @@ def test_native_carrier_without_a_parsed_value_is_corrected_and_retried():
 
 def test_native_carriers_without_a_parsed_value_fail_once_retries_are_spent():
     from langchain_core.exceptions import OutputParserException
+    from yian.llm_clients.base_client import MissingToolCallError, missing_tool_call
+    from yian.nodes.agent.structured import type_to_schema
+    from yian.typesys.values import Type, ValueKind
     model = _Carriers([_unparsed_carrier(), _unparsed_carrier()])
-    with pytest.raises(OutputParserException):
+    with pytest.raises(OutputParserException) as caught:
         _run_carriers(model, SessionMemory(), max_retries=1)
     assert len(model.calls) == 2
+    assert type(caught.value) is MissingToolCallError
+    assert str(caught.value) == str(missing_tool_call(type_to_schema(Type.scalar(ValueKind.INTEGER)).__name__))
 
 
 def test_native_carrier_without_a_parsed_value_and_a_nonfinite_raw_is_retried_unstored():
@@ -253,6 +258,18 @@ def test_native_carrier_without_a_parsed_value_and_a_nonfinite_raw_is_retried_un
     view = _view(memory)
     assert [item.payload["message"]["type"] for item in view.items].count("ai") == 1
     assert not any(item.payload["message"]["data"]["content"] == "42" for item in view.items)
+
+
+def test_native_carrier_without_a_parsed_value_and_a_deep_raw_is_retried_unstored():
+    from yian.typesys.values import MAX_VALUE_NESTING
+    deep: dict = {}
+    for _ in range(MAX_VALUE_NESTING + 5):
+        deep = {"x": deep}
+    model = _Carriers([_unparsed_carrier(AIMessage(content="42", response_metadata=deep)), _valid_carrier])
+    memory = SessionMemory()
+    assert _run_carriers(model, memory) == 7 and len(model.calls) == 2
+    assert [item.payload["message"]["type"] for item in _view(memory).items].count("ai") == 1
+    assert "did not call the" in model.calls[1][-1].content
 
 
 @pytest.mark.parametrize("native,stage", [(native, stage) for native in (False, True)

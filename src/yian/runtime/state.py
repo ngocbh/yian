@@ -50,6 +50,7 @@ from yian.nodes.contracts import (
     Parameter,
     PartialRecordContract,
     SeedConnection,
+    ValueContract,
     iter_source_strings,
     output_contract_field_error,
     output_contract_origin,
@@ -97,6 +98,9 @@ from yian.typesys.values import (
     Type,
     TypeCheckError,
     TypedValue,
+    ValueKind,
+    has_file,
+    normalize_typed_files,
     reject_deep_nesting,
     reject_nonfinite,
 )
@@ -120,6 +124,62 @@ def _canonical_output_value(
     if type(contract) is PartialRecordContract:
         output = validate_output_contract(contract, output)
     return canonical_typed(output, declared_type)
+
+
+def _file_reading_type(node: Node) -> Type | None:
+    """Return the type a value committed to `node` is read through to restore its files.
+
+    A whole-value contract gives its type. A partial record contract, or the input
+    record of a node that commits one, gives a record of only the typed fields that
+    may hold a file, so every other field is read as stored. `None` when no position
+    may hold a file.
+
+    Args:
+        node (`Node`):
+            The commit target.
+
+    Returns:
+        `Type | None`:
+            The reading type, or `None` when committed values need no reading.
+    """
+    contract = node.output_contract
+    if type(contract) is ValueContract:
+        return contract.type if has_file(contract.type) else None
+    if type(contract) is PartialRecordContract:
+        typed_fields = [(name, field.type) for name, field in contract.fields if field is not None]
+    elif node.commits_input_record:
+        typed_fields = [
+            (param.name, param.contract.type)
+            for param in node.params or ()
+            if param.contract is not None
+        ]
+    else:
+        return None
+    fields = {name: typ for name, typ in typed_fields if has_file(typ)}
+    if not fields:
+        return None
+    return Type(kind=ValueKind.OBJECT, fields=fields, required=frozenset())
+
+
+def _restore_files(node: Node, typed: TypedValue) -> TypedValue:
+    """Read a decoded committed value through its commit target's contract.
+
+    The run record stores each file as its JSON form; a reader sees a `FileRef` at
+    each position the target's contract types as `file`. The record bytes are not
+    touched, so live and replayed runs read the same value.
+
+    Args:
+        node (`Node`):
+            The commit target whose contract the value was written through.
+        typed (`TypedValue`):
+            The value decoded from the record bytes.
+
+    Returns:
+        `TypedValue`:
+            `typed` itself when the contract has no file position or nothing changes,
+            else a copy of the same class holding the read value.
+    """
+    return normalize_typed_files(_file_reading_type(node), typed)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1360,9 +1420,9 @@ def _prepare_success_transition(
         delta=delta,
         terminal=terminal,
     )
-    observer_value = ANY_VALUE_ADAPTER.validate_json(
-        delta.value_bytes,
-        strict=True,
+    observer_value = _restore_files(
+        state.flow.nodes[delta.commit_target],
+        ANY_VALUE_ADAPTER.validate_json(delta.value_bytes, strict=True),
     ).to_object()
     observer = NodeSucceeded(
         node_id=delta.node_id,
@@ -1757,6 +1817,10 @@ def _prepare_record_trace(
     """Prepare accepted trace data while the actual executing node still exists."""
     record = envelope.record
     node_id = _outcome_node_id(record)
+    writer_files = (
+        _file_reading_type(state.flow.nodes[record.commit_target])
+        if isinstance(record, NodeSucceededRecord) and state.trace is not None else None
+    )
     return prepare_trace(state.trace, envelope, state.flow.nodes.get(node_id),
                          input_connections=input_connections, child_boundaries=child_boundaries,
                          retired_ids=retired_ids,
@@ -1767,7 +1831,8 @@ def _prepare_record_trace(
                          ),
                          terminal_succeeded=terminal_succeeded,
                          terminal_output_bytes=terminal_output_bytes,
-                         terminal_failure=terminal_failure)
+                         terminal_failure=terminal_failure,
+                         writer_files=writer_files)
 
 
 def _outcome_node_id(record: RunRecord) -> str | None:
@@ -1836,7 +1901,10 @@ def _require_outcome_trace_terminal(state: RunState, prepared: PreparedTransitio
         if (type(delta.writer) is not tuple or len(delta.writer) != 2
                 or type(delta.writer[0]) is not str or delta.writer[0] != record.commit_target):
             raise ValueError("physical trace writer disagrees with the accepted output target")
-        writer = SourceEntry(source, prepared.expected_sequence, plan.delta.value_bytes)
+        writer = SourceEntry(
+            source, prepared.expected_sequence, plan.delta.value_bytes,
+            _file_reading_type(state.flow.nodes[record.commit_target]),
+        )
     elif delta.writer is not None:
         raise ValueError("only an accepted output can install a physical trace writer")
     root_writer = writer if writer is not None and record.commit_target == state.flow.end_id else None
@@ -4534,10 +4602,12 @@ def _apply_run_started(state: RunState, apply: _RunStartedApply) -> None:
 
 def _materialize_success(plan: _SuccessPlan) -> _SuccessApply:
     """Decode independent pool, observer, and terminal copies before append."""
-    value = ANY_VALUE_ADAPTER.validate_json(plan.delta.value_bytes, strict=True)
-    observer_value = ANY_VALUE_ADAPTER.validate_json(
-        plan.delta.value_bytes,
-        strict=True,
+    target = plan.originating_flow.nodes[plan.delta.commit_target]
+    value = _restore_files(
+        target, ANY_VALUE_ADAPTER.validate_json(plan.delta.value_bytes, strict=True),
+    )
+    observer_value = _restore_files(
+        target, ANY_VALUE_ADAPTER.validate_json(plan.delta.value_bytes, strict=True),
     ).to_object()
     terminal = (
         _materialize_terminal(plan.terminal)

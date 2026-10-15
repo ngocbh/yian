@@ -2664,6 +2664,36 @@ def normalize_files(typ: Type, value: Any) -> Any:
     return value
 
 
+def normalize_typed_files(typ: Optional[Type], typed: TypedValue) -> TypedValue:
+    """Return `typed` with its value read through `typ` by `normalize_files`.
+
+    A decoded value holds each file as its JSON form unless its whole kind is `file`;
+    reading it through the type it was written as turns each one back into a `FileRef`.
+    The result keeps `typed`'s class and kind and encodes to the same JSON value.
+
+    Args:
+        typ (`Type`, *optional*):
+            The type to read the value through. `None` reads nothing.
+        typed (`TypedValue`):
+            The decoded value.
+
+    Returns:
+        `TypedValue`:
+            `typed` itself when nothing changes, else a copy holding the read value.
+
+    Example:
+        With `typ` the type `list(file)` and `form` a file's JSON form,
+        `normalize_typed_files(typ, ListAnyValue(value=[form]))` returns
+        `ListAnyValue(value=[FileRef(**form)])`.
+    """
+    if typ is None:
+        return typed
+    value = normalize_files(typ, typed.value)
+    if value is typed.value:
+        return typed
+    return typed.model_copy(update={"value": value})
+
+
 def _reads_files(typ: Type) -> bool:
     """Whether `typ` has a `file` or an unrefined `object` position at any depth.
 

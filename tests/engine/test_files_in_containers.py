@@ -2,8 +2,8 @@
 slot reads a nested file as its mapping, and an untagged union whose members then
 share a value is a load error."""
 
-from pathlib import Path
 from collections import defaultdict
+from pathlib import Path
 import textwrap
 from typing import Any
 
@@ -13,8 +13,10 @@ from yian.compose.helpers.errors import LoadError
 from yian.expr.expressions import eval_expr
 from yian.expr.grammar import parse_expr
 from yian.expr.lineage import ResolvedValue, SourceRef
+from yian.nodes.base import _HostStop
 from yian.nodes.binding import bind_params
 from yian.nodes.contracts import Binding, Parameter, ValueContract
+from yian.nodes.loop import LoopNode
 from yian.run import resume_flow, run_flow
 from yian.typesys.pool import VariablePool
 from yian.typesys.types import read_typedefs, type_for
@@ -29,6 +31,8 @@ from yian.typesys.values import (
     normalize_files,
     types_overlap,
 )
+
+from tests.engine.test_expand import _child_flow
 
 _REGISTRY = read_typedefs(
     {
@@ -855,3 +859,411 @@ def test_field_of_reads_only_the_file_fields_of_a_file_subclass():
 
     assert field_of(value, "uri") == (True, "f")
     assert field_of(value, "tag") == (False, None)
+
+
+# --- committed values and trace reads decode a file through the target's type --- #
+
+def _ok_run(text: str, inputs: dict | None = None, **kwargs: Any) -> Any:
+    """Run a dedented flow and return its output, asserting it succeeded."""
+    result = run_flow(load_flow(textwrap.dedent(text)), inputs or {}, **kwargs)
+    assert result.status == "succeeded", result.failure
+    return result.output
+
+
+_READER_FLOW = f"""\
+    id: p
+    name: p
+    nodes:
+      a:
+        kind: code
+        output: list(file)
+        code: |
+          return [{F}, {F}]
+      r:
+        kind: code
+        output:
+          f: file
+          n: int
+        code: |
+          return dict(f={F}, n=1)
+      b:
+        kind: code
+        input:
+          xs: ${{a.output}}
+          f: ${{r.output.f}}
+          u: ${{r.output.f.uri}}
+        code: |
+          return [[type(x).__name__ for x in inputs['xs']], type(inputs['f']).__name__,
+                  inputs['u']]
+    output: ${{b.output}}
+    """
+
+
+@pytest.mark.parametrize("learnable", [False, True])
+def test_a_reader_sees_the_files_of_a_typed_output(learnable):
+    output = _ok_run(_READER_FLOW, learnable=learnable)
+
+    assert output == [["FileRef", "FileRef"], "FileRef", "f"]
+
+
+@pytest.mark.parametrize("learnable", [False, True])
+def test_the_success_event_holds_the_files_of_a_typed_output(learnable):
+    events: list[Any] = []
+    _ok_run(_READER_FLOW, learnable=learnable, on_event=events.append)
+
+    (output,) = [
+        event.output for event in events
+        if type(event).__name__ == "NodeSucceeded" and event.node_id == "a"
+    ]
+    assert output == [REF, REF]
+    assert all(type(item) is FileRef for item in output)
+
+
+@pytest.mark.parametrize("learnable", [False, True])
+def test_an_untyped_output_holding_files_is_read_as_mappings(learnable):
+    output = _ok_run(f"""\
+        id: p
+        name: p
+        nodes:
+          a:
+            kind: code
+            code: |
+              return [{F}]
+          b:
+            kind: code
+            input:
+              xs: ${{a.output}}
+            code: |
+              return [type(x).__name__ for x in inputs['xs']]
+        output: ${{b.output}}
+        """, learnable=learnable)
+
+    assert output == ["dict"]
+
+
+@pytest.mark.parametrize("learnable", [False, True])
+def test_a_map_body_reads_its_file_input_as_a_file(learnable):
+    output = _ok_run(f"""\
+        id: p
+        name: p
+        defs:
+          body:
+            input:
+              f: !file
+            nodes:
+              c:
+                kind: code
+                input:
+                  x: ${{input.f}}
+                code: |
+                  return type(inputs['x']).__name__
+            output: ${{c.output}}
+        nodes:
+          a:
+            kind: code
+            output: list(file)
+            code: |
+              return [{F}, {F}]
+          m:
+            kind: map
+            over: ${{a.output}}
+            call: body
+            input:
+              f: ${{item}}
+        output: ${{m.output}}
+        """, learnable=learnable)
+
+    assert output == ["FileRef", "FileRef"]
+
+
+@pytest.mark.parametrize("learnable", [False, True])
+def test_a_call_body_reads_its_list_of_files_input_as_files(learnable):
+    output = _ok_run(f"""\
+        id: p
+        name: p
+        defs:
+          body:
+            input:
+              fs: !list(file)
+            nodes:
+              c:
+                kind: code
+                input:
+                  fs: ${{input.fs}}
+                code: |
+                  return [type(x).__name__ for x in inputs['fs']]
+            output: ${{c.output}}
+        nodes:
+          a:
+            kind: code
+            output: list(file)
+            code: |
+              return [{F}]
+          k:
+            kind: call
+            call: body
+            input:
+              fs: ${{a.output}}
+        output: ${{k.output}}
+        """, learnable=learnable)
+
+    assert output == ["FileRef"]
+
+
+@pytest.mark.parametrize("learnable", [False, True])
+def test_the_parent_reads_a_file_a_call_body_returns(learnable):
+    output = _ok_run(f"""\
+        id: p
+        name: p
+        defs:
+          body:
+            nodes:
+              c:
+                kind: code
+                output:
+                  f: file
+                code: |
+                  return dict(f={F})
+            output: ${{c.output}}
+        nodes:
+          k:
+            kind: call
+            call: body
+          d:
+            kind: code
+            input:
+              x: ${{k.output.f}}
+            code: |
+              return type(inputs['x']).__name__
+        output: ${{d.output}}
+        """, learnable=learnable)
+
+    assert output == "FileRef"
+
+
+@pytest.mark.parametrize("learnable", [False, True])
+def test_the_parent_reads_the_typed_file_of_a_partial_record_body_output(learnable):
+    output = _ok_run(f"""\
+        id: p
+        name: p
+        defs:
+          body:
+            nodes:
+              c:
+                kind: code
+                code: |
+                  return dict(f={F}, g={F})
+            output:
+              f: !file ${{c.output.f}}
+              g: ${{c.output.g}}
+        nodes:
+          k:
+            kind: call
+            call: body
+          d:
+            kind: code
+            input:
+              f: ${{k.output.f}}
+              g: ${{k.output.g}}
+            code: |
+              return [type(inputs['f']).__name__, inputs['g']]
+        output: ${{d.output}}
+        """, learnable=learnable)
+
+    assert output == ["FileRef", FORM]
+
+
+_LOOP_FLOW = f"""\
+    id: p
+    name: p
+    defs:
+      body:
+        input:
+          f: !file
+          n: !int
+        nodes:
+          c:
+            kind: code
+            input:
+              f: ${{input.f}}
+              n: ${{input.n}}
+            output:
+              f: file
+              n: int
+            code: |
+              return dict(f=inputs['f'], n=inputs['n'] + 1)
+        output: ${{c.output}}
+    nodes:
+      a:
+        kind: code
+        output: file
+        code: |
+          return {F}
+      l:
+        kind: loop
+        times: 2
+        call: body
+        input:
+          f: ${{a.output}}
+          n: 0
+      d:
+        kind: code
+        input:
+          x: ${{l.output.f}}
+          n: ${{l.output.n}}
+        code: |
+          return [type(inputs['x']).__name__, inputs['n']]
+    output: ${{d.output}}
+    """
+
+
+@pytest.mark.parametrize("learnable", [False, True])
+def test_the_parent_reads_a_file_a_loop_carries(learnable):
+    assert _ok_run(_LOOP_FLOW, learnable=learnable) == ["FileRef", 2]
+
+
+def _partial_file_loop() -> LoopNode:
+    node = LoopNode(
+        "lp", flow_id="f", child=_child_flow(), predicate_kind="times", times=1, max_iters=1,
+        returned_fields=("n",),
+        child_inputs=[
+            Parameter("f", contract=ValueContract(FILE), required=True),
+            Parameter("n", contract=ValueContract(Type.scalar(ValueKind.INTEGER)), required=True),
+        ],
+    )
+    node.params = [Parameter("f"), Parameter("n")]
+    return node
+
+
+def test_a_partial_loop_keeps_an_omitted_file_as_a_file():
+    clone = _partial_file_loop().respawn(1, {"f": dict(FORM), "n": 1})
+
+    by_name = {param.name: param for param in clone.params}
+    assert by_name["f"].default == REF
+    assert type(by_name["f"].default) is FileRef
+    assert by_name["n"].has_default is False
+
+
+_BODY_OUTPUTS = {
+    "whole": "${c.output}",
+    "typed": "\n                g: !file ${c.output.g}\n                n: !int ${c.output.n}",
+}
+
+
+@pytest.mark.parametrize("body_output", sorted(_BODY_OUTPUTS))
+@pytest.mark.parametrize("learnable", [False, True])
+def test_a_partial_loop_compares_an_omitted_file_with_a_returned_one(learnable, body_output):
+    # The body returns `g` and `n` but not `f`, so `f` is carried from the seed.
+    output = _ok_run(f"""\
+        id: p
+        name: p
+        defs:
+          body:
+            input:
+              f: !file
+              n: !int
+            nodes:
+              c:
+                kind: code
+                input:
+                  f: ${{input.f}}
+                  n: ${{input.n}}
+                output:
+                  g: file
+                  n: int
+                code: |
+                  return dict(g=inputs['f'], n=inputs['n'] + 1)
+            output: {_BODY_OUTPUTS[body_output]}
+        nodes:
+          a:
+            kind: code
+            output: file
+            code: |
+              return {F}
+          l:
+            kind: loop
+            until: f == g
+            max: 3
+            call: body
+            input:
+              f: ${{a.output}}
+              g: !file ${{a.output}}
+              n: 0
+        output: ${{l.output.n}}
+        """, learnable=learnable)
+
+    assert output == 1
+
+
+_GATED_READER_FLOW = f"""\
+    id: p
+    name: p
+    nodes:
+      a:
+        kind: code
+        output: list(file)
+        code: |
+          return [{F}, {F}]
+      ask:
+        kind: human_input
+        prompt: "Go?"
+      b:
+        kind: code
+        input:
+          xs: ${{a.output}}
+          go: ${{ask.output}}
+        code: |
+          return [type(x).__name__ for x in inputs['xs']]
+    output: ${{b.output}}
+    """
+
+
+@pytest.mark.parametrize("flow", [_READER_FLOW, _LOOP_FLOW])
+def test_resuming_a_finished_run_with_files_replays_its_output(tmp_path: Path, flow):
+    path = tmp_path / "run.jsonl"
+    first = run_flow(load_flow(textwrap.dedent(flow)), {}, log=path)
+    assert first.status == "succeeded", first.failure
+
+    events: list[Any] = []
+    resumed = resume_flow(load_flow(textwrap.dedent(flow)), log=path, on_event=events.append)
+
+    assert resumed.status == "succeeded", resumed.failure
+    assert resumed.output == first.output
+    assert [type(event).__name__ for event in events if "Node" in type(event).__name__] == []
+
+
+def test_a_reader_after_resume_sees_the_files_of_a_replayed_output(tmp_path: Path):
+    path = tmp_path / "run.jsonl"
+    flow = textwrap.dedent(_GATED_READER_FLOW)
+
+    def interrupt(**request):
+        raise _HostStop("stop before the answer")
+
+    with pytest.raises(_HostStop):
+        run_flow(load_flow(flow), {}, log=path, tools={"ask_user": interrupt})
+    resumed = resume_flow(load_flow(flow), log=path, tools={"ask_user": lambda **request: "y"})
+
+    assert resumed.status == "succeeded", resumed.failure
+    assert resumed.output == ["FileRef", "FileRef"]
+
+
+@pytest.mark.parametrize("learnable", [False, True])
+def test_a_flow_input_file_reaches_code_as_a_file(learnable):
+    output = _ok_run("""\
+        id: p
+        name: p
+        input:
+          f: !file
+          fs: !list(file)
+        nodes:
+          c:
+            kind: code
+            input:
+              f: ${input.f}
+              fs: ${input.fs}
+            code: |
+              return [type(inputs['f']).__name__, [type(x).__name__ for x in inputs['fs']]]
+        output: ${c.output}
+        """, {"f": REF, "fs": [REF]}, learnable=learnable)
+
+    assert output == ["FileRef", ["FileRef"]]

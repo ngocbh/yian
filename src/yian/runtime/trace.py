@@ -32,7 +32,7 @@ from yian.runtime.log import (
     NodeSucceededRecord, RecordEnvelope, RunResumedRecord, RunStartedRecord,
     _decode_typed, _evidence_payload, canonical_seed, decode_pool, decode_record, encode_record,
 )
-from yian.typesys.values import ANY_VALUE_ADAPTER, field_of
+from yian.typesys.values import ANY_VALUE_ADAPTER, Type, field_of, normalize_typed_files
 
 
 def capture_bindings(
@@ -69,15 +69,26 @@ def capture_bindings(
 
 @dataclass(frozen=True, slots=True)
 class SourceEntry:
-    """A typed accepted value and its producer identity read as one unit."""
+    """A typed accepted value and its producer identity read as one unit.
+
+    ``files`` is the type the commit target reads the value through to restore its
+    files, as the pool does; ``None`` reads the value as stored.
+    """
 
     source: SourceRef | None
     outcome_seq: int
     _value_bytes: bytes = field(repr=False)
+    files: Type | None = field(default=None, repr=False)
 
     @property
     def value(self) -> Any:
         """Decode a detached typed value with the same semantics as the pool."""
+        typed = ANY_VALUE_ADAPTER.validate_json(self._value_bytes, strict=True)
+        return normalize_typed_files(self.files, typed).to_object()
+
+    @property
+    def stored_value(self) -> Any:
+        """Decode a detached typed value as stored, each nested file as its JSON form."""
         return ANY_VALUE_ADAPTER.validate_json(self._value_bytes, strict=True).to_object()
 
 
@@ -271,7 +282,7 @@ class RetainedTrace:
     def lookup_source(self, source: SourceRef) -> Any:
         """Return canonical source-shaped data for an accepted producer."""
         root = SourceRef(source.run_id, source.execution_seq)
-        value = canonical_seed(self._sources[root].value)[1]
+        value = canonical_seed(self._sources[root].stored_value)[1]
         for part in source.path:
             value = value[part]
         return value
@@ -461,10 +472,13 @@ def prepare_trace(
     terminal_succeeded: bool | None = None,
     terminal_output_bytes: bytes | None = None,
     terminal_failure: Failure | None = None,
+    writer_files: Type | None = None,
 ) -> TraceDelta | None:
     """Validate capture authority and prepare a detached accepted-record delta.
 
     ``retired_ids`` are the settled prune IDs, earlier deferred ones, and the nodes grown under them.
+    ``writer_files`` is the type an accepted output's commit target reads it through to
+    restore its files (`SourceEntry.files`).
     """
     record = envelope.record
     if type(record) is RunStartedRecord:
@@ -555,6 +569,7 @@ def prepare_trace(
         typed = _decode_typed(record.value)
         writer = (record.commit_target, SourceEntry(
             source, envelope.seq, ANY_VALUE_ADAPTER.dump_json(typed, warnings="error"),
+            writer_files,
         ))
     root_writer = writer[1] if writer is not None and writer[0] == trace.end_id else None
     causal_route_source = (

@@ -992,7 +992,8 @@ located error, not a `RecursionError`. Sites: input defaults and AGENT
 variable defaults in `helpers/types.py`, MAP `over:` and WAIT `until:` in their
 descriptors' `_validate_fields`, value entries in the pipeline's `read_value` (an
 untagged entry in `parse/nodes.py`), and node inputs (LOOP seeds and MAP per-item
-inputs included), CASE value branches, and flow outputs in
+inputs included), a CASE branch written as a value (always rejected, but one past
+the limit reports the limit), and flow outputs in
 `compose/validate/value_nesting.py`, a pre-pass before the tagged splits and the
 case-branch check (a record output's fields pass `enclosing_levels=1`), and `env:`
 values through `check_env_values` (flow `env:` in `loader._validate_flow_env`, a

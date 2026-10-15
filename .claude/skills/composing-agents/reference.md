@@ -312,9 +312,9 @@ see `docs/defaults.md`), counting each record and list. A binding or MAP
 list around a 100-level value is one level too deep. A run input may nest 100 levels.
 A value written out in the flow file is checked at load with the same counting, YAML
 aliases included: a node input (LOOP seeds, MAP per-item inputs), MAP `over:`, WAIT
-`until:`, a value entry, an input or AGENT variable default, a CASE value branch, a
-flow `output:` (a record output's fields sit one level in), or a flow, `defs:`, or node
-`env:` value nested deeper is a load error at that value (an `env:` value at its key);
+`until:`, a value entry, an input or AGENT variable default, a flow `output:` (a record
+output's fields sit one level in), or a flow, `defs:`, or node `env:` value nested deeper
+is a load error at that value (an `env:` value at its key);
 an `env:` value that contains itself through a YAML alias is a load error at its key too;
 the value a `${...}` computes is checked when it runs.
 A type nests at most 100 levels (`YIAN_MAX_TYPE_NESTING`, at most 125): type text counts

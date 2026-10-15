@@ -276,9 +276,8 @@ A value nests at most 100 levels (each record and list is one): a binding, MAP
 value (`${[x]}`, a record flow output, a MAP's result list) adds the level that fails.
 An AGENT's tool call whose arguments nest deeper fails the node before any call runs.
 A value written out in the flow file (a node input, MAP `over:`, WAIT `until:`, a value
-entry, a default, a CASE value branch, a flow `output:`, an `env:` value) nested deeper
-is a located load error instead, YAML aliases included; a record output's fields may
-nest 99.
+entry, a default, a flow `output:`, an `env:` value) nested deeper is a located load
+error instead, YAML aliases included; a record output's fields may nest 99.
 A type nests at most 100 levels: in type text each constructor (`Optional(` and `Union(`
 included) is one; in a record written as a mapping in `output:`, each record is one and
 a field's type adds its records and lists (a typedef counts as deep as its definition).

@@ -638,8 +638,9 @@ replay, and the run-log codecs never apply it; they see only values these entry
 checks bounded. Compose applies the same check at load to each value written out in
 a flow file (`compose.helpers.value_nesting.check_written_value`, which turns the
 `TypeCheckError` into a located `LoadError`): node inputs, MAP `over:`, WAIT `until:`,
-value entries, input and AGENT variable defaults, CASE value branches, flow
-outputs (a record output's fields with `enclosing_levels=1`), and flow, `defs:`, and
+value entries, input and AGENT variable defaults, a CASE branch written as a value
+(always a load error, but one past the limit reports the limit), flow outputs (a
+record output's fields with `enclosing_levels=1`), and flow, `defs:`, and
 node `env:` values (`check_env_values`, which also rejects an `env:` value that
 contains itself through a recursive alias, found by `typesys.values.recursive_entry_path`,
 since the run's fingerprint cannot encode it). It runs before any

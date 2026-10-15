@@ -83,7 +83,8 @@ this model whenever you design anything:
   `parse_int=parse_json_int` where values cross a boundary, so a long token becomes
   an `OverLimitInt` marker the following check reports. Count digits with
   `int_digits`/`long_int_digits`, never `str()`; show a long int with `value_repr`
-  (`<int with N digits>`); pass failure text through `rewrite_digit_limit_text` so
+  (`<int with N digits>`; any other repr is cut to `YIAN_MAX_SHOWN_VALUE_CHARS`, 200,
+  by `shown_text`, and an error's path stays exact, cut only when rendered); pass failure text through `rewrite_digit_limit_text` so
   Python's hint never reaches a message or the model. Temporaries inside an
   expression are not checked; writing one as text is an `ExpressionError` with the
   same message. `decode_record` fails a run record holding one with a clear error.

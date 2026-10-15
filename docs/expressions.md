@@ -160,7 +160,9 @@ number at any depth fails its node with `binding.evaluate`, naming the input and
 (`input 'y' at a[1]: non-finite number inf is not a yian value`,
 `input 'v': complex number (…) is not a yian value`). A temporary inside an expression
 is fine: only the binding's final value is checked, so the embedded template
-`"v=${x * 10}"` is the text `v=inf`. Flows that used to pass an infinite value along
+`"v=${x * 10}"` is the text `v=inf`. A non-finite literal written in an output without
+a type (`g: .nan`) fails earlier, at load (see
+[Flow syntax → YAML values](syntax.md#yaml-values)). Flows that used to pass an infinite value along
 now fail. To fix one, keep the value in range before it reaches the binding (guard it
 with a `case`, such as checking the base is not negative before `**`, or compute it in
 a `code` node), or return null explicitly: a `case` that routes to a value entry

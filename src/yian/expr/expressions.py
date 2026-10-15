@@ -183,7 +183,7 @@ def _parse_literal(token: str) -> Any:
 
 
 def _operand_repr(value: Any) -> str:
-    """Return `repr(value)`, or a placeholder giving a long int's digit count."""
+    """Return `value_repr(value)`: the repr cut for a message, or a placeholder."""
     return value_repr(value)
 
 

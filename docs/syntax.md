@@ -2483,12 +2483,13 @@ place_buy:
   so it is narrowed like it.
 
 A searched `case` narrows with [`isinstance`](expressions.md#isinstance-the-type-test): each
-top-level `and` part `isinstance(<ref>, T)` of a `when:` narrows that reference to `T`
+top-level `and` part `isinstance(<ref>, T)` of a `when:` narrows that reference
 in that branch and its chain. `T` may be a member, a union of members, or any other type.
 A union `T` that shares members with the reference's union narrows it to those shared
 members, so the branch lines up with an `on:` branch or `else:` over them, as long as no
-other member could pass the check (by having the shape of one of `T`'s members);
-otherwise the reference narrows to `T`. A `T` the reference's type already fits, such as
+other member could pass the check (because some of its values also fit one of `T`'s
+members); otherwise the reference narrows to `T`. A `T` the reference's type already
+fits, such as
 `object`, doesn't narrow. First true `when:` still wins, and checks may overlap. The
 searched form's `else:` narrows nothing. A later `and` part of the same `when:` may
 already read `T`'s fields:

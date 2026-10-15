@@ -105,9 +105,9 @@ from yian.typesys.pool import VariablePool
 from yian.typesys.seeding import default_run_id, seed_system_clock
 from yian.typesys.values import (
     reject_deep_nesting,
+    reject_long_ints,
     reject_non_text_keys,
     reject_nonfinite,
-    value_repr,
 )
 
 
@@ -184,6 +184,9 @@ class RunResult:
             `TypeError`: Feedback has an invalid ordinary-message carrier.
             `ValueError`: Retention is disabled, or feedback does not match the
                 output's shape or nests deeper than `YIAN_MAX_VALUE_NESTING` levels.
+            `TypeCheckError`: Feedback holds an int over `YIAN_MAX_INT_DIGITS` digits;
+                the message locates it, e.g. ``feedback at note: integer with N
+                digits is larger than yian allows (4300 digits)``.
             `MemorySetupError`: Enabled memories cannot restore their recorded
                 snapshots. Host and log faults also propagate while preserving
                 the accepted prefix.
@@ -199,6 +202,7 @@ class RunResult:
             raise ValueError("backward requires a run retained with learnable=True")
         # Checked before anything walks the feedback recursively.
         reject_deep_nesting(feedback, "feedback")
+        reject_long_ints(feedback, "feedback")
         if not handle._guard.acquire(blocking=False):
             raise RuntimeError("a backward call on this result is already in progress")
         try:
@@ -428,7 +432,8 @@ def run_flow(
         `ValueError`:
             An `inputs` key names no declared input, an `inputs` value nests
             deeper than `YIAN_MAX_VALUE_NESTING` levels, holds a NaN, infinity, or
-            complex number at any depth, or holds a mapping with a non-text key;
+            complex number, or an int with more than `YIAN_MAX_INT_DIGITS` digits, at
+            any depth, or holds a mapping with a non-text key;
             identity, worker count,
             model configuration, or prepared run state violates its contract,
             an AGENT has no provider or model (no layer, environment default,
@@ -1106,7 +1111,7 @@ def _binding_label(typ: Type) -> str:
         and typ.bounds[0] == typ.bounds[1]
         and not typ.nullable
     ):
-        return f"{value_repr(typ.bounds[0])} (int)"
+        return f"{typ.bounds[0]} (int)"
     if (
         typ.kind is ValueKind.STRING
         and typ.tags is not None

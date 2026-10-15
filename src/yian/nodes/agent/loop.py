@@ -10,6 +10,7 @@ never drives tool dispatch, and its synthetic missing-result repairs are not sav
 from __future__ import annotations
 
 from functools import partial
+import json
 from uuid import uuid4
 
 from langchain_core.messages import (
@@ -48,7 +49,7 @@ from yian.nodes.agent.text import (
 from yian.nodes.agent.structured import generate_structured, type_to_schema
 from yian.nodes.base import Output
 from yian.skills.tool import LOAD_SKILL, invoke_load_skill, load_skill_tool
-from yian.typesys.values import reject_deep_nesting, reject_nonfinite
+from yian.typesys.values import parse_json_int, reject_deep_nesting, reject_nonfinite
 
 
 def run_agent(ctx: AgentRunContext) -> Output:
@@ -240,12 +241,31 @@ def run_agent(ctx: AgentRunContext) -> Output:
 
 
 def _reject_invalid_arguments(reply: BaseMessage) -> None:
-    """Raise `TypeCheckError` if a tool call's arguments nest too deep or hold a NaN or infinity."""
+    """Raise `TypeCheckError` if a tool call's arguments nest too deep or hold a rejected number.
+
+    A rejected number is a NaN, infinity, complex, or int over `YIAN_MAX_INT_DIGITS` digits.
+    An invalid tool call's raw arguments text is parsed and checked the same way, since
+    the client may have failed it only for such an int; text that is not JSON is left
+    to the invalid call's own handling.
+    """
     for call in getattr(reply, "tool_calls", None) or []:
-        where = f"tool call {call.get('name')!r} arguments"
-        # Depth first: the non-finite walk recurses, so it must not see an unbounded value.
-        reject_deep_nesting(call.get("args"), where)
-        reject_nonfinite(call.get("args"), where)
+        _reject_arguments(call.get("name"), call.get("args"))
+    for call in getattr(reply, "invalid_tool_calls", None) or []:
+        arguments = call.get("args")
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments, parse_int=parse_json_int)
+            except (ValueError, RecursionError):
+                continue
+        _reject_arguments(call.get("name"), arguments)
+
+
+def _reject_arguments(name: object, arguments: object) -> None:
+    """Raise `TypeCheckError` if one tool call's arguments nest too deep or hold a rejected number."""
+    where = f"tool call {name!r} arguments"
+    # Depth first: the non-finite walk recurses, so it must not see an unbounded value.
+    reject_deep_nesting(arguments, where)
+    reject_nonfinite(arguments, where)
 
 
 def _interrupted(ctx: AgentRunContext, reply: BaseMessage | None) -> Output:

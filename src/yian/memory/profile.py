@@ -9,13 +9,13 @@ document from that run's feedback. Commits are compare-and-set writes to a
 from __future__ import annotations
 
 import hashlib
+import json
 from threading import Lock
 from types import TracebackType
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from yian.defaults import current
-import yian.json_codec as json_codec
 from yian.llm_clients import model_from_config
 from yian.llm_clients.config import pop_host_credentials
 from yian.llm_clients.connection import resolve_model_config, scrub_call_credentials
@@ -427,7 +427,7 @@ class _ProfileSession:
             elif used + len(encoded) > budget:
                 break
             used += len(encoded)
-            kept.append(json_codec.loads(encoded))
+            kept.append(json.loads(encoded))
         kept.reverse()
         material: JsonObject = {
             "max_chars": self._memory.max_chars,
@@ -438,7 +438,7 @@ class _ProfileSession:
         }
         if current_version != self._version:
             material["seen_profile"] = self._text
-        return json_codec.dumps(material, ensure_ascii=False, indent=2, sort_keys=True)
+        return json.dumps(material, ensure_ascii=False, indent=2, sort_keys=True)
 
     def commit(self, commit_id: str, mutations: tuple[MemoryMutation, ...]) -> None:
         """Write the proposed document with compare-and-set; never call a model.

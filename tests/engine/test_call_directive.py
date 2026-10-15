@@ -12,7 +12,7 @@ is asserted on the returned descriptor map with a deterministic minter.
 """
 
 import math
-import sys
+import re
 from datetime import date, datetime, timezone
 
 import pytest
@@ -21,7 +21,7 @@ from yian.compose import LoadError, desugar_inline_calls, load_flow
 from yian.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.parse.file import CodeDescriptor
-from yian.compose.source import parse_yaml_literal
+from yian.compose.source import SourceSyntaxError, parse_yaml_literal
 from yian.diagnostics import OriginRef, SourceRange
 from yian.nodes.contracts import Assertion
 from yian.run import run_flow
@@ -414,51 +414,25 @@ def test_binding_keyword_values_are_unchanged(arg):
     assert _synth_inputs(f"call(f, x={arg})") == {"x": arg}
 
 
-D = "1" * 5000  # past Python's default 4300-digit limit
-ONES = (10**5000 - 1) // 9  # the int spelled by D
-
-
-@pytest.fixture
-def _default_int_digit_limit():
-    """Run a test under Python's default int/str digit limit."""
-    get = getattr(sys, "get_int_max_str_digits", None)
-    if get is None:
-        yield  # this Python has no limit
-        return
-    before = get()
-    sys.set_int_max_str_digits(4300)
-    try:
-        yield
-        after = get()
-    finally:
-        sys.set_int_max_str_digits(before)
-    assert after == 4300, "yian code changed the global digit limit"
-
-
-@pytest.mark.usefixtures("_default_int_digit_limit")
-@pytest.mark.parametrize(
-    "value",
-    [
-        "1e3",
-        "0x1F",
-        "~",
-        "2026-10-14",
-        "None",
-        "tRUE",
-        ".5",
-        pytest.param(D, id="5000-digits"),
-    ],
-)
+@pytest.mark.parametrize("value", ["1e3", "0x1F", "~", "2026-10-14", "None", "tRUE", ".5"])
 def test_named_and_inline_forms_read_a_bare_value_alike(value):
     _assert_same(
         _synth_inputs(f"call(f, x={value})")["x"], parse_yaml_literal(f"x: {value}")["x"]
     )
 
 
-@pytest.mark.usefixtures("_default_int_digit_limit")
-def test_a_bare_int_of_any_length_reads_as_in_the_named_form():
-    assert parse_yaml_literal(f"x: {D}") == {"x": ONES}
-    assert _synth_inputs(f"call(f, x={D})") == {"x": ONES}
+def test_a_bare_int_too_long_to_convert_fails_as_in_the_named_form():
+    digits = "1" * 5000
+    limit_msg = "integer with 5000 digits is larger than yian allows (4300 digits)"
+    with pytest.raises(SourceSyntaxError) as named:
+        parse_yaml_literal(f"x: {digits}")
+    with pytest.raises(LoadError) as caught:
+        _synth_inputs(f"call(f, x={digits})")
+    assert "keyword 'x'" in str(caught.value)
+    for message in (str(named.value), str(caught.value)):
+        assert limit_msg in message
+        assert "set_int_max_str_digits" not in message
+        assert re.search(r"[0-9]{600}", message) is None
 
 
 def _g_flow(node: str, d_type: str = "str") -> str:

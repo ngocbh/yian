@@ -75,6 +75,7 @@ from yian.runtime.contracts import BackwardCapture
 from yian.runtime.log import canonical_seed
 from yian.tools import ToolSet
 from yian.typesys.pool import VariablePool
+from yian.typesys.values import rewrite_digit_limit_text
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,11 +96,16 @@ def _evaluation_failure(
     origin: OriginRef | None = None,
     traceback_text: str | None = None,
 ) -> EvaluationFailure:
-    """Build one semantic failure with its canonical opaque origin trace."""
+    """Build one semantic failure with its canonical opaque origin trace.
+
+    The message gives Python's int/str digit-limit text as yian's; the traceback
+    keeps Python's text.
+    """
     return EvaluationFailure(
         failure=Failure(
             code=code,
-            message=str(exception),
+            # Python's digit-limit text names a setting yian authors cannot change.
+            message=rewrite_digit_limit_text(str(exception)),
             node_id=node.id,
             trace=node.failure_trace(origin),
             cause_type=type(exception).__name__,

@@ -196,7 +196,9 @@ with `isinstance(r, <Type>) and ...`.
 
 Arithmetic is Python's: `+` concatenates text and lists, `*` repeats them, `%` formats text
 (`${"%.2f" % p}`), a bool is 0/1 (but a CASE `on:` never equates a bool with a number). No
-cost limits; an operator Python can't complete (overflow) fails like an expression error.
+cost limits; an operator Python can't complete (overflow), or writing an int longer than 4300
+digits as text (a template, a prompt, `%`, `join`, `render_as_json`), fails like an
+expression error.
 
 `and`, `or`, `not`, and `in` are reserved operators, so none can be the root
 name of a reference. A dotted field may use those names (`${record.output.in}`).
@@ -242,7 +244,7 @@ checked at runtime when passed on.
 Use `int(1..12)` or `float(0.0..1.0)` for inclusive numeric ranges. Either end may
 be open: `int(0..)` is 0 or more, `int(..100)` is at most 100; `int(..)` is an error
 (write `int`). The lower must not exceed the upper (`0..1` reads as a range). Integer
-ends may be arbitrary precision; float ends must be finite, and integer ends in a
+ends are exact, up to 4300 digits; float ends must be finite, and integer ends in a
 float domain must convert without rounding. Booleans are invalid. Ranges compose
 with lists, records, aliases, and nullable types. Defaults and supplied values are
 checked; cross-flow sources must fit the destination domain, with an open end
@@ -252,10 +254,11 @@ A `float` is finite: a binding whose value is NaN, infinity, or complex (say an
 overflowing `${x * 10}`, or `${(0 - 8) ** 0.5}`) fails its node with
 `binding.evaluate`, so keep the value in range (a `case` guard or a `code` clamp)
 or return null explicitly (a `case` routed to a value entry
-`no_value: !Optional(float) null`, or a `code` node returning `None`). An `int` computed by an
-expression or node, or supplied as an input, may have any number of digits and is
-recorded exactly. So may an int literal in the YAML, and text (a template, a prompt,
-`join`, `%s`/`%d` and the other text and integer `%` conversions) writes every digit.
+`no_value: !Optional(float) null`, or a `code` node returning `None`). An `int` has at
+most 4300 digits: a longer literal is a load error, and a longer value fails where it
+crosses a boundary (input, binding, output, model reply, feedback) with
+`integer with 5000 digits is larger than yian allows (4300 digits)`. A temporary
+inside an expression may be longer (`${10 ** n > 0}`); writing one as text fails.
 
 A value nests at most 100 levels (each record and list is one): a binding, MAP
 `over` list, or node output nested deeper fails its node, and wrapping a 100-level

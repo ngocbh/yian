@@ -122,6 +122,10 @@ start but no durable outcome. Requests and tool actions may repeat; the run log 
 session memory nor provides exactly-once execution. See the
 [Python API recovery contract](api.md#durable-recovery-with-resume_flow).
 
+`--resume` fails on a log holding an int longer than 4300 digits, with `run-record
+JSON: integer with N digits is larger than yian allows (4300 digits); a log written
+while yian accepted such ints can't be read`, and leaves the log unchanged.
+
 Expected host-side failures while creating or recovering a log (for example a
 corrupt, mismatched, or locked log) are reported as concise errors that name the
 log path, plus the line and seq of a damaged record. Pass
@@ -233,8 +237,10 @@ A fresh flow declares typed `input:` fields. Explicit inputs layer in this order
    A default applied by START was already validated at load and is not
    string-coerced.
 
-An `int` input may have any number of digits, from `--inputs`, `-i`/`--input`, or the
-interactive prompt.
+An `int` input may have at most 4300 digits, from `--inputs`, `-i`/`--input`, or the
+interactive prompt. A longer one fails before the log is created, naming the input
+and path (`input 'xs' at [1]: integer with 5000 digits is larger than yian allows
+(4300 digits)`); the interactive prompt asks again.
 
 Every key must name a declared input: an unknown name (such as a typo) is a bad
 parameter (exit 2) that lists the declared inputs. When stdin is an interactive
@@ -365,8 +371,7 @@ does not cancel the surrounding conversation.
 ## Output and progress
 
 - The terminal output is rendered as Markdown when it is a non-empty string,
-  otherwise printed as-is (e.g. a multi-field object). An int prints every digit,
-  however long, here and in `--verbose` node output.
+  otherwise printed as-is (e.g. a multi-field object).
 - **Per-node progress** is printed to **stderr** as the flow advances. On a real
   terminal each running node shows an animated spinner that is rewritten in place
   as a green `✓ node_id` on success, or a red `✗ node_id` (with the error on the

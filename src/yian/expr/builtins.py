@@ -9,15 +9,17 @@ calls them against the node's already-bound declared inputs.
 This is a deliberate, bounded bend of the "all computation is a node" law: builtins are
 read-only formatting and produce no graph node or edge. See `docs/expressions.md`.
 
-Knows about: `expr.expressions` (peer — `ExpressionError`).
+Knows about: `expr.expressions` (peer — `ExpressionError`) and `typesys.values`
+(`write_as_text`, for the int digit limit).
 Never imports: `template`, `nodes`, `compile`, `runtime` (they sit above / beside it).
 """
 
 from __future__ import annotations
 
+import json
 from typing import Any, Callable
 
-import yian.json_codec as json_codec
+from yian.typesys.values import write_as_text
 
 # name -> a pure value->value formatter, called as `fn(*pos, **kw)` at prompt-render time.
 TEMPLATE_FNS: dict[str, Callable[..., Any]] = {}
@@ -62,11 +64,12 @@ def _text(fn: str, s: Any) -> str:
 @register_template_fn("render_as_json")
 def _render_as_json(value: Any, indent: int = 2) -> str:
     """Pretty-print `value` as JSON — the headline builtin (a list/dict input renders as a
-    JSON block instead of its Python repr). `default=str` keeps non-JSON values printable,
-    and ints of any size are written in full. A null `value` is an error; a null nested
-    inside it renders as `null`."""
+    JSON block instead of its Python repr). `default=str` keeps non-JSON values printable.
+    A null `value` is an error; a null nested inside it renders as `null`."""
     _reject_null("render_as_json", value)
-    return json_codec.dumps(value, indent=indent, default=str, ensure_ascii=False)
+    return write_as_text(
+        lambda v: json.dumps(v, indent=indent, default=str, ensure_ascii=False), value
+    )
 
 
 @register_template_fn("join")
@@ -78,7 +81,7 @@ def _join(value: Any, sep: str = "\n") -> str:
         raise TypeError(f"join() takes a list, got {_kind(value)}")
     if any(x is None for x in value):
         raise TypeError("join() got a null element; drop or default it before joining")
-    return sep.join(json_codec.as_text(x) for x in value)
+    return write_as_text(lambda v: sep.join(str(x) for x in v), value)
 
 
 @register_template_fn("upper")

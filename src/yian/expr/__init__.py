@@ -10,9 +10,7 @@ The engine is three layers, all pool-agnostic (they take a `resolve` callable):
   (`parse_condition`, `evaluate_when`, `first_failing_assert`), the `isinstance` type
   names a tree uses (`isinstance_type_names`), its constructor names
   (`constructor_names`), and a call's tested expression
-  (`isinstance_subject`), and pool resolution (`resolve_reference`). Its `%`
-  formats text through `percent_format` (`format_text`) when the right side holds
-  an int past Python's digit limit, which yian never raises.
+  (`isinstance_subject`), and pool resolution (`resolve_reference`).
 - `template` — the binding/prompt scanner: splits a value into text + `${...}`
   spans, then drives the engine per span (`eval_binding`, `eval_template`,
   `expr_refs_of`, `prompt_refs`, `render_template_record`, `scan_template`), and
@@ -25,15 +23,15 @@ The engine is three layers, all pool-agnostic (they take a `resolve` callable):
 source-relative feedback transfer. Optional tracing in the same evaluator walk
 retains selected value arms, container mappings, and opaque function boundaries.
 Routes reference accepted source identities; the caller supplies recorded values
-when transferring feedback. This leaf uses only the standard library and the
-stdlib-only `yian.json_codec`, and stays independent of nodes, memory, and runtime.
+when transferring feedback. This leaf uses only the standard library and
+`typesys.values` (the int digit limit) and stays independent of nodes, memory, and runtime.
 
 Flow invocation is NO LONGER a `${...}` construct — it is the compile-time
 whole-value `call(...)` directive (in `compose.desugar.inline_calls`), not part of this engine.
 
 Knows about:   `typesys` (the pool and value types, in `expressions`; the value
-               nesting bound, in `grammar`) and the stdlib-only `yian.json_codec`
-               (JSON text for ints of any size).
+               nesting bound and int digit limit, in `grammar`; `write_as_text`
+               and the digit limit, in `builtins`, `template`, and `lineage`).
 Never imports: `nodes`, `compile`, or `runtime` (they import IT).
 """
 

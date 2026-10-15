@@ -33,7 +33,7 @@ from yian.expr.expressions import ISINSTANCE, constructor_shape_error
 from yian.nodes.contracts import ValueContract, output_contract_field_error
 from yian.typesys import canonical_type_label
 from yian.typesys.types import AliasDef, RefExpr, TypeRegistry, UnionExpr
-from yian.typesys.values import Type
+from yian.typesys.values import Type, parse_int_text
 
 __all__ = ["constructor_errors"]
 
@@ -184,7 +184,9 @@ def _argument_type(
         if arg.type == "STRING":
             value: object = text[1:-1]
         elif arg.type == "NUMBER":
-            value = float(text) if "." in text else int(text)
+            # `parse_expr` rejected a long int token; parse_int_text keeps yian's limit
+            # and message should one reach here anyway.
+            value = float(text) if "." in text else parse_int_text(text)
         else:
             value = text.lower() == "true"
         return literal_type(value)

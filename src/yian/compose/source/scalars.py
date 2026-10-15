@@ -9,9 +9,11 @@ YAML 1.2 core schema, keeping two YAML 1.1 extensions: unquoted timestamps and
 scalar that is not a real date or time, such as ``2026-13-45`` or an offset of
 ``+05:99``, a located ``ConstructorError`` that says to quote it. PyYAML's global
 ``SafeLoader`` tables are never modified. A document nested deeper than
-``current().max_yaml_nesting`` levels is a located ``ComposerError``.
+``current().max_yaml_nesting`` levels is a located ``ComposerError``, and an integer
+with more than ``current().max_int_digits`` decimal digits a located
+``ConstructorError``.
 
-Knows about:   PyYAML, yian.json_codec, yian.defaults.
+Knows about:   PyYAML, yian.defaults, yian.typesys.values.
 Never imports: compose helpers or phases, nodes, compile, runtime, the run
                boundary, CLI modules, or provider SDKs.
 """
@@ -25,8 +27,8 @@ import yaml
 from yaml.composer import ComposerError
 from yaml.constructor import ConstructorError
 
-import yian.json_codec as json_codec
 from yian.defaults import current
+from yian.typesys.values import IntTooLongError, int_digits, parse_int_text
 
 _BOOL_TAG = "tag:yaml.org,2002:bool"
 _INT_TAG = "tag:yaml.org,2002:int"
@@ -158,7 +160,7 @@ class _FlowLoader(yaml.SafeLoader):
         return text.lower() == "true"
 
     def construct_yaml_int(self, node: yaml.Node) -> int:
-        """Construct a core-schema integer of any length; leading zeros stay decimal.
+        """Construct a core-schema integer; leading zeros stay decimal.
 
         Args:
             node (`yaml.Node`):
@@ -170,17 +172,22 @@ class _FlowLoader(yaml.SafeLoader):
 
         Raises:
             `ConstructorError`:
-                Raised when the text is not a core-schema integer.
+                Raised when the text is not a core-schema integer or the integer has
+                more than ``YIAN_MAX_INT_DIGITS`` decimal digits.
         """
 
         text = self._core_text(node, _INT, "integer")
-        if text.startswith("0o"):
-            return int(text[2:], 8)
-        if text.startswith("0x"):
-            return int(text[2:], 16)
-        # Python's digit limit covers only non-power-of-two bases, so base 10 alone
-        # needs the codec to read a literal of any length.
-        return json_codec.parse_int(text)
+        try:
+            if not text.startswith(("0o", "0x")):
+                return parse_int_text(text)
+            # Python converts power-of-two bases at any length, so count afterwards.
+            value = int(text[2:], 8 if text[1] == "o" else 16)
+            digits = int_digits(value)
+            if digits > current().max_int_digits:
+                raise IntTooLongError(digits)
+            return value
+        except IntTooLongError as exc:
+            raise ConstructorError(None, None, str(exc), node.start_mark) from None
 
     def construct_yaml_float(self, node: yaml.Node) -> float:
         """Construct a core-schema float, including ``.inf`` and ``.nan`` forms.

@@ -29,9 +29,8 @@ from typing import (
     runtime_checkable,
 )
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
-import yian.json_codec as json_codec
 from yian.diagnostics import Failure, FailureCode, OriginRef
 from yian.memory import (
     DeclSite,
@@ -62,6 +61,7 @@ from yian.runtime.contracts import (
     BackwardOutcome,
     ForwardCapture,
     MemoryProposal,
+    _LongIntFinder,
     _validate_route,
     _validate_source,
 )
@@ -1456,10 +1456,10 @@ def canonical_typed(
     Raises:
         `TypeCheckError`:
             The live value does not satisfy ``declared`` or contains a NaN, infinity,
-            or complex number. With no ``declared`` type: the value is not made of JSON
-            values and `FileRef`s (``output[ at <path>]: <reason>``), or a list mixes
-            ints and floats with an int too large for a float. ``path`` locates the
-            rejected value.
+            or complex number, or an int with more than `YIAN_MAX_INT_DIGITS` digits. With no
+            ``declared`` type: the value is not made of JSON values and `FileRef`s
+            (``output[ at <path>]: <reason>``), or a list mixes ints and floats with an
+            int too large for a float. ``path`` locates the rejected value.
         `ValueError`:
             The typed value contains data that cannot be represented as canonical JSON.
     """
@@ -1498,7 +1498,8 @@ def canonical_seed(value: Any) -> tuple[Any, Any]:
 
     Raises:
         `TypeCheckError`:
-            The value contains a NaN, infinity, or complex number; checked before
+            The value contains a NaN, infinity, or complex number, or an int with
+            more than `YIAN_MAX_INT_DIGITS` digits; checked before
             JSON mode can turn a NaN or infinity into ``null``. ``path`` locates the
             rejected number.
         `ValueError`:
@@ -1527,7 +1528,8 @@ def encode_pool(pool: VariablePool) -> dict[str, Any]:
 
     Raises:
         `TypeCheckError`:
-            A stored or system value contains a NaN, infinity, or complex number.
+            A stored or system value contains a NaN, infinity, or complex number, or
+            an int with more than `YIAN_MAX_INT_DIGITS` digits.
         `ValueError`:
             A nested typed value cannot cross the JSON boundary.
     """
@@ -1618,18 +1620,23 @@ def decode_record(data: bytes | str) -> RecordEnvelope:
 
     Raises:
         `ValueError`:
-            JSON, envelope identity, record kind, or payload fields are invalid.
+            JSON, envelope identity, record kind, or payload fields are invalid, or
+            the record holds an int with more than `YIAN_MAX_INT_DIGITS` digits.
         `TypeError`:
             ``data`` is neither bytes nor text.
     """
     if not isinstance(data, (bytes, str)):
         raise TypeError("decode_record expects bytes or str")
+    long_ints = _LongIntFinder()
     try:
-        raw = json_codec.loads(
+        raw = long_ints.loads(
             data,
             object_pairs_hook=_object_without_duplicates,
             parse_constant=_reject_json_constant,
         )
+        # Logs written while yian accepted ints of any size can hold one; name that
+        # before _copy_json rejects the marker as a non-JSON value.
+        long_ints.check()
         raw = _copy_json(raw)
     except RecursionError as exc:
         raise ValueError("run-record JSON nesting exceeds the supported depth") from exc
@@ -2629,39 +2636,6 @@ def _decode_typed(wire: dict[str, Any]) -> TypedValue:
     return ANY_VALUE_ADAPTER.validate_python(copied, strict=True)
 
 
-def decode_typed_json(data: bytes | str) -> TypedValue:
-    """Strictly decode a typed value from JSON that may hold ints of any size.
-
-    Pydantic's JSON parser rejects ints past Python's digit limit as invalid
-    JSON; those documents are read through `json_codec` and validated as Python
-    data, which keeps object key order.
-
-    Args:
-        data (`bytes | str`):
-            One typed-value JSON document, as written by `ANY_VALUE_ADAPTER.dump_json`.
-
-    Returns:
-        `TypedValue`:
-            The strictly validated typed value.
-
-    Raises:
-        `ValidationError`:
-            The document is not valid JSON or not a valid typed value.
-    """
-    try:
-        # Parsing and validating in one pass avoids building Python objects
-        # first; only documents with long ints need the slower path below.
-        return ANY_VALUE_ADAPTER.validate_json(data, strict=True)
-    except ValidationError as exc:
-        if any(error["type"] != "json_invalid" for error in exc.errors()):
-            raise
-        try:
-            parsed = json_codec.loads(data)
-        except (ValueError, RecursionError):
-            raise exc from None
-    return ANY_VALUE_ADAPTER.validate_python(parsed, strict=True)
-
-
 def _copy_json(value: Any) -> Any:
     """Return a key-sorted deep copy while rejecting values outside strict JSON."""
     if value is None or type(value) in (bool, int):
@@ -2772,7 +2746,7 @@ def _json_bytes(value: Any) -> bytes:
     """Serialize strict JSON with stable key order and no trailing newline."""
     canonical = _copy_json(value)
     try:
-        return json_codec.dumps(
+        return json.dumps(
             canonical,
             ensure_ascii=False,
             allow_nan=False,

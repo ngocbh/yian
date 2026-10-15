@@ -476,7 +476,11 @@ def _literal_hint(
     if fix is not None:
         return fix[1]
     if isinstance(value, str):
-        candidate = coerce_param(replace(decl, coerce_strings=True), value)
+        try:
+            candidate = coerce_param(replace(decl, coerce_strings=True), value)
+        except TypeCheckError:
+            # Text spelling an int past the digit limit fits no int however it's written.
+            return None
         if isinstance(candidate, str) or not _fits(child_type, candidate):
             return None
         # YAML reads an unquoted `nan` or `inf` as text, so writing it doesn't help.

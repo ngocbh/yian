@@ -674,7 +674,6 @@ model made enforceable.
 ## Layer ladder (where code goes)
 
 ```
-json_codec                                  (stdlib only; below every package)
 diagnostics  <-  events
       ^
       └────────  nodes  <-  compile  <-  compose
@@ -690,8 +689,7 @@ resolved `DiagnosticFrame` and `Diagnostic` presentation values, the
 `OriginResolver` protocol, and immutable exact-route `ResolverTable`. It imports
 only the standard library. `events.py` imports the semantic diagnostics it uses
 but does not re-export `SourceRange`; Compose imports that coordinate directly
-from `diagnostics`. `json_codec.py` also imports only the standard library; every
-layer that writes or reads value JSON imports it.
+from `diagnostics`.
 
 Arrows never reverse: a package imports only lower-level or peer packages. See the
 `structure` skill. An upward import means the code is in the wrong package (extract
@@ -830,8 +828,8 @@ never enters the durable record schema.
 
 Numeric `Type.bounds` refines INTEGER/NUMBER with one inclusive endpoint pair;
 either end may be `None` (open), but not both. The shared shape validator rejects
-malformed or reversed bounds and competing refinements. Integer endpoints retain
-arbitrary precision; NUMBER endpoints must have a finite, lossless float
+malformed or reversed bounds and competing refinements. Integer endpoints are
+exact, up to `YIAN_MAX_INT_DIGITS` digits; NUMBER endpoints must have a finite, lossless float
 representation. Runtime checks retain nested `TypeCheckError.path`; compatibility
 checks interval containment through `typesys.values.numeric_interval` (an open end
 is infinite), including integer-to-number widening. Inline canonicalization
@@ -866,20 +864,49 @@ rejects a raw reply holding one anywhere, provider metadata included, before sto
 it; the model effect is observed `failed` and the reply is not kept. Without memory,
 metadata is not checked.
 
-Ints of any size are values. Run-log JSON, `VariablePool.loads`, lineage,
-`render_as_json`, memory storage, manifest fingerprints, and CLI input and output go
-through `yian.json_codec`, which converts long ints itself; yian source never calls
-`sys.set_int_max_str_digits` (tests may pin it). Value bytes decode through
-`runtime.log.decode_typed_json`: pydantic's strict `validate_json` first, then the
-codec when pydantic reports invalid JSON (as it does for an int past the digit
-limit). Converting a long int costs time quadratic in its digits (about 0.2 s each
-way at 100,000 digits); there is no cost limit.
-Render values as text with `json_codec.as_text` (template interpolation, prompt
-text, `join`); `%` retries through `expr/percent_format.py` when Python's `%`
-refuses a long int. The YAML loader and `int(lo..hi)` range ends read long int
-literals with `json_codec.parse_int`. Show a long int in a message with
-`typesys.values.value_repr`, which writes `<int too large to display>`; load errors
-show a long digit run echoed from the source the same way.
+An int longer than `YIAN_MAX_INT_DIGITS` (4300, Python's default int/str limit)
+digits is not a yian value. `reject_nonfinite` reports one like a NaN (`<where>[ at
+<path>]: integer with N digits is larger than yian allows (4300 digits)`), so every
+boundary above rejects it: load (YAML literals, `!int` tags, value entries, defaults,
+bare `call(...)` arguments, range ends, and expression number tokens), run inputs,
+bindings and defaults, MAP `over`, LOOP seeds, node and flow outputs, structured and
+prompted model replies (retried under `retries:`), tool-call arguments (failing before
+the tool runs), backward responses, and `RunResult.backward` feedback. An over-limit
+int key is reported at its mapping's path. The message never holds the digits; source
+excerpts and tracebacks are diagnostics and may. Helpers in `typesys/values.py`:
+
+- `int_digits(n)` counts digits from `bit_length()`; `long_int_digits(value)` finds
+  the first long int at any depth. Walks compare against 10 to the limit's power and
+  never call `str()`.
+- `parse_int_text(text)` parses int text as `int()` does (sign, `_`, leading zeros of
+  any script, none counted) and raises `IntTooLongError` before converting.
+- `parse_json_int` is the `parse_int=` hook for `json.loads` wherever values cross a
+  boundary (CLI `--inputs` and JSON prompts, structured and prompted replies, tool-call
+  arguments, backward responses, run records). It returns an `OverLimitInt(digits)`
+  marker for a long token; the check that follows the parse reports it with its path.
+- `reject_long_ints(value, where)` checks ints only; feedback and backward responses
+  use it, since a NaN there gets its own error.
+- `rewrite_digit_limit_text(text)` swaps Python's digit-limit message for yian's.
+  `runtime/eval_node.py` `_evaluation_failure` and the structured retry correction run
+  every failure text through it, so Python's hint never reaches a message or the model.
+  A provider SDK that parses a reply itself may report its own error.
+- `write_as_text(convert, value)` is how expressions write values as text (`_as_text`,
+  `%`, `join`, `render_as_json`): it fails with the long-int message, walking first only
+  when Python's own limit wouldn't refuse such an int (`python_refuses_long_ints()`).
+- `value_repr(value)` shows a long int as `<int with N digits>` and a container holding
+  one as `<list holding an int with N digits>`.
+
+yian source never calls `sys.set_int_max_str_digits`. The checks hold with Python's
+limit at its default or off; a host must not lower it below 4300. Temporaries inside
+an expression aren't checked (`${10 ** n > 0}`); writing one as text (`_as_text`, `%`
+with text on the left, `join`, `render_as_json`) raises `ExpressionError` with the
+same message whatever Python's own limit. `decode_record` reads run records with plain
+`json.loads` while Python's limit refuses long ints, and re-parses with a
+`parse_json_int` finder only when that raises; it fails a record holding a long int,
+as a number or inside a route's `value_json`, with `run-record JSON: integer with N
+digits is larger than yian allows (4300 digits); a log written while yian accepted
+such ints can't be read`; resume and replay leave the log unchanged. Memory stores
+read with plain `json.loads` and may raise Python's own error for such a store.
 
 A yian value nests at most `YIAN_MAX_VALUE_NESTING` (default 100) levels, counting
 itself. `reject_deep_nesting(value, where, *, enclosing_levels=0)` counts each dict,
@@ -1249,8 +1276,7 @@ shape; live growth and replay keep using the kind-blind injected `build_grow` pa
 Bindings, conditions, and prompts share ONE expression grammar — the three
 divergent dialects the engine grew (binding coalesce/default, `when:`
 boolean/arithmetic, prompt builtin-call) are unified. Three modules, one pipeline
-(parse → AST → evaluate / infer type / ref-walk), plus `percent_format.py`, the `%`
-formatter for ints past Python's digit limit:
+(parse → AST → evaluate / infer type / ref-walk):
 
 - **`grammar.py` — parse only.** `parse_expr` compiles a span into a Lark tree
   (arithmetic `+ - * / % **`, comparisons, `and`/`or`/`not`, `in`/`not in`, list
@@ -1279,10 +1305,10 @@ formatter for ints past Python's digit limit:
   `x`. `RequiredError` (a `${x:?"msg"}` over an unbound ref) lives here, its
   natural home now that the evaluator raises it. Operators apply Python semantics to
   resolved values; `ValueError`, `OverflowError` and `KeyError` from an operator become
-  `ExpressionError`, so the run fails instead of raising. A `%` that Python refuses for a
-  long int retries through `percent_format.format_text`. `_as_text` in `template.py`
-  renders an embedded span or a whole prompt with `json_codec.as_text`, writing every
-  digit of a long int.
+  `ExpressionError`, so the run fails instead of raising. A `%` with text on the left
+  and an int over `YIAN_MAX_INT_DIGITS` on the right, and `_as_text` in `template.py` (an
+  embedded span, or a whole prompt) given a value holding one, raise `ExpressionError`
+  with the digit-limit message, whatever Python's own limit.
 - **`template.py` — the string surface.** `scan_template` splits literal text from
   `${...}` spans; `eval_binding` renders a binding value; `render_template_record`
   renders a strict prompt; `$$` is the scanner's universal escape (a prompt `$$`

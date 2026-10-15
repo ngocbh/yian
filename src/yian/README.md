@@ -38,7 +38,6 @@ know the shape of it:
 
 ```
 diagnostics.py semantic failures, resolved presentation, origins/resolver routing [leaf]
-json_codec.py JSON and plain text for values holding ints of any size; stdlib only [leaf]
 defaults.py   every predefined default and limit, overridable by YIAN_<NAME> [leaf]
 typesys/      typed value system (values) + variable pool                 [leaf]
 events.py     transient run/node observer vocabulary; imports diagnostics
@@ -72,8 +71,6 @@ contracts, but never imports `compile.expand` or `compose`. Its `common.py`
 module owns the scheduler-state vocabulary used by the reducer.
 Compose imports `SourceRange` directly from `diagnostics`; `events` does not
 re-export that front-end presentation coordinate.
-`json_codec` imports only the standard library and sits below every package; any
-layer that reads or writes value JSON may import it.
 The package facade lazy-loads its declared root exports, so importing a leaf
 submodule does not bootstrap those higher layers.
 Package-root `run.py` sits above `compose`, `compile.expand`, and `runtime`: it
@@ -496,20 +493,44 @@ growth rejection (`contract.growth`). Nothing is recorded as null in its place. 
 top-level complex returned by a CODE node fails `contract.output` like NaN. An int
 too large for a float in a `float` slot fails the type check at its path.
 
-Ints of any size are values. Run-log JSON goes through `yian.json_codec`, which
-writes and reads ints of any size without changing Python's process-wide
-`sys.set_int_max_str_digits`; yian never calls it. Value bytes decode through
-`runtime.log.decode_typed_json`: pydantic's strict JSON path first, and the codec for
-a document with an int past the digit limit. `json_codec.as_text` renders values as
-text (template interpolation, prompt text, `join`), and `%` retries through the
-size-safe formatter in `expr/percent_format.py` when Python's `%` refuses a long int.
-The YAML loader and `int(lo..hi)` range ends read long int literals through
-`json_codec.parse_int`. Manifests, fingerprints, and canonical type labels stay exact.
-Converting a long int costs time quadratic in its digits (about 0.2 s each way at
-100,000 digits). Messages show such an int as `<int too large to display>`
-(`typesys.values.value_repr`), and load errors show a long digit run echoed from the
-source the same way. An operator Python can't complete fails like any other
-expression error (`binding.evaluate` in a binding, `node.execute` for a prompt).
+An int longer than 4300 digits (`YIAN_MAX_INT_DIGITS`, Python's default
+int/str limit) is not a yian value either. `reject_nonfinite` finds one too, so every boundary
+above rejects it, with `<where>[ at <path>]: integer with N digits is larger than yian
+allows (4300 digits)`; the message never holds the digits. `reject_long_ints(value,
+where)` checks ints only, where a NaN gets its own check or error (feedback, backward
+responses). The helpers in `typesys/values.py`:
+
+- `int_digits(n)` counts decimal digits from `bit_length()`, never `str()`;
+  `long_int_digits(value)` returns the first long int's digit count at any depth, or
+  `None`.
+- `parse_int_text(text)` parses int text as `int()` does and raises `IntTooLongError`
+  before converting a long one: YAML literals, `!int` tags, range ends, expression
+  number tokens, and string-coerced inputs.
+- `parse_json_int`, passed as `json.loads(..., parse_int=parse_json_int)`, stands an
+  `OverLimitInt` marker carrying the digit count in for a long JSON int token; the
+  boundary check that follows each parse reports it with its path.
+- `rewrite_digit_limit_text(text)` replaces Python's digit-limit message in a failure
+  text with yian's. Node failure messages and the structured retry correction pass
+  through it, so Python's hint reaches neither a message nor the model.
+- `value_repr(value)` shows a long int as `<int with N digits>`.
+- `write_as_text(convert, value)` converts a value to text (`_as_text`, `%`, `join`,
+  `render_as_json`) and raises `ValueError` with the long-int message instead of
+  writing a long int; it walks for one first only when Python's own limit wouldn't
+  refuse it (`python_refuses_long_ints()`), so the common path costs a plain `str()`.
+
+Never call `sys.set_int_max_str_digits`. The checks hold with Python's limit at its
+default or off; a host must not lower it below 4300, or valid ints fail to convert.
+Read JSON with `parse_int=parse_json_int` where values cross a boundary (run inputs,
+model replies, tool-call arguments, backward responses; run records parse plainly
+first and use the hook only when Python's own limit raises). Temporaries
+inside an expression are not checked. Writing one as text (`_as_text` in
+`expr/template.py`, `%`, `join`, `render_as_json`) raises `ExpressionError` with the
+same message, as does an operator Python can't complete (`binding.evaluate` in a
+binding, `node.execute` for a prompt). `runtime.log.decode_record` fails a record
+holding a long int, as a number or inside a route's `value_json`, with `run-record
+JSON: integer with N digits is larger than yian allows (4300 digits); a log written
+while yian accepted such ints can't be read`, so resume and replay of such a log fail
+and leave it unchanged.
 
 Structured generation asks for a schema with an open part
 (`llm_clients.capabilities.has_open_schema`, from an `object`, `Any`, or elementless-list

@@ -13,6 +13,8 @@ result and concatenates it with the literal runs. `template_refs(segments)` unio
 the span refs in source order.
 """
 
+import re
+
 import pytest
 
 from yian.expr.expressions import ExpressionError, ResolveMode
@@ -218,17 +220,18 @@ def test_eval_template_strict_mode_raises_on_miss():
 # Rendering an embedded span's value as text
 # --------------------------------------------------------------------------- #
 
-_DIGITS = "1" + "0" * 5000  # the decimal text of 10**5000
+# 10**5000 has 5001 digits.
+LONG_INT_MSG = "integer with 5001 digits is larger than yian allows (4300 digits)"
 
 
-def test_eval_template_embedded_huge_int_renders_every_digit():
-    rendered = eval_template(scan_template("x=${n}"), lambda p: 10**5000 if p == "n" else None)
-    assert rendered == "x=" + _DIGITS
+def test_eval_template_embedded_int_too_large_for_text_raises_expression_error():
+    with pytest.raises(ExpressionError, match=re.escape(LONG_INT_MSG)):
+        eval_template(scan_template("x=${n}"), lambda p: 10**5000 if p == "n" else None)
 
 
-def test_eval_template_embedded_list_holding_a_huge_int_renders_every_digit():
-    rendered = eval_template(scan_template("x=${n}"), lambda p: [10**5000])
-    assert rendered == "x=[" + _DIGITS + "]"
+def test_eval_template_embedded_list_holding_a_huge_int_raises_expression_error():
+    with pytest.raises(ExpressionError, match=re.escape(LONG_INT_MSG)):
+        eval_template(scan_template("x=${n}"), lambda p: [10**5000])
 
 
 def test_eval_template_whole_single_span_keeps_a_huge_int_typed():
@@ -236,10 +239,6 @@ def test_eval_template_whole_single_span_keeps_a_huge_int_typed():
     assert value == 10**5000
 
 
-def test_render_template_record_whole_span_huge_int_renders_every_digit():
-    assert render_template_record("${n}", {"n": 10**5000}) == _DIGITS
-
-
-def test_render_template_record_embedded_dict_holding_a_huge_int_renders_every_digit():
-    rendered = render_template_record("a ${n} b", {"n": {"k": 10**5000}})
-    assert rendered == "a {'k': " + _DIGITS + "} b"
+def test_render_template_record_whole_span_int_too_large_for_text_raises_expression_error():
+    with pytest.raises(ExpressionError, match=re.escape(LONG_INT_MSG)):
+        render_template_record("${n}", {"n": 10**5000})

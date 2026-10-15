@@ -119,6 +119,16 @@ def test_no_rewrite_hint_when_rewriting_cannot_help(child, binding, message):
     assert str(exc.value).splitlines()[0].endswith(f"binding 't' — {message}")
 
 
+def test_no_rewrite_hint_for_text_spelling_an_int_past_the_digit_limit():
+    digits = "1" * 5000
+    with pytest.raises(LoadError) as exc:
+        load_flow(_flow("int", f'"{digits}"'))
+    message = str(exc.value).splitlines()[0]
+    assert message.endswith(
+        f"binding 't' — child expects 'int', but the value \"{digits}\" does not fit"
+    )
+
+
 def test_inline_call_with_a_former_boolean_word_names_the_boolean_to_write():
     text = _CALL.replace(
         "  c:\n    kind: {kind}\n    {over}\n    call: child\n    input:\n      t: {binding}\n",

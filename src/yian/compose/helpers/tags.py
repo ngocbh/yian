@@ -51,7 +51,13 @@ from yian.typesys import (
     type_for,
 )
 from yian.typesys.types import EnumExpr, format_type_expr, legacy_respelling, parse_type
-from yian.typesys.values import Type, ValueKind, canonical_type_label, requires_file, value_repr
+from yian.typesys.values import (
+    IntTooLongError,
+    Type,
+    ValueKind,
+    canonical_type_label,
+    requires_file,
+)
 
 if TYPE_CHECKING:
     from yian.compose.source.catalog import _SourceCatalogBuilder
@@ -126,7 +132,9 @@ def read_tag_type(
     try:
         return type_for(tag, registry)
     except TypeCheckError as exc:
-        message = f"{label!r}: `!{tag}` is not a type ({exc})"
+        # A long int's tag would repeat every digit; the range still points at it.
+        shown = "the tag" if isinstance(exc.__cause__, IntTooLongError) else f"`!{tag}`"
+        message = f"{label!r}: {shown} is not a type ({exc})"
         match = close_type_name(tag, registry)
         if match is not None:
             message += f". Did you mean `{match}`?"
@@ -923,7 +931,7 @@ def _mismatch_reason(error: TypeCheckError, value: Any) -> str | None:
         `str | None`: The reason, or `None` when the error only says the value does
             not match.
     """
-    head = f"{value_repr(value)} does not match declared type "
+    head = f"{value!r} does not match declared type "
     text = str(error)
     if not text.startswith(head):
         return None

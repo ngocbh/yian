@@ -56,7 +56,9 @@ One expression grammar, everywhere `${...}` appears:
 
 Arithmetic is Python's: `+` concatenates text and lists, `*` repeats them, `%` formats text
 (`${"%.2f" % p}`), a bool is 0/1 (but a CASE `on:` never equates a bool with a number). No
-cost limits; an operator Python can't complete (overflow) fails like an expression error.
+cost limits; an operator Python can't complete (overflow), or writing an int longer than 4300
+digits as text (a template, a prompt, `%`, `join`, `render_as_json`), fails like an
+expression error.
 
 `and`, `or`, `not`, and `in` are reserved operators, so none can be the root
 name of a reference. A dotted field may use those names (`${record.output.in}`).
@@ -293,11 +295,11 @@ NaN, infinity, and complex numbers (`${(0 - 8) ** 0.5}`) are not yian values. A
 binding whose value holds one at any depth fails its node with `binding.evaluate`;
 a temporary inside an expression is fine. Keep the value in range or return null
 explicitly: a `case` routed to a value entry `no_value: !Optional(float) null`, or a
-`code` node returning `None`. An int of any size is a value and is recorded
-exactly; an int literal in the YAML may have any number of digits, and text (a
-template, a prompt, `join`, `%s`/`%d` and the other text and integer `%` conversions)
-writes every digit; `%e`/`%f`/`%g`/`%c` on an int too large for a float or character
-fail as in Python.
+`code` node returning `None`. An int longer than 4300 digits is not a value either:
+a literal is a load error, and a value fails at the first boundary (input, binding,
+output, model reply, feedback) with `integer with 5000 digits is larger than yian
+allows (4300 digits)`. A temporary inside an expression may be longer; writing one as
+text (a template, a prompt, `%`, `join`, `render_as_json`) fails.
 
 A value nests at most 100 levels (`YIAN_MAX_VALUE_NESTING`, which can only lower it;
 see `docs/defaults.md`), counting each record and list. A binding or MAP
@@ -323,7 +325,7 @@ the chain).
 
 Bounds are ordered numeric literals with at most one end left open (`int(0..)`,
 `int(..100)`; `int(..)` is an error) and exclude booleans. Integer bounds
-retain arbitrary precision. Float bounds must be finite; integer endpoints used
+are exact, up to 4300 digits. Float bounds must be finite; integer endpoints used
 in a float domain must convert without rounding. Bounds compose with other
 type forms and constrain defaults, supplied values, and generated schemas.
 Cross-flow wiring requires the source domain to fit inside the destination;

@@ -1,15 +1,8 @@
-"""Arithmetic that Python can't complete fails the run, not the caller."""
-
-import sys
+"""Arithmetic or rendering that Python can't complete fails the run, not the caller."""
 
 import pytest
 
 from yian import load_flow, run_flow
-
-# Python 3.10.0-3.10.6 has no int-to-str digit limit, so a huge int renders there.
-needs_digit_limit = pytest.mark.skipif(
-    not hasattr(sys, "get_int_max_str_digits"), reason="no int-to-str digit limit"
-)
 
 
 def _flow(decl: str, value: str) -> str:
@@ -48,10 +41,14 @@ def test_an_int_too_large_for_float_division_fails_the_run():
     _failed("n: !int", "${input.n / 3}", {"n": 10**400})
 
 
-@needs_digit_limit
 def test_a_type_error_on_a_huge_int_fails_the_run():
     failure = _failed("n: !int", '${10 ** input.n + "a"}', {"n": 5000})
     assert "type error" in failure.message
+
+
+def test_an_embedded_int_too_large_for_text_fails_the_run():
+    failure = _failed("n: !int", "'x=${10 ** input.n}'", {"n": 4999})
+    assert failure.message == "integer with 5000 digits is larger than yian allows (4300 digits)"
 
 
 def test_a_missing_format_key_fails_the_run():

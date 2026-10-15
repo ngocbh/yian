@@ -28,9 +28,7 @@ from langchain_core.tools import BaseTool, InjectedToolArg, StructuredTool
 from pydantic import BeforeValidator, Field
 
 from yian.defaults import current
-import yian.json_codec as json_codec
 from yian.skills.tool import LOAD_SKILL
-from yian.typesys.values import value_repr
 
 # Maps tool id -> a LangChain tool with a Pydantic argument schema. The supported
 # ``register_tool`` path guarantees that schema, which the strict invocation boundary needs.
@@ -396,14 +394,14 @@ class ToolSet:
             tool = self._tools.get(tool_id)
             if tool is None:
                 raise ValueError(
-                    f"unknown tool id {value_repr(tool_id)}; known tools: {sorted(self._tools)}"
+                    f"unknown tool id {tool_id!r}; known tools: {sorted(self._tools)}"
                 )
             return tool
         with _REGISTRY_LOCK:
             tool = TOOL_REGISTRY.get(tool_id)
             if tool is None:
                 raise ValueError(
-                    f"unknown tool id {value_repr(tool_id)}; known tools: {sorted(TOOL_REGISTRY)}"
+                    f"unknown tool id {tool_id!r}; known tools: {sorted(TOOL_REGISTRY)}"
                 )
             return tool
 
@@ -472,7 +470,7 @@ class ToolSet:
         tool = self._get(tool_id)
         payload = dict(inputs)
         _validate_invocation(tool_id, tool, payload, trusted=False)
-        return tool.invoke(_printable_ints(payload))
+        return tool.invoke(payload)
 
     def invoke_trusted(self, tool_id: str, inputs: dict[str, Any]) -> Any:
         """Invoke one tool through its full schema, including host-injected fields.
@@ -495,7 +493,7 @@ class ToolSet:
         tool = self._get(tool_id)
         payload = dict(inputs)
         _validate_invocation(tool_id, tool, payload, trusted=True)
-        return tool.invoke(_printable_ints(payload))
+        return tool.invoke(payload)
 
 
 def resolve_tools(tool_ids: list[str]) -> list[BaseTool]:
@@ -528,43 +526,9 @@ def _registered_tool(tool_id: str) -> BaseTool:
         tool = TOOL_REGISTRY.get(tool_id)
         if tool is None:
             raise ValueError(
-                f"unknown tool id {value_repr(tool_id)}; known tools: {sorted(TOOL_REGISTRY)}"
+                f"unknown tool id {tool_id!r}; known tools: {sorted(TOOL_REGISTRY)}"
             )
         return tool
-
-
-class _PrintableInt(int):
-    """An int whose text is its decimal digits at any size."""
-
-    def __repr__(self) -> str:
-        return json_codec.int_text(self)
-
-    __str__ = __repr__
-
-
-def _printable_ints(value: Any) -> Any:
-    """Return `value` with each long int in its dicts and lists as a `_PrintableInt`.
-
-    Args:
-        value (`Any`): A tool's validated input payload or one of its items.
-
-    Returns:
-        `Any`: `value` itself when it holds no long int, else a copy.
-    """
-    # LangChain's `BaseTool.run` writes the whole input with `str()` for its
-    # callbacks, which fails past Python's digit limit. Pydantic validation hands
-    # an `int` parameter a plain int; an untyped (`Any`, `dict`, `object`) one
-    # sees this int subclass, which compares and computes like the int.
-    if json_codec.displayable(value) is value:
-        return value
-    if isinstance(value, int) and not isinstance(value, bool):
-        return _PrintableInt(value)
-    if isinstance(value, dict):
-        return {key: _printable_ints(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        items = [_printable_ints(item) for item in value]
-        return items if isinstance(value, list) else tuple(items)
-    return value
 
 
 def _validate_invocation(
@@ -612,7 +576,7 @@ def invoke_tool(tool_id: str, inputs: dict[str, Any]) -> Any:
     tool = _registered_tool(tool_id)
     payload = dict(inputs)
     _validate_invocation(tool_id, tool, payload, trusted=False)
-    return tool.invoke(_printable_ints(payload))
+    return tool.invoke(payload)
 
 
 def invoke_tool_trusted(tool_id: str, inputs: dict[str, Any]) -> Any:
@@ -620,4 +584,4 @@ def invoke_tool_trusted(tool_id: str, inputs: dict[str, Any]) -> Any:
     tool = _registered_tool(tool_id)
     payload = dict(inputs)
     _validate_invocation(tool_id, tool, payload, trusted=True)
-    return tool.invoke(_printable_ints(payload))
+    return tool.invoke(payload)

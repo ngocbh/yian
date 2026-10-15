@@ -20,6 +20,7 @@ from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor, r
 from yian.compose.source import SourceCursor
 from yian.diagnostics import OriginRef, SourceRange
 from yian.nodes.code import CodeNode, select_inline_code_origin
+from yian.typesys.values import rewrite_digit_limit_text
 
 if TYPE_CHECKING:
     from yian.compose.source.catalog import _SourceCatalogBuilder
@@ -180,7 +181,9 @@ class CodeDescriptor(NodeDescriptor):
                 if ctx.resolve_origin is not None and error_origin is not None
                 else None
             )
-            message = exc.msg if isinstance(exc, SyntaxError) else str(exc)
+            message = rewrite_digit_limit_text(
+                exc.msg if isinstance(exc, SyntaxError) else str(exc)
+            )
             if error_frame is not None:
                 error = ctx.diagnostics.error(
                     f"node {self.id!r}: {message}",

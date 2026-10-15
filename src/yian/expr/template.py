@@ -26,10 +26,11 @@ NOT a binding (it reads already-bound declared inputs, mints no edge), but it is
 `${...}` template, and it reuses these scanners — so it lives here rather than in
 `expressions` (which cannot import this module without a cycle).
 
-Knows about: `expr.expressions` (peer — the evaluator, `_value_args`, and `ExpressionError`) and
-`expr.builtins` (the prompt `TEMPLATE_FNS` registry).
-Never imports: `nodes`, `compile`, `runtime`, or `typesys` at runtime (pool-agnostic via
-`resolve`; `Type` appears in annotations only).
+Knows about: `expr.expressions` (peer — the evaluator, `_value_args`, and `ExpressionError`),
+`expr.builtins` (the prompt `TEMPLATE_FNS` registry), and `typesys.values` (`write_as_text`, for
+the int digit limit).
+Never imports: `nodes`, `compile`, `runtime`, or the pool (pool-agnostic via `resolve`; `Type`
+appears in annotations only).
 """
 
 from __future__ import annotations
@@ -38,7 +39,6 @@ import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, Union
 
-import yian.json_codec as json_codec
 from yian.expr import grammar
 from yian.expr.builtins import TEMPLATE_FNS
 from yian.expr.expressions import (
@@ -53,6 +53,7 @@ from yian.expr.expressions import (
     rewrite_expr_refs,
 )
 from yian.expr.lineage import TracedValue, ValueRoute
+from yian.typesys.values import write_as_text
 
 if TYPE_CHECKING:  # annotation-only imports
     from lark import Token, Tree
@@ -539,7 +540,7 @@ def _resolve_record_strict_or_none(path: str, record: dict) -> Any:
 
 
 def _as_text(value: Any) -> str:
-    """Return `str(value)` with ints of any size written in full.
+    """Return `str(value)`, failing when the value holds an int too long to write.
 
     Args:
         value (`Any`): The value to render.
@@ -548,14 +549,13 @@ def _as_text(value: Any) -> str:
         `str`: The value's text.
 
     Raises:
-        `ExpressionError`: The value can't be written as text, such as a long
-            int inside a set.
+        `ExpressionError`: The value holds an int with more than `YIAN_MAX_INT_DIGITS`
+            digits, or one past a lower digit limit a host set for Python.
     """
     try:
-        return json_codec.as_text(value)
+        return write_as_text(str, value)
     except ValueError as exc:
-        # The run must fail, not crash.
-        raise ExpressionError(f"cannot render the {type(value).__name__} value as text") from exc
+        raise ExpressionError(str(exc)) from exc
 
 
 def render_template_record(text: str, record: dict) -> str:
@@ -590,7 +590,7 @@ def render_template_record(text: str, record: dict) -> str:
         `ExpressionError`:
             On an unbalanced span, an unresolved reference (unknown input or dict-path
             miss), a final `None` span value, an unknown builtin, a builtin that fails,
-            or a value that can't be rendered as text.
+            or a value holding an int too long to render as text.
     """
     segments = scan_template(text)
     result = eval_template(
@@ -857,7 +857,7 @@ def eval_template(
         `ExpressionError`:
             On any error `eval_expr` raises for a span interior, when a span's final
             value is `None` in `STRICT_RAISE` mode, or when an embedded value can't be
-            rendered as text.
+            rendered as text (an int past Python's digit limit).
         `RequiredError`:
             When a span's `head :? message` required atom misses / is None.
         `TypeError`:

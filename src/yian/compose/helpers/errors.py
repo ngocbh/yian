@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import re
-import sys
 from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Iterable, TYPE_CHECKING
@@ -12,38 +10,6 @@ from yian.diagnostics import Diagnostic, DiagnosticFrame, SourceRange
 
 if TYPE_CHECKING:
     from yian.compose.source import SourceCursor, SourceDocument
-
-# A digit run, with single `_` separators as YAML and Python allow in int literals.
-_DIGIT_RUN = re.compile(r"[0-9]+(?:_[0-9]+)*")
-# The same text `typesys.values.value_repr` gives for an int too long to print.
-_TOO_LARGE = "<int too large to display>"
-
-
-def _elide_long_ints(text: str) -> str:
-    """Replace each digit run longer than Python's int/str digit limit by a placeholder.
-
-    Args:
-        text (`str`): A message or note.
-
-    Returns:
-        `str`: `text` with each over-long digit run replaced; unchanged when this
-            Python has no digit limit or the limit is off (`0`).
-    """
-    get_limit = getattr(sys, "get_int_max_str_digits", None)
-    limit = get_limit() if get_limit is not None else 0
-    if limit <= 0:
-        return text
-
-    def elide(match: re.Match[str]) -> str:
-        run = match.group()
-        digits = len(run) - run.count("_")
-        return _TOO_LARGE if digits > limit else run
-
-    # Load messages echo authored text (a type spelling, a tag, a hint quoting the
-    # source), and an int literal there may be longer than Python can render. Eliding
-    # it here, where every load message is built, matches how `value_repr` shows such
-    # an int, so a message never prints an int one place and a placeholder another.
-    return _DIGIT_RUN.sub(elide, text)
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,9 +148,9 @@ class LoadDiagnostics:
             raise TypeError("load diagnostic notes must be strings")
         return Diagnostic(
             code="compose.load",
-            message=_elide_long_ints(message),
+            message=message,
             frames=owned_frames,
-            notes=tuple(_elide_long_ints(note) for note in owned_notes),
+            notes=owned_notes,
         )
 
     def error(
@@ -247,9 +213,7 @@ class LoadDiagnostics:
             frames = (outer, *frames)
         diagnostic = replace(
             error.diagnostic,
-            message=(
-                error.diagnostic.message if message is None else _elide_long_ints(message)
-            ),
+            message=(error.diagnostic.message if message is None else message),
             frames=frames,
         )
         return LoadError(diagnostic)

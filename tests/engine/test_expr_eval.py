@@ -125,25 +125,27 @@ def test_missing_format_key_is_an_expression_error():
 
 @needs_digit_limit
 def test_type_error_with_a_huge_int_names_the_operand_type():
-    with pytest.raises(ExpressionError, match="<int too large to display>"):
+    with pytest.raises(ExpressionError, match="<int with 5001 digits>"):
         _eval('n + "a"', _from({"n": 10**5000}))
 
 
 @needs_digit_limit
 def test_division_by_zero_with_a_huge_int():
-    with pytest.raises(ExpressionError, match="division by zero: <int too large to display>"):
+    with pytest.raises(ExpressionError, match="division by zero: <int with 5001 digits>"):
         _eval("n / 0", _from({"n": 10**5000}))
 
 
 @needs_digit_limit
 def test_comparison_type_error_with_a_huge_int():
-    with pytest.raises(ExpressionError, match="<int too large to display>"):
+    with pytest.raises(ExpressionError, match="<int with 5001 digits>"):
         _eval('n < "a"', _from({"n": 10**5000}))
 
 
 @needs_digit_limit
 def test_unary_minus_on_a_list_holding_a_huge_int():
-    with pytest.raises(ExpressionError, match="unary minus on non-number <list too large"):
+    with pytest.raises(
+        ExpressionError, match="unary minus on non-number <list holding an int with 5001 digits>"
+    ):
         _eval("-xs", _from({"xs": [10**5000]}))
 
 

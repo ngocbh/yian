@@ -1295,9 +1295,10 @@ constraints, so the provider doesn't constrain the open part:
   deployment) sends the tool with `strict: false`.
 - `anthropic` with `thinking` on gets a tool the model may call; see
   [Provider blocks](#provider-blocks-request-settings).
-- `google`, `ollama`, the other Chat Completions providers, and `anthropic` without
-  thinking are unchanged. Without thinking, the Claude models that refuse a forced tool
-  call already get a tool the model may call for every schema.
+- `google`, `ollama`, and the other Chat Completions providers are unchanged, and so is
+  `anthropic` without thinking, except Claude Opus 5.5, Sonnet 5.5 and Fable 5.1, which get
+  a tool the model may call for every schema; see
+  [Provider blocks](#provider-blocks-request-settings).
 
 The choice is per schema: one open part makes the whole schema non-strict, its closed
 fields included. yian still checks every field and retries a reply that doesn't fit.

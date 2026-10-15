@@ -661,8 +661,8 @@ model made enforceable.
   (with `include_raw`, a `parsing_error`) or left by a tool parser that returns no result
   (`_generate_native` treats `None`, or `parsed: None, parsing_error: None`, the same
   way), is `base_client.missing_tool_call`: a `MissingToolCallError`
-  (`OutputParserException`) naming the tool, fed back under `retries:` and raised as
-  `node.execute` once they're spent.
+  (`OutputParserException`) naming the tool, fed back under `retries:`; once they're
+  spent the AGENT fails `node.execute`.
   A root enum string (`Literal(...)`) uses `ScalarWrapper.value` with a Pydantic
   `Literal` annotation and unwraps to the bare tag returned to the flow.
   Three-part contract: **generate-tries** (the schema asks), **boundary-enforces**

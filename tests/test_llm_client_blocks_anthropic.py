@@ -11,13 +11,18 @@ import anthropic
 import pytest
 from anthropic.resources.messages import Messages
 from langchain_anthropic import convert_to_anthropic_tool
+from langchain_anthropic.chat_models import _supports_forced_tool_choice
 from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel
 
 from tests.engine._session_fakes import harness, request
 from tests.engine.test_agent_session import _view
-from yian.llm_clients.anthropic_client import AnthropicClient, NormalizedChatAnthropic
+from yian.llm_clients.anthropic_client import (
+    AnthropicClient,
+    NormalizedChatAnthropic,
+    _forces_tool,
+)
 from yian.llm_clients.base_client import missing_tool_call
 from yian.llm_clients.capabilities import has_open_schema
 from yian.llm_clients.factory import model_from_config
@@ -451,8 +456,8 @@ _NO_FORCE_SCHEMAS = {
 }
 
 
-def _no_force_case(model, case, block=None, method=None, include_raw=False, server=None):
-    """Bind case's schema on `model`, answer with a call to its tool, and check both."""
+def _no_force_case(server, model, case, block=None, method=None, include_raw=False):
+    """Bind `case`'s schema on `model` and check it goes as an unforced tool whose call parses."""
     make, args = _NO_FORCE_SCHEMAS[case]
     schema = make()
     name = convert_to_anthropic_tool(schema)["name"]
@@ -478,19 +483,18 @@ def _no_force_case(model, case, block=None, method=None, include_raw=False, serv
 @pytest.mark.parametrize("case", sorted(_NO_FORCE_SCHEMAS))
 @pytest.mark.parametrize("include_raw", [False, True])
 def test_models_that_refuse_a_forced_tool_get_an_unforced_tool(server, model, case, include_raw):
-    _no_force_case(model, case, include_raw=include_raw, server=server)
+    _no_force_case(server, model, case, include_raw=include_raw)
 
 
 @pytest.mark.parametrize("model", _NO_FORCE)
 def test_those_models_get_an_unforced_tool_for_an_explicit_function_calling(server, model):
-    _no_force_case(model, "Answer", method="function_calling", server=server)
+    _no_force_case(server, model, "Answer", method="function_calling")
 
 
 def test_those_models_get_an_unforced_tool_with_block_thinking_disabled(server):
-    # Of the three, only claude-opus-5-5 takes a disabled thinking (langchain checks).
-    _no_force_case(
-        "claude-opus-5-5", "Answer", block={"thinking": {"type": "disabled"}}, server=server
-    )
+    # langchain-anthropic's model check refuses `disabled` on the other two before any
+    # request, so only claude-opus-5-5 can exercise this branch here.
+    _no_force_case(server, "claude-opus-5-5", "Answer", block={"thinking": {"type": "disabled"}})
 
 
 @pytest.mark.parametrize("reply", sorted(_NO_TOOL_REPLIES))
@@ -545,10 +549,6 @@ def test_those_models_keep_an_explicit_json_schema_method(server):
 
 
 def test_forced_tool_support_matches_langchain():
-    from langchain_anthropic.chat_models import _supports_forced_tool_choice
-
-    from yian.llm_clients.anthropic_client import _forces_tool
-
     for model in [*_NO_FORCE, "claude-sonnet-4-5"]:
         assert _forces_tool(model) == _supports_forced_tool_choice(model), model
     assert not any(_forces_tool(model) for model in _NO_FORCE)
@@ -572,6 +572,7 @@ def test_a_transcript_run_on_those_models_stores_the_reply_and_corrects_it(serve
                 memory_context=MemoryContext(transcript=turn),
             )
     assert value == 42
+    assert len(server.bodies) == 2
     types = [item.payload["message"]["type"] for item in _view(memory).items]
     assert types[-3:] == ["ai", "human", "ai"]
     messages = server.bodies[1]["messages"]

@@ -6,6 +6,8 @@ import time
 
 import pytest
 
+from yian.compose import load_flow
+from yian.defaults import Defaults
 from yian.typesys.types import (
     AliasDef,
     RefExpr,
@@ -76,3 +78,75 @@ def test_field_order_decides_between_a_union_error_and_a_cycle():
         "different value in each member, e.g. kind: Literal(u1)"
     )
     assert info.value.path == ("R", "a")
+
+
+def test_aliases_wrapped_in_optional_resolve():
+    raw = {"A0": {"a": "int"}}
+    for i in range(1, 20):
+        raw[f"A{i}"] = "Optional(" * 99 + f"A{i - 1}" + ")" * 99
+    read_typedefs(raw)
+
+
+def test_aliases_wrapped_in_union_resolve():
+    raw = {"A0": {"a": "int"}}
+    for i in range(1, 100):
+        raw[f"A{i}"] = "Union(" * 99 + f"A{i - 1}" + ")" * 99
+    read_typedefs(raw)
+
+
+def _flow(typedefs: dict[str, str], output: str) -> str:
+    """Return a flow declaring `typedefs` whose CODE node `use` has `output: <output>`."""
+    lines = "".join(f"  {name}: {defn}\n" for name, defn in typedefs.items())
+    return (
+        f"id: f\nname: f\ntypedefs:\n{lines}nodes:\n  use:\n    kind: code\n"
+        f"    code: tests.engine._compose_codefns:echo\n    input:\n      topic: x\n"
+        f"    output: {output}\noutput: ${{use.output}}\n"
+    )
+
+
+def _union_levels(limit: int, tagged: bool) -> str:
+    """Return a flow of `limit` record levels, each above the bottom one holding an
+    optional union of the level below and `S`; the bottom field nests `limit` Optionals."""
+    tag = "k: Literal(r), " if tagged else ""
+    deep = "Optional(" * limit + "int" + ")" * limit
+    typedefs = {"S": "{k: Literal(s)}" if tagged else "{x: int}", "T0": f"{{{tag}a: '{deep}'}}"}
+    for i in range(1, limit):
+        typedefs[f"T{i}"] = f"{{{tag}a: 'Optional(Union(T{i - 1}, S))'}}"
+    return _flow(typedefs, f"T{limit - 1}")
+
+
+def _unions_over_a_deep_union(limit: int) -> str:
+    """Return a flow like `_union_levels` with `limit - 1` records over a bottom field of
+    `limit` nested unions of `S`, so `S` is the last of `limit` levels."""
+    deep = "Union(" * limit + "S" + ")" * limit
+    typedefs = {"S": "{k: Literal(s)}", "T0": f"{{k: Literal(r), a: '{deep}'}}"}
+    for i in range(1, limit - 1):
+        typedefs[f"T{i}"] = f"{{k: Literal(r), a: 'Optional(Union(T{i - 1}, S))'}}"
+    return _flow(typedefs, f"T{limit - 2}")
+
+
+def _records_over_a_deep_union(limit: int) -> str:
+    """Return a flow of `limit - 1` records, each the only field of the next, over a
+    bottom field of `limit` nested unions of `S`."""
+    deep = "Union(" * limit + "S" + ")" * limit
+    typedefs = {"S": "{x: int}", "T0": f"{{a: '{deep}'}}"}
+    for i in range(1, limit - 1):
+        typedefs[f"T{i}"] = f"{{a: T{i - 1}}}"
+    return _flow(typedefs, f"T{limit - 2}")
+
+
+@pytest.mark.parametrize("limit", [None, 125])
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda limit: _union_levels(limit, tagged=True),
+        lambda limit: _union_levels(limit, tagged=False),
+        _unions_over_a_deep_union,
+        _records_over_a_deep_union,
+    ],
+    ids=["tagged-unions", "untagged-unions", "unions-over-union", "records-over-union"],
+)
+def test_types_at_the_limit_load(build, limit, set_defaults):
+    if limit is not None:
+        set_defaults(MAX_TYPE_NESTING=limit)
+    load_flow(build(limit or Defaults().max_type_nesting))

@@ -12,6 +12,7 @@ resolution. Runtime receives only the resolved ``Type`` values.
 from __future__ import annotations
 
 import ast
+import functools
 import io
 import re
 import tokenize
@@ -745,7 +746,10 @@ def resolve_type(t: TypeExpr, registry: TypeRegistry, _seen: frozenset[str] = fr
         return Type(kind=kind, bounds=t.bounds)
 
     if isinstance(t, OptionalExpr):
-        return replace(resolve_type(t.inner, registry, _seen), nullable=True)
+        # Peel the whole chain in a loop so nested Optionals cost one frame, not one each.
+        while isinstance(t, OptionalExpr):
+            t = t.inner
+        return replace(resolve_type(t, registry, _seen), nullable=True)
 
     if isinstance(t, EnumExpr):
         return Type(kind=ValueKind.STRING, tags=frozenset(t.tags))
@@ -778,7 +782,7 @@ def resolve_type(t: TypeExpr, registry: TypeRegistry, _seen: frozenset[str] = fr
     if isinstance(defn, VariantDef):
         return Type(kind=ValueKind.STRING, tags=frozenset(defn.tags))
     fields = {
-        f: resolve_type(parse_type(ts), registry, _seen | {name})
+        f: resolve_type(_parse_field(ts), registry, _seen | {name})
         for f, ts in defn.fields.items()
     }
     # an Optional[X] field (its resolved Type is nullable) is NOT required.
@@ -788,22 +792,24 @@ def resolve_type(t: TypeExpr, registry: TypeRegistry, _seen: frozenset[str] = fr
 
 def _resolve_union(t: UnionExpr, registry: TypeRegistry, _seen: frozenset[str]) -> Type:
     """Resolve a `Union(...)` into a record, or a union of distinguishable records."""
-    label = _expr_label(t)
+    # The label is rendered only for an error: rendering recurses through the whole
+    # expression, which a deeply nested union would pay at every level of resolution.
     members: list[tuple[str, str | None, Type]] = []
     for name, origin, member in _union_parts(t, registry, _seen):
         if member.nullable:
             raise TypeCheckError(
-                f"{label}: member {name!r} is nullable; use Optional(Union(...)) instead"
+                f"{_expr_label(t)}: member {name!r} is nullable; use Optional(Union(...)) "
+                f"instead"
             )
         if member.fields is None:
-            raise TypeCheckError(f"{label}: member {name!r} is not a record")
+            raise TypeCheckError(f"{_expr_label(t)}: member {name!r} is not a record")
         # `Type` holds dicts, so it is unhashable; dedupe by equality.
         same = next((m for m in members if m[2] == member), None)
         if same is None:
             members.append((name, origin, member))
         elif same[1] != origin:
             # Two differently named records with one shape can't be told apart.
-            raise _overlap_error(label, same[0], name)
+            raise _overlap_error(_expr_label(t), same[0], name)
     if len(members) == 1:
         return members[0][2]
     union = Type(
@@ -815,7 +821,7 @@ def _resolve_union(t: UnionExpr, registry: TypeRegistry, _seen: frozenset[str]) 
             for b_name, _, b in members[i + 1:]:
                 if types_overlap(a, b):
                     raise _overlap_error(
-                        label, a_name, b_name, files=_holds_file(a) or _holds_file(b)
+                        _expr_label(t), a_name, b_name, files=_holds_file(a) or _holds_file(b)
                     )
     return union
 
@@ -871,31 +877,35 @@ def _overlap_error(
 
 
 def _union_parts(
-    t: TypeExpr,
-    registry: TypeRegistry,
-    _seen: frozenset[str],
-    name: str | None = None,
+    t: TypeExpr, registry: TypeRegistry, _seen: frozenset[str]
 ) -> list[tuple[str, str | None, Type]]:
     """Return a union's flattened `(display name, origin, resolved member)` triples.
 
     Nested unions and aliases are expanded so error messages can name each member the
-    way it was written. The origin is the registry name an alias chain ends at, or
-    `None` when the member is not a reference; it tells a repeated member from a
-    differently named record of the same shape.
+    way it was written: a member reached through an alias chain is named by the chain's
+    first alias, unless a union lies between. The origin is the registry name an alias
+    chain ends at, or `None` when the member is not a reference; it tells a repeated
+    member from a differently named record of the same shape.
     """
-    if isinstance(t, UnionExpr):
-        parts: list[tuple[str, str | None, Type]] = []
-        for member in t.members:
-            parts.extend(_union_parts(member, registry, _seen))
-        return parts
-    if isinstance(t, RefExpr):
-        if t.name in _seen:
-            raise TypeCheckError(f"recursive type reference: {t.name!r}")
-        defn = registry.get(t.name)
-        if isinstance(defn, AliasDef):
-            return _union_parts(defn.target, registry, _seen | {t.name}, name or t.name)
-    origin = t.name if isinstance(t, RefExpr) else None
-    return [(name or _expr_label(t), origin, resolve_type(t, registry, _seen))]
+    # An explicit stack, so deeply nested unions and long alias chains cost no frames.
+    # Each entry is (expression, names on its alias path, display name so far).
+    parts: list[tuple[str, str | None, Type]] = []
+    stack: list[tuple[TypeExpr, frozenset[str], str | None]] = [(t, _seen, None)]
+    while stack:
+        t, seen, name = stack.pop()
+        if isinstance(t, UnionExpr):
+            stack.extend((member, seen, None) for member in reversed(t.members))
+            continue
+        if isinstance(t, RefExpr):
+            if t.name in seen:
+                raise TypeCheckError(f"recursive type reference: {t.name!r}")
+            defn = registry.get(t.name)
+            if isinstance(defn, AliasDef):
+                stack.append((defn.target, seen | {t.name}, name or t.name))
+                continue
+        origin = t.name if isinstance(t, RefExpr) else None
+        parts.append((name or _expr_label(t), origin, resolve_type(t, registry, seen)))
+    return parts
 
 
 def format_type_expr(t: TypeExpr) -> str:
@@ -956,6 +966,34 @@ def type_for(type_str: str, registry: TypeRegistry) -> Type:
 # ---------- typedefs: registry builder ----------
 
 
+def _parse_field(text: str) -> TypeExpr:
+    """Parse a record field's type text, memoized per text and type nesting limit.
+
+    The registry check parses every field near the top of the stack, so resolution,
+    which reaches a field deep inside nested records, finds it parsed instead of paying
+    the parser's frames there. Sharing a result is safe: type ASTs are frozen.
+
+    Args:
+        text (`str`):
+            The field's authored type expression.
+
+    Returns:
+        `TypeExpr`:
+            What [`parse_type`][yian.typesys.types.parse_type] returns for `text`.
+
+    Raises:
+        `TypeCheckError`:
+            `text` is not a valid type expression (errors are not memoized).
+    """
+    return _parse_field_within(text, current().max_type_nesting)
+
+
+@functools.lru_cache(maxsize=65536)
+def _parse_field_within(text: str, max_type_nesting: int) -> TypeExpr:
+    """Parse `text`; the limit is part of the cache key because `parse_type` checks it."""
+    return parse_type(text)
+
+
 def _refs_in_type(t: TypeExpr) -> set:
     """The registry names a parsed TypeExpr references (for the eager alias-cycle check)."""
     if isinstance(t, RefExpr):
@@ -1007,11 +1045,10 @@ def _check_local(t: TypeExpr, registry: TypeRegistry) -> None:
 def _check_typedefs(registry: TypeRegistry) -> None:
     """Resolve every typedef, so a broken one fails even when nothing uses it.
 
-    Typedefs are checked dependencies first, each one's fields in order. A field naming
-    a typedef the walk is still inside closes a cycle, and the cycle is reported there:
-    a simple cycle (`A: {x: B}`, `B: {y: A}`) keeps the message `typedef 'B' field 'y':
-    recursive type reference: 'B'`; a cycle that isn't simple names the typedef at which
-    it is reported.
+    Typedefs are checked dependencies first, each one's fields in order. A cycle is
+    reported at the field that closes it, naming the typedef that holds that field:
+    with `A: {x: B}` and `B: {y: A}` the error is `typedef 'B' field 'y': recursive type
+    reference: 'B'`.
     """
     parsed: dict[str, list[tuple[str | None, TypeExpr]]] = {}
     # First each typedef's own text, so an error names the typedef that holds the
@@ -1020,7 +1057,7 @@ def _check_typedefs(registry: TypeRegistry) -> None:
         parts = []
         for field, written in _typedef_parts(defn):
             try:
-                t = parse_type(written) if isinstance(written, str) else written
+                t = _parse_field(written) if isinstance(written, str) else written
                 _check_local(t, registry)
             except TypeCheckError as exc:
                 raise _typedef_error(name, field, exc) from exc
@@ -1038,6 +1075,8 @@ def _check_typedefs(registry: TypeRegistry) -> None:
     def refs_of(name: str):
         return (ref for _, t in parsed[name] for ref in sorted(_refs_in_type(t)))
 
+    # A typedef becomes a key of `back_refs` when the walk reaches it, so the keys are
+    # also the set of typedefs already discovered.
     for root in registry:
         if root in back_refs:
             continue

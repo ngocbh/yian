@@ -661,8 +661,10 @@ model made enforceable.
   keyword its strict mode rejects (`minimum`, `maximum`, `minItems`, `pattern`, ...;
   `_AZURE_STRICT_UNSUPPORTED`), bound without `method`/`strict`, goes strict with those
   keywords moved into the subschema's `description` (`_strict_schema_without`), and the
-  pydantic parse still enforces them; dict schemas and an explicit `method`/`strict` go
-  unchanged. Gemini gets each `const: v` as `enum: [v]` (`_const_as_enum`). A reply with no tool call, raised by that guard
+  pydantic parse (strict, `model_validate_json`) still enforces them; dict schemas, an
+  explicit `method`/`strict`, and classes setting `json_schema_extra` go unchanged.
+  Gemini gets each `const: v` as `enum: [v]` (`_const_as_enum`). A reply with no tool
+  call, raised by that guard
   (with `include_raw`, a `parsing_error`) or left by a tool parser that returns no result
   (`_generate_native` treats `None`, or `parsed: None, parsing_error: None`, the same
   way), is `base_client.missing_tool_call`: a `MissingToolCallError`

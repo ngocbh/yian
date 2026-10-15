@@ -546,12 +546,15 @@ yet) when block thinking is off and no explicit `method="json_schema"` is given.
 Two clients rewrite a closed schema their provider can't take. Azure's strict mode rejects
 the keywords in `azure_client._AZURE_STRICT_UNSUPPORTED` (`minimum`, `maximum`,
 `multipleOf`, `minLength`, `maxLength`, `pattern`, `format`, and object and array bounds
-such as `minItems`). A closed pydantic schema holding one, given without `method` or
+such as `minItems`). A closed pydantic (v2) schema holding one, given without `method` or
 `strict`, is bound as the SDK's strict `json_schema` format with those keywords moved into
 each subschema's `description` as `{minimum: 0, maximum: 10}` (`_strict_schema_without`),
 on Chat Completions (`response_format`) and Responses-routed deployments (`text.format`)
 alike. The reply is parsed with the pydantic class, which still enforces them, so a value
-out of range is an `OutputParserException` corrected under `retries:`. Reflective memory's
+out of range is an `OutputParserException` corrected under `retries:`. The reply is read
+strictly (`model_validate_json`, no repair of truncated JSON), and a refusal's text is
+named in the error. A class whose schema sets `json_schema_extra` keeps langchain's
+request, since a hand-written keyword isn't enforced by the parse. Reflective memory's
 reflection call (`actions` has `minItems: 1`) takes this path. Dict schemas and an
 explicit `method` or `strict` reach Azure unchanged; open schemas keep the non-strict
 function tool. Gemini's `responseJsonSchema` lacks `const`, so

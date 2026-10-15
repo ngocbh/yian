@@ -49,12 +49,12 @@ def _tree_value(levels: int) -> dict:
     return {"tree": tree}
 
 
-def _code_node(indent: str, output: str, code: str = _DEEP_TREE) -> list[str]:
+def _code_node(indent: str, output: str) -> list[str]:
     """Return the lines of a `u` CODE node passing `n` through, with `output:` type `output`."""
     return [
         f"{indent}u:",
         f"{indent}  kind: code",
-        f"{indent}  code: {code}",
+        f"{indent}  code: {_DEEP_TREE}",
         f"{indent}  input:",
         f"{indent}    n: ${{input.n}}",
         f"{indent}  output: {output}",
@@ -223,4 +223,5 @@ def test_a_record_past_the_value_limit_fails_its_output_contract(set_defaults) -
 
     assert result.status == "failed"
     assert result.failure.code == "contract.output"
+    assert "nests deeper than" in result.failure.message
 

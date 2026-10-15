@@ -1046,7 +1046,8 @@ class Type:
     Despite the name, `variants` holds union members, not the string tags of a
     "variant" above. Members are non-nullable records; a nullable union sets
     `nullable` on the union itself.
-    A `Type` is never changed after it is built, so copies of a flow share it.
+    A `Type` must not be changed after it is built (its `fields` dict included), so
+    copies of a flow share it.
     """
 
     kind: ValueKind
@@ -1066,8 +1067,9 @@ class Type:
                 The copy memo; unused.
 
         Returns:
-            `Type`: This type. A type is immutable, so a copy of a flow shares it, and
-            the copy's recursion then does not depend on how deep the type nests.
+            `Type`:
+                This type. A type is immutable, so a copy of a flow shares it, and
+                the copy's recursion then does not depend on how deep the type nests.
         """
         return self
 

@@ -1317,20 +1317,23 @@ JSON-schema mode rejects an open part. On Anthropic with `thinking` on, an `obje
 back as `{}` and an `Any` failed before the request was sent. Both now go through a tool
 call that isn't strict.
 
-Two providers also need a closed schema rewritten. Azure's strict mode, on Chat
-Completions and Responses-routed deployments alike, rejects range and length keywords:
-an `int(0..10)` slot's `minimum` and `maximum`, `minLength`, `maxLength`, `pattern`,
-`format`, `multipleOf`, and array and object bounds such as `minItems`. yian moves them
-into the slot's description (`{minimum: 0, maximum: 10}`), so the model still reads them,
-and checks the reply against the full type, so a value out of range is corrected and
-retried under `retries:`. Gemini doesn't support `const`, so a union member's tag or a
-one-value `Literal` goes as a one-value `enum`, which means the same; the reply is still
-checked against the declared type.
+Two providers also need a closed schema rewritten. On Chat Completions and
+Responses-routed deployments alike, Azure rejects keywords its strict mode doesn't
+support: an `int(0..10)` slot's `minimum` and `maximum`, `minLength`, `maxLength`,
+`pattern`, `format`, `multipleOf`, and array and object bounds such as `minItems`. yian
+moves them into the slot's description (`{minimum: 0, maximum: 10}`), so the model still
+reads them, and checks the reply against the full type, so a value out of range is
+corrected and retried under `retries:`. Gemini doesn't support `const`, so a union
+member's tag or a one-value `Literal` goes as a one-value `enum`, which means the same;
+the reply is still checked against the declared type.
 
 Changed: an AGENT `output:` with a range, such as `int(0..10)`, used to reach Azure with
-keywords its strict mode rejects. Those keywords now go in the description. A host that
-passes the client a JSON-schema dict, or an explicit `method` or `strict`, still reaches
-Azure unchanged, so Azure may reject it.
+keywords its strict mode rejects. Those keywords now go in the description. These
+requests still reach Azure unchanged: a host's JSON-schema dict, or its explicit `method`
+or `strict`; an older deployment that langchain sends as a function tool (`gpt-4`,
+`gpt-4-*`, `gpt-3*`); and a host's output class whose schema yian can't check after the
+reply, such as one with hand-written schema keywords or a pydantic v1 class. A strict
+request among them may still be rejected.
 
 A [union](#unions-of-records-union) `output:` asks for one of the members: each member's
 schema forbids unknown fields and pins its tag with a `const`. The node returns the

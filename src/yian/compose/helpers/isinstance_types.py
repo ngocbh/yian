@@ -4,14 +4,14 @@
 Compose fills that table from the names a node's expressions use, resolved against the
 flow's own `typedefs:` registry, so each flow (root, `defs:`, inline bodies, `uses:`
 children) sees its own types. `isinstance` also takes a builtin scalar name; a
-constructor takes only a `typedefs:` name. It also decides which members of a union an
-`isinstance` check narrows it to.
+constructor takes only a `typedefs:` name. `isinstance_members` also says which members of
+a union an `isinstance` check narrows it to.
 """
 
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from yian.expr import constructor_names, isinstance_type_names, parse_condition
 from yian.expr.expressions import unknown_function_message
@@ -202,7 +202,7 @@ def constructor_type_fn(registry: TypeRegistry) -> Callable[[str], Type | None]:
     return type_fn
 
 
-def isinstance_members(base_type: Type, typ: Type) -> Optional[tuple[Type, ...]]:
+def isinstance_members(base_type: Type, typ: Type) -> tuple[Type, ...] | None:
     """Return the members of a union `base_type` that pass `isinstance(x, typ)`, if known.
 
     The answer is the base members equal to a member of `typ` (ignoring nullability),
@@ -232,10 +232,11 @@ def isinstance_members(base_type: Type, typ: Type) -> Optional[tuple[Type, ...]]
     strict = replace(typ, nullable=False)
     wanted = strict.variants or (strict,)
     shared = [member for member in members if any(member == w for w in wanted)]
-    # The runtime check is the write-boundary check, so a member that only overlaps
-    # `typ` can still pass it; listing just the shared members would then claim less
-    # than `typ` and could reject a value that fits it.
+    # The runtime check is the write-boundary check, so a base member that is not a
+    # member of `typ` but overlaps it can still pass. Leaving it out would be unsound
+    # (the branch could see a value the answer excludes), and keeping it could make the
+    # answer less permissive than `typ` (its values need not fit `typ`), so give no answer.
     passing = [member for member in members if types_overlap(member, strict)]
-    if shared and len(shared) == len(passing):
+    if shared and shared == passing:
         return canonical_union_order(shared)
     return None

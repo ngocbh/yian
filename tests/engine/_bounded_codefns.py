@@ -51,3 +51,33 @@ def many_unknown_fields(inputs: dict) -> dict:
 
 def wrong_long_field(inputs: dict) -> dict:
     return {LONG_FIELD: "not an int", "g": 1}
+
+
+DEEP = 200_000
+
+
+def deep_list(inputs: dict) -> list:
+    return _nest(DEEP, lambda value: [value])
+
+
+def deep_tuple(inputs: dict) -> tuple:
+    return _nest(DEEP, lambda value: (value,))
+
+
+def dict_of_deep_list(inputs: dict) -> dict:
+    return {"s": _nest(DEEP, lambda value: [value])}
+
+
+def deep_frozenset(inputs: dict) -> frozenset:
+    return _nest(DEEP, lambda value: frozenset({value}))
+
+
+class HidingList(list):
+    """A list whose iteration yields nothing, so a walk over it sees no items."""
+
+    def __iter__(self):
+        return iter(())
+
+
+def hidden_deep_list(inputs: dict) -> dict:
+    return {"s": HidingList([_nest(DEEP, lambda value: [value])])}

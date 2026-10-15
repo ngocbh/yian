@@ -153,3 +153,29 @@ def test_long_declared_field_keeps_its_origin():
     assert result.status == "failed"
     assert result.failure.code == "contract.output"
     assert result.failure.trace == (field_origin,)
+
+
+@pytest.mark.parametrize("output", [None, "Any"])
+@pytest.mark.parametrize("fn", ["deep_list", "deep_tuple", "dict_of_deep_list"])
+def test_deep_output_is_located(fn, output):
+    failure = _failure(fn, output)
+    assert "value nests deeper than 100 levels" in failure.message
+    assert " at " in failure.message
+    assert "canonical data nesting" not in failure.message
+
+
+@pytest.mark.parametrize("output", [None, "Any", "list(Any)"])
+def test_deep_frozenset_output_is_not_a_json_value(output):
+    failure = _failure("deep_frozenset", output)
+    assert (
+        "is not a JSON value" in failure.message
+        or "is not a list for declared" in failure.message
+    )
+    assert "canonical data nesting" not in failure.message
+
+
+def test_list_hiding_a_deep_list_fails_the_output_contract():
+    result = run_flow(load_flow(_flow("hidden_deep_list")), {}, num_workers=0)
+    assert result.status == "failed"
+    assert result.failure.code == "contract.output"
+    assert result.failure.node_id == "b"

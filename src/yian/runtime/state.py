@@ -484,7 +484,7 @@ class _SuccessPlan:
     delta: _SuccessDelta
     terminal: _TerminalDelta | None
     trace_delta: TraceDelta | None = None
-    files: Type | None = None
+    files: Type | None = field(default=None, hash=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -550,7 +550,7 @@ class _TerminalDelta:
     succeeded: bool
     output_bytes: bytes | None
     failure: Failure | None
-    files: Type | None = None
+    files: Type | None = field(default=None, hash=False)
 
 
 @dataclass(slots=True)

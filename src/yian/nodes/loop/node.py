@@ -34,9 +34,10 @@ from yian.nodes.contracts import (
     ExecutionPosition,
     ExecutionScope,
     Parameter,
+    PartialRecordContract,
+    ValueContract,
     _iter_origin_carrier,
     _rewrite_origin_carrier,
-    output_contract_file_type,
 )
 from yian.nodes.ids import map_callsite, ns
 from yian.typesys.values import normalize_files
@@ -206,12 +207,21 @@ class LoopNode(Node):
         returned field bound from a whole-reference body output (`output: ${c.output}`),
         since the body's END has no contract for it, and an omitted field the body does
         not take as input, since its carried default has no body parameter to read it
-        through (`_carried_value`). Reading every field through the contract the record
-        is committed under makes each field the contract types as `file` a `FileRef`, so
-        the predicate compares like with like.
+        through (`_carried_value`). The seed is bound from live values, so a field the
+        contract types as `object` can hold a nested `FileRef` on the first iteration and
+        its mapping once the body has returned it through that `object`. Reading every
+        typed field through the contract the record is committed under makes each `file`
+        position a `FileRef` and each `object` position's nested files mappings, so the
+        predicate reads every iteration alike. Untyped fields are read as given.
         """
-        typ = output_contract_file_type(self.output_contract)
-        return carried if typ is None else normalize_files(typ, carried)
+        contract = self.output_contract
+        if type(contract) is ValueContract:
+            return normalize_files(contract.type, carried)
+        if type(contract) is PartialRecordContract:
+            typed = {name: field.type for name, field in contract.fields if field is not None}
+            return {name: normalize_files(typed[name], value) if name in typed else value
+                    for name, value in carried.items()}
+        return carried
 
     def _should_stop_now(self, carried: dict[str, Any], k: int) -> bool:
         """Continue-vs-stop on the carried record at index `k`. Pure. See `run` for the stop rule."""

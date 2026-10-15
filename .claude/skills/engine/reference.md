@@ -854,8 +854,9 @@ and on replay, without changing the record bytes. The run result reads through
 carried record through its output contract and a partial loop's omitted field through
 the body's typed input. Backward contexts and `lookup_source` keep canonical JSON
 (`SourceEntry.stored_value`); untyped outputs and seeds keep nested files as mappings.
-A MAP whose body returns a partial record has no inferable list contract, so a run
-result read from it keeps nested files as mappings. Every dotted read goes through
+A MAP whose body returns a partial record gets no list contract (only a whole-value
+body output is inferred as a list), so readers of `${m.output}` in the parent and the
+run result keep its nested files as mappings. Every dotted read goes through
 `field_of` (a dict key or a file's `uri`/`mime`/`name`, never `getattr`). Structured
 generation in an AGENT node reads `.type` only from the exact arm. Growth clones retain
 the carrier so its origins survive lexical rewrites. Manifests encode exact or partial

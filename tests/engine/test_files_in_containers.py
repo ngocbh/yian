@@ -1248,6 +1248,50 @@ def test_a_partial_loop_compares_a_carried_file_the_body_does_not_take(learnable
     assert output == 1
 
 
+
+@pytest.mark.parametrize("learnable", [False, True])
+def test_a_loop_reads_a_file_in_a_carried_object_as_a_mapping_on_every_iteration(learnable):
+    # The seed binds `f` from `r`'s live output, where `f.x` is a file; from the second
+    # iteration `f` comes back through the body's `object` output. Both must read alike.
+    output = _ok_run(f"""\
+        id: p
+        name: p
+        defs:
+          body:
+            input:
+              f: !object
+              n: !int
+            nodes:
+              c:
+                kind: code
+                input:
+                  n: ${{input.n}}
+                output: int
+                code: |
+                  return inputs['n'] + 1
+            output:
+              f: ${{input.f}}
+              n: ${{c.output}}
+        nodes:
+          r:
+            kind: code
+            output:
+              x: file
+            code: |
+              return dict(x={F})
+          l:
+            kind: loop
+            while: isinstance(f.x, object) and n < 2
+            max: 3
+            call: body
+            input:
+              f: ${{r.output}}
+              n: 0
+        output: ${{l.output.n}}
+        """, learnable=learnable)
+
+    assert output == 2
+
 _GATED_READER_FLOW = f"""\
     id: p
     name: p
@@ -1300,6 +1344,32 @@ def test_a_reader_after_resume_sees_the_files_of_a_replayed_output(tmp_path: Pat
 
     assert resumed.status == "succeeded", resumed.failure
     assert resumed.output == ["FileRef", "FileRef"]
+
+
+@pytest.mark.parametrize("learnable", [False, True])
+def test_resuming_an_unfinished_run_returns_the_files_of_a_typed_output(tmp_path: Path, learnable):
+    # `a` is replayed from the log; the run then finishes live, so the result reads
+    # through the contract the replayed state carries.
+    path = tmp_path / "run.jsonl"
+    flow = textwrap.dedent(_GATED_READER_FLOW).replace(
+        "output: ${b.output}\n", "output: ${a.output}\n")
+
+    def interrupt(**request):
+        raise _HostStop("stop before the answer")
+
+    with pytest.raises(_HostStop):
+        run_flow(load_flow(flow), {}, log=path, tools={"ask_user": interrupt},
+                 learnable=learnable)
+    events: list[Any] = []
+    resumed = resume_flow(load_flow(flow), log=path, on_event=events.append,
+                          tools={"ask_user": lambda **request: "y"})
+
+    assert resumed.status == "succeeded", resumed.failure
+    assert resumed.output == [REF, REF]
+    assert all(type(item) is FileRef for item in resumed.output)
+    (succeeded,) = [event for event in events if type(event).__name__ == "RunSucceeded"]
+    assert succeeded.output == resumed.output
+    assert all(type(item) is FileRef for item in succeeded.output)
 
 
 @pytest.mark.parametrize("learnable", [False, True])

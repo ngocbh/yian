@@ -839,8 +839,9 @@ the flow's inferred output contract that `run.py` passes in. A LOOP driver reads
 carried record through its own output contract, and a partial LOOP's omitted field
 through the body's typed input. Backward contexts and `lookup_source` keep the stored
 canonical JSON. Untyped outputs and seeds keep nested files as mappings. A MAP whose body
-returns a partial record has no inferable list contract, so a run result read from it
-keeps nested files as mappings too.
+returns a partial record gets no list contract (only a whole-value body output is
+inferred as a list), so readers of `${m.output}` in the parent and the run result keep
+its nested files as mappings too.
 Exact contracts also drive node-owned structured generation. For
 an AGENT node,
 only a plain `str` opts out to free text; an enum string (`Literal(...)`) uses the

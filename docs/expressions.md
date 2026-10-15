@@ -110,7 +110,9 @@ non-strict, so an embedded null contributes an empty string.
 `name`, never `getattr` (so `${x.__class__}` is just a missing key, on a file too);
 builtin calls dispatch through `TEMPLATE_FNS` only (no arbitrary callable is reachable).
 So `${doc.output.uri}` reads a file's `uri` in bindings, templates and prompts, `case`
-`on:` and `when:`, and asserts.
+`on:` and `when:`, and asserts. When the loader knows the value is a `file`, it checks
+the read: `uri` is `str`, `mime` and `name` are `Optional(str)`, and any other name is a
+load error (see [Flow syntax → References](syntax.md#references-naming-a-value)).
 
 ### Arithmetic follows Python
 

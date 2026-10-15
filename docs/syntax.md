@@ -306,8 +306,8 @@ contributes empty text. A flow output that reads a node a `case` skipped is null
 (see [Skipped branches and flow outputs](#skipped-branches-and-flow-outputs)).
 
 When the loader knows a value's type, reading a field that type can't have is a load
-error: a field on a scalar (`str`, `int`, `Literal(...)`, ...) or a list, or a field a
-record doesn't declare. This covers `${input.X...}`, `${node.output...}`, and a MAP's
+error: a field on a scalar (`str`, `int`, `Literal(...)`, ...) or a list, a field a
+record doesn't declare, or a field of a `file` other than `uri`, `mime`, and `name`. This covers `${input.X...}`, `${node.output...}`, and a MAP's
 `${item...}` in bindings, `case` conditions, and flow outputs, and the carried fields a
 LOOP `while:`/`until:` predicate reads. Reading a declared field
 through an `Optional(...)` record still gives `null` when the whole value is null, and
@@ -316,8 +316,22 @@ below them) aren't checked.
 
 A `file` value has three fields: `uri`, `mime`, and `name`. They read the same way in
 bindings, templates and prompts, `case` `on:` and `when:`, and node and flow asserts,
-so a node's assert can check `output.f.uri`. Any other field of a file is a miss, like a
-missing key. The loader doesn't check field reads on a `file`.
+so a node's assert can check `output.f.uri`. Where the loader knows a value is a `file`,
+`uri` reads as `str` and `mime` and `name` as `Optional(str)`, and any other field is a
+load error:
+
+```
+reference ${a.output.f.urii} reads field 'urii' on a file, which has only uri, mime, and name
+```
+
+A file the loader doesn't know about (from an untyped output) isn't checked; any other
+field of it is a miss at run, like a missing key. An AGENT prompt checks only the first
+name of each reference, so a field read on a file there isn't checked either.
+
+Changed: a read of another field on a typed `file` (`${a.output.f.urii}`) used to load
+and read as missing; it is now a load error. The three fields are now typed too, so a
+typed binding such as `n: !int ${a.output.f.uri}` that used to fail at run now fails at
+load.
 
 On a [union](#unions-of-records-union), a field every member has can be read anywhere. Its
 type is the members' type when they agree, the merged `Literal` when every member's field

@@ -240,7 +240,8 @@ slot (`n: !int ${x.output}`, checked at runtime) or narrow it with `isinstance` 
 non-text key, a date object, or a set fails the node. A node output with no `output:`
 follows the same rule but may also hold files; a date, set, or non-text key in it fails
 `contract.output` with its path (`output at d: ...`). A `file` is a `FileRef` (`uri`,
-`mime`, `name`; read them as `${f.uri}`). It keeps its type inside typed containers: a
+`mime`, `name`; read them as `${f.uri}`, typed at load: `uri` is `str`, `mime` and
+`name` `Optional(str)`, and any other field is a load error). It keeps its type inside typed containers: a
 `list(file)` item, a record `file` field, or a LOOP-carried `file` reaches CODE as a
 `FileRef` (`x["f"].uri`, not `x["f"]["uri"]`). A `file` slot also reads the mapping
 `{uri, mime, name}`, and an `object` slot reads a nested file as its mapping; untyped

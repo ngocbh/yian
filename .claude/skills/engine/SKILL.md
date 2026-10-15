@@ -339,7 +339,10 @@ this model whenever you design anything:
   algorithms. Compose and runtime growth reference validation share the source-neutral
   closed-field walk from `nodes/contracts.py` (`output_contract_field_error`): it
   rejects a provably absent record field and any field on a scalar or list type;
-  an opaque `object` (no declared fields), `Any`, and `file` stay unchecked. On a union it
+  an opaque `object` (no declared fields) and `Any` stay unchecked; a `file` reads only
+  `uri` (`str`), `mime` and `name` (`Optional(str)`), typed by
+  `typesys.values.file_field_type`, which inline-binding inference,
+  `project_output_contract`, and expression typing share. On a union it
   reads a field every member has and rejects a member-only field; runtime growth passes
   `partial_union_fields=True` because loader-time narrowing is not recorded on the
   fragment. Compose's narrowing pass (`compose/validate/narrowing.py`) gives each node a

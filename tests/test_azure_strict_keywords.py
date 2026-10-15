@@ -8,6 +8,7 @@ from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import HumanMessage
 from langchain_openai import AzureChatOpenAI
 from pydantic import BaseModel, Field, ValidationError
+from pydantic import v1 as pydantic_v1
 
 from tests.test_structured_open_schema import _ToolCallServer, _azure, _payload, azure_env
 from yian.llm_clients.azure_client import _strict_schema_without
@@ -197,6 +198,17 @@ def test_azure_dict_schema_is_unchanged(azure_env):
     payload = _payload(llm, llm.with_structured_output(schema))
     assert payload == _payload(llm, AzureChatOpenAI.with_structured_output(llm, schema))
     assert payload["response_format"]["json_schema"]["schema"]["properties"]["n"]["minimum"] == 1
+
+
+class _V1Count(pydantic_v1.BaseModel):
+    n: int = pydantic_v1.Field(ge=0)
+
+
+@pytest.mark.filterwarnings("ignore")
+def test_azure_pydantic_v1_schema_is_unchanged(azure_env):
+    llm = _azure()
+    payload = _payload(llm, llm.with_structured_output(_V1Count))
+    assert payload == _payload(llm, AzureChatOpenAI.with_structured_output(llm, _V1Count))
 
 
 class _ContentServer:

@@ -6,9 +6,9 @@ from typing import Any, Optional
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.runnables import RunnableMap, RunnablePassthrough
 from langchain_core.utils.function_calling import convert_to_openai_tool
-from langchain_core.utils.pydantic import is_basemodel_subclass
 from langchain_openai import AzureChatOpenAI
 from openai.lib._parsing._completions import type_to_response_format_param
+from pydantic import BaseModel
 
 from .base_client import BaseLLMClient, normalize_content
 from .capabilities import has_open_schema
@@ -103,7 +103,7 @@ class NormalizedAzureChatOpenAI(RequestBlockMixin, AzureChatOpenAI):
         the caller gave ``strict``.
 
         Azure's strict mode also rejects keywords such as ``minimum``, ``maximum`` and
-        ``minItems`` (`_AZURE_STRICT_UNSUPPORTED`). A closed pydantic schema holding one,
+        ``minItems`` (`_AZURE_STRICT_UNSUPPORTED`). A closed pydantic v2 schema holding one,
         given without ``method`` or ``strict``, is sent as a strict ``json_schema`` with
         those keywords moved into the subschema's description (`_strict_schema_without`),
         and the reply is parsed against `schema` itself, so the moved keywords are still
@@ -130,7 +130,7 @@ class NormalizedAzureChatOpenAI(RequestBlockMixin, AzureChatOpenAI):
             method is None
             and "strict" not in kwargs
             and isinstance(schema, type)
-            and is_basemodel_subclass(schema)
+            and issubclass(schema, BaseModel)
             and not has_open_schema(schema)
             and (response_format := _strict_schema_without(schema)) is not None
         ):

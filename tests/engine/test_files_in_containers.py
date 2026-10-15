@@ -37,6 +37,8 @@ _REGISTRY = read_typedefs(
         "XObject": {"x": "object"},
         "Box": {"x": "object"},
         "Num": {"n": "float"},
+        "TFile": {"kind": "Literal(file)", "x": "file"},
+        "TObject": {"kind": "Literal(object)", "x": "object"},
     }
 )
 
@@ -205,10 +207,79 @@ def test_normalize_files_returns_the_same_value_when_nothing_changes(declared, v
     assert normalize_files(_t(declared), value) is value
 
 
-def test_normalize_files_picks_a_union_member_like_the_write_check():
-    union = Type(kind=ValueKind.OBJECT, variants=(_t("Num"), _t("XFile")))
+@pytest.mark.parametrize(
+    ("members", "expected"),
+    [(("XFile", "XObject"), {"x": REF}), (("XObject", "XFile"), {"x": FORM})],
+)
+def test_normalize_files_picks_an_untagged_union_member_like_the_write_check(
+    members, expected
+):
+    # Both members admit `{"x": FORM}`, so the first one decides how `x` reads.
+    union = Type(kind=ValueKind.OBJECT, variants=tuple(_t(name) for name in members))
+    value = {"x": dict(FORM)}
 
-    assert normalize_files(union, {"x": dict(FORM)}) == {"x": REF}
+    assert normalize_files(union, value) == expected
+    assert build_value_as(union, value).to_object() == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ({"kind": "file", "x": FORM}, {"kind": "file", "x": REF}),
+        ({"kind": "object", "x": {"f": REF}}, {"kind": "object", "x": {"f": FORM}}),
+    ],
+)
+def test_normalize_files_picks_a_tagged_union_member_by_its_tag(value, expected):
+    assert normalize_files(_t("Union(TFile, TObject)"), value) == expected
+
+
+def test_normalize_files_reads_an_optional_union():
+    declared = _t("Optional(Union(TFile, TObject))")
+
+    assert normalize_files(declared, None) is None
+    assert normalize_files(declared, {"kind": "file", "x": FORM}) == {"kind": "file", "x": REF}
+
+
+def test_normalize_files_reads_a_tuple_as_a_list_only_when_it_changes():
+    unchanged = (REF, REF)
+
+    assert normalize_files(_t("list(file)"), (FORM, REF)) == [REF, REF]
+    assert normalize_files(_t("list(file)"), unchanged) is unchanged
+
+
+@pytest.mark.parametrize(
+    ("declared", "value"),
+    [
+        ("Rec", "text"),
+        ("list(file)", {"f": FORM}),
+        ("Union(TFile, TObject)", {"kind": "other", "x": FORM}),
+        ("Union(TFile, TObject)", {"x": FORM}),
+        ("Union(XFile, IntUri)", {"y": FORM}),
+        ("Union(XFile, IntUri)", [FORM]),
+    ],
+)
+def test_normalize_files_keeps_a_value_that_fails_the_type(declared, value):
+    assert normalize_files(_t(declared), value) is value
+
+
+@pytest.mark.parametrize(
+    ("declared", "value"),
+    [
+        ("file", FORM),
+        ("Rec", {"f": FORM, "n": 1}),
+        ("list(Rec)", [{"f": REF, "n": 1}, {"f": FORM, "n": 2}]),
+        ("Optional(list(Optional(file)))", [FORM, None]),
+        ("object", {"f": REF, "g": [REF, 1]}),
+        ("list(object)", [{"f": REF}, {"a": 1}]),
+        ("Box", {"x": {"f": [REF]}}),
+        ("Union(TFile, TObject)", {"kind": "file", "x": FORM}),
+        ("Union(XFile, IntUri)", {"x": FORM}),
+    ],
+)
+def test_normalize_files_agrees_with_the_write_check(declared, value):
+    typ = _t(declared)
+
+    assert normalize_files(typ, value) == build_value_as(typ, value).to_object()
 
 
 # --- untagged unions whose members can share a file --- #
@@ -291,7 +362,7 @@ def test_a_map_over_a_list_of_files_into_a_file_input_succeeds():
                 input:
                   f: ${{input.f}}
                 code: |
-                  return inputs['f']['uri']
+                  return 'ok'
             output: ${{c.output}}
         nodes:
           a:
@@ -308,7 +379,7 @@ def test_a_map_over_a_list_of_files_into_a_file_input_succeeds():
         output: ${{m.output}}
         """)
 
-    assert output == ["f", "f"]
+    assert output == ["ok", "ok"]
 
 
 def test_a_loop_carrying_a_file_succeeds():

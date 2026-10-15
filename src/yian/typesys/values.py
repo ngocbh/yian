@@ -2435,15 +2435,14 @@ def _build_for_union(
             f"{value_repr(value)} is not an object for a union type", path=path
         )
     members = typ.variants
-    tag_fields = _members_tag_fields(members)
-    if tag_fields:
-        field = tag_fields[0]
+    tagged = _tagged_member(members, value)
+    if tagged is not None:
+        field, member = tagged
         if field not in value:
             raise TypeCheckError(
                 f"missing tag field {field!r} (expected one of {_tag_values(members, field)})",
                 path=path + (field,),
             )
-        member = _member_with_tag(members, field, value[field])
         if member is None:
             raise TypeCheckError(
                 f"{value_repr(value[field])} is not a tag of the union "
@@ -2462,6 +2461,31 @@ def _build_for_union(
             reasons.append(f"{canonical_type_label(member)}: {exc}")
     summary = f"value matches no member of {canonical_type_label(typ)}"
     raise _NoUnionMember(summary + ": " + "; ".join(reasons), summary=summary, path=path)
+
+
+def _tagged_member(
+    members: tuple[Type, ...], value: dict[str, Any]
+) -> Optional[tuple[str, Optional[Type]]]:
+    """Return a tagged union's first tag field and the member `value`'s tag selects.
+
+    Args:
+        members (`tuple[Type, ...]`):
+            The union's members.
+        value (`dict[str, Any]`):
+            The object being read as the union.
+
+    Returns:
+        `tuple[str, Type | None] | None`:
+            `None` when the members share no tag field (an untagged union); else the
+            first tag field and the member whose tag equals `value`'s, or `None` for
+            the member when that field is missing or holds an unknown tag.
+    """
+    tag_fields = _members_tag_fields(members)
+    if not tag_fields:
+        return None
+    field = tag_fields[0]
+    member = _member_with_tag(members, field, value[field]) if field in value else None
+    return field, member
 
 
 def _tag_values(members: tuple[Type, ...], field: str) -> list[str]:
@@ -2579,8 +2603,6 @@ def normalize_files(typ: Type, value: Any) -> Any:
     if typ.variants is not None:
         member = _union_member_of(typ, value)
         return value if member is None else normalize_files(member, value)
-    if typ.tags is not None:
-        return value
     if typ.fields is not None:
         if not isinstance(value, dict):
             return value
@@ -2594,12 +2616,11 @@ def normalize_files(typ: Type, value: Any) -> Any:
     if typ.kind.is_list():
         if not isinstance(value, (list, tuple)):
             return value
+        # `_reads_files` admits a list only with an element type or as flat `list(object)`.
         if typ.element is not None:
             items = [normalize_files(typ.element, item) for item in value]
-        elif typ.kind is ValueKind.LIST_OBJECT:
-            items = [_files_as_mappings(item) for item in value]
         else:
-            return value
+            items = [_files_as_mappings(item) for item in value]
         if all(new is old for new, old in zip(items, value)):
             return value
         return items
@@ -2611,7 +2632,11 @@ def normalize_files(typ: Type, value: Any) -> Any:
 
 
 def _reads_files(typ: Type) -> bool:
-    """Whether `typ` has a `file` or an unrefined `object` position at any depth."""
+    """Whether `typ` has a `file` or an unrefined `object` position at any depth.
+
+    Unlike `has_file`, it also counts plain `object` and flat `list(object)`, whose
+    nested `FileRef`s are read as mappings.
+    """
     if typ.kind is ValueKind.FILE or _is_plain_object(typ):
         return True
     if typ.kind is ValueKind.LIST_OBJECT and typ.element is None:
@@ -2627,14 +2652,15 @@ def _union_member_of(typ: Type, value: Any) -> Optional[Type]:
     """Return the member of union `typ` that `build_value_as` checks `value` against.
 
     `None` when the value is not an object, has a missing or unknown tag, or matches
-    no member.
+    no member. A tagged union's member comes from `_tagged_member`, as in
+    `_build_for_union`. For an untagged union it builds the value against each member
+    again, deliberately: the first member it satisfies is the one the write check took.
     """
     if not isinstance(value, dict):
         return None
-    tag_fields = _members_tag_fields(typ.variants)
-    if tag_fields:
-        field = tag_fields[0]
-        return _member_with_tag(typ.variants, field, value[field]) if field in value else None
+    tagged = _tagged_member(typ.variants, value)
+    if tagged is not None:
+        return tagged[1]
     for member in typ.variants:
         try:
             _build_for_type(member, value)

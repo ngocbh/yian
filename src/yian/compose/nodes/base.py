@@ -399,8 +399,8 @@ class NodeDescriptor:
     # `when:` (conditions live in a `case` node's `cases:` entries), so the bare "not allowed"
     # error would leave the author guessing where the condition goes. `case` overrides it.
     when_hint: ClassVar[str] = (
-        "; a node takes no `when:`; to run it only when a condition holds, route to it from a "
-        "`case` node (`cases: [{when: ..., then: <node>}]`)"
+        "; to run a node only when a condition holds, route to it from a `case` node "
+        "(`cases: [{when: ..., then: <node>}]`)"
     )
 
     # The descriptor FIELD names carrying `${...}` binding strings, consumed by the

@@ -180,11 +180,17 @@ def test_deep_frozenset_output_is_not_a_json_value(output):
     assert "canonical data nesting" not in failure.message
 
 
-def test_list_hiding_a_deep_list_fails_the_output_contract():
+def test_list_hiding_a_deep_list_stores_what_its_iteration_yields():
     result = run_flow(load_flow(_flow("hidden_deep_list")), {}, num_workers=0)
-    assert result.status == "failed"
-    assert result.failure.code == "contract.output"
-    assert result.failure.node_id == "b"
+    assert result.status == "succeeded"
+    assert result.output == {"s": []}
+
+
+def test_list_yielding_a_deep_list_fails_the_output_contract():
+    failure = _failure("yielded_deep_list")
+    assert failure.node_id == "b"
+    assert "value nests deeper than 100 levels" in failure.message
+    assert "s[0][0]" in failure.message
 
 
 def test_value_repr_raises_a_bad_defaults_variable(monkeypatch) -> None:

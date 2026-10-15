@@ -776,7 +776,7 @@ def _too_deep(where: str, path: tuple[str | int, ...], limit: int) -> TypeCheckE
     )
 
 
-def plain_containers(value: Any) -> Any:
+def plain_containers(value: Any, where: str) -> Any:
     """Return a value whose containers are plain, reading each subclass once.
 
     When no `dict`, `list`, or `tuple` subclass is reachable, directly or inside a
@@ -792,6 +792,8 @@ def plain_containers(value: Any) -> Any:
     Args:
         value (`Any`):
             The value to read.
+        where (`str`):
+            Names the boundary for the message, e.g. ``"output"``.
 
     Returns:
         `Any`: `value` itself, or its copy built from plain containers.
@@ -799,7 +801,8 @@ def plain_containers(value: Any) -> Any:
     Raises:
         `TypeCheckError`:
             A `dict` subclass's ``items()`` yields an unhashable key; ``path`` locates
-            the mapping and the message reads ``object keys must be text, got <repr>``.
+            the mapping and the message reads
+            ``<where>[ at <path>]: object keys must be text, got <repr>``.
         `Exception`:
             Whatever a subclass's own iteration raises, unchanged.
     """
@@ -854,9 +857,11 @@ def plain_containers(value: Any) -> Any:
                 try:
                     hash(key)
                 except TypeError:
+                    path = _copy_path(stack)
+                    location = f"{where} at {_render_value_path(path)}" if path else where
                     raise TypeCheckError(
-                        f"object keys must be text, got {value_repr(key)}",
-                        path=_copy_path(stack),
+                        f"{location}: object keys must be text, got {value_repr(key)}",
+                        path=path,
                     ) from None
             copied[key] = adopt(child, key)
         else:

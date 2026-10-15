@@ -4,7 +4,8 @@ A value written in a flow file is checked at load with the counting the run-time
 applies to it (`typesys.values.reject_deep_nesting`), so it fails before any recursive
 load walker reads it, even when YAML aliases build its depth while the text stays
 shallow. `${...}` text counts as a scalar; the run-time check still covers computed
-values.
+values. An `env:` value that holds itself through a recursive alias is rejected the
+same way, since the run's fingerprint cannot encode it.
 """
 
 from __future__ import annotations
@@ -14,7 +15,13 @@ from typing import Any, Mapping
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.source import SourceCursor
 from yian.diagnostics import SourceRange
-from yian.typesys.values import TypeCheckError, reject_deep_nesting
+from yian.typesys.values import (
+    TypeCheckError,
+    _nesting_children,
+    _nesting_segment,
+    _render_value_path,
+    reject_deep_nesting,
+)
 
 
 def check_written_value(
@@ -51,7 +58,9 @@ def check_env_values(
     env_cursor: SourceCursor | None,
     diagnostics: LoadDiagnostics,
 ) -> None:
-    """Reject an `env:` value that nests deeper than `current().max_value_nesting` levels.
+    """Reject an `env:` value that nests too deep or holds itself through an alias.
+
+    Each value's depth is checked first, against `current().max_value_nesting` levels.
 
     Args:
         env (`Mapping[str, Any]`): The authored `env:` mapping.
@@ -61,10 +70,58 @@ def check_env_values(
 
     Raises:
         `LoadError`: Raised at the entry's value (else at `env:`) when a value sits past
-            the limit.
+            the limit, or when an entry in it refers back to a container enclosing it;
+            the latter reads `<prefix>env '<key>' at <path>: cannot descend through a
+            recursive alias occurrence`.
     """
     for key, value in env.items():
         range = None
         if env_cursor is not None:
             range = env_cursor.range_of(key) or env_cursor.range
-        check_written_value(value, f"{prefix}env {key!r}", range, diagnostics)
+        where = f"{prefix}env {key!r}"
+        check_written_value(value, where, range, diagnostics)
+        path = _recursive_entry_path(value)
+        if path is not None:
+            raise diagnostics.error(
+                f"{where} at {_render_value_path(path)}: "
+                "cannot descend through a recursive alias occurrence",
+                range=range,
+            )
+
+
+def _recursive_entry_path(value: Any) -> tuple[str | int, ...] | None:
+    """Return the path of the first entry that refers back to a container enclosing it.
+
+    Walks the containers `reject_deep_nesting` walks, depth-first and in order.
+
+    Args:
+        value (`Any`): The authored value.
+
+    Returns:
+        `tuple[str | int, ...] | None`: The entry's path from `value`, or `None` when
+            no entry holds an enclosing container.
+    """
+    children = _nesting_children(value)
+    if children is None:
+        return None
+    # An explicit stack, not recursion: the value already passed the depth check, but
+    # this walk should not depend on the caller's stack depth either.
+    stack = [(iter(children), value, ())]
+    active = {id(value)}
+    while stack:
+        iterator, container, path = stack[-1]
+        entry = next(iterator, None)
+        if entry is None:
+            stack.pop()
+            active.discard(id(container))
+            continue
+        key, child = entry
+        grandchildren = _nesting_children(child)
+        if grandchildren is None:
+            continue
+        child_path = path + (_nesting_segment(container, key),)
+        if id(child) in active:
+            return child_path
+        stack.append((iter(grandchildren), child, child_path))
+        active.add(id(child))
+    return None

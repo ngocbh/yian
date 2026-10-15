@@ -129,7 +129,7 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_MAX_CALL_NESTING` | limit | 50 | 1 to 50 (can only be lowered) | Deepest chain of call, map, and loop bodies a flow may nest |
 | `YIAN_MAX_TOTAL_NODES` | limit | 10,000 | 1 or more | Most live nodes a run's graph may grow to |
 | `YIAN_MAX_SKIP_WORLDS` | limit | 10,000 | 1 or more | Most branch combinations the skip check explores before giving up |
-| `YIAN_MAX_INT_DIGITS` | limit | 4,300 | 1 to the interpreter's int digit limit | Most decimal digits an int may have when read or written as text |
+| `YIAN_MAX_INT_DIGITS` | limit | 4,300 | 1 to the interpreter's int digit limit | Most decimal digits an int may have when read or written as text (reserved; not enforced yet) |
 | `YIAN_AGENT_RETRIES` | setting | 2 | 0 or more | Extra attempts an AGENT gets to correct an invalid structured reply when the node sets none |
 | `YIAN_AGENT_MAX_TOOL_ITERATIONS` | setting | -1 | 1 or more, or -1 for no cap | AGENT tool-call turns when the node sets none; -1 is no cap |
 | `YIAN_EPISODIC_MAX_EPISODES` | setting | 100 | 1 or more | Episodes an episodic memory keeps when it sets no limit |

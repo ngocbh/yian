@@ -1215,7 +1215,7 @@ def _replay_run_log(
 
     The authored fingerprint is checked before copying.  The private graph gets
     only the complete effective LLM map recorded by ``RunStarted``; recovery
-    never consults current process defaults.  Historical transitions use the
+    never consults the current LLM defaults.  Historical transitions use the
     same reducer and growth constructor as live execution.  A host ``api_key``
     goes to the agents the map marks for it.
     """

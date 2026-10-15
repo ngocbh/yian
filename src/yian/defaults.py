@@ -125,7 +125,10 @@ ENTRIES: tuple[Entry, ...] = (
     Entry(
         "MAX_INT_DIGITS",
         default=4300,
-        description="Most decimal digits an int may have when read or written as text",
+        description=(
+            "Most decimal digits an int may have when read or written as text"
+            " (reserved; not enforced yet)"
+        ),
         group="limit",
         minimum=1,
         maximum=None,

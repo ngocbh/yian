@@ -1329,7 +1329,7 @@ another writer still holds raises `BlockingIOError` naming the path; a damaged
 record raises `ValueError` naming the path, its 1-based line, and the expected seq.
 It reconstructs the typed pool,
 dynamic expansions, original input, run identity, diagnostics, and snapshotted LLM
-configuration without reading current process defaults. A run started before the
+configuration without reading the current LLM defaults. A run started before the
 AGENT `mode:` field was removed cannot be resumed: the AGENT manifest changed, so
 every AGENT flow has a new fingerprint.
 

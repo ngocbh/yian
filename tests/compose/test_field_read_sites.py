@@ -4,6 +4,7 @@ import pytest
 
 from yian.compose import load_flow
 from yian.compose.helpers.errors import LoadError
+from yian.expr.builtins import TEMPLATE_FNS
 from yian.run import run_flow
 
 _PREAMBLE = (
@@ -35,8 +36,10 @@ _QTY_HINT = (
 def _flow(
     nodes: str, output: str, *, defs: str = "", inputs: str = "", tail: str = ""
 ) -> str:
-    """The shared preamble, `defs`, the inputs (plus `inputs` lines), node `step`, then
-    `nodes`, `output` and `tail`."""
+    """Return a flow built from the shared preamble and the given sections.
+
+    The flow holds `defs`, the inputs (plus `inputs` lines), node `step`, then `nodes`,
+    `output` and `tail`."""
     return (
         _PREAMBLE
         + defs
@@ -461,3 +464,158 @@ def test_flow_assert_known_input_field_loads_and_runs():
 )
 def test_flow_assert_readable_input_fields_load(inputs, assertion):
     load_flow(_flow("", "${step.output}", inputs=inputs, tail=_asserts(assertion)))
+
+
+_TEXT_FIELD = "reference ${{{name}(...).f}} reads field 'f' on type str, which has no fields"
+
+
+def _case_targets() -> str:
+    """CODE nodes `a` and `b`, the targets of the CASE helpers below."""
+    return (
+        "  a: {kind: code, code: \"return 'a'\", output: str}\n"
+        "  b: {kind: code, code: \"return 'b'\", output: str}\n"
+    )
+
+
+def test_binding_reads_a_field_on_a_builtin_result():
+    nodes = (
+        "  c:\n    kind: code\n"
+        "    input:\n      v: ${upper(input.s).f}\n"
+        "    output: str\n    code: return 'x'\n"
+    )
+    message = _load_error(_flow(nodes, "${c.output}"))
+    assert f"node 'c' input 'v' from: {_TEXT_FIELD.format(name='upper')}" in message
+
+
+def test_flow_output_reads_a_field_on_a_builtin_result():
+    message = _load_error(_flow("", "\n  o: ${lower(input.s).f}"))
+    assert f"flow output from: {_TEXT_FIELD.format(name='lower')}" in message
+
+
+def test_prompt_reads_a_field_on_a_builtin_result():
+    message = _load_error(
+        _flow(_agent({"v": "${step.output}"}, "${upper(v.a).x}"), "${ag.output}")
+    )
+    assert (
+        "node 'ag' prompt: reference ${upper(...).x} reads field 'x' on type str, "
+        "which has no fields" in message
+    )
+
+
+def test_case_when_reads_a_field_on_a_builtin_result():
+    nodes = (
+        "  g:\n    kind: case\n    cases:\n"
+        "      - when: \"upper(input.s).f == 'x'\"\n        then: a\n"
+        "    else: b\n" + _case_targets()
+    )
+    message = _load_error(_flow(nodes, "${g.output}"))
+    assert f"case node 'g' cases[0].when: {_TEXT_FIELD.format(name='upper')}" in message
+
+
+def test_node_assert_reads_a_field_on_a_builtin_result():
+    message = _load_error(
+        _flow(_code({"v": "${step.output}"}, ["upper(v.a).f == 'x'"]), "${c.output}")
+    )
+    assert (
+        f"node 'c' assert \"upper(v.a).f == 'x'\": {_TEXT_FIELD.format(name='upper')}"
+        in message
+    )
+
+
+def test_flow_assert_reads_a_field_on_a_builtin_result():
+    message = _load_error(
+        _flow("", "${step.output}", tail=_asserts("upper(input.s).f == 'x'"))
+    )
+    assert (
+        f"flow assert \"upper(input.s).f == 'x'\": {_TEXT_FIELD.format(name='upper')}"
+        in message
+    )
+
+
+def test_loop_while_reads_a_field_on_a_builtin_result():
+    nodes = (
+        "  drive:\n    kind: loop\n    call: body\n"
+        "    while: ${upper(st.a).f == 'x'}\n    max: 3\n"
+        "    input:\n      st: ${step.output}\n"
+    )
+    message = _load_error(_flow(nodes, "${drive.output}", defs=_LOOP_NAMED_BODY))
+    assert f"loop node 'drive' while: {_TEXT_FIELD.format(name='upper')}" in message
+
+
+_MAP_CHILD = (
+    "defs:\n"
+    "  child:\n"
+    "    input:\n      x: !str\n"
+    "    nodes:\n"
+    "      inner:\n"
+    "        kind: code\n"
+    "        input:\n          x: ${input.x}\n"
+    "        output: str\n"
+    "        code: return 'x'\n"
+    "    output: ${inner.output}\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("nodes", "output", "site"),
+    [
+        (
+            "  m:\n    kind: map\n    call: child\n    over: ${upper(input.s).f}\n"
+            "    input:\n      x: ${item}\n",
+            "${m.output}",
+            "node 'm' map over",
+        ),
+        (
+            "  g:\n    kind: case\n    on: ${upper(input.s).f}\n"
+            "    cases:\n      - when: x\n        then: a\n    else: b\n"
+            + _case_targets(),
+            "${g.output}",
+            "node 'g' on",
+        ),
+        (
+            "  c:\n    kind: code\n"
+            "    input:\n      v: call(child, x=${upper(input.s).f})\n"
+            "    output: str\n    code: return 'x'\n",
+            "${c.output}",
+            "node 'c' input 'v' call(child) argument 'x' from",
+        ),
+    ],
+    ids=["map-over", "case-on", "inline-call-arg"],
+)
+def test_scanned_sites_read_a_field_on_a_builtin_result_once(nodes, output, site):
+    message = _load_error(_flow(nodes, output, defs=_MAP_CHILD))
+    assert site in message
+    assert message.count(_TEXT_FIELD.format(name="upper")) == 1
+
+
+@pytest.mark.parametrize(
+    "nodes",
+    [
+        _agent({"v": "${upper(input.s)}"}, "${v}"),
+        _agent({"v": "!list(str) [a, b]"}, "${join(v, ',')}"),
+        _code({"v": "${input.s}"}, ["upper(v) == 'X'"]),
+    ],
+    ids=["upper", "join", "assert"],
+)
+def test_builtin_results_without_a_field_read_load(nodes):
+    load_flow(_flow(nodes, "${ag.output}" if "ag:" in nodes else "${c.output}"))
+
+
+def test_host_builtin_field_reads_load(monkeypatch):
+    monkeypatch.setitem(TEMPLATE_FNS, "mkrec", lambda s: {"f": s})
+    monkeypatch.setitem(TEMPLATE_FNS, "upper", lambda s: {"f": s})
+    for name in ("mkrec", "upper"):
+        nodes = (
+            "  c:\n    kind: code\n"
+            f"    input:\n      v: ${{{name}(input.s).f}}\n"
+            "    output: str\n    code: return 'x'\n"
+            f"    asserts:\n      - \"{name}(v).f == v\"\n"
+        )
+        load_flow(_flow(nodes, "${c.output}"))
+
+
+def test_unparsable_condition_keeps_its_located_parse_error():
+    message = _load_error(
+        _flow(_code({"v": "${step.output}"}, ["upper(v.a).f =="]), "${c.output}")
+    )
+    assert "node 'c' assert 'upper(v.a).f ==': not a valid boolean expression" in message

@@ -16,8 +16,9 @@ import pytest
 from yian.compose import LoadError, load_flow
 from yian.expr import ExpressionError, eval_binding, prompt_refs, render_template_record
 from yian.expr import grammar
-from yian.expr.builtins import register_template_fn
+from yian.expr.builtins import TEMPLATE_FNS, builtin_result_type, register_template_fn
 from yian.expr.expressions import ResolveMode, eval_expr
+from yian.typesys.values import Type, ValueKind
 
 _REC = {"briefs": ["ab", "adf"], "name": "zeta", "sig": {"value": 0.8}}
 
@@ -300,3 +301,21 @@ def test_condition_call_result_miss_stays_falsy():
     register_template_fn("_mkrec")(lambda x: {"field": f"F-{x}"})
     tree = grammar.parse_expr("_mkrec(name).nope == 1")
     assert eval_expr(tree, _record_resolve(_REC), mode=ResolveMode.CONDITION_FALSY) is False
+
+
+# --- result types ------------------------------------------------------------ #
+
+
+@pytest.mark.parametrize("name", ["render_as_json", "join", "upper", "lower"])
+def test_builtin_result_type_is_text(name):
+    assert builtin_result_type(name) == Type.scalar(ValueKind.STRING)
+
+
+def test_builtin_result_type_unknown_name():
+    assert builtin_result_type("frobnicate") is None
+
+
+def test_builtin_result_type_of_a_host_override(monkeypatch):
+    monkeypatch.setitem(TEMPLATE_FNS, "upper", TEMPLATE_FNS["upper"])
+    register_template_fn("upper")(lambda s: {"f": s})
+    assert builtin_result_type("upper") is None

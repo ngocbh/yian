@@ -45,7 +45,8 @@ reject an ill-formed flow before it is compiled:
 - `constructors.py` — `constructor_errors`: a `${T(...)}` constructor call that can never
   succeed (mixed keyword and positional arguments or several positional ones, a field
   `T` doesn't have, a missing required field, or an argument whose inferred type is
-  disjoint from the declared one).
+  disjoint from the declared one); `builtin_field_errors`: a field read on a builtin's
+  result whose type has no such field (`upper(x).f`).
 - `skips.py` — `SkipModel`: which nodes of a flow level the CASE routing may skip, and
   whether a set of them may skip together; `null_skipped_outputs` gives a flow output whose
   producers may all be skipped the explicit null default; `check_skipped_arithmetic` rejects

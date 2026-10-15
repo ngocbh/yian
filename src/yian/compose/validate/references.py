@@ -53,7 +53,7 @@ from yian.compose.helpers.output_contracts import (
     resolve_output_binding_contract,
 )
 from yian.compose.nodes.base import BuildResult
-from yian.compose.validate.constructors import constructor_errors
+from yian.compose.validate.constructors import builtin_field_errors, constructor_errors
 from yian.compose.validate.narrowing import Narrowing
 from yian.compose.validate.typed_bindings import LocalInput, ResolveOrigin
 from yian.diagnostics import SourceRange
@@ -286,12 +286,14 @@ def validate_references(
     ) -> None:
         """Name-check every reference one template string reads; see `scan`.
 
-        A call to a builtin with arguments it doesn't take is one more error at `where`."""
+        A call to a builtin with arguments it doesn't take, and each field read on a
+        builtin's result its type can't have, is one more error at `where`."""
         try:
             paths = expr_refs_of(text)
         except ExpressionError as exc:
             errors.append((f"{where}: {exc}", rng))
             return
+        add_builtin_field_errors(text, where, rng)
         if registry is not None and constructors:
 
             def ref_type(path: str) -> Type | None:
@@ -361,6 +363,15 @@ def validate_references(
         except ExpressionError as exc:
             errors.append((f"{where}: {exc}", rng))
 
+    def add_builtin_field_errors(text: str, where: str, rng: Optional[SourceRange]) -> None:
+        """Add one error at `where` per field read on a builtin's result in `text`."""
+        for segment in scan_template(text):
+            if isinstance(segment, Span):
+                errors.extend(
+                    (f"{where}: {problem}", rng)
+                    for problem in builtin_field_errors(segment.tree)
+                )
+
     def check_template(
         where: str,
         template: str,
@@ -375,7 +386,8 @@ def validate_references(
         """Parse one rendered template; check each ref against `declared` and `contracts`.
 
         A malformed span, unknown builtin, builtin called with arguments it doesn't take, or
-        nested `${...}` is one error at `where`; each ref whose head is not in `declared` is
+        nested `${...}` is one error at `where`, and so is each field read on a builtin's
+        result its type can't have; each ref whose head is not in `declared` is
         another, with the pool-ref hint (ending in `hint_tail`) when the head is a pool-style
         head or a node id. Each distinct ref reading a field of a declared name with an
         entry in `contracts` is another when every alternative rejects the read
@@ -385,6 +397,7 @@ def validate_references(
         except ExpressionError as exc:
             errors.append((f"{where}: {exc}", rng))
             return
+        add_builtin_field_errors(template, where, rng)
         field_checked: set[str] = set()
         for ref in refs:
             head = ref.split(".", 1)[0].strip()

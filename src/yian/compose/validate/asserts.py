@@ -330,14 +330,13 @@ def validate_node_asserts(
     independently proven field contract.
     Rejected (located `LoadError`): a pool head (`${outputs/inputs/system/item.X}`), an inline
     `${call}`, `${output.field}` on an output that is neither a record nor a `file` (whose
-    `uri`, `mime` and `name` it can read), a `${name.field}` read of a declared input that
-    every alternative in ``local_contracts[nid][name]`` (`local_input_contracts`) rejects
-    (a field only some union members have is readable on a node in
-    ``partial_union_nodes``; a name with no entry is not field-checked), a declared input
-    named `output`,
-    `isinstance` or a constructor on a CALL/MAP/LOOP node (its asserts run in the child
-    flow), and any node assert on a mapped call (a `MapNode`, `kind: map` — the per-node
-    hook has no `${item}` scope). A call inside `${...}` to a name in ``type_names`` (the
+    `uri`, `mime` and `name` it can read), a `${name.field}` read of a declared input
+    when every alternative of ``local_contracts[nid][name]`` (a `LocalInput` from
+    `local_input_contracts`) rejects it (a field only some union members have is readable
+    on a node in ``partial_union_nodes``; a name with no entry is not field-checked), a
+    declared input named `output`, `isinstance` or a constructor on a CALL/MAP/LOOP node
+    (its asserts run in the child flow), and any node assert on a mapped call (a
+    `MapNode`, `kind: map` — the per-node hook has no `${item}` scope). A call inside `${...}` to a name in ``type_names`` (the
     flow's `typedefs:` names) is a constructor, not an inline call.
     Classifies each PRE (no `${output}`) or POST (reads `${output}`) and stamps
     `node.pre_asserts` / `node.post_asserts`. ``assertion_site_at`` optionally supplies each

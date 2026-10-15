@@ -146,7 +146,7 @@ from yian.compose.helpers.types import (
 from yian.compose.helpers.value_nesting import check_written_value
 from yian.compose.validate.handles import check_case_handles
 from yian.compose.validate.asserts import validate_node_asserts
-from yian.compose.validate.constructors import constructor_errors
+from yian.compose.validate.constructors import builtin_field_errors, constructor_errors
 
 # Name for the single output of a bare whole-string `output:` binding. The value-mode
 # EndNode returns the bare resolved value, so the name only labels the carrier.
@@ -1588,16 +1588,22 @@ def _fill_type_tables(
         condition: bool = False,
     ) -> dict[str, Type]:
         """Resolve `names` as `table` does, then reject a constructor call in `source`
-        that can never succeed whatever the references hold.
+        that can never succeed whatever the references hold, or a field read on a
+        builtin's result its type can't have.
 
         Only for condition sites: `validate_references` already checked every binding's
-        constructor calls, with the references typed."""
+        constructor calls and builtin field reads, with the references typed."""
         resolved_names = table(names, where, rng)
-        if names[1]:
-            for tree in expression_trees(source, condition=condition):
-                problems = constructor_errors(tree, registry)
-                if problems:
-                    raise diagnostics.error(f"{where}: {problems[0]}", range=rng)
+        try:
+            trees = expression_trees(source, condition=condition)
+        except ExpressionError:
+            # An earlier pass reports a source that won't parse.
+            return resolved_names
+        for tree in trees:
+            problems = constructor_errors(tree, registry) if names[1] else []
+            problems += builtin_field_errors(tree)
+            if problems:
+                raise diagnostics.error(f"{where}: {problems[0]}", range=rng)
         return resolved_names
 
     def names_in(source: Any, *, condition: bool = False) -> TypeNames:

@@ -105,6 +105,8 @@ this model whenever you design anything:
   A value written out in a flow file, `env:` values included (`check_env_values`), is
   checked at load first (`compose.helpers.value_nesting.check_written_value`, located
   `LoadError`), before any recursive load walker, so YAML aliases can't crash the load;
+  `check_env_values` also rejects an `env:` value that contains itself through a
+  recursive alias (`typesys.values.recursive_entry_path`), which no fingerprint encodes;
   the run-time checks remain for computed values and flows built in Python. A record
   type written in `output:` counts each record plus its fields' `type_levels` (records
   and lists of the resolved type) against `current().max_type_nesting` in

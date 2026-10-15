@@ -966,7 +966,11 @@ inputs included), CASE value branches, and flow outputs in
 case-branch check (a record output's fields pass `enclosing_levels=1`), and `env:`
 values through `check_env_values` (flow `env:` in `loader._validate_flow_env`, a
 multi-node `defs:` entry's in `_load_def`, a node's in `_read_common_fields`), located
-at the key.
+at the key. After the depth check, `check_env_values` also rejects an `env:` value that
+contains itself through a recursive alias, since the run's fingerprint cannot encode it:
+`typesys.values.recursive_entry_path` returns the path of the first entry that refers
+back to a container enclosing it, and the error reads
+`<prefix>env '<key>' at <path>: cannot descend through a recursive alias occurrence`.
 A record type written as a mapping in a node's `output:` counts against
 `current().max_type_nesting` in `helpers/types.py`: each record is a level, checked
 before its entries are read, and a field's resolved type adds `typesys.values.type_levels`

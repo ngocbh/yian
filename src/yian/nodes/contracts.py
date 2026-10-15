@@ -802,6 +802,7 @@ def output_contract_field_error(
     *,
     partial_union_fields: bool = False,
     isinstance_hint: bool = False,
+    union_root: str | None = None,
 ) -> str | None:
     """Return why a reference reads a field its contract can't have, else `None`.
 
@@ -830,6 +831,10 @@ def output_contract_field_error(
             Whether a member-only field error tells the author to check the member
             with an `isinstance(..., T) and ...` conjunct before the read rather than
             in a case, for a condition no case can route (a LOOP predicate).
+        union_root (`str | None`, *optional*, defaults to `None`):
+            The pool path the referenced value is bound from, when `path` reads a
+            node-local name. A member-only field error's fix then names the union
+            from this path, which a case can route on, instead of from the local name.
 
     Returns:
         `str | None`:
@@ -863,6 +868,7 @@ def output_contract_field_error(
             path,
             partial_union_fields=partial_union_fields,
             isinstance_hint=isinstance_hint,
+            union_root=None if union_root is None else f"{union_root}.{field_name}",
         )
     if type(contract) is not ValueContract:
         output_contract_type(contract)
@@ -871,7 +877,11 @@ def output_contract_field_error(
     typ = output_contract_type(contract)
     assert typ is not None
     # The path segments walked so far, starting with the ones before `fields`.
-    walked = path.split(".")[: path.count(".") + 1 - len(fields)]
+    walked = (
+        path.split(".")[: path.count(".") + 1 - len(fields)]
+        if union_root is None
+        else [union_root]
+    )
     for field_name in fields:
         if typ.variants is not None:
             read = union_field(typ, field_name)

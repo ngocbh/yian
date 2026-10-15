@@ -338,6 +338,31 @@ def test_shared_walk_allows_member_only_fields_when_asked():
     ) == ("reference ${d.output.zzz} reads unknown field 'zzz' on record")
 
 
+def test_member_only_hint_names_the_union_root():
+    contract = ValueContract(_decision())
+    assert output_contract_field_error(contract, ["qty"], "v.qty", union_root="d.output") == (
+        "reference ${v.qty} reads field 'qty', which only union members with "
+        "action buy have; read it inside a case on ${d.output.action}"
+    )
+    nested = PartialRecordContract((("order", contract), ("note", None)))
+    assert output_contract_field_error(
+        nested, ["order", "qty"], "v.order.qty", union_root="d.output"
+    ) == (
+        "reference ${v.order.qty} reads field 'qty', which only union members with "
+        "action buy have; read it inside a case on ${d.output.order.action}"
+    )
+    untagged = ValueContract(
+        read_type("Reply", read_typedefs({"Text": {"text": "str"}, "Num": {"num": "int"},
+                                          "Reply": "Union(Text, Num)"}))
+    )
+    assert output_contract_field_error(
+        untagged, ["text"], "v.text", union_root="s.output"
+    ) == (
+        "reference ${v.text} reads field 'text', which only 1 of 2 union members have; "
+        "check the member with isinstance(s.output, <Type>) in a case first"
+    )
+
+
 def test_runtime_growth_allows_member_only_fields():
     node = CodeNode("g", code="return None")
     producers = {"d": ValueContract(_decision())}

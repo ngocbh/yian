@@ -181,6 +181,7 @@ def output_contract_path_error(
     path: str,
     *,
     partial_union_fields: bool = False,
+    union_root: str | None = None,
 ) -> str | None:
     """Return the field-read error for an output path, else ``None``.
 
@@ -188,11 +189,60 @@ def output_contract_path_error(
     of a `file` other than `uri`, `mime` and `name`, or a field only some members of
     a union have (unless `partial_union_fields`).
     An opaque field inside a partial record remains lenient below that field,
-    while the partial record's closed root name set is still enforced.
+    while the partial record's closed root name set is still enforced. A
+    member-only field's fix names the union from `union_root` when it is set.
     """
     return output_contract_field_error(
-        contract, fields, path, partial_union_fields=partial_union_fields
+        contract,
+        fields,
+        path,
+        partial_union_fields=partial_union_fields,
+        union_root=union_root,
     )
+
+
+def local_field_error(
+    alternatives: tuple[OutputContract, ...],
+    fields: list[str],
+    path: str,
+    *,
+    source: str | None = None,
+    partial_union_fields: bool = False,
+) -> str | None:
+    """Return the field-read error for a node-local name's path, else `None`.
+
+    A local name's value may have any of several proven contracts (a typed binding's
+    declared one and the one its source is inferred to have, or a LOOP's seed and
+    carried field), so the read is an error only when every alternative rejects it.
+
+    Args:
+        alternatives (`tuple[OutputContract, ...]`): The name's proven contracts; the
+            first one's error is reported.
+        fields (`list[str]`): The field names the reference reads below the name.
+        path (`str`): The reference path without `${}`, for the message.
+        source (`str | None`, *optional*, defaults to `None`): The pool path the name
+            is bound from when its binding is one whole-value reference, so a
+            member-only field's fix names a union a case can route on.
+        partial_union_fields (`bool`, *optional*, defaults to `False`): Whether a
+            field only some union members have can be read.
+
+    Returns:
+        `str | None`: The first alternative's error, or `None` when any alternative
+            accepts the read.
+    """
+    first = None
+    for contract in alternatives:
+        error = output_contract_path_error(
+            contract,
+            fields,
+            path,
+            partial_union_fields=partial_union_fields,
+            union_root=source,
+        )
+        if error is None:
+            return None
+        first = first or error
+    return first
 
 
 def resolve_output_binding_contract(
@@ -706,6 +756,7 @@ __all__ = [
     "direct_reference_parts",
     "literal_type",
     "literal_value",
+    "local_field_error",
     "output_contract_path_error",
     "project_output_contract",
     "reference_contract",

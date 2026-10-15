@@ -19,7 +19,9 @@ runtime check:
 
 `infer_binding_type` returns the type one binding is proven to produce (a typed
 binding's declared type, a literal's exact type, or a reference's inferred type), for
-passes that record binding types rather than reject them.
+passes that record binding types rather than reject them. `local_input_contracts`
+returns the proven contracts each node-local name may have, for the passes that
+field-check what a node reads from its own inputs (prompts).
 
 Node inputs are checked as soon as producer contracts exist, before the CALL, MAP,
 and LOOP checks that compare the declared type with a child's parameters; flow
@@ -28,8 +30,8 @@ the binding's registered value origin, else its `input:` entry range, else the n
 range; a flow output error at its registered origin, else the `output:` range.
 
 Imports flow down only: `compile.validation` (the type relation), `expr` (template
-scanning), `typesys`, and `compose.helpers` (output-contract inference and load
-diagnostics). The loader, the compose package facade, and the CALL/MAP check
+scanning), `typesys`, `nodes` (binding carriers and the LOOP node), and
+`compose.helpers` (output-contract inference and load diagnostics). The loader, the compose package facade, and the CALL/MAP check
 (`call_types`, for its literal and `${item}` helpers) import this back.
 """
 
@@ -37,7 +39,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from typing import Any, Callable, Optional
 
@@ -48,6 +50,7 @@ from yian.compose.helpers.output_contracts import (
     NOT_LITERAL,
     TypeFn,
     direct_reference_path,
+    literal_contract,
     literal_type,
     literal_value,
     project_output_contract,
@@ -66,6 +69,7 @@ from yian.nodes.contracts import (
     ValueTemplate,
     binding_source,
 )
+from yian.nodes.loop import LoopNode
 from yian.typesys import (
     Type,
     TypeRegistry,
@@ -75,6 +79,22 @@ from yian.typesys import (
 )
 
 ResolveOrigin = Callable[[OriginRef], DiagnosticFrame | None]
+
+
+@dataclass(frozen=True)
+class LocalInput:
+    """The proven contracts a node-local name's value has, and where it is bound from.
+
+    Attributes:
+        alternatives (`tuple[OutputContract, ...]`): A read is an error only when every
+            alternative rejects it.
+        source (`str | None`): The pool path the name is bound from when the binding
+            is one whole-value reference (`direct_reference_path`), else `None`; a
+            member-only union hint names it instead of the local name.
+    """
+
+    alternatives: tuple[OutputContract, ...]
+    source: str | None = None
 
 
 def check_typed_inputs(
@@ -254,6 +274,137 @@ def infer_binding_type(
         binding, producers, flow_inputs, type_fn=type_fn
     )
     return inferred.type if type(inferred) is ValueContract else None
+
+
+def local_input_contracts(
+    flow_wiring: dict[str, dict[str, Any]],
+    producers: dict[str, OutputContract],
+    flow_inputs: dict[str, ValueContract],
+    build_results: dict[str, BuildResult],
+    *,
+    narrowing: Narrowing | None = None,
+    type_fn: TypeFn | None = None,
+) -> dict[str, dict[str, LocalInput]]:
+    """Return each node input's alternative contracts, keyed by node id then param name.
+
+    A name's alternatives come from its wiring binding, read under the node's narrowed
+    view of the producer and flow-input contracts. A typed binding has its declared
+    contract, plus the contract its raw source is inferred to have when that is exact
+    and fits the declared type (so a branch's narrowed member is readable); a literal
+    has its widened contract; any other binding has its inferred exact or partial
+    contract. A LOOP name also has the carried record's field contract, since a turn
+    may return a compatible wider value than the seed. A name with an unproven binding
+    contract, or a LOOP name with an unproven carried field, is left out, as are a
+    node's reserved wiring keys and every input of a per-item node (MAP).
+
+    Args:
+        flow_wiring (`dict[str, dict[str, Any]]`): Final binding maps keyed by node id
+            and parameter name.
+        producers (`dict[str, OutputContract]`): Exact or partial node output
+            contracts keyed by producer id.
+        flow_inputs (`dict[str, ValueContract]`): Exact flow input contracts keyed by
+            input name.
+        build_results (`dict[str, BuildResult]`): Built nodes, for the node kind and a
+            LOOP's carried record contract.
+        narrowing (`Narrowing | None`, *optional*, defaults to `None`): The union
+            narrowing each param reads against; `None` reads every param against the
+            unchanged maps.
+        type_fn (`TypeFn | None`, *optional*, defaults to `None`): Resolves a
+            constructor name to its type for inference.
+
+    Returns:
+        `dict[str, dict[str, LocalInput]]`: The proven names of each node.
+    """
+    contracts: dict[str, dict[str, LocalInput]] = {}
+    for node_id, wiring in flow_wiring.items():
+        result = build_results.get(node_id)
+        node = result.node if result is not None else None
+        if node is not None and node.binds_per_item:
+            continue
+        reserved = node.reserved_wiring_keys() if node is not None else frozenset()
+        names: dict[str, LocalInput] = {}
+        for name, binding in wiring.items():
+            if name in reserved:
+                continue
+            param_producers, param_inputs = (
+                narrowing.for_param(node_id, name)
+                if narrowing is not None
+                else (producers, flow_inputs)
+            )
+            alternatives = _binding_alternatives(
+                binding, param_producers, param_inputs, type_fn
+            )
+            if alternatives is None:
+                continue
+            if isinstance(node, LoopNode):
+                carried = (
+                    project_output_contract(node.output_contract, [name])
+                    if node.output_contract is not None
+                    else None
+                )
+                if carried is None:
+                    continue
+                alternatives = (*alternatives, carried)
+            names[name] = LocalInput(alternatives, direct_reference_path(binding))
+        if names:
+            contracts[node_id] = names
+    return contracts
+
+
+def _binding_alternatives(
+    binding: Any,
+    producers: dict[str, OutputContract],
+    flow_inputs: dict[str, ValueContract],
+    type_fn: TypeFn | None,
+) -> tuple[OutputContract, ...] | None:
+    """Return the contracts one binding's value is proven to have, else `None`.
+
+    Unlike `infer_binding_type`, a partial record is kept, since its closed root names
+    can still be checked, and a literal is widened, so a message names `str` rather
+    than its one-tag `Literal`. A typed binding also keeps the type inferred from its
+    raw source when that fits the declared type, as a narrower view of the same value.
+
+    Args:
+        binding (`Any`): A wiring binding, raw or a `Binding`.
+        producers (`dict[str, OutputContract]`): Node output contracts by producer id.
+        flow_inputs (`dict[str, ValueContract]`): Flow input contracts by name.
+        type_fn (`TypeFn | None`): Resolves a constructor name to its type.
+
+    Returns:
+        `tuple[OutputContract, ...] | None`: The alternatives, the declared contract
+            first for a typed binding, or `None` when the value's contract is unproven.
+    """
+    source = binding_source(binding)
+    literal = literal_value(source)
+    if isinstance(binding, Binding) and binding.contract is not None:
+        declared = binding.contract
+        # Infer from the raw source: the Binding itself resolves to its declared contract.
+        if literal is not NOT_LITERAL:
+            inferred = literal_contract(literal)
+        elif isinstance(source, ValueTemplate):
+            inferred = template_contract(
+                source,
+                lambda text: resolve_output_binding_contract(
+                    text, producers, flow_inputs, type_fn=type_fn
+                ),
+            )
+        else:
+            inferred = resolve_output_binding_contract(
+                source, producers, flow_inputs, type_fn=type_fn
+            )
+        if (
+            type(inferred) is ValueContract
+            and type_relation(inferred.type, declared.type) == "fits"
+        ):
+            return (declared, inferred)
+        return (declared,)
+    if literal is not NOT_LITERAL:
+        contract = literal_contract(literal)
+    else:
+        contract = resolve_output_binding_contract(
+            binding, producers, flow_inputs, type_fn=type_fn
+        )
+    return None if contract is None else (contract,)
 
 
 def _located_error(

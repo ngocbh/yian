@@ -125,7 +125,11 @@ from yian.compose.validate.skips import (
 )
 from yian.compose.validate.tool_inputs import stamp_tool_input_types
 from yian.compose.validate.value_nesting import check_written_values
-from yian.compose.validate.typed_bindings import check_typed_inputs, check_typed_outputs
+from yian.compose.validate.typed_bindings import (
+    check_typed_inputs,
+    check_typed_outputs,
+    local_input_contracts,
+)
 from yian.compose.validate.wiring_parity import check_wiring_parity
 from yian.compose.parse.nodes import (
     normalize_node_signature_cursor,
@@ -2509,6 +2513,17 @@ def _assemble(
 
     reconciled = data_edges + case_edges + host_edges
 
+    # The proven contracts of each node-local name, for the field reads a node makes
+    # of its own inputs (prompts).
+    local_contracts = local_input_contracts(
+        flow_wiring,
+        producers,
+        flow_input_contracts,
+        build_results,
+        narrowing=narrowing,
+        type_fn=constructor_type,
+    )
+
     # Reference + assert validation over the built flow. Errors locate
     # at the node's line (a bad node-input ref) or the `output:` section line (a
     # dangling flow-output ref).
@@ -2521,6 +2536,7 @@ def _assemble(
         input_contracts=flow_input_contracts,
         outputs_range=outputs_range,
         narrowing=narrowing,
+        local_contracts=local_contracts,
         registry=registry,
         resolve_origin=catalog_builder.resolve_registered,
         diagnostics=diagnostics,

@@ -1,5 +1,6 @@
 import builtins
 import copy
+import json
 import typing
 from typing import Any, Optional
 
@@ -87,11 +88,11 @@ def _const_as_enum(schema: dict[str, Any]) -> dict[str, Any]:
 
     Returns:
         `dict[str, Any]`:
-            A deep copy of `schema` where every subschema under ``properties``, ``$defs``,
-            ``items``, ``prefixItems``, ``additionalProperties``, ``anyOf``, ``oneOf`` and
-            ``allOf`` holding ``const: v`` has ``enum: [v]`` instead. A subschema whose
-            existing ``enum`` holds ``v`` gets ``enum: [v]``; one whose ``enum`` lacks
-            ``v`` is left as written.
+            A deep copy of `schema` where the root and every subschema under
+            ``properties``, ``$defs``, ``items``, ``prefixItems``, ``additionalProperties``,
+            ``anyOf``, ``oneOf`` and ``allOf`` holding ``const: v`` has ``enum: [v]``
+            instead. A subschema whose existing ``enum`` holds ``v`` (compared as JSON
+            values) gets ``enum: [v]``; one whose ``enum`` lacks ``v`` is left as written.
     """
     result = copy.deepcopy(schema)
     stack = [result]
@@ -101,7 +102,12 @@ def _const_as_enum(schema: dict[str, Any]) -> dict[str, Any]:
             continue
         if "const" in node:
             value = node["const"]
-            if "enum" not in node or value in node["enum"]:
+            # Compare as JSON, where `true` and `1` differ; Python has `True == 1`.
+            wanted = json.dumps(value, sort_keys=True)
+            members = node.get("enum")
+            if members is None or any(
+                json.dumps(member, sort_keys=True) == wanted for member in members
+            ):
                 del node["const"]
                 node["enum"] = [value]
         for key in ("properties", "$defs"):

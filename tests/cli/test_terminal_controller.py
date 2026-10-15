@@ -696,7 +696,9 @@ def test_ctrl_c_during_active_prompt_preserves_keyboard_interrupt_and_joins() ->
     assert "ask_user" not in TOOL_REGISTRY
 
 
-def test_second_sigint_during_drain_waits_for_controller_before_returning() -> None:
+def test_second_sigint_during_drain_waits_for_controller_before_returning(
+    default_sigint_handler: None,
+) -> None:
     """Repeated Ctrl-C is deferred until the stopped controller has really finished."""
 
     controller_entered = Event()

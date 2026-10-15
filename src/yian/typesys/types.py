@@ -1044,13 +1044,117 @@ def _check_local(t: TypeExpr, registry: TypeRegistry) -> None:
             _check_local(member, registry)
 
 
+def _expr_levels(t: TypeExpr, levels: dict[str, int]) -> int:
+    """Return how many record and list levels a parsed type nests.
+
+    Each `list(...)` is a level, `Optional(...)` adds none, a union counts as its deepest
+    member, and a name counts as `levels[name]` (0 when not yet measured, which happens
+    only on a reference cycle). Other scalars, `Literal(...)` and `dict(...)` are 0.
+    """
+    # Levels are the most lists on any path to a leaf plus that leaf's levels, so an
+    # explicit stack of (expression, lists above it) needs no recursion.
+    deepest = 0
+    stack: list[tuple[TypeExpr, int]] = [(t, 0)]
+    while stack:
+        t, above = stack.pop()
+        if isinstance(t, ListExpr):
+            stack.append((t.element, above + 1))
+        elif isinstance(t, OptionalExpr):
+            stack.append((t.inner, above))
+        elif isinstance(t, UnionExpr):
+            stack.extend((member, above) for member in t.members)
+        else:
+            leaf = levels.get(t.name, 0) if isinstance(t, RefExpr) else 0
+            deepest = max(deepest, above + leaf)
+    return deepest
+
+
+def _measure_typedef(
+    name: str,
+    defn: Union[RecordDef, VariantDef, AliasDef],
+    parts: list[tuple[str | None, TypeExpr]],
+    levels: dict[str, int],
+    chain: dict[str, int],
+) -> tuple[int, int, str | None, str | None]:
+    """Measure a typedef from the typedefs it names, and record the result.
+
+    Args:
+        name (`str`):
+            The typedef's name; its results are stored under it in `levels` and `chain`.
+        defn (`RecordDef | VariantDef | AliasDef`):
+            The typedef's definition.
+        parts (`list[tuple[str | None, TypeExpr]]`):
+            Its parsed `(field, type)` parts: each record field, or the alias target.
+        levels (`dict[str, int]`):
+            The levels of the typedefs measured so far; a name not in it counts 0.
+        chain (`dict[str, int]`):
+            The chains of the typedefs measured so far; a name not in it counts 0.
+
+    Returns:
+        `tuple[int, int, str | None, str | None]`:
+            Its levels (a record is 1 more than its deepest field, an alias its target's,
+            an enum 0; equal to `type_levels` of the resolved type), its chain (the
+            typedefs on the longest path of names from it, itself included), the first
+            field with the most levels, and the first field with the longest chain. The
+            fields are `None` for an alias or an enum.
+    """
+    field_levels = [(field, _expr_levels(t, levels)) for field, t in parts]
+    field_chain = [
+        (field, max((chain.get(ref, 0) for ref in _refs_in_type(t)), default=0))
+        for field, t in parts
+    ]
+    deepest = max((d for _, d in field_levels), default=0)
+    longest = max((c for _, c in field_chain), default=0)
+    # An enum has no parts, so it measures 0 levels like the string it resolves to.
+    levels[name] = (1 if isinstance(defn, RecordDef) else 0) + deepest
+    chain[name] = 1 + longest
+    levels_field = next((f for f, d in field_levels if d == deepest), None)
+    chain_field = next((f for f, c in field_chain if c == longest), None)
+    return levels[name], chain[name], levels_field, chain_field
+
+
+def _check_measure(
+    name: str,
+    defn: Union[RecordDef, VariantDef, AliasDef],
+    parts: list[tuple[str | None, TypeExpr]],
+    levels: dict[str, int],
+    chain: dict[str, int],
+) -> None:
+    """Measure a typedef and reject one whose levels or chain exceed `max_type_nesting`."""
+    limit = current().max_type_nesting
+    depth, length, levels_field, chain_field = _measure_typedef(
+        name, defn, parts, levels, chain
+    )
+    if depth > limit:
+        message = (
+            f"type nests deeper than {limit} levels, the limit for a type (each record and "
+            f"list is a level)"
+        )
+        if isinstance(defn, RecordDef):
+            message += f"; its type {defn.fields[levels_field]!r} adds {depth - 1}"
+            raise _typedef_error(name, levels_field, TypeCheckError(message))
+        raise _typedef_error(name, None, TypeCheckError(message))
+    if length > limit:
+        raise _typedef_error(
+            name,
+            chain_field,
+            TypeCheckError(
+                f"it ends a chain of {length} typedefs, each naming the next, more than "
+                f"{limit}, the limit for a type; write its type with fewer typedefs in "
+                f"between"
+            ),
+        )
+
+
 def _check_typedefs(registry: TypeRegistry) -> None:
     """Resolve every typedef, so a broken one fails even when nothing uses it.
 
-    Typedefs are checked dependencies first, each one's fields in order. A cycle is
-    reported at the field that closes it, naming the typedef that holds that field:
-    with `A: {x: B}` and `B: {y: A}` the error is `typedef 'B' field 'y': recursive type
-    reference: 'B'`.
+    Typedefs are checked dependencies first, each one's fields in order. Each typedef is
+    first measured: its levels and its chain of typedef names must stay within
+    `max_type_nesting`, so resolution, which follows both, never runs deeper than the
+    limit allows. A cycle is reported at the field that closes it, naming the typedef
+    that holds that field: with `A: {x: B}` and `B: {y: A}` the error is `typedef 'B'
+    field 'y': recursive type reference: 'B'`.
     """
     parsed: dict[str, list[tuple[str | None, TypeExpr]]] = {}
     # First each typedef's own text, so an error names the typedef that holds the
@@ -1098,7 +1202,10 @@ def _check_typedefs(registry: TypeRegistry) -> None:
                 finished.add(name)
                 order.append(name)
 
+    levels: dict[str, int] = {}
+    chain: dict[str, int] = {}
     for name in order:
+        _check_measure(name, registry[name], parsed[name], levels, chain)
         for field, t in parsed[name]:
             if _refs_in_type(t) & back_refs[name]:
                 exc = TypeCheckError(f"recursive type reference: {name!r}")
@@ -1164,8 +1271,10 @@ def read_typedefs(raw: dict) -> TypeRegistry:
         `TypeCheckError`:
             A name is not PascalCase or shadows a builtin, a field name is empty, not a
             string, or holds a Unicode surrogate, a field type is not a string, a value is
-            a union sequence, or a typedef does not resolve (an unknown constructor or
-            name, bad bounds, a recursive record, an alias cycle, or a bad `Union(...)`).
+            a union sequence, a typedef nests more record and list levels than
+            `max_type_nesting` or ends a longer chain of typedefs each naming the next, or
+            a typedef does not resolve (an unknown constructor or name, bad bounds, a
+            recursive record, an alias cycle, or a bad `Union(...)`).
             The message names the typedef and field, and `path` is `(typedef,)` or
             `(typedef, field)` when the error belongs to one entry.
 
@@ -1233,3 +1342,4 @@ def read_typedefs(raw: dict) -> TypeRegistry:
     _check_alias_cycles(registry)
     _check_typedefs(registry)
     return registry
+

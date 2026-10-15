@@ -784,6 +784,17 @@ def _member_only_field_error(
     return f"reference ${{{path}}} reads field {field_name!r}, which {which}; {fix}"
 
 
+def file_field_error(path: str, field_name: str) -> str:
+    """Return the error for reading field `field_name`, which no `file` has.
+
+    `path` is the whole reference path without `${}`.
+    """
+    return (
+        f"reference ${{{path}}} reads field {field_name!r} on a file, "
+        "which has only uri, mime, and name"
+    )
+
+
 def output_contract_field_error(
     contract: OutputContract,
     fields: list[str] | tuple[str, ...],
@@ -883,10 +894,7 @@ def output_contract_field_error(
             if typ.kind is ValueKind.FILE:
                 read_type = file_field_type(field_name)
                 if read_type is None:
-                    return (
-                        f"reference ${{{path}}} reads field {field_name!r} on a file, "
-                        "which has only uri, mime, and name"
-                    )
+                    return file_field_error(path, field_name)
                 typ = read_type
                 walked.append(field_name)
                 continue
@@ -1259,6 +1267,7 @@ __all__ = [
     "as_binding",
     "binding_input_groups",
     "binding_source",
+    "file_field_error",
     "file_fields_type",
     "iter_source_strings",
     "map_source_strings",

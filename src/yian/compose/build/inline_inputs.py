@@ -38,6 +38,7 @@ from yian.nodes.contracts import (
     ValueContract,
     ValueTemplate,
     binding_source,
+    file_field_error,
 )
 from yian.typesys.values import (
     Type,
@@ -559,8 +560,7 @@ def _walk_record_type(
                 raise _inference_error(
                     binding_label,
                     binding_range,
-                    f"reference ${{{path}}} reads field {field!r} on a file, "
-                    "which has only uri, mime, and name",
+                    file_field_error(path, field),
                     diagnostics,
                 )
             current = read_type

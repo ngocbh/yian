@@ -311,16 +311,17 @@ record doesn't declare, or a field of a `file` other than `uri`, `mime`, and `na
 This covers `${input.X...}`, `${node.output...}`, and a MAP's `${item...}` in bindings,
 `case` conditions, and flow outputs, the carried fields a LOOP `while:`/`until:`
 predicate reads, a node's local names in its `prompt:` (AGENT or `human_input`), an
-AGENT's `system_prompt:`, a `human_input` question's text, and the node's own `asserts:`,
-and `${input.X...}` in flow `asserts:`. Reading a declared field through an
+AGENT's `system_prompt:`, a `human_input` question's text and `adaptive_questions.prompt:`,
+and the node's own `asserts:`, and `${input.X...}` in flow `asserts:`. Reading a declared field through an
 `Optional(...)` record still gives `null` when the whole value is null, and values whose
 type isn't known at load (`object`, `Any`, an untyped output, or anything below them)
 aren't checked.
 
 A node's local name is typed by what it is bound to: a typed binding by its declared
 type, a literal by its value, and any other binding by the type the loader infers for
-it. Inside a `case` branch the binding's narrowed type counts too, so
-`v: !Decision ${d.output}` under `when: buy` can read `v.qty`. A CALL input reads its
+it. A typed binding also has the type its value is inferred to have when that fits the
+declared type, so `v: !Decision ${d.output}` under `when: buy`, or
+`v: !Decision {action: buy, qty: 1}`, can read `v.qty`. A CALL input reads its
 binding's type: a field only the child's declared input has is a load error, since the
 value can't hold it. A LOOP's carried name may read a field the seed's type or the
 body's returned type has.

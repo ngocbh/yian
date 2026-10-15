@@ -890,14 +890,16 @@ only some members have, naming the tag to `case` on or suggesting `isinstance`. 
 growth passes `partial_union_fields=True`: grown fragments come from flows the loader
 already checked under narrowing, and that narrowing is not recorded, so member-only reads
 are allowed there.
-The same walk checks a node's local names in prompts and its own asserts: each name is
-typed by its binding's contract under the node's narrowing view
-(`compose/validate/typed_bindings.py`, `local_input_contracts`, read by
-`local_field_error` in `compose/helpers/output_contracts.py`), and a read is an error only
-when every alternative rejects it. Flow asserts check `${input.X...}` the same way. A
-field read on a builtin's result walks the type `expr.builtins.builtin_result_type` gives
-(`str` for every shipped builtin, unknown for a host-registered one), via
-`compose/validate/constructors.py`'s `builtin_field_errors`.
+The same walk checks a node's local names in prompts and its own asserts: each name's
+alternatives are its binding's contract under the node's narrowing view (a typed binding's
+declared contract, plus its inferred one when that fits) and, for a LOOP, the carried
+field's contract (`compose/validate/typed_bindings.py`, `local_input_contracts`, read by
+`local_field_error` in `compose/helpers/output_contracts.py`); a read is an error only
+when every alternative rejects it. MAP inputs and reserved wiring keys are skipped. Flow
+asserts check `${input.X...}` the same way. A field read on a builtin's result walks the
+type `expr.builtins.builtin_result_type` gives (`str` for every shipped builtin, unknown
+for a host-registered one), via `compose/validate/constructors.py`'s
+`builtin_field_errors`.
 
 Compose's narrowing pass (`compose/validate/narrowing.py`, `compute_narrowing`) gives each
 node a view of the producer and flow-input contracts with narrowed union bases rebuilt. A

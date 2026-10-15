@@ -86,11 +86,11 @@ evaluator serves the pool, a prompt's local record, and the map-body `item` scop
 When the `None` would come from a node a `case` may skip, Compose rejects the arithmetic at
 load and asks for a `:-` default (see `syntax.md`, "Skipped branches and flow outputs").
 
-In bindings, CASE conditions, LOOP predicates, and flow outputs the loader rejects field
-reads a known type can't have, including a field only some members of a union have outside a
-narrowing `case` branch or an `isinstance` conjunct before it (see `syntax.md`), so a `None`
-there is a null, skipped, or untyped value, not a misspelled field. Some assert reads check
-only the name, so a `None` in an assert can still be a dotted miss.
+In bindings, CASE conditions, LOOP predicates, flow outputs, prompts, and asserts the
+loader rejects field reads a known type can't have, including a field only some members of
+a union have outside a narrowing `case` branch (or, in a LOOP predicate or a searched
+`case` `when:`, an `isinstance` conjunct before it; see `syntax.md`), so a `None` there is
+a null, skipped, or untyped value, not a misspelled field.
 
 **`ResolveMode`** — how the caller wants a miss treated:
 

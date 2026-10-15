@@ -1,13 +1,23 @@
 """Azure strict structured output without the JSON-schema keywords its strict mode rejects."""
 
 import json
+from dataclasses import dataclass
+from typing import Annotated, TypedDict
 
+import annotated_types
 import httpx
 import pytest
 from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import HumanMessage
 from langchain_openai import AzureChatOpenAI
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    Strict,
+    ValidationError,
+    WithJsonSchema,
+)
 from pydantic import v1 as pydantic_v1
 
 from tests.test_structured_open_schema import _ToolCallServer, _azure, _payload, azure_env
@@ -118,6 +128,9 @@ _BOUNDED = {
     "list(int(1..5))": lambda: _schema("list(int(1..5))"),
     "Rec": lambda: _schema("Rec"),
     "CU": lambda: _schema("CU"),
+    "Optional(int(0..3))": lambda: _schema("Optional(int(0..3))"),
+    "float(0.0..1.0)": lambda: _schema("float(0.0..1.0)"),
+    "list(Rec)": lambda: _schema("list(Rec)"),
     "_ReflectionResponse": lambda: _ReflectionResponse,
 }
 _MOVED = {"minimum", "maximum", "minItems"}
@@ -239,12 +252,68 @@ class _HandWrittenNested(BaseModel):
     inner: list[_HandWrittenInner | None]
 
 
-@pytest.mark.parametrize("schema", [_HandWrittenFormat, _HandWrittenNested])
+class _WithJsonSchema(BaseModel):
+    n: int = Field(ge=0)
+    p: Annotated[str, WithJsonSchema({"type": "string", "pattern": "^a+$"})]
+
+
+class _SchemaHook(BaseModel):
+    n: int = Field(ge=0)
+
+    @classmethod
+    def __get_pydantic_json_schema__(cls, core_schema, handler):
+        schema = handler(core_schema)
+        schema["properties"]["n"]["maximum"] = 5
+        return schema
+
+
+class _PatternDict(TypedDict):
+    p: Annotated[str, Field(json_schema_extra={"pattern": "^a$"})]
+
+
+class _HasTypedDict(BaseModel):
+    n: int = Field(ge=0)
+    d: _PatternDict
+
+
+@dataclass
+class _PatternData:
+    p: Annotated[str, Field(json_schema_extra={"pattern": "^a$"})]
+
+
+class _HasDataclass(BaseModel):
+    n: int = Field(ge=0)
+    d: _PatternData
+
+
+class _ExtraInList(BaseModel):
+    n: int = Field(ge=0)
+    xs: list[Annotated[str, Field(json_schema_extra={"pattern": "^a$"})]]
+
+
+@pytest.mark.parametrize("schema", [
+    _HandWrittenFormat, _HandWrittenNested, _WithJsonSchema, _SchemaHook, _HasTypedDict,
+    _HasDataclass, _ExtraInList,
+])
 def test_azure_hand_written_schema_keywords_keep_the_unchanged_path(azure_env, schema):
     llm = _azure()
     payload = _payload(llm, llm.with_structured_output(schema))
     assert payload == _payload(llm, AzureChatOpenAI.with_structured_output(llm, schema))
     assert payload["response_format"] is schema
+
+
+class _Constrained(BaseModel):
+    a: float = Field(ge=0, le=1, allow_inf_nan=False)
+    b: str = Field(min_length=1, max_length=3, pattern="^a")
+    c: list[Annotated[int, Field(gt=0, multiple_of=2)]] = Field(min_length=1)
+    d: int | None = Field(lt=9, strict=True)
+    e: list[Annotated[int, annotated_types.Ge(1), Strict()]]
+
+
+def test_azure_pydantic_constraints_take_the_stripped_path(azure_env):
+    llm = _azure()
+    payload = _payload(llm, llm.with_structured_output(_Constrained))
+    assert payload["response_format"] == _strict_schema_without(_Constrained)
 
 
 _LEGACY_DEPLOYMENTS = ["gpt-4", "gpt-4-turbo", "gpt-35-turbo"]

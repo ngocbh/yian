@@ -2,15 +2,17 @@ import copy
 import json
 from functools import partial
 from operator import itemgetter
-from typing import Any, Optional, get_args
+from types import NoneType, UnionType
+from typing import Annotated, Any, Literal, Optional, Union, get_args, get_origin
 
+import annotated_types
 from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda, RunnableMap, RunnablePassthrough
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_openai import AzureChatOpenAI
 from openai.lib._parsing._completions import type_to_response_format_param
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pydantic.fields import FieldInfo
 
 from .base_client import BaseLLMClient, normalize_content
@@ -27,11 +29,9 @@ _PASSTHROUGH_KWARGS = (
 # Keywords Azure OpenAI's strict structured outputs reject, from "JSON Schema support and
 # limitations" in learn.microsoft.com/azure/foundry/openai/how-to/structured-outputs; the
 # list covers both Chat Completions and the Responses API. It is Azure's own: OpenAI's
-# strict mode accepts some of these. The reply's parse enforces a moved keyword that comes
-# from a pydantic constraint (``Field(ge=..., min_length=..., pattern=...)``), so adding
-# such a keyword is safe (e.g. ``exclusiveMinimum``); classes that add schema keywords by
-# hand through ``json_schema_extra`` keep langchain's request (`_has_json_schema_extra`).
-# Still moved but not enforced: keywords from ``WithJsonSchema`` or a custom schema hook.
+# strict mode accepts some of these. Keywords are moved only from classes built of types
+# and pydantic constraints the reply's parse enforces (`_reply_checks_every_keyword`), so
+# adding a keyword such a class can emit is safe (e.g. ``exclusiveMinimum``).
 _AZURE_STRICT_UNSUPPORTED = (
     "minLength", "maxLength", "pattern", "format",
     "minimum", "maximum", "multipleOf",
@@ -40,6 +40,17 @@ _AZURE_STRICT_UNSUPPORTED = (
     "unevaluatedItems", "contains", "minContains", "maxContains", "minItems", "maxItems",
     "uniqueItems",
 )
+
+_SCALAR_TYPES = frozenset({str, int, float, bool, NoneType, None})
+
+# The metadata pydantic makes for ``Field(gt=..., ge=..., lt=..., le=..., multiple_of=...,
+# min_length=..., max_length=..., strict=..., allow_inf_nan=..., pattern=...)``. The class
+# holding ``allow_inf_nan`` and ``pattern`` is private, so it is read from a ``Field``.
+_CONSTRAINT_TYPES = frozenset({
+    annotated_types.Gt, annotated_types.Ge, annotated_types.Lt, annotated_types.Le,
+    annotated_types.MultipleOf, annotated_types.MinLen, annotated_types.MaxLen,
+    *(type(meta) for meta in Field(strict=True, allow_inf_nan=False).metadata),
+})
 
 
 def _strict_schema_without(schema_cls: type) -> Optional[dict[str, Any]]:
@@ -141,11 +152,15 @@ def _parse_strict_reply(message: AIMessage, schema: type[BaseModel]) -> BaseMode
         ) from err
 
 
-def _has_json_schema_extra(schema_cls: type[BaseModel]) -> bool:
-    """Whether `schema_cls` or a model reachable through its fields sets ``json_schema_extra``.
+def _reply_checks_every_keyword(schema_cls: type[BaseModel]) -> bool:
+    """Whether parsing a reply as `schema_cls` checks every keyword in its JSON schema.
 
-    Such a class can add schema keywords no validator checks, so moving them out of the
-    sent schema would leave them unenforced.
+    Only types whose schema keywords all come from pydantic validation qualify: plain
+    pydantic v2 models (`_is_plain_model`), ``str``, ``int``, ``float``, ``bool``,
+    ``None``, ``list``, ``dict``, unions, ``Literal``, and ``Annotated`` with pydantic
+    ``Field`` constraints (`_CONSTRAINT_TYPES`). Anything else (a TypedDict, a dataclass,
+    ``WithJsonSchema``, a custom schema hook) can add a keyword no validator checks, so
+    moving it out of the sent schema would drop it.
 
     Args:
         schema_cls (`type[BaseModel]`):
@@ -153,31 +168,61 @@ def _has_json_schema_extra(schema_cls: type[BaseModel]) -> bool:
 
     Returns:
         `bool`:
-            `True` when the model config, a field, or ``Field`` metadata inside a field's
-            annotation sets ``json_schema_extra``, on `schema_cls` or a nested model.
+            `True` when every type reachable from `schema_cls` qualifies.
     """
     seen: set[type] = set()
-    models = [schema_cls]
-    while models:
-        model = models.pop()
-        if model in seen:
+    stack: list[Any] = [schema_cls]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, FieldInfo):
+            if item.json_schema_extra is not None:
+                return False
+            if any(type(meta) not in _CONSTRAINT_TYPES for meta in item.metadata):
+                return False
+            stack.append(item.annotation)
             continue
-        seen.add(model)
-        if model.model_config.get("json_schema_extra") is not None:
-            return True
-        annotations = []
-        for field in model.model_fields.values():
-            if field.json_schema_extra is not None:
-                return True
-            annotations.append(field.annotation)
-        while annotations:
-            annotation = annotations.pop()
-            if isinstance(annotation, FieldInfo) and annotation.json_schema_extra is not None:
-                return True
-            if isinstance(annotation, type) and issubclass(annotation, BaseModel):
-                models.append(annotation)
-            annotations.extend(get_args(annotation))
-    return False
+        if item in _SCALAR_TYPES or item in seen:
+            continue
+        origin = get_origin(item)
+        if origin is Literal:
+            continue
+        if origin is Annotated:
+            annotated, *metadata = get_args(item)
+            stack.append(annotated)
+            for meta in metadata:
+                if isinstance(meta, FieldInfo):
+                    stack.append(meta)
+                elif type(meta) not in _CONSTRAINT_TYPES:
+                    return False
+        elif origin in (list, dict, Union, UnionType) or item in (list, dict):
+            stack.extend(get_args(item))
+        elif isinstance(item, type) and issubclass(item, BaseModel):
+            if not _is_plain_model(item):
+                return False
+            seen.add(item)
+            stack.extend(item.model_fields.values())
+        else:
+            return False
+    return True
+
+
+def _is_plain_model(model: type[BaseModel]) -> bool:
+    """Whether `model` keeps pydantic's own schema hooks and sets no ``json_schema_extra``.
+
+    Args:
+        model (`type[BaseModel]`):
+            A pydantic v2 model class.
+
+    Returns:
+        `bool`:
+            `True` when neither schema hook is overridden and the config has no
+            ``json_schema_extra``.
+    """
+    return model.model_config.get("json_schema_extra") is None and all(
+        getattr(getattr(model, hook), "__func__", None)
+        is getattr(BaseModel, hook).__func__
+        for hook in ("__get_pydantic_json_schema__", "__get_pydantic_core_schema__")
+    )
 
 
 class NormalizedAzureChatOpenAI(RequestBlockMixin, AzureChatOpenAI):
@@ -218,9 +263,10 @@ class NormalizedAzureChatOpenAI(RequestBlockMixin, AzureChatOpenAI):
         The reply's JSON is then parsed strictly against `schema` itself, which enforces
         the moved keywords that come from pydantic constraints. A refusal, an empty reply
         or one cut off mid-value raises an `OutputParserException`, naming any refusal,
-        that yian's structured-output retry corrects. A class that sets
-        ``json_schema_extra`` anywhere in its tree keeps langchain's request, since
-        keywords it adds by hand have no check (`_has_json_schema_extra`), and so does a
+        that yian's structured-output retry corrects. A class holding a type whose schema
+        keywords the parse might not check (`_reply_checks_every_keyword`), such as
+        ``json_schema_extra``, ``WithJsonSchema``, a schema hook, a TypedDict or a
+        dataclass, keeps langchain's request, where Azure rejects the keyword. So does a
         deployment langchain sends as a function tool (`_langchain_sends_a_tool`). Any other
         schema or method reaches langchain unchanged.
 
@@ -247,7 +293,7 @@ class NormalizedAzureChatOpenAI(RequestBlockMixin, AzureChatOpenAI):
             and isinstance(schema, type)
             and issubclass(schema, BaseModel)
             and not has_open_schema(schema)
-            and not _has_json_schema_extra(schema)
+            and _reply_checks_every_keyword(schema)
             and (response_format := _strict_schema_without(schema)) is not None
         ):
             return self._stripped_strict_output(

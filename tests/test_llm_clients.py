@@ -149,6 +149,20 @@ def test_vllm_accepts_any_model_name():
     assert validate_model("vllm", "any/arbitrary-served-model") is True
 
 
+def test_claude_mythos_5_1_is_a_known_anthropic_model():
+    """Mythos 5.1 validates and builds an Anthropic client without an unknown-model warning."""
+    import warnings
+
+    from yian.llm_clients.anthropic_client import AnthropicClient
+    from yian.llm_clients.validators import validate_model
+
+    assert validate_model("anthropic", "claude-mythos-5-1") is True
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        AnthropicClient("claude-mythos-5-1", api_key="k").warn_if_unknown_model()
+    assert not [w for w in caught if issubclass(w.category, RuntimeWarning)]
+
+
 # --- Ollama (native client, no default think) ------------------------------ #
 
 

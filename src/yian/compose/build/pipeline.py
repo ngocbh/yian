@@ -25,6 +25,7 @@ from here. It imports NOTHING from `loader.py` (that would be a back-edge).
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from typing import Any, Callable, Optional, Protocol
@@ -74,7 +75,11 @@ from yian.compose.desugar.inline_bodies import (
 )
 from yian.compose.desugar.inline_calls import _synth_id_gen, desugar_inline_calls
 from yian.compose.desugar.case_outputs import case_output_reads, expand_case_outputs
-from yian.compose.desugar.value_entries import ValueEntryDescriptor, read_value_entry
+from yian.compose.desugar.value_entries import (
+    ValueEntryDescriptor,
+    non_finite_reason,
+    read_value_entry,
+)
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.isinstance_types import (
     collect_constructor_names,
@@ -1141,7 +1146,9 @@ def _reject_non_json_literals(
     """Reject a literal in an untyped output that YAML read as a non-JSON value.
 
     An untagged date or datetime gets the quoted text to write; a `!!set` or
-    `!!binary` literal is named without a hint. A tagged value is left to its tag.
+    `!!binary` literal is named without a hint; a number that is not finite (`.nan`,
+    `.inf`, `1e400`) is named with the spelling YAML reads when the authored one
+    differs. A tagged value is left to its tag.
     A scalar key or value of an `!!omap` or `!!pairs` entry is checked at its pair.
     For an alias (`g: *d`) the range is the anchor's; the label still names the
     output field.
@@ -1157,7 +1164,7 @@ def _reject_non_json_literals(
 
     Raises:
         `LoadError`: Raised when `value` holds a date, datetime, set, or bytes
-            literal.
+            literal, or a number that is not finite.
         `SourceAccessError`: Raised when the retained cursor cannot be traversed.
     """
     # A value the cursor doesn't hold was replaced after parsing, so the cursor
@@ -1204,12 +1211,12 @@ def _raise_if_non_json_literal(
     path: ValuePath,
     diagnostics: LoadDiagnostics,
 ) -> None:
-    """Raise when one scalar in an untyped output is a date, set, or bytes value.
+    """Raise when one untyped output scalar is a date, set, bytes, or non-finite value.
 
     Args:
         value (`Any`): The constructed scalar.
         text (`str | None`): The authored scalar text, or `None` to spell a date
-            with `isoformat()`.
+            with `isoformat()` and a number as YAML does (`.inf`, `-.inf`, `.nan`).
         source_range (`SourceRange | None`): Where to locate the error.
         label (`str`): The output name, or `"output"` for a whole section.
         path (`ValuePath`): Keys and indexes from the output to `value`.
@@ -1217,8 +1224,13 @@ def _raise_if_non_json_literal(
 
     Raises:
         `LoadError`: Raised when `value` is a date, datetime, set, frozenset, or
-            bytes value.
+            bytes value, or a float that is not finite.
     """
+    if isinstance(value, float) and not math.isfinite(value):
+        raise diagnostics.error(
+            f"{path_label(label, path)!r}: {non_finite_reason(value, text)}",
+            range=source_range,
+        )
     if isinstance(value, date):
         kind = "datetime" if isinstance(value, datetime) else "date"
         if text is None:

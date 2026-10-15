@@ -130,7 +130,9 @@ load error; quote it to keep it as text.
 An unquoted date in an output without a type (`output: {as_of: 2026-01-01, ...}`, also
 a body's output) is a load error at the value too, since an untyped output holds JSON
 values; quote it to keep it as text, or tag it (`!date "2026-01-01"`). So is a YAML
-`!!set` or `!!binary` value there.
+`!!set` or `!!binary` value there, and a number that is not finite: `g: .nan` gives
+`'g': numbers must be finite (got .nan)`, and `g: 1e400` gives `'g': numbers must be
+finite (got 1e400, which YAML reads as .inf)`.
 
 A flow file's YAML nests at most 200 levels (`YIAN_MAX_YAML_NESTING` can lower it; see
 [Defaults and limits](defaults.md)); each mapping and list is a level, counting the
@@ -433,7 +435,11 @@ A binding you didn't write as an input is named by where you wrote it: `node 'g'
 `node 'g' on: non-finite number inf is not a yian value`. A `call(...)` argument is
 named `<site> call(f) argument 'y'` and located at the binding the call is written in.
 A temporary inside an expression is fine: the embedded template `"v=${x * 10}"` is
-the text `v=inf`. Only a binding's final value is checked. See [Expressions → Non-finite results](expressions.md#non-finite-results).
+the text `v=inf`. Only a binding's final value is checked. A non-finite literal
+(`.nan`, `.inf`, `1e400`) in an output without a type is a load error at the value
+instead (`'g': numbers must be finite (got .nan)`; see [above](#yaml-values)); in an
+input, a default, or a tagged output it still fails at run time with `binding.evaluate`.
+See [Expressions → Non-finite results](expressions.md#non-finite-results).
 
 A value nests at most 100 levels (`YIAN_MAX_VALUE_NESTING` can lower it; see [Defaults
 and limits](defaults.md)); each record and list is a level, and a record or list built
@@ -517,9 +523,9 @@ untyped CODE or TOOL output used to accept a date, a set, a pydantic model, an e
 or another non-JSON value, which the run log turned into text or rejected without a
 path (an untyped TOOL output turned a nested model into a dict and a nested enum into
 its value); it now fails `contract.output` naming the path
-(`output at d: datetime.date(2026, 1, 1) is not a JSON value`). An unquoted date, or a
-YAML `!!set` or `!!binary` literal, in a flow output without a type is now a load error
-at the value (``'as_of': `2026-01-01` is not a JSON value (YAML reads it as a date); quote
+(`output at d: datetime.date(2026, 1, 1) is not a JSON value`). An unquoted date, a
+YAML `!!set` or `!!binary` literal, or a number that is not finite (`.nan`, `.inf`,
+`1e400`), in a flow output without a type is now a load error at the value (``'as_of': `2026-01-01` is not a JSON value (YAML reads it as a date); quote
 it to keep it as text: `as_of: "2026-01-01"` ``). A returned dict with a non-text key
 fails `object keys must be text, got 1` for an untyped, `object`, or `Any` output, and
 an inline CODE return that isn't a JSON value fails `contract.output`, not

@@ -908,7 +908,10 @@ excerpts and tracebacks are diagnostics and may. Helpers in `typesys/values.py`:
   `%`, `join`, `render_as_json`): it fails with the long-int message, walking first only
   when Python's own limit wouldn't refuse such an int (`python_refuses_long_ints()`).
 - `value_repr(value)` shows a long int as `<int with N digits>` and a container holding
-  one as `<list holding an int with N digits>`.
+  one as `<list holding an int with N digits>`; any other repr longer than
+  `YIAN_MAX_SHOWN_VALUE_CHARS` (200) is cut by `shown_text` to one character less plus
+  `…`. Error paths stay exact; `_render_value_path` cuts each key and the whole path
+  only when rendering a message.
 
 yian source never calls `sys.set_int_max_str_digits`. The checks hold with Python's
 limit at its default or off; a host must not lower it below 4300. Temporaries inside

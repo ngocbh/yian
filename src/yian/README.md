@@ -512,7 +512,10 @@ responses). The helpers in `typesys/values.py`:
 - `rewrite_digit_limit_text(text)` replaces Python's digit-limit message in a failure
   text with yian's. Node failure messages and the structured retry correction pass
   through it, so Python's hint reaches neither a message nor the model.
-- `value_repr(value)` shows a long int as `<int with N digits>`.
+- `value_repr(value)` shows a long int as `<int with N digits>`; any other repr longer
+  than `YIAN_MAX_SHOWN_VALUE_CHARS` (200) is cut by `shown_text` to one character less
+  plus `…`. Messages cut keys and joined name lists the same way; an error's path stays
+  exact and is cut only when rendered.
 - `write_as_text(convert, value)` converts a value to text (`_as_text`, `%`, `join`,
   `render_as_json`) and raises `ValueError` with the long-int message instead of
   writing a long int; it walks for one first only when Python's own limit wouldn't

@@ -6,7 +6,8 @@ entry's name. `YIAN_MAX_TOTAL_NODES=20000` raises the node budget from 10,000 to
 20,000. The entries fall in three groups:
 
 - **limit**: a language safety limit, such as how deep a value may nest or how many
-  live nodes a run may grow to;
+  live nodes a run may grow to, or a bound on what yian writes in a message, such as
+  how much of a value an error message shows;
 - **setting**: the default for a setting a flow author can write. A value written in
   the flow wins; the variable changes only what applies when the flow sets none (an
   AGENT's `retries:`, its `env: {max_tool_iterations: ...}`, a memory's `config:`);
@@ -135,6 +136,7 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_MAX_TOTAL_NODES` | limit | 10,000 | 1 or more | Most live nodes a run's graph may grow to |
 | `YIAN_MAX_SKIP_WORLDS` | limit | 10,000 | 1 or more | Most branch combinations the skip check explores before giving up |
 | `YIAN_MAX_INT_DIGITS` | limit | 4,300 | 1 to the interpreter's int digit limit | Most decimal digits an int may have to be a yian value |
+| `YIAN_MAX_SHOWN_VALUE_CHARS` | limit | 200 | 2 or more | Longest rendering of a value or key an error message shows |
 | `YIAN_AGENT_RETRIES` | setting | 2 | 0 or more | Extra attempts an AGENT gets to correct an invalid structured reply when the node sets none |
 | `YIAN_AGENT_MAX_TOOL_ITERATIONS` | setting | -1 | 1 or more, or -1 for no cap | AGENT tool-call turns when the node sets none; -1 is no cap |
 | `YIAN_EPISODIC_MAX_EPISODES` | setting | 100 | 1 or more | Episodes an episodic memory keeps when it sets no limit |

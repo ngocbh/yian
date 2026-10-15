@@ -137,6 +137,15 @@ ENTRIES: tuple[Entry, ...] = (
         maximum=None,
         maximum_from_interpreter=True,
     ),
+    # A cut keeps one character less than the cap and adds `…`, so the minimum is 2.
+    Entry(
+        "MAX_SHOWN_VALUE_CHARS",
+        default=200,
+        description="Longest rendering of a value or key an error message shows",
+        group="limit",
+        minimum=2,
+        maximum=None,
+    ),
     # Defaults for settings a flow author can set.
     Entry(
         "AGENT_RETRIES",
@@ -372,6 +381,7 @@ class Defaults:
     max_total_nodes: int = 10_000
     max_skip_worlds: int = 10_000
     max_int_digits: int = 4300
+    max_shown_value_chars: int = 200
     agent_retries: int = 2
     agent_max_tool_iterations: int = -1
     episodic_max_episodes: int = 100

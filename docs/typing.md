@@ -239,7 +239,9 @@ the bad part's path: a non-text key with `object keys must be text, got 1` at th
 mapping, anything else (a date object, a set, a pydantic model, a dataclass, a
 `FileRef`) with `<value> is not a JSON value`, and a container inside itself with
 `value contains itself`. Depth and non-finite numbers are left to the boundary checks
-above, so a recorded value replays.
+above, so a recorded value replays. A value or key shown in a type-check message is cut
+to `YIAN_MAX_SHOWN_VALUE_CHARS` (200) characters: a longer rendering keeps its first 199
+and ends with `…` (see [Defaults and limits](defaults.md)).
 A node output with no declared type (and each untyped field of a partial record output)
 goes through the same walk at `canonical_typed`, with `FileRef` leaves allowed at any
 depth; its message names the path (`output at d.x[1]: datetime.date(2026, 1, 1) is not a
@@ -250,7 +252,9 @@ segments name record fields and integer segments are actual list indices. A
 mismatch at the checked root uses `()`; a nested container mismatch keeps its
 current field/index path. The message and ordinary `ValueError.args` stay unchanged,
 while input/output boundaries use the path to select the exact or nearest authored
-contract origin before recording a failure.
+contract origin before recording a failure. The path stays exact however long its keys
+are; only its rendering in a message is cut: each key to `YIAN_MAX_SHOWN_VALUE_CHARS`,
+and a rendered path longer than four times that keeps its start and end around `…`.
 
 ## `Type` — structure beyond the bare tag
 

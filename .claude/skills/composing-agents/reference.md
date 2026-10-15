@@ -293,7 +293,9 @@ left) is plain text.
 
 NaN, infinity, and complex numbers (`${(0 - 8) ** 0.5}`) are not yian values. A
 binding whose value holds one at any depth fails its node with `binding.evaluate`;
-a temporary inside an expression is fine. Keep the value in range or return null
+a temporary inside an expression is fine. A non-finite literal (`.nan`, `.inf`,
+`1e400`) in an untyped output (a flow or body `output:` without a tag) is a load
+error at the value instead, like an unquoted date there. Keep the value in range or return null
 explicitly: a `case` routed to a value entry `no_value: !Optional(float) null`, or a
 `code` node returning `None`. An int longer than 4300 digits is not a value either:
 a literal is a load error, and a value fails at the first boundary (input, binding,

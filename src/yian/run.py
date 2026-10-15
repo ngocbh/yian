@@ -55,6 +55,7 @@ from yian.compile.memory_layout import (
 from yian.compile.model import CompiledFlow
 from yian.compile.validation import type_relation
 from yian.compose.loader import ComposedFlow
+from yian.compose.nodes.resolver import child_signature
 from yian.defaults import check_recorded, current
 from yian.diagnostics import Failure, OriginRef
 from yian.events import (
@@ -74,7 +75,7 @@ from yian.memory import (
 from yian.memory_host import MemoryRegistry
 from yian.nodes.base import Steering
 from yian.nodes.binding import coerce_inputs
-from yian.nodes.contracts import HostToolCall, iter_source_strings
+from yian.nodes.contracts import HostToolCall, OutputContract, iter_source_strings
 from yian.runtime.engine import FlowEngine
 from yian.runtime.eval_node import require_steering
 from yian.runtime.backward import drive_backward
@@ -618,7 +619,8 @@ def _run_flow_controlled(
     authority: RunLog | None = None
     primary_error: BaseException | None = None
     try:
-        state = RunState(private_flow)
+        # The result reads its files through the contract a CALL of this flow gets.
+        state = RunState(private_flow, result_contract=child_signature(flow).output)
         prepared_start = prepare_run_started(
             state,
             RunStartData(
@@ -1222,17 +1224,26 @@ def _replay_run_log(
     only the complete effective LLM map recorded by ``RunStarted``; recovery
     never consults the current LLM defaults.  Historical transitions use the
     same reducer and growth constructor as live execution.  A host ``api_key``
-    goes to the agents the map marks for it.
+    goes to the agents the map marks for it. The run result reads its files
+    through the flow's output contract, as ``run_flow``'s does.
     """
     if not isinstance(flow, ComposedFlow):
         raise TypeError("_replay_run_log expects a ComposedFlow")
-    return _replay_compiled_run_log(flow.compiled, log, api_key=api_key)
+    return _replay_compiled_run_log(
+        flow.compiled, log, api_key=api_key, result_contract=child_signature(flow).output,
+    )
 
 
 def _replay_compiled_run_log(
     flow: CompiledFlow, log: RunLog, *, api_key: SecretStr | None = None,
+    result_contract: OutputContract | None = None,
 ) -> RunState:
-    """Reuse canonical replay for a private original compiled program."""
+    """Reuse canonical replay for a private original compiled program.
+
+    ``result_contract`` is the contract the terminal output is read through to
+    restore its files (`RunState.result_contract`); a finished log materializes its
+    terminal during replay, so it is set before any record is folded.
+    """
     source_run_id = log.run_id
     source_sequence = log.next_sequence
     if type(source_run_id) is not str or not source_run_id:
@@ -1301,7 +1312,7 @@ def _replay_compiled_run_log(
             subject="supplied flow",
         )
     state = _replay_records(
-        RunState(private_flow),
+        RunState(private_flow, result_contract=result_contract),
         tuple(canonical),
         grow_builder=build_grow,
     )

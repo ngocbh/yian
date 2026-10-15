@@ -435,7 +435,11 @@ _PARTIAL_RECORD_BODY = (
 
 
 def test_a_partial_record_output_holds_a_file():
-    assert _ok(_PARTIAL_RECORD_FLOW) == {"f": _FILE_WIRE, "g": [1]}
+    # The result reads its typed `f` through the flow's output contract.
+    output = _ok(_PARTIAL_RECORD_FLOW)
+
+    assert output == {"f": FileRef(uri="f"), "g": [1]}
+    assert type(output["f"]) is FileRef
 
 
 def test_a_call_body_returns_a_partial_record_holding_a_file():
@@ -447,7 +451,10 @@ def test_a_call_body_returns_a_partial_record_holding_a_file():
         "  c:\n    kind: call\n    call: body\n    input:\n      s: ${input.s}\n"
         "output: ${c.output}\n"
     )
-    assert _ok(text) == {"f": _FILE_WIRE, "g": [1]}
+    output = _ok(text)
+
+    assert output == {"f": FileRef(uri="f"), "g": [1]}
+    assert type(output["f"]) is FileRef
 
 
 def test_a_map_body_returns_a_partial_record_holding_a_file():
@@ -460,6 +467,7 @@ def test_a_map_body_returns_a_partial_record_holding_a_file():
         "    input:\n      s: ${item}\n"
         "output: ${m.output}\n"
     )
+    # A list of partial records has no output contract, so the result keeps the JSON form.
     assert _ok(text) == [{"f": _FILE_WIRE, "g": [1]}] * 2
 
 
@@ -576,7 +584,7 @@ def _committed(path: Path) -> dict[str, dict]:
         ),
         (
             _PARTIAL_RECORD_FLOW,
-            {"f": _FILE_WIRE, "g": [1]},
+            {"f": FileRef(uri="f"), "g": [1]},
             {
                 "a": {"kind": "file", "value": _FILE_WIRE},
                 "b": {"kind": "list[int]", "value": [1]},

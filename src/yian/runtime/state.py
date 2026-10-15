@@ -276,13 +276,30 @@ class RunState:
             Reverse lookups derived from the live graph, built by the first growth
             and kept current by growth commits, so a growth looks up the nodes it
             affects instead of scanning every node.
+        result_contract (`OutputContract | None`):
+            Caller-supplied contract the terminal output is read through to restore
+            its files, typically the flow's inferred output contract. It is not
+            recorded; ``None`` returns the output as stored.
     """
 
-    def __init__(self, flow: CompiledFlow) -> None:
-        """Adopt ``flow`` and seed empty reducer structures for its current topology."""
+    def __init__(self, flow: CompiledFlow, *, result_contract: OutputContract | None = None) -> None:
+        """Adopt ``flow`` and seed empty reducer structures for its current topology.
+
+        Args:
+            flow (`CompiledFlow`):
+                The caller's private per-run graph.
+            result_contract (`OutputContract`, *optional*, defaults to `None`):
+                The contract the terminal output is read through to restore its files.
+                `None` returns the output as stored.
+
+        Raises:
+            `TypeError`:
+                Raised when `flow` is not a `CompiledFlow`.
+        """
         if not isinstance(flow, CompiledFlow):
             raise TypeError("RunState expects a CompiledFlow")
         self.flow = flow
+        self.result_contract = result_contract
         self.pool = VariablePool(start_id=flow.start_id)
         self.node_state: dict[str, NodeState] = {
             node_id: NodeState.UNKNOWN for node_id in flow.nodes
@@ -526,11 +543,14 @@ class _TerminalDelta:
     ``output_bytes`` is a canonical tagged typed value for success and ``None``
     for failure. ``succeeded`` distinguishes a typed null output from failure;
     ``failure`` is the one source-neutral authority for an unreachable terminal.
+    ``files`` is the type the output is read through to restore its files, from
+    ``RunState.result_contract``.
     """
 
     succeeded: bool
     output_bytes: bytes | None
     failure: Failure | None
+    files: Type | None = None
 
 
 @dataclass(slots=True)
@@ -4079,6 +4099,7 @@ def _prepare_terminal_delta(
             succeeded=True,
             output_bytes=pending_value_bytes,
             failure=None,
+            files=output_contract_file_type(state.result_contract),
         )
     if end_id in state.pool.store:
         output_bytes = ANY_VALUE_ADAPTER.dump_json(
@@ -4089,6 +4110,7 @@ def _prepare_terminal_delta(
             succeeded=True,
             output_bytes=output_bytes,
             failure=None,
+            files=output_contract_file_type(state.result_contract),
         )
     if terminal_unreachable_failure is None:
         raise ValueError(
@@ -4618,15 +4640,18 @@ def _materialize_route(plan: _RoutePlan) -> _RouteApply:
 
 
 def _terminal_observer(delta: _TerminalDelta) -> RunSucceeded | RunFailed:
-    """Materialize one detached terminal event from immutable plan authority."""
+    """Materialize one detached terminal event from immutable plan authority.
+
+    A success output is read through ``delta.files``, so each file the run's result
+    contract types as `file` is a `FileRef`.
+    """
     if delta.succeeded:
         if type(delta.output_bytes) is not bytes:
             raise ValueError("successful terminal delta requires typed output bytes")
         if delta.failure is not None:
             raise ValueError("successful terminal delta cannot carry a failure")
-        output = ANY_VALUE_ADAPTER.validate_json(
-            delta.output_bytes,
-            strict=True,
+        output = normalize_typed_files(
+            delta.files, ANY_VALUE_ADAPTER.validate_json(delta.output_bytes, strict=True),
         ).to_object()
         return RunSucceeded(output=output)
     if delta.output_bytes is not None:

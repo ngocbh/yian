@@ -1349,3 +1349,81 @@ def test_a_file_default_is_fingerprinted_apart_from_its_mapping():
     assert _canonical_value(REF, _ManifestContext(), "default") != _canonical_value(
         dict(FORM), _ManifestContext(), "default"
     )
+
+
+# --- the run result reads its files through the flow's output type --- #
+
+_TWO_FILES = f"""\
+    id: p
+    name: p
+    nodes:
+      a:
+        kind: code
+        output: list(file)
+        code: |
+          return [{F}, {F}]
+      b:
+        kind: code
+        code: |
+          return 1
+    output: {{output}}
+    """
+
+_RESULT_OUTPUTS = {
+    "whole": ("${a.output}", lambda output: output),
+    "tagged": ("!list(file) ${a.output}", lambda output: output),
+    "record": ("\n      a: ${a.output}\n      n: ${b.output}", lambda output: output["a"]),
+}
+
+
+def _two_files_flow(output: str) -> str:
+    return _TWO_FILES.replace("{output}", output)
+
+
+@pytest.mark.parametrize("shape", sorted(_RESULT_OUTPUTS))
+@pytest.mark.parametrize("learnable", [False, True])
+def test_the_run_result_holds_the_files_of_a_typed_output(learnable, shape):
+    output, files_of = _RESULT_OUTPUTS[shape]
+    events: list[Any] = []
+    result = run_flow(load_flow(textwrap.dedent(_two_files_flow(output))), {},
+                      learnable=learnable, on_event=events.append)
+
+    assert result.status == "succeeded", result.failure
+    assert files_of(result.output) == [REF, REF]
+    assert all(type(item) is FileRef for item in files_of(result.output))
+    (succeeded,) = [event for event in events if type(event).__name__ == "RunSucceeded"]
+    assert succeeded.output == result.events[-1].output == result.output
+    assert all(type(item) is FileRef for item in files_of(succeeded.output))
+
+
+@pytest.mark.parametrize("shape", sorted(_RESULT_OUTPUTS))
+@pytest.mark.parametrize("learnable", [False, True])
+def test_resuming_a_finished_run_returns_the_files_of_a_typed_output(tmp_path: Path, learnable, shape):
+    path = tmp_path / "run.jsonl"
+    flow = textwrap.dedent(_two_files_flow(_RESULT_OUTPUTS[shape][0]))
+    first = run_flow(load_flow(flow), {}, log=path, learnable=learnable)
+    assert first.status == "succeeded", first.failure
+
+    resumed = resume_flow(load_flow(flow), log=path)
+
+    assert resumed.output == first.output
+    files = _RESULT_OUTPUTS[shape][1](resumed.output)
+    assert all(type(item) is FileRef for item in files)
+
+
+@pytest.mark.parametrize("learnable", [False, True])
+def test_the_run_result_holds_the_files_of_an_untyped_output_as_mappings(learnable):
+    result = run_flow(load_flow(textwrap.dedent(f"""\
+        id: p
+        name: p
+        nodes:
+          a:
+            kind: code
+            code: |
+              return [{F}]
+        output: ${{a.output}}
+        """)), {}, learnable=learnable)
+
+    assert result.status == "succeeded", result.failure
+    assert result.output == [FORM]
+    assert type(result.output[0]) is dict

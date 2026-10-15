@@ -9,7 +9,7 @@ import annotated_types
 import httpx
 import pytest
 from langchain_core.exceptions import OutputParserException
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_openai import AzureChatOpenAI
 from pydantic import (
     BaseModel,
@@ -516,6 +516,14 @@ def test_a_responses_refusal_is_a_parse_error_naming_it(azure_env):
     refusal = [{"type": "refusal", "refusal": "I can't help with that."}]
     with pytest.raises(OutputParserException, match="I can't help with that."):
         _ask(_responses_server(refusal), _schema("int(0..10)"), "gpt-5-codex")
+
+
+def test_a_refusal_already_set_is_kept(azure_env):
+    reply = AIMessage(
+        content=[{"type": "refusal", "refusal": "from a block"}],
+        additional_kwargs={"refusal": "already set"},
+    )
+    assert _azure().normalize_reply(reply).additional_kwargs["refusal"] == "already set"
 
 
 def test_a_reply_past_a_moved_bound_is_corrected_and_retried(azure_env):

@@ -7,7 +7,7 @@ from yian.nodes.binding import check_input_names
 from yian.nodes.contracts import Parameter, output_contract_origin
 from yian.run import run_flow
 from yian.typesys import Type, TypeCheckError, ValueKind, build_value_as
-from yian.typesys.values import value_repr
+from yian.typesys.values import _sort_repr, value_repr
 
 from tests.engine._bounded_codefns import LONG_FIELD, BrokenRepr
 
@@ -85,13 +85,18 @@ def test_record_lists_many_unknown_fields_within_the_cap():
     assert caught.value.path == ("key0",)
 
 
-def test_record_sorts_mixed_unknown_keys_by_full_repr():
+def test_sort_repr_orders_past_the_cap_and_keeps_placeholders():
+    assert _sort_repr("x" * 300 + "a") < _sort_repr("x" * 300 + "b")
+    assert _sort_repr(BrokenRepr()) == "<BrokenRepr object>"
+
+
+def test_record_sorts_mixed_unknown_keys_by_type_without_crashing():
     record = Type(
         kind=ValueKind.OBJECT,
         fields={"a": Type.scalar(ValueKind.INTEGER)},
         required=frozenset({"a"}),
     )
-    # Equal past the cap, so a sort on the cut text would keep insertion order.
+    # Equal up to the cap, so a sort on the cut text could not order them.
     later, earlier = "x" * 300 + "b", "x" * 300 + "a"
     with pytest.raises(TypeCheckError) as caught:
         build_value_as(record, {"a": 1, later: 1, earlier: 2, 1: 3, BrokenRepr(): 4})
@@ -114,7 +119,7 @@ def test_unknown_inputs_list_within_the_cap():
 def test_output_holding_a_big_set_shows_a_cut_repr(output):
     failure = _failure("big_set", output)
     assert "…" in failure.message
-    assert len(failure.message) <= MESSAGE_BOUND
+    assert len(failure.message) < 300
 
 
 @pytest.mark.parametrize("output", [None, "Any", "{s: Any}"])
@@ -129,6 +134,7 @@ def test_too_deep_value_under_long_keys_shows_a_bounded_path(output):
 @pytest.mark.parametrize("fn", ["long_tuple_key", "long_int_key", "broken_repr_key"])
 def test_too_deep_value_under_a_non_text_key_shows_a_bounded_message(fn, output):
     failure = _failure(fn, output)
+    assert "value nests deeper" in failure.message
     assert len(failure.message) <= MESSAGE_BOUND
     if fn == "long_int_key":
         assert "<int with 5001 digits>" in failure.message

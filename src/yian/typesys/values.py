@@ -76,6 +76,12 @@ def shown_text(text: str) -> str:
 
     Returns:
         `str`: ``text`` when it fits; else its first cap - 1 characters and ``…``.
+
+    Example:
+        ```python
+        shown_text("short")  # 'short'
+        shown_text("x" * 500)  # 199 x's then '…', with the default cap of 200
+        ```
     """
     cap = current().max_shown_value_chars
     return text if len(text) <= cap else text[: cap - 1] + "…"
@@ -119,6 +125,14 @@ def _sort_repr(value: Any) -> str:
 
     A sort key: names whose cut renderings are equal still sort apart, so the order
     does not depend on the hash seed.
+
+    Args:
+        value (`Any`):
+            The name or key to sort.
+
+    Returns:
+        `str`: ``repr(value)`` in full, or ``value_repr(value)`` (such as
+            ``<{type} object>``) when the value's repr raises.
     """
     try:
         return repr(value)

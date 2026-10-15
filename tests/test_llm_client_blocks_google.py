@@ -1,6 +1,6 @@
 """The ``google`` block reaches the Gemini generateContent request body as written.
 
-A structured output schema's ``const`` keywords are sent as one-value ``enum``s, which
+A structured output schema's string and number ``const``s are sent as one-value ``enum``s, which
 Gemini's ``responseJsonSchema`` subset supports.
 """
 
@@ -270,6 +270,9 @@ def test_parsing_still_checks_the_tag(bodies):
         ({"const": 1, "enum": [True, "b"]}, {"const": 1, "enum": [True, "b"]}),
         ({"const": True, "enum": [1]}, {"const": True, "enum": [1]}),
         ({"const": 3, "type": "integer"}, {"enum": [3], "type": "integer"}),
+        ({"const": 0.5}, {"enum": [0.5]}),
+        ({"const": True}, {"const": True}),
+        ({"const": None}, {"const": None}),
         ({"type": "array", "items": {"const": "a"}}, {"type": "array", "items": {"enum": ["a"]}}),
         ({"prefixItems": [{"const": "a"}]}, {"prefixItems": [{"enum": ["a"]}]}),
         ({"additionalProperties": {"const": 1}}, {"additionalProperties": {"enum": [1]}}),

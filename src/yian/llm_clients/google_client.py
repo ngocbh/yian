@@ -75,12 +75,13 @@ def _check_http_client_type(name: str, value: Any) -> None:
 
 
 def _const_as_enum(schema: dict[str, Any]) -> dict[str, Any]:
-    """Return a copy of a JSON schema with each ``const`` keyword written as a one-value ``enum``.
+    """Return a copy of a JSON schema with string and number ``const``s as one-value ``enum``s.
 
     Gemini's ``responseJsonSchema`` supports only a subset of JSON Schema, which lists
-    ``enum`` but not ``const`` (google-genai ``GenerateContentConfig.response_json_schema``).
-    ``{"const": v}`` and ``{"enum": [v]}`` accept the same values, so the rewrite is exact.
-    A non-string ``const`` (a number, boolean or null) becomes ``enum: [v]`` too.
+    ``enum`` (for strings and numbers) but not ``const`` (google-genai
+    ``GenerateContentConfig.response_json_schema``). ``{"const": v}`` and ``{"enum": [v]}``
+    accept the same values, so the rewrite is exact. A boolean or null ``const`` is left as
+    written, since the list does not cover such an ``enum`` either.
 
     Args:
         schema (`dict[str, Any]`):
@@ -90,8 +91,8 @@ def _const_as_enum(schema: dict[str, Any]) -> dict[str, Any]:
         `dict[str, Any]`:
             A deep copy of `schema` where the root and every subschema under
             ``properties``, ``$defs``, ``items``, ``prefixItems``, ``additionalProperties``,
-            ``anyOf``, ``oneOf`` and ``allOf`` holding ``const: v`` has ``enum: [v]``
-            instead. A subschema whose existing ``enum`` holds ``v`` (compared as JSON
+            ``anyOf``, ``oneOf`` and ``allOf`` holding a string or number ``const: v`` has
+            ``enum: [v]`` instead. A subschema whose existing ``enum`` holds ``v`` (compared as JSON
             values) gets ``enum: [v]``; one whose ``enum`` lacks ``v`` is left as written.
     """
     result = copy.deepcopy(schema)
@@ -100,8 +101,9 @@ def _const_as_enum(schema: dict[str, Any]) -> dict[str, Any]:
         node = stack.pop()
         if not isinstance(node, dict):
             continue
-        if "const" in node:
-            value = node["const"]
+        value = node.get("const")
+        # `bool` is a subclass of `int`, but a JSON boolean is not a number.
+        if isinstance(value, (str, int, float)) and not isinstance(value, bool):
             # Compare as JSON, where `true` and `1` differ; Python has `True == 1`.
             wanted = json.dumps(value, sort_keys=True)
             members = node.get("enum")

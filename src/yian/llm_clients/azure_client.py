@@ -1,7 +1,12 @@
 import copy
 import json
+from operator import itemgetter
 from typing import Any, Optional
 
+from langchain_core.output_parsers import PydanticOutputParser
+from langchain_core.runnables import RunnableMap, RunnablePassthrough
+from langchain_core.utils.function_calling import convert_to_openai_tool
+from langchain_core.utils.pydantic import is_basemodel_subclass
 from langchain_openai import AzureChatOpenAI
 from openai.lib._parsing._completions import type_to_response_format_param
 
@@ -87,34 +92,90 @@ class NormalizedAzureChatOpenAI(RequestBlockMixin, AzureChatOpenAI):
         """Apply the reply normalization `invoke` uses; streamed replies reuse it."""
         return normalize_content(response)
 
-    def with_structured_output(self, schema=None, *, method=None, **kwargs):
-        """Bind `schema` for structured output, as a non-strict function tool when it is open.
+    def with_structured_output(self, schema=None, *, method=None, include_raw=False, **kwargs):
+        """Bind `schema` for structured output in a form Azure's strict mode accepts.
 
         Azure's default (``json_schema``, strict) rejects a schema with an open part
         (`has_open_schema`), so without an explicit ``method`` such a schema goes as a
         forced function tool without ``strict`` instead. When an open schema is bound as
         a function tool on a deployment langchain routes to the Responses API, where an
         omitted ``strict`` lets the API try strict mode, ``strict=False`` is sent unless
-        the caller gave ``strict``. Any other schema or method reaches langchain unchanged.
+        the caller gave ``strict``.
+
+        Azure's strict mode also rejects keywords such as ``minimum``, ``maximum`` and
+        ``minItems`` (`_AZURE_STRICT_UNSUPPORTED`). A closed pydantic schema holding one,
+        given without ``method`` or ``strict``, is sent as a strict ``json_schema`` with
+        those keywords moved into the subschema's description (`_strict_schema_without`),
+        and the reply is parsed against `schema` itself, so the moved keywords are still
+        enforced. On that path a refusal or an empty reply fails to parse, raising an
+        `OutputParserException` that yian's structured-output retry corrects. Any other
+        schema or method reaches langchain unchanged.
 
         Args:
             schema (`dict | type | None`, *optional*, defaults to `None`):
                 The output schema: a pydantic class, a TypedDict or a JSON-schema dict.
             method (`str`, *optional*, defaults to `None`):
                 The structured-output method; `None` picks as described above.
+            include_raw (`bool`, *optional*, defaults to `False`):
+                Whether to return ``{"raw", "parsed", "parsing_error"}`` instead of the
+                parsed output.
             **kwargs:
                 Passed to `AzureChatOpenAI.with_structured_output`.
 
         Returns:
             `Runnable`:
-                The structured-output runnable langchain builds.
+                A runnable that returns outputs matching `schema`.
         """
+        if (
+            method is None
+            and "strict" not in kwargs
+            and isinstance(schema, type)
+            and is_basemodel_subclass(schema)
+            and not has_open_schema(schema)
+            and (response_format := _strict_schema_without(schema)) is not None
+        ):
+            return self._stripped_strict_output(schema, response_format, include_raw=include_raw)
         if method is None and has_open_schema(schema):
             method = "function_calling"
         _strict_false_for_open_schema(self, schema, method, kwargs)
         if method is not None:
             kwargs["method"] = method
-        return super().with_structured_output(schema, **kwargs)
+        return super().with_structured_output(schema, include_raw=include_raw, **kwargs)
+
+    def _stripped_strict_output(self, schema, response_format, *, include_raw):
+        """Bind `response_format` and parse the reply's content as `schema`.
+
+        Args:
+            schema (`type`):
+                The pydantic v2 output class.
+            response_format (`dict`):
+                The strict format from `_strict_schema_without`.
+            include_raw (`bool`):
+                Whether to return ``{"raw", "parsed", "parsing_error"}``, assembled as
+                `AzureChatOpenAI.with_structured_output` does.
+
+        Returns:
+            `Runnable`:
+                A runnable that returns outputs matching `schema`.
+        """
+        llm = self.bind(
+            response_format=response_format,
+            ls_structured_output_format={
+                "kwargs": {"method": "json_schema", "strict": True},
+                "schema": convert_to_openai_tool(schema),
+            },
+        )
+        parser = PydanticOutputParser(pydantic_object=schema)
+        if not include_raw:
+            return llm | parser
+        # Kept in step with `AzureChatOpenAI.with_structured_output`'s include_raw assembly.
+        parser_assign = RunnablePassthrough.assign(
+            parsed=itemgetter("raw") | parser, parsing_error=lambda _: None
+        )
+        parser_none = RunnablePassthrough.assign(parsed=lambda _: None)
+        return RunnableMap(raw=llm) | parser_assign.with_fallbacks(
+            [parser_none], exception_key="parsing_error"
+        )
 
 
 class AzureOpenAIClient(BaseLLMClient):

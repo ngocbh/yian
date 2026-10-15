@@ -589,16 +589,16 @@ def test_scanned_sites_read_a_field_on_a_builtin_result_once(nodes, output, site
 
 
 @pytest.mark.parametrize(
-    "nodes",
+    ("nodes", "output"),
     [
-        _agent({"v": "${upper(input.s)}"}, "${v}"),
-        _agent({"v": "!list(str) [a, b]"}, "${join(v, ',')}"),
-        _code({"v": "${input.s}"}, ["upper(v) == 'X'"]),
+        (_agent({"v": "${upper(input.s)}"}, "${v}"), "${ag.output}"),
+        (_agent({"v": "!list(str) [a, b]"}, "${join(v, ',')}"), "${ag.output}"),
+        (_code({"v": "${input.s}"}, ["upper(v) == 'X'"]), "${c.output}"),
     ],
     ids=["upper", "join", "assert"],
 )
-def test_builtin_results_without_a_field_read_load(nodes):
-    load_flow(_flow(nodes, "${ag.output}" if "ag:" in nodes else "${c.output}"))
+def test_builtin_results_without_a_field_read_load(nodes, output):
+    load_flow(_flow(nodes, output))
 
 
 def test_host_builtin_field_reads_load(monkeypatch):

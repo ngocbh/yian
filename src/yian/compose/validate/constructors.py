@@ -118,11 +118,10 @@ def builtin_field_errors(tree: Tree | Token) -> list[str]:
     for node in tree.iter_subtrees_topdown():
         if node.data != "refcall":
             continue
-        name = str(node.children[0])
-        if name not in TEMPLATE_FNS or not any(
-            isinstance(c, Tree) and c.data == "call_suffix" for c in node.children
-        ):
+        # A `${upper.f}` read of an input named `upper` is no call.
+        if not any(isinstance(c, Tree) and c.data == "call_suffix" for c in node.children):
             continue
+        name = str(node.children[0])
         typ = builtin_result_type(name)
         if typ is None:
             continue

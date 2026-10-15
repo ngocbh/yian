@@ -293,7 +293,10 @@ def validate_references(
         except ExpressionError as exc:
             errors.append((f"{where}: {exc}", rng))
             return
-        add_builtin_field_errors(text, where, rng)
+        trees = [
+            segment.tree for segment in scan_template(text) if isinstance(segment, Span)
+        ]
+        add_builtin_field_errors(trees, where, rng)
         if registry is not None and constructors:
 
             def ref_type(path: str) -> Type | None:
@@ -309,12 +312,11 @@ def validate_references(
                     contract = reference_contract(path, site_producers, site_inputs)
                 return output_contract_type(contract)
 
-            for segment in scan_template(text):
-                if isinstance(segment, Span):
-                    constructor_problems.extend(
-                        (f"{where}: {problem}", rng)
-                        for problem in constructor_errors(segment.tree, registry, ref_type)
-                    )
+            for tree in trees:
+                constructor_problems.extend(
+                    (f"{where}: {problem}", rng)
+                    for problem in constructor_errors(tree, registry, ref_type)
+                )
         for path in paths:
             err = _classify_path(
                 path, valid_targets, flow_inputs, extra_heads
@@ -363,14 +365,14 @@ def validate_references(
         except ExpressionError as exc:
             errors.append((f"{where}: {exc}", rng))
 
-    def add_builtin_field_errors(text: str, where: str, rng: Optional[SourceRange]) -> None:
-        """Add one error at `where` per field read on a builtin's result in `text`."""
-        for segment in scan_template(text):
-            if isinstance(segment, Span):
-                errors.extend(
-                    (f"{where}: {problem}", rng)
-                    for problem in builtin_field_errors(segment.tree)
-                )
+    def add_builtin_field_errors(
+        trees: list, where: str, rng: Optional[SourceRange]
+    ) -> None:
+        """Add one error at `where` per field read on a builtin's result in `trees`."""
+        for tree in trees:
+            errors.extend(
+                (f"{where}: {problem}", rng) for problem in builtin_field_errors(tree)
+            )
 
     def check_template(
         where: str,
@@ -397,7 +399,10 @@ def validate_references(
         except ExpressionError as exc:
             errors.append((f"{where}: {exc}", rng))
             return
-        add_builtin_field_errors(template, where, rng)
+        trees = [
+            segment.tree for segment in scan_template(template) if isinstance(segment, Span)
+        ]
+        add_builtin_field_errors(trees, where, rng)
         field_checked: set[str] = set()
         for ref in refs:
             head = ref.split(".", 1)[0].strip()

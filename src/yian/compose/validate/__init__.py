@@ -38,7 +38,9 @@ reject an ill-formed flow before it is compiled:
 - `typed_bindings.py` — `check_typed_inputs` / `check_typed_outputs`: a typed node
   input or flow output can fit its declared type (literal text exactly; a reference
   unless its inferred type is disjoint, leaving a narrower one to the runtime check);
-  `infer_binding_type` returns the type one binding is proven to produce.
+  `infer_binding_type` returns the type one binding is proven to produce;
+  `local_input_contracts` gives each node-local name's alternative contracts, for
+  prompt and node-assert field reads.
 - `reserved_sources.py` — `check_reserved_sources`: a MAP `over:` reference infers a
   list and a WAIT `until:` reference a type that overlaps `date` or `datetime`; a
   literal is left to the parse stage and an unproven type to the run-time check.

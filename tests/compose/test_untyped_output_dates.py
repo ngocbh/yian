@@ -3,7 +3,8 @@
 An untyped output must hold JSON values, so an unquoted YAML date or datetime written
 in a flow's `output:` (root, a `defs:` body, or an inline CALL/MAP/LOOP body) fails at
 load, located at the value, with the quoted form to write. A YAML `!!set` or `!!binary`
-literal fails the same way without a hint. A quoted or tagged date keeps its behavior.
+literal fails the same way without a hint, and a number that is not finite (`.nan`,
+`1e400`) names the spelling YAML reads. A quoted or tagged value keeps its behavior.
 """
 
 from __future__ import annotations
@@ -283,3 +284,105 @@ def test_other_untagged_literals_in_untyped_outputs_still_load():
     assert _ok(text) == {"n": 1, "s": "x", "l": [1, None], "m": {"k": True}, "h": 1}
     omap = _ok(_flow("g: !!omap [a: 1]\nh: ${b.output}"))
     assert omap["g"] == [["a", 1]]
+
+
+_FINITE = "numbers must be finite"
+
+
+@pytest.mark.parametrize(
+    ("g", "got"),
+    [
+        (".nan", ".nan"),
+        (".inf", ".inf"),
+        ("-.inf", "-.inf"),
+        (".NaN", ".NaN, which YAML reads as .nan"),
+        (".Inf", ".Inf, which YAML reads as .inf"),
+        ("+.inf", "+.inf, which YAML reads as .inf"),
+        ("-.Inf", "-.Inf, which YAML reads as -.inf"),
+        ("1e400", "1e400, which YAML reads as .inf"),
+        ("1.0e+400", "1.0e+400, which YAML reads as .inf"),
+    ],
+)
+def test_a_non_finite_number_in_an_untyped_output_is_a_load_error(g, got):
+    """A number that is not finite fails at load, naming the spelling YAML reads."""
+    text = _flow(f"g: {g}\nh: ${{b.output}}")
+    message = f"'g': {_FINITE} (got {got})"
+    with pytest.raises(LoadError, match=f"^{re.escape(message)}$") as excinfo:
+        load_flow(text)
+    line = text.splitlines().index(f"  g: {g}") + 1
+    assert excinfo.value.diagnostic.frames[-1].range.start_line == line
+
+
+@pytest.mark.parametrize(
+    ("output", "label"),
+    [
+        ("g: [1, .nan]\nh: ${b.output}", "g[1]"),
+        ("g: {x: .nan}\nh: ${b.output}", "g.x"),
+        ("g: !!float .nan\nh: ${b.output}", "g"),
+        ("g: !!omap [{a: .nan}]\nh: ${b.output}", "g[0][1]"),
+    ],
+)
+def test_a_nested_or_core_tagged_non_finite_number_is_a_load_error(output, label):
+    """A nested, `!!float`, or `!!omap` pair `.nan` fails at load, on its line."""
+    text = _flow(output)
+    message = f"'{label}': {_FINITE} (got .nan)"
+    with pytest.raises(LoadError, match=f"^{re.escape(message)}$") as excinfo:
+        load_flow(text)
+    line = text.splitlines().index(f"  {output.splitlines()[0]}") + 1
+    assert excinfo.value.diagnostic.frames[-1].range.start_line == line
+
+
+@pytest.mark.parametrize(
+    ("output", "label"),
+    [(".nan", "output"), ("[1, .nan]", "output[1]")],
+)
+def test_a_non_finite_number_as_the_whole_output_is_a_load_error(output, label):
+    """A `.nan` as the whole `output:`, or an item of it, fails at load."""
+    text = _HEAD + f"output: {output}\n"
+    message = f"'{label}': {_FINITE} (got .nan)"
+    with pytest.raises(LoadError, match=f"^{re.escape(message)}$") as excinfo:
+        load_flow(text)
+    line = text.splitlines().index(f"output: {output}") + 1
+    assert excinfo.value.diagnostic.frames[-1].range.start_line == line
+
+
+_NAN_BODY = """id: p
+name: p
+defs:
+  sub:
+    nodes:
+      a:
+        kind: code
+        code: return 1
+      b:
+        kind: code
+        code: return 2
+    output:
+      g: .nan
+      h: ${b.output}
+nodes:
+  c:
+    kind: call
+    call: sub
+output: ${c.output}
+"""
+
+
+def test_a_non_finite_number_in_a_body_output_is_a_load_error():
+    """A `.nan` in a `defs:` body's untyped output fails at load, at the value."""
+    message = f"defs entry 'sub': 'g': {_FINITE} (got .nan)"
+    with pytest.raises(LoadError, match=f"^{re.escape(message)}$") as excinfo:
+        load_flow(_NAN_BODY)
+    line = _NAN_BODY.splitlines().index("      g: .nan") + 1
+    assert excinfo.value.diagnostic.frames[-1].range.start_line == line
+
+
+def test_quoted_tagged_or_finite_numbers_keep_their_behavior():
+    """Quoted or `!!str` `.nan` stays text; `!float .nan` fails at run; finite loads."""
+    assert _ok(_flow('g: ".nan"\nh: ${b.output}')) == {"g": ".nan", "h": 1}
+    assert _ok(_flow("g: !!str .nan\nh: ${b.output}")) == {"g": ".nan", "h": 1}
+    tagged = run_flow(load_flow(_flow("g: !float .nan\nh: ${b.output}")), {})
+    assert tagged.status == "failed"
+    assert tagged.failure.code == "binding.evaluate"
+    finite = _ok(_flow("g: [1.5, -2e10, 1e300]\nh: ${b.output}"))
+    assert finite == {"g": [1.5, -2e10, 1e300], "h": 1}

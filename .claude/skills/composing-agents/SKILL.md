@@ -109,7 +109,8 @@ text; `2026-10-14` is a date. An unquoted date-shaped value that is not a real
 date (`2026-13-45`, `2026-01-01T10:00:00+05:99`) is a load error at the value;
 quote it to keep it as text. A bare `call(...)` argument reads the same way, as
 one scalar (`x=None` is text; write `x=null`). An unquoted date in an untyped
-output (a flow or body `output:` without a tag) is a load error; quote it. A `yes`
+output (a flow or body `output:` without a tag) is a load error; quote it. So is a
+number there that is not finite (`.nan`, `.inf`, `1e400`). A `yes`
 in a tagged binding or default, a call input, a value entry, `steerable:`, or
 `inherit:` that needs a `bool` fails with "`yes` is text; write `true`". Under a `bool` `on:`, write
 `when: true`: a `when: yes` there is a load error with the same fix.

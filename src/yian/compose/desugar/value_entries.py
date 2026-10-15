@@ -30,7 +30,7 @@ from yian.compose.nodes.code import CodeDescriptor
 from yian.compose.source import SourceCursor
 from yian.nodes.contracts import OutputContract, ValueContract, ValuePath, ValueTemplate
 from yian.typesys.types import TypeRegistry
-from yian.typesys.values import Type, ValueKind
+from yian.typesys.values import Type, ValueKind, shown_text
 
 if TYPE_CHECKING:
     from yian.compose.source.catalog import _SourceCatalogBuilder
@@ -49,16 +49,26 @@ def non_finite_text(number: float) -> str:
     return ".inf" if number > 0 else "-.inf"
 
 
-def non_finite_reason(number: float) -> str:
+def non_finite_reason(number: float, text: str | None = None) -> str:
     """Return why a number that is not finite can't be a value.
 
     Args:
         number (`float`): `inf`, `-inf`, or `nan`.
+        text (`str | None`, *optional*, defaults to `None`): The authored spelling,
+            shown (cut to `YIAN_MAX_SHOWN_VALUE_CHARS`) with the spelling YAML reads
+            when the two differ.
 
     Returns:
-        `str`: Such as `numbers must be finite (got .inf)`.
+        `str`: Such as `numbers must be finite (got .inf)`, or with a differing
+            `text`, `numbers must be finite (got 1e400, which YAML reads as .inf)`.
     """
-    return f"numbers must be finite (got {non_finite_text(number)})"
+    canonical = non_finite_text(number)
+    if text is None or text == canonical:
+        return f"numbers must be finite (got {canonical})"
+    return (
+        f"numbers must be finite (got {shown_text(text)}, which YAML reads as "
+        f"{canonical})"
+    )
 
 
 def infers_record(tag: Type, value: Any) -> bool:

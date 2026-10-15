@@ -130,7 +130,9 @@ load error; quote it to keep it as text.
 An unquoted date in an output without a type (`output: {as_of: 2026-01-01, ...}`, also
 a body's output) is a load error at the value too, since an untyped output holds JSON
 values; quote it to keep it as text, or tag it (`!date "2026-01-01"`). So is a YAML
-`!!set` or `!!binary` value there.
+`!!set` or `!!binary` value there, and a number that is not finite: `g: .nan` gives
+`'g': numbers must be finite (got .nan)`, and `g: 1e400` gives `'g': numbers must be
+finite (got 1e400, which YAML reads as .inf)`.
 
 A flow file's YAML nests at most 200 levels (`YIAN_MAX_YAML_NESTING` can lower it; see
 [Defaults and limits](defaults.md)); each mapping and list is a level, counting the

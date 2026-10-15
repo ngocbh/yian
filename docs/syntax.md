@@ -127,6 +127,11 @@ An unquoted value shaped like a date that isn't a real one (`2026-13-45`,
 `2026-02-30`, `2026-01-01T25:00:00`, `2026-01-01T10:00:00+05:99`) is a located
 load error; quote it to keep it as text.
 
+An unquoted date in an output without a type (`output: {as_of: 2026-01-01, ...}`, also
+a body's output) is a load error at the value too, since an untyped output holds JSON
+values; quote it to keep it as text, or tag it (`!date "2026-01-01"`). So is a YAML
+`!!set` or `!!binary` value there.
+
 A flow file's YAML nests at most 200 levels (`YIAN_MAX_YAML_NESTING` can lower it; see
 [Defaults and limits](defaults.md)); each mapping and list is a level, counting the
 file's top level. A deeper file is a load error at the first mapping or list past
@@ -512,8 +517,10 @@ untyped CODE or TOOL output used to accept a date, a set, a pydantic model, an e
 or another non-JSON value, which the run log turned into text or rejected without a
 path (an untyped TOOL output turned a nested model into a dict and a nested enum into
 its value); it now fails `contract.output` naming the path
-(`output at d: datetime.date(2026, 1, 1) is not a JSON value`). So does an unquoted date in a flow output record without a type
-(`output: {as_of: 2026-01-01, ...}`); quote it. A returned dict with a non-text key
+(`output at d: datetime.date(2026, 1, 1) is not a JSON value`). An unquoted date, or a
+YAML `!!set` or `!!binary` literal, in a flow output without a type is now a load error
+at the value (``'as_of': `2026-01-01` is not a JSON value (YAML reads it as a date); quote
+it to keep it as text: `as_of: "2026-01-01"` ``). A returned dict with a non-text key
 fails `object keys must be text, got 1` for an untyped, `object`, or `Any` output, and
 an inline CODE return that isn't a JSON value fails `contract.output`, not
 `node.execute`.

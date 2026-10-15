@@ -897,8 +897,11 @@ fact for a base path (`<node>.output[.path]` or `input.<name>[.path]`) is `Membe
 subset of the base's own union members, with nullability) or `Exact(T)`. An `on:` CASE
 over a union tag field gives each `when:` handle its tagged members and `else:` the
 unlisted ones. A searched CASE's top-level `isinstance(<ref>, T)` conjunct gives its
-handle a fact; its `else:` carries none. A later conjunct of the same `and` chain is
-checked against the narrowed base (`Narrowing.for_param`). Facts flow in Kahn's order
+handle a fact; its `else:` carries none. That fact is `Members` of the base members `T`
+shares when no other base member overlaps `T`, else `Exact(T)`; the LOOP predicate walk
+uses the same rule (`isinstance_members` in `compose/helpers/isinstance_types.py`). A
+later conjunct of the same `and` chain is checked against the narrowed base
+(`Narrowing.for_param`). Facts flow in Kahn's order
 over data, CASE, and `depends_on` edges: control edges join by union, each required data
 group joins its producers by union, and all contributions meet by intersection. Optional
 groups and `runs_after` contribute nothing; nodes on a cycle get no facts and are left for

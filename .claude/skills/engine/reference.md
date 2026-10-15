@@ -1066,7 +1066,10 @@ Compose and runtime growth reference validation both call the source-neutral clo
 walk in `nodes/contracts.py`; exact nested records and partial root name sets therefore
 reject the same provably absent paths without importing Compose into runtime.
 The walk, `output_contract_field_error`, also rejects any field on a scalar or list
-type; an opaque `object` (no declared fields), `Any`, and `file` stay unchecked. On a
+type; an opaque `object` (no declared fields) and `Any` stay unchecked. A `file` reads
+only `uri` (`str`), `mime` and `name` (`Optional(str)`), typed by
+`typesys.values.file_field_type`, which inline-binding inference,
+`project_output_contract`, and expression typing share. On a
 union it continues with a shared field's type and rejects a field only some members
 have (naming the tag to `case` on, or `isinstance` for an untagged union). Runtime
 growth passes `partial_union_fields=True`: fragments come from flows the loader already

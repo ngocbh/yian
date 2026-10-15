@@ -240,16 +240,17 @@ slot (`n: !int ${x.output}`, checked at runtime) or narrow it with `isinstance` 
 non-text key, a date object, or a set fails the node. A node output with no `output:`
 follows the same rule but may also hold files; a date, set, or non-text key in it fails
 `contract.output` with its path (`output at d: ...`). A `file` is a `FileRef` (`uri`,
-`mime`, `name`; read them as `${f.uri}`). It keeps its type inside typed containers: a
-`list(file)` item, a record `file` field, or a LOOP-carried `file` reaches CODE as a
-`FileRef` (`x["f"].uri`, not `x["f"]["uri"]`). A `file` slot also reads the mapping
-`{uri, mime, name}`, and an `object` slot reads a nested file as its mapping; untyped
-outputs keep nested files as mappings. A MAP's list is typed only when its body's output
-has one exact type (a typed whole value, or a record with every field typed); over a
-body returning a record with an untyped field, `${m.output}` readers in the parent and
-the run result see nested files as mappings. A list the loader can't type (a
-tool's untyped array, a mixed or empty literal) is `list(Optional(Any))`; its items are
-checked at runtime when passed on.
+`mime`, `name`; read them as `${f.uri}`, typed at load: `uri` is `str`, `mime` and
+`name` `Optional(str)`, and any other field is a load error). It keeps its type inside
+typed containers: a `list(file)` item, a record `file` field, or a LOOP-carried `file`
+reaches CODE as a `FileRef` (`x["f"].uri`, not `x["f"]["uri"]`). A `file` slot also
+reads the mapping `{uri, mime, name}`, and an `object` slot reads a nested file as its
+mapping; untyped outputs keep nested files as mappings. A MAP's list is typed only when
+its body's output has one exact type (a typed whole value, or a record with every field
+typed); over a body returning a record with an untyped field, `${m.output}` readers in
+the parent and the run result see nested files as mappings. A list the loader can't type
+(a tool's untyped array, a mixed or empty literal) is `list(Optional(Any))`; its items
+are checked at runtime when passed on.
 
 Use `int(1..12)` or `float(0.0..1.0)` for inclusive numeric ranges. Either end may
 be open: `int(0..)` is 0 or more, `int(..100)` is at most 100; `int(..)` is an error

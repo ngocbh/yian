@@ -33,6 +33,7 @@ from yian.typesys.values import (
     ValueKind,
     build_value_as,
     field_of,
+    file_field_type,
     normalize_files,
     parse_int_text,
     union_field,
@@ -1371,7 +1372,8 @@ def _field_read_type(typ: Type, name: str) -> "Type | None":
     """Return the type of reading field `name` on a value of type `typ`, if proven.
 
     A record's field is `Optional` when the record is, or the field is not required;
-    a union's field is the members' shared type when every member has it.
+    a union's field is the members' shared type when every member has it; a file's
+    `uri`, `mime` or `name` is its `file_field_type`, `Optional` when the file is.
     """
     if typ.variants is not None:
         read = union_field(typ, name)
@@ -1382,6 +1384,10 @@ def _field_read_type(typ: Type, name: str) -> "Type | None":
         field = typ.fields[name]
         if name not in (typ.required or frozenset()):
             field = replace(field, nullable=True)
+    elif typ.fields is None and typ.kind is ValueKind.FILE:
+        field = file_field_type(name)
+        if field is None:
+            return None
     else:
         return None
     return replace(field, nullable=True) if typ.nullable else field

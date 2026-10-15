@@ -760,12 +760,27 @@ _OBJECT_PRODUCER = """\
 """
 
 
+# With no `output:`, load leaves reads on `a.output` unchecked while the value stays a file.
+_UNTYPED_FILE_PRODUCER = f"""\
+  a:
+    kind: code
+    code: |
+      return {F}
+"""
+
+
 @pytest.mark.parametrize("field", ["other", "__class__"])
 def test_another_field_of_a_file_is_missing_like_a_missing_key(field):
     expected = _missing_outcome(_OBJECT_PRODUCER, f"a.output.{field}")
 
     assert expected == ("succeeded", "None")
-    assert _missing_outcome(_PRODUCERS, f"a.output.{field}") == expected
+    assert _missing_outcome(_UNTYPED_FILE_PRODUCER, f"a.output.{field}") == expected
+
+
+@pytest.mark.parametrize("field", ["other", "__class__"])
+def test_another_field_of_a_typed_file_is_a_load_error(field):
+    with pytest.raises(LoadError, match=f"reads field '{field}' on a file"):
+        _missing_outcome(_PRODUCERS, f"a.output.{field}")
 
 
 def test_render_as_json_writes_a_file_as_its_mapping():
@@ -799,16 +814,24 @@ def test_a_traced_item_read_of_another_file_field_has_no_source_route():
     assert traced.route.source is None
 
 
-def test_a_learnable_run_reads_the_fields_of_a_file_through_its_trace():
+@pytest.mark.parametrize("learnable", [False, True])
+def test_a_run_reads_the_fields_of_a_file_through_its_trace(learnable):
     # A learnable run resolves bindings through the run trace, not the pool.
-    result = run_flow(load_flow(_file_flow(
+    result = run_flow(load_flow(
+        f"id: p\nname: p\nnodes:\n{_UNTYPED_FILE_PRODUCER}"
+        "  n:\n    kind: code\n    output: file\n"
+        f"    code: |\n      return {_NAMED_F}\n"
         "  b:\n    kind: code\n    input:\n"
-        "      u: ${a.output.uri}\n      k: ${n.output.name}\n      x: ${a.output.other}\n"
-        "    code: |\n      return [inputs['u'], inputs['k'], inputs['x']]\n"
-    )), {}, learnable=True)
+        "      u: ${a.output.uri}\n      k: ${n.output.name}\n"
+        "      x: ${a.output.other}\n      c: ${a.output.__class__}\n      t: ${a.output}\n"
+        "    code: |\n"
+        "      return [inputs['u'], inputs['k'], inputs['x'], inputs['c'],\n"
+        "              type(inputs['t']).__name__]\n"
+        "output: ${b.output}\n"
+    ), {}, learnable=learnable)
 
     assert result.status == "succeeded", result.failure
-    assert result.output == ["f", "a.txt", None]
+    assert result.output == ["f", "a.txt", None, None, "FileRef"]
 
 
 @pytest.mark.parametrize(

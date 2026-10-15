@@ -63,7 +63,11 @@ typed default must be quoted (see [syntax](syntax.md#types)), and so must a time
 anywhere else.
 
 `file` is a file reference, held as a `FileRef` with `uri` (text), `mime`, and `name`
-(text or null). Storage and transfer are not built yet. Its JSON form is the mapping
+(text or null). Where the loader knows a value is a `file`, a field read on it is typed
+at load: `${f.uri}` is `str`, `${f.mime}` and `${f.name}` are `Optional(str)`, and any
+other field is a load error. A file from an untyped output and a read in an AGENT prompt
+aren't checked (see [References](syntax.md#references-naming-a-value)). Storage and
+transfer are not built yet. Its JSON form is the mapping
 `{"uri": ..., "mime": ..., "name": ...}`. A `file` slot reads that mapping, with exactly
 those keys, as a `FileRef`. An `object` slot reads a nested `FileRef` as its mapping, but
 a `FileRef` at the top of an `object` slot fails, and `Any` and `list[Any]` reject files.

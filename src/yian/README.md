@@ -879,7 +879,10 @@ origins, so changing or rebasing provenance does not change flow or expansion id
 Compose and runtime growth reference validation share the source-neutral closed-field walk
 in `nodes/contracts.py`, so a partial record cannot expose a provably absent field. That
 walk, `output_contract_field_error`, also rejects any field on a scalar or list type; an
-opaque `object` (no declared fields) and `file` stay unchecked. On a union it reads a
+opaque `object` (no declared fields) and `Any` stay unchecked. A `file` reads only `uri`
+(`str`), `mime` and `name` (`Optional(str)`), typed by `typesys.values.file_field_type`;
+the same helper types file reads in inline-binding inference, `project_output_contract`,
+and expression typing. On a union it reads a
 field every member has with the shared type (the merged `Literal` when every member's
 field is a string `Literal`, untyped when the types otherwise differ) and rejects a field
 only some members have, naming the tag to `case` on or suggesting `isinstance`. Runtime

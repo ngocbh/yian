@@ -38,11 +38,13 @@ from yian.nodes.contracts import (
     ValueContract,
     ValueTemplate,
     binding_source,
+    file_field_error,
 )
 from yian.typesys.values import (
     Type,
     ValueKind,
     canonical_type_label,
+    file_field_type,
     list_kind_for_element,
     union_field,
 )
@@ -527,7 +529,8 @@ def _walk_record_type(
     """Walk proven record fields and return a fresh result with path nullability.
 
     A union field is read through the shared output-contract walk, so its rules and
-    messages match every other reference check.
+    messages match every other reference check. A file's `uri`, `mime` and `name` are
+    typed by `file_field_type`.
     """
     current = root
     path_nullable = root.nullable
@@ -546,6 +549,18 @@ def _walk_record_type(
                     binding_label,
                     binding_range,
                     f"reference ${{{path}}} has no statically proven exact type",
+                    diagnostics,
+                )
+            current = read_type
+            path_nullable = path_nullable or current.nullable
+            continue
+        if current.fields is None and current.kind is ValueKind.FILE:
+            read_type = file_field_type(field)
+            if read_type is None:
+                raise _inference_error(
+                    binding_label,
+                    binding_range,
+                    file_field_error(path, field),
                     diagnostics,
                 )
             current = read_type

@@ -1,6 +1,9 @@
+import copy
+import json
 from typing import Any, Optional
 
 from langchain_openai import AzureChatOpenAI
+from openai.lib._parsing._completions import type_to_response_format_param
 
 from .base_client import BaseLLMClient, normalize_content
 from .capabilities import has_open_schema
@@ -12,6 +15,66 @@ _PASSTHROUGH_KWARGS = (
     "timeout", "max_retries", "api_key", "callbacks", "http_client",
     "http_async_client",
 )
+
+# Keywords Azure OpenAI's strict structured outputs reject, from "JSON Schema support and
+# limitations" in learn.microsoft.com/azure/foundry/openai/how-to/structured-outputs; the
+# list covers both Chat Completions and the Responses API. It is Azure's own: OpenAI's
+# strict mode accepts some of these. Adding a keyword is always safe, since the reply's
+# parse still enforces it (e.g. ``exclusiveMinimum``).
+_AZURE_STRICT_UNSUPPORTED = (
+    "minLength", "maxLength", "pattern", "format",
+    "minimum", "maximum", "multipleOf",
+    "patternProperties", "unevaluatedProperties", "propertyNames", "minProperties",
+    "maxProperties",
+    "unevaluatedItems", "contains", "minContains", "maxContains", "minItems", "maxItems",
+    "uniqueItems",
+)
+
+
+def _strict_schema_without(schema_cls: type) -> Optional[dict[str, Any]]:
+    """Return the strict ``response_format`` for `schema_cls` without Azure's rejected keywords.
+
+    Each subschema loses the keywords in `_AZURE_STRICT_UNSUPPORTED` and has them restated
+    at the end of its ``description`` as ``{key: value, ...}`` with JSON spellings of the
+    values, as Anthropic's SDK ``transform_schema`` does. Only schema positions are
+    visited (``properties`` and ``$defs`` values, ``items``, ``prefixItems`` members, a
+    dict ``additionalProperties``, ``anyOf``/``oneOf``/``allOf`` members), so a property
+    named like a keyword is kept.
+
+    Args:
+        schema_cls (`type`):
+            A pydantic v2 model class.
+
+    Returns:
+        `dict | None`:
+            The ``{"type": "json_schema", "json_schema": {...}}`` format with the keywords
+            moved, or `None` when no subschema holds one.
+    """
+    # The private openai SDK helper `chat.completions.parse` uses today, so the schema
+    # matches what a strict Azure request sends now.
+    fmt = copy.deepcopy(type_to_response_format_param(schema_cls))
+    moved = False
+    stack = [fmt["json_schema"]["schema"]]
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, dict):
+            continue
+        notes = [
+            f"{key}: {json.dumps(node.pop(key))}"
+            for key in _AZURE_STRICT_UNSUPPORTED if key in node
+        ]
+        if notes:
+            moved = True
+            note = "{" + ", ".join(notes) + "}"
+            description = node.get("description")
+            node["description"] = f"{description}\n\n{note}" if description else note
+        for key in ("properties", "$defs"):
+            stack.extend((node.get(key) or {}).values())
+        for key in ("prefixItems", "anyOf", "oneOf", "allOf"):
+            stack.extend(node.get(key) or ())
+        stack.append(node.get("items"))
+        stack.append(node.get("additionalProperties"))
+    return fmt if moved else None
 
 
 class NormalizedAzureChatOpenAI(RequestBlockMixin, AzureChatOpenAI):

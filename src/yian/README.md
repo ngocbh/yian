@@ -553,8 +553,12 @@ on Chat Completions (`response_format`) and Responses-routed deployments (`text.
 alike. The reply is parsed with the pydantic class, which still enforces them, so a value
 out of range is an `OutputParserException` corrected under `retries:`. The reply is read
 strictly (`model_validate_json`, no repair of truncated JSON), and a refusal's text is
-named in the error. A class whose schema sets `json_schema_extra` keeps langchain's
-request, since a hand-written keyword isn't enforced by the parse. Reflective memory's
+named in the error. Only a class built from types and constraints the parse checks
+(`_reply_checks_every_keyword`: plain v2 models, builtin scalars, lists, dicts, unions,
+literals, and `Field`/`annotated_types` bounds) takes this path; any other class (a
+hand-written schema keyword, a custom schema hook, a TypedDict or dataclass, pydantic v1)
+keeps langchain's request, and so does a deployment langchain sends as a function tool
+(`gpt-4`, `gpt-4-*`, `gpt-3*`). Reflective memory's
 reflection call (`actions` has `minItems: 1`) takes this path. Dict schemas and an
 explicit `method` or `strict` reach Azure unchanged; open schemas keep the non-strict
 function tool. Gemini's `responseJsonSchema` lacks `const`, so

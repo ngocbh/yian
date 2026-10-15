@@ -1138,8 +1138,9 @@ def _reject_non_json_literals(
 
     An untagged date or datetime gets the quoted text to write; a `!!set` or
     `!!binary` literal is named without a hint. A tagged value is left to its tag.
-    An `!!omap` or `!!pairs` entry is checked at its pair. For an alias (`g: *d`)
-    the range is the anchor's; the label still names the output field.
+    A scalar key or value of an `!!omap` or `!!pairs` entry is checked at its pair.
+    For an alias (`g: *d`) the range is the anchor's; the label still names the
+    output field.
 
     Args:
         value (`Any`): The constructed YAML value at `cursor`.

@@ -107,11 +107,11 @@ only `true`/`false` are booleans, so `yes`/`no`/`on`/`off` are text (CASE's `on:
 key too); `017` is 17 (octal is `0o17`); `1e3` is a float; `1:30` and `1_000` are
 text; `2026-10-14` is a date. An unquoted date-shaped value that is not a real
 date (`2026-13-45`, `2026-01-01T10:00:00+05:99`) is a load error at the value;
-quote it to keep it as text. An unquoted date in an untyped output (a flow or body
-`output:` without a tag) is a load error; quote it. A bare `call(...)` argument
-reads the same way, as one scalar (`x=None` is text; write `x=null`). A `yes` in a tagged binding or
-default, a call input, a value entry, `steerable:`, or `inherit:` that needs a
-`bool` fails with "`yes` is text; write `true`". Under a `bool` `on:`, write
+quote it to keep it as text. A bare `call(...)` argument reads the same way, as
+one scalar (`x=None` is text; write `x=null`). An unquoted date in an untyped
+output (a flow or body `output:` without a tag) is a load error; quote it. A `yes`
+in a tagged binding or default, a call input, a value entry, `steerable:`, or
+`inherit:` that needs a `bool` fails with "`yes` is text; write `true`". Under a `bool` `on:`, write
 `when: true`: a `when: yes` there is a load error with the same fix.
 
 Never write a secret in a flow file: every written value is part of the flow's

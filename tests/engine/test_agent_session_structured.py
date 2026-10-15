@@ -187,6 +187,74 @@ def test_native_malformed_carriers_fail_without_retry_and_keep_available_raw(sha
     assert len(_view(memory).items) == int(available)
 
 
+class _Carriers:
+    """A native model whose bound runnable returns each queued carrier, built from the schema."""
+
+    def __init__(self, carriers):
+        self.carriers = iter(carriers)
+        self.calls = []
+
+    def with_structured_output(self, schema, *, include_raw):
+        assert include_raw is True
+        def invoke(messages):
+            self.calls.append(deepcopy(messages))
+            return next(self.carriers)(schema)
+        return SimpleNamespace(invoke=invoke)
+
+
+def _unparsed_carrier(raw=None):
+    """Build a carrier for a reply with no call to the schema's tool."""
+    return lambda schema: {"raw": raw or AIMessage(content="42"), "parsed": None, "parsing_error": None}
+
+
+def _valid_carrier(schema):
+    raw = AIMessage(content="", tool_calls=[{"name": schema.__name__, "args": {"value": 7}, "id": "format-id"}])
+    return {"raw": raw, "parsed": schema.model_validate({"value": 7}), "parsing_error": None}
+
+
+def _run_carriers(model, memory, max_retries=2):
+    from yian.nodes.agent.structured import generate_structured
+    from yian.typesys.values import Type, ValueKind
+    with harness(memory) as opened:
+        with opened.frame.open_turn(request(), check_stopped=lambda: None) as turn:
+            return generate_structured(model, [HumanMessage(content="question")], Type.scalar(ValueKind.INTEGER),
+                                       max_retries=max_retries, llm_config=_config(True),
+                                       memory_context=MemoryContext(transcript=turn))
+
+
+def test_native_carrier_without_a_parsed_value_is_corrected_and_retried():
+    from yian.llm_clients.base_client import missing_tool_call
+    from yian.nodes.agent.structured import type_to_schema
+    from yian.typesys.values import Type, ValueKind
+    model, memory = _Carriers([_unparsed_carrier(), _valid_carrier]), SessionMemory()
+    assert _run_carriers(model, memory) == 7 and len(model.calls) == 2
+    view = _view(memory)
+    assert [item.payload["message"]["type"] for item in view.items][-3:] == ["ai", "human", "ai"]
+    assert all(effect.status == "completed" for effect in view.effects)
+    assert not any(isinstance(message, AIMessage) for message in model.calls[1])
+    correction = model.calls[1][-1]
+    assert isinstance(correction, HumanMessage)
+    assert str(missing_tool_call(type_to_schema(Type.scalar(ValueKind.INTEGER)).__name__)) in correction.content
+    assert "provider error (" not in correction.content
+
+
+def test_native_carriers_without_a_parsed_value_fail_once_retries_are_spent():
+    from langchain_core.exceptions import OutputParserException
+    model = _Carriers([_unparsed_carrier(), _unparsed_carrier()])
+    with pytest.raises(OutputParserException):
+        _run_carriers(model, SessionMemory(), max_retries=1)
+    assert len(model.calls) == 2
+
+
+def test_native_carrier_without_a_parsed_value_and_a_nonfinite_raw_is_retried_unstored():
+    nonfinite = AIMessage(content="42", response_metadata={"x": float("nan")})
+    model, memory = _Carriers([_unparsed_carrier(nonfinite), _valid_carrier]), SessionMemory()
+    assert _run_carriers(model, memory) == 7 and len(model.calls) == 2
+    view = _view(memory)
+    assert [item.payload["message"]["type"] for item in view.items].count("ai") == 1
+    assert not any(item.payload["message"]["data"]["content"] == "42" for item in view.items)
+
+
 @pytest.mark.parametrize("native,stage", [(native, stage) for native in (False, True)
                                           for stage in ("before", "after_reply", "after_bad_reply", "after_parse")]
                          + [(True, "after_bind")])

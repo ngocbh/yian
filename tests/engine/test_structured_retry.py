@@ -4,13 +4,17 @@ import json
 
 import pytest
 from langchain_core.exceptions import OutputParserException
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.output_parsers import PydanticOutputParser
-from pydantic import ValidationError, create_model
+from langchain_core.output_parsers.openai_tools import PydanticToolsParser
+from pydantic import BaseModel, ValidationError, create_model
 
+from yian.llm_clients.base_client import missing_tool_call
 from yian.nodes.agent.structured import (
     _is_contract_path,
     _structured_validation_path,
     generate_structured,
+    type_to_schema,
 )
 from yian.nodes.base import _HostStop
 from yian.typesys.values import Type, ValueKind
@@ -133,6 +137,73 @@ def test_retry_exhausted_raises():
 
     with pytest.raises(Exception):
         generate_structured(_Always(), [], typ, max_retries=2)
+
+
+
+def test_missing_tool_call_error_reads_cleanly():
+    error = missing_tool_call("Answer")
+    assert isinstance(error, OutputParserException)
+    assert str(error) == "the reply did not call the Answer tool; call it with the answer"
+
+
+class _Replies:
+    """A native model whose bound runnable returns each queued reply in turn."""
+
+    def __init__(self, replies):
+        self.replies = iter(replies)
+        self.calls = []
+
+    def with_structured_output(self, schema):
+        outer = self
+
+        class _Bound:
+            def invoke(self, msgs):
+                outer.calls.append(list(msgs))
+                reply = next(outer.replies)
+                return reply(schema) if callable(reply) else reply
+
+        return _Bound()
+
+
+def test_a_reply_without_a_structured_result_is_corrected_and_retried():
+    typ = Type.scalar(ValueKind.INTEGER)
+    model = _Replies([None, lambda schema: schema.model_validate({"value": 42})])
+    out = generate_structured(
+        model,
+        [HumanMessage(content="question")],
+        typ,
+        max_retries=2,
+        llm_config={"provider": "openai", "model": "gpt-4o"},
+    )
+    assert out == 42 and len(model.calls) == 2
+    correction = model.calls[1][-1]
+    assert isinstance(correction, HumanMessage)
+    assert f"the reply did not call the {type_to_schema(typ).__name__} tool" in correction.content
+
+
+@pytest.mark.parametrize("max_retries", [0, 2])
+def test_replies_without_a_structured_result_fail_naming_the_tool_once_retries_are_spent(max_retries):
+    typ = Type.scalar(ValueKind.INTEGER)
+    model = _Replies([None] * (max_retries + 1))
+    with pytest.raises(OutputParserException) as caught:
+        generate_structured(
+            model,
+            [HumanMessage(content="question")],
+            typ,
+            max_retries=max_retries,
+            llm_config={"provider": "openai", "model": "gpt-4o"},
+        )
+    name = type_to_schema(typ).__name__
+    assert str(caught.value) == f"the reply did not call the {name} tool; call it with the answer"
+    assert len(model.calls) == max_retries + 1
+
+
+def test_tool_parser_returns_none_for_a_reply_without_a_tool_call():
+    class S(BaseModel):
+        value: int
+
+    parser = PydanticToolsParser(tools=[S], first_tool_only=True)
+    assert parser.invoke(AIMessage(content="42")) is None
 
 
 def _validation_error(typ, payload, *, native=True, constructor=False):

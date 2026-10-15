@@ -19,8 +19,8 @@ member models that reject unknown fields, so its JSON schema is an `anyOf` of `$
 Optional memory-owned turns retain raw API replies before parsing. Provider
 context and newly retained deltas stay separate across self-correction attempts.
 
-Layer: nodes — imports memory contracts, the message adapter, `typesys` and
-`pydantic`; no engine/runtime imports.
+Layer: nodes — imports memory contracts, the message adapter, `llm_clients`, `typesys`
+and `pydantic`; no engine/runtime imports.
 """
 
 from __future__ import annotations
@@ -44,6 +44,7 @@ from pydantic import (
 )
 
 from yian.defaults import current
+from yian.llm_clients.base_client import missing_tool_call
 from yian.memory.contracts import (
     MemoryContext,
     EvaluationTrace,
@@ -354,12 +355,12 @@ def generate_structured(
       the prompt, invoke for free text, then `json.loads` + `schema.model_validate` it.
 
     Either way a deviation (schema rejection, unparseable JSON, a NaN, infinity, or int
-    over `YIAN_MAX_INT_DIGITS` digits in the reply) appends a corrective `HumanMessage` naming
-    the error, with Python's digit-limit text given as yian's, and retries, up to
-    `max_retries` extra attempts (`max_retries + 1` total invocations). The last error is
-    re-raised once the cap is spent. Session corrections expose only the type of a
-    provider-side error; diagnostics raised once the reply surfaced stay intact. Session
-    cancellation never retries.
+    over `YIAN_MAX_INT_DIGITS` digits in the reply, a native reply with no call to the
+    schema's tool) appends a corrective `HumanMessage` naming the error, with Python's
+    digit-limit text given as yian's, and retries, up to `max_retries` extra attempts
+    (`max_retries + 1` total invocations). The last error is re-raised once the cap is
+    spent. Session corrections expose only the type of a provider-side error; diagnostics
+    raised once the reply surfaced stay intact. Session cancellation never retries.
 
     Args:
         model (`Any`): Configured provider model, optionally supporting native binding.
@@ -442,7 +443,7 @@ def _generate_native(
         reply_surfaced = True
         if memory_context.transcript is not None:
             _reject_deep_carrier(response, schema, typ)
-            _reject_nonfinite_carrier(response)
+            _reject_nonfinite_carrier(response, schema.__name__)
 
     for _ in range(max_retries + 1):
         check_stopped()
@@ -459,7 +460,13 @@ def _generate_native(
                 new_messages=delta, check_stopped=check_stopped, purpose="structured_native",
                 raw_reply=_native_raw, exchange_id=exchange_id, check_reply=check_reply,
             )
-            obj = response if memory_context.transcript is None else _native_parsed(response)
+            if memory_context.transcript is None:
+                # The tool parser returns `None` for a reply with no call to the schema's tool.
+                if response is None:
+                    raise missing_tool_call(schema.__name__)
+                obj = response
+            else:
+                obj = _native_parsed(response, schema.__name__)
             value = _unwrap(obj, typ)
             reject_deep_nesting(value, "structured output")
             reject_nonfinite(value, "structured output")
@@ -507,16 +514,52 @@ def _native_raw(response):
     return response["raw"]
 
 
-def _native_parsed(response):
-    """Validate the native carrier after raw publication, then raise its exact error."""
-    error = _native_carrier_error(response)
+def _native_parsed(response: dict, tool_name: str) -> BaseModel:
+    """Validate the native carrier after raw publication, then raise its exact error.
+
+    Args:
+        response (`dict`):
+            The `raw`/`parsed`/`parsing_error` carrier.
+        tool_name (`str`):
+            The name of the schema's tool, for the error when the reply did not call it.
+
+    Returns:
+        `BaseModel`:
+            The parsed value.
+
+    Raises:
+        `Exception`:
+            The carrier's parsing error, or `missing_tool_call(tool_name)` when the reply
+            has no parsed value and no parsing error.
+        `_CapabilityFault`:
+            Raised when the carrier is malformed.
+    """
+    error = _native_carrier_error(response, tool_name)
     if error is not None:
         raise error
     return response["parsed"]
 
 
-def _native_carrier_error(response: dict) -> BaseException | None:
-    """Return a native carrier's parsing error, raising `_CapabilityFault` if it is malformed."""
+def _native_carrier_error(response: dict, tool_name: str) -> BaseException | None:
+    """Return a native carrier's parsing error, raising `_CapabilityFault` if it is malformed.
+
+    A carrier with neither a parsed value nor a parsing error holds a reply that did not
+    call the schema's tool, so its error is `missing_tool_call(tool_name)`.
+
+    Args:
+        response (`dict`):
+            The `raw`/`parsed`/`parsing_error` carrier.
+        tool_name (`str`):
+            The name of the schema's tool.
+
+    Returns:
+        `BaseException | None`:
+            The carrier's error, or `None` when it holds a parsed value.
+
+    Raises:
+        `_CapabilityFault`:
+            Raised when the carrier's fields, parsing error, or parsed value are malformed.
+    """
     if set(response) != {"raw", "parsed", "parsing_error"}:
         raise _CapabilityFault(ValueError("native structured response fields are invalid"))
     error = response["parsing_error"]
@@ -524,6 +567,8 @@ def _native_carrier_error(response: dict) -> BaseException | None:
         if not isinstance(error, BaseException):
             raise _CapabilityFault(TypeError("native structured parsing_error must be an exception or None"))
         return error
+    if response["parsed"] is None:
+        return missing_tool_call(tool_name)
     if not isinstance(response["parsed"], BaseModel):
         raise _CapabilityFault(TypeError("native structured parsed value must be a BaseModel"))
     return None
@@ -533,14 +578,14 @@ def _reject_deep_carrier(response: Any, schema: type[BaseModel], typ: Type) -> N
     """Reject a native carrier whose reply nests past the value limit, before it is stored.
 
     A parsed value past the limit raises `TypeCheckError`. A carrier holding a parsing
-    error whose raw reply is past the limit raises that parsing error, so the retry and
-    the exhausted error's origin match a run without memory. A malformed carrier is left
-    alone. The raw reply carries the value, so a reply past the limit may be too deep
-    for memory, and the non-finite walk of the raw reply recurses.
+    error, or no parsed value, whose raw reply is past the limit raises the carrier's
+    error, so the retry and the exhausted error's origin match a run without memory. A
+    malformed carrier is left alone. The raw reply carries the value, so a reply past the
+    limit may be too deep for memory, and the non-finite walk of the raw reply recurses.
     """
     if type(response) is not dict or set(response) != {"raw", "parsed", "parsing_error"}:
         return
-    if response["parsing_error"] is None:
+    if response["parsing_error"] is None and response["parsed"] is not None:
         if isinstance(response["parsed"], schema):
             reject_deep_nesting(_unwrap(response["parsed"], typ), "structured output")
         return
@@ -554,18 +599,18 @@ def _reject_deep_carrier(response: Any, schema: type[BaseModel], typ: Type) -> N
     else:
         return
     # Raised outside the handler so the provider's error gains no `__context__`.
-    error = _native_carrier_error(response)
+    error = _native_carrier_error(response, schema.__name__)
     if error is not None:
         raise error
 
 
-def _reject_nonfinite_carrier(response: Any) -> None:
+def _reject_nonfinite_carrier(response: Any, tool_name: str) -> None:
     """Raise a native carrier's parsing error when its raw reply holds a NaN or infinity.
 
     A carrier whose raw reply is finite is left alone, so it is stored and parsed as
     before. A malformed carrier raises `_CapabilityFault`. The parsing error is the
     schema's own, so the retry and the exhausted error's origin match a run without
-    memory.
+    memory. A carrier with no parsed value raises `missing_tool_call(tool_name)`.
     """
     if type(response) is not dict:
         return
@@ -576,7 +621,7 @@ def _reject_nonfinite_carrier(response: Any) -> None:
     else:
         return
     # Raised outside the handler so the provider's error gains no `__context__`.
-    error = _native_carrier_error(response)
+    error = _native_carrier_error(response, tool_name)
     if error is not None:
         raise error
 

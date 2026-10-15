@@ -398,6 +398,9 @@ def test_type_for_bounds_a_type_with_its_typedefs_expanded():
     with pytest.raises(TypeCheckError) as info:
         type_for(_wrapped("T99"), registry)
     assert _EXPANDED in str(info.value)
+    with pytest.raises(TypeCheckError) as info:
+        type_for(_wrapped("T99", 1), registry)
+    assert _EXPANDED in str(info.value)
 
 
 def test_type_for_at_the_limit_resolves():
@@ -434,5 +437,6 @@ def test_a_flow_wrapping_a_deep_typedef_is_a_located_load_error(build, needle):
     text = build(_flow_lines(_records(100)), _wrapped("T99"))
     with pytest.raises(LoadError) as info:
         load_flow(text)
+    assert _EXPANDED in str(info.value)
     assert info.value.diagnostic.frames[-1].range.start_line == _line_of(text, needle)
     assert not any(isinstance(exc, RecursionError) for exc in _causes(info.value))

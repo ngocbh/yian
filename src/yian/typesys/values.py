@@ -1016,6 +1016,27 @@ def field_of(value: Any, name: str) -> tuple[bool, Any]:
     return False, None
 
 
+def file_field_type(name: str) -> Optional["Type"]:
+    """Return the type of reading field `name` on a `file`, as load checks it.
+
+    `uri` is `str`; `mime` and `name` are `Optional(str)`, since a file may leave them
+    unset. A file has no other field.
+
+    Args:
+        name (`str`):
+            The field name, one dotted step.
+
+    Returns:
+        `Type | None`:
+            The field's type, or `None` when a file has no field `name`.
+
+    Example:
+        `file_field_type("uri")` returns `Type.scalar(ValueKind.STRING)`;
+        `file_field_type("size")` returns `None`.
+    """
+    return _FILE_FORM.fields.get(name)
+
+
 # --------------------------------------------------------------------------- #
 # TypedValue subclasses (one per type, each pinning a Literal discriminator)
 # --------------------------------------------------------------------------- #
@@ -2016,7 +2037,8 @@ def _bounds_intersect(a: Type, b: Type) -> bool:
 _TEXT_KINDS = frozenset({ValueKind.STRING, ValueKind.DATE, ValueKind.DATETIME})
 _NUMERIC_KINDS = frozenset({ValueKind.INTEGER, ValueKind.NUMBER})
 _OPTIONAL_STR = Type(kind=ValueKind.STRING, nullable=True)
-# The record a file's JSON form satisfies; a record overlapping it overlaps `file`.
+# The record a file's JSON form satisfies; a record overlapping it overlaps `file`. Its
+# fields also type a file's dotted reads (`file_field_type`).
 _FILE_FORM = Type(
     kind=ValueKind.OBJECT,
     fields={"uri": Type.scalar(ValueKind.STRING), "mime": _OPTIONAL_STR, "name": _OPTIONAL_STR},

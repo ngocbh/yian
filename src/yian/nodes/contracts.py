@@ -28,7 +28,13 @@ from yian.typesys import (
     union_field,
     union_tag_fields,
 )
-from yian.typesys.values import _sort_repr, has_file, shown_text, value_repr
+from yian.typesys.values import (
+    _sort_repr,
+    file_field_type,
+    has_file,
+    shown_text,
+    value_repr,
+)
 
 
 ValuePath: TypeAlias = tuple[str | int, ...]
@@ -746,9 +752,9 @@ def output_contract_file_type(contract: OutputContract | None) -> Type | None:
     return None
 
 
-# Kinds a field read is not checked on: `object` is opaque unless it declares fields, an
-# `Any` value may be an object, and `file` is the reserved file reference.
-_UNCHECKED_FIELD_KINDS = frozenset({ValueKind.OBJECT, ValueKind.ANY, ValueKind.FILE})
+# Kinds a field read is not checked on: `object` is opaque unless it declares fields, and
+# an `Any` value may be an object.
+_UNCHECKED_FIELD_KINDS = frozenset({ValueKind.OBJECT, ValueKind.ANY})
 
 
 def _member_only_field_error(
@@ -789,9 +795,10 @@ def output_contract_field_error(
     """Return why a reference reads a field its contract can't have, else `None`.
 
     An exact record is closed at every proven nested record, and a partial record is
-    closed at its root; reading below an opaque partial field is not checked. Every type
-    other than `object` and `file` (scalars, `Literal[...]`, lists, and their
-    `Optional[...]` forms) has no fields, so reading one is an error. On a union, a
+    closed at its root; reading below an opaque partial field is not checked. A `file`
+    has only `uri`, `mime` and `name`, typed by `file_field_type`. Every other type but
+    `object` and `Any` (scalars, `Literal[...]`, lists, and their `Optional[...]`
+    forms) has no fields, so reading one is an error. On a union, a
     field every member has can be read, and the walk continues with its shared type
     (or stops when the members' types differ); a field no member has is an unknown
     field, and a field only some members have is an error unless
@@ -873,6 +880,16 @@ def output_contract_field_error(
         if typ.fields is None:
             if typ.kind in _UNCHECKED_FIELD_KINDS:
                 return None
+            if typ.kind is ValueKind.FILE:
+                read_type = file_field_type(field_name)
+                if read_type is None:
+                    return (
+                        f"reference ${{{path}}} reads field {field_name!r} on a file, "
+                        "which has only uri, mime, and name"
+                    )
+                typ = read_type
+                walked.append(field_name)
+                continue
             return (
                 f"reference ${{{path}}} reads field {field_name!r} on type "
                 f"{canonical_type_label(typ)}, which has no fields"

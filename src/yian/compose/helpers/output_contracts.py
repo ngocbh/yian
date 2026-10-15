@@ -38,6 +38,7 @@ from yian.typesys.values import (
     FieldRead,
     Type,
     ValueKind,
+    file_field_type,
     list_kind_for_element,
     union_field,
 )
@@ -56,7 +57,9 @@ def project_output_contract(
     """Project a proven path from an exact or partial record output contract.
 
     A field read on a union projects to the members' shared field type; a field
-    only some members have, or whose types differ, projects to `None`.
+    only some members have, or whose types differ, projects to `None`. A file's
+    `uri`, `mime` and `name` project to their `file_field_type`. A projected type is
+    `Optional` when anything on the path may be absent.
     """
     if type(contract) is PartialRecordContract:
         contract.validate_shape()
@@ -89,7 +92,12 @@ def project_output_contract(
             typ = read.type
             continue
         if typ.fields is None:
-            return None
+            field_type = file_field_type(field) if typ.kind is ValueKind.FILE else None
+            if field_type is None:
+                return None
+            path_nullable = path_nullable or field_type.nullable
+            typ = field_type
+            continue
         field_type = typ.fields.get(field)
         if field_type is None:
             return None

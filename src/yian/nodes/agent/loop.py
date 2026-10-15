@@ -50,9 +50,6 @@ from yian.nodes.base import Output
 from yian.skills.tool import LOAD_SKILL, invoke_load_skill, load_skill_tool
 from yian.typesys.values import reject_deep_nesting, reject_nonfinite
 
-# -1 means no bound; a positive per-node env value bounds model turns.
-MAX_TOOL_ITERATIONS = -1
-
 
 def run_agent(ctx: AgentRunContext) -> Output:
     """Run one AGENT invocation.

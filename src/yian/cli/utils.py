@@ -25,19 +25,13 @@ import os
 import sys
 from typing import Optional
 
+from yian.defaults import current
 from yian.llm_clients.api_key_env import OPTIONAL_API_KEY_PROVIDERS, get_api_key_env
 
 # Mirror of `ollama_client._DEFAULT_BASE_URL`. Duplicated (not imported) so this
 # module stays import-light — importing the ollama client pulls `langchain_ollama`
 # at module top, which we don't want on the CLI's hot path.
 _OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434"
-
-# How many times the interactive key prompt re-asks on an empty answer before giving
-# up. An empty answer is a fingerslip (the key can't be validated locally, so it is
-# never a "wrong guess"); we re-prompt to be friendly, but bound the loop so a
-# non-interactive-but-TTY caller feeding empty forever can't hang. 3 mirrors sudo's
-# `passwd_tries` default — the most familiar credential prompt on Linux.
-MAX_KEY_PROMPTS = 3
 
 
 def ensure_api_key(provider: str, *, interactive: bool = True) -> Optional[str]:
@@ -91,9 +85,9 @@ def ensure_env_key(provider: str, *, interactive: bool = True) -> Optional[str]:
     env var is set its value is returned unchanged. When it is unset and a TTY is
     attached, the user is prompted (the answer is stripped and exported into the
     process env so downstream clients read it); an empty answer is treated as a
-    fingerslip and re-prompts, up to `MAX_KEY_PROMPTS` times. With no TTY (or
-    `interactive=False`) a required-but-missing key raises rather than hanging on
-    a prompt.
+    fingerslip and re-prompts, up to `current().max_key_prompts` times. With no
+    TTY (or `interactive=False`) a required-but-missing key raises rather than
+    hanging on a prompt.
 
     Args:
         provider (`str`):
@@ -113,8 +107,8 @@ def ensure_env_key(provider: str, *, interactive: bool = True) -> Optional[str]:
             The provider requires a key, none is set, and one of: no interactive
             prompt is available (no TTY, or `interactive=False`); the user cancels
             the prompt (Ctrl-C / Esc); or the user submits an empty answer
-            `MAX_KEY_PROMPTS` times in a row. A single empty answer is not an
-            error — it re-prompts.
+            `current().max_key_prompts` times in a row. A single empty answer is
+            not an error — it re-prompts.
     """
     env_var = get_api_key_env(provider)
     if env_var is None:
@@ -132,10 +126,12 @@ def ensure_env_key(provider: str, *, interactive: bool = True) -> Optional[str]:
         )
     import questionary
 
-    # Interactive: an empty/whitespace answer is a fingerslip -> re-prompt, capped at
-    # MAX_KEY_PROMPTS tries so the loop can't run forever. An explicit cancel (Ctrl-C / Esc,
+    # Interactive: an empty/whitespace answer is a fingerslip (the key can't be checked
+    # locally, so it is never a wrong guess) -> re-prompt, capped so a caller feeding
+    # empty answers forever can't hang. An explicit cancel (Ctrl-C / Esc,
     # where questionary returns None) aborts at once. The no-TTY path above already raised up front.
-    for _ in range(MAX_KEY_PROMPTS):
+    tries = current().max_key_prompts
+    for _ in range(tries):
         key = questionary.password(f"Enter {env_var} for provider {provider!r}:").ask()
         if key is None:  # Ctrl-C / Esc — the user chose to cancel; does not spend an extra try
             raise RuntimeError(f"no API key provided for {provider!r} (${env_var})")
@@ -145,7 +141,7 @@ def ensure_env_key(provider: str, *, interactive: bool = True) -> Optional[str]:
             return key
         # empty / whitespace-only — hit Enter with no real input; this attempt is spent, ask again
     raise RuntimeError(
-        f"no API key provided for {provider!r} (${env_var}) after {MAX_KEY_PROMPTS} attempts"
+        f"no API key provided for {provider!r} (${env_var}) after {tries} attempts"
     )
 
 

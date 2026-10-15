@@ -6,9 +6,11 @@ import pytest
 
 from yian.compose import LoadError, load_flow
 from yian.compose.source import SourceDocument, SourceSyntaxError, parse_yaml_literal
-from yian.compose.source.scalars import MAX_YAML_NESTING
+from yian.defaults import Defaults
 from yian.diagnostics import SourceRange
-from yian.typesys.values import MAX_VALUE_NESTING
+
+MAX_YAML_NESTING = Defaults().max_yaml_nesting
+MAX_VALUE_NESTING = Defaults().max_value_nesting
 
 _MESSAGE = f"nests deeper than {MAX_YAML_NESTING} levels, the limit for a YAML document"
 

@@ -22,6 +22,7 @@ from pydantic import (
     model_validator,
 )
 
+from yian.defaults import current
 from yian.llm_clients.provider_blocks import (
     PROVIDER_BLOCKS,
     AnthropicMessagesBlock,
@@ -80,7 +81,6 @@ AZURE_NEEDS_BASE_URL = (
     "provider: azure. AZURE_OPENAI_ENDPOINT is not read"
 )
 _LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
-_MAX_BASE_URL_LENGTH = 2048
 # RFC 3986 characters minus "?" and "#", since a query or fragment is refused anyway.
 # Everything else (whitespace, controls, non-ASCII) is something urlsplit or httpx
 # would strip, normalise, or encode, so the string sent would differ from the one
@@ -131,8 +131,8 @@ class LLMConfig(BaseModel):
             allowed only for exactly `localhost`, `127.0.0.1`, and `[::1]`. It is
             checked and stored as written, so whitespace, control characters,
             non-ASCII characters (use a host's `xn--` form), a bad port, or more than
-            2048 characters are rejected rather than normalised (see
-            `validate_base_url`). The `ollama` provider rejects it. For
+            `YIAN_MAX_BASE_URL_CHARS` characters (default 2048) are rejected rather
+            than normalised (see `validate_base_url`). The `ollama` provider rejects it. For
             `provider="azure"` it is the Azure OpenAI resource endpoint, such as
             `https://<resource>.openai.azure.com/`, and is required when the model
             is called; it needs no `api_key`, since the key may come from
@@ -383,10 +383,11 @@ def validate_base_url(value: Any) -> str:
 
     The check runs on the exact string the client will use: it must be a lowercase
     ``https://`` URL (``http://`` only for exactly ``localhost``, ``127.0.0.1``, or
-    ``[::1]``) of a host, an optional port from 1 to 65535, and a path, at most 2048
-    characters long. Credentials, a query, a fragment, whitespace, control characters,
-    and non-ASCII characters are refused rather than normalised; write an
-    internationalised host in its ``xn--`` form. Errors never echo the value.
+    ``[::1]``) of a host, an optional port from 1 to 65535, and a path, at most
+    ``YIAN_MAX_BASE_URL_CHARS`` characters long (default 2048). Credentials, a query, a
+    fragment, whitespace, control characters, and non-ASCII characters are refused
+    rather than normalised; write an internationalised host in its ``xn--`` form.
+    Errors never echo the value.
 
     Args:
         value (`Any`): The candidate URL.
@@ -399,8 +400,9 @@ def validate_base_url(value: Any) -> str:
     """
     if not isinstance(value, str):
         raise ValueError("base_url must be a string")
-    if len(value) > _MAX_BASE_URL_LENGTH:
-        raise ValueError(f"base_url must be at most {_MAX_BASE_URL_LENGTH} characters")
+    limit = current().max_base_url_chars
+    if len(value) > limit:
+        raise ValueError(f"base_url must be at most {limit} characters")
     if not _URL_CHARACTERS.fullmatch(value):
         raise ValueError(
             "base_url may contain only ASCII URL characters, with no whitespace or "

@@ -12,11 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 import re
 
+from yian.defaults import current
+
 SKILL_FILE = "SKILL.md"
-# Largest SKILL.md or bundled file returned to a model, in bytes.
-MAX_SKILL_FILE_BYTES = 256 * 1024
 _NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
-_MAX_NAME = 64
 
 
 class SkillError(ValueError):
@@ -71,12 +70,14 @@ def check_skill_name(name: object) -> str:
         `str`: The unchanged name.
 
     Raises:
-        `SkillError`: Raised when `name` is not 1-64 lowercase letters, digits,
-            and single hyphens, starting and ending with a letter or digit.
+        `SkillError`: Raised when `name` is not 1 to `current().max_skill_name_chars`
+            lowercase letters, digits, and single hyphens, starting and ending with a
+            letter or digit.
     """
-    if type(name) is not str or len(name) > _MAX_NAME or not _NAME.fullmatch(name):
+    limit = current().max_skill_name_chars
+    if type(name) is not str or len(name) > limit or not _NAME.fullmatch(name):
         raise SkillError(
-            f"invalid skill name {name!r}: use 1-{_MAX_NAME} lowercase letters, "
+            f"invalid skill name {name!r}: use 1-{limit} lowercase letters, "
             "digits, and single hyphens"
         )
     return name
@@ -99,7 +100,7 @@ def read_skill_file(skill: Skill, path: str) -> str:
 
     Raises:
         `SkillError`: Raised when the path is unsafe, hidden, missing, not a regular
-            file, larger than `MAX_SKILL_FILE_BYTES`, or not UTF-8 text.
+            file, larger than `current().max_skill_file_bytes`, or not UTF-8 text.
     """
     where = f"skill {skill.name!r}: file {path!r}"
     if skill.directory is None:
@@ -137,12 +138,13 @@ def read_skill_text(path: Path, where: str | None = None) -> str:
         `str`: The file text.
 
     Raises:
-        `SkillError`: Raised when the file is larger than `MAX_SKILL_FILE_BYTES`
-            or not UTF-8 text.
+        `SkillError`: Raised when the file is larger than
+            `current().max_skill_file_bytes` or not UTF-8 text.
     """
     label = where or str(path)
-    if path.stat().st_size > MAX_SKILL_FILE_BYTES:
-        raise SkillError(f"{label} is larger than {MAX_SKILL_FILE_BYTES} bytes")
+    limit = current().max_skill_file_bytes
+    if path.stat().st_size > limit:
+        raise SkillError(f"{label} is larger than {limit} bytes")
     try:
         return path.read_text(encoding="utf-8")
     except UnicodeDecodeError:

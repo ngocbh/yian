@@ -15,6 +15,8 @@ import time
 from typing import Any, Optional
 from urllib.parse import urlencode, urlsplit
 
+from yian.defaults import current
+
 from .auth.common import HttpResponse, _text
 from .auth.http import _request
 from .config import validate_base_url
@@ -29,8 +31,6 @@ _GOOGLE_BASE_URL = "https://generativelanguage.googleapis.com"
 _OLLAMA_BASE_URL = "http://localhost:11434"
 # The largest page Anthropic and Google serve, so most listings take one request.
 _PAGE_SIZE = "1000"
-# OpenRouter's listing carries a description and pricing for every model.
-_BODY_LIMIT = 16 * 1024 * 1024
 
 _Fetch = Callable[[str, dict], dict]
 
@@ -128,10 +128,9 @@ def list_models(
     if name == "ollama" and base.endswith("/v1"):
         base = base[: -len("/v1")]
 
-    fetch = partial(
-        _fetch, request or partial(_request, body_limit=_BODY_LIMIT),
-        base, headers, time.monotonic() + timeout,
-    )
+    if request is None:
+        request = partial(_request, body_limit=current().max_model_list_bytes)
+    fetch = partial(_fetch, request, base, headers, time.monotonic() + timeout)
     invalid = False
     try:
         ids = set(pages(fetch))

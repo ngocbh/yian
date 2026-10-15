@@ -39,6 +39,7 @@ know the shape of it:
 ```
 diagnostics.py semantic failures, resolved presentation, origins/resolver routing [leaf]
 json_codec.py JSON and plain text for values holding ints of any size; stdlib only [leaf]
+defaults.py   every predefined default and limit, overridable by YIAN_<NAME> [leaf]
 typesys/      typed value system (values) + variable pool                 [leaf]
 events.py     transient run/node observer vocabulary; imports diagnostics
 expr/         one ${...} grammar: parse -> AST -> evaluate / infer type / ref-walk
@@ -534,7 +535,7 @@ native path the carrier's own schema error is raised instead when it has one, so
 retry and origin match a run without memory. Without a transcript, provider metadata
 is not checked.
 
-A yian value nests at most `typesys.values.MAX_VALUE_NESTING` (100) levels, counting
+A yian value nests at most `YIAN_MAX_VALUE_NESTING` (default 100) levels, counting
 itself; each dict, list, tuple, pydantic model (such as `FileRef`), or dataclass
 instance is a level, and a `TypedValue` wrapper adds none. `reject_deep_nesting(value,
 where, *, enclosing_levels=0)` walks with an explicit stack and raises `TypeCheckError`
@@ -570,8 +571,8 @@ recursive load walker reads the value, so a value made deep by YAML aliases is a
 error rather than a `RecursionError`. `${...}` text counts as a scalar, so the
 run-time checks above still cover computed values and flows built in Python.
 
-An expression has the same bound, `expr.grammar.MAX_EXPRESSION_NESTING` (set to
-`MAX_VALUE_NESTING`). A chain of same-precedence operators parses as one flat node
+An expression has the same bound, `current().max_value_nesting` (no variable of
+its own). A chain of same-precedence operators parses as one flat node
 (`a + b - c` is one `sum`, `a * b / c % d` one `product`, `a ** b ** c` one `power`),
 evaluated left to right (`**` right to left), so a chain is one level at any length.
 `parse_expr` walks the tree with an explicit stack before any recursive walker runs and
@@ -582,7 +583,7 @@ balanced tree of `concat` routes, and a `* / %` chain that repeats one list is o
 `repeat` route with a count child.
 
 A flow's CALL, MAP, and LOOP bodies nest at most
-`compose.nodes.resolver.MAX_CALL_NESTING` (50) levels. Each `defs:` entry, inline body,
+`YIAN_MAX_CALL_NESTING` (default 50) levels. Each `defs:` entry, inline body,
 `call(...)` directive, and `uses:` flow on a chain is one level. The baked graph is a
 tree of compiled flows, and loading, run setup (the `copy.deepcopy` of the compiled
 flow in `run.py` and the recursive compile walkers), and replay walk it recursively,
@@ -879,8 +880,8 @@ for isolated literals (`parse_yaml_literal`), and for one bare plain scalar
 touching PyYAML's global resolver or constructor tables. A date-shaped plain
 scalar that isn't a real date, such as `2026-13-45`, is a located YAML error that
 says to quote it. The loader counts collection events as the composer takes them and
-refuses a document nested deeper than `compose.source.scalars.MAX_YAML_NESTING`
-(200) levels, each mapping and list a level, with a located YAML error before
+refuses a document nested deeper than `YIAN_MAX_YAML_NESTING`
+(default 200) levels, each mapping and list a level, with a located YAML error before
 PyYAML's recursive composer can exhaust the stack; the count adds no frame per
 level. Root text and each uncached external file are constructed once
 as `SourceDocument`s, whose public cursor interface is immutable and defensive.
@@ -1468,15 +1469,16 @@ separate ordered entries with empty contribution context. Received/generated
 input and opaque-stop entries reconstruct context through the existing route
 interpreter; literal/default feedback remains local without a fabricated source.
 Defined JSON/materialization failure becomes a memory-attributed context failure
-before Ready; invalid record authority remains an error. Memory JSON allows 128
-levels, and run material at the value limit nests about 108, so it always fits. A
-context that still cannot be built (for example from a log recorded before the
-limit) raises `OwnerContextError` carrying the owner occurrence's `BackwardContext`;
-each occurrence's feedback is validated on its own so the failure is attributed to
-it. The driver records a `memory.invalid_context` `BackwardFailure` naming that
-occurrence (`scope`, `run_id`, `node_id`, `node_started_seq`) with the message
-`memory learn context could not be constructed for node '<id>': <cause>`; replay
-requires the named occurrence to be accepted and to receive that memory. Only a
+before Ready; invalid record authority remains an error. Memory JSON allows
+`current().memory_json_nesting` levels (`YIAN_MAX_VALUE_NESTING` plus 28, so 128 by
+default), and run material at the value limit nests about 8 levels deeper than the
+value, so it always fits. A context that still cannot be built (for example from a log
+recorded before the limit) raises `OwnerContextError` carrying the owner occurrence's
+`BackwardContext`; each occurrence's feedback is validated on its own so the failure
+is attributed to it. The driver records a `memory.invalid_context` `BackwardFailure`
+naming that occurrence (`scope`, `run_id`, `node_id`, `node_started_seq`) with the
+message `memory learn context could not be constructed for node '<id>': <cause>`;
+replay requires the named occurrence to be accepted and to receive that memory. Only a
 failure in root fallback feedback carries no node. `MemoryRuntime.propose_learning`
 rebuilds each `LearnContext` instead of deep-copying it, which re-validates and
 detaches the feedback without recursing through a value at the limit.
@@ -1633,13 +1635,14 @@ make missing tool results unknown and schema pseudo-calls inert; raw history is
 unchanged. Replies, including native structured raw replies, are saved before
 cancellation or parsing. Memory faults bypass structured/provider retry loops.
 
-`SessionMemory(history_budget_chars=32_000, recent_turns=4)` accepts a positive
+`SessionMemory(history_budget_chars=None, recent_turns=None)` accepts a positive
 history budget and nonnegative prior-turn count as keyword settings, from host code
-or the declaration's `config`. A session memory is declared on exactly one AGENT,
-and each instance holds one conversation with one FIFO queue. MAP items, LOOP
-iterations, the call sites of one def, and concurrent runs on the same instance
-take turns, and no fork mode exists. Run setup rejects a session key whose
-placements resolve different conversation compatibility. FIFO is admission
+or the declaration's `config`; an unset one takes `YIAN_SESSION_HISTORY_BUDGET_CHARS`
+(default 32,000) or `YIAN_SESSION_RECENT_TURNS` (default 4). A session memory is
+declared on exactly one AGENT, and each instance holds one conversation with one FIFO
+queue. MAP items, LOOP iterations, the call sites of one def, and concurrent runs on
+the same instance take turns, and no fork mode exists. Run setup rejects a session key
+whose placements resolve different conversation compatibility. FIFO is admission
 order, not a MAP input-index guarantee. A turn reads its live
 baseline only after acquiring the lease. The run handle's detached opening
 snapshot stays pinned as live turns advance history. Public
@@ -1726,8 +1729,9 @@ and the lower-level snapshot/reset interface.
 `run_flow(..., log=path)` exclusively creates a new JSONL authority. Its first
 record captures the run ID, authored-flow fingerprint, complete initial typed
 pool, START wiring, worker count, fully resolved LLM configuration, the required
-`learnable` retention flag, and optional memory table, stacks, and snapshots. Expansion
-records retain canonical growth seeds plus topology digests, so replay rebuilds
+`learnable` retention flag, optional memory table, stacks, and snapshots, and the
+`yian.defaults` values that differ from the built-in ones. Expansion records retain
+canonical growth seeds plus topology digests, so replay rebuilds
 the same nested CALL/MAP/LOOP graph without re-running the spawner.
 
 `resume_flow(flow, log=path)` locks an existing log, durably removes bytes after
@@ -1739,6 +1743,22 @@ durable outcome back ahead of the ready frontier before dispatch continues. A
 terminal primary returns its observed backward prefix without appending records
 or invoking graph nodes, backward callbacks, learners, or commits. Recovery uses the
 recorded input, run ID, and complete LLM map rather than current ambient defaults.
+
+Every predefined default and limit lives in `yian.defaults` (see
+[Defaults and limits](../../docs/defaults.md)). `current()` reads and checks every
+`YIAN_<NAME>` variable the first time anything needs a value and returns the same
+frozen `Defaults` for the rest of the process; the CLI root callback, `load_flow`,
+`run_flow`, and `resume_flow` call it first so a bad value raises `DefaultsError`
+before any work. `run_flow` records `current().non_defaults()` as
+`RunStartedRecord.defaults` (keyed by entry name, omitted from the wire when empty, so
+default-env logs are unchanged and older logs decode as all built-in values).
+`RunStartData.defaults` defaults to `{}`, meaning built-in values; never default it to
+`current()`. The reducer overlays the record on the built-in values as
+`RunState.run_defaults`, and the growth check reads `run_defaults.max_total_nodes`, so
+replay depends only on the log. Replay calls `defaults.check_recorded` before the
+fingerprint check, since values like `AGENT_RETRIES` change the loaded flow; a
+different effective value or an unknown recorded name raises `DefaultsMismatchError`
+naming each variable and how to set it to resume.
 
 An ordinary node retry receives a new start sequence.
 A retry may resend model requests or repeat tool actions; there is no exactly-once

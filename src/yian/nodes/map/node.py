@@ -119,7 +119,7 @@ class MapNode(Node):
         Returns `{"over": <list>}`: the `over` source rides `node_wiring["over"]`, evaluated
         against `pool`. A source that resolves to `None`/non-list raises a binder-owned
         ``BindingError`` classified as ``contract.input`` by the read seam; a list nesting
-        deeper than `MAX_VALUE_NESTING` levels or holding a NaN, infinity, or complex
+        deeper than `YIAN_MAX_VALUE_NESTING` levels or holding a NaN, infinity, or complex
         number at any depth raises one classified as ``binding.evaluate``."""
         over_src = node_wiring["over"]
 

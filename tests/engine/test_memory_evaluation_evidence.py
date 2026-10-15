@@ -12,6 +12,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import StructuredTool
 import pytest
 
+from yian import defaults
 import yian.llm_clients as llm_clients
 import yian.tools as tools
 from yian.compile.model import END_ID, START_ID, GrowthRejected
@@ -535,7 +536,7 @@ def test_oversized_recall_inputs_fail_identically_with_or_without_capture(
     """Recall context validation is semantic while evidence remains observational."""
     # A low memory bound keeps the payload well inside the yian value limit, which the
     # binder enforces before recall sees the inputs.
-    monkeypatch.setattr("yian.memory.contracts._MAX_JSON_NESTING", 5)
+    monkeypatch.setattr(defaults.Defaults, "memory_json_nesting", property(lambda self: 5))
     nested: dict = {}
     for _ in range(10):
         nested = {"nested": nested}

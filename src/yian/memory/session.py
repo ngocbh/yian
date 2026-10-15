@@ -18,6 +18,7 @@ from threading import Condition
 from types import TracebackType
 from uuid import uuid4
 
+from yian.defaults import current
 import yian.memory.contracts as c
 from yian.memory.conversation import (
     _invocation_from_json,
@@ -308,18 +309,22 @@ class SessionMemory:
     def __init__(
         self,
         *,
-        history_budget_chars: int = 32_000,
-        recent_turns: int = 4,
+        history_budget_chars: int | None = None,
+        recent_turns: int | None = None,
         storage: str | os.PathLike[str] | None = None,
         create_parent: bool = False,
     ) -> None:
         """Create an empty namespace with an optional API context budget.
 
         Args:
-            history_budget_chars (`int`): Positive soft context character budget;
-                defaults to 32,000. Raw history is never removed.
-            recent_turns (`int`): Nonnegative number of whole prior turns kept
-                unsummarized; defaults to four. The current turn is always kept.
+            history_budget_chars (`int | None`, *optional*, defaults to `None`):
+                Positive soft context character budget; `None` uses
+                `YIAN_SESSION_HISTORY_BUDGET_CHARS` (32,000). Raw history is never
+                removed.
+            recent_turns (`int | None`, *optional*, defaults to `None`):
+                Nonnegative number of whole prior turns kept unsummarized; `None`
+                uses `YIAN_SESSION_RECENT_TURNS` (4). The current turn is always
+                kept.
             storage (`str | PathLike[str] | None`): Optional local SQLite file;
                 defaults to `None` for process-local values. Nothing is opened
                 until the first operation; this backend then owns the file until
@@ -333,7 +338,13 @@ class SessionMemory:
             `ValueError`: A setting is outside its supported range.
             `MemoryOperationError`: ``storage`` is not a local file path
                 (`storage.path`).
+            `DefaultsError`: A setting is `None` and a `YIAN_` variable holds a
+                value it does not accept.
         """
+        if history_budget_chars is None:
+            history_budget_chars = current().session_history_budget_chars
+        if recent_turns is None:
+            recent_turns = current().session_recent_turns
         for name, value, minimum in (
             ("history_budget_chars", history_budget_chars, 1),
             ("recent_turns", recent_turns, 0),

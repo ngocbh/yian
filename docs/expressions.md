@@ -57,8 +57,9 @@ so the results are Python's and a chain of any length needs no recursion per ope
 
 ### Expression nesting limit
 
-An expression nests at most 100 levels (`expr.grammar.MAX_EXPRESSION_NESTING`, the same
-bound as a [value](typing.md#nesting-limit)). Each call, list literal, unary operator
+An expression nests at most 100 levels, the same bound as a
+[value](typing.md#nesting-limit), so `YIAN_MAX_VALUE_NESTING` sets both (see
+[Defaults and limits](defaults.md)). Each call, list literal, unary operator
 (`-`, `not`), comparison, escape (`|`, `:-`, `:?`), `and`/`or` chain, and operator chain is
 one level; a plain reference adds none, and parentheses add none of their own. Mixing
 precedence nests: `a * b + c` is a `product` inside a `sum`, two levels, and

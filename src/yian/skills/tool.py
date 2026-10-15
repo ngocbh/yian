@@ -6,11 +6,10 @@ from typing import Mapping, Sequence
 
 from langchain_core.tools import BaseTool, StructuredTool
 
+from yian.defaults import current
 from yian.skills.catalog import Skill, SkillError, read_skill_file
 
 LOAD_SKILL = "load_skill"
-# Longest description shown in the listing, in characters.
-MAX_LISTED_DESCRIPTION = 1024
 
 _LISTING_HEADER = (
     "Skills: each skill below is a package of instructions. When a task matches a "
@@ -40,11 +39,12 @@ def system_prompt_with_skills(base: str, skills: Sequence[Skill]) -> str:
     """
     if not skills:
         return base
+    limit = current().max_skill_description_chars
     lines = [base, "", _LISTING_HEADER]
     for skill in sorted(skills, key=lambda item: item.name):
         description = " ".join(skill.description.split())
-        if len(description) > MAX_LISTED_DESCRIPTION:
-            description = description[: MAX_LISTED_DESCRIPTION - 1] + "…"
+        if len(description) > limit:
+            description = description[: limit - 1] + "…"
         lines.append(f"- {skill.name}: {description}")
     return "\n".join(lines)
 

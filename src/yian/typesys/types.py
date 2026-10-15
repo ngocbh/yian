@@ -17,6 +17,7 @@ from dataclasses import dataclass, replace
 from typing import Union
 
 import yian.json_codec as json_codec
+from yian.defaults import current
 from yian.typesys.values import (
     _BUILTIN_CONSTANTS,
     _NAME_PATTERN,
@@ -206,10 +207,6 @@ _TYPE_TOKEN = re.compile(
     re.VERBOSE,
 )
 
-# Deeper types are rejected before they can exhaust Python's recursion limit.
-_MAX_TYPE_DEPTH = 100
-
-
 class _TypeParser:
     """Recursive-descent parser for the parenthesized type grammar."""
 
@@ -227,6 +224,7 @@ class _TypeParser:
             pos = match.end()
         self.index = 0
         self.depth = 0
+        self.max_depth = current().max_type_nesting
 
     def parse(self) -> TypeExpr:
         t = self._type()
@@ -299,10 +297,10 @@ class _TypeParser:
             return _named_type(name)
         self._next()
         self.depth += 1
-        if self.depth > _MAX_TYPE_DEPTH:
+        if self.depth > self.max_depth:
             raise TypeCheckError(
                 f"type nested too deeply in {self.src[:40]!r}... "
-                f"(at most {_MAX_TYPE_DEPTH} levels)"
+                f"(at most {self.max_depth} levels)"
             )
         t = self._constructed(name)
         self.depth -= 1

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from threading import Event
 from typing import Any, Callable
 
+from yian.defaults import current
 from yian.memory.contracts import EvaluationTrace, MemoryContext
 from yian.nodes.base import Steering, _HostStop
 from yian.skills.catalog import Skill
@@ -34,8 +35,10 @@ class AgentRunContext:
     tools: list[str] = field(default_factory=list)  # granted tool and group ids
     llm_config: dict | None = None  # effective plain-dict model config
     output_type: Any = None  # the node's declared output Type; None = text passthrough
-    retries: int = 2  # structured-generation self-correction cap (extra attempts)
-    max_tool_iterations: int = -1  # model turns before AgentLoopError; -1 = no cap (default)
+    # structured-generation self-correction cap (extra attempts)
+    retries: int = field(default_factory=lambda: current().agent_retries)
+    # model turns before AgentLoopError; -1 = no cap
+    max_tool_iterations: int = field(default_factory=lambda: current().agent_max_tool_iterations)
     stop_event: Event | None = None  # transient host lifecycle; absent for direct loop tests
     evaluation_trace: EvaluationTrace | None = None  # write-only visible evidence sink
     memory_context: MemoryContext = field(default_factory=MemoryContext)

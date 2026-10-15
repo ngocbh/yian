@@ -2,7 +2,7 @@
 
 Covers the live CALL Grow path through the engine's generic `_apply_grow` (clone the child
 namespaced, substitute the spawner's value via the `commit_as` filler, fire its out-edges) plus
-the runtime node budget (MAX_TOTAL_NODES). The `eval_node` -> `NodeExpanded` routing
+the runtime node budget (YIAN_MAX_TOTAL_NODES). The `eval_node` -> `NodeExpanded` routing
 (spawner Grow grows the graph; a non-spawner Grow fails loud) is pinned in `test_eval_node_grow.py`.
 """
 
@@ -175,7 +175,7 @@ def test_call_grow_clones_namespaced_and_substitutes_spawner(num_workers):
     assert eng.state.flow.nodes["sp/__end__"].commit_as == "sp"
 
 
-# --- runtime node budget (MAX_TOTAL_NODES), deep static nesting, CALL-inside-MAP nesting ---- #
+# --- runtime node budget (YIAN_MAX_TOTAL_NODES), deep static nesting, CALL-inside-MAP nesting - #
 
 from yian.compose import load_flow
 
@@ -378,9 +378,10 @@ def _wide_child(n: int) -> CompiledFlow:
 @pytest.mark.parametrize("num_workers", [0, 4])
 def test_over_budget_expansion_trips_max_total_nodes(num_workers):
     from yian.events import RunFailed
-    from yian.runtime.state import MAX_TOTAL_NODES
+    from yian.defaults import Defaults
 
-    parent = _parent_with_spawner(_wide_child(MAX_TOTAL_NODES + 10), {"x": 0})  # one clone busts it
+    budget = Defaults().max_total_nodes
+    parent = _parent_with_spawner(_wide_child(budget + 10), {"x": 0})  # one clone busts it
     events = list(
         _engine(
             parent,

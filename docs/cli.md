@@ -112,6 +112,11 @@ nothing, so the log stays resumable. A run started from Python with
 `llm_config.api_key` can only be resumed from Python, with
 `resume_flow(..., api_key=...)`.
 
+`--resume` also needs the `YIAN_<NAME>` defaults and limits the run started with. A
+run records the ones that differ from the built-in values, and a log that started
+with different ones exits 1 naming each variable and how to set it (see
+[Defaults and limits](defaults.md#runs-record-the-values-they-started-with)).
+
 An eligible unfinished log appends a resume segment and retries nodes with a durable
 start but no durable outcome. Requests and tool actions may repeat; the run log neither reconstructs
 session memory nor provides exactly-once execution. See the
@@ -408,7 +413,8 @@ log before publishing the progress event that the CLI renders.
 | Flow succeeded | `0` |
 | Flow failed | `1` (error printed to stderr) |
 | Flow failed to compile (bad YAML) | `1` (located error printed to stderr) |
-| Run-log creation or recovery failed | `1` (concise error printed to stderr) |
+| Run-log creation or recovery failed (including a resume with different `YIAN_<NAME>` values) | `1` (concise error printed to stderr) |
+| A `YIAN_<NAME>` variable holds a value it does not accept | `1` (error printed to stderr) |
 | Memory setup failed (a custom memory type, a storage path that is not a local file, or a flow `id:` that cannot be a directory name) | `1` (concise error printed to stderr) |
 | Run cancelled at the input prompt, or input closed at a resume key prompt | `1` |
 | Resume key check failed (a missing, changed, or unavailable provider key) | `1` (error printed to stderr) |

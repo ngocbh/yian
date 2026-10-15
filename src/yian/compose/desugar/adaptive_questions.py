@@ -105,7 +105,7 @@ def desugar_adaptive_questions(
             )
 
         # The block IS the agent spec. Pass optional fields only when present so the
-        # AgentDescriptor defaults (e.g. retries=2, llm_config={}) apply otherwise. The
+        # AgentDescriptor defaults (e.g. `AGENT_RETRIES`, llm_config={}) apply otherwise. The
         # synth agent inherits the gate's ranges so its downstream errors locate there,
         # but its prompt and llm_config are the block's, so their errors locate at the
         # block's values and name the gate's fields. Its copied inputs are named as the

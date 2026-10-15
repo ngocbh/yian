@@ -79,7 +79,7 @@ this model whenever you design anything:
   typed value bytes with `runtime.log.decode_typed_json`; never call
   `sys.set_int_max_str_digits` in source. Show a long int in a message with
   `typesys.values.value_repr`. Render values as text with `json_codec.as_text`.
-- A yian value nests at most `typesys.values.MAX_VALUE_NESTING` (100) levels,
+- A yian value nests at most `YIAN_MAX_VALUE_NESTING` (default 100) levels,
   counting itself; each dict, list, tuple, model, or dataclass is a level and a
   `TypedValue` adds none. `reject_deep_nesting(value, where, *,
   enclosing_levels=0)` checks iteratively, before the non-finite walk, at the same
@@ -97,13 +97,13 @@ this model whenever you design anything:
   (`compose.helpers.value_nesting.check_written_value`, located `LoadError`), before
   any recursive load walker, so YAML aliases can't crash the load; the run-time
   checks remain for computed values and flows built in Python.
-  An expression has the same bound (`expr.grammar.MAX_EXPRESSION_NESTING`), which
+  An expression has the same bound (`current().max_value_nesting`), which
   `parse_expr` checks iteratively before any other walk; an operator chain is one level.
-- Documents yian reads nest at most `compose.source.scalars.MAX_YAML_NESTING` (200)
+- Documents yian reads nest at most `YIAN_MAX_YAML_NESTING` (default 200)
   levels; `_FlowLoader.get_event` counts collection events and raises a located
   `ComposerError` past it, before PyYAML's recursive composer runs out of stack.
 - A flow's CALL, MAP, and LOOP bodies nest at most
-  `compose.nodes.resolver.MAX_CALL_NESTING` (50) levels, checked at load in
+  `YIAN_MAX_CALL_NESTING` (default 50) levels, checked at load in
   `_resolve_child`: before resolving, against the calls active in the file being
   loaded (`call_nesting_scope` per `_load_flow`), and after, adding the built callee's
   depth (`call_nesting`, iterative). Load, run setup, and replay walk the baked tree
@@ -465,6 +465,17 @@ Most are just the functional model (above) made enforceable:
   migrating them, and preserve canonical bytes through preparation, replay,
   trace, and append checks. Do not rewrite accepted prefixes. The run log holds
   no conversation records; session history lives only in the backend.
+- **Defaults are read once and recorded** — every predefined default and limit is an
+  entry in `yian.defaults` (`docs/defaults.md`), overridable by `YIAN_<NAME>`.
+  `current()` reads the environment once per process; the CLI callback, `load_flow`,
+  `run_flow`, and `resume_flow` call it first so a bad value raises `DefaultsError`
+  before any work. Read a value from `current()`, hoisted out of loops; never add a
+  module constant for one. `run_flow` records `current().non_defaults()` as
+  `RunStartedRecord.defaults` (omitted when empty); `RunStartData.defaults` defaults
+  to `{}` (built-in values), never `current()`. The reducer keeps the run's values as
+  `RunState.run_defaults`, and the growth check reads `max_total_nodes` there, never
+  from `current()`. Replay calls `check_recorded` before the fingerprint check and
+  raises `DefaultsMismatchError` naming each differing or unknown variable.
 - **Every authored value is flow identity** — `flow_manifest`/`flow_fingerprint`
   include every value written in the flow, under any name, so an edited literal
   fails the resume check. Never redact, mask, or drop a value because its name or
@@ -559,7 +570,8 @@ Most are just the functional model (above) made enforceable:
   explicit attempt driver. Ready/replay validation must not call a node or
   materialize transcript contexts. `RuntimeBackwardState` is the sole attempt
   authority. `project_owner_contexts` is the only episode projection; forward
-  execution keeps no per-memory episode inventory. Memory JSON allows 128 levels,
+  execution keeps no per-memory episode inventory. Memory JSON allows
+  `current().memory_json_nesting` levels (value nesting + 28, 128 by default),
   so run material at the value limit fits; a context that still cannot be built
   raises `OwnerContextError` with the owner's `BackwardContext`, and the driver
   records `memory.invalid_context` naming that occurrence and the cause (only

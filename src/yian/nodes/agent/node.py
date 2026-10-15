@@ -15,6 +15,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Callable, Iterator, Literal, Mapping, Optional
 
+from yian.defaults import current
 from yian.diagnostics import OriginRef
 from yian.expr.template import render_template_record
 from yian.expr.lineage import FeedbackValue
@@ -30,7 +31,7 @@ from yian.memory.contracts import (
 from yian.nodes.agent.context import DEFAULT_SYSTEM, AgentRunContext
 from yian.nodes.agent.memory import compatibility
 from yian.nodes.agent.backward import backward_agent
-from yian.nodes.agent.loop import MAX_TOOL_ITERATIONS, run_agent
+from yian.nodes.agent.loop import run_agent
 from yian.nodes.agent.structured import _structured_validation_path
 from yian.nodes.base import (
     BackwardContext,
@@ -101,7 +102,7 @@ class AgentNode(Node):
         tools: Optional[list[str]] = None,
         llm_config: Optional[dict[str, Any]] = None,
         llm_inherit: bool = True,
-        retries: int = 2,
+        retries: int | None = None,
         title: Optional[str] = None,
         memories: tuple[MemoryDecl, ...] = (),
         variables: list[Parameter] | None = None,
@@ -126,7 +127,7 @@ class AgentNode(Node):
         self.own_llm_config: dict[str, Any] = dict(llm_config) if llm_config else {}
         self.llm_config = llm_config
         self.llm_inherit = llm_inherit
-        self.retries = retries
+        self.retries = current().agent_retries if retries is None else retries
         if type(memories) is not tuple or any(
             type(decl) is not MemoryDecl for decl in memories
         ):
@@ -263,8 +264,8 @@ class AgentNode(Node):
         _rewrite_memory_decl_origins(self.memories, mapper, seen)
 
     def _max_tool_iterations(self) -> int:
-        """Return the positive authored loop bound or ``-1`` for no bound."""
-        raw = self.env.get("max_tool_iterations", MAX_TOOL_ITERATIONS)
+        """Return the authored or default positive loop bound, or ``-1`` for no bound."""
+        raw = self.env.get("max_tool_iterations", current().agent_max_tool_iterations)
         if not is_max_tool_iterations(raw):
             raise ValueError(
                 f"AGENT node {self.id!r}: env max_tool_iterations must be a positive int "

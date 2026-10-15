@@ -9,6 +9,7 @@ from textwrap import indent
 from langchain_core.messages import AIMessage
 import pytest
 
+from yian import defaults
 import yian.llm_clients as llm_clients
 from yian.compose import load_flow
 from yian.memory import MemoryMutation, MemoryOperationError
@@ -635,7 +636,7 @@ output: ${input.payload}
 """)
     # A low memory bound lets a value well inside the yian value limit exceed the
     # learn-context bound.
-    monkeypatch.setattr("yian.memory.contracts._MAX_JSON_NESTING", 10)
+    monkeypatch.setattr(defaults.Defaults, "memory_json_nesting", property(lambda self: 10))
     value = {"leaf": "retained"}
     for _ in range(20):
         value = {"next": value}

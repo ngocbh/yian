@@ -8,6 +8,7 @@ ordinary outputs. See the project README for status.
 Layers, leaf-to-root (a package imports only DOWN/leftward — never up, never in a cycle):
 
     json_codec                                      (stdlib only; below every package)
+    defaults                                        (stdlib only; below every package)
     diagnostics  <-  events
           ^
           └────────  nodes  <-  compile  <-  compose
@@ -20,8 +21,10 @@ Layers, leaf-to-root (a package imports only DOWN/leftward — never up, never i
 
 `json_codec.py` imports only the standard library and converts values holding ints of
 any size to and from JSON text, and to plain text, without changing
-`sys.set_int_max_str_digits`; any layer may import it. `diagnostics.py` is the
-dependency-free source-neutral value spine and owns
+`sys.set_int_max_str_digits`; any layer may import it. `defaults.py` imports only
+the standard library and holds every predefined default and limit, each overridable
+by a `YIAN_<NAME>` environment variable read once per process; any layer may import
+it. `diagnostics.py` is the dependency-free source-neutral value spine and owns
 `SourceRange`; `events` imports semantic failures from it but does not re-export
 that Compose-facing coordinate type. Other leaves import nothing upward:
 `typesys` (the typed value pool), `expr` (`${...}` evaluation), and `llm_clients` (provider client wrappers +

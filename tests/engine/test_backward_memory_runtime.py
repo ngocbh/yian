@@ -7,6 +7,7 @@ from dataclasses import replace
 
 import pytest
 
+from yian import defaults
 from yian.compile.model import START_ID, FlowOutput
 from yian.expr.lineage import SourceRef
 from yian.memory import (
@@ -254,7 +255,7 @@ def test_no_policy_backward_still_records_ready_and_finished_without_opening_res
 def test_context_depth_failure_keeps_completed_backward_without_calling_learners(monkeypatch):
     # A low memory bound lets a value well inside the yian value limit exceed the
     # learn-context bound.
-    monkeypatch.setattr("yian.memory.contracts._MAX_JSON_NESTING", 10)
+    monkeypatch.setattr(defaults.Defaults, "memory_json_nesting", property(lambda self: 10))
     value = "leaf"
     for _ in range(20):
         value = [value]
@@ -294,7 +295,7 @@ def _context_failure_retry(engine, failure):
 
 @pytest.mark.parametrize("change", [None, "node", "source", "memory_scope", "scope", "run", "code"])
 def test_replayed_context_failure_must_name_an_accepted_receiving_occurrence(change, monkeypatch):
-    monkeypatch.setattr("yian.memory.contracts._MAX_JSON_NESTING", 10)
+    monkeypatch.setattr(defaults.Defaults, "memory_json_nesting", property(lambda self: 10))
     value = "leaf"
     for _ in range(20):
         value = [value]

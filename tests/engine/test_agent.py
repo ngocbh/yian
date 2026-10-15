@@ -450,11 +450,11 @@ def test_tool_loop_cap_trips_when_bounded(monkeypatch):
 
 
 def test_default_no_cap_runs_unbounded(monkeypatch):
-    from yian.nodes.agent.loop import MAX_TOOL_ITERATIONS
+    from yian.defaults import current
 
     # The default cap is the -1 no-cap sentinel: an agent making many tool turns (well past the
     # old default of 100) then answering still finishes, no AgentLoopError.
-    assert MAX_TOOL_ITERATIONS == -1
+    assert current().agent_max_tool_iterations == -1
     monkeypatch.setitem(tools_mod.TOOL_REGISTRY, "noop", _FakeTool(lambda a: "ok"))
     replies = [_ai_tool_call("noop", {}, str(i)) for i in range(150)]
     replies.append(AIMessage(content="done"))

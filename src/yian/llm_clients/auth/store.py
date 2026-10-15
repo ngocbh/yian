@@ -14,6 +14,8 @@ import stat
 import sys
 import time
 
+from yian.defaults import current
+
 from .common import (
     ApiKeyCredentials,
     AuthError,
@@ -22,8 +24,6 @@ from .common import (
     OAuthCredentials,
     ProviderSelection,
 )
-
-_LIMIT = 1024 * 1024
 
 
 class AuthStore:
@@ -140,8 +140,9 @@ class AuthStore:
             return None, {}
         with os.fdopen(fd, "rb") as file:
             self._private(file.fileno())
-            raw = file.read(_LIMIT + 1)
-        if len(raw) > _LIMIT:
+            limit = current().max_auth_store_bytes
+            raw = file.read(limit + 1)
+        if len(raw) > limit:
             raise AuthError("Credential storage exceeds its size limit")
         try:
             value = json.loads(raw)
@@ -218,7 +219,7 @@ class AuthStore:
             },
         }
         raw = json.dumps(value, sort_keys=True).encode() + b"\n"
-        if len(raw) > _LIMIT:
+        if len(raw) > current().max_auth_store_bytes:
             raise AuthError("Credential storage exceeds its size limit")
         temporary = ".auth-" + secrets.token_hex(16)
         fd = os.open(

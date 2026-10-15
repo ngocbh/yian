@@ -148,18 +148,19 @@ invent lessons or perform backend-specific writes. See
 interfaces and [AGENT memory](agent.md#memory-is-an-outer-to-local-stack) for
 recall order.
 
-Memory JSON has its own nesting bound of 128 levels. A run value nests at most 100
-levels ([nesting limit](typing.md#nesting-limit)) and an episode or feedback entry
-wraps it about 8 levels deeper, so run material always fits; an AGENT's structured
-value or tool-call arguments past the limit fail at the reply, so they never become
-evidence. When a learn context
-still cannot be built, for example from a log recorded before the value limit, the
-attempt fails with `memory.invalid_context` before any learner runs. The
+Memory JSON has its own nesting bound of 128 levels: the value limit plus 28, so
+lowering `YIAN_MAX_VALUE_NESTING` lowers it too (see [Defaults and
+limits](defaults.md)). A run value nests at most 100 levels ([nesting
+limit](typing.md#nesting-limit)) and an episode or feedback entry wraps it about 8
+levels deeper, so run material always fits; an AGENT's structured value or tool-call
+arguments past the limit fail at the reply, so they never become evidence. When a learn
+context still cannot be built, for example from a log recorded before the value limit,
+the attempt fails with `memory.invalid_context` before any learner runs. The
 `BackwardFailure` names the occurrence whose episode or feedback failed (`node_id`,
 `node_started_seq`, `scope`, `run_id`), and its message gives the cause:
 `memory learn context could not be constructed for node 'n': ... nests deeper than
-the memory limit of 128 levels`. Only a failure in the root flow's fallback feedback
-names no node.
+the memory limit of 128 levels (derived from YIAN_MAX_VALUE_NESTING)`. Only a failure in
+the root flow's fallback feedback names no node.
 
 ## Episodic memory
 
@@ -172,16 +173,18 @@ execution: `learnable=True` retains the episode, and a successful later
 `backward()` attempt commits it.
 
 Each memory has two optional positive integer limits, set by YAML `config` or
-the constructor. An unset limit adopts the stored value, else the default; a
-different explicit value raises `episodic.config_conflict`. `ReflectiveMemory`
-limits (`max_items`, `recall_limit`) follow the same rule with
-`reflective.config_conflict`. `max_episodes` bounds the stored history and
-evicts its oldest entries after a commit. `recall_limit`
-bounds contextual AGENT recall. Contextual recall uses deterministic lexical
-overlap and recency; context-free recall returns the complete bounded history in
-chronological order. Entries are canonical JSON and preserve the run ID,
-occurrence, owner path, inputs, outcome or failure, prompts, recalled sections,
-visible model/tool interactions, and accepted execution sequence.
+the constructor. An unset limit adopts the stored value, else the default
+(`YIAN_EPISODIC_MAX_EPISODES` and `YIAN_EPISODIC_RECALL_LIMIT`,
+`YIAN_REFLECTIVE_MAX_ITEMS` and `YIAN_REFLECTIVE_RECALL_LIMIT`; see
+[Defaults and limits](defaults.md)); a different explicit value raises
+`episodic.config_conflict`. `ReflectiveMemory` limits (`max_items`, `recall_limit`)
+follow the same rule with `reflective.config_conflict`. `max_episodes` bounds the stored
+history and evicts its oldest entries after a commit. `recall_limit` bounds contextual
+AGENT recall. Contextual recall uses deterministic lexical overlap and recency;
+context-free recall returns the complete bounded history in chronological order. Entries
+are canonical JSON and preserve the run ID, occurrence, owner path, inputs, outcome or
+failure, prompts, recalled sections, visible model/tool interactions, and accepted
+execution sequence.
 
 By default the backend lives only in the current process. Reusing one instance shares
 committed episodes with later fresh runs; `reset()` clears them. Run sessions pin
@@ -220,12 +223,14 @@ result = run_flow(flow, inputs, memory={"about": profile}, learnable=True)
   accepts `max_chars` and `input_budget_chars`.
 - **Learning.** `backward(feedback)` makes one tool-free model call. It sends the
   current document, the version the run saw when it differs, the feedback, and
-  recent AGENT episodes within `input_budget_chars` (default 24,000). The newest
+  recent AGENT episodes within `input_budget_chars` (default 24,000,
+  `YIAN_PROFILE_INPUT_BUDGET_CHARS`). The newest
   episode is always sent; if it alone is over the budget, it is cut to a prefix
   and a suffix. Older episodes are added whole while they fit. Each episode
   includes its visible model replies, tool calls, and tool results. The
   reply must be the whole document inside `<profile>` tags and at most
-  `max_chars` (default 32,000, about 8k tokens). No feedback, or an unchanged
+  `max_chars` (default 32,000, about 8k tokens, `YIAN_PROFILE_MAX_CHARS`). No feedback,
+  or an unchanged
   document, proposes nothing. `llm_config=None` uses the ambient model defaults.
 - **Commit.** A compare-and-set write against the version the learner read. It
   never calls a model. If someone edited the document in between, the attempt

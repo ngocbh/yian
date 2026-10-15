@@ -312,7 +312,7 @@ when its last backward attempt was interrupted. For an eligible nonterminal pref
 `RunResumedRecord` places durably started nodes with no durable outcome ahead of the
 ready frontier, then dispatch continues. Original inputs, run ID,
 worker count, typed values, growth seeds, and resolved LLM configuration all come from
-the log rather than current process defaults.
+the log rather than the current LLM defaults.
 
 Conversation metadata does not block ordinary node retry. A retried node may
 resend a model request or repeat tool actions: recovery provides no exactly-once

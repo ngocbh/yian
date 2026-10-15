@@ -29,6 +29,7 @@ from yian.compose.helpers.output_contracts import (
     combine_output_contracts,
     resolve_output_binding_contract,
 )
+from yian.defaults import current
 from yian.diagnostics import SourceRange
 from yian.nodes.contracts import (
     OutputContract,
@@ -199,9 +200,6 @@ def _callable_display(flow_id: str, child_label: str | None = None) -> str:
     return child_label or f"callable {value_repr(flow_id)}"
 
 
-# A flow's call, map, and loop bodies nest at most this many levels.
-MAX_CALL_NESTING = 50
-
 # Calls being resolved around the current one in the file being loaded.
 _ACTIVE_CALLS: ContextVar[int] = ContextVar("_ACTIVE_CALLS", default=0)
 
@@ -295,23 +293,24 @@ def _resolve_child(
     Raises:
         `LoadError`:
             Raised when the callable can't be resolved, or the call nests bodies deeper
-            than `MAX_CALL_NESTING` levels.
+            than `current().max_call_nesting` levels.
     """
     diagnostics = diagnostics or LoadDiagnostics()
     display = _callable_display(flow_id, child_label)
+    limit = current().max_call_nesting
 
     def too_deep(levels: str) -> LoadError:
         return diagnostics.error(
             f"call node {node_id!r}: calling {display} nests calls {levels} deep, past the "
-            f"call nesting limit of {MAX_CALL_NESTING} (each call, map, or loop body is a "
+            f"call nesting limit of {limit} (each call, map, or loop body is a "
             "level); flatten the chain",
             range=range,
         )
 
     depth = _ACTIVE_CALLS.get()
     # Checked before resolving: building the callee would recurse another level.
-    if depth >= MAX_CALL_NESTING:
-        raise too_deep(f"more than {MAX_CALL_NESTING} levels")
+    if depth >= limit:
+        raise too_deep(f"more than {limit} levels")
     token = _ACTIVE_CALLS.set(depth + 1)
     try:
         child = resolver(flow_id, None)
@@ -326,6 +325,6 @@ def _resolve_child(
         _ACTIVE_CALLS.reset(token)
     # A callee built earlier (a cached def, an imported file) never ran on this count.
     levels = depth + 1 + call_nesting(child.compiled)
-    if levels > MAX_CALL_NESTING:
+    if levels > limit:
         raise too_deep(f"{levels} levels")
     return child

@@ -120,7 +120,7 @@ def test_ensure_api_key_exhausts_after_max(monkeypatch):
     monkeypatch.setitem(sys.modules, "questionary", fake)
     with pytest.raises(RuntimeError, match="after 3 attempts"):  # not the cancel message
         utils.ensure_api_key("anthropic")
-    assert len(fake.prompts) == 3  # capped at MAX_KEY_PROMPTS
+    assert len(fake.prompts) == 3  # capped at the MAX_KEY_PROMPTS default
 
 
 def test_ensure_api_key_accepts_on_last_attempt(monkeypatch):

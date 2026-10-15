@@ -30,6 +30,7 @@ from yian.compose.nodes.base import (
     reject_non_text,
 )
 from yian.compose.source import SourceCursor
+from yian.defaults import current
 from yian.diagnostics import SourceRange
 from yian.llm_clients import LLMConfig
 from yian.llm_clients.config import host_only_field_error
@@ -189,7 +190,8 @@ class AgentDescriptor(NodeDescriptor):
     tools: list[str] = field(default_factory=list)
     skills: list[str] | str = field(default_factory=list)
     llm_config: dict[str, Any] = field(default_factory=dict)
-    retries: int = 2
+    # The effective count, so the manifest holds it and a default flow keeps its identity.
+    retries: int = field(default_factory=lambda: current().agent_retries)
     asserts: list[str] = field(default_factory=list)
     steerable: bool = False
     memories: tuple[MemoryDecl, ...] = ()

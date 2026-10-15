@@ -61,6 +61,7 @@ Before adding a package, place it on the dependency ladder. The engine reads
 
 ```
 json_codec                                  (stdlib only; below every package)
+defaults                                    (stdlib only; below every package)
 diagnostics  <-  events
       ^
       └────────  nodes  <-  compile  <-  compose
@@ -83,6 +84,11 @@ JSON text for values holding ints of any size, and renders such values as plain
 text (`as_text`), without changing `sys.set_int_max_str_digits`; every layer that
 encodes or decodes value JSON or renders values as text imports it
 (`import yian.json_codec as json_codec`).
+
+`defaults.py` is a stdlib-only leaf below every package: it holds every predefined
+default and limit, each overridable by a `YIAN_<NAME>` environment variable read
+once per process. Code reads a value through `defaults.current()` instead of a
+module constant; `test_defaults_leaf_imports_only_stdlib` ratchets the leaf.
 
 The package-root run boundary is the composition root: it may import compose,
 compile's concrete builders, and runtime. Lower layers never import it. **Arrows

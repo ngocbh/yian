@@ -13,13 +13,14 @@ from __future__ import annotations
 import copy
 from bisect import bisect_left
 from collections import ChainMap, deque
-from collections.abc import Callable, Container
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Container, Mapping
+from dataclasses import dataclass, field, replace
 from typing import Any, NoReturn
 
 from yian.compile.manifest import expansion_digest
 from yian.compile.model import CompiledFlow, Edge, Flow, GrowthRejected, validate_growth_metadata
 from yian.compile.validation import _classify_path
+from yian.defaults import Defaults
 from yian.diagnostics import Failure, OriginRef
 from yian.events import (
     NodeExpanded,
@@ -100,9 +101,6 @@ from yian.typesys.values import (
     reject_deep_nesting,
 )
 
-
-MAX_TOTAL_NODES = 10_000
-"""Maximum live topology size before same-transition pruning."""
 
 GrowBuilder = Callable[[Node, Any], Flow]
 """Injected kind-aware interpreter from a spawner and canonical seed to a fragment."""
@@ -233,6 +231,10 @@ class RunState:
             Canonical recorded snapshots, one per memory key.
         learnable (`bool`):
             Whether accepted eligible outcomes must project durable learning evidence.
+        run_defaults (`Defaults`):
+            The `yian.defaults` values ``RunStarted`` recorded, built-in values
+            overlaid with the recorded ones; the reducer reads its limits here,
+            never from the process.
         trace (`RetainedTrace | None`):
             Accepted executions, immutable producer entries and private backward
             handlers, enabled by recorded learning independently of memory scopes.
@@ -278,6 +280,7 @@ class RunState:
         self.memories: tuple[MemorySpec, ...] | None = None
         self.memory_stacks: tuple[MemoryStack, ...] | None = None
         self.learnable = False
+        self.run_defaults = Defaults()
         self.trace: RetainedTrace | None = None
         self.backward_state = RuntimeBackwardState()
         self._memory_authority = _MemoryAuthority(
@@ -316,6 +319,9 @@ class RunStartData:
             Sorted memory key table paired with ``memory_snapshots``.
         memory_stacks (`tuple[MemoryStack, ...] | None`, *optional*):
             Each scoped target's key stack, sorted by locator.
+        defaults (`Mapping[str, int]`, *optional*, defaults to `{}`):
+            The `yian.defaults` values that differ from the built-in ones, keyed
+            by entry name; empty means the run uses the built-in values.
     """
 
     run_id: str
@@ -328,6 +334,7 @@ class RunStartData:
     learnable: bool = False
     memories: tuple[MemorySpec, ...] | None = None
     memory_stacks: tuple[MemoryStack, ...] | None = None
+    defaults: Mapping[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -372,6 +379,7 @@ class _RunStartedApply:
     memories: tuple[MemorySpec, ...] | None
     memory_stacks: tuple[MemoryStack, ...] | None
     learnable: bool
+    run_defaults: Defaults
     backward_state: RuntimeBackwardState
     memory_authority: _MemoryAuthority
     observers: tuple[Any, ...]
@@ -793,6 +801,7 @@ def prepare_run_started(
         learnable=data.learnable,
         memories=data.memories,
         memory_stacks=data.memory_stacks,
+        defaults=data.defaults,
     )
     # The public envelope codec is the sole payload authority.  Decode its canonical
     # bytes immediately so the prepared record is exactly what either log will retain.
@@ -1950,6 +1959,7 @@ def _replay_records(
             learnable=start.learnable,
             memories=start.memories,
             memory_stacks=start.memory_stacks,
+            defaults=start.defaults,
         ),
         schema=first.schema,
     )
@@ -2599,10 +2609,11 @@ def _prepare_growth_topology(
 ) -> tuple[_GrowthDelta, _GrowthTopology]:
     """Validate growth and build the detached change commit applies in place."""
     new_node_ids, new_edge_ids = validated_fragment
-    if len(state.flow.nodes) + len(new_node_ids) > MAX_TOTAL_NODES:
+    budget = state.run_defaults.max_total_nodes
+    if len(state.flow.nodes) + len(new_node_ids) > budget:
         _raise_growth_rejected(
             ValueError(
-                f"expansion exceeded node budget ({MAX_TOTAL_NODES}) at spawner "
+                f"expansion exceeded node budget ({budget}) at spawner "
                 f"{record.spawner_id!r}"
             )
         )
@@ -4447,6 +4458,7 @@ def _materialize_run_started(
     if not isinstance(canonical_input, dict):
         raise TypeError("canonical START input is not a dict")
 
+    run_defaults = Defaults.from_recorded(record.defaults)
     backward_state = RuntimeBackwardState(
         () if record.memories is None else tuple(spec.key for spec in record.memories)
     )
@@ -4478,6 +4490,7 @@ def _materialize_run_started(
         memories=record.memories,
         memory_stacks=record.memory_stacks,
         learnable=record.learnable,
+        run_defaults=run_defaults,
         backward_state=backward_state,
         memory_authority=memory_authority,
         observers=(RunStarted(),),
@@ -4506,6 +4519,7 @@ def _apply_run_started(state: RunState, apply: _RunStartedApply) -> None:
     state.memories = apply.memories
     state.memory_stacks = apply.memory_stacks
     state.learnable = apply.learnable
+    state.run_defaults = apply.run_defaults
     state.backward_state = apply.backward_state
     state._memory_authority = apply.memory_authority
     state.next_sequence = apply.next_sequence
@@ -4729,7 +4743,6 @@ def _apply_growth(
 
 __all__ = [
     "GrowBuilder",
-    "MAX_TOTAL_NODES",
     "PreparedTransition",
     "RunStartData",
     "RunState",

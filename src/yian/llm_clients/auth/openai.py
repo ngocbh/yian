@@ -15,6 +15,8 @@ import sys
 import time
 from urllib.parse import parse_qs, urlencode, urlsplit
 
+from yian.defaults import current
+
 from .common import ApiKeyCredentials, AuthError, HttpResponse, OAuthCredentials, _text
 from .http import _RequestCancelled, _request
 
@@ -50,6 +52,7 @@ def _callback_server(monotonic: Callable[[], float]) -> Iterator[Callable]:
 
         def wait(redirect_uri, timeout, check_stopped):
             deadline = monotonic() + timeout
+            limit = current().max_oauth_callback_bytes
 
             def remaining():
                 check_stopped()
@@ -68,7 +71,7 @@ def _callback_server(monotonic: Callable[[], float]) -> Iterator[Callable]:
                     headers = bytearray()
                     # Socket inactivity timeouts alone let slowly arriving bytes
                     # bypass cancellation and the overall authorization deadline.
-                    while b"\r\n\r\n" not in headers and len(headers) <= 16384:
+                    while b"\r\n\r\n" not in headers and len(headers) <= limit:
                         connection.settimeout(remaining())
                         try:
                             chunk = connection.recv(4096)
@@ -91,7 +94,7 @@ def _callback_server(monotonic: Callable[[], float]) -> Iterator[Callable]:
                         )
                         if method != "GET" or version not in ("HTTP/1.0", "HTTP/1.1"):
                             raise ValueError
-                        if b"\r\n\r\n" not in headers or len(headers) > 16384:
+                        if b"\r\n\r\n" not in headers or len(headers) > limit:
                             raise ValueError
                         parsed = urlsplit(path)
                         if (

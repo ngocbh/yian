@@ -3,7 +3,7 @@
 The engine is three layers, all pool-agnostic (they take a `resolve` callable):
 - `grammar` (`parse_expr`) — PARSE ONLY: one Lark grammar for every `${...}`
   construct (refs, arithmetic, boolean, coalesce/default/required, builtin calls).
-  An expression nests at most `MAX_EXPRESSION_NESTING` (100) levels.
+  An expression nests at most as deep as a value, `current().max_value_nesting` levels.
 - `expressions` (`eval_expr`, `infer_expr_type`, `expr_refs`) — evaluate a parsed
   tree against a `resolve`, conservatively infer its static type, and walk its
   reference leaves. Also the `when:`/`asserts:` condition surface
@@ -55,7 +55,7 @@ from yian.expr.expressions import (
     rewrite_condition_refs,
     rewrite_expr_refs,
 )
-from yian.expr.grammar import MAX_EXPRESSION_NESTING, parse_expr
+from yian.expr.grammar import parse_expr
 from yian.expr.lineage import FeedbackValue, has_feedback, validate_feedback
 from yian.expr.template import (
     ConditionRead,
@@ -77,7 +77,6 @@ __all__ = [
     "ConstructorTypeError",
     "ExpressionError",
     "FeedbackValue",
-    "MAX_EXPRESSION_NESTING",
     "RequiredError",
     "binding_co_skips",
     "check_template_calls",

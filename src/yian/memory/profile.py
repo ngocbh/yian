@@ -14,6 +14,7 @@ from types import TracebackType
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from yian.defaults import current
 import yian.json_codec as json_codec
 from yian.llm_clients import model_from_config
 from yian.llm_clients.config import pop_host_credentials
@@ -120,8 +121,8 @@ class ProfileMemory:
         store: MarkdownStore,
         *,
         llm_config: JsonObject | None = None,
-        max_chars: int = 32_000,
-        input_budget_chars: int = 24_000,
+        max_chars: int | None = None,
+        input_budget_chars: int | None = None,
     ) -> None:
         """Bind the backend to one store and learner model.
 
@@ -135,10 +136,12 @@ class ProfileMemory:
                 never recorded. A ``base_url`` entry needs ``api_key`` and is
                 where the learner sends it; for ``provider: azure`` it is the
                 required resource endpoint and needs no key.
-            max_chars (`int`, *optional*, defaults to `32_000`): Largest document
-                the learner may write (about 8k tokens). Host writes are not bounded.
-            input_budget_chars (`int`, *optional*, defaults to `24_000`): Character
-                budget for episode JSON sent to the learner. Feedback is always sent.
+            max_chars (`int | None`, *optional*, defaults to `None`): Largest
+                document the learner may write. `None` uses `YIAN_PROFILE_MAX_CHARS`
+                (32,000, about 8k tokens). Host writes are not bounded.
+            input_budget_chars (`int | None`, *optional*, defaults to `None`):
+                Character budget for episode JSON sent to the learner. `None` uses
+                `YIAN_PROFILE_INPUT_BUDGET_CHARS` (24,000). Feedback is always sent.
 
         Raises:
             `TypeError`: ``store`` lacks ``read``/``write`` or ``llm_config`` is not
@@ -147,11 +150,17 @@ class ProfileMemory:
                 empty or lacks ``provider``, a non-Azure ``base_url`` lacks
                 ``api_key``, an Azure ``api_key`` lacks ``base_url``, or
                 ``base_url`` is not an allowed URL.
+            `DefaultsError`: A budget is `None` and a `YIAN_` variable holds a
+                value it does not accept.
         """
         if not isinstance(store, MarkdownStore):
             raise TypeError("store must provide read() and write()")
         if llm_config is not None and type(llm_config) is not dict:
             raise TypeError("llm_config must be a dict or None")
+        if max_chars is None:
+            max_chars = current().profile_max_chars
+        if input_budget_chars is None:
+            input_budget_chars = current().profile_input_budget_chars
         for name, value in (("max_chars", max_chars), ("input_budget_chars", input_budget_chars)):
             if type(value) is not int or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")

@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from langchain_core.exceptions import OutputParserException
 
+from yian import defaults
 from yian.llm_clients.auth import ApiKeyCredentials, AuthStore
 from yian.memory.contracts import (
     LearnContext,
@@ -60,6 +61,18 @@ def test_reflective_episode_material_retains_the_physical_execution_sequence() -
     material = json.loads(reflective._bounded_episode_material(LearnContext("run-1", "reflective", (episode,))))
     assert material["episodes"][0]["execution_seq"] == 17
     assert material["episodes"][0]["owner_static_path"] == ["agent"]
+
+
+def _prompt_budget(memory: str = "reflective") -> int:
+    """Return the most characters a reflection prompt can hold: three budgets and labels."""
+    values = defaults.current()
+    labels = "Memory: " + memory + "\nLimits: \nCurrent lessons: \nEpisodes: "
+    return (
+        values.reflective_max_lesson_chars
+        + values.reflective_max_episode_chars
+        + values.reflective_max_limit_chars
+        + len(labels)
+    )
 
 
 def _mutation(
@@ -379,7 +392,10 @@ def test_snapshot_rejects_excessive_nesting_as_typed_invalid_snapshot() -> None:
         ReflectiveMemory().open_run(snapshot=snapshot)
     assert exc.value.code == "reflective.invalid_snapshot"
     cause = str(exc.value.__cause__)
-    assert cause.endswith("nests deeper than the memory limit of 128 levels")
+    assert cause.endswith(
+        "nests deeper than the memory limit of 128 levels "
+        "(derived from YIAN_MAX_VALUE_NESTING)"
+    )
     assert "wire-safe" not in cause
 
 
@@ -749,7 +765,7 @@ def test_episode_material_is_capped_in_one_model_call(
         {"actions": [{"action": "noop", "lesson_id": None, "text": None}]},
     )
     memory = ReflectiveMemory({"provider": "ollama", "model": "qwen"})
-    huge = "x" * (reflective._MAX_EPISODE_MATERIAL_CHARS * 2)
+    huge = "x" * (defaults.current().reflective_max_episode_chars * 2)
     with memory.open_run() as session:
         frame = session
         result = frame.learn(_context(text=huge))
@@ -758,7 +774,7 @@ def test_episode_material_is_capped_in_one_model_call(
     assert model.structured.messages is not None
     material = model.structured.messages[-1].content
     assert isinstance(material, str)
-    assert len(material) <= reflective._MAX_REFLECTION_PROMPT_CHARS
+    assert len(material) <= _prompt_budget()
     assert "truncated" in material
 
 
@@ -789,7 +805,7 @@ def test_huge_current_lessons_cannot_displace_new_episode_evidence(
     assert model.structured.messages is not None
     prompt = model.structured.messages[-1].content
     assert isinstance(prompt, str)
-    assert len(prompt) <= reflective._MAX_REFLECTION_PROMPT_CHARS
+    assert len(prompt) <= _prompt_budget()
     assert "Current lessons:" in prompt
     assert "truncated" in prompt
     assert "Episodes:" in prompt

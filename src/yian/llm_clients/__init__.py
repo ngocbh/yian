@@ -19,9 +19,10 @@ extracts text without mutating the messages used for the next request.
 `list_models` lists the model ids a provider's host offers, using only the key
 and base URL passed in.
 
-Knows about:   langchain, provider SDKs.
-Never imports: any other yian subpackage — it is a leaf (peer of state /
-               events), so nodes/compose/runtime may import it, never the reverse.
+Knows about:   langchain, provider SDKs, and the stdlib-only yian.defaults.
+Never imports: any other yian subpackage except the stdlib-only yian.defaults
+               leaf — it is a leaf (peer of state / events), so
+               nodes/compose/runtime may import it, never the reverse.
 """
 
 from yian.llm_clients.base_client import BaseLLMClient

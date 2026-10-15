@@ -185,6 +185,13 @@ YAML parse; other scalar forms retain a whole-value fallback.
 
 ::: yian.compose.source.ScalarSource
 
+## Defaults and limits
+
+Every predefined default and limit, each overridable by a `YIAN_<NAME>` environment
+variable. See [Defaults and limits](defaults.md) for the table.
+
+::: yian.defaults
+
 ## Runtime authority
 
 The lower-level runtime surface is deliberately scoped to

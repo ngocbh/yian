@@ -308,7 +308,8 @@ def validate_node_asserts(
     semantic type; partial records enforce their closed root field set and walk any
     independently proven field contract.
     Rejected (located `LoadError`): a pool head (`${outputs/inputs/system/item.X}`), an inline
-    `${call}`, `${output.field}` on a non-record output, a declared input named `output`,
+    `${call}`, `${output.field}` on an output that is neither a record nor a `file` (whose
+    `uri`, `mime` and `name` it can read), a declared input named `output`,
     `isinstance` or a constructor on a CALL/MAP/LOOP node (its asserts run in the child
     flow), and any node assert on a mapped call (a `MapNode`, `kind: map` — the per-node
     hook has no `${item}` scope). A call inside `${...}` to a name in ``type_names`` (the
@@ -435,9 +436,12 @@ def validate_node_asserts(
                                 "ValueContract, PartialRecordContract, or None, "
                                 f"got {type(contract).__name__}"
                             )
-                        if (
-                            type(contract) is ValueContract
-                            and contract.type.kind not in (ValueKind.OBJECT, ValueKind.ANY)
+                        # A file output reaches the shared walk, which types its
+                        # `uri`, `mime` and `name` and rejects any other field.
+                        if type(contract) is ValueContract and contract.type.kind not in (
+                            ValueKind.OBJECT,
+                            ValueKind.ANY,
+                            ValueKind.FILE,
                         ):
                             errors.append(
                                 (

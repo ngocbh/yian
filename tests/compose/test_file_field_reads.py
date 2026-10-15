@@ -148,6 +148,25 @@ def test_another_field_of_a_top_level_file_output_is_a_load_error():
     _assert_located_error(text, URII, "x: ${a.output.urii}")
 
 
+def _file_output_assert(check: str) -> str:
+    """A flow whose CODE node `a` has `output: file` and a post-assert `check`."""
+    return (
+        f"id: p\nname: p\nnodes:\n  a:\n    kind: code\n    output: file\n"
+        f"    code: return {F}\n    asserts:\n      - \"{check}\"\n"
+        "output: ${a.output.uri}\n"
+    )
+
+
+def test_a_node_assert_reads_the_uri_of_its_file_output():
+    assert _ok(_file_output_assert("output.uri == 'f'")) == "f"
+
+
+def test_a_node_assert_reading_another_field_of_its_file_output_is_a_load_error():
+    _assert_located_error(
+        _file_output_assert("output.urii == 'f'"), URII, "output.urii == 'f'"
+    )
+
+
 def test_another_field_of_an_optional_file_is_a_load_error():
     _assert_located_error(
         _flow(_reader("${a.output.g.urii}")), URII, "x: ${a.output.g.urii}"

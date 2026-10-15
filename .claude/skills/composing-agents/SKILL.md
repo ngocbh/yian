@@ -244,7 +244,10 @@ follows the same rule but may also hold files; a date, set, or non-text key in i
 `list(file)` item, a record `file` field, or a LOOP-carried `file` reaches CODE as a
 `FileRef` (`x["f"].uri`, not `x["f"]["uri"]`). A `file` slot also reads the mapping
 `{uri, mime, name}`, and an `object` slot reads a nested file as its mapping; untyped
-outputs keep nested files as mappings. A list the loader can't type (a
+outputs keep nested files as mappings. A MAP's list is typed only when its body's output
+has one exact type (a typed whole value, or a record with every field typed); over a
+body returning a record with an untyped field, `${m.output}` readers in the parent and
+the run result see nested files as mappings. A list the loader can't type (a
 tool's untyped array, a mixed or empty literal) is `list(Optional(Any))`; its items are
 checked at runtime when passed on.
 
@@ -406,7 +409,7 @@ output:
   fields, keys, and `<<:` merge sources. Tags under `x-*` keys are ignored. YAML's own
   `!!` tags keep their YAML meaning.
 
-**Tags only check.** A tag never fills in anything and converts only how files are
+**Tags check.** A tag never fills in anything and converts only how files are
 held (a file's mapping at a `file` slot becomes a file; a nested file at an `object`
 slot becomes its mapping). `n: !float ${i}` still delivers an `int`.
 - **Load:** the declared type is compared with the inferred one. Disjoint is a load

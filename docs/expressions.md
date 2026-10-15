@@ -225,8 +225,10 @@ compute a carried boolean directly, for example
 A nested record or list value is typed structurally: each field takes the type of its
 own value. A [tag](syntax.md#typed-slots-yaml-tags) on a slot (`name: !T value`) replaces
 the inferred type with its declared one. The loader rejects it only when the two are
-disjoint; the binder checks the value at runtime. A tag never fills in or converts a
-value.
+disjoint; the binder checks the value at runtime. A tag never fills in a value, and it
+converts only how files are held: in a `file` slot a file's JSON form becomes a file, and
+in an `object` slot a nested file becomes its mapping. Numbers are delivered as given
+(`!float ${i}` delivers an int).
 
 A **prompt** is the strict context: it reads local inputs as bare `${name}`;
 AGENT prompts also read their own declared variables. It renders in
@@ -345,8 +347,8 @@ nodes:
 - Either form delivers the value as given, except how files are held: a file's JSON form
   at a `file` field becomes a file, and a file nested at an `object` field becomes its
   mapping.
-- Only `typedefs:` names are constructors. yian never converts a value, so `${int(x)}` is
-  an unknown function, not a conversion.
+- Only `typedefs:` names are constructors. There are no conversion functions, so
+  `${int(x)}` is an unknown function.
 - `isinstance(x, Buy)` stays the boolean test: it returns `false` where `Buy(x)` fails.
 
 Compose resolves the name at load into the node's type table (`Node.types`), as for

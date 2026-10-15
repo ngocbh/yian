@@ -275,8 +275,10 @@ multi-argument type (`Union`, a multi-value `Literal`, `dict(K, V)`) in `typedef
 and tag by name. A tag ends at a space, so `!Union(A, B)` is a load error that says
 to name it; `[ ] { } ,` in a tag are load errors. Inside `{...}`, quote an unquoted
 multi-argument type or use block style, and put a space after a tag before `,`/`}`.
-Tags only check: no fill-in, no conversion. Quoted values stay text (`!int "5"`
-fails), and values follow YAML 1.2 core rules plus unquoted dates (`!str 30` fails with a hint to quote; `!bool yes` fails: `yes` is text, write `true`). A
+Tags check, never fill in, and convert only how files are held: a `file` slot reads
+`{uri, mime, name}` as a file, an `object` slot reads a nested file as its mapping, and
+numbers are delivered as given (`!float ${i}` stays an int). Quoted values stay text
+(`!int "5"` fails), and values follow YAML 1.2 core rules plus unquoted dates (`!str 30` fails with a hint to quote; `!bool yes` fails: `yes` is text, write `true`). A
 record missing a required single-value tag field fails, naming the field. Load
 rejects a value whose inferred type is disjoint from the declared one; narrower or
 unknown types are checked at runtime, failing the consumer (END for a flow output)

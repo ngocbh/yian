@@ -1078,10 +1078,12 @@ meaning); `SourceCursor.tag`, `tag_definition_id`, `has_value`, and `scalar_text
 it. `compose/helpers/tags.py` is the one slot reader (`read_tag_type`,
 `read_tagged_value` -> `TaggedSlot`, `suggest_tag` for every message spelling). Every
 slot reads through it, and each read records the tag in a ledger so a tag outside a
-slot is a load error (`x-*` keys excepted). A tag only checks and narrows (load:
-`type_relation`; run time: `build_value_as`, `binding.type`); never add a fill-in or
-conversion path. Nested `${...}` stays a `ValueTemplate` evaluated by the binder; do not
-lift it into synthetic nodes, which would run on an untaken CASE branch and could not
+slot is a load error (`x-*` keys excepted). A tag checks and narrows (load:
+`type_relation`; run time: `build_value_as`, `binding.type`) and converts only how files
+are held (`normalize_files`: a `file` position reads `{uri, mime, name}` as a `FileRef`, an
+`object` position reads a nested `FileRef` as its mapping); never add a fill-in or any
+other conversion path. Nested `${...}` stays a `ValueTemplate` evaluated by the binder; do
+not lift it into synthetic nodes, which would run on an untaken CASE branch and could not
 read MAP's `${item}`. Load-time walkers reach nested strings through
 `iter_source_strings` / `map_source_strings` / `binding_input_groups` in
 `nodes/contracts.py`, never a private tree walk. Constructors `${T(...)}` (typedef

@@ -839,8 +839,9 @@ the flow's inferred output contract that `run.py` passes in. A LOOP driver reads
 carried record through its own output contract, and a partial LOOP's omitted field
 through the body's typed input. Backward contexts and `lookup_source` keep the stored
 canonical JSON. Untyped outputs and seeds keep nested files as mappings. A MAP whose body
-returns a partial record gets no list contract (only a whole-value body output is
-inferred as a list), so readers of `${m.output}` in the parent and the run result keep
+returns a partial record gets no list contract (only a body output with an exact
+contract, such as a typed whole value or a record whose every field is typed, is inferred
+as a list), so readers of `${m.output}` in the parent and the run result keep
 its nested files as mappings too.
 Exact contracts also drive node-owned structured generation. For
 an AGENT node,
@@ -1060,9 +1061,11 @@ a mapping or list becomes a typed `Binding` at its position, and a container hol
 or holding a string with a `${...}` span, becomes a `ValueTemplate`. `suggest_tag` spells a
 tagged slot for every message, including the migration errors for the old
 `name: T = value` forms. Each read records the tag's definition id in a ledger; a tag no
-slot consumed is a load error, except under `x-*` keys. A tag only checks and narrows:
+slot consumed is a load error, except under `x-*` keys. A tag checks and narrows:
 `type_relation` at load (disjoint fails, narrower is left to runtime), `build_value_as` at
-run time (`binding.type`). It never fills in a field.
+run time (`binding.type`). It never fills in a field, and it converts only how files are
+held: the binder delivers `normalize_files(type, value)`, so a `file` position holds a
+`FileRef` and an `object` position holds a nested file as its mapping.
 
 `SourceCatalog` is Compose's immutable document-local `OriginResolver`. Its private
 builder maps typed semantic paths to opaque origins while retaining the physical

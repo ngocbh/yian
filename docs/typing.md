@@ -450,9 +450,11 @@ The runtime state primitive the engine owns. Narrow by design:
   LOOP-carried `file`. The run result reads through the flow's inferred output type the
   same way. Live runs, replay and resume, and learnable trace reads agree; the log bytes
   don't change. A `${x.f}` dotted step reads a dict key or a file's `uri`, `mime`, or
-  `name`. An untyped output or seed keeps its nested files as mappings. A MAP whose body
-  returns a record with an untyped field has no inferable list type, so a run result
-  read from it keeps its files as mappings too.
+  `name`. An untyped output or seed keeps its nested files as mappings. A MAP gets a
+  list type only when its body's output has one exact type: a typed whole value, or a
+  record whose every field is typed. A MAP whose body returns a record with an untyped
+  field has no inferable list type, so readers of `${m.output}` in the parent, and a run
+  result read from it, see its nested files as mappings too.
 
 ## Why this shape
 

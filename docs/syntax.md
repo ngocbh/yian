@@ -540,7 +540,11 @@ item, and an `object` record field. A file at the top of an `object` slot still 
 and `Any` and `list(Any)` still reject files. A file inside a typed value keeps its
 type: a `list(file)` item, a record's `file` field, a union member's `file` field, and a
 LOOP-carried `file` reach the next node as a `FileRef`, and so does a file in the run
-result when the flow's output type says `file`. Read a file's fields as `${f.uri}`,
+result when the flow's output type says `file`. A MAP's list is typed only when its
+body's output has one exact type: a typed whole value, or a record whose every field is
+typed. A MAP over a body that returns a record with an untyped field gives readers of
+`${m.output}` in the parent, and the run result, its nested files as mappings. Read a
+file's fields as `${f.uri}`,
 `${f.mime}`, and `${f.name}` (see [References](#references-naming-a-value)).
 
 Load still asks for a `file`-typed source where a typed `file` slot reads a
@@ -742,6 +746,8 @@ returning a nested file (stored as its mapping), and a CODE `output: file` retur
 `{uri, mime, name}`. An untagged union mixing `file` with `object`, `Any`, or a record
 shaped like a file used to load; it is now a load error, so add a tag field.
 `render_as_json` used to render a file as its Python text; it now renders its mapping.
+With a typedef that names `file` (`FileT: file`), `isinstance(x, FileT)` used to be false
+for the mapping `{uri, mime, name}`; it is now true.
 
 ## Typed slots — YAML tags
 
@@ -1104,7 +1110,7 @@ A narrower type is checked when the entry runs, and a failure fails the entry wi
 value entry 'x': 5 does not match declared type str
 ```
 
-A tag only checks; it never fills in a field. `!Buy` names `action: Literal(buy)`, but a
+A tag never fills in a field. `!Buy` names `action: Literal(buy)`, but a
 `Buy` value must still write `action: buy`:
 
 ```text

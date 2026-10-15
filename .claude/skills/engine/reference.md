@@ -854,8 +854,9 @@ and on replay, without changing the record bytes. The run result reads through
 carried record through its output contract and a partial loop's omitted field through
 the body's typed input. Backward contexts and `lookup_source` keep canonical JSON
 (`SourceEntry.stored_value`); untyped outputs and seeds keep nested files as mappings.
-A MAP whose body returns a partial record gets no list contract (only a whole-value
-body output is inferred as a list), so readers of `${m.output}` in the parent and the
+A MAP whose body returns a partial record gets no list contract (only a body output
+with an exact contract, such as a typed whole value or a record whose every field is
+typed, is inferred as a list), so readers of `${m.output}` in the parent and the
 run result keep its nested files as mappings. Every dotted read goes through
 `field_of` (a dict key or a file's `uri`/`mime`/`name`, never `getattr`). Structured
 generation in an AGENT node reads `.type` only from the exact arm. Growth clones retain
@@ -1222,8 +1223,9 @@ character rule, the tag-ends-at-a-space error, and the typedef hint for multi-ar
 types), `read_tagged_value` (cursor -> `TaggedSlot`; nested tags become typed `Binding`s
 inside a `ValueTemplate`), and `suggest_tag` (every message spelling, including the
 migration errors for `name: T = value`). Each read records the tag's definition id in a
-ledger; a tag no slot consumed is a load error, except under `x-*` keys. A tag only checks
-and narrows; it never fills in a field.
+ledger; a tag no slot consumed is a load error, except under `x-*` keys. A tag checks and
+narrows; it never fills in a field and converts only how files are held
+(`normalize_files`).
 
 Inline-body extraction takes one graph-wide nodes snapshot before projection so
 unchanged aliases remain shared. Other source-aware field navigation uses cursors
@@ -1428,7 +1430,8 @@ constructors.
 **Constructors.** `${Buy(...)}` names a typedef and resolves through the same `Node.types`
 table as `isinstance`. The keyword form builds a record from exactly the given fields and
 checks it; the positional form `${Buy(x)}` checks and narrows `x`, exactly like
-`!Buy ${x}`. Neither fills a field or converts. Only typedef names are constructors:
+`!Buy ${x}`. Neither fills a field; both convert only how files are held
+(`normalize_files`). Only typedef names are constructors:
 `${int(x)}` is an unknown function. A nested `call(...)` inside a `ValueTemplate` is a
 load error.
 

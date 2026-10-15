@@ -6,6 +6,7 @@ import pytest
 
 from yian.compile.model import Edge
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
+from yian.compose.helpers.isinstance_types import isinstance_members
 from yian.compose.helpers.types import read_type
 from yian.compose.nodes.base import BuildContext, NodeDescriptor
 from yian.compose.nodes.case import (
@@ -27,6 +28,7 @@ from yian.diagnostics import OriginRef, SourceRange
 from yian.nodes.contracts import ContractOrigins, PartialRecordContract, ValueContract
 from yian.typesys import Type, ValueKind
 from yian.typesys.types import read_typedefs
+from yian.typesys.values import types_overlap
 
 _REGISTRY = read_typedefs(
     {
@@ -39,6 +41,11 @@ _REGISTRY = read_typedefs(
         "Decision": "Union(Buy, Hold, Sell)",
         "BuyOrSell": "Union(Buy, Sell)",
         "Text": {"text": "str"},
+        "Cancel": {"action": "Literal(cancel)", "reason": "str"},
+        "Rest": "Union(Hold, Sell, Cancel)",
+        "Wide": {"action": "Literal(buy, cancel)", "qty": "int", "leg": "Leg"},
+        "SellOrWide": "Union(Sell, Wide)",
+        "TextOrWide": "Union(Text, Wide)",
     }
 )
 
@@ -191,6 +198,29 @@ def test_isinstance_fact_against_the_base_union():
     assert isinstance_fact(DECISION, replace(BUY, nullable=True)) == Members(
         (BUY,), nullable=True
     )
+
+
+def test_isinstance_fact_against_a_partly_shared_union():
+    """A union sharing some base members gives those members when no other member can pass."""
+    assert isinstance_fact(DECISION, _t("Rest")) == Members((HOLD, SELL))
+    assert isinstance_fact(DECISION, _t("Optional(Rest)")) == Members(
+        (HOLD, SELL), nullable=True
+    )
+    assert isinstance_fact(replace(DECISION, nullable=True), _t("Rest")) == Members(
+        (HOLD, SELL)
+    )
+    # `Buy` values can pass `Wide`, so keeping only `Sell` would be unsound.
+    assert types_overlap(BUY, _t("Wide"))
+    assert isinstance_fact(DECISION, _t("SellOrWide")) == Exact(_t("SellOrWide"))
+    assert isinstance_fact(DECISION, _t("TextOrWide")) == Exact(_t("TextOrWide"))
+
+
+def test_isinstance_members_keeps_the_shared_members_only_when_nothing_else_can_pass():
+    assert isinstance_members(DECISION, _t("Rest")) == (HOLD, SELL)
+    assert isinstance_members(DECISION, BUY) == (BUY,)
+    assert isinstance_members(DECISION, _t("SellOrWide")) is None
+    assert isinstance_members(DECISION, TEXT) is None
+    assert isinstance_members(TEXT, TEXT) is None
 
 
 # --------------------------------------------------------------------------- #

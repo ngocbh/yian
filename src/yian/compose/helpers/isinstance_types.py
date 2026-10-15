@@ -4,11 +4,13 @@
 Compose fills that table from the names a node's expressions use, resolved against the
 flow's own `typedefs:` registry, so each flow (root, `defs:`, inline bodies, `uses:`
 children) sees its own types. `isinstance` also takes a builtin scalar name; a
-constructor takes only a `typedefs:` name.
+constructor takes only a `typedefs:` name. `isinstance_members` also says which members of
+a union an `isinstance` check narrows it to.
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Callable
 
 from yian.expr import constructor_names, isinstance_type_names, parse_condition
@@ -17,7 +19,7 @@ from yian.expr.template import Span, scan_template
 from yian.nodes.contracts import binding_source, iter_source_strings
 from yian.typesys import TypeCheckError
 from yian.typesys.types import TypeRegistry, type_for
-from yian.typesys.values import Type
+from yian.typesys.values import Type, canonical_union_order, types_overlap
 
 __all__ = [
     "BUILTIN_TYPE_NAMES",
@@ -25,6 +27,7 @@ __all__ = [
     "collect_isinstance_names",
     "constructor_type_fn",
     "expression_trees",
+    "isinstance_members",
     "resolve_constructor_type",
     "resolve_isinstance_type",
 ]
@@ -197,3 +200,43 @@ def constructor_type_fn(registry: TypeRegistry) -> Callable[[str], Type | None]:
         return resolved[name]
 
     return type_fn
+
+
+def isinstance_members(base_type: Type, typ: Type) -> tuple[Type, ...] | None:
+    """Return the members of a union `base_type` that pass `isinstance(x, typ)`, if known.
+
+    The answer is the base members equal to a member of `typ` (ignoring nullability),
+    and only when no other base member could pass the check. It does not check whether
+    every `base_type` value already fits `typ`; callers check that first.
+
+    Args:
+        base_type (`Type`):
+            The type of the value being tested.
+        typ (`Type`):
+            The type the check names. A union names each of its members.
+
+    Returns:
+        `tuple[Type, ...] | None`:
+            The shared members in canonical union order, or `None` when `base_type` is
+            no union, shares no member with `typ`, or has another member that `typ` may
+            admit.
+
+    Example:
+        For `Union[Buy, Hold, Sell]`, `Union[Hold, Sell, Cancel]` gives `(Hold, Sell)`
+        and `Buy` gives `(Buy,)`; a `typ` whose member admits some `Buy` values but is
+        no base member gives `None`.
+    """
+    members = base_type.variants
+    if members is None:
+        return None
+    strict = replace(typ, nullable=False)
+    wanted = strict.variants or (strict,)
+    shared = [member for member in members if any(member == w for w in wanted)]
+    # The runtime check is the write-boundary check, so a base member that is not a
+    # member of `typ` but overlaps it can still pass. Leaving it out would be unsound
+    # (the branch could see a value the answer excludes), and keeping it could make the
+    # answer less permissive than `typ` (its values need not fit `typ`), so give no answer.
+    passing = [member for member in members if types_overlap(member, strict)]
+    if shared and shared == passing:
+        return canonical_union_order(shared)
+    return None

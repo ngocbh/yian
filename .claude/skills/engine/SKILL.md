@@ -347,10 +347,13 @@ this model whenever you design anything:
   `partial_union_fields=True` because loader-time narrowing is not recorded on the
   fragment. Compose's narrowing pass (`compose/validate/narrowing.py`) gives each node a
   view of the producer/flow-input contracts under the `on:`/`isinstance` CASE branches
-  that route it; the reference, call-type, and exhaustiveness checks read
-  `Narrowing.for_node` (the reference check uses `for_param` for `isinstance`-guarded
-  searched-CASE params). Runtime routing does not change. A value-producing CASE
-  (read as `${case.output}`, or routed to by one) must be exhaustive (an
+  that route it (an `isinstance` fact keeps the base members `T` shares if it shares some
+  and no other member overlaps `T`, else is `Exact(T)`, and is none if the base already
+  fits `T`; `isinstance_members`); the reference,
+  call-type, and exhaustiveness checks read `Narrowing.for_node` (the reference check
+  uses `for_param` for `isinstance`-guarded searched-CASE params). Runtime routing does
+  not change. A value-producing CASE (read as `${case.output}`, or routed to by one)
+  must be exhaustive (an
   `else:`, every tag of a non-nullable enum `on:`, or `true` and `false` for a
   non-nullable `bool` `on:`, compared as typed values), with a flow-input `on:` resolved
   for it. `case_exhaustive.py`'s `check_case_when_values` runs right after narrowing: an

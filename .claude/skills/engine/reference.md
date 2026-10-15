@@ -1082,13 +1082,16 @@ node builds. A fact for a base path (`<node>.output[.path]`, `input.<name>[.path
 `Members(S)` (members of the base's own union, with nullability) or `Exact(T)`. An `on:`
 CASE over a union tag gives each `when:` handle its members and `else:` the unlisted ones;
 a searched CASE's top-level `isinstance(<direct ref>, T)` conjunct gives its handle a
-fact. A searched CASE's `__rN` param whose every read follows an `isinstance` conjunct in
-the same `and` chain gets its own view (`Narrowing.param_views`, read through
-`for_param`). Facts propagate in Kahn's order over data, CASE, and `depends_on` edges:
-control edges union, each required data group unions its producers, and contributions
-intersect (`union_facts`/`intersect_facts`; losing information is always sound). Optional
-groups (including a searched CASE's read inside a `:-`/`:?`/`|`) and `runs_after`
-contribute nothing; unordered (cycle) nodes get no facts so
+fact. The fact is `Members` of the base members `T` shares, when it shares some and no
+other base member overlaps `T`, and `Exact(T)` otherwise; a base whose type already fits
+`T` gets none. The LOOP predicate walk uses the same rule (`isinstance_members` in
+`compose/helpers/isinstance_types.py`). A searched CASE's `__rN` param whose every read
+follows an `isinstance` conjunct in the same `and` chain gets its own view
+(`Narrowing.param_views`, read through `for_param`). Facts propagate in Kahn's order over
+data, CASE, and `depends_on` edges: control edges union, each required data group unions
+its producers, and contributions intersect (`union_facts`/`intersect_facts`; losing
+information is always sound). Optional groups (including a searched CASE's read inside
+a `:-`/`:?`/`|`) and `runs_after` contribute nothing; unordered (cycle) nodes get no facts so
 `reject_cycles` reports the cycle. `Narrowing.for_node(id)` returns the node's view, which
 the call-type and exhaustiveness checks read; the reference check reads `for_param`, which
 falls back to `for_node`. Flow outputs use the unnarrowed maps. Build-time seams (inline

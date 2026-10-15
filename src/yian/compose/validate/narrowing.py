@@ -37,7 +37,10 @@ from yian.compose.helpers.output_contracts import (
 )
 from yian.compose.nodes.base import NodeDescriptor
 from yian.diagnostics import SourceRange
-from yian.compose.helpers.isinstance_types import resolve_isinstance_type
+from yian.compose.helpers.isinstance_types import (
+    isinstance_members,
+    resolve_isinstance_type,
+)
 from yian.compose.nodes.case import (
     CaseDescriptor,
     IsinstanceCheck,
@@ -190,24 +193,19 @@ def isinstance_fact(base_type: Type, typ: Type) -> Optional[Fact]:
         `Fact | None`:
             `None` when every `base_type` value already satisfies `typ`, since `typ`
             would only widen it (`object`, say, would turn off field checks);
-            `Members` when `typ` (ignoring nullability) equals a member of the base's
-            union, or is a union of its members; otherwise `Exact(typ)`.
+            `Members` of the base union's members that `typ` (ignoring nullability)
+            shares, when no other member could pass it; otherwise `Exact(typ)`.
 
     Example:
-        For `Union[Buy, Hold, Sell]`, `Buy` gives `Members((Buy,))`, an unrelated
-        record gives `Exact` of that record, and `object` gives `None`.
+        For `Union[Buy, Hold, Sell]`, `Buy` gives `Members((Buy,))`,
+        `Union[Hold, Sell, Cancel]` gives `Members((Hold, Sell))`, an unrelated record
+        gives `Exact` of that record, and `object` gives `None`.
     """
     if types_compatible(base_type, typ):
         return None
-    strict = replace(typ, nullable=False)
-    members = base_type.variants
-    if members is not None:
-        if _contains(members, strict):
-            return Members((strict,), typ.nullable)
-        if strict.variants is not None and all(
-            _contains(members, member) for member in strict.variants
-        ):
-            return Members(strict.variants, typ.nullable)
+    kept = isinstance_members(base_type, typ)
+    if kept is not None:
+        return Members(kept, typ.nullable)
     return Exact(typ)
 
 

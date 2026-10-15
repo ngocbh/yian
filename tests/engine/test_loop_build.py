@@ -1341,6 +1341,58 @@ def test_predicate_isinstance_check_with_an_unknown_type_reports_the_type():
     assert "union members" not in message
 
 
+# `Step` and `Finished` share `Done` and `Skip`; `Finished` also has `Other`, which no `Step`
+# value can be, so `isinstance(r, Finished)` narrows `r` to `Union(Done, Skip)`.
+PARTLY_SHARED_STATE = """
+id: loop-partly-shared
+name: loop_partly_shared
+typedefs:
+  Done: {answer: str}
+  More: {hint: str}
+  Skip: {answer: str, why: str}
+  Other: {x: int}
+  Step: Union(Done, More, Skip)
+  Finished: Union(Done, Skip, Other)
+nodes:
+  ask:
+    kind: loop
+    PRED
+    input:
+      n: 0
+      r: !Step {"hint":"start"}
+    nodes:
+      step:
+        kind: code
+        input:
+          n: ${input.n}
+        output:
+          n: int
+          r: Step
+        code: |
+          n = inputs["n"] + 1
+          return {"n": n, "r": {"answer": "ok"} if n >= 3 else {"hint": "again"}}
+    output: ${step.output}
+output: ${ask.output}
+"""
+
+
+def test_predicate_isinstance_of_a_partly_shared_union_reads_the_shared_fields():
+    pred = "until: isinstance(r, Finished) and r.answer == 'ok'"
+    flow = load_flow(_swap(PARTLY_SHARED_STATE, "PRED", pred))
+    result = run_flow(flow, {})
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"n": 3, "r": {"answer": "ok"}}
+
+
+def test_predicate_isinstance_of_a_partly_shared_union_rejects_a_member_only_field():
+    pred = "until: isinstance(r, Finished) and r.why == 'x'"
+    with pytest.raises(LoadError) as e:
+        load_flow(_swap(PARTLY_SHARED_STATE, "PRED", pred))
+    message = str(e.value)
+    assert "reads field 'why', which only 1 of 2 union members have" in message
+    assert "check the member first with `isinstance(r, <Type>) and ...`" in message
+
+
 # A named body taking `n: <n_type>` and `k: int`, returning only `k`, so `n` carries over
 # (a partial loop). The carried `extra` is not a body input, so it is never checked.
 _SEEDED = """id: p

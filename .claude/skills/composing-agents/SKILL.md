@@ -861,7 +861,9 @@ ref to the tag (not a coalesce); a `when:` that isn't a tag is a load error (``c
 'route': `when: buyy` is not a tag of `on: ${d.output.action}` (`Literal(buy, sell)`);
 use one of: buy, sell``). A searched `case`
 narrows with a top-level `and` part `isinstance(<ref>, T)`:
-`when: isinstance(d.output, Buy) and d.output.qty > 5`. Its `else:` doesn't narrow.
+`when: isinstance(d.output, Buy) and d.output.qty > 5`. A union `T` sharing some
+members narrows to just those members, unless another member could also pass the check.
+Its `else:` doesn't narrow.
 A searched `case` whose `when:` reads a node only under such a default doesn't pass
 that node's narrowing to its branches. Inline
 child bodies are typed before narrowing; read member fields in a branch node.

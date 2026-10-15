@@ -270,7 +270,8 @@ a second runtime authority.
 `compose/helpers/isinstance_types.py` collects the type names `isinstance` calls use and
 resolves them against the owning flow's `typedefs:`; `compose/build` stores the result on
 `Node.types` after the START/END boundary is synthesized, so the evaluator never sees a
-registry. `compose/validate/narrowing.py` computes union narrowing from built CASE
+registry. `isinstance_types.py` also decides which union members an `isinstance` check
+narrows to. `compose/validate/narrowing.py` computes union narrowing from built CASE
 descriptors and edges and hands each node a view of the producer and flow-input contracts;
 the reference, call-type, and exhaustiveness validators read that view, while the
 field-read rule itself stays in `nodes/contracts.py`. Narrowing is load-time only and adds

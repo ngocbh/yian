@@ -53,24 +53,24 @@ def test_stored_output_is_what_iteration_yields(fn, output, expected):
 
 def test_a_cycle_through_a_subclass_reads_it_once():
     codefns.COUNTED.clear()
-    _failure("cycle_through_subclass")
+    failure = _failure("cycle_through_subclass")
+    assert failure.message == "output at [0][0]: value contains itself"
     assert [sub.iterations for sub in codefns.COUNTED] == [1]
 
 
 def test_a_yielded_nan_is_located():
     message = _failure("shows_a_nan").message
-    assert "non-finite" in message
-    assert "s[0]" in message
+    assert message == "output at s[0]: non-finite number nan is not a yian value"
 
 
 def test_a_yielded_set_is_located():
     message = _failure("shows_a_set").message
-    assert "is not a JSON value" in message
-    assert "s[0]" in message
+    assert message == "output at s[0]: {1} is not a JSON value"
 
 
 def test_a_yielded_text_key_is_required():
-    assert "object keys must be text, got 1" in _failure("items_int_key").message
+    message = _failure("items_int_key").message
+    assert message == "output at s: object keys must be text, got 1"
 
 
 @pytest.mark.parametrize("output", [None, "object"])

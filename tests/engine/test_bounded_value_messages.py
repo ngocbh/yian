@@ -191,6 +191,8 @@ def test_list_yielding_a_deep_list_fails_the_output_contract():
     assert failure.node_id == "b"
     assert "value nests deeper than 100 levels" in failure.message
     assert "s[0][0]" in failure.message
+    assert "canonical data nesting" not in failure.message
+    assert "Circular reference" not in failure.message
 
 
 def test_value_repr_raises_a_bad_defaults_variable(monkeypatch) -> None:

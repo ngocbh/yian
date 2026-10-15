@@ -781,11 +781,17 @@ def test_imports_and_a_calling_defs_chain_count_apart(tmp_path: Path) -> None:
         load_flow(_importing("root", {"first": "u0"}), search_paths=[tmp_path])
 
 
-def test_imports_at_the_limit_over_uncalled_defs_at_the_limit_load(tmp_path: Path) -> None:
+_UNCALLED_DEFS = (
+    _defs_chain(51, prefix="k").split("nodes:\n  top:\n")[0] + "nodes:\n" + _ROOT_LEAF
+)
+
+
+# A last file that calls its chain is the deepest accepted load, since importing it
+# rebases a compiled graph 50 levels deep.
+@pytest.mark.parametrize("last", [_defs_chain(50), _UNCALLED_DEFS], ids=["called", "uncalled"])
+def test_imports_at_the_limit_over_defs_at_the_limit_load(tmp_path: Path, last: str) -> None:
     texts = _chain_texts(50, calls=False)
-    texts["u49"] = (
-        _defs_chain(51, prefix="k").split("nodes:\n  top:\n")[0] + "nodes:\n" + _ROOT_LEAF
-    )
+    texts["u49"] = last
     _write_files(tmp_path, texts)
     with _stack_headroom(frames=800):
         load_flow(_importing("root", {"first": "u0"}), search_paths=[tmp_path])

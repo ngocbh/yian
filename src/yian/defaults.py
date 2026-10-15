@@ -95,9 +95,9 @@ ENTRIES: tuple[Entry, ...] = (
     ),
     # Loading a body or a `uses:` file recurses through the loader, so the limit holds
     # both chains. A 50-level chain loads, runs, and resumes within Python's default
-    # recursion limit; the worst accepted load, 50 imports whose last file holds an
-    # uncalled 50-level defs chain, peaks near 670 frames on Python 3.12. Deeper chains
-    # are not proven to fit, so the variable can only lower it.
+    # recursion limit; the worst accepted load, 50 imports whose last file calls a
+    # 50-level chain, peaks near 735 frames on Python 3.10 and 3.12. Deeper chains are
+    # not proven to fit, so the variable can only lower it.
     Entry(
         "MAX_CALL_NESTING",
         default=50,

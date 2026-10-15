@@ -2695,10 +2695,12 @@ The loaded flow records its chain as `ComposedFlow.import_depth`; a flow a host
 Changed: a chain of 51 `uses:` files that calls through each import used to fail at
 the root `call:`; it now fails at the `uses:` alias that crosses the limit. An import
 chain more than 50 files deep that never calls through used to load; it now fails at
-load. A chain of about 120 or more such files used to fail with "could not rebase child"
-or "could not resolve" and "maximum recursion depth exceeded". A cycle across 50 or more
-files reports this limit instead of the cross-file cycle: a root outside the cycle makes
-a 50-file cycle 51 deep before it closes.
+load. Under the default recursion limit, a chain of about 245 or more such files used to
+fail with "could not resolve" and "maximum recursion depth exceeded", and a chain of
+about 170 or more files that call through used to fail with "could not rebase child" and
+"maximum recursion depth exceeded". A cycle across 50 or more files reports this limit
+instead of the cross-file cycle: a root outside the cycle makes a 50-file cycle 51 deep
+before it closes.
 
 Changed: a chain deeper than about 95 levels used to crash at load with a
 `RecursionError` or "could not resolve callable ...: maximum recursion depth exceeded".

@@ -103,7 +103,7 @@ load, run, and resume with stack to spare:
   and resume within Python's default recursion limit, and deeper chains are not
   shown to fit. A chain of `uses:` imports is held to the same limit, since loading
   each file recurses too; the deepest accepted load measured, 50 imports whose last
-  file holds an uncalled 50-level `defs:` chain, peaks near 670 frames on Python 3.12.
+  file calls a 50-level chain, peaks near 735 frames on Python 3.10 and 3.12.
 - `YIAN_MAX_YAML_NESTING` can only be lowered (maximum 200): composing and walking a
   document 200 levels deep stays within Python's default recursion limit.
 - `YIAN_MAX_TYPE_NESTING` may be raised to 125, the depth proven for type text: type

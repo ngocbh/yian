@@ -814,16 +814,59 @@ def _resolve_union(t: UnionExpr, registry: TypeRegistry, _seen: frozenset[str]) 
         for i, (a_name, _, a) in enumerate(members):
             for b_name, _, b in members[i + 1:]:
                 if types_overlap(a, b):
-                    raise _overlap_error(label, a_name, b_name)
+                    raise _overlap_error(
+                        label, a_name, b_name, files=_holds_file(a) or _holds_file(b)
+                    )
     return union
 
 
-def _overlap_error(label: str, a_name: str, b_name: str) -> TypeCheckError:
-    """Build the error for two union members that can match the same value."""
+def _holds_file(t: Type) -> bool:
+    """Whether a record field of `t`, at any record depth, is typed `file`.
+
+    Args:
+        t (`Type`):
+            A resolved union member, or one of its field types.
+
+    Returns:
+        `bool`:
+            `True` when `t` is `file`, or a record or union with such a field. List
+            elements are not walked, since any two lists already overlap.
+    """
+    if t.kind is ValueKind.FILE:
+        return True
+    if t.fields is not None:
+        return any(_holds_file(field) for field in t.fields.values())
+    return t.variants is not None and any(_holds_file(member) for member in t.variants)
+
+
+def _overlap_error(
+    label: str, a_name: str, b_name: str, *, files: bool = False
+) -> TypeCheckError:
+    """Build the error for two union members that can match the same value.
+
+    Args:
+        label (`str`):
+            The union as written, e.g. `Union(Bull, Bear)`.
+        a_name (`str`):
+            One overlapping member's name.
+        b_name (`str`):
+            The other overlapping member's name.
+        files (`bool`, *optional*, defaults to `False`):
+            Whether either member holds a `file` field, which overlaps more than its
+            name suggests, so the message says why.
+
+    Returns:
+        `TypeCheckError`:
+            The load error naming both members and the tag field that separates them.
+    """
+    why = (
+        " (a `file` slot reads `{uri, mime, name}`, so `file` overlaps `object`, `Any` "
+        "and a record of that shape)" if files else ""
+    )
     return TypeCheckError(
-        f"{label}: members {a_name!r} and {b_name!r} can match the same value; add a tag "
-        f"field every member declares as a single-value Literal, with a different value "
-        f"in each member, e.g. kind: {literal_label([a_name.lower()])}"
+        f"{label}: members {a_name!r} and {b_name!r} can match the same value{why}; add a "
+        f"tag field every member declares as a single-value Literal, with a different "
+        f"value in each member, e.g. kind: {literal_label([a_name.lower()])}"
     )
 
 

@@ -408,7 +408,10 @@ inline-body arguments), and flow outputs.
 - Each reader records the tags it reads in a ledger. A tag no slot read is a load error,
   except under `x-*` keys.
 
-A tag only checks and narrows. It never adds a field or converts a value. At load, a
+A tag checks and narrows. It never adds a field, and it converts only how files are held:
+in a `file` slot a file's JSON form `{uri, mime, name}` becomes a file, and in an `object`
+slot a nested file becomes its mapping. Numbers and other values are delivered as given.
+At load, a
 disjoint inferred type is an error and a narrower one is left to the runtime check;
 `check typed inputs` and `check typed outputs` run that comparison. At run time the binder
 checks the value with `build_value_as` and fails with `binding.type`.

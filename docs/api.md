@@ -1555,7 +1555,7 @@ The terminal outcome of a fresh or recovered run exposes these public fields:
 | `status` | exactly `"succeeded"` or `"failed"` |
 | `run_id` | durable identity shared by the state and log |
 | `log` | durable JSONL `Path`, or `None` for a process-local fresh run |
-| `output` | terminal flow value on success; otherwise `None` |
+| `output` | terminal flow value on success; otherwise `None`. Each position the flow's inferred output type marks `file` holds a `FileRef`, as `RunSucceeded.output` does; untyped files stay mappings |
 | `failure` | canonical `Failure` on failure; otherwise `None` |
 | `events` | post-durable observer events published during this call only; in-loop AGENT observers are excluded |
 | `learning` | learning projection of the last observed backward outcome; `None` before an attempt is observed or when the run had no memory |

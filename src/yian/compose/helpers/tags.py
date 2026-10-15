@@ -405,7 +405,8 @@ def any_source_hint(
     Load can't tell which JSON value an `Any` holds, so a tag checks it at runtime or a
     `case` narrows it. There is no advice when the source isn't `Any`, the slot is `Any`
     or `Optional(Any)` (only nullability failed), or every non-null value of the slot
-    holds a file (no `Any` value fits).
+    holds a file: load treats such a slot as disjoint from `Any`, although a `file` slot
+    reads a file's JSON form at runtime, where load can't tell.
 
     Args:
         name (`str`): The slot's name.

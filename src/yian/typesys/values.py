@@ -831,8 +831,11 @@ class FileRef(BaseModel):
     """A minimal, opaque file reference — reserved placeholder.
 
     Carries only what is needed to round-trip through the typed-value wire
-    representation used by run records. Storage, transfer, size and markdown
-    rendering are deliberately absent until file handling is actually built.
+    representation used by run records. Its JSON form is the mapping
+    `{"uri": ..., "mime": ..., "name": ...}`: a `file` slot reads that mapping as a
+    `FileRef`, and an `object` slot reads a nested `FileRef` as that mapping. Storage,
+    transfer, size and markdown rendering are deliberately absent until file handling
+    is actually built.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -840,6 +843,43 @@ class FileRef(BaseModel):
     uri: str
     mime: Optional[str] = None
     name: Optional[str] = None
+
+
+# A file's fields: the keys of its JSON form and the only names a dotted read gives.
+_FILE_FIELDS = frozenset({"uri", "mime", "name"})
+
+
+def field_of(value: Any, name: str) -> tuple[bool, Any]:
+    """Read field `name` of `value`, as a dotted `${x.name}` read sees it.
+
+    A `dict` gives its key `name`; a `FileRef` gives its `uri`, `mime` or `name`. No
+    other name is read from a `FileRef`, and nothing is read from any other value, so a
+    dotted read never reaches a Python attribute such as `__class__`.
+
+    Args:
+        value (`Any`):
+            The value being read.
+        name (`str`):
+            The field name, one dotted step.
+
+    Returns:
+        `tuple[bool, Any]`:
+            `(True, field value)` when `value` has the field, else `(False, None)`. A
+            present field may hold `None`, as a file's unset `mime` does.
+
+    Example:
+        `field_of(FileRef(uri="a"), "uri")` returns `(True, "a")`;
+        `field_of(FileRef(uri="a"), "__class__")` returns `(False, None)`.
+    """
+    if isinstance(value, dict):
+        # Presence uses `dict`'s own lookup, so a subclass's `__contains__` never runs; the
+        # value is read with `get`, as a dotted read always has been.
+        if not dict.__contains__(value, name):
+            return False, None
+        return True, value.get(name)
+    if isinstance(value, FileRef) and name in _FILE_FIELDS:
+        return True, getattr(value, name)
+    return False, None
 
 
 # --------------------------------------------------------------------------- #
@@ -1790,7 +1830,9 @@ def requires_file(typ: Type) -> bool:
     A list counts when its element is a non-nullable type that requires a file: the
     empty list is shared by every list type and is not counted as a shared value. A
     record counts when a required, non-nullable field requires a file; a union when
-    every member does.
+    every member does. Load treats such a type as disjoint from `Any`, although a
+    `file` slot reads a file's JSON form (an `Any` value) at runtime, where load can't
+    tell.
 
     Args:
         typ (`Type`):
@@ -1839,6 +1881,13 @@ def _bounds_intersect(a: Type, b: Type) -> bool:
 
 _TEXT_KINDS = frozenset({ValueKind.STRING, ValueKind.DATE, ValueKind.DATETIME})
 _NUMERIC_KINDS = frozenset({ValueKind.INTEGER, ValueKind.NUMBER})
+_OPTIONAL_STR = Type(kind=ValueKind.STRING, nullable=True)
+# The record a file's JSON form satisfies; a record overlapping it overlaps `file`.
+_FILE_FORM = Type(
+    kind=ValueKind.OBJECT,
+    fields={"uri": Type.scalar(ValueKind.STRING), "mime": _OPTIONAL_STR, "name": _OPTIONAL_STR},
+    required=frozenset({"uri", "mime", "name"}),
+)
 
 
 def types_overlap(a: Type, b: Type) -> bool:
@@ -1847,7 +1896,8 @@ def types_overlap(a: Type, b: Type) -> bool:
     The check is conservative: it may say two types overlap when no value
     satisfies both, but never the reverse. It decides whether an untagged union's
     members can be told apart from the data alone. `Any` overlaps every type
-    except `None` and a bare `file`.
+    except `None`. Since a `file` slot reads a file's JSON form `{uri, mime, name}`,
+    `file` overlaps plain `object`, `Any`, and every record that admits that mapping.
 
     Args:
         a (`Type`):
@@ -1867,10 +1917,7 @@ def types_overlap(a: Type, b: Type) -> bool:
         return True
     if a.kind is ValueKind.ANY or b.kind is ValueKind.ANY:
         other = b if a.kind is ValueKind.ANY else a
-        # Only a bare `file` is excluded: a container that holds files can still share
-        # a value with `Any` (an empty list, say), and this check may only err towards
-        # overlap.
-        return other.kind not in (ValueKind.NONE, ValueKind.FILE)
+        return other.kind is not ValueKind.NONE
     if a.variants is not None:
         return any(types_overlap(member, b) for member in a.variants)
     if b.variants is not None:
@@ -1895,6 +1942,11 @@ def types_overlap(a: Type, b: Type) -> bool:
         return _bounds_intersect(a, b)
     if a.kind in _TEXT_KINDS and b.kind in _TEXT_KINDS:
         return a.kind is b.kind or ValueKind.STRING in (a.kind, b.kind)
+    if ValueKind.FILE in (a.kind, b.kind) and a.kind is not b.kind:
+        other = b if a.kind is ValueKind.FILE else a
+        if _is_plain_object(other):
+            return True
+        return other.fields is not None and _records_overlap(other, _FILE_FORM)
     return a.kind is b.kind
 
 
@@ -1961,15 +2013,97 @@ def _scalar_matches(declared: ValueKind, value: Any) -> bool:
     if declared == ValueKind.OBJECT:
         return isinstance(value, dict)
     if declared == ValueKind.FILE:
-        return isinstance(value, FileRef)
+        return isinstance(value, FileRef) or _is_file_form(value)
     return False
 
 
 def _coerce_scalar(declared: ValueKind, value: Any, path: tuple[str | int, ...]) -> Any:
-    """Widen an int filling a `float` slot; return any other value unchanged."""
+    """Widen an int in a `float` slot and read a file's JSON form in a `file` slot.
+
+    Any other value is returned unchanged.
+    """
     if declared == ValueKind.NUMBER and isinstance(value, int) and not isinstance(value, bool):
         return _widen_int(value, path)
+    if declared == ValueKind.FILE and _is_file_form(value):
+        return FileRef(**value)
     return value
+
+
+def _is_file_form(value: Any) -> bool:
+    """Whether `value` is a file's JSON form.
+
+    That is a `dict` with exactly the keys `uri` (`str`), `mime` and `name` (each `str`
+    or `None`).
+
+    Args:
+        value (`Any`):
+            The value to test.
+
+    Returns:
+        `bool`:
+            `True` when a `file` slot would read `value` as a `FileRef`.
+    """
+    return (
+        isinstance(value, dict)
+        and value.keys() == _FILE_FIELDS
+        and isinstance(value["uri"], str)
+        and all(value[key] is None or isinstance(value[key], str) for key in ("mime", "name"))
+    )
+
+
+def _files_as_mappings(value: Any) -> Any:
+    """Return `value` with each nested `FileRef` replaced by its JSON form.
+
+    Only the containers on the path to a `FileRef` are copied (a `dict` as a `dict`, a
+    `list` or `tuple` as a `list`); everything else is shared with `value`, which is
+    returned itself when it holds no `FileRef`. A value with a container inside itself
+    is returned itself, for the JSON walk to reject. The walk uses an explicit stack,
+    like `_json_value_error`.
+
+    Args:
+        value (`Any`):
+            The value at an `object` position.
+
+    Returns:
+        `Any`:
+            `value`, or a copy whose nested files are mappings.
+    """
+    entries = _json_entries(value)
+    if entries is None:
+        return value
+    # Each frame holds its entries iterator, the container, its key in the parent, and
+    # the replaced children found so far.
+    stack: list[tuple[Iterator[tuple[Any, Any]], Any, Any, dict[Any, Any]]] = [
+        (entries, value, None, {})
+    ]
+    active = {id(value)}
+    while True:
+        iterator, container, key_in_parent, replaced = stack[-1]
+        entry = next(iterator, None)
+        if entry is not None:
+            key, child = entry
+            if isinstance(child, FileRef):
+                replaced[key] = child.model_dump()
+                continue
+            child_entries = _json_entries(child)
+            if child_entries is not None:
+                if id(child) in active:
+                    return value
+                stack.append((child_entries, child, key, {}))
+                active.add(id(child))
+            continue
+        stack.pop()
+        active.discard(id(container))
+        result = container
+        if replaced:
+            if isinstance(container, dict):
+                result = {**container, **replaced}
+            else:
+                result = [replaced.get(index, item) for index, item in enumerate(container)]
+        if not stack:
+            return result
+        if result is not container:
+            stack[-1][3][key_in_parent] = result
 
 
 def _widen_int(value: int, path: tuple[str | int, ...]) -> float:
@@ -2139,13 +2273,18 @@ def build_value_as(declared: "ValueKind | Type", value: Any) -> TypedValue:
 
     This is the write-boundary check the variable pool uses against each declared
     output type, so a node returning the wrong type fails loudly at the write rather
-    than silently downstream. The only coercion is widening: an `int` fills a `float`
-    slot at any depth (a record field, a list item, a union member's field).
+    than silently downstream. Three conversions apply at any depth (a record field, a
+    list item, a union member's field): an `int` filling a `float` slot widens; a file's
+    JSON form `{"uri": str, "mime": str | None, "name": str | None}` (exactly those
+    keys) filling a `file` slot becomes a `FileRef`; and a `FileRef` nested inside an
+    `object` value or `list(object)` item becomes that mapping, copying only the
+    containers on its path.
 
     `Any` accepts any non-null JSON value and stores it unchanged in its natural
     carrier (a list as `list[Any]`). An `object` value, a `list(object)` item, and a
     `list[Any]` item must be JSON values: a `dict` with only `str` keys, a list or
-    tuple, `None`, `bool`, `int`, `float`, or `str`, nested.
+    tuple, `None`, `bool`, `int`, `float`, or `str`, nested. A `FileRef` is not one, so
+    it fails as an `object` value itself and anywhere in an `Any` or `list[Any]` value.
 
     Args:
         declared (`ValueKind | Type`):
@@ -2338,15 +2477,14 @@ def _build_for_union(
             f"{value_repr(value)} is not an object for a union type", path=path
         )
     members = typ.variants
-    tag_fields = _members_tag_fields(members)
-    if tag_fields:
-        field = tag_fields[0]
+    tagged = _tagged_member(members, value)
+    if tagged is not None:
+        field, member = tagged
         if field not in value:
             raise TypeCheckError(
                 f"missing tag field {field!r} (expected one of {_tag_values(members, field)})",
                 path=path + (field,),
             )
-        member = _member_with_tag(members, field, value[field])
         if member is None:
             raise TypeCheckError(
                 f"{value_repr(value[field])} is not a tag of the union "
@@ -2365,6 +2503,31 @@ def _build_for_union(
             reasons.append(f"{canonical_type_label(member)}: {exc}")
     summary = f"value matches no member of {canonical_type_label(typ)}"
     raise _NoUnionMember(summary + ": " + "; ".join(reasons), summary=summary, path=path)
+
+
+def _tagged_member(
+    members: tuple[Type, ...], value: dict[str, Any]
+) -> Optional[tuple[str, Optional[Type]]]:
+    """Return a tagged union's first tag field and the member `value`'s tag selects.
+
+    Args:
+        members (`tuple[Type, ...]`):
+            The union's members.
+        value (`dict[str, Any]`):
+            The object being read as the union.
+
+    Returns:
+        `tuple[str, Type | None] | None`:
+            `None` when the members share no tag field (an untagged union); else the
+            first tag field and the member whose tag equals `value`'s, or `None` for
+            the member when that field is missing or holds an unknown tag.
+    """
+    tag_fields = _members_tag_fields(members)
+    if not tag_fields:
+        return None
+    field = tag_fields[0]
+    member = _member_with_tag(members, field, value[field]) if field in value else None
+    return field, member
 
 
 def _tag_values(members: tuple[Type, ...], field: str) -> list[str]:
@@ -2431,6 +2594,7 @@ def _build_scalar_or_list(
                         path=path + (index,),
                     )
                 if element is ValueKind.OBJECT:
+                    items[index] = item = _files_as_mappings(item)
                     _require_json_value(item, path + (index,))
             items = [
                 _coerce_scalar(element, item, path + (index,))
@@ -2444,5 +2608,153 @@ def _build_scalar_or_list(
             message += f": {_temporal_error(declared, value)}"
         raise TypeCheckError(message, path=path)
     if declared is ValueKind.OBJECT:
+        value = _files_as_mappings(value)
         _require_json_value(value, path)
     return _SCALAR_VALUE_CLASS[declared](value=_coerce_scalar(declared, value, path))
+
+
+def normalize_files(typ: Type, value: Any) -> Any:
+    """Return `value` with only its file and object representation read as `typ` reads it.
+
+    At a `file` position a file's JSON form becomes a `FileRef`; at an `object` position
+    (a plain `object` value, a `list(object)` item, an `object` record field) each nested
+    `FileRef` becomes its JSON form. Nothing else converts: an `int` at a `float`
+    position stays an `int`, and a value that does not fit `typ` is walked as far as it
+    fits and otherwise kept. A union member is picked as `build_value_as` picks it: by
+    its tag, else the first member the value satisfies. Only the containers on the path
+    to a change are copied.
+
+    Args:
+        typ (`Type`):
+            The type `value` is read as, typically one it was already checked against.
+        value (`Any`):
+            The plain value to read.
+
+    Returns:
+        `Any`:
+            `value` itself when nothing changes (always so when `typ` has no `file` and
+            no `object` position), else a copy with the changed parts.
+
+    Example:
+        With `Rec` the record `{f: file, n: float}`,
+        `normalize_files(Rec, {"f": {"uri": "a", "mime": None, "name": None}, "n": 1})`
+        returns `{"f": FileRef(uri="a"), "n": 1}`.
+    """
+    if value is None or not _reads_files(typ):
+        return value
+    if typ.variants is not None:
+        member = _union_member_of(typ, value)
+        return value if member is None else normalize_files(member, value)
+    if typ.fields is not None:
+        if not isinstance(value, dict):
+            return value
+        changed = {
+            name: normalized
+            for name, field in typ.fields.items()
+            if name in value
+            and (normalized := normalize_files(field, value[name])) is not value[name]
+        }
+        return {**value, **changed} if changed else value
+    if typ.kind.is_list():
+        if not isinstance(value, (list, tuple)):
+            return value
+        # `_reads_files` admits a list only with an element type or as flat `list(object)`.
+        if typ.element is not None:
+            items = [normalize_files(typ.element, item) for item in value]
+        else:
+            items = [_files_as_mappings(item) for item in value]
+        if all(new is old for new, old in zip(items, value)):
+            return value
+        return items
+    if typ.kind is ValueKind.FILE:
+        return FileRef(**value) if _is_file_form(value) else value
+    if typ.kind is ValueKind.OBJECT:
+        return _files_as_mappings(value)
+    return value
+
+
+def normalize_typed_files(typ: Optional[Type], typed: TypedValue) -> TypedValue:
+    """Return `typed` with its value read through `typ` by `normalize_files`.
+
+    A decoded value holds each file as its JSON form unless its whole kind is `file`;
+    reading it through the type it was written as turns each one back into a `FileRef`.
+    The result keeps `typed`'s class and kind and encodes to the same JSON value.
+
+    Args:
+        typ (`Type`, *optional*):
+            The type to read the value through. `None` reads nothing.
+        typed (`TypedValue`):
+            The decoded value.
+
+    Returns:
+        `TypedValue`:
+            `typed` itself when nothing changes, else a copy holding the read value.
+
+    Example:
+        With `typ` the type `list(file)` and `form` a file's JSON form,
+        `normalize_typed_files(typ, ListAnyValue(value=[form]))` returns
+        `ListAnyValue(value=[FileRef(**form)])`.
+    """
+    if typ is None:
+        return typed
+    value = normalize_files(typ, typed.value)
+    if value is typed.value:
+        return typed
+    return typed.model_copy(update={"value": value})
+
+
+def _reads_files(typ: Type) -> bool:
+    """Whether `typ` has a `file` or an unrefined `object` position at any depth.
+
+    Unlike `has_file`, it also counts plain `object` and flat `list(object)`, whose
+    nested `FileRef`s are read as mappings.
+
+    Args:
+        typ (`Type`):
+            The type a value is read through.
+
+    Returns:
+        `bool`:
+            `True` when reading a value through `typ` may change how a file is held.
+    """
+    if typ.kind is ValueKind.FILE or _is_plain_object(typ):
+        return True
+    if typ.kind is ValueKind.LIST_OBJECT and typ.element is None:
+        return True
+    if typ.element is not None and _reads_files(typ.element):
+        return True
+    if typ.fields is not None and any(_reads_files(field) for field in typ.fields.values()):
+        return True
+    return typ.variants is not None and any(_reads_files(member) for member in typ.variants)
+
+
+def _union_member_of(typ: Type, value: Any) -> Optional[Type]:
+    """Return the member of union `typ` that `build_value_as` checks `value` against.
+
+    `None` when the value is not an object, has a missing or unknown tag, or matches
+    no member. A tagged union's member comes from `_tagged_member`, as in
+    `_build_for_union`. For an untagged union it builds the value against each member
+    again, deliberately: the first member it satisfies is the one the write check took.
+
+    Args:
+        typ (`Type`):
+            A union type (its `variants` set).
+        value (`Any`):
+            A value that passed `build_value_as(typ, value)`.
+
+    Returns:
+        `Optional[Type]`:
+            The member `value` was checked against, or `None` as above.
+    """
+    if not isinstance(value, dict):
+        return None
+    tagged = _tagged_member(typ.variants, value)
+    if tagged is not None:
+        return tagged[1]
+    for member in typ.variants:
+        try:
+            _build_for_type(member, value)
+        except TypeCheckError:
+            continue
+        return member
+    return None

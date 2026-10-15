@@ -1,8 +1,8 @@
 """The binder validates a typed binding's value against its declared type.
 
-A typed binding checks the resolved value without converting it and fails the
-consuming node with ``binding.type``; the receiving parameter's own contract
-still runs afterwards.
+A typed binding checks the resolved value, converting only its file and object
+representation, and fails the consuming node with ``binding.type``; the receiving
+parameter's own contract still runs afterwards.
 """
 
 import dataclasses

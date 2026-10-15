@@ -358,7 +358,8 @@ binding's own origin. Declared binding types are part of the manifest: wiring ty
 in a separate `binding_types` map and output types under a `type` key, so untyped
 flows keep their fingerprints. A `ValueTemplate` source is the one container the binder
 evaluates: each leaf string is a template at its position, each nested `Binding`
-checks its value against its own contract without converting it, and the captured
+checks its value against its own contract and converts only its file and object
+representation (`normalize_files`), and the captured
 route is a record or list of the parts' routes. A plain dict or list source is
 always a literal. Its leaf-string origins and nested bindings are traversed and
 rebased with the outer binding; `iter_source_strings`, `map_source_strings` and
@@ -472,8 +473,12 @@ into a child START is validated unconverted. A bound null shadows a default but 
 through contract validation, so it is accepted only when the parameter is untyped
 or its contract accepts null (a nullable or `None`-kind type). A present typed
 `Binding` is checked after its source resolves and before the parameter contract:
-`build_value_as` validates the value against `Binding.contract` and the built value
-is discarded, so the payload reaches the node unconverted. A miss is `binding.type`.
+`build_value_as` validates the value against `Binding.contract`, and the payload
+reaches the node with only its file and object representation converted
+(`normalize_files`): a file's JSON form at a `file` position becomes a `FileRef`, and a
+nested `FileRef` at an `object` position becomes its mapping. Nothing else converts, so
+an `int` bound `!float` stays an `int`. `T(...)` constructors deliver the same way. A
+miss is `binding.type`.
 
 NaN, infinity, and complex numbers are not yian values;
 `typesys.values.reject_nonfinite(value, where)` finds one at any depth and raises
@@ -700,14 +705,24 @@ manifests, and HUMAN_INPUT `answer_schema` types (`"Any"` for an `Any` answer).
 values). `ValueKind.ANY` is type-only: `build_value_as` stores an `Any` value under its
 natural kind, and checks that `object` values, `list(object)` items, and `LIST_ANY`
 items are JSON values, failing with the path of a non-text key or a non-JSON value.
-`canonical_typed` checks an untyped node output, and each untyped field of a partial
+Before that walk an `object` value or `list(object)` item reads each nested `FileRef` as
+its mapping; a `file` slot reads a file's JSON form (exactly `uri`, `mime`, `name`) as a
+`FileRef`. `canonical_typed` checks an untyped node output, and each untyped field of a
+partial
 record output, with the same walk (`reject_non_json(value, "output", files=True)`),
 which also accepts `FileRef` leaves at any depth; it fails `contract.output` with
 `output at <path>: ...`. An already-built `TypedValue` (a replayed record) is not walked.
 Load doesn't check field reads on an `Any` value. In wiring, an `Any` source fits only
 `Any` and `Optional(Any)`; a tagged slot treats it as narrower than any other type except
 `None` and a type whose every value holds a `file` (both disjoint), and checks it at
-runtime. The lowercase `any` is a load error (`unknown type 'any'; write
+runtime. Load also treats `file` as disjoint from `object` and a record shaped like a
+file's JSON form, so a typed `file` slot needs a `file`-typed source; the JSON form is
+accepted at runtime where load can't tell. `types_overlap`, deciding whether an untagged
+union's members can be told apart, counts `file` as overlapping plain `object`, `Any`,
+and every record that admits the JSON form. Every dotted read (`${x.f}`, trace
+projections, pool lookups) goes through `field_of`, which reads a dict key or a
+`FileRef`'s `uri`, `mime`, or `name` and never `getattr`.
+The lowercase `any` is a load error (`unknown type 'any'; write
 Any`).
 
 Numeric `Type` values may retain an inclusive `bounds` pair for INTEGER or
@@ -738,8 +753,10 @@ Compose fills it after the START/END boundary is synthesized, from the names the
 wiring sources, asserts, CASE `when:`s, and LOOP predicate use, resolved against the
 owning flow's `typedefs:`. A constructor `${Buy(...)}` names a typedef and reads the same
 table: the keyword form builds a record from exactly the given fields and checks it with
-`build_value_as`; the positional form `${Buy(x)}` checks `x` and returns it unchanged,
-like `!Buy ${x}`. Neither fills a field or converts a value. A builtin type name
+`build_value_as`; the positional form `${Buy(x)}` checks `x` and returns it like
+`!Buy ${x}`. Neither fills a field; both return the value with only file representation
+normalized (`normalize_files`: a file's JSON form in a `file` slot becomes a `FileRef`, a
+nested file in an `object` slot becomes its mapping), and numbers stay as given. A builtin type name
 (`${int(x)}`) is not a constructor, and prompts reject constructors as they reject
 `isinstance`. Every evaluation entry point takes `types=None`; `eval_node`
 (binding), node asserts, CASE routing, and the LOOP predicate pass `self.types`, and
@@ -813,7 +830,22 @@ on `Node.output_contract`, including when compact/flat lowering generates the re
 The partial arm is a closed record: every field name is enforced, proven fields retain
 their recursive contracts, and opaque fields retain presence without pretending their
 type is `None`. Runtime success and replay validate the effective commit target through
-this same sum. Exact contracts also drive node-owned structured generation. For
+this same sum. The run log stores each nested file as its JSON form, so every committed
+value is decoded through the commit target's contract (`output_contract_file_type`, or
+the typed parameters of a node with `commits_input_record` and no output contract):
+each position the contract types as `file` gets a `FileRef` in the pool, the
+`NodeSucceeded` observer, and the trace's writer value. The reading type is computed
+once when the commit is prepared, so live runs and replay read the same value and the
+record bytes don't change. The run result reads through `RunState.result_contract`,
+the flow's inferred output contract that `run.py` passes in. A LOOP driver reads its
+carried record through its own output contract, and a partial LOOP's omitted field
+through the body's typed input. Backward contexts and `lookup_source` keep the stored
+canonical JSON. Untyped outputs and seeds keep nested files as mappings. A MAP whose body
+returns a partial record gets no list contract (only a body output with an exact
+contract, such as a typed whole value or a record whose every field is typed, is inferred
+as a list), so readers of `${m.output}` in the parent and the run result keep
+its nested files as mappings too.
+Exact contracts also drive node-owned structured generation. For
 an AGENT node,
 only a plain `str` opts out to free text; an enum string (`Literal(...)`) uses the
 generated scalar `value` wrapper and is unwrapped back to its bare tag. A live type
@@ -1031,9 +1063,11 @@ a mapping or list becomes a typed `Binding` at its position, and a container hol
 or holding a string with a `${...}` span, becomes a `ValueTemplate`. `suggest_tag` spells a
 tagged slot for every message, including the migration errors for the old
 `name: T = value` forms. Each read records the tag's definition id in a ledger; a tag no
-slot consumed is a load error, except under `x-*` keys. A tag only checks and narrows:
+slot consumed is a load error, except under `x-*` keys. A tag checks and narrows:
 `type_relation` at load (disjoint fails, narrower is left to runtime), `build_value_as` at
-run time (`binding.type`). It never fills in a field.
+run time (`binding.type`). It never fills in a field, and it converts only how files are
+held: the binder delivers `normalize_files(type, value)`, so a `file` position holds a
+`FileRef` and an `object` position holds a nested file as its mapping.
 
 `SourceCatalog` is Compose's immutable document-local `OriginResolver`. Its private
 builder maps typed semantic paths to opaque origins while retaining the physical
@@ -1253,7 +1287,9 @@ connections and execution topology; authored fingerprints exclude them.
 
 The runtime core is **kind-blind**. It dispatches on this result sum and consults
 node-owned execution-semantic traits/hooks (`is_spawner`, `commits_input_record` (START's
-input record may go one level over the value nesting limit), `binds_per_item`, `item_source_key`,
+input record may go one level over the value nesting limit, and without an output
+contract its typed parameters give the type its committed files are read through),
+`binds_per_item`, `item_source_key`,
 `bind_reserved`, `validate_execution_setup`, `grow_depth_delta`, `is_loop`,
 `needs_stop_event`, `needs_tools`, `needs_memory_context`, `needs_skills`,
 `needs_evaluation_trace`, `needs_live_events`, `needs_steering`, `memory_scope`, and

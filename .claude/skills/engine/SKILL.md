@@ -101,7 +101,9 @@ this model whenever you design anything:
   output whole (`contract.output` at the path); a record or list built around a
   value is a level deeper, so a MAP's result list or a record flow output can
   fail at its END. Only the kind-blind `commits_input_record` trait (START) may go one level
-  over. Replay and the run-log codecs never apply the limit, so older logs replay.
+  over (the same trait makes a node with no output contract read its committed files
+  through its typed parameters).
+  Replay and the run-log codecs never apply the limit, so older logs replay.
   A value written out in a flow file, `env:` values included (`check_env_values`), is
   checked at load first (`compose.helpers.value_nesting.check_written_value`, located
   `LoadError`), before any recursive load walker, so YAML aliases can't crash the load;
@@ -300,8 +302,11 @@ this model whenever you design anything:
   `Binding` with the first predicate origin that introduced the read, or stamps
   `__on` from `on:`; its generated `Parameter` carriers remain source-free.
   A present typed `Binding` is checked after its source resolves and before the
-  parameter contract: `build_value_as` against `Binding.contract`, discarding the
-  built value so the payload is not converted; a miss is `binding.type`.
+  parameter contract: `build_value_as` against `Binding.contract`, then the payload is
+  delivered with only its file and object representation converted (`normalize_files`:
+  a file's JSON form at a `file` position becomes a `FileRef`, a nested `FileRef` at an
+  `object` position becomes its mapping; an `int` bound `!float` stays an `int`), as
+  `T(...)` constructors and nested `ValueTemplate` bindings do; a miss is `binding.type`.
   The binder never converts a string: only `run_flow`'s `coerce_inputs` converts the
   top-level flow's supplied inputs, so a CALL/MAP/LOOP edge carries values as is.
   Supplied contract failures select
@@ -311,9 +316,18 @@ this model whenever you design anything:
 - Compiled `Node.output_contract` is one closed sum: an exact `ValueContract`, a
   closed `PartialRecordContract` with optional field contracts, or `None` for an
   unenforced output. Runtime success and replay enforce the same sum; behavior that
-  needs a whole semantic type uses only the exact arm. Manifests exclude origins. Compose
-  descriptors, child signatures, producer
-  maps, and validators retain the contract and project `.type` only inside type
+  needs a whole semantic type uses only the exact arm. The run log stores nested files
+  as their JSON form, so committed values (pool, `NodeSucceeded` observer, trace writer
+  value) are decoded through the commit target's contract (`output_contract_file_type`),
+  computed once when the commit is prepared: each `file` position holds a `FileRef`
+  live and on replay, and the record bytes don't change. The run result reads through
+  `RunState.result_contract` (the flow's inferred output contract); LOOP reads its
+  carried record through its output contract and a partial loop's omitted field through
+  the body input. Backward contexts and `lookup_source` keep canonical JSON; untyped
+  outputs and seeds keep nested files as mappings. Dotted reads go through `field_of`
+  (a dict key or a file's `uri`/`mime`/`name`, never `getattr`). Manifests exclude
+  origins. Compose descriptors, child signatures, producer maps, and validators
+  retain the contract and project `.type` only inside type
   algorithms. Compose and runtime growth reference validation share the source-neutral
   closed-field walk from `nodes/contracts.py` (`output_contract_field_error`): it
   rejects a provably absent record field and any field on a scalar or list type;
@@ -469,11 +483,17 @@ Most are just the functional model (above) made enforceable:
   labelled `list(Optional(Any))`, whose items compatibility reads as `Optional(Any)`
   and MAP checks at runtime. `ValueKind.ANY` is type-only (any non-null JSON value,
   stored under its natural kind); `object`, `list(object)` items, and `LIST_ANY` items
-  must be JSON values (text keys, no date objects, sets, or `FileRef`s). An untyped
+  must be JSON values (text keys, no date objects or sets; nested `FileRef`s in an
+  `object` value or `list(object)` item become mappings, and `LIST_ANY` items and `Any`
+  reject them). A `file` slot reads a file's JSON form (exactly `uri`, `mime`, `name`)
+  as a `FileRef`. An untyped
   node output must be JSON values or `FileRef`s, checked at `canonical_typed`. In wiring an
   `Any` source fits only `Any`/`Optional(Any)`; `type_relation` treats it as narrower
   than every type except `None` and a type whose every value holds a `file`, which are
-  disjoint. The specialized `LIST_*` discriminator and carrier preserve
+  disjoint. Load also treats `file` as disjoint from `object` and a file-shaped record,
+  while `types_overlap` counts `file` as overlapping plain `object`, `Any`, and records
+  admitting its JSON form, so such an untagged union needs a tag field.
+  The specialized `LIST_*` discriminator and carrier preserve
   `None` through canonical round-trips. Cross-flow compatibility recursively
   applies the nullable-source-to-strict-sink rule to list elements. A union is
   `Type(kind=OBJECT, variants=(record, ...))`: non-nullable record members in
@@ -1058,10 +1078,12 @@ meaning); `SourceCursor.tag`, `tag_definition_id`, `has_value`, and `scalar_text
 it. `compose/helpers/tags.py` is the one slot reader (`read_tag_type`,
 `read_tagged_value` -> `TaggedSlot`, `suggest_tag` for every message spelling). Every
 slot reads through it, and each read records the tag in a ledger so a tag outside a
-slot is a load error (`x-*` keys excepted). A tag only checks and narrows (load:
-`type_relation`; run time: `build_value_as`, `binding.type`); never add a fill-in or
-conversion path. Nested `${...}` stays a `ValueTemplate` evaluated by the binder; do not
-lift it into synthetic nodes, which would run on an untaken CASE branch and could not
+slot is a load error (`x-*` keys excepted). A tag checks and narrows (load:
+`type_relation`; run time: `build_value_as`, `binding.type`) and converts only how files
+are held (`normalize_files`: a `file` position reads `{uri, mime, name}` as a `FileRef`, an
+`object` position reads a nested `FileRef` as its mapping); never add a fill-in or any
+other conversion path. Nested `${...}` stays a `ValueTemplate` evaluated by the binder; do
+not lift it into synthetic nodes, which would run on an untaken CASE branch and could not
 read MAP's `${item}`. Load-time walkers reach nested strings through
 `iter_source_strings` / `map_source_strings` / `binding_input_groups` in
 `nodes/contracts.py`, never a private tree walk. Constructors `${T(...)}` (typedef

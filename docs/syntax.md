@@ -291,6 +291,7 @@ Everywhere you wire data you use a `${...}` reference:
 | `${input.X}` | field `X` of the flow's input |
 | `${node.output}` | node `node`'s whole value |
 | `${node.output.field}` | dot into an object value |
+| `${node.output.uri}` | the `uri` of a `file`; `.mime` and `.name` read its other fields |
 | `${name}` / bare `name` | a local input in a node's `prompt:` (AGENT or `human_input`), a `human_input` question's text, an AGENT's `system_prompt:`, or a `case` `when:`; AGENT prompts also see their own declared `variables:` |
 
 A whole-string `${ref}` resolves to the **typed value**; embedded in surrounding
@@ -312,6 +313,11 @@ LOOP `while:`/`until:` predicate reads. Reading a declared field
 through an `Optional(...)` record still gives `null` when the whole value is null, and
 values whose type isn't known at load (`object`, `Any`, an untyped output, or anything
 below them) aren't checked.
+
+A `file` value has three fields: `uri`, `mime`, and `name`. They read the same way in
+bindings, templates and prompts, `case` `on:` and `when:`, and node and flow asserts,
+so a node's assert can check `output.f.uri`. Any other field of a file is a miss, like a
+missing key. The loader doesn't check field reads on a `file`.
 
 On a [union](#unions-of-records-union), a field every member has can be read anywhere. Its
 type is the members' type when they agree, the merged `Literal` when every member's field
@@ -522,9 +528,28 @@ pass it to a narrower one, tag the slot (`n: !int ${x.output}`), which checks it
 runtime, or narrow it with `isinstance` in a `case`. `object` is a JSON object: a
 mapping with text keys and JSON values. A dict with a non-text key, or holding a set,
 a date object, or any other non-JSON value, fails the check. A node output with no
-`output:` type is checked by the same walk, except that it may also hold files (nested
-files come back as plain objects). Write `Any`, not `any`: `unknown type 'any'; write
-Any`.
+`output:` type is checked by the same walk, except that it may also hold files. Nested
+files in it come back as plain objects, since nothing types them. Write `Any`, not
+`any`: `unknown type 'any'; write Any`.
+
+`file` is a file reference: a `FileRef` with the fields `uri` (text), `mime`, and `name`
+(text or null). Its JSON form is the mapping `{uri, mime, name}`. A `file` slot also
+accepts that mapping, with exactly those keys, and reads it as a file. An `object` slot
+reads a nested file as its mapping; this holds for an `object` value, a `list(object)`
+item, and an `object` record field. A file at the top of an `object` slot still fails,
+and `Any` and `list(Any)` still reject files. A file inside a typed value keeps its
+type: a `list(file)` item, a record's `file` field, a union member's `file` field, and a
+LOOP-carried `file` reach the next node as a `FileRef`, and so does a file in the run
+result when the flow's output type says `file`. A MAP's list is typed only when its
+body's output has one exact type: a typed whole value, or a record whose every field is
+typed. A MAP over a body that returns a record with an untyped field gives readers of
+`${m.output}` in the parent, and the run result, its nested files as mappings. Read a
+file's fields as `${f.uri}`,
+`${f.mime}`, and `${f.name}` (see [References](#references-naming-a-value)).
+
+Load still asks for a `file`-typed source where a typed `file` slot reads a value: an
+`object` or `Any` value into `!file` doesn't load. The JSON form is accepted where load
+can't tell: an untyped producer, a seed, or a value read back from the run log.
 
 When the loader can't type a list's items (a tool's untyped array, a mixed or empty
 literal list), the list is a `list(Optional(Any))`, and its items are checked at
@@ -666,6 +691,21 @@ every member declares as a single-value Literal, with a different value in each 
 e.g. kind: Literal(buy)
 ```
 
+A `file` field reads a file's JSON form, so it can match the same value as an `object`
+or `Any` field, or a record field with `uri`, `mime`, and `name`. So an untagged union of
+`{x: file}` and `{x: object}` fails the same way. Add a tag field:
+
+```yaml
+typedefs:
+  Doc:
+    kind: Literal(doc)
+    x: file
+  Meta:
+    kind: Literal(meta)
+    x: object
+  Part: Union(Doc, Meta)
+```
+
 Other load errors:
 
 | Write | Error |
@@ -692,6 +732,21 @@ first (see [`case`](#case-branching)), or tag the member on the binding
 (`buy: !Buy ${decision.output}`, see [Typed slots](#typed-slots-yaml-tags)), which loads
 and is checked at runtime. Reading fields of a union is covered under
 [References](#references-naming-a-value).
+
+Changed: a typed `list(file)` item, a record's `file` field, and a LOOP-carried `file`
+used to reach the next node as a dict; they now reach it as a `FileRef`, in CODE inputs,
+host TOOL arguments, and AGENT prompt text. CODE that indexed `x["f"]["uri"]` must use
+`x["f"].uri`, and a template `"${a.output}"` shows the file's repr. Resuming an old log
+mid-run gives nodes after the resume point a `FileRef`. These used to fail and now
+work: a MAP over a `list(file)`, a LOOP carrying a `file`, a CALL into a `list(file)`
+input, a CALL body returning a record with a `file`, resuming a log with a typed
+`list(file)` output, a node assert reading `output.f.uri`, a CODE `output: object`
+returning a nested file (stored as its mapping), and a CODE `output: file` returning
+`{uri, mime, name}`. An untagged union mixing `file` with `object`, `Any`, or a record
+shaped like a file used to load; it is now a load error, so add a tag field.
+`render_as_json` used to render a file as its Python text; it now renders its mapping.
+With a typedef that names `file` (`FileT: file`), `isinstance(x, FileT)` used to be false
+for the mapping `{uri, mime, name}`; it is now true.
 
 ## Typed slots — YAML tags
 
@@ -904,11 +959,13 @@ Literals are checked against the type at load:
 
 ### Runtime check
 
-Before the consuming node runs, the value is checked against the tag's type. A tag only
-checks: it never fills in a field and never converts. An int bound as `float` stays an
-int, and the string `"30"` is not an int. A failure fails the consuming node (END for a
-flow output) with the failure code `binding.type`, and the diagnostic points at the
-slot.
+Before the consuming node runs, the value is checked against the tag's type. A tag never
+fills in a field. It converts only how files are held: at a `file` position a file's
+JSON form becomes a `FileRef`, and at an `object` position a nested file becomes its
+mapping. Nothing else converts. An int bound as `float` stays an int (`n: !float ${i}`
+delivers an `int`), and the string `"30"` is not an int. A failure fails the consuming
+node (END for a flow output) with the failure code `binding.type`, and the diagnostic
+points at the slot.
 
 A flow's committed output is stored like any typed node output: an int in a
 `float` slot is widened to a float at any depth, whether the slot is the whole
@@ -1052,7 +1109,7 @@ A narrower type is checked when the entry runs, and a failure fails the entry wi
 value entry 'x': 5 does not match declared type str
 ```
 
-A tag only checks; it never fills in a field. `!Buy` names `action: Literal(buy)`, but a
+A tag never fills in a field. `!Buy` names `action: Literal(buy)`, but a
 `Buy` value must still write `action: buy`:
 
 ```text

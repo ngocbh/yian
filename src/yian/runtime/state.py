@@ -50,8 +50,10 @@ from yian.nodes.contracts import (
     Parameter,
     PartialRecordContract,
     SeedConnection,
+    file_fields_type,
     iter_source_strings,
     output_contract_field_error,
+    output_contract_file_type,
     output_contract_origin,
     output_contract_type,
     validate_output_contract,
@@ -97,6 +99,7 @@ from yian.typesys.values import (
     Type,
     TypeCheckError,
     TypedValue,
+    normalize_typed_files,
     reject_deep_nesting,
     reject_nonfinite,
 )
@@ -120,6 +123,32 @@ def _canonical_output_value(
     if type(contract) is PartialRecordContract:
         output = validate_output_contract(contract, output)
     return canonical_typed(output, declared_type)
+
+
+def _file_reading_type(node: Node) -> Type | None:
+    """Return the type a value committed to `node` is read through to restore its files.
+
+    The node's output contract gives it (`output_contract_file_type`); a node without one
+    that commits its input record reads through its typed parameters. The run record
+    stores each file as its JSON form; reading through this type gives a reader a
+    `FileRef` at each position typed `file`, without touching the record bytes, so live
+    and replayed runs read the same value.
+
+    Args:
+        node (`Node`):
+            The commit target.
+
+    Returns:
+        `Type | None`:
+            The reading type, or `None` when no position may hold a file.
+    """
+    if node.output_contract is None and node.commits_input_record:
+        return file_fields_type(
+            (param.name, param.contract.type)
+            for param in node.params or ()
+            if param.contract is not None
+        )
+    return output_contract_file_type(node.output_contract)
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,13 +276,30 @@ class RunState:
             Reverse lookups derived from the live graph, built by the first growth
             and kept current by growth commits, so a growth looks up the nodes it
             affects instead of scanning every node.
+        result_contract (`OutputContract | None`):
+            Caller-supplied contract the terminal output is read through to restore
+            its files, typically the flow's inferred output contract. It is not
+            recorded; ``None`` returns the output as stored.
     """
 
-    def __init__(self, flow: CompiledFlow) -> None:
-        """Adopt ``flow`` and seed empty reducer structures for its current topology."""
+    def __init__(self, flow: CompiledFlow, *, result_contract: OutputContract | None = None) -> None:
+        """Adopt ``flow`` and seed empty reducer structures for its current topology.
+
+        Args:
+            flow (`CompiledFlow`):
+                The caller's private per-run graph.
+            result_contract (`OutputContract`, *optional*, defaults to `None`):
+                The contract the terminal output is read through to restore its files.
+                `None` returns the output as stored.
+
+        Raises:
+            `TypeError`:
+                Raised when `flow` is not a `CompiledFlow`.
+        """
         if not isinstance(flow, CompiledFlow):
             raise TypeError("RunState expects a CompiledFlow")
         self.flow = flow
+        self.result_contract = result_contract
         self.pool = VariablePool(start_id=flow.start_id)
         self.node_state: dict[str, NodeState] = {
             node_id: NodeState.UNKNOWN for node_id in flow.nodes
@@ -422,7 +468,11 @@ class _RunResumedDelta:
 
 @dataclass(frozen=True, slots=True)
 class _SuccessPlan:
-    """Opaque authority anchors and one immutable successful-output delta."""
+    """Opaque authority anchors and one immutable successful-output delta.
+
+    ``files`` is the type the commit target reads the value through to restore its
+    files (`_file_reading_type`), computed once when the commit is prepared.
+    """
 
     originating_state: RunState
     originating_flow: CompiledFlow
@@ -434,6 +484,7 @@ class _SuccessPlan:
     delta: _SuccessDelta
     terminal: _TerminalDelta | None
     trace_delta: TraceDelta | None = None
+    files: Type | None = field(default=None, hash=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -492,11 +543,14 @@ class _TerminalDelta:
     ``output_bytes`` is a canonical tagged typed value for success and ``None``
     for failure. ``succeeded`` distinguishes a typed null output from failure;
     ``failure`` is the one source-neutral authority for an unreachable terminal.
+    ``files`` is the type the output is read through to restore its files, from
+    ``RunState.result_contract``.
     """
 
     succeeded: bool
     output_bytes: bytes | None
     failure: Failure | None
+    files: Type | None = field(default=None, hash=False)
 
 
 @dataclass(slots=True)
@@ -1359,10 +1413,10 @@ def _prepare_success_transition(
         ),
         delta=delta,
         terminal=terminal,
+        files=_file_reading_type(state.flow.nodes[delta.commit_target]),
     )
-    observer_value = ANY_VALUE_ADAPTER.validate_json(
-        delta.value_bytes,
-        strict=True,
+    observer_value = normalize_typed_files(
+        plan.files, ANY_VALUE_ADAPTER.validate_json(delta.value_bytes, strict=True),
     ).to_object()
     observer = NodeSucceeded(
         node_id=delta.node_id,
@@ -1381,6 +1435,7 @@ def _prepare_success_transition(
             terminal_succeeded=terminal.succeeded if terminal is not None else None,
             terminal_output_bytes=terminal.output_bytes if terminal is not None else None,
             terminal_failure=terminal.failure if terminal is not None else None,
+            writer_files=plan.files,
         )),
         observers=observers,
     )
@@ -1753,8 +1808,13 @@ def _prepare_record_trace(
     terminal_succeeded: bool | None = None,
     terminal_output_bytes: bytes | None = None,
     terminal_failure: Failure | None = None,
+    writer_files: Type | None = None,
 ) -> TraceDelta | None:
-    """Prepare accepted trace data while the actual executing node still exists."""
+    """Prepare accepted trace data while the actual executing node still exists.
+
+    ``writer_files`` is the type an accepted output's commit target reads it through
+    to restore its files.
+    """
     record = envelope.record
     node_id = _outcome_node_id(record)
     return prepare_trace(state.trace, envelope, state.flow.nodes.get(node_id),
@@ -1767,7 +1827,8 @@ def _prepare_record_trace(
                          ),
                          terminal_succeeded=terminal_succeeded,
                          terminal_output_bytes=terminal_output_bytes,
-                         terminal_failure=terminal_failure)
+                         terminal_failure=terminal_failure,
+                         writer_files=writer_files)
 
 
 def _outcome_node_id(record: RunRecord) -> str | None:
@@ -1836,7 +1897,7 @@ def _require_outcome_trace_terminal(state: RunState, prepared: PreparedTransitio
         if (type(delta.writer) is not tuple or len(delta.writer) != 2
                 or type(delta.writer[0]) is not str or delta.writer[0] != record.commit_target):
             raise ValueError("physical trace writer disagrees with the accepted output target")
-        writer = SourceEntry(source, prepared.expected_sequence, plan.delta.value_bytes)
+        writer = SourceEntry(source, prepared.expected_sequence, plan.delta.value_bytes, plan.files)
     elif delta.writer is not None:
         raise ValueError("only an accepted output can install a physical trace writer")
     root_writer = writer if writer is not None and record.commit_target == state.flow.end_id else None
@@ -4038,6 +4099,7 @@ def _prepare_terminal_delta(
             succeeded=True,
             output_bytes=pending_value_bytes,
             failure=None,
+            files=output_contract_file_type(state.result_contract),
         )
     if end_id in state.pool.store:
         output_bytes = ANY_VALUE_ADAPTER.dump_json(
@@ -4048,6 +4110,7 @@ def _prepare_terminal_delta(
             succeeded=True,
             output_bytes=output_bytes,
             failure=None,
+            files=output_contract_file_type(state.result_contract),
         )
     if terminal_unreachable_failure is None:
         raise ValueError(
@@ -4534,10 +4597,11 @@ def _apply_run_started(state: RunState, apply: _RunStartedApply) -> None:
 
 def _materialize_success(plan: _SuccessPlan) -> _SuccessApply:
     """Decode independent pool, observer, and terminal copies before append."""
-    value = ANY_VALUE_ADAPTER.validate_json(plan.delta.value_bytes, strict=True)
-    observer_value = ANY_VALUE_ADAPTER.validate_json(
-        plan.delta.value_bytes,
-        strict=True,
+    value = normalize_typed_files(
+        plan.files, ANY_VALUE_ADAPTER.validate_json(plan.delta.value_bytes, strict=True),
+    )
+    observer_value = normalize_typed_files(
+        plan.files, ANY_VALUE_ADAPTER.validate_json(plan.delta.value_bytes, strict=True),
     ).to_object()
     terminal = (
         _materialize_terminal(plan.terminal)
@@ -4576,15 +4640,18 @@ def _materialize_route(plan: _RoutePlan) -> _RouteApply:
 
 
 def _terminal_observer(delta: _TerminalDelta) -> RunSucceeded | RunFailed:
-    """Materialize one detached terminal event from immutable plan authority."""
+    """Materialize one detached terminal event from immutable plan authority.
+
+    A success output is read through ``delta.files``, so each file the run's result
+    contract types as `file` is a `FileRef`.
+    """
     if delta.succeeded:
         if type(delta.output_bytes) is not bytes:
             raise ValueError("successful terminal delta requires typed output bytes")
         if delta.failure is not None:
             raise ValueError("successful terminal delta cannot carry a failure")
-        output = ANY_VALUE_ADAPTER.validate_json(
-            delta.output_bytes,
-            strict=True,
+        output = normalize_typed_files(
+            delta.files, ANY_VALUE_ADAPTER.validate_json(delta.output_bytes, strict=True),
         ).to_object()
         return RunSucceeded(output=output)
     if delta.output_bytes is not None:

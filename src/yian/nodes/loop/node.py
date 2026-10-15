@@ -34,10 +34,13 @@ from yian.nodes.contracts import (
     ExecutionPosition,
     ExecutionScope,
     Parameter,
+    PartialRecordContract,
+    ValueContract,
     _iter_origin_carrier,
     _rewrite_origin_carrier,
 )
 from yian.nodes.ids import map_callsite, ns
+from yian.typesys.values import normalize_files
 
 
 class LoopMaxExceeded(RuntimeError):
@@ -178,7 +181,7 @@ class LoopNode(Node):
         if `should_stop(k)`), then a `Grow` splicing body_k + `respawn(k+1, carried)`, pruning
         body_{k-1} + self (except origin). The reducer retires each body_{k-1} node with its
         whole grown subtree (nested CALL/MAP/LOOP) once every node in it is settled."""
-        carried = dict(inputs)
+        carried = self._read_carried(dict(inputs))
         k = self.iteration
         if self._should_stop_now(carried, k):
             return Output(carried, commit_as=self.origin_id)
@@ -196,6 +199,37 @@ class LoopNode(Node):
         if self.id != self.origin_id:
             prune.add(self.id)                       # self-prune (never the origin L)
         return Grow(seed=(carried, k), prune=frozenset(prune))
+
+    def _read_carried(self, carried: dict[str, Any]) -> dict[str, Any]:
+        """Read the carried record through the loop's output contract.
+
+        A field can reach the driver holding a file as its JSON form in two cases: a
+        returned field bound from a whole-reference body output (`output: ${c.output}`),
+        since the body's END has no contract for it, and an omitted field the body does
+        not take as input, since its carried default has no body parameter to read it
+        through (`_carried_value`). The seed is bound from live values, so a field the
+        contract types as `object` can hold a nested `FileRef` on the first iteration and
+        its mapping once the body has returned it through that `object`. Reading every
+        typed field through the contract the record is committed under makes each `file`
+        position a `FileRef` and each `object` position's nested files mappings, so the
+        predicate reads every iteration alike. Untyped fields are read as given.
+
+        Args:
+            carried (`dict[str, Any]`):
+                The carried record, keyed by the loop's input field names.
+
+        Returns:
+            `dict[str, Any]`:
+                The record with each typed field's files held as the contract reads them.
+        """
+        contract = self.output_contract
+        if type(contract) is ValueContract:
+            return normalize_files(contract.type, carried)
+        if type(contract) is PartialRecordContract:
+            typed = {name: field.type for name, field in contract.fields if field is not None}
+            return {name: normalize_files(typed[name], value) if name in typed else value
+                    for name, value in carried.items()}
+        return carried
 
     def _should_stop_now(self, carried: dict[str, Any], k: int) -> bool:
         """Continue-vs-stop on the carried record at index `k`. Pure. See `run` for the stop rule."""
@@ -254,7 +288,9 @@ class LoopNode(Node):
         a `Parameter` default holding its value in `carried`, so the next driver binds the merged
         record: a returned field (even an explicit null) overrides it, an omitted one keeps the
         previous value. `carried` is the canonical JSON-decoded growth-seed record, the same values
-        that seed the body's START, so live growth and durable replay merge identically. A total
+        that seed the body's START, so live growth and durable replay merge identically; each
+        default is read through the body's typed input of that name (`child_inputs`), so an
+        omitted file stays a `FileRef`. A total
         loop shares the origin's `params` unchanged. Generated `origin_context` is copied unchanged
         while the authored loop origin remains local, so each iteration's failure trace contains
         that origin once. The type table is copied so every iteration's predicate and asserts
@@ -307,7 +343,8 @@ class LoopNode(Node):
             clone.params = self.params
         else:
             clone.params = [
-                replace(param, required=False, has_default=True, default=carried[param.name])
+                replace(param, required=False, has_default=True,
+                        default=self._carried_value(param.name, carried[param.name]))
                 if param.name in carried and param.name not in self.returned_fields else param
                 for param in self.params
             ]
@@ -316,6 +353,28 @@ class LoopNode(Node):
         clone.post_asserts = list(self.post_asserts)
         clone.types = self.types
         return clone
+
+    def _carried_value(self, name: str, value: Any) -> Any:
+        """Read a JSON-decoded carried field as the body's typed input `name` reads it.
+
+        The driver's own params have no contract, so the body's START parameter gives the
+        field's type; a `file` position turns the file's JSON form back into a `FileRef`.
+        An untyped or unknown field is returned as given.
+
+        Args:
+            name (`str`):
+                The carried field's name, matched against the body's input parameters.
+            value (`Any`):
+                The field's carried value.
+
+        Returns:
+            `Any`:
+                The value with its files held as the body's typed input `name` reads them.
+        """
+        for parameter in self.child_inputs or ():
+            if parameter.name == name and parameter.contract is not None:
+                return normalize_files(parameter.contract.type, value)
+        return value
 
     def should_stop(self, iteration: int) -> bool:
         """The loop's hard iteration budget: True once `iteration` has reached `max_iters`.

@@ -8,7 +8,9 @@ resolved against the pool with type preserved, an embedded `${...}` stringified,
 building the `{name: value}` record the engine's `eval_node` hands the node instead of the pool.
 Type-checking consumes an optional resolved `ValueContract`; untyped parameters
 accept any resolved Python value. A typed `Binding` additionally checks its resolved
-value against the binding's own declared contract, without converting it.
+value against the binding's own declared contract and converts only its file and object
+representation (`normalize_files`): a file's JSON form at a `file` position becomes a
+`FileRef`, a nested `FileRef` at an `object` position becomes its mapping.
 
 A `ValueTemplate` source is an authored container: each leaf string is evaluated as a
 template at its position and each nested typed `Binding` is checked against its own
@@ -51,7 +53,7 @@ from yian.nodes.contracts import (
     ValueTemplate,
     binding_source,
 )
-from yian.typesys import TypeCheckError, ValueKind, build_value_as
+from yian.typesys import TypeCheckError, ValueKind, build_value_as, normalize_files
 from yian.typesys.pool import VariablePool
 from yian.typesys.values import (
     IntTooLongError,
@@ -449,9 +451,10 @@ class _SourceReader:
         """Evaluate one node of a template tree at ``path``.
 
         Each leaf string is a template; a nested typed ``Binding`` evaluates its
-        source in place, then checks the result against its contract without
-        converting it. Other leaves are literals. ``label``, when set, names the
-        parameter in an error message in place of ``binding '<name>'``.
+        source in place, then checks the result against its contract, converting
+        only its file and object representation. Other leaves are literals.
+        ``label``, when set, names the parameter in an error message in place of
+        ``binding '<name>'``.
 
         Raises:
             BindingError: A leaf fails to evaluate (located at its registered
@@ -469,7 +472,7 @@ class _SourceReader:
                 try:
                     # A value that is not a yian value fails as such, not as a type mismatch.
                     _reject_invalid_binding(value, where, node.origin)
-                    _check_binding_type(where, node, node.contract, value)
+                    value = _check_binding_type(where, node, node.contract, value)
                 except BindingError as exc:
                     if exc.origin is None:
                         exc.origin = template.origin_at(path) or origin
@@ -601,18 +604,24 @@ def _failure_code(exc: ExpressionError) -> BindingFailureCode:
 
 def _check_binding_type(
     where: str, binding: Binding, contract: ValueContract, value: Any
-) -> None:
+) -> Any:
     """Validate a resolved value against its typed binding's declared contract.
 
-    The check runs before the parameter contract and discards the built value, so
-    the original payload is delivered unchanged (an ``int`` declared ``float`` stays
-    an ``int``) and a string never satisfies a non-string declared type.
+    The check runs before the parameter contract. It delivers the payload with only
+    its file and object representation read as the declared type reads it
+    (`normalize_files`): a file's JSON form at a `file` position becomes a `FileRef`,
+    and a nested `FileRef` at an `object` position becomes its mapping. Nothing else
+    converts (an ``int`` declared ``float`` stays an ``int``), and a string never
+    satisfies a non-string declared type.
 
     Args:
         where (`str`): Names the binding in the failure message, e.g. ``binding 'p'``.
         binding (`Binding`): The typed binding, whose origin is the fallback location.
         contract (`ValueContract`): The binding's declared contract.
         value (`Any`): The value the binding's source resolved to.
+
+    Returns:
+        `Any`: The value to deliver; ``value`` itself when nothing converts.
 
     Raises:
         BindingError: With ``failure_code="binding.type"`` when the value violates
@@ -627,6 +636,7 @@ def _check_binding_type(
             failure_code="binding.type",
             origin=contract.origins.at(exc.path) or binding.origin,
         ) from exc
+    return normalize_files(contract.type, value)
 
 
 def bind_params(
@@ -645,10 +655,10 @@ def bind_params(
 
     Joins each param to its source from the flow-owned `wiring` dict (`wiring[name] -> source`):
     coalesce / default / required / type-check / deep-copy / `item` scope. A present typed
-    `Binding` first checks its resolved value against the binding's declared contract, leaving
-    the value unconverted; the parameter's own contract then runs as usual. An OMITTED input (no
-    wiring edge) fills its declared default or fails when required; a caller's explicit null
-    SHADOWS the child default (`f(x=None)` semantics).
+    `Binding` first checks its resolved value against the binding's declared contract,
+    converting only its file and object representation; the parameter's own contract then
+    runs as usual. An OMITTED input (no wiring edge) fills its declared default or fails when
+    required; a caller's explicit null SHADOWS the child default (`f(x=None)` semantics).
 
     Args:
         params (`list[Parameter]`):
@@ -701,7 +711,7 @@ def bind_params(
             )
             _reject_invalid_binding(value, input_where, _source_origin(source))
             if present and isinstance(source, Binding) and source.contract is not None:
-                _check_binding_type(
+                value = _check_binding_type(
                     _binding_where(p.name, (), label), source, source.contract, value
                 )
             if value is None:

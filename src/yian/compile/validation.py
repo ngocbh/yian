@@ -197,7 +197,10 @@ def type_relation(inferred: Type, declared: Type) -> TypeRelation:
     `Any` (narrower when nullable); one whose every non-null value holds a `file` is
     disjoint from it, and one that only may hold a `file` is narrower. `Any` is
     narrower than every other type except `None` and types whose every non-null value
-    holds a `file`, which are disjoint from it.
+    holds a `file`, which are disjoint from it. Load treats `file` as disjoint from
+    `Any`, `object`, and a record shaped like a file's JSON form, so a typed `file`
+    slot needs a `file`-typed source; the JSON form is accepted at runtime where load
+    can't tell (an untyped producer, a value decoded from a run record).
 
     Args:
         inferred (`Type`): Type the producing expression is inferred to have.

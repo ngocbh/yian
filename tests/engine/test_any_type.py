@@ -516,11 +516,11 @@ def test_any_is_disjoint_from_file_and_none(declared):
         (_t("list(int)"), True),
         (ANY, True),
         (_t("None"), False),
-        (FILE, False),
-        (FILE_RECORD, True),  # conservative: only a bare file is excluded
+        (FILE, True),  # a file slot reads a file's JSON form, which is an `Any` value
+        (FILE_RECORD, True),
     ],
 )
-def test_any_overlaps_every_type_but_none_and_a_bare_file(other, expected):
+def test_any_overlaps_every_type_but_none(other, expected):
     assert types_overlap(ANY, other) is expected
     assert types_overlap(other, ANY) is expected
 

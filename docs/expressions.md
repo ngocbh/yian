@@ -106,9 +106,11 @@ Strictness also applies to the span's final value: a prompt span that evaluates 
 null raises before whole-value return or embedded concatenation. Bindings remain
 non-strict, so an embedded null contributes an empty string.
 
-**Two safety rules:** dotted access is dict-key lookup only, never `getattr` (so
-`${x.__class__}` is just a missing key); builtin calls dispatch through `TEMPLATE_FNS` only
-(no arbitrary callable is reachable).
+**Two safety rules:** dotted access reads only a dict key or a file's `uri`, `mime`, or
+`name`, never `getattr` (so `${x.__class__}` is just a missing key, on a file too);
+builtin calls dispatch through `TEMPLATE_FNS` only (no arbitrary callable is reachable).
+So `${doc.output.uri}` reads a file's `uri` in bindings, templates and prompts, `case`
+`on:` and `when:`, and asserts.
 
 ### Arithmetic follows Python
 
@@ -223,8 +225,10 @@ compute a carried boolean directly, for example
 A nested record or list value is typed structurally: each field takes the type of its
 own value. A [tag](syntax.md#typed-slots-yaml-tags) on a slot (`name: !T value`) replaces
 the inferred type with its declared one. The loader rejects it only when the two are
-disjoint; the binder checks the value at runtime. A tag never fills in or converts a
-value.
+disjoint; the binder checks the value at runtime. A tag never fills in a value, and it
+converts only how files are held: in a `file` slot a file's JSON form becomes a file, and
+in an `object` slot a nested file becomes its mapping. Numbers are delivered as given
+(`!float ${i}` delivers an int).
 
 A **prompt** is the strict context: it reads local inputs as bare `${name}`;
 AGENT prompts also read their own declared variables. It renders in
@@ -252,6 +256,7 @@ value still renders as `null`.
 `render_as_json` of text renders that text as a JSON string, so nesting
 re-encodes: `render_as_json(render_as_json(x))` is the JSON string of
 `render_as_json(x)`'s text, the same as Python's `json.dumps(json.dumps(x))`.
+A file, at any depth, renders as its mapping `{"uri": ..., "mime": ..., "name": ...}`.
 Each level escapes the quotes and backslashes of the one inside it, so the text
 roughly doubles per level. Render a value once.
 
@@ -286,7 +291,9 @@ only test for null. The call must be exactly
 result.
 
 The check is the pool's write-boundary check (`build_value_as`), so a value passes exactly
-when it could be written to a slot of type `T` (an `int` passes `float`). A missing `x` is
+when it could be written to a slot of type `T` (an `int` passes `float`). With a typedef
+that names `file` (`FileT: file`), a file's JSON form `{uri, mime, name}` passes
+`isinstance(x, FileT)`, since a `file` slot reads it. A missing `x` is
 checked as `None` in the non-strict modes, so it fails a record and passes an
 `Optional(...)` alias. Load-time inference types the result `bool`, and the ref-walk and
 rewrites skip `T`.
@@ -337,8 +344,11 @@ nodes:
   `action` fails the check, and the error names the field.
 - **Positional form.** `Buy(x)` checks `x` against `Buy` and narrows it, exactly like
   `!Buy ${x}` on a slot. A value that is not a valid `Buy` fails the evaluation.
-- Only `typedefs:` names are constructors. yian never converts a value, so `${int(x)}` is
-  an unknown function, not a conversion.
+- Either form delivers the value as given, except how files are held: a file's JSON form
+  at a `file` field becomes a file, and a file nested at an `object` field becomes its
+  mapping.
+- Only `typedefs:` names are constructors. There are no conversion functions, so
+  `${int(x)}` is an unknown function.
 - `isinstance(x, Buy)` stays the boolean test: it returns `false` where `Buy(x)` fails.
 
 Compose resolves the name at load into the node's type table (`Node.types`), as for
@@ -370,5 +380,5 @@ failed-forward rules.
   scope; `expr` never imports `nodes`/`compile`/`runtime`.
 - **Parse/eval separation** — the same tree feeds evaluation *and* the compile-time walks,
   so the inferred graph matches what runs.
-- **Safe by construction** — dict-only access and a closed builtin registry keep an
-  expression from reaching arbitrary Python.
+- **Safe by construction** — dict-key and file-field access and a closed builtin registry
+  keep an expression from reaching arbitrary Python.

@@ -32,6 +32,8 @@ from yian.typesys.values import (
     TypeCheckError,
     ValueKind,
     build_value_as,
+    field_of,
+    normalize_files,
     parse_int_text,
     union_field,
     value_repr,
@@ -138,7 +140,7 @@ def _resolve_in_record(path: str, record: dict) -> Any:
         raise ExpressionError(f"invalid variable path: '${{{path}}}'")
     value: Any = record.get(parts[0])
     for step in parts[1:]:
-        value = value.get(step) if isinstance(value, dict) else None
+        value = field_of(value, step)[1]
     return value
 
 
@@ -829,8 +831,8 @@ class _EvalExpr:
 
     def _reference(self, path: str) -> Any:
         """Resolve a dotted reference path. An `item`-headed path walks the MAP-body
-        `item` scope locally (dict-only — see `_dotted_step`); every other path is
-        handed WHOLE to `resolve` (the pool-agnostic seam — the
+        `item` scope locally (dict keys and file fields — see `_dotted_step`); every
+        other path is handed WHOLE to `resolve` (the pool-agnostic seam — the
         resolver owns the dotted walk, exactly as `resolve_reference` / `_resolve_in_record`
         do today). A miss (`item` miss, or `resolve` -> None) yields `_MISSING`."""
         parts = path.split(".")
@@ -846,9 +848,11 @@ class _EvalExpr:
                 value = _MISSING
             for step in parts[1:]:
                 if self._trace and source is not None:
-                    present = (
-                        present and isinstance(value, dict)
-                        and dict.__contains__(value, step)
+                    # A dict's presence is read off its stored keys, so the subclass `get`
+                    # that `_dotted_step` calls runs once per step and nothing else does.
+                    present = present and (
+                        dict.__contains__(value, step) if isinstance(value, dict)
+                        else field_of(value, step)[0]
                     )
                 value = self._dotted_step(value, step)
             if self._trace and source is None:
@@ -883,16 +887,15 @@ class _EvalExpr:
         return ValueRoute.literal(resolved.value)
 
     def _dotted_step(self, value: Any, step: str) -> Any:
-        """One dotted step — dict `.get` ONLY, never `getattr` (SAFETY-CRITICAL: so
-        `${x.__class__}` can never reach a Python attribute). A non-dict, a missing key,
-        or a `None`-valued key -> `_MISSING` (the unresolved-reference sentinel), so a
-        dotted miss on ANY object — a plain ref value OR a builtin-call result — is treated
-        identically by every value consumer (strict raise / non-strict None / falsy). Also
-        used to walk into an already-`_MISSING` value (a chained miss stays `_MISSING`)."""
-        if isinstance(value, dict):
-            stepped = value.get(step)
-            return _MISSING if stepped is None else stepped
-        return _MISSING
+        """One dotted step — `field_of` ONLY (a dict key, or a file's `uri` / `mime` /
+        `name`), never `getattr` (SAFETY-CRITICAL: so `${x.__class__}` can never reach a
+        Python attribute). Any other value, a missing field, or a `None`-valued field ->
+        `_MISSING` (the unresolved-reference sentinel), so a dotted miss on ANY object — a
+        plain ref value OR a builtin-call result — is treated identically by every value
+        consumer (strict raise / non-strict None / falsy). Also used to walk into an
+        already-`_MISSING` value (a chained miss stays `_MISSING`)."""
+        stepped = field_of(value, step)[1]
+        return _MISSING if stepped is None else stepped
 
     def _isinstance(self, call_suffix: Tree) -> bool:
         """`isinstance(x, T)`: whether the value of `x` satisfies the type named `T`.
@@ -931,9 +934,10 @@ class _EvalExpr:
         """`T(x)` checks the value of `x` against `T`; `T(a=..., b=...)` builds a record.
 
         The keyword form's record holds exactly the given fields. Either value is
-        checked with the variable pool's write-boundary check and given back
-        unchanged, so it is exactly what `!T ${x}` delivers. A missing `x` is checked
-        as `None` in the non-strict modes and raises in `STRICT_RAISE`.
+        checked with the variable pool's write-boundary check and given back with
+        only its file and object representation read as `T` reads it
+        (`normalize_files`), so it is exactly what `!T ${x}` delivers. A missing `x`
+        is checked as `None` in the non-strict modes and raises in `STRICT_RAISE`.
 
         Raises:
             ExpressionError: The call mixes keyword and positional arguments or has
@@ -955,7 +959,7 @@ class _EvalExpr:
             build_value_as(self._types[name], value)
         except TypeCheckError as exc:
             raise ConstructorTypeError(f"{name}(...): {exc}") from exc
-        return value
+        return normalize_files(self._types[name], value)
 
     def _constructor_route(self, name: str, call_suffix: Tree) -> ValueRoute:
         """The route of a constructor call, from its argument routes.
@@ -1214,9 +1218,10 @@ def eval_expr(
     `None` raises a loud `ExpressionError` (a wrapped `TypeError`); an ordered
     comparison with a `None` operand is `False` (missing->falsy).
 
-    Dotted access is dict-key lookup ONLY — never `getattr` — so `${x.__class__}`
-    can never reach a Python attribute (SAFETY-CRITICAL). Builtin calls dispatch
-    through `expr.builtins.TEMPLATE_FNS` only (no arbitrary callables).
+    Dotted access reads only a dict key or a file's `uri`, `mime` or `name`
+    (`field_of`) — never `getattr` — so `${x.__class__}` can never reach a Python
+    attribute (SAFETY-CRITICAL). Builtin calls dispatch through
+    `expr.builtins.TEMPLATE_FNS` only (no arbitrary callables).
 
     Args:
         tree (`Tree | Token`):
@@ -1228,9 +1233,10 @@ def eval_expr(
             With `trace=True`, returns one `ResolvedValue` containing the value,
             actual presence, and a `SourceRef` or existing `ValueRoute`.
         item (`Any`, *optional*, defaults to `None`):
-            The MAP-body-local scope for `item` / `item.path` (dict-only walk). `None`
-            means no item scope. With tracing enabled, a `ResolvedValue` may
-            supply the item's presence and route through a composed collection.
+            The MAP-body-local scope for `item` / `item.path` (dict keys and file
+            fields). `None` means no item scope. With tracing enabled, a
+            `ResolvedValue` may supply the item's presence and route through a composed
+            collection.
         mode (`ResolveMode`, *optional*, defaults to `BINDING_NONE`):
             How a missing reference is treated — raise (`STRICT_RAISE`) or become
             `None` (`BINDING_NONE` / `CONDITION_FALSY`).

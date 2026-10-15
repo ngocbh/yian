@@ -13,7 +13,7 @@ types only inside type algorithms.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterator, Literal, Mapping, TypeAlias, cast
+from typing import Any, Callable, Iterable, Iterator, Literal, Mapping, TypeAlias, cast
 
 from yian.diagnostics import OriginRef
 from yian.typesys import (
@@ -28,7 +28,7 @@ from yian.typesys import (
     union_field,
     union_tag_fields,
 )
-from yian.typesys.values import _sort_repr, shown_text, value_repr
+from yian.typesys.values import _sort_repr, has_file, shown_text, value_repr
 
 
 ValuePath: TypeAlias = tuple[str | int, ...]
@@ -693,6 +693,59 @@ def output_contract_type(contract: OutputContract | None) -> Type | None:
     )
 
 
+def file_fields_type(fields: Iterable[tuple[str, Type]]) -> Type | None:
+    """Return a record of only the `fields` whose type may hold a file, none required.
+
+    Read through `normalize_files`, the record turns each such field's file JSON forms
+    into `FileRef`s and leaves every other field of a value as given.
+
+    Args:
+        fields (`Iterable[tuple[str, Type]]`):
+            Field names paired with their types.
+
+    Returns:
+        `Type | None`:
+            The record type, or `None` when no field may hold a file.
+
+    Example:
+        `file_fields_type([("f", file), ("n", int)])` returns the record `{f: file}`
+        with no required field.
+    """
+    typed = {name: typ for name, typ in fields if has_file(typ)}
+    if not typed:
+        return None
+    return Type(kind=ValueKind.OBJECT, fields=typed, required=frozenset())
+
+
+def output_contract_file_type(contract: OutputContract | None) -> Type | None:
+    """Return the type a value written under `contract` is read through to restore its files.
+
+    A stored or JSON-decoded value holds each nested file as its JSON form; reading it
+    through this type with `normalize_files` gives a `FileRef` at each position the
+    contract types as `file`. A whole-value contract gives its type; a partial record
+    gives `file_fields_type` of its typed fields, so its opaque fields are read as given.
+
+    Args:
+        contract (`OutputContract`, *optional*):
+            The contract the value was written under. `None` has no file position.
+
+    Returns:
+        `Type | None`:
+            The reading type, or `None` when no position may hold a file.
+
+    Example:
+        For `ValueContract(list(file))` it returns `list(file)`; for
+        `ValueContract(int)` it returns `None`.
+    """
+    if type(contract) is ValueContract:
+        return contract.type if has_file(contract.type) else None
+    if type(contract) is PartialRecordContract:
+        return file_fields_type(
+            (name, field.type) for name, field in contract.fields if field is not None
+        )
+    return None
+
+
 # Kinds a field read is not checked on: `object` is opaque unless it declares fields, an
 # `Any` value may be an object, and `file` is the reserved file reference.
 _UNCHECKED_FIELD_KINDS = frozenset({ValueKind.OBJECT, ValueKind.ANY, ValueKind.FILE})
@@ -1189,9 +1242,11 @@ __all__ = [
     "as_binding",
     "binding_input_groups",
     "binding_source",
+    "file_fields_type",
     "iter_source_strings",
     "map_source_strings",
     "output_contract_field_error",
+    "output_contract_file_type",
     "output_contract_origin",
     "output_contract_type",
     "validate_output_contract",

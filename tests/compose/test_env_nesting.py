@@ -309,8 +309,8 @@ def test_env_mapping_holding_itself_is_a_located_load_error(
 
 def _cyclic_list_alias(levels: int) -> tuple[str, str]:
     """Return a one-item list over an alias chain ending in a self-alias, `levels` deep."""
-    header = _anchors(levels - 1, record=False).replace("&a0 [1]", "&a0 [*a0]", 1)
-    return header, f"[*a{levels - 2}]"
+    items = ["&a0 [*a0]"] + [f"&a{i} [*a{i - 1}]" for i in range(1, levels - 1)]
+    return f"x-anchors: [{', '.join(items)}]\n", f"[*a{levels - 2}]"
 
 
 def test_env_nesting_is_checked_before_the_cycle() -> None:

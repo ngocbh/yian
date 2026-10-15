@@ -10,6 +10,7 @@ from yian.typesys.values import (
     ObjectValue,
     TypeCheckError,
     build_value,
+    recursive_entry_path,
     reject_deep_nesting,
     reject_non_text_keys,
 )
@@ -157,6 +158,26 @@ def test_cycles_are_not_reported_as_too_deep():
     items: list = []
     items.append(items)
     reject_deep_nesting(items, "output")
+
+
+def test_recursive_entry_path_names_the_entry_that_refers_back():
+    items: list = [1]
+    items.append(items)
+    record: dict = {"a": {}}
+    record["a"]["b"] = record
+    pair: list = []
+    pair.append(("x", pair))
+
+    assert recursive_entry_path(items) == (1,)
+    assert recursive_entry_path(record) == ("a", "b")
+    assert recursive_entry_path(pair) == (0, 1)
+
+
+def test_recursive_entry_path_is_none_without_a_cycle():
+    shared = [1, 2]
+
+    assert recursive_entry_path({"a": shared, "b": [shared]}) is None
+    assert recursive_entry_path(1) is None
 
 
 def test_limit_is_read_at_call_time(set_defaults):

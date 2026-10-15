@@ -598,32 +598,53 @@ def reject_deep_nesting(value: Any, where: str, *, enclosing_levels: int = 0) ->
         value = value.to_object()
     if 1 + enclosing_levels > limit and _nesting_children(value) is not None:
         raise _too_deep(where, (), limit)
-    for stack, key, descends in _walk_nesting(value):
+    for stack, key, _, descends in _walk_nesting(value):
         if descends and len(stack) + 1 + enclosing_levels > limit:
             path = _frame_path(stack) + (_nesting_segment(stack[-1][1], key),)
             raise _too_deep(where, path, limit)
+
+
+def recursive_entry_path(value: Any) -> tuple[str | int, ...] | None:
+    """Return the path of the first entry that refers back to a container enclosing it.
+
+    Walks the containers `reject_deep_nesting` walks, depth-first and in order, and
+    unwraps a `TypedValue`. A container repeated outside its own path does not count.
+
+    Args:
+        value (`Any`):
+            The value to search.
+
+    Returns:
+        `tuple[str | int, ...] | None`: The entry's path from `value`, or `None` if
+            no entry holds a container enclosing it.
+    """
+    for stack, key, child, descends in _walk_nesting(value):
+        if not descends and _nesting_children(child) is not None:
+            return _frame_path(stack) + (_nesting_segment(stack[-1][1], key),)
+    return None
 
 
 _Frame = tuple[Iterator[tuple[Any, Any]], Any, Any]
 """A walk frame: the container's children iterator, the container, and its key in the parent."""
 
 
-def _walk_nesting(value: Any) -> Iterator[tuple[list[_Frame], Any, bool]]:
+def _walk_nesting(value: Any) -> Iterator[tuple[list[_Frame], Any, Any, bool]]:
     """Yield each entry of a value's containers, depth-first and in order.
 
-    Unwraps a `TypedValue` wherever it sits. Each yield is ``(stack, key, descends)``:
-    the frames of the containers on the current path, root first, with the entry's
-    container last; the entry's key in that container; and whether the walk goes into
-    the entry next, which it does for a container not already on the path. A caller
-    reads the stack before resuming the walk, which changes it.
+    Unwraps a `TypedValue` wherever it sits. Each yield is
+    ``(stack, key, child, descends)``: the frames of the containers on the current path,
+    root first, with the entry's container last; the entry's key in that container; the
+    entry's value, unwrapped; and whether the walk goes into the entry next, which it
+    does for a container not already on the path. A caller reads the stack before
+    resuming the walk, which changes it.
 
     Args:
         value (`Any`):
             The value to walk; a leaf yields nothing.
 
     Yields:
-        `tuple[list[_Frame], Any, bool]`: The frame stack, the entry's key, and
-            whether the walk descends into the entry.
+        `tuple[list[_Frame], Any, Any, bool]`: The frame stack, the entry's key, its
+            value, and whether the walk descends into the entry.
     """
     while isinstance(value, TypedValue):
         value = value.to_object()
@@ -648,7 +669,7 @@ def _walk_nesting(value: Any) -> Iterator[tuple[list[_Frame], Any, bool]]:
                 child = child.to_object()
             if id(child) not in active:
                 grandchildren = _nesting_children(child)
-        yield stack, key, grandchildren is not None
+        yield stack, key, child, grandchildren is not None
         if grandchildren is not None:
             stack.append((iter(grandchildren), child, key))
             active.add(id(child))
@@ -706,7 +727,7 @@ def reject_non_text_keys(value: Any, where: str) -> None:
             A mapping has a non-text key; ``path`` locates the mapping and the message
             reads ``<where>[ at <path>]: object keys must be text, got <repr>``.
     """
-    for stack, key, _ in _walk_nesting(value):
+    for stack, key, _, _ in _walk_nesting(value):
         container = stack[-1][1]
         if isinstance(container, dict) and not isinstance(key, str):
             path = _frame_path(stack)

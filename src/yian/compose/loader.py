@@ -723,8 +723,9 @@ def _validate_flow_env(
 ) -> None:
     """Refuse a flow `env:` value too deep or holding itself, or an invalid `max_tool_iterations`.
 
-    The nesting and recursive alias checks run first, so a deep `max_tool_iterations` is not shown in full; a
-    `max_tool_iterations` default must be one every AGENT node would accept when it runs.
+    The nesting and recursive alias checks run first, so a deep `max_tool_iterations` is
+    not shown in full; a `max_tool_iterations` default must be one every AGENT node would
+    accept when it runs.
     """
     check_env_values(
         env, "flow ", cursor.child("env") if cursor.has("env") else None, diagnostics

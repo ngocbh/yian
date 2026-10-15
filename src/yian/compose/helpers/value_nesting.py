@@ -17,9 +17,8 @@ from yian.compose.source import SourceCursor
 from yian.diagnostics import SourceRange
 from yian.typesys.values import (
     TypeCheckError,
-    _nesting_children,
-    _nesting_segment,
     _render_value_path,
+    recursive_entry_path,
     reject_deep_nesting,
 )
 
@@ -80,48 +79,10 @@ def check_env_values(
             range = env_cursor.range_of(key) or env_cursor.range
         where = f"{prefix}env {key!r}"
         check_written_value(value, where, range, diagnostics)
-        path = _recursive_entry_path(value)
+        path = recursive_entry_path(value)
         if path is not None:
             raise diagnostics.error(
                 f"{where} at {_render_value_path(path)}: "
                 "cannot descend through a recursive alias occurrence",
                 range=range,
             )
-
-
-def _recursive_entry_path(value: Any) -> tuple[str | int, ...] | None:
-    """Return the path of the first entry that refers back to a container enclosing it.
-
-    Walks the containers `reject_deep_nesting` walks, depth-first and in order.
-
-    Args:
-        value (`Any`): The authored value.
-
-    Returns:
-        `tuple[str | int, ...] | None`: The entry's path from `value`, or `None` when
-            no entry holds an enclosing container.
-    """
-    children = _nesting_children(value)
-    if children is None:
-        return None
-    # An explicit stack, not recursion: the value already passed the depth check, but
-    # this walk should not depend on the caller's stack depth either.
-    stack = [(iter(children), value, ())]
-    active = {id(value)}
-    while stack:
-        iterator, container, path = stack[-1]
-        entry = next(iterator, None)
-        if entry is None:
-            stack.pop()
-            active.discard(id(container))
-            continue
-        key, child = entry
-        grandchildren = _nesting_children(child)
-        if grandchildren is None:
-            continue
-        child_path = path + (_nesting_segment(container, key),)
-        if id(child) in active:
-            return child_path
-        stack.append((iter(grandchildren), child, child_path))
-        active.add(id(child))
-    return None

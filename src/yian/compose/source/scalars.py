@@ -9,9 +9,10 @@ YAML 1.2 core schema, keeping two YAML 1.1 extensions: unquoted timestamps and
 scalar that is not a real date or time, such as ``2026-13-45`` or an offset of
 ``+05:99``, a located ``ConstructorError`` that says to quote it. PyYAML's global
 ``SafeLoader`` tables are never modified. A document nested deeper than
-``current().max_yaml_nesting`` levels is a located ``ComposerError``, and an integer
-with more than ``current().max_int_digits`` decimal digits a located
-``ConstructorError``.
+``current().max_yaml_nesting`` levels, or one that expands to more than
+``current().max_yaml_nodes`` nodes when each alias counts as a copy of what it
+names, is a located ``ComposerError``, and an integer with more than
+``current().max_int_digits`` decimal digits a located ``ConstructorError``.
 
 Knows about:   PyYAML, yian.defaults, yian.typesys.values.
 Never imports: compose helpers or phases, nodes, compile, runtime, the run
@@ -22,6 +23,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime
+from typing import Any
 
 import yaml
 from yaml.composer import ComposerError
@@ -67,6 +69,25 @@ def _pyyaml_timestamp_regex() -> re.Pattern[str]:
     raise AssertionError("PyYAML has no implicit timestamp resolver")
 
 
+def _children(node: yaml.Node) -> list[yaml.Node]:
+    """Return a node's child nodes: a list's items, or each pair's key and value.
+
+    Args:
+        node (`yaml.Node`):
+            A composed node.
+
+    Returns:
+        `list[yaml.Node]`:
+            The children in document order; none for a scalar.
+    """
+
+    if isinstance(node, yaml.SequenceNode):
+        return node.value
+    if isinstance(node, yaml.MappingNode):
+        return [child for pair in node.value for child in pair]
+    return []
+
+
 class ScalarValueError(ConstructorError):
     """A plain scalar's resolved tag can't build its text; quoting keeps it as text.
 
@@ -90,7 +111,10 @@ class _FlowLoader(yaml.SafeLoader):
     the table resolves. A ``timestamp`` that can't be built is a located
     ``ConstructorError``; every other tag keeps PyYAML's safe behavior. A
     mapping or list nested past ``current().max_yaml_nesting`` is a located
-    ``ComposerError``.
+    ``ComposerError``, and so is the first mapping or list, in post-order, that
+    expands to more than ``current().max_yaml_nodes`` nodes. Each mapping, list, and
+    scalar node, mapping keys included, counts once per place it appears, so an
+    alias or a ``<<`` merge source counts every node it names again.
 
     Args:
         stream (`str`):
@@ -105,6 +129,7 @@ class _FlowLoader(yaml.SafeLoader):
         self._nesting = 0
         limits = current()
         self._max_nesting = limits.max_yaml_nesting
+        self._max_nodes = limits.max_yaml_nodes
         self._max_value_nesting = limits.max_value_nesting
 
     # PyYAML composes recursively, a few frames per level, and takes every event
@@ -139,6 +164,101 @@ class _FlowLoader(yaml.SafeLoader):
         elif isinstance(event, yaml.CollectionEndEvent):
             self._nesting -= 1
         return event
+
+    # Aliases let a short document name exponentially many nodes, and every later step
+    # (construction, walking, the run log) costs per expanded node, so the composed
+    # graph is counted before anything else touches it. The walk is iterative and
+    # inline, so no frame in a failure's traceback takes a node as an argument: the
+    # repr of an alias graph is exponential too.
+    #
+    # A recursive alias is a back edge to a node still on the path. It counts 1 (the
+    # alias itself), and the source layer reports it when something descends through
+    # it. Its count makes every node on the cycle, from its target down to it,
+    # path-dependent: reached from outside the cycle, the loader's walkers expand that
+    # target in full, and reached from inside it, the target is the back edge. So a node
+    # is memoized only when no back edge below it reaches it or above it (its `low`, the
+    # shallowest path depth such an edge reaches, is deeper than its own depth), and a
+    # path-dependent node is counted again at each visit. Every step adds at least 1 to
+    # `counted`, the nodes counted so far, so once that passes the limit the document
+    # is over it; a recount then would only repeat work, so the walk stops there and
+    # reports the deepest node on the path already holding more than the limit.
+    def compose_document(self) -> yaml.Node:
+        """Compose one document, refusing one that expands past the node limit.
+
+        Returns:
+            `yaml.Node`:
+                The document's root node.
+
+        Raises:
+            `ComposerError`:
+                Raised at the first mapping or list, in post-order, that holds more
+                than ``current().max_yaml_nodes`` nodes, counting each alias as a copy
+                of what it names. Under a recursive alias, raised instead at the
+                deepest node on the path already over the limit once the count would
+                need repeating.
+        """
+
+        root = super().compose_document()
+        limit = self._max_nodes
+        counts: dict[int, int] = {}
+        path_dependent: set[int] = set()
+        # The depth of each node on the path, by id.
+        depths = {id(root): 0}
+        counted = 1
+        over: yaml.Node | None = None
+        # Each frame: the node, its children, the next child's index, its count so far,
+        # and its `low`, which starts one deeper than the node.
+        stack: list[list[Any]] = [[root, _children(root), 0, 1, 1]]
+        while stack:
+            frame = stack[-1]
+            node, children, index, total, low = frame
+            if index < len(children):
+                frame[2] = index + 1
+                child = children[index]
+                key = id(child)
+                if key in counts:
+                    frame[3] = total + counts[key]
+                    counted += counts[key]
+                elif key in depths:
+                    frame[3] = total + 1
+                    frame[4] = min(low, depths[key])
+                    counted += 1
+                elif counted > limit and key in path_dependent:
+                    partial = 0
+                    for held in reversed(stack):
+                        partial += held[3]
+                        if partial > limit:
+                            over = held[0]
+                            break
+                    break
+                else:
+                    depths[key] = len(stack)
+                    stack.append([child, _children(child), 0, 1, len(stack) + 1])
+                    counted += 1
+                continue
+            stack.pop()
+            del depths[id(node)]
+            if low > len(stack):
+                counts[id(node)] = total
+            else:
+                path_dependent.add(id(node))
+            if total > limit:
+                over = node
+                break
+            if stack:
+                stack[-1][3] += total
+                stack[-1][4] = min(stack[-1][4], low)
+        if over is not None:
+            kind = "list" if isinstance(over, yaml.SequenceNode) else "mapping"
+            raise ComposerError(
+                None,
+                None,
+                f"this {kind} holds more than {limit} YAML nodes, counting each alias "
+                f"as a copy of what it names; the limit for a YAML document is {limit} "
+                "(YIAN_MAX_YAML_NODES; each mapping, list, and scalar is a node)",
+                over.start_mark,
+            )
+        return root
 
     def construct_yaml_bool(self, node: yaml.Node) -> bool:
         """Construct a core-schema boolean.

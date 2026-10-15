@@ -1144,7 +1144,19 @@ plain scalar that isn't a real date, such as `2026-13-45`, is a located YAML err
 that says to quote it. A document nested deeper than `YIAN_MAX_YAML_NESTING`
 (default 200) levels, each mapping and list a level, is a located YAML error:
 `_FlowLoader.get_event` counts collection events, adding no frame per level, and stops
-before PyYAML's recursive composer runs out of stack. It constructs root text once as a
+before PyYAML's recursive composer runs out of stack. A document (each flow and `uses:`
+file, each `parse_yaml_literal` literal, skill frontmatter; not `read_plain_scalar`)
+that expands past `YIAN_MAX_YAML_NODES` (default 100,000) nodes is a located YAML error
+too: `_FlowLoader.compose_document` walks the composed graph iteratively before
+construction, counting each mapping, list, and scalar, keys included, once per place it
+appears, so an alias or a `<<` merge source counts every node it names again (a merge
+source counts in full even where the mapping overrides its keys). It raises at the first
+mapping or list, in post-order, past the limit, which for an alias blow-up is the anchor
+whose copies blow up. A recursive alias (one inside the node it names) counts 1, and in a
+document that has one the error may name an enclosing mapping or list, up to the whole
+document. Aliases make the expanded size exponential in the text, and every
+later walker, the flow fingerprint, and the run log (JSON, without aliases) cost per
+expanded node. `compose/source/` constructs root text once as a
 `SourceDocument` with an immutable, defensive public cursor interface and keeps the
 composed and constructed YAML graph private. Each uncached external file gets one
 document too. The document owns the original text, label, semantic value, occurrence

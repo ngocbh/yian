@@ -957,8 +957,16 @@ says to quote it. The loader counts collection events as the composer takes them
 refuses a document nested deeper than `YIAN_MAX_YAML_NESTING`
 (default 200) levels, each mapping and list a level, with a located YAML error before
 PyYAML's recursive composer can exhaust the stack; the count adds no frame per
-level. Root text and each uncached external file are constructed once
-as `SourceDocument`s, whose public cursor interface is immutable and defensive.
+level. After composing a document (not a `read_plain_scalar` scalar), the loader also
+counts its expanded nodes, each mapping, list, and scalar, keys included, once per place
+it appears, so an alias or a `<<` merge source counts every node it names again (a merge
+source counts in full even where the mapping overrides its keys). A document past
+`YIAN_MAX_YAML_NODES` (default 100,000) is a located YAML error at the first mapping or
+list, in post-order, that passes the limit, before construction: aliases make the
+expanded size exponential in the text, and every later walker, the flow fingerprint, and
+the run log (JSON, without aliases) cost per expanded node. Root text and each uncached
+external file are constructed once as `SourceDocument`s, whose public cursor interface
+is immutable and defensive.
 They retain the original text and label while keeping PyYAML's
 composed/constructed graph private. YAML aliases and merge mappings are
 interpreted without mutating that graph. Persistent pair/arc ropes keep merge

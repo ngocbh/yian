@@ -325,7 +325,14 @@ An expression nests at most 100 levels as well (each call, list, unary operator,
 comparison, `|`/`:-`/`:?`, and operator chain is one); a deeper one is a load error at
 its field. A flow file's YAML nests at most 200 levels (`YIAN_MAX_YAML_NESTING`; each
 mapping and list is one);
-deeper is a located load error.
+deeper is a located load error. Each YAML document (a flow file, each `uses:` file, a
+skill's frontmatter) expands to at most 100,000 nodes (`YIAN_MAX_YAML_NODES`), each
+mapping, list, and scalar, keys included, counting once per place it appears: an alias
+counts every node it names again, and a `<<:` merge source counts in full even where the
+mapping overrides its keys. More is an invalid-YAML error (a load error in a flow
+file) at the first mapping or list, in post-order, past the limit, which for an alias
+blow-up is the anchor whose copies blow up (`invalid YAML: this list holds more than
+100000 YAML nodes, counting each alias as a copy of what it names; ...`).
 CALL, MAP, and LOOP bodies nest at most 50 levels (`YIAN_MAX_CALL_NESTING`), counting
 `defs:`, inline,
 `call(...)`, and `uses:` bodies alike; a deeper chain is a load error at the `call:`

@@ -112,6 +112,9 @@ load, run, and resume with stack to spare:
   type in `output:` counts its record levels against the same limit, but one near 125
   levels runs with less stack headroom.
 
+`YIAN_MAX_YAML_NODES` has no maximum, since counting a document's nodes takes no stack;
+raising it raises load time and run-log size in proportion.
+
 ## Integer digits
 
 `YIAN_MAX_INT_DIGITS` defaults to 4,300, Python's own limit on the decimal digits of
@@ -132,6 +135,7 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_MAX_VALUE_NESTING` | limit | 100 | 1 to 100 (can only be lowered) | Deepest nesting a value may have; also bounds expression nesting |
 | `YIAN_MAX_TYPE_NESTING` | limit | 100 | 1 to 125 | Deepest nesting a type may have, counting record levels |
 | `YIAN_MAX_YAML_NESTING` | limit | 200 | 1 to 200 (can only be lowered) | Deepest nesting of a YAML document yian reads |
+| `YIAN_MAX_YAML_NODES` | limit | 100,000 | 1 or more | Most nodes a YAML document yian reads may expand to, counting each alias as a copy |
 | `YIAN_MAX_CALL_NESTING` | limit | 50 | 1 to 50 (can only be lowered) | Deepest chain of call, map, and loop bodies a flow may nest, and of uses: files it may import |
 | `YIAN_MAX_TOTAL_NODES` | limit | 10,000 | 1 or more | Most live nodes a run's graph may grow to |
 | `YIAN_MAX_SKIP_WORLDS` | limit | 10,000 | 1 or more | Most branch combinations the skip check explores before giving up |

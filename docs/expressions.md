@@ -272,6 +272,11 @@ prompt that calls a builtin with arguments it doesn't take, makes `run_flow` rai
 `ExpressionError` before the run. A `typedefs:` constructor `T(...)` is not an unknown
 function; set in Python, its name must be in the node's type table.
 
+Each shipped builtin returns text, so a field read on its result (`${upper(x).f}`) is a
+load error wherever it is written: `reference ${upper(...).f} reads field 'f' on type
+str, which has no fields`. A host-registered builtin's result, even one registered
+under a shipped name, isn't checked.
+
 ## `isinstance` — the type test
 
 `isinstance(x, T)` is `true` when the value of `x` satisfies the type named `T`:

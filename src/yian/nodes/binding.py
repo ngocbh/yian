@@ -57,9 +57,11 @@ from yian.typesys.values import (
     IntTooLongError,
     Type,
     _render_value_path,
+    _sort_repr,
     parse_int_text,
     reject_deep_nesting,
     reject_nonfinite,
+    shown_text,
     value_repr,
 )
 
@@ -298,11 +300,12 @@ def check_input_names(params: list[Parameter], raw: Mapping[str, Any]) -> None:
             f"inputs must be a mapping of input names to values, got {type(raw).__name__}"
         )
     declared = [parameter.name for parameter in params]
-    unknown = sorted(value_repr(name) for name in raw if name not in declared)
+    unknown = sorted((name for name in raw if name not in declared), key=_sort_repr)
     if unknown:
         noun = "input" if len(unknown) == 1 else "inputs"
+        shown = shown_text(", ".join(value_repr(name) for name in unknown))
         raise ValueError(
-            f"unknown {noun} {', '.join(unknown)}; "
+            f"unknown {noun} {shown}; "
             f"declared inputs: {', '.join(declared) or '(none)'}"
         )
 

@@ -28,7 +28,7 @@ from yian.typesys import (
     union_field,
     union_tag_fields,
 )
-from yian.typesys.values import value_repr
+from yian.typesys.values import _sort_repr, shown_text, value_repr
 
 
 ValuePath: TypeAlias = tuple[str | int, ...]
@@ -896,14 +896,14 @@ def validate_output_contract(
         except TypeError:
             ordered_unknown = sorted(
                 unknown,
-                key=lambda name: (type(name).__qualname__, value_repr(name)),
+                key=lambda name: (type(name).__qualname__, _sort_repr(name)),
             )
         path = (
             (ordered_unknown[0],)
             if all(type(name) is str for name in unknown)
             else ()
         )
-        shown = ", ".join(value_repr(name) for name in ordered_unknown)
+        shown = shown_text(", ".join(value_repr(name) for name in ordered_unknown))
         raise TypeCheckError(
             f"record has unknown fields: [{shown}]",
             path=path,

@@ -67,8 +67,22 @@ class TypeCheckError(ValueError):
         self.path = path
 
 
+def shown_text(text: str) -> str:
+    """Cut text to `YIAN_MAX_SHOWN_VALUE_CHARS` for a message.
+
+    Args:
+        text (`str`):
+            The rendering to show.
+
+    Returns:
+        `str`: ``text`` when it fits; else its first cap - 1 characters and ``…``.
+    """
+    cap = current().max_shown_value_chars
+    return text if len(text) <= cap else text[: cap - 1] + "…"
+
+
 def value_repr(value: Any) -> str:
-    """Return `repr(value)`, or a placeholder when it can't be rendered.
+    """Return `repr(value)` cut for a message, or a placeholder when it can't be rendered.
 
     Args:
         value (`Any`):
@@ -77,7 +91,8 @@ def value_repr(value: Any) -> str:
     Returns:
         `str`: ``<int with N digits>`` for an int longer than `YIAN_MAX_INT_DIGITS`, or
             ``<{type} holding an int with N digits>`` for a value holding one,
-            whatever Python's own digit limit; else ``repr(value)``,
+            whatever Python's own digit limit; else ``repr(value)`` cut to
+            `YIAN_MAX_SHOWN_VALUE_CHARS` (see `shown_text`),
             ``<{type} too large to display>`` when that fails, or ``<{type} object>``
             when the value's own repr raises.
     """
@@ -87,7 +102,7 @@ def value_repr(value: Any) -> str:
             if isinstance(value, (int, OverLimitInt)):
                 return f"<int with {digits} digits>"
             return f"<{type(value).__name__} holding an int with {digits} digits>"
-        return repr(value)
+        text = repr(value)
     except ValueError:
         # repr of an int past Python's str-digit limit raises, also inside a container
         # the walk doesn't enter, such as a set.
@@ -95,6 +110,20 @@ def value_repr(value: Any) -> str:
     except Exception:
         # A returned value's repr is user code; a broken one must not crash the run.
         return f"<{type(value).__name__} object>"
+    # Cut outside the `try`, so a bad `YIAN_MAX_SHOWN_VALUE_CHARS` is not swallowed.
+    return shown_text(text)
+
+
+def _sort_repr(value: Any) -> str:
+    """Return `repr(value)` uncut, or `value_repr`'s placeholder when it raises.
+
+    A sort key: names whose cut renderings are equal still sort apart, so the order
+    does not depend on the hash seed.
+    """
+    try:
+        return repr(value)
+    except Exception:
+        return value_repr(value)
 
 
 def reject_nonfinite(value: Any, where: str) -> None:
@@ -251,16 +280,26 @@ def _dict_children(
 
 
 def _render_value_path(path: tuple[str | int, ...]) -> str:
-    """Render a path as ``a[1].b``, quoting a non-identifier key as ``['my key']``."""
+    """Render a path as ``a[1].b``, quoting a non-identifier key as ``['my key']``.
+
+    Each key is cut with `shown_text`, and a rendering longer than four times
+    `YIAN_MAX_SHOWN_VALUE_CHARS` keeps its start and end around ``…``.
+    """
     parts = []
     for segment in path:
         if isinstance(segment, int):
             parts.append(f"[{segment}]")
         elif segment.isidentifier():
-            parts.append(f".{segment}" if parts else segment)
+            shown = shown_text(segment)
+            parts.append(f".{shown}" if parts else shown)
         else:
-            parts.append(f"[{segment!r}]")
-    return "".join(parts)
+            parts.append(f"[{shown_text(repr(segment))}]")
+    text = "".join(parts)
+    limit = 4 * current().max_shown_value_chars
+    if len(text) <= limit:
+        return text
+    head = limit // 2
+    return text[:head] + "…" + text[len(text) - (limit - head - 1) :]
 
 
 def _int_bound() -> int:
@@ -630,7 +669,7 @@ def _nesting_segment(container: Any, key: Any) -> str | int:
     """Return the path segment for `key` within `container`."""
     if isinstance(container, dict):
         # `TypeCheckError` paths hold exact `str` segments, so a `str` subclass key is unwrapped.
-        return str.__str__(key) if isinstance(key, str) else repr(key)
+        return str.__str__(key) if isinstance(key, str) else value_repr(key)
     return key
 
 
@@ -2160,14 +2199,14 @@ def _build_for_type(
             except TypeError:
                 ordered_unknown = sorted(
                     unknown,
-                    key=lambda name: (type(name).__qualname__, value_repr(name)),
+                    key=lambda name: (type(name).__qualname__, _sort_repr(name)),
                 )
             unknown_path = (
                 path + (ordered_unknown[0],)
                 if all_string_keys
                 else path
             )
-            shown = ", ".join(value_repr(name) for name in ordered_unknown)
+            shown = shown_text(", ".join(value_repr(name) for name in ordered_unknown))
             raise TypeCheckError(
                 f"record has unknown fields: [{shown}]",
                 path=unknown_path,

@@ -73,7 +73,7 @@ class MissingToolCallError(OutputParserException):
         self.send_to_llm = False
 
 
-def missing_tool_call(name: str) -> OutputParserException:
+def missing_tool_call(name: str) -> MissingToolCallError:
     """Return the error for a structured reply that did not call the schema's tool.
 
     The AGENT sends this message as the correction before a retry, and raises the error
@@ -84,8 +84,8 @@ def missing_tool_call(name: str) -> OutputParserException:
             The name of the schema's tool.
 
     Returns:
-        `OutputParserException`:
-            A `MissingToolCallError` whose message names the tool.
+        `MissingToolCallError`:
+            The error, an `OutputParserException` whose message names the tool.
 
     Example:
         >>> str(missing_tool_call("Answer"))

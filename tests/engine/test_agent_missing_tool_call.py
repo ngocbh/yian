@@ -24,6 +24,7 @@ _TEXT = [{"type": "text", "text": "7"}]
 def _flow(retries, session, llm_config="{provider: anthropic, model: claude-opus-5-5}"):
     text = (_FLOW.replace("{provider: openai, model: test-model}", llm_config)
             .replace("    output: str", f"    retries: {retries}\n    output: int"))
+    assert llm_config in text and "output: int" in text
     return load_flow(text if session else text.replace(_SESSION_LINE, ""))
 
 
@@ -32,7 +33,8 @@ def _run(flow, session):
 
 
 def _anthropic(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    # A distinctive key: the run scrubs the key from failure messages.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
     model = _model(model="claude-opus-5-5")
     monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
 
@@ -101,4 +103,5 @@ def test_a_generic_agent_fails_naming_the_tool_when_the_reply_has_no_result(monk
     assert result.status == "failed"
     assert result.failure.code == "node.execute" and result.failure.node_id == "agent"
     assert _MESSAGE in result.failure.message
+    assert result.failure.cause_type == "MissingToolCallError"
     assert len(model.calls) == 1

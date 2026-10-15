@@ -540,12 +540,14 @@ binds a forced function tool without `strict`, a request routed to the Responses
 makes the whole schema non-strict; other clients and closed schemas are unchanged. The
 same unforced-tool binding (`_unforced_tool_output`) serves, for every schema, Anthropic
 models that refuse a forced tool (`_forces_tool(model)` false: Opus 5.5, Sonnet 5.5,
-Fable 5.1) when block thinking is off and no explicit `method="json_schema"` is given. A reply with no tool call, whether that guard
-raises it (with `include_raw`, as the `parsing_error`) or a tool parser returns no result (`_generate_native` treats `None`, or a
-carrier with `parsed: None, parsing_error: None`, the same way), is the correctable
-deviation `base_client.missing_tool_call`: a `MissingToolCallError`
-(`OutputParserException`) whose message names the tool, fed back under `retries:`; once
-they're spent the AGENT fails `node.execute`.
+Fable 5.1) when block thinking is off and no explicit `method="json_schema"` is given.
+
+A reply with no tool call is the correctable deviation `base_client.missing_tool_call`, a
+`MissingToolCallError` (`OutputParserException`) whose message names the tool. The guard
+above raises it (with `include_raw`, it is the `parsing_error`), and `_generate_native`
+raises it when a tool parser returns no result: `None`, or a carrier with `parsed: None,
+parsing_error: None`. It is fed back under `retries:`; once they're spent the AGENT fails
+`node.execute`.
 
 An AGENT checks what the model sends back. `run_agent` passes `invoke_model` a
 `check_reply` that rejects a tool call whose arguments hold a NaN or infinity, before any call of

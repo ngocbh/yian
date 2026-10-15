@@ -611,6 +611,10 @@ def _reject_nonfinite_carrier(response: Any, tool_name: str) -> None:
     before. A malformed carrier raises `_CapabilityFault`. The parsing error is the
     schema's own, so the retry and the exhausted error's origin match a run without
     memory. A carrier with no parsed value raises `missing_tool_call(tool_name)`.
+
+    Args:
+        response (`Any`): The native carrier the model call returned.
+        tool_name (`str`): The schema's tool name, for a carrier with no parsed value.
     """
     if type(response) is not dict:
         return

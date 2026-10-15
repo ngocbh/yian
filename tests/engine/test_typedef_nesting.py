@@ -19,15 +19,11 @@ import pytest
 from yian.compose import LoadError, load_flow
 from yian.defaults import Defaults
 from yian.typesys.types import (
-    AliasDef,
-    EnumExpr,
     RecordDef,
     RefExpr,
-    VariantDef,
     _measure_typedef,
     _parse_field,
     _typedef_parts,
-    parse_type,
     read_typedefs,
     resolve_type,
 )
@@ -251,6 +247,7 @@ def test_a_list_alias_chain_over_a_scalar_fails_on_its_length():
     with pytest.raises(TypeCheckError) as info:
         read_typedefs(_aliases(101, "L", wrap="list({})"))
     assert str(info.value) == _chain_message("L100", 101)
+    assert info.value.path == ("L100",)
 
 
 def test_a_list_alias_chain_over_a_record_fails_on_levels():
@@ -337,17 +334,11 @@ def _diamond(n: int) -> dict:
     return raw
 
 
-def _measure_all(raw: dict) -> dict[str, int]:
-    """Measure the typedefs of `raw`, listed dependencies first, without resolving them;
-    return their levels."""
+def _measure_all(registry: dict) -> dict[str, int]:
+    """Measure the typedefs of `registry`, listed dependencies first; return their levels."""
     levels: dict[str, int] = {}
     chain: dict[str, int] = {}
-    for name, written in raw.items():
-        if isinstance(written, dict):
-            defn = RecordDef(fields=dict(written))
-        else:
-            target = parse_type(written)
-            defn = VariantDef(tags=target.tags) if isinstance(target, EnumExpr) else AliasDef(target)
+    for name, defn in registry.items():
         parts = [
             (field, _parse_field(t) if isinstance(t, str) else t)
             for field, t in _typedef_parts(defn)
@@ -358,7 +349,9 @@ def _measure_all(raw: dict) -> dict[str, int]:
 
 def test_measuring_a_diamond_is_memoized():
     start = time.monotonic()
-    levels = _measure_all(_diamond(61))
+    # Built by hand: `read_typedefs` would resolve the diamond, expanding 2**60 records.
+    registry = {name: RecordDef(fields=fields) for name, fields in _diamond(61).items()}
+    levels = _measure_all(registry)
     assert time.monotonic() - start < 5
     assert levels["D60"] == 61
 
@@ -369,7 +362,8 @@ def test_a_flow_with_a_diamond_loads():
 
 
 def test_an_empty_record_and_an_enum_load():
-    assert _measure_all({"E": {}, "V": "Literal(a)"}) == {"E": 1, "V": 0}
+    registry = read_typedefs({"E": {}, "V": "Literal(a)"})
+    assert _measure_all(registry) == {"E": 1, "V": 0}
 
 
 def test_measured_levels_match_the_resolved_type():
@@ -385,6 +379,6 @@ def test_measured_levels_match_the_resolved_type():
         "M": {"l": "Optional(L)", "b": "B", "e": "list(E)"},
     }
     registry = read_typedefs(raw)
-    measured = _measure_all(raw)
+    measured = _measure_all(registry)
     for name in raw:
         assert measured[name] == type_levels(resolve_type(RefExpr(name), registry)), name

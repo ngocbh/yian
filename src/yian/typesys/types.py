@@ -1120,7 +1120,26 @@ def _check_measure(
     levels: dict[str, int],
     chain: dict[str, int],
 ) -> None:
-    """Measure a typedef and reject one whose levels or chain exceed `max_type_nesting`."""
+    """Measure a typedef and reject one whose levels or chain exceed `max_type_nesting`.
+
+    Args:
+        name (`str`):
+            The typedef's name.
+        defn (`RecordDef | VariantDef | AliasDef`):
+            Its definition.
+        parts (`list[tuple[str | None, TypeExpr]]`):
+            Its parsed `(field, type)` parts.
+        levels (`dict[str, int]`):
+            The levels memo of [`_measure_typedef`][yian.typesys.types._measure_typedef].
+        chain (`dict[str, int]`):
+            The chain memo of [`_measure_typedef`][yian.typesys.types._measure_typedef].
+
+    Raises:
+        `TypeCheckError`:
+            The typedef nests more record and list levels than the limit, or ends a
+            longer chain of typedefs each naming the next. `path` is `(typedef, field)`
+            for the record field reported, else `(typedef,)`.
+    """
     limit = current().max_type_nesting
     depth, length, levels_field, chain_field = _measure_typedef(
         name, defn, parts, levels, chain
@@ -1151,10 +1170,10 @@ def _check_typedefs(registry: TypeRegistry) -> None:
 
     Typedefs are checked dependencies first, each one's fields in order. Each typedef is
     first measured: its levels and its chain of typedef names must stay within
-    `max_type_nesting`, so resolution, which follows both, never runs deeper than the
-    limit allows. A cycle is reported at the field that closes it, naming the typedef
-    that holds that field: with `A: {x: B}` and `B: {y: A}` the error is `typedef 'B'
-    field 'y': recursive type reference: 'B'`.
+    `max_type_nesting`, so resolution's stack stays bounded by the limit. A cycle is
+    reported at the field that closes it, naming the typedef that holds that field: with
+    `A: {x: B}` and `B: {y: A}` the error is `typedef 'B' field 'y': recursive type
+    reference: 'B'`.
     """
     parsed: dict[str, list[tuple[str | None, TypeExpr]]] = {}
     # First each typedef's own text, so an error names the typedef that holds the
@@ -1342,4 +1361,3 @@ def read_typedefs(raw: dict) -> TypeRegistry:
     _check_alias_cycles(registry)
     _check_typedefs(registry)
     return registry
-

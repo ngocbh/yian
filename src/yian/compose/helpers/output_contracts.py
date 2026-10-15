@@ -184,8 +184,9 @@ def output_contract_path_error(
 ) -> str | None:
     """Return the field-read error for an output path, else ``None``.
 
-    The error is an undeclared record field, any field on a scalar or list, or a
-    field only some members of a union have (unless `partial_union_fields`).
+    The error is an undeclared record field, any field on a scalar or list, a field
+    of a `file` other than `uri`, `mime` and `name`, or a field only some members of
+    a union have (unless `partial_union_fields`).
     An opaque field inside a partial record remains lenient below that field,
     while the partial record's closed root name set is still enforced.
     """

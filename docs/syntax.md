@@ -307,12 +307,12 @@ contributes empty text. A flow output that reads a node a `case` skipped is null
 
 When the loader knows a value's type, reading a field that type can't have is a load
 error: a field on a scalar (`str`, `int`, `Literal(...)`, ...) or a list, a field a
-record doesn't declare, or a field of a `file` other than `uri`, `mime`, and `name`. This covers `${input.X...}`, `${node.output...}`, and a MAP's
-`${item...}` in bindings, `case` conditions, and flow outputs, and the carried fields a
-LOOP `while:`/`until:` predicate reads. Reading a declared field
-through an `Optional(...)` record still gives `null` when the whole value is null, and
-values whose type isn't known at load (`object`, `Any`, an untyped output, or anything
-below them) aren't checked.
+record doesn't declare, or a field of a `file` other than `uri`, `mime`, and `name`.
+This covers `${input.X...}`, `${node.output...}`, and a MAP's `${item...}` in bindings,
+`case` conditions, and flow outputs, and the carried fields a LOOP `while:`/`until:`
+predicate reads. Reading a declared field through an `Optional(...)` record still gives
+`null` when the whole value is null, and values whose type isn't known at load
+(`object`, `Any`, an untyped output, or anything below them) aren't checked.
 
 A `file` value has three fields: `uri`, `mime`, and `name`. They read the same way in
 bindings, templates and prompts, `case` `on:` and `when:`, and node and flow asserts,

@@ -29,6 +29,7 @@ from yian.typesys.values import (
     Type,
     build_value,
     build_value_as,
+    field_of,
 )
 
 
@@ -161,7 +162,7 @@ class VariablePool(BaseModel):
             return None
         value = seg.to_object()
         for step in path:
-            value = value.get(step) if isinstance(value, dict) else None
+            value = field_of(value, step)[1]
             if value is None:
                 return None
         return value

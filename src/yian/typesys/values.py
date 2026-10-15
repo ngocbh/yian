@@ -845,6 +845,40 @@ class FileRef(BaseModel):
     name: Optional[str] = None
 
 
+_FILE_FIELDS = ("uri", "mime", "name")
+
+
+def field_of(value: Any, name: str) -> tuple[bool, Any]:
+    """Read field `name` of `value`, as a dotted `${x.name}` read sees it.
+
+    A `dict` gives its key `name`; a `FileRef` gives its `uri`, `mime` or `name`. No
+    other name is read from a `FileRef`, and nothing is read from any other value, so a
+    dotted read never reaches a Python attribute such as `__class__`.
+
+    Args:
+        value (`Any`):
+            The value being read.
+        name (`str`):
+            The field name, one dotted step.
+
+    Returns:
+        `tuple[bool, Any]`:
+            `(True, field value)` when `value` has the field, else `(False, None)`. A
+            present field may hold `None`, as a file's unset `mime` does.
+
+    Example:
+        `field_of(FileRef(uri="a"), "uri")` returns `(True, "a")`;
+        `field_of(FileRef(uri="a"), "__class__")` returns `(False, None)`.
+    """
+    if isinstance(value, dict):
+        if dict.__contains__(value, name):
+            return True, dict.__getitem__(value, name)
+        return False, None
+    if isinstance(value, FileRef) and name in _FILE_FIELDS:
+        return True, getattr(value, name)
+    return False, None
+
+
 # --------------------------------------------------------------------------- #
 # TypedValue subclasses (one per type, each pinning a Literal discriminator)
 # --------------------------------------------------------------------------- #

@@ -53,7 +53,7 @@ from yian.expr.expressions import (
     rewrite_expr_refs,
 )
 from yian.expr.lineage import TracedValue, ValueRoute
-from yian.typesys.values import write_as_text
+from yian.typesys.values import field_of, write_as_text
 
 if TYPE_CHECKING:  # annotation-only imports
     from lark import Token, Tree
@@ -521,11 +521,11 @@ def rewrite_condition_reads(
 
 def _resolve_record_strict_or_none(path: str, record: dict) -> Any:
     """Resolve a dotted `path` against a node's bound input `record`, returning `None` on
-    any miss (unknown head, a dotted-walk step off a non-dict / absent key, or a `None`
-    value). This is the resolve seam handed to `eval_template` in `STRICT_RAISE` mode: the
-    evaluator turns a `None` here into a raised `ExpressionError`, so a `None` return IS the
-    strict prompt floor (no silent blank). A present-but-falsy value (`0`, `""`, `False`)
-    is a hit and comes back unchanged."""
+    any miss (unknown head, a dotted-walk step to a field the value lacks — see
+    `field_of` — or a `None` value). This is the resolve seam handed to `eval_template`
+    in `STRICT_RAISE` mode: the evaluator turns a `None` here into a raised
+    `ExpressionError`, so a `None` return IS the strict prompt floor (no silent blank). A
+    present-but-falsy value (`0`, `""`, `False`) is a hit and comes back unchanged."""
     parts = [p.strip() for p in path.split(".")]
     if not parts or any(not p for p in parts):
         raise ExpressionError(f"malformed reference ${{{path}}} in prompt")
@@ -533,7 +533,7 @@ def _resolve_record_strict_or_none(path: str, record: dict) -> Any:
         return None
     value: Any = record[parts[0]]
     for step in parts[1:]:
-        value = value.get(step) if isinstance(value, dict) else None
+        value = field_of(value, step)[1]
         if value is None:
             return None
     return value

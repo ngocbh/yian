@@ -11,6 +11,7 @@ from yian.compose import load_flow
 from yian.compose.helpers.errors import LoadError
 from yian.expr.expressions import eval_expr
 from yian.expr.grammar import parse_expr
+from yian.expr.lineage import ResolvedValue, SourceRef
 from yian.nodes.binding import bind_params
 from yian.nodes.contracts import Binding, Parameter, ValueContract
 from yian.run import resume_flow, run_flow
@@ -23,6 +24,7 @@ from yian.typesys.values import (
     TypeCheckError,
     ValueKind,
     build_value_as,
+    field_of,
     normalize_files,
     types_overlap,
 )
@@ -616,3 +618,195 @@ def test_a_constructor_in_a_flow_delivers_a_nested_file_as_its_mapping():
     )
 
     assert output == "dict"
+
+
+# --- dotted reads of a file's uri, mime and name --- #
+
+_NAMED_F = (
+    "__import__('yian.typesys.values', fromlist=['FileRef'])"
+    ".FileRef(uri='f', mime='text/plain', name='a.txt')"
+)
+_PRODUCERS = f"""\
+  a:
+    kind: code
+    output: file
+    code: |
+      return {F}
+  n:
+    kind: code
+    output: file
+    code: |
+      return {_NAMED_F}
+"""
+
+
+def _file_flow(nodes: str, output: str = "${b.output}", extra: str = "") -> str:
+    """A flow whose nodes are the file producers `a` and `n`, then `nodes`."""
+    return f"id: p\nname: p\nnodes:\n{_PRODUCERS}{nodes}output: {output}\n{extra}"
+
+
+def test_a_binding_reads_the_fields_of_a_file():
+    output = _ok(_file_flow(
+        "  b:\n    kind: code\n    input:\n"
+        "      u: ${a.output.uri}\n      m: ${n.output.mime}\n      k: ${n.output.name}\n"
+        "    code: |\n      return [inputs['u'], inputs['m'], inputs['k']]\n"
+    ))
+
+    assert output == ["f", "text/plain", "a.txt"]
+
+
+def test_a_template_binding_reads_the_uri_of_a_file():
+    output = _ok(_file_flow(
+        '  b:\n    kind: code\n    input:\n      u: "u=${a.output.uri}"\n'
+        "    code: |\n      return inputs['u']\n"
+    ))
+
+    assert output == "u=f"
+
+
+def test_a_prompt_reads_the_name_of_a_file():
+    flow = load_flow(_file_flow(
+        "  b:\n    kind: human_input\n    prompt: \"u=${f.uri} k=${f.name}\"\n"
+        "    input:\n      f: ${n.output}\n    output: str\n"
+    ))
+
+    result = run_flow(flow, {}, tools={"ask_user": lambda **request: request["question"]})
+
+    assert result.status == "succeeded", result.failure
+    assert result.output == "u=f k=a.txt"
+
+
+_CASE_NODES = """\
+  gate:
+    kind: case
+{cases}
+    else: other
+  b: {{kind: code, code: "return 'hit'", output: str}}
+  other: {{kind: code, code: "return 'else'", output: str}}
+"""
+
+
+@pytest.mark.parametrize(
+    "cases",
+    [
+        "    on: ${a.output.uri}\n    cases:\n      - when: f\n        then: b",
+        "    cases:\n      - when: \"a.output.uri == 'f'\"\n        then: b",
+    ],
+    ids=["on", "when"],
+)
+def test_a_case_routes_on_the_uri_of_a_file(cases):
+    output = _ok(_file_flow(_CASE_NODES.format(cases=cases), "${b.output | other.output}"))
+
+    assert output == "hit"
+
+
+def test_a_flow_assert_reads_the_uri_of_a_file():
+    output = _ok(_file_flow(
+        "  b: {kind: code, code: \"return 'ok'\", output: str}\n",
+        extra="asserts:\n  - \"a.output.uri == 'f' and n.output.name == 'a.txt'\"\n",
+    ))
+
+    assert output == "ok"
+
+
+def test_a_node_pre_assert_reads_the_uri_of_a_file():
+    output = _ok(_file_flow(
+        "  b:\n    kind: code\n    input:\n      f: ${a.output}\n"
+        "    code: |\n      return 'ok'\n    output: str\n"
+        "    asserts:\n      - \"f.uri == 'f'\"\n"
+    ))
+
+    assert output == "ok"
+
+
+def test_a_node_post_assert_reads_the_uri_of_a_file_in_its_output():
+    output = _ok(_file_flow(
+        "  b:\n    kind: code\n    output:\n      f: file\n      n: int\n"
+        f"    code: |\n      return dict(f={F}, n=1)\n"
+        "    asserts:\n      - \"output.f.uri == 'f'\"\n",
+        "${b.output.n}",
+    ))
+
+    assert output == 1
+
+
+def _missing_outcome(producer: str, path: str) -> tuple[str, Any]:
+    """Run a node binding `${<path>}` after `producer`; return its status and output."""
+    result = _run(
+        f"id: p\nname: p\nnodes:\n{producer}"
+        f"  b:\n    kind: code\n    input:\n      x: ${{{path}}}\n"
+        "    code: |\n      return repr(inputs['x'])\n"
+        "output: ${b.output}\n"
+    )
+    return result.status, result.output
+
+
+_OBJECT_PRODUCER = """\
+  a:
+    kind: code
+    output: object
+    code: |
+      return {'uri': 'f'}
+"""
+
+
+@pytest.mark.parametrize("field", ["other", "__class__"])
+def test_another_field_of_a_file_is_missing_like_a_missing_key(field):
+    expected = _missing_outcome(_OBJECT_PRODUCER, f"a.output.{field}")
+
+    assert expected == ("succeeded", "None")
+    assert _missing_outcome(_PRODUCERS, f"a.output.{field}") == expected
+
+
+def test_render_as_json_writes_a_file_as_its_mapping():
+    output = _ok(_file_flow(
+        "  b:\n    kind: code\n    input:\n      j: ${render_as_json(a.output)}\n"
+        "    code: |\n      return inputs['j']\n"
+    ))
+
+    assert output == '{\n  "uri": "f",\n  "mime": null,\n  "name": null\n}'
+
+
+def test_a_traced_item_read_of_a_file_field_routes_to_its_source():
+    item = ResolvedValue(REF, True, SourceRef("run", 1, ("xs", 0)))
+
+    traced = eval_expr(
+        parse_expr("item.uri"), lambda path: ResolvedValue(None, False), item=item, trace=True
+    )
+
+    assert traced.value == "f"
+    assert traced.route.source == SourceRef("run", 1, ("xs", 0, "uri"))
+
+
+def test_a_learnable_run_reads_the_fields_of_a_file_through_its_trace():
+    # A learnable run resolves bindings through the run trace, not the pool.
+    result = run_flow(load_flow(_file_flow(
+        "  b:\n    kind: code\n    input:\n"
+        "      u: ${a.output.uri}\n      k: ${n.output.name}\n      x: ${a.output.other}\n"
+        "    code: |\n      return [inputs['u'], inputs['k'], inputs['x']]\n"
+    )), {}, learnable=True)
+
+    assert result.status == "succeeded", result.failure
+    assert result.output == ["f", "a.txt", None]
+
+
+@pytest.mark.parametrize(
+    ("value", "name", "expected"),
+    [
+        ({"a": 1}, "a", (True, 1)),
+        ({"a": None}, "a", (True, None)),
+        ({"a": 1}, "b", (False, None)),
+        (FileRef(uri="f", mime="m", name="n"), "uri", (True, "f")),
+        (FileRef(uri="f", mime="m", name="n"), "mime", (True, "m")),
+        (FileRef(uri="f", mime="m", name="n"), "name", (True, "n")),
+        (FileRef(uri="f"), "name", (True, None)),
+        (FileRef(uri="f"), "other", (False, None)),
+        (FileRef(uri="f"), "__class__", (False, None)),
+        (FileRef(uri="f"), "model_dump", (False, None)),
+        ("text", "upper", (False, None)),
+        ([1], "0", (False, None)),
+        (None, "a", (False, None)),
+    ],
+)
+def test_field_of_reads_a_dict_key_or_a_file_field(value, name, expected):
+    assert field_of(value, name) == expected

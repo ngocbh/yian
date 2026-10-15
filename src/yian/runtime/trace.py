@@ -32,7 +32,7 @@ from yian.runtime.log import (
     NodeSucceededRecord, RecordEnvelope, RunResumedRecord, RunStartedRecord,
     _decode_typed, _evidence_payload, canonical_seed, decode_pool, decode_record, encode_record,
 )
-from yian.typesys.values import ANY_VALUE_ADAPTER
+from yian.typesys.values import ANY_VALUE_ADAPTER, field_of
 
 
 def capture_bindings(
@@ -356,9 +356,9 @@ class RetainedTrace:
             return ResolvedValue(None, False)
         value = entry.value
         for part in projection:
-            if not isinstance(value, dict) or part not in value:
+            present, value = field_of(value, part)
+            if not present:
                 return ResolvedValue(None, False)
-            value = value[part]
         source = entry.source
         return ResolvedValue(value, True, None if source is None else SourceRef(
             source.run_id, source.execution_seq, tuple(projection),

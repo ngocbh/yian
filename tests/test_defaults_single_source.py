@@ -31,9 +31,7 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("llm_clients/redact.py", "_MIN_VISIBLE"): "key characters a masked echo must show to count",
     # Internal sizes that no user input reaches.
     ("expr/lineage.py", "_MAX_SNAPSHOT_DEPTH"): "diagnostic retention depth, internal",
-    ("expr/percent_format.py", "_STAND_IN"): "a short int that overflows every C-sized field",
-    ("json_codec.py", "_SHORT_INT_BITS"): "size below Python's smallest int digit limit",
-    ("json_codec.py", "_SHORT_INT_TEXT"): "size below Python's smallest int digit limit",
+    ("typesys/values.py", "_LOG10_2"): "log10(2), a math constant for counting digits",
     # Host call options and network tuning, passed per call.
     ("run.py", "run_flow.num_workers"): "host run option, passed per call",
     ("run.py", "_run_flow_controlled.num_workers"): "host run option, passed per call",

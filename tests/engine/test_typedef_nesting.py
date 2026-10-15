@@ -26,6 +26,7 @@ from yian.typesys.types import (
     _typedef_parts,
     read_typedefs,
     resolve_type,
+    type_for,
 )
 from yian.typesys.values import TypeCheckError, type_levels
 
@@ -382,3 +383,56 @@ def test_measured_levels_match_the_resolved_type():
     measured = _measure_all(registry)
     for name in raw:
         assert measured[name] == type_levels(resolve_type(RefExpr(name), registry)), name
+
+
+_EXPANDED = "nests deeper than 100 levels once its typedef names are expanded"
+
+
+def _wrapped(name: str, lists: int = 100) -> str:
+    """Return `name` wrapped in `lists` nested `list(...)`s."""
+    return "list(" * lists + name + ")" * lists
+
+
+def test_type_for_bounds_a_type_with_its_typedefs_expanded():
+    registry = read_typedefs(_records(100))
+    with pytest.raises(TypeCheckError) as info:
+        type_for(_wrapped("T99"), registry)
+    assert _EXPANDED in str(info.value)
+
+
+def test_type_for_at_the_limit_resolves():
+    registry = read_typedefs(_records(99))
+    assert type_levels(type_for(_wrapped("T98", 1), registry)) == 100
+    type_for(_wrapped("int"), {})
+
+
+def _line_of(text: str, needle: str) -> int:
+    """Return the 1-based line of the first `needle` in `text`."""
+    return text[: text.index(needle)].count("\n") + 1
+
+
+def _node_input_tag_flow(typedefs: dict[str, str], tag: str) -> str:
+    """Return a flow whose CODE node passes `topic` an empty list tagged `!<tag>`."""
+    return _flow(typedefs, "T0").replace("      topic: x\n", f"      topic: !{tag} []\n")
+
+
+def _flow_input_tag_flow(typedefs: dict[str, str], tag: str) -> str:
+    """Return a flow declaring a flow input `t` with the tag `!<tag>`."""
+    return _flow(typedefs, "T0").replace("name: f\n", f"name: f\ninput:\n  t: !{tag}\n", 1)
+
+
+@pytest.mark.parametrize(
+    "build, needle",
+    [
+        (lambda typedefs, t: _flow(typedefs, f"'{t}'"), "    output: 'list("),
+        (_node_input_tag_flow, "      topic: !list("),
+        (_flow_input_tag_flow, "  t: !list("),
+    ],
+    ids=["output", "node-input-tag", "flow-input-tag"],
+)
+def test_a_flow_wrapping_a_deep_typedef_is_a_located_load_error(build, needle):
+    text = build(_flow_lines(_records(100)), _wrapped("T99"))
+    with pytest.raises(LoadError) as info:
+        load_flow(text)
+    assert info.value.diagnostic.frames[-1].range.start_line == _line_of(text, needle)
+    assert not any(isinstance(exc, RecursionError) for exc in _causes(info.value))

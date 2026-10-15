@@ -32,6 +32,7 @@ from yian.typesys.values import (
     int_digits,
     literal_label,
     parse_int_text,
+    type_levels,
     types_overlap,
     union_tag_fields,
 )
@@ -960,8 +961,21 @@ def type_for(type_str: str, registry: TypeRegistry) -> Type:
     Returns:
         `Type`:
             The resolved leaf structural type.
+
+    Raises:
+        `TypeCheckError`:
+            `type_str` does not parse or resolve, or the resolved type nests more record
+            and list levels than `max_type_nesting`: text within the limit can still
+            name a typedef that brings it past.
     """
-    return resolve_type(parse_type(type_str), registry)
+    typ = resolve_type(parse_type(type_str), registry)
+    limit = current().max_type_nesting
+    if type_levels(typ) > limit:
+        raise TypeCheckError(
+            f"type nests deeper than {limit} levels once its typedef names are expanded, "
+            f"the limit for a type (each record and list is a level)"
+        )
+    return typ
 
 
 # ---------- typedefs: registry builder ----------

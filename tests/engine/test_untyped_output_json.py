@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 from yian.compose import load_flow
+from yian.compose.helpers.errors import LoadError
 from yian.diagnostics import OriginRef
 from yian.events import NodeStarted
 from yian.nodes.contracts import PartialRecordContract, ValueContract
@@ -510,16 +511,21 @@ def _literal_flow(g: str) -> str:
 @pytest.mark.parametrize(
     ("g", "message"),
     [
-        ("2026-01-01", "output at g: datetime.date(2026, 1, 1) is not a JSON value"),
-        ("{d: 2026-01-01}", "output at g.d: datetime.date(2026, 1, 1) is not a JSON value"),
+        (
+            "2026-01-01",
+            "'g': `2026-01-01` is not a JSON value (YAML reads it as a date); "
+            'quote it to keep it as text: `g: "2026-01-01"`',
+        ),
+        (
+            "{d: 2026-01-01}",
+            "'g.d': `2026-01-01` is not a JSON value (YAML reads it as a date); "
+            'quote it to keep it as text: `"2026-01-01"`',
+        ),
     ],
 )
-def test_an_unquoted_date_literal_in_an_untyped_output_fails_at_the_end(g, message):
-    result = _run(_literal_flow(g))
-    assert result.status == "failed"
-    assert result.failure.code == "contract.output"
-    assert result.failure.node_id == "__end__"
-    assert result.failure.message == message
+def test_an_unquoted_date_literal_in_an_untyped_output_fails_at_load(g, message):
+    with pytest.raises(LoadError, match=re.escape(message)):
+        load_flow(_literal_flow(g))
 
 
 def test_a_quoted_date_literal_in_an_untyped_output_stays_text():

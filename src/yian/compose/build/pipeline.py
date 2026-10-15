@@ -26,6 +26,7 @@ from here. It imports NOTHING from `loader.py` (that would be a back-edge).
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from datetime import date, datetime
 from typing import Any, Callable, Optional, Protocol
 
 from yian.compile.model import CompiledFlow, Edge, FlowOutput
@@ -51,7 +52,7 @@ from yian.expr import ExpressionError
 from yian.memory.contracts import DeclSite, MemoryDecl
 from yian.typesys import TypeCheckError
 from yian.typesys.types import TypeRegistry
-from yian.typesys.values import Type
+from yian.typesys.values import Type, value_repr
 from yian.compose.validate.asserts import lower_flow_asserts
 from yian.compose.build.boundary import synthesize_boundary_graph
 from yian.compose.build.inline_inputs import (
@@ -88,6 +89,7 @@ from yian.compose.helpers.tags import (
     QUOTED_STYLES,
     old_form_suggestion,
     old_typed_text,
+    path_label,
     read_tagged_value,
     reject_tagged_output,
     suggest_tag,
@@ -1064,7 +1066,8 @@ def _split_typed_outputs(
 
     Raises:
         `LoadError`: Raised when a record field name is not a string, a typed output's
-            type or value is malformed, or the retained cursor cannot be traversed.
+            type or value is malformed, the retained cursor cannot be traversed, or an
+            untyped output holds a literal that isn't a JSON value.
     """
     def split_one(value, cursor, binding_label: str, index: int):
         """Split one output value at its positional catalog site."""
@@ -1091,6 +1094,10 @@ def _split_typed_outputs(
             return None, {}
         if not isinstance(outputs_section, dict):
             typed = split_one(outputs_section, outputs_cursor, "output", 0)
+            if typed is None or typed[1] is None:
+                _reject_non_json_literals(
+                    outputs_section, outputs_cursor, "output", diagnostics
+                )
             if typed is None:
                 return outputs_section, {}
             value, contract = typed
@@ -1107,6 +1114,8 @@ def _split_typed_outputs(
                 else None
             )
             typed = split_one(value, cursor, str(key), index)
+            if typed is None or typed[1] is None:
+                _reject_non_json_literals(value, cursor, str(key), diagnostics)
             if typed is None:
                 continue
             split[key], contract = typed
@@ -1115,6 +1124,64 @@ def _split_typed_outputs(
     except SourceAccessError as exc:
         raise diagnostics.error(str(exc), range=exc.range) from exc
     return split, output_types
+
+
+def _reject_non_json_literals(
+    value: Any,
+    cursor: SourceCursor | None,
+    label: str,
+    diagnostics: LoadDiagnostics,
+    path: tuple[Any, ...] = (),
+) -> None:
+    """Reject a literal in an untyped output that YAML read as a non-JSON value.
+
+    An untagged date or datetime gets the quoted text to write; a `!!set` or
+    `!!binary` literal is named without a hint. A tagged value is left to its tag.
+
+    Args:
+        value (`Any`): The constructed YAML value at `cursor`.
+        cursor (`SourceCursor | None`): Retained authored value, or `None` for a
+            generated one, which is not checked.
+        label (`str`): The output name, or `"output"` for a whole section.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
+        path (`tuple[Any, ...]`): Keys and indexes from the output to `value`.
+
+    Raises:
+        `LoadError`: Raised when `value` holds a date, datetime, set, or bytes
+            literal.
+        `SourceAccessError`: Raised when the retained cursor cannot be traversed.
+    """
+    if cursor is None or cursor.tag is not None:
+        return
+    # Recursion is bounded: `check_written_values` already capped written-value
+    # nesting at 100 levels before the outputs are split.
+    if type(value) is dict:
+        for key, item in value.items():
+            _reject_non_json_literals(
+                item, cursor.child(key), label, diagnostics, (*path, key)
+            )
+    elif type(value) is list:
+        for index, item in enumerate(value):
+            _reject_non_json_literals(
+                item, cursor.child(index), label, diagnostics, (*path, index)
+            )
+    elif isinstance(value, date):
+        kind = "datetime" if isinstance(value, datetime) else "date"
+        text = cursor.scalar_text
+        if text is None:
+            text = value.isoformat()
+        quoted = yaml_quoted(text)
+        hint = f"`{label}: {quoted}`" if not path else f"`{quoted}`"
+        raise diagnostics.error(
+            f"{path_label(label, path)!r}: `{text}` is not a JSON value (YAML reads it "
+            f"as a {kind}); quote it to keep it as text: {hint}",
+            range=cursor.range,
+        )
+    elif isinstance(value, (set, frozenset, bytes)):
+        raise diagnostics.error(
+            f"{path_label(label, path)!r}: {value_repr(value)} is not a JSON value",
+            range=cursor.range,
+        )
 
 
 def _flow_outputs(outputs) -> list[FlowOutput]:

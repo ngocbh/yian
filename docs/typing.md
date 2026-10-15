@@ -269,6 +269,10 @@ nested `FileRef` as its mapping before the walk. Depth and non-finite numbers ar
 to the boundary checks above, so a recorded value replays. A value or key shown in a
 type-check message is cut to `YIAN_MAX_SHOWN_VALUE_CHARS` (200) characters: a longer
 rendering keeps its first 199 and ends with `…` (see [Defaults and limits](defaults.md)).
+A node output is first read once, through Python iteration, into plain containers, and
+every output check and the stored value use that copy: a `dict`, `list`, or `tuple`
+subclass counts as what its `items()` or iteration yields (a list whose iteration
+yields nothing is stored as `[]`).
 A node output with no declared type (and each untyped field of a partial record output)
 goes through the same walk at `canonical_typed`, with `FileRef` leaves allowed at any
 depth; its message names the path (`output at d.x[1]: datetime.date(2026, 1, 1) is not a

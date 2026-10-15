@@ -491,7 +491,9 @@ Most are just the functional model (above) made enforceable:
   `object` value or `list(object)` item become mappings, and `LIST_ANY` items and `Any`
   reject them). A `file` slot reads a file's JSON form (exactly `uri`, `mime`, `name`)
   as a `FileRef`. An untyped
-  node output must be JSON values or `FileRef`s, checked at `canonical_typed`. In wiring an
+  node output must be JSON values or `FileRef`s, checked at `canonical_typed`. A node
+  output is first read once through Python iteration into plain containers
+  (`plain_containers`); the checks and the stored value use that copy. In wiring an
   `Any` source fits only `Any`/`Optional(Any)`; `type_relation` treats it as narrower
   than every type except `None` and a type whose every value holds a `file`, which are
   disjoint. Load also treats `file` as disjoint from `object` and a file-shaped record,

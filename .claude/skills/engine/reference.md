@@ -969,7 +969,10 @@ deeper structured value fails `structured output at <path>`, retried under
 before storing the raw reply (or, for a carrier with a parsing error, the raw reply,
 raising the parsing error), so the model effect is observed `failed` and the reply is
 not kept.
-`prepare_node_succeeded` checks a live output whole and fails `contract.output` at
+`prepare_node_succeeded` first reads a live output once, through Python iteration,
+into plain containers (`plain_containers`), so a `dict`, `list`, or `tuple` subclass
+counts as what its iteration yields, and checks and stores that one copy. It checks the
+output whole and fails `contract.output` at
 the field path with the declared field's origin. A record or list built around a
 value is one level deeper: a record flow output fails at `__end__`, a MAP's result
 list at `<map>/__end__`, and a LOOP body's record output counts its level. A node

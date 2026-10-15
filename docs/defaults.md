@@ -110,7 +110,9 @@ load, run, and resume with stack to spare:
 - `YIAN_MAX_TYPE_NESTING` may be raised to 125, the depth proven for type text: type
   text nested 125 levels still parses, and text nested 150 levels does not. A record
   type in `output:` counts its record levels against the same limit. Copies of a flow
-  share its types, so record depth adds no stack at run setup.
+  share its types, so record depth adds no stack at run setup. The limit also bounds
+  each typedef's levels, the length of a chain of typedefs naming each other, and a
+  type with its typedef names expanded.
 
 `YIAN_MAX_YAML_NODES` has no maximum, since counting a document's nodes takes no stack;
 raising it raises load time and run-log size in proportion.

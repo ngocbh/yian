@@ -176,6 +176,20 @@ type at r.k.k nests deeper than 100 levels, the limit for a type (each record an
 
 The `; its type ...` part appears when a field's type pushes the record over.
 
+A typedef counts the same way, and a chain of typedefs, each naming the next, holds at
+most 100 of them. A typedef past either bound fails the load at the typedef, and at the
+field that crosses the limit for a record:
+
+```
+bad typedefs: typedef 'T100' field 'a': type nests deeper than 100 levels, the limit for a type (each record and list is a level); its type 'T99' adds 100
+bad typedefs: typedef 'A100': it ends a chain of 101 typedefs, each naming the next, more than 100, the limit for a type; write its type with fewer typedefs in between
+```
+
+A type anywhere else (an `output:` type, a tag, a flow `input:`) also stays within 100
+levels once its typedef names are expanded, so `list(T)` over a 100-level `T` fails at
+load: `type nests deeper than 100 levels once its typedef names are expanded, the limit
+for a type (each record and list is a level)`.
+
 The first boundary that sees a deeper value rejects it:
 
 - a run input may nest 100 levels; a deeper one makes `run_flow` raise `ValueError`

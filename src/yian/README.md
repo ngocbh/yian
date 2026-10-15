@@ -641,6 +641,17 @@ a level and a field's resolved type adds its records and lists (`type_levels` in
 `typesys/values.py`), checked before the reader descends, so an alias-built record is a
 located `LoadError` (`type at <path> nests deeper than 100 levels, the limit for a type
 ...`). Type text counts every constructor in the type parser instead.
+`read_typedefs` (`typesys/types.py`) measures each typedef in dependency order the same
+way (`_measure_typedef`: a record is 1 plus its deepest field, a name counts as its
+typedef, `Optional` adds none, a union its deepest member) and also bounds the chain of
+typedefs each naming the next at `max_type_nesting`, so a deep or long chain is a
+`bad typedefs:` load error at the typedef (and field) that crosses it. Its walks
+(alias cycles, the dependency order) are iterative and report a record cycle as
+`recursive type reference`; `resolve_type` peels `Optional` and flattens `Union` members
+without recursion and parses record fields once (`_parse_field`, cached), so every set
+that passes resolves in bounded stack. `type_for` checks `type_levels` of the resolved
+type too, so text wrapping a deep typedef (`list(T)` over a 100-level `T`) fails with
+`type nests deeper than 100 levels once its typedef names are expanded ...`.
 
 An expression has the same bound, `current().max_value_nesting` (no variable of
 its own). A chain of same-precedence operators parses as one flat node

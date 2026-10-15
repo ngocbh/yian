@@ -628,7 +628,17 @@ type adds the records and lists it resolves to, so a typedef name counts as deep
 definition. A deeper one fails at load, at the record or field that crosses the limit:
 `type at r.k.k nests deeper than 100 levels, the limit for a type (each record and list
 is a level)`, ending `; its type 'list(list(int))' adds 2` when a field's type pushes it
-over. See [Types → Nesting limit](typing.md#nesting-limit).
+over. A typedef counts the same way, and a chain of typedefs, each naming the next, holds
+at most 100: `bad typedefs: typedef 'A100': it ends a chain of 101 typedefs, each naming
+the next, more than 100, the limit for a type; write its type with fewer typedefs in
+between`. Any other type stays within 100 levels once its typedef names are expanded, so
+`list(T)` over a 100-level `T` fails at load. See
+[Types → Nesting limit](typing.md#nesting-limit).
+
+Changed: a typedef deeper than 100 levels, or ending a chain of more than 100 typedefs,
+used to load and could crash the run, and a long enough chain crashed the loader with a
+raw `RecursionError`. `list(T)` over a 100-level `T` used to load and crash the run. Both
+are now load errors.
 
 Brackets are the old spelling. `Optional[str]`, `list[Buy]`, or `int[1, 12]` anywhere
 (a typedef, an `output:` type, or a tag) is a load error that shows the new spelling,

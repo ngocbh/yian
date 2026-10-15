@@ -256,10 +256,10 @@ def test_azure_include_raw_is_forwarded_for_an_open_schema(azure_env):
 _AZURE_CONFIG = {"provider": "azure", "model": "gpt-4o"}
 
 
-def _ask(server, schema, **kwargs):
+def _ask(server, schema, deployment="gpt-4o", **kwargs):
     """Invoke Azure's structured output for `schema` against `server`'s replies."""
     with httpx.Client(transport=httpx.MockTransport(server)) as http_client:
-        llm = _azure(http_client=http_client, max_retries=0)
+        llm = _azure(deployment, http_client=http_client, max_retries=0)
         return llm.with_structured_output(schema, **kwargs).invoke([HumanMessage("q")])
 
 
@@ -309,10 +309,61 @@ def test_reflection_response_with_no_actions_is_a_parse_error(azure_env):
         _ask(_ContentServer('{"actions": []}'), _ReflectionResponse)
 
 
-def test_a_refusal_is_a_parse_error(azure_env):
-    refusal = {"role": "assistant", "content": None, "refusal": "no"}
+def test_a_valid_reflection_response_parses(azure_env):
+    reply = {"actions": [{"action": "noop", "lesson_id": None, "text": None}]}
+    result = _ask(_ContentServer(json.dumps(reply)), _ReflectionResponse)
+    assert [action.action for action in result.actions] == ["noop"]
+
+
+def _responses_server(content, status="completed"):
+    """Answer Responses API requests with one message holding `content` blocks."""
+    def handler(request):
+        return httpx.Response(200, json={
+            "id": "resp_1", "object": "response", "created_at": 0, "status": status,
+            "incomplete_details": (
+                {"reason": "max_output_tokens"} if status == "incomplete" else None
+            ),
+            "model": "gpt-5-codex", "error": None, "instructions": None, "metadata": {},
+            "parallel_tool_calls": False, "tool_choice": "auto", "tools": [],
+            "output": [{"type": "message", "id": "m", "status": status, "role": "assistant",
+                        "content": content}],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2,
+                      "input_tokens_details": {"cached_tokens": 0},
+                      "output_tokens_details": {"reasoning_tokens": 0}},
+        })
+    return handler
+
+
+_TRUNCATED = '{"items": [1, 2, 3'
+
+
+def test_a_truncated_reply_is_a_parse_error(azure_env):
     with pytest.raises(OutputParserException):
+        _ask(_ContentServer(_TRUNCATED), _schema("list(int(1..5))"))
+
+
+def test_a_truncated_responses_reply_is_a_parse_error(azure_env):
+    text = [{"type": "output_text", "text": _TRUNCATED, "annotations": []}]
+    with pytest.raises(OutputParserException):
+        _ask(_responses_server(text, "incomplete"), _schema("list(int(1..5))"), "gpt-5-codex")
+
+
+def test_a_valid_responses_reply_parses(azure_env):
+    text = [{"type": "output_text", "text": '{"items": [1, 5]}', "annotations": []}]
+    result = _ask(_responses_server(text), _schema("list(int(1..5))"), "gpt-5-codex")
+    assert result.items == [1, 5]
+
+
+def test_a_refusal_is_a_parse_error_naming_it(azure_env):
+    refusal = {"role": "assistant", "content": None, "refusal": "I can't help with that."}
+    with pytest.raises(OutputParserException, match="I can't help with that."):
         _ask(_ContentServer(refusal), _schema("int(0..10)"))
+
+
+def test_a_responses_refusal_is_a_parse_error_naming_it(azure_env):
+    refusal = [{"type": "refusal", "refusal": "I can't help with that."}]
+    with pytest.raises(OutputParserException, match="I can't help with that."):
+        _ask(_responses_server(refusal), _schema("int(0..10)"), "gpt-5-codex")
 
 
 def test_a_reply_past_a_moved_bound_is_corrected_and_retried(azure_env):

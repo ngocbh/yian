@@ -1,10 +1,12 @@
 import copy
 import json
+from functools import partial
 from operator import itemgetter
 from typing import Any, Optional
 
-from langchain_core.output_parsers import PydanticOutputParser
-from langchain_core.runnables import RunnableMap, RunnablePassthrough
+from langchain_core.exceptions import OutputParserException
+from langchain_core.messages import AIMessage
+from langchain_core.runnables import RunnableLambda, RunnableMap, RunnablePassthrough
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_openai import AzureChatOpenAI
 from openai.lib._parsing._completions import type_to_response_format_param
@@ -82,6 +84,39 @@ def _strict_schema_without(schema_cls: type) -> Optional[dict[str, Any]]:
     return fmt if moved else None
 
 
+def _parse_strict_reply(message: AIMessage, schema: type[BaseModel]) -> BaseModel:
+    """Validate the text of `message` as JSON for `schema`.
+
+    The JSON is parsed strictly, so a reply cut off mid-value is an error rather than
+    repaired into a shorter value, as langchain's partial-JSON parser would.
+
+    Args:
+        message (`AIMessage`):
+            The model's reply.
+        schema (`type[BaseModel]`):
+            The pydantic v2 output class.
+
+    Returns:
+        `BaseModel`:
+            The validated output.
+
+    Raises:
+        `OutputParserException`:
+            The text is not valid JSON for `schema`, naming any refusal the reply holds;
+            the pydantic `ValidationError` is its ``__cause__``.
+    """
+    text = message.text
+    try:
+        return schema.model_validate_json(text)
+    except ValueError as err:
+        refusal = message.additional_kwargs.get("refusal")
+        reason = f"the model refused: {refusal}" if refusal else str(err)
+        raise OutputParserException(
+            f"Failed to parse {schema.__name__} from completion {text!r}. Got: {reason}",
+            llm_output=text,
+        ) from err
+
+
 class NormalizedAzureChatOpenAI(RequestBlockMixin, AzureChatOpenAI):
     """AzureChatOpenAI with normalized content output and the `azure` block in each request."""
 
@@ -89,7 +124,18 @@ class NormalizedAzureChatOpenAI(RequestBlockMixin, AzureChatOpenAI):
         return self.normalize_reply(super().invoke(input, config, **kwargs))
 
     def normalize_reply(self, response):
-        """Apply the reply normalization `invoke` uses; streamed replies reuse it."""
+        """Apply the reply normalization `invoke` uses; streamed replies reuse it.
+
+        A Responses refusal block is kept as ``additional_kwargs["refusal"]``, where Chat
+        Completions puts a refusal, since joining the content drops non-text blocks.
+        """
+        if isinstance(response.content, list):
+            refusals = [
+                block["refusal"] for block in response.content
+                if isinstance(block, dict) and block.get("type") == "refusal"
+            ]
+            if refusals and not response.additional_kwargs.get("refusal"):
+                response.additional_kwargs["refusal"] = "\n".join(refusals)
         return normalize_content(response)
 
     def with_structured_output(self, schema=None, *, method=None, include_raw=False, **kwargs):
@@ -107,9 +153,10 @@ class NormalizedAzureChatOpenAI(RequestBlockMixin, AzureChatOpenAI):
         given without ``method`` or ``strict``, is sent as a strict ``json_schema`` with
         those keywords moved into the subschema's description (`_strict_schema_without`),
         and the reply is parsed against `schema` itself, so the moved keywords are still
-        enforced. On that path a refusal or an empty reply fails to parse, raising an
-        `OutputParserException` that yian's structured-output retry corrects. Any other
-        schema or method reaches langchain unchanged.
+        enforced. On that path the reply's JSON is parsed strictly, and a refusal, an empty
+        reply or one cut off mid-value raises an `OutputParserException`, naming any
+        refusal, that yian's structured-output retry corrects. Any other schema or method
+        reaches langchain unchanged.
 
         Args:
             schema (`dict | type | None`, *optional*, defaults to `None`):
@@ -165,7 +212,7 @@ class NormalizedAzureChatOpenAI(RequestBlockMixin, AzureChatOpenAI):
                 "schema": convert_to_openai_tool(schema),
             },
         )
-        parser = PydanticOutputParser(pydantic_object=schema)
+        parser = RunnableLambda(partial(_parse_strict_reply, schema=schema))
         if not include_raw:
             return llm | parser
         # Kept in step with `AzureChatOpenAI.with_structured_output`'s include_raw assembly.

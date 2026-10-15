@@ -1068,8 +1068,9 @@ class Type:
 
         Returns:
             `Type`:
-                This type. A type is immutable, so a copy of a flow shares it, and
-                the copy's recursion then does not depend on how deep the type nests.
+                This type. A type must not be changed after it is built, so a copy of a
+                flow shares it, and the copy's recursion then does not depend on how
+                deep the type nests.
         """
         return self
 

@@ -224,4 +224,3 @@ def test_a_record_past_the_value_limit_fails_its_output_contract(set_defaults) -
     assert result.status == "failed"
     assert result.failure.code == "contract.output"
     assert "nests deeper than" in result.failure.message
-

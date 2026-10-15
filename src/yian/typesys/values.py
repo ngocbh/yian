@@ -776,6 +776,134 @@ def _too_deep(where: str, path: tuple[str | int, ...], limit: int) -> TypeCheckE
     )
 
 
+def plain_containers(value: Any) -> Any:
+    """Return a value whose containers are plain, reading each subclass once.
+
+    When no `dict`, `list`, or `tuple` subclass is reachable, directly or inside a
+    `TypedValue`'s payload, `value` itself is returned. Otherwise every reachable
+    container is copied: a `dict` (or subclass) to a `dict` of its ``items()``; a
+    `list` or `tuple` (or subclass) to a `list` of what ``iter()`` yields; a
+    `TypedValue` to a ``model_copy`` of the same kind holding its payload's copy.
+    Each container is copied once, so sharing and cycles are kept, and a subclass's
+    own iteration runs once. Pydantic models other than `TypedValue`, dataclasses,
+    `FileRef`, scalars, and `str` subclasses are leaves, kept as they are. Neither
+    walk recurses or cuts at a depth.
+
+    Args:
+        value (`Any`):
+            The value to read.
+
+    Returns:
+        `Any`: `value` itself, or its copy built from plain containers.
+
+    Raises:
+        `TypeCheckError`:
+            A `dict` subclass's ``items()`` yields an unhashable key; ``path`` locates
+            the mapping and the message reads ``object keys must be text, got <repr>``.
+        `Exception`:
+            Whatever a subclass's own iteration raises, unchanged.
+    """
+    if not _reaches_container_subclass(value):
+        return value
+    memo: dict[int, Any] = {}
+    # Holds every copied original so no id in `memo` is reused by a later object, such
+    # as a fresh value a subclass's iteration yields after an earlier one is freed.
+    originals: list[Any] = []
+    stack: list[_CopyFrame] = []
+
+    def adopt(obj: Any, key: Any) -> Any:
+        """Return `obj`'s copy, creating it empty and stacking its fill when new."""
+        if obj is None or type(obj) in _NESTING_SCALARS:
+            return obj
+        copied = memo.get(id(obj))
+        if copied is not None:
+            return copied
+        if isinstance(obj, TypedValue):
+            wrappers = []
+            payload: Any = obj
+            while isinstance(payload, TypedValue) and id(payload) not in memo:
+                wrappers.append(payload)
+                payload = payload.value
+            copied = adopt(payload, key)
+            for wrapper in reversed(wrappers):
+                copied = wrapper.model_copy(update={"value": copied})
+                memo[id(wrapper)] = copied
+                originals.append(wrapper)
+            return copied
+        if isinstance(obj, dict):
+            copied, entries, is_dict = {}, iter(obj.items()), True
+        elif isinstance(obj, (list, tuple)):
+            copied, entries, is_dict = [], iter(obj), False
+        else:
+            return obj
+        memo[id(obj)] = copied
+        originals.append(obj)
+        stack.append((entries, copied, key, is_dict, type(obj) is not dict))
+        return copied
+
+    end = object()
+    root = adopt(value, None)
+    while stack:
+        entries, copied, _, is_dict, check_keys = stack[-1]
+        entry = next(entries, end)
+        if entry is end:
+            stack.pop()
+        elif is_dict:
+            key, child = entry
+            if check_keys:
+                try:
+                    hash(key)
+                except TypeError:
+                    raise TypeCheckError(
+                        f"object keys must be text, got {value_repr(key)}",
+                        path=_copy_path(stack),
+                    ) from None
+            copied[key] = adopt(child, key)
+        else:
+            copied.append(adopt(entry, len(copied)))
+    return root
+
+
+_CopyFrame = tuple[Iterator[Any], Any, Any, bool, bool]
+"""A copy frame: the entries iterator, the copy being filled, its key in the parent,
+whether it is a mapping, and whether its keys need a hashability check."""
+
+
+def _reaches_container_subclass(value: Any) -> bool:
+    """Whether a `dict`, `list`, or `tuple` subclass is reachable from `value`."""
+    pending = [value]
+    seen: set[int] = set()
+    while pending:
+        obj = pending.pop()
+        kind = type(obj)
+        if kind is dict:
+            children: Iterable[Any] = obj.values()
+        elif kind is list or kind is tuple:
+            children = obj
+        elif isinstance(obj, TypedValue):
+            children = (obj.value,)
+        elif isinstance(obj, (dict, list, tuple)):
+            return True
+        else:
+            continue
+        if id(obj) in seen:
+            continue
+        seen.add(id(obj))
+        pending.extend(
+            child
+            for child in children
+            if child is not None and type(child) not in _NESTING_SCALARS
+        )
+    return False
+
+
+def _copy_path(stack: list[_CopyFrame]) -> tuple[str | int, ...]:
+    """Return the path from the root to the last copy frame's container."""
+    return tuple(
+        _nesting_segment(parent[1], frame[2]) for parent, frame in zip(stack, stack[1:])
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Type vocabulary
 # --------------------------------------------------------------------------- #

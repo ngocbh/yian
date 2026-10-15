@@ -48,7 +48,8 @@ Modules:
                   that nests deeper than a yian value may, as a located load error,
                   counted as the run-time check counts it and before any recursive
                   walker reads it. `check_env_values`: the same check for each value
-                  of an `env:` mapping, located at its key.
+                  of an `env:` mapping, located at its key, which also rejects a value
+                  that holds itself through a recursive alias.
   - `yaml_words`  `former_boolean_fix`: the boolean a YAML 1.1 boolean spelling (`yes`,
                   `off`) meant, and the fix a load error shows when one reaches a `bool`
                   that the boolean fits, at any depth of a list or record. `yaml_read_as`:

@@ -1145,7 +1145,13 @@ it has its own. A multi-node `defs:` entry sets its own `env:` at the same level
 its `nodes:`. Values must be literals (no `${...}` refs). Like other written-out values,
 each is checked at load against the 100-level value nesting limit, YAML aliases
 included (`flow env 'k' at [0][0]...: value nests deeper than 100 levels, ...`; see
-[Types → Nesting limit](typing.md#nesting-limit)).
+[Types → Nesting limit](typing.md#nesting-limit)). A value that contains itself through
+a YAML alias is a load error at its key too
+(`flow env 'k' at [0]: cannot descend through a recursive alias occurrence`).
+
+Changed: an `env:` value that contains itself through a YAML alias used to load and
+fail the run with an unlocated `ValueError` (`cyclic value is not manifestable`); it is
+now a load error.
 
 Keys in use today:
 

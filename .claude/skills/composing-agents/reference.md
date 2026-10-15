@@ -313,6 +313,7 @@ aliases included: a node input (LOOP seeds, MAP per-item inputs), MAP `over:`, W
 `until:`, a value entry, an input or AGENT variable default, a CASE value branch, a
 flow `output:` (a record output's fields sit one level in), or a flow, `defs:`, or node
 `env:` value nested deeper is a load error at that value (an `env:` value at its key);
+an `env:` value that contains itself through a YAML alias is a load error at its key too;
 the value a `${...}` computes is checked when it runs.
 A type nests at most 100 levels (`YIAN_MAX_TYPE_NESTING`, at most 125): type text counts
 each constructor, `Optional(` and `Union(` included; a record written as a mapping or a
@@ -641,7 +642,7 @@ is the default for every node;
 each node overrides individual keys. Merge is **static at build time** (`{**flow_env,
 **node_env}`, node wins), **flow-local** (a child flow does NOT inherit the parent's
 flow env; a multi-node `defs:` entry sets its own `env:` beside its `nodes:`),
-and literals only (no `${...}`).
+and literals only (no `${...}`) that must not contain themselves through a YAML alias.
 
 ```yaml
 env: {max_tool_iterations: 150}         # flow default for every node

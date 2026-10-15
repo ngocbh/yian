@@ -6,6 +6,14 @@ instead of raising `RecursionError` when the run walks it (under a raised
 `YIAN_MAX_YAML_NODES`: at the default, the chain's anchors exceed the node limit first).
 A value at the limit loads and runs.
 
+An `env:` value that holds itself through a recursive YAML alias (`K: &a [*a]`) is a
+located load error too, rather than a `ValueError` from the run's fingerprint: the
+message reads `<prefix>env '<key>' at <path>: cannot descend through a recursive alias
+occurrence`, where `<path>` names the first entry that refers back to a container
+enclosing it. Lists, records, and the lists of pairs `!!pairs` builds all count. The
+depth check runs first, so a cyclic value nested past the limit gets the depth message.
+A value that repeats an alias without holding itself loads and runs.
+
 Message prefix per site, each at the `env:` entry's value:
 
 - flow `env:`: `flow env '<key>'`.
@@ -221,3 +229,107 @@ def test_env_value_at_the_limit_loads_and_runs(
     result = run_flow(load_flow(flow(*form(MAX_VALUE_NESTING))), {})
 
     assert result.status == "succeeded", result.failure
+
+
+# --------------------------------------------------------------------------- #
+# Recursive aliases
+# --------------------------------------------------------------------------- #
+
+_CYCLE = "cannot descend through a recursive alias occurrence"
+
+
+def _assert_cycle_error(text: str, message_start: str, line_prefix: str) -> None:
+    """Assert loading `text` fails with the cycle error starting `message_start`."""
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    error = caught.value
+    message = error.diagnostic.message
+    assert message == f"{message_start}: {_CYCLE}", message
+    assert error.diagnostic.frames[-1].range.start_line == _line_of(text, line_prefix)
+    assert not any(
+        isinstance(link, (RecursionError, ValueError)) and not isinstance(link, LoadError)
+        for link in _chain(error)
+    )
+
+
+@pytest.mark.parametrize("site", list(_SITES))
+def test_env_value_holding_itself_is_a_located_load_error(site: str) -> None:
+    flow, where, line = _SITES[site]
+
+    _assert_cycle_error(flow("", "&a [*a]"), f"{where}[0]", line)
+
+
+@pytest.mark.parametrize(
+    ("value", "path"),
+    [
+        ("&a {b: *a}", "b"),
+        ("[1, &a [2, *a]]", "[1][1]"),
+        ("&a [&b [*a]]", "[0][0]"),
+        ("&a !!pairs [x: *a]", "[0][1]"),
+        ("&a {b: 1, <<: {c: *a}}", "c"),
+    ],
+    ids=["record", "inner-list", "outer-alias", "pairs", "merge-key"],
+)
+def test_flow_env_cycle_names_the_entry_that_refers_back(value: str, path: str) -> None:
+    _assert_cycle_error(_flow_env("", value), f"flow env 'K' at {path}", "  K:")
+
+
+def _flow_env_inline(env: str) -> str:
+    """Return a flow whose flow `env:` is the one-line mapping `env`."""
+    return (
+        f"id: f\nname: f\nenv: {env}\nnodes:\n  use:\n{_ECHO}"
+        "    input:\n      topic: x\noutput: ${use.output}\n"
+    )
+
+
+def _node_env_inline(env: str) -> str:
+    """Return a flow whose node `use` has the one-line `env:` mapping `env`."""
+    return (
+        f"id: f\nname: f\nnodes:\n  use:\n{_ECHO}    env: {env}\n"
+        "    input:\n      topic: x\noutput: ${use.output}\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("flow", "where", "line"),
+    [
+        (_flow_env_inline, "flow env 'K'", "env:"),
+        (_node_env_inline, "node 'use' env 'K'", "    env:"),
+    ],
+    ids=["flow", "node"],
+)
+@pytest.mark.parametrize(
+    ("env", "path"), [("&e {K: *e}", "K"), ("&e {K: [*e]}", "[0].K")], ids=["direct", "list"]
+)
+def test_env_mapping_holding_itself_is_a_located_load_error(
+    flow: _Flow, where: str, line: str, env: str, path: str
+) -> None:
+    _assert_cycle_error(flow(env), f"{where} at {path}", line)
+
+
+def _cyclic_list_alias(levels: int) -> tuple[str, str]:
+    """Return a one-item list over an alias chain ending in a self-alias, `levels` deep."""
+    items = ["&a0 [*a0]"] + [f"&a{i} [*a{i - 1}]" for i in range(1, levels - 1)]
+    return f"x-anchors: [{', '.join(items)}]\n", f"[*a{levels - 2}]"
+
+
+def test_env_nesting_is_checked_before_the_cycle() -> None:
+    _assert_limit_error(
+        _flow_env(*_cyclic_list_alias(MAX_VALUE_NESTING + 1)), "flow env 'K' at ", "  K:"
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(_flow_env(*_cyclic_list_alias(MAX_VALUE_NESTING)))
+    message = caught.value.diagnostic.message
+    assert message.startswith("flow env 'K' at [0]") and message.endswith(_CYCLE), message
+
+
+def test_env_value_repeating_an_alias_loads_and_runs() -> None:
+    text = "x-anchors: [&s [1, 2]]\n" + _flow_env("", "[*s, *s]")
+
+    result = run_flow(load_flow(text), {})
+
+    assert result.status == "succeeded", result.failure
+
+
+def test_env_scalar_value_loads() -> None:
+    load_flow(_flow_env("", "1"))

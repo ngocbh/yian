@@ -624,7 +624,9 @@ a flow file (`compose.helpers.value_nesting.check_written_value`, which turns th
 `TypeCheckError` into a located `LoadError`): node inputs, MAP `over:`, WAIT `until:`,
 value entries, input and AGENT variable defaults, CASE value branches, flow
 outputs (a record output's fields with `enclosing_levels=1`), and flow, `defs:`, and
-node `env:` values (`check_env_values`). It runs before any
+node `env:` values (`check_env_values`, which also rejects an `env:` value that
+contains itself through a recursive alias, found by `typesys.values.recursive_entry_path`,
+since the run's fingerprint cannot encode it). It runs before any
 recursive load walker reads the value, so a value made deep by YAML aliases is a load
 error rather than a `RecursionError`. `${...}` text counts as a scalar, so the
 run-time checks above still cover computed values and flows built in Python.

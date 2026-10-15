@@ -650,6 +650,11 @@ tree of compiled flows, and loading, run setup (the `copy.deepcopy` of the compi
 flow in `run.py` and the recursive compile walkers), and replay walk it recursively,
 about 10 frames per level. At 50 levels a load, run, or resume peaks near 535 frames,
 which leaves about 450 for the caller under the default limit of 1000.
+Loading a `uses:` file recurses into the loader too, so a chain of `uses:` imports is
+held to the same limit, counted apart from call depth: `_CallableScope.resolve`
+checks the imports being loaded (`_ACTIVE_IMPORTS`, which spans files and custom
+resolvers that call `load_flow`) before loading, and adds the loaded flow's
+`ComposedFlow.import_depth` after, so a cached or memoized file is checked too.
 
 `_resolve_child` checks twice. Before resolving, it counts the calls active in the file
 being loaded (`_load_flow` resets the count with `call_nesting_scope`) and fails once

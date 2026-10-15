@@ -6,8 +6,15 @@ limit loads, runs, and resumes. A chain one past it fails at the root call that 
 levels; a much longer chain fails at the first call past the limit, before the loader
 recurses any deeper. Imported files load before `defs:`, so a file loads at
 its importer's base stack and its own uncalled defs don't count the importing chain.
+
+A flow's chain of `uses:` imports is held to the same limit, counted apart from call depth:
+the root importing `u0` is one file deep, and an import that would make the chain 51 files
+deep fails at its alias, before the loader loads the file, whether or not anything calls it.
+A file already loaded (from the cache or a memoizing resolver) is checked by the import
+depth it carries, so the order of a flow's `uses:` entries does not change the result.
 """
 
+import dataclasses
 import inspect
 import json
 import sys
@@ -26,6 +33,7 @@ from yian.run import resume_flow, run_flow
 
 _PAST_51 = "nests calls 51 levels deep, past the call nesting limit of 50"
 _PAST_DEEP = "more than 50 levels deep, past the call nesting limit of 50"
+_IMPORT_51 = "makes a chain of uses: files 51 deep, past the call nesting limit of 50"
 _LEAF = (
     "    input:\n"
     "      x: !str\n"
@@ -215,17 +223,30 @@ def _directive_chain(n: int) -> str:
     )
 
 
-def _uses_files(directory: Path, n: int) -> str:
-    """Write a chain of flow files and return a root flow that imports the first.
+def _importing(name: str, uses: dict[str, str]) -> str:
+    """Return a flow `name` that imports `uses` without calling them; its node is a CODE leaf."""
+    head = f"id: {name}\nname: {name}\ninput:\n  x: !str\n"
+    if uses:
+        head += "uses:\n" + "".join(f"  {alias}: {ref}\n" for alias, ref in uses.items())
+    return head + "nodes:\n" + _ROOT_LEAF
 
-    Files `u0`..`u(n-1)` each import and call the next, the last is a CODE leaf, and the
-    root imports `u0` as `first`.
+
+def _chain_texts(
+    n: int, *, prefix: str = "u", calls: bool = True, last_imports: str | None = None
+) -> dict[str, str]:
+    """Return flows `u0`..`u(n-1)` by name, each importing the next as `nxt`.
+
+    With `calls`, each file but the last calls `nxt`; otherwise every node is a CODE
+    leaf. The last file is a CODE leaf that imports `last_imports` as `nxt` when given.
     """
+    texts = {}
     for i in range(n):
-        head = f"id: u{i}\nname: u{i}\ninput:\n  x: !str\n"
-        if i < n - 1:
-            text = (
-                head + f"uses:\n  nxt: u{i + 1}\nnodes:\n"
+        name = f"{prefix}{i}"
+        target = f"{prefix}{i + 1}" if i < n - 1 else last_imports
+        if calls and i < n - 1:
+            texts[name] = (
+                f"id: {name}\nname: {name}\ninput:\n  x: !str\n"
+                f"uses:\n  nxt: {target}\nnodes:\n"
                 "  step:\n"
                 "    kind: call\n"
                 "    call: nxt\n"
@@ -234,8 +255,25 @@ def _uses_files(directory: Path, n: int) -> str:
                 "output: ${step.output}\n"
             )
         else:
-            text = head + "nodes:\n" + _ROOT_LEAF
-        (directory / f"u{i}.yaml").write_text(text)
+            texts[name] = _importing(name, {"nxt": target} if target else {})
+    return texts
+
+
+def _write_files(directory: Path, texts: dict[str, str]) -> None:
+    """Write each flow text to `<directory>/<name>.yaml`."""
+    for name, text in texts.items():
+        (directory / f"{name}.yaml").write_text(text)
+
+
+def _uses_files(directory: Path, n: int, *, calls: bool = True) -> str:
+    """Write a chain of flow files and return a root flow that imports the first.
+
+    Files `u0`..`u(n-1)` each import and call the next, the last is a CODE leaf, and the
+    root imports `u0` as `first`. Without `calls`, the files and root only import.
+    """
+    _write_files(directory, _chain_texts(n, calls=calls))
+    if not calls:
+        return _importing("root", {"first": "u0"})
     return (
         "id: root\nname: root\ninput:\n  x: !str\nuses:\n  first: u0\nnodes:\n"
         "  top:\n"
@@ -245,6 +283,25 @@ def _uses_files(directory: Path, n: int) -> str:
         "      x: ${input.x}\n"
         "output: ${top.output}\n"
     )
+
+
+def _import_message(n: int, limit: int = 50) -> str:
+    """Return the error for `u(n-2)`'s import of `u(n-1)`, making the chain `n` files deep."""
+    return (
+        f"callable 'nxt' (uses: 'u{n - 1}'): importing it makes a chain of uses: files "
+        f"{n} deep, past the call nesting limit of {limit} (a chain of uses: imports is "
+        "held to the same limit as nested call, map, and loop bodies); flatten the chain"
+    )
+
+
+def _assert_refused_at_alias(error: LoadError, label: str, text: str, target: str) -> None:
+    """Assert a load error's innermost frame is file `label`'s `nxt: <target>` alias."""
+    frame = error.diagnostic.frames[-1]
+    assert frame.label == label
+    assert frame.note == "uses alias 'nxt'"
+    alias = SourceDocument.parse(text).root.child("uses").child("nxt")
+    assert frame.range == alias.range
+    assert frame.range.start_line == _line_of(text, f"nxt: {target}")
 
 
 def _line_of(text: str, line: str) -> int:
@@ -279,13 +336,13 @@ def _assert_no_recursion_error(error: LoadError) -> None:
 
 
 @contextmanager
-def _stack_headroom():
-    """Pin the recursion limit to 650 frames past the current stack depth, restoring it after.
+def _stack_headroom(frames: int = 650):
+    """Pin the recursion limit to `frames` past the current stack depth, restoring it after.
 
     This usually lowers the limit, so an at-limit chain is shown to fit in that headroom.
     """
     old = sys.getrecursionlimit()
-    sys.setrecursionlimit(len(inspect.stack(0)) + 650)
+    sys.setrecursionlimit(len(inspect.stack(0)) + frames)
     try:
         yield
     finally:
@@ -560,10 +617,186 @@ def test_uses_files_count(tmp_path: Path) -> None:
     with pytest.raises(LoadError) as caught:
         load_flow(text, search_paths=[deep])
 
-    assert _PAST_51 in str(caught.value)
-    assert "call node 'top': calling callable 'first'" in str(caught.value)
+    # The import is refused before the call check runs on the built chain.
+    assert str(caught.value) == _import_message(51)
+    _assert_no_recursion_error(caught.value)
+    _assert_refused_at_alias(caught.value, "u49.yaml", (deep / "u49.yaml").read_text(), "u50")
+
+
+def test_long_uses_chain_fails_at_the_import_past_the_limit(tmp_path: Path) -> None:
+    text = _uses_files(tmp_path, 200)
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(text, search_paths=[tmp_path])
+
+    assert str(caught.value) == _import_message(51)
+    assert _IMPORT_51 in str(caught.value)
+    assert "maximum recursion depth" not in str(caught.value)
     _assert_no_recursion_error(caught.value)
     frames = caught.value.diagnostic.frames
+    assert len(frames) == 51
+    _assert_refused_at_alias(caught.value, "u49.yaml", (tmp_path / "u49.yaml").read_text(), "u50")
+    assert frames[0].label == "<flow>"
+    assert frames[0].range is not None
+    assert frames[0].range.start_line == _line_of(text, "first: u0")
+
+
+def test_import_only_chain_counts(tmp_path: Path) -> None:
+    legal = tmp_path / "legal"
+    legal.mkdir()
+    with _stack_headroom():
+        load_flow(_uses_files(legal, 50, calls=False), search_paths=[legal])
+
+    deep = tmp_path / "deep"
+    deep.mkdir()
+    text = _uses_files(deep, 60, calls=False)
+    with pytest.raises(LoadError) as caught:
+        load_flow(text, search_paths=[deep])
+
+    assert str(caught.value) == _import_message(51)
+    _assert_no_recursion_error(caught.value)
+    _assert_refused_at_alias(caught.value, "u49.yaml", (deep / "u49.yaml").read_text(), "u50")
+
+
+def _shared_file_texts(under_x: int) -> dict[str, str]:
+    """Return a file `x` over an `under_x`-file chain, and a 40-file chain ending in `x`."""
+    texts = _chain_texts(under_x, prefix="c", calls=False)
+    texts["x"] = _importing("x", {"nxt": "c0"})
+    texts.update(_chain_texts(40, prefix="a", calls=False, last_imports="x"))
+    return texts
+
+
+_ORDERS = [{"x": "x", "a": "a0"}, {"a": "a0", "x": "x"}]
+
+
+@pytest.mark.parametrize("uses", _ORDERS, ids=["x-first", "chain-first"])
+def test_import_depth_does_not_depend_on_load_order(tmp_path: Path, uses) -> None:
+    # Through the 40-file chain, x's 10-file chain ends 51 files deep; loading x first
+    # caches it, so the chain then reaches x from the cache.
+    deep = tmp_path / "deep"
+    deep.mkdir()
+    _write_files(deep, _shared_file_texts(10))
+    with pytest.raises(LoadError) as caught:
+        load_flow(_importing("root", uses), search_paths=[deep])
+    assert _IMPORT_51 in str(caught.value)
+    _assert_no_recursion_error(caught.value)
+
+    legal = tmp_path / "legal"
+    legal.mkdir()
+    _write_files(legal, _shared_file_texts(9))
+    with _stack_headroom():
+        load_flow(_importing("root", uses), search_paths=[legal])
+
+
+def _memoizing_resolver(texts: dict[str, str]):
+    """Return a resolver loading each named text once, through itself, and reusing it."""
+    memo = {}
+
+    def resolve(path: str, version: str | None = None):
+        if path not in memo:
+            memo[path] = load_flow(
+                texts[path], child_resolver=resolve, source_label=f"{path}.yaml"
+            )
+        return memo[path]
+
+    return resolve
+
+
+@pytest.mark.parametrize("uses", _ORDERS, ids=["x-first", "chain-first"])
+def test_import_depth_holds_through_a_memoizing_resolver(uses) -> None:
+    root = _importing("root", uses)
+    with pytest.raises(LoadError) as caught:
+        load_flow(root, child_resolver=_memoizing_resolver(_shared_file_texts(10)))
+    assert _IMPORT_51 in str(caught.value)
+    _assert_no_recursion_error(caught.value)
+
+    with _stack_headroom(frames=800):
+        load_flow(root, child_resolver=_memoizing_resolver(_shared_file_texts(9)))
+
+
+def test_resolver_that_calls_load_flow_is_bounded() -> None:
+    texts = _chain_texts(200)
+
+    def resolve(path: str, version: str | None = None):
+        return load_flow(texts[path], child_resolver=resolve, source_label=f"{path}.yaml")
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(_importing("root", {"first": "u0"}), child_resolver=resolve)
+
+    assert str(caught.value) == _import_message(51)
+    _assert_no_recursion_error(caught.value)
+    _assert_refused_at_alias(caught.value, "u49.yaml", texts["u49"], "u50")
+
+
+def test_import_chain_follows_the_configured_limit(tmp_path: Path, set_defaults) -> None:
+    set_defaults(MAX_CALL_NESTING=5)
+    legal = tmp_path / "legal"
+    legal.mkdir()
+    load_flow(_uses_files(legal, 5, calls=False), search_paths=[legal])
+
+    deep = tmp_path / "deep"
+    deep.mkdir()
+    text = _uses_files(deep, 6, calls=False)
+    with pytest.raises(LoadError) as caught:
+        load_flow(text, search_paths=[deep])
+
+    assert str(caught.value) == _import_message(6, limit=5)
+    _assert_refused_at_alias(caught.value, "u4.yaml", (deep / "u4.yaml").read_text(), "u5")
+
+
+@pytest.mark.parametrize("depth", [-1, "1", True, 1.0, None])
+def test_resolved_flow_with_a_bad_import_depth_is_refused(depth) -> None:
+    text = _importing("f", {"ext": "child"})
+    leaf = load_flow(_importing("child", {}))
+
+    def resolve(_path: str, _version: str | None = None):
+        return dataclasses.replace(leaf, import_depth=depth)
+
+    with pytest.raises(LoadError) as caught:
+        load_flow(text, child_resolver=resolve)
+
+    assert str(caught.value) == (
+        f"callable 'ext' (uses: 'child'): resolved flow has import_depth {depth!r}; "
+        "expected a non-negative int"
+    )
+    frames = caught.value.diagnostic.frames
     assert len(frames) == 1
-    assert frames[0].note is None
-    assert _error_line(caught.value) == _line_of(text, "call: first")
+    assert frames[0].note == "uses alias 'ext'"
+    assert frames[0].range is not None
+    assert frames[0].range.start_line == _line_of(text, "ext: child")
+
+
+def test_loaded_flow_records_its_import_depth(tmp_path: Path) -> None:
+    flow = load_flow(_uses_files(tmp_path, 3, calls=False), search_paths=[tmp_path])
+    assert flow.import_depth == 3
+    assert load_flow(_importing("f", {})).import_depth == 0
+
+
+def test_imports_and_a_calling_defs_chain_count_apart(tmp_path: Path) -> None:
+    # The import chain and the call chain in its last file are each 30 deep, 60 together.
+    texts = _chain_texts(30, calls=False)
+    texts["u29"] = _defs_chain(30)
+    _write_files(tmp_path, texts)
+    with _stack_headroom():
+        load_flow(_importing("root", {"first": "u0"}), search_paths=[tmp_path])
+
+
+def test_imports_at_the_limit_over_uncalled_defs_at_the_limit_load(tmp_path: Path) -> None:
+    texts = _chain_texts(50, calls=False)
+    texts["u49"] = (
+        _defs_chain(51, prefix="k").split("nodes:\n  top:\n")[0] + "nodes:\n" + _ROOT_LEAF
+    )
+    _write_files(tmp_path, texts)
+    with _stack_headroom(frames=800):
+        load_flow(_importing("root", {"first": "u0"}), search_paths=[tmp_path])
+
+
+def test_long_cross_file_cycle_reports_the_depth_limit(tmp_path: Path) -> None:
+    # A cycle longer than the limit is 51 files deep before it closes, so the depth
+    # error, not the cycle error, is what the author sees.
+    _write_files(tmp_path, _chain_texts(60, calls=False, last_imports="u0"))
+    with pytest.raises(LoadError) as caught:
+        load_flow(_importing("root", {"first": "u0"}), search_paths=[tmp_path])
+
+    assert str(caught.value) == _import_message(51)
+    _assert_no_recursion_error(caught.value)

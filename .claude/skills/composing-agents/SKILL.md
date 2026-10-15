@@ -283,6 +283,8 @@ CALL, MAP, and LOOP bodies nest at most 50 levels too (each body is one, whether
 `defs:` entry, an inline `nodes:` body, a `call(...)` directive, or a `uses:` flow); a
 deeper chain is a load error at the `call:` that crosses the limit, so move short
 bodies into their callers or split the work into separate steps.
+A chain of `uses:` files, each importing the next, is held to 50 files the same way,
+counted apart from call depth; a longer one fails at the alias that crosses it.
 These limits are the defaults of `YIAN_MAX_VALUE_NESTING` (which also sets expression
 nesting), `YIAN_MAX_YAML_NESTING`, and `YIAN_MAX_CALL_NESTING`; each can only be
 lowered. `YIAN_MAX_TYPE_NESTING` sets the type limit (at most 125). `docs/defaults.md`

@@ -2678,6 +2678,24 @@ deep part as separate steps. The limit exists because loading, run setup, and re
 walk nested bodies recursively; 50 levels stays well inside Python's default recursion
 limit.
 
+A chain of `uses:` imports is held to the same limit, counted apart from call depth: a
+flow importing a file is one file deep, and a file that imports another adds one, whether
+or not anything calls the import. An import that would make the chain 51 files deep is
+a load error at its `uses:` alias, with one frame per importing file above it:
+
+```text
+callable 'nxt' (uses: 'u50'): importing it makes a chain of uses: files 51 deep, past the call nesting limit of 50 (a chain of uses: imports is held to the same limit as nested call, map, and loop bodies); flatten the chain
+```
+
+A file imported twice counts at its deepest place, whichever import loads it first.
+The loaded flow records its chain as `ComposedFlow.import_depth`; a flow a host
+`child_resolver` builds without `load_flow` carries 0.
+
+Changed: a chain of about 200 or more `uses:` files used to fail at load with "could not
+rebase child" or "could not resolve" and "maximum recursion depth exceeded"; a chain of
+51 or more files now fails at the import that crosses the limit. A cycle across more
+than 50 files reports this limit instead of the cross-file cycle.
+
 Changed: a chain deeper than about 95 levels used to crash at load with a
 `RecursionError` or "could not resolve callable ...: maximum recursion depth exceeded".
 A chain of 51 to 95 levels used to load; it now fails at load. A broken `uses:` import

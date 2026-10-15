@@ -99,7 +99,10 @@ ENTRIES: tuple[Entry, ...] = (
     Entry(
         "MAX_CALL_NESTING",
         default=50,
-        description="Deepest chain of call, map, and loop bodies a flow may nest",
+        description=(
+            "Deepest chain of call, map, and loop bodies a flow may nest, and of uses: "
+            "files it may import"
+        ),
         group="limit",
         minimum=1,
         maximum=50,

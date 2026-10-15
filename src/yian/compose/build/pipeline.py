@@ -271,6 +271,9 @@ class ComposedFlow:
             assembly pipeline leaves this unset while one physical document is still
             being built; the loader installs the exact immutable resolver before the
             flow is returned or cached.
+        import_depth (`int`, *optional*, defaults to `0`):
+            Longest chain of `uses:` imports beneath this flow; 0 when it imports nothing
+            or was built without the loader.
     """
 
     compiled: CompiledFlow
@@ -282,6 +285,7 @@ class ComposedFlow:
         repr=False,
         compare=False,
     )
+    import_depth: int = field(default=0, compare=False)
 
     @property
     def input(self) -> list[Parameter]:

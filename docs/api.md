@@ -71,7 +71,9 @@ Parses, compiles, and validates the flow `text`, including every authored input
 default. Pass `search_paths` so that a flow's `call:` / `uses:` references resolve
 relative to the flow file's directory — typically `search_paths=[flow_dir]`—or
 inject `child_resolver` for host-provided external flow resolution. An injected
-resolver takes precedence over local search paths. Pass the filename as
+resolver takes precedence over local search paths. A flow a custom resolver returns
+counts its own `uses:` chain through `ComposedFlow.import_depth`; one built without
+`load_flow` counts 0. Pass the filename as
 `source_label` when `text` came from a file. Raises
 `LoadError` on a bad flow (compile-time errors surface here, not at run time);
 its immutable `.diagnostic` owns the message, notes, and every ordered

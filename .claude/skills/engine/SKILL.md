@@ -132,8 +132,8 @@ this model whenever you design anything:
   limit in `_CallableScope.resolve`, counted apart: before loading against
   `_ACTIVE_IMPORTS` (spans files, never reset by `load_flow`), and after, adding the
   loaded flow's `ComposedFlow.import_depth`. Load, run setup, and replay walk the baked tree
-  recursively (about 10 frames per level), so the cap keeps a run inside the default
-  recursion limit. Runtime growth depth (`state.depth`) is unrelated and uncapped.
+  recursively (about 10 frames per level; a flow copy shares its `Type`s, so record depth
+  adds none), so the cap keeps a run inside the default recursion limit. Runtime growth depth (`state.depth`) is unrelated and uncapped.
 - `AgentNode.variables` reuses ordered `Parameter` declarations, each with an
   exact contract and explicit typed default. Reject duplicate names and input
   collisions. Resolve a detached default record once per invocation, then render

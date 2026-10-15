@@ -654,6 +654,10 @@ A flow's CALL, MAP, and LOOP bodies nest at most
 tree of compiled flows, and loading, run setup (the `copy.deepcopy` of the compiled
 flow in `run.py` and the recursive compile walkers), and replay walk it recursively,
 about 10 frames per level. At 50 levels a load, run, or resume peaks near 535 frames.
+Every `copy.deepcopy` of a compiled flow (run setup, the per-callsite copies in
+`compile/llm_cascade.py`, the CLI's and the runtime's copies) shares the flow's types,
+since a `Type` is never changed after it is built, so record depth adds no stack to a
+copy; the 535-frame figure counts call depth alone.
 A chain of `uses:` imports adds about 4 frames per file: a load of 50 imports whose last
 file calls a 50-level chain peaks near 735 frames, which leaves about 265 for the caller
 under Python's default limit of 1000.

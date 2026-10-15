@@ -29,8 +29,9 @@ binding a value. Two forces make the typing non-negotiable:
 
 ## `ValueKind` — the closed vocabulary
 
-Every value is one of a fixed set of kinds. The enum's `.value` is the *one* spelling —
-author token, wire tag, and display name at once (it is `str`, never `string`):
+Every value is one of a fixed set of kinds. The enum's `.value` is the kind's storage
+tag, the name the run log and the wire use (it is `str`, never `string`). It is not
+authored syntax: authors write types with parentheses, such as `list(str)`.
 
 ```
 scalars   None  str  int  float  bool  date  datetime  object  file
@@ -159,12 +160,12 @@ and expands to at most 100,000 nodes, each alias counting as a copy of what it n
 (`YIAN_MAX_YAML_NODES`); see [Syntax → YAML values](syntax.md#yaml-values).
 
 A value written out in a flow file (a node input, MAP `over:`, WAIT `until:`, a value
-entry, an input or AGENT variable default, a CASE value branch, a flow `output:`, an
-`env:` value) is checked at load with the counting the run-time check would apply to
-it, so one nested deeper is a located load error, even when YAML aliases build its
-depth while the text stays shallow. A record flow output's fields count the record's
-level. `${...}` text counts as a scalar there, so the boundaries below still check
-computed values and values in a flow built in Python.
+entry, an input or AGENT variable default, a flow `output:`, an `env:` value) is
+checked at load with the counting the run-time check would apply to it, so one nested
+deeper is a located load error, even when YAML aliases build its depth while the text
+stays shallow. A record flow output's fields count the record's level. `${...}` text
+counts as a scalar there, so the boundaries below still check computed values and
+values in a flow built in Python.
 
 A type nests at most 100 levels by default (`YIAN_MAX_TYPE_NESTING`). In type text
 every constructor is a level, `Optional(` and `Union(` included, so `list(Optional(int))`
@@ -252,7 +253,8 @@ build_value(v)               → wrap v in its NATURAL type (infer)
 build_value_as(declared, v)  → wrap v as `declared`, RAISE on mismatch (check)
 ```
 
-`build_value` infers the kind (`bool` checked before `int`; empty list → `list[Any]`).
+`build_value` infers the kind (`bool` checked before `int`; an empty list is the untyped
+list, labelled `list(Optional(Any))`).
 `build_value_as` is the declared-type check used by both `VariablePool.set` and the
 run log's `canonical_typed` success-record boundary. It raises `TypeCheckError` on a
 mismatch. Three conversions apply at any depth (a record field, a list item, or a union
@@ -265,9 +267,9 @@ member's field): an `int` filling a `float` slot widens; a file's JSON form fill
 widening. Typed bindings and `T(...)` constructors deliver their value through it, and
 the runtime uses it to restore files in values it decodes from the run log.
 
-`object`, `Any`, `list(object)` items, and `list[Any]` items must be JSON values: `None`,
-a `bool`, `int`, `float`, or `str`, a `dict` with only `str` keys and JSON values, or a
-list or tuple of JSON values. The check walks the value without recursion and fails at
+`object`, `Any`, `list(object)` items, and `list(Optional(Any))` items must be JSON
+values: `None`, a `bool`, `int`, `float`, or `str`, a `dict` with only `str` keys and
+JSON values, or a list or tuple of JSON values. The check walks the value without recursion and fails at
 the bad part's path: a non-text key with `object keys must be text, got 1` at the
 mapping, anything else (a date object, a set, a pydantic model, a dataclass, a
 `FileRef` in an `Any` value) with `<value> is not a JSON value`, and a container inside
@@ -485,6 +487,7 @@ The runtime state primitive the engine owns. Narrow by design:
 
 - **Durable by construction** — the discriminated union makes canonical record replay
   lossless.
-- **One vocabulary** — `ValueKind.value` is author token, wire tag, and display name at once.
+- **One storage vocabulary** — `ValueKind.value` names a kind in the run log and on the
+  wire alike.
 - **Fail at the boundary** — nodes cannot mutate graph state; `build_value_as`
   catches a wrong type early.

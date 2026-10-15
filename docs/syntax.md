@@ -840,7 +840,7 @@ A flow input is a tag with an optional default:
 ```yaml
 input:
   qty: !int                       # required
-  history: !list(message) []      # default []
+  history: !list(str) []          # default []
   model: !Optional(str)           # may be omitted; gives null
   note: !Optional(str) null       # default null
 ```
@@ -2077,11 +2077,8 @@ Changed: reading `${case.output}` of a `case` that isn't [exhaustive](#exhaustiv
 used to load, and returned null when no branch ran; it is now a load error. Add an
 `else:`, or list every tag of a non-nullable `Literal` `on:`. An unquoted `then:` or
 `else:` word that names no node used to fail with a `KeyError`; it is now a load error
-that suggests the nearest node, or quoting. An empty `else:` used to mean no `else:`; it
-is now a load error unless the `case` declares an `Optional` `output:` (then it is the
-value `null`). Node ids may no longer start with `__value_` or `__case_`. Flows without
-value branches or a typed `case` keep their fingerprints. (Value branches, `case`
-`output:`, and the reserved prefixes were later removed; see [Branches](#branches).)
+that suggests the nearest node. An empty `else:` used to mean no `else:`; it is now a
+load error.
 
 Changed: a `case` routes only. A value branch (quoted text, a number, a bool, `null` or
 an empty `else:`, a date, a mapping, a list, or unquoted text holding `${`) and a `case`

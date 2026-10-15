@@ -448,7 +448,9 @@ def test_open_schema_run_with_a_transcript_corrects_a_reply_without_the_tool_cal
 
 
 # Models langchain-anthropic lists as refusing a forced tool choice.
-_NO_FORCE = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1"]
+_LANGCHAIN_NO_FORCE = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1"]
+# Plus those Anthropic's forced-tool table names that langchain-anthropic does not list.
+_NO_FORCE = [*_LANGCHAIN_NO_FORCE, "claude-mythos-5-1"]
 _NO_FORCE_SCHEMAS = {
     "Answer": (lambda: Answer, {"answer": "ok"}),
     "C": (lambda: _agent_schema("C"), {"a": 1, "b": ["x"]}),
@@ -527,19 +529,23 @@ def test_binding_on_those_models_emits_no_warning(server, model):
     assert caught == []
 
 
-def test_those_models_with_block_thinking_and_a_closed_schema_keep_the_output_format(server):
+@pytest.mark.parametrize("model", _NO_FORCE)
+def test_those_models_with_block_thinking_and_a_closed_schema_keep_the_output_format(
+    server, model
+):
     server.text = '{"answer": "ok"}'
-    # These models take only adaptive thinking.
-    model = _model({"thinking": {"type": "adaptive"}, "max_tokens": 4096}, model="claude-opus-5-5")
+    # Adaptive thinking, which all of these accept.
+    model = _model({"thinking": {"type": "adaptive"}, "max_tokens": 4096}, model=model)
     assert model.with_structured_output(Answer).invoke("hi") == Answer(answer="ok")
     body = server.bodies[0]
     assert body["output_config"]["format"]["type"] == "json_schema"
     assert "tools" not in body
 
 
-def test_those_models_keep_an_explicit_json_schema_method(server):
+@pytest.mark.parametrize("model", _NO_FORCE)
+def test_those_models_keep_an_explicit_json_schema_method(server, model):
     server.text = '{"answer": "ok"}'
-    model = _model(model="claude-opus-5-5")
+    model = _model(model=model)
     assert model.with_structured_output(Answer, method="json_schema").invoke("hi") == Answer(
         answer="ok"
     )
@@ -549,10 +555,16 @@ def test_those_models_keep_an_explicit_json_schema_method(server):
 
 
 def test_forced_tool_support_matches_langchain():
-    for model in [*_NO_FORCE, "claude-sonnet-4-5"]:
+    for model in [*_LANGCHAIN_NO_FORCE, "claude-sonnet-4-5"]:
         assert _forces_tool(model) == _supports_forced_tool_choice(model), model
     assert not any(_forces_tool(model) for model in _NO_FORCE)
     assert _forces_tool("claude-sonnet-4-5")
+    assert _forces_tool("claude-mythos-5-1") is False
+    assert _forces_tool("claude-mythos-5-1-20261001") is False
+    # Fails once langchain lists Mythos 5.1; then yian's extra prefix can go.
+    assert _supports_forced_tool_choice("claude-mythos-5-1")
+    # Anthropic's table names only Mythos 5.1.
+    assert _forces_tool("claude-mythos-5")
 
 
 def test_a_transcript_run_on_those_models_stores_the_reply_and_corrects_it(server):

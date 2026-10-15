@@ -44,6 +44,12 @@ def _call_keywords() -> frozenset[str]:
     return frozenset(names | _SAMPLING_KEYWORDS)
 
 
+# Model id prefixes Anthropic's forced-tool table (platform.claude.com, "Forcing tool use")
+# lists as returning 400 for ``tool_choice`` ``any`` / ``tool`` that langchain-anthropic's
+# ``_supports_forced_tool_choice`` does not list yet.
+_NO_FORCED_TOOL_PREFIXES = ("claude-mythos-5-1",)
+
+
 def _forces_tool(model: str) -> bool:
     """Return whether `model` accepts a forced tool choice (``tool_choice`` ``any`` / ``tool``).
 
@@ -53,10 +59,14 @@ def _forces_tool(model: str) -> bool:
 
     Returns:
         `bool`:
-            False for models the Messages API refuses a forced tool choice for.
+            False for models the Messages API refuses a forced tool choice for: those
+            langchain-anthropic lists and those starting with a `_NO_FORCED_TOOL_PREFIXES`
+            entry.
     """
-    # langchain-anthropic's list lives in a private helper, so a test pins it; going
-    # through this function lets yian add models langchain does not list yet.
+    # langchain-anthropic's list lives in a private helper, so a test pins it; the
+    # prefixes cover models Anthropic's table names that langchain does not list yet.
+    if model.startswith(_NO_FORCED_TOOL_PREFIXES):
+        return False
     return _supports_forced_tool_choice(model)
 
 

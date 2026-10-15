@@ -1,23 +1,40 @@
-"""The ``google`` block reaches the Gemini generateContent request body as written."""
+"""The ``google`` block reaches the Gemini generateContent request body as written.
+
+A structured output schema's string and number ``const``s are sent as one-value ``enum``s, which
+Gemini's ``responseJsonSchema`` subset supports.
+"""
 
 import json
 
 import httpx
 import pytest
 from google.genai._api_client import SyncHttpxClient
+from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import HumanMessage
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from yian.llm_clients.factory import model_from_config
+from yian.llm_clients.google_client import _const_as_enum
+from yian.nodes.agent.structured import type_to_schema
+from yian.typesys.types import read_typedefs, type_for
 
-_REPLY = {
-    "candidates": [{
-        "content": {"role": "model", "parts": [{"text": "{\"answer\": \"ok\"}"}]},
-        "finishReason": "STOP",
-        "index": 0,
-    }],
-    "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
-}
+
+def _reply(text):
+    """Return a generateContent response whose one candidate says `text`."""
+    return {
+        "candidates": [{
+            "content": {"role": "model", "parts": [{"text": text}]},
+            "finishReason": "STOP",
+            "index": 0,
+        }],
+        "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+    }
+
+
+class _Bodies(list):
+    """The request bodies recorded so far; every reply's text is `text`."""
+
+    text = '{"answer": "ok"}'
 
 
 @pytest.fixture
@@ -26,13 +43,14 @@ def bodies(tmp_path, monkeypatch):
     monkeypatch.setenv("YIAN_AUTH_FILE", str(tmp_path / "auth.json"))
     for name in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "YIAN_DEFAULT_PROVIDER", "YIAN_DEFAULT_MODEL"):
         monkeypatch.delenv(name, raising=False)
-    recorded = []
+    recorded = _Bodies()
 
     def send(self, request, **kwargs):
         recorded.append(json.loads(request.content))
+        reply = _reply(recorded.text)
         if ":streamGenerateContent" in request.url.path:
-            return httpx.Response(200, text=f"data: {json.dumps(_REPLY)}\n\n", request=request)
-        return httpx.Response(200, json=_REPLY, request=request)
+            return httpx.Response(200, text=f"data: {json.dumps(reply)}\n\n", request=request)
+        return httpx.Response(200, json=reply, request=request)
 
     monkeypatch.setattr(SyncHttpxClient, "send", send)
     return recorded
@@ -125,3 +143,150 @@ def test_block_merges_into_a_callers_extra_body(bodies):
     assert bodies[-1]["generationConfig"]["topK"] == 5
     assert bodies[-1]["generationConfig"]["seed"] == 7
     assert caller == {"extra_body": {"generationConfig": {"seed": 7}}}
+
+
+_TRADES = read_typedefs({
+    "Buy": {"kind": "Literal(buy)", "x": "int"},
+    "Sell": {"kind": "Literal(sell)", "n": "int"},
+    "D": "Union(Buy, Sell)",
+})
+
+
+def _keywords(schema):
+    """Return every key of every dict in `schema`, property names included."""
+    keys, stack = set(), [schema]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            keys.update(node)
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    return keys
+
+
+def test_union_tags_are_sent_as_one_value_enums(bodies):
+    bodies.text = '{"value": {"kind": "buy", "x": 1}}'
+
+    _model("gemini-2.5-flash").with_structured_output(
+        type_to_schema(type_for("D", _TRADES))
+    ).invoke([HumanMessage("hi")])
+
+    schema = bodies[-1]["generationConfig"]["responseJsonSchema"]
+    assert "const" not in _keywords(schema)
+    kinds = {name: d["properties"]["kind"] for name, d in schema["$defs"].items()}
+    assert kinds == {
+        "buy": {"enum": ["buy"], "type": "string", "title": "Kind"},
+        "sell": {"enum": ["sell"], "type": "string", "title": "Kind"},
+    }
+
+
+def test_a_one_value_literal_is_sent_as_an_enum(bodies):
+    bodies.text = '{"value": "only"}'
+
+    result = _model("gemini-2.5-flash").with_structured_output(
+        type_to_schema(type_for("Literal(only)", {}))
+    ).invoke([HumanMessage("hi")])
+
+    assert result.value == "only"
+    value = bodies[-1]["generationConfig"]["responseJsonSchema"]["properties"]["value"]
+    assert value == {"enum": ["only"], "type": "string", "title": "Value"}
+
+
+def test_a_schema_without_const_is_sent_unchanged(bodies):
+    _model("gemini-2.5-flash").with_structured_output(_Answer).invoke([HumanMessage("hi")])
+
+    assert bodies[-1]["generationConfig"]["responseJsonSchema"] == _Answer.model_json_schema()
+
+
+def test_a_property_named_const_keeps_its_name(bodies):
+    bodies.text = '{"const": "x"}'
+    schema = {
+        "title": "Pinned",
+        "type": "object",
+        "properties": {"const": {"type": "string", "const": "x"}},
+        "required": ["const"],
+    }
+
+    _model("gemini-2.5-flash").with_structured_output(schema).invoke([HumanMessage("hi")])
+
+    sent = bodies[-1]["generationConfig"]["responseJsonSchema"]
+    assert sent["properties"] == {"const": {"type": "string", "enum": ["x"]}}
+    assert schema["properties"]["const"] == {"type": "string", "const": "x"}
+
+
+def test_the_bound_schema_is_not_rewritten(bodies):
+    bodies.text = '{"value": {"kind": "buy", "x": 1}}'
+    output = type_to_schema(type_for("D", _TRADES))
+    before = output.model_json_schema()
+    structured = _model("gemini-2.5-flash").with_structured_output(output)
+
+    structured.invoke([HumanMessage("hi")])
+    structured.invoke([HumanMessage("hi")])
+
+    assert bodies[-1] == bodies[-2]
+    assert output.model_json_schema() == before
+    assert structured.first.kwargs["response_json_schema"] == before
+
+
+def test_streaming_sends_the_union_tags_as_enums(bodies):
+    bodies.text = '{"value": {"kind": "sell", "n": 2}}'
+
+    chunks = list(
+        _model("gemini-2.5-flash").with_structured_output(
+            type_to_schema(type_for("D", _TRADES))
+        ).stream([HumanMessage("hi")])
+    )
+
+    assert chunks
+    schema = bodies[-1]["generationConfig"]["responseJsonSchema"]
+    assert "const" not in _keywords(schema)
+    assert schema["$defs"]["sell"]["properties"]["kind"]["enum"] == ["sell"]
+
+
+def test_parsing_still_checks_the_tag(bodies):
+    structured = _model("gemini-2.5-flash").with_structured_output(
+        type_to_schema(type_for("D", _TRADES)), include_raw=True
+    )
+
+    bodies.text = '{"value": {"kind": "hold", "x": 1}}'
+    wrong = structured.invoke([HumanMessage("hi")])
+    bodies.text = '{"value": {"kind": "buy", "x": 1}}'
+    right = structured.invoke([HumanMessage("hi")])
+
+    assert wrong["parsed"] is None
+    assert isinstance(wrong["parsing_error"], OutputParserException)
+    assert isinstance(wrong["parsing_error"].__cause__, ValidationError)
+    assert right["parsing_error"] is None
+    assert right["parsed"].value.kind == "buy"
+    assert right["parsed"].value.x == 1
+
+
+@pytest.mark.parametrize(
+    "schema, sent",
+    [
+        ({"const": "a", "enum": ["a", "b"]}, {"enum": ["a"]}),
+        ({"const": "a", "enum": ["b"]}, {"const": "a", "enum": ["b"]}),
+        ({"const": 1, "enum": [True, "b"]}, {"const": 1, "enum": [True, "b"]}),
+        ({"const": True, "enum": [1]}, {"const": True, "enum": [1]}),
+        ({"const": 3, "type": "integer"}, {"enum": [3], "type": "integer"}),
+        ({"const": 0.5}, {"enum": [0.5]}),
+        ({"const": True}, {"const": True}),
+        ({"const": None}, {"const": None}),
+        ({"type": "array", "items": {"const": "a"}}, {"type": "array", "items": {"enum": ["a"]}}),
+        ({"prefixItems": [{"const": "a"}]}, {"prefixItems": [{"enum": ["a"]}]}),
+        ({"additionalProperties": {"const": 1}}, {"additionalProperties": {"enum": [1]}}),
+        ({"allOf": [{"const": "a"}], "oneOf": [{"const": "b"}]},
+         {"allOf": [{"enum": ["a"]}], "oneOf": [{"enum": ["b"]}]}),
+        ({"anyOf": [{"const": "a"}, {"type": "null"}]},
+         {"anyOf": [{"enum": ["a"]}, {"type": "null"}]}),
+        ({"$defs": {"A": {"const": "a"}}}, {"$defs": {"A": {"enum": ["a"]}}}),
+        ({"properties": {"const": {"const": 1}}}, {"properties": {"const": {"enum": [1]}}}),
+        ({"default": {"const": 1}}, {"default": {"const": 1}}),
+    ],
+)
+def test_const_as_enum(schema, sent):
+    original = json.loads(json.dumps(schema))
+
+    assert _const_as_enum(schema) == sent
+    assert schema == original

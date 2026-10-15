@@ -1,5 +1,6 @@
 import builtins
 import copy
+import json
 import typing
 from typing import Any, Optional
 
@@ -73,6 +74,56 @@ def _check_http_client_type(name: str, value: Any) -> None:
         raise TypeError(f"{name} must be an {expected}, got {_class_name(type(value))}") from None
 
 
+def _const_as_enum(schema: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of a JSON schema with string and number ``const``s as one-value ``enum``s.
+
+    Gemini's ``responseJsonSchema`` supports only a subset of JSON Schema, which lists
+    ``enum`` (for strings and numbers) but not ``const`` (google-genai
+    ``GenerateContentConfig.response_json_schema``). ``{"const": v}`` and ``{"enum": [v]}``
+    accept the same values, so the rewrite is exact. A boolean or null ``const`` is left as
+    written, since the list does not cover such an ``enum`` either.
+
+    Args:
+        schema (`dict[str, Any]`):
+            The schema to rewrite. It is not changed.
+
+    Returns:
+        `dict[str, Any]`:
+            A deep copy of `schema` where the root and every subschema under
+            ``properties``, ``$defs``, ``items``, ``prefixItems``, ``additionalProperties``,
+            ``anyOf``, ``oneOf`` and ``allOf`` holding a string or number ``const: v`` has
+            ``enum: [v]`` instead. A subschema whose existing ``enum`` holds ``v`` (compared as JSON
+            values) gets ``enum: [v]``; one whose ``enum`` lacks ``v`` is left as written.
+    """
+    result = copy.deepcopy(schema)
+    stack = [result]
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, dict):
+            continue
+        value = node.get("const")
+        # `bool` is a subclass of `int`, but a JSON boolean is not a number.
+        if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+            # Compare as JSON, where `true` and `1` differ; Python has `True == 1`.
+            wanted = json.dumps(value, sort_keys=True)
+            members = node.get("enum")
+            if members is None or any(
+                json.dumps(member, sort_keys=True) == wanted for member in members
+            ):
+                del node["const"]
+                node["enum"] = [value]
+        for key in ("properties", "$defs"):
+            if isinstance(node.get(key), dict):
+                stack.extend(node[key].values())
+        for key in ("items", "additionalProperties"):
+            if isinstance(node.get(key), dict):
+                stack.append(node[key])
+        for key in ("prefixItems", "anyOf", "oneOf", "allOf"):
+            if isinstance(node.get(key), list):
+                stack.extend(node[key])
+    return result
+
+
 class NormalizedChatGoogleGenerativeAI(ChatGoogleGenerativeAI):
     """ChatGoogleGenerativeAI with normalized content output.
 
@@ -119,11 +170,14 @@ class NormalizedChatGoogleGenerativeAI(ChatGoogleGenerativeAI):
         return self
 
     def _prepare_request(self, messages, **kwargs):
-        """Return langchain's request with `block` added to the request's ``extra_body``.
+        """Return langchain's request with `block` added and ``const`` sent as ``enum``.
 
         google-genai deep-merges ``http_options.extra_body`` into the REST body after
         building it, aligning key case, so the block's camelCase keys land beside
         langchain's own fields (structured output, tools) and win where both set one.
+        The request's ``response_json_schema`` is replaced by a copy whose ``const``
+        keywords are one-value ``enum``s (see `_const_as_enum`); the bound schema is
+        not changed, and replies still parse against the original output class.
 
         Args:
             messages (`list[BaseMessage]`):
@@ -148,7 +202,14 @@ class NormalizedChatGoogleGenerativeAI(ChatGoogleGenerativeAI):
             extra_body = copy.deepcopy(options.extra_body or {})
             options.extra_body = merge_request_body(extra_body, self.block)
             kwargs["http_options"] = options
-        return super()._prepare_request(messages, **kwargs)
+        request = super()._prepare_request(messages, **kwargs)
+        config = request["config"]
+        schema = config.response_json_schema
+        if isinstance(schema, dict):
+            rewritten = _const_as_enum(schema)
+            if rewritten != schema:
+                request["config"] = config.model_copy(update={"response_json_schema": rewritten})
+        return request
 
     def invoke(self, input, config=None, **kwargs):
         return self.normalize_reply(super().invoke(input, config, **kwargs))

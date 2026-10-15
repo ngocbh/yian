@@ -486,7 +486,9 @@ its bare tag to the flow. A union returns the matching member's record; each mem
 schema pins its tag and rejects unknown fields. An `object` or `Any` output is an open
 mapping or any JSON value; where structured output is strict (Azure, the OpenAI Responses
 API, Anthropic with `thinking` on) yian asks for that whole schema through a non-strict or
-unforced tool instead, and still validates and retries the reply. Use a downstream `code`
+unforced tool instead, and still validates and retries the reply. A range such as
+`int(0..10)` goes to Azure in the field's description rather than as `minimum`/`maximum`,
+and is still checked on the reply. Use a downstream `code`
 node only for deterministic post-processing.
 `prompt:` must be text: quote a number, boolean, date, or a value starting with `[` or `{`;
 otherwise it is a load error at the value.

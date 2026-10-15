@@ -2,6 +2,8 @@ from abc import ABC, abstractmethod
 from typing import Any, Optional
 import warnings
 
+from langchain_core.exceptions import OutputParserException
+
 
 def normalize_content(response):
     """Coerce an LLM response's `.content` to a plain string in place.
@@ -50,6 +52,46 @@ def check_no_redirects(name: str, http_client: Any) -> None:
             f"{name} follows redirects, which would send the API key past base_url; "
             "build it with follow_redirects=False"
         )
+
+
+class MissingToolCallError(OutputParserException):
+    """A structured reply that did not call the schema's tool.
+
+    Its `str` is the message alone: `OutputParserException.__init__` appends
+    langchain's troubleshooting link, so this skips that initializer and sets the
+    parent's attributes itself.
+
+    Args:
+        message (`str`):
+            The full error message.
+    """
+
+    def __init__(self, message: str):
+        Exception.__init__(self, message)
+        self.observation = None
+        self.llm_output = None
+        self.send_to_llm = False
+
+
+def missing_tool_call(name: str) -> MissingToolCallError:
+    """Return the error for a structured reply that did not call the schema's tool.
+
+    The AGENT sends this message as the correction before a retry, and raises the error
+    once retries are spent.
+
+    Args:
+        name (`str`):
+            The name of the schema's tool.
+
+    Returns:
+        `MissingToolCallError`:
+            The error, an `OutputParserException` whose message names the tool.
+
+    Example:
+        >>> str(missing_tool_call("Answer"))
+        'the reply did not call the Answer tool; call it with the answer'
+    """
+    return MissingToolCallError(f"the reply did not call the {name} tool; call it with the answer")
 
 
 class BaseLLMClient(ABC):

@@ -651,12 +651,18 @@ model made enforceable.
   elementless list) goes non-strict, whole, where a client's default is strict: Azure
   binds a forced function tool without `strict`; a request langchain routes to the
   Responses API (OpenAI, the subscription, a `*-codex` name on Azure or OpenRouter) sends
-  `strict: false`; Anthropic with block thinking binds an unforced tool, and a reply
-  without that tool call raises `OutputParserException` (with `include_raw`, a
-  `parsing_error`) for the retry to correct. Closed schemas there, Gemini, Ollama, the
-  OpenAI-compatible Chat Completions clients, and Anthropic without thinking are
+  `strict: false`; Anthropic with block thinking binds an unforced tool. Closed schemas
+  there, Gemini, Ollama, and the OpenAI-compatible Chat Completions clients are
   unchanged; an explicit `method=` is respected, and so is an explicit `strict=` on the
-  OpenAI-family clients.
+  OpenAI-family clients. Anthropic models that refuse a forced tool (`_forces_tool(model)`
+  false: Opus 5.5, Sonnet 5.5, Fable 5.1) get the same unforced tool
+  (`_unforced_tool_output`) for every schema when block thinking is off; other Anthropic
+  models without thinking are unchanged. A reply with no tool call, raised by that guard
+  (with `include_raw`, a `parsing_error`) or left by a tool parser that returns no result
+  (`_generate_native` treats `None`, or `parsed: None, parsing_error: None`, the same
+  way), is `base_client.missing_tool_call`: a `MissingToolCallError`
+  (`OutputParserException`) naming the tool, fed back under `retries:`; once they're
+  spent the AGENT fails `node.execute`.
   A root enum string (`Literal(...)`) uses `ScalarWrapper.value` with a Pydantic
   `Literal` annotation and unwraps to the bare tag returned to the flow.
   Three-part contract: **generate-tries** (the schema asks), **boundary-enforces**

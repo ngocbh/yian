@@ -11,18 +11,27 @@ import anthropic
 import pytest
 from anthropic.resources.messages import Messages
 from langchain_anthropic import convert_to_anthropic_tool
+from langchain_anthropic.chat_models import _supports_forced_tool_choice
 from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel
 
 from tests.engine._session_fakes import harness, request
-from yian.llm_clients.anthropic_client import AnthropicClient, NormalizedChatAnthropic
+from tests.engine.test_agent_session import _view
+from yian.llm_clients.anthropic_client import (
+    AnthropicClient,
+    NormalizedChatAnthropic,
+    _forces_tool,
+)
+from yian.llm_clients.base_client import missing_tool_call
 from yian.llm_clients.capabilities import has_open_schema
 from yian.llm_clients.factory import model_from_config
 from yian.llm_clients.provider_blocks import AnthropicMessagesBlock
 from yian.memory import MemoryContext
+from yian.memory.session import SessionMemory
 from yian.nodes.agent.structured import generate_structured, type_to_schema
 from yian.typesys.types import read_typedefs, type_for
+from yian.typesys.values import Type, ValueKind
 
 _ENV_KEYS = (
     "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "YIAN_DEFAULT_PROVIDER", "YIAN_DEFAULT_MODEL",
@@ -348,8 +357,9 @@ def test_open_schema_reply_without_the_tool_call_raises_naming_the_tool(server, 
     name = convert_to_anthropic_tool(schema)["name"]
     server.content = _NO_TOOL_REPLIES[reply]
     model = _model({"thinking": _THINKING, "max_tokens": 4096})
-    with pytest.raises(OutputParserException, match=f"Call the {name} tool with the answer"):
+    with pytest.raises(OutputParserException) as caught:
         model.with_structured_output(schema).invoke("hi")
+    assert str(caught.value) == str(missing_tool_call(name))
 
 
 @pytest.mark.parametrize("reply", sorted(_NO_TOOL_REPLIES))
@@ -364,7 +374,7 @@ def test_open_schema_reply_without_the_tool_call_is_a_parsing_error_with_raw(ser
     assert result["raw"].response_metadata["id"] == "msg_1"
     assert result["parsed"] is None
     assert isinstance(result["parsing_error"], OutputParserException)
-    assert f"Call the {name} tool with the answer" in str(result["parsing_error"])
+    assert str(result["parsing_error"]) == str(missing_tool_call(name))
 
 
 def test_open_schema_binding_leaves_warnings_alone(server):
@@ -434,7 +444,142 @@ def test_open_schema_run_with_a_transcript_corrects_a_reply_without_the_tool_cal
     assert value == {"k": 1}
     assert len(server.bodies) == 2
     correction = json.dumps(server.bodies[1]["messages"][-1])
-    assert f"Call the {name} tool with the answer" in correction
+    assert str(missing_tool_call(name)) in correction
+
+
+# Models langchain-anthropic lists as refusing a forced tool choice.
+_NO_FORCE = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1"]
+_NO_FORCE_SCHEMAS = {
+    "Answer": (lambda: Answer, {"answer": "ok"}),
+    "C": (lambda: _agent_schema("C"), {"a": 1, "b": ["x"]}),
+    "object": (lambda: _agent_schema("object"), {"value": {"k": 1}}),
+}
+
+
+def _no_force_case(server, model, case, block=None, method=None, include_raw=False):
+    """Bind `case`'s schema on `model` and check it goes as an unforced tool whose call parses."""
+    make, args = _NO_FORCE_SCHEMAS[case]
+    schema = make()
+    name = convert_to_anthropic_tool(schema)["name"]
+    server.content = [{"type": "tool_use", "id": "toolu_1", "name": name, "input": args}]
+    kwargs = {} if method is None else {"method": method}
+    structured = _model(block, model=model).with_structured_output(
+        schema, include_raw=include_raw, **kwargs
+    )
+    result = structured.invoke("hi")
+    expected = schema.model_validate(args)
+    if include_raw:
+        assert result["parsed"] == expected and result["parsing_error"] is None
+        assert isinstance(result["raw"], AIMessage)
+    else:
+        assert result == expected
+    body = server.bodies[0]
+    assert body["tools"] == [convert_to_anthropic_tool(schema)]
+    assert "tool_choice" not in body
+    assert "output_config" not in body
+
+
+@pytest.mark.parametrize("model", _NO_FORCE)
+@pytest.mark.parametrize("case", sorted(_NO_FORCE_SCHEMAS))
+@pytest.mark.parametrize("include_raw", [False, True])
+def test_models_that_refuse_a_forced_tool_get_an_unforced_tool(server, model, case, include_raw):
+    _no_force_case(server, model, case, include_raw=include_raw)
+
+
+@pytest.mark.parametrize("model", _NO_FORCE)
+def test_those_models_get_an_unforced_tool_for_an_explicit_function_calling(server, model):
+    _no_force_case(server, model, "Answer", method="function_calling")
+
+
+def test_those_models_get_an_unforced_tool_with_block_thinking_disabled(server):
+    # langchain-anthropic's model check refuses `disabled` on the other two before any
+    # request, so only claude-opus-5-5 can exercise this branch here.
+    _no_force_case(server, "claude-opus-5-5", "Answer", block={"thinking": {"type": "disabled"}})
+
+
+@pytest.mark.parametrize("reply", sorted(_NO_TOOL_REPLIES))
+def test_a_reply_without_the_tool_call_on_those_models_raises_naming_the_tool(server, reply):
+    server.content = _NO_TOOL_REPLIES[reply]
+    with pytest.raises(OutputParserException) as caught:
+        _model(model="claude-opus-5-5").with_structured_output(Answer).invoke("hi")
+    assert str(caught.value) == str(missing_tool_call("Answer"))
+
+
+@pytest.mark.parametrize("reply", sorted(_NO_TOOL_REPLIES))
+def test_a_reply_without_the_tool_call_on_those_models_is_a_parsing_error_with_raw(server, reply):
+    server.content = _NO_TOOL_REPLIES[reply]
+    model = _model(model="claude-opus-5-5")
+    result = model.with_structured_output(Answer, include_raw=True).invoke("hi")
+    assert isinstance(result["raw"], AIMessage)
+    assert result["parsed"] is None
+    assert isinstance(result["parsing_error"], OutputParserException)
+    assert str(result["parsing_error"]) == str(missing_tool_call("Answer"))
+
+
+@pytest.mark.parametrize("model", _NO_FORCE)
+def test_binding_on_those_models_emits_no_warning(server, model):
+    server.content = _tool_reply("Answer", {"answer": "ok"})
+    chat = _model(model=model)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        chat.with_structured_output(Answer).invoke("hi")
+        chat.with_structured_output(Answer, include_raw=True).invoke("hi")
+    assert caught == []
+
+
+def test_those_models_with_block_thinking_and_a_closed_schema_keep_the_output_format(server):
+    server.text = '{"answer": "ok"}'
+    # These models take only adaptive thinking.
+    model = _model({"thinking": {"type": "adaptive"}, "max_tokens": 4096}, model="claude-opus-5-5")
+    assert model.with_structured_output(Answer).invoke("hi") == Answer(answer="ok")
+    body = server.bodies[0]
+    assert body["output_config"]["format"]["type"] == "json_schema"
+    assert "tools" not in body
+
+
+def test_those_models_keep_an_explicit_json_schema_method(server):
+    server.text = '{"answer": "ok"}'
+    model = _model(model="claude-opus-5-5")
+    assert model.with_structured_output(Answer, method="json_schema").invoke("hi") == Answer(
+        answer="ok"
+    )
+    body = server.bodies[0]
+    assert body["output_config"]["format"]["type"] == "json_schema"
+    assert "tools" not in body
+
+
+def test_forced_tool_support_matches_langchain():
+    for model in [*_NO_FORCE, "claude-sonnet-4-5"]:
+        assert _forces_tool(model) == _supports_forced_tool_choice(model), model
+    assert not any(_forces_tool(model) for model in _NO_FORCE)
+    assert _forces_tool("claude-sonnet-4-5")
+
+
+def test_a_transcript_run_on_those_models_stores_the_reply_and_corrects_it(server):
+    typ = Type.scalar(ValueKind.INTEGER)
+    name = convert_to_anthropic_tool(type_to_schema(typ))["name"]
+    server.replies = [
+        [{"type": "text", "text": "42"}],
+        [{"type": "tool_use", "id": "toolu_1", "name": name, "input": {"value": 42}}],
+    ]
+    model = _model(model="claude-opus-5-5")
+    memory = SessionMemory()
+    with harness(memory) as opened:
+        with opened.frame.open_turn(request(), check_stopped=lambda: None) as turn:
+            value = generate_structured(
+                model, [HumanMessage(content="question")], typ,
+                llm_config={"provider": "anthropic", "model": "claude-opus-5-5"},
+                memory_context=MemoryContext(transcript=turn),
+            )
+    assert value == 42
+    assert len(server.bodies) == 2
+    types = [item.payload["message"]["type"] for item in _view(memory).items]
+    assert types[-3:] == ["ai", "human", "ai"]
+    messages = server.bodies[1]["messages"]
+    assert [message["role"] for message in messages] == ["user"]
+    last = messages[0]["content"][-1]["text"]
+    assert str(missing_tool_call(name)) in last
+    assert "provider error (" not in last
 
 
 @pytest.fixture

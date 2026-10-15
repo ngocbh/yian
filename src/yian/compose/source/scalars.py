@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime
+from typing import Any
 
 import yaml
 from yaml.composer import ComposerError
@@ -169,6 +170,17 @@ class _FlowLoader(yaml.SafeLoader):
     # graph is counted before anything else touches it. The walk is iterative and
     # inline, so no frame in a failure's traceback takes a node as an argument: the
     # repr of an alias graph is exponential too.
+    #
+    # A recursive alias is a back edge to a node still on the path. It counts 1 (the
+    # alias itself), and the source layer reports it when something descends through
+    # it. Its count makes every node between it and its target path-dependent: reached
+    # from outside the cycle, the loader's walkers expand that target in full. So a
+    # node is memoized only when no back edge below it reaches above it (its `low`, the
+    # shallowest path depth such an edge reaches, is not above its own depth), and a
+    # path-dependent node is counted again at each visit. Every step adds at least 1 to
+    # `counted`, the nodes counted so far, so once that passes the limit the document
+    # is over it; a recount then would only repeat work, so the walk stops there and
+    # reports the deepest node on the path already holding more than the limit.
     def compose_document(self) -> yaml.Node:
         """Compose one document, refusing one that expands past the node limit.
 
@@ -180,44 +192,71 @@ class _FlowLoader(yaml.SafeLoader):
             `ComposerError`:
                 Raised at the first mapping or list, in post-order, that holds more
                 than ``current().max_yaml_nodes`` nodes, counting each alias as a copy
-                of what it names.
+                of what it names. Under a recursive alias, raised instead at the
+                deepest node on the path already over the limit once the count would
+                need repeating.
         """
 
         root = super().compose_document()
         limit = self._max_nodes
         counts: dict[int, int] = {}
-        # A recursive alias is a back edge to a node still on the path; it counts 0
-        # here, and the source layer reports it when something descends through it.
-        on_path = {id(root)}
-        # Each frame: the node, its children, the next child's index, its count so far.
-        stack: list[list] = [[root, _children(root), 0, 1]]
+        path_dependent: set[int] = set()
+        # The depth of each node on the path, by id.
+        depths = {id(root): 0}
+        counted = 1
+        over: yaml.Node | None = None
+        # Each frame: the node, its children, the next child's index, its count so far,
+        # and its `low`, which starts at its own depth.
+        stack: list[list[Any]] = [[root, _children(root), 0, 1, 0]]
         while stack:
             frame = stack[-1]
-            node, children, index, total = frame
+            node, children, index, total, low = frame
             if index < len(children):
                 frame[2] = index + 1
                 child = children[index]
-                if id(child) in counts:
-                    frame[3] = total + counts[id(child)]
-                elif id(child) not in on_path:
-                    on_path.add(id(child))
-                    stack.append([child, _children(child), 0, 1])
+                key = id(child)
+                if key in counts:
+                    frame[3] = total + counts[key]
+                    counted += counts[key]
+                elif key in depths:
+                    frame[3] = total + 1
+                    frame[4] = min(low, depths[key])
+                    counted += 1
+                elif counted > limit and key in path_dependent:
+                    partial = 0
+                    for held in reversed(stack):
+                        partial += held[3]
+                        if partial > limit:
+                            over = held[0]
+                            break
+                    break
+                else:
+                    depths[key] = len(stack)
+                    stack.append([child, _children(child), 0, 1, len(stack)])
+                    counted += 1
                 continue
             stack.pop()
-            on_path.discard(id(node))
-            counts[id(node)] = total
+            del depths[id(node)]
+            if low >= len(stack):
+                counts[id(node)] = total
+            else:
+                path_dependent.add(id(node))
             if total > limit:
-                kind = "list" if isinstance(node, yaml.SequenceNode) else "mapping"
-                raise ComposerError(
-                    None,
-                    None,
-                    f"this {kind} holds more than {limit} YAML nodes, counting each alias "
-                    f"as a copy of what it names; the limit for a YAML document is {limit} "
-                    "(YIAN_MAX_YAML_NODES; each mapping, list, and scalar is a node)",
-                    node.start_mark,
-                )
+                over = node
+                break
             if stack:
                 stack[-1][3] += total
+                stack[-1][4] = min(stack[-1][4], low)
+        if over is not None:
+            kind = "list" if isinstance(over, yaml.SequenceNode) else "mapping"
+            raise ComposerError(
+                None,
+                None,
+                f"this {kind} holds more than {limit} YAML nodes, counting each alias "
+                f"as a copy of what it names; the limit for a YAML document is {limit} "
+                "(YIAN_MAX_YAML_NODES; each mapping, list, and scalar is a node)",
+                over.start_mark,
+            )
         return root
 
     def construct_yaml_bool(self, node: yaml.Node) -> bool:

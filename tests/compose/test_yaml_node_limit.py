@@ -49,6 +49,15 @@ def _doubling_anchors(levels: int) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _assert_no_recursion_error(error: BaseException) -> None:
+    """Assert that no exception in `error`'s cause chain is a `RecursionError`."""
+
+    cause = error.__cause__
+    while cause is not None:
+        assert not isinstance(cause, RecursionError)
+        cause = cause.__cause__
+
+
 def test_doubling_aliases_fail_fast_at_the_first_anchor_over_the_limit() -> None:
     # a<i> holds 3 * 2**i - 1 nodes: a15 (98,303) fits and a16 (196,607) does not.
     assert 3 * 2**15 - 1 <= MAX_YAML_NODES < 3 * 2**16 - 1
@@ -63,10 +72,7 @@ def test_doubling_aliases_fail_fast_at_the_first_anchor_over_the_limit() -> None
     assert elapsed < 5
     assert f"this list {_message(MAX_YAML_NODES)}" in str(caught.value)
     assert caught.value.diagnostic.frames[-1].range.start_line == 4 + 16
-    cause = caught.value.__cause__
-    while cause is not None:
-        assert not isinstance(cause, RecursionError)
-        cause = cause.__cause__
+    _assert_no_recursion_error(caught.value)
 
 
 def test_message_names_the_variable_and_what_a_node_is(set_defaults) -> None:
@@ -162,6 +168,90 @@ def test_a_listed_1000_link_chain_under_a_raised_limit_meets_the_value_limit(
 def test_a_recursive_alias_keeps_its_error() -> None:
     with pytest.raises(LoadError, match="cannot descend through a recursive alias occurrence"):
         load_flow(_flow("&x [*x]"))
+
+
+def test_a_count_a_recursive_alias_cut_short_is_not_reused_outside_the_cycle() -> None:
+    # Inside r, s's aliases of r are recursive and add nothing, but t0 reaches s from
+    # outside r, where each *r expands r's 8,191-node a12 again: t0 holds over 65,000
+    # nodes and t1 is the first node over the limit.
+    lines = [
+        "  - &r [*a12, &s [*r, *r, *r, *r]]",
+        "  - &t0 [*s, *s]",
+        *(f"  - &t{j} [*t{j - 1}, *t{j - 1}]" for j in range(1, 30)),
+    ]
+    text = _flow("*t29", _doubling_anchors(13) + "\n".join(lines) + "\n")
+    assert text.splitlines()[18] == "  - &t1 [*t0, *t0]"
+
+    started = time.monotonic()
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 5
+    assert f"this list {_message(MAX_YAML_NODES)}" in str(caught.value)
+    assert caught.value.diagnostic.frames[-1].range.start_line == 19
+    _assert_no_recursion_error(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("items", "where"),
+    [
+        # Each s<i> depends on r, so the walk cannot memoize it; s<i> doubles s<i-1>.
+        (
+            ["&s0 [*r, *r]", *(f"&s{i} [*s{i - 1}, *s{i - 1}]" for i in range(1, 30))],
+            ("mapping", 1),
+        ),
+        # u's thousand recursive aliases each count, so recounting u stays bounded.
+        (
+            [
+                "&u [" + ", ".join(["*r"] * 1000) + "]",
+                "&s1 [*u, *u]",
+                *(f"&s{i} [*s{i - 1}, *s{i - 1}]" for i in range(2, 30)),
+            ],
+            ("list", 3),
+        ),
+        # s15 depends on r and holds about 65,000 nodes; r lists it 300 more times,
+        # bare and wrapped, so a walk that recounted each would take minutes.
+        (
+            [
+                "&s0 [*r]",
+                *(f"&s{i} [*s{i - 1}, *s{i - 1}]" for i in range(1, 16)),
+                *(["*s15", "[*s15]"] * 300),
+            ],
+            ("mapping", 1),
+        ),
+    ],
+    ids=["doubling", "wide", "repeated"],
+)
+def test_exponential_nodes_inside_a_cycle_fail_fast(
+    items: list[str], where: tuple[str, int]
+) -> None:
+    # Once the document has counted past the limit, a node a recursive alias made
+    # path-dependent is not counted again: the error names the deepest node on the
+    # path already over the limit, which here is often the document itself.
+    kind, line = where
+    text = _flow("*r", f"x-anchors: [&r [{', '.join(items)}]]\n")
+
+    started = time.monotonic()
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 5
+    assert f"this {kind} {_message(MAX_YAML_NODES)}" in str(caught.value)
+    assert caught.value.diagnostic.frames[-1].range.start_line == line
+    _assert_no_recursion_error(caught.value)
+
+
+@pytest.mark.parametrize("value", ["&x [*x, *x, [*x]]", "&m {<<: *m}"])
+def test_a_pure_cycle_ends(value: str) -> None:
+    started = time.monotonic()
+    try:
+        load_flow(_flow(value))
+    except LoadError as error:
+        assert "cannot descend through a recursive alias occurrence" in str(error)
+
+    assert time.monotonic() - started < 5
 
 
 def test_a_plain_20000_element_list_loads() -> None:

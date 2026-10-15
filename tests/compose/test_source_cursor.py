@@ -15,6 +15,18 @@ from yian.compose.source import (
 from yian.diagnostics import SourceRange
 
 
+@pytest.fixture
+def unbounded_yaml_nodes(set_defaults):
+    """Lift the YAML node limit for one test.
+
+    The alias documents below expand exponentially, past the node limit (and some
+    past the 18 digits the variable takes); the tests prove the source layer stays
+    linear for an author who raises the limit.
+    """
+
+    set_defaults.unchecked(max_yaml_nodes=10**1000)
+
+
 def test_document_preserves_constructed_keys_and_effective_collision_ranges():
     text = """\
 values:
@@ -93,11 +105,7 @@ def test_holds_compares_exactly_and_ends_on_a_recursive_alias():
     assert not cursor.child("q").holds([1, 1])
 
 
-def test_value_copy_is_stack_safe_for_deep_alias_dag(set_defaults):
-    # The document expands exponentially, past the node limit (and some such documents
-    # past the 18 digits the variable takes); this proves the source layer stays
-    # linear for an author who raises the limit.
-    set_defaults.unchecked(max_yaml_nodes=10**1000)
+def test_value_copy_is_stack_safe_for_deep_alias_dag(unbounded_yaml_nodes):
     levels = 2_000
     copied = _binary_alias_document(levels).root.child("root").value
 
@@ -353,11 +361,7 @@ def _binary_alias_document(levels: int = 24) -> SourceDocument:
     return SourceDocument.parse("\n".join(lines) + "\n")
 
 
-def test_definition_dag_is_linear_for_binary_alias_graph(set_defaults):
-    # The document expands exponentially, past the node limit (and some such documents
-    # past the 18 digits the variable takes); this proves the source layer stays
-    # linear for an author who raises the limit.
-    set_defaults.unchecked(max_yaml_nodes=10**1000)
+def test_definition_dag_is_linear_for_binary_alias_graph(unbounded_yaml_nodes):
     document = _binary_alias_document()
 
     assert len(document._definitions) < 200
@@ -381,11 +385,7 @@ def _binary_merge_document(levels: int) -> SourceDocument:
     return SourceDocument.parse("\n".join(lines) + "\n")
 
 
-def test_merge_definition_dag_retains_only_unique_raw_pairs(set_defaults):
-    # The document expands exponentially, past the node limit (and some such documents
-    # past the 18 digits the variable takes); this proves the source layer stays
-    # linear for an author who raises the limit.
-    set_defaults.unchecked(max_yaml_nodes=10**1000)
+def test_merge_definition_dag_retains_only_unique_raw_pairs(unbounded_yaml_nodes):
     levels = 16
     document = _binary_merge_document(levels)
     pending = [
@@ -422,11 +422,7 @@ def test_merge_definition_dag_retains_only_unique_raw_pairs(set_defaults):
     assert len(deepest_node.value) == 1
 
 
-def test_binary_merge_chain_reuses_cached_rope_summaries(monkeypatch, set_defaults):
-    # The document expands exponentially, past the node limit (and some such documents
-    # past the 18 digits the variable takes); this proves the source layer stays
-    # linear for an author who raises the limit.
-    set_defaults.unchecked(max_yaml_nodes=10**1000)
+def test_binary_merge_chain_reuses_cached_rope_summaries(monkeypatch, unbounded_yaml_nodes):
     levels = 120
     pair_hash_calls = 0
     arc_hash_calls = 0
@@ -493,11 +489,7 @@ def test_repeated_merge_occurrences_keep_logical_ordinals_and_replay():
         assert document._resolve_occurrence(item.path).value == "leaf"
 
 
-def test_merge_range_summary_folds_shared_rope_without_enumerating(monkeypatch, set_defaults):
-    # The document expands exponentially, past the node limit (and some such documents
-    # past the 18 digits the variable takes); this proves the source layer stays
-    # linear for an author who raises the limit.
-    set_defaults.unchecked(max_yaml_nodes=10**1000)
+def test_merge_range_summary_folds_shared_rope_without_enumerating(monkeypatch, unbounded_yaml_nodes):
     document = _binary_merge_document(24)
 
     def reject_enumeration(*_args, **_kwargs):
@@ -616,11 +608,7 @@ def test_nested_mapping_can_merge_its_recursive_value_ancestor():
     assert child["leaf"] == "child"
 
 
-def test_deep_alias_path_is_lazy(set_defaults):
-    # The document expands exponentially, past the node limit (and some such documents
-    # past the 18 digits the variable takes); this proves the source layer stays
-    # linear for an author who raises the limit.
-    set_defaults.unchecked(max_yaml_nodes=10**1000)
+def test_deep_alias_path_is_lazy(unbounded_yaml_nodes):
     cursor = _binary_alias_document().root.child("root")
 
     for _ in range(24):

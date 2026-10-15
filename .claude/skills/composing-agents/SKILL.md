@@ -283,6 +283,9 @@ included) is one; in a record written as a mapping in `output:`, each record is 
 a field's type adds its records and lists (a typedef counts as deep as its definition).
 Deeper is a load error: `type at r.k nests deeper than 100 levels, the limit for a type
 (each record and list is a level)`.
+Each typedef counts the same way, a chain of typedefs each naming the next holds at most
+100, and any type stays within 100 levels with its typedef names expanded (so `list(T)`
+over a 100-level `T` fails), all at load.
 An expression nests at most 100 levels too (each call, list, unary operator, comparison,
 `|`/`:-`/`:?`, and operator chain is one, so `a + b + ...` is one level at any length);
 a deeper one is a load error, so split it into smaller bindings.
@@ -301,8 +304,8 @@ A chain of `uses:` files, each importing the next, is held to 50 files the same 
 counted apart from call depth; a longer one fails at the alias that crosses it.
 These limits are the defaults of `YIAN_MAX_VALUE_NESTING` (which also sets expression
 nesting), `YIAN_MAX_YAML_NESTING`, and `YIAN_MAX_CALL_NESTING`; each can only be
-lowered. `YIAN_MAX_TYPE_NESTING` sets the type limit (at most 125). `docs/defaults.md`
-lists every default and limit and its variable.
+lowered. `YIAN_MAX_TYPE_NESTING` sets the type limit (at most 125), typedef chains
+included. `docs/defaults.md` lists every default and limit and its variable.
 
 Only values supplied to the top-level flow (CLI, JSON inputs, `run_flow`) may undergo
 string coercion; a `call`, `map`, or `loop` edge is not a flow boundary.

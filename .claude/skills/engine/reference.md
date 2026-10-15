@@ -1004,6 +1004,18 @@ before its entries are read, and a field's resolved type adds `typesys.values.ty
 located `LoadError` (`type at <path> nests deeper than N levels, the limit for a type
 (each record and list is a level)`, plus `; its type '<text>' adds <d>`). A CASE
 `output:` too deep to show falls back to the case error without its text.
+`read_typedefs` measures each typedef in dependency order with `_measure_typedef` (memo
+dicts of levels and chain; levels as `type_levels` would count the resolved type, chain
+the typedefs on the longest path of names, itself included) and raises past
+`max_type_nesting`, levels first: `typedef 'T' field 'a': type nests deeper than N levels
+... ; its type 'X' adds d` or `typedef 'A': it ends a chain of C typedefs, each naming the
+next, more than N, ...`. The alias-cycle check and the dependency DFS are iterative; a ref
+still on the DFS stack when a field is resolved is the `recursive type reference` error.
+`resolve_type` peels `Optional` in a loop, `_union_parts` flattens unions with an explicit
+stack, and record fields come from `_parse_field` (an `lru_cache` keyed by the text
+and the current `Defaults`), so an accepted set resolves within a bounded stack. `type_for` checks
+`type_levels` of the resolved type: `type nests deeper than N levels once its typedef
+names are expanded, ...`.
 `${...}` text counts as a scalar, so the run-time checks still cover computed values
 and flows built in Python. WAIT `until:` has no run-time counterpart.
 
@@ -1013,7 +1025,7 @@ not `canonical_type_label`) and deduplicated by `==`, never `set()`, since `Type
 dicts. `Optional(Union(...))` sets `nullable` on the union. Tag fields are derived by
 `union_tag_fields` (a field every member requires as a non-nullable single-value
 `Literal`, with pairwise distinct values); nothing stores them. `resolve_type` rejects an
-untagged union with two members that `types_overlap`, and `read_typedefs` resolves every typedef union eagerly. Value checks pick the member by the
+untagged union with two members that `types_overlap`, and `read_typedefs` resolves every typedef union eagerly, field by field in dependency order after measuring the typedef. Value checks pick the member by the
 first tag field (or the one untagged member the value satisfies) and keep
 `TypeCheckError.path`. `types_compatible` is member by member: a union never fits a record
 sink, a union fits `object`, and `object` never fits a union. An AGENT `output: Any` maps

@@ -12,13 +12,14 @@ resolution. Runtime receives only the resolved ``Type`` values.
 from __future__ import annotations
 
 import ast
+import functools
 import io
 import re
 import tokenize
 from dataclasses import dataclass, replace
 from typing import Union
 
-from yian.defaults import current
+from yian.defaults import Defaults, current
 from yian.typesys.values import (
     _BUILTIN_CONSTANTS,
     _NAME_PATTERN,
@@ -31,6 +32,7 @@ from yian.typesys.values import (
     int_digits,
     literal_label,
     parse_int_text,
+    type_levels,
     types_overlap,
     union_tag_fields,
 )
@@ -745,7 +747,10 @@ def resolve_type(t: TypeExpr, registry: TypeRegistry, _seen: frozenset[str] = fr
         return Type(kind=kind, bounds=t.bounds)
 
     if isinstance(t, OptionalExpr):
-        return replace(resolve_type(t.inner, registry, _seen), nullable=True)
+        # Peel the whole chain in a loop so nested Optionals cost one frame, not one each.
+        while isinstance(t, OptionalExpr):
+            t = t.inner
+        return replace(resolve_type(t, registry, _seen), nullable=True)
 
     if isinstance(t, EnumExpr):
         return Type(kind=ValueKind.STRING, tags=frozenset(t.tags))
@@ -778,7 +783,7 @@ def resolve_type(t: TypeExpr, registry: TypeRegistry, _seen: frozenset[str] = fr
     if isinstance(defn, VariantDef):
         return Type(kind=ValueKind.STRING, tags=frozenset(defn.tags))
     fields = {
-        f: resolve_type(parse_type(ts), registry, _seen | {name})
+        f: resolve_type(_parse_field(ts), registry, _seen | {name})
         for f, ts in defn.fields.items()
     }
     # an Optional[X] field (its resolved Type is nullable) is NOT required.
@@ -788,22 +793,24 @@ def resolve_type(t: TypeExpr, registry: TypeRegistry, _seen: frozenset[str] = fr
 
 def _resolve_union(t: UnionExpr, registry: TypeRegistry, _seen: frozenset[str]) -> Type:
     """Resolve a `Union(...)` into a record, or a union of distinguishable records."""
-    label = _expr_label(t)
+    # The label is rendered only for an error: rendering recurses through the whole
+    # expression, which a deeply nested union would pay at every level of resolution.
     members: list[tuple[str, str | None, Type]] = []
     for name, origin, member in _union_parts(t, registry, _seen):
         if member.nullable:
             raise TypeCheckError(
-                f"{label}: member {name!r} is nullable; use Optional(Union(...)) instead"
+                f"{_expr_label(t)}: member {name!r} is nullable; use Optional(Union(...)) "
+                f"instead"
             )
         if member.fields is None:
-            raise TypeCheckError(f"{label}: member {name!r} is not a record")
+            raise TypeCheckError(f"{_expr_label(t)}: member {name!r} is not a record")
         # `Type` holds dicts, so it is unhashable; dedupe by equality.
         same = next((m for m in members if m[2] == member), None)
         if same is None:
             members.append((name, origin, member))
         elif same[1] != origin:
             # Two differently named records with one shape can't be told apart.
-            raise _overlap_error(label, same[0], name)
+            raise _overlap_error(_expr_label(t), same[0], name)
     if len(members) == 1:
         return members[0][2]
     union = Type(
@@ -815,7 +822,7 @@ def _resolve_union(t: UnionExpr, registry: TypeRegistry, _seen: frozenset[str]) 
             for b_name, _, b in members[i + 1:]:
                 if types_overlap(a, b):
                     raise _overlap_error(
-                        label, a_name, b_name, files=_holds_file(a) or _holds_file(b)
+                        _expr_label(t), a_name, b_name, files=_holds_file(a) or _holds_file(b)
                     )
     return union
 
@@ -871,31 +878,36 @@ def _overlap_error(
 
 
 def _union_parts(
-    t: TypeExpr,
-    registry: TypeRegistry,
-    _seen: frozenset[str],
-    name: str | None = None,
+    t: TypeExpr, registry: TypeRegistry, _seen: frozenset[str]
 ) -> list[tuple[str, str | None, Type]]:
     """Return a union's flattened `(display name, origin, resolved member)` triples.
 
     Nested unions and aliases are expanded so error messages can name each member the
-    way it was written. The origin is the registry name an alias chain ends at, or
-    `None` when the member is not a reference; it tells a repeated member from a
-    differently named record of the same shape.
+    way it was written: a member reached through an alias chain is named by the chain's
+    first alias, unless a union lies between. The origin is the registry name an alias
+    chain ends at, or `None` when the member is not a reference; it tells a repeated
+    member from a differently named record of the same shape.
     """
-    if isinstance(t, UnionExpr):
-        parts: list[tuple[str, str | None, Type]] = []
-        for member in t.members:
-            parts.extend(_union_parts(member, registry, _seen))
-        return parts
-    if isinstance(t, RefExpr):
-        if t.name in _seen:
-            raise TypeCheckError(f"recursive type reference: {t.name!r}")
-        defn = registry.get(t.name)
-        if isinstance(defn, AliasDef):
-            return _union_parts(defn.target, registry, _seen | {t.name}, name or t.name)
-    origin = t.name if isinstance(t, RefExpr) else None
-    return [(name or _expr_label(t), origin, resolve_type(t, registry, _seen))]
+    # An explicit stack, so flattening deeply nested unions and long alias chains costs
+    # no frames.
+    # Each entry is (expression, names on its alias path, display name so far).
+    parts: list[tuple[str, str | None, Type]] = []
+    stack: list[tuple[TypeExpr, frozenset[str], str | None]] = [(t, _seen, None)]
+    while stack:
+        t, seen, name = stack.pop()
+        if isinstance(t, UnionExpr):
+            stack.extend((member, seen, None) for member in reversed(t.members))
+            continue
+        if isinstance(t, RefExpr):
+            if t.name in seen:
+                raise TypeCheckError(f"recursive type reference: {t.name!r}")
+            defn = registry.get(t.name)
+            if isinstance(defn, AliasDef):
+                stack.append((defn.target, seen | {t.name}, name or t.name))
+                continue
+        origin = t.name if isinstance(t, RefExpr) else None
+        parts.append((name or _expr_label(t), origin, resolve_type(t, registry, seen)))
+    return parts
 
 
 def format_type_expr(t: TypeExpr) -> str:
@@ -949,11 +961,61 @@ def type_for(type_str: str, registry: TypeRegistry) -> Type:
     Returns:
         `Type`:
             The resolved leaf structural type.
+
+    Raises:
+        `TypeCheckError`:
+            `type_str` does not parse or resolve, or the resolved type nests more record
+            and list levels than `max_type_nesting`: text within the limit can still
+            name a typedef that brings it past.
     """
-    return resolve_type(parse_type(type_str), registry)
+    typ = resolve_type(parse_type(type_str), registry)
+    limit = current().max_type_nesting
+    if type_levels(typ) > limit:
+        raise TypeCheckError(
+            f"type nests deeper than {limit} levels once its typedef names are expanded, "
+            f"the limit for a type (each record and list is a level)"
+        )
+    return typ
 
 
 # ---------- typedefs: registry builder ----------
+
+
+def _parse_field(text: str) -> TypeExpr:
+    """Parse a record field's type text, cached per text and defaults.
+
+    Args:
+        text (`str`):
+            The field's authored type expression.
+
+    Returns:
+        `TypeExpr`:
+            What [`parse_type`][yian.typesys.types.parse_type] returns for `text`.
+
+    Raises:
+        `TypeCheckError`:
+            `text` is not a valid type expression (errors are not cached).
+    """
+    # The registry check parses every field near the top of the stack, so resolution,
+    # which reaches a field deep inside nested records, finds it parsed instead of paying
+    # the parser's frames there. Sharing a result is safe: type ASTs are frozen. The key
+    # holds the whole `Defaults`, since every default `parse_type` reads (the nesting and
+    # integer digit limits) must be part of it.
+    return _parse_field_within(text, current())
+
+
+@functools.lru_cache(maxsize=65536)
+def _parse_field_within(text: str, defaults: Defaults) -> TypeExpr:
+    """Parse `text`, cached per text and defaults.
+
+    Args:
+        text (`str`): A record field's type text.
+        defaults (`Defaults`): The values in effect; part of the cache key only.
+
+    Returns:
+        `TypeExpr`: The parsed type.
+    """
+    return parse_type(text)
 
 
 def _refs_in_type(t: TypeExpr) -> set:
@@ -1004,8 +1066,144 @@ def _check_local(t: TypeExpr, registry: TypeRegistry) -> None:
             _check_local(member, registry)
 
 
+def _expr_levels(t: TypeExpr, levels: dict[str, int]) -> int:
+    """Return how many record and list levels a parsed type nests.
+
+    Each `list(...)` is a level, `Optional(...)` adds none, a union counts as its deepest
+    member, and a name counts as `levels[name]` (0 when not yet measured, which happens
+    only on a reference cycle). Other scalars, `Literal(...)` and `dict(...)` are 0.
+
+    Args:
+        t (`TypeExpr`): The parsed type.
+        levels (`dict[str, int]`): Levels of the typedefs measured so far.
+
+    Returns:
+        `int`: The level count.
+    """
+    # Levels are the most lists on any path to a leaf plus that leaf's levels, so an
+    # explicit stack of (expression, lists above it) needs no recursion.
+    deepest = 0
+    stack: list[tuple[TypeExpr, int]] = [(t, 0)]
+    while stack:
+        t, above = stack.pop()
+        if isinstance(t, ListExpr):
+            stack.append((t.element, above + 1))
+        elif isinstance(t, OptionalExpr):
+            stack.append((t.inner, above))
+        elif isinstance(t, UnionExpr):
+            stack.extend((member, above) for member in t.members)
+        else:
+            leaf = levels.get(t.name, 0) if isinstance(t, RefExpr) else 0
+            deepest = max(deepest, above + leaf)
+    return deepest
+
+
+def _measure_typedef(
+    name: str,
+    defn: Union[RecordDef, VariantDef, AliasDef],
+    parts: list[tuple[str | None, TypeExpr]],
+    levels: dict[str, int],
+    chain: dict[str, int],
+) -> tuple[int, int, str | None, str | None]:
+    """Measure a typedef from the typedefs it names, and record the result.
+
+    Args:
+        name (`str`):
+            The typedef's name; its results are stored under it in `levels` and `chain`.
+        defn (`RecordDef | VariantDef | AliasDef`):
+            The typedef's definition.
+        parts (`list[tuple[str | None, TypeExpr]]`):
+            Its parsed `(field, type)` parts: each record field, or the alias target.
+        levels (`dict[str, int]`):
+            The levels of the typedefs measured so far; a name not in it counts 0.
+        chain (`dict[str, int]`):
+            The chains of the typedefs measured so far; a name not in it counts 0.
+
+    Returns:
+        `tuple[int, int, str | None, str | None]`:
+            Its levels (a record is 1 more than its deepest field, an alias its target's,
+            an enum 0; equal to `type_levels` of the resolved type), its chain (the
+            typedefs on the longest path of names from it, itself included), the first
+            field with the most levels, and the first field with the longest chain. The
+            fields are `None` for an alias or an enum.
+    """
+    field_levels = [(field, _expr_levels(t, levels)) for field, t in parts]
+    field_chain = [
+        (field, max((chain.get(ref, 0) for ref in _refs_in_type(t)), default=0))
+        for field, t in parts
+    ]
+    deepest = max((d for _, d in field_levels), default=0)
+    longest = max((c for _, c in field_chain), default=0)
+    # An enum has no parts, so it measures 0 levels like the string it resolves to.
+    levels[name] = (1 if isinstance(defn, RecordDef) else 0) + deepest
+    chain[name] = 1 + longest
+    levels_field = next((f for f, d in field_levels if d == deepest), None)
+    chain_field = next((f for f, c in field_chain if c == longest), None)
+    return levels[name], chain[name], levels_field, chain_field
+
+
+def _check_measure(
+    name: str,
+    defn: Union[RecordDef, VariantDef, AliasDef],
+    parts: list[tuple[str | None, TypeExpr]],
+    levels: dict[str, int],
+    chain: dict[str, int],
+) -> None:
+    """Measure a typedef and reject one whose levels or chain exceed `max_type_nesting`.
+
+    Args:
+        name (`str`):
+            The typedef's name.
+        defn (`RecordDef | VariantDef | AliasDef`):
+            Its definition.
+        parts (`list[tuple[str | None, TypeExpr]]`):
+            Its parsed `(field, type)` parts.
+        levels (`dict[str, int]`):
+            The levels memo of [`_measure_typedef`][yian.typesys.types._measure_typedef].
+        chain (`dict[str, int]`):
+            The chain memo of [`_measure_typedef`][yian.typesys.types._measure_typedef].
+
+    Raises:
+        `TypeCheckError`:
+            The typedef nests more record and list levels than the limit, or ends a
+            longer chain of typedefs each naming the next. `path` is `(typedef, field)`
+            for the record field reported, else `(typedef,)`.
+    """
+    limit = current().max_type_nesting
+    depth, length, levels_field, chain_field = _measure_typedef(
+        name, defn, parts, levels, chain
+    )
+    if depth > limit:
+        message = (
+            f"type nests deeper than {limit} levels, the limit for a type (each record and "
+            f"list is a level)"
+        )
+        if isinstance(defn, RecordDef):
+            message += f"; its type {defn.fields[levels_field]!r} adds {depth - 1}"
+            raise _typedef_error(name, levels_field, TypeCheckError(message))
+        raise _typedef_error(name, None, TypeCheckError(message))
+    if length > limit:
+        raise _typedef_error(
+            name,
+            chain_field,
+            TypeCheckError(
+                f"it ends a chain of {length} typedefs, each naming the next, more than "
+                f"{limit}, the limit for a type; write its type with fewer typedefs in "
+                f"between"
+            ),
+        )
+
+
 def _check_typedefs(registry: TypeRegistry) -> None:
-    """Resolve every typedef, so a broken one fails even when nothing uses it."""
+    """Resolve every typedef, so a broken one fails even when nothing uses it.
+
+    Typedefs are checked dependencies first, each one's fields in order. Each typedef is
+    first measured: its levels and its chain of typedef names must stay within
+    `max_type_nesting`, so resolution's stack stays bounded by the limit. A cycle is
+    reported at the field that closes it, naming the typedef that holds that field: with
+    `A: {x: B}` and `B: {y: A}` the error is `typedef 'B' field 'y': recursive type
+    reference: 'B'`.
+    """
     parsed: dict[str, list[tuple[str | None, TypeExpr]]] = {}
     # First each typedef's own text, so an error names the typedef that holds the
     # mistake rather than the first typedef that happens to use it.
@@ -1013,7 +1211,7 @@ def _check_typedefs(registry: TypeRegistry) -> None:
         parts = []
         for field, written in _typedef_parts(defn):
             try:
-                t = parse_type(written) if isinstance(written, str) else written
+                t = _parse_field(written) if isinstance(written, str) else written
                 _check_local(t, registry)
             except TypeCheckError as exc:
                 raise _typedef_error(name, field, exc) from exc
@@ -1021,23 +1219,45 @@ def _check_typedefs(registry: TypeRegistry) -> None:
         parsed[name] = parts
 
     # Then the checks that follow references (recursion, union members), dependencies
-    # first for the same reason.
+    # first for the same reason. The walk is iterative so a long chain can't overflow
+    # the stack; a ref still on the walk's stack (gray) when met is a back edge, so the
+    # typedef holding it lies on a cycle.
     order: list[str] = []
-    visited: set[str] = set()
+    finished: set[str] = set()
+    back_refs: dict[str, set[str]] = {}
 
-    def visit(name: str) -> None:
-        if name in visited:
-            return
-        visited.add(name)
-        for _, t in parsed[name]:
-            for ref in sorted(_refs_in_type(t)):
-                visit(ref)
-        order.append(name)
+    def refs_of(name: str):
+        return (ref for _, t in parsed[name] for ref in sorted(_refs_in_type(t)))
 
-    for name in registry:
-        visit(name)
+    # A typedef becomes a key of `back_refs` when the walk reaches it, so the keys are
+    # also the set of typedefs already discovered.
+    for root in registry:
+        if root in back_refs:
+            continue
+        back_refs[root] = set()
+        stack = [(root, refs_of(root))]
+        while stack:
+            name, refs = stack[-1]
+            for ref in refs:
+                if ref not in back_refs:
+                    back_refs[ref] = set()
+                    stack.append((ref, refs_of(ref)))
+                    break
+                if ref not in finished:
+                    back_refs[name].add(ref)
+            else:
+                stack.pop()
+                finished.add(name)
+                order.append(name)
+
+    levels: dict[str, int] = {}
+    chain: dict[str, int] = {}
     for name in order:
+        _check_measure(name, registry[name], parsed[name], levels, chain)
         for field, t in parsed[name]:
+            if _refs_in_type(t) & back_refs[name]:
+                exc = TypeCheckError(f"recursive type reference: {name!r}")
+                raise _typedef_error(name, field, exc)
             try:
                 resolve_type(t, registry, frozenset({name}))
             except TypeCheckError as exc:
@@ -1047,19 +1267,32 @@ def _check_typedefs(registry: TypeRegistry) -> None:
 def _check_alias_cycles(registry: TypeRegistry) -> None:
     """Reject an alias->alias cycle, located at the alias it was found from (record
     recursion is caught by `_check_typedefs`)."""
-    def visit(start: str, name: str, path: frozenset) -> None:
-        defn = registry.get(name)
-        if not isinstance(defn, AliasDef):
-            return
-        for ref in _refs_in_type(defn.target):
-            if ref in path:
-                raise TypeCheckError(f"alias cycle through {ref!r} in typedefs", path=(start,))
-            if ref in registry:
-                visit(start, ref, path | {ref})
+    # An iterative walk, so a long alias chain can't overflow the stack; an alias whose
+    # walk finished without a cycle is not walked again, so a chain costs linear time.
+    finished: set[str] = set()
 
-    for name, defn in registry.items():
-        if isinstance(defn, AliasDef):
-            visit(name, name, frozenset({name}))
+    def alias_refs(defn: AliasDef):
+        return iter(sorted(_refs_in_type(defn.target)))
+
+    for start, defn in registry.items():
+        if not isinstance(defn, AliasDef) or start in finished:
+            continue
+        on_path = {start}
+        stack = [(start, alias_refs(defn))]
+        while stack:
+            name, refs = stack[-1]
+            for ref in refs:
+                if ref in on_path:
+                    raise TypeCheckError(f"alias cycle through {ref!r} in typedefs", path=(start,))
+                target = registry.get(ref)
+                if isinstance(target, AliasDef) and ref not in finished:
+                    on_path.add(ref)
+                    stack.append((ref, alias_refs(target)))
+                    break
+            else:
+                stack.pop()
+                on_path.discard(name)
+                finished.add(name)
 
 
 def read_typedefs(raw: dict) -> TypeRegistry:
@@ -1086,8 +1319,10 @@ def read_typedefs(raw: dict) -> TypeRegistry:
         `TypeCheckError`:
             A name is not PascalCase or shadows a builtin, a field name is empty, not a
             string, or holds a Unicode surrogate, a field type is not a string, a value is
-            a union sequence, or a typedef does not resolve (an unknown constructor or
-            name, bad bounds, a recursive record, an alias cycle, or a bad `Union(...)`).
+            a union sequence, a typedef nests more record and list levels than
+            `max_type_nesting` or ends a longer chain of typedefs each naming the next, or
+            a typedef does not resolve (an unknown constructor or name, bad bounds, a
+            recursive record, an alias cycle, or a bad `Union(...)`).
             The message names the typedef and field, and `path` is `(typedef,)` or
             `(typedef, field)` when the error belongs to one entry.
 

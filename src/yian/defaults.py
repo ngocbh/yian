@@ -74,7 +74,8 @@ ENTRIES: tuple[Entry, ...] = (
     # Deeper types are rejected before they can exhaust Python's recursion limit. Type
     # text 125 levels deep still parses; a record type written in `output:` counts its
     # record levels too. Copies of a flow share its types, so record depth adds no stack
-    # at run setup.
+    # at run setup. The limit also bounds each typedef's levels, a chain of typedefs
+    # naming each other, and a type with its typedef names expanded.
     Entry(
         "MAX_TYPE_NESTING",
         default=100,

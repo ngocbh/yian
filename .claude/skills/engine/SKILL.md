@@ -112,7 +112,11 @@ this model whenever you design anything:
   the run-time checks remain for computed values and flows built in Python. A record
   type written in `output:` counts each record plus its fields' `type_levels` (records
   and lists of the resolved type) against `current().max_type_nesting` in
-  `compose/helpers/types.py`, before descending.
+  `compose/helpers/types.py`, before descending. `read_typedefs` measures each typedef
+  the same way in dependency order (`_measure_typedef`) and bounds a chain of typedefs
+  naming each other at the same limit (`bad typedefs:` at the typedef and field); its
+  walks are iterative, so long chains and cycles never raise `RecursionError`. `type_for`
+  bounds the resolved type's `type_levels` too (`... once its typedef names are expanded`).
   An expression has the same bound (`current().max_value_nesting`), which
   `parse_expr` checks iteratively before any other walk; an operator chain is one level.
 - Documents yian reads nest at most `YIAN_MAX_YAML_NESTING` (default 200)

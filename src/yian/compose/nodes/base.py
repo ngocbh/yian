@@ -16,7 +16,9 @@ corresponding authored fields continue to reject them.
 Like `nodes/base.py`, this base imports only the dependencies its contract needs —
 `typesys` (TypeRegistry), `nodes.contracts` (OutputContract/Parameter/ValueContract),
 `compose.helpers.types` (read_type), `compose.helpers.errors` (LoadError),
-`compose.helpers.tags` (has_span), `compose.helpers.yaml_words` (yaml_read_as), `pydantic`
+`compose.helpers.tags` (has_span), `compose.helpers.output_contracts`
+(direct_reference_path), `expr.grammar` (whole_span_interior),
+`compose.helpers.yaml_words` (yaml_read_as), `pydantic`
 (ValidationError), `nodes.human_input.node` (site_label, a runtime leaf that imports no
 `yian.compose` module), and `compose.source` (SourceCursor) for parse navigation,
 `diagnostics` (SourceRange) — all earlier layers on the ladder, so it stays a leaf of the
@@ -25,7 +27,8 @@ imports it at module top level without cycling; `parse/file.py` re-exports it as
 descriptor base type for its importers.
 
 It also owns the shared messages for a field whose value YAML read as the wrong type (text
-or otherwise), so every kind reports that mistake in the same words.
+or otherwise) and for an `input:` that is not a mapping, so every kind reports those
+mistakes in the same words.
 """
 
 from __future__ import annotations
@@ -44,13 +47,50 @@ from yian.typesys.values import value_repr
 from yian.compile.model import Edge
 from yian.compose.helpers.types import read_type
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
+from yian.compose.helpers.output_contracts import direct_reference_path
 from yian.compose.helpers.tags import has_span
 from yian.compose.helpers.yaml_words import yaml_read_as
 from yian.compose.source import SourceCursor
 from yian.diagnostics import DiagnosticFrame, OriginRef, SourceRange
+from yian.expr.grammar import whole_span_interior
 
 if TYPE_CHECKING:
     from yian.compose.source.catalog import _SourceCatalogBuilder
+
+
+def _input_shape_problem(kind: str, value: Any) -> str:
+    """Describe a non-mapping `input:` value and how to write it as a binding mapping.
+
+    Args:
+        kind (`str`): The node kind; it picks the message's binding noun and fix verb.
+        value (`Any`): The authored `input:` value, which is not a mapping.
+
+    Returns:
+        `str`: What `input:` must be, what it got, and a fix after a `;`. A lone reference
+            `${R}` gets the example `<field>: ${R.<field>}`.
+    """
+    if kind == "loop":
+        noun, verb = "carried fields", "list each carried field"
+    elif kind in ("call", "map"):
+        noun, verb = "the child's arguments", "bind each argument"
+    else:
+        noun, verb = "parameter names to bindings", "bind each parameter"
+    path = direct_reference_path(value) if isinstance(value, str) else None
+    if path is not None:
+        got = f"the reference '${{{path}}}'"
+        fix = f"{verb}, such as `<field>: ${{{path}.<field>}}`"
+    elif isinstance(value, str) and whole_span_interior(value) is not None:
+        got = f"the expression '{value}'"
+        fix = f"{verb}, such as `<field>: ${{...}}`"
+    else:
+        got = value_repr(value)
+        if isinstance(value, (list, str)) and not value:
+            fix = "write `input: {}` or remove `input:`"
+        elif isinstance(value, str) and has_span(value):
+            fix = f"{verb}, such as `<field>: ${{...}}`"
+        else:
+            fix = f"{verb}, such as `<field>: ...`"
+    return f"`input:` must be a mapping of {noun} (got {got}); {fix}"
 
 
 def reject_container_spans(
@@ -598,8 +638,9 @@ class NodeDescriptor:
         this kind's own keys — the commons + `kind` live on the base's set, so the loop never
         touches them; each present key is read into `kwargs` under its `keyword_remap`ped name,
         its `SourceRange` recorded), `_validate_fields` (kind-specific legality hook, default:
-        the asserts-list check), then `_read_common_fields` (the four commons with `env`
-        validation). Finally constructs `cls(**kwargs, range=..., field_ranges=...)`.
+        the `input:` shape check, then the asserts-list check), then `_read_common_fields`
+        (the four commons with `env` validation). Finally constructs
+        `cls(**kwargs, range=..., field_ranges=...)`.
 
         Kinds customize the two hooks and may wrap `parse` itself (agent, human_input, case,
         and map do). Returns the fully-populated descriptor instance (`cls`, never the abstract
@@ -645,11 +686,19 @@ class NodeDescriptor:
 
         Receives `kwargs` (already remapped/populated by the loop), not the raw body, plus
         `own_range` (the node body's range, for anchoring an error about an ABSENT field, which
-        has no per-field range). Default: if an `asserts:` field is present, it must be a `list`
-        of `str` — a bad shape raises a located `LoadError` naming `cls.kind`. Presence-guarded:
-        absent `asserts` is a no-op, so kinds that never author `asserts` are unaffected. Kinds
-        override it for their own fields and call `super()`.
+        has no per-field range). Default: the `input:` shape check, then the `asserts` check.
+        A present, non-null `input:` must be a mapping; any other value raises a located
+        `LoadError` at the field that names the kind's binding noun and shows a fix. A present
+        `asserts:` must be a `list` of `str` — a bad shape raises a located `LoadError` naming
+        `cls.kind`. Both are presence-guarded, so kinds that never author these fields are
+        unaffected. Kinds override it for their own fields and call `super()`.
         """
+        inputs = kwargs.get("inputs")
+        if inputs is not None and not isinstance(inputs, Mapping):
+            raise diagnostics.error(
+                f"node {node_id!r} (kind={cls.kind}): {_input_shape_problem(cls.kind, inputs)}",
+                range=ranges.get(("field", "inputs")) or own_range,
+            )
         asserts = kwargs.get("asserts")
         if asserts is not None and not (
             isinstance(asserts, list) and all(isinstance(a, str) for a in asserts)

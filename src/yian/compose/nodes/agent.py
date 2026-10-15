@@ -405,11 +405,11 @@ class AgentDescriptor(NodeDescriptor):
         )
         if type(node.output_contract) is ValueContract:
             outputs_range = self.field_ranges.get(("field", "outputs")) or self.range
-            # Schema generation recurses once per level, so a deeper type would exhaust
-            # the stack at run.
+            # Schema generation, here and at run, recurses per level; deeper types aren't
+            # proven to fit the stack. An engine-built output type is not the author's.
             levels = type_levels(node.output_contract.type)
             limit = current().max_agent_output_nesting
-            if levels > limit:
+            if override is None and levels > limit:
                 raise ctx.diagnostics.error(
                     f"node {self.id!r}: this AGENT's `output:` nests {levels} levels, deeper "
                     f"than {limit}, the limit for a model's structured reply (each record "

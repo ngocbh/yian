@@ -3,8 +3,10 @@
 Building a model's structured reply schema recurses once per type level, so a deeper
 type is refused at load rather than overflowing the stack at run. Levels count as
 `type_levels` counts them: each record and list is a level, a union counts as its
-deepest member, and `Optional` adds none. Every AGENT is checked: in `nodes:`, a compact
-flow, a `defs:` entry, or an inline body. Other kinds keep only the type nesting limit.
+deepest member, and `Optional` adds none. Every authored AGENT is checked: in `nodes:`, a
+compact flow, a `defs:` entry, or an inline body. An AGENT the engine builds with its own
+output type, such as an `adaptive_questions:` block's, is not. Other kinds keep only the
+type nesting limit.
 
 The message reads `node '<id>': this AGENT's `output:` nests <n> levels, deeper than
 <limit>, the limit for a model's structured reply (each record and list is a level);
@@ -128,6 +130,16 @@ def test_the_limit_follows_the_variable(set_defaults) -> None:
 
     _assert_refused(_agent_flow(_written(4)), "a", 4, 7, limit=3)
     load_flow(_agent_flow(_written(3)))
+
+
+def test_an_engine_built_agent_output_skips_the_limit(set_defaults) -> None:
+    # The questions AGENT an `adaptive_questions:` block builds has a 4-level output.
+    set_defaults(MAX_AGENT_OUTPUT_NESTING=3)
+
+    load_flow(
+        "id: gate\nname: gate\nnodes:\n  ask:\n    kind: human_input\n"
+        "    adaptive_questions:\n      prompt: Ask what you need.\noutput: ${ask.output}\n"
+    )
 
 
 def test_a_fifty_level_output_fails_at_load_without_recursion_error() -> None:

@@ -87,10 +87,12 @@ ENTRIES: tuple[Entry, ...] = (
     # A model's structured reply schema is built by recursion, about 28 frames per level
     # for the costliest shape, an `Optional(Union(...))` field at each level. With 300
     # frames below the default recursion limit, under 50 nested calls, that shape passes
-    # 23 levels on Python 3.12 and 18 on 3.10 through every structured-output path. An
-    # AGENT at 16 levels under the worst accepted load, 50 `uses:` imports ending in a
-    # 50-level chain, loads in about 780 frames on 3.12 and 850 on 3.10. Deeper types are
-    # not proven to fit, so the variable can only lower it.
+    # 23 levels on Python 3.12 through every structured-output path, and 18 on 3.10
+    # through the native and prompted paths. 16 is the smallest passing depth minus 2, a
+    # margin for the 3.10 real-client paths that couldn't be measured offline. An AGENT
+    # at 16 levels under the worst accepted load, 50 `uses:` imports ending in a 50-level
+    # chain, loads in about 780 frames on 3.12 and 850 on 3.10. The variable can only
+    # lower it.
     Entry(
         "MAX_AGENT_OUTPUT_NESTING",
         default=16,

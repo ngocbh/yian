@@ -342,7 +342,9 @@ def test_agent_output_nesting_maximum_runs_with_less_stack_on_azure(
     monkeypatch.setenv("OPENAI_API_VERSION", "2025-03-01-preview")
     monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
     # langchain sends `gpt-4` structured output as a tool call, after the client's
-    # `has_open_schema` check walks the schema.
+    # `has_open_schema` check walks the schema. The deployment must stay `gpt-4`: a
+    # `gpt-4o` deployment takes the strict json_schema branch, which `_ToolCallServer`
+    # doesn't answer.
     text, reply = _deep_agent_flow(
         levels, "provider: azure\nmodel: gpt-4\nbase_url: https://x.openai.azure.com/"
     )

@@ -34,10 +34,9 @@ from yian.nodes.contracts import (
     ExecutionPosition,
     ExecutionScope,
     Parameter,
-    PartialRecordContract,
-    ValueContract,
     _iter_origin_carrier,
     _rewrite_origin_carrier,
+    output_contract_file_type,
 )
 from yian.nodes.ids import map_callsite, ns
 from yian.typesys.values import normalize_files
@@ -203,21 +202,16 @@ class LoopNode(Node):
     def _read_carried(self, carried: dict[str, Any]) -> dict[str, Any]:
         """Read the carried record through the loop's output contract.
 
-        A returned field is bound from the body's output, which may be untyped and hold a
-        file as its JSON form, while an omitted one holds the previous value. Reading every
-        field through the contract the record is committed under makes each field the
-        contract types as `file` a `FileRef`, so the predicate compares like with like.
+        A field can reach the driver holding a file as its JSON form in two cases: a
+        returned field bound from a whole-reference body output (`output: ${c.output}`),
+        since the body's END has no contract for it, and an omitted field the body does
+        not take as input, since its carried default has no body parameter to read it
+        through (`_carried_value`). Reading every field through the contract the record
+        is committed under makes each field the contract types as `file` a `FileRef`, so
+        the predicate compares like with like.
         """
-        contract = self.output_contract
-        if type(contract) is ValueContract:
-            return normalize_files(contract.type, carried)
-        if type(contract) is PartialRecordContract:
-            typed = {name: field.type for name, field in contract.fields if field is not None}
-            return {
-                name: normalize_files(typed[name], value) if name in typed else value
-                for name, value in carried.items()
-            }
-        return carried
+        typ = output_contract_file_type(self.output_contract)
+        return carried if typ is None else normalize_files(typ, carried)
 
     def _should_stop_now(self, carried: dict[str, Any], k: int) -> bool:
         """Continue-vs-stop on the carried record at index `k`. Pure. See `run` for the stop rule."""

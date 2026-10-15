@@ -3,11 +3,13 @@ slot reads a nested file as its mapping, and an untagged union whose members the
 share a value is a load error."""
 
 from collections import defaultdict
+import copy
 from pathlib import Path
 import textwrap
 from typing import Any
 
 import pytest
+from yian.compile.manifest import _canonical_value, _ManifestContext
 from yian.compose import load_flow
 from yian.compose.helpers.errors import LoadError
 from yian.expr.expressions import eval_expr
@@ -18,6 +20,7 @@ from yian.nodes.binding import bind_params
 from yian.nodes.contracts import Binding, Parameter, ValueContract
 from yian.nodes.loop import LoopNode
 from yian.run import resume_flow, run_flow
+from yian.runtime.trace import SourceEntry
 from yian.typesys.pool import VariablePool
 from yian.typesys.types import read_typedefs, type_for
 from yian.typesys.values import (
@@ -32,6 +35,7 @@ from yian.typesys.values import (
     types_overlap,
 )
 
+from tests.engine._graph_builder import _engine
 from tests.engine.test_expand import _child_flow
 
 _REGISTRY = read_typedefs(
@@ -1195,6 +1199,55 @@ def test_a_partial_loop_compares_an_omitted_file_with_a_returned_one(learnable, 
     assert output == 1
 
 
+@pytest.mark.parametrize("body_output", sorted(_BODY_OUTPUTS))
+@pytest.mark.parametrize("learnable", [False, True])
+def test_a_partial_loop_compares_a_carried_file_the_body_does_not_take(learnable, body_output):
+    # The untyped `h` makes the loop's contract a partial record. The body takes only `n`,
+    # so `f` is carried from the seed with no body input to read it through.
+    output = _ok_run(f"""\
+        id: p
+        name: p
+        defs:
+          body:
+            input:
+              n: !int
+            nodes:
+              c:
+                kind: code
+                input:
+                  n: ${{input.n}}
+                output:
+                  g: file
+                  n: int
+                code: |
+                  return dict(g={F}, n=inputs['n'] + 1)
+            output: {_BODY_OUTPUTS[body_output]}
+        nodes:
+          a:
+            kind: code
+            output: file
+            code: |
+              return {F}
+          u:
+            kind: code
+            code: |
+              return {F}
+          l:
+            kind: loop
+            until: f == g
+            max: 3
+            call: body
+            input:
+              f: ${{a.output}}
+              g: !file ${{a.output}}
+              h: ${{u.output}}
+              n: 0
+        output: ${{l.output.n}}
+        """, learnable=learnable)
+
+    assert output == 1
+
+
 _GATED_READER_FLOW = f"""\
     id: p
     name: p
@@ -1232,7 +1285,8 @@ def test_resuming_a_finished_run_with_files_replays_its_output(tmp_path: Path, f
     assert [type(event).__name__ for event in events if "Node" in type(event).__name__] == []
 
 
-def test_a_reader_after_resume_sees_the_files_of_a_replayed_output(tmp_path: Path):
+@pytest.mark.parametrize("learnable", [False, True])
+def test_a_reader_after_resume_sees_the_files_of_a_replayed_output(tmp_path: Path, learnable):
     path = tmp_path / "run.jsonl"
     flow = textwrap.dedent(_GATED_READER_FLOW)
 
@@ -1240,7 +1294,8 @@ def test_a_reader_after_resume_sees_the_files_of_a_replayed_output(tmp_path: Pat
         raise _HostStop("stop before the answer")
 
     with pytest.raises(_HostStop):
-        run_flow(load_flow(flow), {}, log=path, tools={"ask_user": interrupt})
+        run_flow(load_flow(flow), {}, log=path, tools={"ask_user": interrupt},
+                 learnable=learnable)
     resumed = resume_flow(load_flow(flow), log=path, tools={"ask_user": lambda **request: "y"})
 
     assert resumed.status == "succeeded", resumed.failure
@@ -1267,3 +1322,30 @@ def test_a_flow_input_file_reaches_code_as_a_file(learnable):
         """, {"f": REF, "fs": [REF]}, learnable=learnable)
 
     assert output == ["FileRef", ["FileRef"]]
+
+
+def test_backward_context_holds_the_files_of_a_typed_output_as_json():
+    # Feedback shapes and source lookups stay on the recorded JSON value.
+    flow = copy.deepcopy(load_flow(textwrap.dedent(_READER_FLOW)).compiled)
+    engine = _engine(flow, learnable=True)
+    list(engine.run())
+    trace = engine.state.trace
+    (occurrence,) = [item for item in trace.occurrences if item.node_id == "a"]
+
+    assert trace.backward_context(occurrence.source).output == [FORM, FORM]
+    assert trace.lookup_source(occurrence.source) == [FORM, FORM]
+    assert trace.current_writers["a"].value == [REF, REF]
+
+
+def test_a_source_entry_with_a_record_reading_type_is_hashable():
+    files = Type(kind=ValueKind.OBJECT, fields={"f": FILE}, required=frozenset())
+    entry = SourceEntry(None, 0, b"null", files)
+
+    assert hash(entry) == hash(SourceEntry(None, 0, b"null"))
+    assert entry != SourceEntry(None, 0, b"null")
+
+
+def test_a_file_default_is_fingerprinted_apart_from_its_mapping():
+    assert _canonical_value(REF, _ManifestContext(), "default") != _canonical_value(
+        dict(FORM), _ManifestContext(), "default"
+    )

@@ -72,13 +72,14 @@ class SourceEntry:
     """A typed accepted value and its producer identity read as one unit.
 
     ``files`` is the type the commit target reads the value through to restore its
-    files, as the pool does; ``None`` reads the value as stored.
+    files, as the pool does; ``None`` reads the value as stored. A record `Type` is
+    unhashable, so it takes part in comparison but not in the hash.
     """
 
     source: SourceRef | None
     outcome_seq: int
     _value_bytes: bytes = field(repr=False)
-    files: Type | None = field(default=None, repr=False)
+    files: Type | None = field(default=None, repr=False, hash=False)
 
     @property
     def value(self) -> Any:

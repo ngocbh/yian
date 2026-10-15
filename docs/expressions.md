@@ -247,6 +247,12 @@ evaluation, like arithmetic over null. Give a default when the value may be
 missing: `${upper(input.name :- "")}`. A null nested inside a `render_as_json`
 value still renders as `null`.
 
+`render_as_json` of text renders that text as a JSON string, so nesting
+re-encodes: `render_as_json(render_as_json(x))` is the JSON string of
+`render_as_json(x)`'s text, the same as Python's `json.dumps(json.dumps(x))`.
+Each level escapes the quotes and backslashes of the one inside it, so the text
+roughly doubles per level. Render a value once.
+
 New builtins register with `@register_template_fn()`, before loading a flow that
 calls one.
 

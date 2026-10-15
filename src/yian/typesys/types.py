@@ -1005,7 +1005,14 @@ def _check_local(t: TypeExpr, registry: TypeRegistry) -> None:
 
 
 def _check_typedefs(registry: TypeRegistry) -> None:
-    """Resolve every typedef, so a broken one fails even when nothing uses it."""
+    """Resolve every typedef, so a broken one fails even when nothing uses it.
+
+    Typedefs are checked dependencies first, each one's fields in order. A field naming
+    a typedef the walk is still inside closes a cycle, and the cycle is reported there:
+    a simple cycle (`A: {x: B}`, `B: {y: A}`) keeps the message `typedef 'B' field 'y':
+    recursive type reference: 'B'`; a cycle that isn't simple names the typedef at which
+    it is reported.
+    """
     parsed: dict[str, list[tuple[str | None, TypeExpr]]] = {}
     # First each typedef's own text, so an error names the typedef that holds the
     # mistake rather than the first typedef that happens to use it.
@@ -1021,23 +1028,40 @@ def _check_typedefs(registry: TypeRegistry) -> None:
         parsed[name] = parts
 
     # Then the checks that follow references (recursion, union members), dependencies
-    # first for the same reason.
+    # first for the same reason. The walk is iterative so a long chain can't overflow
+    # the stack; a ref still on the walk's stack (gray) when met is a back edge, so the
+    # typedef holding it lies on a cycle.
     order: list[str] = []
-    visited: set[str] = set()
+    finished: set[str] = set()
+    back_refs: dict[str, set[str]] = {}
 
-    def visit(name: str) -> None:
-        if name in visited:
-            return
-        visited.add(name)
-        for _, t in parsed[name]:
-            for ref in sorted(_refs_in_type(t)):
-                visit(ref)
-        order.append(name)
+    def refs_of(name: str):
+        return (ref for _, t in parsed[name] for ref in sorted(_refs_in_type(t)))
 
-    for name in registry:
-        visit(name)
+    for root in registry:
+        if root in back_refs:
+            continue
+        back_refs[root] = set()
+        stack = [(root, refs_of(root))]
+        while stack:
+            name, refs = stack[-1]
+            for ref in refs:
+                if ref not in back_refs:
+                    back_refs[ref] = set()
+                    stack.append((ref, refs_of(ref)))
+                    break
+                if ref not in finished:
+                    back_refs[name].add(ref)
+            else:
+                stack.pop()
+                finished.add(name)
+                order.append(name)
+
     for name in order:
         for field, t in parsed[name]:
+            if _refs_in_type(t) & back_refs[name]:
+                exc = TypeCheckError(f"recursive type reference: {name!r}")
+                raise _typedef_error(name, field, exc)
             try:
                 resolve_type(t, registry, frozenset({name}))
             except TypeCheckError as exc:
@@ -1047,19 +1071,32 @@ def _check_typedefs(registry: TypeRegistry) -> None:
 def _check_alias_cycles(registry: TypeRegistry) -> None:
     """Reject an alias->alias cycle, located at the alias it was found from (record
     recursion is caught by `_check_typedefs`)."""
-    def visit(start: str, name: str, path: frozenset) -> None:
-        defn = registry.get(name)
-        if not isinstance(defn, AliasDef):
-            return
-        for ref in _refs_in_type(defn.target):
-            if ref in path:
-                raise TypeCheckError(f"alias cycle through {ref!r} in typedefs", path=(start,))
-            if ref in registry:
-                visit(start, ref, path | {ref})
+    # An iterative walk, so a long alias chain can't overflow the stack; an alias whose
+    # walk finished without a cycle is not walked again, so a chain costs linear time.
+    finished: set[str] = set()
 
-    for name, defn in registry.items():
-        if isinstance(defn, AliasDef):
-            visit(name, name, frozenset({name}))
+    def alias_refs(defn: AliasDef):
+        return iter(sorted(_refs_in_type(defn.target)))
+
+    for start, defn in registry.items():
+        if not isinstance(defn, AliasDef) or start in finished:
+            continue
+        on_path = {start}
+        stack = [(start, alias_refs(defn))]
+        while stack:
+            name, refs = stack[-1]
+            for ref in refs:
+                if ref in on_path:
+                    raise TypeCheckError(f"alias cycle through {ref!r} in typedefs", path=(start,))
+                target = registry.get(ref)
+                if isinstance(target, AliasDef) and ref not in finished:
+                    on_path.add(ref)
+                    stack.append((ref, alias_refs(target)))
+                    break
+            else:
+                stack.pop()
+                on_path.discard(name)
+                finished.add(name)
 
 
 def read_typedefs(raw: dict) -> TypeRegistry:

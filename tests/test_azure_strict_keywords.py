@@ -18,6 +18,7 @@ from pydantic import (
     Strict,
     ValidationError,
     WithJsonSchema,
+    computed_field,
 )
 from pydantic import v1 as pydantic_v1
 
@@ -301,9 +302,34 @@ class _ExtraInList(BaseModel):
     xs: list[Annotated[str, Field(json_schema_extra={"pattern": "^a$"})]]
 
 
+class _SchemaMethod(BaseModel):
+    s: str = Field(max_length=3)
+
+    @classmethod
+    def model_json_schema(cls, *args, **kwargs):
+        schema = super().model_json_schema(*args, **kwargs)
+        schema["properties"]["s"]["pattern"] = "^a$"
+        return schema
+
+
+class _SerializationSchema(BaseModel):
+    model_config = ConfigDict(json_schema_mode_override="serialization")
+    n: int = Field(ge=0)
+
+    @computed_field
+    @property
+    def c(self) -> Annotated[int, Field(le=5)]:
+        return self.n
+
+
+class _UnhashableMetadata(BaseModel):
+    n: int = Field(ge=0)
+    xs: list[Annotated[str, {"a": 1}]]
+
+
 @pytest.mark.parametrize("schema", [
     _HandWrittenFormat, _HandWrittenNested, _WithJsonSchema, _SchemaHook, _HasTypedDict,
-    _HasDataclass, _ExtraInList,
+    _HasDataclass, _ExtraInList, _SchemaMethod, _SerializationSchema, _UnhashableMetadata,
 ])
 def test_azure_hand_written_schema_keywords_keep_the_unchanged_path(azure_env, schema):
     llm = _azure()

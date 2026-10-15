@@ -183,9 +183,10 @@ def _reply_checks_every_keyword(schema_cls: type[BaseModel]) -> bool:
                 return False
             stack.append(item.annotation)
             continue
-        if item in _SCALAR_TYPES or item in seen:
-            continue
         origin = get_origin(item)
+        # Only plain classes are looked up: an alias's metadata may be unhashable.
+        if origin is None and (item in _SCALAR_TYPES or item in seen):
+            continue
         if origin is Literal:
             continue
         if origin is Annotated:
@@ -209,7 +210,7 @@ def _reply_checks_every_keyword(schema_cls: type[BaseModel]) -> bool:
 
 
 def _is_plain_model(model: type[BaseModel]) -> bool:
-    """Whether `model` keeps pydantic's own schema hooks and sets no ``json_schema_extra``.
+    """Whether `model` keeps pydantic's own schema hooks and builds its schema for validation.
 
     Args:
         model (`type[BaseModel]`):
@@ -217,13 +218,24 @@ def _is_plain_model(model: type[BaseModel]) -> bool:
 
     Returns:
         `bool`:
-            `True` when neither schema hook is overridden and the config has no
-            ``json_schema_extra``.
+            `True` when no schema hook (``model_json_schema``, which the openai helper
+            calls, included) is overridden, the config has no ``json_schema_extra``, and
+            the schema isn't built in serialization mode, whose serializer return types
+            and computed fields validation never checks.
     """
-    return model.model_config.get("json_schema_extra") is None and all(
-        getattr(getattr(model, hook), "__func__", None)
-        is getattr(BaseModel, hook).__func__
-        for hook in ("__get_pydantic_json_schema__", "__get_pydantic_core_schema__")
+    config = model.model_config
+    return (
+        config.get("json_schema_extra") is None
+        and config.get("json_schema_mode_override") in (None, "validation")
+        and all(
+            getattr(getattr(model, hook), "__func__", None)
+            is getattr(BaseModel, hook).__func__
+            for hook in (
+                "model_json_schema",
+                "__get_pydantic_json_schema__",
+                "__get_pydantic_core_schema__",
+            )
+        )
     )
 
 

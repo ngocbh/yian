@@ -10,13 +10,16 @@ time, while a recursive alias keeps its own error.
 
 from __future__ import annotations
 
+import random
 import time
 
 import pytest
+import yaml
 
 from yian.compose import LoadError, load_flow
 from yian.compose.source import SourceDocument, SourceSyntaxError, parse_yaml_literal
 from yian.compose.source.literals import read_plain_scalar
+from yian.compose.source.scalars import _FlowLoader
 from yian.defaults import Defaults
 
 MAX_YAML_NODES = Defaults().max_yaml_nodes
@@ -171,16 +174,17 @@ def test_a_recursive_alias_keeps_its_error() -> None:
 
 
 def test_a_count_a_recursive_alias_cut_short_is_not_reused_outside_the_cycle() -> None:
-    # Inside r, s's aliases of r are recursive and add nothing, but t0 reaches s from
-    # outside r, where each *r expands r's 8,191-node a12 again: t0 holds over 65,000
-    # nodes and t1 is the first node over the limit.
+    # Inside r, s's aliases of r are recursive and count 1 each, but t0 reaches s from
+    # outside r, where each *r expands r's 12,287-node a12 again: t0 holds over 98,000
+    # nodes. With the anchors before it, the count passes the limit inside t0, so the
+    # error names the deepest node on the path already over it, the x-anchors list.
     lines = [
         "  - &r [*a12, &s [*r, *r, *r, *r]]",
         "  - &t0 [*s, *s]",
         *(f"  - &t{j} [*t{j - 1}, *t{j - 1}]" for j in range(1, 30)),
     ]
     text = _flow("*t29", _doubling_anchors(13) + "\n".join(lines) + "\n")
-    assert text.splitlines()[18] == "  - &t1 [*t0, *t0]"
+    assert text.splitlines()[3] == "  - &a0 [1]"
 
     started = time.monotonic()
     with pytest.raises(LoadError) as caught:
@@ -189,8 +193,17 @@ def test_a_count_a_recursive_alias_cut_short_is_not_reused_outside_the_cycle() -
 
     assert elapsed < 5
     assert f"this list {_message(MAX_YAML_NODES)}" in str(caught.value)
-    assert caught.value.diagnostic.frames[-1].range.start_line == 19
+    assert caught.value.diagnostic.frames[-1].range.start_line == 4
     _assert_no_recursion_error(caught.value)
+
+
+def test_a_node_on_its_own_cycle_is_counted_again_inside_it() -> None:
+    # M is on its own cycle, so each *M inside D counts 1 even after M's first visit:
+    # the block holds about 1,200 nodes, not 400 copies of M's 402.
+    anchors = "x-anchors:\n  - &M [&D [" + ", ".join(["*M"] * 400) + "]]\n  - [*D]\n"
+
+    SourceDocument.parse(anchors)
+    load_flow(_flow("hi", anchors))
 
 
 @pytest.mark.parametrize(
@@ -252,6 +265,79 @@ def test_a_pure_cycle_ends(value: str) -> None:
         assert "cannot descend through a recursive alias occurrence" in str(error)
 
     assert time.monotonic() - started < 5
+
+
+def _expanded_count(root: yaml.Node) -> int:
+    """Return how many nodes `root` expands to, counting a recursive alias as 1."""
+
+    def count(node: yaml.Node, path: set[int]) -> int:
+        if id(node) in path:
+            return 1
+        path.add(id(node))
+        if isinstance(node, yaml.SequenceNode):
+            children = node.value
+        elif isinstance(node, yaml.MappingNode):
+            children = [child for pair in node.value for child in pair]
+        else:
+            children = []
+        total = 1 + sum(count(child, path) for child in children)
+        path.discard(id(node))
+        return total
+
+    return count(root, set())
+
+
+def _random_alias_graph(rng: random.Random, recursive: bool) -> str:
+    """Return a flow list of nested anchored lists and aliases, recursive if asked."""
+
+    open_names: list[str] = []
+    done_names: list[str] = []
+
+    def value(depth: int) -> str:
+        roll = rng.random()
+        pool = done_names + (open_names if recursive else [])
+        if pool and roll < 0.45:
+            return "*" + rng.choice(pool)
+        if depth > 4 or roll < 0.6:
+            return "1"
+        name = f"a{len(open_names) + len(done_names)}"
+        open_names.append(name)
+        items = [value(depth + 1) for _ in range(rng.randint(1, 4))]
+        open_names.remove(name)
+        done_names.append(name)
+        return f"&{name} [{', '.join(items)}]"
+
+    return "[" + ", ".join(value(0) for _ in range(rng.randint(2, 6))) + "]"
+
+
+def _over_node_limit(text: str) -> bool:
+    """Return whether composing `text` meets the node limit."""
+
+    loader = _FlowLoader(text)
+    try:
+        loader.get_single_node()
+    except yaml.composer.ComposerError as error:
+        assert "YAML nodes" in str(error)
+        return True
+    finally:
+        loader.dispose()
+    return False
+
+
+def test_the_count_matches_a_full_expansion(set_defaults) -> None:
+    # Below the limit the count is exact, recursive aliases or not: a document loads
+    # at a limit of its full expansion and fails one below it.
+    rng = random.Random(646)
+    for index in range(300):
+        text = _random_alias_graph(rng, recursive=index % 2 == 1)
+        expanded = _expanded_count(yaml.compose(text, Loader=yaml.SafeLoader))
+        if expanded > 5000:
+            continue
+
+        set_defaults.unchecked(max_yaml_nodes=expanded - 1)
+        assert _over_node_limit(text), text
+        set_defaults.unchecked(max_yaml_nodes=expanded)
+        assert not _over_node_limit(text), text
 
 
 def test_a_plain_20000_element_list_loads() -> None:

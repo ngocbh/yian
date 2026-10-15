@@ -173,10 +173,11 @@ class _FlowLoader(yaml.SafeLoader):
     #
     # A recursive alias is a back edge to a node still on the path. It counts 1 (the
     # alias itself), and the source layer reports it when something descends through
-    # it. Its count makes every node between it and its target path-dependent: reached
-    # from outside the cycle, the loader's walkers expand that target in full. So a
-    # node is memoized only when no back edge below it reaches above it (its `low`, the
-    # shallowest path depth such an edge reaches, is not above its own depth), and a
+    # it. Its count makes every node on the cycle, from its target down to it,
+    # path-dependent: reached from outside the cycle, the loader's walkers expand that
+    # target in full, and reached from inside it, the target is the back edge. So a node
+    # is memoized only when no back edge below it reaches it or above it (its `low`, the
+    # shallowest path depth such an edge reaches, is deeper than its own depth), and a
     # path-dependent node is counted again at each visit. Every step adds at least 1 to
     # `counted`, the nodes counted so far, so once that passes the limit the document
     # is over it; a recount then would only repeat work, so the walk stops there and
@@ -206,8 +207,8 @@ class _FlowLoader(yaml.SafeLoader):
         counted = 1
         over: yaml.Node | None = None
         # Each frame: the node, its children, the next child's index, its count so far,
-        # and its `low`, which starts at its own depth.
-        stack: list[list[Any]] = [[root, _children(root), 0, 1, 0]]
+        # and its `low`, which starts one deeper than the node.
+        stack: list[list[Any]] = [[root, _children(root), 0, 1, 1]]
         while stack:
             frame = stack[-1]
             node, children, index, total, low = frame
@@ -232,12 +233,12 @@ class _FlowLoader(yaml.SafeLoader):
                     break
                 else:
                     depths[key] = len(stack)
-                    stack.append([child, _children(child), 0, 1, len(stack)])
+                    stack.append([child, _children(child), 0, 1, len(stack) + 1])
                     counted += 1
                 continue
             stack.pop()
             del depths[id(node)]
-            if low >= len(stack):
+            if low > len(stack):
                 counts[id(node)] = total
             else:
                 path_dependent.add(id(node))

@@ -1,6 +1,7 @@
 """Azure strict structured output without the JSON-schema keywords its strict mode rejects."""
 
 import json
+import sys
 from dataclasses import dataclass
 from typing import Annotated, TypedDict
 
@@ -121,6 +122,15 @@ def test_reflection_response_min_items_moves_into_the_description():
 def test_closed_unbounded_schemas_need_no_change():
     assert _strict_schema_without(_schema("C")) is None
     assert _strict_schema_without(_schema("int")) is None
+
+
+def test_the_private_openai_helper_is_imported_only_when_needed(azure_env, monkeypatch):
+    # A module set to None in sys.modules fails its import, as a moved module would.
+    monkeypatch.setitem(sys.modules, "openai.lib._parsing._completions", None)
+    with pytest.raises(ImportError):
+        _strict_schema_without(_schema("int(0..10)"))
+    llm = _azure()
+    assert "tools" in _payload(llm, llm.with_structured_output(_schema("object")))
 
 
 _BOUNDED = {

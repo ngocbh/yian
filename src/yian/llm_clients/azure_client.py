@@ -11,7 +11,6 @@ from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda, RunnableMap, RunnablePassthrough
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_openai import AzureChatOpenAI
-from openai.lib._parsing._completions import type_to_response_format_param
 from pydantic import BaseModel, Field
 from pydantic.fields import FieldInfo
 
@@ -73,7 +72,10 @@ def _strict_schema_without(schema_cls: type) -> Optional[dict[str, Any]]:
             moved, or `None` when no subschema holds one.
     """
     # The private openai SDK helper `chat.completions.parse` uses today, so the schema
-    # matches what a strict Azure request sends now.
+    # matches what a strict Azure request sends now. Imported here so that if a release
+    # moves it, only this call fails, not every Azure client import.
+    from openai.lib._parsing._completions import type_to_response_format_param
+
     fmt = copy.deepcopy(type_to_response_format_param(schema_cls))
     moved = False
     stack = [fmt["json_schema"]["schema"]]

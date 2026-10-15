@@ -81,3 +81,18 @@ class HidingList(list):
 
 def hidden_deep_list(inputs: dict) -> dict:
     return {"s": HidingList([_nest(DEEP, lambda value: [value])])}
+
+
+class YieldingList(list):
+    """A list that stores nothing while its iteration yields `shown`."""
+
+    def __init__(self, shown: list):
+        super().__init__()
+        self.shown = shown
+
+    def __iter__(self):
+        return iter(self.shown)
+
+
+def yielded_deep_list(inputs: dict) -> dict:
+    return {"s": YieldingList([_nest(DEEP, lambda value: [value])])}

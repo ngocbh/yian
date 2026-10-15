@@ -283,6 +283,10 @@ while input/output boundaries use the path to select the exact or nearest author
 contract origin before recording a failure. The path stays exact however long its keys
 are; only its rendering in a message is cut: each key to `YIAN_MAX_SHOWN_VALUE_CHARS`,
 and a rendered path longer than four times that keeps its start and end around `…`.
+Before any of these checks, a node output is read once, through Python iteration, into
+plain containers, and every output check and the stored value use that copy: a `dict`,
+`list`, or `tuple` subclass counts as what its `items()` or iteration yields (a list
+whose iteration yields nothing is stored as `[]`).
 
 ## `Type` — structure beyond the bare tag
 

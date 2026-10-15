@@ -100,6 +100,7 @@ from yian.typesys.values import (
     TypeCheckError,
     TypedValue,
     normalize_typed_files,
+    plain_containers,
     reject_deep_nesting,
     reject_nonfinite,
 )
@@ -939,6 +940,8 @@ def prepare_node_succeeded(
             Exact ID of the executing node that produced ``output``.
         output (`Any`):
             Plain or typed value to validate against the effective target's output type.
+            It is read once into plain containers (see `plain_containers`); the checks
+            and the stored value use that copy.
         commit_as (`str | None`, *optional*):
             Explicit commit target.  ``None`` falls back to the executing node's baked
             target and then to ``node_id`` itself.
@@ -991,6 +994,9 @@ def prepare_node_succeeded(
     # recorded before the limit still replay.
     enclosing_levels = -1 if state.flow.nodes[node_id].commits_input_record else 0
     try:
+        # The checks below iterate in Python while the encoder reads stored entries, so
+        # a container subclass could pass one and store another; both read one copy.
+        output = plain_containers(output, "output")
         reject_deep_nesting(output, "output", enclosing_levels=enclosing_levels)
         if type(output_contract) is PartialRecordContract:
             # A partial record's contract runs before `canonical_typed` checks numbers, so

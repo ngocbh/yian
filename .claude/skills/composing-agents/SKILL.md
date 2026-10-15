@@ -305,8 +305,7 @@ counted apart from call depth; a longer one fails at the alias that crosses it.
 These limits are the defaults of `YIAN_MAX_VALUE_NESTING` (which also sets expression
 nesting), `YIAN_MAX_YAML_NESTING`, and `YIAN_MAX_CALL_NESTING`; each can only be
 lowered. `YIAN_MAX_TYPE_NESTING` sets the type limit (at most 125), typedef chains
-included. `docs/defaults.md`
-lists every default and limit and its variable.
+included. `docs/defaults.md` lists every default and limit and its variable.
 
 Only values supplied to the top-level flow (CLI, JSON inputs, `run_flow`) may undergo
 string coercion; a `call`, `map`, or `loop` edge is not a flow boundary.

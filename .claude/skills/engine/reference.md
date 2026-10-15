@@ -1012,8 +1012,8 @@ the typedefs on the longest path of names, itself included) and raises past
 next, more than N, ...`. The alias-cycle check and the dependency DFS are iterative; a ref
 still on the DFS stack when a field is resolved is the `recursive type reference` error.
 `resolve_type` peels `Optional` in a loop, `_union_parts` flattens unions with an explicit
-stack, and record fields come from `_parse_field` (an `lru_cache` keyed by text and
-limit), so an accepted set resolves within a bounded stack. `type_for` checks
+stack, and record fields come from `_parse_field` (an `lru_cache` keyed by the text
+and the current `Defaults`), so an accepted set resolves within a bounded stack. `type_for` checks
 `type_levels` of the resolved type: `type nests deeper than N levels once its typedef
 names are expanded, ...`.
 `${...}` text counts as a scalar, so the run-time checks still cover computed values

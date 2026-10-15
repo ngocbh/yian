@@ -1006,7 +1006,15 @@ def _parse_field(text: str) -> TypeExpr:
 
 @functools.lru_cache(maxsize=65536)
 def _parse_field_within(text: str, defaults: Defaults) -> TypeExpr:
-    """Parse `text`, cached per text and defaults."""
+    """Parse `text`, cached per text and defaults.
+
+    Args:
+        text (`str`): A record field's type text.
+        defaults (`Defaults`): The values in effect; part of the cache key only.
+
+    Returns:
+        `TypeExpr`: The parsed type.
+    """
     return parse_type(text)
 
 
@@ -1064,6 +1072,13 @@ def _expr_levels(t: TypeExpr, levels: dict[str, int]) -> int:
     Each `list(...)` is a level, `Optional(...)` adds none, a union counts as its deepest
     member, and a name counts as `levels[name]` (0 when not yet measured, which happens
     only on a reference cycle). Other scalars, `Literal(...)` and `dict(...)` are 0.
+
+    Args:
+        t (`TypeExpr`): The parsed type.
+        levels (`dict[str, int]`): Levels of the typedefs measured so far.
+
+    Returns:
+        `int`: The level count.
     """
     # Levels are the most lists on any path to a leaf plus that leaf's levels, so an
     # explicit stack of (expression, lists above it) needs no recursion.

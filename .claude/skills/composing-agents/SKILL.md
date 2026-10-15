@@ -987,6 +987,8 @@ turn:
     exited: false
   while: not exited            # pre-check over the carried record
 ```
+A LOOP's `input:` is a mapping of carried fields; `input: ${seed.output}` is a load
+error, so list each field (`n: ${seed.output.n}`).
 A tagged seed (`n: !int 0`) checks the starting value; a field the body omits
 keeps its declared type. Every seed must fit the body's input like a CALL argument
 (`n: "1"` into `int` fails; write `1`). Tag an `Optional` reference that is always set
@@ -1157,7 +1159,7 @@ starts, and a `human_input` node fails when it asks. There is no authored
 
 ## Authoring checklist
 - [ ] Every `input:` entry is tagged (`name: !T` or `name: !T default`); every type used is a scalar/form or a `typedefs:` entry, spelled with parentheses.
-- [ ] Every data dependency uses `${...}` in `input:`; ordering-only dependencies use `depends_on:` or `runs_after:`.
+- [ ] Every data dependency uses `${...}` in `input:`; ordering-only dependencies use `depends_on:` or `runs_after:`. `input:` is always a mapping of names to bindings, never a whole `${node.output}`.
 - [ ] Every `agent` `output:` is typed — bare `str` for free text, or a
   `Literal(...)`/other supported shape for structured generation.
 - [ ] Every `prompt:` and `system_prompt:` references local inputs or, for an AGENT, its own declared variables.

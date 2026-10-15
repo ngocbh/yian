@@ -9,9 +9,10 @@ values.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping
 
 from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.source import SourceCursor
 from yian.diagnostics import SourceRange
 from yian.typesys.values import TypeCheckError, reject_deep_nesting
 
@@ -42,3 +43,28 @@ def check_written_value(
         reject_deep_nesting(value, where, enclosing_levels=enclosing_levels)
     except TypeCheckError as exc:
         raise diagnostics.error(str(exc), range=range) from exc
+
+
+def check_env_values(
+    env: Mapping[str, Any],
+    prefix: str,
+    env_cursor: SourceCursor | None,
+    diagnostics: LoadDiagnostics,
+) -> None:
+    """Reject an `env:` value that nests deeper than `current().max_value_nesting` levels.
+
+    Args:
+        env (`Mapping[str, Any]`): The authored `env:` mapping.
+        prefix (`str`): Starts the message before `env '<key>'`, e.g. `"flow "`.
+        env_cursor (`SourceCursor | None`): Cursor over the `env:` mapping, for ranges.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
+
+    Raises:
+        `LoadError`: Raised at the entry's value (else at `env:`) when a value sits past
+            the limit.
+    """
+    for key, value in env.items():
+        range = None
+        if env_cursor is not None:
+            range = env_cursor.range_of(key) or env_cursor.range
+        check_written_value(value, f"{prefix}env {key!r}", range, diagnostics)

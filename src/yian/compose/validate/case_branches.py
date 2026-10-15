@@ -90,7 +90,7 @@ from yian.expr.grammar import whole_span_interior
 from yian.expr.template import expr_refs_of, flow_call_callees_in_spans
 from yian.typesys import BUILTIN_TYPE_NAMES, TypeCheckError, build_value_as
 from yian.typesys.types import TypeRegistry
-from yian.typesys.values import Type
+from yian.typesys.values import Type, reject_deep_nesting
 
 # A value longer than this is cut in a message; the author writes it as a block.
 _SHOWN_LIMIT = 60
@@ -821,7 +821,8 @@ def _read_output(
 
     Returns:
         `Optional[_CaseOutput]`: The declared type, as far as it resolves, and the
-        `output:` range. An empty `output:`, or one that contains itself, has no text.
+        `output:` range. An empty `output:`, one that contains itself, or one nested past
+        the value limit has no text.
     """
     if cursor is None:
         return None
@@ -829,7 +830,17 @@ def _read_output(
     spec = value if value not in (None, "") else cursor.tag
     # The key line, which a block mapping's value range starts below.
     rng = cursor.key_range or cursor.range or desc.range
-    if spec is None or contains_itself(spec):
+    if spec is None:
+        return _CaseOutput(type=None, text=None, range=rng)
+    if isinstance(spec, (dict, list)):
+        # The self-containment check and `_flow_text` recurse through the raw value, so
+        # an alias chain could overflow them. This only decides whether the rejected
+        # `output:` can be shown, so the value limit bounds it rather than the type rule.
+        try:
+            reject_deep_nesting(spec, "case output")
+        except TypeCheckError:
+            return _CaseOutput(type=None, text=None, range=rng)
+    if contains_itself(spec):
         return _CaseOutput(type=None, text=None, range=rng)
     if isinstance(spec, str):
         resolved = resolve_type_text(spec, registry)

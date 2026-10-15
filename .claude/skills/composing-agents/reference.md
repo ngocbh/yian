@@ -308,9 +308,17 @@ see `docs/defaults.md`), counting each record and list. A binding or MAP
 list around a 100-level value is one level too deep. A run input may nest 100 levels.
 A value written out in the flow file is checked at load with the same counting, YAML
 aliases included: a node input (LOOP seeds, MAP per-item inputs), MAP `over:`, WAIT
-`until:`, a value entry, an input or AGENT variable default, a CASE value branch, or a
-flow `output:` (a record output's fields sit one level in) nested deeper is a load
-error at that value; the value a `${...}` computes is checked when it runs.
+`until:`, a value entry, an input or AGENT variable default, a CASE value branch, a
+flow `output:` (a record output's fields sit one level in), or a flow, `defs:`, or node
+`env:` value nested deeper is a load error at that value (an `env:` value at its key);
+the value a `${...}` computes is checked when it runs.
+A type nests at most 100 levels (`YIAN_MAX_TYPE_NESTING`, at most 125): type text counts
+each constructor, `Optional(` and `Union(` included; a record written as a mapping or a
+list of single-key maps in `output:` counts each record, plus the records and lists of
+each field's resolved type (a typedef name counts as deep as its definition). Deeper is
+a load error at the record or field, aliases included (`type at r.k.k nests deeper than
+100 levels, the limit for a type (each record and list is a level); its type
+'list(list(int))' adds 2`).
 An expression nests at most 100 levels as well (each call, list, unary operator,
 comparison, `|`/`:-`/`:?`, and operator chain is one); a deeper one is a load error at
 its field. A flow file's YAML nests at most 200 levels (`YIAN_MAX_YAML_NESTING`; each

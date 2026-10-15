@@ -4,10 +4,13 @@ A node here is a leaf type string (`"float"`, `"list(str)"`, a registry name), a
 map of field -> node (a record, nested natively), or a list of single-key maps
 (the list-of-fields style). Resolution of leaf strings and nested records is the
 type layer's job (`type_for` recurses over aliases/lists/Optional); this reader
-walks native record syntax and wraps any type error loudly. ``read_type`` is the
-source-free semantic view. ``read_value_contract`` performs the same recursion
-over a retained cursor and compiles authored root/nested sites into opaque
-``ContractOrigins`` without leaking YAML concepts below Compose.
+walks native record syntax and wraps any type error loudly. A record counts its
+levels against ``MAX_TYPE_NESTING``: each record is a level and a field's type
+adds its own (see `type_levels`), however YAML text or aliases built the record,
+so a deep alias chain is a load error before the walk recurses past the limit.
+``read_type`` is the source-free semantic view. ``read_value_contract`` performs the
+same recursion over a retained cursor and compiles authored root/nested sites into
+opaque ``ContractOrigins`` without leaking YAML concepts below Compose.
 """
 
 import re
@@ -20,8 +23,9 @@ from yian.nodes.contracts import (
     ValueContract,
     ValuePath,
 )
+from yian.defaults import current
 from yian.typesys import TypeCheckError, Type, type_for
-from yian.typesys.values import ValueKind
+from yian.typesys.values import ValueKind, _render_value_path, type_levels
 from yian.typesys.types import BUILTIN_TYPE_NAMES, TypeRegistry, encodes_as_utf8
 
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
@@ -60,14 +64,27 @@ def _path_sort_key(path: ValuePath) -> tuple[tuple[int, str | int], ...]:
     )
 
 
+def _too_deep(path: ValuePath, limit: int) -> str:
+    """Return the message for a type at ``path`` nesting past ``limit`` levels."""
+    location = f"type at {_render_value_path(path)}" if path else "type"
+    return (
+        f"{location} nests deeper than {limit} levels, "
+        "the limit for a type (each record and list is a level)"
+    )
+
+
 def _read_record_type(
     entries: list[tuple[Any, Any, SourceCursor | None]],
     registry: TypeRegistry,
     *,
     path: ValuePath,
     diagnostics: LoadDiagnostics,
+    levels: int,
 ) -> tuple[Type, list[tuple[ValuePath, SourceCursor]]]:
-    """Read normalized ``(field, value, cursor)`` entries into one record type."""
+    """Read normalized ``(field, value, cursor)`` entries into one record type.
+
+    ``levels`` counts the records enclosing each field, this one included.
+    """
     fields: dict[str, Type] = {}
     sites: list[tuple[ValuePath, SourceCursor]] = []
     for key, value, child_cursor in entries:
@@ -90,6 +107,7 @@ def _read_record_type(
             cursor=child_cursor,
             path=child_path,
             diagnostics=diagnostics,
+            levels=levels,
         )
         fields[key] = field_type
         sites.extend(child_sites)
@@ -112,16 +130,53 @@ def _read_type_and_sites(
     cursor: SourceCursor | None,
     path: ValuePath,
     diagnostics: LoadDiagnostics,
+    levels: int = 0,
 ) -> tuple[Type, list[tuple[ValuePath, SourceCursor]]]:
-    """Read one type node and collect each physically authored record-field site."""
+    """Read one type node and collect each physically authored record-field site.
+
+    Args:
+        node (`Any`):
+            Type text, a record mapping, or a list of single-key maps.
+        registry (`TypeRegistry`):
+            The typedefs type text resolves against.
+        cursor (`SourceCursor | None`):
+            The node's source, or `None` for a source-free read.
+        path (`ValuePath`):
+            The node's field path from the declaration's root.
+        diagnostics (`LoadDiagnostics`):
+            Builds the load errors.
+        levels (`int`, *optional*, defaults to `0`):
+            The records enclosing ``node``.
+
+    Returns:
+        `tuple[Type, list[tuple[ValuePath, SourceCursor]]]`: The type and the
+            authored record-field sites inside it.
+
+    Raises:
+        `LoadError`: The node is not a type, or a record or a field's type nests
+            past ``MAX_TYPE_NESTING`` levels with the records around it.
+    """
+    limit = current().max_type_nesting
+    rng = cursor.range if cursor is not None else None
     if isinstance(node, str):
         try:
-            return type_for(node, registry), []
+            typ = type_for(node, registry)
         except TypeCheckError as exc:
             raise diagnostics.error(
-                f"bad type expression {node!r}: {exc}",
-                range=(cursor.range if cursor is not None else None),
+                f"bad type expression {node!r}: {exc}", range=rng
             ) from exc
+        if levels:
+            added = type_levels(typ)
+            if levels + added > limit:
+                raise diagnostics.error(
+                    f"{_too_deep(path, limit)}; its type {node!r} adds {added}", range=rng
+                )
+        return typ, []
+
+    if isinstance(node, (dict, list)) and levels + 1 > limit:
+        # Checked before reading the entries: an alias chain can nest a record far
+        # deeper than this walk could recurse.
+        raise diagnostics.error(_too_deep(path, limit), range=rng)
 
     if isinstance(node, dict):
         return _read_record_type(
@@ -136,6 +191,7 @@ def _read_type_and_sites(
             registry,
             path=path,
             diagnostics=diagnostics,
+            levels=levels + 1,
         )
 
     if isinstance(node, list):
@@ -162,11 +218,12 @@ def _read_type_and_sites(
             registry,
             path=path,
             diagnostics=diagnostics,
+            levels=levels + 1,
         )
 
     raise diagnostics.error(
         f"cannot read type from {node!r} (type {type(node).__name__})",
-        range=(cursor.range if cursor is not None else None),
+        range=rng,
     )
 
 

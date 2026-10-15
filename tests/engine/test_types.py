@@ -723,3 +723,42 @@ def test_bracket_single_endpoint_hint_uses_the_range_spelling():
         match=re.escape("a numeric range needs `..`, e.g. int(1..12), int(0..), or int(..100)"),
     ):
         parse_type("int[1]")
+
+
+# --------------------------------------------------------------------------- #
+# type_levels: how many record and list levels a resolved Type nests
+# --------------------------------------------------------------------------- #
+
+from yian.typesys.values import type_levels  # noqa: E402
+
+
+def _record(**fields: Type) -> Type:
+    """Return a record Type whose fields are all required."""
+    return Type(kind=ValueKind.OBJECT, fields=fields, required=frozenset(fields))
+
+
+def test_type_levels_counts_a_scalar_as_zero():
+    assert type_levels(Type.scalar(ValueKind.STRING)) == 0
+
+
+def test_type_levels_counts_a_list_as_one():
+    assert type_levels(type_for("list(int)", {})) == 1
+
+
+def test_type_levels_counts_each_record():
+    assert type_levels(_record(a=_record(b=Type.scalar(ValueKind.INTEGER)))) == 2
+
+
+def test_type_levels_counts_a_union_as_its_deepest_member():
+    shallow = _record(a=Type.scalar(ValueKind.INTEGER))
+    deep = _record(b=_record(c=_record(d=Type.scalar(ValueKind.INTEGER))))
+    union = Type(kind=ValueKind.OBJECT, variants=(shallow, deep))
+    assert type_levels(union) == 3
+
+
+def test_type_levels_measures_a_shared_type_once():
+    # Each level's two fields hold the same Type, so an unmemoized walk visits 2**60 leaves.
+    typ = Type.scalar(ValueKind.INTEGER)
+    for _ in range(60):
+        typ = _record(a=typ, b=typ)
+    assert type_levels(typ) == 60

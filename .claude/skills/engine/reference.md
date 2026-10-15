@@ -960,7 +960,17 @@ descriptors' `_validate_fields`, value entries in the pipeline's `read_value` (a
 untagged entry in `parse/nodes.py`), and node inputs (LOOP seeds and MAP per-item
 inputs included), CASE value branches, and flow outputs in
 `compose/validate/value_nesting.py`, a pre-pass before the tagged splits and the
-case-branch check (a record output's fields pass `enclosing_levels=1`).
+case-branch check (a record output's fields pass `enclosing_levels=1`), and `env:`
+values through `check_env_values` (flow `env:` in `loader._validate_flow_env`, a
+multi-node `defs:` entry's in `_load_def`, a node's in `_read_common_fields`), located
+at the key.
+A record type written as a mapping in a node's `output:` counts against
+`current().max_type_nesting` in `helpers/types.py`: each record is a level, checked
+before its entries are read, and a field's resolved type adds `typesys.values.type_levels`
+(records and lists, iterative, a union as its deepest member), so an alias chain is a
+located `LoadError` (`type at <path> nests deeper than N levels, the limit for a type
+(each record and list is a level)`, plus `; its type '<text>' adds <d>`). A CASE
+`output:` too deep to show falls back to the case error without its text.
 `${...}` text counts as a scalar, so the run-time checks still cover computed values
 and flows built in Python. WAIT `until:` has no run-time counterpart.
 

@@ -785,8 +785,9 @@ def plain_containers(value: Any, where: str) -> Any:
     `list` or `tuple` (or subclass) to a `list` of what ``iter()`` yields; a
     `TypedValue` to a ``model_copy`` of the same kind holding its payload's copy.
     Each container is copied once, so sharing and cycles are kept, and a subclass's
-    own iteration runs once. Pydantic models other than `TypedValue`, dataclasses,
-    `FileRef`, scalars, and `str` subclasses are leaves, kept as they are. Neither
+    own iteration runs once. Everything else (pydantic models other than
+    `TypedValue`, dataclasses, `FileRef`, scalars, `str` subclasses, sets, and any
+    other object) is a leaf, kept as it is. Neither
     walk recurses or cuts at a depth.
 
     Args:

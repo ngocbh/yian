@@ -972,8 +972,8 @@ not kept.
 `prepare_node_succeeded` first reads a live output once, through Python iteration,
 into plain containers (`plain_containers`), so a `dict`, `list`, or `tuple` subclass
 counts as what its iteration yields, and checks and stores that one copy. It checks the
-output whole and fails `contract.output` at
-the field path with the declared field's origin. A record or list built around a
+output whole and fails `contract.output` at the field path with the declared field's
+origin. A record or list built around a
 value is one level deeper: a record flow output fails at `__end__`, a MAP's result
 list at `<map>/__end__`, and a LOOP body's record output counts its level. A node
 with `commits_input_record` (START) passes `enclosing_levels=-1`. Replay validation

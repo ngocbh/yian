@@ -620,8 +620,8 @@ admission (`prepare_node_succeeded`) first reads a node output once, through Pyt
 iteration, into plain containers (`typesys.values.plain_containers`), so a `dict`,
 `list`, or `tuple` subclass counts as what its iteration yields; it checks that copy
 whole, stores the same copy, and fails `contract.output` at the field path with the
-declared field's origin. A record built
-around a value is one level deeper, so a record flow output wrapping a 100-level value
+declared field's origin. A record built around a value is one level deeper, so a record
+flow output wrapping a 100-level value
 fails at `__end__`, and a MAP whose children return 100-level values fails at its
 fan-in END (`<map>/__end__`). A node with the `commits_input_record` trait (START)
 passes `enclosing_levels=-1`, since its record wraps input values already checked.

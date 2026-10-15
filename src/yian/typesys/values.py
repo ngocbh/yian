@@ -1046,6 +1046,8 @@ class Type:
     Despite the name, `variants` holds union members, not the string tags of a
     "variant" above. Members are non-nullable records; a nullable union sets
     `nullable` on the union itself.
+    A `Type` must not be changed after it is built (its `fields` dict included), so
+    copies of a flow share it.
     """
 
     kind: ValueKind
@@ -1056,6 +1058,21 @@ class Type:
     nullable: bool = False  # an Optional[X] slot — accepts None (present-None or absent)
     bounds: tuple[int | float | None, int | float | None] | None = None
     variants: Optional[tuple["Type", ...]] = None
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> "Type":
+        """Return this type as its own deep copy.
+
+        Args:
+            memo (`dict[int, Any]`):
+                The copy memo; unused.
+
+        Returns:
+            `Type`:
+                This type. A type must not be changed after it is built, so a copy of a
+                flow shares it, and the copy's recursion then does not depend on how
+                deep the type nests.
+        """
+        return self
 
     @classmethod
     def scalar(cls, seg: ValueKind) -> "Type":

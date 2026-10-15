@@ -109,8 +109,8 @@ load, run, and resume with stack to spare:
   document 200 levels deep stays within Python's default recursion limit.
 - `YIAN_MAX_TYPE_NESTING` may be raised to 125, the depth proven for type text: type
   text nested 125 levels still parses, and text nested 150 levels does not. A record
-  type in `output:` counts its record levels against the same limit, but one near 125
-  levels runs with less stack headroom.
+  type in `output:` counts its record levels against the same limit. Copies of a flow
+  share its types, so record depth adds no stack at run setup.
 
 `YIAN_MAX_YAML_NODES` has no maximum, since counting a document's nodes takes no stack;
 raising it raises load time and run-log size in proportion.

@@ -113,9 +113,10 @@ load, run, and resume with stack to spare:
 an int converted to or from text. A set value may not exceed the interpreter's limit
 (`sys.get_int_max_str_digits()`, when the interpreter has one), since yian could not
 honour more. The default is not checked against it, so with a lower
-`PYTHONINTMAXSTRDIGITS` the interpreter's limit applies first. No check reads this
-entry yet: it is reserved for the integer-size check, and setting it changes nothing
-today beyond being recorded and compared on resume like every other entry.
+`PYTHONINTMAXSTRDIGITS` the interpreter's limit applies first. An int with more digits
+is not a yian value: it fails at the first boundary that sees it, and an int literal
+in a flow file is a load error; see [Types → Integer size
+limit](typing.md#integer-size-limit).
 
 ## All defaults and limits
 
@@ -129,7 +130,7 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_MAX_CALL_NESTING` | limit | 50 | 1 to 50 (can only be lowered) | Deepest chain of call, map, and loop bodies a flow may nest |
 | `YIAN_MAX_TOTAL_NODES` | limit | 10,000 | 1 or more | Most live nodes a run's graph may grow to |
 | `YIAN_MAX_SKIP_WORLDS` | limit | 10,000 | 1 or more | Most branch combinations the skip check explores before giving up |
-| `YIAN_MAX_INT_DIGITS` | limit | 4,300 | 1 to the interpreter's int digit limit | Most decimal digits an int may have when read or written as text (reserved; not enforced yet) |
+| `YIAN_MAX_INT_DIGITS` | limit | 4,300 | 1 to the interpreter's int digit limit | Most decimal digits an int may have to be a yian value |
 | `YIAN_AGENT_RETRIES` | setting | 2 | 0 or more | Extra attempts an AGENT gets to correct an invalid structured reply when the node sets none |
 | `YIAN_AGENT_MAX_TOOL_ITERATIONS` | setting | -1 | 1 or more, or -1 for no cap | AGENT tool-call turns when the node sets none; -1 is no cap |
 | `YIAN_EPISODIC_MAX_EPISODES` | setting | 100 | 1 or more | Episodes an episodic memory keeps when it sets no limit |

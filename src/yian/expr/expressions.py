@@ -22,18 +22,20 @@ from typing import Any, Callable
 
 from lark import Token, Tree
 
-import yian.json_codec as json_codec
-from yian.expr import percent_format
 from yian.expr.lineage import ResolvedValue, SourceRef, TracedValue, ValueRoute
 from yian.typesys.pool import VariablePool
 from yian.typesys.types import BUILTIN_TYPE_NAMES
 from yian.typesys.values import (
     FieldRead,
+    IntTooLongError,
     Type,
     TypeCheckError,
     ValueKind,
     build_value_as,
+    parse_int_text,
     union_field,
+    value_repr,
+    write_as_text,
 )
 
 
@@ -140,6 +142,28 @@ def _resolve_in_record(path: str, record: dict) -> Any:
     return value
 
 
+def _int_literal(text: str) -> int:
+    """Convert an int literal's text, rejecting one with more than `YIAN_MAX_INT_DIGITS` digits.
+
+    `parse_expr` already rejects a long `NUMBER` token; this keeps a tree or text that
+    skipped it from failing with Python's own digit-limit error.
+
+    Args:
+        text (`str`): Decimal digits with an optional ``-`` sign.
+
+    Returns:
+        `int`: The literal's value.
+
+    Raises:
+        `ExpressionError`: The literal has more than `YIAN_MAX_INT_DIGITS` significant digits,
+            raised from the `IntTooLongError`.
+    """
+    try:
+        return parse_int_text(text)
+    except IntTooLongError as exc:
+        raise ExpressionError(str(exc)) from exc
+
+
 def _parse_literal(token: str) -> Any:
     t = token.strip()
     if not t:
@@ -152,36 +176,15 @@ def _parse_literal(token: str) -> Any:
     if low in ("null", "none"):
         return None
     if _NUMBER_RE.match(t):
-        return float(t) if "." in t else json_codec.parse_int(t)
+        return float(t) if "." in t else _int_literal(t)
     if (t.startswith('"') and t.endswith('"')) or (t.startswith("'") and t.endswith("'")):
         return t[1:-1]
     raise ExpressionError(f"cannot parse literal {token!r}")
 
 
 def _operand_repr(value: Any) -> str:
-    """Return `repr(value)`, or a placeholder naming its type when it can't be rendered."""
-    try:
-        return repr(value)
-    except ValueError:
-        # repr of an int past Python's str-digit limit raises, at any nesting depth.
-        return f"<{type(value).__name__} too large to display>"
-
-
-def _apply_binop(op: Callable[[Any, Any], Any], symbol: str, lhs: Any, rhs: Any) -> Any:
-    """Return `op(lhs, rhs)`, formatting text with `%` for ints of any size."""
-    try:
-        return op(lhs, rhs)
-    except ValueError:
-        if symbol != "%" or not isinstance(lhs, str) or json_codec.displayable(rhs) is rhs:
-            raise
-    # The right side holds a long int: retry without the digit limit
-    # (`format_text` gives Python's own error for anything else).
-    return percent_format.format_text(lhs, rhs)
-
-
-def _is_digit_limit(exc: ValueError) -> bool:
-    """Return whether `exc` is Python's int/str digit-limit error."""
-    return "set_int_max_str_digits" in str(exc)
+    """Return `repr(value)`, or a placeholder giving a long int's digit count."""
+    return value_repr(value)
 
 
 def _eval_comparison(op: str, lhs: Any, rhs: Any) -> bool:
@@ -759,7 +762,7 @@ class _EvalExpr:
         """A lone literal that inlined up to a top-level token."""
         if tok.type == "NUMBER":
             s = str(tok)
-            return float(s) if "." in s else json_codec.parse_int(s)
+            return float(s) if "." in s else _int_literal(s)
         if tok.type == "STRING":
             return str(tok)[1:-1]
         if tok.type == "BOOL":
@@ -1094,10 +1097,14 @@ class _EvalExpr:
 
         Raises:
             `ExpressionError`:
-                If Python raises; the message names the operator and both values.
+                If Python raises, or `%` formats an int over the digit limit; the
+                message names the operator and both values.
         """
         try:
-            return _apply_binop(_ARITH_STEPS[symbol], symbol, lhs, rhs)
+            if symbol == "%" and isinstance(lhs, str):
+                # Formatting writes the right side as text.
+                return write_as_text(lambda right: lhs % right, rhs)
+            return _ARITH_STEPS[symbol](lhs, rhs)
         except ZeroDivisionError as exc:
             l, r = _operand_repr(lhs), _operand_repr(rhs)
             raise ExpressionError(f"division by zero: {l} {symbol} {r}") from exc
@@ -1114,10 +1121,7 @@ class _EvalExpr:
             raise ExpressionError(f"cannot compute {l} {symbol} {r}: missing key {exc}") from exc
         except ValueError as exc:
             l, r = _operand_repr(lhs), _operand_repr(rhs)
-            # Python's digit-limit message suggests raising a process-wide limit
-            # that yian never changes.
-            detail = "an int too long to format" if _is_digit_limit(exc) else exc
-            raise ExpressionError(f"cannot compute {l} {symbol} {r}: {detail}") from exc
+            raise ExpressionError(f"cannot compute {l} {symbol} {r}: {exc}") from exc
 
     def _do_sum(self, node: Tree) -> Any:
         """A `+ -` or `* / %` chain, folded left to right.

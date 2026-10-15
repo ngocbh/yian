@@ -84,7 +84,6 @@ from yian.runtime.log import (
     canonical_typed,
     decode_pool,
     decode_record,
-    decode_typed_json,
     encode_pool,
     encode_record,
 )
@@ -99,6 +98,7 @@ from yian.typesys.values import (
     TypeCheckError,
     TypedValue,
     reject_deep_nesting,
+    reject_nonfinite,
 )
 
 
@@ -938,6 +938,10 @@ def prepare_node_succeeded(
     enclosing_levels = -1 if state.flow.nodes[node_id].commits_input_record else 0
     try:
         reject_deep_nesting(output, "output", enclosing_levels=enclosing_levels)
+        if type(output_contract) is PartialRecordContract:
+            # A partial record's contract runs before `canonical_typed` checks numbers, so
+            # a value that is not a yian value must not read as a type mismatch there.
+            reject_nonfinite(output, "output")
         value_wire, typed = _canonical_output_value(
             output,
             output_contract,
@@ -1356,7 +1360,10 @@ def _prepare_success_transition(
         delta=delta,
         terminal=terminal,
     )
-    observer_value = decode_typed_json(delta.value_bytes).to_object()
+    observer_value = ANY_VALUE_ADAPTER.validate_json(
+        delta.value_bytes,
+        strict=True,
+    ).to_object()
     observer = NodeSucceeded(
         node_id=delta.node_id,
         output=observer_value,
@@ -4527,8 +4534,11 @@ def _apply_run_started(state: RunState, apply: _RunStartedApply) -> None:
 
 def _materialize_success(plan: _SuccessPlan) -> _SuccessApply:
     """Decode independent pool, observer, and terminal copies before append."""
-    value = decode_typed_json(plan.delta.value_bytes)
-    observer_value = decode_typed_json(plan.delta.value_bytes).to_object()
+    value = ANY_VALUE_ADAPTER.validate_json(plan.delta.value_bytes, strict=True)
+    observer_value = ANY_VALUE_ADAPTER.validate_json(
+        plan.delta.value_bytes,
+        strict=True,
+    ).to_object()
     terminal = (
         _materialize_terminal(plan.terminal)
         if plan.terminal is not None
@@ -4572,7 +4582,10 @@ def _terminal_observer(delta: _TerminalDelta) -> RunSucceeded | RunFailed:
             raise ValueError("successful terminal delta requires typed output bytes")
         if delta.failure is not None:
             raise ValueError("successful terminal delta cannot carry a failure")
-        output = decode_typed_json(delta.output_bytes).to_object()
+        output = ANY_VALUE_ADAPTER.validate_json(
+            delta.output_bytes,
+            strict=True,
+        ).to_object()
         return RunSucceeded(output=output)
     if delta.output_bytes is not None:
         raise ValueError("failed terminal delta cannot carry output bytes")

@@ -58,7 +58,7 @@ from yian.diagnostics import (
     ResolverTable,
 )
 from yian.memory.contracts import DeclSite, MemorySetupError
-from yian.typesys.values import TypeCheckError, value_repr
+from yian.typesys.values import TypeCheckError
 from yian.typesys.types import read_typedefs
 from yian.compose.build.pipeline import _assemble, ComposedFlow
 from yian.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
@@ -714,7 +714,7 @@ def _validate_flow_env(
     if "max_tool_iterations" in env and not is_max_tool_iterations(env["max_tool_iterations"]):
         raise diagnostics.error(
             "flow `env.max_tool_iterations` must be a positive int or -1 (no cap), "
-            f"got {value_repr(env['max_tool_iterations'])}",
+            f"got {env['max_tool_iterations']!r}",
             range=cursor.child("env").range_of("max_tool_iterations"),
         )
 

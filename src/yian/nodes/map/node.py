@@ -31,7 +31,6 @@ from yian.nodes.contracts import (
     _rewrite_origin_carrier,
     binding_source,
 )
-from yian.typesys.values import value_repr
 
 
 class MapNode(Node):
@@ -120,13 +119,12 @@ class MapNode(Node):
         against `pool`. A source that resolves to `None`/non-list raises a binder-owned
         ``BindingError`` classified as ``contract.input`` by the read seam; a list nesting
         deeper than `YIAN_MAX_VALUE_NESTING` levels or holding a NaN, infinity, or complex
-        number at any depth raises one classified as ``binding.evaluate``."""
+        number, or an int with more than `YIAN_MAX_INT_DIGITS` digits, at any depth raises
+        one classified as ``binding.evaluate``."""
         over_src = node_wiring["over"]
 
         def validate(items):
-            source = binding_source(over_src)
-            # An authored literal may hold an int too long for Python to write as text.
-            display_src = source if isinstance(source, str) else value_repr(source)
+            display_src = binding_source(over_src)
             if items is None or not isinstance(items, list):
                 raise BindingError(
                     f"MAP node {self.id!r}: `over` ({display_src}) did not resolve to a list",

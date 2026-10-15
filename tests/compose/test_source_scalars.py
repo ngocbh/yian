@@ -5,6 +5,7 @@ one loader table; PyYAML's global SafeLoader keeps its YAML 1.1 rules.
 """
 
 import math
+import re
 import subprocess
 import sys
 from datetime import date, datetime, timedelta, timezone
@@ -20,6 +21,7 @@ from yian.compose.source import (
 )
 from yian.compose.source.scalars import _FlowLoader
 from yian.typesys.temporal import parse_datetime
+from yian.typesys.values import int_digits, long_int_message
 
 
 def _document_value(text: str):
@@ -181,42 +183,34 @@ def test_explicit_tag_rejects_a_non_core_form(read, text, found):
         assert caught.value.range.start_line == 1
 
 
-D = "1" * 5000  # past Python's default 4300-digit limit
-ONES = (10**5000 - 1) // 9  # the int spelled by D
-
-
-@pytest.fixture
-def _default_int_digit_limit():
-    """Run a test under Python's default int/str digit limit."""
-    get = getattr(sys, "get_int_max_str_digits", None)
-    if get is None:
-        yield  # this Python has no limit
-        return
-    before = get()
-    sys.set_int_max_str_digits(4300)
-    try:
-        yield
-        after = get()
-    finally:
-        sys.set_int_max_str_digits(before)
-    assert after == 4300, "yian code changed the global digit limit"
-
-
-@pytest.mark.usefixtures("_default_int_digit_limit")
 @ENTRY_POINTS
-def test_an_integer_of_any_length_loads(read):
-    assert read("value: " + D + "\n") == {"value": ONES}
-    assert read("value: -" + D + "\n") == {"value": -ONES}
-    assert read("value: +" + D + "\n") == {"value": ONES}
-    assert read("value: 0" + D + "\n") == {"value": ONES}
-    assert read("value: 0x" + "f" * 5000 + "\n") == {"value": 16**5000 - 1}
-    assert read("value: 0o" + "7" * 5000 + "\n") == {"value": 8**5000 - 1}
-    assert read("value: !!int " + D + "\n") == {"value": ONES}
+@pytest.mark.parametrize(
+    ("text", "digits"),
+    [
+        ("1" * 5000, 5000),
+        ("-" + "1" * 5000, 5000),
+        ("!!int " + "1" * 5000, 5000),
+        ("0x" + "f" * 4000, int_digits(int("f" * 4000, 16))),
+        ("0o" + "7" * 5000, int_digits(int("7" * 5000, 8))),
+    ],
+    ids=["decimal", "negative", "tagged", "hex", "octal"],
+)
+def test_an_integer_over_the_digit_limit_is_a_located_syntax_error(read, text, digits):
+    with pytest.raises(SourceSyntaxError) as caught:
+        read("value: " + text + "\n")
+
+    message = str(caught.value)
+    assert long_int_message(digits) in message
+    assert "set_int_max_str_digits" not in message
+    assert re.search(r"[0-9]{600}", message) is None
+    if read is _document_value:
+        assert caught.value.range is not None
+        assert caught.value.range.start_line == 1
 
 
-@pytest.mark.usefixtures("_default_int_digit_limit")
-def test_read_plain_scalar_reads_an_integer_of_any_length():
-    assert read_plain_scalar(D) == ONES
+@ENTRY_POINTS
+def test_leading_zeros_do_not_count_toward_the_digit_limit(read):
+    _assert_same(read("value: " + "0" * 4999 + "1\n")["value"], 1)
 
 
 @pytest.mark.parametrize(

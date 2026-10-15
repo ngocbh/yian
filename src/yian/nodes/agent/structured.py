@@ -26,6 +26,7 @@ Layer: nodes — imports memory contracts, the message adapter, `typesys` and
 from __future__ import annotations
 
 from concurrent.futures import CancelledError as FutureCancelledError
+import json
 from typing import Annotated, Any, Callable, List, Literal, Optional, Union
 from uuid import uuid4
 
@@ -42,7 +43,6 @@ from pydantic import (
     create_model,
 )
 
-import yian.json_codec as json_codec
 from yian.defaults import current
 from yian.memory.contracts import (
     MemoryContext,
@@ -57,8 +57,11 @@ from yian.typesys.values import (
     Type,
     TypeCheckError,
     ValueKind,
+    parse_json_int,
     reject_deep_nesting,
+    reject_long_ints,
     reject_nonfinite,
+    rewrite_digit_limit_text,
     union_tag_fields,
 )
 
@@ -270,6 +273,18 @@ def _unwrap(obj: BaseModel, typ: Type) -> Any:
     return data["value"]
 
 
+def _reply_value(data: Any, typ: Type) -> Any:
+    """Return the value a parsed prompted reply carries for `typ`, before validation.
+
+    For a wrapped type this is the wrapper field's content when the reply has it;
+    otherwise the whole reply.
+    """
+    if _is_bare_record(typ) or type(data) is not dict:
+        return data
+    key = "items" if typ.kind.is_list() or typ.kind == ValueKind.LIST_ANY else "value"
+    return data.get(key, data)
+
+
 def _supports_native_structured(llm_config: Any) -> bool:
     """Whether the node's effective `(provider, model)` can use native structured output.
 
@@ -338,8 +353,9 @@ def generate_structured(
     - **fallback** — the provider has no native structured output: render the JSON schema into
       the prompt, invoke for free text, then `json.loads` + `schema.model_validate` it.
 
-    Either way a deviation (schema rejection, unparseable JSON, a NaN or infinity in the
-    reply) appends a corrective `HumanMessage` naming the error and retries, up to
+    Either way a deviation (schema rejection, unparseable JSON, a NaN, infinity, or int
+    over `YIAN_MAX_INT_DIGITS` digits in the reply) appends a corrective `HumanMessage` naming
+    the error, with Python's digit-limit text given as yian's, and retries, up to
     `max_retries` extra attempts (`max_retries + 1` total invocations). The last error is
     re-raised once the cap is spent. Session corrections expose only the type of a
     provider-side error; diagnostics raised once the reply surfaced stay intact. Session
@@ -460,7 +476,8 @@ def _generate_native(
             # reply surfaced is a local diagnostic of that reply (yian's check or the
             # client's parser), so it is sent in full.
             detail = (f"provider error ({type(err).__name__})"
-                      if memory_context.transcript is not None and not reply_surfaced else err)
+                      if memory_context.transcript is not None and not reply_surfaced
+                      else rewrite_digit_limit_text(str(err)))
             correction = HumanMessage(
                 content=(
                     f"Your previous output was invalid: {detail}. "
@@ -564,21 +581,6 @@ def _reject_nonfinite_carrier(response: Any) -> None:
         raise error
 
 
-def _fallback_instruction(schema: type[BaseModel]) -> str:
-    """Return the prompt text asking for a JSON reply that matches `schema`.
-
-    Args:
-        schema (`type[BaseModel]`): The pydantic model the reply must validate against.
-
-    Returns:
-        `str`: The instruction, with the model's JSON schema written in full.
-    """
-    return (
-        "Respond with ONLY a JSON object matching this JSON schema (no prose, no code "
-        f"fences):\n{json_codec.dumps(schema.model_json_schema())}"
-    )
-
-
 def _generate_fallback(
     model: Any,
     messages: list,
@@ -595,7 +597,12 @@ def _generate_fallback(
     matching the schema, parse + validate the free-text reply, capped self-correction retry.
     A wrapping ```json … ``` code fence is stripped before parsing (`_strip_code_fence`) so a
     fenced-but-valid reply doesn't burn a retry."""
-    instruction = HumanMessage(content=_fallback_instruction(schema))
+    instruction = HumanMessage(
+        content=(
+            "Respond with ONLY a JSON object matching this JSON schema (no prose, no code "
+            f"fences):\n{json.dumps(schema.model_json_schema())}"
+        )
+    )
     msgs = list(messages) + [instruction]
     pending_messages = list(messages if new_messages is None else new_messages) + [instruction]
     last_err: Optional[Exception] = None
@@ -622,7 +629,12 @@ def _generate_fallback(
             text = text_of(reply)
             check_stopped()
             record_model_text(evaluation_trace, text)
-            obj = schema.model_validate(json_codec.loads(_strip_code_fence(text)))
+            data = json.loads(_strip_code_fence(text), parse_int=parse_json_int)
+            reply_value = _reply_value(data, typ)
+            reject_deep_nesting(reply_value, "structured output")
+            # A long int is a marker here, which the schema would reject without saying why.
+            reject_long_ints(reply_value, "structured output")
+            obj = schema.model_validate(data)
             value = _unwrap(obj, typ)
             reject_deep_nesting(value, "structured output")
             reject_nonfinite(value, "structured output")
@@ -637,7 +649,8 @@ def _generate_fallback(
             last_err = err
             # As on the native path, an error raised once the reply surfaced is sent in full.
             detail = (f"provider error ({type(err).__name__})"
-                      if memory_context.transcript is not None and not reply_surfaced else err)
+                      if memory_context.transcript is not None and not reply_surfaced
+                      else rewrite_digit_limit_text(str(err)))
             correction = HumanMessage(
                 content=(
                     f"Your previous output was invalid: {detail}. Respond with ONLY a JSON "

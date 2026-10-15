@@ -86,12 +86,48 @@ depth. The first boundary that sees one rejects it and names where it sits:
 A temporary inside an expression may be infinite or complex; only a binding's final
 value is checked.
 
-An `int` computed by an expression or a node, or supplied as an input, has no size
-limit. The run log and the run's outputs record it exactly, however many digits it
-has, and `resume_flow` reads it back unchanged. An int literal in the YAML has no size
-limit either. Rendering an int as text (embedded in a string or in prompt text) writes
-all its digits; see
+## Integer size limit
+
+An `int` has at most 4300 decimal digits, Python's default int/str limit; a host can
+lower the limit with `YIAN_MAX_INT_DIGITS` (see [Defaults](defaults.md)). The sign and
+leading zeros don't count, a hex or octal literal counts the digits of its decimal
+value, and exactly 4300 digits is allowed. A longer int is not a yian value, like NaN. The message gives the digit count, never the digits:
+
+```
+input 'n': integer with 5000 digits is larger than yian allows (4300 digits)
+```
+
+The first boundary that sees one rejects it and names where it sits:
+
+- an int literal in the flow file (a value, a default, a bare `call(...)` argument, a
+  number in an expression, or an `int(lo..hi)` range end): a load error at the literal;
+- a run input: `run_flow` raises `ValueError` before the log exists, and `yian run`
+  reports it for `-i`, `--inputs`, and the interactive prompt (which asks again);
+- a binding's value or default, a value entry, a MAP `over` list, a LOOP seed, or a
+  flow output: the node fails with `binding.evaluate`;
+- a node output: the node fails with `contract.output` at the field path;
+- a model reply: a structured reply is retried under `retries:`, and tool-call
+  arguments fail the AGENT with `node.execute` before any call of that reply runs;
+- a host tool's result, which the model reads as text: the AGENT fails naming the tool
+  (`tool 'lookup' result: ...`);
+- `RunResult.backward(feedback)`: such feedback raises `ValueError` before any
+  backward attempt starts. An AGENT's backward response holding one is rejected at its
+  path (`backward response at self_feedback[1]: ...`).
+
+A temporary inside an expression may be larger: `${10 ** n > 0}` is a bool. Writing
+one as text fails like any other expression error, with the same message: embedded
+text (`"v=${10 ** n}"`), a prompt, `%`, `join`, or `render_as_json`; see
 [Expressions → Arithmetic follows Python](expressions.md#arithmetic-follows-python).
+
+yian never changes Python's own int/str digit limit. The rule holds with that limit at
+its default (4300) or off; a host that lowers it below `YIAN_MAX_INT_DIGITS` makes
+valid ints fail to convert.
+
+Changed: ints of any size used to be values. An int over 4300 digits now fails at
+the first boundary. A run log written then that holds one fails to resume or replay
+with `run-record JSON: integer with N digits is larger than yian allows (4300
+digits); a log written while yian accepted such ints can't be read`, and the log is
+left unchanged. A memory store written then that holds one may fail to open.
 
 ## Nesting limit
 

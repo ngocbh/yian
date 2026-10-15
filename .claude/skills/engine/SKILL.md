@@ -52,7 +52,7 @@ this model whenever you design anything:
   `typesys.Type` remains provenance-free while arbitrary payloads stay opaque.
 - Numeric `Type.bounds` is one optional inclusive pair on INTEGER/NUMBER; an open
   end is `None`, never both. Validate shape and values through the existing type
-  system. Integer endpoints remain arbitrary precision; NUMBER endpoints need
+  system. Integer endpoints are exact, up to `YIAN_MAX_INT_DIGITS`; NUMBER endpoints need
   finite, lossless float representation. Compatibility requires interval
   containment (through `typesys.values.numeric_interval`, an open end as
   infinite), and inline type copies, nested schemas, and labels retain the
@@ -74,11 +74,19 @@ this model whenever you design anything:
   reply self-corrects under `retries:`; with a transcript `invoke_model` rejects a
   non-finite raw reply (metadata included) before storing it and observes the
   effect `failed` instead of crashing the codec.
-- Ints of any size are values. Write and read value JSON through
-  `yian.json_codec` (run log, pool, lineage, memory, manifests, CLI) and decode
-  typed value bytes with `runtime.log.decode_typed_json`; never call
-  `sys.set_int_max_str_digits` in source. Show a long int in a message with
-  `typesys.values.value_repr`. Render values as text with `json_codec.as_text`.
+- An int longer than `YIAN_MAX_INT_DIGITS` (default 4300) digits is not a yian
+  value. `reject_nonfinite` finds one too, so every boundary above rejects it
+  (`<where>[ at <path>]: integer with N digits is larger than yian allows (4300
+  digits)`); `reject_long_ints` checks ints only. The message never holds the
+  digits. Never call `sys.set_int_max_str_digits`. Parse int text with
+  `parse_int_text` (raises `IntTooLongError`), and read JSON with
+  `parse_int=parse_json_int` where values cross a boundary, so a long token becomes
+  an `OverLimitInt` marker the following check reports. Count digits with
+  `int_digits`/`long_int_digits`, never `str()`; show a long int with `value_repr`
+  (`<int with N digits>`); pass failure text through `rewrite_digit_limit_text` so
+  Python's hint never reaches a message or the model. Temporaries inside an
+  expression are not checked; writing one as text is an `ExpressionError` with the
+  same message. `decode_record` fails a run record holding one with a clear error.
 - A yian value nests at most `YIAN_MAX_VALUE_NESTING` (default 100) levels,
   counting itself; each dict, list, tuple, model, or dataclass is a level and a
   `TypedValue` adds none. `reject_deep_nesting(value, where, *,

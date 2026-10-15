@@ -67,7 +67,7 @@ from yian.nodes.contracts import (
     PartialRecordContract,
     ValueContract,
 )
-from yian.typesys.values import ValueKind
+from yian.typesys.values import IntTooLongError, ValueKind
 from yian.compose.helpers.errors import LoadDiagnostics
 
 
@@ -195,8 +195,11 @@ def lower_flow_asserts(
         try:
             refs = [_qualify_flow_input(path) for path in condition_refs(expr)]
         except ExpressionError as exc:
+            # A long int's text would repeat every digit; the range still points at it.
+            long_int = isinstance(exc.__cause__, IntTooLongError)
+            shown = "" if long_int else f" {assertion.display!r}"
             raise diagnostics.error(
-                f"assert {assertion.display!r} is not a valid boolean expression: {exc}",
+                f"assert{shown} is not a valid boolean expression: {exc}",
                 range=rng,
             ) from exc
 
@@ -406,9 +409,11 @@ def validate_node_asserts(
             try:
                 refs = condition_refs(a)
             except ExpressionError as exc:
+                # A long int's text would repeat every digit; the range still points at it.
+                shown = "" if isinstance(exc.__cause__, IntTooLongError) else f" {a!r}"
                 errors.append(
                     (
-                        f"node {nid!r} assert {a!r}: not a valid boolean expression ({exc})",
+                        f"node {nid!r} assert{shown}: not a valid boolean expression ({exc})",
                         error_range,
                     )
                 )

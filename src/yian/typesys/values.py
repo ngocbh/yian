@@ -14,22 +14,23 @@ yet exposed to flow authors (so adding real file handling later is additive,
 not a schema migration).
 
 This module's only package-internal dependencies are the stdlib-only date/datetime
-grammar in `yian.typesys.temporal` and the stdlib-only `yian.json_codec` and
-`yian.defaults`; otherwise it is the leaf.
+grammar in `yian.typesys.temporal` and the stdlib-only `yian.defaults`; otherwise it is
+the leaf.
 """
 
 import json
 import re
-from collections.abc import Iterable, Iterator
+import sys
+import unicodedata
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, is_dataclass, replace
 from dataclasses import fields as _dataclass_fields
 from enum import Enum
-from math import inf, isfinite
+from math import inf, isfinite, log10
 from typing import Annotated, Any, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
-import yian.json_codec as json_codec
 from yian.defaults import current
 from yian.typesys.temporal import parse_date, parse_datetime
 
@@ -67,20 +68,29 @@ class TypeCheckError(ValueError):
 
 
 def value_repr(value: Any) -> str:
-    """Return `repr(value)`, or a placeholder naming its type when it can't be rendered.
+    """Return `repr(value)`, or a placeholder when it can't be rendered.
 
     Args:
         value (`Any`):
             The value to show in a message.
 
     Returns:
-        `str`: ``repr(value)``, ``<{type} too large to display>``, or ``<{type} object>``
+        `str`: ``<int with N digits>`` for an int longer than `YIAN_MAX_INT_DIGITS`, or
+            ``<{type} holding an int with N digits>`` for a value holding one,
+            whatever Python's own digit limit; else ``repr(value)``,
+            ``<{type} too large to display>`` when that fails, or ``<{type} object>``
             when the value's own repr raises.
     """
     try:
+        digits = long_int_digits(value)
+        if digits is not None:
+            if isinstance(value, (int, OverLimitInt)):
+                return f"<int with {digits} digits>"
+            return f"<{type(value).__name__} holding an int with {digits} digits>"
         return repr(value)
     except ValueError:
-        # repr of an int past Python's str-digit limit raises, at any nesting depth.
+        # repr of an int past Python's str-digit limit raises, also inside a container
+        # the walk doesn't enter, such as a set.
         return f"<{type(value).__name__} too large to display>"
     except Exception:
         # A returned value's repr is user code; a broken one must not crash the run.
@@ -88,13 +98,15 @@ def value_repr(value: Any) -> str:
 
 
 def reject_nonfinite(value: Any, where: str) -> None:
-    """Raise if a value contains a number that is not a yian value: NaN, infinity, or complex.
+    """Raise if a value holds a NaN, infinity, complex, or int longer than `YIAN_MAX_INT_DIGITS`.
 
+    An `OverLimitInt` counts as the long int it stands for; a bool never counts.
     Walks `dict` values, `list`/`tuple` items, `TypedValue` payloads, pydantic
     models, and dataclass instances, depth-first and in order. It walks declared
-    fields and extras only; a non-str key renders as its repr, or a
-    ``<type too large to display>`` placeholder. A container
-    already on the current path is skipped; the canonical codecs reject cycles.
+    fields and extras only; a non-str key renders as its repr or a `value_repr`
+    placeholder, and an int key longer than the limit is reported at its mapping's
+    path. A container already on the current path is skipped; the canonical codecs
+    reject cycles.
 
     Args:
         value (`Any`):
@@ -105,28 +117,93 @@ def reject_nonfinite(value: Any, where: str) -> None:
     Raises:
         `TypeCheckError`:
             Such a number was found; ``path`` locates it and the message reads
-            ``<where>[ at <path>]: non-finite number <repr> is not a yian value``, or
-            ``... complex number <repr> ...`` for a complex.
+            ``<where>[ at <path>]: non-finite number <repr> is not a yian value``,
+            ``... complex number <repr> ...`` for a complex, or ``<where>[ at <path>]:
+            integer with N digits is larger than yian allows (4300 digits)``.
     """
-    found = _find_nonfinite(value, (), set())
+    found = _find_rejected_number(value, (), set(), _int_bound(), ints_only=False)
+    _raise_rejected_number(found, where)
+
+
+def reject_long_ints(value: Any, where: str) -> None:
+    """Raise if a value contains an int with more than `YIAN_MAX_INT_DIGITS` digits.
+
+    Walks what `reject_nonfinite` walks but checks only ints and `OverLimitInt`
+    markers, so a NaN, infinity, or complex passes.
+
+    Args:
+        value (`Any`):
+            The value to check.
+        where (`str`):
+            Names the boundary for the message, e.g. ``"feedback"``.
+
+    Raises:
+        `TypeCheckError`:
+            A long int was found; ``path`` locates it and the message reads
+            ``<where>[ at <path>]: integer with N digits is larger than yian
+            allows (4300 digits)``.
+    """
+    found = _find_rejected_number(value, (), set(), _int_bound(), ints_only=True)
+    _raise_rejected_number(found, where)
+
+
+def _raise_rejected_number(
+    found: tuple[tuple[str | int, ...], "float | complex | OverLimitInt"] | None, where: str
+) -> None:
+    """Raise the located error for a number `_find_rejected_number` found, if any."""
     if found is None:
         return
     path, number = found
     location = f"{where} at {_render_value_path(path)}" if path else where
+    if isinstance(number, OverLimitInt):
+        raise TypeCheckError(f"{location}: {long_int_message(number.digits)}", path=path)
     label = "complex number" if isinstance(number, complex) else "non-finite number"
     raise TypeCheckError(f"{location}: {label} {number!r} is not a yian value", path=path)
 
 
-def _find_nonfinite(
+def long_int_digits(value: Any) -> int | None:
+    """Return the digit count of the first int longer than `YIAN_MAX_INT_DIGITS` in a value.
+
+    Walks what `reject_nonfinite` walks; an `OverLimitInt` counts as its int and a
+    bool never counts.
+
+    Args:
+        value (`Any`):
+            The value to search.
+
+    Returns:
+        `int | None`: The first long int's decimal digit count, or `None` if
+            there is none.
+    """
+    found = _find_rejected_number(value, (), set(), _int_bound(), ints_only=True)
+    return None if found is None else found[1].digits
+
+
+def _find_rejected_number(
     value: Any,
     path: tuple[str | int, ...],
     active: set[int],
-) -> tuple[tuple[str | int, ...], float | complex] | None:
-    """Return the path to and value of the first NaN, infinity, or complex, or `None`."""
-    if isinstance(value, float):
-        return None if isfinite(value) else (path, value)
-    if isinstance(value, complex):
+    bound: int,
+    *,
+    ints_only: bool,
+) -> tuple[tuple[str | int, ...], "float | complex | OverLimitInt"] | None:
+    """Return the path to and value of the first number that is not a yian value.
+
+    A long int is returned as an `OverLimitInt` carrying its digit count. With
+    ``ints_only`` set, NaN, infinity, and complex are not looked for.
+    """
+    if isinstance(value, int):
+        # A bool falls inside the bound.
+        if -bound < value < bound:
+            return None
+        return (path, OverLimitInt(int_digits(value)))
+    if isinstance(value, OverLimitInt):
         return (path, value)
+    if not ints_only:
+        if isinstance(value, float):
+            return None if isfinite(value) else (path, value)
+        if isinstance(value, complex):
+            return (path, value)
     if id(value) in active:
         return None
     # `TypedValue` subclasses `BaseModel`; unwrap it first so paths gain no `value` segment.
@@ -136,11 +213,7 @@ def _find_nonfinite(
         children = [(getattr(value, name), path + (name,)) for name in type(value).model_fields]
         children.append((value.model_extra or {}, path))
     elif isinstance(value, dict):
-        # `TypeCheckError` paths hold exact `str` segments, so a `str` subclass key is unwrapped.
-        children = [
-            (item, path + (str.__str__(key) if isinstance(key, str) else value_repr(key),))
-            for key, item in value.items()
-        ]
+        children = _dict_children(value, path, bound)
     elif isinstance(value, (list, tuple)):
         children = [(item, path + (index,)) for index, item in enumerate(value)]
     elif is_dataclass(value) and not isinstance(value, type):
@@ -153,12 +226,28 @@ def _find_nonfinite(
     active.add(id(value))
     try:
         for child, child_path in children:
-            found = _find_nonfinite(child, child_path, active)
+            found = _find_rejected_number(child, child_path, active, bound, ints_only=ints_only)
             if found is not None:
                 return found
         return None
     finally:
         active.discard(id(value))
+
+
+def _dict_children(
+    value: dict, path: tuple[str | int, ...], bound: int
+) -> Iterator[tuple[Any, tuple[str | int, ...]]]:
+    """Yield a mapping's values with their paths.
+
+    An int key longer than `YIAN_MAX_INT_DIGITS` yields an `OverLimitInt` at the mapping's
+    path instead, since a path segment would have to render it.
+    """
+    for key, item in value.items():
+        if isinstance(key, int) and not -bound < key < bound:
+            yield OverLimitInt(int_digits(key)), path
+            continue
+        # `TypeCheckError` paths hold exact `str` segments, so a `str` subclass key is unwrapped.
+        yield item, path + (str.__str__(key) if isinstance(key, str) else value_repr(key),)
 
 
 def _render_value_path(path: tuple[str | int, ...]) -> str:
@@ -172,6 +261,258 @@ def _render_value_path(path: tuple[str | int, ...]) -> str:
         else:
             parts.append(f"[{segment!r}]")
     return "".join(parts)
+
+
+def _int_bound() -> int:
+    """Return the smallest int with more digits than `YIAN_MAX_INT_DIGITS` allows.
+
+    Comparing against it is cheap, so the value walks test every int without
+    counting its digits.
+    """
+    digits = current().max_int_digits
+    bound = _INT_BOUNDS.get(digits)
+    if bound is None:
+        bound = _INT_BOUNDS[digits] = 10**digits
+    return bound
+
+
+_INT_BOUNDS: dict[int, int] = {}
+
+_LOG10_2 = log10(2)
+
+
+def int_digits(n: int) -> int:
+    """Return the number of decimal digits in an int, without its sign.
+
+    Counts from ``bit_length()`` rather than ``str()``, which fails past Python's
+    digit limit.
+
+    Args:
+        n (`int`):
+            The int to measure; 0 has one digit.
+
+    Returns:
+        `int`: The decimal digit count.
+    """
+    n = abs(n)
+    bits = n.bit_length()
+    if bits <= 3:
+        return 1
+    # 2**(bits-1) <= n, so n has at least this many digits; the small margin keeps
+    # float rounding from overestimating, and the loop below corrects upward.
+    digits = int((bits - 1) * _LOG10_2 - 1e-6) + 1
+    power = 10**digits
+    while n >= power:
+        digits += 1
+        power *= 10
+    return digits
+
+
+def long_int_message(digits: int) -> str:
+    """Return the message for an int with `digits` digits, past `YIAN_MAX_INT_DIGITS`.
+
+    Args:
+        digits (`int`):
+            The int's decimal digit count.
+
+    Returns:
+        `str`: ``integer with N digits is larger than yian allows (4300 digits)``.
+    """
+    limit = current().max_int_digits
+    return f"integer with {digits} digits is larger than yian allows ({limit} digits)"
+
+
+class IntTooLongError(ValueError):
+    """Text spells an int with more than `YIAN_MAX_INT_DIGITS` digits.
+
+    Args:
+        digits (`int`):
+            The int's significant decimal digit count, kept as ``digits``.
+    """
+
+    def __init__(self, digits: int) -> None:
+        """Build the long-int message for `digits` digits."""
+        super().__init__(long_int_message(digits))
+        self.digits = digits
+
+
+class OverLimitInt:
+    """Stands for an int with more than `YIAN_MAX_INT_DIGITS` digits that was never built.
+
+    A plain class rather than a dataclass or model, so value walks treat it as a leaf.
+
+    Args:
+        digits (`int`):
+            The int's decimal digit count, kept as ``digits``.
+    """
+
+    __slots__ = ("digits",)
+
+    def __init__(self, digits: int) -> None:
+        """Record the digit count."""
+        self.digits = digits
+
+    def __repr__(self) -> str:
+        """Show the digit count, never digits."""
+        return f"<int with {self.digits} digits>"
+
+
+_INT_TEXT = re.compile(r"([+-]?)(\d(?:_?\d)*)")
+
+
+def parse_int_text(text: str) -> int:
+    """Parse text as `int()` does, rejecting an int with more than `YIAN_MAX_INT_DIGITS` digits.
+
+    Accepts surrounding whitespace, a sign, ``_`` separators, and leading zeros;
+    zeros and separators don't count as digits. The limit holds whatever
+    Python's own int/str limit is set to.
+
+    Args:
+        text (`str`):
+            The text to parse.
+
+    Returns:
+        `int`: The parsed int.
+
+    Raises:
+        `IntTooLongError`: The int has more than `YIAN_MAX_INT_DIGITS` significant digits.
+        `ValueError`: The text is not an int literal; `int()`'s own error.
+    """
+    match = _INT_TEXT.fullmatch(text.strip())
+    if match is None:
+        return int(text)
+    sign, body = match.groups()
+    significant = body.replace("_", "")
+    # int() reads any Unicode decimal digit, so a leading zero may be any script's zero.
+    leading = 0
+    while leading < len(significant) and unicodedata.decimal(significant[leading], None) == 0:
+        leading += 1
+    significant = significant[leading:]
+    if len(significant) > current().max_int_digits:
+        raise IntTooLongError(len(significant))
+    # Leading zeros are dropped first, since Python's own limit counts them.
+    return int(sign + (significant or "0"))
+
+
+def parse_json_int(text: str) -> int | OverLimitInt:
+    """Parse a JSON int token, standing in an `OverLimitInt` for one past `YIAN_MAX_INT_DIGITS`.
+
+    Meant as ``json.loads(..., parse_int=parse_json_int)``; a JSON int token has
+    no leading zeros, so its length less any sign is its digit count.
+
+    Args:
+        text (`str`):
+            The JSON int token, ``-?digits``.
+
+    Returns:
+        `int | OverLimitInt`: The int, or a marker carrying its digit count.
+    """
+    digits = len(text) - text.startswith("-")
+    if digits > current().max_int_digits:
+        return OverLimitInt(digits)
+    return int(text)
+
+
+_DIGIT_LIMIT_TEXT = re.compile(
+    r"Exceeds the limit \(\d+(?: digits)?\) for integer string conversion"
+    r"(?:: value has (\d+) digits)?; use sys\.set_int_max_str_digits\(\) to increase the limit"
+    # The compiler adds this to a source literal's error.
+    r"(?: - Consider hexadecimal for huge integer literals to avoid decimal conversion limits\.)?"
+)
+
+
+def rewrite_digit_limit_text(text: str) -> str:
+    """Replace Python's int/str digit-limit message inside an error text with yian's.
+
+    Args:
+        text (`str`):
+            An error text that may hold Python's message.
+
+    Returns:
+        `str`: The text with Python's message replaced by `long_int_message` when it
+            gives a digit count, else by ``integer longer than yian allows (4300
+            digits)``; other text is unchanged.
+    """
+
+    def replacement(match: re.Match[str]) -> str:
+        if match.group(1) is not None:
+            return long_int_message(int(match.group(1)))
+        return f"integer longer than yian allows ({current().max_int_digits} digits)"
+
+    return _DIGIT_LIMIT_TEXT.sub(replacement, text)
+
+
+# Part of Python's error when an int is too long for its own int/str digit limit.
+_PYTHON_DIGIT_LIMIT_TEXT = "for integer string conversion"
+
+
+def is_digit_limit_error(exc: BaseException) -> bool:
+    """Return whether `exc` is Python's int/str digit-limit error.
+
+    Args:
+        exc (`BaseException`):
+            The error to classify.
+
+    Returns:
+        `bool`: `True` for the `ValueError` Python raises converting an int past its
+            own digit limit, in either direction.
+    """
+    return isinstance(exc, ValueError) and _PYTHON_DIGIT_LIMIT_TEXT in str(exc)
+
+
+def python_refuses_long_ints() -> bool:
+    """Whether Python's own digit limit refuses to write every int over `YIAN_MAX_INT_DIGITS`.
+
+    When it does, converting such an int raises, so a value needs no walk for long
+    ints before it is converted.
+
+    Returns:
+        `bool`: `True` if Python's limit is on and at most `YIAN_MAX_INT_DIGITS`.
+    """
+    get_limit = getattr(sys, "get_int_max_str_digits", None)
+    limit = get_limit() if get_limit is not None else 0
+    return 0 < limit <= current().max_int_digits
+
+
+def write_as_text(convert: Callable[[Any], str], value: Any) -> str:
+    """Convert a value to text, failing on an int too long to write.
+
+    Args:
+        convert (`Callable[[Any], str]`):
+            The conversion, such as `str`.
+        value (`Any`):
+            The value to convert.
+
+    Returns:
+        `str`: `convert(value)`.
+
+    Raises:
+        `ValueError`:
+            With `long_int_message` if the value holds an int over `YIAN_MAX_INT_DIGITS`,
+            or a message naming Python's digit limit if a host lowered that limit
+            below `YIAN_MAX_INT_DIGITS` and the value holds an int past it. Neither
+            message shows the digits or Python's hint.
+    """
+    if not python_refuses_long_ints():
+        _reject_long_int(value)
+    try:
+        return convert(value)
+    except ValueError as exc:
+        if not is_digit_limit_error(exc):
+            raise
+        # The walk tells an int over yian's limit from one only a lowered Python limit refuses.
+        _reject_long_int(value)
+        raise ValueError(
+            f"cannot render the {type(value).__name__} value as text: "
+            "it holds an int longer than Python's digit limit"
+        ) from exc
+
+
+def _reject_long_int(value: Any) -> None:
+    """Raise `ValueError` with `long_int_message` if `value` holds an int over `YIAN_MAX_INT_DIGITS`."""
+    digits = long_int_digits(value)
+    if digits is not None:
+        raise ValueError(long_int_message(digits))
 
 
 def reject_deep_nesting(value: Any, where: str, *, enclosing_levels: int = 0) -> None:
@@ -934,7 +1275,7 @@ def _canonical_nonnullable_label(typ: Type) -> tuple[str, str]:
     if typ.bounds is not None:
         _validate_numeric_bounds(typ.kind, typ.bounds)
         # An open end renders empty in the label (`int(0..)`) and as null in the key.
-        key_ends = [json_codec.dumps(value, allow_nan=False) for value in typ.bounds]
+        key_ends = [json.dumps(value, allow_nan=False) for value in typ.bounds]
         label_ends = ["" if value is None else end for value, end in zip(typ.bounds, key_ends)]
         return (
             f"{typ.kind.value}({'..'.join(label_ends)})",
@@ -1734,8 +2075,7 @@ def _build_for_type(
         if _scalar_matches(typ.kind, value) and not low <= value <= high:
             kind = typ.kind.value
             if None not in typ.bounds:
-                low_text, high_text = (value_repr(end) for end in typ.bounds)
-                message = f"is outside inclusive {kind} bounds ({low_text}, {high_text})"
+                message = f"is outside inclusive {kind} bounds {typ.bounds!r}"
             elif value < low:
                 message = f"is below the inclusive {kind} minimum {value_repr(low)}"
             elif value > high:

@@ -21,7 +21,7 @@ from yian.nodes.contracts import (
     ValuePath,
 )
 from yian.typesys import TypeCheckError, Type, type_for
-from yian.typesys.values import ValueKind, value_repr
+from yian.typesys.values import ValueKind
 from yian.typesys.types import BUILTIN_TYPE_NAMES, TypeRegistry, encodes_as_utf8
 
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
@@ -147,7 +147,7 @@ def _read_type_and_sites(
             item_cursor = cursor.child(index) if cursor is not None else None
             if not (isinstance(element, dict) and len(element) == 1):
                 raise diagnostics.error(
-                    f"a list of fields must hold single-key maps, got {value_repr(element)}",
+                    f"a list of fields must hold single-key maps, got {element!r}",
                     range=(item_cursor.range if item_cursor is not None else None),
                 )
             key, value = next(iter(element.items()))
@@ -165,7 +165,7 @@ def _read_type_and_sites(
         )
 
     raise diagnostics.error(
-        f"cannot read type from {value_repr(node)} (type {type(node).__name__})",
+        f"cannot read type from {node!r} (type {type(node).__name__})",
         range=(cursor.range if cursor is not None else None),
     )
 
@@ -521,13 +521,12 @@ def _example_default(value: Any) -> tuple[str, str]:
 
     Returns:
         `tuple[str, str]`: The tag's type and the default written after it: the
-            value itself when it is text or a scalar (an int too long to write as
-            text shows as a placeholder), else `int` and `30`.
+            value itself when it is text or a scalar, else `int` and `30`.
     """
     if isinstance(value, bool):
         return "bool", "true" if value else "false"
     if isinstance(value, int):
-        return "int", value_repr(value)
+        return "int", str(value)
     if isinstance(value, float):
         return "float", repr(value)
     if isinstance(value, str) and value.strip():

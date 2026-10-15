@@ -40,7 +40,12 @@ from yian.memory import (
 from yian.memory.summary import admissions
 from yian.nodes.agent.interrupts import ReplyInterrupted
 from yian.nodes.base import _CapabilityFault, _HostStop
-from yian.typesys.values import reject_nonfinite
+from yian.typesys.values import (
+    long_int_digits,
+    long_int_message,
+    reject_nonfinite,
+    write_as_text,
+)
 
 MESSAGE_FORMAT = "yian.langchain-message.v1"
 HISTORY_PROJECTION = "yian.api-history.v2"
@@ -743,6 +748,29 @@ def _record_failure(turn, ordinal, operation, primary, *, interrupted):
 SKIPPED_TOOL_RESULT = "Not run: interrupted by the user."
 
 
+def _tool_text(name: str, result: Any) -> str:
+    """Return a tool result as the text the model reads.
+
+    Args:
+        name (`str`): The tool's name, for the message.
+        result (`Any`): What the tool returned.
+
+    Returns:
+        `str`: ``str(result)``.
+
+    Raises:
+        `ValueError`: The result holds an int with more than `YIAN_MAX_INT_DIGITS` digits,
+            named with the tool, whatever Python's own digit limit is.
+    """
+    try:
+        return write_as_text(str, result)
+    except ValueError as exc:
+        digits = long_int_digits(result)
+        if digits is None:
+            raise
+        raise ValueError(f"tool {name!r} result: {long_int_message(digits)}") from exc
+
+
 def _tool_payload(name, arguments, model_exchange_id, call_index, tool_call_id):
     """Build the request payload shared by run and skipped tool effects."""
     return {
@@ -853,7 +881,7 @@ def invoke_tool_effect(
     if turn is None:
         result = invoke()
         check_stopped()
-        return ToolMessage(content=str(result), tool_call_id=tool_call_id)
+        return ToolMessage(content=_tool_text(name, result), tool_call_id=tool_call_id)
     with _memory_boundary():
         ordinal = turn.request(
             "tool",
@@ -865,7 +893,7 @@ def invoke_tool_effect(
         _observe_failure(turn, ordinal, "tool", primary, check_stopped)
         raise
     try:
-        text = str(result)
+        text = _tool_text(name, result)
         with _memory_boundary():
             message = ToolMessage(content=text, tool_call_id=tool_call_id)
             item = encode_message(message, model_exchange_id)

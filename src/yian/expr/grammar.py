@@ -71,6 +71,7 @@ from lark.exceptions import LarkError
 # the base of `expressions.RequiredError`, so parse failures here stay in one family.
 from yian.expr.expressions import ISINSTANCE, ExpressionError
 from yian.defaults import current
+from yian.typesys.values import IntTooLongError, parse_int_text
 
 # The unified grammar. Precedence, lowest to highest:
 #   coalesce (`|`) -> default/required (`:-`/`:?`) -> or -> and -> not
@@ -317,6 +318,39 @@ def reject_nested_spans(text: str, *, in_span: bool = False) -> None:
     raise ExpressionError(message)
 
 
+def _reject_long_int_literals(tree: Tree | Token) -> None:
+    """Raise if a parsed expression holds an int literal with more than `YIAN_MAX_INT_DIGITS` digits.
+
+    Leading zeros don't count. The walk is iterative, like `_reject_deep_expression`.
+
+    Args:
+        tree (`Tree | Token`):
+            A parse from `_PARSER`.
+
+    Raises:
+        `ExpressionError`:
+            If a `NUMBER` token without a `.` has more than `YIAN_MAX_INT_DIGITS` significant
+            digits, raised from the `IntTooLongError`; the message gives the digit
+            count, never the digits.
+    """
+    stack: list[Tree | Token] = [tree]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, Tree):
+            stack.extend(node.children)
+        # A token no longer than the limit can't be over it, so skip the parse.
+        elif (
+            isinstance(node, Token)
+            and node.type == "NUMBER"
+            and len(node) > current().max_int_digits
+            and "." not in node
+        ):
+            try:
+                parse_int_text(str(node))
+            except IntTooLongError as exc:
+                raise ExpressionError(str(exc)) from exc
+
+
 def _reject_deep_expression(tree: Tree | Token) -> None:
     """Raise if a parsed expression nests deeper than the value nesting limit.
 
@@ -510,8 +544,9 @@ def parse_expr(text: str) -> Tree | Token:
     Raises:
         `ExpressionError`:
             If `text` holds a `${...}` (see `reject_nested_spans`), does not parse,
-            nests deeper than `current().max_value_nesting` levels, is a dotted-callee
-            builtin call, uses a reserved operator word as a reference root, calls
+            nests deeper than `current().max_value_nesting` levels, holds an int literal
+            with more than `current().max_int_digits` digits, is a dotted-callee builtin
+            call, uses a reserved operator word as a reference root, calls
             `isinstance` with anything but a value and a bare type name, or repeats a
             keyword argument.
     """
@@ -522,6 +557,7 @@ def parse_expr(text: str) -> Tree | Token:
         raise ExpressionError(f"could not parse expression {text!r}: {exc}") from exc
     # First, so no later walk meets a tree deep enough to overflow it.
     _reject_deep_expression(tree)
+    _reject_long_int_literals(tree)
     _reject_dotted_callee(tree)
     # Before the reserved-root check, so `isinstance(x, in)` reports the type-name rule.
     _validate_isinstance(tree)

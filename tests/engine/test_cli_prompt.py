@@ -365,7 +365,7 @@ def _record_list_type() -> Type:
     ],
 )
 def test_parse_structured_input_returns_native_arrays_and_objects(raw, typ, expected):
-    assert _parse_structured_input(raw, typ) == expected
+    assert _parse_structured_input(raw, typ, "x") == expected
 
 
 @pytest.mark.parametrize(
@@ -392,7 +392,7 @@ def test_parse_structured_input_returns_native_arrays_and_objects(raw, typ, expe
 )
 def test_parse_structured_input_reports_concise_value_failures(raw, typ, message):
     with pytest.raises(ValueError) as captured:
-        _parse_structured_input(raw, typ)
+        _parse_structured_input(raw, typ, "x")
 
     assert str(captured.value) == message
 
@@ -401,7 +401,7 @@ def test_parse_structured_input_rejects_null_at_nullable_structural_root():
     typ = Type(kind=ValueKind.LIST_ANY, nullable=True)
 
     with pytest.raises(ValueError) as captured:
-        _parse_structured_input("null", typ)
+        _parse_structured_input("null", typ, "x")
 
     assert str(captured.value) == "Expected a JSON array"
 
@@ -412,13 +412,13 @@ def test_parse_structured_input_accepts_null_inside_nullable_element():
         element=Type(kind=ValueKind.INTEGER, nullable=True),
     )
 
-    assert _parse_structured_input("[null, 3]", typ) == [None, 3]
+    assert _parse_structured_input("[null, 3]", typ, "x") == [None, 3]
 
 
 def test_parse_structured_input_keeps_flat_list_any_behavior():
     raw = '[1, "two", null, {"ok": true}, [3]]'
 
-    assert _parse_structured_input(raw, Type.scalar(ValueKind.LIST_ANY)) == [
+    assert _parse_structured_input(raw, Type.scalar(ValueKind.LIST_ANY), "x") == [
         1,
         "two",
         None,
@@ -431,6 +431,7 @@ def test_parse_structured_input_keeps_json_loads_nonfinite_number_behavior():
     parsed = _parse_structured_input(
         "[NaN, Infinity, -Infinity]",
         Type.scalar(ValueKind.LIST_NUMBER),
+        "x",
     )
 
     assert math.isnan(parsed[0])
@@ -446,7 +447,7 @@ def test_parse_structured_input_does_not_hide_validator_faults(monkeypatch):
     monkeypatch.setattr(climod, "build_value_as", fail)
 
     with pytest.raises(RuntimeError) as captured:
-        _parse_structured_input("[]", Type.scalar(ValueKind.LIST_ANY))
+        _parse_structured_input("[]", Type.scalar(ValueKind.LIST_ANY), "x")
 
     assert captured.value is fault
 

@@ -65,7 +65,6 @@ from yian.compose.loader import load_flow
 from yian.compose.skills import default_skill_roots, load_skills
 from yian.defaults import current
 from yian.diagnostics import Diagnostic
-import yian.json_codec as json_codec
 from yian.memory.contracts import MemoryOperationError
 from yian.run import (
     RunResult,
@@ -85,7 +84,13 @@ from yian.typesys import (
     canonical_type_label,
 )
 from yian.typesys.seeding import default_run_id
-from yian.typesys.values import ValueKind
+from yian.typesys.values import (
+    OverLimitInt,
+    ValueKind,
+    parse_json_int,
+    reject_deep_nesting,
+    reject_long_ints,
+)
 
 console = Console()
 err_console = Console(stderr=True)
@@ -365,7 +370,7 @@ class _ProgressReporter:
 
     def _emit_output(self, output: Any) -> None:
         """Print a node's produced value, indented under its check (verbose only)."""
-        body = output if isinstance(output, str) else repr(json_codec.displayable(output))
+        body = output if isinstance(output, str) else repr(output)
         for line in body.splitlines() or [""]:
             self._emit(Text(f"    {line}", style="dim"))
 
@@ -627,7 +632,9 @@ def _read_inputs_json(path: Path) -> Dict[str, Any]:
 
     Returns:
         `Dict[str, Any]`:
-            The decoded object, keyed by input name.
+            The decoded object, keyed by input name. An int token with more than
+            `YIAN_MAX_INT_DIGITS` digits decodes to an `OverLimitInt`, which the run
+            rejects with its path.
 
     Raises:
         `typer.BadParameter`:
@@ -639,7 +646,7 @@ def _read_inputs_json(path: Path) -> Dict[str, Any]:
     except UnicodeDecodeError:
         raise typer.BadParameter("is not UTF-8 text", param_hint="--inputs") from None
     try:
-        parsed = json_codec.loads(text)
+        parsed = json.loads(text, parse_int=parse_json_int)
     except json.JSONDecodeError as exc:
         raise typer.BadParameter(
             f"invalid JSON at line {exc.lineno}, column {exc.colno}: {exc.msg}",
@@ -658,6 +665,7 @@ _JSON_TYPE_NAMES: Dict[type, str] = {
     list: "array",
     str: "string",
     int: "number",
+    OverLimitInt: "number",
     float: "number",
     bool: "boolean",
     type(None): "null",
@@ -741,6 +749,7 @@ class _StructuredInputError(ValueError):
 def _parse_structured_input(
     raw: str,
     typ: Type,
+    name: str,
 ) -> list[Any] | dict[str, Any]:
     """Parse and recursively validate one list/object prompt answer.
 
@@ -753,21 +762,28 @@ def _parse_structured_input(
     Args:
         raw (`str`): Raw text returned by the interactive widget.
         typ (`Type`): Resolved list or object contract for the declared input.
+        name (`str`): The declared input's name, for messages.
 
     Returns:
         `list[Any] | dict[str, Any]`: The native JSON array or object.
 
     Raises:
-        `_StructuredInputError`: JSON syntax, root shape, or recursive contract
+        `_StructuredInputError`: JSON syntax, a value nesting too deep or holding an
+            int past `YIAN_MAX_INT_DIGITS` digits, root shape, or recursive contract
             rejection. This remains a ``ValueError`` for direct callers.
         `TypeError`: ``typ`` is not a list or object contract.
     """
     try:
-        parsed = json_codec.loads(raw)
+        parsed = json.loads(raw, parse_int=parse_json_int)
     except json.JSONDecodeError as exc:
         raise _StructuredInputError(
             f"Invalid JSON at line {exc.lineno}, column {exc.colno}: {exc.msg}"
         ) from None
+    try:
+        reject_deep_nesting(parsed, f"input {name!r}")
+        reject_long_ints(parsed, f"input {name!r}")
+    except TypeCheckError as exc:
+        raise _StructuredInputError(str(exc)) from None
 
     if typ.kind.is_list():
         if not isinstance(parsed, list):
@@ -871,7 +887,7 @@ def _prompt_open_value(
             if not decl.required and raw.strip() == "":
                 return True
             try:
-                _parse_structured_input(raw, typ)
+                _parse_structured_input(raw, typ, decl.name)
             except _StructuredInputError as exc:
                 return str(exc)
             return True
@@ -888,7 +904,7 @@ def _prompt_open_value(
             return None
         if value.strip() == "" and not decl.required:
             return _OMIT_INPUT
-        return _parse_structured_input(value, typ)
+        return _parse_structured_input(value, typ, decl.name)
 
     value = questionary.text(label, default="", qmark="?", style=style).ask()
     if (
@@ -1882,7 +1898,7 @@ def run(
         if isinstance(out, str) and out.strip():
             console.print(Markdown(out))
         else:
-            console.print(json_codec.displayable(out))
+            console.print(out)
     else:
         # The loaded front end projects authored origins to source frames; failures
         # without presentable origins retain their semantic message.

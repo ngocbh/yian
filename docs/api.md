@@ -127,8 +127,11 @@ one raises `ValueError` naming the input and path, before the log is created (se
 → Nesting limit](typing.md#nesting-limit)). A non-finite value in an `llm_config`
 provider block, such as `{"openai": {"temperature": float("nan")}}`, is rejected too: in
 a flow file it is a load error, and in the host `llm_config` it raises `ValueError`
-before the run starts when an AGENT uses it. An int of any size is a value: the log
-records every digit, and `resume_flow` reads it back exact. A node assertion, CASE
+before the run starts when an AGENT uses it. An int longer than 4300 digits
+(`YIAN_MAX_INT_DIGITS`) is not a yian value either: an `inputs` value holding one raises
+`ValueError` before the log is created (`input 'n': integer with 5000 digits is larger
+than yian allows (4300 digits)`; see [Types → Integer size
+limit](typing.md#integer-size-limit)). A node assertion, CASE
 `when`, or LOOP `while`/`until` set in Python whose expression doesn't parse (or calls
 an unknown function or a builtin with the wrong arguments) raises `ExpressionError` (a
 `ValueError`) naming the node and the field (assertion list and assertion, case handle,
@@ -467,8 +470,10 @@ run accepts only a string or `None`, because it has no usable output shape.
 Invalid feedback is rejected before a new attempt or memory session opens, and
 preserves this result's previously observed outcome and learning objects. A message
 that is not a string, object, list, or `None`, or an object key that is not a string,
-raises `TypeError`; feedback that does not match the output's shape, or nests deeper
-than 100 levels, raises `ValueError`.
+raises `TypeError`, except an int longer than 4300 digits, which raises `ValueError`
+naming where it sits (`feedback at note: integer with 5000 digits is larger than yian
+allows (4300 digits)`); feedback that does not match the output's shape, or nests
+deeper than 100 levels, raises `ValueError`.
 
 This complete example needs no model or memory backend:
 
@@ -1327,6 +1332,10 @@ but this run started with 5000; set YIAN_MAX_TOTAL_NODES=5000 to resume it`, or
 that recorded an entry this version doesn't know can't be resumed by it. A log
 another writer still holds raises `BlockingIOError` naming the path; a damaged
 record raises `ValueError` naming the path, its 1-based line, and the expected seq.
+A log holding an int longer than 4300 digits is rejected the same way and left
+unchanged; the message ends with `run-record JSON: integer with N digits is larger
+than yian allows (4300 digits); a log written while yian accepted such ints can't be
+read`.
 It reconstructs the typed pool,
 dynamic expansions, original input, run identity, diagnostics, and snapshotted LLM
 configuration without reading the current LLM defaults. A run started before the

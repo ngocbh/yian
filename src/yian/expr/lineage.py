@@ -13,7 +13,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Literal, TypeAlias
 
-import yian.json_codec as json_codec
+from yian.typesys.values import long_int_digits, python_refuses_long_ints
 
 FeedbackValue: TypeAlias = (
     str | dict[str, "FeedbackValue"] | list["FeedbackValue"] | None
@@ -96,12 +96,8 @@ class ValueRoute:
             `ValueRoute`: A literal snapshot with no upstream feedback route.
         """
         if _uses_only_json_builtins(value):
-            try:
-                encoded = json_codec.dumps(value, ensure_ascii=False, allow_nan=False)
-                encoded.encode("utf-8")
-            except (ValueError, RecursionError):
-                pass
-            else:
+            encoded = _snapshot_json(value)
+            if encoded is not None:
                 return cls("literal", value_json=encoded, expression=encoded)
         return _capture_literal(value, set())
 
@@ -210,7 +206,7 @@ class RouteContext:
         Partial container structure remains in `snapshot`. Source contexts keep
         the exact accepted value reference in `sources` instead of a JSON copy.
         """
-        return json_codec.loads(self.result_json) if self.result_json is not None else None
+        return json.loads(self.result_json) if self.result_json is not None else None
 
 
 @dataclass(frozen=True)
@@ -291,6 +287,22 @@ def _uses_only_json_builtins(value: Any) -> bool:
     return True
 
 
+def _snapshot_json(value: Any) -> str | None:
+    """Return a literal snapshot's JSON text, or `None` when the value has no JSON snapshot.
+
+    An int over the digit limit has none, whatever Python's own digit limit is.
+    """
+    try:
+        # Unless Python's limit makes json.dumps raise for such an int, look for one first.
+        if not python_refuses_long_ints() and long_int_digits(value) is not None:
+            return None
+        encoded = json.dumps(value, ensure_ascii=False, allow_nan=False)
+        encoded.encode("utf-8")
+    except (ValueError, RecursionError):
+        return None
+    return encoded
+
+
 def _capture_literal(value: Any, active: set[int], depth: int = 0) -> ValueRoute:
     """Capture bounded exact-builtin structure without calling subclass hooks."""
     value_type = type(value)
@@ -299,10 +311,8 @@ def _capture_literal(value: Any, active: set[int], depth: int = 0) -> ValueRoute
         "literal", result_type=result_type, expression=f"<{result_type}>"
     )
     if value_type in (type(None), bool, int, float, str):
-        try:
-            encoded = json_codec.dumps(value, ensure_ascii=False, allow_nan=False)
-            encoded.encode("utf-8")
-        except (ValueError, RecursionError):
+        encoded = _snapshot_json(value)
+        if encoded is None:
             return unavailable
         return ValueRoute("literal", value_json=encoded, expression=encoded)
     if value_type not in (list, tuple, dict):
@@ -373,7 +383,7 @@ def _route_value(route: ValueRoute, lookup: Callable[[SourceRef], Any]) -> Any:
         if route.snapshot is not None:
             return _route_value(route.snapshot, lookup)
         return (
-            json_codec.loads(route.value_json)
+            json.loads(route.value_json)
             if route.value_json is not None
             else _UNAVAILABLE_RESULT
         )

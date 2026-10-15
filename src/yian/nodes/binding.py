@@ -33,7 +33,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Callable, Literal, TypeAlias
 
-import yian.json_codec as json_codec
 from yian.diagnostics import OriginRef
 from yian.expr import (
     ConstructorTypeError,
@@ -55,8 +54,10 @@ from yian.nodes.contracts import (
 from yian.typesys import TypeCheckError, ValueKind, build_value_as
 from yian.typesys.pool import VariablePool
 from yian.typesys.values import (
+    IntTooLongError,
     Type,
     _render_value_path,
+    parse_int_text,
     reject_deep_nesting,
     reject_nonfinite,
     value_repr,
@@ -203,7 +204,8 @@ def _reject_invalid_binding(value: Any, where: str, origin: OriginRef | None) ->
     """Raise a ``binding.evaluate`` `BindingError` if ``value`` is not a yian value.
 
     A value is rejected when it nests deeper than `YIAN_MAX_VALUE_NESTING` levels or holds a
-    NaN, infinity, or complex number at any depth.
+    NaN, infinity, or complex number, or an int with more than `YIAN_MAX_INT_DIGITS`
+    digits, at any depth.
     """
     try:
         # Depth first, so the non-finite walk never meets an unbounded value.
@@ -232,7 +234,23 @@ _FALSE_SPELLINGS = frozenset({"0", "false", "no", "n", "off"})
 
 
 def coerce_param(parameter: Parameter, value: Any) -> Any:
-    """Coerce a supplied string under one parameter's explicit scalar policy."""
+    """Coerce a supplied string under one parameter's explicit scalar policy.
+
+    Text that does not convert stays a string for the contract to reject.
+
+    Args:
+        parameter (`Parameter`): The parameter whose contract and `coerce_strings`
+            policy apply.
+        value (`Any`): The supplied value; only a string is converted.
+
+    Returns:
+        `Any`: The converted int, float, or bool, or ``value`` unchanged.
+
+    Raises:
+        `TypeError`: ``parameter`` is not an exact `Parameter`.
+        `TypeCheckError`: An int input's text spells an int with more than
+            `YIAN_MAX_INT_DIGITS` digits; the message gives its digit count.
+    """
     if type(parameter) is not Parameter:
         raise TypeError(
             "parameter must be an exact Parameter, "
@@ -249,7 +267,7 @@ def coerce_param(parameter: Parameter, value: Any) -> Any:
     raw = value.strip()
     try:
         if parameter.contract.type.kind is ValueKind.INTEGER:
-            return json_codec.parse_int(raw)
+            return parse_int_text(raw)
         if parameter.contract.type.kind is ValueKind.NUMBER:
             return float(raw)
         if parameter.contract.type.kind is ValueKind.BOOLEAN:
@@ -260,6 +278,8 @@ def coerce_param(parameter: Parameter, value: Any) -> Any:
                 return False
             # Any other text stays a string so the bool contract rejects it.
             return value
+    except IntTooLongError as exc:
+        raise TypeCheckError(str(exc)) from None
     except ValueError:
         return value
     return value
@@ -295,11 +315,20 @@ def coerce_inputs(
     Raises:
         `TypeError`: ``raw`` is not a mapping.
         `ValueError`: A key names no declared input.
+        `TypeCheckError`: An int input's text is too long; the message reads
+            ``input '<name>': integer with N digits is larger than yian allows
+            (4300 digits)``.
     """
     _validate_parameters(params)
     check_input_names(params, raw)
     by_name = {parameter.name: parameter for parameter in params}
-    return {name: coerce_param(by_name[name], value) for name, value in raw.items()}
+    coerced = {}
+    for name, value in raw.items():
+        try:
+            coerced[name] = coerce_param(by_name[name], value)
+        except TypeCheckError as exc:
+            raise TypeCheckError(f"input {name!r}: {exc}") from None
+    return coerced
 
 
 def apply_defaults(
@@ -314,7 +343,8 @@ def apply_defaults(
     Raises:
         `BindingError`: With ``failure_code="binding.evaluate"`` when a default nests
             deeper than `YIAN_MAX_VALUE_NESTING` levels, holds a NaN, infinity, or complex
-            number at any depth, or violates its parameter's contract.
+            number, or an int with more than `YIAN_MAX_INT_DIGITS` digits, at any depth, or
+            violates its parameter's contract.
     """
     _validate_parameters(params)
     output = dict(inputs)
@@ -423,17 +453,20 @@ class _SourceReader:
         Raises:
             BindingError: A leaf fails to evaluate (located at its registered
                 origin, else the nearest enclosing binding's origin, else
-                ``origin``) or a nested binding's value violates its contract.
+                ``origin``), a nested typed binding's value is not a yian value
+                (too deep, non-finite, or an int over `YIAN_MAX_INT_DIGITS` digits),
+                or it violates its contract.
         """
         if isinstance(node, Binding):
             value, route, evaluated = self.tree(
                 node.source, path, name, template, node.origin or origin, label
             )
             if node.contract is not None:
+                where = _binding_where(name, path, label)
                 try:
-                    _check_binding_type(
-                        _binding_where(name, path, label), node, node.contract, value
-                    )
+                    # A value that is not a yian value fails as such, not as a type mismatch.
+                    _reject_invalid_binding(value, where, node.origin)
+                    _check_binding_type(where, node, node.contract, value)
                 except BindingError as exc:
                     if exc.origin is None:
                         exc.origin = template.origin_at(path) or origin
@@ -644,9 +677,9 @@ def bind_params(
     Raises:
         `BindingError`: On expression/default/required evaluation failure, a resolved value
             or filled default nesting deeper than `YIAN_MAX_VALUE_NESTING` levels or holding a
-            NaN, infinity, or complex number at any depth, typed binding
-            rejection, or supplied input contract rejection; ``failure_code`` identifies
-            the stage.
+            NaN, infinity, or complex number, or an int with more than `YIAN_MAX_INT_DIGITS`
+            digits, at any depth, typed binding rejection, or supplied input contract
+            rejection; ``failure_code`` identifies the stage.
     """
     _validate_parameters(params)
     if collector is not None:

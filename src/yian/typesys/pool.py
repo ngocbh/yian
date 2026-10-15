@@ -22,7 +22,6 @@ from typing import Any, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
-import yian.json_codec as json_codec
 from yian.typesys.values import (
     AnyValue,
     TypedValue,
@@ -176,4 +175,4 @@ class VariablePool(BaseModel):
     @classmethod
     def loads(cls, blob: str) -> "VariablePool":
         """Reconstruct a pool from `dumps` output, decoding each value to its exact type."""
-        return cls.model_validate(json_codec.loads(blob))
+        return cls.model_validate_json(blob)

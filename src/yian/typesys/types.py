@@ -12,21 +12,25 @@ resolution. Runtime receives only the resolved ``Type`` values.
 from __future__ import annotations
 
 import ast
+import io
 import re
+import tokenize
 from dataclasses import dataclass, replace
 from typing import Union
 
-import yian.json_codec as json_codec
 from yian.defaults import current
 from yian.typesys.values import (
     _BUILTIN_CONSTANTS,
     _NAME_PATTERN,
+    IntTooLongError,
     TypeCheckError,
     ValueKind,
     Type,
     _validate_numeric_bounds,
     canonical_union_order,
+    int_digits,
     literal_label,
+    parse_int_text,
     types_overlap,
     union_tag_fields,
 )
@@ -134,11 +138,6 @@ def parse_type(s: str) -> TypeExpr:
 
 def _bracket_error(s: str) -> TypeCheckError:
     """Explain that types use parentheses, showing `s` in that spelling when it parses."""
-    if re.search(r"[0-9][0-9_]{600,}", s):
-        # `ast.parse` rejects a decimal literal past Python's digit limit and its
-        # message carries Python's hint, so a long digit run skips the respelling;
-        # 600 is below the smallest limit Python allows (640).
-        return TypeCheckError("types use parentheses, not brackets")
     try:
         spelled = legacy_respelling(s)
     except TypeCheckError as exc:
@@ -356,7 +355,7 @@ class _TypeParser:
             high = self._endpoint()
             bounds = (low, high)
             if bounds != (None, None) and _valid_bounds(ctor, bounds):
-                example = f"{ctor}({_endpoint_text(low)}..{_endpoint_text(high)})"
+                example = f"{ctor}({'' if low is None else low}..{'' if high is None else high})"
             raise self._malformed(f"write a range: {example}")
         dots = self._peek() == ".."
         high = None
@@ -387,7 +386,7 @@ class _TypeParser:
             return None
         text = self._next()[1]
         if re.fullmatch(r"[+-]?[0-9]+", text):
-            return json_codec.parse_int(text)
+            return _int_endpoint(text)
         return float(text)
 
     def _literal_tags(self) -> tuple:
@@ -419,15 +418,6 @@ def _range_needs_dots(ctor: str) -> str:
     else:
         examples = "float(0.0..1.0), float(0.0..), or float(..1.0)"
     return f"a numeric range needs `..`, e.g. {examples}"
-
-
-def _endpoint_text(end: int | float | None) -> str:
-    """Spell a range end as type text: empty when open, every digit of an int."""
-    if end is None:
-        return ""
-    if isinstance(end, int):
-        return json_codec.int_text(end)
-    return str(end)
 
 
 def _valid_bounds(ctor: str, bounds: tuple) -> bool:
@@ -484,6 +474,7 @@ def _parse_legacy_type(s: str) -> TypeExpr:
     Only migration errors use it, to show the parenthesized spelling.
     """
     s = s.strip()
+    _reject_long_int_tokens(s)
     try:
         node = ast.parse(s, mode="eval").body
     except SyntaxError as exc:
@@ -499,6 +490,68 @@ def _parse_legacy_type(s: str) -> TypeExpr:
         return _type_from_ast(node, s)
     except RecursionError as exc:
         raise TypeCheckError(f"type nested too deeply in {s[:40]!r}...") from exc
+
+
+def _reject_long_int_tokens(s: str) -> None:
+    """Raise if bracket-spelled type text holds an int literal past `YIAN_MAX_INT_DIGITS`.
+
+    Runs before `ast.parse`, which would fail on a long decimal literal with Python's
+    own digit-limit message, or build it when that limit is off.
+
+    Args:
+        s (`str`): Type text in the older bracket spelling.
+
+    Raises:
+        `TypeCheckError`: An int literal has more than `YIAN_MAX_INT_DIGITS` digits.
+    """
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(s).readline))
+    except (tokenize.TokenError, SyntaxError):
+        return  # `ast.parse` reports the malformed text
+    for token in tokens:
+        if token.type != tokenize.NUMBER:
+            continue
+        text = token.string
+        if text[:2].lower() in ("0x", "0o", "0b"):
+            digits = int_digits(int(text, 0))
+            if digits > current().max_int_digits:
+                raise _long_range_end(IntTooLongError(digits))
+        elif re.fullmatch(r"[0-9_]+", text):
+            _int_endpoint(text)
+
+
+def _int_endpoint(text: str) -> int:
+    """Read an int range end, rejecting one with more than `YIAN_MAX_INT_DIGITS` digits.
+
+    Args:
+        text (`str`): The end's text, a decimal int with an optional sign.
+
+    Returns:
+        `int`: The end's value.
+
+    Raises:
+        `TypeCheckError`: The int is too long, raised from the `IntTooLongError`; the
+            message leaves out the type text, which would repeat every digit.
+    """
+    try:
+        return parse_int_text(text)
+    except IntTooLongError as exc:
+        raise _long_range_end(exc)
+
+
+def _long_range_end(cause: IntTooLongError) -> TypeCheckError:
+    """Build the error for a too-long int range end, with `cause` as its cause.
+
+    Args:
+        cause (`IntTooLongError`): The digit-count error.
+
+    Returns:
+        `TypeCheckError`: An error whose message leaves out the type text, which
+            would repeat every digit.
+    """
+    error = TypeCheckError(f"numeric range end: {cause}")
+    error.__cause__ = cause
+    return error
 
 
 def _type_from_ast(node: "ast.expr", src: str) -> TypeExpr:
@@ -821,7 +874,7 @@ def format_type_expr(t: TypeExpr) -> str:
     if isinstance(t, ScalarExpr):
         if t.bounds is None:
             return t.name
-        low, high = (_endpoint_text(end) for end in t.bounds)
+        low, high = ("" if end is None else end for end in t.bounds)
         return f"{t.name}({low}..{high})"
     if isinstance(t, RefExpr):
         return t.name

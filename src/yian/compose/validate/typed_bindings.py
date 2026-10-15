@@ -73,7 +73,6 @@ from yian.typesys import (
     build_value_as,
     canonical_type_label,
 )
-from yian.typesys.values import value_repr
 
 ResolveOrigin = Callable[[OriginRef], DiagnosticFrame | None]
 
@@ -645,8 +644,8 @@ def shown_literal(value: Any) -> str:
 
     Returns:
         `str`: JSON text, with each date or datetime (YAML reads an unquoted one as a
-            date) written as its bare ISO text; `repr` (or a placeholder for an int
-            too long to render) for anything else JSON can't write.
+            date) written as its bare ISO text; `repr` for anything else JSON can't
+            write.
     """
     if isinstance(value, (date, datetime)):
         return value.isoformat()
@@ -658,5 +657,4 @@ def shown_literal(value: Any) -> str:
     try:
         return json.dumps(value, ensure_ascii=False)
     except (TypeError, ValueError):
-        # An int past Python's digit limit raises ValueError in json and repr alike.
-        return value_repr(value)
+        return repr(value)

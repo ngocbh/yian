@@ -7,9 +7,9 @@ never import the runtime log, state, trace, driver, or public run boundary.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from typing import Literal
+import json
+from typing import Any, Literal
 
-import yian.json_codec as json_codec
 from yian.diagnostics import Failure, OriginRef
 from yian.expr.lineage import (
     FeedbackValue, SourceRef, ValueRoute, validate_feedback,
@@ -26,6 +26,13 @@ from yian.nodes.base import (
     BackwardResult, _copy_backward_value, _validate_declared_names, _validate_input_output_paths,
 )
 from yian.nodes.contracts import ExecutionScope
+from yian.typesys.values import (
+    OverLimitInt,
+    is_digit_limit_error,
+    long_int_message,
+    parse_json_int,
+    python_refuses_long_ints,
+)
 
 
 def _validate_source(source: SourceRef) -> None:
@@ -55,6 +62,67 @@ def _route_object_without_duplicates(pairs: list[tuple[str, JsonValue]]) -> Json
             raise ValueError(f"duplicate JSON object key: {name!r}")
         result[name] = value
     return result
+
+
+class _LongIntFinder:
+    """A ``json.loads`` ``parse_int`` hook that remembers the first long int it parses.
+
+    Finding the int while parsing spares a second walk over every decoded record.
+
+    Attributes:
+        digits (`int | None`):
+            The first int token's digit count past `YIAN_MAX_INT_DIGITS`, or `None`.
+    """
+
+    __slots__ = ("digits",)
+
+    def __init__(self) -> None:
+        """Start with no long int found."""
+        self.digits: int | None = None
+
+    def __call__(self, text: str) -> int | OverLimitInt:
+        """Parse one JSON int token as `parse_json_int` does, noting the first marker."""
+        value = parse_json_int(text)
+        if self.digits is None and type(value) is OverLimitInt:
+            self.digits = value.digits
+        return value
+
+    def loads(self, text: str | bytes, **kwargs: Any) -> Any:
+        """Parse JSON text, finding a long int whatever Python's own digit limit is.
+
+        When Python's limit refuses such an int, plain `json.loads` runs first and the
+        hook is used only after it raises, so the common path pays no per-int call.
+
+        Args:
+            text (`str | bytes`):
+                The JSON text.
+            **kwargs (`Any`):
+                Other `json.loads` arguments.
+
+        Returns:
+            `Any`: The parsed value; an int past the limit is an `OverLimitInt`.
+        """
+        if python_refuses_long_ints():
+            try:
+                return json.loads(text, **kwargs)
+            except ValueError as exc:
+                if not is_digit_limit_error(exc):
+                    raise
+        return json.loads(text, parse_int=self, **kwargs)
+
+    def check(self) -> None:
+        """Raise the run-record error if a long int was parsed.
+
+        Raises:
+            `ValueError`:
+                The parsed text held an int with more than `YIAN_MAX_INT_DIGITS` digits; the
+                message gives its digit count, never its digits.
+        """
+        if self.digits is not None:
+            raise ValueError(
+                f"run-record JSON: {long_int_message(self.digits)}; "
+                "a log written while yian accepted such ints can't be read"
+            )
 
 
 def _validate_route(route: ValueRoute) -> None:
@@ -120,9 +188,15 @@ def _validate_route(route: ValueRoute) -> None:
     if route.value_json is not None:
         if type(route.value_json) is not str:
             raise TypeError("route value_json must be a string or None")
-        result = json_codec.loads(route.value_json, object_pairs_hook=_route_object_without_duplicates)
+        long_ints = _LongIntFinder()
+        result = long_ints.loads(
+            route.value_json, object_pairs_hook=_route_object_without_duplicates
+        )
+        # A recorded route result is a yian value, so a long int in it fails here with
+        # a message naming old logs, the usual source, before the copy below.
+        long_ints.check()
         _copy_backward_value(result, "route result")
-        json_codec.dumps(result, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        json.dumps(result, ensure_ascii=False, allow_nan=False).encode("utf-8")
     if route.result_type is not None and (type(route.result_type) is not str or not route.result_type):
         raise ValueError("route result_type must be a non-empty string or None")
     if route.kind in ("literal", "scalar", "opaque"):

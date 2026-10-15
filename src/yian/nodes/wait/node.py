@@ -49,7 +49,7 @@ def _normalize_until(until_src: Any, value: Any) -> str:
         resolved = value.isoformat()
     else:
         raise BindingError(
-            f"wait `until` ({value_repr(display_source)}) did not resolve to a date/datetime: "
+            f"wait `until` ({display_source!r}) did not resolve to a date/datetime: "
             f"{value_repr(value)}",
             failure_code="contract.input",
             origin=origin,

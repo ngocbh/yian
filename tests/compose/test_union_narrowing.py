@@ -3,6 +3,7 @@
 import pytest
 
 from yian.compose import LoadError, load_flow
+from yian.run import run_flow
 
 _TYPEDEFS = (
     "typedefs:\n"
@@ -20,6 +21,10 @@ _TYPEDEFS = (
     "  Num: {num: int}\n"
     "  Reply: Union(Text, Num)\n"
     "  Mode: Literal(a, b)\n"
+    "  Cancel: {action: 'Literal(cancel)', reason: str}\n"
+    "  Rest: Union(Hold, Sell, Cancel)\n"
+    "  Narrow: {action: 'Literal(buy)', qty: int, limit: float, leg: Limit}\n"
+    "  SellOrNarrow: Union(Sell, Narrow)\n"
 )
 
 # Fields: `qty` (buy, sell), `limit` and `leg` (buy), `price` (sell), `note` (hold, sell).
@@ -42,6 +47,12 @@ _DEFS = (
     "    output: ${p.output}\n"
     "  place_rest:\n"
     "    input:\n      order: !HoldOrSell\n"
+    "    nodes:\n"
+    "      p:\n        kind: code\n        input:\n          o: ${input.order}\n"
+    "        code: return 1\n"
+    "    output: ${p.output}\n"
+    "  place_sell_or_narrow:\n"
+    "    input:\n      order: !SellOrNarrow\n"
     "    nodes:\n"
     "      p:\n        kind: code\n        input:\n          o: ${input.order}\n"
     "        code: return 1\n"
@@ -894,3 +905,95 @@ def test_an_unknown_isinstance_type_keeps_its_own_error():
         _code("e"),
     ))
     assert "unknown type 'Nope'" in msg
+
+
+# --- isinstance against a partly shared union --- #
+
+
+def test_isinstance_of_a_partly_shared_union_reads_the_shared_fields():
+    _loads(_flow(
+        _searched(("isinstance(d.output, Rest)", "b")),
+        _code("b", {"n": "${d.output.note}"}),
+        _code("e"),
+    ))
+    msg = _load_error(_flow(
+        _searched(("isinstance(d.output, Rest)", "b")),
+        _code("b", {"n": "${d.output.reason}"}),
+        _code("e"),
+    ))
+    assert (
+        "node 'b' input 'n' from: reference ${d.output.reason} reads unknown field 'reason'"
+        in msg
+    )
+    assert "cancel" not in msg
+
+
+def test_a_partly_shared_union_branch_passes_the_shared_members_to_a_call():
+    branch = _searched(("isinstance(d.output, Rest)", "call(place_rest, order=${d.output})"))
+    _loads(_flow(branch, _code("e")))
+    _loads(_flow(branch, _code("e"), d_type="Optional(Decision)"))
+
+
+def test_a_partly_shared_union_check_lines_up_with_an_on_else():
+    _loads(_flow(
+        _case("route", _ON, [("buy", "b")], else_="inner"),
+        _case("inner", None, [("isinstance(d.output, Rest)", "t")], else_="m"),
+        _code("b"),
+        _code("t", {"n": "${d.output.note}"}),
+        _code("m"),
+    ))
+
+
+def test_a_conjunct_after_a_partly_shared_union_check_reads_the_shared_fields():
+    _loads(_flow(
+        _searched(('"isinstance(d.output, Rest) and d.output.note == \'x\'"', "b")),
+        _code("b"),
+        _code("e"),
+    ))
+
+
+def test_an_on_inside_a_partly_shared_union_branch_covers_the_shared_tags():
+    _loads(_flow(
+        _searched(("isinstance(d.output, Rest)", "inner")),
+        _case("inner", _ON, [("hold", "h"), ("sell", "s")]),
+        _code("h"),
+        _code("s"),
+        _code("e"),
+    ))
+
+
+def test_a_partly_shared_union_branch_runs():
+    text = (
+        "id: p\nname: p\n"
+        + _TYPEDEFS
+        + "input:\n  s: !str\n"
+        + "nodes:\n"
+        "  d:\n"
+        "    kind: code\n"
+        "    input:\n      s: ${input.s}\n"
+        "    output: Decision\n"
+        "    code: |\n"
+        "      return {'action': 'sell', 'qty': 2, 'price': 1.5, 'note': 'n'}\n"
+        + _searched(("isinstance(d.output, Rest)", "t"))
+        + "  t:\n"
+        "    kind: code\n"
+        "    input:\n      n: ${d.output.note}\n"
+        "    output: str\n"
+        "    code: return inputs['n']\n"
+        + _code("e")
+        + "output: ${route.output}\n"
+    )
+    result = run_flow(load_flow(text), {"s": "x"})
+    assert result.status == "succeeded", result.failure
+    assert result.output == "n"
+
+
+def test_a_member_that_only_overlaps_the_checked_union_keeps_the_checked_type():
+    call = "call(place_sell_or_narrow, order=${d.output})"
+    _loads(_flow(_searched(("isinstance(d.output, SellOrNarrow)", call)), _code("e")))
+    msg = _load_error(_flow(
+        _searched(("isinstance(d.output, SellOrNarrow)", "b")),
+        _code("b", {"p": "${d.output.price}"}),
+        _code("e"),
+    ))
+    assert "which only union members with action sell have" in msg

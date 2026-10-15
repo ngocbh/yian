@@ -345,15 +345,18 @@ this model whenever you design anything:
   `project_output_contract`, and expression typing share. On a union it
   reads a field every member has and rejects a member-only field; runtime growth passes
   `partial_union_fields=True` because loader-time narrowing is not recorded on the
-  fragment. Compose's narrowing pass (`compose/validate/narrowing.py`) gives each node a
-  view of the producer/flow-input contracts under the `on:`/`isinstance` CASE branches
-  that route it (an `isinstance` fact keeps the base members `T` shares if it shares some
-  and no other member overlaps `T`, else is `Exact(T)`, and is none if the base already
-  fits `T`; `isinstance_members`); the reference,
-  call-type, and exhaustiveness checks read `Narrowing.for_node` (the reference check
-  uses `for_param` for `isinstance`-guarded searched-CASE params). Runtime routing does
-  not change. A value-producing CASE (read as `${case.output}`, or routed to by one)
-  must be exhaustive (an
+  fragment. The walk also checks prompt and node-assert local names, each typed by its
+  binding's contract under the node's narrowing view (`local_input_contracts`), a flow
+  assert's `${input.X...}`, and a builtin's result (`builtin_result_type`, `str` for each
+  shipped builtin; `builtin_field_errors`). Compose's narrowing pass
+  (`compose/validate/narrowing.py`) gives each node a view of the producer/flow-input
+  contracts under the `on:`/`isinstance` CASE branches that route it (an `isinstance`
+  fact keeps the base members `T` shares if it shares some and no other member overlaps
+  `T`, else is `Exact(T)`, and is none if the base already fits `T`;
+  `isinstance_members`); the reference, call-type, and exhaustiveness checks read
+  `Narrowing.for_node` (the reference check uses `for_param` for `isinstance`-guarded
+  searched-CASE params). Runtime routing does not change. A value-producing CASE
+  (read as `${case.output}`, or routed to by one) must be exhaustive (an
   `else:`, every tag of a non-nullable enum `on:`, or `true` and `false` for a
   non-nullable `bool` `on:`, compared as typed values), with a flow-input `on:` resolved
   for it. `case_exhaustive.py`'s `check_case_when_values` runs right after narrowing: an

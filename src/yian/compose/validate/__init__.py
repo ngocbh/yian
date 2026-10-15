@@ -38,14 +38,17 @@ reject an ill-formed flow before it is compiled:
 - `typed_bindings.py` — `check_typed_inputs` / `check_typed_outputs`: a typed node
   input or flow output can fit its declared type (literal text exactly; a reference
   unless its inferred type is disjoint, leaving a narrower one to the runtime check);
-  `infer_binding_type` returns the type one binding is proven to produce.
+  `infer_binding_type` returns the type one binding is proven to produce;
+  `local_input_contracts` gives each node-local name's alternative contracts, for
+  prompt and node-assert field reads.
 - `reserved_sources.py` — `check_reserved_sources`: a MAP `over:` reference infers a
   list and a WAIT `until:` reference a type that overlaps `date` or `datetime`; a
   literal is left to the parse stage and an unproven type to the run-time check.
 - `constructors.py` — `constructor_errors`: a `${T(...)}` constructor call that can never
   succeed (mixed keyword and positional arguments or several positional ones, a field
   `T` doesn't have, a missing required field, or an argument whose inferred type is
-  disjoint from the declared one).
+  disjoint from the declared one); `builtin_field_errors`: a field read on a builtin's
+  result whose type has no such field (`upper(x).f`).
 - `skips.py` — `SkipModel`: which nodes of a flow level the CASE routing may skip, and
   whether a set of them may skip together; `null_skipped_outputs` gives a flow output whose
   producers may all be skipped the explicit null default; `check_skipped_arithmetic` rejects

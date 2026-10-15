@@ -9,6 +9,9 @@ it. Most of what can go wrong is visible in the call itself:
   record, a field `T` doesn't have, or leaves out a required field;
 - a field read on the result (`T(x).f`) names a field `T` can't have.
 
+`builtin_field_errors` rejects a field read on a builtin whose result type is known
+(`upper(x).f` reads a field of text), the same way.
+
 Given the types of the references an expression reads, a positional argument or a
 keyword field whose inferred type is disjoint from the declared one is an error too.
 A narrower or unproven value loads and is left to the runtime check.
@@ -28,14 +31,14 @@ from yian.compile.validation import type_relation
 from yian.compose.helpers.isinstance_types import constructor_type_fn
 from yian.compose.helpers.output_contracts import literal_type
 from yian.expr import infer_expr_type
-from yian.expr.builtins import TEMPLATE_FNS
+from yian.expr.builtins import TEMPLATE_FNS, builtin_result_type
 from yian.expr.expressions import ISINSTANCE, constructor_shape_error
 from yian.nodes.contracts import ValueContract, output_contract_field_error
 from yian.typesys import canonical_type_label
 from yian.typesys.types import AliasDef, RefExpr, TypeRegistry, UnionExpr
 from yian.typesys.values import Type, parse_int_text
 
-__all__ = ["constructor_errors"]
+__all__ = ["builtin_field_errors", "constructor_errors"]
 
 RefType = Callable[[str], "Type | None"]
 
@@ -89,18 +92,57 @@ def constructor_errors(
                 errors.append(error)
         else:
             errors.extend(_record_errors(name, typ, args, registry, ref_type, type_fn))
-        fields = [
-            str(child.children[0])
-            for child in node.children
-            if isinstance(child, Tree) and child.data == "trailer"
-        ]
-        if fields:
-            error = output_contract_field_error(
-                ValueContract(typ), fields, f"{name}(...)." + ".".join(fields)
-            )
-            if error is not None:
-                errors.append(error)
+        error = _result_field_error(node, name, typ)
+        if error is not None:
+            errors.append(error)
     return errors
+
+
+def builtin_field_errors(tree: Tree | Token) -> list[str]:
+    """Return why each field read on a builtin call's result in one expression fails.
+
+    A builtin whose result type is unknown (`builtin_result_type` gives `None`) is left
+    unchecked.
+
+    Args:
+        tree (`Tree | Token`):
+            A parsed `${...}` interior or condition.
+
+    Returns:
+        `list[str]`:
+            One message per field read the result type can't have, in source order.
+    """
+    if not isinstance(tree, Tree):
+        return []
+    errors: list[str] = []
+    for node in tree.iter_subtrees_topdown():
+        if node.data != "refcall":
+            continue
+        # A `${upper.f}` read of an input named `upper` is no call.
+        if not any(isinstance(c, Tree) and c.data == "call_suffix" for c in node.children):
+            continue
+        name = str(node.children[0])
+        typ = builtin_result_type(name)
+        if typ is None:
+            continue
+        error = _result_field_error(node, name, typ)
+        if error is not None:
+            errors.append(error)
+    return errors
+
+
+def _result_field_error(node: Tree, name: str, typ: Type) -> str | None:
+    """Return why the field reads trailing call `name(...)`, whose result is `typ`, fail."""
+    fields = [
+        str(child.children[0])
+        for child in node.children
+        if isinstance(child, Tree) and child.data == "trailer"
+    ]
+    if not fields:
+        return None
+    return output_contract_field_error(
+        ValueContract(typ), fields, f"{name}(...)." + ".".join(fields)
+    )
 
 
 def _value_error(

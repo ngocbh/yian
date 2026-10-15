@@ -12,7 +12,10 @@ Two subtleties mirror the representation-neutral collector:
 - **Prompt scope**: an AGENT `prompt:` or `system_prompt:` may interpolate this node's inputs
   and variables as bare `${name}`; a `${<id>.output}`/`${input.X}`/`${system.X}` in either is a
   located error. A HUMAN_INPUT `prompt:` and its question text (`question`, option
-  `label`/`description`) follow the same rule, reading the gate's declared inputs.
+  `label`/`description`) follow the same rule, reading the gate's declared inputs. Each
+  `${name.f}` read is field-checked against the name's proven contracts (its binding's,
+  under the node's narrowing, or a typed variable's), and is an error only when all of
+  them reject it.
 - **Case node-local refs**: the desugared CASE `when:` strings use `__rN`/`__on`,
   which resolve against the bound input record — they are EXCLUDED here (only the
   `__rN`/`__on` SOURCES are classified, against the pool; mirrors the strict CASE check).
@@ -43,15 +46,16 @@ from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.isinstance_types import constructor_type_fn
 from yian.compose.helpers.output_contracts import (
     TypeFn,
+    local_field_error,
     output_contract_path_error,
     project_output_contract,
     reference_contract,
     resolve_output_binding_contract,
 )
 from yian.compose.nodes.base import BuildResult
-from yian.compose.validate.constructors import constructor_errors
+from yian.compose.validate.constructors import builtin_field_errors, constructor_errors
 from yian.compose.validate.narrowing import Narrowing
-from yian.compose.validate.typed_bindings import ResolveOrigin
+from yian.compose.validate.typed_bindings import LocalInput, ResolveOrigin
 from yian.diagnostics import SourceRange
 from yian.expr import (
     ExpressionError,
@@ -150,6 +154,7 @@ def validate_references(
     input_contracts: dict[str, ValueContract] | None = None,
     outputs_range: Optional[SourceRange] = None,
     narrowing: Narrowing | None = None,
+    local_contracts: dict[str, dict[str, LocalInput]] | None = None,
     registry: TypeRegistry | None = None,
     resolve_origin: ResolveOrigin | None = None,
     diagnostics: LoadDiagnostics | None = None,
@@ -189,6 +194,11 @@ def validate_references(
     not reach skips the member-only field rule, so the later cycle check reports the cycle.
     The flow outputs are always checked unnarrowed.
 
+    With `local_contracts` (`local_input_contracts`, keyed by node id then param), each
+    prompt read `${name.f}` of an AGENT or HUMAN_INPUT input is field-checked against
+    that name's alternatives, and an AGENT read of a typed variable against its
+    declared type; a name with no entry is not field-checked.
+
     With `registry`, every `${T(...)}` constructor call in a binding is checked too
     (`constructor_errors`), with each reference typed by the same contracts.
 
@@ -214,6 +224,7 @@ def validate_references(
     scanned: set[tuple[str, str, Optional[SourceRange]]] = set()
     constructor_problems: list[tuple[str, Optional[SourceRange]]] = []
     unordered = narrowing.unordered if narrowing is not None else frozenset()
+    local_contracts = local_contracts or {}
     type_fn = constructor_type_fn(registry) if registry is not None else None
 
     def scan(
@@ -275,12 +286,17 @@ def validate_references(
     ) -> None:
         """Name-check every reference one template string reads; see `scan`.
 
-        A call to a builtin with arguments it doesn't take is one more error at `where`."""
+        A call to a builtin with arguments it doesn't take, and each field read on a
+        builtin's result its type can't have, is one more error at `where`."""
         try:
             paths = expr_refs_of(text)
         except ExpressionError as exc:
             errors.append((f"{where}: {exc}", rng))
             return
+        trees = [
+            segment.tree for segment in scan_template(text) if isinstance(segment, Span)
+        ]
+        add_builtin_field_errors(trees, where, rng)
         if registry is not None and constructors:
 
             def ref_type(path: str) -> Type | None:
@@ -296,12 +312,11 @@ def validate_references(
                     contract = reference_contract(path, site_producers, site_inputs)
                 return output_contract_type(contract)
 
-            for segment in scan_template(text):
-                if isinstance(segment, Span):
-                    constructor_problems.extend(
-                        (f"{where}: {problem}", rng)
-                        for problem in constructor_errors(segment.tree, registry, ref_type)
-                    )
+            for tree in trees:
+                constructor_problems.extend(
+                    (f"{where}: {problem}", rng)
+                    for problem in constructor_errors(tree, registry, ref_type)
+                )
         for path in paths:
             err = _classify_path(
                 path, valid_targets, flow_inputs, extra_heads
@@ -350,6 +365,15 @@ def validate_references(
         except ExpressionError as exc:
             errors.append((f"{where}: {exc}", rng))
 
+    def add_builtin_field_errors(
+        trees: list, where: str, rng: Optional[SourceRange]
+    ) -> None:
+        """Add one error at `where` per field read on a builtin's result in `trees`."""
+        for tree in trees:
+            errors.extend(
+                (f"{where}: {problem}", rng) for problem in builtin_field_errors(tree)
+            )
+
     def check_template(
         where: str,
         template: str,
@@ -358,18 +382,28 @@ def validate_references(
         *,
         noun: str,
         hint_tail: str,
+        contracts: dict[str, LocalInput],
+        partial_union_fields: bool,
     ) -> None:
-        """Parse one rendered template and name-check each ref against `declared`.
+        """Parse one rendered template; check each ref against `declared` and `contracts`.
 
         A malformed span, unknown builtin, builtin called with arguments it doesn't take, or
-        nested `${...}` is one error at `where`; each ref whose head is not in `declared` is
+        nested `${...}` is one error at `where`, and so is each field read on a builtin's
+        result its type can't have; each ref whose head is not in `declared` is
         another, with the pool-ref hint (ending in `hint_tail`) when the head is a pool-style
-        head or a node id."""
+        head or a node id. Each distinct ref reading a field of a declared name with an
+        entry in `contracts` is another when every alternative rejects the read
+        (`partial_union_fields` allows a field only some union members have)."""
         try:
             refs = prompt_refs(template)
         except ExpressionError as exc:
             errors.append((f"{where}: {exc}", rng))
             return
+        trees = [
+            segment.tree for segment in scan_template(template) if isinstance(segment, Span)
+        ]
+        add_builtin_field_errors(trees, where, rng)
+        field_checked: set[str] = set()
         for ref in refs:
             head = ref.split(".", 1)[0].strip()
             if head not in declared:
@@ -379,6 +413,22 @@ def validate_references(
                     else ""
                 )
                 errors.append((f"{where}: ${{{ref}}} is not a declared {noun}{hint}", rng))
+                continue
+            path = ref.strip()
+            parts = path.split(".")
+            local = contracts.get(head)
+            if local is None or len(parts) < 2 or path in field_checked:
+                continue
+            field_checked.add(path)
+            err = local_field_error(
+                local.alternatives,
+                parts[1:],
+                path,
+                source=local.source,
+                partial_union_fields=partial_union_fields,
+            )
+            if err is not None:
+                errors.append((f"{where}: {err}", rng))
 
     for node_id, result in build_results.items():
         node = result.node
@@ -396,9 +446,16 @@ def validate_references(
         # span is rejected here (via `prompt_refs`, the renderer's compile-time companion).
         # A HUMAN_INPUT `prompt:` and its question text (`question`, option `label` /
         # `description`) follow the same rule, reading the gate's declared inputs.
+        node_locals = local_contracts.get(node_id, {})
         if isinstance(node, AgentNode):
             declared = {p.name for p in (node.params or [])}
             declared.update(variable.name for variable in node.variables)
+            prompt_contracts = dict(node_locals)
+            prompt_contracts.update(
+                (variable.name, LocalInput((variable.contract,)))
+                for variable in node.variables
+                if variable.contract is not None
+            )
             for field_name, template in (
                 ("prompt", node.prompt),
                 ("system_prompt", node.system_prompt),
@@ -412,6 +469,8 @@ def validate_references(
                     franges.get(("field", field_name)) or node_range,
                     noun="input or variable",
                     hint_tail="a strict AGENT prompt",
+                    contracts=prompt_contracts,
+                    partial_union_fields=partial_union_fields,
                 )
         elif isinstance(node, HumanInputNode):
             declared = {p.name for p in (node.params or [])}
@@ -428,6 +487,8 @@ def validate_references(
                     or node_range,
                     noun="input",
                     hint_tail="human_input text",
+                    contracts=node_locals,
+                    partial_union_fields=partial_union_fields,
                 )
         # Node-owned reserved wiring (`over`, `until`, ...) follows the same pool reference
         # grammar as ordinary inputs. It never receives a body-local scope: in particular,

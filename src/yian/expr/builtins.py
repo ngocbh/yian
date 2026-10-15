@@ -9,8 +9,11 @@ calls them against the node's already-bound declared inputs.
 This is a deliberate, bounded bend of the "all computation is a node" law: builtins are
 read-only formatting and produce no graph node or edge. See `docs/expressions.md`.
 
+`builtin_result_type` gives the type a shipped builtin always returns, so the loader can
+reject a field read on its result.
+
 Knows about: `expr.expressions` (peer — `ExpressionError`) and `typesys.values`
-(`write_as_text`, for the int digit limit).
+(`write_as_text`, for the int digit limit; `Type` and `ValueKind`, for result types).
 Never imports: `template`, `nodes`, `compile`, `runtime` (they sit above / beside it).
 """
 
@@ -19,7 +22,7 @@ from __future__ import annotations
 import json
 from typing import Any, Callable
 
-from yian.typesys.values import FileRef, write_as_text
+from yian.typesys.values import FileRef, Type, ValueKind, write_as_text
 
 # name -> a pure value->value formatter, called as `fn(*pos, **kw)` at prompt-render time.
 TEMPLATE_FNS: dict[str, Callable[..., Any]] = {}
@@ -110,3 +113,23 @@ def _upper(s: Any) -> str:
 def _lower(s: Any) -> str:
     """Lower-case a str. Null or a non-str value is an error."""
     return _text("lower", s).lower()
+
+
+# Every builtin shipped here returns text. Keyed by function, so a host that registers
+# another function under one of these names gets no result type.
+_TEXT_BUILTINS = frozenset({_render_as_json, _join, _upper, _lower})
+
+
+def builtin_result_type(name: str) -> Type | None:
+    """Return the type builtin `name` always returns, or `None` when it isn't known.
+
+    Args:
+        name (`str`):
+            The name a `${name(...)}` call uses.
+
+    Returns:
+        `Type | None`:
+            `str` for a builtin shipped here; `None` for an unknown name or for a host
+            function registered under the name.
+    """
+    return Type.scalar(ValueKind.STRING) if TEMPLATE_FNS.get(name) in _TEXT_BUILTINS else None

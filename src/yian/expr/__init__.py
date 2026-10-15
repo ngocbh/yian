@@ -31,7 +31,8 @@ whole-value `call(...)` directive (in `compose.desugar.inline_calls`), not part 
 
 Knows about:   `typesys` (the pool and value types, in `expressions`; the value
                nesting bound and int digit limit, in `grammar`; `write_as_text`
-               and the digit limit, in `builtins`, `template`, and `lineage`).
+               and the digit limit, in `builtins`, `template`, and `lineage`; `Type`
+               and `ValueKind`, for builtin result types, in `builtins`).
 Never imports: `nodes`, `compile`, or `runtime` (they import IT).
 """
 

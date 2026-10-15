@@ -125,7 +125,11 @@ from yian.compose.validate.skips import (
 )
 from yian.compose.validate.tool_inputs import stamp_tool_input_types
 from yian.compose.validate.value_nesting import check_written_values
-from yian.compose.validate.typed_bindings import check_typed_inputs, check_typed_outputs
+from yian.compose.validate.typed_bindings import (
+    check_typed_inputs,
+    check_typed_outputs,
+    local_input_contracts,
+)
 from yian.compose.validate.wiring_parity import check_wiring_parity
 from yian.compose.parse.nodes import (
     normalize_node_signature_cursor,
@@ -142,7 +146,7 @@ from yian.compose.helpers.types import (
 from yian.compose.helpers.value_nesting import check_written_value
 from yian.compose.validate.handles import check_case_handles
 from yian.compose.validate.asserts import validate_node_asserts
-from yian.compose.validate.constructors import constructor_errors
+from yian.compose.validate.constructors import builtin_field_errors, constructor_errors
 
 # Name for the single output of a bare whole-string `output:` binding. The value-mode
 # EndNode returns the bare resolved value, so the name only labels the carrier.
@@ -1584,16 +1588,22 @@ def _fill_type_tables(
         condition: bool = False,
     ) -> dict[str, Type]:
         """Resolve `names` as `table` does, then reject a constructor call in `source`
-        that can never succeed whatever the references hold.
+        that can never succeed whatever the references hold, or a field read on a
+        builtin's result its type can't have.
 
         Only for condition sites: `validate_references` already checked every binding's
-        constructor calls, with the references typed."""
+        constructor calls and builtin field reads, with the references typed."""
         resolved_names = table(names, where, rng)
-        if names[1]:
-            for tree in expression_trees(source, condition=condition):
-                problems = constructor_errors(tree, registry)
-                if problems:
-                    raise diagnostics.error(f"{where}: {problems[0]}", range=rng)
+        try:
+            trees = expression_trees(source, condition=condition)
+        except ExpressionError:
+            # An earlier pass reports a source that won't parse.
+            return resolved_names
+        for tree in trees:
+            problems = constructor_errors(tree, registry) if names[1] else []
+            problems += builtin_field_errors(tree)
+            if problems:
+                raise diagnostics.error(f"{where}: {problems[0]}", range=rng)
         return resolved_names
 
     def names_in(source: Any, *, condition: bool = False) -> TypeNames:
@@ -2509,6 +2519,17 @@ def _assemble(
 
     reconciled = data_edges + case_edges + host_edges
 
+    # The proven contracts of each node-local name, for the field reads a node makes
+    # of its own inputs (prompts and node asserts).
+    local_contracts = local_input_contracts(
+        flow_wiring,
+        producers,
+        flow_input_contracts,
+        build_results,
+        narrowing=narrowing,
+        type_fn=constructor_type,
+    )
+
     # Reference + assert validation over the built flow. Errors locate
     # at the node's line (a bad node-input ref) or the `output:` section line (a
     # dangling flow-output ref).
@@ -2521,6 +2542,7 @@ def _assemble(
         input_contracts=flow_input_contracts,
         outputs_range=outputs_range,
         narrowing=narrowing,
+        local_contracts=local_contracts,
         registry=registry,
         resolve_origin=catalog_builder.resolve_registered,
         diagnostics=diagnostics,
@@ -2538,6 +2560,8 @@ def _assemble(
         descriptors,
         assertion_site_at=node_assertion_site_at,
         type_names=frozenset(registry),
+        local_contracts=local_contracts,
+        partial_union_nodes=narrowing.unordered,
         diagnostics=diagnostics,
     )
     # Lower the flow-level `asserts:` into node-local asserts stamped on the synthesized
@@ -2549,6 +2573,7 @@ def _assemble(
     lowered = lower_flow_asserts(
         asserts_section, flow_inputs, set(descriptors), producers,
         assert_ranges=flow_assertion_ranges,
+        input_contracts=flow_input_contracts,
         diagnostics=diagnostics,
     )
 

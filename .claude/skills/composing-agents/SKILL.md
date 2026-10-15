@@ -165,18 +165,30 @@ contributes empty text.
 When the loader knows a value's type, reading a field that type can't have is a load
 error: a field on a scalar (`str`, `int`, `Literal(...)`, ...) or a list, or a field a
 record doesn't declare. This covers `${input.X...}`, `${node.output...}`, and a MAP's
-`${item...}` in bindings, `case` conditions, and flow outputs, and the carried fields a
-LOOP `while:`/`until:` predicate reads. Reading a declared field
+`${item...}` in bindings, `case` conditions, and flow outputs, the carried fields a
+LOOP `while:`/`until:` predicate reads, a node's local names in its prompts
+(`prompt:`, `system_prompt:`, `human_input` question text, `adaptive_questions.prompt:`)
+and its own `asserts:`, and `${input.X...}` in flow `asserts:`. Reading a declared field
 through an `Optional(...)` record still gives `null` when the whole value is null, and
 values whose type isn't known at load (`object`, `Any`, an untyped output, or anything
 below them) aren't checked.
+
+A local name is typed by its binding: a typed binding by its declared type (plus its
+inferred type when that fits, e.g. a case branch's member or a literal tag), a literal by
+its value, else the inferred type. So a CALL input can't read a field only the child's
+declared input has, and a LOOP's carried name may read a field the seed or the body's
+returned type has. Every shipped builtin returns text, so `${upper(x).f}` is a load error
+(`reads field 'f' on type str, which has no fields`); a host-registered builtin's result
+isn't checked.
 
 On a `Union(...)`, a field every member has reads anywhere (one type if the members
 agree, the merged `Literal` if every member's field is a string `Literal`, else
 untyped). A field only some members have
 is a load error outside a narrowing `case` branch (see `case` below): `reference
 ${d.output.qty} reads field 'qty', which only union members with action buy, sell have;
-read it inside a case on ${d.output.action}`. Flow outputs are never narrowed. A LOOP
+read it inside a case on ${d.output.action}`. Flow outputs are never narrowed; a node's
+prompt and assert reads of its inputs are checked too, and narrowed when the node sits in
+a `case` branch. A LOOP
 `while:`/`until:` predicate narrows with a top-level `and` part before the read, as a
 searched `case` `when:` does: `until: isinstance(r, Done) and r.answer == "ok"` (a check
 under `or`/`not` doesn't narrow); unnarrowed, the error says to check the member first

@@ -309,10 +309,40 @@ When the loader knows a value's type, reading a field that type can't have is a 
 error: a field on a scalar (`str`, `int`, `Literal(...)`, ...) or a list, a field a
 record doesn't declare, or a field of a `file` other than `uri`, `mime`, and `name`.
 This covers `${input.X...}`, `${node.output...}`, and a MAP's `${item...}` in bindings,
-`case` conditions, and flow outputs, and the carried fields a LOOP `while:`/`until:`
-predicate reads. Reading a declared field through an `Optional(...)` record still gives
+`case` conditions, and flow outputs, the carried fields a LOOP `while:`/`until:`
+predicate reads, a node's local names in its `prompt:` (AGENT or `human_input`), an
+AGENT's `system_prompt:`, a `human_input` question's text and
+`adaptive_questions.prompt:`, and the node's own `asserts:`, and `${input.X...}` in flow
+`asserts:`. Reading a declared field through an `Optional(...)` record still gives
 `null` when the whole value is null, and values whose type isn't known at load
 (`object`, `Any`, an untyped output, or anything below them) aren't checked.
+
+A node's local name is typed by what it is bound to: a typed binding by its declared
+type, a literal by its value, and any other binding by the type the loader infers for
+it. A typed binding also has the type its value is inferred to have when that fits the
+declared type. So with `Order: Union(Buy, Sell)`, where only `Buy` has `qty`,
+`v: !Order ${d.output}` in a `case` branch on `${d.output.action}` that takes `buy`, or
+`v: !Order {action: buy, qty: 1}`, can read `v.qty`. A CALL input reads its
+binding's type: a field only the child's declared input has is a load error, since the
+value can't hold it. A LOOP's carried name may read a field the seed's type or the
+body's returned type has.
+
+Each shipped builtin returns text, so a field read on its result is a load error
+wherever it is written:
+
+```
+reference ${upper(...).f} reads field 'f' on type str, which has no fields
+```
+
+Changed: a field read a local name's type can't have, in a prompt, question text, or
+node assert, or on `${input.X...}` in a flow assert, used to load and read `null` or
+fail at run; it is now a load error. So is a field read on a builtin's result. A read
+of a field only some union members have, in a node assert or on `${input.X...}` in a
+flow assert, used to load even when the assert guarded it with `isinstance`
+(`not isinstance(v, Buy) or v.qty > 0`); it is now a load error, since a check inside
+an assert doesn't narrow. Route the node with a `case` that narrows the value its input
+is bound from instead; for a flow assert on an input, check it in a node under such a
+`case`.
 
 A `file` value has three fields: `uri`, `mime`, and `name`. They read the same way in
 bindings, templates and prompts, `case` `on:` and `when:`, and node and flow asserts,
@@ -325,8 +355,8 @@ reference ${a.output.f.urii} reads field 'urii' on a file, which has only uri, m
 ```
 
 A file the loader doesn't know about (from an untyped output) isn't checked; any other
-field of it is a miss at run, like a missing key. An AGENT prompt checks only the first
-name of each reference, so a field read on a file there isn't checked either.
+field of it is a miss at run, like a missing key. A prompt's local name bound to a
+typed `file` is checked like any other read, so `${f.urii}` there is a load error too.
 
 Changed: a read of another field on a typed `file` (`${a.output.f.urii}`) used to load
 and read as missing; it is now a load error. The three fields are now typed too, so a
@@ -347,9 +377,12 @@ sell have; read it inside a case on ${d.output.action}
 An untagged union says `which only 1 of 2 union members have; check the member with
 isinstance(d.output, <Type>) in a case first`. A field no member has is an unknown field.
 The rule also covers a node's `${output...}` asserts, flow asserts, MAP `${item...}`,
-and flow outputs, which are never narrowed. To return a member field, read it in a
-branch and return the `case` result with `${case.output}`; to use one per item, pass
-`${item}` to the child and narrow there.
+and flow outputs, which are never narrowed. A node's prompt and assert reads of its
+inputs are checked too, and narrowed only by the `case` branch the node sits in, not by
+an `isinstance` or tag check inside the assert; for an input bound from one reference,
+the hint names that source (`read it inside a case on ${d.output.action}`). To return a
+member field, read it in a branch and return the `case` result with `${case.output}`; to
+use one per item, pass `${item}` to the child and narrow there.
 
 A LOOP `while:`/`until:` predicate can't sit in a `case` branch, so it narrows with a
 top-level `and` part instead: an `isinstance(r, T)` part narrows `r` for the parts after it
@@ -3373,6 +3406,9 @@ is committed, and may read `${output}` **and** the call's declared inputs
 `asserts:` at load time — assert a `map`'s result with a flow-level or downstream
 check instead.) A `call` or `loop` node's own asserts can't use `isinstance`; assert
 inside the child flow.
+
+A node assert's field read on an input (`name.f`) and a flow assert's `input.X.f` are
+field-checked at load, like any other read (see [References](#references-naming-a-value)).
 
 ## Next
 

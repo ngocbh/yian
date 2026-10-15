@@ -32,7 +32,7 @@ class CodeDescriptor(NodeDescriptor):
     Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
     the Compose-only `range`/`field_ranges` parse metadata) from `NodeDescriptor`, along with the `input:`
     call-arg map and the template `parse`; its `_validate_fields` hook rejects a `code:` YAML
-    read as non-text (including `null`), then runs the base asserts-list check. The
+    read as non-text (including `null`), then runs the base `input:` shape and asserts checks. The
     code-specific semantic fields (`code`, `asserts`) and diagnostic origin carriers
     (`code_origin`, `code_line_origins`) are declared here; `inputs`/`outputs` come from the base.
 

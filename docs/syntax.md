@@ -31,6 +31,14 @@ Each `nodes:` entry is a node (a mapping with `kind:`) or a tagged value, such a
 Flows, nodes, and `defs:` entries all spell their signature `input:` and `output:`.
 The old plural `inputs:`/`outputs:` keys are a load error at any level.
 
+A node's `input:` is a mapping of names to bindings, or omitted. A whole `${...}`
+reference or any other value is a load error at the field: for
+`input: ${seed.output}`, list each field (`n: ${seed.output.n}`).
+
+Changed: a node's `input: []` and `input: ''` used to load as no inputs and are now
+load errors; remove `input:` or write `input: {}`. A non-mapping `input:` such as
+`input: ${seed.output}` used to crash the loader with a Python error.
+
 The shape of `output:` sets what the flow returns:
 
 - `output: ${x}` (one binding string) returns the value of `x` as is.
@@ -2516,10 +2524,11 @@ each:
     ticker: ${item}
 ```
 
-The `input:` map contains the child's arguments. A `call` re-exports the child's
-output (`None` when the child has no `output:`; `{}` for `output: {}`); a `map`
-requires a non-empty child `output:` and returns `list(U)` in `over:` order. If the
-child's `output:` is a record, even of one field, the MAP returns a list of records.
+The `input:` map contains the child's arguments, one per name (a whole `${...}`
+record is a load error). A `call` re-exports the child's output (`None` when the
+child has no `output:`; `{}` for `output: {}`); a `map` requires a non-empty child
+`output:` and returns `list(U)` in `over:` order. If the child's `output:` is a
+record, even of one field, the MAP returns a list of records.
 `parallel:` is accepted but currently inert; MAP concurrency is controlled by
 the run's `num_workers`, while collection order remains the `over:` order.
 
@@ -2855,8 +2864,10 @@ Here the generated child signature is `n: int`, and its record output `{n: int}`
 returns the whole carried record.
 
 - **`input:`** is the seed carried record — its field names and types define `'a`.
-  A tagged seed (`n: !int 0`) checks the starting value. A field the body omits
-  keeps the seed's declared type; a returned field follows the body's output type.
+  It is a mapping, so a whole record such as `input: ${seed.output}` is a load
+  error; list each carried field (`n: ${seed.output.n}`). A tagged seed
+  (`n: !int 0`) checks the starting value. A field the body omits keeps the seed's
+  declared type; a returned field follows the body's output type.
   Every seed, tagged or not, is checked against the body's input like a
   [`call` argument](#call-map-composition-over-child-flows), and nothing is coerced:
   `n: "1"` into an `int` input is a load error (write `1`), a `str` reference does not

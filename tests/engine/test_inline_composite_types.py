@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
+import pickle
 
 import pytest
 
@@ -397,7 +397,7 @@ def test_whole_item_reference_returns_a_fresh_nullable_type_without_mutation():
         required=frozenset({"name"}),
         nullable=True,
     )
-    before = deepcopy(item)
+    before = pickle.dumps(item)
     calls: list[tuple[str, SourceRange | None]] = []
 
     def item_type(
@@ -420,7 +420,7 @@ def test_whole_item_reference_returns_a_fresh_nullable_type_without_mutation():
     assert inferred == item
     assert inferred is not item
     assert inferred.nullable is True
-    assert item == before
+    assert pickle.loads(before) == item
 
 
 def test_computed_item_expression_rejects_without_invoking_item_provider():
@@ -514,7 +514,7 @@ def test_direct_record_walk_accumulates_every_nullable_step_without_mutation(
         required=frozenset({"middle"}),
         nullable=root_nullable,
     )
-    before = deepcopy(root)
+    before = pickle.dumps(root)
 
     inferred = _infer(
         "${input.record.middle.value}",
@@ -524,7 +524,7 @@ def test_direct_record_walk_accumulates_every_nullable_step_without_mutation(
     assert inferred.kind == ValueKind.INTEGER
     assert inferred.nullable is expected_nullable
     assert inferred is not value_type
-    assert root == before
+    assert pickle.loads(before) == root
 
 
 def test_nullable_producer_root_propagates_to_a_selected_field():
@@ -958,7 +958,7 @@ def test_canonicalization_deep_copies_sorts_and_preserves_required_membership():
         },
         required=frozenset({"é", "required_nullable", "a"}),
     )
-    before = deepcopy(original)
+    before = pickle.dumps(original)
 
     canonical = canonicalize_inline_type(original)
 
@@ -970,7 +970,7 @@ def test_canonicalization_deep_copies_sorts_and_preserves_required_membership():
     assert canonical.fields["a"] is not listed_variant
     assert canonical.fields["a"].element is not variant
     assert canonical.fields["a"].element.tags == variant.tags
-    assert original == before
+    assert pickle.loads(before) == original
     assert list(original.fields or {}) == ["é", "optional", "required_nullable", "a"]
 
 

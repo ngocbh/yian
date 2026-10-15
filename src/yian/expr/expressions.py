@@ -32,6 +32,7 @@ from yian.typesys.values import (
     TypeCheckError,
     ValueKind,
     build_value_as,
+    normalize_files,
     parse_int_text,
     union_field,
     value_repr,
@@ -931,9 +932,10 @@ class _EvalExpr:
         """`T(x)` checks the value of `x` against `T`; `T(a=..., b=...)` builds a record.
 
         The keyword form's record holds exactly the given fields. Either value is
-        checked with the variable pool's write-boundary check and given back
-        unchanged, so it is exactly what `!T ${x}` delivers. A missing `x` is checked
-        as `None` in the non-strict modes and raises in `STRICT_RAISE`.
+        checked with the variable pool's write-boundary check and given back with
+        only its file and object representation read as `T` reads it
+        (`normalize_files`), so it is exactly what `!T ${x}` delivers. A missing `x`
+        is checked as `None` in the non-strict modes and raises in `STRICT_RAISE`.
 
         Raises:
             ExpressionError: The call mixes keyword and positional arguments or has
@@ -955,7 +957,7 @@ class _EvalExpr:
             build_value_as(self._types[name], value)
         except TypeCheckError as exc:
             raise ConstructorTypeError(f"{name}(...): {exc}") from exc
-        return value
+        return normalize_files(self._types[name], value)
 
     def _constructor_route(self, name: str, call_suffix: Tree) -> ValueRoute:
         """The route of a constructor call, from its argument routes.

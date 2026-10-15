@@ -916,7 +916,6 @@ def test_decode_record_rejects_excessive_nesting_as_a_value_error():
             datetime(2026, 8, 13, 9, 30, tzinfo=timezone.utc),
             "datetime.datetime(2026, 8, 13, 9, 30, tzinfo=datetime.timezone.utc)",
         ),
-        (FileRef(uri="s3://bucket/report"), "FileRef("),
     ],
 )
 def test_typed_object_output_rejects_a_non_json_member(member, shown):
@@ -925,6 +924,16 @@ def test_typed_object_output_rejects_a_non_json_member(member, shown):
 
     assert shown in str(caught.value)
     assert caught.value.path == ("nested", "at")
+
+
+def test_typed_object_output_records_a_nested_file_as_its_mapping():
+    file = FileRef(uri="s3://bucket/report")
+
+    wire, decoded = canonical_typed({"items": (1, 2), "nested": {"at": file}}, ValueKind.OBJECT)
+
+    mapping = {"uri": "s3://bucket/report", "mime": None, "name": None}
+    assert wire == {"kind": "object", "value": {"items": [1, 2], "nested": {"at": mapping}}}
+    assert decoded.to_object() == wire["value"]
 
 
 def test_recorded_object_past_the_nesting_limit_still_replays():

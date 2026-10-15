@@ -181,7 +181,9 @@ class NormalizedAzureChatOpenAI(RequestBlockMixin, AzureChatOpenAI):
             and not has_open_schema(schema)
             and (response_format := _strict_schema_without(schema)) is not None
         ):
-            return self._stripped_strict_output(schema, response_format, include_raw=include_raw)
+            return self._stripped_strict_output(
+                schema, response_format, include_raw=include_raw, **kwargs
+            )
         if method is None and has_open_schema(schema):
             method = "function_calling"
         _strict_false_for_open_schema(self, schema, method, kwargs)
@@ -189,7 +191,7 @@ class NormalizedAzureChatOpenAI(RequestBlockMixin, AzureChatOpenAI):
             kwargs["method"] = method
         return super().with_structured_output(schema, include_raw=include_raw, **kwargs)
 
-    def _stripped_strict_output(self, schema, response_format, *, include_raw):
+    def _stripped_strict_output(self, schema, response_format, *, include_raw, **kwargs):
         """Bind `response_format` and parse the reply's content as `schema`.
 
         Args:
@@ -200,17 +202,23 @@ class NormalizedAzureChatOpenAI(RequestBlockMixin, AzureChatOpenAI):
             include_raw (`bool`):
                 Whether to return ``{"raw", "parsed", "parsing_error"}``, assembled as
                 `AzureChatOpenAI.with_structured_output` does.
+            **kwargs:
+                Bound into the model call as langchain's ``json_schema`` path binds them;
+                ``tools`` are converted to OpenAI tools as it converts them.
 
         Returns:
             `Runnable`:
                 A runnable that returns outputs matching `schema`.
         """
+        if tools := kwargs.pop("tools", None):
+            kwargs["tools"] = [convert_to_openai_tool(tool) for tool in tools]
         llm = self.bind(
             response_format=response_format,
             ls_structured_output_format={
                 "kwargs": {"method": "json_schema", "strict": True},
                 "schema": convert_to_openai_tool(schema),
             },
+            **kwargs,
         )
         parser = RunnableLambda(partial(_parse_strict_reply, schema=schema))
         if not include_raw:

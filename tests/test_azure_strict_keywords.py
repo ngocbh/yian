@@ -159,6 +159,28 @@ def test_azure_responses_deployment_sends_a_bounded_schema_strict_without_the_bo
     assert not _MOVED & set(_keys(payload))
 
 
+def test_azure_extra_kwargs_reach_the_payload(azure_env):
+    llm = _azure()
+    schema = _schema("int(0..10)")
+    payload = _payload(llm, llm.with_structured_output(schema, temperature=0.1))
+    assert payload["temperature"] == 0.1
+    assert payload["response_format"] == _strict_schema_without(schema)
+
+
+def _lookup(query: str) -> str:
+    """Look `query` up."""
+    return query
+
+
+def test_azure_extra_tools_are_sent_as_langchain_sends_them(azure_env):
+    llm = _azure()
+    schema = _schema("int(0..10)")
+    payload = _payload(llm, llm.with_structured_output(schema, tools=[_lookup]))
+    expected = AzureChatOpenAI.with_structured_output(llm, schema, tools=[_lookup])
+    assert payload["tools"] == _payload(llm, expected)["tools"]
+    assert payload["response_format"] == _strict_schema_without(schema)
+
+
 @pytest.mark.parametrize("text", ["int", "C"])
 def test_azure_closed_unbounded_schema_payload_is_unchanged(azure_env, text):
     llm = _azure()

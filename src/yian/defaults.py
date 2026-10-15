@@ -93,13 +93,18 @@ ENTRIES: tuple[Entry, ...] = (
         minimum=1,
         maximum=200,
     ),
-    # Loading a body recurses through the loader, and a 50-level chain loads, runs,
-    # and resumes within 650 frames of stack headroom; deeper chains are not proven to
-    # fit, so the variable can only lower it.
+    # Loading a body or a `uses:` file recurses through the loader, so the limit holds
+    # both chains. A 50-level chain loads, runs, and resumes within Python's default
+    # recursion limit; the worst accepted load, 50 imports whose last file calls a
+    # 50-level chain, peaks near 735 frames on Python 3.10 and 3.12. Deeper chains are
+    # not proven to fit, so the variable can only lower it.
     Entry(
         "MAX_CALL_NESTING",
         default=50,
-        description="Deepest chain of call, map, and loop bodies a flow may nest",
+        description=(
+            "Deepest chain of call, map, and loop bodies a flow may nest, and of uses: "
+            "files it may import"
+        ),
         group="limit",
         minimum=1,
         maximum=50,

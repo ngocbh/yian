@@ -31,6 +31,10 @@ authorities to the exact reachable keys, and installs `ComposedFlow.origin_resol
 Source-free graphs carry `None`; private `_assemble` products keep the resolver unset.
 Final resolver routes include the START signature's parameter, contract, and default origins.
 
+A flow's chain of `uses:` imports is at most `current().max_call_nesting` files deep, the
+call nesting limit, counted apart from call depth; each loaded flow records its own
+`import_depth`.
+
 Imports flow DOWN only: this module composes the compose package's own components plus
 `typesys`/`compile`; nothing in the engine imports it back.
 """
@@ -38,6 +42,7 @@ Imports flow DOWN only: this module composes the compose package's own component
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -277,6 +282,11 @@ class _LoadCtx:
 
     loading: set[Path] = field(default_factory=set)
     flows: dict[Path, ComposedFlow] = field(default_factory=dict)
+
+
+# `uses:` imports being loaded around the current one. It spans files and is never reset
+# by `load_flow`, so a custom `child_resolver` that calls `load_flow` is bounded too.
+_ACTIVE_IMPORTS: ContextVar[int] = ContextVar("_ACTIVE_IMPORTS", default=0)
 
 
 def _join_path(base, p: str) -> Path:
@@ -880,7 +890,9 @@ def _load_flow_body(
     reject_unread_tags(
         document, callable_scope.catalog_builder.consumed_tags, diagnostics
     )
-    return callable_scope.finalize(staged)
+    return replace(
+        callable_scope.finalize(staged), import_depth=callable_scope.import_depth
+    )
 
 
 @dataclass(frozen=True)
@@ -973,6 +985,12 @@ class _CallableScope:
         self._private: dict[str, _PrivateCallable] = {}
         self._built: dict[str, ComposedFlow] = {}
         self._in_progress: set[str] = set()
+        self._import_depth = 0
+
+    @property
+    def import_depth(self) -> int:
+        """Return the longest chain of `uses:` imports among the aliases resolved so far."""
+        return self._import_depth
 
     @property
     def catalog_builder(self) -> _SourceCatalogBuilder:
@@ -1095,7 +1113,29 @@ class _CallableScope:
     def resolve(
         self, flow_id: str, version: Optional[str] = None
     ) -> ComposedFlow:
-        """Resolve one callable once; a `uses:` declaration owns its external version."""
+        """Resolve one callable once; a `uses:` declaration owns its external version.
+
+        A `uses:` alias whose import would make the chain of `uses:` files deeper than
+        `current().max_call_nesting` is refused: before loading when the files already
+        being imported reach the limit, and after loading by the `import_depth` the
+        resolved flow carries, so a cached or memoized file is held to the same rule.
+
+        Args:
+            flow_id (`str`):
+                The callable name: a compiler-generated callable, a `defs:` entry, or a
+                `uses:` alias.
+            version (`str`, *optional*, defaults to `None`):
+                Unused; a `uses:` alias takes its version from its own ref.
+
+        Returns:
+            `ComposedFlow`:
+                The built callable, cached for later calls.
+
+        Raises:
+            `LoadError`:
+                Raised when the callable is unknown, recursive, fails to build, or its
+                import chain is past the limit; a `uses:` failure is located at its alias.
+        """
         if flow_id in self._built:
             return self._built[flow_id]
         if flow_id in self._private:
@@ -1164,6 +1204,12 @@ class _CallableScope:
                         f"callable {flow_id!r} (uses: {self._uses[flow_id]!r}) needs a search "
                         f"path or child_resolver to resolve (load with search_paths=[...])"
                     )
+                limit = current().max_call_nesting
+                active = _ACTIVE_IMPORTS.get()
+                # Checked before loading: loading the file would recurse another level.
+                if active >= limit:
+                    raise self._import_too_deep(flow_id, active + 1, limit)
+                token = _ACTIVE_IMPORTS.set(active + 1)
                 try:
                     child = self._external(ref.path, ref.version)
                 except LoadError:
@@ -1173,7 +1219,19 @@ class _CallableScope:
                         f"callable {flow_id!r} (uses: {self._uses[flow_id]!r}): could not "
                         f"resolve: {exc}"
                     ) from exc
+                finally:
+                    _ACTIVE_IMPORTS.reset(token)
                 loaded = _rebase_external_child(flow_id, child)
+                depth = loaded.import_depth
+                if type(depth) is not int or depth < 0:
+                    raise self._diagnostics.error(
+                        f"callable {flow_id!r} (uses: {self._uses[flow_id]!r}): resolved "
+                        f"flow has import_depth {depth!r}; expected a non-negative int"
+                    )
+                # A file loaded earlier (cached or memoized) never ran on this count.
+                if active + 1 + depth > limit:
+                    raise self._import_too_deep(flow_id, active + 1 + depth, limit)
+                self._import_depth = max(self._import_depth, 1 + depth)
             except LoadError as exc:
                 alias_cursor = _source_child(self._uses_cursor, flow_id)
                 raise self._diagnostics.prepend(
@@ -1192,6 +1250,15 @@ class _CallableScope:
             f"callable {flow_id!r} is neither an in-file defs: callable nor a uses: "
             f"alias — external flows are reachable only through a uses: alias "
             f"(declare `uses: {{{flow_id}: <ref>}}`)"
+        )
+
+    def _import_too_deep(self, alias: str, levels: int, limit: int) -> LoadError:
+        """Return the error for a `uses:` alias whose import makes the chain `levels` deep."""
+        return self._diagnostics.error(
+            f"callable {alias!r} (uses: {self._uses[alias]!r}): importing it makes a chain "
+            f"of uses: files {levels} deep, past the call nesting limit of {limit} (a "
+            "chain of uses: imports is held to the same limit as nested call, map, and "
+            "loop bodies); flatten the chain"
         )
 
     def eager_load_defs(self) -> None:

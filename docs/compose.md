@@ -498,6 +498,8 @@ authored nodes inside retained inline bodies are stamped normally.
   validated at load; supplied values are checked when the boundary binds them,
 - `origin_resolver` — an immutable source-neutral resolver whose exact domain is the
   distinct origins reachable from `compiled`; `None` only for a source-free graph.
+- `import_depth` — the longest chain of `uses:` imports beneath the flow (0 when it
+  imports nothing), held to the call nesting limit.
 - `diagnose(failure)` — the presentation-only boundary that resolves the complete
   ordered failure trace through that authority into a canonical `Diagnostic`.
 

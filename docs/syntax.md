@@ -2662,7 +2662,8 @@ Each CALL, MAP, or LOOP body is one level, whether it is a `defs:` entry, an inl
 directive, or a `uses:` flow. A flow's bodies nest at most 50 levels, counting through
 imported files (`YIAN_MAX_CALL_NESTING` can lower it; see [Defaults and
 limits](defaults.md)). A deeper chain is a load error at the `call:` field of the call
-that crosses the limit, or at the node for an inline body:
+that crosses the limit, or at the node for an inline body; a chain of `uses:` imports past
+the limit is a load error at the `uses:` alias that crosses it (see below):
 
 ```text
 call node 'top': calling callable 'c0' nests calls 51 levels deep, past the call nesting limit of 50 (each call, map, or loop body is a level); flatten the chain
@@ -2677,6 +2678,29 @@ it, flatten the chain: move a short body's nodes into its caller's graph, or run
 deep part as separate steps. The limit exists because loading, run setup, and replay
 walk nested bodies recursively; 50 levels stays well inside Python's default recursion
 limit.
+
+A chain of `uses:` imports is held to the same limit, counted apart from call depth: a
+flow importing a file is one file deep, and a file that imports another adds one, whether
+or not anything calls the import. An import that would make the chain 51 files deep is
+a load error at its `uses:` alias, with one frame per importing file above it:
+
+```text
+callable 'nxt' (uses: 'u50'): importing it makes a chain of uses: files 51 deep, past the call nesting limit of 50 (a chain of uses: imports is held to the same limit as nested call, map, and loop bodies); flatten the chain
+```
+
+A file imported twice counts at its deepest place, whichever import loads it first.
+The loaded flow records its chain as `ComposedFlow.import_depth`; a flow a host
+`child_resolver` builds without `load_flow` carries 0.
+
+Changed: a chain of 51 `uses:` files that calls through each import used to fail at
+the root `call:`; it now fails at the `uses:` alias that crosses the limit. An import
+chain more than 50 files deep that never calls through used to load; it now fails at
+load. Under the default recursion limit, a chain of about 245 or more such files used to
+fail with "could not resolve" and "maximum recursion depth exceeded", and a chain of
+about 170 or more files that call through used to fail with "could not rebase child" and
+"maximum recursion depth exceeded". A cycle across 50 or more files reports this limit
+instead of the cross-file cycle: a root outside the cycle makes a 50-file cycle 51 deep
+before it closes.
 
 Changed: a chain deeper than about 95 levels used to crash at load with a
 `RecursionError` or "could not resolve callable ...: maximum recursion depth exceeded".

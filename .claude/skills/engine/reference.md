@@ -1277,7 +1277,9 @@ and runtime:
   load context guards cross-file recursion. An injected resolver is responsible
   for any equivalent protection, so the baked call graph remains finite when
   that seam honors the contract, and at most `YIAN_MAX_CALL_NESTING` (default 50) deep,
-  checked in `_resolve_child` for any resolver.
+  checked in `_resolve_child` for any resolver. A chain of `uses:` imports is held to
+  the same limit, counted apart, in `_CallableScope.resolve`: before loading against
+  `_ACTIVE_IMPORTS`, and after against the loaded flow's `ComposedFlow.import_depth`.
 - `compose.build.pipeline` associates retained bodies with final descriptors.
   Outer `input:` bindings become generated `Parameter` values through
   `build.inline_inputs`' strict structural proof. Parent descriptors are built

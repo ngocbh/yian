@@ -329,7 +329,9 @@ CALL, MAP, and LOOP bodies nest at most 50 levels (`YIAN_MAX_CALL_NESTING`), cou
 `call(...)`, and `uses:` bodies alike; a deeper chain is a load error at the `call:`
 that crosses the limit (`nests calls N levels deep, past the call nesting limit of 50`,
 or `nests calls more than 50 levels deep, ...` when the loader stops before the end of
-the chain).
+the chain). A chain of `uses:` imports is held to 50 files, counted apart from call
+depth; the import that crosses it fails at its alias (`importing it makes a chain of
+uses: files 51 deep, past the call nesting limit of 50`).
 
 Bounds are ordered numeric literals with at most one end left open (`int(0..)`,
 `int(..100)`; `int(..)` is an error) and exclude booleans. Integer bounds

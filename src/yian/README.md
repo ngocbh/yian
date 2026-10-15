@@ -648,13 +648,15 @@ A flow's CALL, MAP, and LOOP bodies nest at most
 `call(...)` directive, and `uses:` flow on a chain is one level. The baked graph is a
 tree of compiled flows, and loading, run setup (the `copy.deepcopy` of the compiled
 flow in `run.py` and the recursive compile walkers), and replay walk it recursively,
-about 10 frames per level. At 50 levels a load, run, or resume peaks near 535 frames,
-which leaves about 450 for the caller under the default limit of 1000.
+about 10 frames per level. At 50 levels a load, run, or resume peaks near 535 frames.
+A chain of `uses:` imports adds about 4 frames per file: a load of 50 imports whose last
+file calls a 50-level chain peaks near 735 frames, which leaves about 265 for the caller
+under Python's default limit of 1000.
 
-`_resolve_child` checks twice. Before resolving, it counts the calls active in the file
-being loaded (`_load_flow` resets the count with `call_nesting_scope`) and fails once
-that count reaches the limit, so the loader never recurses deeper; this message says
-"more than 50 levels". After resolving, it adds the built callee's depth
+For calls, `_resolve_child` checks twice. Before resolving, it counts the calls active
+in the file being loaded (`_load_flow` resets the count with `call_nesting_scope`) and
+fails once that count reaches the limit, so the loader never recurses deeper; this
+message says "more than 50 levels". After resolving, it adds the built callee's depth
 (`call_nesting`, an iterative walk over `Node.origin_children()` that visits each flow
 once), which catches a callee built earlier: a cached def, a def written before its
 caller, or an imported file. Each file load resolves its `uses:` aliases in source
@@ -662,7 +664,15 @@ order before its `defs:`, so an imported file loads at its importer's base stack
 at the bottom of a def chain. A broken alias is reported at the alias, and a resolver
 (the file resolver or a custom `child_resolver`) that raises anything but `LoadError`
 becomes a load error there.
-This load rule is unrelated to runtime growth depth (`state.depth`, stamped through
+
+Loading a `uses:` file recurses into the loader too, so a chain of `uses:` imports is
+held to the same limit, counted apart from call depth. `_CallableScope.resolve` checks
+it twice in the same way. Before loading, it counts the imports being loaded
+(`_ACTIVE_IMPORTS`, which `load_flow` never resets, so it spans files and custom
+resolvers that call `load_flow`) and fails once that count reaches the limit. After
+loading, it adds the loaded flow's `ComposedFlow.import_depth`, which catches a file
+loaded earlier: a cached or memoized one. Both fail at the alias that crosses the limit.
+These load rules are unrelated to runtime growth depth (`state.depth`, stamped through
 `grow_depth_delta`; LOOP adds 0), which has no cap.
 
 Authored types use one parenthesized grammar: `Optional(str)`, `list(Buy)`,

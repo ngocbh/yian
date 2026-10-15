@@ -46,6 +46,7 @@ from yian.nodes.contracts import (
     Parameter,
     PartialRecordContract,
     ValueContract,
+    ValuePath,
     as_binding,
 )
 from yian.expr import ExpressionError
@@ -1131,12 +1132,14 @@ def _reject_non_json_literals(
     cursor: SourceCursor | None,
     label: str,
     diagnostics: LoadDiagnostics,
-    path: tuple[Any, ...] = (),
+    path: ValuePath = (),
 ) -> None:
     """Reject a literal in an untyped output that YAML read as a non-JSON value.
 
     An untagged date or datetime gets the quoted text to write; a `!!set` or
     `!!binary` literal is named without a hint. A tagged value is left to its tag.
+    An `!!omap` or `!!pairs` entry is checked at its pair. For an alias (`g: *d`)
+    the range is the anchor's; the label still names the output field.
 
     Args:
         value (`Any`): The constructed YAML value at `cursor`.
@@ -1144,14 +1147,17 @@ def _reject_non_json_literals(
             generated one, which is not checked.
         label (`str`): The output name, or `"output"` for a whole section.
         diagnostics (`LoadDiagnostics`): Factory for located load errors.
-        path (`tuple[Any, ...]`): Keys and indexes from the output to `value`.
+        path (`ValuePath`, *optional*, defaults to `()`): Keys and indexes from the
+            output to `value`.
 
     Raises:
         `LoadError`: Raised when `value` holds a date, datetime, set, or bytes
             literal.
         `SourceAccessError`: Raised when the retained cursor cannot be traversed.
     """
-    if cursor is None or cursor.tag is not None:
+    # A value the cursor doesn't hold was replaced after parsing, so the cursor
+    # cannot locate it.
+    if cursor is None or cursor.tag is not None or not cursor.holds(value):
         return
     # Recursion is bounded: `check_written_values` already capped written-value
     # nesting at 100 levels before the outputs are split.
@@ -1162,12 +1168,54 @@ def _reject_non_json_literals(
             )
     elif type(value) is list:
         for index, item in enumerate(value):
-            _reject_non_json_literals(
-                item, cursor.child(index), label, diagnostics, (*path, index)
-            )
-    elif isinstance(value, date):
+            if type(item) is not tuple:
+                _reject_non_json_literals(
+                    item, cursor.child(index), label, diagnostics, (*path, index)
+                )
+                continue
+            # An `!!omap` or `!!pairs` entry is a tuple whose cursor is the whole
+            # pair and can't be descended, so its parts are located at the pair.
+            pair = cursor.child(index)
+            for position, part in enumerate(item):
+                _raise_if_non_json_literal(
+                    part,
+                    None,
+                    pair.range,
+                    label,
+                    (*path, index, position),
+                    diagnostics,
+                )
+    else:
+        _raise_if_non_json_literal(
+            value, cursor.scalar_text, cursor.range, label, path, diagnostics
+        )
+
+
+def _raise_if_non_json_literal(
+    value: Any,
+    text: str | None,
+    source_range: SourceRange | None,
+    label: str,
+    path: ValuePath,
+    diagnostics: LoadDiagnostics,
+) -> None:
+    """Raise when one scalar in an untyped output is a date, set, or bytes value.
+
+    Args:
+        value (`Any`): The constructed scalar.
+        text (`str | None`): The authored scalar text, or `None` to spell a date
+            with `isoformat()`.
+        source_range (`SourceRange | None`): Where to locate the error.
+        label (`str`): The output name, or `"output"` for a whole section.
+        path (`ValuePath`): Keys and indexes from the output to `value`.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
+
+    Raises:
+        `LoadError`: Raised when `value` is a date, datetime, set, frozenset, or
+            bytes value.
+    """
+    if isinstance(value, date):
         kind = "datetime" if isinstance(value, datetime) else "date"
-        text = cursor.scalar_text
         if text is None:
             text = value.isoformat()
         quoted = yaml_quoted(text)
@@ -1175,12 +1223,12 @@ def _reject_non_json_literals(
         raise diagnostics.error(
             f"{path_label(label, path)!r}: `{text}` is not a JSON value (YAML reads it "
             f"as a {kind}); quote it to keep it as text: {hint}",
-            range=cursor.range,
+            range=source_range,
         )
-    elif isinstance(value, (set, frozenset, bytes)):
+    if isinstance(value, (set, frozenset, bytes)):
         raise diagnostics.error(
             f"{path_label(label, path)!r}: {value_repr(value)} is not a JSON value",
-            range=cursor.range,
+            range=source_range,
         )
 
 

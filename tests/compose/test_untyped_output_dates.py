@@ -57,6 +57,15 @@ def test_nested_untagged_date_names_its_path(g, label):
         load_flow(_flow(f"g: {g}\nh: ${{b.output}}"))
 
 
+def test_a_nested_date_is_located_at_the_value():
+    """A nested unquoted date's error range starts at the date, not the field."""
+    text = _flow("g:\n  x: 1\n  d: 2026-01-01\nh: ${b.output}")
+    with pytest.raises(LoadError, match=re.escape(f"'g.d': {_DATE}")) as excinfo:
+        load_flow(text)
+    line = text.splitlines().index("    d: 2026-01-01") + 1
+    assert excinfo.value.diagnostic.frames[-1].range.start_line == line
+
+
 @pytest.mark.parametrize(
     ("as_of", "message"),
     [
@@ -71,7 +80,7 @@ def test_nested_untagged_date_names_its_path(g, label):
         ),
     ],
 )
-def test_untagged_datetime_in_an_untyped_output_is_a_load_error(as_of, message):
+def test_a_datetime_or_timestamp_in_an_untyped_output_is_a_load_error(as_of, message):
     """An unquoted datetime, or a `!!timestamp` scalar, fails at load."""
     with pytest.raises(LoadError, match=re.escape(message)):
         load_flow(_flow(f"as_of: {as_of}\nh: ${{b.output}}"))
@@ -199,6 +208,14 @@ def test_untagged_date_in_a_body_output_is_a_load_error(text):
         load_flow(text)
 
 
+def test_a_body_output_date_is_located_at_the_value():
+    """An unquoted date in a `defs:` body's output is located at the date."""
+    with pytest.raises(LoadError, match=re.escape(f"'d': {_DATE}")) as excinfo:
+        load_flow(_NAMED_CALL)
+    line = _NAMED_CALL.splitlines().index("      d: 2026-01-01") + 1
+    assert excinfo.value.diagnostic.frames[-1].range.start_line == line
+
+
 @pytest.mark.parametrize(
     ("g", "message"),
     [
@@ -213,14 +230,38 @@ def test_set_or_binary_literal_in_an_untyped_output_is_a_load_error(g, message):
 
 
 def test_an_aliased_date_names_the_output_field():
-    """An alias to an unquoted date names the output field that reads it."""
+    """An alias to an unquoted date names the output field, located at the anchor."""
     text = (
         "id: p\nname: p\nnodes:\n  b:\n    kind: code\n"
         "    input:\n      d: &d 2026-01-01\n    code: return 1\n"
         "output:\n  g: *d\n  h: ${b.output}\n"
     )
-    with pytest.raises(LoadError, match=re.escape(f"'g': {_DATE}")):
+    with pytest.raises(LoadError, match=re.escape(f"'g': {_DATE}")) as excinfo:
         load_flow(text)
+    line = text.splitlines().index("      d: &d 2026-01-01") + 1
+    assert excinfo.value.diagnostic.frames[-1].range.start_line == line
+
+
+@pytest.mark.parametrize(
+    ("g", "message"),
+    [
+        (
+            "!!omap [a: 2026-01-01]",
+            f"'g[0][1]': {_DATE}; {_HINT}`\"2026-01-01\"`",
+        ),
+        ("!!pairs [a: !!set {x: null}]", "'g[0][1]': {'x'} is not a JSON value"),
+    ],
+)
+def test_a_non_json_value_in_an_omap_pair_is_a_load_error(g, message):
+    """A date or set as an `!!omap` or `!!pairs` value fails at load, at the pair."""
+    text = _flow(f"g: {g}\nh: ${{b.output}}")
+    with pytest.raises(LoadError, match=re.escape(message) + "$") as excinfo:
+        load_flow(text)
+    lines = text.splitlines()
+    line = lines.index(f"  g: {g}") + 1
+    frame_range = excinfo.value.diagnostic.frames[-1].range
+    assert frame_range.start_line == line
+    assert frame_range.start_col == lines[line - 1].index("[") + 2
 
 
 def test_quoted_or_tagged_dates_keep_their_behavior():
@@ -233,6 +274,7 @@ def test_quoted_or_tagged_dates_keep_their_behavior():
         load_flow(_flow("as_of: !Any 2026-01-01\nh: ${b.output}"))
     load_flow(_flow('as_of: !date "2026-01-01"\nh: ${b.output}'))
     load_flow(_flow('as_of: "${b.output}-2026-01-01"\nh: ${b.output}'))
+    load_flow(_flow("as_of: ${b.output}-2026-01-01\nh: ${b.output}"))
 
 
 def test_other_untagged_literals_in_untyped_outputs_still_load():

@@ -88,6 +88,26 @@ def _strict_schema_without(schema_cls: type) -> Optional[dict[str, Any]]:
     return fmt if moved else None
 
 
+def _langchain_sends_a_tool(model_name: Optional[str]) -> bool:
+    """Whether langchain sends ``json_schema`` structured output to `model_name` as a tool.
+
+    Mirrors the model check in langchain-openai 1.6.2's
+    ``BaseChatOpenAI.with_structured_output``, which falls back to ``function_calling``
+    for models without structured outputs. On Azure the model name is the deployment name.
+
+    Args:
+        model_name (`str`, *optional*):
+            The model's ``model_name``.
+
+    Returns:
+        `bool`:
+            `True` for a name starting with ``gpt-3`` or ``gpt-4-``, or equal to ``gpt-4``.
+    """
+    return bool(model_name) and (
+        model_name.startswith(("gpt-3", "gpt-4-")) or model_name == "gpt-4"
+    )
+
+
 def _parse_strict_reply(message: AIMessage, schema: type[BaseModel]) -> BaseModel:
     """Validate the text of `message` as JSON for `schema`.
 
@@ -200,7 +220,8 @@ class NormalizedAzureChatOpenAI(RequestBlockMixin, AzureChatOpenAI):
         or one cut off mid-value raises an `OutputParserException`, naming any refusal,
         that yian's structured-output retry corrects. A class that sets
         ``json_schema_extra`` anywhere in its tree keeps langchain's request, since
-        keywords it adds by hand have no check (`_has_json_schema_extra`). Any other
+        keywords it adds by hand have no check (`_has_json_schema_extra`), and so does a
+        deployment langchain sends as a function tool (`_langchain_sends_a_tool`). Any other
         schema or method reaches langchain unchanged.
 
         Args:
@@ -222,6 +243,7 @@ class NormalizedAzureChatOpenAI(RequestBlockMixin, AzureChatOpenAI):
         if (
             method is None
             and "strict" not in kwargs
+            and not _langchain_sends_a_tool(self.model_name)
             and isinstance(schema, type)
             and issubclass(schema, BaseModel)
             and not has_open_schema(schema)

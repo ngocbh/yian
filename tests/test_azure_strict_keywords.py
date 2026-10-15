@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pydantic import v1 as pydantic_v1
 
 from tests.test_structured_open_schema import _ToolCallServer, _azure, _payload, azure_env
-from yian.llm_clients.azure_client import _strict_schema_without
+from yian.llm_clients.azure_client import _langchain_sends_a_tool, _strict_schema_without
 from yian.memory.reflective import _ReflectionResponse
 from yian.nodes.agent.structured import (
     _structured_validation_path,
@@ -245,6 +245,32 @@ def test_azure_hand_written_schema_keywords_keep_the_unchanged_path(azure_env, s
     payload = _payload(llm, llm.with_structured_output(schema))
     assert payload == _payload(llm, AzureChatOpenAI.with_structured_output(llm, schema))
     assert payload["response_format"] is schema
+
+
+_LEGACY_DEPLOYMENTS = ["gpt-4", "gpt-4-turbo", "gpt-35-turbo"]
+
+
+@pytest.mark.filterwarnings("ignore")
+@pytest.mark.parametrize("deployment", _LEGACY_DEPLOYMENTS)
+@pytest.mark.parametrize("name", ["int(0..10)", "_ReflectionResponse"])
+def test_azure_legacy_deployment_keeps_langchains_request(azure_env, deployment, name):
+    llm = _azure(deployment)
+    schema = _BOUNDED[name]()
+    payload = _payload(llm, llm.with_structured_output(schema))
+    assert payload == _payload(llm, AzureChatOpenAI.with_structured_output(llm, schema))
+    assert "tools" in payload
+    assert "response_format" not in payload
+
+
+@pytest.mark.filterwarnings("ignore")
+@pytest.mark.parametrize("deployment", [
+    *_LEGACY_DEPLOYMENTS, "gpt-3.5-turbo", "gpt-4o", "gpt-4.1", "gpt-4o-mini", "o3", "gpt-5",
+])
+def test_legacy_deployment_check_matches_langchain(azure_env, deployment):
+    llm = _azure(deployment)
+    schema = _schema("int")
+    payload = _payload(llm, AzureChatOpenAI.with_structured_output(llm, schema))
+    assert _langchain_sends_a_tool(deployment) is ("tools" in payload)
 
 
 class _V1Count(pydantic_v1.BaseModel):

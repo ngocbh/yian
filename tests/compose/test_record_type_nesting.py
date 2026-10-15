@@ -6,8 +6,9 @@ its resolved type: each record and list is a level, a union counts as its deepes
 member, a scalar adds none, and a typedef name counts as deep as its definition. The
 total must stay within `MAX_TYPE_NESTING` (100 by default), however YAML text or aliases
 built the record, so a 1000-link alias chain is a located load error instead of a
-`RecursionError`. A bare type text or typedef name at the top of `output:` keeps the
-type parser's own checks.
+`RecursionError` (under a raised `YIAN_MAX_YAML_NODES`: at the default, the chain's
+anchors exceed the node limit first). A bare type text or typedef name at the top of
+`output:` keeps the type parser's own checks.
 
 The message reads `type at <path> nests deeper than <limit> levels, the limit for a type
 (each record and list is a level)`, located at the record or field that crosses the
@@ -28,6 +29,16 @@ from yian.run import run_flow
 MAX_TYPE_NESTING = Defaults().max_type_nesting
 
 _LIMIT = f"nests deeper than {MAX_TYPE_NESTING} levels, the limit for a type"
+
+
+# A listed chain's anchors cost quadratically many nodes: a 1000-link chain holds over
+# 500,000, past the default YIAN_MAX_YAML_NODES. These tests exercise the nesting checks
+# behind the node limit, so they raise it; test_yaml_node_limit.py covers the default.
+@pytest.fixture(autouse=True)
+def _raised_yaml_node_limit(set_defaults) -> None:
+    """Raise the YAML node limit so a 1000-link alias chain reaches the nesting checks."""
+    set_defaults(MAX_YAML_NODES=10_000_000)
+
 
 _ECHO = "    kind: code\n    code: tests.engine._compose_codefns:echo\n"
 

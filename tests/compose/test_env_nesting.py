@@ -2,8 +2,9 @@
 
 Each `env:` value is checked at load with the counting the run-time check applies to a
 value, whether YAML text or aliases built it, so a 1000-link alias chain fails at load
-instead of raising `RecursionError` when the run walks it. A value at the limit loads
-and runs.
+instead of raising `RecursionError` when the run walks it (under a raised
+`YIAN_MAX_YAML_NODES`: at the default, the chain's anchors exceed the node limit first).
+A value at the limit loads and runs.
 
 Message prefix per site, each at the `env:` entry's value:
 
@@ -27,6 +28,16 @@ from yian.run import run_flow
 MAX_VALUE_NESTING = Defaults().max_value_nesting
 
 _LIMIT = f"value nests deeper than {MAX_VALUE_NESTING} levels"
+
+
+# A listed chain's anchors cost quadratically many nodes: a 1000-link chain holds over
+# 500,000, past the default YIAN_MAX_YAML_NODES. These tests exercise the nesting checks
+# behind the node limit, so they raise it; test_yaml_node_limit.py covers the default.
+@pytest.fixture(autouse=True)
+def _raised_yaml_node_limit(set_defaults) -> None:
+    """Raise the YAML node limit so a 1000-link alias chain reaches the nesting checks."""
+    set_defaults(MAX_YAML_NODES=10_000_000)
+
 
 _ECHO = "    kind: code\n    code: tests.engine._compose_codefns:echo\n"
 

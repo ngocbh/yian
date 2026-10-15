@@ -867,3 +867,149 @@ def test_frame_types_are_gone() -> None:
         assert not hasattr(contracts, name)
     assert not hasattr(runtime_contracts, "FrameProposal")
     assert "open_frame" not in vars(contracts.MemorySession)
+
+
+def test_freeze_memo_keeps_the_nesting_limit() -> None:
+    """A dict reached once shallow and again past the limit still fails at the deep path."""
+    from yian.defaults import current
+
+    limit = current().memory_json_nesting
+    shared: dict[str, Any] = {"leaf": 1}
+    deep: Any = shared
+    for _ in range(limit - 1):
+        deep = [deep]
+    item = {"a": shared, "b": deep}
+
+    with pytest.raises(ValueError) as caught:
+        LearnContext("run", "notes", (), feedback=(item,))
+    assert str(caught.value) == (
+        f"feedback[0].b{'[0]' * (limit - 1)} nests deeper than the memory "
+        f"limit of {limit} levels (derived from YIAN_MAX_VALUE_NESTING)"
+    )
+
+
+def test_freeze_still_detects_cycles() -> None:
+    loop: list[Any] = []
+    loop.append(loop)
+    with pytest.raises(ValueError) as caught:
+        LearnContext("run", "notes", (), feedback=(loop,))
+    assert str(caught.value) == "feedback[0][0] contains a circular JSON value"
+
+    node: dict[str, Any] = {}
+    node["self"] = node
+    with pytest.raises(ValueError) as caught:
+        LearnContext("run", "notes", (), feedback=({"x": [node]},))
+    assert str(caught.value) == "feedback[0].x[0].self contains a circular JSON value"
+
+
+def test_freeze_shares_a_repeated_subtree() -> None:
+    shared = {"note": ["kept", 1]}
+    context = LearnContext("run", "notes", (), feedback=({"a": shared, "b": shared},))
+
+    (item,) = context._feedback
+    (_, first), (_, second) = item.entries
+    assert first is second
+    assert context.feedback == ({"a": shared, "b": shared},)
+
+
+def test_learn_context_equal_feedback() -> None:
+    shared = {"note": ["kept", 1]}
+    feedback = ({"a": shared, "b": [shared]}, shared)
+    aliased = LearnContext("run", "notes", (), feedback=feedback)
+    copied = LearnContext("run", "notes", (), feedback=copy.deepcopy(feedback))
+
+    assert aliased.feedback == copied.feedback == feedback
+    assert aliased == copied
+
+
+def _proposed_feedback(forged: object) -> LearnContext:
+    """Return the context a session receives after ``propose_learning`` rebuilds a forged one."""
+    from yian.memory import MemorySpec
+    from yian.runtime.memory_runtime import MemoryRuntime
+    from tests.engine._memory_fakes import _Memory
+
+    memory = _Memory()
+    runtime = MemoryRuntime.open(
+        memories=(MemorySpec("notes", "notes", {}, (DeclSite((), ("root",), None),), False),),
+        origins={"notes": None}, memory={"notes": memory},
+    )
+    context = LearnContext("run", "notes", ())
+    object.__setattr__(context, "_feedback", forged)
+    try:
+        runtime.propose_learning((context,))
+    finally:
+        runtime.close()
+    received, = memory.learn_contexts
+    return received
+
+
+def test_propose_learning_rebuild_of_forged_feedback() -> None:
+    """Rebuilding a context thaws and refreezes its feedback, as it does today."""
+    from yian.memory.contracts import (
+        _FrozenJsonArray, _FrozenJsonObject, _FrozenJsonScalar, _FrozenJsonScalarKind as Kind,
+    )
+
+    def scalar(kind: Kind, value: object) -> _FrozenJsonScalar:
+        return _FrozenJsonScalar(kind, value)  # type: ignore[arg-type]
+
+    # A string-kind scalar holding an int is rebuilt as an integer.
+    received = _proposed_feedback((scalar(Kind.STRING, 5),))
+    assert received._feedback == (scalar(Kind.INTEGER, 5),) and received.feedback == (5,)
+
+    # Unsorted, duplicate object entries are rebuilt sorted, and the last duplicate wins.
+    received = _proposed_feedback((_FrozenJsonObject((
+        ("b", scalar(Kind.INTEGER, 1)), ("a", scalar(Kind.INTEGER, 2)), ("b", scalar(Kind.INTEGER, 3)),
+    )),))
+    assert received._feedback == (_FrozenJsonObject((
+        ("a", scalar(Kind.INTEGER, 2)), ("b", scalar(Kind.INTEGER, 3)),
+    )),)
+
+    # A raw list inside a frozen array is validated and detached.
+    raw = ["x"]
+    received = _proposed_feedback((_FrozenJsonArray((raw,)),))  # type: ignore[arg-type]
+    assert received._feedback == (
+        _FrozenJsonArray((_FrozenJsonArray((scalar(Kind.STRING, "x"),)),)),
+    )
+    raw.append("y")
+    assert received.feedback == ([["x"]],)
+
+    # A list in place of the feedback tuple is accepted.
+    received = _proposed_feedback([scalar(Kind.INTEGER, 1)])
+    assert received._feedback == (scalar(Kind.INTEGER, 1),)
+
+    with pytest.raises(ValueError) as caught:
+        _proposed_feedback((_FrozenJsonArray((scalar(Kind.NUMBER, float("nan")),)),))
+    assert str(caught.value) == "feedback[0][0] JSON number must be finite"
+
+    with pytest.raises(TypeError) as caught:
+        _proposed_feedback((_FrozenJsonObject((("k", object()),)),))  # type: ignore[arg-type]
+    assert str(caught.value) == "feedback[0].k must contain exact JSON values"
+
+
+def test_propose_learning_shares_canonical_feedback() -> None:
+    from yian.memory.contracts import _FrozenJsonScalar, _FrozenJsonScalarKind as Kind
+
+    canonical = LearnContext(
+        "run", "notes", (), feedback=({"b": [1, "x", None, 1.5, True], "a": {}},),
+    )._feedback
+    assert _proposed_feedback(canonical)._feedback is canonical
+
+    # A boolean held under the integer kind is not canonical, so it is rebuilt as a boolean.
+    received = _proposed_feedback((_FrozenJsonScalar(Kind.INTEGER, True),))
+    assert received._feedback == (_FrozenJsonScalar(Kind.BOOLEAN, True),)
+
+
+def test_propose_learning_parity_on_deleted_slots() -> None:
+    from yian.memory.contracts import _FrozenJsonScalar, _FrozenJsonScalarKind as Kind
+
+    # A scalar missing its kind is not canonical; the rebuild reads only its value.
+    forged = _FrozenJsonScalar(Kind.STRING, 5)
+    object.__delattr__(forged, "kind")
+    assert _proposed_feedback((forged,))._feedback == (_FrozenJsonScalar(Kind.INTEGER, 5),)
+
+    # A context missing both its run ID and feedback reports the run ID first.
+    context = LearnContext("run", "notes", ())
+    object.__delattr__(context, "run_id")
+    object.__delattr__(context, "_feedback")
+    with pytest.raises(AttributeError, match="run_id"):
+        LearnContext._revalidated(context)

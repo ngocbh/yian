@@ -450,12 +450,11 @@ class MemoryRuntime:
             type(context) is not LearnContext for context in contexts
         ):
             raise TypeError("learning contexts must be a tuple of exact LearnContext values")
-        # Rebuilding re-validates each context and detaches its feedback; every other
-        # carrier is a frozen slotted dataclass over tuples, so a deep copy would add
-        # nothing but recursion deep enough to overflow on a value at the nesting limit.
-        copied = tuple(LearnContext(
-            context.run_id, context.memory, context.episodes, context.feedback,
-        ) for context in contexts)
+        # Each context is re-validated; frozen feedback exactly as a fresh context builds it is
+        # immutable, so it is shared, and any other feedback is thawed and refrozen. Every other
+        # carrier is a frozen slotted dataclass over tuples, so a deep copy would add nothing
+        # but recursion deep enough to overflow on a value at the nesting limit.
+        copied = tuple(LearnContext._revalidated(context) for context in contexts)
         if tuple(context.memory for context in copied) != tuple(
             spec.key for spec in self._memories
         ):

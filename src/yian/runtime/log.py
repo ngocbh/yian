@@ -1916,13 +1916,35 @@ def _execution_scope_from_payload(payload: dict[str, Any] | None) -> ExecutionSc
 
 
 def _route_payload(route: ValueRoute) -> dict[str, Any]:
-    """Encode an exact immutable route without accepting normalized forgeries."""
+    """Encode an exact immutable route without accepting normalized forgeries.
+
+    The whole tree is checked once up front, so each node is checked once.
+
+    Args:
+        route (`ValueRoute`):
+            The route to encode.
+
+    Returns:
+        `dict[str, Any]`:
+            The route's JSON fields, with children and snapshot encoded the same way.
+
+    Raises:
+        `TypeError`:
+            Raised when a route field has the wrong type.
+        `ValueError`:
+            Raised when a route field or variant breaks the route contract.
+    """
     _validate_route(route)
+    return _encode_route(route)
+
+
+def _encode_route(route: ValueRoute) -> dict[str, Any]:
+    """Encode a route that `_validate_route` already accepted, without checking it again."""
     return {
         "kind": route.kind,
         "source": _source_payload(route.source),
         "value_json": route.value_json,
-        "children": [_route_payload(child) for child in route.children],
+        "children": [_encode_route(child) for child in route.children],
         "expression": route.expression,
         "names": list(route.names),
         "sizes": list(route.sizes),
@@ -1931,12 +1953,31 @@ def _route_payload(route: ValueRoute) -> dict[str, Any]:
         "spans": [list(span) for span in route.spans],
         "path": list(route.path),
         "result_type": route.result_type,
-        "snapshot": None if route.snapshot is None else _route_payload(route.snapshot),
+        "snapshot": None if route.snapshot is None else _encode_route(route.snapshot),
     }
 
 
 def _route_from_payload(payload: dict[str, Any]) -> ValueRoute:
-    """Decode a strictly shaped route, then check its exact variant invariants."""
+    """Decode a strictly shaped route, then check its exact variant invariants.
+
+    Each child and the snapshot are decoded and checked by their own recursive
+    call first, so the new node is checked without its subtree and each node is
+    checked once.
+
+    Args:
+        payload (`dict[str, Any]`):
+            The route's JSON fields, as `_route_payload` writes them.
+
+    Returns:
+        `ValueRoute`:
+            The decoded route.
+
+    Raises:
+        `TypeError`:
+            Raised when a route field has the wrong type.
+        `ValueError`:
+            Raised when a route field or variant breaks the route contract.
+    """
     source = payload["source"]
     route = ValueRoute(
         kind=payload["kind"],
@@ -1950,7 +1991,7 @@ def _route_from_payload(payload: dict[str, Any]) -> ValueRoute:
         path=tuple(payload["path"]), result_type=payload["result_type"],
         snapshot=None if payload["snapshot"] is None else _route_from_payload(payload["snapshot"]),
     )
-    _validate_route(route)
+    _validate_route(route, _deep=False)
     return route
 
 

@@ -26,7 +26,7 @@ from yian.runtime.contracts import (
 )
 from yian.runtime.trace import RetainedTrace
 from yian.runtime.learning import (
-    _contextual_transfers, _materialize_context, _project_root_backward, _seed_backward,
+    _ContextCache, _contextual_transfers, _materialize_context, _project_root_backward, _seed_backward,
     _prefix_learning, _proposal_batches, OwnerContextError, memory_commit_id, project_owner_contexts,
 )
 from yian.runtime.log import (
@@ -54,7 +54,7 @@ def _failure(context: BackwardContext, code: str, exc: Exception) -> _BackwardCo
 
 
 def compute_backward(
-    trace: RetainedTrace, root_feedback: FeedbackValue,
+    trace: RetainedTrace, root_feedback: FeedbackValue, *, cache: _ContextCache | None = None,
 ) -> tuple[BackwardResult, tuple[AttributedBackwardResult, ...]]:
     """Project root feedback through one accepted-outcome reverse walk.
 
@@ -64,6 +64,9 @@ def compute_backward(
         root_feedback (`FeedbackValue`): One ordinary text, record, positional
             list, or None value selecting the actual terminal output. Failed
             terminals accept text or None.
+        cache (`_ContextCache | None`, *optional*, defaults to `None`): The
+            pass's route-context cache over `trace`, so the owner projection
+            can reuse it; `None` starts a new one.
 
     Returns:
         `tuple[BackwardResult, tuple[AttributedBackwardResult, ...]]`: Root input
@@ -77,6 +80,8 @@ def compute_backward(
         `_BackwardComputeError`: For an attributed callback or result-contract error.
             Host capability faults and cancellation propagate unchanged.
     """
+    if cache is None:
+        cache = _ContextCache(trace)
     pending, direct_root = _seed_backward(trace, root_feedback)
     occurrences = trace.occurrences
     results = {item.source: AttributedBackwardResult(item.source, (), (), BackwardResult(), False)
@@ -88,7 +93,9 @@ def compute_backward(
             continue
         context = trace.backward_context(
             occurrence.source,
-            downstream_context=tuple(_materialize_context(trace, message, i) for i, message in enumerate(messages)),
+            downstream_context=tuple(
+                _materialize_context(trace, message, i, cache) for i, message in enumerate(messages)
+            ),
         )
         received = tuple(item.feedback for item in messages)
         feedback = tuple(_copy_backward_value(message, "feedback") for message in received)
@@ -108,7 +115,7 @@ def compute_backward(
         input_feedback = result.input_feedback
         if occurrence.source == trace.root_start_source:
             root_inputs = input_feedback
-        for source, transfer in _contextual_transfers(trace, occurrence, context, messages, result):
+        for source, transfer in _contextual_transfers(trace, occurrence, context, messages, result, cache):
             pending.setdefault(source, []).append(transfer)
     root = _project_root_backward(trace, pending, root_inputs, direct_root)
     return root, tuple(results[item.source] for item in occurrences)
@@ -135,8 +142,9 @@ def _finish_backward(
 def _drive_opened_backward(state: RunState, log: RunLog, memory: MemoryRuntime | None) -> BackwardOutcome:
     """Compute once, stage every memory, then request and observe each memory key in order."""
     started = state.backward_state.started
+    cache = _ContextCache(state.trace)
     try:
-        root, attributed = compute_backward(state.trace, started.feedback)
+        root, attributed = compute_backward(state.trace, started.feedback, cache=cache)
     except _BackwardComputeError as exc:
         _raise_host_error(exc)
         return _finish_backward(state, log, BackwardOutcome(
@@ -145,8 +153,10 @@ def _drive_opened_backward(state: RunState, log: RunLog, memory: MemoryRuntime |
     try:
         contexts = project_owner_contexts(
             state.trace, state.memories or (), state.memory_stacks or (),
-            started.feedback, root, attributed,
+            started.feedback, root, attributed, cache=cache,
         )
+        # The cache holds source copies and materialized contexts the frozen contexts no longer need.
+        del cache
         proposals = memory.propose_learning(contexts) if memory is not None else ()
     except (OwnerContextError, _LearningProposalError) as exc:
         _raise_host_error(exc)

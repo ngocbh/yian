@@ -1004,6 +1004,42 @@ class Type:
         _validate_type_shape(self, active=set(), validated=set())
 
 
+def type_levels(typ: Type) -> int:
+    """Return how many record and list levels a type nests.
+
+    Each record (a type with `fields`) and each list kind is one level, on top of the
+    deepest type inside it; a union counts as its deepest member and a scalar as 0.
+    The walk uses an explicit stack, so a deep type needs no Python recursion, and
+    measures a `Type` shared by several fields once.
+
+    Args:
+        typ (`Type`):
+            The resolved type to measure; its graph must be acyclic.
+
+    Returns:
+        `int`: The level count, e.g. 0 for `int`, 1 for `list(int)`, 2 for a record
+            holding a record.
+    """
+    levels: dict[int, int] = {}
+    stack: list[tuple[Type, bool]] = [(typ, False)]
+    while stack:
+        node, expanded = stack.pop()
+        if id(node) in levels:
+            continue
+        children = [
+            *(node.fields or {}).values(),
+            *((node.element,) if node.element is not None else ()),
+            *(node.variants or ()),
+        ]
+        if not expanded:
+            stack.append((node, True))
+            stack.extend((child, False) for child in children if id(child) not in levels)
+            continue
+        own = 1 if node.fields is not None or node.kind.is_list() else 0
+        levels[id(node)] = own + max((levels[id(child)] for child in children), default=0)
+    return levels[id(typ)]
+
+
 def _validate_type_shape(
     typ: Type,
     *,

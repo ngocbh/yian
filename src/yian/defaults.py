@@ -93,6 +93,18 @@ ENTRIES: tuple[Entry, ...] = (
         minimum=1,
         maximum=200,
     ),
+    # Aliases make a document's expanded size exponential in its text, and every later
+    # step, including the run log (JSON has no aliases), costs per expanded node.
+    Entry(
+        "MAX_YAML_NODES",
+        default=100_000,
+        description=(
+            "Most nodes a YAML document yian reads may expand to, counting each alias as a copy"
+        ),
+        group="limit",
+        minimum=1,
+        maximum=None,
+    ),
     # Loading a body or a `uses:` file recurses through the loader, so the limit holds
     # both chains. A 50-level chain loads, runs, and resumes within Python's default
     # recursion limit; the worst accepted load, 50 imports whose last file calls a
@@ -377,6 +389,7 @@ class Defaults:
     max_value_nesting: int = 100
     max_type_nesting: int = 100
     max_yaml_nesting: int = 200
+    max_yaml_nodes: int = 100_000
     max_call_nesting: int = 50
     max_total_nodes: int = 10_000
     max_skip_worlds: int = 10_000

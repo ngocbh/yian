@@ -150,3 +150,19 @@ def test_types_at_the_limit_load(build, limit, set_defaults):
     if limit is not None:
         set_defaults(MAX_TYPE_NESTING=limit)
     load_flow(build(limit or Defaults().max_type_nesting))
+
+
+def test_field_parse_follows_the_int_digit_limit(set_defaults):
+    raw = {"R": {"a": "int(0..123456)"}}
+    read_typedefs(raw)
+    set_defaults(MAX_INT_DIGITS=3)
+    with pytest.raises(TypeCheckError):
+        read_typedefs(raw)
+
+
+def test_field_parse_follows_the_type_nesting_limit(set_defaults):
+    raw = {"R": {"a": "list(" * 6 + "int" + ")" * 6}}
+    read_typedefs(raw)
+    set_defaults(MAX_TYPE_NESTING=5)
+    with pytest.raises(TypeCheckError):
+        read_typedefs(raw)

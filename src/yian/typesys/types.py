@@ -19,7 +19,7 @@ import tokenize
 from dataclasses import dataclass, replace
 from typing import Union
 
-from yian.defaults import current
+from yian.defaults import Defaults, current
 from yian.typesys.values import (
     _BUILTIN_CONSTANTS,
     _NAME_PATTERN,
@@ -887,7 +887,8 @@ def _union_parts(
     chain ends at, or `None` when the member is not a reference; it tells a repeated
     member from a differently named record of the same shape.
     """
-    # An explicit stack, so deeply nested unions and long alias chains cost no frames.
+    # An explicit stack, so flattening deeply nested unions and long alias chains costs
+    # no frames.
     # Each entry is (expression, names on its alias path, display name so far).
     parts: list[tuple[str, str | None, Type]] = []
     stack: list[tuple[TypeExpr, frozenset[str], str | None]] = [(t, _seen, None)]
@@ -967,11 +968,7 @@ def type_for(type_str: str, registry: TypeRegistry) -> Type:
 
 
 def _parse_field(text: str) -> TypeExpr:
-    """Parse a record field's type text, memoized per text and type nesting limit.
-
-    The registry check parses every field near the top of the stack, so resolution,
-    which reaches a field deep inside nested records, finds it parsed instead of paying
-    the parser's frames there. Sharing a result is safe: type ASTs are frozen.
+    """Parse a record field's type text, cached per text and defaults.
 
     Args:
         text (`str`):
@@ -983,14 +980,19 @@ def _parse_field(text: str) -> TypeExpr:
 
     Raises:
         `TypeCheckError`:
-            `text` is not a valid type expression (errors are not memoized).
+            `text` is not a valid type expression (errors are not cached).
     """
-    return _parse_field_within(text, current().max_type_nesting)
+    # The registry check parses every field near the top of the stack, so resolution,
+    # which reaches a field deep inside nested records, finds it parsed instead of paying
+    # the parser's frames there. Sharing a result is safe: type ASTs are frozen. The key
+    # holds the whole `Defaults`, since every default `parse_type` reads (the nesting and
+    # integer digit limits) must be part of it.
+    return _parse_field_within(text, current())
 
 
 @functools.lru_cache(maxsize=65536)
-def _parse_field_within(text: str, max_type_nesting: int) -> TypeExpr:
-    """Parse `text`; the limit is part of the cache key because `parse_type` checks it."""
+def _parse_field_within(text: str, defaults: Defaults) -> TypeExpr:
+    """Parse `text`, cached per text and defaults."""
     return parse_type(text)
 
 

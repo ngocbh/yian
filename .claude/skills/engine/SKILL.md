@@ -119,8 +119,9 @@ this model whenever you design anything:
   bounds the resolved type's `type_levels` too (`... once its typedef names are expanded`).
   `compose/helpers/types.py`, before descending. An authored AGENT `output:` is also held
   to `current().max_agent_output_nesting` (`YIAN_MAX_AGENT_OUTPUT_NESTING`, 16,
-  lower-only) by `type_levels` in `compose/nodes/agent.py`, before `type_to_schema`,
-  since pydantic's schema generation recurses per level.
+  lower-only), counted with `typesys.values.type_levels` and checked in
+  `compose/nodes/agent.py` before `type_to_schema`, since pydantic's schema generation
+  recurses per level.
   An expression has the same bound (`current().max_value_nesting`), which
   `parse_expr` checks iteratively before any other walk; an operator chain is one level.
 - Documents yian reads nest at most `YIAN_MAX_YAML_NESTING` (default 200)

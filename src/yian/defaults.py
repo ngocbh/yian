@@ -88,11 +88,10 @@ ENTRIES: tuple[Entry, ...] = (
     # for the costliest shape, an `Optional(Union(...))` field at each level. With 300
     # frames below the default recursion limit, under 50 nested calls, that shape passes
     # 23 levels on Python 3.12 through every structured-output path, and 18 on 3.10
-    # through the native and prompted paths. 16 is the smallest passing depth minus 2, a
-    # margin for the 3.10 real-client paths that couldn't be measured offline. An AGENT
-    # at 16 levels under the worst accepted load, 50 `uses:` imports ending in a 50-level
-    # chain, loads in about 780 frames on 3.12 and 850 on 3.10. The variable can only
-    # lower it.
+    # through the prompted path. 16 is the smallest passing depth minus 2, a margin for
+    # the 3.10 provider-client paths that couldn't be measured offline. Under the worst
+    # accepted load, 50 `uses:` imports ending in a 50-level chain, an AGENT at 16 levels
+    # builds its schema well above the load's peak. The variable can only lower it.
     Entry(
         "MAX_AGENT_OUTPUT_NESTING",
         default=16,

@@ -688,9 +688,8 @@ copy. The 535-frame figure is for small values: a literal or output template nea
 100-level value limit under 50 calls peaks near 710 frames.
 A chain of `uses:` imports adds about 4 frames per file: a load of 50 imports whose last
 file calls a 50-level chain peaks near 735 frames, which leaves about 265 for the caller
-under Python's default limit of 1000. With an AGENT whose `output:` nests 16 levels of
-the costliest shape at the bottom, building its schema at load raises the peak to about
-780 frames on Python 3.12 and 850 on 3.10.
+under Python's default limit of 1000. An AGENT at the bottom builds its `output:`
+schema well above that peak, so it doesn't raise it.
 
 For calls, `_resolve_child` checks twice. Before resolving, it counts the calls active
 in the file being loaded (`_load_flow` resets the count with `call_nesting_scope`) and

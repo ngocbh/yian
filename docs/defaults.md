@@ -117,10 +117,10 @@ load, run, and resume with stack to spare:
   structured reply schema takes about 28 frames per level for the costliest shape, an
   `Optional(Union(...))` field at each level. With 300 frames to spare under 50 nested
   calls, that shape runs 23 levels deep on Python 3.12 through every structured-output
-  path, and 18 on 3.10 through the native and prompted paths. The maximum is the
-  smallest passing depth minus 2, a margin for the 3.10 provider-client paths that
-  couldn't be measured offline. An AGENT at 16 levels under the deepest accepted load
-  (50 imports whose last file calls a 50-level chain) loads in about 850 frames.
+  path, and 18 on 3.10 through the prompted path. The maximum is the smallest passing
+  depth minus 2, a margin for the 3.10 provider-client paths that couldn't be measured
+  offline. Under the deepest accepted load (50 imports whose last file calls a 50-level
+  chain), an AGENT at 16 levels builds its schema well above the load's peak.
 
 `YIAN_MAX_YAML_NODES` has no maximum, since counting a document's nodes takes no stack;
 raising it raises load time and run-log size in proportion.

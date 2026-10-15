@@ -4,6 +4,7 @@ import pytest
 
 from yian.compose import load_flow
 from yian.compose.helpers.errors import LoadError
+from yian.run import run_flow
 
 _PREAMBLE = (
     "id: p\nname: p\n"
@@ -31,9 +32,22 @@ _QTY_HINT = (
 )
 
 
-def _flow(nodes: str, output: str, *, defs: str = "") -> str:
-    """The shared preamble, `defs`, the inputs, node `step`, then `nodes` and `output`."""
-    return _PREAMBLE + defs + _INPUTS + "nodes:\n" + _STEP + nodes + f"output: {output}\n"
+def _flow(
+    nodes: str, output: str, *, defs: str = "", inputs: str = "", tail: str = ""
+) -> str:
+    """The shared preamble, `defs`, the inputs (plus `inputs` lines), node `step`, then
+    `nodes`, `output` and `tail`."""
+    return (
+        _PREAMBLE
+        + defs
+        + _INPUTS
+        + inputs
+        + "nodes:\n"
+        + _STEP
+        + nodes
+        + f"output: {output}\n"
+        + tail
+    )
 
 
 def _agent(
@@ -270,3 +284,180 @@ def test_narrowed_input_reads_the_branch_member():
     outside = _producer("d", "Order") + _agent({"v": "${d.output}"}, "${v.qty}")
     message = _load_error(_flow(outside, "${ag.output}"))
     assert f"node 'ag' prompt: reference ${{v.qty}} {_QTY_HINT}" in message
+
+
+def _code(
+    inputs: dict[str, str], asserts: list[str], *, node_id: str = "c"
+) -> str:
+    """A CODE node returning `'x'` (typed `str`) with `inputs` and `asserts`."""
+    text = f"  {node_id}:\n    kind: code\n    input:\n"
+    for name, source in inputs.items():
+        text += f"      {name}: {source}\n"
+    text += "    output: str\n    code: return 'x'\n    asserts:\n"
+    return text + "".join(f'      - "{a}"\n' for a in asserts)
+
+
+def _asserts(*asserts: str) -> str:
+    """A flow-level `asserts:` section."""
+    return "asserts:\n" + "".join(f'  - "{a}"\n' for a in asserts)
+
+
+@pytest.mark.parametrize(
+    "assertion", ["v.b == 'x'", "output == 'x' and v.b == 'x'"], ids=["pre", "post"]
+)
+def test_node_assert_reads_unknown_input_field(assertion):
+    message = _load_error(_flow(_code({"v": "${step.output}"}, [assertion]), "${c.output}"))
+    assert "node 'c' assert: reference ${v.b} reads unknown field 'b' on record" in message
+
+
+def test_node_assert_field_error_is_reported_once_per_ref():
+    message = _load_error(
+        _flow(_code({"v": "${step.output}"}, ["v.b == null or v.b == 'y'"]), "${c.output}")
+    )
+    assert message.count("reference ${v.b} reads unknown field 'b'") == 1
+
+
+@pytest.mark.parametrize("child_type", ["Rec", "Rec3"])
+def test_call_node_assert_reads_a_field_its_binding_lacks(child_type):
+    defs = (
+        "defs:\n"
+        "  child:\n"
+        f"    input:\n      v: !{child_type}\n"
+        "    nodes:\n"
+        "      inner:\n"
+        "        kind: code\n"
+        "        input:\n          v: ${input.v}\n"
+        "        output: str\n"
+        "        code: return 'x'\n"
+        "    output: ${inner.output}\n"
+    )
+    nodes = (
+        "  c:\n    kind: call\n    call: child\n"
+        "    input:\n      v: ${step.output}\n"
+        "    asserts:\n      - \"v.b == 'x'\"\n"
+    )
+    message = _load_error(_flow(nodes, "${c.output}", defs=defs))
+    assert "node 'c' assert: reference ${v.b} reads unknown field 'b' on record" in message
+
+
+_LOOP_NAMED_BODY = (
+    "defs:\n"
+    "  body:\n"
+    "    input:\n      st: !Rec3\n"
+    "    nodes:\n"
+    "      bump:\n"
+    "        kind: code\n"
+    "        input:\n          st: ${input.st}\n"
+    "        output:\n          st: Rec3\n"
+    "        code: return dict(st=dict(a='x', b='y'))\n"
+    "    output: ${bump.output}\n"
+)
+
+
+def _named_loop(assertion: str) -> str:
+    """A LOOP over the named `body` (carries `Rec3`), seeded with `step`'s `Rec`."""
+    nodes = (
+        "  drive:\n    kind: loop\n    call: body\n    times: 3\n"
+        "    input:\n      st: ${step.output}\n"
+        f'    asserts:\n      - "{assertion}"\n'
+    )
+    return _flow(nodes, "${drive.output}", defs=_LOOP_NAMED_BODY)
+
+
+def _inline_loop(assertion: str) -> str:
+    """A one-turn inline LOOP carrying `Rec3`, seeded with `step`'s `Rec`."""
+    nodes = (
+        "  drive:\n    kind: loop\n    times: 1\n"
+        "    input:\n      st: ${step.output}\n"
+        f'    asserts:\n      - "{assertion}"\n'
+        "    nodes:\n"
+        "      bump:\n"
+        "        kind: code\n"
+        "        input:\n          st: ${input.st}\n"
+        "        output:\n          st: Rec3\n"
+        "        code: return dict(st=dict(a='x', b='y'))\n"
+        "    output: ${bump.output}\n"
+    )
+    return _flow(nodes, "${drive.output}")
+
+
+@pytest.mark.parametrize("build", [_named_loop, _inline_loop], ids=["named", "inline"])
+def test_loop_assert_reads_the_carried_field(build):
+    flow = load_flow(build("st.b == null or st.b == 'y'"))
+    result = run_flow(flow, {"s": "x", "r": {"a": "x"}})
+    assert result.status == "succeeded", result.failure
+
+
+@pytest.mark.parametrize("build", [_named_loop, _inline_loop], ids=["named", "inline"])
+def test_loop_assert_reads_a_field_neither_seed_nor_carried_has(build):
+    message = _load_error(build("st.zz == 'x'"))
+    assert "node 'drive' assert: reference ${st.zz} reads unknown field 'zz'" in message
+
+
+def test_node_assert_literal_input_field_read():
+    message = _load_error(_flow(_code({"n": "3"}, ["n.x == 1"]), "${c.output}"))
+    assert (
+        "node 'c' assert: reference ${n.x} reads field 'x' on type int, "
+        "which has no fields" in message
+    )
+
+
+@pytest.mark.parametrize(
+    "nodes",
+    [
+        _code({"v": "!Any ${step.output}"}, ["v.k == 1"]),
+        _producer("o", "object") + _code({"v": "${o.output}"}, ["v.k == 1"]),
+    ],
+    ids=["any", "object"],
+)
+def test_node_assert_open_input_field_reads_load(nodes):
+    load_flow(_flow(nodes, "${c.output}"))
+
+
+def test_node_assert_known_input_field_loads_and_runs():
+    flow = load_flow(_flow(_code({"v": "${step.output}"}, ["v.a == 'x'"]), "${c.output}"))
+    result = run_flow(flow, {"s": "x", "r": {"a": "x"}})
+    assert result.status == "succeeded", result.failure
+
+
+def test_node_assert_reads_the_narrowed_member_inside_a_branch():
+    load_flow(
+        _flow(
+            _routed(_code({"v": "${d.output}"}, ["v.qty > 0"], node_id="ag")),
+            "${ag.output | other.output}",
+        )
+    )
+    outside = _producer("d", "Order") + _code({"v": "${d.output}"}, ["v.qty > 0"])
+    message = _load_error(_flow(outside, "${c.output}"))
+    assert f"node 'c' assert: reference ${{v.qty}} {_QTY_HINT}" in message
+
+
+@pytest.mark.parametrize(
+    ("assertion", "expected"),
+    [
+        ("input.r.b == 'x'", "reference ${input.r.b} reads unknown field 'b' on record"),
+        ("input.s.x == 'y'", "reference ${input.s.x} reads field 'x' on type str"),
+    ],
+    ids=["record", "scalar"],
+)
+def test_flow_assert_reads_unknown_input_field(assertion, expected):
+    message = _load_error(_flow("", "${step.output}", tail=_asserts(assertion)))
+    assert f"assert {assertion!r}: {expected}" in message
+
+
+def test_flow_assert_known_input_field_loads_and_runs():
+    flow = load_flow(_flow("", "${step.output}", tail=_asserts("input.r.a == 'x'")))
+    assert run_flow(flow, {"s": "x", "r": {"a": "x"}}).status == "succeeded"
+    assert run_flow(flow, {"s": "x", "r": {"a": "y"}}).status == "failed"
+
+
+@pytest.mark.parametrize(
+    ("inputs", "assertion"),
+    [
+        ("  o: !object\n", "input.o.k == 1"),
+        ("", "step.output.a == 'x' and input.r.a == 'x'"),
+    ],
+    ids=["object", "post"],
+)
+def test_flow_assert_readable_input_fields_load(inputs, assertion):
+    load_flow(_flow("", "${step.output}", inputs=inputs, tail=_asserts(assertion)))

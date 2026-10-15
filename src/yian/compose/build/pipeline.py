@@ -2514,7 +2514,7 @@ def _assemble(
     reconciled = data_edges + case_edges + host_edges
 
     # The proven contracts of each node-local name, for the field reads a node makes
-    # of its own inputs (prompts).
+    # of its own inputs (prompts and node asserts).
     local_contracts = local_input_contracts(
         flow_wiring,
         producers,
@@ -2554,6 +2554,8 @@ def _assemble(
         descriptors,
         assertion_site_at=node_assertion_site_at,
         type_names=frozenset(registry),
+        local_contracts=local_contracts,
+        partial_union_nodes=narrowing.unordered,
         diagnostics=diagnostics,
     )
     # Lower the flow-level `asserts:` into node-local asserts stamped on the synthesized
@@ -2565,6 +2567,7 @@ def _assemble(
     lowered = lower_flow_asserts(
         asserts_section, flow_inputs, set(descriptors), producers,
         assert_ranges=flow_assertion_ranges,
+        input_contracts=flow_input_contracts,
         diagnostics=diagnostics,
     )
 

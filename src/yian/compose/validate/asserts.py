@@ -39,8 +39,8 @@ node id and authored list index; only the origin crosses into the semantic asser
 Imports flow DOWN only within the engine core (`compile.validation`, `expr`,
 `typesys.values`) plus two acknowledged validate-phase edges: `nodes` (Node/
 CaseNode discrimination) and `desugar.inline_calls.desugar_call_directives`
-(inline-call rejection). Nothing in helpers/nodes/parse/desugar/edges imports
-this back.
+(inline-call rejection). Within the validate phase it reads `LocalInput` from
+`typed_bindings`. Nothing in helpers/nodes/parse/desugar/edges imports this back.
 """
 
 from __future__ import annotations
@@ -58,7 +58,11 @@ from yian.compose.helpers.isinstance_types import (
     collect_constructor_names,
     collect_isinstance_names,
 )
-from yian.compose.helpers.output_contracts import output_contract_path_error
+from yian.compose.helpers.output_contracts import (
+    local_field_error,
+    output_contract_path_error,
+)
+from yian.compose.validate.typed_bindings import LocalInput
 from yian.nodes.base import Node, NodeKind
 from yian.nodes.contracts import (
     Assertion,
@@ -114,6 +118,7 @@ def lower_flow_asserts(
     producers: "dict[str, OutputContract]",
     assert_ranges: "list[SourceRange | None] | None" = None,
     *,
+    input_contracts: dict[str, ValueContract] | None = None,
     diagnostics: LoadDiagnostics | None = None,
 ) -> LoweredAsserts:
     """Lower a flow's `asserts:` into node-local asserts for the START/END boundary nodes.
@@ -134,9 +139,14 @@ def lower_flow_asserts(
     edge from), so a `system` ref raises a located `LoadError` telling the author to move the
     check into a body node.
 
-    Raises `LoadError` on the first malformed assert, bad ref, or `${system}` ref.
+    A `${<id>.output.f}` read is field-checked against the producer's contract, and an
+    `${input.X.f}` read against `input_contracts[X]` when the flow input has one.
+
+    Raises `LoadError` on the first malformed assert, bad ref, bad field read, or
+    `${system}` ref.
     """
     diagnostics = diagnostics or LoadDiagnostics()
+    input_contracts = input_contracts or {}
     result = LoweredAsserts()
     # Retain exact and partial carriers so a closed partial root can reject an
     # unknown field without inventing a semantic Type for opaque siblings.
@@ -205,7 +215,7 @@ def lower_flow_asserts(
 
         # 2. validate each ref + forbid `${system}` + detect any outputs-head ref (-> post).
         is_post = False
-        for path in refs:
+        for path in dict.fromkeys(refs):
             err = _classify_path(path, valid_targets, flow_inputs, ())
             parts = path.split(".")
             if (
@@ -216,6 +226,15 @@ def lower_flow_asserts(
             ):
                 err = output_contract_path_error(
                     producers[parts[0]], parts[2:], path
+                )
+            elif (
+                err is None
+                and parts[0] == "input"
+                and len(parts) >= 3
+                and parts[1] in input_contracts
+            ):
+                err = output_contract_path_error(
+                    input_contracts[parts[1]], parts[2:], path
                 )
             if err is not None:
                 raise diagnostics.error(
@@ -299,6 +318,8 @@ def validate_node_asserts(
         tuple[OriginRef | None, SourceRange | None] | None,
     ] | None = None,
     type_names: frozenset[str] = frozenset(),
+    local_contracts: dict[str, dict[str, LocalInput]] | None = None,
+    partial_union_nodes: frozenset[str] = frozenset(),
     diagnostics: LoadDiagnostics | None = None,
 ) -> None:
     """Validate + classify + stamp each node's `asserts:` — the per-node contract.
@@ -309,7 +330,11 @@ def validate_node_asserts(
     independently proven field contract.
     Rejected (located `LoadError`): a pool head (`${outputs/inputs/system/item.X}`), an inline
     `${call}`, `${output.field}` on an output that is neither a record nor a `file` (whose
-    `uri`, `mime` and `name` it can read), a declared input named `output`,
+    `uri`, `mime` and `name` it can read), a `${name.field}` read of a declared input that
+    every alternative in ``local_contracts[nid][name]`` (`local_input_contracts`) rejects
+    (a field only some union members have is readable on a node in
+    ``partial_union_nodes``; a name with no entry is not field-checked), a declared input
+    named `output`,
     `isinstance` or a constructor on a CALL/MAP/LOOP node (its asserts run in the child
     flow), and any node assert on a mapped call (a `MapNode`, `kind: map` — the per-node
     hook has no `${item}` scope). A call inside `${...}` to a name in ``type_names`` (the
@@ -322,6 +347,7 @@ def validate_node_asserts(
     at the first available exact assertion, offending field, or node range.
     """
     diagnostics = diagnostics or LoadDiagnostics()
+    local_contracts = local_contracts or {}
     errors: list[tuple[str, SourceRange | None]] = []
     for nid, node in nodes.items():
         desc = descriptors.get(nid)
@@ -349,6 +375,7 @@ def validate_node_asserts(
             )
             continue
         declared = {p.name for p in (node.params or [])}
+        node_locals = local_contracts.get(nid, {})
         if "output" in declared:
             errors.append(
                 (
@@ -420,7 +447,7 @@ def validate_node_asserts(
                 )
                 continue
             reads_output = False
-            for ref in refs:
+            for ref in dict.fromkeys(refs):
                 segs = ref.split(".")
                 head = segs[0] if segs else ""
                 if head == "output":
@@ -461,7 +488,18 @@ def validate_node_asserts(
                                     )
                                 )
                 elif head in declared:
-                    continue
+                    local = node_locals.get(head)
+                    if local is None or len(segs) < 2:
+                        continue
+                    err = local_field_error(
+                        local.alternatives,
+                        segs[1:],
+                        ref,
+                        source=local.source,
+                        partial_union_fields=nid in partial_union_nodes,
+                    )
+                    if err is not None:
+                        errors.append((f"node {nid!r} assert: {err}", error_range))
                 elif head in _POOL_HEADS:
                     errors.append(
                         (

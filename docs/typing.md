@@ -149,12 +149,26 @@ A flow file's YAML has its own, larger bound of 200 levels (`YIAN_MAX_YAML_NESTI
 see [Syntax → YAML values](syntax.md#yaml-values).
 
 A value written out in a flow file (a node input, MAP `over:`, WAIT `until:`, a value
-entry, an input or AGENT variable default, a CASE value branch, a flow `output:`) is
-checked at load with the counting the run-time check would apply to it, so one nested
-deeper is a located load error, even when YAML aliases build its depth while the text
-stays shallow. A record flow output's fields count the record's level. `${...}` text
-counts as a scalar there, so the boundaries below still check computed values and
-values in a flow built in Python.
+entry, an input or AGENT variable default, a CASE value branch, a flow `output:`, an
+`env:` value) is checked at load with the counting the run-time check would apply to
+it, so one nested deeper is a located load error, even when YAML aliases build its
+depth while the text stays shallow. A record flow output's fields count the record's
+level. `${...}` text counts as a scalar there, so the boundaries below still check
+computed values and values in a flow built in Python.
+
+A type nests at most 100 levels by default (`YIAN_MAX_TYPE_NESTING`). In type text
+every constructor is a level, `Optional(` and `Union(` included, so `list(Optional(int))`
+nests 2. A record written as a mapping, or a list of single-key maps, in a node's
+`output:` counts differently: each record is a level, and a field's type adds the
+records and lists it resolves to, so a typedef name counts as deep as its definition
+(an `Optional(...)` or a union adds only its deepest member's). A deeper record is a
+load error at the record or field that crosses the limit, aliases included:
+
+```
+type at r.k.k nests deeper than 100 levels, the limit for a type (each record and list is a level); its type 'list(list(int))' adds 2
+```
+
+The `; its type ...` part appears when a field's type pushes the record over.
 
 The first boundary that sees a deeper value rejects it:
 

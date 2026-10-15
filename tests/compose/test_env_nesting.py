@@ -141,7 +141,7 @@ def _line_of(text: str, prefix: str) -> int:
 def _chain(error: BaseException) -> Iterator[BaseException]:
     """Yield `error` and every exception reachable through `__cause__`/`__context__`."""
     seen: set[int] = set()
-    pending = [error]
+    pending: list[BaseException | None] = [error]
     while pending:
         current = pending.pop()
         if current is None or id(current) in seen:

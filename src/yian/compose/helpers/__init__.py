@@ -47,7 +47,8 @@ Modules:
   - `value_nesting` `check_written_value`: rejects a value written out in a flow file
                   that nests deeper than a yian value may, as a located load error,
                   counted as the run-time check counts it and before any recursive
-                  walker reads it.
+                  walker reads it. `check_env_values`: the same check for each value
+                  of an `env:` mapping, located at its key.
   - `yaml_words`  `former_boolean_fix`: the boolean a YAML 1.1 boolean spelling (`yes`,
                   `off`) meant, and the fix a load error shows when one reaches a `bool`
                   that the boolean fits, at any depth of a list or record. `yaml_read_as`:

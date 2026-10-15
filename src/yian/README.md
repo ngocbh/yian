@@ -619,11 +619,18 @@ replay, and the run-log codecs never apply it; they see only values these entry
 checks bounded. Compose applies the same check at load to each value written out in
 a flow file (`compose.helpers.value_nesting.check_written_value`, which turns the
 `TypeCheckError` into a located `LoadError`): node inputs, MAP `over:`, WAIT `until:`,
-value entries, input and AGENT variable defaults, CASE value branches, and flow
-outputs (a record output's fields with `enclosing_levels=1`). It runs before any
+value entries, input and AGENT variable defaults, CASE value branches, flow
+outputs (a record output's fields with `enclosing_levels=1`), and flow, `defs:`, and
+node `env:` values (`check_env_values`). It runs before any
 recursive load walker reads the value, so a value made deep by YAML aliases is a load
 error rather than a `RecursionError`. `${...}` text counts as a scalar, so the
 run-time checks above still cover computed values and flows built in Python.
+A record type written as a mapping in a node's `output:` counts against
+`current().max_type_nesting` the same way, in `compose/helpers/types.py`: each record is
+a level and a field's resolved type adds its records and lists (`type_levels` in
+`typesys/values.py`), checked before the reader descends, so an alias-built record is a
+located `LoadError` (`type at <path> nests deeper than 100 levels, the limit for a type
+...`). Type text counts every constructor in the type parser instead.
 
 An expression has the same bound, `current().max_value_nesting` (no variable of
 its own). A chain of same-precedence operators parses as one flat node

@@ -266,8 +266,14 @@ A value nests at most 100 levels (each record and list is one): a binding, MAP
 value (`${[x]}`, a record flow output, a MAP's result list) adds the level that fails.
 An AGENT's tool call whose arguments nest deeper fails the node before any call runs.
 A value written out in the flow file (a node input, MAP `over:`, WAIT `until:`, a value
-entry, a default, a CASE value branch, a flow `output:`) nested deeper is a located
-load error instead, YAML aliases included; a record output's fields may nest 99.
+entry, a default, a CASE value branch, a flow `output:`, an `env:` value) nested deeper
+is a located load error instead, YAML aliases included; a record output's fields may
+nest 99.
+A type nests at most 100 levels: in type text each constructor (`Optional(` and `Union(`
+included) is one; in a record written as a mapping in `output:`, each record is one and
+a field's type adds its records and lists (a typedef counts as deep as its definition).
+Deeper is a load error: `type at r.k nests deeper than 100 levels, the limit for a type
+(each record and list is a level)`.
 An expression nests at most 100 levels too (each call, list, unary operator, comparison,
 `|`/`:-`/`:?`, and operator chain is one, so `a + b + ...` is one level at any length);
 a deeper one is a load error, so split it into smaller bindings.
@@ -279,7 +285,8 @@ deeper chain is a load error at the `call:` that crosses the limit, so move shor
 bodies into their callers or split the work into separate steps.
 These limits are the defaults of `YIAN_MAX_VALUE_NESTING` (which also sets expression
 nesting), `YIAN_MAX_YAML_NESTING`, and `YIAN_MAX_CALL_NESTING`; each can only be
-lowered. `docs/defaults.md` lists every default and limit and its variable.
+lowered. `YIAN_MAX_TYPE_NESTING` sets the type limit (at most 125). `docs/defaults.md`
+lists every default and limit and its variable.
 
 Only values supplied to the top-level flow (CLI, JSON inputs, `run_flow`) may undergo
 string coercion; a `call`, `map`, or `loop` edge is not a flow boundary.
@@ -575,6 +582,7 @@ settings are rejected.
 Tune a node's non-model behavior with a static `env:` block (flow-level default +
 per-node override, node wins): e.g. `env: {max_tool_iterations: 300}` bounds an
 AGENT's tool-calling loop (default `-1` = no cap, `YIAN_AGENT_MAX_TOOL_ITERATIONS`).
+`env:` values are literals, checked at load against the 100-level value nesting limit.
 `retries` bounds typed-output correction, not tool, transport, authentication, or stop
 failures.
 

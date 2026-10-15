@@ -104,8 +104,10 @@ load, run, and resume with stack to spare:
   shown to fit.
 - `YIAN_MAX_YAML_NESTING` can only be lowered (maximum 200): composing and walking a
   document 200 levels deep stays within Python's default recursion limit.
-- `YIAN_MAX_TYPE_NESTING` may be raised to 125: a type nested 125 levels still parses
-  with stack to spare, and one nested 150 levels does not.
+- `YIAN_MAX_TYPE_NESTING` may be raised to 125, the depth proven for type text: type
+  text nested 125 levels still parses, and text nested 150 levels does not. A record
+  type in `output:` counts its record levels against the same limit, but one near 125
+  levels runs with less stack headroom.
 
 ## Integer digits
 
@@ -125,7 +127,7 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | Variable | Group | Default | Valid values | Meaning |
 | --- | --- | ---: | --- | --- |
 | `YIAN_MAX_VALUE_NESTING` | limit | 100 | 1 to 100 (can only be lowered) | Deepest nesting a value may have; also bounds expression nesting |
-| `YIAN_MAX_TYPE_NESTING` | limit | 100 | 1 to 125 | Deepest nesting a type expression may have |
+| `YIAN_MAX_TYPE_NESTING` | limit | 100 | 1 to 125 | Deepest nesting a type may have, counting record levels |
 | `YIAN_MAX_YAML_NESTING` | limit | 200 | 1 to 200 (can only be lowered) | Deepest nesting of a YAML document yian reads |
 | `YIAN_MAX_CALL_NESTING` | limit | 50 | 1 to 50 (can only be lowered) | Deepest chain of call, map, and loop bodies a flow may nest |
 | `YIAN_MAX_TOTAL_NODES` | limit | 10,000 | 1 or more | Most live nodes a run's graph may grow to |

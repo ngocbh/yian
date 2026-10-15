@@ -572,6 +572,14 @@ field that holds it:
 bad typedefs: typedef 'Signal' field 'tags': unknown type constructor 'lst' in 'lst(str)'
 ```
 
+A record written as a mapping (or a list of single-key maps) in a node's `output:`
+nests at most 100 levels (`YIAN_MAX_TYPE_NESTING`): each record is a level, and a field's
+type adds the records and lists it resolves to, so a typedef name counts as deep as its
+definition. A deeper one fails at load, at the record or field that crosses the limit:
+`type at r.k.k nests deeper than 100 levels, the limit for a type (each record and list
+is a level)`, ending `; its type 'list(list(int))' adds 2` when a field's type pushes it
+over. See [Types → Nesting limit](typing.md#nesting-limit).
+
 Brackets are the old spelling. `Optional[str]`, `list[Buy]`, or `int[1, 12]` anywhere
 (a typedef, an `output:` type, or a tag) is a load error that shows the new spelling,
 such as ``types use parentheses: `Literal(buy)` ``.
@@ -1109,7 +1117,10 @@ The merge is **static, at build time** (`{**flow_env, **node_env}`) — there is
 runtime cascade and no per-field resolution across parent flows. It is also
 **flow-local**: a called child flow does *not* inherit its parent's flow `env:` —
 it has its own. A multi-node `defs:` entry sets its own `env:` at the same level as
-its `nodes:`. Values must be literals (no `${...}` refs).
+its `nodes:`. Values must be literals (no `${...}` refs). Like other written-out values,
+each is checked at load against the 100-level value nesting limit, YAML aliases
+included (`flow env 'k' at [0][0]...: value nests deeper than 100 levels, ...`; see
+[Types → Nesting limit](typing.md#nesting-limit)).
 
 Keys in use today:
 

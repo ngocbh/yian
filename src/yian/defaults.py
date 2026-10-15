@@ -71,12 +71,13 @@ ENTRIES: tuple[Entry, ...] = (
         minimum=1,
         maximum=100,
     ),
-    # Deeper types are rejected before they can exhaust Python's recursion limit, and
-    # 125 levels still parse with reduced stack headroom.
+    # Deeper types are rejected before they can exhaust Python's recursion limit. Type
+    # text 125 levels deep still parses; a record type written in `output:` counts its
+    # record levels too, and near 125 it runs with less stack headroom.
     Entry(
         "MAX_TYPE_NESTING",
         default=100,
-        description="Deepest nesting a type expression may have",
+        description="Deepest nesting a type may have, counting record levels",
         group="limit",
         minimum=1,
         maximum=125,

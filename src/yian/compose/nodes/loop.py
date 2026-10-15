@@ -12,7 +12,7 @@ into `KINDS`/`BINDING_FIELDS` at import so the shared dispatch routes here.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 
 from yian.compile.validation import types_compatible
@@ -27,7 +27,11 @@ from yian.nodes.contracts import (
 from yian.nodes.loop import LoopNode
 from yian.typesys import TypeCheckError
 from yian.typesys.types import TypeRegistry
-from yian.compose.helpers.isinstance_types import resolve_isinstance_type
+from yian.typesys.values import restrict_union
+from yian.compose.helpers.isinstance_types import (
+    isinstance_members,
+    resolve_isinstance_type,
+)
 from yian.compose.helpers.output_contracts import (
     combine_output_contracts,
     project_output_contract,
@@ -420,11 +424,12 @@ def _predicate_field_error(
     """Return why a predicate ref reads a field the carried record can't have, else `None`.
 
     A check `isinstance(<base>, T)` guarding the read, with `<base>` a strict prefix of
-    `ref`, narrows `<base>` to `T` as a searched CASE does, so the fields below it are
-    walked on `T`. The value passes every guarding check, so the read is fine when any
-    of them allows it. A check the base's type already satisfies narrows nothing. A
-    read guarded by a check whose type name doesn't resolve is not checked, so the
-    type-table check reports the unknown name.
+    `ref`, narrows `<base>` as a searched CASE does: to the members of the base's union
+    that `T` shares when no other member could pass it, else to `T`. The fields below it
+    are walked on that narrowed type. The value passes every guarding check, so the read
+    is fine when any of them allows it. A check the base's type already satisfies narrows
+    nothing. A read guarded by a check whose type name doesn't resolve is not checked, so
+    the type-table check reports the unknown name.
     """
     parts = ref.split(".")
     narrowed_errors: list[str | None] = []
@@ -439,11 +444,18 @@ def _predicate_field_error(
             # build first and hide it behind a hint to add the check the author wrote.
             return None
         base_contract = project_output_contract(contract, base_parts)
-        if type(base_contract) is ValueContract and types_compatible(base_contract.type, typ):
-            continue
+        narrowed = typ
+        if type(base_contract) is ValueContract:
+            if types_compatible(base_contract.type, typ):
+                continue
+            kept = isinstance_members(base_contract.type, typ)
+            if kept is not None:
+                narrowed = replace(
+                    restrict_union(base_contract.type, kept), nullable=typ.nullable
+                )
         narrowed_errors.append(
             output_contract_field_error(
-                ValueContract(typ), parts[len(base_parts) :], ref, isinstance_hint=True
+                ValueContract(narrowed), parts[len(base_parts) :], ref, isinstance_hint=True
             )
         )
     if not narrowed_errors:

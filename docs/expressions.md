@@ -275,7 +275,8 @@ function; set in Python, its name must be in the node's type table.
 Each shipped builtin returns text, so a field read on its result (`${upper(x).f}`) is a
 load error wherever it is written: `reference ${upper(...).f} reads field 'f' on type
 str, which has no fields`. A host-registered builtin's result, even one registered
-under a shipped name, isn't checked.
+under a shipped name, isn't checked. A value bound from a builtin call (`v: ${upper(x)}`)
+is not typed at load, so a later `${v.f}` is not checked.
 
 ## `isinstance` — the type test
 

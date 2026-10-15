@@ -167,8 +167,8 @@ error: a field on a scalar (`str`, `int`, `Literal(...)`, ...) or a list, or a f
 record doesn't declare. This covers `${input.X...}`, `${node.output...}`, and a MAP's
 `${item...}` in bindings, `case` conditions, and flow outputs, the carried fields a
 LOOP `while:`/`until:` predicate reads, a node's local names in its prompts
-(`prompt:`, `system_prompt:`, `human_input` question text) and its own `asserts:`, and
-`${input.X...}` in flow `asserts:`. Reading a declared field
+(`prompt:`, `system_prompt:`, `human_input` question text, `adaptive_questions.prompt:`)
+and its own `asserts:`, and `${input.X...}` in flow `asserts:`. Reading a declared field
 through an `Optional(...)` record still gives `null` when the whole value is null, and
 values whose type isn't known at load (`object`, `Any`, an untyped output, or anything
 below them) aren't checked.

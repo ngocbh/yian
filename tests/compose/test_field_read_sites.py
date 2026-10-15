@@ -34,14 +34,21 @@ _QTY_HINT = (
 
 
 def _flow(
-    nodes: str, output: str, *, defs: str = "", inputs: str = "", tail: str = ""
+    nodes: str,
+    output: str,
+    *,
+    typedefs: str = "",
+    defs: str = "",
+    inputs: str = "",
+    tail: str = "",
 ) -> str:
     """Return a flow built from the shared preamble and the given sections.
 
-    The flow holds `defs`, the inputs (plus `inputs` lines), node `step`, then `nodes`,
-    `output` and `tail`."""
+    The flow holds the shared typedefs plus `typedefs` lines, `defs`, the inputs (plus
+    `inputs` lines), node `step`, then `nodes`, `output` and `tail`."""
     return (
         _PREAMBLE
+        + typedefs
         + defs
         + _INPUTS
         + inputs
@@ -439,6 +446,125 @@ def test_node_assert_reads_the_narrowed_member_inside_a_branch():
     outside = _producer("d", "Order") + _code({"v": "${d.output}"}, ["v.qty > 0"])
     message = _load_error(_flow(outside, "${c.output}"))
     assert f"node 'c' assert: reference ${{v.qty}} {_QTY_HINT}" in message
+
+
+def test_node_assert_isinstance_guard_does_not_narrow_an_input():
+    guarded = _code({"v": "${d.output}"}, ["not isinstance(v, Buy) or v.qty > 0"])
+    message = _load_error(_flow(_producer("d", "Order") + guarded, "${c.output}"))
+    assert f"node 'c' assert: reference ${{v.qty}} {_QTY_HINT}" in message
+    routed = _code(
+        {"v": "${d.output}"}, ["not isinstance(v, Buy) or v.qty > 0"], node_id="ag"
+    )
+    load_flow(_flow(_routed(routed), "${ag.output | other.output}"))
+
+
+def test_flow_assert_isinstance_guard_does_not_narrow_an_input():
+    message = _load_error(
+        _flow(
+            "",
+            "${step.output}",
+            inputs="  o: !Order\n",
+            tail=_asserts("isinstance(input.o, Buy) and input.o.qty > 0"),
+        )
+    )
+    assert (
+        "reference ${input.o.qty} reads field 'qty', which only union members with "
+        "action buy have" in message
+    )
+
+
+_UNION_TYPES = (
+    "  Short: {action: 'Literal(short)', qty: int}\n"
+    "  Hold: {action: 'Literal(hold)'}\n"
+    "  Trade: Union(Buy, Short, Hold)\n"
+    "  Sized: Union(Buy, Short)\n"
+    "  A: {x: int}\n"
+    "  B: {y: str}\n"
+    "  AB: Union(A, B)\n"
+)
+
+
+def _isinstance_routed(produced: str, member: str, node: str) -> str:
+    """Producer `d` typed `produced`, a case routing `isinstance(d.output, member)` to
+    `ag` and anything else to `other`, then `node` (id `ag`) and `other`."""
+    return (
+        _producer("d", produced)
+        + "  route:\n"
+        "    kind: case\n"
+        "    cases:\n"
+        f"      - when: isinstance(d.output, {member})\n        then: ag\n"
+        "    else: other\n"
+        + node
+        + "  other:\n"
+        "    kind: code\n"
+        "    input:\n      s: ${input.s}\n"
+        "    output: str\n"
+        "    code: return 'x'\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("produced", "member", "node"),
+    [
+        ("AB", "A", _agent({"v": "${d.output}"}, "${v.x}")),
+        ("AB", "A", _code({"v": "${d.output}"}, ["v.x > 0"], node_id="ag")),
+        ("Order", "Buy", _agent({"v": "${d.output}"}, "${v.qty}")),
+        ("Trade", "Sized", _agent({"v": "${d.output}"}, "${v.qty}")),
+        ("Trade", "Sized", _code({"v": "${d.output}"}, ["v.qty > 0"], node_id="ag")),
+    ],
+    ids=[
+        "untagged-prompt",
+        "untagged-assert",
+        "tagged-prompt",
+        "shared-prompt",
+        "shared-assert",
+    ],
+)
+def test_isinstance_branch_reads_the_narrowed_member(produced, member, node):
+    flow = _flow(
+        _isinstance_routed(produced, member, node),
+        "${ag.output | other.output}",
+        typedefs=_UNION_TYPES,
+    )
+    load_flow(flow)
+
+
+_PARTIAL_CHILD = (
+    "defs:\n"
+    "  child:\n"
+    "    input:\n      x: !str\n"
+    "    nodes:\n"
+    "      typed:\n"
+    "        kind: code\n"
+    "        input:\n          x: ${input.x}\n"
+    "        output: str\n"
+    "        code: return 'a'\n"
+    "      untyped:\n"
+    "        kind: code\n"
+    "        input:\n          x: ${input.x}\n"
+    "        code: return dict(deep=dict(k=1))\n"
+    "    output:\n"
+    "      a: ${typed.output}\n"
+    "      b: ${untyped.output}\n"
+)
+
+
+def _partial_read(assertion: str) -> str:
+    """A CALL to `child` (a partial record: typed `a`, opaque `b`), and a CODE node
+    asserting `assertion` on it through the local name `v`."""
+    nodes = (
+        "  call_child:\n    kind: call\n    call: child\n"
+        "    input:\n      x: ${input.s}\n"
+        + _code({"v": "${call_child.output}"}, [assertion])
+    )
+    return _flow(nodes, "${c.output}", defs=_PARTIAL_CHILD)
+
+
+def test_partial_record_local_root_reads():
+    message = _load_error(_partial_read("v.zz == 1"))
+    assert "node 'c' assert: reference ${v.zz} reads unknown field 'zz' on record" in message
+    flow = load_flow(_partial_read("v.a == 'a' and v.b.deep.k == 1"))
+    assert run_flow(flow, {"s": "x", "r": {"a": "x"}}).status == "succeeded"
 
 
 @pytest.mark.parametrize(

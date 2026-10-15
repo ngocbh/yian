@@ -302,6 +302,14 @@ def test_defaulted_union_binding_hint_names_the_bound_source():
     assert f"node 'ag' prompt: reference ${{v.qty}} {_QTY_HINT}" in message
 
 
+def test_transformed_union_binding_hint_names_no_bound_source():
+    """A constructor wraps the value, so the hint can't name a path below its source."""
+    nodes = _producer("d", "Order") + _agent({"v": "${Wrap(o=d.output)}"}, "${v.o.qty}")
+    message = _load_error(_flow(nodes, "${ag.output}", typedefs="  Wrap: {o: Order}\n"))
+    assert "read it inside a case on ${v.o.action}" in message
+    assert "d.output.o" not in message
+
+
 def _code(
     inputs: dict[str, str], asserts: list[str], *, node_id: str = "c"
 ) -> str:

@@ -44,12 +44,15 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime
 from typing import Any, Callable, Optional
 
+from lark import Tree
+
 from yian.compile.model import FlowOutput
 from yian.compile.validation import type_relation
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.output_contracts import (
     NOT_LITERAL,
     TypeFn,
+    direct_reference_parts,
     direct_reference_path,
     literal_contract,
     literal_type,
@@ -63,7 +66,7 @@ from yian.compose.nodes.base import BuildResult
 from yian.compose.validate.narrowing import Narrowing
 from yian.diagnostics import DiagnosticFrame, OriginRef, SourceRange
 from yian.expr import ExpressionError
-from yian.expr.template import Span, scan_template, template_refs
+from yian.expr.template import Span, scan_template
 from yian.nodes.contracts import (
     Binding,
     OutputContract,
@@ -356,16 +359,17 @@ def local_input_contracts(
 
 
 def _bound_source(binding: Any) -> str | None:
-    """Return the one reference path a binding's whole-value span reads, else `None`.
+    """Return the reference path a binding passes through unchanged, else `None`.
 
     Args:
         binding (`Any`): A wiring binding, raw or a `Binding`.
 
     Returns:
-        `str | None`: The path for a source that is one `${...}` span reading a single
-            path (`${d.output}`, `${d.output :- null}`), or `None` for a literal, a
-            value template, embedded text, malformed text, or a span reading several
-            paths.
+        `str | None`: The path for a source that is one `${...}` span holding a bare
+            reference, alone or on the left of `:-` or `:?` (`${d.output}`,
+            `${d.output :- null}`), or `None` for a literal, a value template,
+            embedded text, malformed text, or any other expression (a call, a
+            coalesce, an operator), whose value isn't the referenced one.
     """
     source = binding_source(binding)
     if not isinstance(source, str):
@@ -376,8 +380,11 @@ def _bound_source(binding: Any) -> str | None:
         return None
     if not (len(segments) == 1 and isinstance(segments[0], Span)):
         return None
-    paths = set(template_refs(segments))
-    return paths.pop() if len(paths) == 1 else None
+    tree = segments[0].tree
+    if isinstance(tree, Tree) and tree.data in ("default_expr", "required_expr"):
+        tree = tree.children[0]
+    parts = direct_reference_parts(tree)
+    return ".".join(parts) if parts is not None else None
 
 
 def _binding_alternatives(

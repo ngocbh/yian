@@ -102,6 +102,8 @@ def value_repr(value: Any) -> str:
             ``<{type} too large to display>`` when that fails, or ``<{type} object>``
             when the value's own repr raises.
     """
+    # Read before the `try`, so a bad `YIAN_*` value is raised, not swallowed.
+    current()
     try:
         digits = long_int_digits(value)
         if digits is not None:
@@ -116,7 +118,6 @@ def value_repr(value: Any) -> str:
     except Exception:
         # A returned value's repr is user code; a broken one must not crash the run.
         return f"<{type(value).__name__} object>"
-    # Cut outside the `try`, so a bad `YIAN_MAX_SHOWN_VALUE_CHARS` is not swallowed.
     return shown_text(text)
 
 

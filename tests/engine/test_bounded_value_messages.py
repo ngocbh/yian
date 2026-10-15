@@ -185,3 +185,17 @@ def test_list_hiding_a_deep_list_fails_the_output_contract():
     assert result.status == "failed"
     assert result.failure.code == "contract.output"
     assert result.failure.node_id == "b"
+
+
+def test_value_repr_raises_a_bad_defaults_variable(monkeypatch) -> None:
+    """A bad `YIAN_*` value is raised, not turned into a placeholder."""
+    from yian import defaults
+
+    monkeypatch.setenv("YIAN_MAX_SHOWN_VALUE_CHARS", "1")
+    defaults._forget()
+    try:
+        with pytest.raises(defaults.DefaultsError):
+            value_repr("abc")
+    finally:
+        monkeypatch.delenv("YIAN_MAX_SHOWN_VALUE_CHARS")
+        defaults._forget()

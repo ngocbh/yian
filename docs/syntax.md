@@ -547,10 +547,9 @@ typed. A MAP over a body that returns a record with an untyped field gives reade
 file's fields as `${f.uri}`,
 `${f.mime}`, and `${f.name}` (see [References](#references-naming-a-value)).
 
-Load still asks for a `file`-typed source where a typed `file` slot reads a
-value: an `object` or `Any` value into `!file` doesn't load. The JSON form is accepted
-where load can't tell: an untyped producer, a seed, or a value read back from the run
-log.
+Load still asks for a `file`-typed source where a typed `file` slot reads a value: an
+`object` or `Any` value into `!file` doesn't load. The JSON form is accepted where load
+can't tell: an untyped producer, a seed, or a value read back from the run log.
 
 When the loader can't type a list's items (a tool's untyped array, a mixed or empty
 literal list), the list is a `list(Optional(Any))`, and its items are checked at

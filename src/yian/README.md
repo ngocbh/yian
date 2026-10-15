@@ -753,8 +753,10 @@ Compose fills it after the START/END boundary is synthesized, from the names the
 wiring sources, asserts, CASE `when:`s, and LOOP predicate use, resolved against the
 owning flow's `typedefs:`. A constructor `${Buy(...)}` names a typedef and reads the same
 table: the keyword form builds a record from exactly the given fields and checks it with
-`build_value_as`; the positional form `${Buy(x)}` checks `x` and returns it unchanged,
-like `!Buy ${x}`. Neither fills a field or converts a value. A builtin type name
+`build_value_as`; the positional form `${Buy(x)}` checks `x` and returns it like
+`!Buy ${x}`. Neither fills a field; both return the value with only file representation
+normalized (`normalize_files`: a file's JSON form in a `file` slot becomes a `FileRef`, a
+nested file in an `object` slot becomes its mapping), and numbers stay as given. A builtin type name
 (`${int(x)}`) is not a constructor, and prompts reject constructors as they reject
 `isinstance`. Every evaluation entry point takes `types=None`; `eval_node`
 (binding), node asserts, CASE routing, and the LOOP predicate pass `self.types`, and

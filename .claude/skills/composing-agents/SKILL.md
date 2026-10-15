@@ -478,7 +478,7 @@ a cycle.
 checks a typed value: `${Buy(action="buy", qty=size.output)}` builds a record from
 exactly the given fields and checks it; `${Buy(x)}` checks and narrows `x`, exactly
 like `!Buy ${x}`. Only typedef names are constructors (`${int(x)}` is an unknown
-function: yian never converts). They work where `isinstance` does, not in prompts.
+function: there are no conversion functions). They work where `isinstance` does, not in prompts.
 `isinstance(x, Buy)` stays the boolean check. See
 [`docs/expressions.md`](../../../docs/expressions.md#constructors-t).
 

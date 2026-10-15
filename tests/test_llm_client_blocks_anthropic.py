@@ -534,7 +534,7 @@ def test_those_models_with_block_thinking_and_a_closed_schema_keep_the_output_fo
     server, model
 ):
     server.text = '{"answer": "ok"}'
-    # These models take only adaptive thinking.
+    # Adaptive thinking, which all of these accept.
     model = _model({"thinking": {"type": "adaptive"}, "max_tokens": 4096}, model=model)
     assert model.with_structured_output(Answer).invoke("hi") == Answer(answer="ok")
     body = server.bodies[0]
@@ -561,6 +561,8 @@ def test_forced_tool_support_matches_langchain():
     assert _forces_tool("claude-sonnet-4-5")
     assert _forces_tool("claude-mythos-5-1") is False
     assert _forces_tool("claude-mythos-5-1-20261001") is False
+    # Fails once langchain lists Mythos 5.1; then yian's extra prefix can go.
+    assert _supports_forced_tool_choice("claude-mythos-5-1")
     # Anthropic's table names only Mythos 5.1.
     assert _forces_tool("claude-mythos-5")
 

@@ -109,7 +109,8 @@ the runtime cannot safely infer which input field caused a custom function's
 output.
 
 Each reached behavioral occurrence receives its retained `BackwardContext` and
-ordered feedback tuple. Its `backward()` hook returns three channels:
+ordered feedback tuple. The context keeps canonical JSON, so a file in it is its
+mapping `{uri, mime, name}`, not a `FileRef`. Its `backward()` hook returns three channels:
 
 | Channel | Destination |
 | --- | --- |

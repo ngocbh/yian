@@ -62,7 +62,12 @@ value gets its ISO text, so YAML forms such as `2026-05-21 14:30:00 -5` work the
 typed default must be quoted (see [syntax](syntax.md#types)), and so must a timestamp
 anywhere else.
 
-`file` is a reserved placeholder (not yet authorable).
+`file` is a file reference, held as a `FileRef` with `uri` (text), `mime`, and `name`
+(text or null). Storage and transfer are not built yet. Its JSON form is the mapping
+`{"uri": ..., "mime": ..., "name": ...}`. A `file` slot reads that mapping, with exactly
+those keys, as a `FileRef`. An `object` slot reads a nested `FileRef` as its mapping, but
+a `FileRef` at the top of an `object` slot fails, and `Any` and `list[Any]` reject files.
+A typedef that names `file` (`FileT: file`) passes `isinstance` for the JSON form too.
 
 A `float` is finite. NaN, infinity, and `complex` numbers are not yian values, at any
 depth. The first boundary that sees one rejects it and names where it sits:
@@ -229,24 +234,32 @@ build_value_as(declared, v)  → wrap v as `declared`, RAISE on mismatch (check)
 `build_value` infers the kind (`bool` checked before `int`; empty list → `list[Any]`).
 `build_value_as` is the declared-type check used by both `VariablePool.set` and the
 run log's `canonical_typed` success-record boundary. It raises `TypeCheckError` on a
-mismatch; the only coercion is widening (`int` fills a `float` slot at any depth:
-a record field, a list item, or a union member's field). An `Any` value is stored
-as given: an int stays an int and `True` stays a bool.
+mismatch. Three conversions apply at any depth (a record field, a list item, or a union
+member's field): an `int` filling a `float` slot widens; a file's JSON form filling a
+`file` slot becomes a `FileRef`; and a `FileRef` nested in an `object` value or a
+`list(object)` item becomes its mapping, copying only the containers on its path. An
+`Any` value is stored as given: an int stays an int and `True` stays a bool.
+
+`normalize_files(typ, value)` applies only the file conversions, with no check and no
+widening. Typed bindings and `T(...)` constructors deliver their value through it, and
+the runtime uses it to restore files in values it decodes from the run log.
 
 `object`, `Any`, `list(object)` items, and `list[Any]` items must be JSON values: `None`,
 a `bool`, `int`, `float`, or `str`, a `dict` with only `str` keys and JSON values, or a
 list or tuple of JSON values. The check walks the value without recursion and fails at
 the bad part's path: a non-text key with `object keys must be text, got 1` at the
 mapping, anything else (a date object, a set, a pydantic model, a dataclass, a
-`FileRef`) with `<value> is not a JSON value`, and a container inside itself with
-`value contains itself`. Depth and non-finite numbers are left to the boundary checks
-above, so a recorded value replays. A value or key shown in a type-check message is cut
-to `YIAN_MAX_SHOWN_VALUE_CHARS` (200) characters: a longer rendering keeps its first 199
-and ends with `…` (see [Defaults and limits](defaults.md)).
+`FileRef` in an `Any` value) with `<value> is not a JSON value`, and a container inside
+itself with `value contains itself`. An `object` value or `list(object)` item reads a
+nested `FileRef` as its mapping before the walk. Depth and non-finite numbers are left
+to the boundary checks above, so a recorded value replays. A value or key shown in a
+type-check message is cut to `YIAN_MAX_SHOWN_VALUE_CHARS` (200) characters: a longer
+rendering keeps its first 199 and ends with `…` (see [Defaults and limits](defaults.md)).
 A node output with no declared type (and each untyped field of a partial record output)
 goes through the same walk at `canonical_typed`, with `FileRef` leaves allowed at any
 depth; its message names the path (`output at d.x[1]: datetime.date(2026, 1, 1) is not a
-JSON value`). An already-built `TypedValue` (a replayed record) is not walked.
+JSON value`). An already-built `TypedValue` (a replayed record) is not walked. Nothing
+types those files, so a reader sees each one as its mapping.
 An `int` too large for a float fails at its path (`int is too large for float`).
 `TypeCheckError.path` is an immutable tuple relative to the declared type: string
 segments name record fields and integer segments are actual list indices. A
@@ -335,8 +348,10 @@ member has it, some do, or none do); `restrict_union` keeps some members. The ma
 emits a union as `"union": [...]` in canonical order.
 
 A [tagged slot](syntax.md#typed-slots-yaml-tags) compares its tag's type with the type
-inferred for its value through `compile.validation.type_relation`. A tag only checks and
-narrows: it never fills in a field and never converts a value.
+inferred for its value through `compile.validation.type_relation`. A tag checks and
+narrows. It never fills in a field, and it converts only how files are held
+(`normalize_files`): a `file` position reads a file's JSON form as a `FileRef`, and an
+`object` position reads a nested `FileRef` as its mapping.
 
 - **fits** — every inferred value is a declared value; no check is needed beyond the
   usual runtime one.
@@ -348,7 +363,10 @@ narrows: it never fills in a field and never converts a value.
 - **disjoint** — no non-null inferred value fits; loading fails. Records count as
   closed, so an extra required field makes them disjoint, and sharing only `None`
   is not overlap. A type whose every non-null value holds a `file` is disjoint from
-  `Any`, and so is `None`.
+  `Any`, and so is `None`. Load treats `file` as disjoint from `object`, `Any`, and a
+  record shaped like a file's JSON form, so a typed `file` slot still needs a
+  `file`-typed source. The JSON form is accepted at runtime where load can't tell: an
+  untyped producer, a seed, or a value decoded from the run log.
 
 Unions compare member-wise: each inferred member takes its best relation against the
 declared members (a non-union side counts as one member), and the results combine to
@@ -367,7 +385,10 @@ In wiring, every non-null type without a `file` in it fits `Any`, and a nullable
 fits `Optional(Any)`. An `Any` source fits only `Any` and `Optional(Any)`, since load
 can't tell which JSON value it holds; the CALL and LOOP errors say to tag the slot or
 narrow the value with `isinstance` in a `case`. `types_overlap` treats `Any` as
-overlapping every type except `None` and a bare `file`.
+overlapping every type except `None`. Since a `file` slot reads a file's JSON form,
+`file` overlaps plain `object`, `Any`, and every record that admits the mapping
+`{uri, mime, name}`, so an untagged union whose members overlap that way is a load error
+that asks for a tag field.
 
 A value with `${...}` nested in a record or list is inferred structurally, field by
 field, so each field keeps its type. A record that omits a required single-value
@@ -422,6 +443,16 @@ The runtime state primitive the engine owns. Narrow by design:
 - **Lossless serialization.** `dumps()`/`loads()` round-trip the whole pool through the
   `AnyValue` union. The run-record codec uses the same typed representation for the
   complete initial pool and for each committed node output.
+- **Files keep their type in typed containers.** The run log stores a file nested in a
+  container as its JSON form. The runtime reads each committed value back through its
+  commit target's contract, so every position the contract types as `file` holds a
+  `FileRef`: a `list(file)` item, a record's `file` field, a union member's field, or a
+  LOOP-carried `file`. The run result reads through the flow's inferred output type the
+  same way. Live runs, replay and resume, and learnable trace reads agree; the log bytes
+  don't change. A `${x.f}` dotted step reads a dict key or a file's `uri`, `mime`, or
+  `name`. An untyped output or seed keeps its nested files as mappings. A MAP whose body
+  returns a record with an untyped field has no inferable list type, so a run result
+  read from it keeps its files as mappings too.
 
 ## Why this shape
 

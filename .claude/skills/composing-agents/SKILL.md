@@ -239,7 +239,12 @@ slot (`n: !int ${x.output}`, checked at runtime) or narrow it with `isinstance` 
 `case`. `object` is a JSON object: text keys and JSON values only, so a dict with a
 non-text key, a date object, or a set fails the node. A node output with no `output:`
 follows the same rule but may also hold files; a date, set, or non-text key in it fails
-`contract.output` with its path (`output at d: ...`). A list the loader can't type (a
+`contract.output` with its path (`output at d: ...`). A `file` is a `FileRef` (`uri`,
+`mime`, `name`; read them as `${f.uri}`). It keeps its type inside typed containers: a
+`list(file)` item, a record `file` field, or a LOOP-carried `file` reaches CODE as a
+`FileRef` (`x["f"].uri`, not `x["f"]["uri"]`). A `file` slot also reads the mapping
+`{uri, mime, name}`, and an `object` slot reads a nested file as its mapping; untyped
+outputs keep nested files as mappings. A list the loader can't type (a
 tool's untyped array, a mixed or empty literal) is `list(Optional(Any))`; its items are
 checked at runtime when passed on.
 
@@ -329,7 +334,9 @@ name, or a record that contains itself fails at that typedef field
 A union's members must be told apart by the data: a **tag field** every member declares
 as a single-value `Literal` with distinct values (any name), or shapes that can't
 overlap. Otherwise the typedef fails with `members 'Buy' and 'Sell' can match the same
-value; add a tag field ...`. Write `Union(...)`, never `A | B` (load error with a hint);
+value; add a tag field ...`. A `file` field overlaps an `object` or `Any` field or a
+record with `uri`, `mime`, `name`, so such an untagged union needs a tag field too.
+Write `Union(...)`, never `A | B` (load error with a hint);
 a nullable union is `Optional(Order)`, not `Union(A, None)`.
 A union fills a union or `object` input member by member, never a record input: narrow
 it in a `case` first, or with a tag (`buy: !Buy ${d.output}`), checked at runtime.
@@ -399,7 +406,9 @@ output:
   fields, keys, and `<<:` merge sources. Tags under `x-*` keys are ignored. YAML's own
   `!!` tags keep their YAML meaning.
 
-**Tags only check.** A tag never fills in or converts anything.
+**Tags only check.** A tag never fills in anything and converts only how files are
+held (a file's mapping at a `file` slot becomes a file; a nested file at an `object`
+slot becomes its mapping). `n: !float ${i}` still delivers an `int`.
 - **Load:** the declared type is compared with the inferred one. Disjoint is a load
   error (a `str` declared `int`; records are closed, so an extra required field
   is disjoint). Narrower (non-Optional over Optional, a `Literal` or range subset, a

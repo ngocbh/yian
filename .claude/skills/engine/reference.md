@@ -578,10 +578,16 @@ model made enforceable.
   items compatibility reads as `Optional(Any)` and MAP checks at runtime.
   `ValueKind.ANY` is type-only: an `Any` value (any non-null JSON value) is stored under
   its natural kind. `object`, `list(object)` items, and `LIST_ANY` items must be JSON
-  values (text keys; no date objects, sets, or `FileRef`s). An untyped node output must
+  values (text keys; no date objects or sets). A nested `FileRef` in an `object` value
+  or `list(object)` item becomes its mapping; `Any` and `LIST_ANY` items reject it. A
+  `file` slot reads a file's JSON form (exactly `uri`, `mime`, `name`) as a `FileRef`.
+  An untyped node output must
   be JSON values or `FileRef`s, checked at `canonical_typed`. An `Any` source fits only
   `Any`/`Optional(Any)` in wiring, and `type_relation` treats it as narrower than other
   types except `None` and a type whose every value holds a `file`, which are disjoint.
+  Load also treats `file` as disjoint from `object` and a file-shaped record, while
+  `types_overlap` counts `file` as overlapping plain `object`, `Any`, and records
+  admitting its JSON form, so such an untagged union needs a tag field.
   The specialized `LIST_*` discriminator and carrier preserve `None` across
   canonical round-trips.
   Cross-flow compatibility recursively applies the nullable-source-to-strict-sink
@@ -727,7 +733,8 @@ owns one input source and, for a tagged slot (`qty: !int ${size.output.qty}`), a
 optional declared `ValueContract` whose origins travel with the binding's. A
 `ValueTemplate` source is an authored mapping or list whose leaf strings are templates
 and which may hold nested typed `Binding`s; the binder evaluates each part in place and
-checks each nested binding against its own contract without converting it. Its leaf
+checks each nested binding against its own contract, converting only its file and object
+representation (`normalize_files`). Its leaf
 strings are separate input groups (`<param>/<JSON pointer>`, from
 `binding_input_groups`), and `iter_source_strings` / `map_source_strings` are the shared
 walkers for load-time checks and rewrites; `Parameter` owns one formal/default policy, `Assertion`
@@ -790,8 +797,12 @@ origins are manifest-neutral. A bound null shadows a default but still undergoes
 contract validation, so it is accepted only when the parameter is untyped or its
 contract accepts null (a nullable or `None`-kind type). A present typed `Binding`
 is checked after its source resolves and before the parameter contract:
-`build_value_as` validates the value against `Binding.contract` and discards the
-built value, so the payload is not converted; a miss is `binding.type`.
+`build_value_as` validates the value against `Binding.contract`, and the payload is
+delivered with only its file and object representation converted (`normalize_files`):
+a file's JSON form at a `file` position becomes a `FileRef`, and a nested `FileRef` at
+an `object` position becomes its mapping. Nothing else converts (an `int` bound
+`!float` stays an `int`); `T(...)` constructors deliver the same way. A miss is
+`binding.type`.
 `TypeCheckError.path` is relative to that contract and contains record names plus actual list indices.
 Supplied-value rejection resolves it through `ContractOrigins.at()` (exact,
 nearest ancestor, then default) before the parameter fallback; an invalid
@@ -833,9 +844,22 @@ output-contract provenance.
 `ValueContract`, a closed `PartialRecordContract`, or `None` for an unenforced output.
 The partial arm lists every record field and attaches a `ValueContract` only where a
 type is proven. Runtime success and replay validate the effective commit target through
-the same sum; structured generation in an AGENT node reads `.type` only from the exact arm. Growth
-clones retain the carrier so its origins survive lexical rewrites. Manifests encode exact
-or partial semantics but deliberately omit `ContractOrigins`, keeping provenance changes
+the same sum. The run log stores nested files as their JSON form, so each committed
+value is decoded through the commit target's contract (`output_contract_file_type`, or
+the typed parameters of a `commits_input_record` node with no output contract),
+computed once when the commit is prepared: the pool, the `NodeSucceeded` observer, and
+the trace writer's `SourceEntry.value` hold a `FileRef` at each `file` position, live
+and on replay, without changing the record bytes. The run result reads through
+`RunState.result_contract`, the flow's inferred output contract; a LOOP driver reads its
+carried record through its output contract and a partial loop's omitted field through
+the body's typed input. Backward contexts and `lookup_source` keep canonical JSON
+(`SourceEntry.stored_value`); untyped outputs and seeds keep nested files as mappings.
+A MAP whose body returns a partial record has no inferable list contract, so a run
+result read from it keeps nested files as mappings. Every dotted read goes through
+`field_of` (a dict key or a file's `uri`/`mime`/`name`, never `getattr`). Structured
+generation in an AGENT node reads `.type` only from the exact arm. Growth clones retain
+the carrier so its origins survive lexical rewrites. Manifests encode exact or partial
+semantics but deliberately omit `ContractOrigins`, keeping provenance changes
 identity-neutral. Live output validation resolves a `TypeCheckError.path` through the
 whole or field-local contract. The structural path is consumed before `Failure` and
 never enters the durable record schema.

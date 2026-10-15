@@ -7,10 +7,10 @@ type layer's job (`type_for` recurses over aliases/lists/Optional); this reader
 walks native record syntax and wraps any type error loudly. A record counts its
 levels against ``MAX_TYPE_NESTING``: each record is a level and a field's type
 adds its own (see `type_levels`), however YAML text or aliases built the record,
-so a deep alias chain is a load error before the walk recurses. ``read_type`` is the
-source-free semantic view. ``read_value_contract`` performs the same recursion
-over a retained cursor and compiles authored root/nested sites into opaque
-``ContractOrigins`` without leaking YAML concepts below Compose.
+so a deep alias chain is a load error before the walk recurses past the limit.
+``read_type`` is the source-free semantic view. ``read_value_contract`` performs the
+same recursion over a retained cursor and compiles authored root/nested sites into
+opaque ``ContractOrigins`` without leaking YAML concepts below Compose.
 """
 
 import re
@@ -223,7 +223,7 @@ def _read_type_and_sites(
 
     raise diagnostics.error(
         f"cannot read type from {node!r} (type {type(node).__name__})",
-        range=(cursor.range if cursor is not None else None),
+        range=rng,
     )
 
 

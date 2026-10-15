@@ -540,6 +540,14 @@ JSON: integer with N digits is larger than yian allows (4300 digits); a log writ
 while yian accepted such ints can't be read`, so resume and replay of such a log fail
 and leave it unchanged.
 
+The AGENT node build (`compose/nodes/agent.py`) checks an authored `output:` at load:
+`type_levels` of the type must not exceed `current().max_agent_output_nesting`
+(`YIAN_MAX_AGENT_OUTPUT_NESTING`, 16, lower-only), since pydantic builds the reply schema
+recursively, about 28 frames per level for an `Optional(Union(...))` field at each level;
+then `type_to_schema` must accept the type (no `file` or `None`). An output type the
+engine supplies (`output_contract_override`, such as `adaptive_questions:`) skips the
+nesting check.
+
 Structured generation asks for a schema with an open part
 (`llm_clients.capabilities.has_open_schema`, from an `object`, `Any`, or elementless-list
 output) without strict constraints, chosen per client in `with_structured_output`: Azure
@@ -680,7 +688,9 @@ copy. The 535-frame figure is for small values: a literal or output template nea
 100-level value limit under 50 calls peaks near 710 frames.
 A chain of `uses:` imports adds about 4 frames per file: a load of 50 imports whose last
 file calls a 50-level chain peaks near 735 frames, which leaves about 265 for the caller
-under Python's default limit of 1000.
+under Python's default limit of 1000. With an AGENT whose `output:` nests 16 levels of
+the costliest shape at the bottom, building its schema at load raises the peak to about
+780 frames on Python 3.12 and 850 on 3.10.
 
 For calls, `_resolve_child` checks twice. Before resolving, it counts the calls active
 in the file being loaded (`_load_flow` resets the count with `call_nesting_scope`) and

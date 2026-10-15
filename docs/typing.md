@@ -175,6 +175,9 @@ type at r.k.k nests deeper than 100 levels, the limit for a type (each record an
 ```
 
 The `; its type ...` part appears when a field's type pushes the record over.
+An AGENT's `output:` nests at most 16 levels, counted the same way
+(`YIAN_MAX_AGENT_OUTPUT_NESTING` can only lower it), since a model's reply schema is built
+from it; see [Syntax → AGENT](syntax.md#agent-the-llm-backed-agent-node).
 
 A typedef counts the same way, and a chain of typedefs, each naming the next, holds at
 most 100 of them. A typedef past either bound fails the load at the typedef, and at the

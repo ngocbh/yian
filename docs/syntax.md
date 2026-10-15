@@ -35,8 +35,8 @@ A node's `input:` is a mapping of names to bindings, or omitted. A whole `${...}
 reference or any other value is a load error at the field: for
 `input: ${seed.output}`, list each field (`n: ${seed.output.n}`).
 
-Changed: `input: []` and `input: ''` used to load as no inputs and are now load
-errors; remove `input:` or write `input: {}`. A non-mapping `input:` such as
+Changed: a node's `input: []` and `input: ''` used to load as no inputs and are now
+load errors; remove `input:` or write `input: {}`. A non-mapping `input:` such as
 `input: ${seed.output}` used to crash the loader with a Python error.
 
 The shape of `output:` sets what the flow returns:

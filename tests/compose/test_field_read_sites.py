@@ -49,6 +49,7 @@ def _agent(
 
 
 def _load_error(text: str) -> str:
+    """Return the message of the `LoadError` loading `text` raises."""
     with pytest.raises(LoadError) as caught:
         load_flow(text)
     return str(caught.value)
@@ -120,6 +121,16 @@ def test_typed_union_input_reads_the_narrowed_member_inside_a_branch():
     outside = _producer("d", "Order") + _agent({"v": "!Order ${d.output}"}, "${v.qty}")
     message = _load_error(_flow(outside, "${ag.output}"))
     assert f"node 'ag' prompt: reference ${{v.qty}} {_QTY_HINT}" in message
+
+
+@pytest.mark.parametrize(
+    "source",
+    ["!Order {action: buy, qty: '${n.output}'}", "!Order {action: buy, qty: 1}"],
+    ids=["template", "literal"],
+)
+def test_typed_record_binding_reads_its_tagged_member(source):
+    nodes = _producer("n", "int") + _agent({"v": source}, "${v.qty}")
+    load_flow(_flow(nodes, "${ag.output}"))
 
 
 def test_optional_binding_field_reads():

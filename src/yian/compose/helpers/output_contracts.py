@@ -397,7 +397,7 @@ def _tree_contract(
     return ValueContract(typ if exact_literals else _widened(typ))
 
 
-def literal_contract(value: Any) -> OutputContract | None:
+def literal_contract(value: Any, *, exact_literals: bool = False) -> OutputContract | None:
     """Infer the contract of a span-free plain literal, as written out.
 
     A mapping is a closed record of its keys' contracts, a list is a list of its
@@ -409,6 +409,9 @@ def literal_contract(value: Any) -> OutputContract | None:
 
     Args:
         value (`Any`): The literal, with no template or binding inside it.
+        exact_literals (`bool`, *optional*, defaults to `False`): Give each scalar its
+            exact type (a one-tag `Literal`, one-point bounds) instead, so a literal
+            tag selects the union member it names.
 
     Returns:
         `OutputContract | None`: The exact or partial contract, or `None` when the
@@ -423,12 +426,19 @@ def literal_contract(value: Any) -> OutputContract | None:
         if any(type(key) is not str for key in value):
             return None
         return combine_output_contracts(
-            {key: literal_contract(item) for key, item in value.items()}
+            {
+                key: literal_contract(item, exact_literals=exact_literals)
+                for key, item in value.items()
+            }
         )
     if type(value) is list:
-        return _list_contract([literal_contract(item) for item in value])
+        return _list_contract(
+            [literal_contract(item, exact_literals=exact_literals) for item in value]
+        )
     typ = literal_type(value)
-    return None if typ is None else ValueContract(_widened(typ))
+    if typ is None:
+        return None
+    return ValueContract(typ if exact_literals else _widened(typ))
 
 
 def _list_contract(items: list[OutputContract | None]) -> ValueContract | None:

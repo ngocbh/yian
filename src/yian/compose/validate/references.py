@@ -372,13 +372,13 @@ def validate_references(
         contracts: dict[str, LocalInput],
         partial_union_fields: bool,
     ) -> None:
-        """Parse one rendered template and check each ref against `declared` and `contracts`.
+        """Parse one rendered template; check each ref against `declared` and `contracts`.
 
         A malformed span, unknown builtin, builtin called with arguments it doesn't take, or
         nested `${...}` is one error at `where`; each ref whose head is not in `declared` is
         another, with the pool-ref hint (ending in `hint_tail`) when the head is a pool-style
-        head or a node id. Each distinct ref reading a field of a declared name with an entry
-        in `contracts` is another when every alternative rejects the read
+        head or a node id. Each distinct ref reading a field of a declared name with an
+        entry in `contracts` is another when every alternative rejects the read
         (`partial_union_fields` allows a field only some union members have)."""
         try:
             refs = prompt_refs(template)
@@ -432,9 +432,7 @@ def validate_references(
         if isinstance(node, AgentNode):
             declared = {p.name for p in (node.params or [])}
             declared.update(variable.name for variable in node.variables)
-            prompt_contracts = {
-                name: local for name, local in node_locals.items() if name in declared
-            }
+            prompt_contracts = dict(node_locals)
             prompt_contracts.update(
                 (variable.name, LocalInput((variable.contract,)))
                 for variable in node.variables
@@ -471,11 +469,7 @@ def validate_references(
                     or node_range,
                     noun="input",
                     hint_tail="human_input text",
-                    contracts={
-                        name: local
-                        for name, local in node_locals.items()
-                        if name in declared
-                    },
+                    contracts=node_locals,
                     partial_union_fields=partial_union_fields,
                 )
         # Node-owned reserved wiring (`over`, `until`, ...) follows the same pool reference

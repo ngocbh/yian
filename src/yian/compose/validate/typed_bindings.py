@@ -31,8 +31,9 @@ range; a flow output error at its registered origin, else the `output:` range.
 
 Imports flow down only: `compile.validation` (the type relation), `expr` (template
 scanning), `typesys`, `nodes` (binding carriers and the LOOP node), and
-`compose.helpers` (output-contract inference and load diagnostics). The loader, the compose package facade, and the CALL/MAP check
-(`call_types`, for its literal and `${item}` helpers) import this back.
+`compose.helpers` (output-contract inference and load diagnostics). The loader, the
+compose package facade, and the CALL/MAP check (`call_types`, for its literal and
+`${item}` helpers) import this back.
 """
 
 from __future__ import annotations
@@ -379,14 +380,16 @@ def _binding_alternatives(
     if isinstance(binding, Binding) and binding.contract is not None:
         declared = binding.contract
         # Infer from the raw source: the Binding itself resolves to its declared contract.
+        # Exact literals, so a literal tag selects its union member.
         if literal is not NOT_LITERAL:
-            inferred = literal_contract(literal)
+            inferred = literal_contract(literal, exact_literals=True)
         elif isinstance(source, ValueTemplate):
             inferred = template_contract(
                 source,
                 lambda text: resolve_output_binding_contract(
                     text, producers, flow_inputs, type_fn=type_fn
                 ),
+                exact_literals=True,
             )
         else:
             inferred = resolve_output_binding_contract(

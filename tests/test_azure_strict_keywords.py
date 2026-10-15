@@ -4,14 +4,19 @@ import json
 
 import httpx
 import pytest
+from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import HumanMessage
 from langchain_openai import AzureChatOpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from tests.test_structured_open_schema import _ToolCallServer, _azure, _payload, azure_env
 from yian.llm_clients.azure_client import _strict_schema_without
 from yian.memory.reflective import _ReflectionResponse
-from yian.nodes.agent.structured import type_to_schema
+from yian.nodes.agent.structured import (
+    _structured_validation_path,
+    generate_structured,
+    type_to_schema,
+)
 from yian.typesys.types import read_typedefs, type_for
 
 __all__ = ["azure_env"]
@@ -234,3 +239,78 @@ def test_azure_include_raw_is_forwarded_for_an_open_schema(azure_env):
         )
     assert set(result) == {"raw", "parsed", "parsing_error"}
     assert result["parsed"].value == {"k": 1}
+
+
+_AZURE_CONFIG = {"provider": "azure", "model": "gpt-4o"}
+
+
+def _ask(server, schema, **kwargs):
+    """Invoke Azure's structured output for `schema` against `server`'s replies."""
+    with httpx.Client(transport=httpx.MockTransport(server)) as http_client:
+        llm = _azure(http_client=http_client, max_retries=0)
+        return llm.with_structured_output(schema, **kwargs).invoke([HumanMessage("q")])
+
+
+def test_a_reply_within_the_bounds_parses(azure_env):
+    schema = _schema("int(0..10)")
+    assert _ask(_ContentServer('{"value": 7}'), schema).value == 7
+    result = _ask(_ContentServer('{"value": 7}'), schema, include_raw=True)
+    assert result["parsing_error"] is None
+    assert result["parsed"].value == 7
+
+
+def test_a_reply_past_a_moved_bound_is_a_parse_error(azure_env):
+    with pytest.raises(OutputParserException) as caught:
+        _ask(_ContentServer('{"value": 11}'), _schema("int(0..10)"))
+    cause = caught.value.__cause__
+    assert isinstance(cause, ValidationError)
+    assert cause.errors()[0]["loc"] == ("value",)
+
+
+def test_a_reply_past_a_moved_bound_is_a_parsing_error_with_include_raw(azure_env):
+    result = _ask(_ContentServer('{"value": 11}'), _schema("int(0..10)"), include_raw=True)
+    assert result["parsed"] is None
+    assert isinstance(result["parsing_error"], OutputParserException)
+    assert isinstance(result["parsing_error"].__cause__, ValidationError)
+
+
+@pytest.mark.parametrize(("text", "reply", "path"), [
+    ("int(0..10)", {"value": 11}, ()),
+    ("Rec", {"n": 6, "s": "x"}, ("n",)),
+])
+def test_a_reply_past_a_moved_bound_is_owned_by_the_output_contract(
+    azure_env, text, reply, path,
+):
+    typ = type_for(text, REGISTRY)
+    server = _ContentServer(json.dumps(reply))
+    with httpx.Client(transport=httpx.MockTransport(server)) as http_client:
+        model = _azure(http_client=http_client, max_retries=0)
+        with pytest.raises(OutputParserException) as caught:
+            generate_structured(
+                model, [HumanMessage("q")], typ, llm_config=_AZURE_CONFIG, max_retries=0,
+            )
+    assert _structured_validation_path(caught.value, typ) == path
+
+
+def test_reflection_response_with_no_actions_is_a_parse_error(azure_env):
+    with pytest.raises(OutputParserException):
+        _ask(_ContentServer('{"actions": []}'), _ReflectionResponse)
+
+
+def test_a_refusal_is_a_parse_error(azure_env):
+    refusal = {"role": "assistant", "content": None, "refusal": "no"}
+    with pytest.raises(OutputParserException):
+        _ask(_ContentServer(refusal), _schema("int(0..10)"))
+
+
+def test_a_reply_past_a_moved_bound_is_corrected_and_retried(azure_env):
+    typ = type_for("int(0..10)", REGISTRY)
+    server = _ContentServer('{"value": 11}', '{"value": 7}')
+    with httpx.Client(transport=httpx.MockTransport(server)) as http_client:
+        model = _azure(http_client=http_client, max_retries=0)
+        value = generate_structured(
+            model, [HumanMessage("q")], typ, llm_config=_AZURE_CONFIG, max_retries=1,
+        )
+    assert value == 7
+    assert len(server.bodies) == 2
+    assert "less than or equal to 10" in json.dumps(server.bodies[1]["messages"][-1])

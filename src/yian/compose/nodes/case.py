@@ -122,6 +122,8 @@ class CaseDescriptor(NodeDescriptor):
     # `outputs` is kept so the loader can say how to migrate an old CASE `output:`.
     allowed = NodeDescriptor.allow("cases", "else", "on", "outputs")
     required = NodeDescriptor.require("cases")
+    # A case's conditions belong to its entries, not the node, so point there instead.
+    when_hint = "; `when:` goes in each entry of `cases:` (`cases: [{when: ..., then: <node>}]`)"
     binding_fields = ()
     # Case owns this remap (the base's is empty): `else` is a Python keyword, so the template
     # `parse` reads the surface `else:` into the `else_` descriptor field.

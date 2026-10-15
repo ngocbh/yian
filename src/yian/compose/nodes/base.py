@@ -395,6 +395,14 @@ class NodeDescriptor:
     # here). Each kind extends it via `require(...)` (e.g. `code` requires `code`).
     required: ClassVar[frozenset[str]] = frozenset()
 
+    # Appended to the unknown-key error for an authored `when:`. No kind takes a top-level
+    # `when:` (conditions live in a `case` node's `cases:` entries), so the bare "not allowed"
+    # error would leave the author guessing where the condition goes. `case` overrides it.
+    when_hint: ClassVar[str] = (
+        "; a node takes no `when:`; to run it only when a condition holds, route to it from a "
+        "`case` node (`cases: [{when: ..., then: <node>}]`)"
+    )
+
     # The descriptor FIELD names carrying `${...}` binding strings, consumed by the
     # kind-blind ref walk in `bindings.py`. Empty on the base; a value-shaped kind sets it
     # (e.g. `("inputs",)`).
@@ -535,17 +543,19 @@ class NodeDescriptor:
         Rejects any body key not in `cls.allowed` (the complete legal key set for this kind —
         the commons + `kind` + the kind's own keys, so no manual union is needed), then requires
         every key in `cls.required`. Raises a located `LoadError` for the first offense — an
-        unknown key caret-points at that key's value, a missing key at the node body. Reads
-        nothing into the descriptor (that is `_read_common_fields` + the template's own-key loop).
+        unknown key caret-points at that key's value (a `when:` key's error adds `when_hint`),
+        a missing key at the node body. Reads nothing into the descriptor (that is
+        `_read_common_fields` + the template's own-key loop).
         """
         diagnostics = LoadDiagnostics.from_cursor(cursor)
         allowed_keys = cls.allowed
         body = cursor._value_view()
         for key in body:
             if key not in allowed_keys:
+                hint = cls.when_hint if key == "when" else ""
                 raise diagnostics.error(
                     f"node {node_id!r} (kind={cls.kind}): field {key!r} is not allowed "
-                    f"(allowed: {', '.join(sorted(allowed_keys))})",
+                    f"(allowed: {', '.join(sorted(allowed_keys))}){hint}",
                     range=cursor.range_of(key),
                 )
         for key in cls.required:

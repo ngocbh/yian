@@ -964,8 +964,9 @@ source counts in full even where the mapping overrides its keys). A document pas
 `YIAN_MAX_YAML_NODES` (default 100,000) is a located YAML error at the first mapping or
 list, in post-order, that passes the limit, before construction: aliases make the
 expanded size exponential in the text, and every later walker, the flow fingerprint, and
-the run log (JSON, without aliases) cost per expanded node. Root text and each uncached external file are constructed once
-as `SourceDocument`s, whose public cursor interface is immutable and defensive.
+the run log (JSON, without aliases) cost per expanded node. Root text and each uncached
+external file are constructed once as `SourceDocument`s, whose public cursor interface
+is immutable and defensive.
 They retain the original text and label while keeping PyYAML's
 composed/constructed graph private. YAML aliases and merge mappings are
 interpreted without mutating that graph. Persistent pair/arc ropes keep merge

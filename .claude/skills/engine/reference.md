@@ -1152,7 +1152,9 @@ construction, counting each mapping, list, and scalar, keys included, once per p
 appears, so an alias or a `<<` merge source counts every node it names again (a merge
 source counts in full even where the mapping overrides its keys). It raises at the first
 mapping or list, in post-order, past the limit, which for an alias blow-up is the anchor
-whose copies blow up. Aliases make the expanded size exponential in the text, and every
+whose copies blow up. A recursive alias (one inside the node it names) counts 1, and in a
+document that has one the error may name an enclosing mapping or list, up to the whole
+document. Aliases make the expanded size exponential in the text, and every
 later walker, the flow fingerprint, and the run log (JSON, without aliases) cost per
 expanded node. `compose/source/` constructs root text once as a
 `SourceDocument` with an immutable, defensive public cursor interface and keeps the

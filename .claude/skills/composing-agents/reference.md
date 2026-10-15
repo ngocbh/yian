@@ -331,8 +331,8 @@ mapping, list, and scalar, keys included, counting once per place it appears: an
 counts every node it names again, and a `<<:` merge source counts in full even where the
 mapping overrides its keys. More is an invalid-YAML error (a load error in a flow
 file) at the first mapping or list, in post-order, past the limit, which for an alias
-blow-up is the anchor whose copies blow up (`invalid YAML: this list holds more than 100000 YAML nodes, counting each alias as a
-copy of what it names; ...`).
+blow-up is the anchor whose copies blow up (`invalid YAML: this list holds more than
+100000 YAML nodes, counting each alias as a copy of what it names; ...`).
 CALL, MAP, and LOOP bodies nest at most 50 levels (`YIAN_MAX_CALL_NESTING`), counting
 `defs:`, inline,
 `call(...)`, and `uses:` bodies alike; a deeper chain is a load error at the `call:`

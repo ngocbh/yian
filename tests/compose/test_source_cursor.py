@@ -489,7 +489,9 @@ def test_repeated_merge_occurrences_keep_logical_ordinals_and_replay():
         assert document._resolve_occurrence(item.path).value == "leaf"
 
 
-def test_merge_range_summary_folds_shared_rope_without_enumerating(monkeypatch, unbounded_yaml_nodes):
+def test_merge_range_summary_folds_shared_rope_without_enumerating(
+    monkeypatch, unbounded_yaml_nodes
+):
     document = _binary_merge_document(24)
 
     def reject_enumeration(*_args, **_kwargs):

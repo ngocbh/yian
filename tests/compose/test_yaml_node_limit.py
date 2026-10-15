@@ -258,6 +258,8 @@ def test_exponential_nodes_inside_a_cycle_fail_fast(
 
 @pytest.mark.parametrize("value", ["&x [*x, *x, [*x]]", "&m {<<: *m}"])
 def test_a_pure_cycle_ends(value: str) -> None:
+    # Only the time is checked when the load succeeds: a pure cycle may load, as long
+    # as nothing descends through it.
     started = time.monotonic()
     try:
         load_flow(_flow(value))

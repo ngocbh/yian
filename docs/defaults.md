@@ -112,6 +112,9 @@ load, run, and resume with stack to spare:
   type in `output:` counts its record levels against the same limit, but one near 125
   levels runs with less stack headroom.
 
+`YIAN_MAX_YAML_NODES` has no maximum, since counting a document's nodes takes no stack;
+raising it raises load time and run-log size in proportion.
+
 ## Integer digits
 
 `YIAN_MAX_INT_DIGITS` defaults to 4,300, Python's own limit on the decimal digits of

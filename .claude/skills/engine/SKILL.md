@@ -119,7 +119,9 @@ this model whenever you design anything:
   construction, each node once per place it appears (aliases and `<<` merge sources
   in full), and raises a located `ComposerError` at the first mapping or list, in
   post-order, past it, since every later walker, the fingerprint, and the run log cost
-  per expanded node. `read_plain_scalar` is not counted.
+  per expanded node. A recursive alias counts 1; once the running count passes the
+  limit under one, it raises at the deepest node on the path already over the limit,
+  up to the document root. `read_plain_scalar` is not counted.
 - A flow's CALL, MAP, and LOOP bodies nest at most
   `YIAN_MAX_CALL_NESTING` (default 50) levels, checked at load in
   `_resolve_child`: before resolving, against the calls active in the file being

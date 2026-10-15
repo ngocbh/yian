@@ -662,10 +662,10 @@ model made enforceable.
   `_AZURE_STRICT_UNSUPPORTED`), bound without `method`/`strict`, goes strict with those
   keywords moved into the subschema's `description` (`_strict_schema_without`), and the
   pydantic parse (strict, `model_validate_json`) still enforces them; dict schemas, an
-  explicit `method`/`strict`, classes whose every keyword the parse can't check
+  explicit `method`/`strict`, classes holding a keyword the parse might not check
   (`_reply_checks_every_keyword`), and `gpt-4`/`gpt-4-*`/`gpt-3*` deployments go unchanged.
-  Gemini gets each `const: v` as `enum: [v]` (`_const_as_enum`). A reply with no tool
-  call, raised by that guard
+  Gemini gets each string or number `const: v` as `enum: [v]` (`_const_as_enum`). A
+  reply with no tool call, raised by that guard
   (with `include_raw`, a `parsing_error`) or left by a tool parser that returns no result
   (`_generate_native` treats `None`, or `parsed: None, parsing_error: None`, the same
   way), is `base_client.missing_tool_call`: a `MissingToolCallError`

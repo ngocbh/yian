@@ -563,8 +563,8 @@ reflection call (`actions` has `minItems: 1`) takes this path. Dict schemas and 
 explicit `method` or `strict` reach Azure unchanged; open schemas keep the non-strict
 function tool. Gemini's `responseJsonSchema` lacks `const`, so
 `NormalizedChatGoogleGenerativeAI._prepare_request` sends a copy of the request schema
-with every `const: v` (union member tags, a one-value `Literal`) as `enum: [v]`
-(`_const_as_enum`); the bound schema and the reply's parse are unchanged.
+with every string or number `const: v` (union member tags, a one-value `Literal`) as
+`enum: [v]` (`_const_as_enum`); the bound schema and the reply's parse are unchanged.
 
 A reply with no tool call is the correctable deviation `base_client.missing_tool_call`, a
 `MissingToolCallError` (`OutputParserException`) whose message names the tool. The guard

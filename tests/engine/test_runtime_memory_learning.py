@@ -396,14 +396,14 @@ def test_root_feedback_context_failure_names_no_node(monkeypatch):
     from tests.engine._memory_fakes import _Memory
 
     state, log, memories, stacks = _start_only_run(True)
-    real = learning_module.LearnContext
+    real = learning_module._freeze_feedback
 
-    def learn_context(run_id, memory, episodes=(), feedback=()):
-        if any(entry.get("root") is True for entry in feedback):
+    def freeze_feedback(entries, memo, first_index=0):
+        if any(entry.get("root") is True for entry in entries):
             raise ValueError("boom")
-        return real(run_id, memory, episodes, feedback)
+        return real(entries, memo, first_index)
 
-    monkeypatch.setattr(learning_module, "LearnContext", learn_context)
+    monkeypatch.setattr(learning_module, "_freeze_feedback", freeze_feedback)
     outcome = drive_backward(state, log, "review", open_memory=lambda: MemoryRuntime.open(
         memories=memories, origins={spec.key: None for spec in memories}, memory={_POLICY: _Memory()},
         snapshots=tuple(MemorySnapshotEnvelope(spec.key, {}) for spec in memories),
@@ -411,6 +411,29 @@ def test_root_feedback_context_failure_names_no_node(monkeypatch):
     failure = outcome.failure
     assert failure.code == "memory.invalid_context" and failure.memory == _POLICY
     assert failure.message == "memory learn context could not be constructed: boom"
+    assert (failure.scope, failure.run_id, failure.node_id, failure.node_started_seq) == (None,) * 4
+    assert failure.cause.message == failure.message
+
+
+def test_root_fallback_failure_names_no_node_end_to_end(monkeypatch):
+    from yian.runtime.backward import drive_backward
+    from yian.runtime.memory_runtime import MemoryRuntime
+    from tests.engine._memory_fakes import _Memory
+
+    state, log, memories, stacks = _start_only_run(True)
+    # A one-level bound makes the root fallback entry's contribution context exceed the limit.
+    monkeypatch.setattr(defaults.Defaults, "memory_json_nesting", property(lambda self: 1))
+    outcome = drive_backward(state, log, "review", open_memory=lambda: MemoryRuntime.open(
+        memories=memories, origins={spec.key: None for spec in memories}, memory={_POLICY: _Memory()},
+        snapshots=tuple(MemorySnapshotEnvelope(spec.key, {}) for spec in memories),
+    ))
+    failure = outcome.failure
+    assert failure.code == "memory.invalid_context" and failure.memory == _POLICY
+    assert failure.message == (
+        "memory learn context could not be constructed: "
+        "feedback[0].contribution_context nests deeper than the memory limit of 1 levels "
+        "(derived from YIAN_MAX_VALUE_NESTING)"
+    )
     assert (failure.scope, failure.run_id, failure.node_id, failure.node_started_seq) == (None,) * 4
     assert failure.cause.message == failure.message
 

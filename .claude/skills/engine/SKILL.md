@@ -583,7 +583,9 @@ Most are just the functional model (above) made enforceable:
   so run material at the value limit fits; a context that still cannot be built
   raises `OwnerContextError` with the owner's `BackwardContext`, and the driver
   records `memory.invalid_context` naming that occurrence and the cause (only
-  root fallback feedback has no node). Rebuild a `LearnContext`; never deep-copy one.
+  root fallback feedback has no node). `propose_learning` re-validates a
+  `LearnContext`'s frozen feedback and shares it, rebuilding one whose frozen
+  feedback is not canonical; never deep-copy one.
 - **Binding capture follows the actual read boundary** — optional input capture
   uses the existing expression walk and a paired value/presence/source resolver.
   Never reevaluate a callable or reconstruct provenance from value equality.

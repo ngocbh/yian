@@ -1501,8 +1501,9 @@ naming that occurrence (`scope`, `run_id`, `node_id`, `node_started_seq`) with t
 message `memory learn context could not be constructed for node '<id>': <cause>`;
 replay requires the named occurrence to be accepted and to receive that memory. Only a
 failure in root fallback feedback carries no node. `MemoryRuntime.propose_learning`
-rebuilds each `LearnContext` instead of deep-copying it, which re-validates and
-detaches the feedback without recursing through a value at the limit.
+re-validates each `LearnContext`'s frozen feedback and shares it, rebuilding a
+context whose frozen feedback is not canonical; it never deep-copies one, which
+would recurse through a value at the limit.
 
 The explicit driver accepts `BackwardStartedRecord`, completes the single reverse
 fold and every `MemoryProposal`, then accepts one `BackwardReadyRecord`.

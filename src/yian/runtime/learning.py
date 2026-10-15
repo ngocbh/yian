@@ -13,10 +13,12 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from hashlib import sha256
 import json
-from typing import Any
+from typing import Any, Callable
 
 from yian.diagnostics import Failure
-from yian.expr.lineage import FeedbackValue, RouteContext, SourceRef, has_feedback, route_feedback, validate_feedback
+from yian.expr.lineage import (
+    FeedbackValue, RouteContext, SourceRef, ValueRoute, has_feedback, route_feedback, validate_feedback,
+)
 from yian.memory import (
     DeclSite,
     LearnContext,
@@ -30,6 +32,7 @@ from yian.memory import (
     MemoryStack,
     PolicyCommitOutcome,
 )
+from yian.memory.contracts import _freeze_feedback
 from yian.nodes.base import BackwardContext, BackwardResult, _copy_backward_value, validate_backward_result
 from yian.runtime.contracts import AttributedBackwardResult, BackwardAttribution, BackwardFailure, BackwardOutcome
 from yian.runtime.log import (
@@ -72,34 +75,139 @@ def _source_data(source: SourceRef | None) -> dict[str, Any] | None:
     return {"run_id": source.run_id, "execution_seq": source.execution_seq, "path": list(source.path)}
 
 
-def _route_context_data(trace: RetainedTrace, contexts: tuple[RouteContext, ...]) -> list[dict[str, Any]]:
-    """Resolve accepted values while preserving unavailable temporary snapshots."""
-    details = []
-    for context in contexts:
-        sources = [{"source": _source_data(source), "value": trace.lookup_source(source)}
-                   for source in context.sources]
-        result = context.result
-        if context.result_json is None and context.result_type is None and len(sources) == 1:
-            result = sources[0]["value"]
-        details.append({
+class _ContextCache:
+    """Materialize each backward route context once per backward pass.
+
+    Route contexts, their ``sources`` tuples and snapshots are shared by every
+    contribution below a route node, so rebuilding them per contribution makes
+    long operator chains quadratic. Entries keyed by ``id`` keep their key
+    object alive so no id is reused while the cache lives. Callers must not
+    mutate the values it returns.
+    """
+
+    def __init__(self, trace: RetainedTrace) -> None:
+        """Start an empty cache over one retained trace.
+
+        Args:
+            trace (`RetainedTrace`): The trace whose accepted sources are looked up.
+        """
+        self._trace = trace
+        self._lookups: dict[SourceRef, Any] = {}
+        self._contexts: dict[int, tuple[RouteContext, dict[str, Any]]] = {}
+        self._sources: dict[int, tuple[tuple[SourceRef, ...], list[dict[str, Any]]]] = {}
+        self._results: dict[str, Any] = {}
+        self._snapshots: dict[int, tuple[ValueRoute, dict[str, Any]]] = {}
+
+    def lookup(self, source: SourceRef) -> Any:
+        """Return the trace's canonical data for `source`, looking it up once.
+
+        Args:
+            source (`SourceRef`): An accepted producer reference, path included.
+
+        Returns:
+            `Any`: The shared canonical value; callers must not mutate it.
+
+        Raises:
+            `KeyError`: If the trace has no such accepted source; failures are not cached.
+        """
+        try:
+            return self._lookups[source]
+        except KeyError:
+            pass
+        # Read the method from the instance on each miss: tests replace it there.
+        value = self._trace.lookup_source(source)
+        self._lookups[source] = value
+        return value
+
+    def context(self, context: RouteContext) -> dict[str, Any]:
+        """Return the shared materialized form of one route context.
+
+        Args:
+            context (`RouteContext`): A route context from this pass.
+
+        Returns:
+            `dict[str, Any]`: Accepted source values resolved and unavailable
+                temporary snapshots preserved; callers must not mutate it.
+        """
+        entry = self._contexts.get(id(context))
+        if entry is not None:
+            return entry[1]
+        sources = self._source_values(context.sources)
+        if context.result_json is None:
+            result = sources[0]["value"] if context.result_type is None and len(sources) == 1 else None
+        else:
+            if context.result_json not in self._results:
+                self._results[context.result_json] = context.result
+            result = self._results[context.result_json]
+        detail = {
             "expression": context.expression, "result": result, "sources": sources,
             "role": context.role,
             "operand": list(context.operand) if type(context.operand) is tuple else context.operand,
             "positions": [list(position) for position in context.positions],
             "span": list(context.span) if context.span is not None else None,
             "result_type": context.result_type,
-            "snapshot": _route_payload(context.snapshot) if context.snapshot is not None else None,
-        })
-    return details
+            "snapshot": self._snapshot(context.snapshot),
+        }
+        self._contexts[id(context)] = (context, detail)
+        return detail
+
+    def _source_values(self, sources: tuple[SourceRef, ...]) -> list[dict[str, Any]]:
+        """Return the shared source/value pairs for one ``sources`` tuple."""
+        entry = self._sources.get(id(sources))
+        if entry is not None:
+            return entry[1]
+        values = [{"source": _source_data(source), "value": self.lookup(source)} for source in sources]
+        self._sources[id(sources)] = (sources, values)
+        return values
+
+    def _snapshot(self, snapshot: ValueRoute | None) -> dict[str, Any] | None:
+        """Return the shared route payload for one snapshot, or None without one."""
+        if snapshot is None:
+            return None
+        entry = self._snapshots.get(id(snapshot))
+        if entry is not None:
+            return entry[1]
+        payload = _route_payload(snapshot)
+        self._snapshots[id(snapshot)] = (snapshot, payload)
+        return payload
 
 
-def _materialize_context(trace: RetainedTrace, message: _BackwardMessage, index: int) -> dict[str, Any]:
-    """Resolve only the accepted values needed by one transient callback view."""
+def _route_context_data(
+    trace: RetainedTrace, contexts: tuple[RouteContext, ...], cache: _ContextCache,
+) -> list[dict[str, Any]]:
+    """Resolve accepted values while preserving unavailable temporary snapshots.
+
+    Args:
+        trace (`RetainedTrace`): The trace whose accepted sources are resolved.
+        contexts (`tuple[RouteContext, ...]`): Route contexts in message order.
+        cache (`_ContextCache`): This backward pass's cache over `trace`.
+
+    Returns:
+        `list[dict[str, Any]]`: One materialized context per route context,
+            shared with other messages; callers must not mutate them.
+    """
+    return [cache.context(context) for context in contexts]
+
+
+def _materialize_context(
+    trace: RetainedTrace, message: _BackwardMessage, index: int, cache: _ContextCache,
+) -> dict[str, Any]:
+    """Resolve only the accepted values needed by one transient callback view.
+
+    Args:
+        trace (`RetainedTrace`): The trace whose accepted sources are resolved.
+        message (`_BackwardMessage`): The message to describe.
+        index (`int`): The message's position among its receiver's messages.
+        cache (`_ContextCache`): This backward pass's cache over `trace`.
+
+    Returns:
+        `dict[str, Any]`: The message's attribution and materialized contexts.
+    """
     attribution = message.attribution
     return {"message_index": index, "sender": _source_data(attribution.sender),
             "input_name": attribution.input_name, "sender_message_index": attribution.message_index,
             "contribution_index": attribution.contribution_index, "parents": list(attribution.parents),
-            "contexts": _route_context_data(trace, message.context)}
+            "contexts": _route_context_data(trace, message.context, cache)}
 
 
 def _output_context(
@@ -129,11 +237,24 @@ def _inherited_context(
 
 def _contextual_transfers(
     trace: RetainedTrace, occurrence: TraceOccurrence, context: BackwardContext,
-    messages: list[_BackwardMessage], result: BackwardResult,
+    messages: list[_BackwardMessage], result: BackwardResult, cache: _ContextCache,
 ) -> tuple[tuple[SourceRef, _BackwardMessage], ...]:
-    """Attach transient inherited/output context after the pure transfer step."""
+    """Attach transient inherited/output context after the pure transfer step.
+
+    Args:
+        trace (`RetainedTrace`): Accepted terminal forward authority.
+        occurrence (`TraceOccurrence`): The occurrence sending feedback.
+        context (`BackwardContext`): The occurrence's backward context.
+        messages (`list[_BackwardMessage]`): The occurrence's ordered incoming messages.
+        result (`BackwardResult`): The occurrence's validated backward result.
+        cache (`_ContextCache`): This backward pass's cache; its lookups route the feedback.
+
+    Returns:
+        `tuple[tuple[SourceRef, _BackwardMessage], ...]`: Each target and its message.
+    """
     transfers = []
-    for source, transfer in _transfer_backward(trace, occurrence, context, messages, result):
+    for source, transfer in _transfer_backward(trace, occurrence, context, messages, result,
+                                               lookup=cache.lookup):
         attribution = transfer.attribution
         inherited = _inherited_context(occurrence, context, messages, attribution.parents,
                                        attribution.input_name, occurrence.source in trace.sources)
@@ -199,8 +320,22 @@ def _structural_parents(
 def _transfer_backward(
     trace: RetainedTrace, occurrence: TraceOccurrence, context: BackwardContext,
     messages: list[_BackwardMessage], result: BackwardResult,
+    *, lookup: Callable[[SourceRef], Any] | None = None,
 ) -> tuple[tuple[SourceRef, _BackwardMessage], ...]:
-    """Derive exact transfers from accepted routes without invoking or formatting."""
+    """Derive exact transfers from accepted routes without invoking or formatting.
+
+    Args:
+        trace (`RetainedTrace`): Accepted terminal forward authority.
+        occurrence (`TraceOccurrence`): The occurrence sending feedback.
+        context (`BackwardContext`): The occurrence's backward context.
+        messages (`list[_BackwardMessage]`): The occurrence's ordered incoming messages.
+        result (`BackwardResult`): The occurrence's backward result.
+        lookup (`Callable[[SourceRef], Any] | None`, *optional*, defaults to `None`):
+            Resolves accepted sources while routing; `None` uses `trace.lookup_source`.
+
+    Returns:
+        `tuple[tuple[SourceRef, _BackwardMessage], ...]`: Each target and its message.
+    """
     structural = _structural_parents(context, messages, result, occurrence.source in trace.sources)
     routes = dict(zip(occurrence.input_route.names, occurrence.input_route.children))
     transfers = []
@@ -208,7 +343,8 @@ def _transfer_backward(
         for message_index, feedback in enumerate(result.input_feedback.get(name, ())):
             parents = ((structural[name][message_index],) if structural is not None
                        else tuple(range(len(messages))))
-            routed = route_feedback(routes[name], feedback, trace.lookup_source,
+            routed = route_feedback(routes[name], feedback,
+                                    trace.lookup_source if lookup is None else lookup,
                                     recorded_value=context.inputs[name])
             for contribution_index, contribution in enumerate(routed.contributions):
                 attribution = BackwardAttribution(occurrence.source, name, message_index,
@@ -706,13 +842,25 @@ class OwnerContextError(Exception):
 
 def _owner_feedback(
     trace: RetainedTrace, occurrence: TraceOccurrence, context: BackwardContext,
-    messages: list[_BackwardMessage], result: BackwardResult,
+    messages: list[_BackwardMessage], result: BackwardResult, cache: _ContextCache,
 ) -> list[dict[str, Any]]:
-    """Project every local channel, including input messages stopped at literals."""
+    """Project every local channel, including input messages stopped at literals.
+
+    Args:
+        trace (`RetainedTrace`): Accepted terminal forward authority.
+        occurrence (`TraceOccurrence`): The owning occurrence.
+        context (`BackwardContext`): The occurrence's backward context.
+        messages (`list[_BackwardMessage]`): The occurrence's ordered incoming messages.
+        result (`BackwardResult`): The occurrence's validated backward result.
+        cache (`_ContextCache`): This backward pass's cache over `trace`.
+
+    Returns:
+        `list[dict[str, Any]]`: One entry per channel message, in channel order.
+    """
     entries = []
     for index, message in enumerate(messages):
         entries.append({"channel": "output", "target_name": None, "value": message.feedback,
-                        "contribution_context": _materialize_context(trace, message, index)})
+                        "contribution_context": _materialize_context(trace, message, index, cache)})
     has_output = occurrence.source in trace.sources
     structural = _structural_parents(context, messages, result, has_output)
     routes = dict(zip(occurrence.input_route.names, occurrence.input_route.children))
@@ -720,16 +868,16 @@ def _owner_feedback(
         for index, feedback in enumerate(result.input_feedback.get(name, ())):
             parents = (structural[name][index],) if structural is not None else tuple(range(len(messages)))
             inherited = _inherited_context(occurrence, context, messages, parents, name, has_output)
-            routed = route_feedback(routes[name], feedback, trace.lookup_source, recorded_value=context.inputs[name])
+            routed = route_feedback(routes[name], feedback, cache.lookup, recorded_value=context.inputs[name])
             entries.append({
                 "channel": "input", "target_name": name, "value": feedback,
                 "contribution_context": {
                     "message_index": index, "parents": list(parents),
-                    "contexts": _route_context_data(trace, inherited),
+                    "contexts": _route_context_data(trace, inherited, cache),
                     "contributions": [
                         {"source": _source_data(contribution.source), "value": contribution.feedback,
                          "contribution_index": contribution_index,
-                         "contexts": _route_context_data(trace, contribution.context)}
+                         "contexts": _route_context_data(trace, contribution.context, cache)}
                         for contribution_index, contribution in enumerate(routed.contributions)
                     ],
                 },
@@ -739,7 +887,7 @@ def _owner_feedback(
                     "channel": "stopped", "target_name": name, "value": stopped.feedback,
                     "contribution_context": {
                         "message_index": index, "stop_index": stop_index, "parents": list(parents),
-                        "contexts": _route_context_data(trace, (*inherited, *stopped.context)),
+                        "contexts": _route_context_data(trace, (*inherited, *stopped.context), cache),
                     },
                 })
     entries.extend({"channel": "self", "target_name": None, "value": feedback,
@@ -779,6 +927,8 @@ def project_owner_contexts(
     submitted_feedback: FeedbackValue,
     root_result: BackwardResult,
     attributed_results: tuple[AttributedBackwardResult, ...],
+    *,
+    cache: _ContextCache | None = None,
 ) -> tuple[LearnContext, ...]:
     """Build every enabled memory's context from a validated complete backward result.
 
@@ -795,6 +945,9 @@ def project_owner_contexts(
         root_result (`BackwardResult`): Completed root projection.
         attributed_results (`tuple[AttributedBackwardResult, ...]`): Complete
             accepted occurrence inventory and validated local results.
+        cache (`_ContextCache | None`, *optional*, defaults to `None`): The
+            backward pass's route-context cache over `trace`, shared with
+            `compute_backward`; `None` starts a new one.
 
     Returns:
         `tuple[LearnContext, ...]`: Detached episode/feedback batches in table order.
@@ -837,20 +990,26 @@ def project_owner_contexts(
         if scope.memories:
             scopes[occurrence.source] = scope
 
+    if cache is None:
+        cache = _ContextCache(trace)
     pending, direct_root = _seed_backward(trace, submitted_feedback)
     feedback_by_source = {}
     for occurrence, item in reversed(tuple(zip(occurrences, attributed_results))):
         messages = sorted(pending.pop(occurrence.source, ()), key=lambda message: message.order)
         context = trace.backward_context(occurrence.source)
         if occurrence.source in scopes:
-            feedback_by_source[occurrence.source] = _owner_feedback(trace, occurrence, context, messages, item.result)
-        for source, transfer in _contextual_transfers(trace, occurrence, context, messages, item.result):
+            feedback_by_source[occurrence.source] = _owner_feedback(
+                trace, occurrence, context, messages, item.result, cache,
+            )
+        for source, transfer in _contextual_transfers(trace, occurrence, context, messages, item.result, cache):
             pending.setdefault(source, []).append(transfer)
     fallback = _root_owner_feedback(_project_root_backward(trace, pending, {}, direct_root))
 
     contexts = []
+    # One memo across every freeze here: occurrences and the root fallback share subtrees.
+    memo: dict[int, Any] = {}
     for spec in memories:
-        episodes, feedback = [], []
+        episodes, frozen = [], []
         for occurrence in occurrences:
             scope = scopes.get(occurrence.source)
             if scope is None or spec.key not in scope.memories:
@@ -866,7 +1025,6 @@ def project_owner_contexts(
                 "execution_scope": execution_scope,
             }
             entries = [{**coordinates, **entry} for entry in feedback_by_source[occurrence.source]]
-            feedback.extend(entries)
             try:
                 episodes.append(MemoryEpisode(
                     run_id=trace.run_id,
@@ -879,14 +1037,18 @@ def project_owner_contexts(
                     memory_sections=() if evidence is None else evidence.memory_sections,
                     execution_seq=occurrence.source.execution_seq,
                 ))
-                # Validating this occurrence's feedback alone attributes a failure to it.
-                LearnContext(trace.run_id, spec.key, (), tuple(entries))
+                # Freezing this occurrence's feedback alone attributes a failure to it, under
+                # the local indices and run/key checks a context of only these entries reports.
+                LearnContext._from_frozen(trace.run_id, spec.key, (), ())
+                frozen.extend(_freeze_feedback(entries, memo))
             except (TypeError, ValueError) as exc:
                 raise OwnerContextError(spec.key, exc, trace.backward_context(occurrence.source)) from exc
-        if _ROOT_FLOW_SITE in spec.owners:
-            feedback.extend(fallback)
         try:
-            contexts.append(LearnContext(trace.run_id, spec.key, tuple(episodes), tuple(feedback)))
+            if _ROOT_FLOW_SITE in spec.owners:
+                # A fresh context checks its run, key and episodes before its feedback.
+                LearnContext._from_frozen(trace.run_id, spec.key, tuple(episodes), ())
+                frozen.extend(_freeze_feedback(fallback, memo, first_index=len(frozen)))
+            contexts.append(LearnContext._from_frozen(trace.run_id, spec.key, tuple(episodes), tuple(frozen)))
         except (TypeError, ValueError) as exc:
             raise OwnerContextError(spec.key, exc) from exc
     return tuple(contexts)

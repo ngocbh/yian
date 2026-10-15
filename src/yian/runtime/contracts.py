@@ -125,8 +125,24 @@ class _LongIntFinder:
             )
 
 
-def _validate_route(route: ValueRoute) -> None:
-    """Validate every route field and variant at the durable capture boundary."""
+def _validate_route(route: ValueRoute, *, _deep: bool = True) -> None:
+    """Validate every route field and variant at the durable capture boundary.
+
+    Args:
+        route (`ValueRoute`):
+            The route to check.
+        _deep (`bool`, *optional*, defaults to `True`):
+            Whether to also check `route`'s children and snapshot. `False` skips
+            only the recursive checks of children and snapshot; the snapshot kind
+            walk still runs. It is for callers that already checked each child and
+            the snapshot, so a tree built bottom-up checks each node once.
+
+    Raises:
+        `TypeError`:
+            Raised when a route field has the wrong type.
+        `ValueError`:
+            Raised when a route field or variant breaks the route contract.
+    """
     if type(route) is not ValueRoute:
         raise TypeError("route must be an exact ValueRoute")
     variants = {
@@ -160,8 +176,9 @@ def _validate_route(route: ValueRoute) -> None:
         if type(getattr(route, name)) is not int:
             raise TypeError(f"route {name} must be an integer")
     _validate_route_path(route.path)
-    for child in route.children:
-        _validate_route(child)
+    if _deep:
+        for child in route.children:
+            _validate_route(child)
     if any(type(name) is not str for name in route.names):
         raise ValueError("route names must be strings")
     if route.kind == "record" and len(set(route.names)) != len(route.names):
@@ -205,7 +222,8 @@ def _validate_route(route: ValueRoute) -> None:
     if route.snapshot is not None:
         if route.result_type is None or route.value_json is not None:
             raise ValueError("partial snapshot requires an unavailable result")
-        _validate_route(route.snapshot)
+        if _deep:
+            _validate_route(route.snapshot)
         pending = [route.snapshot]
         while pending:
             current = pending.pop()

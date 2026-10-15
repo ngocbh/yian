@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field, replace
 from enum import Enum
@@ -258,10 +258,31 @@ def _freeze_json(
     active: set[int] | None = None,
     nesting: int = 0,
     limit: int | None = None,
+    memo: dict[int, tuple[object, _FrozenJson, int]] | None = None,
 ) -> _FrozenJson:
     """Validate and snapshot one exact recursive JSON value.
 
-    `limit` is the memory JSON nesting bound; the top-level call reads it once.
+    Args:
+        value (`object`): The value to validate and snapshot.
+        name (`str`): The path named in validation errors.
+        active (`set[int] | None`, *optional*, defaults to `None`): Identities
+            of the containers on the current path, for cycle detection.
+        nesting (`int`, *optional*, defaults to `0`): Container depth of `value`.
+        limit (`int | None`, *optional*, defaults to `None`): The memory JSON nesting
+            bound; `None` makes the top-level call read it once.
+        memo (`dict[int, tuple[object, _FrozenJson, int]] | None`, *optional*,
+            defaults to `None`): Snapshots of containers already frozen, keyed by
+            identity as `(value, snapshot, height)`; a container reached again
+            reuses its snapshot while it still fits the nesting limit. `None`
+            freezes every reference afresh.
+
+    Returns:
+        `_FrozenJson`: The immutable snapshot of `value`.
+
+    Raises:
+        `TypeError`: When `value` holds a non-JSON value or a non-string key.
+        `ValueError`: When `value` holds a non-finite number, a non-canonical
+            string, a cycle, or nests past the memory limit.
     """
     value_type = type(value)
     if value is None:
@@ -282,17 +303,23 @@ def _freeze_json(
         raise TypeError(f"{name} must contain exact JSON values")
     if limit is None:
         limit = current().memory_json_nesting
+    identity = id(value)
+    if memo is not None:
+        cached = memo.get(identity)
+        # A shared subtree reached deeper than before is refrozen, so the limit error names this path.
+        if cached is not None and nesting + cached[2] - 1 < limit:
+            return cached[1]
     if nesting >= limit:
         raise _memory_nesting_error(name, limit)
 
     active = set() if active is None else active
-    identity = id(value)
     if identity in active:
         raise ValueError(f"{name} contains a circular JSON value")
     active.add(identity)
     try:
+        frozen: _FrozenJson
         if value_type is list:
-            return _FrozenJsonArray(
+            frozen = _FrozenJsonArray(
                 tuple(
                     _freeze_json(
                         item,
@@ -300,32 +327,45 @@ def _freeze_json(
                         active=active,
                         nesting=nesting + 1,
                         limit=limit,
+                        memo=memo,
                     )
                     for index, item in enumerate(value)
                 )
             )
-
-        entries: list[tuple[str, _FrozenJson]] = []
-        for key in value:
-            if type(key) is not str:
-                raise TypeError(f"{name} JSON object keys must be strings")
-            _require_string(key, f"{name} JSON object key", nonempty=False)
-        for key in sorted(value):
-            entries.append(
-                (
-                    key,
-                    _freeze_json(
-                        value[key],
-                        name=f"{name}.{key}",
-                        active=active,
-                        nesting=nesting + 1,
-                        limit=limit,
-                    ),
+            children: Iterable[object] = value
+        else:
+            entries: list[tuple[str, _FrozenJson]] = []
+            for key in value:
+                if type(key) is not str:
+                    raise TypeError(f"{name} JSON object keys must be strings")
+                _require_string(key, f"{name} JSON object key", nonempty=False)
+            for key in sorted(value):
+                entries.append(
+                    (
+                        key,
+                        _freeze_json(
+                            value[key],
+                            name=f"{name}.{key}",
+                            active=active,
+                            nesting=nesting + 1,
+                            limit=limit,
+                            memo=memo,
+                        ),
+                    )
                 )
-            )
-        return _FrozenJsonObject(tuple(entries))
+            frozen = _FrozenJsonObject(tuple(entries))
+            children = value.values()
     finally:
         active.remove(identity)
+    if memo is not None:
+        # Each container child was memoized by its own successful freeze.
+        height = 1 + max(
+            (memo[id(child)][2] for child in children if type(child) in (list, dict)),
+            default=0,
+        )
+        # Keeping the value alive keeps its identity from being reused by another object.
+        memo[identity] = (value, frozen, height)
+    return frozen
 
 
 def _freeze_json_object(value: object, name: str) -> _FrozenJsonObject:
@@ -1259,6 +1299,130 @@ class MemoryEpisode:
         """Return a fresh plain-JSON copy of failure data when present."""
         return None if self._failure is None else _thaw_json_object(self._failure)
 
+
+def _freeze_feedback(
+    entries: Iterable[object],
+    memo: dict[int, tuple[object, _FrozenJson, int]],
+    first_index: int = 0,
+) -> tuple[_FrozenJson, ...]:
+    """Validate and snapshot feedback items as a learning context names them.
+
+    Args:
+        entries (`Iterable[object]`): Feedback items in order.
+        memo (`dict[int, tuple[object, _FrozenJson, int]]`): Snapshots shared
+            across freezes, as `_freeze_json` takes them.
+        first_index (`int`, *optional*, defaults to `0`): Context index of the
+            first item, so errors name `feedback[first_index + i]`.
+
+    Returns:
+        `tuple[_FrozenJson, ...]`: One snapshot per item.
+
+    Raises:
+        `TypeError` or `ValueError`: An item is not an exact JSON value, nests past the
+            memory limit, or is circular; the message names `feedback[i]`.
+    """
+    return tuple(
+        _freeze_json(item, name=f"feedback[{first_index + index}]", memo=memo)
+        for index, item in enumerate(entries)
+    )
+
+
+def _canonical_frozen(
+    node: object,
+    nesting: int,
+    memo: dict[int, tuple[object, int]],
+    limit: int,
+) -> int | None:
+    """Return the container height of a canonical frozen JSON node, or `None`.
+
+    A node is canonical when it is exactly what `_freeze_json` builds: exact
+    node classes, scalar kinds matching their values, tuple arrays, and objects
+    whose string keys strictly increase, within the nesting limit.
+
+    Args:
+        node (`object`): The node to check.
+        nesting (`int`): Container depth of `node`.
+        memo (`dict[int, tuple[object, int]]`): Heights of container nodes
+            already found canonical, keyed by identity as `(node, height)`.
+        limit (`int`): The memory JSON nesting bound in effect.
+
+    Returns:
+        `int | None`: The node's container height (`0` for a scalar), or
+            `None` when it is not canonical.
+    """
+    node_type = type(node)
+    if node_type is _FrozenJsonScalar:
+        # A forged node may have a deleted slot; it is then not canonical.
+        try:
+            kind, value = node.kind, node.value  # type: ignore[union-attr]
+        except AttributeError:
+            return None
+        if type(kind) is not _FrozenJsonScalarKind:
+            return None
+        if kind is _FrozenJsonScalarKind.NULL:
+            return 0 if value is None else None
+        if kind is _FrozenJsonScalarKind.BOOLEAN:
+            return 0 if type(value) is bool else None
+        if kind is _FrozenJsonScalarKind.INTEGER:
+            return 0 if type(value) is int else None
+        if kind is _FrozenJsonScalarKind.NUMBER:
+            return 0 if type(value) is float and isfinite(value) else None
+        if type(value) is not str:
+            return None
+        try:
+            _require_string(value, "value", nonempty=False)
+        except (TypeError, ValueError):
+            return None
+        return 0
+    if node_type is not _FrozenJsonArray and node_type is not _FrozenJsonObject:
+        return None
+    cached = memo.get(id(node))
+    if cached is not None:
+        return cached[1] if nesting + cached[1] - 1 < limit else None
+    # A cycle can only pass by recursing, so it fails here at the limit.
+    if nesting >= limit:
+        return None
+    children: list[object] = []
+    if node_type is _FrozenJsonArray:
+        try:
+            values = node.values  # type: ignore[union-attr]
+        except AttributeError:
+            return None
+        if type(values) is not tuple:
+            return None
+        children.extend(values)
+    else:
+        try:
+            entries = node.entries  # type: ignore[union-attr]
+        except AttributeError:
+            return None
+        if type(entries) is not tuple:
+            return None
+        previous: str | None = None
+        for entry in entries:
+            if type(entry) is not tuple or len(entry) != 2:
+                return None
+            key, item = entry
+            if type(key) is not str:
+                return None
+            try:
+                _require_string(key, "key", nonempty=False)
+            except (TypeError, ValueError):
+                return None
+            if previous is not None and not previous < key:
+                return None
+            previous = key
+            children.append(item)
+    height = 0
+    for child in children:
+        child_height = _canonical_frozen(child, nesting + 1, memo, limit)
+        if child_height is None:
+            return None
+        height = max(height, child_height)
+    memo[id(node)] = (node, height + 1)
+    return height + 1
+
+
 @dataclass(frozen=True, slots=True, init=False)
 class LearnContext:
     """One memory's ordered learning batch."""
@@ -1276,6 +1440,25 @@ class LearnContext:
         feedback: tuple[JsonValue, ...] = (),
     ) -> None:
         """Validate and snapshot one memory's learning context."""
+        self._set_identity(run_id, memory, episodes)
+        if type(feedback) is not tuple:
+            raise TypeError("feedback must be a tuple")
+        object.__setattr__(self, "_feedback", _freeze_feedback(feedback, {}))
+
+    def _set_identity(
+        self, run_id: str, memory: str, episodes: tuple[MemoryEpisode, ...],
+    ) -> None:
+        """Validate and set the run ID, memory key, and episodes, in that order.
+
+        Args:
+            run_id (`str`): The run the context belongs to.
+            memory (`str`): The memory key.
+            episodes (`tuple[MemoryEpisode, ...]`): The memory's episodes.
+
+        Raises:
+            `TypeError` or `ValueError`: An identifier is not a non-empty string, or an
+                episode is invalid or belongs to another run.
+        """
         object.__setattr__(self, "run_id", _require_string(run_id, "run_id"))
         object.__setattr__(self, "memory", _require_string(memory, "memory"))
         if type(episodes) is not tuple:
@@ -1300,16 +1483,66 @@ class LearnContext:
             if episode.run_id != self.run_id:
                 raise ValueError("episode run_id must match the learning context")
         object.__setattr__(self, "episodes", episodes)
-        if type(feedback) is not tuple:
-            raise TypeError("feedback must be a tuple")
-        object.__setattr__(
-            self,
-            "_feedback",
-            tuple(
-                _freeze_json(item, name=f"feedback[{index}]")
-                for index, item in enumerate(feedback)
-            ),
-        )
+
+    @classmethod
+    def _from_frozen(
+        cls,
+        run_id: str,
+        memory: str,
+        episodes: tuple[MemoryEpisode, ...],
+        frozen: tuple[_FrozenJson, ...],
+    ) -> LearnContext:
+        """Return a context over feedback already frozen by `_freeze_feedback`.
+
+        Args:
+            run_id (`str`): The run ID, checked as `__init__` checks it.
+            memory (`str`): The memory key, checked as `__init__` checks it.
+            episodes (`tuple[MemoryEpisode, ...]`): Episodes, checked as
+                `__init__` checks them.
+            frozen (`tuple[_FrozenJson, ...]`): Canonical feedback snapshots,
+                stored as given.
+
+        Returns:
+            `LearnContext`: A new context storing `frozen`.
+
+        Raises:
+            `TypeError`: When the run ID, memory key, episodes, or an episode
+                has the wrong type.
+            `ValueError`: When the run ID or memory key is empty or not
+                canonical, or an episode is invalid or belongs to another run.
+        """
+        context = object.__new__(cls)
+        context._set_identity(run_id, memory, episodes)
+        object.__setattr__(context, "_feedback", frozen)
+        return context
+
+    @classmethod
+    def _revalidated(cls, context: LearnContext) -> LearnContext:
+        """Return a re-validated copy of `context`, sharing canonical frozen feedback.
+
+        Feedback that is not exactly what `__init__` builds is thawed and
+        refrozen, as a fresh `LearnContext` would.
+
+        Args:
+            context (`LearnContext`): The context to re-validate.
+
+        Returns:
+            `LearnContext`: A new context equal to a fresh rebuild of `context`.
+
+        Raises:
+            `AttributeError`: When `context` lacks a field, read in the order a
+                rebuild reads them.
+            `TypeError`, `ValueError`: When a field fails `__init__`'s checks.
+        """
+        # Fields are read in the rebuild's argument order, so a missing one is reported first.
+        run_id, memory, episodes = context.run_id, context.memory, context.episodes
+        frozen = context._feedback
+        if type(frozen) is tuple:
+            memo: dict[int, tuple[object, int]] = {}
+            limit = current().memory_json_nesting
+            if all(_canonical_frozen(item, 0, memo, limit) is not None for item in frozen):
+                return cls._from_frozen(run_id, memory, episodes, frozen)
+        return LearnContext(context.run_id, context.memory, context.episodes, context.feedback)
 
     @property
     def feedback(self) -> tuple[JsonValue, ...]:

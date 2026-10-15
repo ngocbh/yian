@@ -202,27 +202,87 @@ class BackwardResult:
         return self._variable_feedback.copy()
 
 
-def _copy_backward_value(value: Any, name: str) -> Any:
-    """Copy one retained JSON value without coercing keys or container types."""
+def _copy_backward_value(
+    value: Any, name: str, memo: dict[int, tuple[Any, Any]] | None = None,
+) -> Any:
+    """Copy one retained JSON value without coercing keys or container types.
+
+    Args:
+        value (`Any`):
+            The JSON value to check and copy.
+        name (`str`):
+            The value's name in error messages.
+        memo (`dict[int, tuple[Any, Any]] | None`, *optional*, defaults to `None`):
+            Containers already copied, as ``id -> (original, copy)``. A container
+            met again returns its earlier copy, so the result shares it. `None`
+            copies every occurrence separately.
+
+    Returns:
+        `Any`:
+            The copy, with fresh lists and dictionaries.
+
+    Raises:
+        `TypeError`:
+            Raised for a non-JSON value or a non-string object key.
+        `ValueError`:
+            Raised for a non-finite number.
+    """
     if value is None or type(value) in (str, bool, int):
         return value
     if type(value) is float:
         if not isfinite(value):
             raise ValueError(f"{name} must contain only finite JSON numbers")
         return value
+    if memo is not None:
+        entry = memo.get(id(value))
+        if entry is not None:
+            return entry[1]
     if type(value) is list:
-        return [
-            _copy_backward_value(item, f"{name}[{index}]")
+        result: Any = [
+            _copy_backward_value(item, f"{name}[{index}]", memo)
             for index, item in enumerate(value)
         ]
-    if type(value) is dict:
+    elif type(value) is dict:
         if any(type(key) is not str for key in value):
             raise TypeError(f"{name} object keys must be strings")
-        return {
-            key: _copy_backward_value(item, f"{name}[{key!r}]")
+        result = {
+            key: _copy_backward_value(item, f"{name}[{key!r}]", memo)
             for key, item in value.items()
         }
-    raise TypeError(f"{name} must contain only JSON values")
+    else:
+        raise TypeError(f"{name} must contain only JSON values")
+    if memo is not None:
+        # Only finished copies are stored, so a failing container fails again,
+        # with the same name, wherever it reappears.
+        memo[id(value)] = (value, result)
+    return result
+
+
+def _copy_json_tree(value: Any) -> Any:
+    """Return a copy of checked JSON data sharing no lists or dictionaries.
+
+    Args:
+        value (`Any`):
+            JSON data already checked by `_copy_backward_value`; it may share
+            containers.
+
+    Returns:
+        `Any`:
+            A copy in which every list and dictionary occurrence is distinct.
+    """
+    # Explicit loops, not comprehensions: before Python 3.12 a comprehension adds a
+    # stack frame, which would halve the nesting depth a read can copy.
+    if type(value) is dict:
+        copied_dict = {}
+        for key, item in value.items():
+            copied_dict[key] = _copy_json_tree(item)
+        return copied_dict
+    if type(value) is list:
+        copied_list = []
+        for item in value:
+            copied_list.append(_copy_json_tree(item))
+        return copied_list
+    return value
 
 
 def _validate_declared_names(names: tuple[str, ...], field_name: str) -> None:
@@ -382,11 +442,14 @@ class BackwardContext:
         object.__setattr__(self, "node_id", node_id)
         object.__setattr__(self, "node_started_seq", node_started_seq)
         object.__setattr__(self, "_node_data", _copy_backward_value(data, "node_data"))
+        # Messages below one route node share their route contexts, so the
+        # items are copied with one memo: each shared subtree is copied once.
+        memo: dict[int, tuple[Any, Any]] = {}
         object.__setattr__(
             self,
             "_downstream_context",
             tuple(
-                _copy_backward_value(item, f"downstream_context[{index}]")
+                _copy_backward_value(item, f"downstream_context[{index}]", memo)
                 for index, item in enumerate(downstream_context)
             ),
         )
@@ -408,8 +471,13 @@ class BackwardContext:
 
     @property
     def downstream_context(self) -> tuple[dict[str, Any], ...]:
-        """Return detached attribution in the order accompanying feedback."""
-        return copy.deepcopy(self._downstream_context)
+        """Return detached attribution in the order accompanying feedback.
+
+        Each read is a fresh copy in which no list or dictionary is shared,
+        even where the retained items share subtrees. The copy uses one stack
+        frame per nesting level.
+        """
+        return tuple(_copy_json_tree(item) for item in self._downstream_context)
 
 
 def validate_backward_result(result: BackwardResult, context: BackwardContext) -> None:

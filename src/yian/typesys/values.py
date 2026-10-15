@@ -845,7 +845,8 @@ class FileRef(BaseModel):
     name: Optional[str] = None
 
 
-_FILE_FIELDS = ("uri", "mime", "name")
+# A file's fields: the keys of its JSON form and the only names a dotted read gives.
+_FILE_FIELDS = frozenset({"uri", "mime", "name"})
 
 
 def field_of(value: Any, name: str) -> tuple[bool, Any]:
@@ -871,6 +872,7 @@ def field_of(value: Any, name: str) -> tuple[bool, Any]:
         `field_of(FileRef(uri="a"), "__class__")` returns `(False, None)`.
     """
     if isinstance(value, dict):
+        # `dict`'s own lookup, so a subclass's `get` / `__getitem__` / `__contains__` never runs.
         if dict.__contains__(value, name):
             return True, dict.__getitem__(value, name)
         return False, None
@@ -2026,9 +2028,6 @@ def _coerce_scalar(declared: ValueKind, value: Any, path: tuple[str | int, ...])
     return value
 
 
-_FILE_FORM_KEYS = frozenset({"uri", "mime", "name"})
-
-
 def _is_file_form(value: Any) -> bool:
     """Whether `value` is a file's JSON form.
 
@@ -2037,7 +2036,7 @@ def _is_file_form(value: Any) -> bool:
     """
     return (
         isinstance(value, dict)
-        and value.keys() == _FILE_FORM_KEYS
+        and value.keys() == _FILE_FIELDS
         and isinstance(value["uri"], str)
         and all(value[key] is None or isinstance(value[key], str) for key in ("mime", "name"))
     )

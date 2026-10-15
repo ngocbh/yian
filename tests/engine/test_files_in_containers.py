@@ -3,6 +3,7 @@ slot reads a nested file as its mapping, and an untagged union whose members the
 share a value is a load error."""
 
 from pathlib import Path
+from collections import defaultdict
 import textwrap
 from typing import Any
 
@@ -778,6 +779,17 @@ def test_a_traced_item_read_of_a_file_field_routes_to_its_source():
     assert traced.route.source == SourceRef("run", 1, ("xs", 0, "uri"))
 
 
+def test_a_traced_item_read_of_another_file_field_has_no_source_route():
+    item = ResolvedValue(REF, True, SourceRef("run", 1, ("xs", 0)))
+
+    traced = eval_expr(
+        parse_expr("item.other"), lambda path: ResolvedValue(None, False), item=item, trace=True
+    )
+
+    assert traced.value is None
+    assert traced.route.source is None
+
+
 def test_a_learnable_run_reads_the_fields_of_a_file_through_its_trace():
     # A learnable run resolves bindings through the run trace, not the pool.
     result = run_flow(load_flow(_file_flow(
@@ -810,3 +822,36 @@ def test_a_learnable_run_reads_the_fields_of_a_file_through_its_trace():
 )
 def test_field_of_reads_a_dict_key_or_a_file_field(value, name, expected):
     assert field_of(value, name) == expected
+
+
+class _OverridingDict(dict):
+    def get(self, key, default=None):
+        return "get"
+
+    def __getitem__(self, key):
+        return "getitem"
+
+    def __contains__(self, key):
+        return False
+
+
+def test_field_of_reads_the_stored_value_of_a_dict_subclass_that_overrides_lookup():
+    assert field_of(_OverridingDict(a=1), "a") == (True, 1)
+
+
+def test_field_of_misses_on_a_defaultdict_without_adding_the_key():
+    value = defaultdict(list)
+
+    assert field_of(value, "a") == (False, None)
+    assert "a" not in value
+
+
+class _TaggedFileRef(FileRef):
+    tag: str = "t"
+
+
+def test_field_of_reads_only_the_file_fields_of_a_file_subclass():
+    value = _TaggedFileRef(uri="f")
+
+    assert field_of(value, "uri") == (True, "f")
+    assert field_of(value, "tag") == (False, None)

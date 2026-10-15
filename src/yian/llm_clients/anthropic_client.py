@@ -8,7 +8,7 @@ from typing import Any, Optional
 import anthropic
 from anthropic.resources.messages import Messages
 from langchain_anthropic import ChatAnthropic, convert_to_anthropic_tool
-from langchain_core.exceptions import OutputParserException
+from langchain_anthropic.chat_models import _supports_forced_tool_choice
 from langchain_core.output_parsers.openai_tools import (
     JsonOutputKeyToolsParser,
     PydanticToolsParser,
@@ -17,7 +17,7 @@ from langchain_core.runnables import RunnableLambda, RunnableMap, RunnablePassth
 from langchain_core.utils.pydantic import is_basemodel_subclass
 from pydantic import Field
 
-from .base_client import BaseLLMClient, check_no_redirects, normalize_content
+from .base_client import BaseLLMClient, check_no_redirects, missing_tool_call, normalize_content
 from .capabilities import has_open_schema
 from .provider_blocks import merge_request_body
 from .validators import validate_model
@@ -42,6 +42,22 @@ def _call_keywords() -> frozenset[str]:
     """
     names = set(inspect.signature(Messages.create).parameters) - {"self"}
     return frozenset(names | _SAMPLING_KEYWORDS)
+
+
+def _forces_tool(model: str) -> bool:
+    """Return whether `model` accepts a forced tool choice (``tool_choice`` ``any`` / ``tool``).
+
+    Args:
+        model (`str`):
+            The Anthropic model id.
+
+    Returns:
+        `bool`:
+            False for models the Messages API refuses a forced tool choice for.
+    """
+    # langchain-anthropic's list lives in a private helper, so a test pins it; going
+    # through this function lets yian add models langchain does not list yet.
+    return _supports_forced_tool_choice(model)
 
 
 # The raw responses opened by the `_stream` call running in this context.
@@ -121,7 +137,9 @@ class NormalizedChatAnthropic(ChatAnthropic):
         `method` given, this uses the JSON-schema output format (``output_config.format``),
         except for a schema with an open part (`has_open_schema`), which that format can't
         express (the SDK closes an open object and rejects an empty subschema): such a
-        schema goes as an unforced tool (`_unforced_tool_output`).
+        schema goes as an unforced tool (`_unforced_tool_output`). A
+        ``"function_calling"`` binding on a model that refuses a forced tool choice
+        (`_forces_tool`) also goes as an unforced tool.
 
         Args:
             schema (`dict` or `type`):
@@ -146,6 +164,8 @@ class NormalizedChatAnthropic(ChatAnthropic):
             if thinking_on and has_open_schema(schema):
                 return self._unforced_tool_output(schema, include_raw=include_raw)
             method = "json_schema" if thinking_on else "function_calling"
+        if method == "function_calling" and not _forces_tool(self.model):
+            return self._unforced_tool_output(schema, include_raw=include_raw)
         return super().with_structured_output(
             schema, method=method, include_raw=include_raw, **kwargs
         )
@@ -153,13 +173,15 @@ class NormalizedChatAnthropic(ChatAnthropic):
     def _unforced_tool_output(self, schema, *, include_raw):
         """Bind `schema` as a tool the model may call, and parse the reply's call to it.
 
-        Thinking rules out forcing the tool, so a reply can come without the call. That
-        reply raises `OutputParserException` naming the tool, which a caller's retry can
-        send back as a correction; with `include_raw` it comes back as
-        ``parsing_error`` instead. This mirrors langchain-anthropic's own thinking path
-        without its warning, which it emits on every binding. The guard matches calls by
-        the tool's name, stricter than langchain's check for any call, and passes the
-        parser only those calls.
+        Used where the tool can't be forced: block thinking forbids forcing it, and some
+        models refuse a forced tool choice. A reply can then come without the call. That
+        reply raises `missing_tool_call` naming the tool, which a caller's retry can send
+        back as a correction; with `include_raw` it comes back as ``parsing_error``
+        beside the raw reply instead. This mirrors langchain-anthropic's own unforced
+        path, but checks the reply when parsing rather than inside the model call, so the
+        raw reply is kept, and without its warning, which it emits on every binding. The
+        guard matches calls by the tool's name, stricter than langchain's check for any
+        call, and passes the parser only those calls.
 
         Args:
             schema (`dict` or `type`):
@@ -184,7 +206,7 @@ class NormalizedChatAnthropic(ChatAnthropic):
         def require_tool_call(message):
             calls = [call for call in message.tool_calls if call["name"] == name]
             if not calls:
-                raise OutputParserException(f"Call the {name} tool with the answer.")
+                raise missing_tool_call(name)
             return message.model_copy(update={"tool_calls": calls})
 
         if isinstance(schema, type) and is_basemodel_subclass(schema):

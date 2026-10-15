@@ -109,9 +109,8 @@ def test_whole_reference_input_is_a_load_error_for_every_kind(node, noun, verb):
     """Every kind with an `input:` map rejects a whole-record reference with its own noun."""
     text = _FLOW.replace("NODE", f"  under_test:\n    {node}\n    input: ${{seed.output}}")
     message = str(_load_error(text))
-    assert f"`input:` must be a mapping of {noun} (got the reference '${{seed.output}}')" in (
-        message
-    )
+    got = f"`input:` must be a mapping of {noun} (got the reference '${{seed.output}}')"
+    assert got in message
     assert f"; {verb}, such as `<field>: ${{seed.output.<field>}}`" in message
 
 
@@ -150,6 +149,8 @@ def test_non_reference_spans_get_a_generic_example(input_text, got, example):
         ("5", "(got 5); list each carried field, such as `<field>: ...`"),
         ("[1]", "(got [1]); list each carried field, such as `<field>: ...`"),
         ("abc", "(got 'abc'); list each carried field, such as `<field>: ...`"),
+        ("true", "(got True); list each carried field, such as `<field>: ...`"),
+        ("2024-01-01", "(got a date); list each carried field, such as `<field>: ...`"),
         ("[]", "(got []); write `input: {}` or remove `input:`"),
         ("''", "(got ''); write `input: {}` or remove `input:`"),
         (
@@ -158,10 +159,19 @@ def test_non_reference_spans_get_a_generic_example(input_text, got, example):
             "`<field>: ${seed.output.<field>}`",
         ),
     ],
-    ids=["number", "list", "text", "empty-list", "empty-text", "tagged-reference"],
+    ids=[
+        "number",
+        "list",
+        "text",
+        "boolean",
+        "date",
+        "empty-list",
+        "empty-text",
+        "tagged-reference",
+    ],
 )
 def test_non_mapping_input_is_a_load_error(input_text, tail):
-    """A number, list, plain text, or tagged reference as `input:` is a load error."""
+    """A number, list, text, boolean, date, or tagged reference as `input:` is a load error."""
     with pytest.raises(
         LoadError,
         match=re.escape(f"`input:` must be a mapping of carried fields {tail}"),
@@ -204,9 +214,12 @@ output: ${run.output}
 
 def test_non_mapping_input_in_a_defs_body_is_located():
     """A non-mapping `input:` inside a `defs:` body names the defs entry and the node."""
-    message = str(_load_error(_DEFS_FLOW))
+    error = _load_error(_DEFS_FLOW)
+    message = str(error)
     assert "defs entry 'step': " in message
     assert "node 'c' (kind=code): `input:` must be a mapping" in message
+    line = _DEFS_FLOW.splitlines().index("        input: ${b.output}") + 1
+    assert error.diagnostic.frames[-1].range.start_line == line
 
 
 @pytest.mark.parametrize("input_text", ["", " {}"], ids=["null", "empty-mapping"])

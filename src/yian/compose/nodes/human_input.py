@@ -70,7 +70,7 @@ class HumanInputDescriptor(NodeDescriptor):
     `("text", "adaptive_questions.prompt")` range for the adaptive brief, and a
     `("field", "adaptive_questions.llm_config")` range for its `llm_config:` value to
     `field_ranges`. It overrides the `_validate_fields` hook (the one-of-three legality and a
-    text `prompt:`, calling `super()` for the default asserts-list check); only the
+    text `prompt:`, calling `super()` for the base `input:` shape and asserts checks); only the
     human_input-specific fields are declared here.
 
     Class attrs: `kind="human_input"`; `allowed` adds `prompt`/`questions`/`adaptive_questions`,
@@ -187,7 +187,7 @@ class HumanInputDescriptor(NodeDescriptor):
         (the node body) since no question field is present to carry a range; the other two
         anchor on the `adaptive_questions:` field range where it exists. Then it checks that a
         present `prompt:` is text, anchored on its own field range, and finally calls `super()`
-        for the default asserts-list check."""
+        for the base `input:` shape and asserts checks."""
         # One-of-three legality: needs a question surface, `questions`/`adaptive_questions` are
         # mutually exclusive, and an adaptive block needs its own `prompt:` (the LLM brief).
         has_q = kwargs.get("questions") is not None

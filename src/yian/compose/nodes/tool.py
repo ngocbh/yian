@@ -27,9 +27,10 @@ class ToolDescriptor(NodeDescriptor):
     the Compose-only `range`/`field_ranges` parse metadata), the normalized `inputs` binding
     carrier, the optional normalized `outputs` declaration, and the template `parse` from
     `NodeDescriptor`; its `_validate_fields` hook rejects a `tool_id:` YAML read as non-text
-    (including `null`), then runs the base asserts-list check. Only the tool-specific fields
-    (`tool_id`, `asserts`) are declared here; a tool's authored `input:` is stored in the
-    base's `inputs` map, the same binding surface every value-shaped leaf kind uses.
+    (including `null`), then runs the base `input:` shape and asserts checks. Only the
+    tool-specific fields (`tool_id`, `asserts`) are declared here; a tool's authored `input:`
+    is stored in the base's `inputs` map, the same binding surface every value-shaped leaf
+    kind uses.
 
     `output:` is optional. When present it becomes the node's output contract, and the
     engine validates the tool's return value against it on every call.

@@ -104,7 +104,7 @@ class CaseDescriptor(NodeDescriptor):
     Its `parse` wrapper captures positional predicate/target ranges, and
     `with_source_origins` attaches indexed predicate and optional `on:` origins. Its parse
     wrapper also checks the `cases:` shape. Its `_validate_fields` hook rejects an `on:` YAML
-    read as non-text (`null` stays absent), then runs the default asserts-list check; field
+    read as non-text (`null` stays absent), then runs the base checks; field
     legality otherwise uses the default allowed/required-key checks.
     Only the case-specific fields are declared here.
 

@@ -84,7 +84,7 @@ class WaitDescriptor(NodeDescriptor):
 
     Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
     the Compose-only `range`/`field_ranges` parse metadata) and the template `parse` from `NodeDescriptor` (no
-    custom parse hook — a wait authors no `asserts`, so the default asserts check is a no-op).
+    custom parse hook — a wait authors no `input:` or `asserts`, so the base checks are no-ops).
     Only `until` is declared here; a wait never populates `inputs`/`outputs`.
 
     Class attrs: `kind="wait"`; `allowed` adds only `until` to the commons; `required` is

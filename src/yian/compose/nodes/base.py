@@ -35,6 +35,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import date
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Optional
 
 from pydantic import ValidationError
@@ -75,7 +76,7 @@ def _input_shape_problem(kind: str, value: Any) -> str:
         noun, verb = "the child's arguments", "bind each argument"
     else:
         noun, verb = "parameter names to bindings", "bind each parameter"
-    path = direct_reference_path(value) if isinstance(value, str) else None
+    path = direct_reference_path(value)
     if path is not None:
         got = f"the reference '${{{path}}}'"
         fix = f"{verb}, such as `<field>: ${{{path}.<field>}}`"
@@ -83,7 +84,8 @@ def _input_shape_problem(kind: str, value: Any) -> str:
         got = f"the expression '{value}'"
         fix = f"{verb}, such as `<field>: ${{...}}`"
     else:
-        got = value_repr(value)
+        # A date or binary scalar has no YAML-looking repr, so name what YAML read it as.
+        got = yaml_read_as(value) if isinstance(value, (date, bytes)) else value_repr(value)
         if isinstance(value, (list, str)) and not value:
             fix = "write `input: {}` or remove `input:`"
         elif isinstance(value, str) and has_span(value):

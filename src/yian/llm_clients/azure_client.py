@@ -2,7 +2,7 @@ import copy
 import json
 from functools import partial
 from operator import itemgetter
-from typing import Any, Optional
+from typing import Any, Optional, get_args
 
 from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import AIMessage
@@ -11,6 +11,7 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_openai import AzureChatOpenAI
 from openai.lib._parsing._completions import type_to_response_format_param
 from pydantic import BaseModel
+from pydantic.fields import FieldInfo
 
 from .base_client import BaseLLMClient, normalize_content
 from .capabilities import has_open_schema
@@ -26,8 +27,11 @@ _PASSTHROUGH_KWARGS = (
 # Keywords Azure OpenAI's strict structured outputs reject, from "JSON Schema support and
 # limitations" in learn.microsoft.com/azure/foundry/openai/how-to/structured-outputs; the
 # list covers both Chat Completions and the Responses API. It is Azure's own: OpenAI's
-# strict mode accepts some of these. Adding a keyword is always safe, since the reply's
-# parse still enforces it (e.g. ``exclusiveMinimum``).
+# strict mode accepts some of these. The reply's parse enforces a moved keyword that comes
+# from a pydantic constraint (``Field(ge=..., min_length=..., pattern=...)``), so adding
+# such a keyword is safe (e.g. ``exclusiveMinimum``); classes that add schema keywords by
+# hand through ``json_schema_extra`` keep langchain's request (`_has_json_schema_extra`).
+# Still moved but not enforced: keywords from ``WithJsonSchema`` or a custom schema hook.
 _AZURE_STRICT_UNSUPPORTED = (
     "minLength", "maxLength", "pattern", "format",
     "minimum", "maximum", "multipleOf",
@@ -42,8 +46,8 @@ def _strict_schema_without(schema_cls: type) -> Optional[dict[str, Any]]:
     """Return the strict ``response_format`` for `schema_cls` without Azure's rejected keywords.
 
     Each subschema loses the keywords in `_AZURE_STRICT_UNSUPPORTED` and has them restated
-    at the end of its ``description`` as ``{key: value, ...}`` with JSON spellings of the
-    values, as Anthropic's SDK ``transform_schema`` does. Only schema positions are
+    at the end of its ``description``, in the ``{key: value, ...}`` shape Anthropic's SDK
+    ``transform_schema`` uses, with JSON spellings of the values. Only schema positions are
     visited (``properties`` and ``$defs`` values, ``items``, ``prefixItems`` members, a
     dict ``additionalProperties``, ``anyOf``/``oneOf``/``allOf`` members), so a property
     named like a keyword is kept.
@@ -117,6 +121,45 @@ def _parse_strict_reply(message: AIMessage, schema: type[BaseModel]) -> BaseMode
         ) from err
 
 
+def _has_json_schema_extra(schema_cls: type[BaseModel]) -> bool:
+    """Whether `schema_cls` or a model reachable through its fields sets ``json_schema_extra``.
+
+    Such a class can add schema keywords no validator checks, so moving them out of the
+    sent schema would leave them unenforced.
+
+    Args:
+        schema_cls (`type[BaseModel]`):
+            A pydantic v2 model class.
+
+    Returns:
+        `bool`:
+            `True` when the model config, a field, or ``Field`` metadata inside a field's
+            annotation sets ``json_schema_extra``, on `schema_cls` or a nested model.
+    """
+    seen: set[type] = set()
+    models = [schema_cls]
+    while models:
+        model = models.pop()
+        if model in seen:
+            continue
+        seen.add(model)
+        if model.model_config.get("json_schema_extra") is not None:
+            return True
+        annotations = []
+        for field in model.model_fields.values():
+            if field.json_schema_extra is not None:
+                return True
+            annotations.append(field.annotation)
+        while annotations:
+            annotation = annotations.pop()
+            if isinstance(annotation, FieldInfo) and annotation.json_schema_extra is not None:
+                return True
+            if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+                models.append(annotation)
+            annotations.extend(get_args(annotation))
+    return False
+
+
 class NormalizedAzureChatOpenAI(RequestBlockMixin, AzureChatOpenAI):
     """AzureChatOpenAI with normalized content output and the `azure` block in each request."""
 
@@ -151,12 +194,14 @@ class NormalizedAzureChatOpenAI(RequestBlockMixin, AzureChatOpenAI):
         Azure's strict mode also rejects keywords such as ``minimum``, ``maximum`` and
         ``minItems`` (`_AZURE_STRICT_UNSUPPORTED`). A closed pydantic v2 schema holding one,
         given without ``method`` or ``strict``, is sent as a strict ``json_schema`` with
-        those keywords moved into the subschema's description (`_strict_schema_without`),
-        and the reply is parsed against `schema` itself, so the moved keywords are still
-        enforced. On that path the reply's JSON is parsed strictly, and a refusal, an empty
-        reply or one cut off mid-value raises an `OutputParserException`, naming any
-        refusal, that yian's structured-output retry corrects. Any other schema or method
-        reaches langchain unchanged.
+        those keywords moved into the subschema's description (`_strict_schema_without`).
+        The reply's JSON is then parsed strictly against `schema` itself, which enforces
+        the moved keywords that come from pydantic constraints. A refusal, an empty reply
+        or one cut off mid-value raises an `OutputParserException`, naming any refusal,
+        that yian's structured-output retry corrects. A class that sets
+        ``json_schema_extra`` anywhere in its tree keeps langchain's request, since
+        keywords it adds by hand have no check (`_has_json_schema_extra`). Any other
+        schema or method reaches langchain unchanged.
 
         Args:
             schema (`dict | type | None`, *optional*, defaults to `None`):
@@ -167,7 +212,8 @@ class NormalizedAzureChatOpenAI(RequestBlockMixin, AzureChatOpenAI):
                 Whether to return ``{"raw", "parsed", "parsing_error"}`` instead of the
                 parsed output.
             **kwargs:
-                Passed to `AzureChatOpenAI.with_structured_output`.
+                Passed to `AzureChatOpenAI.with_structured_output`, or bound into the model
+                call when the keywords are moved, as langchain's ``json_schema`` path does.
 
         Returns:
             `Runnable`:
@@ -179,6 +225,7 @@ class NormalizedAzureChatOpenAI(RequestBlockMixin, AzureChatOpenAI):
             and isinstance(schema, type)
             and issubclass(schema, BaseModel)
             and not has_open_schema(schema)
+            and not _has_json_schema_extra(schema)
             and (response_format := _strict_schema_without(schema)) is not None
         ):
             return self._stripped_strict_output(

@@ -7,7 +7,7 @@ import pytest
 from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import HumanMessage
 from langchain_openai import AzureChatOpenAI
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pydantic import v1 as pydantic_v1
 
 from tests.test_structured_open_schema import _ToolCallServer, _azure, _payload, azure_env
@@ -20,6 +20,7 @@ from yian.nodes.agent.structured import (
 )
 from yian.typesys.types import read_typedefs, type_for
 
+# Names the imported fixture as used, so pytest finds it here and linters keep the import.
 __all__ = ["azure_env"]
 
 REGISTRY = read_typedefs({
@@ -220,6 +221,30 @@ def test_azure_dict_schema_is_unchanged(azure_env):
     payload = _payload(llm, llm.with_structured_output(schema))
     assert payload == _payload(llm, AzureChatOpenAI.with_structured_output(llm, schema))
     assert payload["response_format"]["json_schema"]["schema"]["properties"]["n"]["minimum"] == 1
+
+
+class _HandWrittenFormat(BaseModel):
+    n: int = Field(ge=0)
+    x: str = Field(json_schema_extra={"format": "email"})
+
+
+class _HandWrittenInner(BaseModel):
+    model_config = ConfigDict(json_schema_extra={"examples": [{"y": "a"}]})
+
+    y: str
+
+
+class _HandWrittenNested(BaseModel):
+    n: int = Field(ge=0)
+    inner: list[_HandWrittenInner | None]
+
+
+@pytest.mark.parametrize("schema", [_HandWrittenFormat, _HandWrittenNested])
+def test_azure_hand_written_schema_keywords_keep_the_unchanged_path(azure_env, schema):
+    llm = _azure()
+    payload = _payload(llm, llm.with_structured_output(schema))
+    assert payload == _payload(llm, AzureChatOpenAI.with_structured_output(llm, schema))
+    assert payload["response_format"] is schema
 
 
 class _V1Count(pydantic_v1.BaseModel):

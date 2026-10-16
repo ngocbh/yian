@@ -58,6 +58,7 @@ from rich.syntax import Syntax
 from rich.text import Text
 
 from yian.compile.model import END_ID, START_ID
+from yian.cli.mcp_config import McpConfigError, load_mcp_config, user_mcp_config
 from yian.cli.memory import MemoryOptionError, build_cli_memories
 from yian.cli.terminal import PromptRequest, TerminalBroker
 from yian.compose.helpers.errors import LoadError
@@ -71,12 +72,14 @@ from yian.run import (
     _resume_flow_controlled,
     _run_flow_controlled,
     _skill_grants,
+    _static_nodes,
 )
 from yian.events import NodeFailed
 from yian.nodes.base import _HostStop
 from yian.nodes.binding import check_input_names
 from yian.nodes.contracts import Parameter
-from yian.tools import registered_tools
+from yian.tools import McpServer, registered_tools
+from yian.tools.mcp import McpConnectError
 from yian.typesys import (
     Type,
     TypeCheckError,
@@ -1651,6 +1654,108 @@ def _validate_run_log_options(
         )
 
 
+def _load_mcp_servers(paths: List[Path], known: set[str]) -> Dict[str, McpServer]:
+    """Read the user's MCP config, when it exists, then each `--mcp-config` file.
+
+    Args:
+        paths (`List[Path]`):
+            The `--mcp-config` files, in the order given; later files win.
+        known (`set[str]`):
+            The tool ids the run supplies without MCP; no server may take one as its name.
+
+    Returns:
+        `Dict[str, McpServer]`:
+            The enabled servers by name, none of them open.
+
+    Raises:
+        `McpConfigError`:
+            Raised when a file can't be read or a server entry is invalid or named
+            like a registered tool, `ask_user` or `load_skill`.
+    """
+    user = user_mcp_config()
+    servers = load_mcp_config(([user] if user.is_file() else []) + list(paths), os.environ)
+    for name in servers:
+        if name in known:
+            raise McpConfigError(
+                f"MCP server {name!r} has the name of a registered tool; rename the server"
+            )
+    return servers
+
+
+def _mcp_needed_names(compiled: Any) -> set[str]:
+    """Return every tool id a static TOOL node calls and every id a static AGENT grants.
+
+    Args:
+        compiled (`Any`):
+            The loaded flow's compiled form.
+
+    Returns:
+        `set[str]`:
+            The tool and tool-group ids the flow can use.
+    """
+    needed: set[str] = set()
+    for _, node in _static_nodes(compiled):
+        call = node.host_tool_call()
+        if call is not None:
+            needed.add(call.tool_id)
+        needed.update(node.granted_tools())
+    return needed
+
+
+@contextmanager
+def _open_mcp_servers(
+    servers: Dict[str, McpServer], needed: set[str], known: set[str]
+):
+    """Open the configured MCP servers a flow needs, and close them on exit.
+
+    A server whose name the flow needs (an AGENT grant of its group) opens. When some
+    needed id is still neither a known tool, a server name, nor a tool of an opened
+    server, every other server opens; those that list such an id stay open and the
+    rest close before the run, so an unused server's tool names can't collide with
+    another's. Nothing opens when the flow needs no tools.
+
+    Args:
+        servers (`Dict[str, McpServer]`):
+            The configured servers by name, none of them open.
+        needed (`set[str]`):
+            The tool and tool-group ids the flow's static nodes use.
+        known (`set[str]`):
+            The tool ids the run supplies without MCP.
+
+    Yields:
+        `Dict[str, McpServer]`:
+            The opened servers by name, as tool groups for the run.
+
+    Raises:
+        `McpConnectError`:
+            Raised when a server that opens doesn't start or lists bad tools.
+        `ImportError`:
+            Raised when a server must open and the MCP SDK is not installed.
+    """
+    opened: Dict[str, McpServer] = {}
+    try:
+        for name, server in servers.items():
+            if name in needed:
+                opened[name] = server.open()
+        supplied = {tool.name for server in opened.values() for tool in server.tools}
+        unresolved = needed - known - servers.keys() - supplied
+        if unresolved:
+            for name, server in servers.items():
+                if name in opened:
+                    continue
+                server.open()
+                if unresolved & {tool.name for tool in server.tools}:
+                    opened[name] = server
+                else:
+                    server.close()
+        yield opened
+    finally:
+        # Closing a server that never opened is a no-op, and this also covers one
+        # interrupted between opening and being recorded.
+        for server in servers.values():
+            server.close()
+
+
 def run(
     flow: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True, help="Path to a flow .yaml"),
     input: List[str] = typer.Option(  # noqa: A002 - matches the user-facing flag name
@@ -1716,6 +1821,16 @@ def run(
         help="On a compile, run-log, or runtime node failure, also print the engine "
         "Python traceback; by default only the concise or located error is shown.",
     ),
+    mcp_config: List[Path] = typer.Option(
+        None,
+        "--mcp-config",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        metavar="FILE",
+        help="Read MCP servers from FILE (mcpServers JSON; repeatable). "
+        "~/.yian/mcp.json is read first when it exists.",
+    ),
 ) -> None:
     """Start or recover a durable flow run and print its terminal output."""
     _validate_run_log_options(
@@ -1766,6 +1881,16 @@ def run(
         for warning in skipped:
             err_console.print(Text(f"warning: {warning.message}", style="yellow"), soft_wrap=True)
 
+    # Configured MCP servers stay unopened here; each controller opens only the ones
+    # the flow needs and closes them when the run ends.
+    mcp_known = {*registered_tools(), "ask_user", "load_skill"}
+    try:
+        mcp_servers = _load_mcp_servers(mcp_config or [], mcp_known)
+    except McpConfigError as exc:
+        err_console.print(Text(str(exc), style="red"), soft_wrap=True)
+        raise typer.Exit(code=1)
+    mcp_needed = _mcp_needed_names(loaded.compiled)
+
     # The "what am I running" banner (flow name/description/version) — stderr, like
     # progress; suppressed under --quiet.
     if not quiet:
@@ -1789,14 +1914,14 @@ def run(
             _render: Callable[[Callable[[], None]], None],
         ) -> RunResult:
             """Recover one run while the helper owns its terminal broker."""
-            with registry:
+            with registry, _open_mcp_servers(mcp_servers, mcp_needed, mcp_known) as opened:
                 return _resume_flow_controlled(
                     loaded,
                     log=selected_log,
                     num_workers=num_workers,
                     on_event=on_event,
                     stop_event=stop_event,
-                    tools={**registered_tools(), "ask_user": ask_user},
+                    tools={**registered_tools(), **opened, "ask_user": ask_user},
                     check_llm_configs=lambda effective: _check_resume_credentials(
                         effective,
                         ask_secret=lambda question: ask_user(question=question, secret=True),
@@ -1861,7 +1986,7 @@ def run(
             _render: Callable[[Callable[[], None]], None],
         ) -> RunResult:
             """Drive one fresh run while the helper owns its terminal broker."""
-            with registry:
+            with registry, _open_mcp_servers(mcp_servers, mcp_needed, mcp_known) as opened:
                 return _run_flow_controlled(
                     loaded,
                     supplied,
@@ -1871,7 +1996,7 @@ def run(
                     llm_config=cli_cfg or None,
                     num_workers=selected_workers,
                     stop_event=stop_event,
-                    tools={**registered_tools(), "ask_user": ask_user},
+                    tools={**registered_tools(), **opened, "ask_user": ask_user},
                     **memory_options,
                     **skill_options,
                 )
@@ -1896,7 +2021,7 @@ def run(
     except _ResumeKeyError as exc:
         err_console.print(Text(str(exc), style="red"))
         raise typer.Exit(code=1)
-    except (OSError, TypeError, ValueError, MemoryOperationError) as exc:
+    except (OSError, TypeError, ValueError, MemoryOperationError, McpConnectError, ImportError) as exc:
         action = "resume" if resume is not None else "run"
         _render_host_run_error(action, exc, engine_trace=engine_trace)
         raise typer.Exit(code=1)

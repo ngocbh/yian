@@ -3,6 +3,7 @@
 import pytest
 
 from yian.compose.helpers.condition_guards import (
+    NEVER,
     NOTHING,
     AllOf,
     AnyOf,
@@ -14,6 +15,7 @@ from yian.compose.helpers.condition_guards import (
     any_of,
     check_in,
     conjuncts,
+    falsified,
     guard_checks,
     guarded_refs,
     literal_text,
@@ -344,3 +346,25 @@ def test_masked_checks_prove_nothing_and_keep_the_reads():
     assert [lit.check for lit in literals_in_context(copy)] == [C]
     # The original is unchanged.
     assert guarded_refs(tree)[2] == ("v.qty", all_of(Holds(A, True), Holds(C, False)))
+
+
+def test_never_absorbs_an_all_of_and_drops_out_of_an_any_of():
+    a, b = Holds(A, True), Holds(B, False)
+    assert all_of(a, NEVER, b) == NEVER
+    assert any_of(a, NEVER) == a
+    assert any_of(NEVER, NEVER) == NEVER
+    assert any_of(NEVER, NOTHING) == NOTHING
+
+
+def test_falsified_checks_prove_never_for_the_value_they_never_have():
+    tree = parse_condition("isinstance(v, Buy) and v.action != 'sell' and v.qty > 0")
+    first, second = (literal.node for literal in literals_in_context(tree))
+    reads = guarded_refs(falsified(tree, [(first, True)]))
+    assert reads[-1] == ("v.qty", NEVER)
+    # The other value proves nothing, and the reads keep their order.
+    reads = guarded_refs(falsified(tree, [(first, False)]))
+    assert [read for read, _ in reads] == [read for read, _ in guarded_refs(tree)]
+    assert reads[-1] == ("v.qty", Holds(B, False))
+    # A `!=` sub-tree that is never false: the read after it still runs.
+    assert guarded_refs(falsified(tree, [(second, False)]))[-1] == ("v.qty", Holds(A, True))
+    assert guarded_refs(falsified(tree, [(second, True)]))[-1] == ("v.qty", NEVER)

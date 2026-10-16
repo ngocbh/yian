@@ -26,6 +26,7 @@ from lark import Token, Tree
 
 from yian.compile.validation import types_compatible
 from yian.compose.helpers.condition_guards import (
+    NEVER,
     NOTHING,
     AllOf,
     Check,
@@ -38,6 +39,7 @@ from yian.compose.helpers.condition_guards import (
     any_of,
     check_text,
     conjuncts,
+    falsified,
     guard_checks,
     guarded_refs,
     literal_text,
@@ -657,13 +659,14 @@ def checked_refs(
 ) -> list[tuple[str, Optional[Guard]]]:
     """Return each reference occurrence in a condition with the guard its field read is checked under.
 
-    A guard some value satisfies is kept. A read no value reaches because of a check
-    `impossible_checks` reports is not checked (`None`): the report explains it, and errors
-    on the code it makes dead would only repeat it. A read no value reaches only because a
-    check the known type always decides went the other way (`isinstance(v, Decision) or
-    v.nosuch > 0` with `v` declared `Decision`) is no error by itself: such checks prove
-    nothing here, so the read is checked as without them (with `NOTHING` when the guard
-    still can't hold).
+    A read that runs only when a check `impossible_checks` reports has the value it can
+    never have is not checked (`None`), whatever the report's reason: the report explains
+    it, and errors on the code it makes dead would only repeat it. So is a read no value
+    reaches because of a reported check. Otherwise a guard some value satisfies is kept. A
+    read no value reaches only because a check the known type always decides, and that is
+    not reported, went the other way (`isinstance(v, Decision) or v.nosuch > 0` with `v`
+    declared `Decision`) is no error by itself: such checks prove nothing here, so the read
+    is checked as without them (with `NOTHING` when the guard still can't hold).
 
     Args:
         tree (`Tree | Token`):
@@ -685,15 +688,25 @@ def checked_refs(
     Example:
         With `v` a `Union[Buy, Hold, Sell]`, the `v.qty` read in
         `isinstance(v, Decision) or v.qty > 0` gets `NOTHING`, and in
-        `isinstance(v, Buy) and v.action == 'hold' and v.qty > 0` gets `None`.
+        `isinstance(v, Buy) and v.action == 'hold' and v.qty > 0` and
+        `isinstance(v, Text) and v.qty > 0` gets `None`.
     """
     known = routing if routing and not env_unsatisfiable(routing) else {}
     refs = guarded_refs(tree)
-    reported = [literal.node for literal, _ in _reported_literals(tree, base_type_of, registry, known)]
-    unreported = guarded_refs(masked(tree, reported)) if reported else refs
+    reported = _reported_literals(tree, base_type_of, registry, known)
+    if not reported:
+        unreported = needing = refs
+    else:
+        unreported = guarded_refs(masked(tree, [literal.node for literal, _ in reported]))
+        never = [(literal.node, _never_value(literal, found)) for literal, found in reported]
+        needing = guarded_refs(falsified(tree, never))
     checked: list[tuple[str, Optional[Guard]]] = []
-    for (ref, guard), (_, without_reported) in zip(refs, unreported, strict=True):
-        if _satisfiable(guard, base_type_of, registry, known):
+    for (ref, guard), (_, without_reported), (_, live) in zip(
+        refs, unreported, needing, strict=True
+    ):
+        if live == NEVER:
+            checked.append((ref, None))
+        elif _satisfiable(guard, base_type_of, registry, known):
             checked.append((ref, guard))
         elif _satisfiable(without_reported, base_type_of, registry, known):
             checked.append((ref, None))
@@ -702,6 +715,19 @@ def checked_refs(
             satisfiable = _satisfiable(trimmed, base_type_of, registry, known)
             checked.append((ref, trimmed if satisfiable else NOTHING))
     return checked
+
+
+def _never_value(literal: CheckLiteral, impossible: "ImpossibleCheck") -> bool:
+    """The value a reported literal's check sub-tree (`v.action != 'x'`, without any
+    `not` around it) never has.
+
+    A text that is no tag never equals the tag field, whichever way the literal compares
+    it; any other reported literal can never be true.
+    """
+    check_never = True if impossible.reason is ImpossibleReason.NOT_A_TAG else literal.value
+    # `!=` spells the check negatively: the sub-tree is true when the check is false.
+    positive = literal.value != literal.negated
+    return check_never == positive
 
 
 def env_read_type(read: str, env: Env) -> Optional[tuple[Type, tuple[str, ...], str]]:

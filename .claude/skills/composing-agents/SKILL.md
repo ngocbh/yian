@@ -198,7 +198,8 @@ proves the opposite), and the narrowed type replaces the declared one. So
 `isinstance(v, Buy) and v.qty > 0`, `not isinstance(v, Buy) or v.qty > 0`, and
 `v.action != "buy" or v.qty > 0` all load; a check after the read doesn't narrow, and an
 unguarded member-only read in an assert or predicate says to check the member first with
-`isinstance(v, <Type>) and ...`. A read the narrowed type lacks is a load error
+`isinstance(v, <Type>) and ...` (in a `call` or `loop` node's asserts, which can't use
+`isinstance`, with `v.<tag> == "<value>" and ...` for a tagged union). A read the narrowed type lacks is a load error
 (`reference ${r.answr} reads field 'answr', which Done doesn't have; r is Done here, by the
 checks before this read; did you mean 'answer'?`), and so is a check that can never be
 true: ruled out by the checks before it or the routing (`` `v.action == "sell"` can never

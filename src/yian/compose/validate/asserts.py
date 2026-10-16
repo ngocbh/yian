@@ -64,7 +64,16 @@ from yian.expr import ExpressionError, condition_refs, parse_condition
 from yian.expr.expressions import rewrite_condition_refs
 from yian.expr.template import flow_call_callees_in_spans
 from yian.compose.desugar.inline_calls import desugar_call_directives
-from yian.compose.helpers.condition_guards import Guard, guarded_refs
+from yian.compose.helpers.condition_guards import (
+    Check,
+    CheckLiteral,
+    Guard,
+    IsinstanceCheck,
+    check_text,
+    guarded_refs,
+    literal_text,
+    literals_in_context,
+)
 from yian.compose.helpers.isinstance_types import (
     collect_constructor_names,
     collect_isinstance_names,
@@ -95,7 +104,7 @@ from yian.nodes.contracts import (
     ValueContract,
 )
 from yian.typesys.types import TypeRegistry
-from yian.typesys.values import IntTooLongError, Type, ValueKind
+from yian.typesys.values import IntTooLongError, Type, ValueKind, union_tag_fields
 from yian.compose.helpers.errors import LoadDiagnostics
 
 
@@ -131,6 +140,37 @@ def _root_base_type(choice: Mapping[str, OutputContract]) -> BaseTypeOf:
     return base_type_of
 
 
+def _distinct(contracts: tuple[OutputContract, ...]) -> tuple[OutputContract, ...]:
+    """`contracts` without repeats, in order."""
+    kept: list[OutputContract] = []
+    for contract in contracts:
+        if not any(contract == seen for seen in kept):
+            kept.append(contract)
+    return tuple(kept)
+
+
+def _narrows(check: Check, root: str, contracts: tuple[OutputContract, ...]) -> bool:
+    """Whether `check` can prove or rule out anything about `root` under some contract.
+
+    A tag comparison on a value that is no union with that tag field (`v.a == 'x'` on a
+    record) is an ordinary comparison, so it narrows nothing.
+    """
+    if _root_of(check.base, (root,)) is None:
+        return False
+    if isinstance(check, IsinstanceCheck):
+        return True
+    rest = check.base[len(root) + 1 :].split(".") if check.base != root else []
+    for contract in contracts:
+        projected = project_output_contract(contract, rest)
+        if type(projected) is not ValueContract:
+            # An unproven base takes its type from the checks on the value around it.
+            return True
+        typ = projected.type
+        if typ.variants is not None and check.field in union_tag_fields(typ):
+            return True
+    return False
+
+
 class _ChoiceView(NamedTuple):
     """What a condition proves under one choice of root contracts."""
 
@@ -140,57 +180,130 @@ class _ChoiceView(NamedTuple):
     checked: list[tuple[str, Optional[Guard]]]
 
 
+@dataclass(frozen=True)
+class _ReadSite:
+    """How a site words a field-read error."""
+
+    spawner: bool = False
+    """Whether the condition runs in a spawned child flow, where `isinstance` is not
+    allowed, so a member-only hint compares the tag instead."""
+    union_roots: Mapping[str, str] = field(default_factory=dict)
+    """The pool path each root is bound from, named by a spawner's case hint."""
+
+    def error(
+        self,
+        contract: OutputContract,
+        fields: list[str],
+        ref: str,
+        *,
+        partial_union_fields: bool,
+        union_root: str | None = None,
+    ) -> str | None:
+        """The read's error on `contract`, else `None`."""
+        return output_contract_path_error(
+            contract,
+            fields,
+            ref,
+            partial_union_fields=partial_union_fields,
+            union_root=union_root if self.spawner else None,
+            isinstance_hint=not self.spawner,
+            tag_hint=self.spawner,
+        )
+
+
+def _authored_spelling(
+    tree: Tree | Token, authored: Tree | Token | None
+) -> Callable[[ImpossibleCheck], ImpossibleCheck]:
+    """Map a report on `tree` back to how `authored`, the same condition before its
+    references were rewritten, spells the literal."""
+    spelled: dict[str, CheckLiteral] = {}
+    if authored is not None:
+        rewritten, written = literals_in_context(tree), literals_in_context(authored)
+        if len(rewritten) == len(written):
+            for literal, original in zip(rewritten, written):
+                spelled.setdefault(literal_text(literal), original)
+
+    def spell(check: ImpossibleCheck) -> ImpossibleCheck:
+        original = spelled.get(check.text)
+        if original is None:
+            return check
+        always_true = check_text(original.check, True) if check.always_true else ""
+        return replace(
+            check,
+            text=literal_text(original),
+            base=original.check.base,
+            always_true=always_true,
+        )
+
+    return spell
+
+
 def _condition_errors(
     tree: Tree | Token,
     roots: Mapping[str, tuple[OutputContract, ...]],
     registry: TypeRegistry,
     *,
     partial_union_roots: Collection[str] = frozenset(),
+    unwalked_roots: Collection[str] = frozenset(),
+    site: _ReadSite = _ReadSite(),
+    authored: Tree | Token | None = None,
 ) -> list[str]:
     """Return an assert's impossible checks and field-read errors, each message once.
 
     `roots` maps each path whose field reads are checked (a node-local name, `output`,
-    `input.X`, `<id>.output`) to the contracts its value may have. `and`, `or` and `not`
-    short-circuit, so the checks before a read (`isinstance` and union tag comparisons)
-    narrow the values it can see (`guarded_read_types`): a read is fine when any narrowed
-    type allows it, and otherwise the first one's error is reported, naming the narrowed
-    type when it lacks the field. A read nothing narrows is walked on the root's contract.
-    A read after a reported impossible check, or guarded by an `isinstance` whose type
-    name doesn't resolve, is not checked.
+    `input.X`, `<id>.output`) to the contracts its value may have; reads below a root in
+    `unwalked_roots` are left to the site. `and`, `or` and `not` short-circuit, so the
+    checks before a read (`isinstance` and union tag comparisons) narrow the values it can
+    see (`guarded_read_types`): a read is fine when any narrowed type allows it, and
+    otherwise the first one's error is reported, naming the narrowed type when it lacks
+    the field. A read nothing narrows is walked on the root's contract. A read that runs
+    only when a reported impossible check is true (`checked_refs`), or guarded by an
+    `isinstance` whose type name doesn't resolve, is not checked. `authored` is the
+    condition as written when `tree` has its references rewritten; reports spell checks
+    as written.
 
-    A root with several contracts (a node-local name's alternatives, which carry the
-    branch that routes the node) is checked under each: a read is an error only when
-    every choice rejects it, and a check is impossible only when it is impossible under
-    every choice. Each distinct (read, guard) pair is checked, since one path can be read
+    A root with several distinct contracts (a node-local name's alternatives, which carry
+    the branch that routes the node) is checked under each: a check is impossible only
+    when it is impossible under every choice, a read is skipped only when it is dead under
+    every choice, and a read is an error only when every choice where it runs rejects it.
+    Only roots some check can narrow are combined; reads below the others are walked on
+    each contract. Each distinct (read, guard) pair is checked, since one path can be read
     both narrowed and not.
     """
     refs = guarded_refs(tree)
     used = [root for root in roots if any(_root_of(ref, (root,)) for ref, _ in refs)]
     if not used:
         return []
-    choices = [
-        dict(zip(used, picked)) for picked in itertools.product(*(roots[r] for r in used))
+    contracts = {root: _distinct(roots[root]) for root in used}
+    literals = literals_in_context(tree)
+    narrowed = [
+        root
+        for root in used
+        if any(_narrows(literal.check, root, contracts[root]) for literal in literals)
     ]
     views: list[_ChoiceView] = []
-    for choice in choices:
-        base_type_of = _root_base_type(choice)
-        views.append(
-            _ChoiceView(
-                choice,
-                base_type_of,
-                impossible_checks(tree, base_type_of, registry),
-                checked_refs(tree, base_type_of, registry),
+    if narrowed:
+        for picked in itertools.product(*(contracts[root] for root in narrowed)):
+            choice = dict(zip(narrowed, picked))
+            base_type_of = _root_base_type(choice)
+            views.append(
+                _ChoiceView(
+                    choice,
+                    base_type_of,
+                    impossible_checks(tree, base_type_of, registry),
+                    checked_refs(tree, base_type_of, registry),
+                )
             )
-        )
+    spell = _authored_spelling(tree, authored)
     messages = [
-        impossible_check_message(check)
-        for check in views[0].impossible
+        impossible_check_message(spell(check))
+        for check in (views[0].impossible if views else [])
         if all(any(seen.text == check.text for seen in view.impossible) for view in views[1:])
     ]
     seen_reads: set[tuple[str, Guard]] = set()
     for index, (ref, guard) in enumerate(refs):
         root = _root_of(ref, used)
-        if root is None or ref == root or (ref, guard) in seen_reads:
+        if root is None or ref == root or root in unwalked_roots or (ref, guard) in seen_reads:
             continue
         seen_reads.add((ref, guard))
         if unresolved_type(guard, registry):
@@ -201,7 +314,9 @@ def _condition_errors(
             root,
             index,
             views,
+            contracts[root] if root not in narrowed else None,
             registry,
+            site,
             partial_union_fields=root in partial_union_roots,
         )
         if message is not None:
@@ -214,45 +329,70 @@ def _read_error(
     root: str,
     index: int,
     views: list[_ChoiceView],
+    unnarrowed: tuple[OutputContract, ...] | None,
     registry: TypeRegistry,
+    site: _ReadSite,
     *,
     partial_union_fields: bool,
 ) -> str | None:
-    """Return why the `index`-th read `ref` below `root` can't work under any choice of
-    root contracts, else `None`; a narrowed error is preferred over an unnarrowed one."""
-    errors: list[tuple[bool, str]] = []
-    for choice, base_type_of, _, checked in views:
-        guard = checked[index][1]
-        if guard is None:
-            # A read after a reported check is reached by no value.
-            return None
-        candidates = guarded_read_types(ref, guard, base_type_of, registry)
-        if not candidates:
-            error = output_contract_path_error(
-                choice[root],
-                ref[len(root) + 1 :].split("."),
+    """Return why the `index`-th read `ref` below `root` can't work, else `None`.
+
+    The read is skipped when it is dead under every view. Otherwise it is an error when
+    every view where it runs rejects it: on each of the `unnarrowed` contracts when no
+    check narrows `root`, else on the view's narrowed types or chosen contract. A narrowed
+    error is preferred over an unnarrowed one.
+    """
+    live = [view for view in views if view.checked[index][1] is not None]
+    if views and not live:
+        # Reached by no value under any choice: a reported check explains it.
+        return None
+    fields = ref[len(root) + 1 :].split(".")
+    union_root = site.union_roots.get(root)
+    if unnarrowed is not None:
+        first: str | None = None
+        for contract in unnarrowed:
+            error = site.error(
+                contract,
+                fields,
                 ref,
                 partial_union_fields=partial_union_fields,
-                isinstance_hint=True,
+                union_root=union_root,
+            )
+            if error is None:
+                return None
+            first = first or error
+        return first
+    errors: list[tuple[bool, str]] = []
+    for choice, base_type_of, _, checked in live:
+        guard = checked[index][1]
+        candidates = guarded_read_types(ref, guard, base_type_of, registry)
+        if not candidates:
+            error = site.error(
+                choice[root],
+                fields,
+                ref,
+                partial_union_fields=partial_union_fields,
+                union_root=union_root,
             )
             if error is None:
                 return None
             errors.append((False, error))
             continue
-        first: str | None = None
+        narrowed_error: str | None = None
         for candidate in candidates:
-            typ, fields, _ = candidate
-            error = output_contract_path_error(
+            typ, below, _ = candidate
+            error = site.error(
                 ValueContract(typ),
-                list(fields),
+                list(below),
                 ref,
                 partial_union_fields=partial_union_fields,
-                isinstance_hint=True,
             )
             if error is None:
                 return None
-            first = first or narrowed_read_error(ref, candidate, error, registry)
-        errors.append((True, first))
+            narrowed_error = narrowed_error or narrowed_read_error(
+                ref, candidate, error, registry
+            )
+        errors.append((True, narrowed_error))
     return next((error for narrowed, error in errors if narrowed), errors[0][1])
 
 
@@ -318,8 +458,8 @@ def lower_flow_asserts(
     `isinstance` or union tag comparison before a read (`isinstance(input.o, Buy) and
     input.o.qty > 0`, `not isinstance(input.o, Buy) or input.o.qty > 0`) decides which
     members it sees. A shorthand check base (`isinstance(o, Buy)`) is qualified like a
-    read. A check that can never be true is a load error, and the `isinstance` types
-    resolve in ``registry`` (the flow's typedefs).
+    read, and reported as written. A check that can never be true is a load error, and the
+    `isinstance` types resolve in ``registry`` (the flow's typedefs).
 
     Raises `LoadError` on the first malformed assert, bad ref, impossible check, bad
     field read, or `${system}` ref.
@@ -425,7 +565,9 @@ def lower_flow_asserts(
 
         # 3. impossible checks and field reads, narrowed by the assert's own checks.
         qualified = parse_condition(rewrite_condition_refs(expr, _qualified_or_none))
-        errors = _condition_errors(qualified, roots, registry)
+        errors = _condition_errors(
+            qualified, roots, registry, authored=parse_condition(expr)
+        )
         if errors:
             raise diagnostics.error(
                 f"assert {assertion.display!r}: {errors[0]}", range=rng
@@ -527,6 +669,8 @@ def validate_node_asserts(
     decides which members it sees, with the `isinstance` types resolved in ``registry``
     (the flow's typedefs). A local name's alternatives carry the branch that routes the
     node, so a check is a load error when it can never be true under every alternative.
+    Checks on `${output}` are tested too, whether or not the assert reads a field of it.
+    A CALL/LOOP node's member-only hint compares the tag instead of naming `isinstance`.
     ``assertion_site_at`` optionally supplies
     each carrier's opaque origin and validation range from the same authored occurrence,
     keyed by node id and original authored index. Runs in the shared `_assemble`, so a
@@ -637,45 +781,51 @@ def validate_node_asserts(
                 )
                 continue
             reads_output = False
-            # The values whose field reads are checked, with the contracts each may have.
+            # The values whose checks and field reads are checked, with the contracts each
+            # may have, and where each local is bound from.
             roots: dict[str, tuple[OutputContract, ...]] = {}
+            union_roots: dict[str, str] = {}
+            unwalked: set[str] = set()
             for ref in dict.fromkeys(refs):
                 segs = ref.split(".")
                 head = segs[0] if segs else ""
                 if head == "output":
                     reads_output = True
-                    if len(segs) > 1:
-                        contract = node.output_contract
-                        if contract is not None and type(contract) not in (
-                            ValueContract,
-                            PartialRecordContract,
-                        ):
-                            raise TypeError(
-                                f"node {nid!r} output_contract must be an exact "
-                                "ValueContract, PartialRecordContract, or None, "
-                                f"got {type(contract).__name__}"
+                    contract = node.output_contract
+                    if contract is not None and type(contract) not in (
+                        ValueContract,
+                        PartialRecordContract,
+                    ):
+                        raise TypeError(
+                            f"node {nid!r} output_contract must be an exact "
+                            "ValueContract, PartialRecordContract, or None, "
+                            f"got {type(contract).__name__}"
+                        )
+                    if contract is not None:
+                        roots["output"] = (contract,)
+                    # A file output reaches the shared walk, which types its
+                    # `uri`, `mime` and `name` and rejects any other field.
+                    if (
+                        len(segs) > 1
+                        and type(contract) is ValueContract
+                        and contract.type.kind
+                        not in (ValueKind.OBJECT, ValueKind.ANY, ValueKind.FILE)
+                    ):
+                        errors.append(
+                            (
+                                f"node {nid!r} assert: ${{{ref}}} — the node output is "
+                                f"not a record, so it has no field "
+                                f"{'.'.join(segs[1:])!r}",
+                                error_range,
                             )
-                        # A file output reaches the shared walk, which types its
-                        # `uri`, `mime` and `name` and rejects any other field.
-                        if type(contract) is ValueContract and contract.type.kind not in (
-                            ValueKind.OBJECT,
-                            ValueKind.ANY,
-                            ValueKind.FILE,
-                        ):
-                            errors.append(
-                                (
-                                    f"node {nid!r} assert: ${{{ref}}} — the node output is "
-                                    f"not a record, so it has no field "
-                                    f"{'.'.join(segs[1:])!r}",
-                                    error_range,
-                                )
-                            )
-                        elif contract is not None:
-                            roots["output"] = (contract,)
+                        )
+                        unwalked.add("output")
                 elif head in declared:
                     local = node_locals.get(head)
                     if local is not None and local.alternatives:
                         roots[head] = local.alternatives
+                        if local.source is not None:
+                            union_roots[head] = local.source
                 elif head in _POOL_HEADS:
                     errors.append(
                         (
@@ -703,6 +853,8 @@ def validate_node_asserts(
                     if nid in partial_union_nodes
                     else frozenset()
                 ),
+                unwalked_roots=unwalked,
+                site=_ReadSite(spawner=kind in _SPAWNER_KINDS, union_roots=union_roots),
             ):
                 errors.append((f"node {nid!r} assert: {message}", error_range))
             if reads_output:

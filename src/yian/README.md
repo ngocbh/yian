@@ -993,9 +993,10 @@ the first one's error, worded by `narrowed_read_message` when the narrowed type 
 field. `impossible_checks` finds the checks that can never be true (an empty member set
 under the checks before them and, at a CASE, its routing; an `isinstance` with no overlap
 with the declared type; a tag comparison with a non-tag), a located load error at each
-site (`check_impossible_whens` for `when:`); a read reached only past such a check isn't
-field-checked, and one reached only past a check the known type always decides is checked
-against that type (`checked_refs`). A searched CASE's `__rN` param gets one view: the union
+site (`check_impossible_whens` for `when:`); a read that runs only when such a check has
+the value it never has isn't field-checked (`falsified` makes that check prove `NEVER`
+there), and one reached only past an unreported check the known type always decides is
+checked against that type (`checked_refs`). A searched CASE's `__rN` param gets one view: the union
 over its reads of each read's guard facts, met with the node's routing facts
 (`Narrowing.for_param`); where that meet loses a fact (two unrelated exact types), the param
 sees its type without it.

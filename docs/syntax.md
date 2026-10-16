@@ -377,6 +377,9 @@ in; for a prompt read of an input bound from one reference, the hint names that 
 (`read it inside a case on ${d.output.action}`). An assert also narrows by the checks
 inside it (see [Narrowing inside a condition](#narrowing-inside-a-condition)), so its hint
 names the check to add: `` check the member first with `isinstance(v, <Type>) and ...` ``.
+A `call` or `loop` node's asserts can't use `isinstance`, so there a tagged union's hint
+compares the tag instead (`` check the member first with `v.action == "buy" and ...` ``) and
+an untagged one keeps the case hint.
 To return a member field, read it in a branch and return the `case` result with
 `${case.output}`; to use one per item, pass `${item}` to the child and narrow there.
 
@@ -465,9 +468,13 @@ declared type fits (or, under `not`, one every value fits), and a tag comparison
 sell); did you mean 'buy'?
 ```
 
-Reads after such a check aren't field-checked, since no value reaches them. A node
+A read that runs only when such a check is true isn't field-checked, since no value
+reaches it (the read in `v.action != "biy" and v.qty > 0` still is: a `!=` with text that
+is no tag is always true). A node
 assert's local name that may have several types (a typed binding's declared and inferred
-ones) reports a check only when it is impossible under each.
+ones) reports a check only when it is impossible under each, and skips a read only when
+no value reaches it under each. A flow assert names a flow input as written: `isinstance(o,
+Text)` is reported as `isinstance(o, Text)`.
 
 Changed: an `isinstance` or tag check inside a condition now narrows reads after it through
 `and`, `or` and `not`. Asserts guarded this way load again (they briefly failed to load),

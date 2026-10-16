@@ -1159,10 +1159,15 @@ set (under the checks before it, or at a CASE its routing too), an `isinstance` 
 doesn't overlap the declared type (or, under `not`, one the declared type always fits), or
 a tag comparison whose text is no tag; `impossible_check_message` words them and each site
 locates them (`check_impossible_whens` for `when:`). `checked_refs` skips the field check
-of a read reached only past a reported check, and checks a read reached only past a check
-the known type always decides against that type. Unguarded member-only reads in asserts
-and LOOP predicates hint `isinstance(v, <Type>) and ...` (`isinstance_hint=True`); searched
-`when:` reads keep the case hint.
+of a read that runs only when a reported check has the value it never has, whatever the
+report's reason (`condition_guards.falsified` makes that check prove `NEVER` for it), and
+checks a read reached only past an unreported check the known type always decides against
+that type. Unguarded member-only reads in asserts and LOOP predicates hint
+`isinstance(v, <Type>) and ...` (`isinstance_hint=True`), and in a CALL or LOOP node's
+asserts, where `isinstance` is rejected, a tagged union's hint compares the tag
+(`tag_hint=True`); searched `when:` reads keep the case hint. An assert combines only the
+distinct contracts of the roots some check can narrow, skips a read only when it is dead
+under every combination, and spells a flow-assert check as written.
 
 Compose output derivation, builders, child signatures, and producer maps retain the
 complete output-contract sum. `ChildSignature.declared_outputs` retains ordered

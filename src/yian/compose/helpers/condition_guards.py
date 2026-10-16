@@ -3,7 +3,8 @@
 A **check** is a test a condition makes on one value: `isinstance(<ref>, T)`, or a tag
 comparison `<ref>.<field> == "<text>"` (`!=` is the same check, negated). A **guard** is a
 small boolean formula over checks in negation normal form: `Holds(check, value)` says the
-check evaluated to `value`; `AllOf` and `AnyOf` combine guards; `NOTHING` proves nothing.
+check evaluated to `value`; `AllOf` and `AnyOf` combine guards; `NOTHING` proves nothing,
+and `NEVER` never holds.
 
 `and` and `or` short-circuit, so in `A and B` the operand `B` only runs once `A` is true,
 and in `A or B` once `A` is false; `not` flips what a check proves. `proves` says what holds
@@ -35,6 +36,7 @@ from yian.expr import isinstance_subject, isinstance_type_names
 from yian.expr.expressions import ISINSTANCE
 
 __all__ = [
+    "NEVER",
     "NOTHING",
     "AllOf",
     "AnyOf",
@@ -49,6 +51,7 @@ __all__ = [
     "check_in",
     "check_text",
     "conjuncts",
+    "falsified",
     "guard_checks",
     "guarded_refs",
     "literal_text",
@@ -144,12 +147,15 @@ Guard: TypeAlias = Holds | AllOf | AnyOf
 NOTHING = AllOf(())
 """The guard that proves nothing."""
 
+NEVER = AnyOf(())
+"""The guard that never holds, such as what a check that is never true proves when true."""
+
 
 def all_of(*parts: Guard) -> Guard:
     """Return the guard that every part holds.
 
     Nested `AllOf`s are flattened and `NOTHING` parts dropped; one remaining part is
-    returned as is.
+    returned as is. A `NEVER` part makes the whole guard `NEVER`.
 
     Args:
         *parts (`Guard`):
@@ -157,13 +163,16 @@ def all_of(*parts: Guard) -> Guard:
 
     Returns:
         `Guard`:
-            `NOTHING` for no parts, the lone part for one, else an `AllOf`.
+            `NEVER` when a part is `NEVER`, `NOTHING` for no parts, the lone part for one,
+            else an `AllOf`.
 
     Example:
         `all_of(a, NOTHING, all_of(b, c))` is `AllOf((a, b, c))`.
     """
     flat: list[Guard] = []
     for part in parts:
+        if part == NEVER:
+            return NEVER
         flat.extend(part.parts if isinstance(part, AllOf) else (part,))
     if len(flat) == 1:
         return flat[0]
@@ -173,8 +182,8 @@ def all_of(*parts: Guard) -> Guard:
 def any_of(*parts: Guard) -> Guard:
     """Return the guard that at least one part holds.
 
-    Nested `AnyOf`s are flattened; a part that proves nothing makes the whole guard
-    prove nothing. One part is returned as is.
+    Nested `AnyOf`s are flattened (so `NEVER` parts drop out); a part that proves nothing
+    makes the whole guard prove nothing. One part is returned as is.
 
     Args:
         *parts (`Guard`):
@@ -182,7 +191,8 @@ def any_of(*parts: Guard) -> Guard:
 
     Returns:
         `Guard`:
-            `NOTHING` when a part is `NOTHING`, the lone part for one, else an `AnyOf`.
+            `NOTHING` when a part is `NOTHING`, `NEVER` when no part remains, the lone
+            part for one, else an `AnyOf`.
 
     Example:
         `any_of(a, any_of(b, c))` is `AnyOf((a, b, c))`; `any_of(a, NOTHING)` is
@@ -284,6 +294,8 @@ def proves(tree: Tree | Token, value: bool) -> Guard:
         return Holds(check, value == positive)
     if not isinstance(tree, Tree):
         return NOTHING
+    if tree.data == _NEVER_HAS:
+        return NEVER if value == (str(tree.children[0]) == "true") else NOTHING
     if tree.data == "negate":
         return proves(tree.children[-1], not value)
     if tree.data not in ("and_expr", "or_expr"):
@@ -475,6 +487,48 @@ def masked(tree: Tree | Token, nodes: Collection[Tree | Token]) -> Tree | Token:
     def copy(node: Tree | Token) -> Tree | Token:
         if id(node) in ids:
             return Tree(_MASKED, [node])
+        if isinstance(node, Token):
+            return node
+        return Tree(node.data, [copy(child) for child in node.children])
+
+    return copy(tree)
+
+
+_NEVER_HAS = "never_has"
+"""The data of a node `falsified` wraps a check in; its first child is the value the check
+never has."""
+
+
+def falsified(
+    tree: Tree | Token, never: Collection[tuple[Tree | Token, bool]]
+) -> Tree | Token:
+    """Return a copy of a condition in which the given checks never have the given values.
+
+    Each `(sub-tree, value)` pair (the sub-tree matched by identity, such as a
+    `CheckLiteral.node`) wraps that check so `proves` gives `NEVER` for `value` and
+    `NOTHING` for the other value, while `guarded_refs` still finds the same references in
+    the same order. A reference whose guard is then `NEVER` is read only when one of those
+    checks has its impossible value.
+
+    Args:
+        tree (`Tree | Token`):
+            A condition parsed with `parse_condition`.
+        never (`Collection[tuple[Tree | Token, bool]]`):
+            Check sub-trees of `tree` and the value each never has.
+
+    Returns:
+        `Tree | Token`:
+            The copy; `tree` itself is left unchanged.
+
+    Example:
+        In `falsified(tree, [(literal.node, True)])` for the literal `isinstance(v, Text)`
+        of `isinstance(v, Text) and v.qty > 0`, the read `v.qty` is guarded by `NEVER`.
+    """
+    values = {id(node): value for node, value in never}
+
+    def copy(node: Tree | Token) -> Tree | Token:
+        if id(node) in values:
+            return Tree(_NEVER_HAS, [Token("NEVER_VALUE", str(values[id(node)]).lower()), node])
         if isinstance(node, Token):
             return node
         return Tree(node.data, [copy(child) for child in node.children])

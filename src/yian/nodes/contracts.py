@@ -764,11 +764,15 @@ def _member_only_field_error(
     path: str,
     union_path: str,
     isinstance_hint: bool,
+    tag_hint: bool = False,
+    read_union_path: str = "",
 ) -> str:
     """Return the error for reading a field only some members of `union` have.
 
-    `path` is the whole reference path and `union_path` the path of the union value.
-    `isinstance_hint` points the fix at an `isinstance` conjunct instead of a case.
+    `path` is the whole reference path, `union_path` the path of the union value, and
+    `read_union_path` its path within `path`. `isinstance_hint` points the fix at an
+    `isinstance` conjunct instead of a case; `tag_hint` points it at a tag comparison
+    conjunct instead, when the union is tagged.
     """
     tag_fields = union_tag_fields(union)
     if tag_fields:
@@ -779,7 +783,10 @@ def _member_only_field_error(
     else:
         which = f"only {len(having)} of {len(union.variants)} union members have"
         fix = f"check the member with isinstance({union_path}, <Type>) in a case first"
-    if isinstance_hint:
+    if tag_hint and tag_fields:
+        value = min(having[0].fields[tag].tags)
+        fix = f'check the member first with `{read_union_path}.{tag} == "{value}" and ...`'
+    elif isinstance_hint and not tag_hint:
         fix = f"check the member first with `isinstance({union_path}, <Type>) and ...`"
     return f"reference ${{{path}}} reads field {field_name!r}, which {which}; {fix}"
 
@@ -802,6 +809,7 @@ def output_contract_field_error(
     *,
     partial_union_fields: bool = False,
     isinstance_hint: bool = False,
+    tag_hint: bool = False,
     union_root: str | None = None,
 ) -> str | None:
     """Return why a reference reads a field its contract can't have, else `None`.
@@ -832,6 +840,11 @@ def output_contract_field_error(
             with an `isinstance(..., T) and ...` conjunct before the read rather than
             in a case, for a condition no case can route (a LOOP predicate or an
             assert).
+        tag_hint (`bool`, *optional*, defaults to `False`):
+            Whether a member-only field error of a tagged union tells the author to
+            compare the tag (`v.<tag> == "<value>" and ...`) before the read, for a
+            condition where `isinstance` is not allowed (a CALL or LOOP node's asserts).
+            An untagged union keeps the case hint. Wins over `isinstance_hint`.
         union_root (`str | None`, *optional*, defaults to `None`):
             The pool path the referenced value is bound from, when `path` reads a
             node-local name. A member-only field error's fix then names the union
@@ -869,6 +882,7 @@ def output_contract_field_error(
             path,
             partial_union_fields=partial_union_fields,
             isinstance_hint=isinstance_hint,
+            tag_hint=tag_hint,
             union_root=None if union_root is None else f"{union_root}.{field_name}",
         )
     if type(contract) is not ValueContract:
@@ -878,11 +892,9 @@ def output_contract_field_error(
     typ = output_contract_type(contract)
     assert typ is not None
     # The path segments walked so far, starting with the ones before `fields`.
-    walked = (
-        path.split(".")[: path.count(".") + 1 - len(fields)]
-        if union_root is None
-        else [union_root]
-    )
+    read_walked = path.split(".")[: path.count(".") + 1 - len(fields)]
+    walked = list(read_walked) if union_root is None else [union_root]
+    start = len(walked)
     for field_name in fields:
         if typ.variants is not None:
             read = union_field(typ, field_name)
@@ -891,8 +903,16 @@ def output_contract_field_error(
             if isinstance(read, FieldPartial):
                 if partial_union_fields:
                     return None
+                read_union_path = ".".join(read_walked + list(walked[start:]))
                 return _member_only_field_error(
-                    typ, read.members, field_name, path, ".".join(walked), isinstance_hint
+                    typ,
+                    read.members,
+                    field_name,
+                    path,
+                    ".".join(walked),
+                    isinstance_hint,
+                    tag_hint,
+                    read_union_path,
                 )
             if read.type is None:
                 return None

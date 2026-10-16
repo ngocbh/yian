@@ -507,6 +507,33 @@ def test_a_read_after_a_reported_check_is_not_checked():
     )
 
 
+@pytest.mark.parametrize(
+    ("condition", "declared"),
+    [
+        # No overlap: the check would narrow `v` to `Text`, a type it can never be.
+        ("isinstance(v, Text) and v.qty > 0", DECISION),
+        ("(isinstance(v, Text) or isinstance(v, Text)) and v.qty > 0", DECISION),
+        # A negated check a non-union type always passes.
+        ("not isinstance(v, Buy) and v.qty > 0", BUY),
+        # A text that is no tag never equals the tag field.
+        ("v.action == 'biy' and v.qty > 0", DECISION),
+        ("not (v.action != 'biy') and v.qty > 0", DECISION),
+    ],
+)
+def test_a_read_that_needs_a_reported_check_to_hold_is_not_checked(condition, declared):
+    assert _checked(condition, v=declared)[-1] == ("v.qty", None)
+
+
+def test_a_read_that_does_not_need_a_reported_check_is_checked():
+    # A `!=` with a text that is no tag is always true, so the read after it runs.
+    assert _checked("v.action != 'biy' and v.qty > 0", v=DECISION)[-1][1] is not None
+    # The read runs when the reported check is false, as it always is.
+    assert _checked("isinstance(v, Text) or v.qty > 0", v=DECISION)[-1][1] is not None
+    # Reporting one occurrence of a check leaves another occurrence of it alone.
+    condition = "(isinstance(v, Buy) and v.action == 'hold') or (v.action == 'hold' and v.qty > 0)"
+    assert _checked(condition, v=DECISION)[-1][1] is not None
+
+
 def test_a_read_after_a_check_the_known_type_decides_is_checked_without_it():
     assert _checked("isinstance(v, Decision) or v.nosuch > 0", v=DECISION)[-1] == (
         "v.nosuch",

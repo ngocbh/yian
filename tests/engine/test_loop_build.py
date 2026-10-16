@@ -1344,6 +1344,29 @@ def test_predicate_check_that_can_never_be_true_is_rejected():
     assert "reads unknown field 'nosuch'" not in str(e.value)
 
 
+@pytest.mark.parametrize(
+    ("pred", "expected"),
+    [
+        (
+            "until: isinstance(r, int) and r.zz == 1",
+            "`isinstance(r, int)` can never be true: r is declared Step, and no Step value "
+            "fits int",
+        ),
+        (
+            "until: not isinstance(n, int) and n.zz == 1",
+            "`not isinstance(n, int)` can never be true: n is declared int, so "
+            "`isinstance(n, int)` is always true",
+        ),
+    ],
+    ids=["no-overlap", "always"],
+)
+def test_predicate_read_after_a_reported_check_is_not_checked(pred, expected):
+    with pytest.raises(LoadError) as e:
+        load_flow(_swap(UNION_STATE, "PRED", pred))
+    assert f"loop node 'ask': `until:` {expected}" in str(e.value)
+    assert "field 'zz'" not in str(e.value)
+
+
 def test_predicate_tagged_member_field_error_points_at_isinstance():
     src = (
         _swap(UNION_STATE, 
@@ -1399,6 +1422,13 @@ def test_predicate_tag_comparison_with_a_value_that_is_no_tag_is_rejected():
         "loop node 'ask': `until:` `r.kind == \"dnoe\"` compares r.kind with 'dnoe', which is "
         "not one of its tags (done, more); did you mean 'done'?"
     ) in str(e.value)
+
+
+def test_predicate_read_after_a_value_that_is_no_tag_is_not_checked():
+    with pytest.raises(LoadError) as e:
+        load_flow(_swap(TAGGED_STATE, "PRED", "until: r.kind == 'dnoe' and r.zz == 'x'"))
+    assert "compares r.kind with 'dnoe', which is not one of its tags" in str(e.value)
+    assert "${r.zz}" not in str(e.value)
 
 
 def test_predicate_isinstance_check_on_an_object_field_checks_reads_on_the_type():

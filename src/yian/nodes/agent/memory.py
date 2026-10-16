@@ -40,6 +40,7 @@ from yian.memory import (
 from yian.memory.summary import admissions
 from yian.nodes.agent.interrupts import ReplyInterrupted
 from yian.nodes.base import _CapabilityFault, _HostStop
+from yian.tools.errors import ReportedToolError
 from yian.typesys.values import (
     long_int_digits,
     long_int_message,
@@ -770,6 +771,23 @@ def _tool_text(name: str, result: Any) -> str:
         raise ValueError(f"tool {name!r} result: {long_int_message(digits)}") from exc
 
 
+def _reported_text(name: str, error: ReportedToolError) -> str:
+    """Return a reported tool error as the text the model reads.
+
+    Args:
+        name (`str`): The tool's name, for the message.
+        error (`ReportedToolError`): What the tool raised.
+
+    Returns:
+        `str`: ``str(error)``, or the error's type name when that is empty.
+
+    Raises:
+        `Exception`: `str(error)` fails, including on an int past Python's digit limit
+            (a `ValueError`).
+    """
+    return _tool_text(name, error) or type(error).__name__
+
+
 def _tool_payload(name, arguments, model_exchange_id, call_index, tool_call_id):
     """Build the request payload shared by run and skipped tool effects."""
     return {
@@ -864,21 +882,32 @@ def invoke_tool_effect(
         call_index (`int`): Zero-based call position within that model reply.
         tool_call_id (`str`): Provider correlation ID, which may repeat across exchanges.
         check_stopped (`Callable`): Cooperative stop check after publishing the result,
-            and before recording a failed call.
+            and before recording a failed call or representing a reported error.
 
     Returns:
         `ToolMessage`: Actual represented result, already retained in session memory.
+            When the tool raises `ReportedToolError`, an error result holding the
+            exception's text (its type name when the text is empty), recorded
+            `completed` like any other result.
 
     Raises:
         `_CapabilityFault`: Encoding or memory access fails.
         `_HostStop`: Cooperative cancellation occurs, including when the tool fails
-            while a stop is pending (the effect is then recorded `interrupted`) or
-            when representing its result fails while a stop is pending.
-            Otherwise tool and representation errors propagate unchanged; a
+            or raises `ReportedToolError` while a stop is pending (the effect is
+            then recorded `interrupted`) or when representing its result fails
+            while a stop is pending. Otherwise tool errors other than
+            `ReportedToolError`, and representation errors, propagate unchanged; a
             representation error does not mark execution failed.
     """
     if turn is None:
-        result = invoke()
+        try:
+            result = invoke()
+        except ReportedToolError as reported:
+            check_stopped()
+            return ToolMessage(
+                content=_reported_text(name, reported), tool_call_id=tool_call_id,
+                status="error",
+            )
         check_stopped()
         return ToolMessage(content=_tool_text(name, result), tool_call_id=tool_call_id)
     with _memory_boundary():
@@ -886,15 +915,27 @@ def invoke_tool_effect(
             "tool",
             _tool_payload(name, arguments, model_exchange_id, call_index, tool_call_id),
         )
+    reported: ReportedToolError | None = None
     try:
         result = invoke()
+    except ReportedToolError as error:
+        # A stop pending when the tool reports its error wins, as it does for a failure.
+        try:
+            check_stopped()
+        except BaseException as stop:
+            _record_failure(turn, ordinal, "tool", stop, interrupted=True)
+            raise
+        reported = error
     except BaseException as primary:
         _observe_failure(turn, ordinal, "tool", primary, check_stopped)
         raise
     try:
-        text = _tool_text(name, result)
+        if reported is None:
+            text, status = _tool_text(name, result), "success"
+        else:
+            text, status = _reported_text(name, reported), "error"
         with _memory_boundary():
-            message = ToolMessage(content=text, tool_call_id=tool_call_id)
+            message = ToolMessage(content=text, tool_call_id=tool_call_id, status=status)
             item = encode_message(message, model_exchange_id)
     except BaseException as primary:
         _observe_preserving_error(turn, ordinal, "completed", primary)

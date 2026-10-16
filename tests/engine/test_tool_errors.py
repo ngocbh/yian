@@ -8,7 +8,12 @@ import yian
 import yian.tools as tools_package
 from yian.defaults import DefaultsError, current
 from yian.tools import FunctionTool, ToolSet
-from yian.tools.errors import PermanentToolError, ToolCheckError, TransientToolError
+from yian.tools.errors import (
+    PermanentToolError,
+    ReportedToolError,
+    ToolCheckError,
+    TransientToolError,
+)
 
 
 def test_tool_retry_defaults() -> None:
@@ -51,10 +56,13 @@ def test_transient_tool_error_rejects_a_non_number_retry_after(value) -> None:
 
 
 def test_tool_errors_are_independent_exceptions() -> None:
-    for error in (PermanentToolError, TransientToolError):
+    for error in (PermanentToolError, TransientToolError, ReportedToolError):
         assert issubclass(error, Exception)
     assert not issubclass(PermanentToolError, TransientToolError)
     assert not issubclass(TransientToolError, PermanentToolError)
+    for other in (PermanentToolError, TransientToolError, ToolCheckError):
+        assert not issubclass(ReportedToolError, other)
+        assert not issubclass(other, ReportedToolError)
     assert issubclass(ToolCheckError, TypeError)
     assert not issubclass(ToolCheckError, (PermanentToolError, TransientToolError))
 
@@ -62,12 +70,15 @@ def test_tool_errors_are_independent_exceptions() -> None:
 def test_tool_errors_are_public() -> None:
     assert yian.PermanentToolError is PermanentToolError
     assert yian.TransientToolError is TransientToolError
+    assert yian.ReportedToolError is ReportedToolError
     assert tools_package.PermanentToolError is PermanentToolError
     assert tools_package.TransientToolError is TransientToolError
     assert tools_package.ToolCheckError is ToolCheckError
-    assert {"PermanentToolError", "TransientToolError", "ToolCheckError"} <= set(
-        tools_package.__all__
-    )
+    assert tools_package.ReportedToolError is ReportedToolError
+    assert {
+        "PermanentToolError", "TransientToolError", "ToolCheckError", "ReportedToolError"
+    } <= set(tools_package.__all__)
+    assert "ReportedToolError" in yian.__all__
     assert "ToolCheckError" not in yian.__all__
 
 

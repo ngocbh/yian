@@ -48,6 +48,10 @@ These names are exported from the top-level `yian` package:
 | `function_tool` | build a `FunctionTool` from a function, optionally overriding its name and description |
 | `PermanentToolError` | an exception a tool raises when another attempt can't help; a TOOL node doesn't retry it (see [TOOL retries](#tool-retries)) |
 | `TransientToolError` | an exception a tool raises to ask a TOOL node to retry, optionally after `retry_after` seconds |
+| `ReportedToolError` | an exception a tool raises for a failure the calling AGENT's model reads as the call's result (see [TOOL retries](#tool-retries)) |
+
+The MCP names (`mcp_server`, `McpServer`, and the `McpError` classes) live in
+`yian.tools` (see [MCP servers](#mcp-servers)).
 
 Recovery, the result type, and the steering protocol live in `yian.run`:
 
@@ -118,7 +122,7 @@ run_flow(
     llm_config: dict[str, Any] | None = None,
     memory: Mapping[str, Memory] | None = None,
     learnable: bool = False,
-    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None = None,
+    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | McpServer | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
     context: Any = None,
@@ -358,6 +362,12 @@ run before appending any record.
   callables, so the run log does not record them. An AGENT that grants skills
   also gets the built-in `load_skill` tool, which is not part of this mapping.
   A list or tuple value is a tool group (see [Tool groups](#tool-groups)).
+  An `McpServer` from `mcp_server` is a group of the tools that server lists. One
+  that isn't open belongs to the run, which opens it before the tool checks and
+  closes it when `run_flow` returns or raises; one opened with `with server:`
+  belongs to the host and stays open (see [MCP servers](#mcp-servers)). Opening
+  raises `McpConnectError` when a server doesn't start or doesn't list its tools,
+  and `ImportError` when the MCP SDK isn't installed.
   Every static AGENT grant must name a tool or group in this set, and every
   static TOOL node's `tool_id:` must name a tool in it; otherwise `run_flow`
   raises `ValueError` before the log is created. Every static TOOL node is also
@@ -464,6 +474,14 @@ Host functions and `FunctionTool`s run directly, not through LangChain's
 `invoke`, so LangChain callbacks and tracing don't fire for them. A LangChain
 `BaseTool` runs as before and receives no `ToolContext`.
 
+`ToolSet.for_run(run_id, stop_event=event)` returns a copy of a tool set bound to
+one run: `run_id` becomes `ToolContext.run_id` and the base of the call ids, and
+`event` is visible to each call the copy makes (`ToolSet.stop_event` returns it).
+The run binds its own stop event, which is set when the run stops (Ctrl-C, a
+failing sibling node, or a host stop). MCP tools watch it, so a stop cancels a
+waiting call (see [MCP servers](#mcp-servers)). The copy holds exactly the event
+given: `None` gives no event, even when the set was bound to one before.
+
 **Descriptions.** The tool's description is the docstring's first text section,
 everything before its first section header. Any `Word:` (or `Some words:`) line
 followed by an indented block starts a section, not only `Args:`, so the text of
@@ -545,6 +563,9 @@ Every exception from the tool is retried, except:
   retried;
 - a host stop, such as Ctrl-C or a sibling node's failure, which ends the node.
 
+A `ReportedToolError` is retried like any other failure, unless it is also a
+`PermanentToolError`.
+
 Before the retry after the k-th failure, the node waits d = min(cap, base · 2^(k−1))
 seconds, drawn uniformly between d/2 and d. The base is
 `YIAN_TOOL_RETRY_DELAY_SECONDS` (1) and the cap is `YIAN_TOOL_RETRY_MAX_DELAY_SECONDS`
@@ -600,6 +621,28 @@ correct a structured reply that doesn't fit `output:` (see
 [structured generation](syntax.md#agent-the-llm-backed-agent-node)). Tool calls
 from an AGENT's tool loop are never retried, and see `ctx.attempt == 1`.
 
+In an AGENT's tool loop, a tool that raises `ReportedToolError` doesn't fail the
+node: the model reads `str(exc)` as that call's result (the exception's type name
+when the text is empty) and the loop continues, so the model can fix its arguments
+or try another tool. A stop pending when the tool raises still ends the node. Any
+other exception from the tool fails the node. In a TOOL node a `ReportedToolError`
+is an ordinary failure, as above. The message goes to the model provider and to
+the session transcript, so it must not hold secrets.
+
+```python
+from pathlib import Path
+
+from yian import ReportedToolError
+
+
+def read_file(path: str) -> str:
+    """Read a text file in the workspace."""
+    file = Path(path)
+    if not file.is_file():
+        raise ReportedToolError(f"no such file: {path}")
+    return file.read_text()
+```
+
 ### Tool groups
 
 A host can fill a named group of tools per run. The flow grants the group by
@@ -629,7 +672,8 @@ result = run_flow(
 `worker` sees `search_tickets`, `read_ticket`, `read_file_tool`, and `ask_user`.
 Each group item is a LangChain `BaseTool` or `FunctionTool` named by its `name`,
 or a function or bound method named by its `__name__` (a lambda has no usable
-name and is rejected). Groups expand before the grant check, so the model calls the tools by
+name and is rejected). An `McpServer` value is a group of the server's tools (see
+[MCP servers](#mcp-servers)). Groups expand before the grant check, so the model calls the tools by
 their own names, never by the group name. A group is not a tool: a TOOL node's
 `tool_id:` may name a tool inside a group, but not the group itself. Before the
 log is created, `run_flow` raises:
@@ -665,6 +709,197 @@ neither their contents nor their tools. Only the group names in the flow are par
 of its fingerprint. Each run gets its own groups, so concurrent runs never see each
 other's tools, and `resume_flow` uses the groups passed to it (see
 [Durable recovery](#durable-recovery-with-resume_flow)).
+
+### MCP servers
+
+A Model Context Protocol (MCP) server offers tools over a standard protocol, and
+can be written in any language. A host passes a server in `tools=`, and its tools
+become ordinary yian tools in one group named by the server's key. The MCP SDK is
+an optional extra:
+
+```console
+python -m pip install "yian[mcp]"
+```
+
+Describe a server with `mcp_server` from `yian.tools`. A stdio server is a command
+yian starts as a subprocess; an HTTP server is a streamable HTTP endpoint:
+
+```python
+from yian.tools import mcp_server
+
+files = mcp_server(
+    command="npx",
+    args=["-y", "@modelcontextprotocol/server-filesystem", "."],
+    env={"LOG_LEVEL": "warn"},
+    cwd="/srv/project",
+)
+github = mcp_server(
+    url="https://mcp.example.com/github",
+    headers={"Authorization": f"Bearer {token}"},
+)
+```
+
+Pass exactly one of `command` and `url`. `args`, `env`, and `cwd` go with
+`command`, and `headers` with `url`; `url` must be `http` or `https`. A stdio
+server gets the MCP SDK's safe default environment (`PATH`, `HOME`, and a few
+others) with `env` merged over it, so the host's secrets reach a server only when
+passed in `env`. `timeout` and `connect_timeout` set the call and connect timeouts
+(below) for this server. `label` names the server in errors and is the command's
+basename, or the URL's host, by default. A bad argument raises `TypeError` or
+`ValueError` at once; nothing starts until the server opens.
+
+Credentials stay with the host: the flow names the server only by its key. An
+AGENT grants the server's key, which grants every tool the server lists, or single
+tools by name. A TOOL node's `tool_id:` names one tool, never the server:
+
+```yaml
+nodes:
+  triage:
+    kind: agent
+    prompt: ${input.task}
+    tools: [github]
+  lookup:
+    kind: tool
+    tool_id: search_issues
+    input:
+      query: ${input.query}
+```
+
+```python
+result = run_flow(flow, inputs, tools={"github": github})
+```
+
+The [Tool groups](#tool-groups) rules apply. A server's tool may not share its name
+with a different tool in another group (another server's, for example) or with a
+top-level key, or be named `ask_user` or `load_skill`; the run raises `ValueError`
+before it starts. A server inside a list group raises `TypeError`; pass it as its
+own entry.
+
+**Lifetime.** A server passed unopened belongs to the run. `run_flow` opens it
+after the checks that need no tools (the other `tools=` entries, conditions,
+templates, skills, and steering) and before the tool grant and type checks, and
+closes it when `run_flow` returns or raises, including on Ctrl-C. When one server
+fails to open, the ones already open are closed. The same server object under
+several keys opens once. `resume_flow` opens a server only for an unfinished run,
+after it replays the log; resuming a finished run opens nothing. Two runs can't
+open one server object at once: while one run has it open, or is opening it,
+another run given the same object raises `ValueError` before its log is created.
+
+A server opened with `with server:` (or `server.open()`) belongs to the host,
+which closes it. Runs use it as it is and leave it open, so several runs, even
+concurrent ones, can share one process or connection:
+
+```python
+with mcp_server(url=url, headers=headers) as github:
+    for task in tasks:
+        run_flow(flow, {"task": task}, tools={"github": github})
+```
+
+A host-owned server yian knows is gone (its loop ended, or a call saw it closed)
+raises `ValueError` at run start (`tools['github']: MCP server 'github' is closed`).
+A stdio server whose process died quietly is found on the first call, which raises
+`McpServerClosed`.
+
+Opening starts the server, waits until it lists its tools, and keeps that list:
+`server.tools` is a tuple of `FunctionTool`s in the server's order, and a later
+change to the server's tool list is ignored until it is opened again. Each tool's
+input schema is the server's, checked like any `FunctionTool`'s
+`params_json_schema` (see [Tool context](#tool-context)), and the run-start checks
+compare a TOOL node's inputs with it (see [Typed tools](#typed-tools)). An MCP tool
+declares no yian return type, so only the node's `output:` checks what it returns.
+`open()` raises `McpConnectError` when the server doesn't start, doesn't list its
+tools within the connect timeout, lists a tool twice, lists a tool whose input
+schema's `type` is not `"object"`, or lists more than 100 pages of tools. It raises
+`ImportError` naming the `mcp` extra when the SDK isn't installed, and
+`RuntimeError` when the server is already open.
+
+`server.tools` holds plain `FunctionTool`s, so a host can wrap or rename them
+before a run. Most model providers accept only tool names matching
+`^[a-zA-Z0-9_-]{1,64}$`, so rename a tool whose name has a dot or a slash:
+
+```python
+import dataclasses
+
+with github:
+    renamed = [
+        dataclasses.replace(tool, name=tool.name.replace(".", "_"))
+        for tool in github.tools
+    ]
+    run_flow(flow, inputs, tools={"github": renamed})
+```
+
+A renamed tool still calls the server's tool by its original name.
+
+**Results.** A call returns the result's structured content (`structuredContent`)
+when the server sends it. A Python MCP server (`MCPServer`, formerly FastMCP) wraps
+a tool's primitive return value as `{"result": ...}`, so such a tool returns a
+record. Otherwise the call returns the result's content as one string: text blocks
+and embedded text resources give their text; images, audio, and binary resources
+give a one-line marker with the mime type and decoded size, such as
+`[image image/png, 12.3 KB]`; a resource link gives `[resource <uri> <mime type>]`.
+Blocks are joined by blank lines, and their bytes are dropped: media does not reach
+the model yet.
+
+**Idempotency.** Each `tools/call` request carries
+`_meta: {"yian/call_id": ctx.call_id, "yian/attempt": ctx.attempt}`. A server with
+side effects can use `yian/call_id` as its idempotency key, as a Python tool uses
+`ctx.call_id` (see [Tool context](#tool-context)).
+
+**Errors.** A failed call raises a subclass of `McpError` (from `yian.tools`). The
+class decides what an AGENT and a TOOL node do with it:
+
+| Class | Raised when | AGENT: the model reads it | TOOL: `retries:` apply |
+| --- | --- | --- | --- |
+| `McpToolError` | the server returned an error result (`isError`), or the call failed locally, for example structured content that fails the tool's output schema | yes | yes |
+| `McpRequestError` | the server answered with a JSON-RPC error | yes | yes |
+| `McpInvalidRequestError` | the JSON-RPC error code is -32700, -32600, -32601, or -32602 (a malformed or unknown request), or the server redirected to another origin | yes | no |
+| `McpTimeoutError` | the call outlasted the call timeout | yes | yes |
+| `McpTransportError` | an HTTP request to the server failed at the connection level | yes | yes |
+| `McpServerClosed` | the server is gone: it was closed, its process or connection ended, or it forgot the HTTP session | no, the node fails | no |
+| `McpCallCancelled` | the calling run stopped while the call waited | no, the node ends with the stop | no |
+
+"The model reads it" means the class is a `ReportedToolError`; "no" under `retries:`
+means it is a `PermanentToolError`. `McpTimeoutError` and `McpTransportError` are
+also `TransientToolError`s. `McpInvalidRequestError` is an `McpRequestError`. After
+`McpServerClosed`, later calls to that server fail at once; the host still closes a
+server it opened. `McpConnectError` (a `RuntimeError`) is raised only when a server
+opens, so the run doesn't start.
+
+The messages are fixed text naming the server's label and the tool. Only an error
+result's content and a JSON-RPC error's message and code come from the server; no
+URL, header, or exception text reaches the model, since those may hold a token.
+The label does reach the model: for an HTTP server built without `label=`, it is
+the URL's host, so set `label=` when the host name shouldn't appear.
+For a stdio server, `McpConnectError` ends with the last 20 lines the server wrote
+to stderr; for an HTTP server it names only the error type and HTTP status.
+
+**Timeouts.** A server must start and list its tools within
+`YIAN_MCP_CONNECT_TIMEOUT_SECONDS` (30 s), and each call must finish within
+`YIAN_MCP_CALL_TIMEOUT_SECONDS` (300 s). A server's `connect_timeout=` and
+`timeout=` override them. A server takes the values from `yian.defaults.current()`
+when it opens (see [Defaults and limits](#defaults-and-limits)).
+
+**Stops.** A run's stop (Ctrl-C, a failing sibling node, or a host stop) cancels
+that run's waiting calls; each raises `McpCallCancelled`. The cancel is per call,
+so a server shared by several runs keeps serving the others. `close()` ends every
+waiting call with `McpServerClosed`.
+
+**HTTP.** A connection failure before the response starts (refused, reset, or a
+DNS failure) fails only that request, with a retryable `McpTransportError`; the
+server stays open and serves later calls once it is reachable again. A reset while
+a JSON response body is being read ends the connection instead, and the server is
+then gone (`McpServerClosed`). The proxy environment variables
+(`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`) apply.
+
+**Protocol.** yian talks to servers that use the 2026-07-28 protocol and to older
+ones that use the 2025 initialize handshake. It only lists and calls tools:
+elicitation, sampling, prompts, and resources are not supported. A stdio server's
+stderr goes to a temporary file, not the host's terminal.
+
+**Trust.** A server runs with whatever access the host gives it: yian starts the
+command the host names, with no sandbox, and sends requests to the URL the host
+names. Choose servers as you would any other executable. A host with a permission
+layer can wrap `server.tools` like any other `FunctionTool`.
 
 ### Typed tools
 
@@ -1624,7 +1859,7 @@ resume_flow(
     on_event: Callable[[Any], None] | None = None,
     on_stream: Callable[[StreamChunk], None] | None = None,
     memory: Mapping[str, Memory] | None = None,
-    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None = None,
+    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | McpServer | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
     api_key: str | SecretStr | None = None,
@@ -1699,6 +1934,11 @@ nodes use per-run tools or ask the human, pass the same `tools` (including
 `ask_user`) and `context` to `resume_flow` again. Tool group contents may differ
 from the original run's: completed nodes keep their recorded results, and nodes
 that restart see the groups passed to `resume_flow`. Every grant must still resolve, as in `run_flow`.
+Pass an MCP server again the same way. An unopened `McpServer` is opened only when
+the run is unfinished, after the log is replayed and before the tool checks, and is
+closed when `resume_flow` returns or raises; terminal inspection opens none.
+Opening raises `McpConnectError` or `ImportError` as in `run_flow` (see
+[MCP servers](#mcp-servers)).
 
 If primary execution is unfinished and eligible for retry, recovery appends one
 `RunResumedRecord`, retries the exact ordered set of nodes that have a durable start but no durable

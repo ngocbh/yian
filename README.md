@@ -73,7 +73,8 @@ To run the unreleased `main` branch or work on Yian itself, see the
 
 Provider extras can be installed separately: `anthropic`, `openai`, `google`,
 or `ollama`. The core engine and CLI do not require a provider SDK; a flow needs
-one only when it contains an AGENT node.
+one only when it contains an AGENT node. The `mcp` extra adds the MCP SDK, needed
+only to call the tools of MCP servers.
 
 Yian has no built-in provider or model. Save a login with `yian auth <provider>`,
 such as `yian auth anthropic --model claude-sonnet-4-5` or `yian auth openai`
@@ -89,7 +90,7 @@ login. See
 
 ```console
 yian run FLOW.yaml [--inputs inputs.json] [--input k=v]... \
-  [--provider P] [--model M] [-w N] [--log PATH]
+  [--provider P] [--model M] [-w N] [--log PATH] [--mcp-config FILE]...
 ```
 
 `--inputs` accepts a JSON object, including lists, records, and explicit nulls.
@@ -100,6 +101,11 @@ still missing.
 New runs use up to eight workers for independent ready nodes. Set
 `--num-workers N` / `-w N` to override the count, or `-w 0` for serial execution.
 Resuming without a worker flag preserves the count recorded in the run log.
+
+To give a flow the tools of MCP servers, list them in `~/.yian/mcp.json` or a file
+passed with `--mcp-config FILE` (the common `mcpServers` format). An AGENT grants a
+server by its name, and only the servers a flow needs start; see
+[MCP servers](docs/cli.md#mcp-servers).
 
 The CLI reports its selected JSONL path before execution. Once runtime
 initialization commits `RunStarted`, that file is the authoritative log. The
@@ -165,8 +171,13 @@ checked against the argument and return types that tool declares; see
 a TOOL node's call id stays the same when `resume_flow` re-runs it, so it can serve as an
 idempotency key (see [Tool context](docs/api.md#tool-context)). A TOOL node with `retries:`
 calls its tool again after a failure, with backoff, and a resumed run continues the attempt
-count (see [TOOL retries](docs/api.md#tool-retries)). A `FunctionTool` gives a
-tool as a name, a description, a JSON Schema, and a call. To pass a provider key without an
+count (see [TOOL retries](docs/api.md#tool-retries)). A tool raises `ReportedToolError`
+for an error an AGENT's model should read and act on; the node carries on. A
+`FunctionTool` gives a tool as a name, a description, a JSON Schema, and a call. An
+MCP server from `yian.tools.mcp_server(command=...)` or `mcp_server(url=...)` passed in
+`tools=` is a group of that server's tools; the run starts and stops it, or the host
+shares one opened with `with server:` across runs (see
+[MCP servers](docs/api.md#mcp-servers)). To pass a provider key without an
 environment variable, add it to the run's config, as in
 `llm_config={"provider": "anthropic", "model": "claude-sonnet-4-5", "api_key": key}`;
 the key is never recorded or echoed, so pass it again to `resume_flow(...,

@@ -556,7 +556,14 @@ Most are just the functional model (above) made enforceable:
   (an unknown id fails at run start) and checks the call against its tool's
   declared argument and return types (`tools.types`) before any record;
   a TOOL `output:` is the ordinary output gate, so expected outcomes are variants
-  of that type and exceptions still fail the node. The
+  of that type and exceptions still fail the node. In an AGENT's tool loop,
+  `invoke_tool_effect` turns a `ReportedToolError` into an error `ToolMessage`
+  (recorded `completed`) that the model reads, and the loop continues; a pending
+  stop still wins, and any other tool exception fails the AGENT. A TOOL node retries
+  a `ReportedToolError` like any failure unless it is also a `PermanentToolError`.
+  `FlowEngine` binds the run's `ToolSet` with `for_run(run_id, stop_event=...)`;
+  `ToolSet.invoke` exposes that event to each call through a context variable, so a
+  waiting tool (an MCP call) stops with its own run even on a shared tool. The
   handler takes six keywords; the model can set only `question` and `options`
   (cleaned leniently), and the rest stay `InjectedToolArg`. The AGENT
   node checks the run-owned stop event between external model/tool effects, and
@@ -569,7 +576,9 @@ Most are just the functional model (above) made enforceable:
   granted tools and skills; with neither, the loop makes one model call. The loop
   imports langchain + `yian.llm_clients` and builds its own model via
   `model_from_config`. Prefer seams for *new* external deps, but model access in
-  the AGENT loop is a direct call. Host-supplied
+  the AGENT loop is a direct call. MCP servers enter as host `tools=` values
+  (`McpServer`, a tool group); `tools/mcp.py` imports the MCP SDK only when a server
+  opens, and the run boundary opens and closes the servers a run owns. Host-supplied
   `SKILL.md` skills enter the same way as memory: `run_flow(skills=...)` ->
   `FlowEngine(skills=...)` -> the evaluator caps only nodes with
   `needs_skills = True`; the AGENT serves `load_skill` like a registered tool

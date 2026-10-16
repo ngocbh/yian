@@ -1438,7 +1438,10 @@ A `null` `prompt:` still counts as an absent `prompt:`. This used to load or cra
 the note under [References](#references-naming-a-value).
 
 An AGENT with `tools:` or `skills:` runs the tool loop; without them it makes one
-model call (text, or structured for a typed `output:`).
+model call (text, or structured for a typed `output:`). In the tool loop, a tool
+that raises `ReportedToolError` doesn't fail the node: the model reads the error
+message as that call's result and the loop continues. Any other exception from a
+tool fails the node (see [TOOL retries](api.md#tool-retries)).
 
 `mode:` was removed. A flow that still sets it fails to load with a message that
 says to delete the line; with `mode: plain` and `tools:`, those tools now run.
@@ -1985,8 +1988,11 @@ an AGENT grants a name the host did not supply (a missing group or tool), when a
 TOOL node names a tool the host did not supply, when two different tools share a
 name, or when a group contains a tool named `ask_user` or `load_skill`. Groups may
 share the same tool; the model sees it once. `ask_user` stays a separate top-level
-entry. `yian run` fills no groups, so a
-flow that grants one needs a Python host. See [Tool groups](api.md#tool-groups).
+entry. A host may also supply a whole MCP server as a group, as in
+`tools={"github": mcp_server(url=...)}`; its key grants every tool the server lists
+(see [MCP servers](api.md#mcp-servers)). The only groups `yian run` fills are the
+MCP servers in its config files (see [MCP servers](cli.md#mcp-servers)); a flow that
+grants any other group needs a Python host. See [Tool groups](api.md#tool-groups).
 
 #### TOOL retries
 
@@ -2006,7 +2012,8 @@ quote:
 
 Before each retry the node waits an exponential backoff with jitter: at most 1, 2,
 4, … seconds, capped at 30. Every exception from the tool is retried except
-`PermanentToolError`; yian's own checks of the arguments and the `output:` are never
+`PermanentToolError`, including a `ReportedToolError` (which an AGENT's model would
+read instead); yian's own checks of the arguments and the `output:` are never
 retried. The tool sees the same `ctx.call_id` on every attempt and the attempt
 number in `ctx.attempt`. Each retry is recorded in the run log, so a resumed run
 continues the count. A failure after a retry lists every attempt's error. The full

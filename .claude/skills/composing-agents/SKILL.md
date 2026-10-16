@@ -628,6 +628,9 @@ AGENT's tool-calling loop (default `-1` = no cap, `YIAN_AGENT_MAX_TOOL_ITERATION
 and must not contain themselves.
 `retries` bounds typed-output correction, not tool, transport, authentication, or stop
 failures. A TOOL node's `retries:` is different: it retries a failed tool call.
+In the tool loop, a tool that raises `ReportedToolError` (from `yian`) doesn't fail the
+node: the model reads the message as that call's result and carries on. Any other tool
+exception fails the AGENT.
 
 ### Agent-owned variables — `variables:`
 
@@ -781,7 +784,8 @@ covers a tool with no Python signature. See `docs/api.md` "Tool context".
 **TOOL retries.** `retries: N` on a TOOL node (default 0, `YIAN_TOOL_RETRIES`) calls the
 tool again after a failure, up to N more times, waiting a jittered backoff (at most 1, 2,
 4, … s, capped at 30 s). Every exception retries except `PermanentToolError` (from `yian`)
-and yian's own argument and `output:` checks; a tool raises
+and yian's own argument and `output:` checks; a `ReportedToolError` retries too unless it
+is also permanent (it only changes what an AGENT does). A tool raises
 `TransientToolError(msg, retry_after=s)` to set the wait (up to the cap). `ctx.call_id`
 stays the same across attempts and `ctx.attempt` counts them, so make side effects
 idempotent on `ctx.call_id`. Attempts are recorded, so a resumed run continues the count,
@@ -803,9 +807,21 @@ function (named by `__name__`). The model sees and calls the group's tools by th
 own names. Groups may share the same tool object; the model sees it once. The run
 fails before it starts if a granted group is missing, two different tools share a
 name (or a group tool's name is a top-level key), or a group has a tool named
-`ask_user` or `load_skill`; the handler stays the top-level `ask_user` entry. `yian run`
-fills no groups, so such flows need a Python host. Pass groups again to `resume_flow`;
-restarted nodes use the contents passed there.
+`ask_user` or `load_skill`; the handler stays the top-level `ask_user` entry. Pass groups
+again to `resume_flow`; restarted nodes use the contents passed there.
+
+**MCP servers.** An MCP server's tools are a group named by its key: grant the key
+(`tools: [github]`) for every tool it lists, or single tools by name; a TOOL node's
+`tool_id:` names one tool, never the server. The YAML is unchanged and holds no
+credentials. In Python: `run_flow(..., tools={"github": mcp_server(url=..., headers=...)})`
+(`mcp_server` from `yian.tools`, extra `yian[mcp]`); the run opens and closes an unopened
+server, and one opened with `with server:` is the host's to share across runs. With
+`yian run`, list servers in `~/.yian/mcp.json` or `--mcp-config FILE` (`mcpServers`
+JSON); only the servers the flow needs start. These are the only groups `yian run`
+fills; any other group needs a Python host. Error results, JSON-RPC errors, timeouts
+and transport errors reach an AGENT's model as `ReportedToolError`s; a gone server or a
+stopped run fails the node. See `docs/api.md` "MCP servers" and `docs/cli.md`
+"MCP servers".
 Note `tool` uses `tool_id:` + `input:`, with an optional `output:`. A `tool_id:` the
 run's tools lack fails at run start, even on a node that may never run. ML inference
 goes through a host tool (`kind: tool`); `kind: model` was removed.
@@ -1246,7 +1262,7 @@ starts, and a `human_input` node fails when it asks. There is no authored
 - [ ] Every variable has a tagged default (`n: !int 4`) and a name distinct from local inputs.
 - [ ] Every `long_term_memory:` declaration is on a full flow or `agent`, uses one of the three forms with only allowlisted built-in config keys (or a custom type a Python host builds), and puts each `session` on exactly one AGENT.
 - [ ] Each `case` whose result is used has an `else:`, lists every tag of a non-nullable `Literal` `on:`, or is a non-nullable `bool` `on:` with `when: true` and `when: false`; its result is read with `${case.output}` and tagged where read; every branch names a node (a value entry for a fixed result) or calls a flow.
-- [ ] `tool` ids are registered or passed per run with `tools=` (AGENT `tools:` may name a host-filled group); a `code` `module:function` is importable (or an inline `code: |` body `return`s a value); `call`/`uses:` targets resolve on the search path.
+- [ ] `tool` ids are registered or passed per run with `tools=` (AGENT `tools:` may name a host-filled group or an MCP server's key); a `code` `module:function` is importable (or an inline `code: |` body `return`s a value); `call`/`uses:` targets resolve on the search path.
 - [ ] Every CALL/MAP/LOOP has exactly one child form: named `call:`, or non-empty inline `nodes:` plus an `output:` key; inline parent/item dependencies cross through outer `input:`.
 - [ ] A child-flow call is written `call(f, ...)` as a whole value, never `${flow(args)}`; string `:-` defaults and `:?` messages are quoted.
 - [ ] Every typed slot uses a tag (`name: !T value`), never `name: T = value`; multi-argument types in a tag are named in `typedefs:`.

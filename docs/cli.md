@@ -5,8 +5,8 @@ recovers them from a durable log, drives the flow to a terminal state, and
 prints the output.
 
 ```console
-yian run FLOW.yaml [--inputs inputs.json] [--input k=v]... [--log PATH] [--memory-root DIR] [--memory-storage KEY=PATH]... [-w N] [--provider NAME] [--model NAME] [--quiet] [--verbose] [--engine-trace]
-yian run FLOW.yaml --resume PATH [--memory-root DIR] [--memory-storage KEY=PATH]... [-w N] [--quiet] [--verbose] [--engine-trace]
+yian run FLOW.yaml [--inputs inputs.json] [--input k=v]... [--log PATH] [--memory-root DIR] [--memory-storage KEY=PATH]... [--mcp-config FILE]... [-w N] [--provider NAME] [--model NAME] [--quiet] [--verbose] [--engine-trace]
+yian run FLOW.yaml --resume PATH [--memory-root DIR] [--memory-storage KEY=PATH]... [--mcp-config FILE]... [-w N] [--quiet] [--verbose] [--engine-trace]
 ```
 
 Commands below that use `examples/...` assume a repository clone and run from
@@ -251,6 +251,86 @@ fails before the run starts. A flow without `skills:` reads no skill folders.
 Resuming with `--resume` reads the folders again, so keep the skills unchanged
 until the run finishes.
 
+## MCP servers
+
+`yian run` can give a flow the tools of MCP servers (see
+[MCP servers](api.md#mcp-servers) for how they behave). It reads
+`~/.yian/mcp.json` when that file exists, then each file named with
+`--mcp-config FILE`, which may be repeated and is also accepted with `--resume`.
+Nothing is read from the project or the current directory. The files are read
+only when the flow uses a tool id or grant that isn't a registered tool,
+`ask_user`, or `load_skill`; for any other flow they are skipped, even a
+`--mcp-config` file, so a broken file can't stop a flow that doesn't use MCP.
+Install the MCP SDK with `python -m pip install "yian[mcp]"`.
+
+```console
+yian run triage.yaml --mcp-config ./mcp.json --input task="Close stale issues"
+```
+
+Each file holds an `mcpServers` object in the format other MCP clients use:
+
+```json
+{
+  "mcpServers": {
+    "files": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "${HOME}/notes"],
+      "env": {"LOG_LEVEL": "warn"}
+    },
+    "github": {
+      "type": "http",
+      "url": "https://mcp.example.com/github",
+      "headers": {"Authorization": "Bearer ${GITHUB_TOKEN}"}
+    }
+  }
+}
+```
+
+An entry has exactly one of `command` (a stdio server, with optional `args`, `env`,
+and `cwd`) and `url` (a streamable HTTP server, with optional `headers`). `type` is
+optional; when given it is `stdio`, `http`, or `streamable-http` and must agree with
+`command` or `url`. The SSE transport (`"type": "sse"`) is not supported.
+`"disabled": true` drops the server. Any other key is ignored with a warning on
+stderr. The server's name is its label in errors.
+
+In `command`, each `args` item, `cwd`, `url`, and the values of `env` and `headers`,
+`${VAR}` expands to the environment variable `VAR`, `${VAR:-default}` to `default`
+when `VAR` is unset or empty, and `$$` to `$`. An unset `${VAR}` without a default
+is an error, so keep tokens in the environment, not in the file. A default can't
+contain `$`, so a nested `${A:-${B}}` is an error. Because `$$` is the escape, a
+value copied from another client's config that holds `$$` changes: `pa$$word`
+becomes `pa$word`; write `pa$$$$word` to keep both. A stdio server
+gets only a safe default environment (`PATH`, `HOME`, and a few others) plus its
+`env`, so pass any other variable it needs there.
+
+A later file's entry replaces an earlier entry of the same name whole, so
+`--mcp-config` can override a server from `~/.yian/mcp.json`, and an entry of just
+`{"disabled": true}` turns one off.
+
+Servers start only when the flow needs them. A server whose name an AGENT grants is
+started by the run itself, after the checks that need no tools, so a flow error is
+reported first and resuming a finished run doesn't start it. When a TOOL node's
+`tool_id:` is not a registered tool, or an AGENT grants a name that is neither a
+registered tool nor a server name, the granted servers start before the run (a
+server name never stands for a TOOL node's tool, which names one tool). If their
+tools don't supply every such name, the other servers start too, to show their
+tools; those that list a missing tool stay for the run, and the rest stop before
+it begins, so an unused server's tool names can't clash with another's. A server
+started only to show its tools that fails to start is skipped with a yellow
+`warning: ...; skipped, the flow doesn't need it` line, unless the flow still lacks
+a tool afterwards; then the run exits with that server's error and a note naming
+the missing tools. A flow that uses no tools starts none. The servers close when
+the run ends, and Ctrl-C cancels their calls in flight and stops any further
+server from starting.
+
+A server's name can't be a registered tool's id, `ask_user`, or `load_skill`, and a
+started server's tools follow the [tool group](api.md#tool-groups) naming rules.
+Breaking either rule, a file that can't be read or isn't valid, a granted server
+that fails to start, and a missing MCP SDK all exit with code 1 before the flow's
+nodes run. A stdio server's stderr goes to a temporary file; the error for a server
+that fails to start ends with its last lines. A `--mcp-config` path that doesn't
+exist exits with code 2.
+
 ## Supplying inputs
 
 A fresh flow declares typed `input:` fields. Explicit inputs layer in this order
@@ -452,6 +532,7 @@ log before publishing the progress event that the CLI renders.
 | Run-log creation or recovery failed (including a resume with different `YIAN_<NAME>` values) | `1` (concise error printed to stderr) |
 | A `YIAN_<NAME>` variable holds a value it does not accept | `1` (error printed to stderr) |
 | Memory setup failed (a custom memory type, a storage path that is not a local file, or a flow `id:` that cannot be a directory name) | `1` (concise error printed to stderr) |
+| MCP setup failed (an MCP config file that can't be read or isn't valid, a server named like a tool, a server that fails to start, or no MCP SDK) | `1` (error printed to stderr) |
 | Run cancelled at the input prompt, or input closed at a resume key prompt | `1` |
 | Resume key check failed (a missing, changed, or unavailable provider key) | `1` (error printed to stderr) |
 | Invalid CLI input (including a forbidden resume combination, a bad `--memory-root` or `--memory-storage` flag, an `--inputs` file that is not UTF-8 text, not valid JSON, or not a JSON object, an input the flow does not declare, or required inputs missing without a TTY) | `2` |

@@ -24,12 +24,25 @@ python -m pip install "yian[anthropic]"   # Claude  (langchain-anthropic)
 python -m pip install "yian[openai]"      # GPT     (langchain-openai)
 python -m pip install "yian[google]"      # Gemini  (langchain-google-genai)
 python -m pip install "yian[ollama]"      # local   (langchain-ollama)
-python -m pip install "yian[all]"         # all provider extras
+python -m pip install "yian[all]"         # all provider extras and mcp
 ```
 
 Provider SDKs are imported **lazily** — only when a flow actually runs an AGENT node
 against that provider. Importing a provider you haven't installed raises a clear
 `pip install yian[...]` hint rather than a bare `ImportError`.
+
+## MCP extra
+
+The `mcp` extra installs the official MCP SDK (`mcp>=2.3,<3`), which yian needs to
+call the tools of MCP servers (see [MCP servers](api.md#mcp-servers) and
+[the CLI's MCP servers](cli.md#mcp-servers)):
+
+```console
+python -m pip install "yian[mcp]"
+```
+
+It is imported only when a server opens; opening one without it raises an
+`ImportError` that names the extra. `yian[all]` includes it.
 
 ## Choosing a provider and model
 

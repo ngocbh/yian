@@ -2047,7 +2047,8 @@ run-owned stop signal between model/tool effects; WAIT blocks on that signal. Ea
 returns `Output` from the same invocation.
 
 Tools reach nodes the same kind-blind way. `run_flow` and `resume_flow` build one
-immutable `ToolSet` from `tools=` before any log work. `FlowEngine` passes it to
+immutable `ToolSet` from `tools=` before any record is appended (`run_flow` before
+the log is created). `FlowEngine` passes it to
 `eval_node`, which adds `caps["tools"]` only for nodes whose `needs_tools` trait
 is set (TOOL, HUMAN_INPUT, and AGENT). `tools=None` reads the global registry. A
 mapping is the run's whole tool set. Hosts that want both pass
@@ -2059,8 +2060,12 @@ thread-safe. Tools are host callables: the log does not record them, and a host
 passes them again on resume.
 
 A `ToolSet` also holds the host's `context=` object, which is never recorded.
-`FlowEngine` binds the set to the run id (`ToolSet.for_run`), so every node that
-receives `caps["tools"]` passes run identity with no new capability. A function
+`FlowEngine` binds the set to the run id and the run's stop event
+(`ToolSet.for_run(run_id, stop_event=...)`), so every node that receives
+`caps["tools"]` passes run identity with no new capability. `ToolSet.invoke` sets
+that event in a context variable for the length of each call, so a waiting tool
+(an MCP call) reads the stop of the run calling it, even when several runs share
+the tool. A function
 tool whose first parameter is annotated `ToolContext` gets one per call: call id,
 attempt, tool name, run id, node, and the context. TOOL and HUMAN_INPUT calls use
 the call id `"<run_id>/<node id>"`, which recovery rebuilds, so a re-run of an
@@ -2081,6 +2086,18 @@ tool. The same tool object may sit in several groups, since host permission grou
 overlap. An AGENT's `tools:` grant may name a group; the tool loop calls
 `ToolSet.expand`, which drops repeated names, before binding tools and before its
 grant check, so the model and the check see each tool name once.
+An opened `McpServer` (`tools/mcp.py`) is a group too: its tools are the
+`FunctionTool`s it listed when it opened. `McpServer` runs the MCP SDK client on its
+own thread and asyncio loop, so tool calls stay synchronous for nodes. The run
+boundary splits unopened servers out of `tools=`, builds a `ToolSet` from the other
+entries first, runs the checks that need no tools, then opens the servers under a
+token unique to the run, builds the full `ToolSet`, and closes them in its
+`finally`. A server opened by the host stays the host's. `resume_flow` opens servers
+only for an unfinished run, after replay. `cli/mcp_config.py` reads `mcpServers`
+files into unopened servers; `cli/run.py` passes the servers the flow grants to the
+run unopened, as groups, and the run opens them after its own checks. The CLI opens
+servers itself only to probe for an unresolved tool name: a TOOL node's `tool_id`
+that no registered tool supplies, or a grant that names neither a tool nor a server.
 Before any log work, fresh runs and unfinished resumes walk static nodes and their
 `origin_children()` through the kind-blind `Node.granted_tools()` hook (AGENT
 returns its `tools:`) and raise `ValueError` when a grant does not resolve in the
@@ -2102,6 +2119,17 @@ The `output:` gate is the ordinary success path: the engine validates each retur
 value against the node's output contract, so a host reports an expected outcome such
 as an interrupt by returning a variant of that type. An exception still fails the
 node.
+
+An AGENT's tool loop treats `ReportedToolError` (`tools/errors.py`) differently:
+`invoke_tool_effect` turns it into an error `ToolMessage` holding the exception's
+text (its type name when empty), records the effect `completed`, and the loop
+continues, so the model reads the error and can act on it. A stop pending when the
+tool raises still wins and records the effect `interrupted`. Any other exception
+fails the AGENT node. A TOOL node treats a `ReportedToolError` like any failure,
+retried under `retries:` unless it is also a `PermanentToolError`. The MCP errors a
+model can act on (error results, JSON-RPC errors, timeouts, transport errors)
+subclass it; a gone server and a stop-cancelled call are `PermanentToolError`s and
+fail the node.
 
 Pooled drives own their executors through a full join: an abnormal dispatch exit
 signals cooperative stop before joining, so the boundary never releases its run-log

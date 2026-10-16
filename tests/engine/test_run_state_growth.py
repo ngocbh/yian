@@ -19,6 +19,7 @@ from yian.compile.model import (
     Flow,
     GrowthRejected,
     START_ID,
+    copy_flow_graph,
 )
 from yian.runtime.common import NodeState
 from yian.diagnostics import OriginRef
@@ -1229,6 +1230,61 @@ def test_growth_builder_non_flow_return_is_a_raw_host_fault():
         )
 
     assert not isinstance(caught.value, GrowthRejected)
+
+
+class _NoChildTupleNode(Node):
+    """Fragment node whose child hook returns something other than a tuple."""
+
+    kind = NodeKind.CODE
+
+    def origin_children(self) -> Any:
+        return None
+
+
+@pytest.mark.parametrize("nodes", ["list", None])
+def test_growth_rejects_non_dict_fragment_nodes_after_copying(nodes: Any):
+    state, log = _initialized_spawner()
+    before = _snapshot(state)
+
+    def builder(_spawner: Node, _seed: Any) -> Flow:
+        fragment = _fragment("spawn")
+        fragment.nodes = (  # type: ignore[assignment]
+            list(fragment.nodes.values()) if nodes == "list" else None
+        )
+        return fragment
+
+    with pytest.raises(GrowthRejected, match="growth fragment nodes must be a dict") as caught:
+        prepare_expanded(state, "spawn", Grow(seed={}), builder)
+
+    assert type(caught.value.original) is TypeError
+    assert _snapshot(state) == before
+    assert log.next_sequence == 4
+
+
+def test_growth_copies_a_fragment_node_whose_children_are_not_a_tuple():
+    state, _ = _initialized_spawner()
+
+    def builder(_spawner: Node, _seed: Any) -> Flow:
+        fragment = _fragment("spawn")
+        extra = _NoChildTupleNode("spawn/child/extra")
+        fragment.nodes[extra.id] = extra
+        return fragment
+
+    # The copy succeeds, so validation reaches the missing wiring entry.
+    with pytest.raises(
+        GrowthRejected, match="wiring keys must exactly equal fragment nodes"
+    ) as caught:
+        prepare_expanded(state, "spawn", Grow(seed={}), builder)
+    assert type(caught.value.original) is ValueError
+
+    fragment = _fragment("spawn")
+    extra = _NoChildTupleNode("spawn/child/extra")
+    fragment.nodes[extra.id] = extra
+    copied = copy_flow_graph(fragment)
+    assert copied is not fragment
+    assert type(copied.nodes[extra.id]) is _NoChildTupleNode
+    assert copied.nodes[extra.id] is not extra
+    assert copied.nodes.keys() == fragment.nodes.keys()
 
 
 def test_growth_reference_validation_reads_a_binding_source(

@@ -412,8 +412,10 @@ class CompiledFlow(Flow):
 def _nested_flows_deepest_first(root: Any) -> list["Flow"]:
     """Return the flows nested under `root`, each after every flow nested under it.
 
-    Child flows come from `Node.origin_children()`; a child that is not a `Flow` is
-    left to the caller's deep copy. Each flow is listed once, by identity. Within a
+    Child flows come from `Node.origin_children()`. Whatever this walk cannot read
+    is skipped and left to the caller's deep copy: a flow whose `nodes` is not a
+    dict, a hook that raises or returns something other than a tuple, and a child
+    that is not a `Flow`. Each flow is listed once, by identity. Within a
     child-flow cycle the flow reached first is listed last.
     """
     found: list[Flow] = []
@@ -421,13 +423,23 @@ def _nested_flows_deepest_first(root: Any) -> list["Flow"]:
 
     def children(owner: Any) -> list[Flow]:
         if isinstance(owner, Flow):
-            nodes = [node for node in owner.nodes.values() if isinstance(node, Node)]
+            owned = getattr(owner, "nodes", None)
+            # A malformed graph (e.g. a growth fragment not yet validated) must
+            # copy exactly as plain deepcopy copies it, so the walk never raises.
+            if type(owned) is not dict:
+                return []
+            nodes = [node for node in owned.values() if isinstance(node, Node)]
         else:
             nodes = [owner] if isinstance(owner, Node) else []
-        return [
-            child for node in nodes for child in node.origin_children()
-            if isinstance(child, Flow)
-        ]
+        flows: list[Flow] = []
+        for node in nodes:
+            try:
+                listed = node.origin_children()
+            except Exception:
+                continue
+            if type(listed) is tuple:
+                flows.extend(child for child in listed if isinstance(child, Flow))
+        return flows
 
     # An explicit stack of (flow, its unvisited children), so listing doesn't
     # recurse per level either.
@@ -456,9 +468,12 @@ def copy_flow_graph(root: _GraphT) -> _GraphT:
     flow finds its child flows already copied.
 
     This holds for compiled flows, which meet two conditions: no `__deepcopy__`
-    hook depends on the order the hooks run in, and no payload holds a reference
-    to an enclosing flow inside a hashed container (a set or a dict key would be
-    rebuilt while that flow's copy is still incomplete).
+    hook depends on the order the hooks run in, and no child-flow cycle runs
+    through a set member or a dict key (the hashed container would be rebuilt
+    while a flow in the cycle is still incompletely copied). Anything the
+    pre-walk cannot read, such as an unvalidated fragment with malformed nodes,
+    is left to `copy.deepcopy`, so it copies or fails exactly as plain
+    `copy.deepcopy(root)` does.
 
     Args:
         root (`Flow | Node`): The flow or node to copy. Any other object is copied
@@ -468,7 +483,9 @@ def copy_flow_graph(root: _GraphT) -> _GraphT:
         `Flow | Node`: The copy of `root`.
     """
     memo: dict[int, Any] = {}
-    # The listed flows stay referenced here, so no id in the memo is reused.
+    # deepcopy keeps each copied original alive in the memo, but a flow that
+    # `origin_children` built on the fly is referenced only by this list; holding
+    # it until the copy ends keeps its id from being reused for another object.
     nested = _nested_flows_deepest_first(root)
     for flow in nested:
         copy.deepcopy(flow, memo)

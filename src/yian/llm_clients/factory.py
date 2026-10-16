@@ -3,6 +3,7 @@ from typing import Any, Optional
 from langchain_core.language_models import BaseChatModel
 from pydantic import SecretStr
 
+from .auth import ApiKeyCredentials, AuthError
 from .config import LLMConfig, SUPPORTED_LLM_PROVIDERS
 from .base_client import BaseLLMClient
 
@@ -160,24 +161,55 @@ def create_llm_client(
     raise ValueError(f"Unsupported LLM provider: {provider}")
 
 
-def _connection_headers(config: LLMConfig) -> dict[str, SecretStr]:
-    """Return the headers a config's connection settings send.
+def _connection_headers(
+    organization: Optional[str],
+    project: Optional[str],
+    headers: Optional[dict[str, SecretStr]],
+) -> dict[str, SecretStr]:
+    """Return the headers a set of connection settings sends.
 
     Args:
-        config (`LLMConfig`): The validated config.
+        organization (`str | None`): The OpenAI organization id, if set.
+        project (`str | None`): The OpenAI project id, if set.
+        headers (`dict[str, SecretStr] | None`): The extra headers, if any.
 
     Returns:
         `dict[str, SecretStr]`: ``OpenAI-Organization`` and ``OpenAI-Project`` from
             ``organization`` and ``project`` when set, then ``headers``.
     """
-    headers: dict[str, SecretStr] = {}
-    for name, value in (
-        ("OpenAI-Organization", config.organization), ("OpenAI-Project", config.project)
-    ):
+    result: dict[str, SecretStr] = {}
+    for name, value in (("OpenAI-Organization", organization), ("OpenAI-Project", project)):
         if value is not None:
-            headers[name] = SecretStr(value)
-    headers.update(config.headers or {})
-    return headers
+            result[name] = SecretStr(value)
+    result.update(headers or {})
+    return result
+
+
+def _saved_headers(
+    credentials: Optional[ApiKeyCredentials], connection: dict[str, Any], provider: str
+) -> dict[str, SecretStr]:
+    """Return a saved login's header values, checked against its recorded names.
+
+    Args:
+        credentials (`ApiKeyCredentials | None`): The pinned login's credentials, or
+            `None` when they were not read because the connection records no headers.
+        connection (`dict[str, Any]`): The recorded ``store`` connection.
+        provider (`str`): The config's provider, named in the error.
+
+    Returns:
+        `dict[str, SecretStr]`: The saved headers by name.
+
+    Raises:
+        AuthError: The saved header names differ from the recorded ``header_names``.
+    """
+    if credentials is None:
+        return {}
+    if {name for name, _ in credentials.headers} != set(connection.get("header_names", ())):
+        raise AuthError(
+            f"The saved {provider} login's connection headers differ from the ones this "
+            f"run recorded; run 'yian auth {provider}' and start a new run"
+        )
+    return {name: SecretStr(value) for name, value in credentials.headers}
 
 
 def model_from_config(config) -> BaseChatModel:
@@ -190,7 +222,7 @@ def model_from_config(config) -> BaseChatModel:
     snapshot. Recorded connections use their pinned method and identity, so a later
     login or removal fails the model instead of changing accounts: OpenAI resolves
     fresh credentials per request, and every other provider's saved key is resolved
-    once per model build.
+    once per model build. A saved login's header values are resolved once per build.
 
     A config `api_key` authenticates the request in place of any saved login and
     the provider's key environment variable. Otherwise a saved login's key is sent,
@@ -200,7 +232,9 @@ def model_from_config(config) -> BaseChatModel:
     it when unset) and `model` the deployment name. A config `organization`,
     `project` and `headers`, which also need that key, are sent with every request
     (the ids as `OpenAI-Organization` / `OpenAI-Project`), and the model then never
-    follows a redirect.
+    follows a redirect. A saved login's key brings the settings saved with it
+    instead: the ids its connection recorded and its saved header values, whose
+    names must equal the recorded ones. A key from the environment sends none.
 
     The block named after the provider is passed to its client as ``block``, and every
     client sends it into the request body as written. The returned model supports
@@ -217,7 +251,8 @@ def model_from_config(config) -> BaseChatModel:
     Raises:
         ValueError: If the provider is unsupported, or `check_model_config` rejects the
             config (e.g. a block the API it reaches refuses).
-        AuthError: If the config's pinned saved login changed or was removed.
+        AuthError: If the config's pinned saved login changed or was removed, or its
+            saved header names differ from the recorded ones.
         ImportError: If the resolved provider's optional dependency extra is not installed.
     """
     from .connection import check_model_config, connection_credentials, resolve_model_config
@@ -244,6 +279,8 @@ def model_from_config(config) -> BaseChatModel:
         )
 
     kwargs: dict[str, Any] = {"block": config.block_for(provider)}
+    # The saved login's credentials, when its header values are needed.
+    saved: Optional[ApiKeyCredentials] = None
 
     # Parallel nodes fan out at once; a low-TPM deployment rate-limits easily,
     # so lean on the provider SDK's exponential backoff (notably on HTTP 429).
@@ -259,15 +296,30 @@ def model_from_config(config) -> BaseChatModel:
         # model instance to a different account between tool iterations.
         kwargs["api_key"] = lambda: connection_credentials(connection).api_key
         kwargs["base_url"] = connection["endpoint"]
+        if connection.get("header_names"):
+            # Headers take no callable, so their values are read once here.
+            saved = connection_credentials(connection)
     elif connection is not None and connection["source"] == "store":
         # Anthropic and Google SDKs take no key callable, so the saved key is
         # resolved once per model; the credential id still pins the login.
-        kwargs["api_key"] = SecretStr(connection_credentials(connection, provider).api_key)
+        saved = connection_credentials(connection, provider)
+        kwargs["api_key"] = SecretStr(saved.api_key)
     if config.base_url is not None:
         # Validation ties a base_url to the config's key, or makes it the Azure
         # resource endpoint, so it is where this request goes.
         kwargs["base_url"] = config.base_url
-    connection_headers = _connection_headers(config)
+    if config.api_key is None and connection is not None and connection["source"] == "store":
+        # A saved login's settings travel with its key, never with a host or
+        # environment key.
+        connection_headers = _connection_headers(
+            connection.get("organization"),
+            connection.get("project"),
+            _saved_headers(saved, connection, provider),
+        )
+    else:
+        connection_headers = _connection_headers(
+            config.organization, config.project, config.headers
+        )
     if connection_headers:
         kwargs["connection_headers"] = connection_headers
     return create_llm_client(provider=provider, model=model, **kwargs).get_llm()

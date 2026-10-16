@@ -27,6 +27,7 @@ from tests.test_llm_client_env_headers import (
     invoke_both,
     poisoned_env,  # noqa: F401  (fixture)
 )
+from yian.llm_clients.auth import ApiKeyCredentials, AuthStore
 from yian.llm_clients.config import LLMConfig
 from yian.llm_clients.factory import create_llm_client, model_from_config
 from yian.llm_clients.openai_subscription import SubscriptionAccess, create_subscription_model
@@ -524,5 +525,39 @@ def test_model_from_config_sends_anthropic_headers(poisoned_env):
     for request in server.requests:
         assert request.headers["x-api-key"] == "sk-ant-host"
         assert "authorization" not in request.headers
+        assert request.headers.get_list("x-gateway") == [_GATEWAY]
+        _assert_no_env_values(request)
+
+
+def test_a_saved_openai_login_sends_its_settings(poisoned_env):
+    AuthStore().save(
+        "openai", ApiKeyCredentials("sk-saved", {"X-Gateway": _GATEWAY}), "gpt-5.5",
+        organization="org-saved", project="proj-saved",
+    )
+    model = model_from_config({"provider": "openai", "model": "gpt-5.5"})
+    server = ResponsesServer(tool_first=False)
+    _invoke_routed(model, server)
+    assert len(server.requests) == 2
+    for request in server.requests:
+        assert request.headers["authorization"] == "Bearer sk-saved"
+        assert request.headers.get_list("openai-organization") == ["org-saved"]
+        assert request.headers.get_list("openai-project") == ["proj-saved"]
+        assert request.headers.get_list("x-gateway") == [_GATEWAY]
+        _assert_no_env_values(request)
+
+
+def test_a_saved_anthropic_login_sends_its_headers(poisoned_env):
+    AuthStore().save(
+        "anthropic", ApiKeyCredentials("sk-ant-saved", {"X-Gateway": _GATEWAY}),
+        "claude-sonnet-4-5",
+    )
+    model = model_from_config({"provider": "anthropic", "model": "claude-sonnet-4-5"})
+    server = _AnthropicServer()
+    _route_anthropic(model, server)
+    model.invoke("hi")
+    asyncio.run(model.ainvoke("hi"))
+    assert len(server.requests) == 2
+    for request in server.requests:
+        assert request.headers["x-api-key"] == "sk-ant-saved"
         assert request.headers.get_list("x-gateway") == [_GATEWAY]
         _assert_no_env_values(request)

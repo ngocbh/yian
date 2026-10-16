@@ -42,13 +42,16 @@ from .config import (
     azure_resource_endpoint,
     validate_base_url,
 )
-from .connection_settings import validate_header_name
+from .connection_settings import validate_header_name, validate_organization
 from .provider_blocks import block_schema
 from .redact import scrub_keys
 
 _API_ENDPOINT = "https://api.openai.com/v1"
 _SUBSCRIPTION_ENDPOINT = "https://chatgpt.com/backend-api/codex"
 _FIELDS = {"method", "source", "credential_id", "endpoint", "store_path"}
+# Optional fields of a saved API-key login's connection: the connection settings saved
+# with it, header names only. Records made before them carry none.
+_SETTINGS_FIELDS = {"organization", "project", "header_names"}
 # Providers whose agents authenticate with a key and so carry a connection.
 _KEYED = frozenset(SUPPORTED_LLM_PROVIDERS) - {"ollama"}
 # Providers whose saved login may hold no credential: Ollama sends none, and vLLM
@@ -308,6 +311,8 @@ def connection_snapshot() -> ConnectionSnapshot:
                 "endpoint": selection.endpoint,
                 "store_path": str(store.path),
             }
+        if selection.method == "api_key":
+            connections[selection.provider].update(_selection_settings(selection))
     for keyed in SUPPORTED_LLM_PROVIDERS:
         if keyed in _KEYED and keyed != "openai" and keyed not in connections:
             connections[keyed] = copy.deepcopy(_ENVIRONMENT_CONNECTION)
@@ -341,6 +346,25 @@ def connection_snapshot() -> ConnectionSnapshot:
         environment.get("OPENAI_BASE_URL") or _API_ENDPOINT,
         stray_model,
     )
+
+
+def _selection_settings(selection: ProviderSelection) -> dict[str, Any]:
+    """Return the connection fields that record a saved login's settings.
+
+    Args:
+        selection (`ProviderSelection`): A saved API-key login.
+
+    Returns:
+        `dict[str, Any]`: ``organization`` and ``project`` when set, and the sorted
+            ``header_names`` when the login has headers; never a header value.
+    """
+    settings: dict[str, Any] = {}
+    for field in ("organization", "project"):
+        if getattr(selection, field) is not None:
+            settings[field] = getattr(selection, field)
+    if selection.header_names:
+        settings["header_names"] = sorted(selection.header_names)
+    return settings
 
 
 def _check_selection(selection: ProviderSelection) -> None:
@@ -379,7 +403,9 @@ def validate_connection(value: Any, provider: str | None = "openai") -> dict[str
     key, or a missing or legacy environment key. Another keyed provider's
     connection is an API key, either a saved login (``store``, pinned by
     credential id and store path, with the resource endpoint for ``azure``) or
-    the provider's key environment variable (``environment``, unpinned).
+    the provider's key environment variable (``environment``, unpinned). A saved
+    API-key login may also record the settings saved with it: ``organization``
+    and ``project`` (``openai`` only) and the sorted ``header_names``.
 
     Args:
         value (`Any`): The candidate metadata.
@@ -400,8 +426,9 @@ def validate_connection(value: Any, provider: str | None = "openai") -> dict[str
             else "an unsupported provider"
         )
         raise ValueError(f"Internal connection metadata is not used for {name}")
-    if type(value) is not dict or set(value) != _FIELDS:
+    if type(value) is not dict or not _FIELDS <= set(value) <= _FIELDS | _SETTINGS_FIELDS:
         raise ValueError("Invalid internal connection metadata fields")
+    _check_connection_settings(value, provider)
     if provider != "openai":
         return _validate_keyed_connection(value, provider)
     method, source = value["method"], value["source"]
@@ -450,6 +477,38 @@ def validate_connection(value: Any, provider: str | None = "openai") -> dict[str
     ):
         raise ValueError("Invalid subscription connection routing")
     return copy.deepcopy(value)
+
+
+def _check_connection_settings(value: dict[str, Any], provider: str) -> None:
+    """Check the optional settings fields of a connection.
+
+    Args:
+        value (`dict[str, Any]`): Metadata with the connection fields.
+        provider (`str`): A keyed provider.
+
+    Raises:
+        `ValueError`: A settings field is on a connection other than a saved
+            API-key login, ``organization`` or ``project`` is on a provider other
+            than ``openai``, or a value is malformed. Errors name only the field.
+    """
+    if not set(value) & _SETTINGS_FIELDS:
+        return
+    if value["source"] != "store" or value["method"] != "api_key":
+        raise ValueError("Internal connection settings are only for a saved API-key login")
+    for field in ("organization", "project"):
+        if field not in value:
+            continue
+        if provider != "openai":
+            raise ValueError(f"Internal connection {field} is only for provider openai")
+        try:
+            validate_organization(value[field], field)
+        except ValueError:
+            raise ValueError(f"Invalid internal connection {field}") from None
+    if "header_names" in value:
+        try:
+            validate_header_names(value["header_names"], provider)
+        except ValueError:
+            raise ValueError("Invalid internal connection header_names") from None
 
 
 def _validate_keyed_connection(value: dict[str, Any], provider: str) -> dict[str, Any]:
@@ -765,10 +824,10 @@ def connection_credentials(
     """Resolve fresh credentials while enforcing the recorded connection identity.
 
     A ``store`` connection resolves the saved login it was pinned to, so a later
-    login or removal fails instead of switching accounts. OpenAI also resolves
-    its environment key, checking that it is the recorded one. Another provider's
-    ``environment`` connection resolves nothing here: its client reads the key
-    variable itself.
+    login or removal fails instead of switching accounts; an API key comes with
+    the header values saved beside it. OpenAI also resolves its environment key,
+    checking that it is the recorded one. Another provider's ``environment``
+    connection resolves nothing here: its client reads the key variable itself.
 
     Args:
         connection (`dict[str, Any]`): The recorded connection metadata.

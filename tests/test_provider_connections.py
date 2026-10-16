@@ -592,3 +592,182 @@ def test_a_recorded_map_takes_settings_only_beside_the_marker():
             _require_concrete_selection(anthropic, path="agent")
     with pytest.raises(ValueError, match="headers"):
         _require_concrete_selection({**marked, "headers": {"X-Gateway": "v"}}, path="agent")
+
+
+# --- saved-login connection settings: recorded in _connection, sent from the store --- #
+
+SAVED_HEADER = "saved-gw-7c2e91"
+_OPENAI_STORE = {**STORE, "endpoint": "https://api.openai.com/v1"}
+
+
+def _save_openai_with_settings(**options):
+    return AuthStore().save(
+        "openai", ApiKeyCredentials("sk-saved-4b1f", {"X-Gateway": SAVED_HEADER}), "gpt-x",
+        organization="org-saved", project="proj-saved", **options,
+    )
+
+
+def test_validate_connection_takes_saved_login_settings():
+    openai = {
+        **_OPENAI_STORE, "organization": "org-a", "project": "proj-a",
+        "header_names": ["X-Gateway", "X-Trace"],
+    }
+    assert validate_connection(openai) == openai
+    anthropic = {**STORE, "header_names": ["X-Gateway"]}
+    assert validate_connection(anthropic, "anthropic") == anthropic
+    azure = {**STORE, "endpoint": "https://r.openai.azure.com/", "header_names": ["X-Gateway"]}
+    assert validate_connection(azure, "azure") == azure
+    # Old records carry none of them.
+    assert validate_connection(_OPENAI_STORE) == _OPENAI_STORE
+
+
+@pytest.mark.parametrize(
+    ("provider", "value", "message"),
+    [
+        ("openai", {**_OPENAI_STORE, "source": "environment", "credential_id": "a" * 64,
+                    "store_path": None, "header_names": ["X-Gateway"]}, "saved API-key login"),
+        ("openai", {**_OPENAI_STORE, "source": "host", "credential_id": None,
+                    "store_path": None, "organization": "org-a"}, "saved API-key login"),
+        ("openai", {**_OPENAI_STORE, "method": "subscription",
+                    "endpoint": "https://chatgpt.com/backend-api/codex",
+                    "header_names": ["X-Gateway"]}, "saved API-key login"),
+        ("anthropic", {**ENVIRONMENT, "header_names": ["X-Gateway"]}, "saved API-key login"),
+        ("anthropic", {**STORE, "organization": "org-a"},
+         "organization is only for provider openai"),
+        ("google", {**STORE, "project": "proj-a"}, "project is only for provider openai"),
+        ("openai", {**_OPENAI_STORE, "organization": "has space"}, "connection organization"),
+        ("openai", {**_OPENAI_STORE, "project": None}, "connection project"),
+        ("openai", {**_OPENAI_STORE, "header_names": []}, "connection header_names"),
+        ("openai", {**_OPENAI_STORE, "header_names": ["X-B", "X-A"]}, "connection header_names"),
+        ("openai", {**_OPENAI_STORE, "header_names": ["OpenAI-Project"]},
+         "connection header_names"),
+        ("anthropic", {**STORE, "header_names": ["Authorization"]}, "connection header_names"),
+        ("anthropic", {**STORE, "header_names": "X-Gateway"}, "connection header_names"),
+        ("anthropic", {**STORE, "headers": {"X-Gateway": "v"}}, "metadata fields"),
+    ],
+)
+def test_validate_connection_refuses_misplaced_settings(provider, value, message):
+    with pytest.raises(ValueError, match=message) as error:
+        validate_connection(value, provider)
+    assert "has space" not in str(error.value)
+
+
+def test_snapshot_records_saved_settings_without_values(monkeypatch):
+    _no_provider_keys(monkeypatch)
+    openai = _save_openai_with_settings()
+    anthropic = AuthStore().save(
+        "anthropic", ApiKeyCredentials("sk-ant-saved", {"X-Trace": "t", "X-Gateway": "g"}), "m",
+        make_default=False,
+    )
+    plain = AuthStore().save("google", ApiKeyCredentials("g-saved"), "g", make_default=False)
+
+    connections = connection_snapshot().connections
+
+    assert connections["openai"] == {
+        **_store_connection(openai, "https://api.openai.com/v1"),
+        "organization": "org-saved", "project": "proj-saved", "header_names": ["X-Gateway"],
+    }
+    assert connections["anthropic"] == {
+        **_store_connection(anthropic), "header_names": ["X-Gateway", "X-Trace"],
+    }
+    assert connections["google"] == _store_connection(plain)
+    assert SAVED_HEADER not in json.dumps(connections)
+
+
+def _plain_connection_headers(kwargs):
+    return _plain_headers(kwargs["connection_headers"])
+
+
+def test_saved_openai_settings_reach_the_client(monkeypatch):
+    _no_provider_keys(monkeypatch)
+    _save_openai_with_settings()
+    captured, _ = _capture_clients(monkeypatch)
+
+    factory.model_from_config({"provider": "openai", "model": "gpt-x"})
+
+    kwargs = captured[0][2]
+    assert _plain_connection_headers(kwargs) == {
+        "OpenAI-Organization": "org-saved", "OpenAI-Project": "proj-saved",
+        "X-Gateway": SAVED_HEADER,
+    }
+    # The key is still resolved per request.
+    assert kwargs["api_key"]() == "sk-saved-4b1f"
+
+
+def test_saved_openai_ids_without_headers_read_no_credentials_at_build(monkeypatch):
+    _no_provider_keys(monkeypatch)
+    AuthStore().save("openai", ApiKeyCredentials("sk-saved"), "gpt-x", organization="org-saved")
+    captured, _ = _capture_clients(monkeypatch)
+
+    def no_store(*args, **kwargs):
+        pytest.fail("read the saved login at build")
+
+    monkeypatch.setattr(AuthStore, "credentials", no_store)
+    factory.model_from_config({"provider": "openai", "model": "gpt-x"})
+
+    assert _plain_connection_headers(captured[0][2]) == {"OpenAI-Organization": "org-saved"}
+
+
+def test_saved_anthropic_headers_reach_the_client(monkeypatch):
+    _no_provider_keys(monkeypatch)
+    AuthStore().save("anthropic", ApiKeyCredentials("sk-ant", {"X-Gateway": SAVED_HEADER}), "m")
+    captured, _ = _capture_clients(monkeypatch)
+
+    factory.model_from_config({"provider": "anthropic", "model": "m"})
+
+    kwargs = captured[0][2]
+    assert _plain(kwargs["api_key"]) == "sk-ant"
+    assert _plain_connection_headers(kwargs) == {"X-Gateway": SAVED_HEADER}
+
+
+def test_environment_and_host_keys_never_get_saved_settings(monkeypatch):
+    _no_provider_keys(monkeypatch)
+    _save_openai_with_settings(make_default=False)
+    AuthStore().save(
+        "azure", ApiKeyCredentials("az-saved", {"X-Gateway": SAVED_HEADER}), "dep",
+        endpoint="https://r.openai.azure.com/", make_default=False,
+    )
+    monkeypatch.setenv("GOOGLE_API_KEY", "env-key")
+    captured, _ = _capture_clients(monkeypatch)
+
+    factory.model_from_config({"provider": "google", "model": "g"})
+    # An Azure base_url on another resource reads the environment key.
+    factory.model_from_config(
+        {"provider": "azure", "model": "dep", "base_url": "https://other.openai.azure.com/"}
+    )
+    factory.model_from_config({"provider": "openai", "model": "gpt-x", "api_key": "sk-host"})
+    factory.model_from_config({
+        "provider": "azure", "model": "dep", "api_key": "az-host",
+        "base_url": "https://r.openai.azure.com/",
+    })
+
+    for _, _, kwargs in captured:
+        assert "connection_headers" not in kwargs
+
+
+def test_resaving_the_login_fails_the_build(monkeypatch):
+    _no_provider_keys(monkeypatch)
+    _save_openai_with_settings()
+    recorded = resolve_model_config({"provider": "openai", "model": "gpt-x"})
+    _save_openai_with_settings()
+    _capture_clients(monkeypatch)
+
+    with pytest.raises(AuthError, match="yian auth openai"):
+        factory.model_from_config(recorded)
+
+
+@pytest.mark.parametrize("names", [["X-Other"], ["X-Gateway", "X-Trace"], None])
+def test_saved_headers_must_match_the_recorded_names(monkeypatch, names):
+    _no_provider_keys(monkeypatch)
+    AuthStore().save("anthropic", ApiKeyCredentials("sk-ant", {"X-Gateway": SAVED_HEADER}), "m")
+    recorded = resolve_model_config({"provider": "anthropic", "model": "m"})
+    if names is None:
+        del recorded["_connection"]["header_names"]
+    else:
+        recorded["_connection"]["header_names"] = names
+    captured, _ = _capture_clients(monkeypatch)
+
+    with pytest.raises(AuthError, match="yian auth anthropic") as error:
+        factory.model_from_config(recorded)
+    assert SAVED_HEADER not in str(error.value)
+    assert captured == []

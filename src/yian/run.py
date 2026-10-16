@@ -79,8 +79,13 @@ from yian.memory import (
 )
 from yian.memory_host import MemoryRegistry
 from yian.nodes.base import Steering
-from yian.nodes.binding import coerce_inputs
-from yian.nodes.contracts import HostToolCall, OutputContract, iter_source_strings
+from yian.nodes.binding import BindingError, apply_defaults, coerce_inputs
+from yian.nodes.contracts import (
+    HostToolCall,
+    OutputContract,
+    Parameter,
+    iter_source_strings,
+)
 from yian.runtime.engine import FlowEngine
 from yian.runtime.eval_node import require_steering
 from yian.runtime.backward import drive_backward
@@ -610,6 +615,33 @@ def _check_effective_llm(
             raise ValueError(f"{where}: {exc}") from exc
 
 
+def _run_start_inputs(
+    params: list[Parameter], coerced: dict[str, Any]
+) -> dict[str, Any]:
+    """Return the run's inputs as run start resolves against them, defaults filled.
+
+    START still binds and checks the inputs, so a missing required input or a
+    default that fails its check stays START's logged failure: such a default is
+    left out here rather than raised before the log exists.
+
+    Args:
+        params (`list[Parameter]`):
+            The flow's declared inputs.
+        coerced (`dict[str, Any]`):
+            The supplied inputs, already coerced at the run boundary.
+
+    Returns:
+        `dict[str, Any]`: The supplied inputs plus each omitted input's valid default.
+    """
+    run_inputs = dict(coerced)
+    for parameter in params:
+        try:
+            run_inputs = apply_defaults([parameter], run_inputs)
+        except BindingError:
+            continue
+    return run_inputs
+
+
 def _run_flow_controlled(
     flow: ComposedFlow,
     inputs: dict[str, Any],
@@ -649,6 +681,18 @@ def _run_flow_controlled(
     private_flow = copy.deepcopy(flow.compiled)
     retained_program = copy.deepcopy(private_flow) if learnable else None
 
+    # Convert supplied boundary strings before RunStarted persists its input, and
+    # before the cascade, so a bad supplied input is reported first. This is the only
+    # string conversion: the generic binder converts nothing, so a value crossing a
+    # CALL/MAP/LOOP edge is validated as is, and START stays the authority for
+    # required/default handling and contract validation.
+    coerced = coerce_inputs(flow.input, inputs)
+    for name, value in coerced.items():
+        reject_deep_nesting(value, f"input {name!r}")
+        reject_nonfinite(value, f"input {name!r}")
+        reject_non_text_keys(value, f"input {name!r}")
+    run_inputs = _run_start_inputs(flow.input, coerced)
+
     # The key stays out of the cascade so RunStarted never records it. Its
     # base_url and connection settings stay out too, so no authored layer can pair
     # the key with another.
@@ -683,15 +727,6 @@ def _run_flow_controlled(
         apply_execution_layout(private_flow, resolve_execution_layout(private_flow))
 
     canonical_run_id = run_id if run_id is not None else default_run_id()
-    # Convert supplied boundary strings before RunStarted persists its input. This is
-    # the only string conversion: the generic binder converts nothing, so a value
-    # crossing a CALL/MAP/LOOP edge is validated as is, and it stays the authority for
-    # required/default handling and contract validation.
-    coerced = coerce_inputs(flow.input, inputs)
-    for name, value in coerced.items():
-        reject_deep_nesting(value, f"input {name!r}")
-        reject_nonfinite(value, f"input {name!r}")
-        reject_non_text_keys(value, f"input {name!r}")
     pool = VariablePool(start_id=private_flow.start_id)
     pool.set(private_flow.start_id, copy.deepcopy(coerced))
     seed_system_clock(pool)

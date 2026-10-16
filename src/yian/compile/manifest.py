@@ -364,6 +364,30 @@ def _sorted_mapping(value: dict, ctx: _ManifestContext, path: str) -> dict[str, 
     return _canonical_mapping(value, ctx, path)
 
 
+def _llm_layer_manifest(layer: Any, ctx: _ManifestContext, path: str) -> Any:
+    """Canonicalize one authored `llm_config` layer as written.
+
+    A literal layer keeps its sorted-mapping encoding, a layer holding values encodes
+    as its `ValueTemplate`, and a whole record written as one value as its `Binding`.
+
+    Args:
+        layer (`Any`): The layer: a dict, a `ValueTemplate` or a `Binding`.
+        ctx (`_ManifestContext`): Recursion stacks for cycle detection.
+        path (`str`): Location used in error messages.
+
+    Returns:
+        `Any`: The layer's canonical record.
+
+    Raises:
+        TypeError: If a literal layer has a key that is not a string.
+    """
+    if isinstance(layer, Binding):
+        return _template_tree_manifest(layer, ctx, path)
+    if isinstance(layer, ValueTemplate):
+        return _canonical_value(layer, ctx, path)
+    return _sorted_mapping(layer, ctx, path)
+
+
 def _canonical_sequence(value: Any, ctx: _ManifestContext, path: str) -> list[Any]:
     """Canonicalize an ordered list/tuple while preserving element order."""
     object_id = id(value)
@@ -875,7 +899,7 @@ def _node_manifest(
                 "prompt": node.prompt,
                 "retries": node.retries,
                 "tools": _canonical_sequence(node.tools, ctx, f"{path}.tools"),
-                "own_llm_config": _sorted_mapping(
+                "own_llm_config": _llm_layer_manifest(
                     node.own_llm_config, ctx, f"{path}.own_llm_config"
                 ),
             }
@@ -1132,7 +1156,7 @@ def _flow_manifest(
                 manifest["memories"] = _memories_manifest(
                     flow.memories, ctx, f"{path}.memories"
                 )
-            manifest["flow_llm_config"] = _sorted_mapping(
+            manifest["flow_llm_config"] = _llm_layer_manifest(
                 flow.flow_llm_config, ctx, f"{path}.flow_llm_config"
             )
             manifest["outputs"] = [

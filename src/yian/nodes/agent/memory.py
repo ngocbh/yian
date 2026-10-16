@@ -692,10 +692,9 @@ def _observe_preserving_error(turn, ordinal, status, primary, *, failure=None):
         )
         if not stopped and secondary is not primary and secondary is not original:
             try:
-                if hasattr(original, "add_note"):
-                    original.add_note(
-                        f"Conversation observation failed: {type(secondary).__name__}: {secondary}"
-                    )
+                original.add_note(
+                    f"Conversation observation failed: {type(secondary).__name__}: {secondary}"
+                )
             except BaseException:
                 pass
         if stopped and isinstance(primary, _HostStop) and not primary.primary:

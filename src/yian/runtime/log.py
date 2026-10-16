@@ -884,7 +884,7 @@ class JsonlRunLog:
             os.fsync(descriptor)
         except BaseException as exc:
             rollback_errors = _rollback_append(descriptor, prior_prefix)
-            if rollback_errors and hasattr(exc, "add_note"):
+            if rollback_errors:
                 exc.add_note(
                     "run-log rollback also failed: "
                     + "; ".join(str(error) for error in rollback_errors)

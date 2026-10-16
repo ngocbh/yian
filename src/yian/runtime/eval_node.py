@@ -365,9 +365,7 @@ def _note_memory_cleanup(primary: BaseException, cleanup: BaseException) -> None
     if cleanup is primary:
         return
     try:
-        add_note = getattr(primary, "add_note", None)
-        if callable(add_note):
-            add_note(f"Memory context cleanup failed: {type(cleanup).__name__}: {cleanup}")
+        primary.add_note(f"Memory context cleanup failed: {type(cleanup).__name__}: {cleanup}")
     except BaseException:
         pass
 
@@ -377,10 +375,8 @@ def _copy_cleanup_notes(source: BaseException, target: BaseException) -> None:
     if source is target:
         return
     try:
-        add_note = getattr(target, "add_note", None)
-        if callable(add_note):
-            for note in tuple(getattr(source, "__notes__", ())):
-                add_note(note)
+        for note in tuple(getattr(source, "__notes__", ())):
+            target.add_note(note)
     except BaseException:
         pass
 

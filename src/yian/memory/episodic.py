@@ -671,10 +671,9 @@ class EpisodicMemory:
             try:
                 self._storage.close()
             except BaseException as cleanup:
-                if hasattr(primary, "add_note"):
-                    primary.add_note(
-                        f"EpisodicMemory cleanup failed: {type(cleanup).__name__}"
-                    )
+                primary.add_note(
+                    f"EpisodicMemory cleanup failed: {type(cleanup).__name__}"
+                )
             # Forget the failed handle so a later operation may retry the open.
             self._storage = None
             raise
@@ -767,8 +766,7 @@ class EpisodicMemory:
         except BaseException as cleanup:
             if exc is None:
                 raise
-            if hasattr(exc, "add_note"):
-                exc.add_note(f"EpisodicMemory cleanup failed: {type(cleanup).__name__}")
+            exc.add_note(f"EpisodicMemory cleanup failed: {type(cleanup).__name__}")
 
     def close(self) -> None:
         """Release storage and invalidate idle handles; repeated closes are inert.
@@ -1019,10 +1017,9 @@ class _EpisodicSession:
         except BaseException as cleanup:
             if exc is None:
                 raise
-            if hasattr(exc, "add_note"):
-                exc.add_note(
-                    f"Episodic session cleanup failed: {type(cleanup).__name__}"
-                )
+            exc.add_note(
+                f"Episodic session cleanup failed: {type(cleanup).__name__}"
+            )
 
     def close(self) -> None:
         """Idempotently close this session, without closing its backend."""

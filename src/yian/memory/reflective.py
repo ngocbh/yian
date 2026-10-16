@@ -699,10 +699,9 @@ class ReflectiveMemory:
             try:
                 self._storage.close()
             except BaseException as cleanup:
-                if hasattr(primary, "add_note"):
-                    primary.add_note(
-                        f"ReflectiveMemory cleanup failed: {type(cleanup).__name__}"
-                    )
+                primary.add_note(
+                    f"ReflectiveMemory cleanup failed: {type(cleanup).__name__}"
+                )
             # Forget the failed handle so a later operation may retry the open.
             self._storage = None
             raise
@@ -810,10 +809,9 @@ class ReflectiveMemory:
         except BaseException as cleanup:
             if exc is None:
                 raise
-            if hasattr(exc, "add_note"):
-                exc.add_note(
-                    f"ReflectiveMemory cleanup failed: {type(cleanup).__name__}"
-                )
+            exc.add_note(
+                f"ReflectiveMemory cleanup failed: {type(cleanup).__name__}"
+            )
 
     def close(self) -> None:
         """Release storage and invalidate idle handles without waiting for work.
@@ -1034,10 +1032,9 @@ class _ReflectiveSession:
         except BaseException as cleanup:
             if exc is None:
                 raise
-            if hasattr(exc, "add_note"):
-                exc.add_note(
-                    f"ReflectiveMemory session cleanup failed: {type(cleanup).__name__}"
-                )
+            exc.add_note(
+                f"ReflectiveMemory session cleanup failed: {type(cleanup).__name__}"
+            )
 
     def close(self) -> None:
         """Idempotently close this process-local session."""

@@ -44,6 +44,40 @@ def _scrub(text: str, credentials: Iterable[str]) -> str:
     return text
 
 
+def _scrub_error(error: ProviderError, credentials: Iterable[str]) -> ProviderError:
+    """Replace each credential in ``error``'s text, which lives in ``message`` and ``args``.
+
+    The body is scrubbed before parsing too, but a JSON-escaped echo (``\\/`` for ``/``)
+    only matches a credential once the parse has undone the escape.
+    """
+    error.message = _scrub(error.message, credentials)
+    error.args = (error.message,)
+    return error
+
+
+def _encode_body(body: Mapping) -> bytes:
+    """Serialize ``body`` as UTF-8 JSON without NaN or infinity.
+
+    Args:
+        body (`Mapping`): The JSON request body.
+
+    Returns:
+        `bytes`: The encoded body.
+
+    Raises:
+        `ValueError`: If ``body`` is not JSON or holds an unpaired surrogate; unchained,
+            so the serialized body the encoder's error holds is not kept.
+    """
+    try:
+        return json.dumps(body, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    except UnicodeEncodeError as exc:
+        problem = f"request body has an unpaired surrogate at position {exc.start}"
+    except (TypeError, ValueError, RecursionError) as exc:
+        problem = f"request body is not JSON: {exc}"
+    # Raised outside the except blocks so the encoder's error is not the context.
+    raise ValueError(problem)
+
+
 def _http_error(
     exc: httpx2.HTTPError, route: Route, *, streaming: bool
 ) -> ProviderError:
@@ -176,8 +210,8 @@ class FrameStream(Iterator[Any]):
             `Any`: An `SSEEvent`, an NDJSON value, or the parsed JSON body.
 
         Raises:
-            StopIteration: The body ended or the stream was closed.
-            ProviderError: The connection failed, timed out, or sent a body that could
+            `StopIteration`: The body ended or the stream was closed.
+            `ProviderError`: The connection failed, timed out, or sent a body that could
                 not be decoded or framed; never retried at this point.
         """
         if self._pending is not _NOTHING:
@@ -227,7 +261,7 @@ class Executor:
             `random.random`.
 
     Raises:
-        ValueError: If ``client`` follows redirects.
+        `ValueError`: If ``client`` follows redirects.
     """
 
     def __init__(
@@ -263,15 +297,15 @@ class Executor:
             when a 2xx body ends before any frame.
 
         Raises:
-            ValueError: If ``framing`` is unknown, ``body`` is not JSON-serializable
-                without NaN or infinity, or an auth header value is invalid.
-            TypeError: If ``body`` holds a value JSON cannot encode.
-            ProviderError: If the request fails and is not retried (any more), the
+            `ValueError`: If ``framing`` is unknown, ``body`` is not JSON-serializable
+                without NaN or infinity or holds an unpaired surrogate, or an auth header
+                value is invalid. Raised before any request.
+            `ProviderError`: If the request fails and is not retried (any more), the
                 server redirects, or the reply cannot be decoded or framed.
         """
         if framing not in _ACCEPT:
             raise ValueError(f"unknown framing {framing!r}; expected sse, ndjson or json")
-        content = json.dumps(body, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        content = _encode_body(body)
         retries = 0
         while True:
             self._check_stopped()
@@ -309,13 +343,15 @@ class Executor:
             )
             # A redirect is never retried, whatever x-should-retry says.
             error.retryable = False
-            raise error
+            raise _scrub_error(error, route.auth.credentials())
         if not 200 <= status < 300:
-            text = _scrub(self._error_body(response), route.auth.credentials())
-            raise error_from_response(
+            credentials = route.auth.credentials()
+            text = _scrub(self._error_body(response), credentials)
+            error = error_from_response(
                 status, response.headers, text, provider=route.provider,
                 max_retry_after=route.max_retry_after,
             )
+            raise _scrub_error(error, credentials)
         stream = FrameStream(response, framing, route, self._check_stopped)
         stream._prefetch()
         return stream
@@ -348,7 +384,8 @@ class Executor:
             and (route.max_retry_after is None or retry_after <= route.max_retry_after)
         ):
             return retry_after
-        return min(0.5 * 2**retries, 8.0) * (1 - 0.25 * self._random())
+        # The exponent is capped as openai does, so a huge retry count cannot overflow.
+        return min(0.5 * 2.0 ** min(retries, 1000), 8.0) * (1 - 0.25 * self._random())
 
     def _wait(self, seconds: float) -> None:
         """Sleep ``seconds`` in short slices, checking for a stop before each."""

@@ -189,6 +189,25 @@ def test_body_rejects_nan():
     assert h.requests == []
 
 
+@pytest.mark.parametrize(
+    "body, reason",
+    [
+        ({"text": "a\ud800b"}, "request body has an unpaired surrogate at position "),
+        ({"x": {1, 2}}, "request body is not JSON: "),
+        ({"x": float("inf")}, "request body is not JSON: "),
+    ],
+)
+def test_unencodable_body_makes_no_request(body, reason):
+    h = Harness()
+    with pytest.raises(ValueError) as info:
+        h.executor().open(route(), body, framing="json")
+    assert str(info.value).startswith(reason)
+    # Unchained, so the serialized body held by the encoder's error is not kept.
+    assert info.value.__cause__ is None
+    assert info.value.__context__ is None
+    assert h.requests == []
+
+
 def test_route_timeout_is_passed_and_client_default_otherwise():
     h = Harness(status(200, "{}"), status(200, "{}"))
     ex = h.executor()
@@ -277,6 +296,20 @@ def test_waits_cap_at_eight_seconds():
     with pytest.raises(ProviderError):
         ex.open(route(max_retries=6), {}, framing="sse")
     assert h.waits() == pytest.approx([0.5, 1.0, 2.0, 4.0, 8.0, 8.0])
+
+
+def test_backoff_stays_finite_after_many_retries():
+    h = Harness(*[status(500)] * 1101)
+    ex = Executor(
+        build_client(transport=httpx2.MockTransport(h.handler)),
+        sleep=h.sleep,
+        random=lambda: 0.0,
+    )
+    with pytest.raises(ProviderError):
+        ex.open(route(max_retries=1100), {}, framing="sse")
+    waits = h.waits()
+    assert len(waits) == 1100
+    assert waits[-1] == pytest.approx(8.0)
 
 
 def test_non_retryable_status_raises_at_once():
@@ -444,6 +477,10 @@ def test_no_raw_httpx_error_before_first_frame(error_type):
     with pytest.raises(ProviderError) as info:
         h.executor().open(route(), {}, framing="sse")
     assert isinstance(info.value.__cause__, error_type)
+    # Transport errors and timeouts are retried (max_retries + 1 requests); decoding and
+    # other httpx2 errors are not.
+    retried = issubclass(error_type, (httpx2.TransportError, httpx2.TimeoutException))
+    assert len(h.requests) == (3 if retried else 1)
 
 
 @pytest.mark.parametrize("error_type", HTTPX_ERRORS)
@@ -591,6 +628,21 @@ def test_status_error_scrubs_the_key():
     assert info.value.kind is ErrorKind.AUTH
     assert "[REDACTED]" in str(info.value)
     assert key not in str(info.value)
+    assert key not in repr(info.value.args)
+
+
+def test_status_error_scrubs_a_json_escaped_key():
+    key = "sk-live/secret/key-abcdef"
+    body = json.dumps({"error": {"message": f"Incorrect API key provided: {key}."}})
+    # JSON may escape "/" as "\/", which the body scrub does not match but the parse undoes.
+    body = body.replace("/", "\\/")
+    assert key not in body
+    h = Harness(status(401, body))
+    with pytest.raises(ProviderError) as info:
+        h.executor().open(route(auth=BearerAuth(key)), {}, framing="sse")
+    assert "Incorrect API key provided: [REDACTED]." in str(info.value)
+    assert key not in str(info.value)
+    assert key not in info.value.message
     assert key not in repr(info.value.args)
 
 

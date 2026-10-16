@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 import json
 
 import pytest
@@ -11,9 +12,9 @@ from yian.compile.expand import build_grow
 from yian.compile.model import START_ID
 from yian.defaults import current
 from yian.nodes.base import Grow
+from yian.nodes.loop import LoopNode
 from yian.runtime.log import (
     SCHEMA_VERSION,
-    NodeStartedRecord,
     NodeStepRecord,
     RecordEnvelope,
     decode_record,
@@ -21,6 +22,7 @@ from yian.runtime.log import (
 )
 from yian.runtime.state import (
     RunState,
+    _NodeStartedDelta,
     _replay_records,
     commit_prepared,
     prepare_expanded,
@@ -32,7 +34,12 @@ from yian.runtime.state import (
     prepare_run_resumed,
 )
 from tests.engine._graph_builder import _forward_capture
-from tests.engine.test_run_state_growth import _fragment, _initialized_spawner
+from tests.engine.test_run_state_growth import (
+    _canonical_child,
+    _fragment,
+    _initialized_spawner,
+    _parent_flow,
+)
 from tests.engine.test_run_state_outcomes import (
     _commit_start_success,
     _fanout_flow,
@@ -154,6 +161,8 @@ def test_prepare_node_step_appends_in_order_without_observers():
     first = prepare_node_step(state, "first", _FAILED)
     assert first.observers == ()
     assert first.record == NodeStepRecord("first", _FAILED)
+    assert type(first._plan.delta).__name__ == "_NodeStepDelta"
+    assert (first._plan.delta.node_id, first._plan.delta.step) == ("first", _FAILED)
     assert "first" not in state.node_steps
     assert commit_prepared(log, state, first) == ()
     assert commit_prepared(log, state, prepare_node_step(state, "first", started)) == ()
@@ -191,15 +200,17 @@ def test_prepare_node_step_requires_an_in_flight_node(node_id):
 
 def test_prepare_node_step_rejects_a_terminal_state():
     state, log = _first_in_flight()
+    commit_prepared(log, state, prepare_node_started(state, "second"))
     commit_prepared(log, state, prepare_node_failed(state, _node_failure("first")))
     assert state.result is not None
+    assert "second" in state.in_flight
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="terminal run state cannot prepare"):
         prepare_node_step(state, "second", {"event": "started"})
 
 
 def test_prepare_node_step_rejects_an_uninitialized_state():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="run state is not initialized"):
         prepare_node_step(RunState(_fanout_flow()), START_ID, {"event": "started"})
 
 
@@ -315,6 +326,21 @@ def test_replay_reproduces_steps_and_starts():
     assert replayed.next_sequence == state.next_sequence
 
 
+def test_learnable_replay_reproduces_steps_starts_and_trace():
+    state, log = _first_in_flight(learnable=True)
+    commit_prepared(log, state, prepare_node_step(state, "first", _FAILED))
+    commit_prepared(log, state, prepare_run_resumed(state, num_workers=0))
+    commit_prepared(log, state, prepare_node_started(state, "first"))
+    commit_prepared(log, state, prepare_node_step(state, "first", {"event": "started", "attempt": 3}))
+
+    replayed = _replay_records(RunState(deepcopy(state.flow)), tuple(log), grow_builder=build_grow)
+
+    assert replayed.node_steps == state.node_steps
+    assert replayed.node_starts == state.node_starts == {"first": 2}
+    assert replayed.trace is not None
+    assert replayed.trace.next_sequence == state.trace.next_sequence == state.next_sequence
+
+
 def test_replay_without_steps_has_no_steps():
     state, log = _first_in_flight()
 
@@ -347,9 +373,6 @@ def test_learnable_run_accepts_a_step_with_an_empty_trace_delta():
 
 
 def test_frontier_commit_rejects_a_step_record_with_a_start_delta():
-    from dataclasses import replace
-    from yian.runtime.state import _NodeStartedDelta
-
     state, log = _first_in_flight()
     prepared = prepare_node_step(state, "first", _FAILED)
     forged = replace(prepared, _plan=replace(prepared._plan, delta=_NodeStartedDelta("first")))
@@ -359,11 +382,59 @@ def test_frontier_commit_rejects_a_step_record_with_a_start_delta():
     assert state.node_steps == {}
 
 
-def test_a_step_record_is_never_prepared_as_a_resume():
+def test_loop_body_steps_go_at_the_outcome_and_stay_gone_after_the_prune():
+    loop = LoopNode(
+        "spawn", flow_id="child", child=_canonical_child(), child_inputs=[],
+        predicate_kind="times", times=2, max_iters=2, origin_id="spawn",
+    )
+    loop.params = []
+    state, log = _initialized_spawner(_parent_flow(loop))
+    expansion = prepare_expanded(state, "spawn", Grow(seed=({}, 0)), build_grow)
+    commit_prepared(log, state, expansion)
+    body_start = expansion._plan.delta.fragment_start_id
+    body_end = expansion._plan.delta.fragment_end_id
+
+    commit_prepared(log, state, prepare_node_started(state, body_start))
+    commit_prepared(log, state, prepare_node_step(state, body_start, _FAILED))
+    assert state.node_steps == {body_start: (_FAILED,)}
+    commit_prepared(log, state, prepare_node_succeeded(state, body_start, {}))
+    assert state.node_steps == {} and state.node_starts == {}
+    commit_prepared(log, state, prepare_node_started(state, body_end))
+    commit_prepared(log, state, prepare_node_succeeded(state, body_end, None))
+
+    commit_prepared(log, state, prepare_node_started(state, "spawn~1"))
+    commit_prepared(log, state, prepare_node_step(state, "spawn~1", _FAILED))
+    grow = state.flow.nodes["spawn~1"].run({})
+    prepared = prepare_expanded(state, "spawn~1", grow, build_grow)
+    assert body_start in prepared.record.prune_ids
+    commit_prepared(log, state, prepared)
+
+    assert body_start not in state.flow.nodes
+    assert state.node_steps == {}
+    assert state.node_starts == {}
+    replayed = _replay_records(RunState(deepcopy(_parent_flow(loop))), tuple(log), grow_builder=build_grow)
+    assert replayed.node_steps == {} and replayed.node_starts == {}
+
+
+@pytest.mark.parametrize("corrupt", ["missing-start", "orphan-steps", "zero-count", "list-steps", "non-dict-step"])
+def test_broken_step_state_is_rejected_before_append(corrupt):
     state, log = _first_in_flight()
-    prepared = prepare_node_step(state, "first", _FAILED)
-    assert type(prepared._plan.delta).__name__ == "_NodeStepDelta"
-    assert prepared._plan.delta.node_id == "first"
-    assert prepared._plan.delta.step == _FAILED
-    assert isinstance(prepared.record, NodeStepRecord)
-    assert not isinstance(prepared.record, NodeStartedRecord)
+    commit_prepared(log, state, prepare_node_step(state, "first", _FAILED))
+    prepared = prepare_node_succeeded(state, "first", {"done": True})
+    if corrupt == "missing-start":
+        del state.node_starts["first"]
+    elif corrupt == "orphan-steps":
+        state.node_steps["second"] = (_FAILED,)
+    elif corrupt == "zero-count":
+        state.node_starts["first"] = 0
+    elif corrupt == "list-steps":
+        state.node_steps["first"] = [_FAILED]
+    else:
+        state.node_steps["first"] = ("text",)
+    before = log.next_sequence
+
+    with pytest.raises(ValueError, match="node starts and steps"):
+        commit_prepared(log, state, prepared)
+
+    assert log.next_sequence == before
+    assert "first" in state.in_flight

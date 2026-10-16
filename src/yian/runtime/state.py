@@ -444,7 +444,7 @@ class _RunStartedApply:
 
 @dataclass(frozen=True, slots=True)
 class _FrontierPlan:
-    """Opaque authority anchors and one immutable dispatch/recovery delta.
+    """Opaque authority anchors and one immutable dispatch, recovery, or step delta.
 
     The private single-writer reducer owns the frontier between records.  State/flow
     identity plus the next durable coordinate therefore make a complete stale-plan
@@ -2158,7 +2158,7 @@ def _commit_frontier(
     state: RunState,
     prepared: PreparedTransition,
 ) -> tuple[Any, ...]:
-    """Validate, append, and apply one sparse dispatch or recovery delta."""
+    """Validate, append, and apply one sparse dispatch, recovery, or node-step delta."""
     plan = prepared._plan
     if not isinstance(plan, _FrontierPlan):
         raise TypeError("frontier commit requires a frontier plan")
@@ -2569,6 +2569,15 @@ def _require_initialized(state: RunState) -> None:
                    for sequence in state.accepted_starts.values())
             or len(set(state.accepted_starts.values())) != len(state.accepted_starts)):
         raise ValueError("accepted starts must match the unfinished invocation inventory")
+    # Every apply path indexes these maps by node, so a broken map must fail here,
+    # before the append, rather than as a KeyError between append and apply.
+    if (any(node_id not in state.node_starts for node_id in state.in_flight)
+            or any(type(count) is not int or count < 1 for count in state.node_starts.values())
+            or not state.node_steps.keys() <= state.node_starts.keys()
+            or any(type(steps) is not tuple or not steps
+                   or any(type(step) is not dict for step in steps)
+                   for steps in state.node_steps.values())):
+        raise ValueError("node starts and steps must match the unsettled invocations")
     if type(state.num_workers) is not int or state.num_workers < 0:
         raise ValueError("run state has an invalid worker count")
     if state.terminal_unreachable_failure is not None:

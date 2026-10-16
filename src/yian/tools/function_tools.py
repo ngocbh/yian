@@ -41,7 +41,8 @@ class FunctionTool:
             The arguments' JSON Schema; its `type` must be `"object"`.
         on_invoke (`Callable[[ToolContext[Any], dict[str, Any]], Any]`):
             A synchronous callable that receives the call's `ToolContext` and a
-            plain `dict` copy of the checked arguments, and returns the result.
+            deep copy of the checked arguments as a plain `dict`, and returns the
+            result. Changing that copy doesn't change the caller's values.
 
     Raises:
         `TypeError`:
@@ -74,7 +75,9 @@ class FunctionTool:
     params_json_schema: dict[str, Any]
     on_invoke: Callable[[ToolContext[Any], dict[str, Any]], Any]
     # Set by `function_tool`, so a tool built from a function validates with the
-    # function's pydantic model and reports its return annotation.
+    # function's pydantic model and reports its return annotation. It is not an init
+    # field, so `dataclasses.replace()` drops it: the copy is a plain JSON-Schema tool,
+    # which stays correct when the replace changes `on_invoke` or the schema.
     _schema: FuncSchema | None = field(default=None, init=False, compare=False, repr=False)
 
     def __post_init__(self) -> None:

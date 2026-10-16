@@ -24,6 +24,8 @@ from yian.tools.registry import _check_ask_user_handler
 from yian.tools.types import tool_types
 from yian.typesys.values import Type, ValueKind
 
+from tests.engine import _future_tools
+
 _HEX32 = re.compile(r"[0-9a-f]{32}")
 
 
@@ -424,3 +426,22 @@ def test_for_run_keeps_the_subclass():
 
     assert type(bound) is _Sub
     assert bound.run_id == "r"
+
+
+@pytest.mark.parametrize(
+    "handler",
+    [
+        _future_tools.ask_with_unresolved_request,
+        _future_tools.AskWithUnresolvedRequest(),
+        functools.partial(_future_tools.ask_with_unresolved_request),
+    ],
+)
+def test_a_handler_with_an_unresolvable_later_annotation_still_takes_the_context(handler):
+    tools = ToolSet({"ask_user": handler}).for_run("r")
+
+    assert tools.invoke("ask_user", {"question": "Q?"}, node="a") == "r/a"
+
+
+def test_a_handler_module_with_an_unresolvable_context_annotation_is_rejected():
+    with pytest.raises(TypeError, match=r"ToolContext\[Missing\]"):
+        ToolSet({"ask_user": _future_tools.ask_with_unresolved_context})

@@ -99,7 +99,7 @@ from yian.runtime.state import (
 )
 from yian.runtime.memory_runtime import MemoryRuntime
 from yian.skills import Skill
-from yian.tools import ToolSet
+from yian.tools import FunctionTool, ToolSet
 from yian.tools.types import tool_types
 from yian.typesys import Type, ValueKind, canonical_type_label
 from yian.typesys.pool import VariablePool
@@ -316,7 +316,7 @@ def run_flow(
     llm_config: dict[str, Any] | None = None,
     memory: Mapping[str, Memory] | None = None,
     learnable: bool = False,
-    tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
+    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
     context: Any = None,
@@ -379,15 +379,15 @@ def run_flow(
             call. Forward execution runs no memory learners or learned-mutation
             commits. Memory is optional; an enabled mapping supplies owned learners
             for that call. Automatic session history is independent of retention.
-        tools (`Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None`, *optional*, defaults to `None`):
+        tools (`Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None`, *optional*, defaults to `None`):
             The tools this run sees, keyed by tool id. `None` uses the tools
             registered with `register_tool`. A mapping, even an empty one, is the
             whole set: registered tools are hidden. To keep them, pass
             `{**registered_tools(), ...}`. That copy is taken when you call it, so
             register every tool before the run starts. A function or method
             becomes a tool named by its key and described by its docstring; bind
-            values with a closure, not `functools.partial`. A `BaseTool` must use
-            its key as its name. The `ask_user` entry is the host handler for
+            values with a closure, not `functools.partial`. A `FunctionTool` or
+            `BaseTool` must use its key as its name. The `ask_user` entry is the host handler for
             HUMAN_INPUT nodes and granted AGENT `ask_user` calls. It must be a
             plain callable that accepts `question`, `questions`, `answer_schema`,
             `title`, `node_id`, and `options` as keywords (define it as
@@ -397,8 +397,8 @@ def run_flow(
             it must be thread-safe. An AGENT can call a tool only if its `tools:`
             list grants the id. A list or tuple value is a tool group: an AGENT
             that grants the group's key can call every tool in it. Each item is a
-            `BaseTool` named by its `name`, or a function or method named by its
-            `__name__`. Each tool name calls one tool: the same tool may sit in
+            `FunctionTool` or `BaseTool` named by its `name`, or a function or
+            method named by its `__name__`. Each tool name calls one tool: the same tool may sit in
             several groups, but two different tools may not share a name, and
             no group tool may be named `ask_user` or `load_skill`. Every static AGENT grant must name a tool or
             group in this set; this is checked before the log is created.
@@ -539,7 +539,7 @@ def _run_flow_controlled(
     llm_config: dict[str, Any] | None = None,
     memory: Mapping[str, Memory] | None = None,
     learnable: bool = False,
-    tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
+    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
     context: Any = None,
@@ -701,7 +701,7 @@ def resume_flow(
     on_event: EventHook | None = None,
     on_stream: StreamHook | None = None,
     memory: Mapping[str, Memory] | None = None,
-    tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
+    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
     api_key: str | SecretStr | None = None,
@@ -734,7 +734,7 @@ def resume_flow(
             recorded run enabled memory and still has unfinished forward execution. Terminal
             inspection opens no memories; supplied references remain available
             for later explicit backward calls.
-        tools (`Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None`, *optional*, defaults to `None`):
+        tools (`Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None`, *optional*, defaults to `None`):
             The tools the resumed segment sees, with the same rules as
             `run_flow`. Tools are not recorded in the log, so pass the same
             mapping (including `ask_user`) that the original run used. Group
@@ -820,7 +820,7 @@ def _resume_flow_controlled(
     on_event: EventHook | None = None,
     on_stream: StreamHook | None = None,
     memory: Mapping[str, Memory] | None = None,
-    tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
+    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
     api_key: str | SecretStr | None = None,

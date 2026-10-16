@@ -116,7 +116,7 @@ run_flow(
     llm_config: dict[str, Any] | None = None,
     memory: Mapping[str, Memory] | None = None,
     learnable: bool = False,
-    tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
+    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
     context: Any = None,
@@ -443,11 +443,14 @@ result = run_flow(flow, {}, tools={"echo": echo_tool})
 ```
 
 `on_invoke` is synchronous and always receives the call's `ToolContext` and a
-plain `dict` of the checked arguments. Before calling it, yian rejects unknown
-keys (unless `additionalProperties` is `true` or a schema, which then checks the
-extra values), rejects missing required keys, and checks each value against the
-yian type its JSON Schema translates to (see [Typed tools](#typed-tools)); a
-property with no translation is passed unchecked. Building one raises
+deep copy of the checked arguments as a plain `dict`, so changing it doesn't
+change the caller's values. Before calling it, yian rejects unknown keys (unless
+`additionalProperties` is `true` or a schema, which then checks the extra values),
+rejects missing required keys, and checks each value against the yian type its
+JSON Schema translates to (see [Typed tools](#typed-tools)); a property with no
+translation is passed unchecked. An integral float such as `3.0` passes where an
+integer is expected, also inside lists and records, and reaches `on_invoke` as
+given. Building one raises
 `TypeError` when `name` or `description` is not a string, `params_json_schema` is
 not a dict, or `on_invoke` is not callable or is async, and `ValueError` when
 `name` is empty or the schema's `type` is not `"object"`. An `on_invoke` that
@@ -1471,7 +1474,7 @@ resume_flow(
     on_event: Callable[[Any], None] | None = None,
     on_stream: Callable[[StreamChunk], None] | None = None,
     memory: Mapping[str, Memory] | None = None,
-    tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
+    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
     api_key: str | SecretStr | None = None,

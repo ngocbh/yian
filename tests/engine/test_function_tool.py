@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any
+import dataclasses
+import inspect
+from typing import Any, get_type_hints
 
 import pytest
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
 import yian
+import yian.run as run_module
 import yian.tools as tools_package
 from yian.tools import (
     TOOL_REGISTRY,
@@ -486,3 +489,84 @@ def test_tool_names_are_exported_from_yian_and_yian_tools():
         assert module.function_tool is function_tool_fn
         assert {"ToolContext", "FunctionTool", "function_tool"} <= set(module.__all__)
 
+
+
+# Copies and nested integers
+
+
+def test_on_invoke_gets_a_deep_copy_of_the_arguments():
+    schema = {"type": "object", "properties": {"items": {"type": "array"}}}
+
+    def on_invoke(ctx: ToolContext[Any], args: dict[str, Any]) -> Any:
+        args["items"].append("added")
+        args["new"] = 1
+        return len(args["items"])
+
+    ft = FunctionTool(name="grow", description="", params_json_schema=schema, on_invoke=on_invoke)
+    items = ["a"]
+    inputs = {"items": items}
+
+    assert ToolSet({"grow": ft}).invoke("grow", inputs) == 2
+    assert items == ["a"]
+    assert inputs == {"items": ["a"]}
+
+
+def test_function_tool_accepts_integral_floats_in_an_integer_array_as_given():
+    schema = {
+        "type": "object",
+        "properties": {"ns": {"type": "array", "items": {"type": "integer"}}},
+    }
+    ft, seen = _echo(schema)
+    tools = ToolSet({"echo": ft})
+
+    tools.invoke("echo", {"ns": [1.0, 2]})
+
+    assert seen[0][1] == {"ns": [1.0, 2]}
+    assert type(seen[0][1]["ns"][0]) is float
+    with pytest.raises(TypeCheckError):
+        tools.invoke("echo", {"ns": [1.5]})
+
+
+def test_function_tool_accepts_integral_floats_in_a_closed_record():
+    schema = {
+        "type": "object",
+        "properties": {
+            "pos": {
+                "type": "object",
+                "properties": {"x": {"type": "integer"}},
+                "required": ["x"],
+                "additionalProperties": False,
+            }
+        },
+    }
+    ft, seen = _echo(schema)
+    tools = ToolSet({"echo": ft})
+
+    tools.invoke("echo", {"pos": {"x": 4.0}})
+
+    assert seen[0][1] == {"pos": {"x": 4.0}}
+    with pytest.raises(TypeCheckError):
+        tools.invoke("echo", {"pos": {"x": 4.5}})
+
+
+def test_replace_drops_the_function_schema():
+    ft = function_tool(add)
+    plain = dataclasses.replace(ft, description="Sum.")
+
+    assert ft._schema is not None
+    assert plain._schema is None
+    assert ToolSet({"add": plain}).invoke("add", {"a": 1, "b": 2}) == 3
+
+
+def test_run_entry_points_and_tool_set_annotate_function_tool_entries():
+    entry_points = (
+        run_module.run_flow,
+        run_module._run_flow_controlled,
+        run_module.resume_flow,
+        run_module._resume_flow_controlled,
+    )
+    for fn in entry_points:
+        annotation = str(inspect.signature(fn).parameters["tools"].annotation)
+        assert annotation.count("FunctionTool") == 2, fn.__name__
+        assert "FunctionTool" in fn.__doc__ or fn.__name__.startswith("_"), fn.__name__
+    assert str(get_type_hints(ToolSet.__init__)["tools"]).count("FunctionTool") == 2

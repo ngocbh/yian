@@ -26,6 +26,7 @@ passes the call's context (``tools.context``) there. A ``FunctionTool``
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import copy
 import functools
 import inspect
 import json
@@ -43,7 +44,7 @@ from yian.tools.context import ToolContext
 from yian.tools.function_tools import FunctionTool
 from yian.tools.schema import _is_tool_context, function_schema
 from yian.tools.types import _input_type_from_json_schema
-from yian.typesys.values import TypeCheckError, ValueKind, build_value_as
+from yian.typesys.values import Type, TypeCheckError, ValueKind, build_value_as
 
 # Maps tool id -> a LangChain tool with a Pydantic argument schema, or a
 # ``FunctionTool``'s JSON Schema that yian checks itself. The supported ``register_tool``
@@ -55,6 +56,8 @@ _ASK_USER_ID = "ask_user"
 _RESERVED_TOOL_NAMES = frozenset({_ASK_USER_ID, LOAD_SKILL})
 # One entry of a host `tools=` mapping or of a tool group.
 _Entry = BaseTool | FunctionTool | Callable[..., Any]
+# What evaluating a string annotation, or reading a signature, can raise.
+_ANNOTATION_ERRORS = (NameError, AttributeError, SyntaxError, TypeError, ValueError)
 
 
 def register_tool(tool_id: str, *, description_override: str | None = None) -> Callable:
@@ -197,7 +200,8 @@ def _tool_from_function_tool(ft: FunctionTool, *, description: str | None = None
         func.__annotations__ = {"return": schema.return_annotation}
 
     def yian_call(ctx: ToolContext[Any], payload: dict[str, Any]) -> Any:
-        result = ft.on_invoke(ctx, payload)
+        # A deep copy, so `on_invoke` can't change values the caller still holds.
+        result = ft.on_invoke(ctx, copy.deepcopy(payload))
         if inspect.isawaitable(result):
             if inspect.iscoroutine(result):
                 result.close()  # Never awaited; closing avoids a "never awaited" warning.
@@ -341,24 +345,45 @@ def _handler_takes_context(handler: Callable[..., Any]) -> bool:
     """
     try:
         signature = inspect.signature(handler, eval_str=True)
-    except (NameError, AttributeError, SyntaxError, TypeError, ValueError) as exc:
-        # Evaluating a string annotation failed, or there is no signature at all.
+    except _ANNOTATION_ERRORS:
+        # Some annotation can't be evaluated, or there is no signature at all; only
+        # the first parameter's annotation decides.
         try:
             first = next(iter(inspect.signature(handler).parameters.values()), None)
         except (TypeError, ValueError):
             return False  # No readable signature: called with keywords only.
         if first is None or not _is_positional(first):
             return False
-        if not isinstance(first.annotation, str):
-            return _is_tool_context(first.annotation)
-        if "ToolContext" in first.annotation:
-            raise TypeError(
-                f"tools['ask_user'] handler parameter {first.name!r} is annotated "
-                f"{first.annotation!r}, which can't be resolved: {exc}"
-            ) from exc
-        return False
+        annotation = first.annotation
+        if isinstance(annotation, str):
+            try:
+                annotation = eval(annotation, _annotation_globals(handler))  # noqa: S307
+            except _ANNOTATION_ERRORS as exc:
+                if "ToolContext" not in first.annotation:
+                    return False
+                raise TypeError(
+                    f"tools['ask_user'] handler parameter {first.name!r} is annotated "
+                    f"{first.annotation!r}, which can't be resolved: {exc}"
+                ) from exc
+        return _is_tool_context(annotation)
     first = next(iter(signature.parameters.values()), None)
     return first is not None and _is_positional(first) and _is_tool_context(first.annotation)
+
+
+
+def _annotation_globals(handler: Callable[..., Any]) -> dict[str, Any]:
+    """Return the globals `handler`'s string annotations resolve in.
+
+    Unwraps partials, a callable object's `__call__`, bound methods and
+    `functools.wraps` wrappers down to the function that defines them.
+    """
+    target: Any = handler
+    while isinstance(target, functools.partial):
+        target = target.func
+    if not inspect.isroutine(target):
+        target = getattr(type(target), "__call__", target)
+    target = inspect.unwrap(getattr(target, "__func__", target))
+    return getattr(target, "__globals__", {})
 
 
 def _is_positional(param: inspect.Parameter) -> bool:
@@ -888,8 +913,9 @@ def _validate_json_arguments(
     Unknown keys are rejected unless `additionalProperties` is `true` or a schema,
     in which case extra values are checked against that schema. Missing required
     keys are rejected. Each value is checked against the yian type its JSON Schema
-    translates to; a schema with no translation is not checked, and an integral
-    float is accepted for an integer.
+    translates to; a schema with no translation is not checked. An integral float
+    is accepted wherever that type expects an integer, including list items and
+    record fields; the value itself is passed on as given.
 
     Raises:
         `ValueError`:
@@ -923,15 +949,30 @@ def _validate_json_arguments(
         typ = _input_type_from_json_schema(prop, root=schema)
         if typ is None:
             continue
-        # JSON decoders and models may send `3.0` for an integer; JSON Schema accepts it.
-        if typ.kind is ValueKind.INTEGER and type(value) is float and value.is_integer():
-            value = int(value)
         try:
-            build_value_as(typ, value)
+            build_value_as(typ, _integral_floats_as_ints(typ, value))
         except TypeCheckError as exc:
             raise TypeCheckError(
                 f"tool {tool_id!r} argument {name!r}: {exc}", path=(name, *exc.path)
             ) from exc
+
+
+def _integral_floats_as_ints(typ: Type, value: Any) -> Any:
+    """Return `value` with each integral float in an integer position made an `int`.
+
+    JSON decoders and models may send `3.0` for an integer, which JSON Schema
+    accepts; yian's integer type does not. Lists and records are copied, not changed.
+    """
+    if typ.kind is ValueKind.INTEGER:
+        return int(value) if type(value) is float and value.is_integer() else value
+    if typ.element is not None and isinstance(value, list):
+        return [_integral_floats_as_ints(typ.element, item) for item in value]
+    if typ.fields is not None and isinstance(value, dict):
+        return {
+            key: _integral_floats_as_ints(typ.fields[key], item) if key in typ.fields else item
+            for key, item in value.items()
+        }
+    return value
 
 
 def invoke_tool(tool_id: str, inputs: dict[str, Any]) -> Any:

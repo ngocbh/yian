@@ -1,8 +1,8 @@
 """Errors a host tool raises to steer a TOOL node's retries, and yian's own check error.
 
 A TOOL node with `retries:` retries a failed call unless the tool raised
-``PermanentToolError`` or a check yian runs failed (``ToolCheckError``). A tool raises
-``TransientToolError(retry_after=...)`` to say how long to wait before the next attempt.
+`PermanentToolError` or a check yian runs failed (`ToolCheckError`). A tool raises
+`TransientToolError(retry_after=...)` to say how long to wait before the next attempt.
 
 Uses only the Python standard library.
 """

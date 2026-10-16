@@ -178,7 +178,7 @@ ENTRIES: tuple[Entry, ...] = (
         minimum=2,
         maximum=None,
     ),
-    # Defaults for settings a flow author can set.
+    # Defaults for node and memory behaviour; a flow can override some of them.
     Entry(
         "AGENT_RETRIES",
         default=2,
@@ -217,7 +217,10 @@ ENTRIES: tuple[Entry, ...] = (
     Entry(
         "TOOL_RETRY_DELAY_SECONDS",
         default=1,
-        description="Seconds a TOOL node waits before its first retry; each later wait doubles",
+        description=(
+            "Base wait in seconds before a TOOL node's first retry; each later wait doubles, "
+            "up to the cap"
+        ),
         group="setting",
         minimum=0,
         maximum=None,

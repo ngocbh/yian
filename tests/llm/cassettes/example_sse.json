@@ -9,7 +9,7 @@
         "url": "https://api.example.test/v1/responses?api-version=2026-01-01",
         "headers": {
           "content-type": "application/json",
-          "accept": "text/event-stream",
+          "accept": "application/json",
           "authorization": "<redacted>"
         },
         "json": {"model": "m", "input": [{"role": "user", "content": "first"}]}
@@ -26,7 +26,7 @@
         "url": "https://api.example.test/v1/responses?api-version=2026-01-01",
         "headers": {
           "content-type": "application/json",
-          "accept": "text/event-stream",
+          "accept": "application/json",
           "authorization": "<redacted>"
         },
         "json": {"model": "m", "input": [{"role": "user", "content": "second"}]}

@@ -27,7 +27,9 @@ Framing = Literal["sse", "ndjson", "json"]
 
 # The same marker as `llm_clients.redact.REDACTED`, which this leaf may not import.
 REDACTED = "[REDACTED]"
-_ACCEPT = {"sse": "text/event-stream", "ndjson": "application/json", "json": "application/json"}
+_FRAMINGS = ("sse", "ndjson", "json")
+# The openai and anthropic SDKs send this Accept on every request, streamed ones too.
+_DEFAULT_HEADERS = {"Content-Type": "application/json", "Accept": "application/json"}
 _MAX_ERROR_BODY = 64 * 1024
 _WAIT_SLICE = 0.25
 _NOTHING = object()
@@ -281,9 +283,11 @@ class Executor:
     def open(self, route: Route, body: Mapping, *, framing: Framing) -> FrameStream:
         """POST ``body`` as JSON over ``route`` and return the reply's frames.
 
-        Each attempt resolves the auth headers again. A retryable status, connection
-        failure or timeout before the first frame is retried up to
-        ``route.max_retries`` times, waiting the server's retry-after when it allows
+        The request sends ``Content-Type`` and ``Accept`` of ``application/json`` for
+        every framing, as the openai and anthropic SDKs do; ``route.headers`` override
+        them, and the auth headers, resolved again on each attempt, override both. A
+        retryable status, connection failure or timeout before the first frame is
+        retried up to ``route.max_retries`` times, waiting the server's retry-after when it allows
         a retry, else an exponential backoff with jitter capped at 8 seconds.
 
         Args:
@@ -303,7 +307,7 @@ class Executor:
             `ProviderError`: If the request fails and is not retried (any more), the
                 server redirects, or the reply cannot be decoded or framed.
         """
-        if framing not in _ACCEPT:
+        if framing not in _FRAMINGS:
             raise ValueError(f"unknown framing {framing!r}; expected sse, ndjson or json")
         content = _encode_body(body)
         retries = 0
@@ -319,10 +323,11 @@ class Executor:
 
     def _attempt(self, route: Route, content: bytes, framing: Framing) -> FrameStream:
         """Send one request and parse up to the first frame."""
-        headers = httpx2.Headers(route.headers)
-        # Each update replaces earlier names case-insensitively, so auth wins over a
-        # route header such as "authorization".
-        headers.update({"Content-Type": "application/json", "Accept": _ACCEPT[framing]})
+        headers = httpx2.Headers(_DEFAULT_HEADERS)
+        # Each update replaces earlier names case-insensitively, so a route header
+        # overrides a framing default and auth wins over a route header such as
+        # "authorization".
+        headers.update(route.headers)
         headers.update(route.auth.headers())
         extra: dict[str, Any] = {}
         if route.timeout is not None:

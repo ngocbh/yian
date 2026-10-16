@@ -146,7 +146,7 @@ def test_request_shape():
     assert request.method == "POST"
     assert request.content == json.dumps(body, ensure_ascii=False, allow_nan=False).encode()
     assert request.headers["content-type"] == "application/json"
-    assert request.headers["accept"] == "text/event-stream"
+    assert request.headers["accept"] == "application/json"
     assert request.headers["authorization"] == "Bearer sk-test-key-0123456789"
     assert request.headers["x-extra"] == "a"
     assert request.headers["user-agent"] == USER_AGENT
@@ -162,24 +162,28 @@ def test_auth_beats_route_header_of_any_case():
     ]
 
 
-def test_framing_headers_beat_route_headers():
+def test_route_headers_override_framing_defaults_of_any_case():
     h = Harness(lambda: httpx2.Response(200, json={"ok": True}))
     r = route(headers={"accept": "text/plain", "CONTENT-TYPE": "text/plain"}, auth=NoAuth())
     h.executor().open(r, {}, framing="json").close()
     (request,) = h.requests
-    assert request.headers.get_list("accept") == ["application/json"]
-    assert request.headers.get_list("content-type") == ["application/json"]
+    assert request.headers.get_list("accept") == ["text/plain"]
+    assert request.headers.get_list("content-type") == ["text/plain"]
     assert "authorization" not in request.headers
 
 
-@pytest.mark.parametrize(
-    "framing, accept",
-    [("sse", "text/event-stream"), ("ndjson", "application/json"), ("json", "application/json")],
-)
-def test_accept_per_framing(framing, accept):
+def test_route_accept_header_overrides_default():
+    h = Harness(sse("data: 1\n\n"))
+    h.executor().open(route(headers={"accept": "text/event-stream"}), {}, framing="sse").close()
+    (request,) = h.requests
+    assert request.headers.get_list("accept") == ["text/event-stream"]
+
+
+@pytest.mark.parametrize("framing", ["sse", "ndjson", "json"])
+def test_accept_per_framing(framing):
     h = Harness(status(200, "{}\n"))
     h.executor().open(route(), {}, framing=framing).close()
-    assert h.requests[0].headers["accept"] == accept
+    assert h.requests[0].headers.get_list("accept") == ["application/json"]
 
 
 def test_body_rejects_nan():

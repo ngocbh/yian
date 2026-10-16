@@ -25,7 +25,9 @@ class Route:
         query (`Mapping[str, str]`): Query parameters, for example ``{"api-version":
             "..."}``; stored as a read-only copy.
         headers (`Mapping[str, str]`): Non-secret extra headers; stored as a read-only
-            copy. Framing and auth headers of the same name replace them.
+            copy. They replace the framing defaults (``Content-Type`` and ``Accept``)
+            of the same name, case-insensitively; auth headers of the same name
+            replace them.
         max_retries (`int`): Retries after the first attempt; defaults to 2.
         max_retry_after (`float | None`): The longest server-requested delay that still
             allows a retry; `None` allows any. Defaults to 120 seconds.

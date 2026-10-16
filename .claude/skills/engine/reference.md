@@ -199,13 +199,14 @@ rejection as `contract.growth`.
 (per-element bind, gated on `binds_per_item`). The AGENT, WAIT, and TOOL nodes get the
 exact run-owned `caps['stop_event']` (gated on `needs_stop_event`): the AGENT node
 checks it between external model/tool effects, while WAIT and a TOOL's retry backoff
-block on it so host shutdown or sibling failure wakes the wait. TOOL, HUMAN_INPUT, and the AGENT node get
-the run's `caps['tools']` (gated on `needs_tools`): one immutable `ToolSet` that
-`run_flow` / `resume_flow` build from `tools=`: the global registry when `None`,
-otherwise only the mapping's entries, and `ask_user` only from the run. A list value
-is a named tool group; the AGENT's tool loop expands granted groups through
-`ToolSet.expand` before binding and the grant check, and the run boundary checks
-every static `Node.granted_tools()` grant against the `ToolSet` before any record.
+block on it so host shutdown or sibling failure wakes the wait. TOOL, HUMAN_INPUT,
+and the AGENT node get the run's `caps['tools']` (gated on `needs_tools`): one
+immutable `ToolSet` that `run_flow` / `resume_flow` build from `tools=`: the global
+registry when `None`, otherwise only the mapping's entries, and `ask_user` only from
+the run. A list value is a named tool group; the AGENT's tool loop expands granted
+groups through `ToolSet.expand` before binding and the grant check, and the run
+boundary checks every static `Node.granted_tools()` grant against the `ToolSet`
+before any record.
 The `ToolSet` also holds the host's unrecorded `context=` object; `FlowEngine` binds
 it to the run id with `ToolSet.for_run`, and `ToolSet.invoke(tool_id, inputs, *, node,
 call_id, attempt)` builds the `ToolContext` for a tool that declares one (call id

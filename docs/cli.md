@@ -120,9 +120,9 @@ with different ones exits 1 naming each variable and how to set it (see
 An eligible unfinished log appends a resume segment and retries nodes with a durable
 start but no durable outcome. Requests and tool actions may repeat; the run log neither reconstructs
 session memory nor provides exactly-once execution. An interrupted TOOL node is re-run
-with the same call id, and a TOOL with `retries:` continues its attempt count (see
-[TOOL retries](api.md#tool-retries)). A log that recorded a TOOL retry can't be read
-by a yian version from before such records existed. See the
+with the same call id and the next attempt number, and a TOOL with `retries:` keeps the
+retries it had left (see [TOOL retries](api.md#tool-retries)). A log that recorded a
+TOOL retry can't be read by a yian version from before such records existed. See the
 [Python API recovery contract](api.md#durable-recovery-with-resume_flow).
 
 `--resume` fails on a log holding an int longer than 4300 digits, with `run-record

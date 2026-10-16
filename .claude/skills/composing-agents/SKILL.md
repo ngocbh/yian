@@ -782,7 +782,8 @@ and yian's own argument and `output:` checks; a tool raises
 `TransientToolError(msg, retry_after=s)` to set the wait (up to the cap). `ctx.call_id`
 stays the same across attempts and `ctx.attempt` counts them, so make side effects
 idempotent on `ctx.call_id`. Attempts are recorded, so a resumed run continues the count,
-and a failure after a retry lists every attempt's error. A waiting TOOL holds a worker.
+and a failure after a retry lists the attempts' errors (past 10, the first and last 5).
+A waiting TOOL holds a worker.
 See `docs/api.md` "TOOL retries".
 
 **Typed TOOL nodes.** Every returned value must fit `output:`; model expected outcomes

@@ -1334,7 +1334,8 @@ contract its typed parameters give the type its committed files are read through
 `binds_per_item`, `item_source_key`,
 `bind_reserved`, `validate_execution_setup`, `grow_depth_delta`, `is_loop`,
 `needs_stop_event`, `needs_tools`, `needs_memory_context`, `needs_skills`,
-`needs_evaluation_trace`, `needs_live_events`, `needs_steering`, `needs_steps`, `memory_scope`, and
+`needs_evaluation_trace`, `needs_live_events`, `needs_steering`, `needs_steps`,
+`memory_scope`, and
 `skipped_output_target`) plus the diagnostic-only projections
 `exception_origin` and `failure_trace`; it never branches behavior on `NodeKind`.
 A kind label may appear in diagnostic text. The diagnostic projections do not
@@ -2006,10 +2007,10 @@ attempt, tool name, run id, node, and the context. TOOL and HUMAN_INPUT calls us
 the call id `"<run_id>/<node id>"`, which recovery rebuilds, so a re-run of an
 interrupted TOOL node sees the same id. An AGENT's tool loop passes
 `"<run_id>/<node id>/<exchange_id>/<call index>"`, unique per call but not stable
-across resume, since a resumed AGENT asks its model again. `attempt` is 1 except
-for a retrying TOOL node, which passes the attempt number it reads from its node
-steps. Host
-functions and `FunctionTool`s become a private `StructuredTool` subclass whose
+across resume, since a resumed AGENT asks its model again. A TOOL node passes the
+attempt number it derives from its start count and its recorded node steps, so a
+resumed re-run sees the next number; every other call passes 1. Host functions and
+`FunctionTool`s become a private `StructuredTool` subclass whose
 `yian_call(ctx, payload)` `ToolSet.invoke` calls after validation; other
 `BaseTool`s still run through `invoke` and get no context.
 

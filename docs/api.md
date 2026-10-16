@@ -484,10 +484,11 @@ Every exception from the tool is retried, except:
 - `PermanentToolError`, which the tool raises when another attempt can't help. A
   class that subclasses both `PermanentToolError` and `TransientToolError` counts
   as permanent;
-- yian's own checks. The arguments are checked once, before the first attempt, as
-  `ToolSet.validate` does. The `output:` contract and the value checks run after the
-  node returns. A `FunctionTool` whose `on_invoke` returns an awaitable raises
-  `ToolCheckError`. None of these is retried;
+- yian's own checks. The arguments are checked once, before the first attempt, with
+  `ToolSet.validate`. The checks on the returned value (the `output:` contract, no
+  NaN or infinity, the nesting limit) run after the node returns. A `FunctionTool`
+  whose `on_invoke` returns an awaitable raises `ToolCheckError`. None of these is
+  retried;
 - a host stop, such as Ctrl-C or a sibling node's failure, which ends the node.
 
 Before the retry after the k-th failure, the node waits d = min(cap, base · 2^(k−1))
@@ -525,13 +526,13 @@ any call of a `retries: 0` node, writes no step.
 A resumed run continues the count from the log. An attempt that was interrupted (the
 process crashed or the run stopped inside it) is re-run with the same `ctx.call_id`
 and the next `ctx.attempt`, and uses up no retry: only recorded failures count
-against `retries:`. A run that crashed during a wait waits the recorded `retry_in`
-again before the next attempt.
+against `retries:`. A run that crashed or stopped during a wait waits the recorded
+`retry_in` again before the next attempt.
 
-When the call fails without a retry, the tool's exception fails the node as before.
+When the call fails without a retry, the tool's exception fails the node.
 After at least one retry, the node fails with `ToolAttemptsFailed` (a
-`RuntimeError`, raised from the last error), and `failure.message` lists every
-attempt:
+`RuntimeError`, raised from the last error), and `failure.message` lists the
+attempts' errors:
 
 ```text
 tool 'place_order' failed after 3 attempts: attempt 1: TimeoutError: read timed out; attempt 2: interrupted; attempt 3: ConnectionError: reset by peer
@@ -1641,8 +1642,10 @@ A retried node may resend requests and repeat tool actions; recovery does not
 provide exactly-once execution or resume an external request midway through. A
 retried TOOL node passes its tool the same `ctx.call_id` as before, so a tool can
 use it as an idempotency key; a retried AGENT's tool calls get new ids (see
-[Tool context](#tool-context)). A TOOL node with `retries:` passes the next
-`ctx.attempt` and keeps the retries it had left (see [TOOL retries](#tool-retries)). The new accepted start receives a new sequence, and metadata for its old unfinished start is rejected.
+[Tool context](#tool-context)). A TOOL node passes the next `ctx.attempt`; one with
+`retries:` keeps the retries it had left (see [TOOL retries](#tool-retries)). The new
+accepted start receives a new sequence, and metadata for its old unfinished start is
+rejected.
 Runtime neither reconstructs a transcript from the run log nor fabricates results
 for unknown effects. SessionMemory owns whatever conversation history was saved;
 the run log is not a durable replacement for that memory backend.

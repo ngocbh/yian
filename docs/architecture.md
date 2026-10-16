@@ -192,9 +192,9 @@ run log or claim to resume an external request midway through. See the
 Replay makes engine state deterministic; it cannot make arbitrary external
 effects exactly once. An interrupted node can run again, so effectful node
 implementations must tolerate that recovery boundary. An interrupted TOOL node is
-re-run with the same `ctx.call_id`, which a tool can use as an idempotency key; a
-TOOL with `retries:` reads its recorded attempts back (`NodeStepRecord`), so it
-passes the next `ctx.attempt` and keeps the retries it had left.
+re-run with the same `ctx.call_id`, which a tool can use as an idempotency key, and
+the next `ctx.attempt`. A TOOL with `retries:` reads its recorded attempts back
+(`NodeStepRecord`), so it keeps the retries it had left.
 
 ## Ownership boundaries
 

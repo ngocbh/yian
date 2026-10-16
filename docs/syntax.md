@@ -1977,7 +1977,8 @@ Before each retry the node waits an exponential backoff with jitter: at most 1, 
 `PermanentToolError`; yian's own checks of the arguments and the `output:` are never
 retried. The tool sees the same `ctx.call_id` on every attempt and the attempt
 number in `ctx.attempt`. Each retry is recorded in the run log, so a resumed run
-continues the count. A failure after a retry lists every attempt's error. The full
+continues the count. A failure after a retry lists the attempts' errors (past 10,
+the first and last 5). The full
 rules, including `TransientToolError(retry_after=...)`, are in
 [TOOL retries](api.md#tool-retries).
 

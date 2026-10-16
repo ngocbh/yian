@@ -15,14 +15,16 @@ import traceback as _tb
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextvars import copy_context
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, field
 from typing import Any
 
 from yian.compile.model import GrowthRejected
 from yian.diagnostics import Failure, FailureCode, OriginRef
 from yian.events import RunFailed, StreamChunk
 from yian.memory import ConversationInvocation, EvaluationEvidence
-from yian.nodes.base import Grow, Output, Route, Steering, _HostStop
+from yian.nodes.base import Grow, Output, Route, Steering, _CapabilityFault, _HostStop
+from yian.nodes.contracts import NodeSteps
 from yian.runtime.eval_node import (
     MemoryContextOpener,
     EvaluatedOutcome,
@@ -43,6 +45,7 @@ from yian.runtime.state import (
     prepare_node_failed,
     prepare_node_routed,
     prepare_node_started,
+    prepare_node_step,
     prepare_node_succeeded,
 )
 from yian.tools import ToolSet
@@ -67,6 +70,20 @@ class _RecordedEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class _RecordedStep:
+    """One node step a worker waits on until the dispatcher appends and applies it.
+
+    The dispatcher sets ``done`` after the commit; on a commit error it first puts the
+    error in ``error``. A step it skips because the run is stopping leaves ``done`` unset.
+    """
+
+    node_id: str
+    step: Any
+    done: threading.Event = field(default_factory=threading.Event)
+    error: list[Exception] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
 class _RecordedCompletion:
     """One completed raw evaluation accepted through the dispatcher message queue."""
 
@@ -85,6 +102,8 @@ class FlowEngine:
     reducer plan applied.  The optional event callback sees the same observers first;
     stream chunks are callback-only and never durable or yielded. Optional memory context is
     one source-neutral callback; evidence capture follows only recorded ``RunState.learnable``.
+    Each start gets a ``NodeSteps`` snapshot; a node declaring ``needs_steps`` records its
+    steps through the dispatcher, which appends and applies each one without an observer.
     """
 
     def __init__(
@@ -198,6 +217,7 @@ class FlowEngine:
                 node_id = self.state.ready[0]
                 observers = self._commit_started(node_id)
                 invocation = ConversationInvocation(self.state.run_id, self.state.accepted_starts[node_id])
+                steps = self._node_steps(node_id, self._serial_recorder(node_id))
                 yield from self._publish(observers)
                 self._raise_if_stopped()
 
@@ -206,6 +226,7 @@ class FlowEngine:
                     invocation,
                     emit_stream=None if self.on_stream is None else self._emit_serial_stream,
                     emit_event=None if self.on_event is None else self._emit_serial_event,
+                    steps=steps,
                 )
                 self._raise_if_stopped()
                 observers = self._commit_outcome(node_id, outcome)
@@ -218,7 +239,9 @@ class FlowEngine:
 
     def _run_pooled(self) -> Iterator[Any]:
         """Execute at most ``num_workers`` starts with one state-writing dispatcher."""
-        messages: queue.Queue[_RecordedStream | _RecordedEvent | _RecordedCompletion] = queue.Queue()
+        messages: queue.Queue[
+            _RecordedStream | _RecordedEvent | _RecordedStep | _RecordedCompletion
+        ] = queue.Queue()
         try:
             executor = ThreadPoolExecutor(
                 max_workers=self.num_workers,
@@ -237,6 +260,7 @@ class FlowEngine:
                     node_id = self.state.ready[0]
                     observers = self._commit_started(node_id)
                     invocation = ConversationInvocation(self.state.run_id, self.state.accepted_starts[node_id])
+                    steps = self._node_steps(node_id, self._pooled_recorder(node_id, messages))
                     yield from self._publish(observers)
                     self._raise_if_stopped()
 
@@ -244,7 +268,8 @@ class FlowEngine:
                     # A submit failure therefore leaves one recoverable unfinished start.
                     # Preserve host context while isolating each node's local changes.
                     future = executor.submit(
-                        copy_context().run, self._evaluate_worker, node_id, invocation, messages
+                        copy_context().run, self._evaluate_worker, node_id, invocation, messages,
+                        steps,
                     )
                     active[future] = node_id
                     submitted.append(future)
@@ -270,6 +295,10 @@ class FlowEngine:
                 if isinstance(message, _RecordedEvent):
                     if not self.stop_event.is_set() and self.on_event is not None:
                         self.on_event(message.event)
+                    continue
+                if isinstance(message, _RecordedStep):
+                    if not self.stop_event.is_set():
+                        self._commit_step(message)
                     continue
 
                 future = message.future
@@ -314,6 +343,65 @@ class FlowEngine:
         """Append and apply the exact ready-head start transition."""
         prepared = prepare_node_started(self.state, node_id)
         return commit_prepared(self.log, self.state, prepared)
+
+    def _node_steps(
+        self, node_id: str, record: Callable[[dict[str, Any]], None],
+    ) -> NodeSteps:
+        """Snapshot one accepted start's steps capability on the dispatcher thread."""
+        return NodeSteps(
+            starts=self.state.node_starts[node_id],
+            prior=deepcopy(self.state.node_steps.get(node_id, ())),
+            record=record,
+        )
+
+    def _serial_recorder(self, node_id: str) -> Callable[[dict[str, Any]], None]:
+        """Return a recorder that commits each step inline on the dispatcher thread."""
+
+        def record(step: dict[str, Any]) -> None:
+            """Append and apply one step, carrying any fault out as a host fault."""
+            try:
+                commit_prepared(self.log, self.state, prepare_node_step(self.state, node_id, step))
+            except Exception as exc:
+                raise _CapabilityFault(exc) from exc
+
+        return record
+
+    def _pooled_recorder(
+        self, node_id: str, messages: queue.Queue,
+    ) -> Callable[[dict[str, Any]], None]:
+        """Return a worker-side recorder that waits for the dispatcher to commit each step."""
+
+        def record(step: dict[str, Any]) -> None:
+            """Queue one step and block until it is applied or the run stops."""
+            message = _RecordedStep(node_id, step)
+            messages.put(message)
+            while not message.done.wait(_POLL):
+                if self.stop_event.is_set():
+                    raise _HostStop(primary=False)
+            if message.error:
+                # The dispatcher raises the original error itself; a fresh exception
+                # keeps the two threads from re-raising (and rewriting) one object.
+                error = message.error[0]
+                raise _CapabilityFault(RuntimeError(
+                    f"the engine did not record the node step: {type(error).__name__}: {error}"
+                ))
+
+        return record
+
+    def _commit_step(self, message: _RecordedStep) -> None:
+        """Append and apply one worker's step, then release the waiting worker.
+
+        A commit error is handed to the worker and re-raised here, so the run
+        fails as a host error.
+        """
+        try:
+            prepared = prepare_node_step(self.state, message.node_id, message.step)
+            commit_prepared(self.log, self.state, prepared)
+        except Exception as exc:
+            message.error.append(exc)
+            message.done.set()
+            raise
+        message.done.set()
 
     def _commit_outcome(
         self,
@@ -462,6 +550,7 @@ class FlowEngine:
         *,
         emit_stream: Callable[[StreamChunk], None] | None,
         emit_event: Callable[[Any], None] | None = None,
+        steps: NodeSteps | None = None,
     ) -> EvaluatedOutcome:
         """Read and execute one already-started node without mutating run state."""
         node = self.state.flow.nodes[node_id]
@@ -482,6 +571,7 @@ class FlowEngine:
             tools=self.tools,
             skills=self.skills,
             steering=self.steering,
+            steps=steps,
         )
 
     def _evaluate_worker(
@@ -489,8 +579,9 @@ class FlowEngine:
         node_id: str,
         invocation: ConversationInvocation,
         messages: queue.Queue,
+        steps: NodeSteps,
     ) -> EvaluatedOutcome:
-        """Evaluate one claimed node and enqueue only its transient chunks and observers."""
+        """Evaluate one claimed node, enqueueing its transient chunks, observers, and steps."""
         return self._evaluate(
             node_id,
             invocation,
@@ -502,6 +593,7 @@ class FlowEngine:
                 None if self.on_event is None
                 else lambda event: messages.put(_RecordedEvent(node_id, event))
             ),
+            steps=steps,
         )
 
     def _emit_serial_stream(self, chunk: StreamChunk) -> None:

@@ -795,6 +795,10 @@ class Node(ABC):
     # ``caps['emit_stream']`` / ``caps['emit_event']`` only for the host sinks that exist.
     # AgentNode is the sole built-in opt-in; the runtime remains kind-blind.
     needs_live_events: ClassVar[bool] = False
+    # Declares "I record durable steps and read them back on a later start". The engine
+    # supplies ``caps['steps']`` (a ``NodeSteps``) only when this is True; a node driven
+    # without the engine gets none. The steps are opaque to the runtime, which stays kind-blind.
+    needs_steps: ClassVar[bool] = False
     # Declares "I read the host's steering inbox". The evaluator supplies
     # ``caps['steering']`` only when the run boundary injected one and this is True.
     # AgentNode reports its authored ``steerable:`` flag; the runtime remains kind-blind.

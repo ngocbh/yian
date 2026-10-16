@@ -1032,6 +1032,56 @@ class HostToolCall:
     output_type: Type | None
 
 
+@dataclass(frozen=True, slots=True)
+class NodeSteps:
+    """The durable steps one start of a node reads and records, from the engine.
+
+    The engine passes it as ``caps['steps']`` to a node declaring ``needs_steps``.
+    A step is a JSON object the node gives meaning to; the engine appends each one
+    to the run log and keeps it until the node settles, so a resumed node reads the
+    steps its earlier starts recorded.
+
+    Args:
+        starts (`int`):
+            Accepted starts of this node, including the current one; at least 1.
+            A resume of an interrupted start counts as a new start.
+        prior (`tuple[dict[str, Any], ...]`):
+            Copies of the steps earlier starts recorded, in record order.
+            Changing them does not change the run.
+        record (`Callable[[dict[str, Any]], None]`):
+            Appends one step durably and returns once the engine has applied it.
+
+    Raises:
+        `TypeError`:
+            A field has the wrong type.
+        `ValueError`:
+            ``starts`` is less than 1.
+
+    Example:
+        ```python
+        def forward(self, inputs, *, steps=None, **caps):
+            if steps is not None:
+                attempt = steps.starts + len(steps.prior)
+                steps.record({"event": "started", "attempt": attempt})
+        ```
+    """
+
+    starts: int
+    prior: tuple[dict[str, Any], ...]
+    record: Callable[[dict[str, Any]], None]
+
+    def __post_init__(self) -> None:
+        """Check the field types and that the current start is counted."""
+        if type(self.starts) is not int:
+            raise TypeError("starts must be an int")
+        if self.starts < 1:
+            raise ValueError("starts must be at least 1")
+        if type(self.prior) is not tuple or any(type(step) is not dict for step in self.prior):
+            raise TypeError("prior must be a tuple of dicts")
+        if not callable(self.record):
+            raise TypeError("record must be callable")
+
+
 @dataclass(frozen=True)
 class Parameter:
     """One named declared value with an optional contract and default policy.
@@ -1267,6 +1317,7 @@ __all__ = [
     "ChildFlowBoundary",
     "ExecutionPosition",
     "ExecutionScope",
+    "NodeSteps",
     "OutputContract",
     "Parameter",
     "PartialRecordContract",

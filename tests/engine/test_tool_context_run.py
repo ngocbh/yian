@@ -13,7 +13,7 @@ from yian.compose import load_flow
 from yian.llm_clients import LLMConfig
 from yian.nodes.agent import AgentNode
 from yian.run import resume_flow, run_flow
-from yian.tools import TOOL_REGISTRY, ToolSet, register_tool
+from yian.tools import TOOL_REGISTRY, FunctionTool, ToolSet, register_tool
 from yian.tools.context import ToolContext
 
 
@@ -368,6 +368,69 @@ def test_agent_registered_tool_sees_the_context(monkeypatch):
     )
 
     assert result.status == "succeeded", result.failure
+    _assert_agent_calls(seen, db)
+
+
+def test_a_function_tool_in_a_tool_node_sees_the_context_and_its_call_id():
+    seen: list[tuple[ToolContext, dict]] = []
+    db = _Db()
+
+    def on_invoke(ctx: ToolContext, args: dict) -> str:
+        seen.append((ctx, args))
+        return ctx.call_id
+
+    place = FunctionTool(
+        name="place",
+        description="Place one order.",
+        params_json_schema={"type": "object", "properties": {}},
+        on_invoke=on_invoke,
+    )
+
+    result = run_flow(
+        load_flow(_TOOL_FLOW), {}, tools={"place": place}, context=db, run_id="run-7f3a"
+    )
+
+    assert result.status == "succeeded", result.failure
+    [(ctx, args)] = seen
+    assert args == {}
+    assert ctx.context is db
+    assert ctx.node == "place"
+    assert ctx.tool_name == "place"
+    assert ctx.call_id == "run-7f3a/place"
+    assert result.output == "run-7f3a/place"
+
+
+def test_a_function_tool_granted_to_an_agent_sees_the_context_and_per_call_ids(monkeypatch):
+    seen: list[ToolContext] = []
+    texts: list[str] = []
+    db = _Db()
+
+    def on_invoke(ctx: ToolContext, args: dict) -> str:
+        seen.append(ctx)
+        texts.append(args["text"])
+        return f"seen {args['text']}"
+
+    probe = FunctionTool(
+        name="probe",
+        description="Look one thing up.",
+        params_json_schema={
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+        },
+        on_invoke=on_invoke,
+    )
+    model = _ScriptedModel(_two_calls_then_answer("probe"))
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: model)
+
+    result = run_flow(
+        load_flow(_AGENT_FLOW.replace("GRANT", "probe")), {},
+        tools={"probe": probe}, context=db, run_id="run-7f3a",
+    )
+
+    assert result.status == "succeeded", result.failure
+    assert texts == ["a", "b", "c"]
+    assert all(ctx.tool_name == "probe" for ctx in seen)
     _assert_agent_calls(seen, db)
 
 

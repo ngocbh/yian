@@ -8,6 +8,7 @@ from typing import Annotated, Optional, get_args, get_origin
 import pytest
 from pydantic import BaseModel, Field, ValidationError
 from pydantic.errors import PydanticInvalidForJsonSchema
+from pydantic.v1 import BaseModel as BaseModelV1
 
 from yian.tools.context import ToolContext
 from yian.tools.schema import function_schema
@@ -442,3 +443,23 @@ def test_annotated_with_several_metadata_items():
     prop = function_schema(f).params_json_schema["properties"]["n"]
 
     assert (prop["description"], prop["minimum"], prop["maximum"]) == ("first", 1, 5)
+
+
+class _LegacyOrder(BaseModelV1):
+    symbol: str
+
+
+@pytest.mark.parametrize("annotation", [_LegacyOrder, Optional[_LegacyOrder], list[_LegacyOrder]])
+def test_a_pydantic_v1_model_parameter_is_rejected_when_the_tool_is_built(annotation):
+    def f(order: annotation) -> None:
+        return None
+
+    with pytest.raises(TypeError) as excinfo:
+        function_schema(f, name_override="legacy")
+
+    message = str(excinfo.value)
+    assert "'legacy'" in message
+    assert "'order'" in message
+    assert "pydantic v2" in message
+    assert "BaseTool" in message
+    assert "args_schema" in message

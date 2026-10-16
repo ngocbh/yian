@@ -366,7 +366,7 @@ a `tools=` entry, and at decoration for `register_tool`. An `async def` tool rai
 | `attempt` | the attempt number, starting at 1 |
 | `tool_name` | the id the tool is registered under |
 | `run_id` | the run's id, or `""` outside a run |
-| `node` | the expanded id of the calling node, such as `loop#3/place`, or `""` outside a run |
+| `node` | the expanded id of the calling node, such as `loop#3/place`, or `""` when the caller names none |
 | `context` | the object passed as `context=`, or `None` |
 
 The call id depends on who calls the tool:
@@ -407,13 +407,17 @@ Host functions and `FunctionTool`s run directly, not through LangChain's
 `BaseTool` runs as before and receives no `ToolContext`.
 
 **Descriptions.** The tool's description is the docstring's first text section,
-everything before its first section header such as `Args:`. With no such text,
-the description is the tool id. Argument descriptions come from a Google `Args:`
-section (also `Arguments:`, `Params:`, or `Parameters:`), a NumPy `Parameters`
-section, or Sphinx `:param name:` fields; the style is detected from the
-docstring. `Annotated[T, "description"]` describes an argument the docstring
-doesn't. `Field(...)` defaults and constraints are kept, and a docstring or
-`Annotated` description replaces a `Field` description.
+everything before its first section header. Any `Word:` (or `Some words:`) line
+followed by an indented block starts a section, not only `Args:`, so the text of
+a `Steps:` or `Sources:` block, and everything after the first section, is not
+part of the description; only `Args:`-style sections fill argument descriptions.
+With no text before the first section, the description is the tool id.
+Argument descriptions come from a Google `Args:` section (also `Arguments:`,
+`Params:`, or `Parameters:`), a NumPy `Parameters` section, or Sphinx
+`:param name:` fields; the style is detected from the docstring.
+`Annotated[T, "description"]` describes an argument the docstring doesn't.
+`Field(...)` defaults and constraints are kept, and a docstring or `Annotated`
+description replaces a `Field` description.
 
 **`FunctionTool`.** A tool without a Python signature, such as one generated
 from an external schema, is a `FunctionTool`:

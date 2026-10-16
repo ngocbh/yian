@@ -86,8 +86,10 @@ def register_tool(tool_id: str, *, description_override: str | None = None) -> C
             `tool_id` is already registered, is the reserved `ask_user` id, or
             differs from a `FunctionTool`'s name.
         `TypeError`:
-            The function is async, an annotation can't be resolved, or `ToolContext`
-            appears anywhere but as the first parameter's type.
+            The target is not a function, method, or `FunctionTool`, or it is
+            rejected as `function_schema` rejects it (for example it is async, an
+            annotation can't be resolved, or `ToolContext` appears anywhere but as
+            the first parameter's type).
 
     Example:
         ```python
@@ -124,6 +126,12 @@ def register_tool(tool_id: str, *, description_override: str | None = None) -> C
                         "its name must match its id"
                     )
                 tool = _tool_from_function_tool(fn, description=description_override)
+            elif not (inspect.isfunction(fn) or inspect.ismethod(fn)):
+                raise TypeError(
+                    f"register_tool({tool_id!r}) got a {type(fn).__name__}; it accepts a "
+                    "function, method, or FunctionTool. Pass a BaseTool or another callable "
+                    "in the run's tools= mapping instead"
+                )
             else:
                 tool = _tool_from_function(tool_id, fn, description=description_override)
             TOOL_REGISTRY[tool_id] = tool

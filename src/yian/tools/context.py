@@ -34,7 +34,8 @@ class ToolContext(Generic[T]):
         run_id (`str`):
             The run's id, or `""` outside a run.
         node (`str`):
-            The expanded id of the calling node, or `""` outside a run.
+            The expanded id of the calling node, or `""` when the caller names
+            none. A node called directly, outside a run, still passes its id.
         context (`T`):
             The host's app object from `run_flow(..., context=...)` or
             `resume_flow(..., context=...)`. It is never recorded.

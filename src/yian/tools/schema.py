@@ -9,8 +9,8 @@ defaults and ``Annotated`` ``Field`` constraints are kept, and ``*args`` /
 annotated ``ToolContext`` (``tools.context``) is left out of the model; yian
 passes it when it calls the tool.
 
-Knows about: pydantic, ``tools.context``, ``tools.docstrings``, and the Python
-standard library.
+Knows about: pydantic (v1 only to reject its models), ``tools.context``,
+``tools.docstrings``, and the Python standard library.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from typing import Annotated, Any, get_args, get_origin, get_type_hints
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
 from pydantic.fields import FieldInfo
+from pydantic.v1 import BaseModel as BaseModelV1
 
 from yian.tools.context import ToolContext
 from yian.tools.docstrings import parse_docstring
@@ -160,9 +161,10 @@ def function_schema(
         `TypeError`:
             Raised when `func` has no name, is async, an annotation can't be
             resolved, `ToolContext` appears anywhere other than as the first
-            positional parameter's own type, `*args` is a fixed-length tuple, or
-            pydantic can't build the argument model or drops a parameter from it
-            (for example a `_x` or `model_config` parameter).
+            positional parameter's own type, a parameter is annotated with a
+            pydantic v1 model, `*args` is a fixed-length tuple, or pydantic can't
+            build the argument model or drops a parameter from it (for example a
+            `_x` or `model_config` parameter).
 
     Example:
         ```python
@@ -228,6 +230,14 @@ def function_schema(
                 f"tool function {func_name!r} parameter {param.name!r} wraps ToolContext in "
                 f"{hint!r}; only a first parameter annotated ToolContext or ToolContext[T] "
                 "receives the context"
+            )
+        if _mentions_pydantic_v1(hint):
+            # Pydantic v2 validates a v1 model field by calling its v2-style hooks, so
+            # every call would fail with an unrelated TypeError.
+            raise TypeError(
+                f"tool {name!r} parameter {param.name!r} is annotated with a pydantic v1 "
+                f"model ({hint!r}); use a pydantic v2 model, or wrap the tool as a "
+                "LangChain BaseTool with a v1 args_schema"
             )
 
     fields: dict[str, Any] = {}
@@ -343,3 +353,12 @@ def _mentions_tool_context(annotation: Any) -> bool:
     if _is_tool_context(annotation):
         return True
     return any(_mentions_tool_context(arg) for arg in get_args(annotation))
+
+
+def _mentions_pydantic_v1(annotation: Any) -> bool:
+    """Whether `annotation` is or contains a pydantic v1 model anywhere in its arguments."""
+    if isinstance(annotation, (list, tuple)):
+        return any(_mentions_pydantic_v1(item) for item in annotation)
+    if isinstance(annotation, type) and issubclass(annotation, BaseModelV1):
+        return True
+    return any(_mentions_pydantic_v1(arg) for arg in get_args(annotation))

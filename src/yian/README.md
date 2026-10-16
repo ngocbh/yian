@@ -339,8 +339,8 @@ appending anything. `model_from_config` passes the values to the client as
 `connection_headers`, a yian-only model field (`exclude=True`, `repr=False`) that
 each client adds to the SDK client's custom headers, so no langchain field, `repr`,
 or `dumpd` holds them. A model with connection headers never follows a redirect: the
-OpenAI-family and Azure clients give it fresh non-redirecting httpx clients, leaving
-langchain's shared ones untouched, and a host `http_client` must not follow
+OpenAI-family and Azure clients give it yian's own cached non-redirecting httpx clients,
+leaving langchain's shared ones untouched, and a host `http_client` must not follow
 redirects.
 
 `provider: azure` is the one exception. Its `base_url` is the resource endpoint and

@@ -911,7 +911,7 @@ Most are just the functional model (above) made enforceable:
   http options), never a langchain field, so `repr`, `model_dump()`, and
   `dumpd()` never show them; for `openai` the ids go as `OpenAI-Organization`/
   `OpenAI-Project` there. A model with connection headers refuses redirects:
-  OpenAI-family/Azure get fresh `follow_redirects=False` httpx clients (never
+  OpenAI-family/Azure get yian's cached `follow_redirects=False` httpx clients (never
   the shared langchain ones), and a host `http_client` must pass
   `check_no_redirects`. `call_credentials` lists every header value, however
   short, so errors scrub them like keys. OpenAI-family and Anthropic SDK clients keep only the custom

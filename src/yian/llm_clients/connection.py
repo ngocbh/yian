@@ -515,7 +515,7 @@ def _validate_keyed_connection(value: dict[str, Any], provider: str) -> dict[str
     """Validate a non-OpenAI keyed provider's connection fields.
 
     Args:
-        value (`dict[str, Any]`): Metadata with exactly the connection fields.
+        value (`dict[str, Any]`): Metadata with the required connection fields and any optional ones.
         provider (`str`): A keyed provider other than ``openai``.
 
     Returns:

@@ -43,6 +43,17 @@ class ErrorKind(str, Enum):
     PROTOCOL = "protocol"
 
 
+# Statuses whose kind does not depend on the body.
+_STATUS_KINDS = {
+    401: ErrorKind.AUTH,
+    403: ErrorKind.PERMISSION,
+    404: ErrorKind.NOT_FOUND,
+    408: ErrorKind.TIMEOUT,
+    429: ErrorKind.RATE_LIMIT,
+    529: ErrorKind.OVERLOADED,
+}
+
+
 class ProviderError(Exception):
     """A model call failed.
 
@@ -52,10 +63,14 @@ class ProviderError(Exception):
     Args:
         kind (`ErrorKind`): What went wrong.
         message (`str`): Human-readable text; ``str(error)`` returns it.
-        status (`int | None`): The HTTP status, when the provider replied.
-        retry_after (`float | None`): Seconds the provider asked to wait, if any.
-        retryable (`bool`): Whether retrying the same request may succeed.
-        provider (`str | None`): The provider name, for example ``"openai"``.
+        status (`int | None`, *optional*, defaults to `None`): The HTTP status, when the
+            provider replied.
+        retry_after (`float | None`, *optional*, defaults to `None`): Seconds the
+            provider asked to wait, if any.
+        retryable (`bool`, *optional*, defaults to `False`): Whether retrying the same
+            request may succeed.
+        provider (`str | None`, *optional*, defaults to `None`): The provider name, for
+            example ``"openai"``.
     """
 
     def __init__(
@@ -97,8 +112,8 @@ def parse_retry_after(headers: Mapping[str, str], *, now: float | None = None) -
 
     Args:
         headers (`Mapping[str, str]`): The reply headers; names match case-insensitively.
-        now (`float | None`): Current time in epoch seconds for the HTTP-date form;
-            defaults to `time.time()`.
+        now (`float | None`, *optional*, defaults to `None`): Current time in epoch
+            seconds for the HTTP-date form; `None` uses `time.time()`.
 
     Returns:
         `float | None`: The delay, or `None` when the header is absent or unparsable.
@@ -137,20 +152,26 @@ def error_from_response(
 ) -> ProviderError:
     """Build the error for a non-2xx HTTP reply.
 
-    The kind comes from the status: 401 auth, 403 permission, 404 not found, 408
-    timeout, 429 rate limit, 529 or a 503 whose body says "overloaded" overloaded,
-    other 5xx server, 3xx redirect, a 400/413/422 whose body names a context
-    overflow context length, and any other 4xx bad request. ``retryable`` follows
-    openai's `_should_retry`: a finite retry-after over ``max_retry_after`` refuses,
-    then ``x-should-retry`` decides, then 408, 409, 429 and 5xx retry.
+    The kind comes from the status:
+
+    - 401 auth, 403 permission, 404 not found, 408 timeout, 429 rate limit.
+    - 529, or a 503 whose body says "overloaded": overloaded.
+    - Any other 5xx: server.
+    - 3xx: redirect.
+    - A 400, 413 or 422 whose body names a context overflow: context length.
+    - Any other 4xx: bad request.
+
+    ``retryable`` follows openai's `_should_retry`: a finite retry-after over
+    ``max_retry_after`` refuses, then ``x-should-retry`` decides, then 408, 409, 429
+    and 5xx retry.
 
     Args:
         status (`int`): The HTTP status.
         headers (`Mapping[str, str]`): The reply headers; names match case-insensitively.
         body (`str`): The reply body text, already stripped of credentials.
         provider (`str`): The provider name, used in the message.
-        max_retry_after (`float | None`): The longest retry-after that still allows a
-            retry; `None` allows any.
+        max_retry_after (`float | None`, *optional*, defaults to `120.0`): The longest
+            retry-after that still allows a retry; `None` allows any.
 
     Returns:
         `ProviderError`: The error, with ``status``, ``retry_after``, ``retryable``
@@ -173,7 +194,10 @@ def error_from_response(
 
 
 def _header(headers: Mapping[str, str], name: str) -> str | None:
-    """Return the header ``name`` (lower case), matching names case-insensitively."""
+    """Return the header ``name``, or `None` when absent.
+
+    ``name`` must be lower case; header names match case-insensitively.
+    """
     value = headers.get(name)
     if value is not None:
         return value
@@ -185,10 +209,8 @@ def _header(headers: Mapping[str, str], name: str) -> str | None:
 
 def _kind(status: int, body: str) -> ErrorKind:
     """Return the error kind for ``status`` and, where it matters, ``body``."""
-    simple = {401: ErrorKind.AUTH, 403: ErrorKind.PERMISSION, 404: ErrorKind.NOT_FOUND,
-              408: ErrorKind.TIMEOUT, 429: ErrorKind.RATE_LIMIT, 529: ErrorKind.OVERLOADED}
-    if status in simple:
-        return simple[status]
+    if status in _STATUS_KINDS:
+        return _STATUS_KINDS[status]
     lowered = body.lower()
     if status == 503 and "overloaded" in lowered:
         return ErrorKind.OVERLOADED
@@ -264,8 +286,10 @@ def _redirect_detail(location: str | None) -> str:
         port = parts.port
     except ValueError:
         return "redirect to an unparsable Location"
-    if not parts.scheme or not host:
+    if not host:
         return "redirect to a relative Location"
+    if not parts.scheme:
+        return "redirect to a Location without a scheme"
     if ":" in host:
         host = f"[{host}]"
     return f"redirect to {parts.scheme}://{host}" + (f":{port}" if port is not None else "")

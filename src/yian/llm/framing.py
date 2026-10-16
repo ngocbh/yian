@@ -108,7 +108,7 @@ def iter_ndjson(chunks: Iterable[bytes]) -> Iterator[Any]:
         `Any`: Each line's JSON value.
 
     Raises:
-        ProviderError: A line is not valid UTF-8 JSON (kind `PROTOCOL`); the message
+        `ProviderError`: A line is not valid UTF-8 JSON (kind `PROTOCOL`); the message
             gives the line number, never the line.
     """
     pending: list[bytes] = []

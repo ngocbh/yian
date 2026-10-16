@@ -185,6 +185,17 @@ class TestMessage:
         err = error_from_response(301, {}, "", provider="p")
         assert err.message.startswith("p returned HTTP 301 (redirect): ")
 
+    def test_redirect_to_location_without_scheme(self):
+        headers = {"Location": "//evil.example.com/steal?token=abc"}
+        err = error_from_response(302, headers, "", provider="p")
+        assert err.message.endswith(": redirect to a Location without a scheme")
+        for leak in ("evil", "steal", "token"):
+            assert leak not in err.message
+
+    def test_redirect_to_relative_location(self):
+        err = error_from_response(302, {"Location": "/steal?token=abc"}, "", provider="p")
+        assert err.message.endswith(": redirect to a relative Location")
+
 
 def test_caller_scrub_removes_echoed_key():
     body = json.dumps({"error": {"message": "Incorrect API key provided: sk-test-123456."}})

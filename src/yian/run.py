@@ -1053,16 +1053,16 @@ def _resume_flow_controlled(
         _check_recorded_llm_fields(state.effective_llm_by_static_path, static_agent_labels(flow.compiled))
         if check_llm_configs is not None:
             check_llm_configs(legacy_connection_map(state.effective_llm_by_static_path))
+        if state.memories is not None and memory is None:
+            raise MemorySetupError(
+                "resuming this run requires its enabled memory mapping"
+            )
         run_servers = _open_run_servers(unopened)
         run_tools = ToolSet(tools, context=context)
         _check_tool_grants(flow.compiled, run_tools)
         _check_tool_types(flow.compiled, run_tools)
 
         if state.memories is not None:
-            if memory is None:
-                raise MemorySetupError(
-                    "resuming this run requires its enabled memory mapping"
-                )
             _check_registry_types(memory, state.memories)
             memory_table, memory_origins, memory_stack_set = _resolve_authored_memory_layout(flow)
             _check_recorded_memory_table(

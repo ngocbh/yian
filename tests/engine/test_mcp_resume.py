@@ -5,10 +5,13 @@ import pytest
 pytest.importorskip("mcp")
 
 from yian.compose import load_flow
+from yian.events import RunStarted
+from yian.memory.contracts import MemorySetupError
 from yian.run import resume_flow, run_flow
 from yian.tools.context import ToolContext
 from yian.tools.mcp import McpConnectError, mcp_server
 
+from tests.engine._memory_fakes import _Memory
 from tests.engine.mcp_helpers import child_alive, mcp_threads, stdio_params
 
 _WHOAMI_FLOW = """
@@ -133,3 +136,36 @@ def test_a_check_that_needs_no_tools_fails_before_the_server_starts(tmp_path):
     _assert_closed(server)
     resumed = resume_flow(flow, log=log, tools={"fake": server})
     assert resumed.status == "succeeded", resumed.failure
+
+
+_MEMORY_FLOW = """
+id: mcp_memory
+name: mcp_memory
+long_term_memory: test
+nodes:
+  work:
+    kind: code
+    code: return 7
+    output: int
+output: ${work.output}
+"""
+
+
+def test_resuming_without_the_runs_memory_fails_before_any_server_starts(tmp_path):
+    log = tmp_path / "run.jsonl"
+    marker = tmp_path / "pid"
+    flow = load_flow(_MEMORY_FLOW)
+
+    def stop_after_start(event: object) -> None:
+        if isinstance(event, RunStarted):
+            raise RuntimeError("host stop")
+
+    with pytest.raises(RuntimeError, match="host stop"):
+        run_flow(flow, {}, log=log, memory={"test": _Memory()}, on_event=stop_after_start)
+    server = mcp_server(**stdio_params("--marker", str(marker)))
+
+    with pytest.raises(MemorySetupError, match="requires its enabled memory mapping"):
+        resume_flow(flow, log=log, tools={"fake": server})
+
+    assert not marker.exists()
+    _assert_closed(server)

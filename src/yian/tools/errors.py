@@ -38,6 +38,8 @@ class ReportedToolError(Exception):
 
     Example:
         ```python
+        import os
+
         def read_file(path: str) -> str:
             if not os.path.exists(path):
                 raise ReportedToolError(f"no such file: {path}")

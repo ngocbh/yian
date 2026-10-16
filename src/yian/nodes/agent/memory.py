@@ -782,8 +782,8 @@ def _reported_text(name: str, error: ReportedToolError) -> str:
         `str`: ``str(error)``, or the error's type name when that is empty.
 
     Raises:
-        `ValueError`: The error's text holds an int with more than
-            `YIAN_MAX_INT_DIGITS` digits.
+        `Exception`: `str(error)` fails, including on an int past Python's digit limit
+            (a `ValueError`).
     """
     return _tool_text(name, error) or type(error).__name__
 

@@ -35,12 +35,14 @@ output: ${worker.output}
 """
 
 
-def _recorder(seen: list):
-    """Return a tool that records the stop event it sees during its call."""
+def _recorder(seen: list, threads: list | None = None):
+    """Return a tool that records the stop event it sees, and its thread's name, during its call."""
 
     def probe() -> str:
         """Record the current stop event."""
         seen.append(_current_stop())
+        if threads is not None:
+            threads.append(threading.current_thread().name)
         return "ok"
 
     return probe
@@ -107,24 +109,32 @@ def test_the_stop_event_is_cleared_after_a_tool_raises():
 @pytest.mark.parametrize("num_workers", [0, 8])
 def test_a_tool_node_sees_the_engine_stop_event(num_workers: int):
     seen: list = []
-    result = run_flow(load_flow(_TOOL_FLOW), {}, tools={"probe": _recorder(seen)}, num_workers=num_workers)
+    threads: list = []
+    result = run_flow(
+        load_flow(_TOOL_FLOW), {}, tools={"probe": _recorder(seen, threads)}, num_workers=num_workers
+    )
 
     assert result.status == "succeeded", result.failure
     [event] = seen
     assert isinstance(event, threading.Event)
+    [name] = threads
+    assert name.startswith("ac-runtime") == (num_workers > 0)
 
 
 @pytest.mark.parametrize("num_workers", [0, 8])
 def test_a_tool_node_sees_its_run_stop_event(num_workers: int):
     ev = threading.Event()
     seen: list = []
+    threads: list = []
     result = _run_flow_controlled(
-        load_flow(_TOOL_FLOW), {}, tools={"probe": _recorder(seen)},
+        load_flow(_TOOL_FLOW), {}, tools={"probe": _recorder(seen, threads)},
         num_workers=num_workers, stop_event=ev,
     )
 
     assert result.status == "succeeded", result.failure
     assert seen == [ev]
+    [name] = threads
+    assert name.startswith("ac-runtime") == (num_workers > 0)
 
 
 def test_concurrent_runs_see_their_own_stop_events():
@@ -133,28 +143,31 @@ def test_concurrent_runs_see_their_own_stop_events():
     seen: dict[str, object] = {}
     results: dict[str, object] = {}
 
-    def make_probe(name: str):
-        def probe() -> str:
-            """Record the current stop event once both runs are inside a call."""
-            barrier.wait()
-            seen[name] = _current_stop()
-            barrier.wait()
-            return "ok"
+    def probe() -> str:
+        """Record the current stop event, by run, once both runs are inside a call."""
+        barrier.wait()
+        # Without workers the tool runs on the run's own thread, named after the run.
+        seen[threading.current_thread().name] = _current_stop()
+        barrier.wait()
+        return "ok"
 
-        return probe
+    # One tools mapping and one tool object shared by both runs, as one MCP server's
+    # tools are; run_flow takes a mapping, not a ToolSet.
+    shared = {"probe": StructuredTool.from_function(probe, name="probe")}
 
     def drive(name: str) -> None:
         results[name] = _run_flow_controlled(
-            load_flow(_TOOL_FLOW), {}, tools={"probe": make_probe(name)},
-            stop_event=events[name],
+            load_flow(_TOOL_FLOW), {}, tools=shared, num_workers=0, stop_event=events[name],
         )
 
-    threads = [threading.Thread(target=drive, args=(name,)) for name in events]
+    threads = [threading.Thread(target=drive, args=(name,), name=name) for name in events]
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join(timeout=30)
 
+    assert not any(thread.is_alive() for thread in threads)
+    assert set(results) == {"a", "b"}
     assert all(result.status == "succeeded" for result in results.values()), results
     assert seen["a"] is events["a"]
     assert seen["b"] is events["b"]

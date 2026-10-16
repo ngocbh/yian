@@ -183,6 +183,7 @@ def test_a_session_records_the_reported_call_completed_with_its_message(monkeypa
             {"name": "lookup", "args": {"value": 1}, "id": "c0", "type": "tool_call"},
         ]),
         AIMessage(content="missing"),
+        AIMessage(content="still missing"),
     ])
     monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
 
@@ -209,6 +210,18 @@ def test_a_session_records_the_reported_call_completed_with_its_message(monkeypa
     assert view.effects[1].failure is None
     stored = _tool_messages([decode_message(item) for item in view.items])
     assert [(message.status, message.content, message.tool_call_id) for message in stored] == [
+        ("error", "no record 1", "c0"),
+    ]
+
+    # A later turn on the same session replays the reported error to the model.
+    second = run_flow(
+        load_flow(_SESSION_FLOW), {"question": "again"}, tools={"lookup": lookup},
+        memory={"session": memory},
+    )
+    assert second.status == "succeeded", second.failure
+    assert second.output == "still missing"
+    replayed = _tool_messages(model.calls[2])
+    assert [(message.status, message.content, message.tool_call_id) for message in replayed] == [
         ("error", "no record 1", "c0"),
     ]
 

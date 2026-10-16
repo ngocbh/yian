@@ -479,8 +479,8 @@ def test_no_raw_httpx_error_before_first_frame(error_type):
     assert isinstance(info.value.__cause__, error_type)
     # Transport errors and timeouts are retried (max_retries + 1 requests); decoding and
     # other httpx2 errors are not.
-    retried = issubclass(error_type, (httpx2.TransportError, httpx2.TimeoutException))
-    assert len(h.requests) == (3 if retried else 1)
+    retried = issubclass(error_type, httpx2.TransportError)
+    assert len(h.requests) == (route().max_retries + 1 if retried else 1)
 
 
 @pytest.mark.parametrize("error_type", HTTPX_ERRORS)

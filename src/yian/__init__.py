@@ -29,9 +29,9 @@ that Compose-facing coordinate type. Other leaves import nothing upward:
 (provider client wrappers + `LLMConfig` — the AGENT node's model seam), `llm` (the
 provider-neutral message, stream and error vocabulary plus an httpx2 transport; it
 imports only the standard library, httpx2 and `defaults`, and `llm_clients` will
-build on it), and `skills` (host-supplied `SKILL.md` values,
-confined bundled-file reads, and the AGENT's built-in `load_skill` tool; `compose.skills`
-reads skill folders from disk). `nodes` are the node kinds — spawners return canonical growth seeds and
+build on it), and `skills` (host-supplied `SKILL.md` values, confined bundled-file
+reads, and the AGENT's built-in `load_skill` tool; `compose.skills` reads skill folders
+from disk). `nodes` are the node kinds — spawners return canonical growth seeds and
 never import compile; the synthesized boundary kinds own their
 reserved ids (`StartNode.ID == "__start__"`, `EndNode.ID == "__end__"`). `compile` is the
 compiled `CompiledFlow` IR + representation-neutral validation checkers, and owns the

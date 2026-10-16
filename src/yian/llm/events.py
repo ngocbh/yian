@@ -207,6 +207,8 @@ def collect(events: Iterable[Event]) -> Response:
         `ProviderError`: A tool call built from deltas has no id or no name (kind
             ``PROTOCOL``).
         `TypeError`: An item is not an event.
+        `MessageFormatError`: A part built from deltas holds text that is not valid
+            (for example an unpaired surrogate), so it could never be sent back.
     """
     try:
         return _collect(events)

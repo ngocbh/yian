@@ -1,0 +1,16 @@
+{"kind":"run_started","payload":{"effective_llm_by_static_path":{},"flow_fingerprint":"85fd41b7508e25e5f1584704b9f1aa5e40ade0308af8e0150d336d2edf387085","initial_pool":{"start_id":"__start__","store":{"__start__":{"kind":"object","value":{}}},"system":{"now":{"kind":"datetime","value":"2026-10-16T07:43:23.182618+00:00"},"run_id":{"kind":"str","value":"old-loop-tool-crash"},"today":{"kind":"date","value":"2026-10-16"}}},"learnable":false,"memories":null,"memory_snapshots":null,"memory_stacks":null,"num_workers":0,"start_wiring_override":{}},"run_id":"old-loop-tool-crash","schema":9,"seq":0}
+{"kind":"node_started","payload":{"node_id":"__start__"},"run_id":"old-loop-tool-crash","schema":9,"seq":1}
+{"kind":"node_succeeded","payload":{"commit_target":"__start__","evidence":null,"forward_capture":null,"node_id":"__start__","value":{"kind":"object","value":{}}},"run_id":"old-loop-tool-crash","schema":9,"seq":2}
+{"kind":"node_started","payload":{"node_id":"loop"},"run_id":"old-loop-tool-crash","schema":9,"seq":3}
+{"kind":"node_expanded","payload":{"evidence":null,"forward_capture":null,"prune_ids":[],"seed":[{"count":0},0],"spawner_id":"loop","topology_digest":"06f1eeafca74f0059a26c2a375a4ef53f84928812b5dd4c338d5e87bb9ed6014"},"run_id":"old-loop-tool-crash","schema":9,"seq":4}
+{"kind":"node_started","payload":{"node_id":"loop#0/__start__"},"run_id":"old-loop-tool-crash","schema":9,"seq":5}
+{"kind":"node_succeeded","payload":{"commit_target":"loop#0/__start__","evidence":null,"forward_capture":null,"node_id":"loop#0/__start__","value":{"kind":"object","value":{"count":0}}},"run_id":"old-loop-tool-crash","schema":9,"seq":6}
+{"kind":"node_started","payload":{"node_id":"loop#0/place"},"run_id":"old-loop-tool-crash","schema":9,"seq":7}
+{"kind":"node_succeeded","payload":{"commit_target":"loop#0/place","evidence":null,"forward_capture":null,"node_id":"loop#0/place","value":{"kind":"str","value":"ok"}},"run_id":"old-loop-tool-crash","schema":9,"seq":8}
+{"kind":"node_started","payload":{"node_id":"loop#0/__end__"},"run_id":"old-loop-tool-crash","schema":9,"seq":9}
+{"kind":"node_succeeded","payload":{"commit_target":"loop#0/__end__","evidence":null,"forward_capture":null,"node_id":"loop#0/__end__","value":{"kind":"object","value":{"count":1}}},"run_id":"old-loop-tool-crash","schema":9,"seq":10}
+{"kind":"node_started","payload":{"node_id":"loop~1"},"run_id":"old-loop-tool-crash","schema":9,"seq":11}
+{"kind":"node_expanded","payload":{"evidence":null,"forward_capture":null,"prune_ids":["loop#0/__end__","loop#0/__start__","loop#0/place","loop~1"],"seed":[{"count":1},1],"spawner_id":"loop~1","topology_digest":"f2861b4aef25f976c8e4c94f681bedbc4f2e947e0055d6cd217999b07c215454"},"run_id":"old-loop-tool-crash","schema":9,"seq":12}
+{"kind":"node_started","payload":{"node_id":"loop#1/__start__"},"run_id":"old-loop-tool-crash","schema":9,"seq":13}
+{"kind":"node_succeeded","payload":{"commit_target":"loop#1/__start__","evidence":null,"forward_capture":null,"node_id":"loop#1/__start__","value":{"kind":"object","value":{"count":1}}},"run_id":"old-loop-tool-crash","schema":9,"seq":14}
+{"kind":"node_started","payload":{"node_id":"loop#1/place"},"run_id":"old-loop-tool-crash","schema":9,"seq":15}

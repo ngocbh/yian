@@ -30,7 +30,7 @@ import copy
 import functools
 import inspect
 import json
-from threading import RLock
+from threading import Event, RLock
 from types import MappingProxyType
 from typing import Annotated, Any, Callable
 from uuid import uuid4
@@ -40,7 +40,7 @@ from pydantic import BeforeValidator, Field
 
 from yian.defaults import current
 from yian.skills.tool import LOAD_SKILL
-from yian.tools.context import ToolContext
+from yian.tools.context import _STOP_EVENT, ToolContext
 from yian.tools.errors import ToolCheckError
 from yian.tools.function_tools import FunctionTool
 from yian.tools.schema import _is_tool_context, function_schema
@@ -484,6 +484,9 @@ class ToolSet:
     tool name, run id, calling node, and this set's `context`. The model never
     sees that parameter. A `FunctionTool`'s `on_invoke` always receives one.
 
+    `for_run` binds a copy to one run's id and stop event; a tool reads the event
+    of the run calling it through `yian.tools.context._current_stop()`.
+
     Args:
         tools (`Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None`, *optional*, defaults to `None`):
             The run's tools keyed by tool id. A function or method becomes a tool
@@ -544,7 +547,7 @@ class ToolSet:
         ```
     """
 
-    __slots__ = ("_tools", "_groups", "_run_id", "_context")
+    __slots__ = ("_tools", "_groups", "_run_id", "_context", "_stop_event")
 
     def __init__(
         self,
@@ -556,6 +559,7 @@ class ToolSet:
         self._groups: MappingProxyType[str, tuple[str, ...]] = MappingProxyType({})
         self._run_id = ""
         self._context = context
+        self._stop_event: Event | None = None
         if tools is None:
             return
         if not isinstance(tools, Mapping):
@@ -667,13 +671,17 @@ class ToolSet:
                 )
             return tool
 
-    def for_run(self, run_id: str) -> ToolSet:
+    def for_run(self, run_id: str, *, stop_event: Event | None = None) -> ToolSet:
         """Return a copy bound to one run, sharing this set's tools and context.
 
         Args:
             run_id (`str`):
                 The run's id, passed to tools as `ToolContext.run_id` and the base
                 of each call's default `call_id`.
+            stop_event (`threading.Event | None`, *optional*, defaults to `None`):
+                The run's stop event, which a tool reads during its call through
+                `yian.tools.context._current_stop()`. The copy holds exactly this
+                value: `None` gives no event, even when this set was bound to one.
 
         Returns:
             `ToolSet`:
@@ -684,12 +692,18 @@ class ToolSet:
         bound._groups = self._groups
         bound._run_id = run_id
         bound._context = self._context
+        bound._stop_event = stop_event
         return bound
 
     @property
     def run_id(self) -> str:
         """The bound run's id, or `""` when `for_run` has not bound one."""
         return self._run_id
+
+    @property
+    def stop_event(self) -> Event | None:
+        """The bound run's stop event, or `None` when `for_run` has not bound one."""
+        return self._stop_event
 
     @property
     def context(self) -> Any:
@@ -869,23 +883,28 @@ class ToolSet:
         """Call a validated tool: a yian-built tool with its context, any other through `invoke`.
 
         Host tools run directly, not inside LangChain's `invoke`, so LangChain
-        callbacks and tracing don't fire for them.
+        callbacks and tracing don't fire for them. The bound stop event is visible
+        to the tool through `_current_stop()` for the length of the call.
         """
-        if not isinstance(tool, _HostTool):
-            return tool.invoke(payload)
-        if call_id is None:
-            # Without a run and a node nothing makes two calls the same call, so
-            # each gets its own id.
-            call_id = f"{self._run_id}/{node}" if self._run_id and node else uuid4().hex
-        ctx = ToolContext(
-            call_id=call_id,
-            attempt=attempt,
-            tool_name=tool_id,
-            run_id=self._run_id,
-            node=node,
-            context=self._context,
-        )
-        return tool.yian_call(ctx, payload)
+        token = _STOP_EVENT.set(self._stop_event)
+        try:
+            if not isinstance(tool, _HostTool):
+                return tool.invoke(payload)
+            if call_id is None:
+                # Without a run and a node nothing makes two calls the same call, so
+                # each gets its own id.
+                call_id = f"{self._run_id}/{node}" if self._run_id and node else uuid4().hex
+            ctx = ToolContext(
+                call_id=call_id,
+                attempt=attempt,
+                tool_name=tool_id,
+                run_id=self._run_id,
+                node=node,
+                context=self._context,
+            )
+            return tool.yian_call(ctx, payload)
+        finally:
+            _STOP_EVENT.reset(token)
 
 
 def resolve_tools(tool_ids: list[str]) -> list[BaseTool]:

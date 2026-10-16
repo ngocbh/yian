@@ -194,7 +194,9 @@ class FlowEngine:
         self.on_stream = on_stream
         self.stop_event = stop_event if stop_event is not None else threading.Event()
         self.memory_context_opener = memory_context_opener
-        self.tools = (tools if tools is not None else ToolSet()).for_run(state.run_id or "")
+        self.tools = (tools if tools is not None else ToolSet()).for_run(
+            state.run_id or "", stop_event=self.stop_event
+        )
         self.skills = skills
         self.steering = require_steering(steering)
 

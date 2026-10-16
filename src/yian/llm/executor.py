@@ -88,6 +88,12 @@ def _http_error(
     Timeouts and other transport errors are retryable only before the first frame;
     decoding errors and any other httpx2 error never are.
 
+    Only the returned error's text is scrubbed. Raised ``from exc``, it keeps the
+    original httpx2 exception as ``__cause__`` unscrubbed: its text and its
+    ``.request`` headers may hold credentials, so callers must scrub before showing
+    the chain (`llm_clients.connection.scrub_call_credentials`) and never serialize
+    the cause.
+
     Args:
         exc (`httpx2.HTTPError`): The failure.
         route (`Route`): The route the request used, for the provider and credentials.
@@ -305,7 +311,10 @@ class Executor:
                 without NaN or infinity or holds an unpaired surrogate, or an auth header
                 value is invalid. Raised before any request.
             `ProviderError`: If the request fails and is not retried (any more), the
-                server redirects, or the reply cannot be decoded or framed.
+                server redirects, or the reply cannot be decoded or framed. An httpx2
+                failure is kept unscrubbed as its ``__cause__``; see `_http_error`.
+            `Exception`: Whatever the route's auth source raises, such as a failed
+                subscription token refresh, propagated unchanged.
         """
         if framing not in _FRAMINGS:
             raise ValueError(f"unknown framing {framing!r}; expected sse, ndjson or json")

@@ -44,7 +44,7 @@ ENV = {
 _UNSET = (
     "OPENAI_API_KEY", "AZURE_OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY",
     "OPENAI_BASE_URL", "OPENAI_API_BASE", "ANTHROPIC_BASE_URL", "GOOGLE_GENAI_USE_VERTEXAI",
-    "GOOGLE_GENAI_USE_ENTERPRISE", "GOOGLE_GEMINI_BASE_URL", "OPENAI_PROXY",
+    "GOOGLE_GENAI_USE_ENTERPRISE", "GOOGLE_GEMINI_BASE_URL", "OPENAI_PROXY", "ANTHROPIC_PROXY",
 )
 
 CHAT_REPLY = {
@@ -175,7 +175,9 @@ def test_subscription_sends_only_its_own_headers(poisoned_env):
 
 
 def test_explicit_default_headers_survive(poisoned_env):
-    poisoned_env.setenv("OPENAI_CUSTOM_HEADERS", ENV["OPENAI_CUSTOM_HEADERS"] + "\nx-host: env-host")
+    poisoned_env.setenv(
+        "OPENAI_CUSTOM_HEADERS", ENV["OPENAI_CUSTOM_HEADERS"] + "\nx-host: env-host"
+    )
     server = ChatServer()
     with httpx.Client(transport=httpx.MockTransport(server)) as client:
         NormalizedChatOpenAI(
@@ -221,7 +223,9 @@ def test_azure_sends_only_the_explicit_key(poisoned_env):
 
 
 def test_azure_user_agent_from_env_does_not_win(poisoned_env):
-    poisoned_env.setenv("OPENAI_CUSTOM_HEADERS", ENV["OPENAI_CUSTOM_HEADERS"] + "\nuser-agent: env-ua")
+    poisoned_env.setenv(
+        "OPENAI_CUSTOM_HEADERS", ENV["OPENAI_CUSTOM_HEADERS"] + "\nuser-agent: env-ua"
+    )
     server = ChatServer()
     invoke_both(_azure(api_key="az-explicit"), server)
     assert len(server.requests) == 2
@@ -292,7 +296,7 @@ def test_anthropic_default_client_drops_env_headers(poisoned_env, base_url):
         assert "Authorization" not in headers
 
 
-def test_drop_environment_headers_clears_an_env_auth_token():
+def test_anthropic_hook_clears_an_env_auth_token():
     # What a 0.x SDK holds after reading ANTHROPIC_AUTH_TOKEN beside a passed key.
     server = _Server()
     package = _anthropic_httpx()

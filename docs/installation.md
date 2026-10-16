@@ -85,7 +85,18 @@ An agent's credential comes from, highest first: a Python host's
 `llm_config.api_key`, the provider's saved login, then the provider's key variable
 (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, ...). Whatever its source, a credential
 that a provider echoes in an error is replaced with `[REDACTED]` before the failure
-is recorded or printed. Endpoints still come from
+is recorded or printed. A request carries only one credential: yian does not send
+the headers in `OPENAI_CUSTOM_HEADERS` or `ANTHROPIC_CUSTOM_HEADERS`, or the
+organization and project from `OPENAI_ORG_ID`, `OPENAI_ORGANIZATION`, and
+`OPENAI_PROJECT_ID`, so an OpenAI organization or project can no longer be chosen
+through them. This is a breaking change: earlier versions sent them. yian warns
+once when it drops a header from these variables; unset the variable to silence it.
+Flow runs (the CLI, YAML, or a Python host's `llm_config`) cannot send these
+headers. Only Python code that builds a model itself with `create_llm_client` can,
+by setting them on the `http_client` it passes, e.g.
+`httpx.Client(headers={"OpenAI-Organization": "org-..."})`. A key yian passes to
+Azure (a Python host's key or a saved login) is sent even when
+`AZURE_OPENAI_AD_TOKEN` is set. Endpoints still come from
 environment variables at run time (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`,
 `VLLM_BASE_URL`, `OLLAMA_BASE_URL`, ...); a saved login stores only the key, plus
 the endpoint for Azure. Azure's API version always comes from `OPENAI_API_VERSION`.
@@ -227,7 +238,8 @@ A flow file may set `base_url` only beside `provider: azure`. An `/openai` or
 `/openai/v1` suffix is stripped. An Azure agent that ends up without a `base_url`
 fails before the run's first node, saying to set it. The API version always comes
 from `OPENAI_API_VERSION`, for runs and for `yian auth azure`'s model check. Without
-a saved login, the key stays in `AZURE_OPENAI_API_KEY`; a Python host can pass the
+a saved login, the key stays in `AZURE_OPENAI_API_KEY` (the Azure SDK prefers
+`AZURE_OPENAI_AD_TOKEN` when both are set); a Python host can pass the
 key as `api_key` instead, and then must pass `base_url` beside it.
 `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_DEPLOYMENT_NAME` are not read: move their
 values into `base_url` and `model`, or save them with `yian auth azure`.

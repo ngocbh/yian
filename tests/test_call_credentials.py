@@ -115,6 +115,15 @@ def test_always_sent_variables(monkeypatch):
     }
 
 
+def test_environment_header_values_are_not_listed(monkeypatch):
+    # The clients drop SDK header variables, so their values are never sent.
+    monkeypatch.setenv("OPENAI_CUSTOM_HEADERS", "Authorization: Bearer custom-secret")
+    monkeypatch.setenv("ANTHROPIC_CUSTOM_HEADERS", "Authorization: Bearer custom-secret")
+    for provider in ("openai", "anthropic"):
+        config = {"provider": provider, "model": "m", "api_key": "sk-host"}
+        assert call_credentials(config) == ("sk-host",)
+
+
 def test_unresolved_config_is_resolved_first():
     AuthStore().save("anthropic", ApiKeyCredentials("sk-saved-anthropic"), "claude-x")
     assert call_credentials({"provider": "anthropic", "model": "c"}) == ("sk-saved-anthropic",)

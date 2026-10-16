@@ -1,5 +1,6 @@
 import copy
 import inspect
+from collections.abc import Iterable
 from contextvars import ContextVar
 from functools import cache, cached_property
 from operator import itemgetter
@@ -17,7 +18,13 @@ from langchain_core.runnables import RunnableLambda, RunnableMap, RunnablePassth
 from langchain_core.utils.pydantic import is_basemodel_subclass
 from pydantic import Field
 
-from .base_client import BaseLLMClient, check_no_redirects, missing_tool_call, normalize_content
+from .base_client import (
+    BaseLLMClient,
+    check_no_redirects,
+    drop_environment_headers,
+    missing_tool_call,
+    normalize_content,
+)
 from .capabilities import has_open_schema
 from .provider_blocks import merge_request_body
 from .validators import validate_model
@@ -70,6 +77,28 @@ def _forces_tool(model: str) -> bool:
     return _supports_forced_tool_choice(model)
 
 
+def _own_headers(client: Any, explicit: Iterable[str]) -> Any:
+    """Strip what an SDK client took from the environment, keeping the passed key.
+
+    Args:
+        client (`anthropic.Client` or `anthropic.AsyncClient`):
+            The built SDK client, changed in place.
+        explicit (`Iterable[str]`):
+            Names of the custom headers the caller passed itself.
+
+    Returns:
+        `anthropic.Client` or `anthropic.AsyncClient`:
+            `client`.
+    """
+    drop_environment_headers(client, explicit, ("ANTHROPIC_CUSTOM_HEADERS",))
+    # The SDK sends both ``x-api-key`` and a bearer ``auth_token`` when it holds both, and
+    # 0.x SDKs fill ``auth_token`` from ANTHROPIC_AUTH_TOKEN; a passed key is the only
+    # credential yian means to send.
+    if client.api_key:
+        client.auth_token = None
+    return client
+
+
 # The raw responses opened by the `_stream` call running in this context.
 _OPENED_STREAMS: ContextVar[Optional[list]] = ContextVar("anthropic_opened_streams", default=None)
 
@@ -79,7 +108,8 @@ class NormalizedChatAnthropic(ChatAnthropic):
 
     Claude models with extended thinking or tool use return content as a
     list of typed blocks. This normalizes to string for consistent
-    downstream handling.
+    downstream handling. Its SDK clients send only the passed key and headers, not
+    ``ANTHROPIC_CUSTOM_HEADERS`` or ``ANTHROPIC_AUTH_TOKEN``.
 
     Attributes:
         follow_redirects (`bool`, *optional*, defaults to `True`):
@@ -106,6 +136,16 @@ class NormalizedChatAnthropic(ChatAnthropic):
 
     @cached_property
     def _client(self) -> anthropic.Client:
+        return _own_headers(self._build_client(), self._client_params.get("default_headers") or {})
+
+    @cached_property
+    def _async_client(self) -> anthropic.AsyncClient:
+        return _own_headers(
+            self._build_async_client(), self._client_params.get("default_headers") or {}
+        )
+
+    def _build_client(self) -> anthropic.Client:
+        """Build the sync SDK client on the HTTP client this model is configured with."""
         client = super()._client
         if self.http_client is not None:
             if not self.follow_redirects:
@@ -115,8 +155,8 @@ class NormalizedChatAnthropic(ChatAnthropic):
             return client
         return client.with_options(http_client=anthropic.DefaultHttpxClient(**self._http_options()))
 
-    @cached_property
-    def _async_client(self) -> anthropic.AsyncClient:
+    def _build_async_client(self) -> anthropic.AsyncClient:
+        """Build the async SDK client on the HTTP client this model is configured with."""
         client = super()._async_client
         if self.http_async_client is not None:
             if not self.follow_redirects:

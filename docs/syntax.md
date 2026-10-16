@@ -1605,7 +1605,8 @@ endpoint, such as `https://<resource>.openai.azure.com/`. Both are ordinary
 `llm_config:` fields there, so a flow can set them at any level. A saved Azure login
 (`yian auth azure`) supplies its endpoint as `base_url` and its deployment as `model`
 to Azure agents that leave them unset, and its key goes only to that resource;
-otherwise the key stays in `AZURE_OPENAI_API_KEY`. An Azure agent whose resolved
+otherwise the key stays in `AZURE_OPENAI_API_KEY` (the Azure SDK prefers
+`AZURE_OPENAI_AD_TOKEN` when both are set). An Azure agent whose resolved
 config has no `base_url` fails before the run's first node.
 
 The CLI flags are the *outermost authored* layer — they fill gaps, they do **not**

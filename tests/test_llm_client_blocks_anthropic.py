@@ -597,7 +597,7 @@ def test_a_transcript_run_on_those_models_stores_the_reply_and_corrects_it(serve
 @pytest.fixture
 def clean_env(tmp_path, monkeypatch):
     monkeypatch.setenv("YIAN_AUTH_FILE", str(tmp_path / "auth.json"))
-    for name in (*_ENV_KEYS, "ANTHROPIC_PROXY"):
+    for name in (*_ENV_KEYS, "ANTHROPIC_PROXY", "ANTHROPIC_CUSTOM_HEADERS"):
         monkeypatch.delenv(name, raising=False)
     return monkeypatch
 

@@ -1,8 +1,14 @@
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from typing import Any, Optional
 import warnings
 
 from langchain_core.exceptions import OutputParserException
+
+# The header-drop warnings already shown in this process. Python's own once-per-location
+# registry is cleared whenever `warnings.catch_warnings()` is entered, which langchain-core
+# does when binding tools, so without this the warning repeats on every agent invocation.
+_warned: set[str] = set()
 
 
 def normalize_content(response):
@@ -52,6 +58,60 @@ def check_no_redirects(name: str, http_client: Any) -> None:
             f"{name} follows redirects, which would send the API key past base_url; "
             "build it with follow_redirects=False"
         )
+
+
+def drop_environment_headers(
+    client: Any, explicit: Iterable[str], variables: tuple[str, ...]
+) -> None:
+    """Remove the headers an SDK client took from the environment when it was built.
+
+    Keeps only the custom headers whose name is exactly (case-sensitive) one of
+    `explicit`, and sets `organization`/`project` to `None` and
+    `_ambient_authorizations` to `frozenset()` where the client has them. Warns with a
+    `UserWarning` naming the dropped headers (not their values) when it drops any, once
+    per process for each distinct message.
+
+    Args:
+        client (`Any`):
+            An OpenAI or Anthropic SDK client, changed in place. `None` is skipped.
+        explicit (`Iterable[str]`):
+            Names of the custom headers the caller passed itself.
+        variables (`tuple[str, ...]`):
+            The environment variables this SDK reads headers from, for the warning.
+    """
+    if client is None:
+        return
+    keep = set(explicit)
+    dropped = {name for name in client._custom_headers if name not in keep}
+    # The SDK merges header variables into the private `_custom_headers`, and
+    # `copy`/`with_options` re-read the environment, so this filters the built
+    # client's dict directly.
+    client._custom_headers = {
+        name: value for name, value in client._custom_headers.items() if name in keep
+    }
+    for attribute, header in (
+        ("organization", "OpenAI-Organization"), ("project", "OpenAI-Project")
+    ):
+        if hasattr(client, attribute):
+            if getattr(client, attribute) is not None:
+                dropped.add(header)
+            setattr(client, attribute, None)
+    if hasattr(client, "_ambient_authorizations"):
+        client._ambient_authorizations = frozenset()
+    if not dropped:
+        return
+    *rest, last = variables
+    sources = f"{', '.join(rest)} or {last}" if rest else last
+    message = (
+        f"yian sends only the headers it sets, so it dropped {', '.join(sorted(dropped))}, "
+        f"read from {sources}; flow runs cannot send them. Unset the variable to silence "
+        "this; code that builds models with create_llm_client can set headers on the "
+        "http_client it passes."
+    )
+    if message in _warned:
+        return
+    _warned.add(message)
+    warnings.warn(message, UserWarning, stacklevel=2)
 
 
 class MissingToolCallError(OutputParserException):

@@ -164,6 +164,9 @@ run outside the backend lock under its existing lease.
 bracketing model/tool calls, and projecting provider usage. It imports `events`
 and publishes only through evaluator-supplied sinks; it never records, retains,
 or prices anything.
+`nodes/agent/llm_values.py` holds the helpers for `llm_config` layers that hold
+values (`${...}`): value leaves and references, which lower values still
+contribute, the reserved node/flow binding, and its resolution against a pool.
 Package-root `memory_host.py` builds the memories a flow declares
 (`build_memories`) and owns their lifetime in a `MemoryRegistry`. It reads the
 compiled memory table and imports only the selected built-in backend modules.

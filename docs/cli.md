@@ -296,7 +296,10 @@ stderr. The server's name is its label in errors.
 In `command`, each `args` item, `cwd`, `url`, and the values of `env` and `headers`,
 `${VAR}` expands to the environment variable `VAR`, `${VAR:-default}` to `default`
 when `VAR` is unset or empty, and `$$` to `$`. An unset `${VAR}` without a default
-is an error, so keep tokens in the environment, not in the file. A stdio server
+is an error, so keep tokens in the environment, not in the file. A default can't
+contain `$`, so a nested `${A:-${B}}` is an error. Because `$$` is the escape, a
+value copied from another client's config that holds `$$` changes: `pa$$word`
+becomes `pa$word`; write `pa$$$$word` to keep both. A stdio server
 gets only a safe default environment (`PATH`, `HOME`, and a few others) plus its
 `env`, so pass any other variable it needs there.
 

@@ -1677,13 +1677,9 @@ def _load_mcp_servers(paths: List[Path], known: set[str]) -> Dict[str, McpServer
             like a registered tool, `ask_user` or `load_skill`.
     """
     user = user_mcp_config()
-    servers = load_mcp_config(([user] if user.is_file() else []) + list(paths), os.environ)
-    for name in servers:
-        if name in known:
-            raise McpConfigError(
-                f"MCP server {name!r} has the name of a registered tool; rename the server"
-            )
-    return servers
+    return load_mcp_config(
+        ([user] if user.is_file() else []) + list(paths), os.environ, reserved=known
+    )
 
 
 def _mcp_needed_names(compiled: Any) -> set[str]:
@@ -2089,7 +2085,15 @@ def run(
     except _ResumeKeyError as exc:
         err_console.print(Text(str(exc), style="red"))
         raise typer.Exit(code=1)
-    except (OSError, TypeError, ValueError, MemoryOperationError, McpConnectError, ImportError) as exc:
+    except (OSError, TypeError, ValueError, MemoryOperationError, McpConnectError) as exc:
+        action = "resume" if resume is not None else "run"
+        _render_host_run_error(action, exc, engine_trace=engine_trace)
+        raise typer.Exit(code=1)
+    except ImportError as exc:
+        # Only the missing MCP SDK is a setup problem to report in one line; any other
+        # ImportError is a bug and keeps its traceback.
+        if "yian[mcp]" not in str(exc):
+            raise
         action = "resume" if resume is not None else "run"
         _render_host_run_error(action, exc, engine_trace=engine_trace)
         raise typer.Exit(code=1)

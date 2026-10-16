@@ -1765,8 +1765,8 @@ def _other_run_error(key: str) -> ValueError:
 
 
 def _split_run_servers(
-    tools: Mapping[str, Any] | None,
-) -> tuple[Mapping[str, Any] | None, list[tuple[str, McpServer]]]:
+    tools: Any,
+) -> tuple[Any, list[tuple[str, McpServer]]]:
     """Split the run's tools into the entries that need no opening and the unopened servers.
 
     An unopened server under a key `ToolSet` rejects (not a non-empty string, or
@@ -1774,12 +1774,12 @@ def _split_run_servers(
     before any server starts.
 
     Args:
-        tools (`Mapping[str, Any] | None`):
+        tools (`Any`):
             The `tools=` argument of `run_flow` or `resume_flow`. Anything other than
             a mapping is returned as is, for `ToolSet` to reject.
 
     Returns:
-        `tuple[Mapping[str, Any] | None, list[tuple[str, McpServer]]]`:
+        `tuple[Any, list[tuple[str, McpServer]]]`:
             `tools` without its unopened `McpServer` entries, and those servers in
             mapping order with the first key each sits under, each once even when it
             sits under several keys.

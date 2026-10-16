@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import re
 import warnings
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -21,8 +21,9 @@ _KNOWN_KEYS = frozenset({"command", "args", "env", "cwd", "url", "headers", "typ
 # A tuple, not a set, so an unhashable `type` value compares instead of raising.
 _TYPES = ("stdio", "http", "streamable-http")
 # `$$` first so `$${X}` is a literal `${X}`; any other `${` that doesn't match the
-# reference form falls to the last branch and is an error.
-_REFERENCE = re.compile(r"\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}|\$\{")
+# reference form falls to the last branch and is an error. A default can't hold
+# `$`, so a nested `${A:-${B}}` is that error rather than the literal text `${B}`.
+_REFERENCE = re.compile(r"\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}$]*))?\}|\$\{")
 
 
 class McpConfigError(ValueError):
@@ -39,7 +40,12 @@ def user_mcp_config() -> Path:
     return Path.home() / ".yian" / "mcp.json"
 
 
-def load_mcp_config(paths: Sequence[Path], environ: Mapping[str, str]) -> dict[str, McpServer]:
+def load_mcp_config(
+    paths: Sequence[Path],
+    environ: Mapping[str, str],
+    *,
+    reserved: Collection[str] = (),
+) -> dict[str, McpServer]:
     """Read `mcpServers` files, in order, into unopened MCP servers keyed by name.
 
     A later file's entry replaces an earlier entry of the same name whole; an entry
@@ -49,13 +55,15 @@ def load_mcp_config(paths: Sequence[Path], environ: Mapping[str, str]) -> dict[s
     `disabled`; any other key is ignored with a `UserWarning`. In `command`, each
     `args` item, `cwd`, `url`, and the values of `env` and `headers`, `${VAR}` expands
     to `environ[VAR]`, `${VAR:-default}` to `default` when `VAR` is unset or empty,
-    and `$$` to `$`; any other `$` stays as written.
+    and `$$` to `$`; a default can't contain `$`, and any other `$` stays as written.
 
     Args:
         paths (`Sequence[Path]`):
             The config files to read, each of which must exist. Later files win.
         environ (`Mapping[str, str]`):
             The variables `${VAR}` references expand from, usually `os.environ`.
+        reserved (`Collection[str]`, *optional*, defaults to `()`):
+            Names no enabled server may take, such as the run's other tool ids.
 
     Returns:
         `dict[str, McpServer]`:
@@ -67,15 +75,17 @@ def load_mcp_config(paths: Sequence[Path], environ: Mapping[str, str]) -> dict[s
             object, or an entry isn't an object, has both or neither of `command` and
             `url`, has a value of the wrong type, a `type` that is unknown, `"sse"`,
             or disagrees with `command`/`url`, references an unset variable without a
-            default, or fails `mcp_server`'s checks.
+            default or holds a `$` in a default, fails `mcp_server`'s checks, or
+            when an enabled server's name is in `reserved`.
 
     Example:
         ```python
-        paths = [user_mcp_config()] if user_mcp_config().exists() else []
+        paths = [user_mcp_config()] if user_mcp_config().is_file() else []
         servers = load_mcp_config(paths, os.environ)
         ```
     """
     servers: dict[str, McpServer] = {}
+    sources: dict[str, Path] = {}
     for path in paths:
         for name, entry in _read_entries(path).items():
             server = _build(path, name, entry, environ)
@@ -83,6 +93,13 @@ def load_mcp_config(paths: Sequence[Path], environ: Mapping[str, str]) -> dict[s
                 servers.pop(name, None)
             else:
                 servers[name] = server
+                sources[name] = path
+    for name in servers:
+        if name in reserved:
+            raise McpConfigError(
+                f"{sources[name]}: server {name!r}: the name is reserved (a registered tool,"
+                " ask_user or load_skill); rename the server"
+            )
     return servers
 
 

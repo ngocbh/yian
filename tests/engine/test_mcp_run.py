@@ -203,7 +203,8 @@ def test_a_server_another_run_opened_is_rejected():
 def test_two_runs_racing_for_one_unopened_server_start_it_once(tmp_path):
     marker = tmp_path / "pid"
     server = mcp_server(**stdio_params("--marker", str(marker)))
-    flow = load_flow(_tool_flow("slow", "{seconds: 1}"))
+    # Long enough that the losing run finds the server still held by the winner.
+    flow = load_flow(_tool_flow("slow", "{seconds: 5}"))
     barrier = threading.Barrier(2)
     outcomes = {}
 

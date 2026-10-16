@@ -159,6 +159,33 @@ def test_unterminated_reference_is_an_error(tmp_path: Path) -> None:
         load_mcp_config([path], {"OPEN": "x"})
 
 
+def test_a_reference_inside_a_default_is_an_error(tmp_path: Path) -> None:
+    path = _write(tmp_path / "mcp.json", {"s": {"command": "srv", "args": ["${A:-${B}}"]}})
+
+    with pytest.raises(McpConfigError, match=r"args\[0\]: '\$\{' must start"):
+        load_mcp_config([path], {"B": "b"})
+
+
+def test_a_reserved_server_name_is_an_error_naming_the_file(tmp_path: Path) -> None:
+    first = _write(tmp_path / "first.json", {"ok": {"command": "srv"}})
+    second = _write(tmp_path / "second.json", {"ask_user": {"command": "srv"}})
+
+    with pytest.raises(McpConfigError) as caught:
+        load_mcp_config([first, second], {}, reserved={"ask_user", "load_skill"})
+
+    assert str(caught.value) == (
+        f"{second}: server 'ask_user': the name is reserved (a registered tool, ask_user"
+        " or load_skill); rename the server"
+    )
+
+
+def test_a_reserved_name_a_later_file_disables_is_no_error(tmp_path: Path) -> None:
+    first = _write(tmp_path / "first.json", {"ask_user": {"command": "srv"}})
+    second = _write(tmp_path / "second.json", {"ask_user": {"disabled": True}})
+
+    assert load_mcp_config([first, second], {}, reserved={"ask_user"}) == {}
+
+
 def test_later_file_replaces_same_named_server(tmp_path: Path) -> None:
     first = _write(tmp_path / "a.json", {"s": {"command": "old", "args": ["1"]}, "keep": {"command": "k"}})
     second = _write(tmp_path / "b.json", {"s": {"url": "https://new.example.com/mcp"}})

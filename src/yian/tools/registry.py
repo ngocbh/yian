@@ -517,8 +517,8 @@ class ToolSet:
     tool name, run id, calling node, and this set's `context`. The model never
     sees that parameter. A `FunctionTool`'s `on_invoke` always receives one.
 
-    `for_run` binds a copy to one run's id and stop event; a tool reads the event
-    of the run calling it through `yian.tools.context._current_stop()`.
+    `for_run` binds a copy to one run's id and stop event; yian's MCP tools watch
+    that event to end a call when the run calling it stops.
 
     Args:
         tools (`Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | McpServer | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None`, *optional*, defaults to `None`):
@@ -719,9 +719,9 @@ class ToolSet:
                 The run's id, passed to tools as `ToolContext.run_id` and the base
                 of each call's default `call_id`.
             stop_event (`threading.Event | None`, *optional*, defaults to `None`):
-                The run's stop event, which a tool reads during its call through
-                `yian.tools.context._current_stop()`. The copy holds exactly this
-                value: `None` gives no event, even when this set was bound to one.
+                The run's stop event, which yian's MCP tools watch to end a call
+                when the run stops. The copy holds exactly this value: `None` gives
+                no event, even when this set was bound to one.
 
         Returns:
             `ToolSet`:

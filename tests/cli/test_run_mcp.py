@@ -125,7 +125,7 @@ def test_a_tool_node_calls_a_server_from_mcp_config(tmp_path):
     result = _run(str(_tool_flow(tmp_path)), "--mcp-config", str(cfg))
 
     assert result.exit_code == 0, result.output
-    assert "hi" in result.output
+    assert result.stdout.strip().splitlines()[-1] == "hi"
     assert len(_pids(marker)) == 1
     _assert_no_children(marker)
 
@@ -136,7 +136,7 @@ def test_a_tool_node_calls_an_http_server(tmp_path):
         result = _run(str(_tool_flow(tmp_path)), "--mcp-config", str(cfg))
 
     assert result.exit_code == 0, result.output
-    assert "hi" in result.output
+    assert result.stdout.strip().splitlines()[-1] == "hi"
     _assert_no_children()
 
 
@@ -148,7 +148,7 @@ def test_the_user_config_is_read_and_a_flag_file_replaces_its_server(tmp_path, i
     from_user = _run(str(flow))
 
     assert from_user.exit_code == 0, from_user.output
-    assert "hi" in from_user.output
+    assert from_user.stdout.strip().splitlines()[-1] == "hi"
     assert len(_pids(marker)) == 1
 
     _config(isolated_cli_home / ".yian" / "mcp.json", {"fake": {"command": str(tmp_path / "missing")}})
@@ -157,7 +157,7 @@ def test_the_user_config_is_read_and_a_flag_file_replaces_its_server(tmp_path, i
     replaced = _run(str(flow), "--mcp-config", str(cfg))
 
     assert replaced.exit_code == 0, replaced.output
-    assert "hi" in replaced.output
+    assert replaced.stdout.strip().splitlines()[-1] == "hi"
     assert len(_pids(marker)) == 2
     _assert_no_children(marker)
 
@@ -171,7 +171,7 @@ def test_a_flow_without_tools_starts_no_server(tmp_path):
     result = _run(str(flow), "--mcp-config", str(cfg))
 
     assert result.exit_code == 0, result.output
-    assert "plain" in result.output
+    assert result.stdout.strip().splitlines()[-1] == "plain"
     assert not marker.exists()
 
 
@@ -189,7 +189,7 @@ def test_unused_servers_with_colliding_tools_dont_fail_the_run(tmp_path):
     result = _run(str(_tool_flow(tmp_path)), "--mcp-config", str(cfg))
 
     assert result.exit_code == 0, result.output
-    assert "hi" in result.output
+    assert result.stdout.strip().splitlines()[-1] == "hi"
     # No server is named `echo`, so every server opened to find it; a and b then closed.
     assert [len(_pids(marker)) for marker in markers.values()] == [1, 1, 1]
     _assert_no_children(*markers.values())
@@ -238,7 +238,7 @@ def test_resume_re_supplies_the_servers(tmp_path):
     )
 
     assert result.exit_code == 0, result.output
-    assert "run-5c2e/call" in result.output
+    assert result.stdout.strip().splitlines()[-1].startswith("run-5c2e/call ")
     assert len(_pids(marker)) == 1
     _assert_no_children(marker)
 
@@ -366,7 +366,10 @@ def test_a_server_named_like_a_registered_tool_exits(tmp_path, monkeypatch):
     result = _run(str(_tool_flow(tmp_path)), "--mcp-config", str(cfg))
 
     assert result.exit_code == 1
-    assert "'shadowed'" in result.output and "registered tool" in result.output
+    assert (
+        f"{cfg}: server 'shadowed': the name is reserved (a registered tool, ask_user or"
+        " load_skill)"
+    ) in result.output
     assert not marker.exists()
 
 
@@ -389,3 +392,24 @@ def test_a_later_file_disables_a_user_server(tmp_path, isolated_cli_home):
     assert result.exit_code == 1
     assert "tool 'echo', which isn't in this run's tools" in " ".join(result.output.split())
     assert not marker.exists()
+
+
+def test_only_the_missing_mcp_sdk_import_error_is_a_host_error(monkeypatch, tmp_path):
+    flow = tmp_path / "flow.yaml"
+    flow.write_text(_PLAIN_FLOW, encoding="utf-8")
+    sdk_missing = ImportError("MCP servers need the MCP SDK; install it with pip install 'yian[mcp]'")
+
+    def fail_with(error):
+        def fail(*args, **kwargs):
+            raise error
+
+        return fail
+
+    monkeypatch.setattr(run_cli, "_run_flow_controlled", fail_with(sdk_missing))
+    reported = _run(str(flow))
+    monkeypatch.setattr(run_cli, "_run_flow_controlled", fail_with(ImportError("no module named 'x'")))
+    other = _run(str(flow))
+
+    assert reported.exit_code == 1
+    assert "run failed: MCP servers need the MCP SDK" in reported.output
+    assert isinstance(other.exception, ImportError)

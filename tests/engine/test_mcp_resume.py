@@ -96,7 +96,7 @@ def test_a_bad_entry_fails_before_the_log_is_touched(tmp_path):
     before = (log.read_bytes(), log.stat().st_mtime_ns)
     server = mcp_server(**stdio_params("--marker", str(marker)))
 
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match=r"tools\['g'\]\[0\] is a lambda"):
         resume_flow(flow, log=log, tools={"fake": server, "g": [lambda text: text]})
 
     assert (log.read_bytes(), log.stat().st_mtime_ns) == before

@@ -23,6 +23,7 @@ import os
 from pathlib import Path
 import threading
 from typing import Any, Callable, Mapping
+import uuid
 
 from langchain_core.tools import BaseTool
 from pydantic import SecretStr
@@ -61,7 +62,7 @@ from yian.compile.validation import type_relation
 from yian.compose.helpers.tags import CLOSE_MATCH_CUTOFF
 from yian.compose.loader import ComposedFlow
 from yian.compose.nodes.resolver import child_signature
-from yian.defaults import check_recorded, current
+from yian.defaults import Defaults, check_recorded, current
 from yian.diagnostics import Failure, OriginRef
 from yian.events import (
     RunFailed,
@@ -426,7 +427,13 @@ def run_flow(
             `FunctionTool` or `BaseTool` named by its `name`, or a function or
             method named by its `__name__`. Each tool name calls one tool: the same tool may sit in
             several groups, but two different tools may not share a name, and
-            no group tool may be named `ask_user` or `load_skill`. Every static AGENT grant must name a tool or
+            no group tool may be named `ask_user` or `load_skill`. An `McpServer`
+            from `mcp_server` is a group of the tools it lists. One that isn't open
+            belongs to this run: it is opened, after the other entries are checked
+            and before the run-start checks, and closed when `run_flow` returns or
+            raises; the same server under several keys opens once. One opened with
+            `with server:` belongs to the host, is used as is, and stays open, so
+            several runs can share it. Every static AGENT grant must name a tool or
             group in this set, and every static TOOL node's `tool_id` must name a
             tool in it; this is checked before the log is created.
             Granting skills also binds the built-in ``load_skill`` tool,
@@ -479,7 +486,8 @@ def run_flow(
             ``api_key`` lacks ``base_url``, an ``azure`` agent has no
             ``base_url``, a `BaseTool` in
             `tools` is named differently from its key, a group tool's name
-            clashes or is reserved, an AGENT grants a tool or group not in the
+            clashes or is reserved, an `McpServer` in `tools` is open because
+            another run in progress opened it, an AGENT grants a tool or group not in the
             run's tools, a TOOL node names a tool not in the run's tools, a
             TOOL node's inputs or `output:` do not match the names and types
             its tool declares (an input the tool does not take,
@@ -491,6 +499,9 @@ def run_flow(
             parse or calls a function it can't (a builtin with arguments it
             doesn't take, a name outside the node's type table, or in a prompt
             any non-builtin).
+        `McpConnectError`:
+            An `McpServer` in `tools` that the run opens doesn't start or doesn't
+            list its tools; the servers it already opened are closed.
         `DefaultsError`:
             A `YIAN_<NAME>` variable holds a value its entry does not accept.
         `MemorySetupError`:
@@ -628,13 +639,64 @@ def _run_flow_controlled(
     context: Any = None,
     stop_event: threading.Event,
 ) -> RunResult:
-    """Drive a fresh run with one host-owned cooperative stop event."""
+    """Drive a fresh run with one host-owned cooperative stop event and its own MCP servers."""
     # A bad YIAN_<NAME> value fails here, before any work.
     run_defaults = current()
     if not isinstance(flow, ComposedFlow):
         raise TypeError("run_flow expects a ComposedFlow")
     if type(learnable) is not bool:
         raise TypeError("learnable must be a bool")
+    other_tools, unopened = _split_run_servers(tools)
+    # The other entries' TypeErrors and ValueErrors come before any server starts.
+    ToolSet(other_tools, context=context)
+    run_servers = _open_run_servers(unopened)
+    primary_error: BaseException | None = None
+    try:
+        return _start_run(
+            flow,
+            inputs,
+            log=log,
+            run_id=run_id,
+            num_workers=num_workers,
+            on_event=on_event,
+            on_stream=on_stream,
+            llm_config=llm_config,
+            memory=memory,
+            learnable=learnable,
+            tools=tools,
+            skills=skills,
+            steering=steering,
+            context=context,
+            stop_event=stop_event,
+            run_defaults=run_defaults,
+        )
+    except BaseException as exc:
+        primary_error = exc
+        raise
+    finally:
+        _close_run_servers(run_servers, primary_error)
+
+
+def _start_run(
+    flow: ComposedFlow,
+    inputs: dict[str, Any],
+    *,
+    log: str | os.PathLike[str] | None,
+    run_id: str | None,
+    num_workers: int,
+    on_event: EventHook | None,
+    on_stream: StreamHook | None,
+    llm_config: dict[str, Any] | None,
+    memory: Mapping[str, Memory] | None,
+    learnable: bool,
+    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | McpServer | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None,
+    skills: Mapping[str, Skill] | None,
+    steering: Steering | None,
+    context: Any,
+    stop_event: threading.Event,
+    run_defaults: Defaults,
+) -> RunResult:
+    """Check, record, and drive a fresh run whose MCP servers are open."""
     run_tools = ToolSet(tools, context=context)
     _check_tool_grants(flow.compiled, run_tools)
     _check_conditions(flow.compiled)
@@ -1667,6 +1729,99 @@ def _close_owned_log(
         if primary_error is None:
             raise
         _note_cleanup_error(primary_error, "run-log close", cleanup_error)
+
+
+def _split_run_servers(
+    tools: Mapping[str, Any] | None,
+) -> tuple[Mapping[str, Any] | None, list[McpServer]]:
+    """Split the run's tools into the entries that need no opening and the unopened servers.
+
+    Args:
+        tools (`Mapping[str, Any] | None`):
+            The `tools=` argument of `run_flow` or `resume_flow`. Anything other than
+            a mapping is returned as is, for `ToolSet` to reject.
+
+    Returns:
+        `tuple[Mapping[str, Any] | None, list[McpServer]]`:
+            `tools` without its unopened `McpServer` entries, and those servers in
+            mapping order, each once even when it sits under several keys.
+
+    Raises:
+        `ValueError`:
+            Raised when a server entry is open because another run in progress
+            opened it.
+    """
+    if not isinstance(tools, Mapping):
+        return tools, []
+    others: dict[str, Any] = {}
+    unopened: list[McpServer] = []
+    for key, entry in tools.items():
+        if not isinstance(entry, McpServer):
+            others[key] = entry
+        elif entry.is_open:
+            if entry._owner != "host":
+                raise ValueError(
+                    f"tools[{key!r}]: this MCP server was opened by another run; "
+                    'open it with "with server:" to share it between runs'
+                )
+            others[key] = entry
+        elif not any(entry is seen for seen in unopened):
+            unopened.append(entry)
+    return others, unopened
+
+
+def _open_run_servers(servers: Sequence[McpServer]) -> list[McpServer]:
+    """Open the servers for one run, in order; if one fails, close the ones already open.
+
+    Args:
+        servers (`Sequence[McpServer]`):
+            Unopened servers, each listed once.
+
+    Returns:
+        `list[McpServer]`:
+            The opened servers, owned by a token unique to this run.
+
+    Raises:
+        `McpConnectError`:
+            Raised when a server doesn't start or doesn't list its tools.
+    """
+    token = f"run-{uuid.uuid4().hex}"
+    opened: list[McpServer] = []
+    try:
+        for server in servers:
+            server._open_for_run(token)
+            opened.append(server)
+    except BaseException as exc:
+        _close_run_servers(opened, exc)
+        raise
+    return opened
+
+
+def _close_run_servers(
+    servers: Sequence[McpServer],
+    primary_error: BaseException | None,
+) -> None:
+    """Close the run's servers while preserving one initiating exception.
+
+    Args:
+        servers (`Sequence[McpServer]`):
+            The servers the run opened.
+        primary_error (`BaseException | None`):
+            The exception ending the run, which a close error is noted on. `None`
+            raises the first close error instead.
+    """
+    pending = primary_error
+    for server in servers:
+        # close() never raises; this keeps an unexpected error from skipping the rest.
+        try:
+            server.close()
+        except BaseException as cleanup_error:
+            if pending is None:
+                pending = cleanup_error
+            else:
+                _note_cleanup_error(pending, f"MCP server '{server.label}' close", cleanup_error)
+    if primary_error is None and pending is not None:
+        raise pending
 
 
 def _close_run_resources(

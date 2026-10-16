@@ -1,0 +1,231 @@
+"""`run_flow` opens the MCP servers passed to it unopened and closes them when the run ends."""
+
+import threading
+import time
+
+import pytest
+
+pytest.importorskip("mcp")
+
+from langchain_core.messages import AIMessage, ToolMessage
+
+import yian.llm_clients as llm_clients
+from yian.compose import load_flow
+from yian.run import run_flow
+from yian.tools.mcp import McpConnectError, mcp_server
+
+from tests.engine.mcp_helpers import child_alive, mcp_threads, run_http_server, stdio_params
+
+
+class _ScriptedModel:
+    """Return scripted replies, capture each request and the tools bound."""
+
+    def __init__(self, replies: list) -> None:
+        self.replies = list(replies)
+        self.calls: list[list] = []
+        self.bound: list = []
+
+    def bind_tools(self, tools):
+        self.bound = list(tools)
+        return self
+
+    def invoke(self, messages):
+        self.calls.append(list(messages))
+        return self.replies.pop(0)
+
+
+def _tool_flow(tool_id: str, inputs: str = "") -> str:
+    """Return a flow whose one TOOL node calls `tool_id` with the YAML mapping `inputs`."""
+    line = f"    input: {inputs}\n" if inputs else ""
+    return (
+        f"id: mcp_tool\nname: mcp_tool\nnodes:\n  call:\n    kind: tool\n    tool_id: {tool_id}\n"
+        f"{line}output: ${{call.output}}\n"
+    )
+
+
+_AGENT_FLOW = """
+id: mcp_agent
+name: mcp_agent
+llm_config: {provider: openai, model: test-model}
+nodes:
+  worker:
+    kind: agent
+    prompt: go
+    tools: [GRANT]
+output: ${worker.output}
+"""
+
+
+def _call_then_answer(name: str, args: dict) -> list[AIMessage]:
+    """One tool call, then a final answer."""
+    return [
+        AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": "c0", "type": "tool_call"}]),
+        AIMessage(content="done"),
+    ]
+
+
+def _pids(marker) -> list[int]:
+    """Return the pids the fake server wrote to `marker`, one per start."""
+    return [int(line) for line in marker.read_text().split()]
+
+
+def _assert_closed(server, marker=None):
+    """Assert the server is closed, no MCP thread runs, and its child (if any) is gone."""
+    assert not server.is_open
+    assert mcp_threads() == []
+    if marker is not None:
+        for pid in _pids(marker):
+            assert not child_alive(pid)
+
+
+def test_a_tool_node_calls_an_unopened_server_which_the_run_closes(tmp_path):
+    marker = tmp_path / "pid"
+    server = mcp_server(**stdio_params("--marker", str(marker)))
+
+    result = run_flow(load_flow(_tool_flow("echo", '{text: "hi"}')), {}, tools={"fake": server})
+
+    assert result.status == "succeeded", result.failure
+    assert result.output == "hi"
+    _assert_closed(server, marker)
+
+
+def test_an_agent_gets_the_server_tools_and_calls_one(monkeypatch):
+    model = _ScriptedModel(_call_then_answer("add", {"a": 2, "b": 3}))
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: model)
+    server = mcp_server(**stdio_params())
+
+    result = run_flow(load_flow(_AGENT_FLOW.replace("GRANT", "fake")), {}, tools={"fake": server})
+
+    assert result.status == "succeeded", result.failure
+    by_name = {tool.name: tool for tool in model.bound}
+    assert {"echo", "add", "fail"} <= set(by_name)
+    assert set(by_name["add"].args) == {"a", "b"}
+    [reply] = [m for m in model.calls[1] if isinstance(m, ToolMessage)]
+    # `add` returns structured content, which the call's result is.
+    assert reply.content == "{'result': 5}"
+    _assert_closed(server)
+
+
+def test_an_agent_calls_an_unopened_http_server(monkeypatch):
+    model = _ScriptedModel(_call_then_answer("echo", {"text": "over http"}))
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: model)
+
+    with run_http_server() as (url, _headers):
+        server = mcp_server(url=url)
+        result = run_flow(load_flow(_AGENT_FLOW.replace("GRANT", "web")), {}, tools={"web": server})
+
+    assert result.status == "succeeded", result.failure
+    [reply] = [m for m in model.calls[1] if isinstance(m, ToolMessage)]
+    assert reply.content == "over http"
+    _assert_closed(server)
+
+
+def test_an_agent_reads_a_tool_error_and_carries_on(monkeypatch):
+    model = _ScriptedModel(_call_then_answer("fail", {"message": "boom"}))
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: model)
+    server = mcp_server(**stdio_params())
+
+    result = run_flow(load_flow(_AGENT_FLOW.replace("GRANT", "fake")), {}, tools={"fake": server})
+
+    assert result.status == "succeeded", result.failure
+    assert result.output == "done"
+    [reply] = [m for m in model.calls[1] if isinstance(m, ToolMessage)]
+    assert "boom" in reply.content
+    _assert_closed(server)
+
+
+def test_a_failed_run_start_check_closes_the_server(tmp_path):
+    marker = tmp_path / "pid"
+    log = tmp_path / "run.jsonl"
+    server = mcp_server(**stdio_params("--marker", str(marker)))
+
+    with pytest.raises(ValueError):
+        run_flow(load_flow(_tool_flow("add", '{a: "x", b: 1}')), {}, log=log, tools={"fake": server})
+
+    assert not log.exists()
+    _assert_closed(server, marker)
+
+
+def test_a_host_opened_server_stays_open_across_runs():
+    flow = load_flow(_tool_flow("echo", '{text: "hi"}'))
+    with mcp_server(**stdio_params()) as server:
+        for _ in range(2):
+            result = run_flow(flow, {}, tools={"fake": server})
+            assert result.status == "succeeded", result.failure
+            assert server.is_open
+    _assert_closed(server)
+
+
+def test_one_server_under_two_keys_starts_once(tmp_path):
+    marker = tmp_path / "pid"
+    server = mcp_server(**stdio_params("--marker", str(marker)))
+
+    result = run_flow(load_flow(_tool_flow("echo", '{text: "hi"}')), {}, tools={"a": server, "b": server})
+
+    assert result.status == "succeeded", result.failure
+    assert len(_pids(marker)) == 1
+    _assert_closed(server, marker)
+
+
+def test_a_server_another_run_opened_is_rejected():
+    server = mcp_server(**stdio_params())
+    flow = load_flow(_tool_flow("slow", "{seconds: 2}"))
+    results = []
+    first = threading.Thread(target=lambda: results.append(run_flow(flow, {}, tools={"fake": server})))
+    first.start()
+    try:
+        deadline = time.monotonic() + 30
+        while not server.is_open:
+            assert first.is_alive() and time.monotonic() < deadline
+            time.sleep(0.02)
+        with pytest.raises(ValueError) as caught:
+            run_flow(flow, {}, tools={"shared": server})
+    finally:
+        first.join(30)
+
+    assert str(caught.value) == (
+        "tools['shared']: this MCP server was opened by another run; "
+        'open it with "with server:" to share it between runs'
+    )
+    [result] = results
+    assert result.status == "succeeded", result.failure
+    _assert_closed(server)
+
+
+def test_a_server_that_fails_to_open_closes_the_ones_already_open(tmp_path):
+    marker = tmp_path / "pid"
+    log = tmp_path / "run.jsonl"
+    ok = mcp_server(**stdio_params("--marker", str(marker)))
+    bad = mcp_server(command="/nonexistent/x")
+
+    with pytest.raises(McpConnectError):
+        run_flow(load_flow(_tool_flow("echo", '{text: "hi"}')), {}, log=log, tools={"ok": ok, "bad": bad})
+
+    assert not log.exists()
+    assert len(_pids(marker)) == 1
+    _assert_closed(ok, marker)
+    assert not bad.is_open
+
+
+def test_a_bad_entry_fails_before_any_server_starts(tmp_path):
+    marker = tmp_path / "pid"
+    server = mcp_server(**stdio_params("--marker", str(marker)))
+
+    with pytest.raises(TypeError):
+        run_flow(
+            load_flow(_tool_flow("echo", '{text: "hi"}')), {},
+            tools={"fake": server, "g": [lambda text: text]},
+        )
+
+    assert not marker.exists()
+    _assert_closed(server)
+
+
+def test_a_failing_node_still_closes_the_server(tmp_path):
+    marker = tmp_path / "pid"
+    server = mcp_server(**stdio_params("--marker", str(marker)))
+
+    result = run_flow(load_flow(_tool_flow("bad_request")), {}, tools={"fake": server})
+
+    assert result.status == "failed"
+    _assert_closed(server, marker)

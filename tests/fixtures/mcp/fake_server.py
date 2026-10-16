@@ -234,15 +234,16 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--name", default="fake")
     parser.add_argument("--only", help="comma-separated tool names to keep")
-    parser.add_argument("--marker", help="write the server's pid to this file at start")
+    parser.add_argument("--marker", help="append the server's pid to this file at start, one line per start")
     parser.add_argument("--hang", action="store_true", help="never answer")
     parser.add_argument("--http", type=int, metavar="PORT", help="serve streamable HTTP on 127.0.0.1:PORT")
     parser.add_argument("--stderr", metavar="TEXT", help="write TEXT to stderr and exit 1 before serving")
     args = parser.parse_args(argv)
 
     if args.marker:
-        with open(args.marker, "w") as marker:
-            marker.write(str(os.getpid()))
+        # Appended, so a test can count the starts; a single start writes the bare pid.
+        with open(args.marker, "a") as marker:
+            marker.write(("\n" if marker.tell() else "") + str(os.getpid()))
     if args.stderr is not None:
         sys.stderr.write(args.stderr + "\n")
         sys.exit(1)

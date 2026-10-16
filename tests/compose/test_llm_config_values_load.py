@@ -298,3 +298,76 @@ def test_a_literal_block_beside_a_value_is_checked_whole():
     )
     error = _load_error(text)
     assert "anthropic.max_tokns" in str(error)
+
+
+_ASK = """\
+id: f
+name: f
+input: {proj: !str , m: !str , t: !float }
+nodes:
+  ask:
+    kind: human_input
+    input: {proj: '${input.proj}'}
+    adaptive_questions:
+      prompt: "Q ${proj}"
+      llm_config:
+LLM
+output: ${ask.output}
+"""
+
+_ASK_SITE = "node 'ask' adaptive_questions.llm_config"
+
+
+def _ask(llm_lines: str) -> str:
+    """Return a flow whose adaptive gate has `llm_lines` under `llm_config:` (indented 8)."""
+    return _ASK.replace("LLM\n", llm_lines)
+
+
+def _composer(text: str) -> AgentNode:
+    return load_flow(text, source_label="f.yaml").compiled.nodes["ask__compose"]
+
+
+def test_a_composer_value_loads_as_a_template():
+    agent = _composer(_ask("        model: ${input.m}\n"))
+    assert isinstance(agent.own_llm_config, ValueTemplate)
+    assert agent.own_llm_config.value == {"model": "${input.m}"}
+    assert agent.llm_config is None
+
+
+def test_a_composer_tag_is_read_and_consumed():
+    agent = _composer(_ask("        model: !str ${input.m}\n"))
+    assert isinstance(agent.own_llm_config.value["model"], Binding)
+
+
+def test_a_composer_excluded_field_from_a_value_names_the_gate():
+    text = _ask("        provider: openai\n        api_key: ${input.m}\n")
+    error = _load_error(text)
+    message = str(error)
+    assert message.startswith(f"{_ASK_SITE}.api_key is a host credential")
+    assert "ask__compose" not in message
+    assert _line(error) == _line_of(text, "api_key:")
+
+
+def test_a_composer_literal_block_field_beside_a_value_names_the_gate():
+    text = _ask(
+        "        provider: anthropic\n"
+        "        anthropic:\n"
+        "          temperature: ${input.t}\n"
+        "          thinking: {type: enabled, budget_tokens: 10}\n"
+    )
+    error = _load_error(text)
+    message = str(error)
+    assert message.startswith(f"{_ASK_SITE}: `anthropic.thinking.budget_tokens`:")
+    assert _line(error) == _line_of(text, "thinking:")
+
+
+def test_a_composer_tag_on_the_whole_mapping_names_the_gate():
+    text = _ASK.replace("      llm_config:\nLLM\n", "      llm_config: !object {model: m}\n")
+    error = _load_error(text)
+    assert str(error).startswith(f"{_ASK_SITE}: a tag on the whole mapping")
+
+
+def test_a_literal_composer_layer_is_unchanged():
+    agent = _composer(_ask("        provider: openai\n        model: gpt-x\n"))
+    assert type(agent.own_llm_config) is dict
+    assert agent.llm_config == {"provider": "openai", "model": "gpt-x"}

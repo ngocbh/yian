@@ -68,6 +68,7 @@ from yian.compose.nodes.agent import AgentDescriptor, read_llm_config
 from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from yian.compose.nodes.call import CallDescriptor
 from yian.compose.nodes.case import CaseDescriptor
+from yian.compose.nodes.human_input import HumanInputDescriptor
 from yian.compose.nodes.loop import LoopDescriptor
 from yian.compose.nodes.map import MapDescriptor
 from yian.compose.desugar.inline_bodies import (
@@ -886,12 +887,14 @@ def _split_typed_llm_config(
     catalog_builder: _SourceCatalogBuilder,
     diagnostics: LoadDiagnostics,
 ) -> dict[str, NodeDescriptor]:
-    """Read each AGENT's `llm_config:` with the `${...}` values and tags in it.
+    """Read each AGENT's and adaptive gate's `llm_config:` with the values and tags in it.
 
-    A layer holding values becomes a `ValueTemplate` (a `Binding` for a whole record
-    written as one value), and the value range of each key in it lands in the
+    An AGENT's own layer and an adaptive gate's `adaptive_questions.llm_config` are
+    read. A layer holding values becomes a `ValueTemplate` (a `Binding` for a whole
+    record written as one value), and the value range of each key in it lands in the
     descriptor's `field_ranges` under `("llm_config", "<dotted.path>")`, so its errors
-    point at the field. A layer without values stays a plain dict.
+    point at the field; the adaptive desugar copies both to the composer agent. A
+    layer without values stays a plain dict.
 
     Args:
         descriptors (`dict[str, NodeDescriptor]`): Located descriptors keyed by node id.
@@ -902,7 +905,7 @@ def _split_typed_llm_config(
         diagnostics (`LoadDiagnostics`): Factory for located load errors.
 
     Returns:
-        `dict[str, NodeDescriptor]`: The descriptors, each AGENT's layer read.
+        `dict[str, NodeDescriptor]`: The descriptors, each layer read.
 
     Raises:
         `LoadError`: Raised when a tag in a layer is malformed or misplaced, or a
@@ -911,30 +914,52 @@ def _split_typed_llm_config(
     split = dict(descriptors)
     try:
         for node_id, descriptor in descriptors.items():
-            if not isinstance(descriptor, AgentDescriptor) or not nodes_cursor.has(node_id):
+            if not nodes_cursor.has(node_id):
                 continue
-            node_cursor = normalize_node_signature_cursor(nodes_cursor.child(node_id))
-            if not node_cursor.has("llm_config"):
+            if isinstance(descriptor, AgentDescriptor):
+                path: tuple[str, ...] = ("llm_config",)
+                written = descriptor.llm_config
+                prefix = f"node {node_id!r}: llm_config"
+            elif isinstance(descriptor, HumanInputDescriptor) and isinstance(
+                descriptor.adaptive_questions, dict
+            ):
+                path = ("adaptive_questions", "llm_config")
+                written = descriptor.adaptive_questions.get("llm_config")
+                prefix = f"node {node_id!r} adaptive_questions.llm_config"
+            else:
                 continue
-            cursor = node_cursor.child("llm_config")
-            if not cursor.holds(descriptor.llm_config):
+            cursor = normalize_node_signature_cursor(nodes_cursor.child(node_id))
+            for key in path:
+                cursor = cursor.child(key) if cursor.has(key) else None
+                if cursor is None:
+                    break
+            if cursor is None or not cursor.holds(written):
                 continue
             layer, ranges = read_llm_config(
                 cursor,
                 registry,
-                prefix=f"node {node_id!r}: llm_config",
-                site_path=(*owner, "node", node_id, "llm_config"),
+                prefix=prefix,
+                site_path=(*owner, "node", node_id, *path),
                 catalog_builder=catalog_builder,
                 diagnostics=diagnostics,
             )
-            split[node_id] = replace(
-                descriptor,
-                llm_config=layer,
-                field_ranges={
-                    **descriptor.field_ranges,
-                    **{("llm_config", path): rng for path, rng in ranges.items()},
-                },
-            )
+            field_ranges = {
+                **descriptor.field_ranges,
+                **{("llm_config", key): rng for key, rng in ranges.items()},
+            }
+            if isinstance(descriptor, AgentDescriptor):
+                split[node_id] = replace(
+                    descriptor, llm_config=layer, field_ranges=field_ranges
+                )
+            else:
+                split[node_id] = replace(
+                    descriptor,
+                    adaptive_questions={
+                        **descriptor.adaptive_questions,
+                        "llm_config": layer,
+                    },
+                    field_ranges=field_ranges,
+                )
     except SourceAccessError as exc:
         raise diagnostics.error(str(exc), range=exc.range) from exc
     return split

@@ -114,7 +114,7 @@ A stale guide or skill is a bug.
 
 ## Environment and tests
 
-Yian supports Python 3.10 or newer. On this host, use the
+Yian supports Python 3.11 or newer. On this host, use the
 `yian` conda environment; the default Python may be too old.
 
 ```bash

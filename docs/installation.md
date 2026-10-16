@@ -1,6 +1,6 @@
 # Installation
 
-Yian needs **Python 3.10+**.
+Yian needs **Python 3.11+**.
 
 Install from PyPI:
 

@@ -751,7 +751,7 @@ nodes:
 ```
 Register the tool in Python so the id resolves:
 ```python
-from typing_extensions import TypedDict   # typing.TypedDict fails in pydantic on 3.10/3.11
+from typing_extensions import TypedDict   # typing.TypedDict fails in pydantic on 3.11
 from yian.tools import register_tool
 
 class Fact(TypedDict):

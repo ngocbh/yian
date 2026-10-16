@@ -62,7 +62,7 @@ with validated defaults and reference them in prompts as `${name}`.
 > **Early stage.** Yian is under active development. The API, YAML
 > surface, and CLI may change quickly.
 
-Install from PyPI:
+Yian needs Python 3.11+. Install from PyPI:
 
 ```console
 python -m pip install "yian[all]"

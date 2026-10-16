@@ -33,6 +33,9 @@ def test_llm_config_keys_are_spelled_as_authored():
             "model",
             "api_key",
             "base_url",
+            "organization",
+            "project",
+            "headers",
             *SUPPORTED_LLM_PROVIDERS,
         }
     )

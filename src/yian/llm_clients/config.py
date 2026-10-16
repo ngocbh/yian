@@ -17,12 +17,18 @@ from pydantic import (
     ConfigDict,
     Field,
     SecretStr,
+    ValidationInfo,
     field_validator,
     model_serializer,
     model_validator,
 )
 
 from yian.defaults import current
+from yian.llm_clients.connection_settings import (
+    validate_header_name,
+    validate_headers,
+    validate_organization,
+)
 from yian.llm_clients.provider_blocks import (
     PROVIDER_BLOCKS,
     AnthropicMessagesBlock,
@@ -138,6 +144,27 @@ class LLMConfig(BaseModel):
             is called; it needs no `api_key`, since the key may come from
             `AZURE_OPENAI_API_KEY`, and a flow file may set it beside
             `provider: azure`. Unlike the key, it appears in `model_dump` when set.
+        organization (`str`, *optional*, defaults to `None`):
+            OpenAI organization id, sent as the `OpenAI-Organization` header. Only
+            `provider="openai"` takes it, and it needs `api_key` and `provider` in the
+            same config, since it goes wherever that key is sent. It must be non-empty
+            visible ASCII of at most `YIAN_MAX_ORGANIZATION_CHARS` characters (default
+            256). It appears in `model_dump` when set.
+        project (`str`, *optional*, defaults to `None`):
+            OpenAI project id, sent as the `OpenAI-Project` header, with the same rules
+            as `organization`.
+        headers (`dict[str, SecretStr]`, *optional*, defaults to `None`):
+            Extra request headers, for example for a gateway. They need `api_key` and
+            `provider` in the same config, and `provider="ollama"` rejects them. Names
+            are HTTP tokens compared without case; credential and framing headers
+            (`Authorization`, `x-api-key`, `Host`, `Content-Type`, ...) are refused for
+            every provider, and `OpenAI-Organization`/`OpenAI-Project` for
+            `provider="openai"` (see `connection_settings.REFUSED_HEADER_NAMES`). Values
+            are visible ASCII, with spaces or tabs only between characters, of at most
+            `YIAN_MAX_HEADER_VALUE_CHARS` characters (default 8192); at most
+            `YIAN_MAX_CONNECTION_HEADERS` headers (default 32). Values are secrets: masked
+            in `repr` and, like the key, left out of every `model_dump`. An empty
+            mapping is the same as `None`.
         <provider> (`_Block`, *optional*, defaults to `None`):
             One block per provider in `SUPPORTED_LLM_PROVIDERS` (`openai`, `qwen-cn`,
             `anthropic`, ...), named after it: request-body fields for the API that
@@ -169,6 +196,10 @@ class LLMConfig(BaseModel):
     # a key dump exactly as they did before the field existed.
     api_key: Optional[SecretStr] = Field(default=None, exclude=True)
     base_url: Optional[str] = None
+    organization: Optional[str] = None
+    project: Optional[str] = None
+    # Header values are secrets, so they are excluded from dumps like the key.
+    headers: Optional[dict[str, SecretStr]] = Field(default=None, exclude=True)
     openai: Optional[OpenAIResponsesBlock] = None
     xai: Optional[XAIChatBlock] = None
     deepseek: Optional[DeepSeekChatBlock] = None
@@ -248,31 +279,70 @@ class LLMConfig(BaseModel):
         """Accept an HTTPS endpoint, or plain HTTP only on the local machine."""
         return value if value is None else validate_base_url(value)
 
+    @field_validator("organization", "project")
+    @classmethod
+    def _require_visible_id(
+        cls, value: Optional[str], info: ValidationInfo
+    ) -> Optional[str]:
+        """Accept a short visible-ASCII OpenAI organization or project id."""
+        return value if value is None else validate_organization(value, info.field_name)
+
+    @field_validator("headers")
+    @classmethod
+    def _require_sendable_headers(
+        cls, value: Optional[dict[str, SecretStr]]
+    ) -> Optional[dict[str, SecretStr]]:
+        """Accept headers whose names and values may be sent to any provider."""
+        if not value:
+            return None
+        validate_headers(value, provider=None)
+        return value
+
     @model_validator(mode="after")
-    def _bind_base_url_to_key(self) -> "LLMConfig":
-        """Require a base_url to travel with the key and provider it serves.
+    def _bind_connection_to_key(self) -> "LLMConfig":
+        """Require base_url and the connection settings to travel with the key they serve.
 
         An Azure base_url is the resource endpoint and may come without a key.
         """
-        if self.base_url is None or self.provider == "azure":
-            return self
-        if self.api_key is None or self.provider is None:
+        if self.base_url is not None and self.provider != "azure":
+            if self.api_key is None or self.provider is None:
+                raise ValueError(
+                    "llm_config.base_url needs llm_config.api_key and llm_config.provider "
+                    "in the same config, since it decides where that key is sent"
+                )
+            if self.provider in _NO_BASE_URL_PROVIDERS:
+                raise ValueError(_NO_BASE_URL_PROVIDERS[self.provider])
+        for field in ("organization", "project", "headers"):
+            if getattr(self, field) is not None and (
+                self.api_key is None or self.provider is None
+            ):
+                raise ValueError(
+                    f"llm_config.{field} needs llm_config.api_key and llm_config.provider "
+                    "in the same config, since it goes wherever that key is sent"
+                )
+        if (self.organization or self.project) and self.provider != "openai":
             raise ValueError(
-                "llm_config.base_url needs llm_config.api_key and llm_config.provider in "
-                "the same config, since it decides where that key is sent"
+                "llm_config.organization and llm_config.project apply only to provider "
+                "openai"
             )
-        if self.provider in _NO_BASE_URL_PROVIDERS:
-            raise ValueError(_NO_BASE_URL_PROVIDERS[self.provider])
+        if self.headers and self.provider == "ollama":
+            raise ValueError(
+                "provider ollama does not take llm_config.headers; it sends no api_key"
+            )
+        # The field check could not see the provider; openai refuses more names.
+        for name in self.headers or ():
+            validate_header_name(name, self.provider)
         return self
 
     @model_serializer(mode="wrap")
     def _omit_unset_fields(self, handler):
-        """Dump an unset base_url or block as absent, so existing recorded dumps stay identical."""
+        """Dump an unset base_url, setting or block as absent, so recorded dumps stay identical."""
         data = handler(self)
         if not isinstance(data, dict):
             return data
-        if self.base_url is None:
-            data.pop("base_url", None)
+        for field in ("base_url", "organization", "project"):
+            if getattr(self, field) is None:
+                data.pop(field, None)
         for key, name in _BLOCK_ATTRIBUTES.items():
             if getattr(self, name) is None:
                 data.pop(key, None)

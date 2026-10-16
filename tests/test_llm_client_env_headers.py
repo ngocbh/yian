@@ -5,6 +5,7 @@ yian's clients send exactly the credential and headers yian passes.
 """
 
 import asyncio
+import os
 import warnings
 
 import anthropic
@@ -456,6 +457,40 @@ def test_google_sends_only_the_explicit_key(poisoned_env):
     for request in server.requests:
         assert request.headers["x-goog-api-key"] == "g-explicit"
         assert_clean(request)
+
+
+_KEY_VARIABLES = (
+    "GOOGLE_API_KEY", "GEMINI_API_KEY", "LANGSMITH_GATEWAY", "LANGSMITH_GATEWAY_API_KEY",
+)
+
+
+def test_google_never_writes_the_key_to_the_environment(poisoned_env):
+    # langchain's Vertex AI branch hands a passed key to google-genai through os.environ.
+    poisoned_env.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    for name in _KEY_VARIABLES:
+        poisoned_env.delenv(name, raising=False)
+    written = []
+    original = os._Environ.__setitem__
+
+    def recorder(self, name, value):
+        written.append(name)
+        original(self, name, value)
+
+    poisoned_env.setattr(os._Environ, "__setitem__", recorder)
+    with httpx.Client(transport=httpx.MockTransport(GeminiServer())) as client:
+        _google(client, None)
+    assert "GOOGLE_API_KEY" not in written
+
+
+def test_google_sends_yian_key_not_the_environment_key(poisoned_env):
+    poisoned_env.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    poisoned_env.setenv("GOOGLE_API_KEY", "env-google-key")
+    poisoned_env.setenv("GEMINI_API_KEY", "env-gemini-key")
+    server = GeminiServer()
+    invoke_both(_google, server)
+    assert len(server.requests) == 2
+    for request in server.requests:
+        assert request.headers["x-goog-api-key"] == "g-explicit"
 
 
 def _deepseek(client, async_client):

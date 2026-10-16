@@ -267,6 +267,9 @@ class GoogleClient(BaseLLMClient):
         # langchain-google-genai sends temperature=0.7 unless it is None; a temperature
         # comes only from the block's generationConfig.
         llm_kwargs["temperature"] = None
+        # Without it langchain reads GOOGLE_GENAI_USE_VERTEXAI, and its Vertex AI branch hands
+        # the key to google-genai only through the environment, where an env key wins.
+        llm_kwargs["vertexai"] = False
 
         # Unified api_key maps to provider-specific google_api_key
         google_api_key = self.kwargs.get("api_key") or self.kwargs.get("google_api_key")

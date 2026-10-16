@@ -72,7 +72,7 @@ def drop_environment_headers(client: Any, explicit: Iterable[str]) -> None:
         return
     keep = set(explicit)
     # The SDK merges header variables into the private `_custom_headers`, and
-    # `copy`/`with_options` re-read the environment, so this edits the dict in place.
+    # `copy`/`with_options` re-read the environment, so this filters the built client's dict directly.
     client._custom_headers = {
         name: value for name, value in client._custom_headers.items() if name in keep
     }

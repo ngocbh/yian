@@ -228,7 +228,7 @@ has no `http_client`, and `model_from_config` passes none. Only code that builds
 model with `create_llm_client(..., http_client=...)` can set them on that client.
 The ollama client deletes the `Authorization` header the ollama SDK built from
 `OLLAMA_API_KEY` (`NormalizedChatOllama`), so no key reaches Ollama, and warns once
-per process when it does (`base_client.warn_once`); Basic auth from userinfo in
+per process when it drops it (`base_client.warn_once`); Basic auth from userinfo in
 `OLLAMA_BASE_URL` stays.
 The google client passes `vertexai=False`, and if google-genai still switched its
 genai client to Vertex AI from the environment, rebuilds it on the Gemini Developer

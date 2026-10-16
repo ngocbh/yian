@@ -96,8 +96,7 @@ headers. Only Python code that builds a model itself with `create_llm_client` ca
 by setting them on the `http_client` it passes, e.g.
 `httpx.Client(headers={"OpenAI-Organization": "org-..."})`. yian never sends
 `OLLAMA_API_KEY` either (see [Local models with Ollama](#local-models-with-ollama)).
-A key yian passes to
-Azure (a Python host's key or a saved login) is sent even when
+A key yian passes to Azure (a Python host's key or a saved login) is sent even when
 `AZURE_OPENAI_AD_TOKEN` is set. Endpoints still come from
 environment variables at run time (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`,
 `GOOGLE_GEMINI_BASE_URL`, `VLLM_BASE_URL`, `OLLAMA_BASE_URL`, ...); a saved login
@@ -268,7 +267,7 @@ The endpoint always comes from `OLLAMA_BASE_URL` (default
 `http://localhost:11434`); the saved login stores only the model.
 
 yian sends no key to Ollama. It does not send `OLLAMA_API_KEY`, and warns once when
-the variable is set; unset it to silence the warning. So a host that needs a key,
+it drops it; unset the variable to silence the warning. So a host that needs a key,
 such as Ollama's hosted API, can no longer be used, and nothing replaces it yet. This
 is a breaking change: earlier versions sent the variable as a Bearer token.
 

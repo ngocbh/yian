@@ -195,6 +195,10 @@ class AuthStore:
                     "credentials",
                 }:
                     raise ValueError
+                # The writer omits unset ids, so a stored null is not canonical. A null
+                # endpoint stays readable, as stores before these ids allowed it.
+                if any(entry.get(key, "") is None for key in ("organization", "project")):
+                    raise ValueError
                 credentials = self._load_credentials(entry["method"], entry["credentials"])
                 selection = ProviderSelection(
                     provider,

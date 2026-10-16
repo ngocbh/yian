@@ -583,5 +583,12 @@ def test_a_recorded_map_takes_settings_only_beside_the_marker():
             _require_concrete_selection({**marked, "_header_names": names}, path="agent")
     with pytest.raises(ValueError, match="'agent'.*organization"):
         _require_concrete_selection({**marked, "organization": "has space"}, path="agent")
+    for key in ("organization", "project"):
+        anthropic = {**marked, "provider": "anthropic", key: marked[key]}
+        anthropic.pop("organization" if key == "project" else "project")
+        with pytest.raises(
+            ValueError, match=f"'agent': {key} applies only to provider openai"
+        ):
+            _require_concrete_selection(anthropic, path="agent")
     with pytest.raises(ValueError, match="headers"):
         _require_concrete_selection({**marked, "headers": {"X-Gateway": "v"}}, path="agent")

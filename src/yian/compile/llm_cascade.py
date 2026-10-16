@@ -357,6 +357,10 @@ def _require_concrete_selection(
         # Only the host's settings, sent with its key, are recorded beside the marker.
         if HOST_KEY_MARKER not in config:
             raise ValueError(f"effective LLM config for {subject} has {key} without a host key")
+        if key != HEADER_NAMES_KEY and config.get("provider") != "openai":
+            raise ValueError(
+                f"effective LLM config for {subject}: {key} applies only to provider openai"
+            )
         try:
             if key == HEADER_NAMES_KEY:
                 validate_header_names(config[key], config.get("provider"))

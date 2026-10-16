@@ -316,6 +316,9 @@ def _entry_store(provider="p", **entry):
         _entry_store("openai", organization=""),
         _entry_store("openai", project="do not echo"),
         _entry_store(organization="do-not-echo"),
+        _entry_store("openai", organization=None),
+        _entry_store("openai", project=None),
+        _entry_store("ollama", credentials={"api_key": "k", "headers": {"X": "do-not-echo"}}),
         _entry_store(
             "openai",
             method="subscription",
@@ -348,6 +351,14 @@ def test_malformed_store_fails_without_echoing_payload(tmp_path, contents):
     with pytest.raises(AuthError) as caught:
         AuthStore(path).read()
     assert "do-not-echo" not in str(caught.value)
+
+
+def test_store_reads_a_null_endpoint(tmp_path):
+    path = tmp_path / "auth" / "auth.json"
+    path.parent.mkdir(mode=0o700)
+    path.write_text(_entry_store(endpoint=None))
+    path.chmod(0o600)
+    assert AuthStore(path).selection("p").endpoint is None
 
 
 def _gateway_credentials(key="sk-open"):
@@ -529,6 +540,7 @@ def test_provider_selection_checks_connection_settings():
         {"method": "subscription", "organization": "org-1"},
         {"provider": "anthropic", "project": "proj-1"},
         {"organization": "has space"},
+        {"provider": "ollama", "header_names": ("X-A",)},
     ):
         values = {"provider": "openai", "method": "api_key", **fields}
         with pytest.raises(AuthError):

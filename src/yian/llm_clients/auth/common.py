@@ -125,6 +125,8 @@ class ProviderSelection:
             raise AuthError("organization and project are only for an openai API-key login")
         if self.method != "api_key" and self.header_names:
             raise AuthError("Connection headers are only for an API-key login")
+        if self.provider == "ollama" and self.header_names:
+            raise AuthError("Connection headers are not sent to provider ollama")
         try:
             for name, value in (("organization", self.organization), ("project", self.project)):
                 if value is not None:

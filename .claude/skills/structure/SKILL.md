@@ -61,6 +61,7 @@ Before adding a package, place it on the dependency ladder. The engine reads
 
 ```
 defaults                                    (stdlib only; below every package)
+trampoline                                  (stdlib only; below every package)
 diagnostics  <-  events
       ^
       └────────  nodes  <-  compile  <-  compose
@@ -82,6 +83,11 @@ does not bootstrap compose or runtime.
 default and limit, each overridable by a `YIAN_<NAME>` environment variable read
 once per process. Code reads a value through `defaults.current()` instead of a
 module constant; `test_defaults_leaf_imports_only_stdlib` ratchets the leaf.
+
+`trampoline.py` is a second stdlib-only leaf: `drive` and `flatten` run generator
+walkers at constant stack depth, so a walker over nested CALL, MAP, or LOOP bodies
+yields its nested call instead of recursing once per level.
+`test_trampoline_leaf_imports_only_stdlib` ratchets it.
 
 The package-root run boundary is the composition root: it may import compose,
 compile's concrete builders, and runtime. Lower layers never import it. **Arrows

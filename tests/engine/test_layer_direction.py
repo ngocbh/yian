@@ -424,3 +424,16 @@ def test_defaults_leaf_imports_only_stdlib() -> None:
     assert not violations, "defaults must stay a stdlib leaf:\n" + "\n".join(
         violations
     )
+
+
+def test_trampoline_leaf_imports_only_stdlib() -> None:
+    """Walkers in every layer run on the trampoline, so it imports no yian module."""
+    path = PACKAGE_ROOT / "trampoline.py"
+    violations = [
+        f"{path.relative_to(SOURCE_ROOT)}:{line}: {statement} -> {target}"
+        for line, target, statement in _import_targets(path)
+        if target.split(".")[0] not in sys.stdlib_module_names
+    ]
+    assert not violations, "trampoline must stay a stdlib leaf:\n" + "\n".join(
+        violations
+    )

@@ -8,6 +8,7 @@ ordinary outputs. See the project README for status.
 Layers, leaf-to-root (a package imports only DOWN/leftward — never up, never in a cycle):
 
     defaults                                        (stdlib only; below every package)
+    trampoline                                      (stdlib only; below every package)
     diagnostics  <-  events
           ^
           └────────  nodes  <-  compile  <-  compose
@@ -21,9 +22,11 @@ Layers, leaf-to-root (a package imports only DOWN/leftward — never up, never i
 `defaults.py` imports only
 the standard library and holds every predefined default and limit, each overridable
 by a `YIAN_<NAME>` environment variable read once per process; any layer may import
-it. `diagnostics.py` is the dependency-free source-neutral value spine and owns
-`SourceRange`; `events` imports semantic failures from it but does not re-export
-that Compose-facing coordinate type. Other leaves import nothing upward:
+it. `trampoline.py` also imports only the standard library: its `drive` and `flatten`
+run generator walkers at constant stack depth, so a walker over nested flows does not
+recurse once per level; any layer may import it. `diagnostics.py` is the
+dependency-free source-neutral value spine and owns `SourceRange`; `events` imports
+semantic failures from it but does not re-export that Compose-facing coordinate type. Other leaves import nothing upward:
 `typesys` (the typed value pool), `expr` (`${...}` evaluation), and `llm_clients` (provider client wrappers +
 `LLMConfig` — the AGENT node's model seam), and `skills` (host-supplied `SKILL.md` values,
 confined bundled-file reads, and the AGENT's built-in `load_skill` tool; `compose.skills`

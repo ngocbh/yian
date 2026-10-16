@@ -156,7 +156,9 @@ def _render_host_run_error(
 ) -> None:
     """Render an expected run-boundary host failure without a default traceback.
 
-    The error's notes, if any, follow its message, one per line.
+    An `McpConnectError`'s notes (the tool names no started server supplies, and the
+    other servers that failed to start) follow its message, one per line. Other notes,
+    such as a cleanup failure attached to the primary error, stay out of the message.
 
     Args:
         action (`str`):
@@ -168,8 +170,9 @@ def _render_host_run_error(
     """
     message = Text(f"{action} failed: ", style="red bold")
     message.append(str(error), style="red")
-    for note in getattr(error, "__notes__", ()):
-        message.append(f"\n{note}", style="red")
+    if isinstance(error, McpConnectError):
+        for note in getattr(error, "__notes__", ()):
+            message.append(f"\n{note}", style="red")
     err_console.print(message)
     if engine_trace:
         err_console.print_exception()

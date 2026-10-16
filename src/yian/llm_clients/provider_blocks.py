@@ -6,13 +6,16 @@ itself (model, messages, tools, structured output, streaming, conversation state
 reserved: setting one is a load error that says so. Error messages name the block and the
 key path and never echo values; the key path can include keys the author wrote in a mapping
 field (e.g. a ``metadata`` key), since keys are names rather than values.
+`partial_block_problems` checks a block whose leaves may be values resolved later, and
+`block_field_annotation` gives the simple type a value for one field must have.
 """
 
 from __future__ import annotations
 
 import types
 import typing
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
+from dataclasses import dataclass
 from typing import Annotated, Any, ClassVar, Dict, List, Literal, Optional, Union
 
 from pydantic import (
@@ -23,6 +26,7 @@ from pydantic import (
     Field,
     StringConstraints,
     Tag,
+    ValidationError,
     model_serializer,
     model_validator,
 )
@@ -1169,3 +1173,240 @@ def _copy(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_copy(item) for item in value]
     return value
+
+
+@dataclass(frozen=True)
+class BlockFieldType:
+    """The type of a provider-block field simple enough to check a value's source against.
+
+    Attributes:
+        base (`type`): ``str``, ``int``, ``float`` or ``bool``.
+        literals (`tuple`): The values a ``Literal`` field allows; empty for any other.
+        ge (`int | float | None`): The inclusive lower bound, if any.
+        le (`int | float | None`): The inclusive upper bound, if any.
+    """
+
+    base: type
+    literals: tuple = ()
+    ge: Optional[Union[int, float]] = None
+    le: Optional[Union[int, float]] = None
+
+
+_SIMPLE_TYPES = (str, int, float, bool)
+
+
+def partial_block_problems(
+    block: str, tree: Any, is_value: Callable[[Any], bool]
+) -> list[str]:
+    """Check a provider block whose leaves may be values that resolve later.
+
+    Reserved and unknown key paths are reported as `block_schema`'s class reports them.
+    A value is opaque: it is never checked, a required field given as one counts as
+    present, and a nested object whose ``type`` (the variant tag) is one is not walked.
+    Every other leaf is checked against its field's type and constraints. A list
+    holding a value has its object entries walked for key paths and its other entries
+    left for when it resolves. Messages name the key path and never echo a value.
+
+    Args:
+        block (`str`):
+            A key of `PROVIDER_BLOCKS`, e.g. ``"anthropic"``.
+        tree (`Any`):
+            The block as written, with values in place of some leaves or subtrees.
+        is_value (`Callable[[Any], bool]`):
+            Whether a leaf or subtree is a value.
+
+    Returns:
+        `list[str]`: One message per problem, in the order written; empty when none.
+
+    Raises:
+        `KeyError`:
+            Raised when ``block`` has no block class.
+
+    Example:
+        ```python
+        partial_block_problems(
+            "anthropic", {"thinking": {"type": "enabled", "budget_tokens": 10}}, is_value
+        )
+        # ["`anthropic.thinking.budget_tokens`: Input should be greater than or equal to 1024"]
+        ```
+    """
+    top = PROVIDER_BLOCKS[block]
+    if is_value(tree):
+        return []
+    if not isinstance(tree, Mapping):
+        return [f"`{top.default_block}` must be a mapping"]
+    problems: list[str] = []
+    _partial_problems(top, tree, top=top, prefix="", is_value=is_value, problems=problems)
+    return problems
+
+
+def _partial_problems(
+    model: type[_Block],
+    data: Mapping,
+    *,
+    top: type[_Block],
+    prefix: str,
+    is_value: Callable[[Any], bool],
+    problems: list[str],
+) -> None:
+    """Append the problems of the partial object ``data`` checked against ``model``."""
+    names = {field.alias or name: name for name, field in model.model_fields.items()}
+    for key, value in data.items():
+        path = f"{prefix}{key}"
+        if path in top.reserved:
+            problems.append(
+                f"`{top.default_block}.{path}` is built by yian ({top.reserved[path]}); remove it"
+            )
+        elif key not in names:
+            problems.append(
+                f"`{top.default_block}.{path}` {top.api}; allowed: {', '.join(sorted(names))}"
+            )
+        else:
+            _partial_field(model, names[key], value, top=top, path=path,
+                           is_value=is_value, problems=problems)
+    for key, name in names.items():
+        if key not in data and model.model_fields[name].is_required():
+            problems.append(f"`{top.default_block}.{prefix}{key}` is required")
+
+
+def _partial_field(
+    model: type[_Block],
+    name: str,
+    value: Any,
+    *,
+    top: type[_Block],
+    path: str,
+    is_value: Callable[[Any], bool],
+    problems: list[str],
+) -> None:
+    """Append the problems of one field's partial ``value``; values are never checked."""
+    if is_value(value):
+        return
+    annotation = model.model_fields[name].annotation
+    if isinstance(value, Mapping):
+        part = _nested_block(annotation, value)
+        if part is not None:
+            _partial_problems(part, value, top=top, prefix=f"{path}.", is_value=is_value,
+                              problems=problems)
+            return
+        if _holds_value(value, is_value):
+            # Several variants and no literal tag: only the tag itself can be checked.
+            if len(_block_members(annotation)) > 1 and not is_value(value.get("type")):
+                tag = {"type": value["type"]} if "type" in value else {}
+                _check_literal(model, name, tag, top=top, path=path, problems=problems)
+            return
+    elif isinstance(value, list) and _holds_value(value, is_value):
+        items = [typing.get_args(m)[0] for m in _members(annotation) if _is_list(m)]
+        item = Union[tuple(items)] if items else None
+        for index, entry in enumerate(value):
+            if isinstance(entry, Mapping) and not is_value(entry):
+                part = _nested_block(item, entry) if item is not None else None
+                if part is not None:
+                    _partial_problems(part, entry, top=top, prefix=f"{path}[{index}].",
+                                      is_value=is_value, problems=problems)
+        return
+    _check_literal(model, name, value, top=top, path=path, problems=problems)
+
+
+def _check_literal(
+    model: type[_Block],
+    name: str,
+    value: Any,
+    *,
+    top: type[_Block],
+    path: str,
+    problems: list[str],
+) -> None:
+    """Append why the value-free ``value`` is not valid for field ``name`` of ``model``."""
+    try:
+        model.__pydantic_validator__.validate_assignment(model.model_construct(), name, value)
+    except ValidationError as exc:
+        for error in exc.errors(include_input=False, include_url=False):
+            where = path
+            for part in error["loc"][1:]:
+                where += f"[{part}]" if isinstance(part, int) else f".{part}"
+            problems.append(f"`{top.default_block}.{where}`: {error['msg']}")
+
+
+def _holds_value(tree: Any, is_value: Callable[[Any], bool]) -> bool:
+    """Return whether ``tree`` is, or anywhere holds, a value."""
+    if is_value(tree):
+        return True
+    if isinstance(tree, Mapping):
+        return any(_holds_value(item, is_value) for item in tree.values())
+    if isinstance(tree, list):
+        return any(_holds_value(item, is_value) for item in tree)
+    return False
+
+
+def _block_members(annotation: Any) -> list[type[_Block]]:
+    """Return the block classes ``annotation`` allows."""
+    return [m for m in _members(annotation) if isinstance(m, type) and issubclass(m, _Block)]
+
+
+def block_field_annotation(
+    block: str, path: tuple[str, ...], tree: Any
+) -> Optional[BlockFieldType]:
+    """Return the simple type of the block field at ``path``, if it has one.
+
+    A nested object with several variants is told apart by the literal ``type`` written
+    at its place in ``tree``.
+
+    Args:
+        block (`str`):
+            A key of `PROVIDER_BLOCKS`, e.g. ``"anthropic"``.
+        path (`tuple[str, ...]`):
+            The field's key path inside the block, e.g. ``("thinking", "budget_tokens")``.
+        tree (`Any`):
+            The block as written, which may hold values.
+
+    Returns:
+        `BlockFieldType | None`:
+            The field's type when it is ``str``, ``int``, ``float`` or ``bool`` (with
+            any inclusive bounds) or a ``Literal`` of one of them; `None` for any other
+            field (an object, list, mapping or union), an unknown path, or a variant
+            that ``tree`` does not name.
+
+    Raises:
+        `KeyError`:
+            Raised when ``block`` has no block class.
+
+    Example:
+        ```python
+        block_field_annotation("anthropic", ("thinking", "budget_tokens"),
+                               {"thinking": {"type": "enabled"}})
+        # BlockFieldType(base=int, literals=(), ge=1024, le=None)
+        ```
+    """
+    model: Optional[type[_Block]] = PROVIDER_BLOCKS[block]
+    for index, key in enumerate(path):
+        fields = {field.alias or name: field for name, field in model.model_fields.items()}
+        field = fields.get(key)
+        if field is None:
+            return None
+        if index == len(path) - 1:
+            return _simple_type(field.annotation, field.metadata)
+        tree = tree.get(key) if isinstance(tree, Mapping) else None
+        model = _nested_block(field.annotation, tree if isinstance(tree, Mapping) else {})
+        if model is None:
+            return None
+    return None
+
+
+def _simple_type(annotation: Any, metadata: list[Any]) -> Optional[BlockFieldType]:
+    """Return the `BlockFieldType` of a field's annotation and metadata, if it is simple."""
+    members = [m for m in _members(annotation) if m is not type(None)]
+    if len(members) != 1:
+        return None
+    member = members[0]
+    # pydantic keeps ``Field(ge=..., le=...)`` as metadata objects carrying that attribute.
+    ge = next((m.ge for m in metadata if getattr(m, "ge", None) is not None), None)
+    le = next((m.le for m in metadata if getattr(m, "le", None) is not None), None)
+    if member in _SIMPLE_TYPES:
+        return BlockFieldType(base=member, ge=ge, le=le)
+    if typing.get_origin(member) is Literal:
+        literals = typing.get_args(member)
+        kinds = {type(literal) for literal in literals}
+        if len(kinds) == 1 and next(iter(kinds)) in _SIMPLE_TYPES:
+            return BlockFieldType(base=next(iter(kinds)), literals=literals)
+    return None

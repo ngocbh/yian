@@ -242,6 +242,9 @@ def _is_plain_model(model: type[BaseModel]) -> bool:
 class NormalizedAzureChatOpenAI(RequestBlockMixin, AzureChatOpenAI):
     """AzureChatOpenAI with normalized content output and the `azure` block in each request."""
 
+    # langchain's Azure client sets its own User-Agent as an SDK custom header.
+    _sdk_header_names = ("User-Agent",)
+
     def invoke(self, input, config=None, **kwargs):
         return self.normalize_reply(super().invoke(input, config, **kwargs))
 

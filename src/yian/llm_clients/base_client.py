@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from typing import Any, Optional
 import warnings
 
@@ -52,6 +53,34 @@ def check_no_redirects(name: str, http_client: Any) -> None:
             f"{name} follows redirects, which would send the API key past base_url; "
             "build it with follow_redirects=False"
         )
+
+
+def drop_environment_headers(client: Any, explicit: Iterable[str]) -> None:
+    """Remove the headers an SDK client took from the environment when it was built.
+
+    Keeps only the custom headers whose name is exactly (case-sensitive) one of
+    `explicit`, and sets `organization`/`project` to `None` and
+    `_ambient_authorizations` to `frozenset()` where the client has them.
+
+    Args:
+        client (`Any`):
+            An OpenAI or Anthropic SDK client, changed in place. `None` is skipped.
+        explicit (`Iterable[str]`):
+            Names of the custom headers the caller passed itself.
+    """
+    if client is None:
+        return
+    keep = set(explicit)
+    # The SDK merges header variables into the private `_custom_headers`, and
+    # `copy`/`with_options` re-read the environment, so this edits the dict in place.
+    client._custom_headers = {
+        name: value for name, value in client._custom_headers.items() if name in keep
+    }
+    for attribute in ("organization", "project"):
+        if hasattr(client, attribute):
+            setattr(client, attribute, None)
+    if hasattr(client, "_ambient_authorizations"):
+        client._ambient_authorizations = frozenset()
 
 
 class MissingToolCallError(OutputParserException):

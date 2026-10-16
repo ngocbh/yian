@@ -2,17 +2,17 @@ import copy
 import inspect
 import os
 from functools import cache
-from typing import Any, Literal, Optional
+from typing import Any, ClassVar, Literal, Optional
 
 from langchain_core.messages import AIMessage
 from langchain_openai import ChatOpenAI
 from langchain_openai.chat_models.base import BaseChatOpenAI
 from openai.resources.chat.completions import Completions
 from openai.resources.responses import Responses
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from .api_key_env import OPTIONAL_API_KEY_PROVIDERS, get_api_key_env
-from .base_client import BaseLLMClient, normalize_content
+from .base_client import BaseLLMClient, drop_environment_headers, normalize_content
 from .capabilities import get_capabilities, has_open_schema
 from .factory import _PROVIDER_BASE_URL
 from .provider_blocks import merge_request_body
@@ -75,6 +75,11 @@ class RequestBlockMixin(BaseChatOpenAI):
     langchain's own (and before a subclass's post-processing). The block is merged as
     written: keys the SDK method takes stay top-level, the rest go into ``extra_body``.
 
+    The SDK clients keep only the headers passed in ``default_headers`` (plus the
+    subclass's `_sdk_header_names`); headers the SDK read from the environment are
+    dropped. The organization and project are always dropped: yian passes none, so a
+    Python caller's ``organization=`` is dropped too.
+
     Attributes:
         block (`dict[str, Any]`, *optional*, defaults to `{}`):
             The provider block, shaped like the request body of `block_api`. Empty sends
@@ -88,6 +93,24 @@ class RequestBlockMixin(BaseChatOpenAI):
     block: dict[str, Any] = Field(default_factory=dict, exclude=True, repr=False)
     block_provider: str = Field(default="", exclude=True, repr=False)
     block_api: Literal["chat", "responses"] = Field(default="chat", exclude=True, repr=False)
+    # Custom headers the langchain class itself passes to the SDK client.
+    _sdk_header_names: ClassVar[tuple[str, ...]] = ()
+
+    @model_validator(mode="after")
+    def _drop_environment_headers(self):
+        """Drop the environment's headers, organization and project from the SDK clients.
+
+        Runs after langchain's validator builds ``root_client``/``root_async_client``.
+
+        Returns:
+            `RequestBlockMixin`:
+                This model.
+        """
+        self.openai_organization = None
+        explicit = (*(self.default_headers or {}), *self._sdk_header_names)
+        drop_environment_headers(self.root_client, explicit)
+        drop_environment_headers(self.root_async_client, explicit)
+        return self
 
     def _get_request_payload(self, input_, *, stop=None, **kwargs):
         """Return langchain's request payload with `block` merged in.

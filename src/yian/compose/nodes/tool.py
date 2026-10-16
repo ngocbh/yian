@@ -14,7 +14,9 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.nodes.agent import retries_error
 from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor, reject_non_text
+from yian.defaults import current
 from yian.diagnostics import SourceRange
 from yian.nodes.tool import ToolNode
 
@@ -27,25 +29,28 @@ class ToolDescriptor(NodeDescriptor):
     the Compose-only `range`/`field_ranges` parse metadata), the normalized `inputs` binding
     carrier, the optional normalized `outputs` declaration, and the template `parse` from
     `NodeDescriptor`; its `_validate_fields` hook rejects a `tool_id:` YAML read as non-text
-    (including `null`), then runs the base `input:` shape and asserts checks. Only the
-    tool-specific fields (`tool_id`, `asserts`) are declared here; a tool's authored `input:`
+    (including `null`) and a `retries:` that is not a non-negative integer, then runs the base
+    `input:` shape and asserts checks. Only the tool-specific fields (`tool_id`, `retries`,
+    `asserts`) are declared here; a tool's authored `input:`
     is stored in the base's `inputs` map, the same binding surface every value-shaped leaf
     kind uses.
 
     `output:` is optional. When present it becomes the node's output contract, and the
     engine validates the tool's return value against it on every call.
 
-    Class attrs: `kind="tool"`; `allowed` adds `tool_id`, normalized `inputs`/`outputs`, and
-    `asserts` to the commons; `required` is `{"tool_id"}`; `binding_fields=("inputs",)` — a
+    Class attrs: `kind="tool"`; `allowed` adds `tool_id`, normalized `inputs`/`outputs`,
+    `retries`, and `asserts` to the commons; `required` is `{"tool_id"}`; `binding_fields=("inputs",)` — a
     tool's input map is its sink-binding surface, walked kind-blind by `bindings.py`.
     """
 
     kind = "tool"
-    allowed = NodeDescriptor.allow("tool_id", "inputs", "outputs", "asserts")
+    allowed = NodeDescriptor.allow("tool_id", "inputs", "outputs", "retries", "asserts")
     required = NodeDescriptor.require("tool_id")
     binding_fields = ("inputs",)
 
     tool_id: str
+    # The effective count, so the manifest holds it; zero is left out of the manifest.
+    retries: int = field(default_factory=lambda: current().tool_retries)
     asserts: list[str] = field(default_factory=list)
 
     @classmethod
@@ -57,7 +62,7 @@ class ToolDescriptor(NodeDescriptor):
         own_range: Optional[SourceRange],
         diagnostics: LoadDiagnostics,
     ) -> None:
-        """Reject a non-text `tool_id:`, then run the base checks."""
+        """Reject a non-text `tool_id:` and a bad `retries:`, then run the base checks."""
         reject_non_text(
             cls.kind,
             node_id,
@@ -67,6 +72,13 @@ class ToolDescriptor(NodeDescriptor):
             diagnostics,
             required=True,
         )
+        if "retries" in kwargs:
+            problem = retries_error(kwargs["retries"])
+            if problem is not None:
+                raise diagnostics.error(
+                    f"node {node_id!r} (kind={cls.kind}): `retries:` {problem}",
+                    range=ranges.get(("field", "retries")) or own_range,
+                )
         super()._validate_fields(node_id, kwargs, ranges, own_range, diagnostics)
 
     def build(self, ctx: BuildContext) -> BuildResult:
@@ -80,7 +92,9 @@ class ToolDescriptor(NodeDescriptor):
         `ctx.resolver` is unused (leaf kind) and the inline-CODE anchors on `ctx` are read only
         by the CODE build.
         """
-        node = ToolNode(self.id, tool_id=self.tool_id, title=self.node_name)
+        node = ToolNode(
+            self.id, tool_id=self.tool_id, title=self.node_name, retries=self.retries
+        )
         node.output_contract = self.output_contract(ctx)
         node.params = self.sink_params()
         wiring = self.sink_wiring()

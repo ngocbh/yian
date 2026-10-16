@@ -12,6 +12,7 @@ engine checks against the tool's return value on every call.
 
 from types import MappingProxyType
 
+from yian.defaults import current
 from yian.nodes.base import Node, NodeKind, Output
 from yian.nodes.contracts import HostToolCall, output_contract_type
 from yian.tools import ToolSet
@@ -40,14 +41,20 @@ class ToolNode(Node):
             The tool id, looked up in the run's `ToolSet`; an unknown id raises at run time.
         title (`str`, *optional*, defaults to `None`):
             Display title.
+        retries (`int`, *optional*, defaults to `None`):
+            How many times a failed tool call may be retried; `None` means
+            `current().tool_retries`.
     """
 
     kind = NodeKind.TOOL
     needs_tools = True
 
-    def __init__(self, node_id: str, *, tool_id: str, title=None) -> None:
+    def __init__(
+        self, node_id: str, *, tool_id: str, title=None, retries: int | None = None
+    ) -> None:
         super().__init__(node_id, title=title)
         self.tool_id = tool_id
+        self.retries = current().tool_retries if retries is None else retries
         self.input_types: dict[str, Type] = {}
 
     def host_tool_call(self) -> HostToolCall:

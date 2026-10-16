@@ -1927,7 +1927,10 @@ A TOOL node's `tool_id:` and an AGENT node's `tools:` grant name either a tool
 registered with `register_tool` or one the host passes to that run with
 `run_flow(..., tools={...})`. When a host passes `tools=`, the run sees only
 those tools. The flow text is the same either way. `tools:` is always a list of
-names, even for one tool (`tools: [search]`); `tools: search` fails at load.
+names, even for one tool (`tools: [search]`); `tools: search` fails at load. A
+host tool whose first parameter is a `ToolContext` receives the call id and the
+host's app object; the flow does not name that parameter (see
+[Tool context](api.md#tool-context)).
 
 An AGENT node's `tools:` entry may also name a **tool group** that the host fills
 for each run. The YAML looks the same; only the host knows which names are groups:

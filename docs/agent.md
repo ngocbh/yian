@@ -430,8 +430,10 @@ threading a carried record.
 ## Planned extensions
 
 An AGENT grants tools by id (registered, or passed per run with `tools=`) with
-`tools:` and host-supplied `SKILL.md` packages with `skills:`. Host-controlled
-discovery of project-local tools is tracked separately.
+`tools:` and host-supplied `SKILL.md` packages with `skills:`. A host tool can
+take a `ToolContext` first to receive its call id and the host's app object (see
+[Tool context](api.md#tool-context)). Host-controlled discovery of project-local
+tools is tracked separately.
 
 ## The authored structure stays fixed
 

@@ -43,6 +43,9 @@ These names are exported from the top-level `yian` package:
 | `LoadError` | bad-flow exception containing one canonical `diagnostic` |
 | `FlowValidationError` | raised on a failed validation check |
 | `ExpressionError` | raised on a bad `${...}` expression |
+| `ToolContext` | the per-call context a host tool receives when its first parameter asks for it (see [Tool context](#tool-context)) |
+| `FunctionTool` | a host tool given as a name, a description, an argument JSON Schema, and an `on_invoke` call |
+| `function_tool` | build a `FunctionTool` from a function, optionally overriding its name and description |
 
 Recovery, the result type, and the steering protocol live in `yian.run`:
 
@@ -116,6 +119,7 @@ run_flow(
     tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
+    context: Any = None,
 ) -> RunResult
 ```
 
@@ -289,10 +293,12 @@ run before appending any record.
   set: registered tools are hidden from the run. To keep them, pass
   `{**registered_tools(), "my_tool": fn}`. `registered_tools()` returns a copy
   taken when you call it, so register every tool before the run starts. A
-  function or method becomes a tool named by its key and described by its
-  docstring. To bind values such as a session id, use a closure or a bound
+  synchronous function or method becomes a tool named by its key and described
+  by its docstring (see [Tool context](#tool-context)). To give tools an app
+  object such as a session, pass it as `context`, or use a closure or a bound
   method; `functools.partial` and other callable objects are rejected. A
-  LangChain `BaseTool` must already use its key as its name. The `ask_user`
+  `FunctionTool` or LangChain `BaseTool` must already use its key as its name.
+  The `ask_user`
   entry is the run's human handler (see
   [Blocking human interaction](#blocking-human-interaction)). Tools are host
   callables, so the run log does not record them. An AGENT that grants skills
@@ -305,6 +311,154 @@ run before appending any record.
 - `skills` — the skills this run may use, keyed by name (see [Skills](#skills)).
   An AGENT's `skills:` grant selects from this mapping. A listed skill that is
   missing raises `ValueError` before the run starts.
+- `context` — the host's app object, such as a database session or a broker
+  client. A tool whose first parameter is annotated `ToolContext` reads it as
+  `ctx.context` (see [Tool context](#tool-context)). It is never recorded and is
+  not part of the flow fingerprint, so pass it again to `resume_flow`.
+
+### Tool context
+
+A host tool is a synchronous function or bound method. Its type hints give the
+argument schema, and its docstring gives the description the model sees and the
+argument descriptions. A tool that needs to know which call it is serving, or
+needs the host's app object, declares a first parameter annotated
+`ToolContext[T]`:
+
+```python
+from yian import ToolContext, run_flow
+from yian.run import resume_flow
+
+
+def place_order(ctx: ToolContext[Broker], symbol: str, qty: int) -> str:
+    """Place a market order.
+
+    Args:
+        symbol: The ticker to buy.
+        qty: How many shares.
+    """
+    return ctx.context.submit(symbol, qty, client_order_id=ctx.call_id)
+
+
+tools = {"place_order": place_order}
+result = run_flow(flow, {}, tools=tools, context=broker, log="run.jsonl")
+
+# After a crash, in a later process, pass the same tools and the app object again:
+recovered = resume_flow(flow, log="run.jsonl", tools=tools, context=broker)
+```
+
+Here `flow` has a TOOL node with `tool_id: place_order`, and `broker` is the
+host's client, which treats a repeated `client_order_id` as the same order. If
+the process dies after the broker accepts the order but before the node's result
+is recorded, the resumed run re-runs the node with the same `ctx.call_id`, and
+the broker returns the first order instead of placing a second one.
+
+The context parameter is found by its type. It must be the first parameter,
+positional, and annotated `ToolContext`, `ToolContext[T]`, or a subclass; its
+name doesn't matter. It is hidden from the schema the model sees and from the
+TOOL node's input names. `ToolContext` anywhere else, such as a later parameter,
+a keyword-only one, or `Optional[ToolContext]`, raises `TypeError` when the tool
+is built: in `run_flow` or `resume_flow` before the log is created for a `tools=`
+entry, and at decoration for `register_tool`. An `async def` tool raises
+`TypeError` the same way, since yian calls tools synchronously.
+
+| Field | Meaning |
+| --- | --- |
+| `call_id` | an opaque string that names this call (rules below) |
+| `attempt` | the attempt number, starting at 1 |
+| `tool_name` | the id the tool is registered under |
+| `run_id` | the run's id, or `""` outside a run |
+| `node` | the expanded id of the calling node, such as `loop#3/place`, or `""` outside a run |
+| `context` | the object passed as `context=`, or `None` |
+
+The call id depends on who calls the tool:
+
+- A TOOL node's call id is `"<run_id>/<node>"`, such as `run-7f3a/loop#3/place`.
+  Each LOOP iteration and MAP item has its own expanded node id, so its own call
+  id. A resumed run re-runs an interrupted TOOL node under the same call id.
+- A HUMAN_INPUT node's `ask_user` call uses the same form.
+- A call from an AGENT's tool loop gets an id of its own, unique per call and
+  never reused for another call. It is not stable across resume: a resumed AGENT
+  asks its model again and may make different calls, so reusing an id could make
+  an idempotency key drop the wrong action. Call a tool whose side effect must
+  happen once from a TOOL node.
+- Outside a run, as with `invoke_tool` or a `ToolSet` not bound to a run, each
+  call gets a fresh random id.
+
+Treat `call_id` as an opaque string and don't parse it; the AGENT form changes
+once AGENT steps are recorded. It is unique across runs only when run ids are: two
+runs given the same `run_id=` give their TOOL nodes the same call ids. When a
+broker limits the length or characters of its key, hash the id, for example
+`hashlib.sha256(ctx.call_id.encode()).hexdigest()[:32]`.
+
+`attempt` is always 1 until TOOL nodes can retry; a resumed re-run of a node is
+the same call and also sees 1.
+
+`context` is the same object for every tool call in the run. With the default
+`num_workers=8`, nodes call tools at the same time from worker threads, so the
+object must be thread-safe. The run log, events, results, and fingerprint never
+hold it. Without `context=` on `resume_flow`, tools in the resumed segment see
+`ctx.context is None`.
+
+The `ask_user` handler may take `ctx` first as well:
+`def handler(ctx: ToolContext[App], **request)` (see
+[Blocking human interaction](#blocking-human-interaction)).
+
+Host functions and `FunctionTool`s run directly, not through LangChain's
+`invoke`, so LangChain callbacks and tracing don't fire for them. A LangChain
+`BaseTool` runs as before and receives no `ToolContext`.
+
+**Descriptions.** The tool's description is the docstring's first text section,
+everything before its first section header such as `Args:`. With no such text,
+the description is the tool id. Argument descriptions come from a Google `Args:`
+section (also `Arguments:`, `Params:`, or `Parameters:`), a NumPy `Parameters`
+section, or Sphinx `:param name:` fields; the style is detected from the
+docstring. `Annotated[T, "description"]` describes an argument the docstring
+doesn't. `Field(...)` defaults and constraints are kept, and a docstring or
+`Annotated` description replaces a `Field` description.
+
+**`FunctionTool`.** A tool without a Python signature, such as one generated
+from an external schema, is a `FunctionTool`:
+
+```python
+from typing import Any
+
+from yian import FunctionTool, ToolContext, run_flow
+
+
+def echo(ctx: ToolContext[Any], args: dict[str, Any]) -> str:
+    return args["text"]
+
+
+echo_tool = FunctionTool(
+    name="echo",
+    description="Echo the text.",
+    params_json_schema={
+        "type": "object",
+        "properties": {"text": {"type": "string"}},
+        "required": ["text"],
+    },
+    on_invoke=echo,
+)
+result = run_flow(flow, {}, tools={"echo": echo_tool})
+```
+
+`on_invoke` is synchronous and always receives the call's `ToolContext` and a
+plain `dict` of the checked arguments. Before calling it, yian rejects unknown
+keys (unless `additionalProperties` is `true` or a schema, which then checks the
+extra values), rejects missing required keys, and checks each value against the
+yian type its JSON Schema translates to (see [Typed tools](#typed-tools)); a
+property with no translation is passed unchecked. Building one raises
+`TypeError` when `name` or `description` is not a string, `params_json_schema` is
+not a dict, or `on_invoke` is not callable or is async, and `ValueError` when
+`name` is empty or the schema's `type` is not `"object"`. An `on_invoke` that
+returns an awaitable fails the call with `TypeError`.
+
+`function_tool(fn, name_override=..., description_override=...)` builds a
+`FunctionTool` from a function, the same way a plain function tool is built; it
+also works as `@function_tool` or `@function_tool(name_override="buy")`.
+`register_tool(id, description_override=...)` replaces the description of the
+function or `FunctionTool` it registers. A `FunctionTool`'s name must equal its
+`tools=` key or `register_tool` id.
 
 ### Tool groups
 
@@ -333,8 +487,8 @@ result = run_flow(
 ```
 
 `worker` sees `search_tickets`, `read_ticket`, `read_file_tool`, and `ask_user`.
-Each group item is a LangChain `BaseTool` named by its `name`, or a function or
-bound method named by its `__name__` (a lambda has no usable name and is
+Each group item is a LangChain `BaseTool` or `FunctionTool` named by its `name`,
+or a function or bound method named by its `__name__` (a lambda has no usable name and is
 rejected). Groups expand before the grant check, so the model calls the tools by
 their own names, never by the group name. A group is not a tool: a TOOL node's
 `tool_id:` may name a tool inside a group, but not the group itself. Before the
@@ -397,8 +551,10 @@ follows the same rules:
 An input with a pydantic function validator (`mode="before"`, `"wrap"`, or
 `"plain"`), `SkipValidation`, or a custom type whose Python validation differs from
 its JSON Schema is not checked. A pydantic v1 schema gets only
-the name and required-input checks. A tool with a raw JSON Schema `args_schema`
-(a dict) is checked, but a TOOL node can't invoke it yet.
+the name and required-input checks. A `FunctionTool`'s inputs are read from its
+`params_json_schema`, and a TOOL node can invoke it. Any other `BaseTool` with a
+raw JSON Schema `args_schema` (a dict) is checked, but a TOOL node can't invoke it
+yet.
 
 Changed: a limit on only one end (pydantic `Field(ge=0)`, JSON Schema `minimum`
 alone) and an exclusive `number` limit used to be dropped. They are now kept, so a
@@ -410,7 +566,9 @@ against one range covering all its members.
 
 The return type is read from the annotation of the function behind the tool: a
 function passed in `tools=` or in a group, one registered with `register_tool`,
-or a `StructuredTool` built from a function. Return a `TypedDict`, `dict`,
+a `FunctionTool` built with `function_tool`, or a `StructuredTool` built from a
+function. A `FunctionTool` built directly has no return type, so its output is
+not checked at run start. Return a `TypedDict`, `dict`,
 `list`, or scalar. The output check is skipped when there is no annotation, the
 annotation is `Any`, the tool is a `BaseTool` that doesn't wrap a function, the
 tool uses `response_format="content_and_artifact"`, or the return type is not
@@ -1317,13 +1475,15 @@ resume_flow(
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
     api_key: str | SecretStr | None = None,
+    context: Any = None,
 ) -> RunResult
 ```
 
 `api_key` re-supplies the key of a run started with `llm_config.api_key`. It goes to
 the agents the log marks for it, at the `base_url` the log recorded for them if the
 run had one, is never recorded, and stays with the returned result for `backward`.
-A log that marks no agent ignores it.
+A log that marks no agent ignores it. `context` re-supplies the host's app
+object; the log does not hold it (see [Tool context](#tool-context)).
 
 Recovery locks the existing file before reading it and validates the complete
 record prefix; a file whose complete lines are not a valid run log is rejected and
@@ -1376,9 +1536,9 @@ For later backward on a memory-enabled log, pass a mapping with the same memory
 keys, for example `build_memories(flow, root=...)` with the original root, to
 `resume_flow(..., memory=...)`; terminal inspection retains it without opening it.
 
-The log does not record `tools`. To continue an unfinished run whose nodes use
-per-run tools or ask the human, pass the same `tools` (including `ask_user`) to
-`resume_flow` again. Tool group contents may differ from the original run's:
+The log does not record `tools` or `context`. To continue an unfinished run whose
+nodes use per-run tools or ask the human, pass the same `tools` (including
+`ask_user`) and `context` to `resume_flow` again. Tool group contents may differ from the original run's:
 completed nodes keep their recorded results, and nodes that restart see the
 groups passed to `resume_flow`. Every grant must still resolve, as in `run_flow`.
 
@@ -1390,7 +1550,10 @@ Fresh inputs, `run_id`, and LLM configuration cannot be supplied during recovery
 
 A retried node may
 resend requests and repeat tool actions; recovery does not provide exactly-once
-execution or resume an external request midway through. The new accepted start
+execution or resume an external request midway through. A retried TOOL node
+passes its tool the same `ctx.call_id` as before, so a tool can use it as an
+idempotency key; a retried AGENT's tool calls get new ids (see
+[Tool context](#tool-context)). The new accepted start
 receives a new sequence, and metadata for its old unfinished start is rejected.
 Runtime neither reconstructs a transcript from the run log nor fabricates results
 for unknown effects. SessionMemory owns whatever conversation history was saved;
@@ -1512,8 +1675,9 @@ result = run_flow(
 
 The handler receives `question`, `questions`, `answer_schema`, `title`,
 `node_id`, and `options` as keyword arguments, so define it as
-`def handler(**request)`. A handler that cannot take all six is rejected before
-the run starts. `human_input` uses the trusted metadata path; model-requested
+`def handler(**request)`, or as `def handler(ctx: ToolContext[App], **request)`
+to receive the call's [tool context](#tool-context) first. A handler that cannot
+take all six is rejected before the run starts. `human_input` uses the trusted metadata path; model-requested
 `ask_user` calls can supply only the public `question` and `options` arguments.
 `options` is `None` or a cleaned list of up to six short answer labels the model
 suggested. Show them as choices, but still let the human type another answer. Each run has its own handler, so
@@ -1527,10 +1691,11 @@ it discards their answers. To stop waiting on a human, withdraw the prompt when
 `on_event` sees the failure and make the handler return.
 For a `human_input` node, `node_id` is the expanded node id (for example
 `loop#1/ask` for a LOOP's second iteration), so a run id plus `node_id` identifies
-one question; bind the run id in the handler's closure when the host needs it.
+one question; a handler that takes `ctx` reads the run id as `ctx.run_id`.
 A model-requested call sets only `question` and `options`; `questions`,
-`answer_schema`, `title`, and `node_id` are `None`, so the handler cannot tell
-which AGENT, or which LOOP or MAP occurrence of it, asked. The mapping is the whole tool set,
+`answer_schema`, `title`, and `node_id` are `None`. Only a handler that takes
+`ctx` can tell which AGENT, or which LOOP or MAP occurrence of it, asked:
+`ctx.node` is its expanded node id. The mapping is the whole tool set,
 so a flow that also uses registered tools passes
 `tools={**registered_tools(), "ask_user": ask}`. `ask_user` never comes from the
 global registry: a run without its own handler fails any HUMAN_INPUT node that

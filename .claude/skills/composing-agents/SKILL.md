@@ -766,6 +766,14 @@ def get_facts(symbol: str, limit: int = 10) -> list[Fact]:
 Or give it to one run only: `run_flow(flow, inputs, tools={"get_facts": get_facts})`.
 That mapping is the run's whole tool set: registered tools are hidden. To keep
 them, pass `tools={**registered_tools(), "get_facts": get_facts}`.
+The docstring's first text section is the description and its `Args:` entries
+describe the arguments. A first parameter `ctx: ToolContext[T]` (from `yian`) is
+hidden from the model and the TOOL node's `input:`; it carries `ctx.call_id`
+(`"<run_id>/<node>"` for a TOOL node, the same on resume, so use it as an
+idempotency key) and `ctx.context`, the object passed as
+`run_flow(..., context=obj)`; pass it again to `resume_flow`. Tools must be `def`,
+not `async def`. A `FunctionTool(name, description, params_json_schema, on_invoke)`
+covers a tool with no Python signature. See `docs/api.md` "Tool context".
 
 **Typed TOOL nodes.** Every returned value must fit `output:`; model expected outcomes
 as union variants (`Union(Filled, Interrupted)`) and route them with `case`. At run

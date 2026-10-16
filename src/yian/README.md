@@ -59,7 +59,8 @@ runtime/      run records/logs, scheduler-state vocabulary, reducer-owned state,
 run.py        public run/recovery boundary and retained RunResult.backward handle
 memory_host.py build_memories/MemoryRegistry: host-side construction of declared memories
 llm_clients/  provider clients, authentication, LLMConfig, model_from_config, model listing
-tools/        tool registry + per-run ToolSet (run tools and the ask_user handler)
+tools/        tool registry, per-run ToolSet (run tools and the ask_user handler),
+              ToolContext, FunctionTool, and schemas from function signatures
 cli/          `yian` commands + main-thread terminal broker
 ```
 
@@ -1982,6 +1983,19 @@ back to the registry, so concurrent runs in one process keep separate handlers.
 Pooled nodes of one run can call the same handler at once, so it must be
 thread-safe. Tools are host callables: the log does not record them, and a host
 passes them again on resume.
+
+A `ToolSet` also holds the host's `context=` object, which is never recorded.
+`FlowEngine` binds the set to the run id (`ToolSet.for_run`), so every node that
+receives `caps["tools"]` passes run identity with no new capability. A function
+tool whose first parameter is annotated `ToolContext` gets one per call: call id,
+attempt, tool name, run id, node, and the context. TOOL and HUMAN_INPUT calls use
+the call id `"<run_id>/<node id>"`, which recovery rebuilds, so a re-run of an
+interrupted TOOL node sees the same id. An AGENT's tool loop passes
+`"<run_id>/<node id>/<exchange_id>/<call index>"`, unique per call but not stable
+across resume, since a resumed AGENT asks its model again. `attempt` is 1. Host
+functions and `FunctionTool`s become a private `StructuredTool` subclass whose
+`yian_call(ctx, payload)` `ToolSet.invoke` calls after validation; other
+`BaseTool`s still run through `invoke` and get no context.
 
 A `tools=` value that is a list or tuple is a named tool group. The `ToolSet`
 flattens every group into its tool map, keeps each group's ordered names, and

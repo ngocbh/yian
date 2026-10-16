@@ -187,7 +187,10 @@ and uses `compose.source.literals.parse_yaml_literal`.
 
 `tools/` is a leaf beside `skills/`: `registry.py` owns `register_tool`, the
 global registry, and the per-run `ToolSet`; `types.py` reads a tool's declared
-argument and return types as yian `Type`s for the run-start TOOL check. It imports
+argument and return types as yian `Type`s for the run-start TOOL check.
+`context.py` holds `ToolContext`; `docstrings.py` parses tool docstrings (stdlib
+only); `schema.py` builds a tool's argument model from a function signature;
+`function_tools.py` holds `FunctionTool` and `function_tool`. It imports
 langchain-core, pydantic, `typesys`, and the skills leaf, never nodes, compile,
 compose, runtime, `run.py`, or CLI. The run boundary compares the types; `tools/`
 only reads them.

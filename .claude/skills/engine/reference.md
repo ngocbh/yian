@@ -206,6 +206,11 @@ otherwise only the mapping's entries, and `ask_user` only from the run. A list v
 is a named tool group; the AGENT's tool loop expands granted groups through
 `ToolSet.expand` before binding and the grant check, and the run boundary checks
 every static `Node.granted_tools()` grant against the `ToolSet` before any record.
+The `ToolSet` also holds the host's unrecorded `context=` object; `FlowEngine` binds
+it to the run id with `ToolSet.for_run`, and `ToolSet.invoke(tool_id, inputs, *, node,
+call_id, attempt)` builds the `ToolContext` for a tool that declares one (call id
+`"<run_id>/<node id>"` from TOOL and HUMAN_INPUT, stable across resume; per call and
+not stable from the AGENT loop; a fresh id outside a run).
 The same walk reads `Node.host_tool_call()`: TOOL returns a `HostToolCall` (tool id,
 input names, proven input types, declared output type), and the boundary compares it
 with `tools.types.tool_types(tool)` through `type_relation`. Unknown or missing inputs

@@ -9,7 +9,6 @@ inspecting arbitrary semantic payloads.
 
 from __future__ import annotations
 
-import copy
 from typing import Callable, Iterator, TypeVar, cast
 
 from yian.diagnostics import OriginRef, OriginResolver, ResolverTable
@@ -23,7 +22,7 @@ from yian.nodes.contracts import (
     _rewrite_origin_carrier,
 )
 
-from .model import CompiledFlow, Flow, FlowOutput
+from .model import CompiledFlow, Flow, FlowOutput, copy_flow_graph
 
 
 _FlowT = TypeVar("_FlowT", bound=Flow)
@@ -156,7 +155,7 @@ def rewrite_flow_origins(
     for _origin in iter_flow_origins(flow):
         pass
 
-    working = copy.deepcopy(flow)
+    working = copy_flow_graph(flow)
     _rewrite_flow_origin_graph(
         working,
         mapper=mapper,
@@ -167,7 +166,7 @@ def rewrite_flow_origins(
     # Frozen carriers may also be keys or set members inside opaque payloads.
     # Re-copying the finalized working graph rebuilds those hash containers with
     # mapped hashes while preserving every alias and cycle.
-    return cast(_FlowT, copy.deepcopy(working))
+    return cast(_FlowT, copy_flow_graph(working))
 
 
 def rebase_flow_origins(

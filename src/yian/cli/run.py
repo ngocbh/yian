@@ -1360,12 +1360,11 @@ def _agent_connections(
             No layer gives an agent a provider and model, or the saved logins or
             default-provider environment are invalid.
     """
-    import copy
-
-    from yian.llm_clients.connection import connection_snapshot
     from yian.compile.llm_cascade import resolve_llm_cascade
+    from yian.compile.model import copy_flow_graph
+    from yian.llm_clients.connection import connection_snapshot
 
-    probe = copy.deepcopy(loaded.compiled)
+    probe = copy_flow_graph(loaded.compiled)
     snapshot = connection_snapshot()
     effective = resolve_llm_cascade(
         probe,

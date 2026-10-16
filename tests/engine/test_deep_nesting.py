@@ -9,8 +9,11 @@ import pytest
 from tests.compose.test_call_nesting_limit import _defs_chain, _mixed_chain
 from tests.deep_chains import deep_load, tight_stack
 from yian.compile.manifest import expansion_digest, flow_fingerprint
+from yian.compile.model import Flow, copy_flow_graph
 from yian.compose import ComposedFlow, load_flow
 from yian.expr import ExpressionError
+from yian.nodes.base import Node
+from yian.nodes.call import CallNode
 from yian.nodes.contracts import Binding
 from yian.run import _check_templates, _static_nodes
 
@@ -109,3 +112,90 @@ def test_a_bad_field_in_a_grandchild_names_its_manifest_path():
         flow_fingerprint(flow.compiled)
     with pytest.raises(ValueError, match=rf"^expansion\.{node}: {unknown}"):
         expansion_digest(flow.compiled)
+
+
+def _graph_objects(flow):
+    """Return the ids of `flow`, its nodes, and every flow and node nested under them."""
+    found = set()
+    pending = [flow]
+    while pending:
+        current = pending.pop()
+        if id(current) in found:
+            continue
+        found.add(id(current))
+        for node in current.nodes.values():
+            found.add(id(node))
+            pending.extend(node.origin_children())
+    return found
+
+
+def _leaf_flow(node_id="only"):
+    """Return a one-node flow."""
+    return Flow(
+        nodes={node_id: Node(node_id)},
+        edges=[],
+        wiring={node_id: {}},
+        start_id=node_id,
+        end_id=node_id,
+    )
+
+
+def _calling_flow(**calls):
+    """Return a flow of CALL nodes, each named by its keyword and holding the given child."""
+    first = next(iter(calls))
+    return Flow(
+        nodes={
+            node_id: CallNode(node_id, flow_id=node_id, child=child)
+            for node_id, child in calls.items()
+        },
+        edges=[],
+        wiring={node_id: {} for node_id in calls},
+        start_id=first,
+        end_id=first,
+    )
+
+
+def test_a_deep_chain_copies_without_recursing_per_level(mixed):
+    with tight_stack(_HEADROOM):
+        copied = copy_flow_graph(mixed.compiled)
+    assert flow_fingerprint(copied) == flow_fingerprint(mixed.compiled)
+    original = _graph_objects(mixed.compiled)
+    assert len(_graph_objects(copied)) == len(original)
+    assert not original & _graph_objects(copied)
+
+
+def test_a_child_flow_shared_by_two_nodes_stays_shared_in_the_copy():
+    shared = _leaf_flow()
+    flow = _calling_flow(a=shared, b=shared)
+    copied = copy_flow_graph(flow)
+    assert copied.nodes["a"].child is copied.nodes["b"].child
+    assert copied.nodes["a"].child is not shared
+
+
+def test_a_child_flow_cycle_is_kept_in_the_copy():
+    flow = _calling_flow(loop=None)
+    flow.nodes["loop"].child = flow
+    copied = copy_flow_graph(flow)
+    assert copied is not flow
+    assert copied.nodes["loop"].child is copied
+
+
+def test_copying_a_node_copies_its_child_flows():
+    node = CallNode("call", flow_id="child", child=_calling_flow(inner=_leaf_flow()))
+    copied = copy_flow_graph(node)
+    assert type(copied) is CallNode and copied is not node
+    assert copied.child is not node.child
+    assert copied.child.nodes["inner"].child is not node.child.nodes["inner"].child
+    assert copied.child.nodes["inner"].child.nodes["only"].id == "only"
+
+
+def test_objects_outside_the_child_flows_are_deep_copied():
+    leaf = _leaf_flow()
+    payload = {"items": [1, 2]}
+    leaf.nodes["only"].extra = payload
+    flow = _calling_flow(call=leaf)
+    flow.extra = payload
+    copied = copy_flow_graph(flow)
+    copied_payload = copied.nodes["call"].child.nodes["only"].extra
+    assert copied_payload == payload and copied_payload is not payload
+    assert copied.extra is copied_payload

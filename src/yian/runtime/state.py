@@ -18,7 +18,14 @@ from dataclasses import dataclass, field, replace
 from typing import Any, NoReturn
 
 from yian.compile.manifest import expansion_digest
-from yian.compile.model import CompiledFlow, Edge, Flow, GrowthRejected, validate_growth_metadata
+from yian.compile.model import (
+    CompiledFlow,
+    Edge,
+    Flow,
+    GrowthRejected,
+    copy_flow_graph,
+    validate_growth_metadata,
+)
 from yian.compile.validation import _classify_path
 from yian.defaults import Defaults
 from yian.diagnostics import Failure, OriginRef
@@ -2791,13 +2798,13 @@ def _build_growth_fragment(
     grow_builder: GrowBuilder,
 ) -> Flow:
     """Call the injected builder with detached inputs and detach its fragment."""
-    builder_spawner = copy.deepcopy(spawner)
+    builder_spawner = copy_flow_graph(spawner)
     if not isinstance(builder_spawner, Node):
         raise TypeError("growth spawner deepcopy must remain a Node")
     built = grow_builder(builder_spawner, builder_seed)
     if not isinstance(built, Flow):
         raise TypeError("grow_builder must return a Flow")
-    fragment = copy.deepcopy(built)
+    fragment = copy_flow_graph(built)
     if not isinstance(fragment, Flow):  # defensive against a hostile deepcopy hook
         raise TypeError("grow_builder fragment deepcopy must remain a Flow")
     return fragment

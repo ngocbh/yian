@@ -27,7 +27,6 @@ never `runtime` or the package-root run boundary.
 
 from __future__ import annotations
 
-import copy
 from dataclasses import replace
 from typing import Any
 
@@ -37,6 +36,7 @@ from yian.compile.model import (
     Edge,
     Flow,
     GrowthRejected,
+    copy_flow_graph,
     validate_growth_metadata,
 )
 from yian.compile.memory_layout import (
@@ -260,7 +260,7 @@ def clone_child(child, callsite: str, record: dict, *,
 
     nodes: dict[str, Node] = {}
     for nid, node in child.nodes.items():
-        clone = copy.deepcopy(node)
+        clone = copy_flow_graph(node)
         clone.id = ns(callsite, nid)
         clone.origin_context = origin_context + clone.origin_context
         if clone.execution_scope is not None:

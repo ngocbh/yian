@@ -52,7 +52,7 @@ from yian.compile.memory_layout import (
     memory_stacks,
     resolve_memory_layout,
 )
-from yian.compile.model import CompiledFlow
+from yian.compile.model import CompiledFlow, copy_flow_graph
 from yian.compile.validation import type_relation
 from yian.compose.loader import ComposedFlow
 from yian.compose.nodes.resolver import child_signature
@@ -254,7 +254,7 @@ class _BackwardHandle:
                 if self.memory is None:
                     raise MemorySetupError("backward requires this run's enabled memory mapping")
                 _check_registry_types(self.memory, state.memories)
-                program = copy.deepcopy(self.program)
+                program = copy_flow_graph(self.program)
                 apply_effective_llm_map(program, legacy_connection_map(state.effective_llm_by_static_path))
                 memory_table, origins, memory_stack_set = _resolve_runtime_memory_layout(program)
                 _check_recorded_memory_table(
@@ -564,8 +564,8 @@ def _run_flow_controlled(
     # Identity belongs to the authored program, before cascade resolution or any
     # per-run copy can change object topology.
     authored_fingerprint = flow_fingerprint(flow.compiled)
-    private_flow = copy.deepcopy(flow.compiled)
-    retained_program = copy.deepcopy(private_flow) if learnable else None
+    private_flow = copy_flow_graph(flow.compiled)
+    retained_program = copy_flow_graph(private_flow) if learnable else None
 
     # The key stays out of the cascade so RunStarted never records it. Its
     # base_url stays out too, so no authored layer can pair the key with another.
@@ -851,7 +851,7 @@ def _resume_flow_controlled(
         state = _replay_run_log(flow, authority, api_key=api_key)
         if api_key is not None and not host_key_providers(state.effective_llm_by_static_path):
             api_key = None
-        retained_program = copy.deepcopy(flow.compiled) if state.learnable else None
+        retained_program = copy_flow_graph(flow.compiled) if state.learnable else None
         if state.result is not None:
             return _result_from_state(state, log_path, [],
                                       handle=_retained_handle(retained_program, state, authority, memory,
@@ -1326,7 +1326,7 @@ def _replay_compiled_run_log(
             f"recorded {recorded_fingerprint!r}, supplied {actual_fingerprint!r}"
         )
 
-    private_flow = copy.deepcopy(flow)
+    private_flow = copy_flow_graph(flow)
     apply_effective_llm_map(
         private_flow,
         legacy_connection_map(first.record.effective_llm_by_static_path),

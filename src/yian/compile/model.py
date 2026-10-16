@@ -15,8 +15,9 @@ flow's result). They are owned canonically by the node classes (`StartNode.ID` /
 and re-exported here so runtime consumers can import them alongside the graph types.
 """
 
+import copy
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, TypeVar
 
 from yian.memory.contracts import MemoryDecl
 from yian.nodes.base import Node
@@ -43,7 +44,10 @@ __all__ = [
     "FlowOutput",
     "Flow",
     "CompiledFlow",
+    "copy_flow_graph",
 ]
+
+_GraphT = TypeVar("_GraphT")
 
 
 class GrowthRejected(Exception):
@@ -403,3 +407,69 @@ class CompiledFlow(Flow):
                           for k, v in self._outgoing.items() if k not in node_ids}
         self._incoming = {k: [e for e in v if e.from_ not in node_ids]
                           for k, v in self._incoming.items() if k not in node_ids}
+
+
+def _nested_flows_deepest_first(root: Any) -> list["Flow"]:
+    """Return the flows nested under `root`, each after every flow nested under it.
+
+    Child flows come from `Node.origin_children()`; a child that is not a `Flow` is
+    left to the caller's deep copy. Each flow is listed once, by identity. Within a
+    child-flow cycle the flow reached first is listed last.
+    """
+    found: list[Flow] = []
+    seen: set[int] = set()
+
+    def children(owner: Any) -> list[Flow]:
+        if isinstance(owner, Flow):
+            nodes = [node for node in owner.nodes.values() if isinstance(node, Node)]
+        else:
+            nodes = [owner] if isinstance(owner, Node) else []
+        return [
+            child for node in nodes for child in node.origin_children()
+            if isinstance(child, Flow)
+        ]
+
+    # An explicit stack of (flow, its unvisited children), so listing doesn't
+    # recurse per level either.
+    pending: list[tuple[Any, list[Flow]]] = [(root, children(root)[::-1])]
+    seen.add(id(root))
+    while pending:
+        owner, unvisited = pending[-1]
+        if unvisited:
+            child = unvisited.pop()
+            if id(child) not in seen:
+                seen.add(id(child))
+                pending.append((child, children(child)[::-1]))
+            continue
+        pending.pop()
+        if owner is not root:
+            found.append(owner)
+    return found
+
+
+def copy_flow_graph(root: _GraphT) -> _GraphT:
+    """Deep-copy a flow or node and the flows nested under it, one level at a time.
+
+    Gives the graph `copy.deepcopy(root)` gives, with the same sharing and the same
+    child-flow cycles, without recursing once per nested CALL, MAP, or LOOP body:
+    the nested flows are copied deepest first into one shared memo, so copying each
+    flow finds its child flows already copied.
+
+    This holds for compiled flows, which meet two conditions: no `__deepcopy__`
+    hook depends on the order the hooks run in, and no payload holds a reference
+    to an enclosing flow inside a hashed container (a set or a dict key would be
+    rebuilt while that flow's copy is still incomplete).
+
+    Args:
+        root (`Flow | Node`): The flow or node to copy. Any other object is copied
+            with plain `copy.deepcopy`.
+
+    Returns:
+        `Flow | Node`: The copy of `root`.
+    """
+    memo: dict[int, Any] = {}
+    # The listed flows stay referenced here, so no id in the memo is reused.
+    nested = _nested_flows_deepest_first(root)
+    for flow in nested:
+        copy.deepcopy(flow, memo)
+    return copy.deepcopy(root, memo)

@@ -29,6 +29,7 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("run.py", "_LITERAL_LABEL_WIDTH"): "width of a literal shown in a type label",
     ("expr/builtins.py", "_render_as_json.indent"): "JSON indent of the render_as_json builtin",
     ("llm_clients/redact.py", "_MIN_VISIBLE"): "key characters a masked echo must show to count",
+    ("llm_clients/base_client.py", "warn_once.stacklevel"): "frames to skip, as warnings.warn",
     # Internal sizes that no user input reaches.
     ("expr/lineage.py", "_MAX_SNAPSHOT_DEPTH"): "diagnostic retention depth, internal",
     ("typesys/values.py", "_LOG10_2"): "log10(2), a math constant for counting digits",

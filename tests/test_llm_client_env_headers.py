@@ -278,8 +278,13 @@ def test_anthropic_with_a_base_url_sends_only_the_explicit_key(poisoned_env):
     assert all(request.url.host == "gateway.test" for request in server.requests)
 
 
-def test_anthropic_default_client_drops_env_headers(poisoned_env):
-    chat = create_llm_client("anthropic", "claude-sonnet-4-5", api_key="sk-ant-explicit").get_llm()
+# Without a base_url the SDK's own client is used; with one, yian rebuilds it through
+# `with_options`, which reads the environment again.
+@pytest.mark.parametrize("base_url", [None, "https://gateway.test"])
+def test_anthropic_default_client_drops_env_headers(poisoned_env, base_url):
+    chat = create_llm_client(
+        "anthropic", "claude-sonnet-4-5", base_url=base_url, api_key="sk-ant-explicit"
+    ).get_llm()
     for client in (chat._client, chat._async_client):
         headers = client.default_headers
         assert headers["X-Api-Key"] == "sk-ant-explicit"

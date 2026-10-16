@@ -471,6 +471,10 @@ class AgentNode(Node):
         """Return the host key bound to this node for the run, if any."""
         return self.llm_config.get("api_key") if isinstance(self.llm_config, dict) else None
 
+    def _host_headers(self) -> Any:
+        """Return the host header values bound to this node with its key, if any."""
+        return self.llm_config.get("headers") if isinstance(self.llm_config, dict) else None
+
     def _resolve_variables(self) -> dict[str, Any]:
         """Resolve validated literal defaults into one detached invocation record."""
         return deepcopy(apply_defaults(self.variables, {}))
@@ -481,8 +485,8 @@ class AgentNode(Node):
         Args:
             context (`BackwardContext`): Accepted context, including recorded model
                 configuration and render/evidence components. Live node fields are
-                unused, except a host ``api_key`` bound by `resume_flow` or
-                `RunResult.backward`.
+                unused, except a host ``api_key`` and ``headers`` bound by
+                `resume_flow` or `RunResult.backward`.
             feedback (`tuple[FeedbackValue, ...]`): Ordered ordinary output messages.
                 Empty effective feedback skips model construction.
 
@@ -500,8 +504,11 @@ class AgentNode(Node):
             `node.backward(recorded_context, ())` returns empty channels without
             constructing a model. Effective messages use only that recorded context.
         """
-        # The one live field: a host key, which is never recorded, bound for this call.
-        return backward_agent(context, feedback, api_key=self._host_api_key())
+        # The only live fields: a host key and its header values, which are never
+        # recorded, bound for this call.
+        return backward_agent(
+            context, feedback, api_key=self._host_api_key(), headers=self._host_headers()
+        )
 
     def declared_variables(self) -> tuple[Parameter, ...]:
         """Return the canonical local declarations in their authored order."""

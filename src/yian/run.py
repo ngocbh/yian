@@ -163,6 +163,7 @@ class RunResult:
 
     def backward(
         self, feedback: FeedbackValue = None, *, api_key: str | SecretStr | None = None,
+        headers: Mapping[str, str | SecretStr] | None = None,
     ) -> BackwardOutcome:
         """Run one new explicit backward attempt over retained accepted execution.
 
@@ -180,6 +181,14 @@ class RunResult:
                 A run that marked no agent ignores it. Without a key, marked
                 agents fail their backward call instead of reading the
                 provider's key environment variable.
+            headers (`Mapping[str, str | SecretStr] | None`, *optional*, defaults to `None`):
+                The header values a run started with ``llm_config.headers`` sent
+                with its key, bound with the key and never recorded. Their names
+                must be the ones the run recorded for the key's agents, compared
+                without case. ``None`` uses the headers this result was created
+                with, if any. A run that marked no agent ignores them. Without
+                them, agents marked for recorded header names fail their
+                backward call.
 
         Returns:
             `BackwardOutcome`: The accepted attempt result, separate from forward
@@ -187,8 +196,11 @@ class RunResult:
 
         Raises:
             `TypeError`: Feedback has an invalid ordinary-message carrier.
-            `ValueError`: Retention is disabled, or feedback does not match the
-                output's shape or nests deeper than `YIAN_MAX_VALUE_NESTING` levels.
+            `ValueError`: Retention is disabled, feedback does not match the
+                output's shape or nests deeper than `YIAN_MAX_VALUE_NESTING` levels,
+                or ``headers`` has a name or value that can't be sent or names that
+                differ from the recorded ones (the message names the header names,
+                never a value).
             `TypeCheckError`: Feedback holds an int over `YIAN_MAX_INT_DIGITS` digits;
                 the message locates it, e.g. ``feedback at note: integer with N
                 digits is larger than yian allows (4300 digits)``.
@@ -213,7 +225,8 @@ class RunResult:
         try:
             try:
                 return handle.backward(
-                    feedback, api_key=None if api_key is None else _secret_key(api_key)
+                    feedback, api_key=None if api_key is None else _secret_key(api_key),
+                    headers=None if headers is None else _secret_headers(headers),
                 )
             finally:
                 self.backward_outcome = handle.outcome
@@ -234,10 +247,14 @@ class _BackwardHandle:
     outcome: BackwardOutcome | None
     # Held in memory for this result's own backward calls; never recorded.
     api_key: SecretStr | None = field(default=None, repr=False)
+    headers: dict[str, SecretStr] | None = field(default=None, repr=False)
     _guard: Any = field(default_factory=threading.Lock, init=False, repr=False, compare=False)
     _unusable: bool = field(default=False, init=False, repr=False, compare=False)
 
-    def backward(self, feedback: FeedbackValue, *, api_key: SecretStr | None = None) -> BackwardOutcome:
+    def backward(
+        self, feedback: FeedbackValue, *, api_key: SecretStr | None = None,
+        headers: dict[str, SecretStr] | None = None,
+    ) -> BackwardOutcome:
         """Reconstruct accepted facts and delegate the complete attempt driver."""
         if self._unusable:
             raise RuntimeError("backward handle is unavailable after an accepted-prefix refresh failure")
@@ -247,10 +264,14 @@ class _BackwardHandle:
         primary_error = None
         try:
             state = _replay_compiled_run_log(
-                self.program, authority, api_key=self.api_key if api_key is None else api_key
+                self.program, authority, api_key=self.api_key if api_key is None else api_key,
+                headers=self.headers if headers is None else headers,
             )
             if state.run_id != self.run_id:
                 raise ValueError("backward log identity differs from the retained run")
+            if headers is not None and host_key_providers(state.effective_llm_by_static_path):
+                # Before the attempt is appended; kept headers were checked when kept.
+                _check_host_header_names(state.effective_llm_by_static_path, headers)
             replay_sequence = state.next_sequence
 
             def open_memory() -> MemoryRuntime:
@@ -757,8 +778,10 @@ def _run_flow_controlled(
         )
         events.extend(engine.run())
         return _result_from_state(state, log_path, events,
-                                  handle=_retained_handle(retained_program, state, authority, memory,
-                                                          locator=retained_locator, api_key=api_key))
+                                  handle=_retained_handle(
+                                      retained_program, state, authority, memory,
+                                      locator=retained_locator, api_key=api_key, headers=headers,
+                                  ))
     except BaseException as exc:
         primary_error = exc
         raise
@@ -944,8 +967,11 @@ def _resume_flow_controlled(
         retained_program = copy.deepcopy(flow.compiled) if state.learnable else None
         if state.result is not None:
             return _result_from_state(state, log_path, [],
-                                      handle=_retained_handle(retained_program, state, authority, memory,
-                                                              locator=retained_locator, api_key=api_key))
+                                      handle=_retained_handle(
+                                          retained_program, state, authority, memory,
+                                          locator=retained_locator, api_key=api_key,
+                                          headers=host_headers,
+                                      ))
         _check_tool_grants(flow.compiled, run_tools)
         _check_conditions(flow.compiled)
         _check_templates(flow.compiled)
@@ -1008,8 +1034,11 @@ def _resume_flow_controlled(
             events.extend(engine.run())
 
         return _result_from_state(state, log_path, events,
-                                  handle=_retained_handle(retained_program, state, authority, memory,
-                                                          locator=retained_locator, api_key=api_key))
+                                  handle=_retained_handle(
+                                      retained_program, state, authority, memory,
+                                      locator=retained_locator, api_key=api_key,
+                                      headers=host_headers,
+                                  ))
     except BaseException as exc:
         primary_error = exc
         raise
@@ -1606,13 +1635,14 @@ def _result_from_state(
 def _retained_handle(
     program: CompiledFlow | None, state: RunState, log: RunLog, memory: Mapping[str, Memory] | None,
     *, locator: Path | None, api_key: SecretStr | None = None,
+    headers: dict[str, SecretStr] | None = None,
 ) -> _BackwardHandle | None:
     """Detach delayed authority without keeping an opened session or public wrapper."""
     if program is None:
         return None
     return _BackwardHandle(program, state.run_id, locator, tuple(log) if log.path is None else (),
                            memory.copy() if type(memory) is dict else memory, state.backward_state.outcome,
-                           api_key=api_key)
+                           api_key=api_key, headers=headers)
 
 
 def _required_state_run_id(state: RunState) -> str:

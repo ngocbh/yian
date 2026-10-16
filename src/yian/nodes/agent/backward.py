@@ -115,6 +115,7 @@ def _parse_result(text: str) -> BackwardResult:
 
 def backward_agent(
     context: BackwardContext, feedback: tuple[FeedbackValue, ...], *, api_key: SecretStr | None = None,
+    headers: dict[str, SecretStr] | None = None,
 ) -> BackwardResult:
     """Request ordinary feedback channels with one invocation of the recorded model.
 
@@ -125,6 +126,8 @@ def backward_agent(
             recorded output. Valid empty selections skip model construction.
         api_key (`SecretStr | None`, *optional*, defaults to `None`): The host key
             for a recorded config marked for one; it is never recorded.
+        headers (`dict[str, SecretStr] | None`, *optional*, defaults to `None`): The
+            header values sent with that host key; they are never recorded.
 
     Returns:
         `BackwardResult`: Parsed independent channels. The caller validates targets
@@ -165,6 +168,8 @@ def backward_agent(
     config = legacy_connection_config(data["effective_llm_config"])
     if api_key is not None:
         config["api_key"] = api_key
+    if headers is not None:
+        config["headers"] = headers
     try:
         model = llm_clients.model_from_config(config)
         response = model.invoke([SystemMessage(content=_SYSTEM), HumanMessage(content=prompt)])

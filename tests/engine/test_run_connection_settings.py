@@ -3,6 +3,7 @@
 import dataclasses
 import json
 
+import httpx
 import pytest
 from langchain_core.messages import AIMessage
 from pydantic import SecretStr
@@ -17,7 +18,12 @@ from yian.memory.profile import ProfileMemory
 from yian.memory.reflective import ReflectiveMemory
 from yian.memory.storage import FileMarkdownStore
 from yian.run import _check_recorded_llm_fields, resume_flow, run_flow
-from tests.engine.test_run_api_key import _NO_FEEDBACK
+from tests.engine.test_run_api_key import (
+    _NO_FEEDBACK,
+    _assert_hidden,
+    _chat_completions,
+    _route_openai_client,
+)
 
 SENTINEL = "sk-sentinel-5e0c27b4"
 HEADER_VALUE = "gw-token-91c3d0aa"
@@ -560,3 +566,103 @@ def test_profile_memory_settings_reach_its_model(tmp_path, monkeypatch):
     assert {name: value.get_secret_value() for name, value in config["headers"].items()} == {
         "X-Gateway": HEADER_VALUE, "X-Trace": OTHER_VALUE,
     }
+
+
+# --- backward keeps and takes the host's headers ----------------------------- #
+
+_VLLM_HEADERS = {
+    "provider": "vllm", "model": "served-model", "api_key": SENTINEL, "headers": _HEADERS,
+}
+
+
+def _sent_headers(requests):
+    return {
+        (r.headers["Authorization"], r.headers["X-Gateway"], r.headers["X-Trace"])
+        for r in requests
+    }
+
+
+def test_backward_sends_the_headers_the_result_kept(tmp_path, monkeypatch):
+    requests, events = [], []
+    path = tmp_path / "run.jsonl"
+    with httpx.Client(transport=_chat_completions(requests, "ok", _NO_FEEDBACK)) as transport:
+        _route_openai_client(monkeypatch, transport)
+        result = run_flow(
+            load_flow(_FLOW), {}, log=path, on_event=events.append, learnable=True,
+            llm_config=_VLLM_HEADERS,
+        )
+        assert result.status == "succeeded", result.failure
+        outcome = result.backward("Be brief.")
+        assert outcome.status == "succeeded", outcome.failure
+        recovered = resume_flow(
+            load_flow(_FLOW), log=path, api_key=SENTINEL, headers=_HEADERS
+        )
+        resumed = recovered.backward("Be brief.")
+        assert resumed.status == "succeeded", resumed.failure
+    assert len(requests) == 3
+    assert _sent_headers(requests) == {(f"Bearer {SENTINEL}", HEADER_VALUE, OTHER_VALUE)}
+    for handle in (result._backward_handle, recovered._backward_handle):
+        assert HEADER_VALUE not in repr(handle)
+        assert OTHER_VALUE not in repr(handle)
+    _assert_hidden(
+        path, events, result, outcome, recovered, resumed,
+        fragments=(SENTINEL, HEADER_VALUE, OTHER_VALUE),
+    )
+
+
+def test_backward_sends_the_headers_it_is_given_after_resume(tmp_path, monkeypatch):
+    requests = []
+    path = tmp_path / "run.jsonl"
+    with httpx.Client(transport=_chat_completions(requests, "ok", _NO_FEEDBACK)) as transport:
+        _route_openai_client(monkeypatch, transport)
+        first = run_flow(load_flow(_FLOW), {}, log=path, learnable=True, llm_config=_VLLM_HEADERS)
+        assert first.status == "succeeded", first.failure
+        recovered = resume_flow(load_flow(_FLOW), log=path)
+        # Names compare without case; values may be plain or secret.
+        headers = {"x-gateway": SecretStr(HEADER_VALUE), "X-TRACE": OTHER_VALUE}
+        outcome = recovered.backward("Be brief.", api_key=SENTINEL, headers=headers)
+        assert outcome.status == "succeeded", outcome.failure
+    assert len(requests) == 2
+    assert _sent_headers(requests) == {(f"Bearer {SENTINEL}", HEADER_VALUE, OTHER_VALUE)}
+    assert HEADER_VALUE not in repr(recovered._backward_handle)
+    _assert_hidden(path, recovered, outcome, fragments=(SENTINEL, HEADER_VALUE, OTHER_VALUE))
+
+
+def test_backward_without_the_headers_fails_naming_them(tmp_path, monkeypatch):
+    requests = []
+    path = tmp_path / "run.jsonl"
+    with httpx.Client(transport=_chat_completions(requests, "ok", _NO_FEEDBACK)) as transport:
+        _route_openai_client(monkeypatch, transport)
+        run_flow(load_flow(_FLOW), {}, log=path, learnable=True, llm_config=_VLLM_HEADERS)
+        recovered = resume_flow(load_flow(_FLOW), log=path)
+        outcome = recovered.backward("Be brief.", api_key=SENTINEL)
+    assert outcome.status == "failed"
+    assert outcome.failure.cause_type == "AuthError"
+    assert "connection headers X-Gateway, X-Trace" in outcome.failure.message
+    assert "RunResult.backward" in outcome.failure.message
+    assert len(requests) == 1
+    _assert_hidden(path, recovered, outcome, fragments=(SENTINEL, HEADER_VALUE, OTHER_VALUE))
+
+
+@pytest.mark.parametrize(
+    ("headers", "error"),
+    [
+        ({"X-Gateway": HEADER_VALUE}, "missing X-Trace"),
+        ({**_HEADERS, "X-Extra": "extra-3f1c"}, "not recorded X-Extra"),
+        ({"X-Gateway": HEADER_VALUE, "X-Trace": "bad\nvalue-77"}, "header X-Trace value"),
+    ],
+)
+def test_backward_checks_the_given_headers_before_appending(tmp_path, monkeypatch, headers, error):
+    seen = _recording_models(monkeypatch)
+    path = tmp_path / "run.jsonl"
+    first = run_flow(load_flow(_FLOW), {}, log=path, learnable=True, llm_config=_ALL_SETTINGS)
+    assert first.status == "succeeded", first.failure
+    seen.clear()
+    recovered = resume_flow(load_flow(_FLOW), log=path)
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match=error) as caught:
+        recovered.backward("Be brief.", api_key=SENTINEL, headers=headers)
+    for value in (HEADER_VALUE, OTHER_VALUE, "extra-3f1c", "value-77", SENTINEL):
+        assert value not in str(caught.value)
+    assert path.read_bytes() == before
+    assert seen == {}

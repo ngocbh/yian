@@ -538,9 +538,8 @@ attempts' errors:
 tool 'place_order' failed after 3 attempts: attempt 1: TimeoutError: read timed out; attempt 2: interrupted; attempt 3: ConnectionError: reset by peer
 ```
 
-An attempt with no recorded outcome shows as `interrupted`. Up to 10 attempts are
-all listed; beyond that the message lists attempts 1 to 5 and the last 5, with
-`…; <n> more attempts; …` between. `failure.code` stays `node.execute`.
+Every attempt is listed, and an attempt with no recorded outcome shows as
+`interrupted`. `failure.code` stays `node.execute`.
 
 An AGENT's `retries:` means something else: it bounds how often the model may
 correct a structured reply that doesn't fit `output:` (see

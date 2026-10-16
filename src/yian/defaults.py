@@ -178,7 +178,7 @@ ENTRIES: tuple[Entry, ...] = (
         minimum=2,
         maximum=None,
     ),
-    # Defaults for node and memory behaviour; a flow can override some of them.
+    # Defaults for node and memory behavior; a flow can override some of them.
     Entry(
         "AGENT_RETRIES",
         default=2,

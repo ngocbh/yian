@@ -442,19 +442,15 @@ def test_a_stop_between_timeout_max_chunks_ends_the_wait():
     assert event.timeouts == [threading.TIMEOUT_MAX, threading.TIMEOUT_MAX]
 
 
-def test_a_long_failure_message_lists_the_first_and_last_five_attempts(delays):
+def test_a_failure_after_100_attempts_lists_every_attempt(delays):
     flaky = _Flaky(*(TimeoutError(f"e{n}") for n in range(1, 101)))
 
     result = run_flow(_flow(99), {}, tools={"flaky": flaky.tool()})
 
     assert result.status == "failed"
     assert len(flaky.seen) == 100
-    first = "; ".join(f"attempt {n}: TimeoutError: e{n}" for n in range(1, 6))
-    last = "; ".join(f"attempt {n}: TimeoutError: e{n}" for n in range(96, 101))
-    assert result.failure.message == (
-        f"tool 'flaky' failed after 100 attempts: {first}; …; 90 more attempts; …; {last}"
-    )
-    assert len(result.failure.message) < 500
+    every = "; ".join(f"attempt {n}: TimeoutError: e{n}" for n in range(1, 101))
+    assert result.failure.message == f"tool 'flaky' failed after 100 attempts: {every}"
 
 
 def test_ten_attempts_are_all_listed(delays):

@@ -94,10 +94,10 @@ def _error_step(error: Exception) -> dict[str, str]:
 def _attempts_message(
     tool_id: str, history: list[dict[str, Any]], attempt: int, error: Exception
 ) -> str:
-    """Return the final failure's message, naming each attempt's error up to `attempt`.
+    """Return the final failure's message, naming every attempt's error up to `attempt`.
 
-    Up to 10 attempts are all listed; beyond that only the first and last 5 are, so
-    the message stays short. Every attempt's error is in the node steps.
+    Each error's text is capped by `shown_text`, so the message grows only with the
+    number of attempts, which `retries:` bounds.
     """
     failed = {
         step.get("attempt"): step.get("error") for step in history if step.get("event") == "failed"
@@ -109,8 +109,6 @@ def _attempts_message(
         parts.append(f"attempt {number}: {shown}")
     last = _error_step(error)
     parts.append(f"attempt {attempt}: {last['type']}: {last['message']}")
-    if len(parts) > 10:
-        parts = [*parts[:5], "…", f"{len(parts) - 10} more attempts", "…", *parts[-5:]]
     return f"tool {tool_id!r} failed after {attempt} attempts: " + "; ".join(parts)
 
 

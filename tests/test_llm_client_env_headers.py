@@ -67,7 +67,7 @@ CHAT_REPLY = {
 
 @pytest.fixture(autouse=True)
 def fresh_warned(monkeypatch):
-    """Forget which drop warnings this process has shown, so each test sees its own."""
+    """Forget which once-per-process warnings were shown, so each test sees its own."""
     monkeypatch.setattr(base_client, "_warned", set())
 
 
@@ -560,11 +560,12 @@ def test_google_rebuild_without_a_cleanup_object(poisoned_env):
     # langchain-google-genai before 4.3.7 builds no cleanup object for its genai client.
     poisoned_env.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
     chat = create_llm_client("google", "gemini-2.5-flash", api_key="g-explicit").get_llm()
-    chat.__pydantic_private__.pop("_client_cleanup", None)
+    # 4.3.0 leaves `__pydantic_private__` as None, having no private attributes.
+    (chat.__pydantic_private__ or {}).pop("_client_cleanup", None)
     chat.client = google.genai.Client(vertexai=True, api_key="g-explicit")
     chat._use_developer_api()
     assert not chat.client._api_client.vertexai
-    assert "_client_cleanup" not in chat.__pydantic_private__
+    assert "_client_cleanup" not in (chat.__pydantic_private__ or {})
 
 
 def test_google_client_does_not_import_the_cleanup_class():

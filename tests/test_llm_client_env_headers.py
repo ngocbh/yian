@@ -6,11 +6,14 @@ yian's clients send exactly the credential and headers yian passes.
 
 import asyncio
 
+import anthropic
 import httpx
 import pytest
 from openai import Omit
 
 from tests.fixtures.openai_responses import ResponsesServer
+from tests.test_llm_client_blocks_anthropic import _anthropic_httpx, _Server
+from yian.llm_clients import anthropic_client
 from yian.llm_clients.factory import create_llm_client
 from yian.llm_clients.openai_client import NormalizedChatOpenAI
 from yian.llm_clients.openai_subscription import SubscriptionAccess, create_subscription_model
@@ -84,7 +87,7 @@ class ChatServer:
         return httpx.Response(200, json=CHAT_REPLY)
 
 
-def invoke_both(build, handler):
+def invoke_both(build, handler, package=httpx):
     """Build a model on mock transports and call `invoke` and `ainvoke` once each.
 
     Args:
@@ -92,11 +95,14 @@ def invoke_both(build, handler):
             Returns the chat model for the given sync and async HTTP clients.
         handler (`Callable[[httpx.Request], httpx.Response]`):
             The mock server.
+        package (`module`, *optional*, defaults to `httpx`):
+            The httpx package to build the clients from; the SDK's own one for Anthropic.
     """
 
     async def run():
-        with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as async_client:
+        transport = package.MockTransport(handler)
+        with package.Client(transport=transport) as client:
+            async with package.AsyncClient(transport=transport) as async_client:
                 model = build(client, async_client)
                 model.invoke("hi")
                 await model.ainvoke("hi")
@@ -235,3 +241,62 @@ def test_azure_without_a_key_keeps_the_sdk_order(poisoned_env):
             assert "sk-openai" not in value
         for name in ("openai-organization", "openai-project", "x-env-injected"):
             assert name not in request.headers, name
+
+
+def _anthropic(**kwargs):
+    def build(client, async_client):
+        return create_llm_client(
+            "anthropic", "claude-sonnet-4-5", api_key="sk-ant-explicit",
+            http_client=client, http_async_client=async_client, **kwargs,
+        ).get_llm()
+
+    return build
+
+
+def _assert_anthropic_key_only(requests):
+    assert len(requests) == 2
+    for request in requests:
+        assert request.headers["x-api-key"] == "sk-ant-explicit"
+        assert "authorization" not in request.headers
+        assert "anthropic-version" in request.headers
+        assert_clean(request)
+
+
+def test_anthropic_sends_only_the_explicit_key(poisoned_env):
+    server = _Server()
+    invoke_both(_anthropic(), server, package=_anthropic_httpx())
+    _assert_anthropic_key_only(server.requests)
+
+
+def test_anthropic_with_a_base_url_sends_only_the_explicit_key(poisoned_env):
+    # The package's clients don't follow redirects, as a host base_url requires.
+    server = _Server()
+    invoke_both(_anthropic(base_url="https://gateway.test"), server, package=_anthropic_httpx())
+    _assert_anthropic_key_only(server.requests)
+    assert all(request.url.host == "gateway.test" for request in server.requests)
+
+
+def test_anthropic_default_client_drops_env_headers(poisoned_env):
+    chat = create_llm_client("anthropic", "claude-sonnet-4-5", api_key="sk-ant-explicit").get_llm()
+    for client in (chat._client, chat._async_client):
+        headers = client.default_headers
+        assert headers["X-Api-Key"] == "sk-ant-explicit"
+        assert "X-Env-Injected" not in headers
+        assert "Authorization" not in headers
+
+
+def test_drop_environment_headers_clears_an_env_auth_token():
+    # What a 0.x SDK holds after reading ANTHROPIC_AUTH_TOKEN beside a passed key.
+    server = _Server()
+    package = _anthropic_httpx()
+    with package.Client(transport=package.MockTransport(server)) as http_client:
+        client = anthropic.Anthropic(
+            api_key="k", auth_token="env-t", http_client=http_client, max_retries=0
+        )
+        anthropic_client._own_headers(client, {})
+        client.messages.create(
+            model="m", max_tokens=1, messages=[{"role": "user", "content": "hi"}]
+        )
+    [request] = server.requests
+    assert "authorization" not in request.headers
+    assert request.headers["x-api-key"] == "k"

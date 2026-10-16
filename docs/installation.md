@@ -85,11 +85,11 @@ An agent's credential comes from, highest first: a Python host's
 `llm_config.api_key`, the provider's saved login, then the provider's key variable
 (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, ...). Whatever its source, a credential
 that a provider echoes in an error is replaced with `[REDACTED]` before the failure
-is recorded or printed. A request carries only that credential: yian does not send
+is recorded or printed. A request carries only one credential: yian does not send
 the headers in `OPENAI_CUSTOM_HEADERS` or `ANTHROPIC_CUSTOM_HEADERS`, or the
-`OPENAI_ORG_ID` and `OPENAI_PROJECT_ID` headers, so these variables no longer choose
-an OpenAI organization or project. This is a breaking change: earlier versions sent
-them. A key yian passes to Azure (a Python host's key or a saved login) is sent even
+organization and project from `OPENAI_ORG_ID`, `OPENAI_ORGANIZATION`, and
+`OPENAI_PROJECT_ID`, so an OpenAI organization or project can no longer be chosen
+through them. This is a breaking change: earlier versions sent them. A key yian passes to Azure (a Python host's key or a saved login) is sent even
 when `AZURE_OPENAI_AD_TOKEN` is set. Endpoints still come from
 environment variables at run time (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`,
 `VLLM_BASE_URL`, `OLLAMA_BASE_URL`, ...); a saved login stores only the key, plus

@@ -222,9 +222,10 @@ Anthropic SDK client yian builds keeps only the custom headers yian or langchain
 set (`llm_clients.base_client.drop_environment_headers`): it drops those the SDK
 read from `OPENAI_CUSTOM_HEADERS` or `ANTHROPIC_CUSTOM_HEADERS` and the
 organization and project from `OPENAI_ORG_ID`, `OPENAI_ORGANIZATION`, and
-`OPENAI_PROJECT_ID`, so their values are never sent. The Azure client passes `azure_ad_token=None`, so the SDK
-reads `AZURE_OPENAI_AD_TOKEN` only when yian passes no key, and the Anthropic
-client clears the SDK's `auth_token` when it holds a key. Providers can echo a
+`OPENAI_PROJECT_ID`, so their values are never sent. The Azure client passes
+`azure_ad_token=None`, so the SDK reads `AZURE_OPENAI_AD_TOKEN` only when yian
+passes no key, and the Anthropic client clears the SDK's `auth_token` when it
+holds a key. Providers can echo a
 rejected credential, so model-call errors are scrubbed of every credential the
 call sends, listed by `llm_clients.connection.call_credentials`: the host key;
 else a `store` connection's saved login (an API key, or OpenAI subscription
@@ -238,9 +239,9 @@ variable of the provider (its own, then `GEMINI_API_KEY` for google or
 failure, so the run log, results, events, and CLI output never carry them.
 `ProfileMemory.learn` and `ReflectiveMemory.learn` scrub the chained cause of
 their errors the same way, and `yian auth`'s model check scrubs the key it sends
-and the provider's token variable. Authored layers cannot set `api_key` or `_host_key`,
-because they reach the recorded effective map; the loader rejects a flow- or
-def-level `api_key`. The loader checks flow- and def-level `llm_config:` against
+and the provider's token variable. Authored layers cannot set `api_key` or
+`_host_key`, because they reach the recorded effective map; the loader rejects a
+flow- or def-level `api_key`. The loader checks flow- and def-level `llm_config:` against
 `LLMConfig` as it does a node's, and the cascade rejects unknown keys in the host
 layer, so a typo never reaches the recorded map.
 

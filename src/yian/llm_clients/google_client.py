@@ -5,6 +5,7 @@ import typing
 from typing import Any, Optional
 
 import pydantic
+from google.genai import Client
 from google.genai.types import HttpOptions
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import Field, model_validator
@@ -147,9 +148,51 @@ class NormalizedChatGoogleGenerativeAI(ChatGoogleGenerativeAI):
     http_client: Any = Field(default=None, exclude=True, repr=False)
     http_async_client: Any = Field(default=None, exclude=True, repr=False)
 
+    # Declared above `_use_http_clients`: pydantic runs after-validators in declaration order,
+    # so the caller's httpx clients go onto the client this one may rebuild.
+    @model_validator(mode="after")
+    def _use_developer_api(self) -> "NormalizedChatGoogleGenerativeAI":
+        """Rebuild the genai client on the Gemini Developer API if the environment switched it.
+
+        Returns:
+            `NormalizedChatGoogleGenerativeAI`:
+                This model, its genai client calling the Gemini Developer API with the
+                model's key. A model built with an explicit ``vertexai=True`` is left alone.
+        """
+        # langchain builds the Developer API client without `vertexai`, so google-genai reads
+        # GOOGLE_GENAI_USE_ENTERPRISE / GOOGLE_GENAI_USE_VERTEXAI itself and switches to
+        # Vertex AI express mode; langchain has no slot to pass `vertexai=False`.
+        if self._use_vertexai or not self.client._api_client.vertexai:
+            return self
+        api = self.client._api_client
+        # google-genai sets these two itself; the key header would carry the env key.
+        headers = {
+            name: value for name, value in (api._http_options.headers or {}).items()
+            if name.lower() not in ("x-goog-api-key", "content-type")
+        }
+        base = self.base_url["api_endpoint"] if isinstance(self.base_url, dict) else self.base_url
+        options = HttpOptions(
+            base_url=base,
+            api_version=self.api_version,
+            headers=headers,
+            client_args=self.client_args,
+            async_client_args=self.client_args,
+        )
+        # langchain's cleanup object closes a replaced client's own transports when it is
+        # dropped; the caller's httpx clients are attached only afterwards, so they stay
+        # open. Versions before 4.3.7 have none, and the replaced client is left to its
+        # transports' own `__del__`. Its type is reused because the class is private.
+        cleanup = getattr(self, "_client_cleanup", None)
+        self.client = Client(
+            vertexai=False, api_key=self.google_api_key.get_secret_value(), http_options=options
+        )
+        if cleanup is not None:
+            self._client_cleanup = type(cleanup)(self.client)
+        return self
+
     @model_validator(mode="after")
     def _use_http_clients(self) -> "NormalizedChatGoogleGenerativeAI":
-        """Hand the given httpx clients to the genai client langchain built.
+        """Hand the given httpx clients to the model's genai client.
 
         Returns:
             `NormalizedChatGoogleGenerativeAI`:
@@ -222,8 +265,10 @@ class NormalizedChatGoogleGenerativeAI(ChatGoogleGenerativeAI):
 class GoogleClient(BaseLLMClient):
     """Client for Google Gemini models.
 
-    With a ``base_url``, the model's httpx client does not follow redirects, so the
-    key goes only to that URL. ``http_client`` / ``http_async_client`` replace the SDK's
+    The model always calls the Gemini Developer API with the key yian resolved, even when
+    ``GOOGLE_GENAI_USE_VERTEXAI`` or ``GOOGLE_GENAI_USE_ENTERPRISE`` is set. With a
+    ``base_url``, the model's httpx client does not follow redirects, so the key goes only
+    to that URL. ``http_client`` / ``http_async_client`` replace the SDK's
     httpx clients; beside a ``base_url`` they must not follow redirects.
     """
 

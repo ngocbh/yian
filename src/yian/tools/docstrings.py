@@ -53,7 +53,8 @@ def parse_docstring(doc: str | None) -> DocInfo:
     Args:
         doc (`str` or `None`):
             The docstring, either a function's raw `__doc__` or `inspect.getdoc`
-            output; both parse the same. `None` or blank gives an empty result.
+            output. Both parse the same, including a docstring that opens with a
+            parameter section. `None` or blank gives an empty result.
 
     Returns:
         `DocInfo`:
@@ -79,18 +80,20 @@ def parse_docstring(doc: str | None) -> DocInfo:
 
 
 def _clean(doc: str) -> str:
-    """Clean a raw `__doc__` or already-cleaned `inspect.getdoc` output the same way."""
+    """Clean a raw `__doc__`, or `inspect.getdoc` output that opens with a parameter section."""
     cleaned = inspect.cleandoc(doc)
     lines = cleaned.splitlines()
     if (
         len(lines) > 1
-        and _GOOGLE_HEADER_RE.match(lines[0])
+        and _PARAM_SECTION_RE.match(lines[0])
         and lines[1].strip()
         and not lines[1].startswith((" ", "\t"))
     ):
-        # Cleaning flattened the body under a first-line section header, which happens when
+        # Cleaning flattened the body under a first-line parameter section, which happens when
         # the input was already cleaned. A leading newline keeps the header in the indent
-        # calculation, as the Agents SDK does before griffe cleans its input.
+        # calculation, as the Agents SDK does before griffe cleans its input. Only a parameter
+        # header qualifies: a wrapped summary such as "Deprecated: use v2.\nKept." also looks
+        # like a header followed by a flattened line.
         return inspect.cleandoc("\n" + doc)
     return cleaned
 

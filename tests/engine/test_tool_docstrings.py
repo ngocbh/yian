@@ -196,6 +196,36 @@ def test_summary_first_docstring_parses_raw_and_cleaned_alike():
     assert parse_docstring(inspect.getdoc(place)) == DocInfo("Place it.", {"x": "The x."})
 
 
+def test_wrapped_summary_with_a_colon_parses_raw_and_cleaned_alike():
+    def fetch(symbols):
+        """Fetch prices: returns the latest quote
+        for each symbol.
+
+        Args:
+            symbols: Tickers.
+        """
+
+    expected = DocInfo(
+        "Fetch prices: returns the latest quote\nfor each symbol.", {"symbols": "Tickers."}
+    )
+    assert parse_docstring(fetch.__doc__) == expected
+    assert parse_docstring(inspect.getdoc(fetch)) == expected
+
+
+def test_wrapped_admonition_like_summary_parses_raw_and_cleaned_alike():
+    def place(x):
+        """Deprecated: use place_v2 instead.
+        Kept for old flows.
+
+        Args:
+            x: The x.
+        """
+
+    expected = DocInfo("Deprecated: use place_v2 instead.\nKept for old flows.", {"x": "The x."})
+    assert parse_docstring(place.__doc__) == expected
+    assert parse_docstring(inspect.getdoc(place)) == expected
+
+
 def test_whitespace_only_parameter_section_is_not_a_section():
     info = parse_docstring("Do it.\n\nArgs:\n    \nReturns:\n    y.")
 

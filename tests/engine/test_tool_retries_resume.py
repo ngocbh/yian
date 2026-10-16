@@ -17,6 +17,7 @@ import yian.runtime.engine as engine_module
 from yian.compose import load_flow
 from yian.run import resume_flow, run_flow
 from yian.runtime.log import BackwardFinishedRecord, JsonlRunLog, MemoryRunLog
+from yian.tools import TransientToolError
 from yian.tools.context import ToolContext
 
 _FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
@@ -98,7 +99,7 @@ class _Clock:
         self.waited: list[float] = []
         self.crash_on: set[int] = set()
 
-    def sleep(self, stop_event, seconds) -> None:
+    def sleep(self, stop_event: threading.Event | None, seconds: float) -> None:
         """Record one wait; raise `_SimulatedCrash` when its index is in `crash_on`."""
         self.waited.append(seconds)
         if len(self.waited) - 1 in self.crash_on:
@@ -132,11 +133,13 @@ def _node_steps(log: Path) -> list[tuple[str, dict[str, Any]]]:
     ]
 
 
-def _failed(attempt: int, message: str, retry_in: float) -> dict[str, Any]:
-    """Return the recorded step of a failed `TimeoutError` attempt."""
+def _failed(
+    attempt: int, message: str, retry_in: float, error_type: str = "TimeoutError"
+) -> dict[str, Any]:
+    """Return the recorded step of a failed attempt that raised `error_type`."""
     return {
         "event": "failed", "attempt": attempt,
-        "error": {"type": "TimeoutError", "message": message}, "retry_in": retry_in,
+        "error": {"type": error_type, "message": message}, "retry_in": retry_in,
     }
 
 
@@ -220,22 +223,47 @@ def test_a_crash_inside_attempt_two_with_no_retry_left_fails_on_resume(tmp_path,
 def test_a_crash_during_the_backoff_wait_rewaits_and_resumes_at_attempt_two(tmp_path, clock):
     log = tmp_path / "run.jsonl"
     flow = _flow(3)
-    script = _Script(TimeoutError("a"))
+    # `retry_after` makes the recorded delay 7, where a recomputed backoff would be 1.0.
+    script = _Script(TransientToolError("a", retry_after=7))
     clock.crash_on = {0}
 
     with pytest.raises(_SimulatedCrash):
         run_flow(flow, {}, log=log, run_id="r1", tools=script.tools(), num_workers=0)
 
-    assert _steps(log) == [_failed(1, "a", 1.0)]
+    assert _steps(log) == [_failed(1, "a", 7, "TransientToolError")]
 
     result = resume_flow(flow, log=log, tools=script.tools())
 
     assert result.status == "succeeded", result.failure
     assert [ctx.attempt for ctx in script.seen] == [1, 2]
     assert {ctx.call_id for ctx in script.seen} == {"r1/call"}
-    assert clock.waited == [1.0, 1.0]
+    assert clock.waited == [7, 7]
     # The resumed attempt 2 is the node's own start, so it records no `started` step.
-    assert _steps(log) == [_failed(1, "a", 1.0)]
+    assert _steps(log) == [_failed(1, "a", 7, "TransientToolError")]
+
+
+def test_a_crash_during_the_second_backoff_rewaits_the_last_recorded_delay(tmp_path, clock):
+    log = tmp_path / "run.jsonl"
+    flow = _flow(3)
+    # Recorded delays 7 then 5; a recomputed second backoff would be 2.0.
+    script = _Script(
+        TransientToolError("a", retry_after=7), TransientToolError("b", retry_after=5)
+    )
+    clock.crash_on = {1}
+
+    with pytest.raises(_SimulatedCrash):
+        run_flow(flow, {}, log=log, run_id="r1", tools=script.tools(), num_workers=0)
+
+    result = resume_flow(flow, log=log, tools=script.tools())
+
+    assert result.status == "succeeded", result.failure
+    assert [ctx.attempt for ctx in script.seen] == [1, 2, 3]
+    assert {ctx.call_id for ctx in script.seen} == {"r1/call"}
+    assert clock.waited == [7, 5, 5]
+    assert _steps(log) == [
+        _failed(1, "a", 7, "TransientToolError"), _started(2),
+        _failed(2, "b", 5, "TransientToolError"),
+    ]
 
 
 def test_a_retries_zero_crash_resumes_at_attempt_two_without_steps(tmp_path, clock):
@@ -292,7 +320,7 @@ def test_a_finished_log_with_retries_replays_to_the_live_steps(tmp_path, monkeyp
 def test_two_crashes_rewait_the_recorded_delay_each_resume(tmp_path, clock):
     log = tmp_path / "run.jsonl"
     flow = _flow(3)
-    script = _Script(TimeoutError("a"))
+    script = _Script(TransientToolError("a", retry_after=7))
     clock.crash_on = {0}
 
     with pytest.raises(_SimulatedCrash):
@@ -303,7 +331,7 @@ def test_two_crashes_rewait_the_recorded_delay_each_resume(tmp_path, clock):
         resume_flow(flow, log=log, tools=script.tools())
 
     assert [ctx.attempt for ctx in script.seen] == [1, 2]
-    assert clock.waited == [1.0, 1.0]
+    assert clock.waited == [7, 7]
 
     result = resume_flow(flow, log=log, tools=script.tools())
 
@@ -311,8 +339,8 @@ def test_two_crashes_rewait_the_recorded_delay_each_resume(tmp_path, clock):
     assert [ctx.attempt for ctx in script.seen] == [1, 2, 3]
     assert {ctx.call_id for ctx in script.seen} == {"r1/call"}
     # The first wait, then the recorded delay again on each of the two resumes.
-    assert clock.waited == [1.0, 1.0, 1.0]
-    assert _steps(log) == [_failed(1, "a", 1.0)]
+    assert clock.waited == [7, 7, 7]
+    assert _steps(log) == [_failed(1, "a", 7, "TransientToolError")]
 
 
 @pytest.mark.parametrize(("first", "then"), [(8, 0), (0, 8)], ids=["pooled-then-serial",

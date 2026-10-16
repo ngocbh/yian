@@ -891,6 +891,10 @@ def resume_flow(
             `run_flow`. Tools are not recorded in the log, so pass the same
             mapping (including `ask_user`) that the original run used. Group
             contents may differ: nodes that restart see the groups passed here.
+            An unopened `McpServer` belongs to this call: it is opened only when
+            the run is unfinished, after the log is replayed and before the
+            resume checks, and closed when `resume_flow` returns or raises.
+            Terminal inspection opens no server.
         skills (`Mapping[str, Skill] | None`, *optional*, defaults to `None`):
             The skills passed to the original `run_flow`. Nodes that restart see
             this mapping. An unfinished run of a flow that grants skills needs
@@ -930,7 +934,8 @@ def resume_flow(
         `ValueError`:
             The prefix is invalid, the flow fingerprint differs, the selected
             worker count violates its contract, a group tool's name clashes or
-            is reserved, an unfinished run's AGENT grants a tool or group
+            is reserved, an `McpServer` in `tools` is open because another run
+            in progress opened it, an unfinished run's AGENT grants a tool or group
             not in `tools` or grants skills while `skills` is `None` or lacks
             a listed skill, an unfinished run's TOOL node names a tool not in
             `tools`, an unfinished run's TOOL node's inputs or
@@ -945,6 +950,9 @@ def resume_flow(
             ``headers`` is given for a log that marks agents for a host key and
             the header names differ from the recorded ones (the message names
             the header names, never a value).
+        `McpConnectError`:
+            An unfinished run's `McpServer` that the call opens doesn't start or
+            doesn't list its tools; the servers it already opened are closed.
         `DefaultsError`:
             A `YIAN_<NAME>` variable holds a value its entry does not accept.
         `DefaultsMismatchError`:
@@ -1003,7 +1011,9 @@ def _resume_flow_controlled(
     """
     # A bad YIAN_<NAME> value fails here, before the log is opened.
     current()
-    run_tools = ToolSet(tools, context=context)
+    other_tools, unopened = _split_run_servers(tools)
+    # The other entries' TypeErrors and ValueErrors come before the log is opened.
+    ToolSet(other_tools, context=context)
     api_key = None if api_key is None else _secret_key(api_key)
     host_headers = None if headers is None else _secret_headers(headers)
     require_steering(steering)
@@ -1011,6 +1021,7 @@ def _resume_flow_controlled(
     retained_locator = log_path.absolute()
     authority = JsonlRunLog.resume(retained_locator)
     memory_runtime: MemoryRuntime | None = None
+    run_servers: list[McpServer] = []
     primary_error: BaseException | None = None
     try:
         state = _replay_run_log(flow, authority, api_key=api_key, headers=host_headers)
@@ -1027,6 +1038,8 @@ def _resume_flow_controlled(
                                           locator=retained_locator, api_key=api_key,
                                           headers=host_headers,
                                       ))
+        run_servers = _open_run_servers(unopened)
+        run_tools = ToolSet(tools, context=context)
         _check_tool_grants(flow.compiled, run_tools)
         _check_conditions(flow.compiled)
         _check_templates(flow.compiled)
@@ -1098,7 +1111,10 @@ def _resume_flow_controlled(
         primary_error = exc
         raise
     finally:
-        _close_run_resources(memory_runtime, authority, primary_error)
+        try:
+            _close_run_servers(run_servers, primary_error)
+        finally:
+            _close_run_resources(memory_runtime, authority, primary_error)
 
 
 def _check_tool_grants(flow: CompiledFlow, tools: ToolSet) -> None:

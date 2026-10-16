@@ -883,9 +883,11 @@ def call_credentials(config: dict[str, Any] | LLMConfig | None) -> tuple[str, ..
     """Return every credential the model call built from ``config`` may send.
 
     This follows the precedence of `model_from_config` and the provider SDKs. A
-    config ``api_key`` is sent in place of any saved login or key variable.
-    Otherwise a ``store`` connection sends its provider's saved login, read
-    without refresh, so expired subscription tokens count too. Otherwise (an
+    config ``api_key`` is sent in place of any saved login or key variable, and
+    the config's ``headers`` values (`SecretStr` or plain strings) are listed
+    whenever given. Otherwise a ``store`` connection sends its provider's saved
+    login, read without refresh: its key and saved header values, or its
+    subscription tokens, expired ones too. Otherwise (an
     ``environment`` or ``legacy_environment`` connection, or none) the client
     reads the first set variable of the provider's key variable, then the SDK
     fallbacks. ``AZURE_OPENAI_AD_TOKEN`` (``azure``) and ``ANTHROPIC_AUTH_TOKEN``
@@ -896,7 +898,8 @@ def call_credentials(config: dict[str, Any] | LLMConfig | None) -> tuple[str, ..
     sent, since the ollama client drops it. A config without connection
     metadata is resolved first, as `model_from_config` does; `None` resolves like
     ``{}``. Each step is guarded, so a failing one still leaves the others'
-    credentials.
+    credentials. Every header value is listed however short, so a value such as
+    ``prod`` is scrubbed wherever it appears.
 
     Args:
         config (`dict[str, Any] | LLMConfig | None`): The config the model call
@@ -906,21 +909,31 @@ def call_credentials(config: dict[str, Any] | LLMConfig | None) -> tuple[str, ..
         `tuple[str, ...]`: The distinct plain credentials, possibly empty. Never raises.
     """
     found: list[str] = []
-    provider = host_key = connection = None
+    provider = host_key = connection = headers = None
     try:
         if config is None:
             config = {}
         if isinstance(config, LLMConfig):
-            provider, host_key = config.provider, config.api_key
+            provider, host_key, headers = config.provider, config.api_key, config.headers
         elif isinstance(config, dict):
             provider, host_key = config.get("provider"), config.get("api_key")
-            connection = config.get("_connection")
+            connection, headers = config.get("_connection"), config.get("headers")
         if isinstance(host_key, SecretStr):
             host_key = host_key.get_secret_value()
         if isinstance(host_key, str) and host_key:
             found.append(host_key)
         else:
             host_key = None
+    except Exception:
+        pass
+    try:
+        if isinstance(headers, Mapping):
+            # A Python caller's dict may hold plain strings where LLMConfig holds SecretStr.
+            for value in headers.values():
+                if isinstance(value, SecretStr):
+                    value = value.get_secret_value()
+                if isinstance(value, str) and value:
+                    found.append(value)
     except Exception:
         pass
     if connection is None and (host_key is None or provider is None):

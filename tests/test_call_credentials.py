@@ -207,3 +207,48 @@ def test_a_missing_openai_connection_sends_nothing():
     config = _resolved("openai", "gpt-x")
     assert config["_connection"]["source"] == "missing"
     assert call_credentials(config) == ()
+
+
+def test_host_header_values_are_listed():
+    host = "sk-host-sentinel-zqxw"
+    plain = {"X-Gateway": "gw-token-plain", "X-Env": "prod"}
+    secret = {name: SecretStr(value) for name, value in plain.items()}
+    for headers in (plain, secret):
+        config = {"provider": "deepseek", "model": "m", "api_key": host, "headers": headers}
+        assert set(call_credentials(config)) == {host, "gw-token-plain", "prod"}
+    config = LLMConfig(provider="deepseek", model="m", api_key=host, headers=plain)
+    assert set(call_credentials(config)) == {host, "gw-token-plain", "prod"}
+
+
+def test_saved_login_header_values_are_listed(monkeypatch):
+    AuthStore().save(
+        "anthropic",
+        ApiKeyCredentials(
+            "sk-saved-anthropic", headers={"X-Gateway": "gw-saved", "X-Env": "prod"}
+        ),
+        "claude-x",
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-env-anthropic")
+    config = _resolved("anthropic", "claude-x")
+    assert config["_connection"]["source"] == "store"
+    assert set(call_credentials(config)) == {"sk-saved-anthropic", "gw-saved", "prod"}
+
+
+def test_a_host_key_never_lists_the_saved_header_values():
+    AuthStore().save(
+        "anthropic",
+        ApiKeyCredentials("sk-saved-anthropic", headers={"X-Gateway": "gw-saved"}),
+        "claude-x",
+    )
+    config = {"provider": "anthropic", "model": "c", "api_key": "sk-host"}
+    assert call_credentials(config) == ("sk-host",)
+
+
+def test_scrub_call_credentials_removes_a_short_header_value():
+    config = {
+        "provider": "deepseek", "model": "m", "api_key": "sk-host-sentinel-zqxw",
+        "headers": {"X-Env": SecretStr("prod")},
+    }
+    exc = RuntimeError("gateway rejected X-Env=prod for tenant prod-eu")
+    scrub_call_credentials(exc, config)
+    assert str(exc) == "gateway rejected X-Env=[REDACTED] for tenant [REDACTED]-eu"

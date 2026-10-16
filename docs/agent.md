@@ -220,6 +220,18 @@ with the `final=True` chunk; its `ModelCallFinished` has no `error` and carries
 the usage received so far. Each tool call the interrupt skipped is reported as a
 `ToolCallStarted` followed by `ToolCallFinished(error="interrupted")`.
 
+A tool can report an error to the model instead of failing the node by raising
+`ReportedToolError` (see [TOOL retries](api.md#tool-retries)); the MCP errors a
+model can act on are subclasses (see [MCP servers](api.md#mcp-servers)). The model
+receives an error tool result (a `ToolMessage` with `status="error"`) whose text is
+the exception's message, or its type name when the message is empty, and the loop
+continues. Observers see `ToolCallFinished` with `error` set to the exception's
+type name, such as `McpToolError` or `McpTimeoutError`, and no `result`. It names
+the concrete class, so don't match on the literal `"ReportedToolError"` to spot a
+reported error; a failure that ends the node shows as the node's failure. The
+session transcript records the call as completed with that error text, and the
+evaluation trace records the text as the call's tool result, like any other.
+
 ### How YAML becomes the request
 
 | YAML or host value | Role in execution |
@@ -432,8 +444,10 @@ threading a carried record.
 An AGENT grants tools by id (registered, or passed per run with `tools=`) with
 `tools:` and host-supplied `SKILL.md` packages with `skills:`. A host tool can
 take a `ToolContext` first to receive its call id and the host's app object (see
-[Tool context](api.md#tool-context)). Host-controlled discovery of project-local
-tools is tracked separately.
+[Tool context](api.md#tool-context)). A host can also supply the tools of an MCP
+server as a group (see [MCP servers](api.md#mcp-servers)), and `yian run` reads
+servers from MCP config files (see [CLI MCP servers](cli.md#mcp-servers)).
+Host-controlled discovery of project-local tools is tracked separately.
 
 ## The authored structure stays fixed
 

@@ -20,7 +20,8 @@ tools a ``ToolSet`` takes as one group, and the ``McpError`` classes its calls r
 the MCP SDK is imported only when a server opens.
 
 Knows about: langchain-core, pydantic, typesys, the skills leaf, the stdlib-only
-yian.defaults, the MCP SDK (lazily, in ``tools.mcp``), and the Python standard library.
+yian.defaults, the MCP SDK and httpx2 (lazily, in ``tools.mcp``), and the Python
+standard library.
 Never imports: nodes, compile, compose, runtime, the run boundary, or CLI.
 """
 

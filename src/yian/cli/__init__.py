@@ -20,6 +20,9 @@ or durable state-transition logic. `memory` turns ``--memory-root`` and
 ``--memory-storage KEY=PATH`` into a `MemoryRegistry` from
 `yian.build_memories`; the controller owns its lifetime, after worker
 drain. Storage paths stay host-only. A terminal resume never opens memory.
+`mcp_config` reads the user's ``~/.yian/mcp.json`` and each ``--mcp-config`` file
+(``mcpServers`` JSON) into unopened MCP servers; the controller opens only those the
+flow needs, passes them to the run as tool groups, and closes them when it ends.
 
 Knows about: compose; compile metadata and LLM-cascade helpers; the package-root run
 boundary; the package-root memory host; memory contracts and built-in backends;

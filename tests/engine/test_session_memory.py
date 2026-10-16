@@ -522,7 +522,7 @@ def test_cleanup_annotation_cannot_replace_primary_error(hostile, monkeypatch):
                 monkeypatch.setattr(h.session, "_candidate_snapshot", reject)
                 raise primary
         assert caught.value is primary
-        if hostile is None and hasattr(BaseException, "add_note"):
+        if hostile is None:
             assert primary.__notes__ == [
                 "Conversation cleanup also failed: Cleanup: cleanup"
             ]

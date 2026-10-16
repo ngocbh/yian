@@ -1,7 +1,6 @@
 """`LLMConfig.api_key`: a host-supplied provider key that no dump, repr, or error shows."""
 
 import json
-import sys
 
 import httpx
 import pytest
@@ -233,7 +232,6 @@ def test_scrub_key_removes_the_key_and_its_masked_fragments_from_a_chain():
     assert "wrapped: [REDACTED]" in text
 
 
-@pytest.mark.skipif(sys.version_info < (3, 11), reason="exception groups and notes need 3.11")
 def test_scrub_key_reaches_exception_group_members_and_notes():
     import traceback
 
@@ -242,7 +240,7 @@ def test_scrub_key_reaches_exception_group_members_and_notes():
     key = "sk-sentinel-scrub-zqxw"
     member = RuntimeError(f"member {key}")
     member.add_note(f"note {key[:8]}***")
-    group = ExceptionGroup("group", [member])  # noqa: F821 - builtin on 3.11+
+    group = ExceptionGroup("group", [member])
     scrub_key(group, key)
     text = "".join(traceback.format_exception(group))
     assert key not in text and key[:8] not in text

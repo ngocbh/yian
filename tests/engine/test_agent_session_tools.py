@@ -324,8 +324,7 @@ def test_tool_error_identity_survives_failed_observation(host_stop):
                            tool_call_id="provider", check_stopped=lambda: None)
     assert (caught.value if host_stop else caught.value.original) is primary
     assert seen == ["interrupted" if host_stop else "failed"]
-    if hasattr(primary, "add_note"):
-        assert "cannot save failure" in primary.__notes__[0]
+    assert "cannot save failure" in primary.__notes__[0]
 
 
 def test_session_tool_calls_keep_public_argument_validation(monkeypatch):

@@ -378,8 +378,7 @@ def test_failed_observation_does_not_replace_provider_or_host_error(host_stop):
         invoke_model(turn, invoke, new_messages=[HumanMessage(content="input")], check_stopped=lambda: None)
     assert (caught.value if host_stop else caught.value.original) is primary
     assert seen == ["interrupted" if host_stop else "failed"]
-    if hasattr(primary, "add_note"):
-        assert any("cannot save failure" in note for note in primary.__notes__)
+    assert any("cannot save failure" in note for note in primary.__notes__)
 
 
 def test_reply_after_stop_is_saved_and_resume_retries_using_latest_history(monkeypatch, tmp_path):

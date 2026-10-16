@@ -170,10 +170,7 @@ def test_decode_record_fails_clearly_whatever_pythons_limit(tmp_path, make_log, 
     """With Python's own limit off or above 4300, the decoder still finds the int."""
     _, path = make_log(tmp_path)
     line = next(line for line in path.read_bytes().splitlines() if D.encode() in line)
-    get = getattr(sys, "get_int_max_str_digits", None)
-    if get is None:
-        pytest.skip("this Python has no int/str digit limit")
-    saved = get()
+    saved = sys.get_int_max_str_digits()
     try:
         sys.set_int_max_str_digits(python_limit)
         with pytest.raises(ValueError) as caught:

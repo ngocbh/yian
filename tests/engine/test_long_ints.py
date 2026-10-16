@@ -30,14 +30,11 @@ BIG = 10**4999 + 12345  # 5000 digits
 D = "1" * 5000
 LIMIT_MSG = "integer with 5000 digits is larger than yian allows (4300 digits)"
 
-_get_limit = getattr(sys, "get_int_max_str_digits", None)
-needs_limit = pytest.mark.skipif(_get_limit is None, reason="this Python has no digit limit")
-
 
 @pytest.fixture
 def python_limit():
     """Yield a setter for Python's int/str digit limit, restoring it afterwards."""
-    before = _get_limit()
+    before = sys.get_int_max_str_digits()
     try:
         yield sys.set_int_max_str_digits
     finally:
@@ -98,7 +95,6 @@ def test_parse_int_text_raises_int_own_error_for_invalid_text():
     assert "invalid literal" in str(caught.value)
 
 
-@needs_limit
 def test_parse_int_text_rejects_a_long_int_with_python_limit_off(python_limit):
     python_limit(0)
     with pytest.raises(IntTooLongError) as caught:
@@ -157,7 +153,6 @@ def test_long_int_digits_finds_the_first_long_int():
     assert long_int_digits([1, "a"]) is None
 
 
-@needs_limit
 def test_value_repr_shows_a_digit_count_for_a_long_int(python_limit):
     python_limit(4300)
     assert value_repr(BIG) == "<int with 5000 digits>"
@@ -165,7 +160,6 @@ def test_value_repr_shows_a_digit_count_for_a_long_int(python_limit):
     assert value_repr({BIG}) == "<set too large to display>"
 
 
-@needs_limit
 def test_value_repr_shows_a_digit_count_with_python_limit_off(python_limit):
     python_limit(0)
     assert value_repr(BIG) == "<int with 5000 digits>"

@@ -97,7 +97,7 @@ def _attempts_message(
     """Return the final failure's message, naming every attempt's error up to `attempt`.
 
     Each error's text is capped by `shown_text`, so the message grows only with the
-    number of attempts, which `retries:` bounds.
+    number of attempts.
     """
     failed = {
         step.get("attempt"): step.get("error") for step in history if step.get("event") == "failed"

@@ -135,11 +135,35 @@ def test_bad_header_values_are_refused(value):
 def test_header_value_and_count_caps(set_defaults):
     set_defaults(MAX_HEADER_VALUE_CHARS=10, MAX_CONNECTION_HEADERS=2)
     assert _config(headers={"A": "x" * 10, "B": "y"}).headers["A"].get_secret_value() == "x" * 10
-    _refused("at most 10 characters", provider="openai", api_key=KEY, headers={"A": "x" * 11})
+    over = "secret-val!"
+    text = _refused("at most 10 characters", provider="openai", api_key=KEY, headers={"A": over})
+    assert over not in text
     _refused(
         "at most 2 headers",
         provider="openai", api_key=KEY, headers={"A": "1", "B": "2", "C": "3"},
     )
+
+
+def test_header_names_share_the_value_cap(set_defaults):
+    set_defaults(MAX_HEADER_VALUE_CHARS=10)
+    assert list(_config(headers={"X" * 10: "1"}).headers) == ["X" * 10]
+    long_name = "X-Long-Name"
+    text = _refused(
+        "header names must be at most 10 characters",
+        provider="openai", api_key=KEY, headers={long_name: "1"},
+    )
+    assert long_name not in text
+
+
+def test_secret_str_header_values_are_accepted():
+    config = _config(headers={"X-A": SecretStr("v")})
+    assert config.headers["X-A"].get_secret_value() == "v"
+
+
+def test_a_non_string_header_value_is_refused():
+    with pytest.raises(ValidationError) as caught:
+        _config(headers={"X-V": 2024})
+    assert "2024" not in str(caught.value)
 
 
 @pytest.mark.parametrize("field", ["organization", "project"])
@@ -163,6 +187,25 @@ def test_headers_are_refused_for_ollama():
     _refused(
         "provider ollama does not take llm_config.headers",
         provider="ollama", api_key=KEY, headers={"X-Gateway": GATEWAY},
+    )
+
+
+@pytest.mark.parametrize("field", ["organization", "project"])
+def test_a_wrong_provider_is_reported_before_a_missing_key(field):
+    _refused("only to provider openai", provider="deepseek", **{field: "org-1"})
+
+
+def test_ollama_headers_are_reported_before_a_missing_key():
+    _refused(
+        "provider ollama does not take llm_config.headers",
+        provider="ollama", headers={"X-Gateway": GATEWAY},
+    )
+
+
+def test_an_openai_id_header_is_reported_before_a_missing_key():
+    _refused(
+        "use llm_config.organization / project",
+        provider="openai", headers={"OpenAI-Project": GATEWAY},
     )
 
 

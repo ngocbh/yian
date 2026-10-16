@@ -161,11 +161,11 @@ class LLMConfig(BaseModel):
             (`Authorization`, `x-api-key`, `Host`, `Content-Type`, ...) are refused for
             every provider, and `OpenAI-Organization`/`OpenAI-Project` for
             `provider="openai"` (see `connection_settings.REFUSED_HEADER_NAMES`). Values
-            are visible ASCII, with spaces or tabs only between characters, of at most
-            `YIAN_MAX_HEADER_VALUE_CHARS` characters (default 8192); at most
-            `YIAN_MAX_CONNECTION_HEADERS` headers (default 32). Values are secrets: masked
-            in `repr` and, like the key, left out of every `model_dump`. An empty
-            mapping is the same as `None`.
+            are visible ASCII, with spaces or tabs only between characters. Names and
+            values are at most `YIAN_MAX_HEADER_VALUE_CHARS` characters (default 8192),
+            with at most `YIAN_MAX_CONNECTION_HEADERS` headers (default 32). Values are
+            secrets: masked in `repr` and, like the key, left out of every
+            `model_dump`. An empty mapping is the same as `None`.
         <provider> (`_Block`, *optional*, defaults to `None`):
             One block per provider in `SUPPORTED_LLM_PROVIDERS` (`openai`, `qwen-cn`,
             `anthropic`, ...), named after it: request-body fields for the API that
@@ -187,6 +187,8 @@ class LLMConfig(BaseModel):
             base_url="https://<resource>.openai.azure.com/openai/v1/",
             api_key=key,
         )
+        LLMConfig(provider="openai", api_key=key, organization="org-abc123")
+        LLMConfig(provider="deepseek", api_key=key, headers={"X-Gateway-Token": token})
         LLMConfig(**{"provider": "qwen-cn", "qwen-cn": {"enable_thinking": True}})
         ```
     """
@@ -303,7 +305,12 @@ class LLMConfig(BaseModel):
     def _bind_connection_to_key(self) -> "LLMConfig":
         """Require base_url and the connection settings to travel with the key they serve.
 
-        An Azure base_url is the resource endpoint and may come without a key.
+        An Azure base_url is the resource endpoint and may come without a key. When
+        ``provider`` is set, the settings must also apply to it: organization and project
+        only to openai, headers to every provider but ollama, and openai refuses the
+        `OpenAI-Organization`/`OpenAI-Project` header names. A provider that does not
+        take a setting is reported before a missing key, since adding the key would not
+        fix it.
         """
         if self.base_url is not None and self.provider != "azure":
             if self.api_key is None or self.provider is None:
@@ -313,6 +320,19 @@ class LLMConfig(BaseModel):
                 )
             if self.provider in _NO_BASE_URL_PROVIDERS:
                 raise ValueError(_NO_BASE_URL_PROVIDERS[self.provider])
+        if self.provider is not None:
+            if (self.organization or self.project) and self.provider != "openai":
+                raise ValueError(
+                    "llm_config.organization and llm_config.project apply only to "
+                    "provider openai"
+                )
+            if self.headers and self.provider == "ollama":
+                raise ValueError(
+                    "provider ollama does not take llm_config.headers; it sends no api_key"
+                )
+            # The field check could not see the provider; openai refuses more names.
+            for name in self.headers or ():
+                validate_header_name(name, self.provider)
         for field in ("organization", "project", "headers"):
             if getattr(self, field) is not None and (
                 self.api_key is None or self.provider is None
@@ -321,18 +341,6 @@ class LLMConfig(BaseModel):
                     f"llm_config.{field} needs llm_config.api_key and llm_config.provider "
                     "in the same config, since it goes wherever that key is sent"
                 )
-        if (self.organization or self.project) and self.provider != "openai":
-            raise ValueError(
-                "llm_config.organization and llm_config.project apply only to provider "
-                "openai"
-            )
-        if self.headers and self.provider == "ollama":
-            raise ValueError(
-                "provider ollama does not take llm_config.headers; it sends no api_key"
-            )
-        # The field check could not see the provider; openai refuses more names.
-        for name in self.headers or ():
-            validate_header_name(name, self.provider)
         return self
 
     @model_serializer(mode="wrap")

@@ -64,8 +64,12 @@ def validate_header_name(name: Any, provider: Optional[str]) -> str:
         `str`: ``name`` itself.
 
     Raises:
-        `ValueError`: ``name`` is not an HTTP token or is a refused name.
+        `ValueError`: ``name`` is longer than ``YIAN_MAX_HEADER_VALUE_CHARS`` characters
+            (default 8192), is not an HTTP token, or is a refused name.
     """
+    limit = current().max_header_value_chars
+    if isinstance(name, str) and len(name) > limit:
+        raise ValueError(f"header names must be at most {limit} characters")
     if not isinstance(name, str) or not _TOKEN.fullmatch(name):
         raise ValueError(
             "header names must be HTTP tokens: letters, digits and !#$%&'*+-.^_`|~"
@@ -90,8 +94,8 @@ def validate_header_value(name: str, value: Any) -> str:
 
     Raises:
         `ValueError`: The value is not a string, is longer than
-            ``YIAN_MAX_HEADER_VALUE_CHARS`` characters (default 8192), or is not visible
-            ASCII with single spaces or tabs between words.
+            ``YIAN_MAX_HEADER_VALUE_CHARS`` characters (default 8192), or is not non-empty
+            visible ASCII with spaces or tabs only between characters.
     """
     if isinstance(value, SecretStr):
         value = value.get_secret_value()

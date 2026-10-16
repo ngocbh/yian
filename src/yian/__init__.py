@@ -13,6 +13,7 @@ Layers, leaf-to-root (a package imports only DOWN/leftward — never up, never i
           └────────  nodes  <-  compile  <-  compose
                        ^  ^
           typesys + expr  └──────  llm_clients      (independent leaves feeding nodes)
+                                   llm              (beside llm_clients; llm_clients will build on it)
 
     compile execution contracts  <-  runtime
     compose + compile.expand + runtime  <-  run.py
@@ -25,7 +26,9 @@ it. `diagnostics.py` is the dependency-free source-neutral value spine and owns
 `SourceRange`; `events` imports semantic failures from it but does not re-export
 that Compose-facing coordinate type. Other leaves import nothing upward:
 `typesys` (the typed value pool), `expr` (`${...}` evaluation), and `llm_clients` (provider client wrappers +
-`LLMConfig` — the AGENT node's model seam), and `skills` (host-supplied `SKILL.md` values,
+`LLMConfig` — the AGENT node's model seam), `llm` (the provider-neutral message,
+stream and error vocabulary plus an httpx2 transport; it imports only the standard
+library, httpx2 and `defaults`, and `llm_clients` will build on it), and `skills` (host-supplied `SKILL.md` values,
 confined bundled-file reads, and the AGENT's built-in `load_skill` tool; `compose.skills`
 reads skill folders from disk). `nodes` are the node kinds — spawners return canonical growth seeds and
 never import compile; the synthesized boundary kinds own their

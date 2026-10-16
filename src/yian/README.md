@@ -59,6 +59,8 @@ runtime/      run records/logs, scheduler-state vocabulary, reducer-owned state,
 run.py        public run/recovery boundary and retained RunResult.backward handle
 memory_host.py build_memories/MemoryRegistry: host-side construction of declared memories
 llm_clients/  provider clients, authentication, LLMConfig, model_from_config, model listing
+llm/          provider-neutral messages, stream events, errors, httpx2 transport [leaf]
+              (stdlib, httpx2 and defaults only; llm_clients will build on it)
 tools/        tool registry, per-run ToolSet (run tools and the ask_user handler),
               ToolContext, FunctionTool, and schemas from function signatures
 cli/          `yian` commands + main-thread terminal broker

@@ -66,6 +66,7 @@ diagnostics  <-  events
       └────────  nodes  <-  compile  <-  compose
                    ^   ^
       typesys + expr    └──────  llm_clients
+                                 llm          (beside llm_clients; llm_clients will build on it)
 
 compile runtime contracts <── runtime
 compose + compile.expand + runtime <── package-root run.py
@@ -196,6 +197,13 @@ only); `schema.py` builds a tool's argument model from a function signature;
 `tools/` imports langchain-core, pydantic, `typesys`, and the skills leaf, never
 nodes, compile, compose, runtime, `run.py`, or CLI. The run boundary compares the
 types; `tools/` only reads them.
+
+`llm/` is a leaf beside `llm_clients/`: yian's provider-neutral message, stream
+and error vocabulary, an httpx2 transport that refuses redirects, SSE and NDJSON
+framing, auth objects, routes, the executor, and test helpers. It imports only the
+standard library, httpx2, and `yian.defaults`, never another yian package, a
+provider SDK, or langchain (`test_llm_leaf_imports_only_declared_leaves`).
+`llm_clients` will build on it; it never imports `llm_clients`.
 
 `llm_clients/auth/` is a private authentication leaf below model construction and
 host settings. It owns immutable credential/selection carriers, provider login

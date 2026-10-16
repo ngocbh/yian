@@ -1,0 +1,41 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "Two streamed replies to the same endpoint, used by the cassette tests.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.example.test/v1/responses?api-version=2026-01-01",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "authorization": "<redacted>"
+        },
+        "json": {"model": "m", "input": [{"role": "user", "content": "first"}]}
+      },
+      "response": {
+        "status": 200,
+        "headers": {"content-type": "text/event-stream"},
+        "chunks": ["data: {\"text\": \"one\"}\n\n", "data: [DONE]\n\n"]
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.example.test/v1/responses?api-version=2026-01-01",
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json",
+          "authorization": "<redacted>"
+        },
+        "json": {"model": "m", "input": [{"role": "user", "content": "second"}]}
+      },
+      "response": {
+        "status": 200,
+        "headers": {"content-type": "text/event-stream"},
+        "chunks": ["data: {\"text\": \"two\"}\n\n", "data: [DONE]\n\n"]
+      }
+    }
+  ]
+}

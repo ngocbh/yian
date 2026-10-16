@@ -26,6 +26,8 @@ dependencies = [
     "pyyaml>=6.0.0",
     "lark>=1.1",
     "typing-extensions>=4.14.0",
+    # httpx2 2.12.0 is the first release with every 2026-08 advisory fixed (GHSA-8xx6).
+    "httpx2>=2.12,<3",
     # CLI
     "typer>=0.21.0",
     "rich>=13.7.0",

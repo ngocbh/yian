@@ -424,3 +424,80 @@ def test_defaults_leaf_imports_only_stdlib() -> None:
     assert not violations, "defaults must stay a stdlib leaf:\n" + "\n".join(
         violations
     )
+
+
+def _llm_leaf_violations(
+    source: str,
+    package: tuple[str, ...] = ("yian", "llm"),
+    filename: str = "<import-ratchet>",
+) -> list[str]:
+    """Check one ``yian.llm`` module through the shared import target scanner.
+
+    Args:
+        source (`str`): The module source to scan.
+        package (`tuple[str, ...]`, *optional*, defaults to `("yian", "llm")`):
+            The module's ``__package__`` parts, which relative imports resolve
+            against.
+        filename (`str`, *optional*, defaults to `"<import-ratchet>"`): The
+            file name a syntax error reports.
+
+    Returns:
+        `list[str]`: One ``line: statement -> target`` entry per undeclared import.
+    """
+    leaves = ("httpx2", "yian.defaults", "yian.llm")
+    targets = _parse_import_targets(
+        source, package=package, filename=filename, include_from_bases=False
+    )
+    violations = []
+    for line, target, statement in targets:
+        if target.split(".")[0] in sys.stdlib_module_names:
+            continue
+        if any(target == leaf or target.startswith(f"{leaf}.") for leaf in leaves):
+            continue
+        violations.append(f"{line}: {statement} -> {target}")
+    return violations
+
+
+def test_llm_leaf_imports_only_declared_leaves() -> None:
+    """The provider-neutral llm core imports only stdlib, httpx2, and defaults."""
+    root = PACKAGE_ROOT / "llm"
+    assert root.is_dir(), "src/yian/llm is missing, so the ratchet would pass vacuously"
+    violations = [
+        f"{path.relative_to(SOURCE_ROOT)}:{violation}"
+        for path in sorted(root.rglob("*.py"))
+        for violation in _llm_leaf_violations(
+            path.read_text(), package=_package_parts(path), filename=str(path)
+        )
+    ]
+    assert not violations, (
+        "llm may import only the standard library, httpx2, and yian.defaults:\n"
+        + "\n".join(violations)
+    )
+
+
+def test_llm_leaf_ratchet_rejects_other_imports() -> None:
+    """SDKs, the package facade, and sibling yian packages are all rejected."""
+    for source in (
+        "import langchain\n",
+        "import openai\n",
+        "import yian\n",
+        "from yian import *\n",
+        "from .. import *\n",
+        "import yian.llm_clients\n",
+        "from yian import llm_clients\n",
+        "from ..nodes import x\n",
+    ):
+        assert _llm_leaf_violations(source), source
+
+
+def test_llm_leaf_ratchet_accepts_declared_leaves() -> None:
+    """Absolute and relative spellings of the declared leaves pass."""
+    for source in (
+        "from yian.defaults import current\n",
+        "from .. import defaults\n",
+        "from . import messages\n",
+        "from yian.llm.errors import ProviderError\n",
+        "import httpx2\n",
+        "import json\n",
+    ):
+        assert not _llm_leaf_violations(source), source

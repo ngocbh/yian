@@ -32,10 +32,6 @@ from yian.llm_clients.layers import (
 )
 from yian.nodes.agent import AgentNode
 
-# Kept for callers and tests that import the cascade's original private names.
-_require_concrete_selection = require_concrete_selection
-_validate_layer = validate_layer
-
 
 def resolve_llm_cascade(
     flow: Any,

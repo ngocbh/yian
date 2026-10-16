@@ -6,7 +6,6 @@ import time
 import pytest
 from pydantic import SecretStr
 
-from yian.compile.llm_cascade import _require_concrete_selection, _validate_layer
 from yian.compose.loader import load_flow
 from yian.llm_clients import connection as connection_module
 from yian.llm_clients import factory
@@ -22,6 +21,7 @@ from yian.llm_clients.connection import (
     split_model_config,
     validate_connection,
 )
+from yian.llm_clients.layers import require_concrete_selection, validate_layer
 from yian.run import run_flow
 
 STORE = {
@@ -86,9 +86,9 @@ def test_split_and_layer_accept_non_openai_metadata():
     with pytest.raises(ValueError):
         split_model_config({"provider": "ollama", "model": "m", "_connection": STORE})
 
-    _validate_layer({"provider": "anthropic", "model": "m", "_connection": STORE})
+    validate_layer({"provider": "anthropic", "model": "m", "_connection": STORE})
     with pytest.raises(ValueError):
-        _validate_layer({"provider": "ollama", "model": "m", "_connection": STORE})
+        validate_layer({"provider": "ollama", "model": "m", "_connection": STORE})
 
     with pytest.raises(ValueError, match="another Azure resource"):
         split_model_config({
@@ -566,7 +566,7 @@ def test_split_and_resolve_carry_headers_beside_the_key():
 
 def test_layers_refuse_recorded_header_names():
     with pytest.raises(ValueError, match="_header_names is internal to recorded runs"):
-        _validate_layer({"provider": "anthropic", "_header_names": ["X-Gateway"]})
+        validate_layer({"provider": "anthropic", "_header_names": ["X-Gateway"]})
 
 
 def test_a_recorded_map_takes_settings_only_beside_the_marker():
@@ -574,25 +574,25 @@ def test_a_recorded_map_takes_settings_only_beside_the_marker():
         "provider": "openai", "model": "m", HOST_KEY_MARKER: True,
         "organization": "org-abc", "project": "proj-abc", "_header_names": ["X-Gateway"],
     }
-    _require_concrete_selection(marked, path="agent")
+    require_concrete_selection(marked, path="agent")
     for key in ("organization", "project", "_header_names"):
         unmarked = {"provider": "openai", "model": "m", key: marked[key]}
         with pytest.raises(ValueError, match=f"'agent' has {key} without a host key"):
-            _require_concrete_selection(unmarked, path="agent")
+            require_concrete_selection(unmarked, path="agent")
     for names in ([], ["X-B", "X-A"], ["Authorization"], "X-A"):
         with pytest.raises(ValueError, match="'agent'.*_header_names"):
-            _require_concrete_selection({**marked, "_header_names": names}, path="agent")
+            require_concrete_selection({**marked, "_header_names": names}, path="agent")
     with pytest.raises(ValueError, match="'agent'.*organization"):
-        _require_concrete_selection({**marked, "organization": "has space"}, path="agent")
+        require_concrete_selection({**marked, "organization": "has space"}, path="agent")
     for key in ("organization", "project"):
         anthropic = {**marked, "provider": "anthropic", key: marked[key]}
         anthropic.pop("organization" if key == "project" else "project")
         with pytest.raises(
             ValueError, match=f"'agent': {key} applies only to provider openai"
         ):
-            _require_concrete_selection(anthropic, path="agent")
+            require_concrete_selection(anthropic, path="agent")
     with pytest.raises(ValueError, match="headers"):
-        _require_concrete_selection({**marked, "headers": {"X-Gateway": "v"}}, path="agent")
+        require_concrete_selection({**marked, "headers": {"X-Gateway": "v"}}, path="agent")
 
 
 # --- saved-login connection settings: recorded in _connection, sent from the store --- #

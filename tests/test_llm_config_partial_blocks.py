@@ -179,3 +179,18 @@ def test_no_annotation_for_fields_checked_when_the_value_resolves(block, path, t
     from yian.llm_clients.provider_blocks import block_field_annotation
 
     assert block_field_annotation(block, path, tree) is None
+
+
+def test_a_literal_union_leaf_reports_key_paths_without_union_branch_names():
+    problems = _problems("deepseek", {"stop": ["a", 5], "max_tokens": _Value()})
+
+    assert problems == [
+        "`deepseek.stop`: Input should be a valid string",
+        "`deepseek.stop[1]`: Input should be a valid string",
+    ]
+
+
+def test_literal_items_of_a_mapping_holding_a_value_are_checked():
+    problems = _problems("openai", {"metadata": {"a": 5, "b": _Value()}})
+
+    assert problems == ["`openai.metadata.a`: Input should be a valid string"]

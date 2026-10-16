@@ -87,16 +87,24 @@ def _key_problems(
     fields = {field.alias or name: field for name, field in model.model_fields.items()}
     for key, value in data.items():
         path = f"{prefix}{key}"
-        if path in top.reserved:
-            problems.append(
-                f"`{top.default_block}.{path}` is built by yian ({top.reserved[path]}); remove it"
-            )
-        elif key not in fields:
-            problems.append(
-                f"`{top.default_block}.{path}` {top.api}; allowed: {', '.join(sorted(fields))}"
-            )
+        problem = _bad_key(top, path, key, fields)
+        if problem is not None:
+            problems.append(problem)
         else:
             _value_problems(fields[key].annotation, value, top=top, path=path, problems=problems)
+
+
+def _bad_key(top: type[_Block], path: str, key: str, allowed: Mapping) -> Optional[str]:
+    """Return why ``key`` at ``path`` is not allowed, or `None` when it is.
+
+    ``top`` is the top-level block, which supplies the block name, the reserved paths and
+    the unknown-key wording; ``allowed`` holds the keys the enclosing object accepts.
+    """
+    if path in top.reserved:
+        return f"`{top.default_block}.{path}` is built by yian ({top.reserved[path]}); remove it"
+    if key not in allowed:
+        return f"`{top.default_block}.{path}` {top.api}; allowed: {', '.join(sorted(allowed))}"
+    return None
 
 
 def _value_problems(
@@ -1205,7 +1213,9 @@ def partial_block_problems(
     present, and a nested object whose ``type`` (the variant tag) is one is not walked.
     Every other leaf is checked against its field's type and constraints. A list
     holding a value has its object entries walked for key paths and its other entries
-    left for when it resolves. Messages name the key path and never echo a value.
+    left for when it resolves; a mapping field holding one has its value-free items
+    checked and its item count left for then. Messages name the key path and never echo
+    a value.
 
     Args:
         block (`str`):
@@ -1253,14 +1263,9 @@ def _partial_problems(
     names = {field.alias or name: name for name, field in model.model_fields.items()}
     for key, value in data.items():
         path = f"{prefix}{key}"
-        if path in top.reserved:
-            problems.append(
-                f"`{top.default_block}.{path}` is built by yian ({top.reserved[path]}); remove it"
-            )
-        elif key not in names:
-            problems.append(
-                f"`{top.default_block}.{path}` {top.api}; allowed: {', '.join(sorted(names))}"
-            )
+        problem = _bad_key(top, path, key, names)
+        if problem is not None:
+            problems.append(problem)
         else:
             _partial_field(model, names[key], value, top=top, path=path,
                            is_value=is_value, problems=problems)
@@ -1290,8 +1295,12 @@ def _partial_field(
                               problems=problems)
             return
         if _holds_value(value, is_value):
+            if any(typing.get_origin(m) is dict for m in _members(annotation)):
+                # Only the value-free items can be checked; the item count waits for the rest.
+                written = {k: v for k, v in value.items() if not _holds_value(v, is_value)}
+                _check_literal(model, name, written, top=top, path=path, problems=problems)
             # Several variants and no literal tag: only the tag itself can be checked.
-            if len(_block_members(annotation)) > 1 and not is_value(value.get("type")):
+            elif len(_block_members(annotation)) > 1 and not is_value(value.get("type")):
                 tag = {"type": value["type"]} if "type" in value else {}
                 _check_literal(model, name, tag, top=top, path=path, problems=problems)
             return
@@ -1317,15 +1326,33 @@ def _check_literal(
     path: str,
     problems: list[str],
 ) -> None:
-    """Append why the value-free ``value`` is not valid for field ``name`` of ``model``."""
+    """Append why the value-free ``value`` is not valid for field ``name`` of ``model``.
+
+    Each message is located at the deepest key path of ``value`` its error names; the
+    union branch names pydantic adds to a location (``str``, ``list[str]``) are dropped.
+    """
     try:
         model.__pydantic_validator__.validate_assignment(model.model_construct(), name, value)
     except ValidationError as exc:
         for error in exc.errors(include_input=False, include_url=False):
-            where = path
-            for part in error["loc"][1:]:
-                where += f"[{part}]" if isinstance(part, int) else f".{part}"
-            problems.append(f"`{top.default_block}.{where}`: {error['msg']}")
+            problem = f"`{top.default_block}.{_written_path(path, value, error['loc'][1:])}`: "
+            problem += error["msg"]
+            if problem not in problems:
+                problems.append(problem)
+
+
+def _written_path(path: str, value: Any, loc: tuple) -> str:
+    """Return ``path`` extended by the parts of ``loc`` that index into ``value`` as written."""
+    node = value
+    for part in loc:
+        if isinstance(part, int) and isinstance(node, list) and 0 <= part < len(node):
+            path += f"[{part}]"
+        elif isinstance(part, str) and isinstance(node, Mapping) and part in node:
+            path += f".{part}"
+        else:
+            continue
+        node = node[part]
+    return path
 
 
 def _holds_value(tree: Any, is_value: Callable[[Any], bool]) -> bool:
@@ -1394,7 +1421,12 @@ def block_field_annotation(
 
 
 def _simple_type(annotation: Any, metadata: list[Any]) -> Optional[BlockFieldType]:
-    """Return the `BlockFieldType` of a field's annotation and metadata, if it is simple."""
+    """Return the `BlockFieldType` of a field's annotation and metadata, if it is simple.
+
+    Only inclusive bounds (``ge``, ``le``) are carried; exclusive bounds (``gt``, ``lt``)
+    and string length and pattern constraints are checked only when the whole block is
+    validated after its values resolve.
+    """
     members = [m for m in _members(annotation) if m is not type(None)]
     if len(members) != 1:
         return None

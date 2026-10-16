@@ -68,7 +68,7 @@ from yian.typesys.types import read_typedefs
 from yian.compose.build.pipeline import _assemble, ComposedFlow
 from yian.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
 from yian.compose.nodes.base import not_text_detail, not_text_error
-from yian.compose.nodes.resolver import ChildResolver, call_nesting_scope
+from yian.compose.nodes.resolver import _ACTIVE_CALLS, ChildResolver, call_nesting_scope
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.memory import parse_memory_declarations
 from yian.compose.helpers.tags import reject_unread_tags
@@ -910,6 +910,40 @@ class _PrivateCallable:
     builder: Callable[[], ComposedFlow]
 
 
+class _BuildFirst(BaseException):
+    """Asks a scope building defs callee-first to build def `name` before its caller.
+
+    It is a `BaseException` so the `except Exception` sites a def build passes through
+    let it reach the scope's scheduler.
+
+    Args:
+        scope (`_CallableScope`): The scope whose scheduler handles it.
+        name (`str`): The def to build first.
+        active_calls (`int`): The calls being resolved around the call to `name`, which
+            the def's own build starts from.
+    """
+
+    def __init__(self, scope: _CallableScope, name: str, active_calls: int) -> None:
+        super().__init__(name)
+        self.scope = scope
+        self.name = name
+        self.active_calls = active_calls
+
+
+@dataclass
+class _PendingDef:
+    """One def on the callee-first build stack.
+
+    ``active_calls`` is the call count its build starts from, and ``failures`` maps each
+    callee that failed to build while this def was on top to the exception and traceback
+    it failed with.
+    """
+
+    name: str
+    active_calls: int
+    failures: dict[str, tuple[Exception, Any]] = field(default_factory=dict)
+
+
 class _CallableScope:
     """The file-local namespace and cache for callable resolution.
 
@@ -987,6 +1021,9 @@ class _CallableScope:
         self._built: dict[str, ComposedFlow] = {}
         self._in_progress: set[str] = set()
         self._import_depth = 0
+        # Set while `eager_load_defs` builds defs callee-first; `_pending` is its stack.
+        self._scheduling = False
+        self._pending: list[_PendingDef] = []
 
     @property
     def import_depth(self) -> int:
@@ -1120,6 +1157,8 @@ class _CallableScope:
         `current().max_call_nesting` is refused: before loading when the files already
         being imported reach the limit, and after loading by the `import_depth` the
         resolved flow carries, so a cached or memoized file is held to the same rule.
+        While `eager_load_defs` runs, a def not built yet is built before its caller
+        instead of inside it.
 
         Args:
             flow_id (`str`):
@@ -1163,23 +1202,15 @@ class _CallableScope:
                     f"of itself (the baked call graph must be finite)",
                     range=(def_cursor.range if def_cursor is not None else None),
                 )
+            if self._scheduling:
+                failure = self._pending[-1].failures.get(flow_id)
+                if failure is not None:
+                    exc, traceback = failure
+                    raise exc.with_traceback(traceback)
+                raise _BuildFirst(self, flow_id, _ACTIVE_CALLS.get())
             self._in_progress.add(flow_id)
             try:
-                def_cursor = None
-                if self._defs_cursor is not None:
-                    try:
-                        def_cursor = self._defs_cursor.child(flow_id)
-                    except SourceAccessError:
-                        pass
-                loaded = self._build_transactionally(
-                    lambda: _load_def(
-                        flow_id,
-                        self._defs_section[flow_id],
-                        self._registry,
-                        self,
-                        def_cursor,
-                    )
-                )
+                loaded = self._build_def(flow_id)
             finally:
                 self._in_progress.discard(flow_id)
             self._built[flow_id] = loaded
@@ -1262,10 +1293,94 @@ class _CallableScope:
             "loop bodies); flatten the chain"
         )
 
+    def _build_def(self, name: str) -> ComposedFlow:
+        """Build `defs:` entry `name` transactionally; the caller tracks it as in progress."""
+        def_cursor = None
+        if self._defs_cursor is not None:
+            try:
+                def_cursor = self._defs_cursor.child(name)
+            except SourceAccessError:
+                pass
+        return self._build_transactionally(
+            lambda: _load_def(
+                name,
+                self._defs_section[name],
+                self._registry,
+                self,
+                def_cursor,
+            )
+        )
+
     def eager_load_defs(self) -> None:
-        """Build every local def in authored mapping order before the parent flow."""
-        for name in self._defs_section:
-            self.resolve(name)
+        """Build every local def in authored mapping order before the parent flow.
+
+        Defs are built callee-first, so a def chain loads without recursing per def.
+        """
+        self._scheduling = True
+        try:
+            for name in self._defs_section:
+                if name not in self._built:
+                    self._build_callee_first(name)
+        finally:
+            self._scheduling = False
+
+    def _build_callee_first(self, first: str) -> None:
+        """Build def `first`, building each def it calls before it, without nesting builds.
+
+        While scheduling, `resolve` of a def not built yet raises `_BuildFirst`, which
+        aborts the caller's build. The callee is pushed on a stack and built, and the
+        caller is built again once the callee is done. While a def builds, the
+        in-progress set holds exactly the defs on the stack and the active call count is
+        the one carried to it, which is what a build nested in its callers would see, so
+        recursion and the call nesting limit are checked as before.
+
+        When a callee fails, its exception is recorded for the caller now on top, and
+        `resolve` of that callee raises it again while that caller builds, so the
+        caller's own error handling wraps it as if the callee had been built nested.
+        The records are dropped when the caller leaves the stack. The failure of
+        `first` is raised.
+
+        This relies on def builds being deterministic given the in-progress set, and on
+        an aborted build leaving no trace: `_build_transactionally` rolls back its cache
+        entries and catalog sites, and no def build changes the `defs:` section.
+
+        Args:
+            first (`str`): The def to build.
+
+        Raises:
+            `LoadError`: Raised when `first`, or a def it calls, fails to build.
+        """
+        self._pending = [_PendingDef(first, _ACTIVE_CALLS.get())]
+        try:
+            while self._pending:
+                top = self._pending[-1]
+                self._in_progress = {pending.name for pending in self._pending}
+                callee: _BuildFirst | None = None
+                failure: Exception | None = None
+                token = _ACTIVE_CALLS.set(top.active_calls)
+                try:
+                    self._built[top.name] = self._build_def(top.name)
+                except _BuildFirst as exc:
+                    if exc.scope is not self:
+                        raise
+                    callee = exc
+                except Exception as exc:
+                    failure = exc
+                finally:
+                    _ACTIVE_CALLS.reset(token)
+                # Acted on after the handlers exit, so the next build and a replayed
+                # failure don't carry the handled exception as their `__context__`.
+                if callee is not None:
+                    self._pending.append(_PendingDef(callee.name, callee.active_calls))
+                    continue
+                self._pending.pop()
+                if failure is not None:
+                    if not self._pending:
+                        raise failure
+                    self._pending[-1].failures[top.name] = (failure, failure.__traceback__)
+        finally:
+            self._pending = []
+            self._in_progress = set()
 
 
 def _check_def_asserts(

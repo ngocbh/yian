@@ -111,7 +111,8 @@ class FlowEngine:
         accepted start before evaluating or submitting its worker.
 
         ``tools`` is this run's ``ToolSet``; every node declaring ``needs_tools``
-        receives it. ``None`` uses the global registry; any other type
+        receives this set bound to the state's run id (one shared bound copy), so
+        tools see that id and the set's host context. ``None`` uses the global registry; any other type
         raises ``TypeError``.
 
         ``skills`` is the run's host-supplied skill mapping, passed unchanged to
@@ -148,7 +149,7 @@ class FlowEngine:
         self.on_stream = on_stream
         self.stop_event = stop_event if stop_event is not None else threading.Event()
         self.memory_context_opener = memory_context_opener
-        self.tools = tools if tools is not None else ToolSet()
+        self.tools = (tools if tools is not None else ToolSet()).for_run(state.run_id or "")
         self.skills = skills
         self.steering = require_steering(steering)
 

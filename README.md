@@ -159,7 +159,11 @@ A library host can inject per-run tools (including its `ask_user` handler and
 named tool groups that an AGENT grants by name) with `tools=`, provider
 configuration, and named memory implementations. Before a run starts, each TOOL
 node's inputs and `output:` are checked against the argument and return types its
-tool declares; see [Typed tools](docs/api.md#typed-tools). To pass a provider key without an
+tool declares; see [Typed tools](docs/api.md#typed-tools). A tool whose first parameter is a
+`ToolContext` receives its call id and the app object passed as `run_flow(..., context=obj)`;
+a TOOL node's call id stays the same when `resume_flow` re-runs it, so it can serve as an
+idempotency key (see [Tool context](docs/api.md#tool-context)). A `FunctionTool` gives a
+tool as a name, a description, a JSON Schema, and a call. To pass a provider key without an
 environment variable, add it to the run's config, as in
 `llm_config={"provider": "anthropic", "model": "claude-sonnet-4-5", "api_key": key}`;
 the key is never recorded or echoed, so pass it again to `resume_flow(...,

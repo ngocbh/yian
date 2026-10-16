@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 from typing import Any, Callable
 
 import pytest
@@ -221,3 +222,28 @@ def test_ask_user_never_falls_back_to_the_global_registry(tools):
 def test_install_ask_user_is_removed():
     assert not hasattr(tools_package, "install_ask_user")
     assert "install_ask_user" not in tools_package.__all__
+
+
+def _scale(value: int, factor: int) -> int:
+    """Scale a value."""
+    return value * factor
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        StructuredTool.from_function(_scale, name="register_scale"),
+        functools.partial(_scale, factor=2),
+    ],
+    ids=["base_tool", "partial"],
+)
+def test_register_tool_rejects_what_it_cannot_register(target):
+    with pytest.raises(TypeError) as excinfo:
+        register_tool("register_scale")(target)
+
+    message = str(excinfo.value)
+    assert "'register_scale'" in message
+    assert "function, method, or FunctionTool" in message
+    assert "tools=" in message
+    assert "annotation" not in message
+    assert "register_scale" not in TOOL_REGISTRY

@@ -43,6 +43,8 @@ sits above all three and is imported by none.
 (`build_memories`) and owns their lifetime in a `MemoryRegistry`. It reads the compiled
 memory table and constructs backends; `run.py` imports it only to check a registry's
 types, and the CLI calls it for `yian run`.
+`tools` is the host tool seam: the registry, the per-run `ToolSet`, and the host
+tool forms `ToolContext`, `FunctionTool` and `function_tool` exported here.
 This package facade resolves the public names below lazily so importing a leaf
 submodule does not bootstrap the whole engine.
 Nothing here imports a DB or a server. Durable authority is limited to the small
@@ -61,6 +63,8 @@ if TYPE_CHECKING:
     from yian.expr.expressions import ExpressionError, evaluate_when
     from yian.memory_host import MemoryRegistry, build_memories
     from yian.run import run_flow
+    from yian.tools.context import ToolContext
+    from yian.tools.function_tools import FunctionTool, function_tool
     from yian.typesys.pool import VariablePool
 
 
@@ -81,6 +85,9 @@ _EXPORTS: dict[str, tuple[str, str]] = {
     "run_flow": ("yian.run", "run_flow"),
     "build_memories": ("yian.memory_host", "build_memories"),
     "MemoryRegistry": ("yian.memory_host", "MemoryRegistry"),
+    "ToolContext": ("yian.tools.context", "ToolContext"),
+    "FunctionTool": ("yian.tools.function_tools", "FunctionTool"),
+    "function_tool": ("yian.tools.function_tools", "function_tool"),
 }
 
 __all__ = [
@@ -96,6 +103,9 @@ __all__ = [
     "run_flow",
     "build_memories",
     "MemoryRegistry",
+    "ToolContext",
+    "FunctionTool",
+    "function_tool",
 ]
 
 

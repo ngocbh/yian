@@ -362,7 +362,14 @@ untyped or its contract accepts null (a nullable or `None`-kind type).
 
 The core ships no domain tools; a host registers its own into the shared registry
 or passes the whole set for one run with `run_flow(..., tools=...)`. A list value
-in that mapping is a tool group an AGENT can grant by name.
+in that mapping is a tool group an AGENT can grant by name. `ToolContext`,
+`FunctionTool`, and `function_tool` are also exported from `yian`.
+
+::: yian.tools.ToolContext
+
+::: yian.tools.FunctionTool
+
+::: yian.tools.function_tool
 
 ::: yian.tools.register_tool
 

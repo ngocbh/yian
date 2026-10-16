@@ -22,9 +22,12 @@ class ToolNode(Node):
     """
     A direct, deterministic invocation of one tool from the run's `ToolSet` (no LLM in the loop).
 
-    The node's bound input record is passed to the tool's `.invoke(...)`; the tool sees
-    only its own record, never the live pool. When `output_contract` is set (from an
-    optional authored `output:`), the engine validates every returned value against it.
+    The node's bound input record is passed to `ToolSet.invoke`; the tool sees only its
+    own record, never the live pool. A tool that declares a `ToolContext` first
+    parameter also receives one naming this node, with the call id
+    `"<run_id>/<node id>"`, which a resumed re-run of the node sees again. When
+    `output_contract` is set (from an optional authored `output:`), the engine
+    validates every returned value against it.
 
     `input_types` maps each input name to the type the loader proved its binding has
     (a literal's exact type, a typed binding's declared type, or a reference's inferred
@@ -58,4 +61,4 @@ class ToolNode(Node):
 
     def forward(self, inputs: dict, *, tools: ToolSet | None = None) -> Output:
         tools = tools if tools is not None else ToolSet()
-        return Output(value=tools.invoke(self.tool_id, inputs))
+        return Output(value=tools.invoke(self.tool_id, inputs, node=self.id))

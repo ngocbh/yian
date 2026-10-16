@@ -91,6 +91,7 @@ class HumanInputNode(Node):
                 "title": self.title,
                 "node_id": self.id,
             },
+            node=self.id,
         )
         return Output(answer)
 

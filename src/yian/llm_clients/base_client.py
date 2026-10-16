@@ -5,6 +5,11 @@ import warnings
 
 from langchain_core.exceptions import OutputParserException
 
+# The header-drop warnings already shown in this process. Python's own once-per-location
+# registry is cleared whenever `warnings.catch_warnings()` is entered, which langchain-core
+# does when binding tools, so without this the warning repeats on every agent invocation.
+_warned: set[str] = set()
+
 
 def normalize_content(response):
     """Coerce an LLM response's `.content` to a plain string in place.
@@ -63,7 +68,8 @@ def drop_environment_headers(
     Keeps only the custom headers whose name is exactly (case-sensitive) one of
     `explicit`, and sets `organization`/`project` to `None` and
     `_ambient_authorizations` to `frozenset()` where the client has them. Warns with a
-    `UserWarning` naming the dropped headers (not their values) when it drops any.
+    `UserWarning` naming the dropped headers (not their values) when it drops any, once
+    per process for each distinct message.
 
     Args:
         client (`Any`):
@@ -92,16 +98,20 @@ def drop_environment_headers(
             setattr(client, attribute, None)
     if hasattr(client, "_ambient_authorizations"):
         client._ambient_authorizations = frozenset()
-    if dropped:
-        *rest, last = variables
-        sources = f"{', '.join(rest)} or {last}" if rest else last
-        warnings.warn(
-            f"yian sends only the headers it sets, so it dropped {', '.join(sorted(dropped))}, "
-            f"which the SDK read from {sources}. A Python host can send extra headers by "
-            "setting them on the http_client it passes.",
-            UserWarning,
-            stacklevel=2,
-        )
+    if not dropped:
+        return
+    *rest, last = variables
+    sources = f"{', '.join(rest)} or {last}" if rest else last
+    message = (
+        f"yian sends only the headers it sets, so it dropped {', '.join(sorted(dropped))}, "
+        f"read from {sources}; flow runs cannot send them. Unset the variable to silence "
+        "this; code that builds models with create_llm_client can set headers on the "
+        "http_client it passes."
+    )
+    if message in _warned:
+        return
+    _warned.add(message)
+    warnings.warn(message, UserWarning, stacklevel=2)
 
 
 class MissingToolCallError(OutputParserException):

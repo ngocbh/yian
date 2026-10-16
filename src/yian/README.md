@@ -222,8 +222,11 @@ Anthropic SDK client yian builds keeps only the custom headers yian or langchain
 set (`llm_clients.base_client.drop_environment_headers`): it drops those the SDK
 read from `OPENAI_CUSTOM_HEADERS` or `ANTHROPIC_CUSTOM_HEADERS` and the
 organization and project from `OPENAI_ORG_ID`, `OPENAI_ORGANIZATION`, and
-`OPENAI_PROJECT_ID`, so their values are never sent, and warns with the names of
-any it drops. The Azure client passes
+`OPENAI_PROJECT_ID`, so their values are never sent, and warns once per process
+with the names of any it drops. Flow runs cannot send these headers: `LLMConfig`
+has no `http_client`, and `model_from_config` passes none. Only code that builds a
+model with `create_llm_client(..., http_client=...)` can set them on that client.
+The Azure client passes
 `azure_ad_token=None`, so the SDK reads `AZURE_OPENAI_AD_TOKEN` only when yian
 passes no key, and the Anthropic client clears the SDK's `auth_token` when it
 holds a key. Providers can echo a

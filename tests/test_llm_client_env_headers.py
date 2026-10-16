@@ -10,12 +10,13 @@ import warnings
 import anthropic
 import httpx
 import pytest
+from langchain_core.tools import tool
 from openai import Omit
 
 from tests.fixtures.openai_responses import ResponsesServer
 from tests.test_llm_client_blocks_anthropic import _anthropic_httpx, _Server
 from tests.test_llm_client_http_clients import _GEMINI_REPLY
-from yian.llm_clients import anthropic_client
+from yian.llm_clients import anthropic_client, base_client
 from yian.llm_clients.connection import call_credentials, resolve_model_config
 from yian.llm_clients.factory import create_llm_client
 from yian.llm_clients.openai_client import NormalizedChatOpenAI
@@ -58,6 +59,12 @@ CHAT_REPLY = {
     ],
     "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
 }
+
+
+@pytest.fixture(autouse=True)
+def fresh_warned(monkeypatch):
+    """Forget which drop warnings this process has shown, so each test sees its own."""
+    monkeypatch.setattr(base_client, "_warned", set())
 
 
 @pytest.fixture
@@ -314,7 +321,6 @@ def test_anthropic_hook_clears_an_env_auth_token():
     assert request.headers["x-api-key"] == "k"
 
 
-
 _DROP_WARNING = "yian sends only the headers"
 
 
@@ -330,8 +336,36 @@ def test_openai_warns_when_it_drops_env_headers(poisoned_env):
         create_llm_client("openai", "gpt-5.5", api_key="sk-explicit").get_llm()
     [message] = {str(w.message) for w in record if _DROP_WARNING in str(w.message)}
     _assert_names_without_values(
-        message, "OpenAI-Organization", "X-Env-Injected", "OPENAI_CUSTOM_HEADERS", "http_client"
+        message, "OpenAI-Organization", "X-Env-Injected", "OPENAI_CUSTOM_HEADERS",
+        "OPENAI_ORGANIZATION", "Unset", "create_llm_client", "http_client",
     )
+
+
+def test_openai_names_openai_organization(poisoned_env):
+    for name in ("OPENAI_CUSTOM_HEADERS", "OPENAI_ORG_ID", "OPENAI_PROJECT_ID"):
+        poisoned_env.delenv(name)
+    with pytest.warns(UserWarning, match=_DROP_WARNING) as record:
+        create_llm_client("openai", "gpt-5.5", api_key="sk-explicit").get_llm()
+    [message] = {str(w.message) for w in record if _DROP_WARNING in str(w.message)}
+    _assert_names_without_values(message, "OpenAI-Organization", "OPENAI_ORGANIZATION")
+
+
+@tool
+def _noop(text: str) -> str:
+    """Return `text`."""
+    return text
+
+
+def test_drop_warning_shows_once_across_builds_and_tool_binding(poisoned_env):
+    # langchain-core enters `catch_warnings` when binding tools, which resets Python's own
+    # once-per-location registry; "always" bypasses that registry, so only yian dedups here.
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        create_llm_client("openai", "gpt-5.5", api_key="sk-explicit").get_llm().bind_tools(
+            [_noop]
+        )
+        create_llm_client("openai", "gpt-5.5", api_key="sk-explicit").get_llm()
+    assert len([w for w in record if _DROP_WARNING in str(w.message)]) == 1
 
 
 def test_anthropic_warns_when_it_drops_env_headers(poisoned_env):
@@ -340,8 +374,18 @@ def test_anthropic_warns_when_it_drops_env_headers(poisoned_env):
         chat._client
     [message] = {str(w.message) for w in record if _DROP_WARNING in str(w.message)}
     _assert_names_without_values(
-        message, "X-Env-Injected", "ANTHROPIC_CUSTOM_HEADERS", "http_client"
+        message, "X-Env-Injected", "ANTHROPIC_CUSTOM_HEADERS", "create_llm_client", "http_client"
     )
+
+
+def test_anthropic_without_env_headers_does_not_warn(poisoned_env):
+    poisoned_env.delenv("ANTHROPIC_CUSTOM_HEADERS")
+    chat = create_llm_client("anthropic", "claude-sonnet-4-5", api_key="sk-ant-explicit").get_llm()
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        chat._client
+        chat._async_client
+    assert not [w for w in record if _DROP_WARNING in str(w.message)]
 
 
 def test_openai_without_env_headers_does_not_warn(poisoned_env):
@@ -366,6 +410,7 @@ def test_host_http_client_headers_are_sent(poisoned_env):
     [request] = server.requests
     assert request.headers["openai-organization"] == "org-host"
     assert request.headers["authorization"] == "Bearer sk-explicit"
+
 
 _GOOGLE_ENV = {
     "GOOGLE_GENAI_DEFAULT_HEADERS": '{"X-Env-Injected": "from-env"}',

@@ -889,7 +889,10 @@ Most are just the functional model (above) made enforceable:
   headers yian or langchain set (`drop_environment_headers`): headers from
   `OPENAI_CUSTOM_HEADERS`/`ANTHROPIC_CUSTOM_HEADERS` and the org/project from
   `OPENAI_ORG_ID`/`OPENAI_ORGANIZATION`/`OPENAI_PROJECT_ID` are never sent; a
-  `UserWarning` names any it drops.
+  `UserWarning` names any it drops, once per process (`base_client._warned`).
+  Flow runs cannot send these headers (`LLMConfig` has no `http_client`;
+  `model_from_config` passes none); only `create_llm_client(..., http_client=)`
+  callers can, on that client.
   Azure passes `azure_ad_token=None`, so `AZURE_OPENAI_AD_TOKEN` is used only
   without a key; Anthropic clears `auth_token` when it holds a key.
   `LLMConfig` keeps the key a `SecretStr` excluded from dumps, rejects

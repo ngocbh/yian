@@ -216,6 +216,10 @@ connection identity. Keep tokens out of model configuration and history.
 `llm_clients/connection.py` combines saved selections with environment defaults
 and supplies pinned request-time credential callbacks. The run host owns the
 snapshot; compiler resolution stays pure and receives provider-scoped defaults.
+`llm_clients/layers.py` checks one `llm_config` layer (`validate_layer`), resolves an
+agent's merged layers with the host defaults and saved models (`resolve_agent_config`),
+and checks a complete or recorded config (`require_concrete_selection`); the
+compile-time cascade calls it per agent.
 `llm_clients/connection_settings.py` checks the connection settings that travel
 with a key: OpenAI organization and project ids and extra request headers (names,
 values, refused names, caps). It imports only pydantic, the standard library, and

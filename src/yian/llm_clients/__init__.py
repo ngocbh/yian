@@ -15,7 +15,9 @@ login, private atomic storage of one saved login per provider, and refresh.
 provider or model) and nonsecret connection identities for the host, and resolves
 pinned credentials for requests. `connection_settings` checks the connection settings
 that travel with a key (an OpenAI organization or project id and extra request
-headers) for the carrier, the auth store, and `yian auth`.
+headers) for the carrier, the auth store, and `yian auth`. `layers` checks one
+`llm_config` layer and resolves an agent's merged layers, the host defaults and saved
+models into its complete effective configuration, for the compile-time cascade.
 OpenAI Responses messages retain their full continuation blocks; presentation
 extracts text without mutating the messages used for the next request.
 `list_models` lists the model ids a provider's host offers, using only the key,

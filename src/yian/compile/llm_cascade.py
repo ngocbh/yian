@@ -23,28 +23,18 @@ from typing import Any
 
 from pydantic import SecretStr
 
-from yian.llm_clients.config import (
-    LLM_CONFIG_KEYS,
-    RETIRED_LLM_CONFIG_KEYS,
-    LLMConfig,
-    host_only_field_error,
-    merge_llm_config,
-    retired_key_error,
-    validate_base_url,
+from yian.llm_clients.config import merge_llm_config
+from yian.llm_clients.connection import HOST_KEY_MARKER
+from yian.llm_clients.layers import (
+    require_concrete_selection,
+    resolve_agent_config,
+    validate_layer,
 )
-from yian.llm_clients.connection import (
-    HEADER_NAMES_KEY,
-    HOST_KEY_MARKER,
-    missing_model_message,
-    validate_connection,
-    validate_header_names,
-)
-from yian.llm_clients.connection_settings import validate_organization
 from yian.nodes.agent import AgentNode
 
-_REQUIRED_SELECTION_FIELDS = ("provider", "model")
-# Recorded only on agents marked for a host key: the nonsecret settings sent with it.
-_HOST_SETTING_KEYS = ("organization", "project", HEADER_NAMES_KEY)
+# Kept for callers and tests that import the cascade's original private names.
+_require_concrete_selection = require_concrete_selection
+_validate_layer = validate_layer
 
 
 def resolve_llm_cascade(
@@ -88,17 +78,14 @@ def resolve_llm_cascade(
             If a provider or model selection is invalid, or an agent has no
             provider or model.
     """
-    _validate_layer(parent_config)
-    _validate_layer(defaults)
-    models = dict(provider_models or {})
-    if defaults.get("provider") and defaults.get("model"):
-        models.setdefault(defaults["provider"], defaults["model"])
+    validate_layer(parent_config)
+    validate_layer(defaults)
     effective: dict[str, dict[str, Any]] = {}
     _resolve_flow(
         flow,
         copy.deepcopy(parent_config),
         defaults=copy.deepcopy(defaults),
-        provider_models=models,
+        provider_models=dict(provider_models or {}),
         stray_model=stray_model,
         path=(),
         effective=effective,
@@ -149,7 +136,7 @@ def apply_effective_llm_map(
         if not isinstance(config, dict):
             subject = labels.get(path) or repr(path)
             raise TypeError(f"effective LLM config for {subject} must be a dict")
-        _require_concrete_selection(config, path=path, label=labels.get(path))
+        require_concrete_selection(config, path=path, label=labels.get(path))
 
     _apply_flow(flow, effective, path=())
 
@@ -166,7 +153,7 @@ def _resolve_flow(
 ) -> None:
     """Resolve one flow scope recursively into ``effective``."""
     authored_flow = copy.deepcopy(getattr(flow, "flow_llm_config", {}))
-    _validate_layer(authored_flow)
+    validate_layer(authored_flow)
     flow_layer = merge_llm_config(
         authored_flow,
         parent_config,
@@ -175,26 +162,18 @@ def _resolve_flow(
     for node_id, node in flow.nodes.items():
         node_path = (*path, node_id)
         if isinstance(node, AgentNode):
-            _validate_layer(node.own_llm_config)
+            validate_layer(node.own_llm_config)
             base = {} if not node.llm_inherit else flow_layer
             authored = merge_llm_config(copy.deepcopy(node.own_llm_config), base)
-            config = merge_llm_config(authored, {key: value for key, value in defaults.items() if key != "model"})
             path_key = _path_key(node_path)
-            label = _agent_label(node, path)
-            provider = config.get("provider")
-            if not provider:
-                raise ValueError(
-                    missing_model_message(path_key, None, stray_model=stray_model, label=label)
-                )
-            if not authored.get("model"):
-                config["model"] = provider_models.get(provider)
-                if not config["model"]:
-                    raise ValueError(
-                        missing_model_message(
-                            path_key, provider, stray_model=stray_model, label=label
-                        )
-                    )
-            _require_concrete_selection(config, path=path_key, label=label)
+            config = resolve_agent_config(
+                authored,
+                defaults=defaults,
+                provider_models=provider_models,
+                stray_model=stray_model,
+                path=path_key,
+                label=_agent_label(node, path),
+            )
             node.llm_config = copy.deepcopy(config)
             effective[path_key] = copy.deepcopy(config)
 
@@ -327,110 +306,3 @@ def host_key_providers(effective: dict[str, dict[str, Any]]) -> set[str]:
 def _path_key(path: tuple[str, ...]) -> str:
     """Encode one non-empty static author path."""
     return "/".join(path)
-
-
-def _require_concrete_selection(
-    config: dict[str, Any], *, path: str, label: str | None = None,
-) -> None:
-    """Reject a config that could fall through to ambient provider/model settings.
-
-    Args:
-        config (`dict[str, Any]`):
-            One agent's effective configuration.
-        path (`str`):
-            The agent's static path, named by every message unless ``label`` is given.
-        label (`str`, *optional*, defaults to `None`):
-            The authored site of a synthesized agent's ``llm_config``, named instead of
-            ``path``.
-
-    Raises:
-        `ValueError`:
-            If the config has an invalid marker, base_url or host setting, a bad
-            field, or no concrete provider/model.
-    """
-    subject = label or repr(path)
-    if config.get(HOST_KEY_MARKER, True) is not True:
-        raise ValueError(f"effective LLM config for {subject} has an invalid host key marker")
-    for key in _HOST_SETTING_KEYS:
-        if key not in config:
-            continue
-        # Only the host's settings, sent with its key, are recorded beside the marker.
-        if HOST_KEY_MARKER not in config:
-            raise ValueError(f"effective LLM config for {subject} has {key} without a host key")
-        if key != HEADER_NAMES_KEY and config.get("provider") != "openai":
-            raise ValueError(
-                f"effective LLM config for {subject}: {key} applies only to provider openai"
-            )
-        try:
-            if key == HEADER_NAMES_KEY:
-                validate_header_names(config[key], config.get("provider"))
-            else:
-                validate_organization(config[key], key)
-        except ValueError as exc:
-            raise ValueError(f"effective LLM config for {subject}: {exc}") from None
-    if "base_url" in config:
-        # An Azure base_url is its resource endpoint; any other serves only a host key.
-        if HOST_KEY_MARKER not in config and config.get("provider") != "azure":
-            raise ValueError(
-                f"effective LLM config for {subject} has a base_url without a host key; "
-                "only provider azure takes a base_url from a flow file"
-            )
-        # A recorded map is replayed on resume; check its URL before any node runs.
-        try:
-            validate_base_url(config["base_url"])
-        except ValueError as exc:
-            raise ValueError(f"effective LLM config for {subject}: {exc}") from None
-    # Only a resolved map carries the marker and the host key's base_url and
-    # settings; authored layers may not (except an Azure endpoint, checked above). A
-    # retired key can only come from a map recorded before it retired; such a finished
-    # run still replays, and resuming an unfinished one refuses it per agent.
-    _validate_layer({
-        key: value
-        for key, value in config.items()
-        if key not in (HOST_KEY_MARKER, "base_url", *_HOST_SETTING_KEYS)
-        and key not in RETIRED_LLM_CONFIG_KEYS
-    })
-    missing = [
-        field
-        for field in _REQUIRED_SELECTION_FIELDS
-        if not isinstance(config.get(field), str) or not config[field]
-    ]
-    if missing:
-        raise ValueError(
-            f"effective LLM config for {subject} lacks concrete fields: {missing}"
-        )
-
-
-def _validate_layer(config: dict[str, Any]) -> None:
-    """Reject unknown fields, retired options, and malformed host metadata before composition."""
-    host_only = host_only_field_error(config)
-    if host_only is not None:
-        # Every layer here ends up in the recorded effective map, and a lower
-        # layer's base_url would redirect the host key.
-        raise ValueError(host_only)
-    for internal in (HOST_KEY_MARKER, HEADER_NAMES_KEY):
-        if internal in config:
-            raise ValueError(f"llm_config.{internal} is internal to recorded runs")
-    provider = config.get("provider")
-    if (isinstance(provider, str) and provider.lower() == "codex") or any(
-        key in config for key in ("sandbox", "cwd")
-    ):
-        LLMConfig(**config)
-    retired = retired_key_error(config)
-    if retired is not None:
-        raise ValueError(retired)
-    # The loader checks authored values; a host layer is checked here only for
-    # unknown keys, which would otherwise be recorded and silently ignored. Its
-    # values, including block contents, are checked against the effective config
-    # before the run starts (`check_model_config`) and when the model client is built.
-    unknown = sorted(set(config) - LLM_CONFIG_KEYS - {"_connection"})
-    for key in unknown:
-        if isinstance(key, str) and key.replace("_", "-") in LLM_CONFIG_KEYS:
-            raise ValueError(f"`{key}` is not an llm_config key; write `{key.replace('_', '-')}`")
-    if unknown:
-        raise ValueError(
-            f"llm_config has unknown field(s) {unknown} "
-            f"(allowed: {', '.join(sorted(LLM_CONFIG_KEYS))})"
-        )
-    if "_connection" in config:
-        validate_connection(config["_connection"], config.get("provider"))

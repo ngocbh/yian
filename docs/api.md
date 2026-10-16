@@ -208,7 +208,8 @@ run before appending any record.
   `ProfileMemory` accepts one in its own `llm_config`, with `provider`, and does not
   record it.
 
-  Besides `provider`, `model`, `api_key`, and `base_url`, the run layer takes the
+  Besides `provider`, `model`, `api_key`, `base_url`, and the connection settings
+  (`organization`, `project`, `headers`; below), the run layer takes the
   same provider blocks as a flow file (see
   [Provider blocks](syntax.md#provider-blocks-request-settings)): one block per
   provider, named after it, holding request-body fields of the API that provider's
@@ -276,6 +277,58 @@ run before appending any record.
   takes one beside its own key; `ReflectiveMemory` rejects one except an Azure
   endpoint beside `provider: azure`. Both memories take an Azure endpoint without a
   key.
+
+  The connection settings go wherever the key goes, so each is accepted only beside
+  `api_key` and `provider` in this run layer, and flow files cannot set them at any
+  level (see [Connection settings](installation.md#connection-settings) for the
+  rules and limits):
+
+  ```python
+  llm_config={
+      "provider": "openai",
+      "model": "gpt-5.5",
+      "api_key": key,
+      "organization": "org-...",  # sent as OpenAI-Organization
+      "project": "proj_...",      # sent as OpenAI-Project
+      "headers": {"X-Gateway-Token": token},
+  }
+  ```
+
+  `organization` and `project` are OpenAI ids, so only `provider: openai` takes
+  them. `headers` are extra request headers, such as a gateway token, for every
+  provider but `ollama`; a name yian sets itself (`Authorization`, `x-api-key`,
+  `Host`, `Content-Type`, ..., and for `openai` also `OpenAI-Organization` and
+  `OpenAI-Project`) is refused. The agents marked for the key send them with every
+  request, and a model that sends them never follows a redirect. Like `base_url`,
+  `organization` and `project` are recorded on those agents. Header values are
+  secrets, handled like the key: the log records only the sorted header names (as
+  `_header_names`), and a value a provider echoes in an error, however short, is
+  replaced with `[REDACTED]`. A saved login brings the settings `yian auth` saved
+  with it instead, and an environment key brings none; a host key never picks up a
+  saved login's settings. A key that marks no agent drops its settings too.
+  `ProfileMemory` takes them beside its own key; `ReflectiveMemory` rejects them.
+
+  Pass the header values again with the key: `resume_flow(..., api_key=key,
+  headers={...})` and `result.backward(..., api_key=key, headers={...})`. Their
+  names must be the recorded ones, compared without case, and an error names the
+  missing or unrecorded header names, never a value. The two calls fail
+  differently when the headers are missing. `resume_flow(..., api_key=key)` on a
+  run that recorded header names raises `ValueError` before it appends anything,
+  so the log stays resumable. `result.backward(..., api_key=key)` without them
+  starts its attempt, and the agents marked for the key fail their model call: the
+  outcome is failed with an `AuthError` cause naming the header names. A result
+  from `run_flow` or `resume_flow` keeps the headers it was given for its own
+  `backward` calls, as it keeps the key.
+
+  Code that builds a model itself passes the same headers as
+  `yian.llm_clients.create_llm_client(..., connection_headers={...})`, a mapping of
+  name to `str` or `SecretStr`. The OpenAI-compatible, `azure`, `anthropic`, and
+  `google` clients take it and keep the values out of the model's fields (its
+  `repr`, `model_dump()`, and `dumpd()`). For `openai`, `OpenAI-Organization` and
+  `OpenAI-Project` there carry the organization and project ids. The names and
+  values follow the `headers` rules, and an `http_client` or `http_async_client`
+  passed beside them must not follow redirects. The `ollama` client and the
+  ChatGPT subscription model refuse it, since they send no API key.
 - `memory` — one backend per declared memory key, normally the
   `MemoryRegistry` from `build_memories(flow)`. `None` leaves all declarations
   dormant. A missing key, or one object under two keys, fails setup; extra keys
@@ -712,10 +765,13 @@ engine has drained active workers and released the boundary-owned log.
 
 ## Explicit backward feedback
 
-`RunResult.backward(feedback=None, *, api_key=None) -> BackwardOutcome` operates on
-a terminal run created with `learnable=True`. `api_key` is the provider key of a run
-started with `llm_config.api_key`; `None` uses the key the result was created with. It leaves the forward `input`, `status`, `output`,
-`failure`, and `events` unchanged. A fresh forward result starts with `backward_outcome=None`
+`RunResult.backward(feedback=None, *, api_key=None, headers=None) -> BackwardOutcome`
+operates on a terminal run created with `learnable=True`. `api_key` is the provider
+key of a run started with `llm_config.api_key`, and `headers` the header values it
+sent beside the key (`llm_config.headers`); `None` uses the ones the result was
+created with. Given headers must have the recorded names; a name, value, or count
+that doesn't fit raises `ValueError` before the attempt starts. It leaves the
+forward `input`, `status`, `output`, `failure`, and `events` unchanged. A fresh forward result starts with `backward_outcome=None`
 and `learning=None`; an accepted attempt updates the separately observed
 `backward_outcome` and its `learning` projection.
 
@@ -1572,6 +1628,7 @@ resume_flow(
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
     api_key: str | SecretStr | None = None,
+    headers: Mapping[str, str | SecretStr] | None = None,
     context: Any = None,
 ) -> RunResult
 ```
@@ -1579,7 +1636,11 @@ resume_flow(
 `api_key` re-supplies the key of a run started with `llm_config.api_key`. It goes to
 the agents the log marks for it, at the `base_url` the log recorded for them if the
 run had one, is never recorded, and stays with the returned result for `backward`.
-A log that marks no agent ignores it. `context` re-supplies the host's app
+A log that marks no agent ignores it. `headers` re-supplies the header values that
+run sent with its key (`llm_config.headers`) the same way. Their names must be the
+ones the log recorded, compared without case: missing or extra names raise
+`ValueError` naming them, before anything is appended, and so does `api_key`
+alone on a log that recorded header names. `context` re-supplies the host's app
 object; the log does not hold it (see [Tool context](#tool-context)).
 
 Recovery locks the existing file before reading it and validates the complete

@@ -178,7 +178,7 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_MAX_MODEL_LIST_BYTES` | input cap | 16,777,216 | 1 or more | Largest model listing read from a provider |
 | `YIAN_MAX_BASE_URL_CHARS` | input cap | 2,048 | 1 or more | Longest provider base URL accepted |
 | `YIAN_MAX_CONNECTION_HEADERS` | input cap | 32 | 1 or more | Most extra request headers a provider connection may send |
-| `YIAN_MAX_HEADER_VALUE_CHARS` | input cap | 8,192 | 1 or more | Longest connection header value accepted |
+| `YIAN_MAX_HEADER_VALUE_CHARS` | input cap | 8,192 | 1 or more | Longest connection header name or value accepted |
 | `YIAN_MAX_ORGANIZATION_CHARS` | input cap | 256 | 1 or more | Longest OpenAI organization or project id accepted |
 | `YIAN_MAX_SKILL_FILE_BYTES` | input cap | 262,144 | 1 or more | Largest SKILL.md or bundled skill file returned to a model |
 | `YIAN_MAX_SKILL_NAME_CHARS` | input cap | 64 | 1 or more | Longest skill name accepted |

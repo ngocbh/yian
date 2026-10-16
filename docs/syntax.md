@@ -1282,14 +1282,21 @@ as node inputs. So don't write a secret in a flow file, under any name. Pass a
 credential as a flow input, or have the host supply it. The run log records input
 values too, so keep logs access-controlled (see
 [Authoritative run logs](api.md#authoritative-run-logs)). What the host supplies is
-not recorded: a model key passed as `llm_config.api_key`, or a credential a host tool
-uses.
+not recorded: a model key passed as `llm_config.api_key`, the header values passed
+beside it as `llm_config.headers`, or a credential a host tool uses.
 
 No name is special: a literal under `password` or `api_key` is an ordinary value.
 Model keys have their own rule: a flow file can't set `llm_config.api_key` at all (see
-[`llm_config`](#llm_config-the-model-selection-cascade)). Memory config keeps its own,
-broader key rule: it rejects credential keys at any depth, whatever the value (see
-[Agent memory](#agent-memory-long_term_memory)).
+[`llm_config`](#llm_config-the-model-selection-cascade)), nor the connection settings
+that go with the key (`organization`, `project`, `headers`). Memory config keeps its
+own, broader key rule: it rejects credential keys at any depth, whatever the value
+(see [Agent memory](#agent-memory-long_term_memory)).
+
+Header values are secrets like the key. The run log records only the header names;
+when a provider echoes a header value in an error, the value is replaced with
+`[REDACTED]` before the failure is recorded or printed, as a key is. Every value is
+scrubbed however short it is, so a header value such as `prod` is also replaced
+wherever that word appears in the error text.
 
 Changed: a literal value under a name such as `password`, `client_secret` or
 `OPENAI_API_KEY` used to fail at load (and before that it loaded but was left out of
@@ -1594,11 +1601,34 @@ when the flow loads: an unknown key such as `modle:`, a bad value such as
 `run_flow(..., llm_config=...)` layer with an unknown key fails before any node runs.
 
 A flow file cannot set `api_key` at any level, nor `base_url` except beside
-`provider: azure`; loading such a flow fails. A library host passes the provider
-key, and optionally the endpoint it goes to, in
-`run_flow(..., llm_config={..., "api_key": key, "base_url": url})` instead (see
-[the Python API](api.md)). The key and its `base_url` go to every AGENT of that
-provider, including one with `inherit: false`.
+`provider: azure`, nor the connection settings `organization`, `project`, and
+`headers`; loading such a flow fails, and the error points at the host's
+`llm_config` and `yian auth`. A library host passes the provider key, and optionally
+the endpoint it goes to and its connection settings, in
+`run_flow(..., llm_config={..., "api_key": key, "base_url": url, "headers": {...}})`
+instead (see [the Python API](api.md)). The key, its `base_url`, and its settings go
+to every AGENT of that provider, including one with `inherit: false`. A login saved
+by `yian auth` brings its own settings (see
+[Connection settings](installation.md#connection-settings)).
+
+The host-only top-level fields are:
+
+| Field | What it is |
+|-------|------------|
+| `api_key` | The provider key for this run; needs `provider`. |
+| `base_url` | Where the key is sent; needs `api_key` and `provider` (a flow may set it only beside `provider: azure`, as the resource endpoint). |
+| `organization` | OpenAI organization id, sent as `OpenAI-Organization`; `provider: openai` only, beside `api_key`. |
+| `project` | OpenAI project id, sent as `OpenAI-Project`; `provider: openai` only, beside `api_key`. |
+| `headers` | Extra request headers, such as a gateway token, beside `api_key`; refused for `ollama`. Values are secrets. |
+
+`headers` refuses the names yian sets itself (credential headers such as
+`Authorization` and `x-api-key`, framing headers such as `Host` and
+`Content-Type`, and for `provider: openai` also `OpenAI-Organization` and
+`OpenAI-Project`); see [Connection settings](installation.md#connection-settings)
+for the full list and limits. Other names are not refused, including a header the
+provider's SDK sets itself, such as `User-Agent` or `anthropic-version`, in any
+case. The OpenAI-compatible, `azure`, and `anthropic` clients then send your value
+in place of the SDK's; the `google` client sends the SDK's value too.
 
 For `provider: azure`, `model` is the deployment name and `base_url` the resource
 endpoint, such as `https://<resource>.openai.azure.com/`. Both are ordinary
@@ -1631,9 +1661,9 @@ provider/model defaults; it ignores enclosing flow, parent-flow, and CLI layers:
 #### Provider blocks — request settings
 
 The top level of `llm_config:` selects the model: `provider`, `model`, `inherit:`
-(node only), and the host-only `api_key` and `base_url` (a flow sets `base_url` only
-beside `provider: azure`). Everything else about the request goes in a block named
-after a provider: `openai`, `azure`, `xai`, `deepseek`, `qwen`, `qwen-cn`, `glm`,
+(node only), and the host-only `api_key`, `base_url`, `organization`, `project`, and
+`headers` (a flow sets `base_url` only beside `provider: azure`). Everything else
+about the request goes in a block named after a provider: `openai`, `azure`, `xai`, `deepseek`, `qwen`, `qwen-cn`, `glm`,
 `glm-cn`, `minimax`, `minimax-cn`, `openrouter`, `vllm`, `anthropic`, `google`, or
 `ollama`. A node uses the block of its resolved provider.
 The other blocks are inert, but they are still checked at load, so one flow can carry

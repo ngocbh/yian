@@ -881,12 +881,40 @@ Most are just the functional model (above) made enforceable:
   A run-layer `llm_config.api_key` (needs `provider`) never enters the effective
   map: `run_flow` pops it before the cascade; the map marks that provider's
   agents `_host_key: true` (OpenAI also records a nonsecret `host` connection),
-  and `bind_api_key` puts the key only on marked agents' run-local `llm_config`.
-  `resume_flow(api_key=)` and `RunResult.backward(api_key=)` rebind it on the
-  replayed program; a marked config without the key fails in
-  `split_model_config`, so agents marked for the key never fall back to the
-  environment. A key that marks no agent is dropped from the result and ignored
-  by replay. OpenAI-family and Anthropic SDK clients keep only the custom
+  and `bind_host_credentials` puts the key and the run layer's header values
+  only on marked agents' run-local `llm_config`.
+  `resume_flow(api_key=, headers=)` and `RunResult.backward(api_key=, headers=)`
+  rebind them on the replayed program; a marked config without the key, or
+  whose headers lack the recorded names, fails in `split_model_config` (an
+  `AuthError` naming header names only), so agents marked for the key never
+  fall back to the environment. A key that marks no agent is dropped from the
+  result, with its settings, and ignored by replay.
+  Connection settings (`organization`, `project`: OpenAI ids, `provider:
+  openai` only; `headers`: extra request headers, `dict[str, SecretStr]`
+  excluded from dumps like the key) are host-only and travel with a key:
+  `pop_host_credentials` takes them only beside `api_key` and `provider`, and
+  authored layers reject them at load. `llm_clients/connection_settings.py`
+  holds the shared name/value/id checks and refused names (credential and
+  framing headers; `OpenAI-Organization`/`OpenAI-Project` for `openai`).
+  `bind(host_settings=)` records `organization`/`project` as plain fields and
+  the sorted header names (never values) as `_header_names`, allowed only
+  beside `_host_key`. A saved login's settings go in its `_connection` as the
+  optional `organization`, `project`, and `header_names` (only for `source:
+  store`, `method: api_key`; ids only for `openai`), pinned by its
+  `credential_id`; old records without them stay valid. A host key never picks
+  up a saved login's settings; an environment key gets none. Resume and
+  backward compare given header names with `_header_names` case-insensitively
+  and raise `ValueError` before anything is appended; `RunResult.backward`
+  without them fails the marked agents' calls with `AuthError`. Clients take
+  the values as the yian-only field `connection_headers` (`exclude=True`,
+  `repr=False`), added to the built SDK clients' custom headers (genai: its
+  http options), never a langchain field, so `repr`, `model_dump()`, and
+  `dumpd()` never show them; for `openai` the ids go as `OpenAI-Organization`/
+  `OpenAI-Project` there. A model with connection headers refuses redirects:
+  OpenAI-family/Azure get fresh `follow_redirects=False` httpx clients (never
+  the shared langchain ones), and a host `http_client` must pass
+  `check_no_redirects`. `call_credentials` lists every header value, however
+  short, so errors scrub them like keys. OpenAI-family and Anthropic SDK clients keep only the custom
   headers yian or langchain set (`drop_environment_headers`): headers from
   `OPENAI_CUSTOM_HEADERS`/`ANTHROPIC_CUSTOM_HEADERS` and the org/project from
   `OPENAI_ORG_ID`/`OPENAI_ORGANIZATION`/`OPENAI_PROJECT_ID` are never sent; a
@@ -896,9 +924,8 @@ Most are just the functional model (above) made enforceable:
   from the environment, so `GOOGLE_GENAI_USE_VERTEXAI` and
   `GOOGLE_GENAI_USE_ENTERPRISE` are ignored; a `UserWarning` names either when
   set, once per process (`warn_once`, shared with the header-drop warning).
-  Flow runs cannot send these headers (`LLMConfig` has no `http_client`;
-  `model_from_config` passes none); only `create_llm_client(..., http_client=)`
-  callers can, on that client.
+  Flow runs send such headers only as connection settings (above); a header
+  named in `explicit` replaces the environment's and is not reported dropped.
   The ollama client deletes the `Authorization` header the ollama SDK built
   from `OLLAMA_API_KEY` (`NormalizedChatOllama`), so no key reaches Ollama; a
   `UserWarning` says so, once per process (`warn_once`). Basic auth from
@@ -916,9 +943,11 @@ Most are just the functional model (above) made enforceable:
   though only a call given no key sends them) and masked echoes of each before
   the runtime records a failure. Learners scrub the chained cause of their
   fixed-message errors; `yian auth`'s model check scrubs the key it
-  sends and the provider's token variable. Authored layers reject `api_key` and
-  `_host_key` (flow and def levels at load); `ProfileMemory` needs `provider`
-  with its key; `ReflectiveMemory` rejects `api_key` and always uses the saved login or
+  sends, its header values, and the provider's token variable. Authored layers
+  reject `api_key`, the connection settings, and `_host_key` (flow and def
+  levels at load); `ProfileMemory` needs `provider`
+  with its key and takes the settings beside it; `ReflectiveMemory` rejects
+  `api_key` and the settings and always uses the saved login or
   environment credentials. A run-layer `llm_config.base_url` is where the key goes: it is
   accepted only beside `api_key` and `provider` (`pop_host_credentials`), must be
   `https` (`http` only for local hosts), is checked as the exact stored string
@@ -946,8 +975,8 @@ Most are just the functional model (above) made enforceable:
   re-checks each agent's block against the API actually called (`check_model_config`
   → `block_schema`, e.g. `OpenAISubscriptionBlock` on a ChatGPT subscription). Clients
   send the block as written (`merge_request_body`) with no translation; the only
-  default is Anthropic `max_tokens`. Keep `provider`, `_connection`, and `_host_key`
-  top-level in recorded configs (resume reads them there).
+  default is Anthropic `max_tokens`. Keep `provider`, `_connection`, `_host_key`,
+  and `_header_names` top-level in recorded configs (resume reads them there).
 - **One attempt barrier precedes commits** — accept Started, complete backward
   results and all memory proposals, then accept Ready. Commit each memory key
   once in sorted key order, even with an empty batch, accepting its positive-attempt

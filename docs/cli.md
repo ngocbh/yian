@@ -22,15 +22,22 @@ come from the flow's `llm_config`, then `--provider`/`--model`, then
 
 ```console
 yian auth
-yian auth PROVIDER [--model MODEL] [--api-key-env NAME] [--endpoint URL] [--method subscription|api-key] [--login browser|device]
+yian auth PROVIDER [--model MODEL] [--api-key-env NAME] [--endpoint URL] [--method subscription|api-key] [--login browser|device] [--organization ID] [--project ID] [--header NAME[=VARIABLE]]...
 yian auth PROVIDER --default
 yian auth PROVIDER --remove
 ```
 
 `yian auth` with no provider lists the saved logins: each provider, its kind
-(`api-key`, `subscription`, or `none`), its model, an Azure endpoint, and the
-default. It notes when `YIAN_DEFAULT_PROVIDER` or `YIAN_DEFAULT_MODEL` overrides the
-saved choice, and never prints a secret.
+(`api-key`, `subscription`, or `none`), its model, an Azure endpoint, its
+connection settings, and the default. It notes when `YIAN_DEFAULT_PROVIDER` or
+`YIAN_DEFAULT_MODEL` overrides the saved choice, and never prints a secret: a
+login's headers are listed by name only.
+
+```text
+Saved logins:
+  openai: api-key, model gpt-5.5, organization org-abc, headers X-Gateway (default)
+  vllm: none, model qwen3
+```
 
 `yian auth PROVIDER` sets up one provider (`openai`, `anthropic`, `google`, `azure`,
 `ollama`, `vllm`, `xai`, `deepseek`, `qwen`, `qwen-cn`, `glm`, `glm-cn`, `minimax`,
@@ -45,6 +52,15 @@ saved choice, and never prints a secret.
   also needs `OPENAI_API_VERSION` set.
 - `--method` and `--login` (openai only) choose ChatGPT subscription or API-key
   access, and browser or device sign-in. Device login works over SSH.
+- `--organization ID` and `--project ID` (openai API key only) save the OpenAI
+  organization and project ids sent with each request.
+- `--header NAME=VARIABLE` saves an extra request header, such as a gateway token,
+  with the key, reading its value from the environment variable `VARIABLE`;
+  `--header NAME` asks for the value with a hidden prompt, which needs a terminal.
+  Repeat it for more headers. A value never comes from the command line. Every
+  provider given a key takes it; `ollama` and an openai subscription refuse it, and
+  `vllm`'s key is required with it. Names and values follow the
+  [connection settings](installation.md#connection-settings) rules.
 - `--model MODEL` names the model; a terminal prompts when it is omitted. Off a
   terminal, supply the model; for openai, the method and login mode; for azure,
   `--endpoint`; and set the key variable for a provider that needs a key.
@@ -55,7 +71,14 @@ model must succeed. With a base-URL variable such as `ANTHROPIC_BASE_URL` set,
 `yian auth` skips the listing and checks the model with one request. OpenAI accepts
 only a model in the account's catalog. Setup changes nothing until sign-in and the
 model check succeed; a failed or cancelled setup keeps the previous login. The
-provider becomes the default only when no default is saved yet.
+provider becomes the default only when no default is saved yet. The model listing
+and the model check send the connection settings too.
+
+Every save replaces the login, settings included: it states the organization,
+project, and headers again, and a save without them keeps none. Saving a login with
+connection settings writes keys an older yian doesn't know, so that version refuses
+the whole store (`Credential storage is malformed`). Before downgrading, run
+`yian auth PROVIDER` again without the settings.
 
 `--default` makes an already-saved provider the default without signing in again.
 `--remove` deletes that provider's saved login; removing the default leaves no
@@ -110,7 +133,10 @@ exits 1: for a missing or changed key it asks you to set the key and resume agai
 and a replaced or removed saved login needs a new run. A failed check appends
 nothing, so the log stays resumable. A run started from Python with
 `llm_config.api_key` can only be resumed from Python, with
-`resume_flow(..., api_key=...)`.
+`resume_flow(..., api_key=...)`; when that run also sent `llm_config.headers`, the
+error says `resume_flow(api_key=..., headers=...)`, since the header values are not
+recorded either. A saved login's connection settings need nothing: they are pinned
+with the login.
 
 `--resume` also needs the `YIAN_<NAME>` defaults and limits the run started with. A
 run records the ones that differ from the built-in values, and a log that started

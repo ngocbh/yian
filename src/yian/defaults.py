@@ -378,7 +378,7 @@ ENTRIES: tuple[Entry, ...] = (
     Entry(
         "MAX_HEADER_VALUE_CHARS",
         default=8192,
-        description="Longest connection header value accepted",
+        description="Longest connection header name or value accepted",
         group="input cap",
         minimum=1,
         maximum=None,

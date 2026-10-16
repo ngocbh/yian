@@ -605,11 +605,14 @@ OpenAI subscription and API-key connections both use `provider: openai`;
 `yian auth openai` selects the method and saves the model.
 Never put `api_key` in a flow's `llm_config:`, nor `base_url` except beside
 `provider: azure` (there it is the resource endpoint, required, and `model` is
-the deployment name); loading fails. A
+the deployment name), nor the connection settings `organization`, `project`
+(OpenAI ids) and `headers` (e.g. a gateway token); loading fails. A
 Python host passes them in `run_flow(..., llm_config={"provider": ...,
-"api_key": key, "base_url": url})`, and the key again to
-`resume_flow`/`result.backward` as `api_key=key`. They reach every AGENT of that
-provider, `inherit: false` ones included.
+"api_key": key, "base_url": url, "headers": {...}})`, and the key and header
+values again to `resume_flow`/`result.backward` as `api_key=key, headers={...}`.
+They reach every AGENT of that provider, `inherit: false` ones included. A saved
+login brings the settings `yian auth` saved with it (`--organization`,
+`--project`, `--header NAME=VARIABLE`).
 No provider or model is built in. Process defaults are `YIAN_DEFAULT_PROVIDER`/
 `YIAN_DEFAULT_MODEL`, then the login saved by `yian auth <provider>` (one per
 provider, each with its model); a default model applies only to its provider. An

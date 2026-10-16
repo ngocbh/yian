@@ -13,11 +13,13 @@ Both OpenAI authentication methods use this model interface. `auth/` owns staged
 login, private atomic storage of one saved login per provider, and refresh.
 `connection` snapshots the environment and saved defaults (there is no built-in
 provider or model) and nonsecret connection identities for the host, and resolves
-pinned credentials for requests.
+pinned credentials for requests. `connection_settings` checks the connection settings
+that travel with a key (an OpenAI organization or project id and extra request
+headers) for the carrier, the auth store, and `yian auth`.
 OpenAI Responses messages retain their full continuation blocks; presentation
 extracts text without mutating the messages used for the next request.
-`list_models` lists the model ids a provider's host offers, using only the key
-and base URL passed in.
+`list_models` lists the model ids a provider's host offers, using only the key,
+base URL, and connection settings passed in.
 
 Knows about:   langchain, provider SDKs, and the stdlib-only yian.defaults.
 Never imports: any other yian subpackage except the stdlib-only yian.defaults

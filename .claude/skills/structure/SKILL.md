@@ -216,8 +216,13 @@ connection identity. Keep tokens out of model configuration and history.
 `llm_clients/connection.py` combines saved selections with environment defaults
 and supplies pinned request-time credential callbacks. The run host owns the
 snapshot; compiler resolution stays pure and receives provider-scoped defaults.
-`llm_clients/model_list.py` lists a host's models with only the key passed in,
-over the `auth/http.py` transport. It imports no model SDK, so the
+`llm_clients/connection_settings.py` checks the connection settings that travel
+with a key: OpenAI organization and project ids and extra request headers (names,
+values, refused names, caps). It imports only pydantic, the standard library, and
+`yian.defaults`, never `config.py` or `auth/`, so the `LLMConfig` carrier, the auth
+store, `yian auth`, and resume all share it.
+`llm_clients/model_list.py` lists a host's models with only the key and connection
+settings passed in, over the `auth/http.py` transport. It imports no model SDK, so the
 OpenAI-compatible default endpoints live in `factory.py` beside the routes, where
 both it and the OpenAI client read them.
 `llm_clients/provider_blocks.py` holds the `llm_config` provider-block schemas: one

@@ -5,8 +5,15 @@ from dataclasses import replace
 import pytest
 
 from yian.compile.model import Edge
+from yian.compose.helpers import narrowing_facts
+from yian.compose.helpers.condition_guards import IsinstanceCheck, TagCheck
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.isinstance_types import isinstance_members
+from yian.compose.helpers.narrowing_facts import (
+    check_fact,
+    not_isinstance_fact,
+    tag_fact,
+)
 from yian.compose.helpers.types import read_type
 from yian.compose.nodes.base import BuildContext, NodeDescriptor
 from yian.compose.nodes.case import (
@@ -26,7 +33,7 @@ from yian.compose.validate.narrowing import (
 )
 from yian.diagnostics import OriginRef, SourceRange
 from yian.nodes.contracts import ContractOrigins, PartialRecordContract, ValueContract
-from yian.typesys import Type, ValueKind
+from yian.typesys import Type, TypeCheckError, ValueKind
 from yian.typesys.types import read_typedefs
 from yian.typesys.values import types_overlap
 
@@ -213,6 +220,85 @@ def test_isinstance_fact_against_a_partly_shared_union():
     assert types_overlap(BUY, _t("Wide"))
     assert isinstance_fact(DECISION, _t("SellOrWide")) == Exact(_t("SellOrWide"))
     assert isinstance_fact(DECISION, _t("TextOrWide")) == Exact(_t("TextOrWide"))
+
+
+def test_the_fact_algebra_lives_in_helpers_and_narrowing_re_exports_it():
+    from yian.compose.validate import narrowing
+
+    for name in ("Env", "Exact", "Fact", "Members", "intersect_facts", "isinstance_fact",
+                 "union_facts"):
+        assert getattr(narrowing, name) is getattr(narrowing_facts, name)
+        assert name in narrowing.__all__
+
+
+def test_not_isinstance_fact_keeps_the_members_the_check_cannot_have_passed():
+    """A false check removes the base members equal to a member of the checked type."""
+    assert not_isinstance_fact(DECISION, BUY) == Members((HOLD, SELL))
+    assert not_isinstance_fact(DECISION, _t("Rest")) == Members((BUY,))
+    # `Buy` only overlaps `Wide`, so a `Buy` value may fail the check: it is kept.
+    assert not_isinstance_fact(DECISION, _t("SellOrWide")) == Members((BUY, HOLD))
+    assert not_isinstance_fact(DECISION, DECISION) == Members(())
+
+
+def test_not_isinstance_fact_nullability():
+    """A null fails a non-nullable check and passes a nullable one."""
+    nullable = replace(DECISION, nullable=True)
+    assert not_isinstance_fact(nullable, BUY) == Members((HOLD, SELL), nullable=True)
+    assert not_isinstance_fact(nullable, _t("Optional(Buy)")) == Members((HOLD, SELL))
+    assert not_isinstance_fact(nullable, _t("Optional(Text)")) == Members(
+        (BUY, HOLD, SELL)
+    )
+
+
+def test_not_isinstance_fact_gives_nothing_without_a_union_or_an_exclusion():
+    assert not_isinstance_fact(BUY, BUY) is None
+    assert not_isinstance_fact(Type.scalar(ValueKind.OBJECT), BUY) is None
+    assert not_isinstance_fact(DECISION, TEXT) is None
+    assert not_isinstance_fact(replace(DECISION, nullable=True), TEXT) is None
+
+
+def test_tag_fact_selects_members_by_tag():
+    assert tag_fact(DECISION, "action", "buy", True) == Members((BUY,))
+    assert tag_fact(DECISION, "action", "buy", False) == Members((HOLD, SELL))
+    assert tag_fact(DECISION, "action", "zzz", True) == Members(())
+    assert tag_fact(DECISION, "action", "zzz", False) == Members((BUY, HOLD, SELL))
+
+
+def test_tag_fact_nullability():
+    """A null base never equals a tag, so only a true comparison drops the null."""
+    nullable = replace(DECISION, nullable=True)
+    assert tag_fact(nullable, "action", "buy", True) == Members((BUY,))
+    assert tag_fact(nullable, "action", "buy", False) == Members(
+        (HOLD, SELL), nullable=True
+    )
+
+
+def test_tag_fact_gives_nothing_off_a_tag_field_or_a_union():
+    assert tag_fact(DECISION, "qty", "1", True) is None
+    assert tag_fact(BUY, "action", "buy", True) is None
+    assert tag_fact(TEXT, "text", "x", False) is None
+
+
+def test_check_fact_dispatches_on_the_check():
+    buy = IsinstanceCheck("v", "Buy")
+    assert check_fact(buy, DECISION, True, _REGISTRY) == Members((BUY,))
+    assert check_fact(buy, DECISION, False, _REGISTRY) == Members((HOLD, SELL))
+    assert check_fact(buy, BUY, True, _REGISTRY) is None
+    tag = TagCheck("v", "action", "sell")
+    assert check_fact(tag, DECISION, True, _REGISTRY) == Members((SELL,))
+    assert check_fact(tag, DECISION, False, _REGISTRY) == Members((BUY, HOLD))
+
+
+def test_check_fact_on_an_unproven_base():
+    """A true `isinstance` on an unproven base proves its type; nothing else proves anything."""
+    assert check_fact(IsinstanceCheck("v", "Buy"), None, True, _REGISTRY) == Exact(BUY)
+    assert check_fact(IsinstanceCheck("v", "Buy"), None, False, _REGISTRY) is None
+    assert check_fact(TagCheck("v", "action", "buy"), None, True, _REGISTRY) is None
+
+
+def test_check_fact_rejects_an_unknown_type_name():
+    with pytest.raises(TypeCheckError):
+        check_fact(IsinstanceCheck("v", "Nope"), DECISION, True, _REGISTRY)
 
 
 def test_isinstance_members_keeps_the_shared_members_only_when_nothing_else_can_pass():

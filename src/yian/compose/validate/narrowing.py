@@ -17,7 +17,11 @@ narrowed by those checks too.
 The pass reads built, desugared CASE descriptors and their edges, so it runs after
 `desugar_case_call_targets` and the node builds.
 
-Knows about: descriptors, compiled edges, output contracts, and `typesys` unions.
+The fact algebra (`Members`, `Exact`, their union and intersection) lives in
+`helpers.narrowing_facts`; this module re-exports it.
+
+Knows about: descriptors, compiled edges, output contracts, narrowing facts, and `typesys`
+unions.
 Never imports: runtime.
 """
 
@@ -28,7 +32,19 @@ from dataclasses import dataclass, field, replace
 from typing import Mapping, Optional, Sequence, TypeAlias
 
 from yian.compile.model import Edge
-from yian.compile.validation import types_compatible
+from yian.compose.helpers.narrowing_facts import (
+    Env,
+    Exact,
+    Fact,
+    Members,
+    fact_type,
+    intersect_envs,
+    intersect_facts,
+    isinstance_fact,
+    members_type,
+    union_envs,
+    union_facts,
+)
 from yian.compose.helpers.output_contracts import (
     combine_output_contracts,
     direct_reference_parts,
@@ -37,10 +53,7 @@ from yian.compose.helpers.output_contracts import (
 )
 from yian.compose.nodes.base import NodeDescriptor
 from yian.diagnostics import SourceRange
-from yian.compose.helpers.isinstance_types import (
-    isinstance_members,
-    resolve_isinstance_type,
-)
+from yian.compose.helpers.isinstance_types import resolve_isinstance_type
 from yian.compose.nodes.case import (
     CaseDescriptor,
     IsinstanceCheck,
@@ -58,183 +71,11 @@ from yian.nodes.contracts import (
 )
 from yian.typesys import TypeCheckError
 from yian.typesys.types import TypeRegistry
-from yian.typesys.values import (
-    Type,
-    ValueKind,
-    canonical_union_order,
-    union_tag_fields,
-)
+from yian.typesys.values import Type, union_tag_fields
 
-
-@dataclass(frozen=True)
-class Members:
-    """The value is one of `members`, all members of the base's union, or `None` if nullable.
-
-    Members are deduplicated by `==` and kept in canonical union order. An empty set
-    that is not nullable means no value satisfies the facts, so the node never runs.
-
-    Args:
-        members (`tuple[Type, ...]`):
-            Non-nullable record members of the base's union.
-        nullable (`bool`, *optional*, defaults to `False`):
-            Whether the value may also be `None`.
-    """
-
-    members: tuple[Type, ...]
-    nullable: bool = False
-
-    def __post_init__(self) -> None:
-        """Deduplicate the members and put them in canonical order."""
-        unique: list[Type] = []
-        for member in self.members:
-            if not any(member == seen for seen in unique):
-                unique.append(member)
-        object.__setattr__(self, "members", canonical_union_order(unique))
-
-
-@dataclass(frozen=True)
-class Exact:
-    """The value satisfies `type`.
-
-    Args:
-        type (`Type`):
-            The type the value is known to satisfy.
-    """
-
-    type: Type
-
-
-Fact: TypeAlias = Members | Exact
-"""One narrowing fact for a base path."""
-
-Env: TypeAlias = dict[str, Fact]
-"""Facts keyed by dotted base path; an absent base is unconstrained."""
 
 Views: TypeAlias = tuple[Mapping[str, OutputContract], Mapping[str, ValueContract]]
 """The producer contracts and the flow-input contracts one node or param reads against."""
-
-
-def _contains(members: Sequence[Type], typ: Type) -> bool:
-    """Whether `typ` equals one of `members`."""
-    return any(member == typ for member in members)
-
-
-def union_facts(a: Optional[Fact], b: Optional[Fact]) -> Optional[Fact]:
-    """Return what holds when either fact holds, or `None` for no fact.
-
-    Args:
-        a (`Fact | None`):
-            One fact; `None` is unconstrained.
-        b (`Fact | None`):
-            The other fact; `None` is unconstrained.
-
-    Returns:
-        `Fact | None`:
-            The set union of two `Members`, an `Exact` both sides share, or `None`.
-
-    Example:
-        `union_facts(Members((Buy,)), Members((Sell,)))` is `Members((Buy, Sell))`;
-        `union_facts(Members((Buy,)), None)` is `None`.
-    """
-    if isinstance(a, Members) and isinstance(b, Members):
-        return Members(a.members + b.members, a.nullable or b.nullable)
-    if isinstance(a, Exact) and isinstance(b, Exact) and a.type == b.type:
-        return a
-    return None
-
-
-def intersect_facts(a: Optional[Fact], b: Optional[Fact]) -> Optional[Fact]:
-    """Return what holds when both facts hold, or `None` for no fact.
-
-    Losing information is always sound, so a pair that cannot be combined gives `None`.
-
-    Args:
-        a (`Fact | None`):
-            One fact; `None` is unconstrained.
-        b (`Fact | None`):
-            The other fact; `None` is unconstrained.
-
-    Returns:
-        `Fact | None`:
-            The set intersection of two `Members`; `Members` of the one member an
-            `Exact` names, else that `Exact`; an `Exact` both sides share; the other
-            fact when one side is `None`; otherwise `None`.
-
-    Example:
-        `intersect_facts(Members((Buy, Sell)), Members((Sell, Hold)))` is
-        `Members((Sell,))`; `intersect_facts(Exact(Buy), Members((Buy, Sell)))` is
-        `Members((Buy,))`.
-    """
-    if a is None:
-        return b
-    if b is None:
-        return a
-    if isinstance(a, Members) and isinstance(b, Members):
-        kept = tuple(member for member in a.members if _contains(b.members, member))
-        return Members(kept, a.nullable and b.nullable)
-    if isinstance(a, Exact) and isinstance(b, Exact):
-        return a if a.type == b.type else None
-    exact, members = (a, b) if isinstance(a, Exact) else (b, a)
-    if _contains(members.members, exact.type):
-        return Members((exact.type,))
-    return exact
-
-
-def isinstance_fact(base_type: Type, typ: Type) -> Optional[Fact]:
-    """Return the fact that a value of `base_type` satisfies `typ`, or `None` for no fact.
-
-    Args:
-        base_type (`Type`):
-            The type of the value being tested.
-        typ (`Type`):
-            The type it satisfies. A nullable `typ` also admits `None`.
-
-    Returns:
-        `Fact | None`:
-            `None` when every `base_type` value already satisfies `typ`, since `typ`
-            would only widen it (`object`, say, would turn off field checks);
-            `Members` of the base union's members that `typ` (ignoring nullability)
-            shares, when no other member could pass it; otherwise `Exact(typ)`.
-
-    Example:
-        For `Union[Buy, Hold, Sell]`, `Buy` gives `Members((Buy,))`,
-        `Union[Hold, Sell, Cancel]` gives `Members((Hold, Sell))`, an unrelated record
-        gives `Exact` of that record, and `object` gives `None`.
-    """
-    if types_compatible(base_type, typ):
-        return None
-    kept = isinstance_members(base_type, typ)
-    if kept is not None:
-        return Members(kept, typ.nullable)
-    return Exact(typ)
-
-
-def _union_envs(envs: Sequence[Env]) -> Env:
-    """Join environments by per-base union; a base missing from any is dropped."""
-    if not envs:
-        return {}
-    joined: Env = {}
-    for base, fact in envs[0].items():
-        for env in envs[1:]:
-            fact = union_facts(fact, env.get(base))
-            if fact is None:
-                break
-        if fact is not None:
-            joined[base] = fact
-    return joined
-
-
-def _intersect_envs(envs: Sequence[Env]) -> Env:
-    """Meet environments by per-base intersection."""
-    met: Env = {}
-    for env in envs:
-        for base, fact in env.items():
-            combined = intersect_facts(met.get(base), fact)
-            if combined is None:
-                met.pop(base, None)
-            else:
-                met[base] = combined
-    return met
 
 
 # --------------------------------------------------------------------------- #
@@ -318,33 +159,6 @@ def narrow_contract_at(
     return PartialRecordContract(tuple(fields.items()))
 
 
-def _members_type(members: Sequence[Type], nullable: bool) -> Optional[Type]:
-    """The type of a value that is one of `members`, or `None` if it may be `None`.
-
-    Returns `None` for an empty set that is not nullable: no value fits.
-    """
-    if not members:
-        return Type.scalar(ValueKind.NONE) if nullable else None
-    if len(members) == 1:
-        return replace(members[0], nullable=nullable)
-    return Type(
-        kind=ValueKind.OBJECT,
-        variants=canonical_union_order(members),
-        nullable=nullable,
-    )
-
-
-def _fact_type(fact: Fact) -> Optional[Type]:
-    """The type a node sees for a base under `fact`, or `None` for no view.
-
-    An empty member set on a nullable base can only be `None`; on a non-nullable base
-    the node never runs, so it gets no view.
-    """
-    if isinstance(fact, Exact):
-        return fact.type
-    return _members_type(fact.members, fact.nullable)
-
-
 def _split_base(base: str) -> Optional[tuple[str, str, tuple[str, ...]]]:
     """Split a base path into `("producer"|"input", root name, field path)`."""
     parts = tuple(base.split("."))
@@ -385,7 +199,7 @@ def _build_views(
         key=lambda item: (len(item[1][2]), item[0]),
     )
     for base, (space, name, path) in ordered:
-        target = _fact_type(env[base])
+        target = fact_type(env[base])
         if target is None:
             continue
         view = producer_view if space == "producer" else input_view
@@ -445,7 +259,7 @@ def _members_fact(
         return Members((), nullable)
     if reference is None:
         # The base has no union of its own outside this branch, so the set is only an exact type.
-        return Exact(_members_type(members, nullable))
+        return Exact(members_type(members, nullable))
     return Members(tuple(members), nullable)
 
 
@@ -528,7 +342,7 @@ def _checks_env(
         fact = isinstance_fact(contract.type, typ)
         if fact is not None:
             facts.append({base: fact})
-    return _intersect_envs(facts)
+    return intersect_envs(facts)
 
 
 def _searched_case_facts(
@@ -550,7 +364,7 @@ def _searched_case_facts(
         by_handle.setdefault(then, []).append(
             _checks_env(checks, producers, inputs, registry)
         )
-    facts = {handle: _union_envs(envs) for handle, envs in by_handle.items()}
+    facts = {handle: union_envs(envs) for handle, envs in by_handle.items()}
     return {handle: env for handle, env in facts.items() if env}
 
 
@@ -570,12 +384,12 @@ def _guarded_param_views(
     for param, occurrences in searched_param_guards(desc).items():
         if not occurrences or not all(checks for _, checks in occurrences):
             continue
-        guard = _union_envs(
+        guard = union_envs(
             [_checks_env(checks, producers, inputs, registry) for _, checks in occurrences]
         )
         if not guard:
             continue
-        view = _build_views(_intersect_envs([env, guard]), producers, inputs)
+        view = _build_views(intersect_envs([env, guard]), producers, inputs)
         if view[0] is not producers or view[1] is not inputs:
             views[param] = view
     return views
@@ -804,7 +618,7 @@ def compute_narrowing(
             source_env = environments.get(edge.from_, {})
             if edge.source_handle is not None:
                 edge_facts = handle_facts.get(edge.from_, {}).get(edge.source_handle, {})
-                control.append(_intersect_envs([source_env, edge_facts]))
+                control.append(intersect_envs([source_env, edge_facts]))
             elif edge.ordering:
                 if not edge.optional:
                     contributions.append(source_env)
@@ -813,11 +627,11 @@ def compute_narrowing(
                 optional, members = groups.setdefault(edge.input_group, (edge.optional, []))
                 members.append(source_env)
         if control:
-            contributions.append(_union_envs(control))
+            contributions.append(union_envs(control))
         contributions.extend(
-            _union_envs(members) for optional, members in groups.values() if not optional
+            union_envs(members) for optional, members in groups.values() if not optional
         )
-        env = _intersect_envs(contributions)
+        env = intersect_envs(contributions)
         if env:
             environments[node_id] = env
             view = _build_views(env, producers, inputs)

@@ -19,6 +19,9 @@ Modules:
                   condition, their resolution against a flow's `typedefs:`, and which
                   union members an `isinstance` check narrows to.
   - `memory`      strict named-policy parsing plus opaque occurrence attachment.
+  - `narrowing_facts` the facts narrowing proves about a union value (`Members`,
+                  `Exact`, their union and intersection) and the facts each check
+                  proves.
   - `output_contracts` the template-aware output-binding contract resolver: exact or
                   partial direct-reference projection, source-free proven expression
                   results, closed-record assembly, and closed-path validation.

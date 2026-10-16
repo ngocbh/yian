@@ -10,6 +10,7 @@ import os
 import warnings
 
 import anthropic
+import google.auth
 import google.genai
 import httpx
 import pytest
@@ -587,6 +588,58 @@ def test_google_client_does_not_import_the_cleanup_class():
     assert not hasattr(google_client, "_ClientCleanup")
     assert "_ClientCleanup(" not in source
     assert "import _ClientCleanup" not in source
+
+
+_VERTEX_WARNING = "yian ignores GOOGLE_GENAI_USE"
+
+
+def _vertex_warnings(record):
+    return [w for w in record if str(w.message).startswith(_VERTEX_WARNING)]
+
+
+def test_google_warns_once_about_the_vertex_switch(poisoned_env):
+    poisoned_env.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    poisoned_env.setenv("GOOGLE_API_KEY", "env-google-key")
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        for _ in range(2):
+            create_llm_client("google", "gemini-2.5-flash", api_key="g-explicit").get_llm()
+        [warning] = _vertex_warnings(record)
+        poisoned_env.setenv("GOOGLE_GENAI_USE_ENTERPRISE", "1")
+        create_llm_client("google", "gemini-2.5-flash", api_key="g-explicit").get_llm()
+    assert warning.category is UserWarning
+    assert warning.filename == __file__
+    message = str(warning.message)
+    assert "GOOGLE_GENAI_USE_VERTEXAI" in message
+    assert "env-google-key" not in message
+    [_, enterprise] = _vertex_warnings(record)
+    assert "GOOGLE_GENAI_USE_ENTERPRISE" in str(enterprise.message)
+
+
+def test_google_without_the_vertex_switch_does_not_warn(poisoned_env):
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        create_llm_client("google", "gemini-2.5-flash", api_key="g-explicit").get_llm()
+    assert not _vertex_warnings(record)
+
+
+def test_google_without_any_key_fails_on_the_developer_api(poisoned_env):
+    # A keyless setup that relied on Vertex AI's default credentials now fails, after the warning.
+    poisoned_env.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    poisoned_env.setenv("GOOGLE_CLOUD_PROJECT", "p")
+    for name in _KEY_VARIABLES:
+        poisoned_env.delenv(name, raising=False)
+
+    def default(*args, **kwargs):
+        raise AssertionError("google.auth.default must not be called")
+
+    poisoned_env.setattr(google.auth, "default", default)
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        with pytest.raises(ValueError, match="API key required"):
+            create_llm_client("google", "gemini-2.5-flash").get_llm()
+    [warning] = _vertex_warnings(record)
+    assert "GOOGLE_GENAI_USE_VERTEXAI" in str(warning.message)
 
 def _deepseek(client, async_client):
     return create_llm_client(

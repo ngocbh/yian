@@ -1,6 +1,7 @@
 import builtins
 import copy
 import json
+import os
 import typing
 from typing import Any, Optional
 
@@ -10,11 +11,14 @@ from google.genai.types import HttpOptions
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import Field, model_validator
 
-from .base_client import BaseLLMClient, check_no_redirects, normalize_content
+from .base_client import BaseLLMClient, check_no_redirects, normalize_content, warn_once
 from .provider_blocks import merge_request_body
 from .validators import validate_model
 
 _HTTP_CLIENT_KWARGS = ("http_client", "http_async_client")
+# google-genai's switches to Vertex AI; GOOGLE_GENAI_USE_ENTERPRISE is the newer name.
+_VERTEX_SWITCHES = ("GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_ENTERPRISE")
+_VERTEX_WARNING_PREFIX = "yian ignores GOOGLE_GENAI_USE"
 
 
 def _class_name(cls: type) -> str:
@@ -287,9 +291,26 @@ class GoogleClient(BaseLLMClient):
                 Raised when a given ``http_client`` / ``http_async_client`` is not an httpx
                 client the SDK takes.
             `ValueError`:
-                Raised when a given client follows redirects beside a ``base_url``.
+                Raised when a given client follows redirects beside a ``base_url``, or when
+                no API key is given or found in the environment.
+
+        Warns:
+            `UserWarning`:
+                Once per process for each of ``GOOGLE_GENAI_USE_VERTEXAI`` and
+                ``GOOGLE_GENAI_USE_ENTERPRISE`` set to a non-empty value, naming the variable:
+                the model ignores it and calls the Gemini Developer API.
         """
         self.warn_if_unknown_model()
+        # Before the build, so a setup that relied on Vertex AI credentials and now fails
+        # for want of an API key sees why.
+        for name in _VERTEX_SWITCHES:
+            if os.environ.get(name):
+                warn_once(
+                    f"{_VERTEX_WARNING_PREFIX}{name.removeprefix('GOOGLE_GENAI_USE')}: the google "
+                    "provider always calls the Gemini Developer API with the key yian resolved, "
+                    "and Vertex AI is not supported. Unset the variable to silence this.",
+                    stacklevel=2,
+                )
         llm_kwargs: dict[str, Any] = {"model": self.model}
 
         if self.base_url:

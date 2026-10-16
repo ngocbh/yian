@@ -132,7 +132,7 @@ def test_no_limit_sentinel() -> None:
 def test_int_digits_cannot_exceed_the_interpreter_limit() -> None:
     limit = sys.get_int_max_str_digits()
     if not limit:
-        pytest.skip("this interpreter has no int digit limit")
+        pytest.skip("Python's int digit limit is switched off")
     entry = _entry("MAX_INT_DIGITS")
     assert entry.maximum_from_interpreter
     assert read({entry.variable: str(limit)}).max_int_digits == limit

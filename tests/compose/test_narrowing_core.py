@@ -24,6 +24,7 @@ from yian.compose.helpers.narrowing_facts import (
     guarded_read_types,
     impossible_check_message,
     impossible_checks,
+    narrowed_read_error,
     narrowed_read_message,
     narrowed_type_label,
     not_isinstance_fact,
@@ -1356,3 +1357,21 @@ def test_narrow_contract_at_the_root_of_a_partial_record_rebases_field_origins()
         record,
         ContractOrigins(entries=((("dec",), _ROOT), (("dec", "qty"), _QTY))),
     )
+
+
+def test_narrowed_read_error_names_the_narrowed_type_only_for_a_field_it_lacks():
+    assert narrowed_read_error("v.qtty", (BUY, ("qtty",), "v"), "plain", _REGISTRY) == (
+        "reference ${v.qtty} reads field 'qtty', which Buy doesn't have; v is Buy here, "
+        "by the checks before this read; did you mean 'qty'?"
+    )
+    assert narrowed_read_error("v.price", (BUY_OR_SELL, ("price",), "v"), "plain", _REGISTRY) == (
+        "plain"
+    )
+    assert narrowed_read_error("v.nope", (BUY_OR_SELL, ("nope",), "v"), "plain", _REGISTRY) == (
+        "reference ${v.nope} reads field 'nope', which Buy | Sell doesn't have; "
+        "v is Buy | Sell here, by the checks before this read"
+    )
+    assert narrowed_read_error(
+        "v.leg.prise", (BUY, ("leg", "prise"), "v"), "plain", _REGISTRY
+    ) == "plain"
+    assert narrowed_read_error("v.x", (BOOL, ("x",), "v"), "plain", _REGISTRY) == "plain"

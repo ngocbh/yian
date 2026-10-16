@@ -79,6 +79,7 @@ __all__ = [
     "intersect_facts",
     "isinstance_fact",
     "members_type",
+    "narrowed_read_error",
     "narrowed_read_message",
     "narrowed_type_label",
     "not_isinstance_fact",
@@ -1042,3 +1043,52 @@ def narrowed_read_message(
     )
     close = _close_match(field, fields)
     return message if close is None else f"{message}; did you mean {close!r}?"
+
+
+def _field_names(typ: Type) -> Optional[set[str]]:
+    """The fields a record has, or any member of a union has; `None` for other types."""
+    if typ.variants is not None:
+        names: set[str] = set()
+        for member in typ.variants:
+            if member.fields is None:
+                return None
+            names.update(member.fields)
+        return names
+    return None if typ.fields is None else set(typ.fields)
+
+
+def narrowed_read_error(
+    ref: str,
+    candidate: tuple[Type, tuple[str, ...], str],
+    error: str,
+    registry: TypeRegistry,
+) -> str:
+    """Return a narrowed read's error, naming the narrowed type when it lacks the field.
+
+    Args:
+        ref (`str`):
+            The dotted reference path read, such as `"r.answr"`.
+        candidate (`tuple[Type, tuple[str, ...], str]`):
+            The candidate the read failed on, from `guarded_read_types`.
+        error (`str`):
+            The site's own error for the read on the candidate's type.
+        registry (`TypeRegistry`):
+            The flow's typedefs, for the type label.
+
+    Returns:
+        `str`:
+            `narrowed_read_message`'s text when no member of the narrowed type has the
+            first field below the narrowed base; otherwise `error` unchanged (a field only
+            some members have, or a field deeper down).
+
+    Example:
+        For `r.answr` with the candidate `(Done, ("answr",), "r")`, the text is
+        `reference ${r.answr} reads field 'answr', which Done doesn't have; r is Done
+        here, by the checks before this read; did you mean 'answer'?`.
+    """
+    typ, fields, base = candidate
+    names = _field_names(typ)
+    if names is None or fields[0] in names:
+        return error
+    label = narrowed_type_label(typ, registry)
+    return narrowed_read_message(ref, fields[0], label, base, sorted(names))

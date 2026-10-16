@@ -12,10 +12,11 @@ into `KINDS`/`BINDING_FIELDS` at import so the shared dispatch routes here.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from yian.compile.validation import types_compatible
+from lark import Token, Tree
+
 from yian.diagnostics import SourceRange
 from yian.expr import ExpressionError, expr_refs, parse_condition
 from yian.nodes.contracts import (
@@ -25,12 +26,16 @@ from yian.nodes.contracts import (
     output_contract_field_error,
 )
 from yian.nodes.loop import LoopNode
-from yian.typesys import TypeCheckError
 from yian.typesys.types import TypeRegistry
-from yian.typesys.values import restrict_union
-from yian.compose.helpers.isinstance_types import (
-    isinstance_members,
-    resolve_isinstance_type,
+from yian.typesys.values import Type
+from yian.compose.helpers.condition_guards import Guard, guarded_refs
+from yian.compose.helpers.narrowing_facts import (
+    BaseTypeOf,
+    guarded_read_types,
+    impossible_check_message,
+    impossible_checks,
+    narrowed_read_error,
+    unresolved_type,
 )
 from yian.compose.helpers.output_contracts import (
     combine_output_contracts,
@@ -38,7 +43,6 @@ from yian.compose.helpers.output_contracts import (
 )
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor, reject_non_text
-from yian.compose.nodes.case import IsinstanceCheck, guarded_refs
 from yian.compose.nodes.resolver import (
     _callable_display,
     _resolve_child,
@@ -335,12 +339,8 @@ class LoopDescriptor(NodeDescriptor):
             if tree is not None and not errors and node.output_contract is not None:
                 # With the field names valid, `output_contract` is the carried record's
                 # contract (the body's for a total loop, merged with typed seeds otherwise).
-                for ref, checks in dict.fromkeys(guarded_refs(tree)):
-                    field_error = _predicate_field_error(
-                        node.output_contract, ref, checks, ctx.registry
-                    )
-                    if field_error:
-                        errors.append(f"loop node {self.id!r}: `{pred_kw}:` {field_error}")
+                for message in _predicate_errors(node.output_contract, tree, ctx.registry):
+                    errors.append(f"loop node {self.id!r}: `{pred_kw}:` {message}")
             # A body that returns none of the fields the predicate reads can never change it,
             # so without `max:` the loop never ends. `returned_fields` is set only when the
             # body returns a known strict subset of the carried record. Skip when a driver,
@@ -415,51 +415,70 @@ def _contract_field_names(
     return set(contract.type.fields)
 
 
+def _carried_base_type(contract: OutputContract) -> BaseTypeOf:
+    """The declared type of a carried-record path, or `None` when it is unproven."""
+
+    def base_type_of(base: str) -> Type | None:
+        projected = project_output_contract(contract, base.split("."))
+        return projected.type if type(projected) is ValueContract else None
+
+    return base_type_of
+
+
+def _predicate_errors(
+    contract: OutputContract,
+    tree: Tree | Token,
+    registry: TypeRegistry,
+) -> list[str]:
+    """Return the predicate's impossible checks and field-read errors, each message once.
+
+    A read is checked under each distinct guard it is read with, since the same path can
+    be read both narrowed and not.
+    """
+    base_type_of = _carried_base_type(contract)
+    messages = [
+        impossible_check_message(check)
+        for check in impossible_checks(tree, base_type_of, registry)
+    ]
+    for ref, guard in dict.fromkeys(guarded_refs(tree)):
+        message = _predicate_field_error(contract, ref, guard, base_type_of, registry)
+        if message is not None:
+            messages.append(message)
+    return list(dict.fromkeys(messages))
+
+
 def _predicate_field_error(
     contract: OutputContract,
     ref: str,
-    checks: tuple[IsinstanceCheck, ...],
+    guard: Guard,
+    base_type_of: BaseTypeOf,
     registry: TypeRegistry,
 ) -> str | None:
     """Return why a predicate ref reads a field the carried record can't have, else `None`.
 
-    A check `isinstance(<base>, T)` guarding the read, with `<base>` a strict prefix of
-    `ref`, narrows `<base>` as a searched CASE does: to the members of the base's union
-    that `T` shares when no other member could pass it, else to `T`. The fields below it
-    are walked on that narrowed type. The value passes every guarding check, so the read
-    is fine when any of them allows it. A check the base's type already satisfies narrows
-    nothing. A read guarded by a check whose type name doesn't resolve is not checked, so
-    the type-table check reports the unknown name.
+    `and`, `or` and `not` short-circuit, so the checks before a read (`isinstance` and
+    union tag comparisons) narrow the values it can see (`guarded_read_types`): the read
+    is fine when any narrowed type allows it, and otherwise the first one's error is
+    reported, naming the narrowed type when it lacks the field. With nothing narrowed the
+    read is walked on the carried record. A read guarded by a check whose type name
+    doesn't resolve is not checked, so the type-table check reports the unknown name, and
+    neither is a read after a check `impossible_checks` reports, which no value reaches.
     """
-    parts = ref.split(".")
-    narrowed_errors: list[str | None] = []
-    for base, type_name in checks:
-        base_parts = base.split(".")
-        if len(base_parts) >= len(parts) or parts[: len(base_parts)] != base_parts:
-            continue
-        try:
-            typ = resolve_isinstance_type(type_name, registry)
-        except TypeCheckError:
-            # The type-table pass reports the unknown name; an error here would fail the
-            # build first and hide it behind a hint to add the check the author wrote.
-            return None
-        base_contract = project_output_contract(contract, base_parts)
-        narrowed = typ
-        if type(base_contract) is ValueContract:
-            if types_compatible(base_contract.type, typ):
-                continue
-            kept = isinstance_members(base_contract.type, typ)
-            if kept is not None:
-                narrowed = replace(
-                    restrict_union(base_contract.type, kept), nullable=typ.nullable
-                )
-        narrowed_errors.append(
-            output_contract_field_error(
-                ValueContract(narrowed), parts[len(base_parts) :], ref, isinstance_hint=True
-            )
-        )
-    if not narrowed_errors:
-        return output_contract_field_error(contract, parts, ref, isinstance_hint=True)
-    if None in narrowed_errors:
+    if unresolved_type(guard, registry):
+        # The type-table pass reports the unknown name; an error here would fail the build
+        # first and hide it behind a hint to add the check the author wrote.
         return None
-    return narrowed_errors[-1]
+    candidates = guarded_read_types(ref, guard, base_type_of, registry)
+    if candidates is None:
+        return None
+    if not candidates:
+        return output_contract_field_error(contract, ref.split("."), ref, isinstance_hint=True)
+    first: str | None = None
+    for candidate in candidates:
+        typ, fields, _ = candidate
+        error = output_contract_field_error(ValueContract(typ), fields, ref, isinstance_hint=True)
+        if error is None:
+            return None
+        if first is None:
+            first = narrowed_read_error(ref, candidate, error, registry)
+    return first

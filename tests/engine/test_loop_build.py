@@ -1265,6 +1265,9 @@ output: ${ask.output}
     [
         "until: isinstance(r, Done) and r.answer == 'ok'",
         "until: ${isinstance(r, Done) and r.answer == 'ok'}",
+        # `or` and `not` narrow too: each read runs only once the checks before it decide.
+        "until: n > 5 or isinstance(r, Done) and r.answer == 'ok'",
+        "until: not isinstance(r, More) and r.answer == 'ok'",
     ],
 )
 def test_predicate_member_field_read_guarded_by_isinstance_builds(pred):
@@ -1277,12 +1280,25 @@ def test_predicate_member_field_read_guarded_by_isinstance_builds(pred):
 @pytest.mark.parametrize(
     "pred",
     [
-        "until: r.answer == 'ok'",
-        # Only a top-level `and` part guards: under `or` or `not` the check may not hold.
-        "until: n > 5 or isinstance(r, Done) and r.answer == 'ok'",
         "while: not (isinstance(r, Done) and r.answer == 'ok')",
+        "while: isinstance(r, More) or r.answer != 'ok'",
+    ],
+)
+def test_predicate_while_read_guarded_through_or_and_not_builds(pred):
+    flow = load_flow(_swap(UNION_STATE, "PRED", pred))
+    result = run_flow(flow, {})
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"n": 3, "r": {"answer": "ok"}}
+
+
+@pytest.mark.parametrize(
+    "pred",
+    [
+        "until: r.answer == 'ok'",
         # The check must come before the read.
         "until: r.answer == 'ok' and isinstance(r, Done)",
+        # `n > 5` may be what made the `and` false, so `r` may still be either member.
+        "until: not (n > 5 and isinstance(r, More)) and r.answer == 'ok'",
     ],
 )
 def test_predicate_unguarded_member_field_read_is_rejected(pred):
@@ -1294,10 +1310,36 @@ def test_predicate_unguarded_member_field_read_is_rejected(pred):
     assert "case" not in message
 
 
-def test_predicate_read_of_a_field_the_checked_member_lacks_is_rejected():
-    pred = "until: isinstance(r, More) and r.answer == 'ok'"
-    with pytest.raises(LoadError, match="reads unknown field 'answer' on record"):
+@pytest.mark.parametrize(
+    "pred",
+    [
+        "until: isinstance(r, More) and r.answer == 'ok'",
+        "until: isinstance(r, Done) or r.answer == 'ok'",
+    ],
+)
+def test_predicate_read_of_a_field_the_checked_member_lacks_is_rejected(pred):
+    with pytest.raises(LoadError) as e:
         load_flow(_swap(UNION_STATE, "PRED", pred))
+    assert (
+        "reference ${r.answer} reads field 'answer', which More doesn't have; r is More here, "
+        "by the checks before this read"
+    ) in str(e.value)
+
+
+def test_predicate_read_after_a_check_the_type_always_decides_is_checked_unnarrowed():
+    with pytest.raises(LoadError, match="reads unknown field 'nosuch' on record"):
+        load_flow(_swap(UNION_STATE, "PRED", "until: isinstance(r, Step) or r.nosuch == 'x'"))
+    load_flow(_swap(UNION_STATE, "PRED", "until: isinstance(r, Step) or n > 2"))
+
+
+def test_predicate_check_that_can_never_be_true_is_rejected():
+    pred = "until: isinstance(r, Done) and isinstance(r, More)"
+    with pytest.raises(LoadError) as e:
+        load_flow(_swap(UNION_STATE, "PRED", pred))
+    assert (
+        "loop node 'ask': `until:` `isinstance(r, More)` can never be true here: r is Done, "
+        "by the checks before it"
+    ) in str(e.value)
 
 
 def test_predicate_tagged_member_field_error_points_at_isinstance():
@@ -1321,12 +1363,57 @@ def test_predicate_tagged_member_field_error_points_at_isinstance():
     assert run_flow(flow, {}).output == {"n": 3, "r": {"kind": "done", "answer": "ok"}}
 
 
+TAGGED_STATE = (
+    _swap(
+        UNION_STATE,
+        "  Done: {answer: str}\n  More: {hint: str}\n",
+        "  Done: {kind: 'Literal(done)', answer: str}\n"
+        "  More: {kind: 'Literal(more)', hint: str}\n",
+    )
+    .replace('{"hint":"start"}', '{"kind":"more","hint":"start"}')
+    .replace('{"answer": "ok"}', '{"kind": "done", "answer": "ok"}')
+    .replace('{"hint": "again"}', '{"kind": "more", "hint": "again"}')
+)
+
+
+@pytest.mark.parametrize(
+    "pred",
+    [
+        "until: r.kind == 'done' and r.answer == 'ok'",
+        "while: r.kind != 'done' or r.answer != 'ok'",
+    ],
+)
+def test_predicate_tag_comparison_narrows_a_read(pred):
+    flow = load_flow(_swap(TAGGED_STATE, "PRED", pred))
+    result = run_flow(flow, {})
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"n": 3, "r": {"kind": "done", "answer": "ok"}}
+
+
+def test_predicate_tag_comparison_with_a_value_that_is_no_tag_is_rejected():
+    with pytest.raises(LoadError) as e:
+        load_flow(_swap(TAGGED_STATE, "PRED", "until: r.kind == 'dnoe'"))
+    assert (
+        "loop node 'ask': `until:` `r.kind == \"dnoe\"` compares r.kind with 'dnoe', which is "
+        "not one of its tags (done, more); did you mean 'done'?"
+    ) in str(e.value)
+
+
 def test_predicate_isinstance_check_on_an_object_field_checks_reads_on_the_type():
     src = _swap(UNION_STATE, 'r: !Step {"hint":"start"}', 'r: !object {"hint":"start"}').replace(
         "          r: Step\n", "          r: object\n"
     )
-    with pytest.raises(LoadError, match="reads unknown field 'answr' on record"):
-        load_flow(src.replace("PRED", "until: isinstance(r, Done) and r.answr == 'ok'"))
+    message = (
+        "reference ${r.answr} reads field 'answr', which Done doesn't have; r is Done here, "
+        "by the checks before this read; did you mean 'answer'?"
+    )
+    for pred in (
+        "until: isinstance(r, Done) and r.answr == 'ok'",
+        "until: not isinstance(r, Done) or r.answr == 'x'",
+    ):
+        with pytest.raises(LoadError) as e:
+            load_flow(src.replace("PRED", pred))
+        assert message in str(e.value)
     flow = load_flow(src.replace("PRED", "until: isinstance(r, Done) and r.answer == 'ok'"))
     assert run_flow(flow, {}).output == {"n": 3, "r": {"answer": "ok"}}
 

@@ -117,14 +117,14 @@ load, run, and resume with stack to spare:
   each typedef's levels, the length of a chain of typedefs naming each other, and a
   type with its typedef names expanded.
 - `YIAN_MAX_AGENT_OUTPUT_NESTING` can only be lowered (maximum 16). Building a model's
-  structured reply schema takes about 28 frames per level for the costliest shape, an
-  `Optional(Union(...))` field at each level. With 300 frames to spare under 50 nested
-  calls, that shape runs 23 levels deep on Python 3.12 through every structured-output
-  path, and 18 on 3.10 through the prompted path. The maximum is the smallest passing
-  depth minus 2, a margin for the 3.10 provider-client paths that couldn't be measured
-  offline. Under the deepest accepted load (50 imports whose last file calls a 50-level
-  chain), an AGENT at 16 levels builds its schema well above the load's peak. Python
-  3.11, now the oldest supported, has not been measured; 16 is kept.
+  structured reply schema is recursive. The costliest shape is an `Optional(Union(...))`
+  field at each level, about 28 frames per level on Python 3.12 and more on 3.11. With
+  300 frames below Python's default recursion limit, under 50 nested calls, that shape
+  passes 18 levels on Python 3.11 and 23 on 3.12 through every structured-output path.
+  The maximum is the smallest passing depth minus 2, a margin for Python versions and
+  library releases that weren't measured. Under the deepest accepted load (50 `uses:`
+  imports whose last file calls a 50-level chain), an AGENT at 16 levels builds its
+  schema well above the load's peak.
 
 `YIAN_MAX_YAML_NODES` has no maximum, since counting a document's nodes takes no stack;
 raising it raises load time and run-log size in proportion.

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import copy
+import difflib
 from dataclasses import dataclass, field
 import os
 from pathlib import Path
@@ -54,6 +55,7 @@ from yian.compile.memory_layout import (
 )
 from yian.compile.model import CompiledFlow
 from yian.compile.validation import type_relation
+from yian.compose.helpers.tags import CLOSE_MATCH_CUTOFF
 from yian.compose.loader import ComposedFlow
 from yian.compose.nodes.resolver import child_signature
 from yian.defaults import check_recorded, current
@@ -401,7 +403,8 @@ def run_flow(
             method named by its `__name__`. Each tool name calls one tool: the same tool may sit in
             several groups, but two different tools may not share a name, and
             no group tool may be named `ask_user` or `load_skill`. Every static AGENT grant must name a tool or
-            group in this set; this is checked before the log is created.
+            group in this set, and every static TOOL node's `tool_id` must name a
+            tool in it; this is checked before the log is created.
             Granting skills also binds the built-in ``load_skill`` tool,
             which is not part of this mapping.
         skills (`Mapping[str, Skill] | None`, *optional*, defaults to `None`):
@@ -453,8 +456,9 @@ def run_flow(
             ``base_url``, a `BaseTool` in
             `tools` is named differently from its key, a group tool's name
             clashes or is reserved, an AGENT grants a tool or group not in the
-            run's tools, a TOOL node's inputs or `output:` do not match the
-            names and types its tool declares (an input the tool does not take,
+            run's tools, a TOOL node names a tool not in the run's tools, a
+            TOOL node's inputs or `output:` do not match the names and types
+            its tool declares (an input the tool does not take,
             a missing required input, or a type that can never fit), an
             AGENT grants skills while `skills` is `None` or lacks a listed
             skill, a node assertion, CASE `when`, or LOOP `while`/`until`
@@ -774,7 +778,8 @@ def resume_flow(
             worker count violates its contract, a group tool's name clashes or
             is reserved, an unfinished run's AGENT grants a tool or group
             not in `tools` or grants skills while `skills` is `None` or lacks
-            a listed skill, an unfinished run's TOOL node's inputs or
+            a listed skill, an unfinished run's TOOL node names a tool not in
+            `tools`, an unfinished run's TOOL node's inputs or
             `output:` do not match the names and types its tool declares, or
             an unfinished run's node assertion, CASE `when`, or LOOP
             `while`/`until` set in Python is not a valid boolean expression, or
@@ -927,11 +932,24 @@ def _resume_flow_controlled(
 
 
 def _check_tool_grants(flow: CompiledFlow, tools: ToolSet) -> None:
-    """Prove every static AGENT grant names a tool or tool group this run supplies.
+    """Prove every static AGENT grant and TOOL `tool_id` names a tool this run supplies.
 
-    Runs before any record is written and covers every static node, including
-    nodes that may never run, so an unresolvable grant raises `ValueError` from
-    `run_flow` or `resume_flow` instead of failing its node when the node starts.
+    An AGENT grant may name a tool group; a TOOL node must name one tool. Runs
+    before any record is written and covers every static node, including nodes
+    that may never run, so an unresolvable id raises `ValueError` from `run_flow`
+    or `resume_flow` instead of failing its node when the node starts.
+
+    Args:
+        flow (`CompiledFlow`):
+            The flow whose static nodes are checked.
+        tools (`ToolSet`):
+            The run's tools.
+
+    Raises:
+        `ValueError`:
+            An AGENT grants a tool or group this run lacks, or `ask_user` with no
+            handler; or a TOOL node names a tool this run lacks, a tool group, or
+            `ask_user` with no handler.
     """
     for node_id, node in _static_nodes(flow):
         for tool_id in tools.expand(list(node.granted_tools())):
@@ -946,6 +964,26 @@ def _check_tool_grants(flow: CompiledFlow, tools: ToolSet) -> None:
                         f"{list(tools.groups)}"
                     )
                 raise ValueError(f"AGENT node {node_id!r} grants {reason}") from None
+        call = node.host_tool_call()
+        if call is None:
+            continue
+        try:
+            tools.resolve([call.tool_id])
+        except ValueError as exc:
+            if call.tool_id == "ask_user" or call.tool_id in tools.groups:
+                reason = f"{call.tool_id!r}: {exc}"
+            else:
+                known = tools.tool_ids
+                reason = (
+                    f"tool {call.tool_id!r}, which isn't in this run's tools; "
+                    f"known tools: {list(known)}"
+                )
+                close = difflib.get_close_matches(
+                    call.tool_id, known, n=1, cutoff=CLOSE_MATCH_CUTOFF
+                )
+                if close:
+                    reason += f"; did you mean {close[0]!r}?"
+            raise ValueError(f"TOOL node {node_id!r} names {reason}") from None
 
 
 def _check_conditions(flow: CompiledFlow) -> None:
@@ -1016,8 +1054,7 @@ def _check_tool_types(flow: CompiledFlow, tools: ToolSet) -> None:
     """Prove every static TOOL node's inputs and output agree with its tool's types.
 
     Runs before any record is written and covers every static node, including
-    nodes that may never run. A node whose tool this run cannot resolve is
-    skipped; it fails when it runs.
+    nodes that may never run.
 
     Args:
         flow (`CompiledFlow`):
@@ -1035,10 +1072,7 @@ def _check_tool_types(flow: CompiledFlow, tools: ToolSet) -> None:
         call = node.host_tool_call()
         if call is None:
             continue
-        try:
-            tool = tools.resolve([call.tool_id])[0]
-        except ValueError:
-            continue
+        tool = tools.resolve([call.tool_id])[0]
         declared = tool_types(tool)
         if declared.inputs is not None:
             _check_tool_inputs(node_id, call, declared.inputs, declared.required)

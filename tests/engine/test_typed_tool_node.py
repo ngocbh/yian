@@ -14,7 +14,7 @@ from typing_extensions import TypedDict
 from yian.compose import load_flow
 from yian.nodes.base import _HostStop
 from yian.run import resume_flow, run_flow
-from yian.tools import TOOL_REGISTRY, ToolSet
+from yian.tools import TOOL_REGISTRY, ToolSet, register_tool
 from yian.tools.types import tool_types
 
 
@@ -410,14 +410,178 @@ def test_tool_nodes_that_may_never_run_are_checked(tmp_path: Path, source: str, 
     assert not path.exists()
 
 
-def test_an_unknown_tool_id_still_fails_the_node():
-    flow = load_flow(_one_tool_flow("      qty: 5"))
+def _misspelled(source: str) -> str:
+    """Return `source` with its TOOL node naming `place_ordr`.
 
-    result = run_flow(flow, {}, tools={"other": place_order})
+    It also renames the `qtty` input to `qty`, so each case has only one fault: the
+    unknown tool id.
+    """
+    return source.replace("tool_id: place_order", "tool_id: place_ordr").replace("qtty", "qty")
 
-    assert result.status == "failed"
-    assert result.failure.node_id == "place"
-    assert "unknown tool id" in result.failure.message
+
+_INLINE_CALL_FLOW = """
+id: inline_call
+name: inline_call
+nodes:
+  wrap:
+    kind: call
+    input:
+      n: 5
+    nodes:
+      place:
+        kind: tool
+        tool_id: place_order
+        input:
+          qty: ${input.n}
+          sym: X
+        output: str
+    output: ${place.output}
+output: ${wrap.output}
+"""
+
+_INLINE_LOOP_FLOW = """
+id: inline_loop
+name: inline_loop
+nodes:
+  again:
+    kind: loop
+    input:
+      count: 0
+      last: ""
+    while: count < 1
+    max: 3
+    nodes:
+      place:
+        kind: tool
+        tool_id: place_order
+        input:
+          qty: ${input.count}
+          sym: X
+        output: str
+    output:
+      count: ${input.count + 1}
+      last: ${place.output}
+output: ${again.output}
+"""
+
+_MISSPELLED = (
+    "names tool 'place_ordr', which isn't in this run's tools; known tools: ['place_order']; "
+    "did you mean 'place_order'?"
+)
+
+
+@pytest.mark.parametrize(
+    ("source", "node_path", "inputs"),
+    [
+        (_one_tool_flow("      qty: 5\n      sym: X"), "place", {}),
+        (_UNREACHED_BRANCH_FLOW, "place", {}),
+        (_DEFS_CHILD_FLOW, "a/place", {}),
+        (
+            _MAP_BODY_FLOW.replace("[1, 2]", "[]").replace("x: ${item}", "x: !int ${item}"),
+            "each/place",
+            {},
+        ),
+        (_LOOP_BODY_FLOW, "again/place", {}),
+        (_INLINE_CALL_FLOW, "wrap/place", {}),
+        (_INLINE_LOOP_FLOW, "again/place", {}),
+        (_ONE_NODE_FLOW, "count", {"qty": 5}),
+    ],
+    ids=[
+        "root", "unreached-branch", "defs-child", "empty-map-body", "loop-body",
+        "inline-call-body", "inline-loop-body", "compact-flow",
+    ],
+)
+def test_an_unknown_tool_id_fails_at_run_start(
+    tmp_path: Path, source: str, node_path: str, inputs: dict
+):
+    path = tmp_path / "run.jsonl"
+    flow = load_flow(_misspelled(source))
+
+    with pytest.raises(ValueError, match=re.escape(f"TOOL node {node_path!r} {_MISSPELLED}")):
+        run_flow(flow, inputs, log=path, tools={"place_order": place_order})
+    assert not path.exists()
+    assert _calls == []
+
+
+def test_an_unknown_tool_id_with_no_close_match_has_no_hint(tmp_path: Path):
+    path = tmp_path / "run.jsonl"
+    flow = load_flow(_one_tool_flow("      qty: 5\n      sym: X").replace("place_order", "zzz"))
+
+    with pytest.raises(ValueError, match=re.escape(
+        "TOOL node 'place' names tool 'zzz', which isn't in this run's tools; "
+        "known tools: ['place_order']"
+    ) + "$"):
+        run_flow(flow, {}, log=path, tools={"place_order": place_order})
+    assert not path.exists()
+
+
+def test_a_tool_node_naming_a_group_fails_at_run_start(tmp_path: Path):
+    path = tmp_path / "run.jsonl"
+    source = _one_tool_flow("      qty: 5\n      sym: X")
+    grouped = {"box": [place_order]}
+
+    with pytest.raises(ValueError, match=re.escape(
+        "TOOL node 'place' names 'box': 'box' is a tool group, not a tool"
+    )):
+        run_flow(load_flow(source.replace("place_order", "box")), {}, log=path, tools=grouped)
+    assert not path.exists()
+
+    result = run_flow(load_flow(source), {}, tools=grouped)
+    assert result.status == "succeeded", result.failure
+    assert result.output == "5 X"
+
+
+def test_a_tool_node_naming_ask_user_without_a_handler_fails_at_run_start(tmp_path: Path):
+    path = tmp_path / "run.jsonl"
+
+    with pytest.raises(ValueError, match=re.escape(
+        "TOOL node 'ask' names 'ask_user': no ask_user handler for this run"
+    )):
+        run_flow(load_flow(_ASK_FLOW), {}, log=path, tools={})
+    assert not path.exists()
+
+
+def test_without_a_tools_mapping_the_registry_is_checked(tmp_path: Path):
+    path = tmp_path / "run.jsonl"
+
+    @register_tool("typed_tool_registry_probe")
+    def probe(qty: int, sym: str) -> str:
+        """Return the order text."""
+        return f"{qty} {sym}"
+
+    source = _one_tool_flow("      qty: 5\n      sym: X")
+    with pytest.raises(ValueError) as caught:
+        run_flow(load_flow(source.replace("place_order", "zz_unregistered_probe")), {}, log=path)
+    message = str(caught.value)
+    assert message.startswith(
+        "TOOL node 'place' names tool 'zz_unregistered_probe', which isn't in this run's tools; "
+        "known tools:"
+    )
+    assert "'typed_tool_registry_probe'" in message
+    assert not path.exists()
+
+    result = run_flow(load_flow(source.replace("place_order", "typed_tool_registry_probe")), {})
+    assert result.status == "succeeded", result.failure
+    assert result.output == "5 X"
+
+
+def test_resume_rejects_an_unknown_tool_id_before_appending(tmp_path: Path):
+    path = tmp_path / "run.jsonl"
+    flow = load_flow(_INT_FLOW)
+
+    def interrupt(qty):
+        raise _HostStop()
+
+    with pytest.raises(_HostStop):
+        run_flow(flow, {}, log=path, tools={"place_order": interrupt})
+    before = path.read_bytes()
+
+    with pytest.raises(ValueError, match=re.escape(
+        "TOOL node 'place' names tool 'place_order', which isn't in this run's tools; "
+        "known tools: []"
+    ) + "$"):
+        resume_flow(flow, log=path, tools={})
+    assert path.read_bytes() == before
 
 
 def place_int(qty: int) -> str:

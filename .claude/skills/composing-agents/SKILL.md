@@ -803,7 +803,8 @@ name (or a group tool's name is a top-level key), or a group has a tool named
 `ask_user` or `load_skill`; the handler stays the top-level `ask_user` entry. `yian run`
 fills no groups, so such flows need a Python host. Pass groups again to `resume_flow`;
 restarted nodes use the contents passed there.
-Note `tool` uses `tool_id:` + `input:`, with an optional `output:`. ML inference
+Note `tool` uses `tool_id:` + `input:`, with an optional `output:`. A `tool_id:` the
+run's tools lack fails at run start, even on a node that may never run. ML inference
 goes through a host tool (`kind: tool`); `kind: model` was removed.
 
 ### `case` — branching (no `input:`)

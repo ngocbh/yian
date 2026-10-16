@@ -2051,14 +2051,16 @@ contents and restarted nodes use them.
 The same walk then reads the kind-blind `Node.host_tool_call()` hook. TOOL returns a
 `HostToolCall`: its `tool_id`, input names, proven input types, and declared output
 type. The compose pass stamps `ToolNode.input_types` at load from the bindings' proven
-types; they are derived from wiring, so they stay out of the fingerprint. For each
-call whose tool resolves, `tools.types.tool_types` reads the tool's declared argument
-and return types, and the boundary compares them with `type_relation`. An unknown
-input, a missing required input, or a disjoint input or output type raises
-`ValueError` before any log work; an unresolved `tool_id` is left to the node. The
-`output:` gate is the ordinary success path: the engine validates each returned value
-against the node's output contract, so a host reports an expected outcome such as an
-interrupt by returning a variant of that type. An exception still fails the node.
+types; they are derived from wiring, so they stay out of the fingerprint. The walk
+first resolves each call's `tool_id` in the run's `ToolSet` and raises `ValueError`
+when it does not resolve, listing `ToolSet.tool_ids` and a close match. Then
+`tools.types.tool_types` reads each tool's declared argument and return types, and
+the boundary compares them with `type_relation`. An unknown input, a missing required
+input, or a disjoint input or output type raises `ValueError` before any log work.
+The `output:` gate is the ordinary success path: the engine validates each returned
+value against the node's output contract, so a host reports an expected outcome such
+as an interrupt by returning a variant of that type. An exception still fails the
+node.
 
 Pooled drives own their executors through a full join: an abnormal dispatch exit
 signals cooperative stop before joining, so the boundary never releases its run-log

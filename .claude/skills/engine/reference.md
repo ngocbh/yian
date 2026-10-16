@@ -221,9 +221,10 @@ releases the worker as a host stop). The TOOL node records its retried attempts 
 way, so `ToolContext.attempt` and its remaining retries survive resume and replay.
 The same walk reads `Node.host_tool_call()`: TOOL returns a `HostToolCall` (tool id,
 input names, proven input types, declared output type), and the boundary compares it
-with `tools.types.tool_types(tool)` through `type_relation`. Unknown or missing inputs
-and disjoint input or output types raise `ValueError`; an unresolved `tool_id` is left
-to the node. `ToolNode.input_types` is stamped by the compose pass at load; it is
+with `tools.types.tool_types(tool)` through `type_relation`. A `tool_id` the run's
+`ToolSet` can't resolve raises `ValueError` first (listing `ToolSet.tool_ids` and a
+close match); unknown or missing inputs and disjoint input or output types raise
+`ValueError` too. `ToolNode.input_types` is stamped by the compose pass at load; it is
 derived from wiring, so the manifest ignores it and it is not in the fingerprint.
 The AGENT node is the
 deliberate model-access exception: its loop in `nodes/agent/loop.py` imports

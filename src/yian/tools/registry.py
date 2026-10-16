@@ -701,6 +701,18 @@ class ToolSet:
         """The names of this run's tool groups, in mapping order."""
         return tuple(self._groups)
 
+    @property
+    def tool_ids(self) -> tuple[str, ...]:
+        """The sorted ids of the tools this run can resolve.
+
+        With a mapping, these are the mapping's tools and group members; with no
+        mapping, the global registry's tools.
+        """
+        if self._tools is not None:
+            return tuple(sorted(self._tools))
+        with _REGISTRY_LOCK:
+            return tuple(sorted(TOOL_REGISTRY))
+
     def expand(self, tool_ids: list[str]) -> list[str]:
         """Replace each group id with the names of the tools in that group.
 

@@ -305,9 +305,10 @@ run before appending any record.
   callables, so the run log does not record them. An AGENT that grants skills
   also gets the built-in `load_skill` tool, which is not part of this mapping.
   A list or tuple value is a tool group (see [Tool groups](#tool-groups)).
-  Every static AGENT grant must name a tool or group in this set; otherwise
-  `run_flow` raises `ValueError` before the log is created. Every static TOOL
-  node is also checked against its tool's argument and return types (see
+  Every static AGENT grant must name a tool or group in this set, and every
+  static TOOL node's `tool_id:` must name a tool in it; otherwise `run_flow`
+  raises `ValueError` before the log is created. Every static TOOL node is also
+  checked against its tool's argument and return types (see
   [Typed tools](#typed-tools)).
 - `skills` — the skills this run may use, keyed by name (see [Skills](#skills)).
   An AGENT's `skills:` grant selects from this mapping. A listed skill that is
@@ -581,6 +582,8 @@ their own names, never by the group name. A group is not a tool: a TOOL node's
 log is created, `run_flow` raises:
 
 - `ValueError` when an AGENT grants a group (or tool) the mapping lacks;
+- `ValueError` when a TOOL node's `tool_id:` names a group
+  (`TOOL node 'place' names 'toolbox': 'toolbox' is a tool group, not a tool; ...`);
 - `ValueError` when two different tools share a name, in one group or across
   groups, or when a group tool's name is also a top-level key, since tools are
   called by name;
@@ -593,11 +596,13 @@ Groups may overlap: the same tool object (or the same bound method) can sit in
 several groups, as when one permission set shares `web_search` with another. An
 AGENT granted overlapping groups, or the same group twice, binds each tool once.
 
-These checks cover the grants of every static AGENT node, including nodes that
-may never run: an unreached `case` branch, the body of a MAP over an empty list,
-or a LOOP body. Because the YAML does not mark which names are groups, every grant
-must resolve, not only group names: an unknown plain tool id, or `ask_user` granted
-with no handler, fails the same way. `run_flow` raises the `ValueError` before the log exists, and `resume_flow`
+These checks cover the grants of every static AGENT node and the `tool_id:` of
+every static TOOL node, including nodes that may never run: an unreached `case`
+branch, the body of a MAP over an empty list, or a LOOP body. Because the YAML does
+not mark which names are groups, every grant must resolve, not only group names: an
+unknown plain tool id, or `ask_user` granted with no handler, fails the same way. A
+TOOL node naming a tool the run lacks fails with
+`TOOL node 'place' names tool 'place_ordr', which isn't in this run's tools; known tools: ['place_order']; did you mean 'place_order'?`. `run_flow` raises the `ValueError` before the log exists, and `resume_flow`
 raises it for an unfinished run before appending any record; neither returns a
 failed `RunResult`. (Before tool groups, an unresolvable grant failed only when
 an AGENT that ran the tool loop started, as a recorded node failure.)
@@ -611,11 +616,14 @@ other's tools, and `resume_flow` uses the groups passed to it (see
 ### Typed tools
 
 A TOOL node calls one host tool directly. When a run starts, before any record is
-written, every static TOOL node is checked against the tool it names in this run's
-tools, including nodes that may never run. `run_flow`, and `resume_flow` for an
-unfinished run, raise `ValueError` naming the node and the tool when an input
-name, a missing input, or an input or output type can't match; the rules and
-messages are in [Typed TOOL nodes](syntax.md#typed-tool-nodes).
+written, every static TOOL node is checked against this run's tools, including
+nodes that may never run. `run_flow`, and `resume_flow` for an unfinished run,
+first raise `ValueError` when the node's `tool_id:` is not one of the run's tools
+(`TOOL node 'place' names tool 'place_ordr', which isn't in this run's tools; known tools: ['place_order']; did you mean 'place_order'?`).
+They then check the node against the tool it names, and raise `ValueError` naming
+the node and the tool when an input name, a missing input, or an input or output
+type can't match; the rules and messages are in
+[Typed TOOL nodes](syntax.md#typed-tool-nodes).
 
 Input types come from the tool's public argument schema. Each pydantic v2 field
 is translated through its JSON Schema, so a tool whose schema is JSON Schema

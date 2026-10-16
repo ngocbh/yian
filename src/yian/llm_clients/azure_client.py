@@ -375,7 +375,8 @@ class AzureOpenAIClient(BaseLLMClient):
     are not read.
 
     Reads from the environment:
-        AZURE_OPENAI_API_KEY: API key, unless the config passes ``api_key``
+        AZURE_OPENAI_AD_TOKEN, then AZURE_OPENAI_API_KEY: read by the SDK only when the
+            config passes no ``api_key``
         OPENAI_API_VERSION: API version (e.g. 2025-03-01-preview)
     """
 
@@ -396,6 +397,11 @@ class AzureOpenAIClient(BaseLLMClient):
             "model": self.model,
             "azure_deployment": self.model,
             "azure_endpoint": azure_resource_endpoint(self.base_url),
+            # langchain reads AZURE_OPENAI_AD_TOKEN into this field, and the SDK then sends the
+            # token instead of a passed key. With no key passed the SDK still picks the token or
+            # AZURE_OPENAI_API_KEY from the environment itself; yian never reads the key variable,
+            # since the mixin's `api_key` field shadows langchain's Azure default.
+            "azure_ad_token": None,
         }
 
         for key in _PASSTHROUGH_KWARGS:

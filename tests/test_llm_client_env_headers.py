@@ -189,3 +189,49 @@ def test_openai_default_clients_drop_env_headers(poisoned_env):
         # The SDK adds the key itself per request; any Authorization here is a custom one.
         assert "env-" not in str(headers.get("Authorization", ""))
     assert llm.openai_organization is None
+
+
+def _azure(**kwargs):
+    def build(client, async_client):
+        return create_llm_client(
+            "azure", "dep", base_url="https://res.openai.azure.com",
+            http_client=client, http_async_client=async_client, **kwargs,
+        ).get_llm()
+
+    return build
+
+
+def test_azure_sends_only_the_explicit_key(poisoned_env):
+    server = ChatServer()
+    invoke_both(_azure(api_key="az-explicit"), server)
+    assert len(server.requests) == 2
+    for request in server.requests:
+        assert request.headers["api-key"] == "az-explicit"
+        assert "authorization" not in request.headers
+        assert request.headers["user-agent"] == "langchain-partner-python-azure-openai"
+        assert_clean(request)
+
+
+def test_azure_user_agent_from_env_does_not_win(poisoned_env):
+    poisoned_env.setenv("OPENAI_CUSTOM_HEADERS", ENV["OPENAI_CUSTOM_HEADERS"] + "\nuser-agent: env-ua")
+    server = ChatServer()
+    invoke_both(_azure(api_key="az-explicit"), server)
+    assert len(server.requests) == 2
+    for request in server.requests:
+        assert request.headers.get_list("user-agent") == ["langchain-partner-python-azure-openai"]
+        assert_clean(request)
+
+
+def test_azure_without_a_key_keeps_the_sdk_order(poisoned_env):
+    # An environment connection: the SDK's own order sends AZURE_OPENAI_AD_TOKEN first.
+    poisoned_env.setenv("OPENAI_API_KEY", "sk-openai")
+    server = ChatServer()
+    invoke_both(_azure(), server)
+    assert len(server.requests) == 2
+    for request in server.requests:
+        assert request.headers["authorization"] == "Bearer env-ad-token"
+        assert "api-key" not in request.headers
+        for _, value in request.headers.multi_items():
+            assert "sk-openai" not in value
+        for name in ("openai-organization", "openai-project", "x-env-injected"):
+            assert name not in request.headers, name

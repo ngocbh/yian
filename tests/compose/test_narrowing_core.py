@@ -8,9 +8,9 @@ from yian.compile.model import Edge
 from yian.compose.helpers import narrowing_facts
 from yian.compose.helpers.condition_guards import (
     NOTHING,
+    Holds,
     IsinstanceCheck,
     TagCheck,
-    guarded_refs,
     proves,
 )
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
@@ -21,6 +21,7 @@ from yian.compose.helpers.narrowing_facts import (
     check_fact,
     guard_env,
     env_unsatisfiable,
+    checked_refs,
     guarded_read_types,
     impossible_check_message,
     impossible_checks,
@@ -469,27 +470,63 @@ def test_guarded_read_types_keeps_each_conjunct_s_candidate():
     ]
 
 
-def test_guarded_read_types_of_an_unreachable_read_is_none():
-    assert _reads("v.qty", "isinstance(v, Buy) and v.action == 'hold'", v=DECISION) is None
-    assert _reads("v.qty", "v.action == 'zzz'", v=DECISION) is None
-    assert _read_in("isinstance(v, Buy) and v.action == 'hold' and v.qty > 0", v=DECISION) is None
-    assert _read_in("v.action != 'biy' or v.qty > 0", v=DECISION) is None
+def _checked(condition: str, routing=None, **declared):
+    """The guard each read in `condition` is checked under, by reference path."""
+    tree = parse_condition(condition)
+    return checked_refs(tree, _types(**declared), _REGISTRY, routing=routing)
 
 
-def _read_in(condition: str, **declared):
-    """The candidate types of the last read in `condition`, under the guard it is read with."""
-    read, guard = guarded_refs(parse_condition(condition))[-1]
-    return guarded_read_types(read, guard, _types(**declared), _REGISTRY)
-
-
-def test_a_read_after_a_check_the_declared_type_decides_is_checked_unnarrowed():
-    assert _read_in("isinstance(v, Decision) or v.nosuch > 0", v=DECISION) == []
-    assert _read_in("isinstance(v, Buy) or v.qty > 0", v=BUY) == []
-    assert _read_in("isinstance(v, BuyOrSell) or v.qty > 0", v=BUY) == []
-    # The other checks before the read still narrow it.
-    assert _read_in("v.action == 'buy' or isinstance(v, Decision) or v.qty > 0", v=DECISION) == [
-        (_t("Union(Hold, Sell)"), ("qty",), "v")
+def test_checked_refs_keeps_a_guard_some_value_satisfies():
+    assert _checked("isinstance(v, Buy) and v.qty > 0", v=DECISION) == [
+        ("v", NOTHING),
+        ("v.qty", Holds(IsinstanceCheck("v", "Buy"), True)),
     ]
+
+
+def test_a_read_after_a_reported_check_is_not_checked():
+    assert _checked("isinstance(v, Buy) and v.action == 'hold' and v.qty > 0", v=DECISION)[
+        -1
+    ] == ("v.qty", None)
+    assert _checked("v.action != 'biy' or v.qty > 0", v=DECISION)[-1] == ("v.qty", None)
+    assert _checked("v.action == 'zzz' and v.qty > 0", v=DECISION)[-1] == ("v.qty", None)
+    # A negated check the declared type always passes is reported, so what follows is dead.
+    assert _checked("not isinstance(v, Decision) and v.qty > 0", v=DECISION)[-1] == (
+        "v.qty",
+        None,
+    )
+    routing = {"v": Members((BUY,))}
+    assert _checked("isinstance(v, Sell) and v.qty > 0", routing=routing, v=DECISION)[-1] == (
+        "v.qty",
+        None,
+    )
+
+
+def test_a_read_after_a_check_the_known_type_decides_is_checked_without_it():
+    assert _checked("isinstance(v, Decision) or v.nosuch > 0", v=DECISION)[-1] == (
+        "v.nosuch",
+        NOTHING,
+    )
+    # A false check on a non-union base proves nothing, so its guard is kept.
+    read, guard = _checked("isinstance(v, Buy) or v.qty > 0", v=BUY)[-1]
+    assert guarded_read_types(read, guard, _types(v=BUY), _REGISTRY) == []
+    # The other checks before the read still narrow it.
+    assert _checked("v.action == 'buy' or isinstance(v, Decision) or v.qty > 0", v=DECISION)[
+        -1
+    ] == ("v.qty", Holds(TagCheck("v", "action", "buy"), False))
+    routing = {"v": Members((BUY,))}
+    assert _checked("isinstance(v, Buy) or v.qty > 0", routing=routing, v=DECISION)[-1] == (
+        "v.qty",
+        NOTHING,
+    )
+    assert _checked("isinstance(v, Buy) or v.qty > 0", v=DECISION)[-1] == (
+        "v.qty",
+        Holds(IsinstanceCheck("v", "Buy"), False),
+    )
+    # The checks before it decide the second check, not the type: nothing is reported, so
+    # the read is checked unnarrowed.
+    assert _checked("isinstance(v, Buy) and (isinstance(v, Buy) or v.qty > 0)", v=DECISION)[
+        -1
+    ] == ("v.qty", NOTHING)
 
 
 # --------------------------------------------------------------------------- #

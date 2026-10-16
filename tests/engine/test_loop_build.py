@@ -1333,13 +1333,15 @@ def test_predicate_read_after_a_check_the_type_always_decides_is_checked_unnarro
 
 
 def test_predicate_check_that_can_never_be_true_is_rejected():
-    pred = "until: isinstance(r, Done) and isinstance(r, More)"
+    pred = "until: isinstance(r, Done) and isinstance(r, More) and r.nosuch == 'x'"
     with pytest.raises(LoadError) as e:
         load_flow(_swap(UNION_STATE, "PRED", pred))
     assert (
         "loop node 'ask': `until:` `isinstance(r, More)` can never be true here: r is Done, "
         "by the checks before it"
     ) in str(e.value)
+    # The read after it is reached by no value, so it is not checked as well.
+    assert "reads unknown field 'nosuch'" not in str(e.value)
 
 
 def test_predicate_tagged_member_field_error_points_at_isinstance():

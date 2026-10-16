@@ -5,8 +5,9 @@ union, or an `Exact` type it satisfies. Facts join by union (either holds) and m
 intersection (both hold); losing a fact is always sound. The facts a check proves come
 from `check_fact`: a true or false `isinstance`, or a true or false comparison of a union's
 tag field with a text. `guard_env` evaluates a guard from `condition_guards` into the facts
-that hold whenever it does, and `guarded_read_types` gives the types a field read under a
-guard is checked against. `impossible_checks` finds the checks in a condition that are wrong
+that hold whenever it does, `checked_refs` gives the guard each read in a condition is
+checked under, and `guarded_read_types` the types a field read under a guard is checked
+against. `impossible_checks` finds the checks in a condition that are wrong
 whatever the values, and the message helpers word those errors and a narrowed read's error.
 
 Knows about: `typesys` types and unions, `compile.validation`, `isinstance` type
@@ -38,8 +39,10 @@ from yian.compose.helpers.condition_guards import (
     check_text,
     conjuncts,
     guard_checks,
+    guarded_refs,
     literal_text,
     literals_in_context,
+    masked,
 )
 from yian.compose.helpers.isinstance_types import (
     isinstance_members,
@@ -69,6 +72,8 @@ __all__ = [
     "Members",
     "NotNarrowable",
     "check_fact",
+    "checked_refs",
+    "env_read_type",
     "env_unsatisfiable",
     "fact_type",
     "guard_env",
@@ -588,14 +593,20 @@ def _guard_envs(guard: Guard, base_type_of: BaseTypeOf, registry: TypeRegistry) 
     return envs
 
 
-def _decided_by_type(atom: Holds, base_type_of: BaseTypeOf, registry: TypeRegistry) -> bool:
-    """Whether the base's declared type alone makes `atom` false, other than a non-tag text.
+def _decided_by_type(
+    atom: Holds,
+    base_type_of: BaseTypeOf,
+    registry: TypeRegistry,
+    routing: Env,
+) -> bool:
+    """Whether the base's known type alone makes `atom` false, other than a non-tag text.
 
-    Such an atom comes from a check the declared type always decides, which is no error
-    by itself. A tag comparison with a text that is not a tag is always reported, so its
-    atom is not counted here.
+    The known type is the declared type met with `routing`. Such an atom comes from a
+    check that type always decides, which is no error by itself. A tag comparison with a
+    text that is not a tag is always reported, so its atom is not counted here.
     """
-    base_type = base_type_of(atom.check.base)
+    base = atom.check.base
+    base_type = base_type_of(base)
     if not isinstance(base_type, Type):
         return False
     check = atom.check
@@ -609,15 +620,126 @@ def _decided_by_type(atom: Holds, base_type_of: BaseTypeOf, registry: TypeRegist
         fact = check_fact(check, base_type, atom.value, registry)
     except TypeCheckError:
         return False
-    return fact == Members(())
+    return intersect_facts(routing.get(base), fact) == Members(())
 
 
-def _without_decided(guard: Guard, base_type_of: BaseTypeOf, registry: TypeRegistry) -> Guard:
-    """`guard` with each atom the declared type alone makes false proving nothing instead."""
+def _without_decided(
+    guard: Guard,
+    base_type_of: BaseTypeOf,
+    registry: TypeRegistry,
+    routing: Env,
+) -> Guard:
+    """`guard` with each atom the known type alone makes false proving nothing instead."""
     if isinstance(guard, Holds):
-        return NOTHING if _decided_by_type(guard, base_type_of, registry) else guard
-    parts = [_without_decided(part, base_type_of, registry) for part in guard.parts]
+        decided = _decided_by_type(guard, base_type_of, registry, routing)
+        return NOTHING if decided else guard
+    parts = [_without_decided(part, base_type_of, registry, routing) for part in guard.parts]
     return all_of(*parts) if isinstance(guard, AllOf) else any_of(*parts)
+
+
+def _satisfiable(
+    guard: Guard,
+    base_type_of: BaseTypeOf,
+    registry: TypeRegistry,
+    routing: Env,
+) -> bool:
+    """Whether some value satisfies `guard`'s facts and each top-level conjunct's, with `routing`."""
+    envs = _guard_envs(guard, base_type_of, registry)
+    return not any(env_unsatisfiable(intersect_envs([routing, env])) for env in envs)
+
+
+def checked_refs(
+    tree: Tree | Token,
+    base_type_of: BaseTypeOf,
+    registry: TypeRegistry,
+    *,
+    routing: Optional[Env] = None,
+) -> list[tuple[str, Optional[Guard]]]:
+    """Return each reference occurrence in a condition with the guard its field read is checked under.
+
+    A guard some value satisfies is kept. A read no value reaches because of a check
+    `impossible_checks` reports is not checked (`None`): the report explains it, and errors
+    on the code it makes dead would only repeat it. A read no value reaches only because a
+    check the known type always decides went the other way (`isinstance(v, Decision) or
+    v.nosuch > 0` with `v` declared `Decision`) is no error by itself: such checks prove
+    nothing here, so the read is checked as without them (with `NOTHING` when the guard
+    still can't hold).
+
+    Args:
+        tree (`Tree | Token`):
+            A condition parsed with `parse_condition`, in any spelling.
+        base_type_of (`BaseTypeOf`):
+            The site's declared type of a base path, as for `guard_env`.
+        registry (`TypeRegistry`):
+            The flow's typedefs.
+        routing (`Env | None`, *optional*, defaults to `None`):
+            The facts that hold wherever the condition is evaluated, such as a CASE
+            node's routing facts; with the declared type they make the known type. `None`,
+            or facts no value satisfies, is none.
+
+    Returns:
+        `list[tuple[str, Guard | None]]`:
+            One `(reference path, guard or None)` pair per occurrence, in `guarded_refs`
+            order.
+
+    Example:
+        With `v` a `Union[Buy, Hold, Sell]`, the `v.qty` read in
+        `isinstance(v, Decision) or v.qty > 0` gets `NOTHING`, and in
+        `isinstance(v, Buy) and v.action == 'hold' and v.qty > 0` gets `None`.
+    """
+    known = routing if routing and not env_unsatisfiable(routing) else {}
+    refs = guarded_refs(tree)
+    reported = [literal.node for literal, _ in _reported_literals(tree, base_type_of, registry, known)]
+    unreported = guarded_refs(masked(tree, reported)) if reported else refs
+    checked: list[tuple[str, Optional[Guard]]] = []
+    for (ref, guard), (_, without_reported) in zip(refs, unreported, strict=True):
+        if _satisfiable(guard, base_type_of, registry, known):
+            checked.append((ref, guard))
+        elif _satisfiable(without_reported, base_type_of, registry, known):
+            checked.append((ref, None))
+        else:
+            trimmed = _without_decided(without_reported, base_type_of, registry, known)
+            satisfiable = _satisfiable(trimmed, base_type_of, registry, known)
+            checked.append((ref, trimmed if satisfiable else NOTHING))
+    return checked
+
+
+def env_read_type(read: str, env: Env) -> Optional[tuple[Type, tuple[str, ...], str]]:
+    """Return the narrowed type a field read sees under `env`, or `None` when none applies.
+
+    Args:
+        read (`str`):
+            The dotted reference path read, such as `"v.qty"`.
+        env (`Env`):
+            Facts by base path.
+
+    Returns:
+        `tuple[Type, tuple[str, ...], str] | None`:
+            `(narrowed type, field names below it, narrowed base path)` for the longest
+            base that is a strict prefix of `read`; `None` when there is no such base or
+            no value can have its fact.
+
+    Example:
+        `env_read_type("v.leg.price", {"v": Members((Buy,))})` is
+        `(Buy, ("leg", "price"), "v")`.
+    """
+    parts = read.split(".")
+    longest: Optional[list[str]] = None
+    for base in env:
+        base_parts = base.split(".")
+        if (
+            len(base_parts) < len(parts)
+            and parts[: len(base_parts)] == base_parts
+            and (longest is None or len(base_parts) > len(longest))
+        ):
+            longest = base_parts
+    if longest is None:
+        return None
+    base = ".".join(longest)
+    typ = fact_type(env[base])
+    if typ is None:
+        return None
+    return typ, tuple(parts[len(longest) :]), base
 
 
 def guarded_read_types(
@@ -625,68 +747,39 @@ def guarded_read_types(
     guard: Guard,
     base_type_of: BaseTypeOf,
     registry: TypeRegistry,
-) -> Optional[list[tuple[Type, tuple[str, ...], str]]]:
+) -> list[tuple[Type, tuple[str, ...], str]]:
     """Return the narrowed types a field read under `guard` is checked against.
 
     Each of the guard's own facts and the facts of each of its top-level conjuncts gives
-    a candidate: the fact type of the longest base that is a strict prefix of `read`,
-    with the field names below it. A conjunct's candidate keeps what the whole guard's
+    a candidate (`env_read_type`). A conjunct's candidate keeps what the whole guard's
     meet can lose (two unrelated exact types). The read is fine when any candidate
-    accepts it.
-
-    A guard no value satisfies only because a check the declared type always decides
-    went the other way (`isinstance(v, Decision) or v.nosuch > 0` with `v` declared
-    `Decision`) is no error by itself: such checks prove nothing here, so the read is
-    checked as without them. A guard no value satisfies otherwise comes after a check
-    `impossible_checks` reports, so the read is left alone.
+    accepts it. Take the guard from `checked_refs`, which also says which reads are not
+    checked at all.
 
     Args:
         read (`str`):
             The dotted reference path read, such as `"v.qty"`.
         guard (`Guard`):
-            The guard that holds whenever the read is evaluated.
+            The guard the read is checked under.
         base_type_of (`BaseTypeOf`):
             The site's declared type of a base path, as for `guard_env`.
         registry (`TypeRegistry`):
             The flow's typedefs.
 
     Returns:
-        `list[tuple[Type, tuple[str, ...], str]] | None`:
+        `list[tuple[Type, tuple[str, ...], str]]`:
             `(narrowed type, field names below it, narrowed base path)` per distinct
             candidate, in order; `[]` when no fact applies to the read, so it is checked
-            unnarrowed; `None` when the guard can never hold because of a check
-            `impossible_checks` reports, so the read is not checked.
+            unnarrowed.
 
     Example:
         With `v` a `Union[Buy, Hold, Sell]`, the read `v.qty` under the guard of
-        `isinstance(v, Buy)` gives `[(Buy, ("qty",), "v")]`; under the guard of
-        `isinstance(v, Decision) or v.qty > 0` it gives `[]`.
+        `isinstance(v, Buy)` gives `[(Buy, ("qty",), "v")]`.
     """
-    envs = _guard_envs(guard, base_type_of, registry)
-    if any(env_unsatisfiable(env) for env in envs):
-        envs = _guard_envs(_without_decided(guard, base_type_of, registry), base_type_of, registry)
-        if any(env_unsatisfiable(env) for env in envs):
-            return None
-    parts = read.split(".")
     candidates: list[tuple[Type, tuple[str, ...], str]] = []
-    for env in envs:
-        longest: Optional[list[str]] = None
-        for base in env:
-            base_parts = base.split(".")
-            if (
-                len(base_parts) < len(parts)
-                and parts[: len(base_parts)] == base_parts
-                and (longest is None or len(base_parts) > len(longest))
-            ):
-                longest = base_parts
-        if longest is None:
-            continue
-        base = ".".join(longest)
-        typ = fact_type(env[base])
-        if typ is None:
-            continue
-        candidate = (typ, tuple(parts[len(longest) :]), base)
-        if candidate not in candidates:
+    for env in _guard_envs(guard, base_type_of, registry):
+        candidate = env_read_type(read, env)
+        if candidate is not None and candidate not in candidates:
             candidates.append(candidate)
     return candidates
 
@@ -878,8 +971,8 @@ def impossible_checks(
 
     A check the types always decide (always true in an `or`, always false in an `and`) is
     no error by itself, and neither is the code after it that no value reaches: sites check
-    such a read as without that check (`guarded_read_types`). A read after a reported check
-    is not checked, so the report does not cascade into errors on the code it makes dead.
+    such a read as without that check, and do not check a read after a reported check
+    (`checked_refs`), so the report does not cascade into errors on the code it makes dead.
     Unproven, `object` and `Any` bases, unknown type names, bases `base_type_of` refuses,
     and facts lost to an intersection prove nothing. Each literal text is reported once.
 
@@ -904,10 +997,23 @@ def impossible_checks(
         `isinstance(v, Buy) and v.action == 'hold'` gives one `CONTEXT` check on
         `v.action == "hold"`, whose base is narrowed to `Buy`.
     """
-    routing = routing or {}
+    found: list[ImpossibleCheck] = []
+    for _, impossible in _reported_literals(tree, base_type_of, registry, routing or {}):
+        if all(impossible.text != seen.text for seen in found):
+            found.append(impossible)
+    return found
+
+
+def _reported_literals(
+    tree: Tree | Token,
+    base_type_of: BaseTypeOf,
+    registry: TypeRegistry,
+    routing: Env,
+) -> list[tuple[CheckLiteral, ImpossibleCheck]]:
+    """Each literal `impossible_checks` reports, with its report, before deduplication."""
     if env_unsatisfiable(routing):
         return []
-    found: list[ImpossibleCheck] = []
+    found: list[tuple[CheckLiteral, ImpossibleCheck]] = []
     for literal in literals_in_context(tree):
         context_env = guard_env(literal.context, base_type_of, registry)
         routed_env = intersect_envs([routing, context_env])
@@ -925,8 +1031,8 @@ def impossible_checks(
             impossible = _context_impossible(
                 literal, base_type, context_env, routed_env, base_type_of, registry, routing
             )
-        if impossible is not None and all(impossible.text != seen.text for seen in found):
-            found.append(impossible)
+        if impossible is not None:
+            found.append((literal, impossible))
     return found
 
 

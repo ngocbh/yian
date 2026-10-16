@@ -28,9 +28,10 @@ from yian.nodes.contracts import (
 from yian.nodes.loop import LoopNode
 from yian.typesys.types import TypeRegistry
 from yian.typesys.values import Type
-from yian.compose.helpers.condition_guards import Guard, guarded_refs
+from yian.compose.helpers.condition_guards import Guard
 from yian.compose.helpers.narrowing_facts import (
     BaseTypeOf,
+    checked_refs,
     guarded_read_types,
     impossible_check_message,
     impossible_checks,
@@ -440,7 +441,10 @@ def _predicate_errors(
         impossible_check_message(check)
         for check in impossible_checks(tree, base_type_of, registry)
     ]
-    for ref, guard in dict.fromkeys(guarded_refs(tree)):
+    for ref, guard in dict.fromkeys(checked_refs(tree, base_type_of, registry)):
+        if guard is None:
+            # A read after a reported check is reached by no value.
+            continue
         message = _predicate_field_error(contract, ref, guard, base_type_of, registry)
         if message is not None:
             messages.append(message)
@@ -461,16 +465,14 @@ def _predicate_field_error(
     is fine when any narrowed type allows it, and otherwise the first one's error is
     reported, naming the narrowed type when it lacks the field. With nothing narrowed the
     read is walked on the carried record. A read guarded by a check whose type name
-    doesn't resolve is not checked, so the type-table check reports the unknown name, and
-    neither is a read after a check `impossible_checks` reports, which no value reaches.
+    doesn't resolve is not checked, so the type-table check reports the unknown name.
+    `guard` comes from `checked_refs`.
     """
     if unresolved_type(guard, registry):
         # The type-table pass reports the unknown name; an error here would fail the build
         # first and hide it behind a hint to add the check the author wrote.
         return None
     candidates = guarded_read_types(ref, guard, base_type_of, registry)
-    if candidates is None:
-        return None
     if not candidates:
         return output_contract_field_error(contract, ref.split("."), ref, isinstance_hint=True)
     first: str | None = None

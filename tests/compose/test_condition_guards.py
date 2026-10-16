@@ -18,6 +18,7 @@ from yian.compose.helpers.condition_guards import (
     guarded_refs,
     literal_text,
     literals_in_context,
+    masked,
     proves,
 )
 from yian.expr import condition_reads, expr_refs, parse_condition
@@ -327,3 +328,19 @@ def test_literal_text_is_canonical():
         "v.action != 'a\"b'",
         'v.action == "sell"',
     ]
+
+
+def test_masked_checks_prove_nothing_and_keep_the_reads():
+    tree = parse_condition("isinstance(v, Buy) and not isinstance(w, Done) and v.qty > w.n")
+    literal = literals_in_context(tree)[0]
+    assert literal.node is not None
+    copy = masked(tree, [literal.node])
+    assert guarded_refs(copy) == [
+        ("v", NOTHING),
+        ("w", NOTHING),
+        ("v.qty", Holds(C, False)),
+        ("w.n", Holds(C, False)),
+    ]
+    assert [lit.check for lit in literals_in_context(copy)] == [C]
+    # The original is unchanged.
+    assert guarded_refs(tree)[2] == ("v.qty", all_of(Holds(A, True), Holds(C, False)))

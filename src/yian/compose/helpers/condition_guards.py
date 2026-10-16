@@ -25,8 +25,8 @@ Never imports: types, `compose.validate`.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional, TypeAlias
+from dataclasses import dataclass, field
+from typing import Collection, Optional, TypeAlias
 
 from lark import Token, Tree
 
@@ -53,6 +53,7 @@ __all__ = [
     "guarded_refs",
     "literal_text",
     "literals_in_context",
+    "masked",
     "proves",
 ]
 
@@ -390,12 +391,15 @@ class CheckLiteral:
             The value the check has when the literal is true.
         negated (`bool`):
             Whether the literal is `not` applied to the check (after `not not` cancels).
+        node (`Tree | Token | None`, *optional*, defaults to `None`):
+            The check's sub-tree in the parsed condition, for `masked`. Not compared.
     """
 
     context: Guard
     check: Check
     value: bool
     negated: bool
+    node: Tree | Token | None = field(default=None, compare=False, repr=False)
 
 
 def literals_in_context(tree: Tree | Token) -> list[CheckLiteral]:
@@ -425,7 +429,7 @@ def literals_in_context(tree: Tree | Token) -> list[CheckLiteral]:
         found = check_in(node)
         if found is not None:
             check, positive = found
-            literals.append(CheckLiteral(context, check, positive != negated, negated))
+            literals.append(CheckLiteral(context, check, positive != negated, negated, node))
             return
         if not isinstance(node, Tree):
             return
@@ -439,6 +443,43 @@ def literals_in_context(tree: Tree | Token) -> list[CheckLiteral]:
 
     walk(tree, NOTHING, False)
     return literals
+
+
+_MASKED = "masked_check"
+"""The data of a node `masked` wraps a check in; no rule here reads it as a check."""
+
+
+def masked(tree: Tree | Token, nodes: Collection[Tree | Token]) -> Tree | Token:
+    """Return a copy of a condition in which the given sub-trees prove nothing.
+
+    Each sub-tree in `nodes` (matched by identity, such as a `CheckLiteral.node`) is
+    wrapped in a node no rule reads as a check, so `proves` gives `NOTHING` for it while
+    `guarded_refs` still finds the same references in the same order.
+
+    Args:
+        tree (`Tree | Token`):
+            A condition parsed with `parse_condition`.
+        nodes (`Collection[Tree | Token]`):
+            Sub-trees of `tree` to mask.
+
+    Returns:
+        `Tree | Token`:
+            The copy; `tree` itself is left unchanged.
+
+    Example:
+        In `masked(tree, [literal.node])` for the literal `isinstance(v, Buy)` of
+        `isinstance(v, Buy) and v.qty > 0`, the read `v.qty` is guarded by `NOTHING`.
+    """
+    ids = {id(node) for node in nodes}
+
+    def copy(node: Tree | Token) -> Tree | Token:
+        if id(node) in ids:
+            return Tree(_MASKED, [node])
+        if isinstance(node, Token):
+            return node
+        return Tree(node.data, [copy(child) for child in node.children])
+
+    return copy(tree)
 
 
 def _quoted(text: str) -> str:

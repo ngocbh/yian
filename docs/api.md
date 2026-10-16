@@ -795,8 +795,10 @@ with mcp_server(url=url, headers=headers) as github:
         run_flow(flow, {"task": task}, tools={"github": github})
 ```
 
-A host-owned server whose process or connection has ended raises `ValueError` at
-run start (`tools['github']: MCP server 'github' is closed`).
+A host-owned server yian knows is gone (its loop ended, or a call saw it closed)
+raises `ValueError` at run start (`tools['github']: MCP server 'github' is closed`).
+A stdio server whose process died quietly is found on the first call, which raises
+`McpServerClosed`.
 
 Opening starts the server, waits until it lists its tools, and keeps that list:
 `server.tools` is a tuple of `FunctionTool`s in the server's order, and a later
@@ -866,6 +868,8 @@ opens, so the run doesn't start.
 The messages are fixed text naming the server's label and the tool. Only an error
 result's content and a JSON-RPC error's message and code come from the server; no
 URL, header, or exception text reaches the model, since those may hold a token.
+The label does reach the model: for an HTTP server built without `label=`, it is
+the URL's host, so set `label=` when the host name shouldn't appear.
 For a stdio server, `McpConnectError` ends with the last 20 lines the server wrote
 to stderr; for an HTTP server it names only the error type and HTTP status.
 
@@ -880,9 +884,11 @@ that run's waiting calls; each raises `McpCallCancelled`. The cancel is per call
 so a server shared by several runs keeps serving the others. `close()` ends every
 waiting call with `McpServerClosed`.
 
-**HTTP.** A failed connection (refused, reset, or a DNS failure) fails only that
-request, with a retryable `McpTransportError`; the server stays open and serves
-later calls once it is reachable again. The proxy environment variables
+**HTTP.** A connection failure before the response starts (refused, reset, or a
+DNS failure) fails only that request, with a retryable `McpTransportError`; the
+server stays open and serves later calls once it is reachable again. A reset while
+a JSON response body is being read ends the connection instead, and the server is
+then gone (`McpServerClosed`). The proxy environment variables
 (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`) apply.
 
 **Protocol.** yian talks to servers that use the 2026-07-28 protocol and to older

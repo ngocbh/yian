@@ -2094,8 +2094,10 @@ entries first, runs the checks that need no tools, then opens the servers under 
 token unique to the run, builds the full `ToolSet`, and closes them in its
 `finally`. A server opened by the host stays the host's. `resume_flow` opens servers
 only for an unfinished run, after replay. `cli/mcp_config.py` reads `mcpServers`
-files into unopened servers; `cli/run.py` opens only those the flow needs, before
-the run, and passes them as groups.
+files into unopened servers; `cli/run.py` passes the servers the flow grants to the
+run unopened, as groups, and the run opens them after its own checks. The CLI opens
+servers itself only to probe for an unresolved tool name: a TOOL node's `tool_id`
+that no registered tool supplies, or a grant that names neither a tool nor a server.
 Before any log work, fresh runs and unfinished resumes walk static nodes and their
 `origin_children()` through the kind-blind `Node.granted_tools()` hook (AGENT
 returns its `tools:`) and raise `ValueError` when a grant does not resolve in the

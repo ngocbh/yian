@@ -309,12 +309,14 @@ A later file's entry replaces an earlier entry of the same name whole, so
 
 Servers start only when the flow needs them. A server whose name an AGENT grants is
 started by the run itself, after the checks that need no tools, so a flow error is
-reported first and resuming a finished run doesn't start it. When the flow uses a
-tool id that is neither a registered tool nor a server name, the granted servers
-and then the other servers start before the run to show their tools; those that
-list such a tool stay for the run, and the rest stop before it begins, so an unused
-server's tool names can't clash with another's. A server started only to show its
-tools that fails to start is skipped with a yellow
+reported first and resuming a finished run doesn't start it. When a TOOL node's
+`tool_id:` is not a registered tool, or an AGENT grants a name that is neither a
+registered tool nor a server name, the granted servers start before the run (a
+server name never stands for a TOOL node's tool, which names one tool). If their
+tools don't supply every such name, the other servers start too, to show their
+tools; those that list a missing tool stay for the run, and the rest stop before
+it begins, so an unused server's tool names can't clash with another's. A server
+started only to show its tools that fails to start is skipped with a yellow
 `warning: ...; skipped, the flow doesn't need it` line, unless the flow still lacks
 a tool afterwards; then the run exits with that server's error and a note naming
 the missing tools. A flow that uses no tools starts none. The servers close when

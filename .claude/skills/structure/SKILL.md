@@ -172,8 +172,9 @@ it; `cli/run.py` passes the registry to the run and closes it only after engine
 work drains. Storage flags remain host-only; runtime never imports either module
 or constructs memory. `cli/mcp_config.py` reads `~/.yian/mcp.json` and each
 `--mcp-config` file (`mcpServers` JSON) into unopened `McpServer`s; `cli/run.py`
-opens only the servers the flow needs, passes them as tool groups, and closes them
-when the run ends.
+passes the servers the flow grants to the run unopened, as tool groups, and the run
+opens them after its own checks and closes them when it ends. The CLI opens servers
+itself only to probe for an unresolved tool name.
 
 The `memory` facade exports contracts only: concrete session, episodic,
 reflection, and profile backends must be imported from their own modules, not eagerly from

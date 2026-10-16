@@ -885,17 +885,24 @@ Most are just the functional model (above) made enforceable:
   replayed program; a marked config without the key fails in
   `split_model_config`, so agents marked for the key never fall back to the
   environment. A key that marks no agent is dropped from the result and ignored
-  by replay. `LLMConfig` keeps the key a `SecretStr` excluded from dumps, rejects
+  by replay. OpenAI-family and Anthropic SDK clients keep only the custom
+  headers yian or langchain set (`drop_environment_headers`): headers from
+  `OPENAI_CUSTOM_HEADERS`/`ANTHROPIC_CUSTOM_HEADERS` and the org/project from
+  `OPENAI_ORG_ID`/`OPENAI_ORGANIZATION`/`OPENAI_PROJECT_ID` are never sent.
+  Azure passes `azure_ad_token=None`, so `AZURE_OPENAI_AD_TOKEN` is used only
+  without a key; Anthropic clears `auth_token` when it holds a key.
+  `LLMConfig` keeps the key a `SecretStr` excluded from dumps, rejects
   an empty key, and hides inputs in validation errors. `AgentNode` forward,
   AGENT backward (`backward_agent`), `ProfileMemory.learn`, and
   `ReflectiveMemory.learn` pass provider errors through
   `llm_clients.connection.scrub_call_credentials`, which removes every
   credential the call sends (`call_credentials`: the host key, else a `store`
   connection's saved login read without refresh, else the provider's first set
-  key variable, plus `AZURE_OPENAI_AD_TOKEN`/`ANTHROPIC_AUTH_TOKEN` when set) and masked echoes of
-  each before the runtime records a failure. Learners scrub the chained cause
-  of their fixed-message errors; `yian auth`'s model check scrubs the key it
-  sends and that token variable. Authored layers reject `api_key` and
+  key variable, plus `AZURE_OPENAI_AD_TOKEN`/`ANTHROPIC_AUTH_TOKEN` whenever set,
+  though only a call given no key sends them) and masked echoes of each before
+  the runtime records a failure. Learners scrub the chained cause of their
+  fixed-message errors; `yian auth`'s model check scrubs the key it
+  sends and the provider's token variable. Authored layers reject `api_key` and
   `_host_key` (flow and def levels at load); `ProfileMemory` needs `provider`
   with its key; `ReflectiveMemory` rejects `api_key` and always uses the saved login or
   environment credentials. A run-layer `llm_config.base_url` is where the key goes: it is

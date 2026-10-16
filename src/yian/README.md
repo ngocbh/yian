@@ -217,20 +217,28 @@ events, results, and manifests never hold it. `resume_flow(api_key=...)` and
 replayed program; AGENT backward takes it from its live node config, the one live
 field it reads. `split_model_config` fails a marked config that has no key, so
 agents marked for the key never fall back to the environment. A key that marks no
-agent is dropped from the result and ignored by replay. Providers can echo a
+agent is dropped from the result and ignored by replay. Each OpenAI-family and
+Anthropic SDK client yian builds keeps only the custom headers yian or langchain
+set (`llm_clients.base_client.drop_environment_headers`): it drops those the SDK
+read from `OPENAI_CUSTOM_HEADERS` or `ANTHROPIC_CUSTOM_HEADERS` and the
+organization and project from `OPENAI_ORG_ID`, `OPENAI_ORGANIZATION`, and
+`OPENAI_PROJECT_ID`, so their values are never sent. The Azure client passes `azure_ad_token=None`, so the SDK
+reads `AZURE_OPENAI_AD_TOKEN` only when yian passes no key, and the Anthropic
+client clears the SDK's `auth_token` when it holds a key. Providers can echo a
 rejected credential, so model-call errors are scrubbed of every credential the
 call sends, listed by `llm_clients.connection.call_credentials`: the host key;
 else a `store` connection's saved login (an API key, or OpenAI subscription
 access and refresh tokens, read without refresh); else the first set key
 variable of the provider (its own, then `GEMINI_API_KEY` for google or
-`OPENAI_API_KEY` for azure); plus, when set, the token variable an SDK may send
-beside any key (`AZURE_OPENAI_AD_TOKEN`, `ANTHROPIC_AUTH_TOKEN`).
+`OPENAI_API_KEY` for azure); plus `AZURE_OPENAI_AD_TOKEN` and
+`ANTHROPIC_AUTH_TOKEN` whenever set, though only a call given no key sends them
+(the Anthropic token only from a 0.x SDK).
 `AgentNode` forward and AGENT backward remove them and their masked fragments
 (`llm_clients.redact.scrub_keys`) before the kind-blind runtime records the
 failure, so the run log, results, events, and CLI output never carry them.
 `ProfileMemory.learn` and `ReflectiveMemory.learn` scrub the chained cause of
 their errors the same way, and `yian auth`'s model check scrubs the key it sends
-and that token variable. Authored layers cannot set `api_key` or `_host_key`,
+and the provider's token variable. Authored layers cannot set `api_key` or `_host_key`,
 because they reach the recorded effective map; the loader rejects a flow- or
 def-level `api_key`. The loader checks flow- and def-level `llm_config:` against
 `LLMConfig` as it does a node's, and the cascade rejects unknown keys in the host

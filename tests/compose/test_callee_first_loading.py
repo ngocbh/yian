@@ -1,16 +1,24 @@
-"""The loader builds `defs:` callee-first, so a def chain loads without recursing per def.
+"""The loader builds `defs:` and loads `uses:` files callee-first, without recursing per level.
 
 A def that calls a def not built yet is set aside, the callee is built first, and the
-caller is built again. Results are the same as building each callee nested inside its
+caller is built again; a file that imports a file not loaded yet is likewise loaded again
+once its import is loaded. Results are the same as building each callee nested inside its
 caller: the same flow, the same call nesting limit failures, and the same error, frames,
-and cause chain when a def in the chain fails.
+and cause chain when a def or file in the chain fails.
 """
 
 from collections import Counter
+from pathlib import Path
 
 import pytest
 
-from tests.compose.test_call_nesting_limit import _LEAF, _defs_chain
+from tests.compose.test_call_nesting_limit import (
+    _LEAF,
+    _chain_texts,
+    _defs_chain,
+    _uses_files,
+    _write_files,
+)
 from tests.deep_chains import lifted_limit, tight_stack
 from yian.compile.manifest import flow_fingerprint
 from yian.compose import LoadError, load_flow
@@ -443,3 +451,137 @@ def test_each_def_is_built_again_once_per_callee_not_built_yet(
 
     expected = {f"c{i}": 1 if reverse or i == 499 else 2 for i in range(500)}
     assert dict(builds) == expected
+
+
+def test_a_long_uses_chain_loads_without_recursing_per_file(tmp_path: Path) -> None:
+    text = _uses_files(tmp_path, 100)
+    with lifted_limit(), tight_stack(300):
+        flow = load_flow(text, search_paths=[tmp_path])
+    assert flow.import_depth == 100
+
+
+_MAIN_USES_FINGERPRINT_30 = "b37d012d60f751a987fb9757aea411ef244a4f1cae9a699fa78d64104b6860cc"
+
+
+def test_a_uses_chain_loads_to_the_same_flow(tmp_path: Path) -> None:
+    flow = load_flow(_uses_files(tmp_path, 30), search_paths=[tmp_path])
+    assert flow_fingerprint(flow.compiled) == _MAIN_USES_FINGERPRINT_30
+
+
+def test_each_file_is_parsed_once_though_its_load_is_repeated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parses: Counter[str] = Counter()
+    loads: Counter[str] = Counter()
+    parse = loader.parse_source_document
+    load = loader._load_flow
+
+    def counting_parse(text, label, *args, **kwargs):
+        parses[label] += 1
+        return parse(text, label, *args, **kwargs)
+
+    def counting_load(document, *args, **kwargs):
+        loads[document.label] += 1
+        return load(document, *args, **kwargs)
+
+    monkeypatch.setattr(loader, "parse_source_document", counting_parse)
+    monkeypatch.setattr(loader, "_load_flow", counting_load)
+    load_flow(_uses_files(tmp_path, 30), search_paths=[tmp_path])
+
+    assert dict(parses) == {"<flow>": 1, **{f"u{i}.yaml": 1 for i in range(30)}}
+    assert dict(loads) == {"<flow>": 1, **{f"u{i}.yaml": 2 if i < 29 else 1 for i in range(30)}}
+
+
+_USES_ROOT = (
+    "id: root\nname: root\ninput:\n  x: !str\nuses:\n  first: {first}\nnodes:\n"
+    "  top:\n"
+    "    kind: call\n"
+    "    call: first\n"
+    "    input:\n"
+    "      x: ${{input.x}}\n"
+    "output: ${{top.output}}\n"
+)
+
+
+def _broken_file_chain() -> dict[str, str]:
+    """Return `_chain_texts(25)` with `u20` calling an undeclared callable after its import."""
+    texts = _chain_texts(25)
+    texts["u20"] = texts["u20"].replace("call: nxt", "call: missing")
+    return texts
+
+
+def _mismatched_version_chain() -> dict[str, str]:
+    """Return `_chain_texts(15)` with `u9` pinning a version `u10` does not declare."""
+    texts = _chain_texts(15)
+    texts["u9"] = texts["u9"].replace("nxt: u10", "nxt: u10@2")
+    return texts
+
+
+_USES_ERROR_CASES = {
+    "broken file 20 deep": (_broken_file_chain, "u0"),
+    "three-file cycle": (lambda: _chain_texts(3, prefix="k", last_imports="k0"), "k0"),
+    "pinned version mismatch 10 deep": (_mismatched_version_chain, "u0"),
+}
+
+
+def _alias_frames(labels: list[str], last_end_col: int) -> list[tuple]:
+    """Return the root's `first` alias frame, then each of `labels`' `nxt` alias frames.
+
+    The `nxt` value ends at column 10 for one-digit targets and 11 for two-digit ones;
+    the last file's ends at `last_end_col`.
+    """
+    frames = [("<flow>", (6, 10, 6, 12), "uses alias 'first'")]
+    for index, label in enumerate(labels):
+        target = int(label[1:-5]) + 1
+        end_col = last_end_col if index == len(labels) - 1 else (10 if target < 10 else 11)
+        frames.append((label, (6, 8, 6, end_col), "uses alias 'nxt'"))
+    return frames
+
+
+def _located_chain(frames: int) -> list[tuple]:
+    """Return the cause chain of an error re-located once per frame over an unlocated one."""
+    return [("LoadError", n, True) for n in range(frames, 0, -1)] + [("LoadError", 0, False)]
+
+
+_UNDECLARED_MISSING = (
+    "callable 'missing' is neither an in-file defs: callable nor a uses: alias — external "
+    "flows are reachable only through a uses: alias (declare `uses: {missing: <ref>}`)"
+)
+
+# Recorded from loading each import nested inside its importer; `<dir>` is the directory.
+_MAIN_USES_ERRORS: dict[str, dict] = {
+    "broken file 20 deep": {
+        "message": _UNDECLARED_MISSING,
+        "notes": [],
+        "frames": _alias_frames([f"u{i}.yaml" for i in range(20)], 11)
+        + [("u20.yaml", (8, 3, 8, 7), None)],
+        "chain": _located_chain(22),
+    },
+    "three-file cycle": {
+        "message": "flow-reference cycle across files: <dir>/k0.yaml",
+        "notes": [],
+        "frames": _alias_frames(["k0.yaml", "k1.yaml", "k2.yaml"], 10),
+        "chain": _located_chain(4),
+    },
+    "pinned version mismatch 10 deep": {
+        "message": (
+            "uses: ref pinned u10@2 but the resolved file declares version: None "
+            "(file-per-version: name a file that declares '2')"
+        ),
+        "notes": [],
+        "frames": _alias_frames([f"u{i}.yaml" for i in range(10)], 13),
+        "chain": _located_chain(11),
+    },
+}
+
+
+@pytest.mark.parametrize("case", list(_USES_ERROR_CASES))
+def test_a_failing_uses_file_reports_the_same_error(case: str, tmp_path: Path) -> None:
+    texts, first = _USES_ERROR_CASES[case]
+    directory = tmp_path.resolve()
+    _write_files(directory, texts())
+    with pytest.raises(LoadError) as caught:
+        load_flow(_USES_ROOT.format(first=first), search_paths=[directory])
+    described = _describe(caught.value)
+    described["message"] = described["message"].replace(str(directory), "<dir>")
+    assert described == _MAIN_USES_ERRORS[case]

@@ -11,6 +11,7 @@ import asyncio
 from collections.abc import Callable, Mapping
 from contextlib import aclosing, closing
 from dataclasses import dataclass, field
+from typing import Any
 
 import httpx
 from langchain_core.messages import ChatMessage, SystemMessage
@@ -82,6 +83,20 @@ class _SubscriptionChatOpenAI(RequestBlockMixin, ChatOpenAI):
     stop_check: Callable[[], None] | None = Field(
         default=None, exclude=True, repr=False
     )
+
+    def __init__(self, **data: Any) -> None:
+        """Build the model, refusing connection headers, which travel only with an API key.
+
+        Raises:
+            `ValueError`: ``connection_headers`` are given.
+        """
+        # Checked before pydantic, whose validation errors would echo the header values.
+        if data.get("connection_headers"):
+            raise ValueError(
+                "the OpenAI subscription model can't send connection_headers: they travel "
+                "with an API key"
+            )
+        super().__init__(**data)
 
     @classmethod
     def is_lc_serializable(cls) -> bool:

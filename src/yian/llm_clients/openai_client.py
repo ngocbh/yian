@@ -1,7 +1,6 @@
 import copy
 import inspect
 import os
-from collections.abc import Mapping
 from functools import cache
 from typing import Any, ClassVar, Literal, Optional
 
@@ -15,13 +14,14 @@ from pydantic import Field, SecretStr, model_validator
 
 from .api_key_env import OPTIONAL_API_KEY_PROVIDERS, get_api_key_env
 from .base_client import (
+    HEADERS_LEAK,
     BaseLLMClient,
+    check_connection_headers,
     check_no_redirects,
     drop_environment_headers,
     normalize_content,
 )
 from .capabilities import get_capabilities, has_open_schema
-from .connection_settings import validate_headers, validate_organization
 from .factory import _PROVIDER_BASE_URL
 from .provider_blocks import merge_request_body
 from .validators import validate_model
@@ -32,49 +32,7 @@ _TRANSPORT_KEYWORDS = frozenset({"self", "extra_headers", "extra_query", "extra_
 _OPENAI_HEADER_VARIABLES = (
     "OPENAI_CUSTOM_HEADERS", "OPENAI_ORG_ID", "OPENAI_ORGANIZATION", "OPENAI_PROJECT_ID"
 )
-# The headers that carry `provider: openai`'s organization and project ids, lowercase ->
-# the `llm_config` field they come from.
-_OPENAI_ID_HEADERS = {"openai-organization": "organization", "openai-project": "project"}
-_HEADERS_LEAK = "the API key or connection headers to another host"
 _HTTP_CLIENT_KEYWORDS = ("http_client", "http_async_client")
-
-
-def check_connection_headers(headers: Any, provider: str) -> dict[str, SecretStr]:
-    """Check the connection headers a caller gave a client and return them as secrets.
-
-    `create_llm_client` callers skip `LLMConfig`, so each client checks them itself. For
-    ``openai``, ``OpenAI-Organization`` and ``OpenAI-Project`` carry the organization and
-    project ids (as `model_from_config` passes them) and are checked as ids; every other
-    header is checked by `validate_headers`.
-
-    Args:
-        headers (`Any`): The candidate mapping of header name to `str` or `SecretStr`.
-        provider (`str`): The provider the headers go to.
-
-    Returns:
-        `dict[str, SecretStr]`: The headers, each value a `SecretStr`.
-
-    Raises:
-        `ValueError`: ``headers`` is not a mapping, or a name, value or id is refused;
-            the message never holds a value.
-    """
-    if not isinstance(headers, Mapping):
-        raise ValueError("connection_headers must be a mapping of header name to value")
-    ids: dict[str, Any] = {}
-    others: dict[Any, Any] = {}
-    for name, value in headers.items():
-        is_id = provider == "openai" and isinstance(name, str)
-        (ids if is_id and name.lower() in _OPENAI_ID_HEADERS else others)[name] = value
-    checked = validate_headers(others, provider)
-    seen = {name.lower() for name in checked}
-    for name, value in ids.items():
-        if name.lower() in seen:
-            raise ValueError(f"header {name} is given more than once (names ignore case)")
-        seen.add(name.lower())
-        if isinstance(value, SecretStr):
-            value = value.get_secret_value()
-        checked[name] = validate_organization(value, _OPENAI_ID_HEADERS[name.lower()])
-    return {name: SecretStr(value) for name, value in checked.items()}
 
 
 def connection_header_clients(
@@ -104,7 +62,7 @@ def connection_header_clients(
     clients: dict[str, Any] = {}
     for key, fresh in zip(_HTTP_CLIENT_KEYWORDS, (httpx.Client, httpx.AsyncClient)):
         if key in kwargs:
-            check_no_redirects(key, kwargs[key], reason=_HEADERS_LEAK)
+            check_no_redirects(key, kwargs[key], reason=HEADERS_LEAK)
             clients[key] = kwargs[key]
         else:
             clients[key] = fresh(follow_redirects=False, proxy=proxy)

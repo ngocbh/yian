@@ -1,9 +1,12 @@
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any, Optional
 import warnings
 
 from langchain_core.exceptions import OutputParserException
+from pydantic import SecretStr
+
+from .connection_settings import validate_headers, validate_organization
 
 # The warnings `warn_once` already showed in this process. Python's own once-per-location
 # registry is cleared whenever `warnings.catch_warnings()` is entered, which langchain-core
@@ -51,6 +54,52 @@ def normalize_content(response):
         ]
         response.content = "\n".join(t for t in texts if t)
     return response
+
+
+# What a redirect would leak from a model that sends connection headers, for
+# `check_no_redirects`.
+HEADERS_LEAK = "the API key or connection headers to another host"
+# The headers that carry `provider: openai`'s organization and project ids, lowercase ->
+# the `llm_config` field they come from.
+_OPENAI_ID_HEADERS = {"openai-organization": "organization", "openai-project": "project"}
+
+
+def check_connection_headers(headers: Any, provider: str) -> dict[str, SecretStr]:
+    """Check the connection headers a caller gave a client and return them as secrets.
+
+    `create_llm_client` callers skip `LLMConfig`, so each client checks them itself. For
+    ``openai``, ``OpenAI-Organization`` and ``OpenAI-Project`` carry the organization and
+    project ids (as `model_from_config` passes them) and are checked as ids; every other
+    header is checked by `validate_headers`.
+
+    Args:
+        headers (`Any`): The candidate mapping of header name to `str` or `SecretStr`.
+        provider (`str`): The provider the headers go to.
+
+    Returns:
+        `dict[str, SecretStr]`: The headers, each value a `SecretStr`.
+
+    Raises:
+        `ValueError`: ``headers`` is not a mapping, or a name, value or id is refused;
+            the message never holds a value.
+    """
+    if not isinstance(headers, Mapping):
+        raise ValueError("connection_headers must be a mapping of header name to value")
+    ids: dict[str, Any] = {}
+    others: dict[Any, Any] = {}
+    for name, value in headers.items():
+        is_id = provider == "openai" and isinstance(name, str)
+        (ids if is_id and name.lower() in _OPENAI_ID_HEADERS else others)[name] = value
+    checked = validate_headers(others, provider)
+    seen = {name.lower() for name in checked}
+    for name, value in ids.items():
+        if name.lower() in seen:
+            raise ValueError(f"header {name} is given more than once (names ignore case)")
+        seen.add(name.lower())
+        if isinstance(value, SecretStr):
+            value = value.get_secret_value()
+        checked[name] = validate_organization(value, _OPENAI_ID_HEADERS[name.lower()])
+    return {name: SecretStr(value) for name, value in checked.items()}
 
 
 def check_no_redirects(

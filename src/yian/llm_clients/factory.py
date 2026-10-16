@@ -100,13 +100,14 @@ def create_llm_client(
             and Google clients also take ``http_client`` / ``http_async_client``, the
             SDK's own HTTP clients (beside a ``base_url``, Anthropic's and Google's
             must not follow redirects); the Ollama client rejects them. The
-            OpenAI-compatible and Azure clients take ``connection_headers``
-            (`dict[str, str | SecretStr]`), headers sent with every request and kept
-            out of the model's fields; for ``openai``, ``OpenAI-Organization`` and
-            ``OpenAI-Project`` there carry the organization and project ids. Their
-            names and values follow ``llm_config.headers``'s rules, and a model with
-            them never follows a redirect, so a host ``http_client`` /
-            ``http_async_client`` beside them must not follow redirects. Generation
+            OpenAI-compatible, Azure, Anthropic and Google clients take
+            ``connection_headers`` (`dict[str, str | SecretStr]`), headers sent with
+            every request and kept out of the model's fields; for ``openai``,
+            ``OpenAI-Organization`` and ``OpenAI-Project`` there carry the
+            organization and project ids. Their names and values follow
+            ``llm_config.headers``'s rules, and a model with them never follows a
+            redirect, so a host ``http_client`` / ``http_async_client`` beside them
+            must not follow redirects; the Ollama client rejects them. Generation
             settings (``temperature``, ``max_tokens``, reasoning effort, …) are no
             longer taken as keyword arguments and are ignored; put them in ``block``.
 

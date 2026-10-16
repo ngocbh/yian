@@ -16,10 +16,12 @@ from langchain_core.output_parsers.openai_tools import (
 )
 from langchain_core.runnables import RunnableLambda, RunnableMap, RunnablePassthrough
 from langchain_core.utils.pydantic import is_basemodel_subclass
-from pydantic import Field
+from pydantic import Field, SecretStr
 
 from .base_client import (
+    HEADERS_LEAK,
     BaseLLMClient,
+    check_connection_headers,
     check_no_redirects,
     drop_environment_headers,
     missing_tool_call,
@@ -77,7 +79,9 @@ def _forces_tool(model: str) -> bool:
     return _supports_forced_tool_choice(model)
 
 
-def _own_headers(client: Any, explicit: Iterable[str]) -> Any:
+def _own_headers(
+    client: Any, explicit: Iterable[str], connection_headers: Optional[dict[str, SecretStr]] = None
+) -> Any:
     """Strip what an SDK client took from the environment, keeping the passed key.
 
     Args:
@@ -85,12 +89,21 @@ def _own_headers(client: Any, explicit: Iterable[str]) -> Any:
             The built SDK client, changed in place.
         explicit (`Iterable[str]`):
             Names of the custom headers the caller passed itself.
+        connection_headers (`dict[str, SecretStr]`, *optional*, defaults to `None`):
+            Headers added to the client's custom headers, which the SDK sends after its
+            own.
 
     Returns:
         `anthropic.Client` or `anthropic.AsyncClient`:
             `client`.
     """
-    drop_environment_headers(client, explicit, ("ANTHROPIC_CUSTOM_HEADERS",))
+    connection_headers = connection_headers or {}
+    drop_environment_headers(
+        client, (*explicit, *connection_headers), ("ANTHROPIC_CUSTOM_HEADERS",)
+    )
+    client._custom_headers.update(
+        {name: value.get_secret_value() for name, value in connection_headers.items()}
+    )
     # The SDK sends both ``x-api-key`` and a bearer ``auth_token`` when it holds both, and
     # 0.x SDKs fill ``auth_token`` from ANTHROPIC_AUTH_TOKEN; a passed key is the only
     # credential yian means to send.
@@ -115,9 +128,13 @@ class NormalizedChatAnthropic(ChatAnthropic):
         follow_redirects (`bool`, *optional*, defaults to `True`):
             Whether the HTTP client follows redirects. The SDK sends the key in
             ``x-api-key``, which httpx re-sends on a cross-origin redirect, so
-            `AnthropicClient` turns this off for a host ``base_url``. When false, a given
-            ``http_client`` / ``http_async_client`` must not follow redirects either;
-            building the SDK client raises `ValueError` otherwise.
+            `AnthropicClient` turns this off for a host ``base_url`` or connection headers.
+            When false, a given ``http_client`` / ``http_async_client`` must not follow
+            redirects either; building the SDK client raises `ValueError` otherwise.
+        connection_headers (`dict[str, SecretStr]`, *optional*, defaults to `{}`):
+            Headers sent with every request, added to the SDK clients' custom headers.
+            Values are secrets: unlike ``default_headers``, this field is left out of
+            ``repr``, dumps and langchain serialization.
         http_client (`httpx.Client`, *optional*, defaults to `None`):
             The SDK's sync HTTP client, used in place of the default one; it must come
             from the httpx package the SDK is built on. `None` uses the SDK default.
@@ -133,15 +150,22 @@ class NormalizedChatAnthropic(ChatAnthropic):
     http_client: Any = Field(default=None, exclude=True, repr=False)
     http_async_client: Any = Field(default=None, exclude=True, repr=False)
     block: dict[str, Any] = Field(default_factory=dict, exclude=True, repr=False)
+    connection_headers: dict[str, SecretStr] = Field(
+        default_factory=dict, exclude=True, repr=False
+    )
 
     @cached_property
     def _client(self) -> anthropic.Client:
-        return _own_headers(self._build_client(), self._client_params.get("default_headers") or {})
+        return _own_headers(
+            self._build_client(), self._client_params.get("default_headers") or {},
+            self.connection_headers,
+        )
 
     @cached_property
     def _async_client(self) -> anthropic.AsyncClient:
         return _own_headers(
-            self._build_async_client(), self._client_params.get("default_headers") or {}
+            self._build_async_client(), self._client_params.get("default_headers") or {},
+            self.connection_headers,
         )
 
     def _build_client(self) -> anthropic.Client:
@@ -149,7 +173,7 @@ class NormalizedChatAnthropic(ChatAnthropic):
         client = super()._client
         if self.http_client is not None:
             if not self.follow_redirects:
-                check_no_redirects("http_client", self.http_client)
+                check_no_redirects("http_client", self.http_client, **self._leak())
             return client.with_options(http_client=self.http_client)
         if self.follow_redirects:
             return client
@@ -160,13 +184,17 @@ class NormalizedChatAnthropic(ChatAnthropic):
         client = super()._async_client
         if self.http_async_client is not None:
             if not self.follow_redirects:
-                check_no_redirects("http_async_client", self.http_async_client)
+                check_no_redirects("http_async_client", self.http_async_client, **self._leak())
             return client.with_options(http_client=self.http_async_client)
         if self.follow_redirects:
             return client
         return client.with_options(
             http_client=anthropic.DefaultAsyncHttpxClient(**self._http_options())
         )
+
+    def _leak(self) -> dict[str, str]:
+        """Keyword arguments naming, for `check_no_redirects`, what a redirect would leak."""
+        return {"reason": HEADERS_LEAK} if self.connection_headers else {}
 
     def _http_options(self) -> dict[str, Any]:
         """Keyword arguments for an HTTP client that never follows a redirect."""
@@ -344,9 +372,10 @@ class NormalizedChatAnthropic(ChatAnthropic):
 class AnthropicClient(BaseLLMClient):
     """Client for Anthropic Claude models.
 
-    With a ``base_url``, the model does not follow redirects, so the key goes only
-    to that URL. ``http_client`` / ``http_async_client`` replace the SDK's HTTP clients;
-    beside a ``base_url`` they must not follow redirects.
+    With a ``base_url`` or ``connection_headers``, the model does not follow redirects,
+    so the key and headers go only to that URL. ``http_client`` / ``http_async_client``
+    replace the SDK's HTTP clients; beside a ``base_url`` or ``connection_headers`` they
+    must not follow redirects.
     """
 
     def __init__(self, model: str, base_url: Optional[str] = None, **kwargs):
@@ -355,10 +384,15 @@ class AnthropicClient(BaseLLMClient):
     def get_llm(self) -> Any:
         """Return configured ChatAnthropic instance.
 
+        ``connection_headers`` (`dict[str, str | SecretStr]`, a keyword argument) are sent
+        with every request; such a model never follows a redirect.
+
         Raises:
             `ValueError`:
-                Raised when a given ``http_client`` / ``http_async_client`` follows
-                redirects beside a ``base_url``, or ``ANTHROPIC_PROXY`` is set beside one.
+                Raised when a connection header is refused (`check_connection_headers`),
+                a given ``http_client`` / ``http_async_client`` follows redirects beside a
+                ``base_url`` or connection headers, or ``ANTHROPIC_PROXY`` is set beside
+                one.
             `TypeError`:
                 Raised when a given ``http_client`` / ``http_async_client`` is not the
                 SDK's httpx client type.
@@ -368,6 +402,12 @@ class AnthropicClient(BaseLLMClient):
 
         if self.base_url:
             llm_kwargs["base_url"] = self.base_url
+            llm_kwargs["follow_redirects"] = False
+        if self.kwargs.get("connection_headers"):
+            llm_kwargs["connection_headers"] = check_connection_headers(
+                self.kwargs["connection_headers"], "anthropic"
+            )
+            # httpx re-sends custom headers on a cross-origin redirect.
             llm_kwargs["follow_redirects"] = False
 
         for key in _PASSTHROUGH_KWARGS:
@@ -381,7 +421,7 @@ class AnthropicClient(BaseLLMClient):
                 f"ANTHROPIC_PROXY can't be used with {given[0]}; set the proxy on that client"
             )
         # Build the SDK clients now so a client of the wrong type, or one that follows
-        # redirects beside a base_url, fails here, not on the first request.
+        # redirects beside a base_url or headers, fails here, not on the first request.
         if "http_client" in given:
             llm._client
         if "http_async_client" in given:

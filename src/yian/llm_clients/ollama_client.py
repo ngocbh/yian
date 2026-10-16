@@ -128,7 +128,8 @@ class OllamaClient(BaseLLMClient):
 
         Raises:
             `ValueError`:
-                Raised when an ``http_client`` or ``http_async_client`` is given.
+                Raised when an ``http_client`` or ``http_async_client`` is given, or
+                ``connection_headers`` are.
         """
         self.warn_if_unknown_model()
         for key in ("http_client", "http_async_client"):
@@ -137,14 +138,19 @@ class OllamaClient(BaseLLMClient):
                     f"the ollama client can't use {key}: the Ollama SDK builds its own "
                     "httpx client"
                 )
+        if self.kwargs.get("connection_headers"):
+            raise ValueError(
+                "the ollama client can't send connection_headers: they travel with a key, "
+                "and ollama sends none"
+            )
         kwargs: dict[str, Any] = {
             "model": self.model,
             "base_url": _resolve_base_url(self.base_url),
             "block": self.kwargs.get("block") or {},
         }
         # Generation settings come only from the block; other client kwargs such as
-        # `max_retries` are not ChatOllama fields and are ignored; the HTTP clients are
-        # rejected above.
+        # `max_retries` are not ChatOllama fields and are ignored; the HTTP clients and
+        # connection headers are rejected above.
         return NormalizedChatOllama(**kwargs)
 
     def validate_model(self) -> bool:

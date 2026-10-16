@@ -8,21 +8,28 @@ a redirect, which would re-send them to another host.
 import asyncio
 import warnings
 
+import anthropic
+import google.genai
+import google.genai.errors
 import httpx
 import openai
 import pytest
 from langchain_core.load import dumpd
 
 from tests.fixtures.openai_responses import ResponsesServer
+from tests.test_llm_client_blocks_anthropic import _anthropic_httpx
+from tests.test_llm_client_blocks_anthropic import _Server as _AnthropicServer
 from tests.test_llm_client_env_headers import (
     CHAT_REPLY,
     ChatServer,
+    GeminiServer,
     fresh_warned,  # noqa: F401  (autouse fixture)
     invoke_both,
     poisoned_env,  # noqa: F401  (fixture)
 )
 from yian.llm_clients.config import LLMConfig
 from yian.llm_clients.factory import create_llm_client, model_from_config
+from yian.llm_clients.openai_subscription import SubscriptionAccess, create_subscription_model
 
 _GATEWAY = "gw-secret-value"
 _SETTINGS = {
@@ -296,3 +303,226 @@ def test_model_from_config_without_settings_passes_no_connection_headers(poisone
     )
     assert model.connection_headers == {}
     assert model.root_client._client.follow_redirects
+
+
+def _anthropic(headers, **kwargs):
+    def build(client, async_client):
+        return create_llm_client(
+            "anthropic", "claude-sonnet-4-5", api_key="sk-ant-explicit",
+            connection_headers=headers, http_client=client, http_async_client=async_client,
+            **kwargs,
+        ).get_llm()
+
+    return build
+
+
+def test_anthropic_sends_headers(poisoned_env):
+    server = _AnthropicServer()
+    with pytest.warns(UserWarning, match=_DROP_WARNING):
+        invoke_both(_anthropic({"X-Gateway": _GATEWAY}), server, package=_anthropic_httpx())
+    assert len(server.requests) == 2
+    for request in server.requests:
+        assert request.headers["x-api-key"] == "sk-ant-explicit"
+        assert "authorization" not in request.headers
+        assert "anthropic-version" in request.headers
+        assert request.headers.get_list("x-gateway") == [_GATEWAY]
+        _assert_no_env_values(request)
+
+
+def _google(headers, **kwargs):
+    def build(client, async_client):
+        return create_llm_client(
+            "google", "gemini-2.5-flash", api_key="g-explicit", connection_headers=headers,
+            http_client=client, http_async_client=async_client, **kwargs,
+        ).get_llm()
+
+    return build
+
+
+def test_google_sends_headers(poisoned_env):
+    server = GeminiServer()
+    invoke_both(_google({"X-Gateway": _GATEWAY}), server)
+    assert len(server.requests) == 2
+    for request in server.requests:
+        assert request.headers["x-goog-api-key"] == "g-explicit"
+        assert request.headers["content-type"] == "application/json"
+        assert request.headers.get_list("x-gateway") == [_GATEWAY]
+        _assert_no_env_values(request)
+
+
+_FAMILY_BUILDS = {
+    "anthropic": lambda **kwargs: create_llm_client(
+        "anthropic", "claude-sonnet-4-5", api_key="sk-ant-explicit",
+        connection_headers={"X-Gateway": _GATEWAY}, **kwargs,
+    ).get_llm(),
+    "google": lambda **kwargs: create_llm_client(
+        "google", "gemini-2.5-flash", api_key="g-explicit",
+        connection_headers={"X-Gateway": _GATEWAY}, **kwargs,
+    ).get_llm(),
+}
+
+
+@pytest.mark.parametrize("provider", list(_FAMILY_BUILDS))
+def test_anthropic_and_google_header_values_stay_out_of_the_model_fields(
+    poisoned_env, provider
+):
+    model = _FAMILY_BUILDS[provider]()
+    for text in (repr(model), str(model.model_dump()), str(dumpd(model))):
+        assert _GATEWAY not in text
+
+
+def _route_anthropic(model, handler):
+    """Send the model's SDK-built HTTP clients to `handler`, keeping their other settings."""
+    package = _anthropic_httpx()
+    transport = package.MockTransport(handler)
+    for client in (model._client._client, model._async_client._client):
+        assert client.follow_redirects is False
+        client._transport = transport
+        client._mounts = {}
+
+
+def _route_google(model, handler):
+    """Send the model's genai HTTP clients to `handler`, keeping their other settings."""
+    transport = httpx.MockTransport(handler)
+    api = model.client._api_client
+    for client in (api._httpx_client, api._async_httpx_client):
+        assert client.follow_redirects is False
+        client._transport = transport
+        client._mounts = {}
+
+
+class _CrossOriginRedirect:
+    """Redirect every request to another origin, which would answer `reply`; record them."""
+
+    def __init__(self, package, reply):
+        self.package = package
+        self.reply = reply
+        self.requests = []
+
+    def __call__(self, request):
+        self.requests.append(request)
+        if request.url.host == "other.test":
+            return self.package.Response(200, json=self.reply)
+        return self.package.Response(
+            307, headers={"location": f"https://other.test{request.url.path}"}
+        )
+
+
+def test_anthropic_with_headers_does_not_follow_redirects(poisoned_env):
+    model = _FAMILY_BUILDS["anthropic"](max_retries=0)
+    server = _CrossOriginRedirect(_anthropic_httpx(), {})
+    _route_anthropic(model, server)
+    with pytest.raises(anthropic.APIStatusError):
+        model.invoke("hi")
+    with pytest.raises(anthropic.APIStatusError):
+        asyncio.run(model.ainvoke("hi"))
+    assert len(server.requests) == 2
+    for request in server.requests:
+        assert request.url.host == "api.anthropic.com"
+        assert request.headers["x-gateway"] == _GATEWAY
+
+
+def test_google_with_headers_does_not_follow_redirects(poisoned_env):
+    model = _FAMILY_BUILDS["google"](max_retries=0)
+    server = _CrossOriginRedirect(httpx, {})
+    _route_google(model, server)
+    with pytest.raises(google.genai.errors.APIError, match="307"):
+        model.invoke("hi")
+    with pytest.raises(google.genai.errors.APIError, match="307"):
+        asyncio.run(model.ainvoke("hi"))
+    assert len(server.requests) == 2
+    for request in server.requests:
+        assert request.url.host == "generativelanguage.googleapis.com"
+        assert request.headers["x-gateway"] == _GATEWAY
+
+
+@pytest.mark.parametrize("base_url", [None, "https://gateway.test"])
+def test_google_never_uses_aiohttp_when_redirects_are_refused(poisoned_env, base_url):
+    poisoned_env.setattr(google.genai._api_client, "has_aiohttp", True)
+    if base_url is None:
+        model = _FAMILY_BUILDS["google"]()
+    else:
+        model = create_llm_client(
+            "google", "gemini-2.5-flash", api_key="g-explicit", base_url=base_url
+        ).get_llm()
+    api = model.client._api_client
+    assert api._use_aiohttp() is False
+    assert api._async_httpx_client.follow_redirects is False
+
+
+@pytest.mark.parametrize(
+    ("build", "package"),
+    [(_anthropic, _anthropic_httpx), (_google, lambda: httpx)],
+    ids=["anthropic", "google"],
+)
+@pytest.mark.parametrize("key", ["http_client", "http_async_client"])
+def test_a_redirecting_host_client_is_refused_with_headers_and_no_base_url(
+    poisoned_env, build, package, key
+):
+    package = package()
+    clients = {"http_client": package.Client(), "http_async_client": package.AsyncClient()}
+    clients[key] = (package.Client if key == "http_client" else package.AsyncClient)(
+        follow_redirects=True
+    )
+    with pytest.raises(
+        ValueError,
+        match=f"{key} follows redirects, which would send the API key or connection headers "
+        "to another host; build it with follow_redirects=False",
+    ):
+        build({"X-Gateway": _GATEWAY})(clients["http_client"], clients["http_async_client"])
+
+
+@pytest.mark.parametrize(
+    ("provider", "headers", "message"),
+    [
+        ("anthropic", {"x-api-key": "sk-ant-other"}, "header x-api-key is refused"),
+        ("anthropic", {"X-Gateway": " gw-padded"}, "header X-Gateway value must be"),
+        ("google", {"X-Goog-Api-Key": "g-other"}, "header X-Goog-Api-Key is refused"),
+        ("google", {"X-Gateway": "gw-one", "x-gateway": "gw-two"}, "more than once"),
+    ],
+)
+def test_anthropic_and_google_get_llm_check_connection_headers(
+    poisoned_env, provider, headers, message
+):
+    client = create_llm_client(provider, "m", api_key="k", connection_headers=headers)
+    with pytest.raises(ValueError, match=message) as error:
+        client.get_llm()
+    for value in headers.values():
+        assert value not in str(error.value)
+
+
+def test_ollama_refuses_connection_headers(poisoned_env):
+    client = create_llm_client("ollama", "qwen3", connection_headers={"X-Gateway": _GATEWAY})
+    with pytest.raises(ValueError, match="the ollama client can't send connection_headers"):
+        client.get_llm()
+
+
+def test_subscription_model_refuses_connection_headers(poisoned_env):
+    model_class = type(create_subscription_model("gpt-5.5", access_source=_subscription_access))
+    with pytest.raises(ValueError, match="can't send connection_headers") as error:
+        model_class(
+            model="gpt-5.5", access_source=_subscription_access, api_key="managed",
+            connection_headers={"X-Gateway": _GATEWAY},
+        )
+    assert _GATEWAY not in str(error.value)
+
+
+def _subscription_access():
+    return SubscriptionAccess("synthetic-access", "synthetic-account")
+
+
+def test_model_from_config_sends_anthropic_headers(poisoned_env):
+    model = model_from_config(LLMConfig(
+        provider="anthropic", model="claude-sonnet-4-5", api_key="sk-ant-host",
+        headers={"X-Gateway": _GATEWAY},
+    ))
+    server = _AnthropicServer()
+    _route_anthropic(model, server)
+    model.invoke("hi")
+    asyncio.run(model.ainvoke("hi"))
+    assert len(server.requests) == 2
+    for request in server.requests:
+        assert request.headers["x-api-key"] == "sk-ant-host"
+        assert "authorization" not in request.headers
+        assert request.headers.get_list("x-gateway") == [_GATEWAY]
+        _assert_no_env_values(request)

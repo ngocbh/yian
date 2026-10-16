@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from typer.testing import CliRunner
 import yian.cli.run as run_cli
 import yian.llm_clients as llm_clients
 from yian.cli import app
+from yian.cli.mcp_config import load_mcp_config
 from yian.compose import load_flow
 from yian.run import run_flow
 from yian.tools.registry import TOOL_REGISTRY
@@ -258,6 +260,99 @@ def test_a_needed_server_that_fails_to_open_exits_naming_it(tmp_path):
 
     assert result.exit_code == 1
     assert "MCP server 'broken'" in result.output
+    assert "the flow needs ['echo'], which no started server supplies" in " ".join(result.output.split())
+    _assert_no_children()
+
+
+def test_a_broken_server_the_flow_doesnt_need_is_a_warning(tmp_path):
+    marker = tmp_path / "pid"
+    cfg = _config(
+        tmp_path / "cfg.json",
+        {
+            "broken": {"command": str(tmp_path / "missing")},
+            "c": _stdio("--only", "echo", "--marker", str(marker)),
+        },
+    )
+
+    result = _run(str(_tool_flow(tmp_path)), "--mcp-config", str(cfg))
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.strip().splitlines()[-1] == "hi"
+    stderr = " ".join(result.stderr.split())
+    assert "warning: MCP server 'broken'" in stderr
+    assert "; skipped, the flow doesn't need it" in stderr
+    assert len(_pids(marker)) == 1
+    _assert_no_children(marker)
+
+
+def test_a_flow_that_needs_no_mcp_tool_reads_no_config(tmp_path, isolated_cli_home):
+    flow = tmp_path / "flow.yaml"
+    flow.write_text(_PLAIN_FLOW, encoding="utf-8")
+    (isolated_cli_home / ".yian").mkdir()
+    (isolated_cli_home / ".yian" / "mcp.json").write_text("{not json", encoding="utf-8")
+    cfg = tmp_path / "cfg.json"
+    cfg.write_text("{not json", encoding="utf-8")
+
+    from_user = _run(str(flow))
+    with_flag = _run(str(flow), "--mcp-config", str(cfg))
+
+    assert from_user.exit_code == 0, from_user.output
+    assert from_user.stdout.strip().splitlines()[-1] == "plain"
+    assert with_flag.exit_code == 0, with_flag.output
+
+
+def test_config_warnings_print_as_warning_lines(tmp_path):
+    cfg = _config(tmp_path / "cfg.json", {"fake": {**_stdio(), "timeout": 5}})
+
+    result = _run(str(_tool_flow(tmp_path)), "--mcp-config", str(cfg))
+
+    assert result.exit_code == 0, result.output
+    stderr = " ".join(result.stderr.split())
+    assert "warning: " in stderr and "server 'fake': ignoring unknown key 'timeout'" in stderr
+    assert "UserWarning" not in result.output
+
+
+def test_a_stop_while_servers_start_opens_no_more(tmp_path):
+    markers = {name: tmp_path / f"{name}.pid" for name in "ab"}
+    cfg = _config(tmp_path / "cfg.json", {name: _stdio("--marker", str(m)) for name, m in markers.items()})
+    servers = load_mcp_config([cfg], {})
+    stop = threading.Event()
+    stop.set()
+    warned: list[str] = []
+
+    with run_cli._open_mcp_servers(servers, {"echo"}, set(), stop_event=stop, warn=warned.append) as opened:
+        assert opened == {}
+
+    assert not any(marker.exists() for marker in markers.values())
+    assert warned == []
+
+
+def test_resuming_a_finished_run_starts_no_granted_server(monkeypatch, tmp_path):
+    flow = tmp_path / "flow.yaml"
+    flow.write_text(_AGENT_FLOW, encoding="utf-8")
+    log = tmp_path / "run.jsonl"
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: _Model())
+
+    def echo(text: str) -> str:
+        """Return `text`.
+
+        Args:
+            text: The text to return.
+        """
+        return text
+
+    finished = run_flow(load_flow(_AGENT_FLOW), {}, log=log, tools={"fake": [echo]})
+    assert finished.status == "succeeded", finished.failure
+    marker = tmp_path / "pid"
+    cfg = _config(tmp_path / "cfg.json", {"fake": _stdio("--marker", str(marker))})
+
+    result = runner.invoke(
+        app, ["run", str(flow), "--resume", str(log), "--mcp-config", str(cfg), "--quiet"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.strip().splitlines()[-1] == "done"
+    assert not marker.exists()
     _assert_no_children()
 
 

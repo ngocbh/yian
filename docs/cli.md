@@ -257,8 +257,11 @@ until the run finishes.
 [MCP servers](api.md#mcp-servers) for how they behave). It reads
 `~/.yian/mcp.json` when that file exists, then each file named with
 `--mcp-config FILE`, which may be repeated and is also accepted with `--resume`.
-Nothing is read from the project or the current directory. Install the MCP SDK
-with `python -m pip install "yian[mcp]"`.
+Nothing is read from the project or the current directory. The files are read
+only when the flow uses a tool id or grant that isn't a registered tool,
+`ask_user`, or `load_skill`; for any other flow they are skipped, even a
+`--mcp-config` file, so a broken file can't stop a flow that doesn't use MCP.
+Install the MCP SDK with `python -m pip install "yian[mcp]"`.
 
 ```console
 yian run triage.yaml --mcp-config ./mcp.json --input task="Close stale issues"
@@ -301,19 +304,27 @@ A later file's entry replaces an earlier entry of the same name whole, so
 `--mcp-config` can override a server from `~/.yian/mcp.json`, and an entry of just
 `{"disabled": true}` turns one off.
 
-Servers start only when the flow needs them. A server starts when an AGENT grants
-its name. When the flow still uses a tool id that no registered tool or started
-server supplies, the other servers start too; those that list such a tool stay for
-the run, and the rest stop before it begins, so an unused server's tool names can't
-clash with another's. A flow that uses no tools starts none. The run closes its
-servers when it ends, and Ctrl-C cancels their calls in flight.
+Servers start only when the flow needs them. A server whose name an AGENT grants is
+started by the run itself, after the checks that need no tools, so a flow error is
+reported first and resuming a finished run doesn't start it. When the flow uses a
+tool id that is neither a registered tool nor a server name, the granted servers
+and then the other servers start before the run to show their tools; those that
+list such a tool stay for the run, and the rest stop before it begins, so an unused
+server's tool names can't clash with another's. A server started only to show its
+tools that fails to start is skipped with a yellow
+`warning: ...; skipped, the flow doesn't need it` line, unless the flow still lacks
+a tool afterwards; then the run exits with that server's error and a note naming
+the missing tools. A flow that uses no tools starts none. The servers close when
+the run ends, and Ctrl-C cancels their calls in flight and stops any further
+server from starting.
 
 A server's name can't be a registered tool's id, `ask_user`, or `load_skill`, and a
 started server's tools follow the [tool group](api.md#tool-groups) naming rules.
-Breaking either rule, a file that can't be read or isn't valid, a server that fails
-to start, and a missing MCP SDK all exit with code 1 before the run starts. A stdio
-server's stderr goes to a temporary file; the error for a server that fails to start
-ends with its last lines. A `--mcp-config` path that doesn't exist exits with code 2.
+Breaking either rule, a file that can't be read or isn't valid, a granted server
+that fails to start, and a missing MCP SDK all exit with code 1 before the flow's
+nodes run. A stdio server's stderr goes to a temporary file; the error for a server
+that fails to start ends with its last lines. A `--mcp-config` path that doesn't
+exist exits with code 2.
 
 ## Supplying inputs
 

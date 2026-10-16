@@ -292,5 +292,5 @@ def test_a_later_file_disables_a_user_server(tmp_path, isolated_cli_home):
     result = _run(str(_tool_flow(tmp_path)), "--mcp-config", str(cfg))
 
     assert result.exit_code == 1
-    assert "unknown tool id 'echo'" in result.output
+    assert "tool 'echo', which isn't in this run's tools" in " ".join(result.output.split())
     assert not marker.exists()

@@ -1,10 +1,11 @@
 """The loader builds `defs:` and loads `uses:` files callee-first, without recursing per level.
 
-A def that calls a def not built yet is set aside, the callee is built first, and the
-caller is built again; a file that imports a file not loaded yet is likewise loaded again
-once its import is loaded. Results are the same as building each callee nested inside its
-caller: the same flow, the same call nesting limit failures, and the same error, frames,
-and cause chain when a def or file in the chain fails.
+A def builds the defs it calls nested, up to a few def builds deep; past that, the defs
+being built are set aside, the callee is built first, and each def set aside is built
+again once the def it called is done. A file that imports a file not loaded yet is
+likewise loaded again once its import is loaded. Results are the same as building each
+callee nested inside its caller: the same flow, the same call nesting limit failures, and
+the same error, frames, and cause chain when a def or file in the chain fails.
 """
 
 from collections import Counter
@@ -434,10 +435,8 @@ def test_a_callee_that_raises_a_plain_exception_could_not_be_resolved(
     assert type(error.__cause__.__cause__) is TypeError
 
 
-@pytest.mark.parametrize("reverse", [False, True], ids=["caller-first", "callee-first"])
-def test_each_def_is_built_again_once_per_callee_not_built_yet(
-    reverse: bool, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def _count_def_builds(monkeypatch: pytest.MonkeyPatch) -> Counter[str]:
+    """Count each build of a def by name, from now until the test ends."""
     builds: Counter[str] = Counter()
     load_def = loader._load_def
 
@@ -446,11 +445,112 @@ def test_each_def_is_built_again_once_per_callee_not_built_yet(
         return load_def(name, *args, **kwargs)
 
     monkeypatch.setattr(loader, "_load_def", counting_load_def)
+    return builds
+
+
+@pytest.mark.parametrize("reverse", [False, True], ids=["caller-first", "callee-first"])
+def test_each_def_in_a_long_chain_is_built_at_most_twice(
+    reverse: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    builds = _count_def_builds(monkeypatch)
     with lifted_limit():
         load_flow(_defs_chain(500, reverse=reverse))
 
-    expected = {f"c{i}": 1 if reverse or i == 499 else 2 for i in range(500)}
-    assert dict(builds) == expected
+    assert set(builds) == {f"c{i}" for i in range(500)}
+    assert max(builds.values()) == (1 if reverse else 2)
+
+
+def _calls(targets: list[str], first: int = 0) -> str:
+    """Return one call node per target, `s{first}` calling `targets[0]` and so on."""
+    return "".join(
+        f"      s{k}:\n"
+        "        kind: call\n"
+        f"        call: {target}\n"
+        "        input:\n"
+        "          x: ${input.x}\n"
+        for k, target in enumerate(targets, start=first)
+    )
+
+
+def test_a_def_calling_many_defs_written_after_it_is_built_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    leaves = [f"l{i}" for i in range(400)]
+    orchestrator = _def("a", _calls(leaves) + _step_calling("l0"))
+    builds = _count_def_builds(monkeypatch)
+    load_flow(_flow(orchestrator, *(_def(leaf, _ECHO) for leaf in leaves)))
+
+    assert dict(builds) == {"a": 1, **{leaf: 1 for leaf in leaves}}
+
+
+def _chain_with_leaves(n: int, broken: str) -> str:
+    """Return a chain `c0` .. `c{n-1}` whose defs each also call five leaves written after.
+
+    Def `ci` calls `ci_l0` .. `ci_l2`, then `c(i+1)`, then `ci_l3` and `ci_l4`; the last
+    def echoes instead of calling on. Leaf `broken` is a broken def.
+    """
+    chain = []
+    leaves = []
+    for i in range(n):
+        own = [f"c{i}_l{j}" for j in range(5)]
+        step = _step_calling(f"c{i + 1}") if i < n - 1 else _ECHO
+        chain.append(_def(f"c{i}", _calls(own[:3]) + step + _calls(own[3:], first=3)))
+        leaves.extend(_def(leaf, _ECHO + _BAD if leaf == broken else _ECHO) for leaf in own)
+    return _flow(*chain, *leaves, root="c0")
+
+
+# Recorded from building each callee nested inside its caller.
+_MAIN_CHAIN_WITH_LEAVES_ERROR: dict = {
+    "message": "".join(f"defs entry 'c{i}': " for i in range(25))
+    + (
+        "defs entry 'c24_l3': callable 'missing' is neither an in-file defs: callable nor a "
+        "uses: alias — external flows are reachable only through a uses: alias (declare "
+        "`uses: {missing: <ref>}`)"
+    ),
+    "notes": [],
+    "frames": [
+        ("<flow>", (7 + 35 * i, 5, 41 + 35 * i, 3), f"definition 'c{i}'") for i in range(25)
+    ]
+    + [
+        ("<flow>", (2411, 5, 2426, 3), "definition 'c24_l3'"),
+        ("<flow>", (2420, 7, 2420, 10), None),
+    ],
+    "chain": [("LoadError", n, True) for n in range(27, 0, -1)] + [("LoadError", 0, False)],
+}
+
+
+def test_a_broken_leaf_deep_in_a_chain_whose_defs_call_leaves_reports_the_same_error() -> None:
+    error = _load_error(_chain_with_leaves(30, broken="c24_l3"))
+    assert _describe(error) == _MAIN_CHAIN_WITH_LEAVES_ERROR
+
+
+_SHORT_THEN_LONG_CHAIN = _flow(
+    _def("a", _calls(["x0"]) + _step_calling("b0")),
+    *(_def(f"x{i}", _step_calling(f"x{i + 1}") if i < 4 else _ECHO) for i in range(5)),
+    *(_def(f"b{i}", _step_calling(f"b{i + 1}" if i < 45 else "x0")) for i in range(46)),
+)
+# Recorded from building each callee nested inside its caller.
+_MAIN_SHORT_THEN_LONG_CHAIN_ERROR: dict = {
+    "message": "defs entry 'a': "
+    + "".join(f"defs entry 'b{i}': " for i in range(46))
+    + "call node 'step': calling callable 'x0' nests calls 51 levels deep,"
+    + _PAST_LIMIT,
+    "notes": [],
+    "frames": [("<flow>", (7, 5, 21, 3), "definition 'a'")]
+    + [("<flow>", (73 + 10 * i, 5, 82 + 10 * i, 3), f"definition 'b{i}'") for i in range(45)]
+    + [
+        ("<flow>", (523, 5, 532, 1), "definition 'b45'"),
+        ("<flow>", (528, 15, 528, 17), None),
+    ],
+    "chain": [("LoadError", n, True) for n in range(48, 1, -1)] + [("LoadError", 1, False)],
+}
+
+
+def test_a_def_built_before_a_deep_call_is_still_built_when_called_past_the_limit() -> None:
+    # `a` builds `x0` nested, then its chain from `b0` nests too deep and is set aside,
+    # which rolls `x0` back; `b45` must find `x0` built, as a nested build does.
+    error = _load_error(_SHORT_THEN_LONG_CHAIN)
+    assert _describe(error) == _MAIN_SHORT_THEN_LONG_CHAIN_ERROR
 
 
 def test_a_long_uses_chain_loads_without_recursing_per_file(tmp_path: Path) -> None:

@@ -1017,38 +1017,53 @@ class _PrivateCallable:
     builder: Callable[[], ComposedFlow]
 
 
+# How many def builds `resolve` nests above the def `eager_load_defs` is building before
+# it hands the next callee to the scheduler's stack. Nesting lets a def build its callees
+# in one pass, so a def that calls many defs written after it is built once; the bound
+# keeps a long def chain to about a hundred Python frames per build the scheduler runs.
+_MAX_NESTED_DEF_BUILDS = 8
+
+
+@dataclass
+class _PendingDef:
+    """One def on the callee-first build stack, or one def build nested on the Python stack.
+
+    `active_calls` is the call count its build starts from, and `outer` is the
+    in-progress set when it was called, without itself. `failures` maps each callee that
+    failed to build while this def was on top, keyed by the callee and its `outer`, to
+    the exception and traceback it failed with.
+    """
+
+    name: str
+    active_calls: int
+    outer: frozenset[str]
+    failures: dict[tuple[str, frozenset[str]], tuple[Exception, Any]] = field(
+        default_factory=dict
+    )
+
+
 class _BuildFirst(BaseException):
-    """Asks a scope building defs callee-first to build def `name` before its caller.
+    """Asks a scope building defs callee-first to build a def before its callers.
 
     It is a `BaseException` so the `except Exception` sites a def build passes through
     let it reach the scope's scheduler.
 
     Args:
         scope (`_CallableScope`): The scope whose scheduler handles it.
-        name (`str`): The def to build first.
-        active_calls (`int`): The calls being resolved around the call to `name`, which
-            the def's own build starts from.
+        chain (`list[_PendingDef]`): The def builds nested on the Python stack when the
+            call was made, outermost first, then the called def.
+        built (`list[_PendingDef]`): The defs built nested in the aborted build and not
+            rolled back, in the order they were built. Aborting rolls them back, so they
+            are built again before the called def, which would find them built.
     """
 
-    def __init__(self, scope: _CallableScope, name: str, active_calls: int) -> None:
-        super().__init__(name)
+    def __init__(
+        self, scope: _CallableScope, chain: list[_PendingDef], built: list[_PendingDef]
+    ) -> None:
+        super().__init__(chain[-1].name)
         self.scope = scope
-        self.name = name
-        self.active_calls = active_calls
-
-
-@dataclass
-class _PendingDef:
-    """One def on the callee-first build stack.
-
-    ``active_calls`` is the call count its build starts from, and ``failures`` maps each
-    callee that failed to build while this def was on top to the exception and traceback
-    it failed with.
-    """
-
-    name: str
-    active_calls: int
-    failures: dict[str, tuple[Exception, Any]] = field(default_factory=dict)
+        self.chain = chain
+        self.built = built
 
 
 class _CallableScope:
@@ -1128,9 +1143,13 @@ class _CallableScope:
         self._built: dict[str, ComposedFlow] = {}
         self._in_progress: set[str] = set()
         self._import_depth = 0
-        # Set while `eager_load_defs` builds defs callee-first; `_pending` is its stack.
+        # Set while `eager_load_defs` builds defs callee-first; `_pending` is its stack,
+        # `_nested` the def builds nested on the Python stack above its top, and
+        # `_nested_built` the defs built nested since the top's build started.
         self._scheduling = False
         self._pending: list[_PendingDef] = []
+        self._nested: list[_PendingDef] = []
+        self._nested_built: dict[str, _PendingDef] = {}
 
     @property
     def import_depth(self) -> int:
@@ -1264,8 +1283,8 @@ class _CallableScope:
         `current().max_call_nesting` is refused: before loading when the files already
         being imported reach the limit, and after loading by the `import_depth` the
         resolved flow carries, so a cached or memoized file is held to the same rule.
-        While `eager_load_defs` runs, a def not built yet is built before its caller
-        instead of inside it.
+        While `eager_load_defs` runs, a def not built yet is built inside its caller up to
+        `_MAX_NESTED_DEF_BUILDS` nested def builds, and before its caller past that.
 
         Args:
             flow_id (`str`):
@@ -1309,18 +1328,34 @@ class _CallableScope:
                     f"of itself (the baked call graph must be finite)",
                     range=(def_cursor.range if def_cursor is not None else None),
                 )
+            called = None
             if self._scheduling:
-                failure = self._pending[-1].failures.get(flow_id)
+                called = _PendingDef(
+                    flow_id, _ACTIVE_CALLS.get(), frozenset(self._in_progress)
+                )
+                failure = self._pending[-1].failures.get((flow_id, called.outer))
                 if failure is not None:
                     exc, traceback = failure
                     raise exc.with_traceback(traceback)
-                raise _BuildFirst(self, flow_id, _ACTIVE_CALLS.get())
+                if len(self._nested) >= _MAX_NESTED_DEF_BUILDS:
+                    # `_built` keeps build order, and a failed build's defs left it.
+                    built = [
+                        self._nested_built[name]
+                        for name in self._built
+                        if name in self._nested_built
+                    ]
+                    raise _BuildFirst(self, [*self._nested, called], built)
+                self._nested.append(called)
             self._in_progress.add(flow_id)
             try:
                 loaded = self._build_def(flow_id)
             finally:
                 self._in_progress.discard(flow_id)
+                if called is not None:
+                    self._nested.pop()
             self._built[flow_id] = loaded
+            if called is not None:
+                self._nested_built[flow_id] = called
             return loaded
         if flow_id in self._uses:
             try:
@@ -1401,7 +1436,14 @@ class _CallableScope:
         )
 
     def _build_def(self, name: str) -> ComposedFlow:
-        """Build `defs:` entry `name` transactionally; the caller tracks it as in progress."""
+        """Build `defs:` entry `name` transactionally; the caller tracks it as in progress.
+
+        Args:
+            name (`str`): The `defs:` entry to build.
+
+        Returns:
+            `ComposedFlow`: The built def.
+        """
         def_cursor = None
         if self._defs_cursor is not None:
             try:
@@ -1432,24 +1474,32 @@ class _CallableScope:
             self._scheduling = False
 
     def _build_callee_first(self, first: str) -> None:
-        """Build def `first`, building each def it calls before it, without nesting builds.
+        """Build def `first` and the defs it calls, nesting at most a few def builds.
 
-        While scheduling, `resolve` of a def not built yet raises `_BuildFirst`, which
-        aborts the caller's build. The callee is pushed on a stack and built, and the
-        caller is built again once the callee is done. While a def builds, the
-        in-progress set holds exactly the defs on the stack and the active call count is
-        the one carried to it, which is what a build nested in its callers would see, so
-        recursion and the call nesting limit are checked as before.
+        While scheduling, `resolve` builds a def not built yet nested inside its caller,
+        as outside scheduling, while fewer than `_MAX_NESTED_DEF_BUILDS` def builds are
+        nested above the def on top of the stack. Past that it raises `_BuildFirst`,
+        which aborts the build on top. The nested defs and then the called def are
+        pushed on the stack, the called def is built first, and each def below it is
+        built again once the def above it is done. The defs the aborted build had built
+        nested are pushed last, so they are built again first, in the order they were
+        built: the called def and the defs after it then find built what a nested build
+        would. A pushed def builds with the in-progress set and active call count it was
+        called with, which are what a build nested in its callers sees, so recursion and
+        the call nesting limit are checked as before.
 
-        When a callee fails, its exception is recorded for the caller now on top, and
-        `resolve` of that callee raises it again while that caller builds, so the
-        caller's own error handling wraps it as if the callee had been built nested.
-        The records are dropped when the caller leaves the stack. The failure of
-        `first` is raised.
+        When a def on the stack fails, its exception is recorded for the def below it,
+        keyed by the failed def and the in-progress set it was called with. While the
+        def below builds again, `resolve` of the failed def with that same set raises
+        it again, so the caller's own error handling wraps it as if the def had been
+        built nested. The records are dropped when the def below leaves the stack. The
+        failure of `first` is raised.
 
-        This relies on def builds being deterministic given the in-progress set, and on
-        an aborted build leaving no trace: `_build_transactionally` rolls back its cache
-        entries and catalog sites, and no def build changes the `defs:` section.
+        This relies on def builds being deterministic given the in-progress set, active
+        call count, and defs built so far, and on an aborted build leaving no trace but
+        the defs it built, which are built again: `_build_transactionally` rolls back
+        its cache entries, inline callables, and catalog sites, and no def build changes
+        the `defs:` section.
 
         Args:
             first (`str`): The def to build.
@@ -1457,12 +1507,13 @@ class _CallableScope:
         Raises:
             `LoadError`: Raised when `first`, or a def it calls, fails to build.
         """
-        self._pending = [_PendingDef(first, _ACTIVE_CALLS.get())]
+        self._pending = [_PendingDef(first, _ACTIVE_CALLS.get(), frozenset())]
         try:
             while self._pending:
                 top = self._pending[-1]
-                self._in_progress = {pending.name for pending in self._pending}
-                callee: _BuildFirst | None = None
+                self._in_progress = {*top.outer, top.name}
+                self._nested_built = {}
+                abort: _BuildFirst | None = None
                 failure: Exception | None = None
                 token = _ACTIVE_CALLS.set(top.active_calls)
                 try:
@@ -1470,23 +1521,28 @@ class _CallableScope:
                 except _BuildFirst as exc:
                     if exc.scope is not self:
                         raise
-                    callee = exc
+                    abort = exc
                 except Exception as exc:
                     failure = exc
                 finally:
                     _ACTIVE_CALLS.reset(token)
                 # Acted on after the handlers exit, so the next build and a replayed
                 # failure don't carry the handled exception as their `__context__`.
-                if callee is not None:
-                    self._pending.append(_PendingDef(callee.name, callee.active_calls))
+                if abort is not None:
+                    self._pending.extend(abort.chain)
+                    self._pending.extend(reversed(abort.built))
                     continue
                 self._pending.pop()
                 if failure is not None:
+                    # The traceback starts at this frame; raising it here or replaying it
+                    # in `resolve` adds the raising frame, so this one would show twice.
+                    traceback = failure.__traceback__.tb_next
                     if not self._pending:
-                        raise failure
-                    self._pending[-1].failures[top.name] = (failure, failure.__traceback__)
+                        raise failure.with_traceback(traceback)
+                    self._pending[-1].failures[(top.name, top.outer)] = (failure, traceback)
         finally:
             self._pending = []
+            self._nested_built = {}
             self._in_progress = set()
 
 

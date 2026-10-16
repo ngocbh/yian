@@ -158,8 +158,8 @@ log, and invariant faults propagate as exceptions.
 A library host can inject per-run tools (including its `ask_user` handler and
 named tool groups that an AGENT grants by name) with `tools=`, provider
 configuration, and named memory implementations. Before a run starts, each TOOL
-node's inputs and `output:` are checked against the argument and return types its
-tool declares; see [Typed tools](docs/api.md#typed-tools). A tool whose first parameter is a
+node's `tool_id:` must name one of the run's tools, and its inputs and `output:` are
+checked against the argument and return types that tool declares; see [Typed tools](docs/api.md#typed-tools). A tool whose first parameter is a
 `ToolContext` receives its call id and the app object passed as `run_flow(..., context=obj)`;
 a TOOL node's call id stays the same when `resume_flow` re-runs it, so it can serve as an
 idempotency key (see [Tool context](docs/api.md#tool-context)). A TOOL node with `retries:`

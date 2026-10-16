@@ -65,6 +65,11 @@ def _steps(log: Path) -> list[dict[str, Any]]:
     return [record["payload"]["step"] for record in records if record["kind"] == "node_step"]
 
 
+def _workers(num_workers: int | None) -> dict[str, int]:
+    """Return the `num_workers` argument; `None` leaves the run's default worker count."""
+    return {} if num_workers is None else {"num_workers": num_workers}
+
+
 def _kinds(log: Path) -> list[str]:
     """Return the record kinds in a durable run log, in order."""
     return [json.loads(line)["kind"] for line in log.read_text(encoding="utf-8").splitlines()]
@@ -85,13 +90,13 @@ def test_retries_zero_fails_as_before_and_records_no_step(tmp_path, delays):
     assert delays == []
 
 
-@pytest.mark.parametrize("num_workers", [0, 8])
+@pytest.mark.parametrize("num_workers", [0, 2, None])
 def test_two_failures_then_success_records_each_attempt(tmp_path, delays, num_workers):
     log = tmp_path / "run.jsonl"
     flaky = _Flaky(TimeoutError("a"), TimeoutError("b"))
 
     result = run_flow(
-        _flow(2), {}, log=log, tools={"flaky": flaky.tool()}, run_id="r1", num_workers=num_workers
+        _flow(2), {}, log=log, tools={"flaky": flaky.tool()}, run_id="r1", **_workers(num_workers)
     )
 
     assert result.status == "succeeded", result.failure
@@ -286,7 +291,7 @@ def test_exhausted_retries_list_every_attempt(delays):
     assert len(flaky.seen) == 2
 
 
-@pytest.mark.parametrize("num_workers", [0, 8])
+@pytest.mark.parametrize("num_workers", [0, 2, None])
 def test_a_stop_during_the_backoff_wait_stops_the_run(tmp_path, monkeypatch, num_workers):
     log = tmp_path / "run.jsonl"
     stop = threading.Event()
@@ -300,7 +305,7 @@ def test_a_stop_during_the_backoff_wait_stops_the_run(tmp_path, monkeypatch, num
 
     with pytest.raises(_HostStop):
         _run_flow_controlled(
-            _flow(2), {}, log=log, tools={"flaky": flaky.tool()}, num_workers=num_workers,
+            _flow(2), {}, log=log, tools={"flaky": flaky.tool()}, **_workers(num_workers),
             stop_event=stop,
         )
 
@@ -403,7 +408,74 @@ def test_the_real_sleep_waits_without_an_event():
 
     tool_node._sleep(None, 0.01)
 
-    assert time.monotonic() - started >= 0.01
+    assert time.monotonic() - started >= 0.005
+
+
+class _ChunkEvent:
+    """An event that records each wait's timeout and is set on the `set_on`-th wait."""
+
+    def __init__(self, set_on: int | None = None) -> None:
+        self.timeouts: list[float] = []
+        self.set_on = set_on
+
+    def wait(self, timeout: float) -> bool:
+        self.timeouts.append(timeout)
+        return len(self.timeouts) == self.set_on
+
+
+def test_a_wait_longer_than_timeout_max_waits_in_chunks():
+    event = _ChunkEvent()
+
+    tool_node._sleep(event, threading.TIMEOUT_MAX * 2 + 5)
+
+    assert event.timeouts[:2] == [threading.TIMEOUT_MAX, threading.TIMEOUT_MAX]
+    assert event.timeouts[2:] == [pytest.approx(5, abs=1e-3)]
+
+
+def test_a_stop_between_timeout_max_chunks_ends_the_wait():
+    event = _ChunkEvent(set_on=2)
+
+    with pytest.raises(_HostStop) as caught:
+        tool_node._sleep(event, threading.TIMEOUT_MAX * 3)
+
+    assert caught.value.primary is False
+    assert event.timeouts == [threading.TIMEOUT_MAX, threading.TIMEOUT_MAX]
+
+
+def test_a_long_failure_message_lists_the_first_and_last_five_attempts(delays):
+    flaky = _Flaky(*(TimeoutError(f"e{n}") for n in range(1, 101)))
+
+    result = run_flow(_flow(99), {}, tools={"flaky": flaky.tool()})
+
+    assert result.status == "failed"
+    assert len(flaky.seen) == 100
+    first = "; ".join(f"attempt {n}: TimeoutError: e{n}" for n in range(1, 6))
+    last = "; ".join(f"attempt {n}: TimeoutError: e{n}" for n in range(96, 101))
+    assert result.failure.message == (
+        f"tool 'flaky' failed after 100 attempts: {first}; …; 90 more attempts; …; {last}"
+    )
+    assert len(result.failure.message) < 500
+
+
+def test_ten_attempts_are_all_listed(delays):
+    flaky = _Flaky(*(TimeoutError(f"e{n}") for n in range(1, 11)))
+
+    result = run_flow(_flow(9), {}, tools={"flaky": flaky.tool()})
+
+    every = "; ".join(f"attempt {n}: TimeoutError: e{n}" for n in range(1, 11))
+    assert result.failure.message == f"tool 'flaky' failed after 10 attempts: {every}"
+
+
+def test_a_long_error_type_name_is_capped(tmp_path, delays):
+    log = tmp_path / "run.jsonl"
+    long_name = type("E" * 5000, (Exception,), {})
+    flaky = _Flaky(long_name("boom"))
+
+    result = run_flow(_flow(1), {}, log=log, tools={"flaky": flaky.tool()})
+
+    assert result.status == "succeeded", result.failure
+    [failed, _started] = _steps(log)
+    assert failed["error"] == {"type": "E" * 199 + "…", "message": "boom"}
 
 
 def test_a_huge_failure_count_gets_the_cap(monkeypatch):

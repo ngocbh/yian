@@ -49,6 +49,11 @@ def _sleep(stop_event: threading.Event | None, seconds: float) -> None:
             Raised when `stop_event` is set before or during the wait.
     """
     event = stop_event if stop_event is not None else threading.Event()
+    # Event.wait raises OverflowError above TIMEOUT_MAX, so a longer wait goes in chunks.
+    while seconds > threading.TIMEOUT_MAX:
+        if event.wait(threading.TIMEOUT_MAX):
+            raise _HostStop(primary=False)
+        seconds -= threading.TIMEOUT_MAX
     if event.wait(seconds):
         raise _HostStop(primary=False)
 
@@ -78,7 +83,7 @@ def _clean(text: str) -> str:
 
 def _error_step(error: Exception) -> dict[str, str]:
     """Return the recorded form of a failed attempt's error: its type name and message."""
-    name = _clean(type(error).__name__)
+    name = shown_text(_clean(type(error).__name__))
     try:
         text = str(error)
     except Exception:
@@ -89,7 +94,11 @@ def _error_step(error: Exception) -> dict[str, str]:
 def _attempts_message(
     tool_id: str, history: list[dict[str, Any]], attempt: int, error: Exception
 ) -> str:
-    """Return the final failure's message, naming every attempt's error up to `attempt`."""
+    """Return the final failure's message, naming each attempt's error up to `attempt`.
+
+    Up to 10 attempts are all listed; beyond that only the first and last 5 are, so
+    the message stays short. Every attempt's error is in the node steps.
+    """
     failed = {
         step.get("attempt"): step.get("error") for step in history if step.get("event") == "failed"
     }
@@ -100,6 +109,8 @@ def _attempts_message(
         parts.append(f"attempt {number}: {shown}")
     last = _error_step(error)
     parts.append(f"attempt {attempt}: {last['type']}: {last['message']}")
+    if len(parts) > 10:
+        parts = [*parts[:5], "…", f"{len(parts) - 10} more attempts", "…", *parts[-5:]]
     return f"tool {tool_id!r} failed after {attempt} attempts: " + "; ".join(parts)
 
 
@@ -208,8 +219,12 @@ class ToolNode(Node):
                 The tool's result.
 
         Raises:
+            `ValueError`:
+                Raised by `ToolSet.validate` when the tool is unknown or an argument
+                doesn't fit, before any attempt.
             `ToolAttemptsFailed`:
-                Raised when the call fails for good after at least one retry.
+                Raised when the call fails for good after at least one retry. When no
+                retry happened, the tool's own exception propagates unchanged.
         """
         tools = tools if tools is not None else ToolSet()
         history = list(steps.prior) if steps is not None else []

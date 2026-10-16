@@ -624,7 +624,7 @@ AGENT's tool-calling loop (default `-1` = no cap, `YIAN_AGENT_MAX_TOOL_ITERATION
 `env:` values are literals, checked at load against the 100-level value nesting limit,
 and must not contain themselves.
 `retries` bounds typed-output correction, not tool, transport, authentication, or stop
-failures.
+failures. A TOOL node's `retries:` is different: it retries a failed tool call.
 
 ### Agent-owned variables — `variables:`
 
@@ -774,6 +774,16 @@ idempotency key) and `ctx.context`, the object passed as
 `run_flow(..., context=obj)`; pass it again to `resume_flow`. Tools must be `def`,
 not `async def`. A `FunctionTool(name, description, params_json_schema, on_invoke)`
 covers a tool with no Python signature. See `docs/api.md` "Tool context".
+
+**TOOL retries.** `retries: N` on a TOOL node (default 0, `YIAN_TOOL_RETRIES`) calls the
+tool again after a failure, up to N more times, waiting a jittered backoff (at most 1, 2,
+4, … s, capped at 30 s). Every exception retries except `PermanentToolError` (from `yian`)
+and yian's own argument and `output:` checks; a tool raises
+`TransientToolError(msg, retry_after=s)` to set the wait (up to the cap). `ctx.call_id`
+stays the same across attempts and `ctx.attempt` counts them, so make side effects
+idempotent on `ctx.call_id`. Attempts are recorded, so a resumed run continues the count,
+and a failure after a retry lists every attempt's error. A waiting TOOL holds a worker.
+See `docs/api.md` "TOOL retries".
 
 **Typed TOOL nodes.** Every returned value must fit `output:`; model expected outcomes
 as union variants (`Union(Filled, Interrupted)`) and route them with `case`. At run

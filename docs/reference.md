@@ -233,6 +233,8 @@ history; that belongs to the memory backend.
 
 ::: yian.runtime.log.NodeStartedRecord
 
+::: yian.runtime.log.NodeStepRecord
+
 ::: yian.runtime.log.NodeSucceededRecord
 
 ::: yian.runtime.log.NodeRoutedRecord
@@ -284,6 +286,8 @@ exception, not a node-result variant.
 
 ::: yian.nodes.base.Grow
 
+::: yian.nodes.contracts.NodeSteps
+
 ### Semantic IR carriers
 
 These source-neutral frozen values give binding, parameter, assertion, and value
@@ -326,6 +330,8 @@ and END boundaries synthesized by the loader.
 
 ::: yian.nodes.tool.node.ToolNode
 
+::: yian.nodes.tool.node.ToolAttemptsFailed
+
 ::: yian.nodes.case.node.CaseNode
 
 ::: yian.nodes.case.node.Case
@@ -363,13 +369,20 @@ untyped or its contract accepts null (a nullable or `None`-kind type).
 The core ships no domain tools; a host registers its own into the shared registry
 or passes the whole set for one run with `run_flow(..., tools=...)`. A list value
 in that mapping is a tool group an AGENT can grant by name. `ToolContext`,
-`FunctionTool`, and `function_tool` are also exported from `yian`.
+`FunctionTool`, `function_tool`, `PermanentToolError`, and `TransientToolError` are
+also exported from `yian`.
 
 ::: yian.tools.ToolContext
 
 ::: yian.tools.FunctionTool
 
 ::: yian.tools.function_tool
+
+::: yian.tools.PermanentToolError
+
+::: yian.tools.TransientToolError
+
+::: yian.tools.ToolCheckError
 
 ::: yian.tools.register_tool
 

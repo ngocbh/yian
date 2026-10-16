@@ -1528,7 +1528,9 @@ limits](defaults.md)). A NaN or infinity in the reply (`{"score": NaN}`),
 or a value nested deeper than 100 levels, is a deviation too. So is a reply that skips
 the structured-output tool call; once retries are spent, the AGENT fails with an error
 naming the tool it didn't call. `retries:` must be a
-non-negative integer (`0` means no retry); anything else fails at load:
+non-negative integer (`0` means no retry); anything else fails at load. It covers
+only these corrections, not tool failures. A TOOL node's `retries:` is different:
+it retries a failed tool call (see [TOOL retries](#tool-retries)).
 
 ```yaml
 extract:
@@ -1953,6 +1955,31 @@ different tools share a name, or when a group contains a tool named `ask_user` o
 `load_skill`. Groups may share the same tool; the model sees it once.
 `ask_user` stays a separate top-level entry. `yian run` fills no groups, so a
 flow that grants one needs a Python host. See [Tool groups](api.md#tool-groups).
+
+#### TOOL retries
+
+`retries:` on a TOOL node sets how many times a failed tool call is tried again.
+The default is 0 (`YIAN_TOOL_RETRIES`; see [Defaults and limits](defaults.md)), so
+the tool is called once unless the flow opts in. `retries:` must be a non-negative
+integer; anything else fails at load.
+
+```yaml
+quote:
+  kind: tool
+  tool_id: get_quote
+  retries: 3                    # up to 3 more attempts after a failure (default 0)
+  input:
+    symbol: ${input.symbol}
+```
+
+Before each retry the node waits an exponential backoff with jitter: at most 1, 2,
+4, … seconds, capped at 30. Every exception from the tool is retried except
+`PermanentToolError`; yian's own checks of the arguments and the `output:` are never
+retried. The tool sees the same `ctx.call_id` on every attempt and the attempt
+number in `ctx.attempt`. Each retry is recorded in the run log, so a resumed run
+continues the count. A failure after a retry lists every attempt's error. The full
+rules, including `TransientToolError(retry_after=...)`, are in
+[TOOL retries](api.md#tool-retries).
 
 #### Typed TOOL nodes
 

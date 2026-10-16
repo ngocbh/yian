@@ -595,7 +595,7 @@ Most are just the functional model (above) made enforceable:
   (`is_spawner`, `binds_per_item`, `item_source_key`,
   `bind_reserved`, `reserved_wiring_keys`, `validate_execution_setup`,
   `grow_depth_delta`, `is_loop`, `needs_stop_event`, `needs_tools`,
-  `needs_steering`, `skipped_output_target`)
+  `needs_steering`, `needs_steps`, `skipped_output_target`)
   plus the diagnostic-only projections `exception_origin` and `failure_trace`.
   Those projections are identity-neutral. `skipped_output_target()` is pure, deterministic
   topology authority derived only from manifest-backed node state. Its base

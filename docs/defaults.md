@@ -60,8 +60,8 @@ built-in values. Every entry is recorded, input caps included.
 Resuming a run (`resume_flow`, `yian run --resume`) and replaying it for backward
 learning compare the recorded values with this process's values before checking the
 flow fingerprint. Some values change the loaded flow (`YIAN_AGENT_RETRIES` is baked
-into each AGENT), so checking them first names the variable instead of failing on the
-flow fingerprint. The comparison is by effective value: a recorded value equal to the
+into each AGENT and `YIAN_TOOL_RETRIES` into each TOOL), so checking them first names
+the variable instead of failing on the flow fingerprint. The comparison is by effective value: a recorded value equal to the
 built-in one matches an unset variable. A difference raises `DefaultsMismatchError` (a
 `ValueError`) with one line per variable:
 

@@ -46,6 +46,8 @@ These names are exported from the top-level `yian` package:
 | `ToolContext` | the per-call context a host tool receives when its first parameter asks for it (see [Tool context](#tool-context)) |
 | `FunctionTool` | a host tool given as a name, a description, an argument JSON Schema, and an `on_invoke` call |
 | `function_tool` | build a `FunctionTool` from a function, optionally overriding its name and description |
+| `PermanentToolError` | an exception a tool raises when another attempt can't help; a TOOL node doesn't retry it (see [TOOL retries](#tool-retries)) |
+| `TransientToolError` | an exception a tool raises to ask a TOOL node to retry, optionally after `retry_after` seconds |
 
 Recovery, the result type, and the steering protocol live in `yian.run`:
 
@@ -363,7 +365,7 @@ a `tools=` entry, and at decoration for `register_tool`. An `async def` tool rai
 | Field | Meaning |
 | --- | --- |
 | `call_id` | an opaque string that names this call (rules below) |
-| `attempt` | the attempt number, starting at 1 |
+| `attempt` | the attempt number, starting at 1 (rules below) |
 | `tool_name` | the id the tool is registered under |
 | `run_id` | the run's id, or `""` outside a run |
 | `node` | the expanded id of the calling node, such as `loop#3/place`, or `""` when the caller names none |
@@ -389,8 +391,10 @@ runs given the same `run_id=` give their TOOL nodes the same call ids. When a
 broker limits the length or characters of its key, hash the id, for example
 `hashlib.sha256(ctx.call_id.encode()).hexdigest()[:32]`.
 
-`attempt` is always 1 until TOOL nodes can retry; a resumed re-run of a node is
-the same call and also sees 1.
+`attempt` counts a TOOL node's attempts at the same call: 1 for the first, 2 for
+the first retry, and so on (see [TOOL retries](#tool-retries)). A resumed run
+that re-runs an interrupted attempt passes the next number, with the same call id.
+Every other call, including one from an AGENT's tool loop, sees 1.
 
 `context` is the same object for every tool call in the run. With the default
 `num_workers=8`, nodes call tools at the same time from worker threads, so the
@@ -457,7 +461,8 @@ given. Building one raises
 `TypeError` when `name` or `description` is not a string, `params_json_schema` is
 not a dict, or `on_invoke` is not callable or is async, and `ValueError` when
 `name` is empty or the schema's `type` is not `"object"`. An `on_invoke` that
-returns an awaitable fails the call with `TypeError`.
+returns an awaitable fails the call with `ToolCheckError` (a `TypeError`), which a
+TOOL node doesn't retry.
 
 `function_tool(fn, name_override=..., description_override=...)` builds a
 `FunctionTool` from a function, the same way a plain function tool is built; it
@@ -465,6 +470,81 @@ also works as `@function_tool` or `@function_tool(name_override="buy")`.
 `register_tool(id, description_override=...)` replaces the description of the
 function or `FunctionTool` it registers. A `FunctionTool`'s name must equal its
 `tools=` key or `register_tool` id.
+
+### TOOL retries
+
+A TOOL node with `retries: N` calls its tool again after a failed attempt, up to N
+more times. The default is 0 (`YIAN_TOOL_RETRIES`), because a retry repeats any side
+effect the failed attempt already had. A tool with side effects should use
+`ctx.call_id` as its idempotency key: it is the same for every attempt, while
+`ctx.attempt` counts them.
+
+Every exception from the tool is retried, except:
+
+- `PermanentToolError`, which the tool raises when another attempt can't help. A
+  class that subclasses both `PermanentToolError` and `TransientToolError` counts
+  as permanent;
+- yian's own checks. The arguments are checked once, before the first attempt, as
+  `ToolSet.validate` does. The `output:` contract and the value checks run after the
+  node returns. A `FunctionTool` whose `on_invoke` returns an awaitable raises
+  `ToolCheckError`. None of these is retried;
+- a host stop, such as Ctrl-C or a sibling node's failure, which ends the node.
+
+Before the retry after the k-th failure, the node waits d = min(cap, base · 2^(k−1))
+seconds, drawn uniformly between d/2 and d. The base is
+`YIAN_TOOL_RETRY_DELAY_SECONDS` (1) and the cap is `YIAN_TOOL_RETRY_MAX_DELAY_SECONDS`
+(30), so the default waits are at most 1, 2, 4, 8, 16, 30, 30, … seconds. A tool that
+raises `TransientToolError("rate limited", retry_after=5)` sets that retry's wait to
+`retry_after`, up to the cap, with no jitter. `retry_after` must be a finite number
+of seconds, at least 0; anything else raises `TypeError` or `ValueError` when the
+error is built.
+
+```python
+from yian import PermanentToolError, ToolContext, TransientToolError
+
+
+def place_order(ctx: ToolContext[Broker], symbol: str, qty: int) -> str:
+    """Place a market order."""
+    response = ctx.context.submit(symbol, qty, client_order_id=ctx.call_id)
+    if response.status == 429:
+        raise TransientToolError("rate limited", retry_after=response.retry_after)
+    if response.status == 400:
+        raise PermanentToolError(response.reason)
+    return response.order_id
+```
+
+A waiting node keeps its worker: it occupies one pooled worker slot, or blocks a
+serial run (`num_workers=0`), until the wait ends. A run stop ends the wait early.
+
+Each retry is recorded in the run log as node steps (`NodeStepRecord`): a `failed`
+step with the error's type and message and the chosen wait (`retry_in`), written
+before the wait, and a `started` step written before the retry calls the tool. The
+first attempt is the node's `NodeStartedRecord`, so a call that succeeds at once, or
+any call of a `retries: 0` node, writes no step.
+
+A resumed run continues the count from the log. An attempt that was interrupted (the
+process crashed or the run stopped inside it) is re-run with the same `ctx.call_id`
+and the next `ctx.attempt`, and uses up no retry: only recorded failures count
+against `retries:`. A run that crashed during a wait waits the recorded `retry_in`
+again before the next attempt.
+
+When the call fails without a retry, the tool's exception fails the node as before.
+After at least one retry, the node fails with `ToolAttemptsFailed` (a
+`RuntimeError`, raised from the last error), and `failure.message` lists every
+attempt:
+
+```text
+tool 'place_order' failed after 3 attempts: attempt 1: TimeoutError: read timed out; attempt 2: interrupted; attempt 3: ConnectionError: reset by peer
+```
+
+An attempt with no recorded outcome shows as `interrupted`. Up to 10 attempts are
+all listed; beyond that the message lists attempts 1 to 5 and the last 5, with
+`…; <n> more attempts; …` between. `failure.code` stays `node.execute`.
+
+An AGENT's `retries:` means something else: it bounds how often the model may
+correct a structured reply that doesn't fit `output:` (see
+[structured generation](syntax.md#agent-the-llm-backed-agent-node)). Tool calls
+from an AGENT's tool loop are never retried, and see `ctx.attempt == 1`.
 
 ### Tool groups
 
@@ -1386,7 +1466,7 @@ is not supported"; other versions are rejected too. Recovery preserves the
 accepted prefix's canonical bytes and appends new records without rewriting it.
 
 The closed durable record vocabulary is `RunStartedRecord`,
-`RunResumedRecord`, `NodeStartedRecord`, `NodeSucceededRecord`,
+`RunResumedRecord`, `NodeStartedRecord`, `NodeStepRecord`, `NodeSucceededRecord`,
 `NodeRoutedRecord`, `NodeExpandedRecord`, `NodeFailedRecord`,
 `MemoryCommitRequestedRecord`,
 `MemoryCommitSucceededRecord`, `MemoryCommitFailedRecord`,
@@ -1395,7 +1475,10 @@ The closed durable record vocabulary is `RunStartedRecord`,
 run started with that differ from the built-in ones, keyed by entry name
 (`{"MAX_TOTAL_NODES": 20000}`); it is omitted from the line when empty, so a run with
 every built-in value writes the same bytes as before, and a log without it counts as
-all built-in values. The four node
+all built-in values. A `NodeStepRecord` holds one step an in-flight node recorded,
+such as a [TOOL retry](#tool-retries); the node gives it meaning, and a resumed node
+reads its steps back. A log holding one can't be read by a yian version from before
+the record existed. The four node
 outcome records carry canonical forward inputs and routes when the recorded
 run has `learnable=True`; `learnable=False` omits that capture. Optional model/tool
 evaluation evidence is separate. Terminal success
@@ -1558,7 +1641,8 @@ A retried node may resend requests and repeat tool actions; recovery does not
 provide exactly-once execution or resume an external request midway through. A
 retried TOOL node passes its tool the same `ctx.call_id` as before, so a tool can
 use it as an idempotency key; a retried AGENT's tool calls get new ids (see
-[Tool context](#tool-context)). The new accepted start receives a new sequence, and metadata for its old unfinished start is rejected.
+[Tool context](#tool-context)). A TOOL node with `retries:` passes the next
+`ctx.attempt` and keeps the retries it had left (see [TOOL retries](#tool-retries)). The new accepted start receives a new sequence, and metadata for its old unfinished start is rejected.
 Runtime neither reconstructs a transcript from the run log nor fabricates results
 for unknown effects. SessionMemory owns whatever conversation history was saved;
 the run log is not a durable replacement for that memory backend.

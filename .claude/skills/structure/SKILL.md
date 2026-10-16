@@ -190,7 +190,9 @@ global registry, and the per-run `ToolSet`; `types.py` reads a tool's declared
 argument and return types as yian `Type`s for the run-start TOOL check.
 `context.py` holds `ToolContext`; `docstrings.py` parses tool docstrings (stdlib
 only); `schema.py` builds a tool's argument model from a function signature;
-`function_tools.py` holds `FunctionTool` and `function_tool`. `tools/` imports
+`function_tools.py` holds `FunctionTool` and `function_tool`; `errors.py` holds
+`PermanentToolError` and `TransientToolError`, which steer a TOOL node's retries, and
+`ToolCheckError`, raised when a check yian runs on a call fails (stdlib only). `tools/` imports
 langchain-core, pydantic, `typesys`, and the skills leaf, never nodes, compile,
 compose, runtime, `run.py`, or CLI. The run boundary compares the types; `tools/`
 only reads them.

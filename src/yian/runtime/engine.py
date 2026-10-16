@@ -111,8 +111,8 @@ class FlowEngine:
         accepted start before evaluating or submitting its worker.
 
         ``tools`` is this run's ``ToolSet``; every node declaring ``needs_tools``
-        receives a copy bound to the state's run id, so tools see that id and the
-        set's host context. ``None`` uses the global registry; any other type
+        receives this set bound to the state's run id (one shared bound copy), so
+        tools see that id and the set's host context. ``None`` uses the global registry; any other type
         raises ``TypeError``.
 
         ``skills`` is the run's host-supplied skill mapping, passed unchanged to

@@ -385,3 +385,53 @@ def test_a_direct_agent_outside_a_run_gives_each_call_a_fresh_id(monkeypatch):
     assert all(re.fullmatch(r"[0-9a-f]{32}", ctx.call_id) for ctx in seen), seen
     assert len({ctx.call_id for ctx in seen}) == 3
     assert {ctx.run_id for ctx in seen} == {""}
+
+
+_ASK_FLOW = """
+id: ask_ctx
+name: ask_ctx
+llm_config: {provider: openai, model: test-model}
+nodes:
+  worker:
+    kind: agent
+    prompt: go
+    tools: [ask_user]
+  confirm:
+    kind: human_input
+    input: {draft: "${worker.output}"}
+    prompt: "Ship ${draft}?"
+output: ${confirm.output}
+"""
+
+
+def test_ask_user_from_an_agent_and_a_human_input_node_sees_the_context(monkeypatch):
+    seen: list[tuple[ToolContext, dict[str, Any]]] = []
+    db = _Db()
+
+    def ask(ctx: ToolContext, **request: Any) -> str:
+        seen.append((ctx, request))
+        return f"yes to {request['question']}"
+
+    model = _ScriptedModel([
+        AIMessage(content="", tool_calls=[_tool_call("ask_user", {"question": "Which?"}, "c0")]),
+        AIMessage(content="draft"),
+    ])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _config: model)
+
+    result = run_flow(
+        load_flow(_ASK_FLOW), {}, tools={"ask_user": ask}, context=db, run_id="run-7f3a"
+    )
+
+    assert result.status == "succeeded", result.failure
+    assert result.output == "yes to Ship draft?"
+    (agent_ctx, agent_request), (human_ctx, human_request) = seen
+    assert agent_request["question"] == "Which?"
+    assert agent_ctx.context is db
+    assert agent_ctx.node == "worker"
+    assert agent_ctx.tool_name == "ask_user"
+    assert _AGENT_CALL_ID.match(agent_ctx.call_id), agent_ctx.call_id
+    assert human_request["node_id"] == "confirm"
+    assert human_ctx.context is db
+    assert human_ctx.node == "confirm"
+    assert human_ctx.tool_name == "ask_user"
+    assert human_ctx.call_id == "run-7f3a/confirm"

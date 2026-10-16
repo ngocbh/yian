@@ -22,9 +22,9 @@ class ToolNode(Node):
     """
     A direct, deterministic invocation of one tool from the run's `ToolSet` (no LLM in the loop).
 
-    The node's bound input record is passed to the tool's `.invoke(...)`; the tool sees
-    only its own record, never the live pool. A tool that declares a `ToolContext`
-    first parameter receives one naming this node, with the call id
+    The node's bound input record is passed to `ToolSet.invoke`; the tool sees only its
+    own record, never the live pool. A tool that declares a `ToolContext` first
+    parameter also receives one naming this node, with the call id
     `"<run_id>/<node id>"`, which a resumed re-run of the node sees again. When
     `output_contract` is set (from an optional authored `output:`), the engine
     validates every returned value against it.

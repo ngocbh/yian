@@ -423,8 +423,9 @@ def run_flow(
         context (`Any`, *optional*, defaults to `None`):
             The host's app object, such as a database session or a broker
             client. A tool whose first parameter is annotated `ToolContext`
-            receives it as `ctx.context`. It is never recorded and is not part
-            of the flow fingerprint, so pass it again to `resume_flow`.
+            receives it as `ctx.context`; with `None`, tools see
+            `ctx.context is None`. It is never recorded and is not part of the
+            flow fingerprint, so pass it again to `resume_flow`.
 
     Returns:
         `RunResult`:
@@ -755,8 +756,9 @@ def resume_flow(
             environment variable.
         context (`Any`, *optional*, defaults to `None`):
             The host's app object, passed to tools as `ctx.context` as in
-            `run_flow`. The log does not hold it, so pass it again here; without
-            it, tools in the resumed segment see `None`.
+            `run_flow`. The log does not hold it and it is not part of the flow
+            fingerprint, so pass it again here; without it, tools in the resumed
+            segment see `ctx.context is None`.
 
     Returns:
         `RunResult`:

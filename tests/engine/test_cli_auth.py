@@ -44,8 +44,9 @@ class Service:
         self.calls.append("subscription_models")
         return ("gpt-test", "gpt-other")
 
-    def api_models(self, credentials):
+    def api_models(self, credentials, *, organization=None, project=None):
         self.calls.append("api_models")
+        self.settings = (dict(credentials.headers), organization, project)
         assert credentials.api_key == "private-key"
         return ("embedding-test", "gpt-test", "gpt-other")
 
@@ -342,17 +343,21 @@ class Checks:
     def __init__(self):
         self.models = ("m1", "m2")
         self.listings = []
+        self.listing_headers = []
         self.answers = []
+        self.answer_headers = []
         self.problem = None
 
-    def list_models(self, provider, api_key=None, base_url=None):
+    def list_models(self, provider, api_key=None, base_url=None, *, headers=None):
         self.listings.append((provider, api_key, base_url))
+        self.listing_headers.append(dict(headers or {}))
         if isinstance(self.models, Exception):
             raise self.models
         return self.models
 
-    def model_answers(self, provider, model, key, endpoint):
+    def model_answers(self, provider, model, key, endpoint, headers=None):
         self.answers.append((provider, model, key, endpoint))
+        self.answer_headers.append(dict(headers or {}))
         return self.problem
 
 
@@ -792,3 +797,235 @@ def test_env_override_note_agrees_with_the_number_of_variables(monkeypatch, setu
     result = runner.invoke(app, ["auth"])
     assert "YIAN_DEFAULT_PROVIDER is set" in result.output
     assert "and overrides the saved choice" in result.output
+
+
+def test_openai_api_key_setup_saves_connection_settings(monkeypatch, setup_auth):
+    store, service = setup_auth
+    monkeypatch.setenv("GW_TOKEN", "private-gw")
+    args = [
+        "auth", "openai", "--method", "api-key", "--model", "gpt-test",
+        "--organization", "org-1", "--project", "proj-1", "--header", "X-G=GW_TOKEN",
+    ]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 0, result.output
+    assert service.settings == ({"X-G": "private-gw"}, "org-1", "proj-1")
+    selected = store.selection("openai")
+    assert (selected.organization, selected.project) == ("org-1", "proj-1")
+    assert selected.header_names == ("X-G",)
+    credentials = store.credentials("openai", selected.credential_id)
+    assert credentials.headers == (("X-G", "private-gw"),)
+    assert "private-" not in result.output
+
+
+def test_provider_setup_sends_headers_to_listing_and_reply_check(monkeypatch, checks):
+    store, fake = checks
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "private-key")
+    monkeypatch.setenv("GW_TOKEN", "private-gw")
+    args = ["auth", "anthropic", "--header", "X-G=GW_TOKEN", "--model", "m"]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 0, result.output
+    assert fake.listing_headers == [{"X-G": "private-gw"}]
+    assert fake.answer_headers == [{"X-G": "private-gw"}]
+    selected = store.selection("anthropic")
+    assert selected.header_names == ("X-G",) and selected.organization is None
+    credentials = store.credentials("anthropic", selected.credential_id)
+    assert credentials.headers == (("X-G", "private-gw"),)
+    assert "private-" not in result.output
+
+
+def test_saving_again_without_settings_keeps_none(monkeypatch, checks):
+    store, fake = checks
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "private-key")
+    monkeypatch.setenv("GW_TOKEN", "private-gw")
+    result = runner.invoke(app, ["auth", "anthropic", "--header", "X-G=GW_TOKEN", "--model", "m1"])
+    assert result.exit_code == 0, result.output
+    result = runner.invoke(app, ["auth", "anthropic", "--model", "m1"])
+    assert result.exit_code == 0, result.output
+    selected = store.selection("anthropic")
+    assert selected.header_names == ()
+    assert store.credentials("anthropic", selected.credential_id).headers == ()
+    assert fake.listing_headers[-1] == {}
+
+
+def test_list_shows_connection_settings_by_name_only(monkeypatch, setup_auth):
+    store, service = setup_auth
+    store.save(
+        "openai",
+        ApiKeyCredentials("private-key", {"X-G": "private-gw"}),
+        "gpt-test",
+        organization="org-1",
+        project="proj-1",
+    )
+    store.save(
+        "anthropic",
+        ApiKeyCredentials("private-key", {"X-B": "private-b", "X-A": "private-a"}),
+        "claude-test",
+    )
+    result = runner.invoke(app, ["auth"])
+    assert result.exit_code == 0, result.output
+    lines = {
+        line.split(":")[0].strip(): line
+        for line in result.output.splitlines()
+        if line.startswith("  ")
+    }
+    assert "organization org-1" in lines["openai"] and "project proj-1" in lines["openai"]
+    assert "headers X-G" in lines["openai"]
+    assert "headers X-A, X-B" in lines["anthropic"]
+    assert "organization" not in lines["anthropic"]
+    assert "private-" not in result.output
+
+
+def test_bare_header_reads_a_hidden_prompt(monkeypatch, checks, terminal):
+    store, fake = checks
+    prompts, answer = terminal
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "private-key")
+    answer.value = "private-gw"
+    result = runner.invoke(app, ["auth", "anthropic", "--header", "X-G", "--model", "m1"])
+    assert result.exit_code == 0, result.output
+    assert prompts == ["X-G header value:"]
+    assert fake.listing_headers == [{"X-G": "private-gw"}]
+    assert store.selection("anthropic").header_names == ("X-G",)
+    assert "private-" not in result.output
+
+    answer.value = "private bad "
+    result = runner.invoke(app, ["auth", "anthropic", "--header", "X-G", "--model", "m2"])
+    assert result.exit_code == 1 and "X-G" in result.output
+    assert "private" not in result.output
+    assert store.selection("anthropic").model == "m1"
+
+
+def test_bare_header_without_a_terminal_names_the_variable_form(monkeypatch, setup_auth):
+    store, service = setup_auth
+
+    def unread(*args, **kwargs):
+        raise AssertionError("the store was opened")
+
+    monkeypatch.setattr(auth_cli, "AuthStore", unread)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "private-key")
+    result = runner.invoke(app, ["auth", "anthropic", "--header", "X-G", "--model", "m1"])
+    assert result.exit_code == 1
+    assert type(result.exception) is SystemExit, result.exception
+    assert "NAME=VARIABLE" in result.output
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["auth", "anthropic", "--organization", "org-1"],
+        ["auth", "anthropic", "--project", "proj-1"],
+        ["auth", "openai", "--method", "subscription", "--organization", "org-1"],
+        ["auth", "openai", "--method", "subscription", "--project", "proj-1"],
+        ["auth", "openai", "--method", "subscription", "--header", "X-G=GW_TOKEN"],
+        ["auth", "openai", "--method", "api-key", "--organization", "org 1"],
+        ["auth", "ollama", "--header", "X-G=GW_TOKEN"],
+        ["auth", "anthropic", "--header", "Authorization=GW_TOKEN"],
+        ["auth", "anthropic", "--header", "Content-Type=GW_TOKEN"],
+        ["auth", "openai", "--method", "api-key", "--header", "OpenAI-Project=GW_TOKEN"],
+        ["auth", "anthropic", "--header", "X G=GW_TOKEN"],
+        ["auth", "anthropic", "--header", "X-G=UNSET_TOKEN"],
+        ["auth", "anthropic", "--header", "X-G=EMPTY_TOKEN"],
+        ["auth", "anthropic", "--header", "X-G=BAD_TOKEN"],
+        ["auth", "anthropic", "--header", "X-G="],
+        ["auth", "anthropic", "--header", "X-G=GW_TOKEN", "--header", "x-g=GW_TOKEN"],
+        ["auth", "anthropic", "--default", "--header", "X-G=GW_TOKEN"],
+        ["auth", "openai", "--remove", "--organization", "org-1"],
+        ["auth", "--project", "proj-1"],
+    ],
+)
+def test_connection_settings_are_refused_before_any_request(monkeypatch, setup_auth, args):
+    store, service = setup_auth
+    monkeypatch.setenv("GW_TOKEN", "private-gw")
+    monkeypatch.setenv("EMPTY_TOKEN", "")
+    monkeypatch.setenv("BAD_TOKEN", " private-bad")
+    monkeypatch.delenv("UNSET_TOKEN", raising=False)
+
+    def unread(*args, **kwargs):
+        raise AssertionError("the store was opened")
+
+    monkeypatch.setattr(auth_cli, "AuthStore", unread)
+    result = runner.invoke(app, args)
+    assert result.exit_code == 1
+    assert type(result.exception) is SystemExit, result.exception
+    assert service.calls == []
+    assert "private" not in result.output
+
+
+def test_unset_header_variable_is_not_echoed(monkeypatch, setup_auth):
+    store, service = setup_auth
+    monkeypatch.delenv("sk_private_typed_value", raising=False)
+    args = ["auth", "anthropic", "--header", "X-G=sk_private_typed_value", "--model", "m"]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 1 and "X-G" in result.output
+    assert "sk_private" not in result.output
+
+
+def test_subscription_chosen_at_the_prompt_refuses_settings(monkeypatch, setup_auth):
+    store, service = setup_auth
+    monkeypatch.setattr(auth_cli, "_choose", lambda *a, **k: "subscription")
+    result = runner.invoke(app, ["auth", "openai", "--organization", "org-1"])
+    assert result.exit_code == 1 and "API-key" in result.output
+    assert service.calls == [] and not store.path.exists()
+
+
+def test_headers_need_a_vllm_key(monkeypatch, checks):
+    store, fake = checks
+    monkeypatch.setenv("GW_TOKEN", "private-gw")
+    result = runner.invoke(app, ["auth", "vllm", "--header", "X-G=GW_TOKEN", "--model", "m1"])
+    assert result.exit_code == 1 and "VLLM_API_KEY" in result.output
+    assert fake.listings == [] and not store.path.exists()
+
+    monkeypatch.setenv("VLLM_API_KEY", "private-key")
+    monkeypatch.setenv("VLLM_BASE_URL", "https://vllm.example.com/v1")
+    result = runner.invoke(app, ["auth", "vllm", "--header", "X-G=GW_TOKEN", "--model", "m1"])
+    assert result.exit_code == 0, result.output
+    assert store.selection("vllm").header_names == ("X-G",)
+
+
+def test_listing_failure_text_is_scrubbed_of_header_values(monkeypatch, checks):
+    store, fake = checks
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "private-key")
+    monkeypatch.setenv("GW_TOKEN", "gwvalue7")
+    fake.models = ModelListError("rejected gwvalue7")
+    monkeypatch.setattr(auth_cli, "_require_terminal", lambda option: None)
+    monkeypatch.setattr(auth_cli, "_ask", lambda message, *, option: "claude-x")
+    result = runner.invoke(app, ["auth", "anthropic", "--header", "X-G=GW_TOKEN"])
+    assert result.exit_code == 0, result.output
+    assert "rejected [REDACTED]" in result.output and "gwvalue7" not in result.output
+
+
+def test_openai_listing_failure_is_scrubbed_of_header_values(monkeypatch, setup_auth):
+    store, service = setup_auth
+    monkeypatch.setenv("GW_TOKEN", "gwvalue7")
+
+    def fail(credentials, **settings):
+        raise AuthError("rejected gwvalue7")
+
+    monkeypatch.setattr(service, "api_models", fail)
+    args = ["auth", "openai", "--method", "api-key", "--model", "gpt-test"]
+    result = runner.invoke(app, [*args, "--header", "X-G=GW_TOKEN"])
+    assert result.exit_code == 1 and "rejected [REDACTED]" in result.output
+    assert "gwvalue7" not in result.output and not store.path.exists()
+
+
+def test_model_answers_sends_and_scrubs_connection_headers(monkeypatch):
+    built = []
+    model = StubModel(RuntimeError("gateway rejected gwvalue7"))
+
+    class Client:
+        def get_llm(self):
+            return model
+
+    def create(provider, name, base_url=None, **kwargs):
+        built.append(kwargs)
+        return Client()
+
+    monkeypatch.setattr(auth_cli, "create_llm_client", create)
+    problem = auth_cli._model_answers(
+        "anthropic", "claude-x", "private-key", None, {"X-G": "gwvalue7"}
+    )
+    assert built[0]["connection_headers"] == {"X-G": "gwvalue7"}
+    assert problem == "RuntimeError: gateway rejected [REDACTED]"
+
+    model.failure = None
+    assert auth_cli._model_answers("anthropic", "claude-x", "private-key", None) is None
+    assert "connection_headers" not in built[-1]

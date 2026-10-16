@@ -12,13 +12,13 @@ Import this module as ``yian.llm.testing``; ``yian.llm`` does not import it.
 
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, deque
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 import json
 from pathlib import Path
 import re
 from typing import Any
-from urllib.parse import parse_qsl, quote, urlsplit
+from urllib.parse import parse_qsl, quote, quote_plus, urlsplit
 
 import httpx2
 
@@ -174,7 +174,7 @@ def load_cassette(path: str | Path) -> dict:
         `dict`: The cassette.
 
     Raises:
-        ValueError: If the file is not JSON or not a ``yian.cassette.v1`` cassette; the
+        `ValueError`: If the file is not JSON or not a ``yian.cassette.v1`` cassette; the
             message names the offending part, e.g. ``interactions[0].response``.
     """
     try:
@@ -305,7 +305,7 @@ class CassetteTransport(httpx2.MockTransport):
         requests (`list[httpx2.Request]`): Every request received, in order.
 
     Raises:
-        ValueError: If the cassette is malformed.
+        `ValueError`: If the cassette is malformed.
     """
 
     def __init__(self, cassette: dict | str | Path) -> None:
@@ -337,7 +337,7 @@ class CassetteTransport(httpx2.MockTransport):
         """Check that every interaction was used.
 
         Raises:
-            AssertionError: If some interactions were never requested, naming how many.
+            `AssertionError`: If some interactions were never requested, naming how many.
         """
         total = len(self._interactions)
         unused = total - len(self.requests)
@@ -373,10 +373,17 @@ class RecordingTransport(httpx2.BaseTransport):
     early still records what was read. Credential headers and every secret string are
     replaced with `REDACTED` when `cassette` is called.
 
+    Replay treats `REDACTED` as "any value" only when it is a whole query value,
+    header value or JSON value. A secret inside a larger value, such as a URL path
+    segment or ``pre-<redacted>``, is still redacted but must match literally, so that
+    cassette will not replay with a different key.
+
     Args:
         inner (`httpx2.BaseTransport`): The transport that really sends requests.
-        secrets (`Iterable[str]`): Values to replace with `REDACTED` in the URL, header
-            values, JSON body and response text, e.g. the API key in use.
+        secrets (`Iterable[str]`, *optional*, defaults to `()`): Values to replace with
+            `REDACTED` in the URL, header values, JSON body and response text, e.g. the
+            API key in use; also caught percent-encoded, plus-encoded and, in response
+            text, with ``/`` JSON-escaped as ``\\/``.
     """
 
     def __init__(self, inner: httpx2.BaseTransport, *, secrets: Iterable[str] = ()) -> None:
@@ -410,10 +417,24 @@ class RecordingTransport(httpx2.BaseTransport):
         """Close the inner transport."""
         self._inner.close()
 
-    def _redact(self, text: str) -> str:
-        """Replace each secret in ``text``, plain or percent-encoded, with `REDACTED`."""
+    def _redact(self, text: str, *, json_escaped: bool = False) -> str:
+        """Replace each secret in ``text`` with `REDACTED`.
+
+        Args:
+            text (`str`): The text to redact.
+            json_escaped (`bool`, *optional*, defaults to `False`): Also replace the
+                form with ``/`` escaped as ``\\/``, which a JSON reply may use.
+
+        Returns:
+            `str`: ``text`` with each secret replaced plain, percent-encoded (``%20``
+            for a space, as in a path) and plus-encoded (``+``, as in a query).
+        """
         for secret in self._secrets:
-            text = text.replace(secret, REDACTED).replace(quote(secret, safe=""), REDACTED)
+            forms = [secret, quote(secret, safe=""), quote_plus(secret, safe="")]
+            if json_escaped:
+                forms.append(secret.replace("/", "\\/"))
+            for form in forms:
+                text = text.replace(form, REDACTED)
         return text
 
     def _redact_json(self, value: Any) -> Any:
@@ -448,8 +469,8 @@ class RecordingTransport(httpx2.BaseTransport):
             `dict`: A ``yian.cassette.v1`` cassette with source ``recorded``.
 
         Raises:
-            ValueError: If a request body is not JSON.
-            httpx2.DecodingError: If a response body cannot be decoded.
+            `ValueError`: If a request body is not JSON.
+            `httpx2.DecodingError`: If a response body cannot be decoded.
         """
         interactions = []
         for request, response, sink in self._exchanges:
@@ -468,7 +489,7 @@ class RecordingTransport(httpx2.BaseTransport):
                 content=b"".join(sink),
             ).content
             # Redacted after joining, so a secret split across chunks is still caught.
-            text = self._redact(decoded.decode("utf-8", errors="replace"))
+            text = self._redact(decoded.decode("utf-8", errors="replace"), json_escaped=True)
             interactions.append(
                 {
                     "request": saved_request,
@@ -550,7 +571,7 @@ class ScriptedModel:
     ) -> None:
         self.provider = provider
         self.model = model
-        self._replies = list(replies)
+        self._replies = deque(replies)
         self.requests: list[Request] = []
         self.calls: list[str] = []
         self.closed = 0
@@ -562,7 +583,7 @@ class ScriptedModel:
         if not self._replies:
             number = len(self.requests)
             raise AssertionError(f"ScriptedModel has no reply left for request {number}")
-        reply = self._replies.pop(0)
+        reply = self._replies.popleft()
         if isinstance(reply, BaseException):
             raise reply
         if isinstance(reply, Response):
@@ -582,8 +603,8 @@ class ScriptedModel:
             `EventStream`: The reply's events.
 
         Raises:
-            AssertionError: If no reply is left.
-            BaseException: The reply itself, when it is an exception.
+            `AssertionError`: If no reply is left.
+            `BaseException`: The reply itself, when it is an exception.
         """
         return EventStream(self._events(request, "stream"), close=self._count_close)
 
@@ -597,8 +618,8 @@ class ScriptedModel:
             `Response`: `collect` of the reply's events.
 
         Raises:
-            AssertionError: If no reply is left.
-            BaseException: The reply itself when it is an exception, or an exception
+            `AssertionError`: If no reply is left.
+            `BaseException`: The reply itself when it is an exception, or an exception
                 scripted inside its events.
         """
         return collect(self._events(request, "generate"))

@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, quote, quote_plus, urlsplit
 import zlib
 
 import httpx2
@@ -304,6 +304,40 @@ def test_a_recorded_cassette_replays_with_a_different_key():
     transport.assert_done()
 
 
+def test_recording_redacts_percent_plus_and_json_escaped_secrets():
+    secret = "abc+def/ghi= " + "x" * 16
+
+    def handler(request):
+        # A JSON encoder may escape "/" as "\/"; json.dumps does not, so do it by hand.
+        echo = json.dumps({"echo": secret}).replace("/", "\\/")
+        return httpx2.Response(200, headers={"content-type": "application/json"}, text=echo)
+
+    recorder = RecordingTransport(httpx2.MockTransport(handler), secrets=[secret])
+    with build_client(transport=recorder) as client:
+        url = f"{BASE}/responses"
+        assert client.post(url, params={"key": secret}, json={"note": secret}).json() == {
+            "echo": secret
+        }
+    cassette = recorder.cassette(description="encoded secrets")
+    [interaction] = cassette["interactions"]
+    request, response = interaction["request"], interaction["response"]
+
+    assert query_of(request["url"])["key"] == REDACTED
+    assert request["json"] == {"note": REDACTED}
+    assert response["chunks"] == ['{"echo": "<redacted>"}']
+    dumped = json.dumps(cassette)
+    saved = request["url"] + "".join(response["chunks"])
+    forms = (
+        secret,
+        quote(secret, safe=""),
+        quote_plus(secret, safe=""),
+        secret.replace("/", "\\/"),
+    )
+    for form in forms:
+        assert form not in dumped
+        assert form not in saved
+
+
 def test_closing_a_stream_early_records_what_was_read():
     body = Body([b"data: one\n\n", b"data: two\n\n"])
     inner = httpx2.MockTransport(lambda request: httpx2.Response(200, stream=body))
@@ -475,7 +509,10 @@ def test_llm_exports():
 
     code = "import sys, yian.llm; print('yian.llm.testing' in sys.modules)"
     result = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True, check=True,
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=True,
         env={**os.environ, "PYTHONPATH": str(Path(yian.llm.__file__).parents[2])},
     )
     assert result.stdout.strip() == "False"

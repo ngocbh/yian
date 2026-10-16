@@ -8,6 +8,7 @@ import pytest
 
 from tests.compose.test_call_nesting_limit import _defs_chain, _mixed_chain
 from tests.deep_chains import deep_load, tight_stack
+from yian.compile.manifest import expansion_digest, flow_fingerprint
 from yian.compose import ComposedFlow, load_flow
 from yian.expr import ExpressionError
 from yian.nodes.contracts import Binding
@@ -62,3 +63,49 @@ def test_first_bad_span_in_check_order_is_reported():
         r"\(s\): too many positional arguments$",
     ):
         _check_templates(flow.compiled)
+
+
+def test_fingerprint_and_expansion_digest_of_a_deep_chain(mixed):
+    with tight_stack(_HEADROOM):
+        fingerprint = flow_fingerprint(mixed.compiled)
+        digest = expansion_digest(mixed.compiled)
+    assert len(fingerprint) == len(digest) == 64
+
+
+def test_fingerprint_of_a_nested_chain_is_unchanged():
+    """The digests main computed for this chain, so walking it iteratively keeps identity."""
+    flow = load_flow(_mixed_chain(30))
+    assert flow_fingerprint(flow.compiled) == (
+        "122a83b235f2eec4d186aabba535a83d648b2c55599f054136c34982bebc9e13"
+    )
+    assert expansion_digest(flow.compiled) == (
+        "a956c8a55e2ae28b69abc49cc85b5d2f3c5cac7e1ce9a16fbcd56d7e4bc08b6c"
+    )
+
+
+def test_a_child_flow_cycle_deep_in_a_chain_is_not_manifestable():
+    flow = load_flow(_defs_chain(4))
+    first = flow.compiled.nodes["top"].child
+    third = first.nodes["step"].child.nodes["step"].child
+    third.nodes["step"].child = first
+    cycle = r"nodes\.top\.child\.nodes\.step\.child\.nodes\.step\.child\.nodes\.step\.child"
+    with pytest.raises(
+        ValueError, match=rf"^flow\.{cycle}: recursive child-flow cycle is not manifestable$"
+    ):
+        flow_fingerprint(flow.compiled)
+    with pytest.raises(
+        ValueError, match=rf"^expansion\.{cycle}: recursive child-flow cycle is not manifestable$"
+    ):
+        expansion_digest(flow.compiled)
+
+
+def test_a_bad_field_in_a_grandchild_names_its_manifest_path():
+    flow = load_flow(_defs_chain(3))
+    grandchild = flow.compiled.nodes["top"].child.nodes["step"].child
+    object.__setattr__(grandchild.nodes["step"], "extra", 1)
+    node = r"nodes\.top\.child\.nodes\.step\.child\.nodes\.step"
+    unknown = r"unknown noncanonical execution field\(s\) for call: \['extra'\]$"
+    with pytest.raises(ValueError, match=rf"^flow\.{node}: {unknown}"):
+        flow_fingerprint(flow.compiled)
+    with pytest.raises(ValueError, match=rf"^expansion\.{node}: {unknown}"):
+        expansion_digest(flow.compiled)

@@ -15,6 +15,7 @@ import base64
 import hashlib
 import json
 import struct
+from collections.abc import Generator, Iterator
 from dataclasses import fields, is_dataclass
 from datetime import date, datetime
 from enum import Enum
@@ -50,6 +51,7 @@ from yian.nodes.map import MapNode
 from yian.nodes.start import StartNode
 from yian.nodes.tool import ToolNode
 from yian.nodes.wait import WaitNode
+from yian.trampoline import drive
 from yian.typesys.values import (
     FileRef, Type, canonical_union_order, long_int_digits, long_int_message,
 )
@@ -778,8 +780,12 @@ def _node_manifest(
     path: str,
     *,
     topology_only: bool,
-) -> dict[str, Any]:
-    """Canonicalize one concrete node under its exhaustive per-kind field policy."""
+) -> Generator[Any, Any, dict[str, Any]]:
+    """Canonicalize one concrete node under its exhaustive per-kind field policy.
+
+    A generator for `drive`: it yields its child flow's manifest walker rather than
+    calling it, so a deep chain of child flows does not recurse once per level.
+    """
     _check_node_fields(node, path)
     params = None
     if node.params is not None:
@@ -916,11 +922,13 @@ def _node_manifest(
     elif node.kind in (NodeKind.CALL, NodeKind.MAP, NodeKind.LOOP):
         manifest.update(
             {
-                "child": _flow_manifest(
-                    node.child,
-                    ctx,
-                    f"{path}.child",
-                    topology_only=topology_only,
+                "child": (
+                    yield _flow_manifest(
+                        node.child,
+                        ctx,
+                        f"{path}.child",
+                        topology_only=topology_only,
+                    )
                 ),
                 "flow_id": node.flow_id,
                 "flow_version": _canonical_value(
@@ -1010,8 +1018,12 @@ def _flow_manifest(
     path: str,
     *,
     topology_only: bool,
-) -> dict[str, Any]:
-    """Canonicalize a Flow recursively, optionally omitting CompiledFlow-only root fields."""
+) -> Generator[Any, Any, dict[str, Any]]:
+    """Canonicalize a Flow and its child flows, optionally omitting CompiledFlow-only root fields.
+
+    A generator for `drive`: it yields each node's manifest walker rather than calling
+    it, so a deep chain of child flows does not recurse once per level.
+    """
     if not isinstance(flow, Flow):
         raise TypeError(f"{path}: expected Flow, got {type(flow).__name__}")
     object_id = id(flow)
@@ -1054,7 +1066,7 @@ def _flow_manifest(
                 f"{path}.nodes: keys must be strings, got {type(bad_node_id).__name__}"
             )
         for node_id in sorted(flow.nodes):
-            nodes[node_id] = _node_manifest(
+            nodes[node_id] = yield _node_manifest(
                 flow.nodes[node_id],
                 ctx,
                 f"{path}.nodes.{node_id}",
@@ -1152,15 +1164,96 @@ def _flow_manifest(
         ctx.flows.remove(object_id)
 
 
+_JSON_OPTIONS: dict[str, Any] = {
+    "ensure_ascii": False,
+    "allow_nan": False,
+    "separators": (",", ":"),
+    "sort_keys": True,
+}
+
+
 def _canonical_json(value: Any) -> str:
-    """Encode already-canonical primitives in one byte-stable JSON spelling."""
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        allow_nan=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    )
+    """Encode already-canonical primitives in one byte-stable JSON spelling.
+
+    Args:
+        value (`Any`): JSON primitives in lists, tuples, and dicts; a value nested past the
+            C encoder's depth limit must also meet `_iterative_canonical_json`'s contract.
+
+    Returns:
+        `str`: Compact JSON with sorted keys and non-ASCII characters kept as is.
+
+    Raises:
+        `ValueError`: A float is NaN or infinite, or the value holds a cycle.
+        `TypeError`: A value is not JSON-encodable.
+    """
+    try:
+        return json.dumps(value, **_JSON_OPTIONS)
+    except RecursionError:
+        pass
+    # The C encoder recurses once per container, and a deep chain of child flows nests
+    # its manifest past that limit. The iterative encoder spells the same text more
+    # slowly, so only those values pay for it. It runs outside the handler so its own
+    # errors don't chain to the RecursionError.
+    return _iterative_canonical_json(value)
+
+
+def _iterative_canonical_json(value: Any) -> str:
+    """Encode `value` as `_canonical_json` would, keeping open containers on a list.
+
+    Each scalar and each key goes through `json.dumps` with the same options, and dict
+    keys are sorted as `sort_keys=True` sorts them, so the text is byte-identical to the
+    C encoder's for the values a manifest holds.
+
+    Args:
+        value (`Any`): Scalars (`str`, `int`, `float`, `bool`, `None`) in lists, tuples,
+            and dicts. Every dict key must be a `str`, which `json.dumps` does not
+            require, and the value must be acyclic, which this encoder does not check.
+
+    Returns:
+        `str`: The canonical JSON text.
+
+    Raises:
+        `TypeError`: A dict key is not a `str`, or a scalar is not JSON-encodable.
+        `ValueError`: A float is NaN or infinite.
+    """
+    parts: list[str] = []
+    # Each open container: its remaining (text before the entry, entry) pairs and its closer.
+    open_containers: list[tuple[Iterator[tuple[str, Any]], str]] = []
+    item = value
+    while True:
+        if isinstance(item, (list, tuple)):
+            parts.append("[")
+            open_containers.append(
+                (((("," if index else ""), entry) for index, entry in enumerate(item)), "]")
+            )
+        elif isinstance(item, dict):
+            for key in item:
+                if not isinstance(key, str):
+                    raise TypeError(f"keys must be str, not {type(key).__name__}")
+            parts.append("{")
+            entries = sorted(item.items(), key=lambda pair: pair[0])
+            open_containers.append(
+                (
+                    (
+                        (("," if index else "") + json.dumps(key, **_JSON_OPTIONS) + ":", entry)
+                        for index, (key, entry) in enumerate(entries)
+                    ),
+                    "}",
+                )
+            )
+        else:
+            parts.append(json.dumps(item, **_JSON_OPTIONS))
+        while open_containers:
+            entries_left, closer = open_containers[-1]
+            following = next(entries_left, None)
+            if following is not None:
+                prefix, item = following
+                parts.append(prefix)
+                break
+            parts.append(closer)
+            open_containers.pop()
+        else:
+            return "".join(parts)
 
 
 def _digest(value: Any) -> str:
@@ -1181,7 +1274,7 @@ def flow_manifest(flow: Flow) -> dict[str, Any]:
         TypeError: If the graph contains a noncanonical class or unsupported value.
         ValueError: If a node/flow has an unknown field or recursive object cycle.
     """
-    return _flow_manifest(flow, _ManifestContext(), "flow", topology_only=False)
+    return drive(_flow_manifest(flow, _ManifestContext(), "flow", topology_only=False))
 
 
 def flow_fingerprint(flow: Flow) -> str:
@@ -1203,10 +1296,12 @@ def expansion_digest(flow_fragment: Flow) -> str:
     Returns:
         A lowercase 64-character SHA-256 hexadecimal digest.
     """
-    manifest = _flow_manifest(
-        flow_fragment,
-        _ManifestContext(),
-        "expansion",
-        topology_only=True,
+    manifest = drive(
+        _flow_manifest(
+            flow_fragment,
+            _ManifestContext(),
+            "expansion",
+            topology_only=True,
+        )
     )
     return _digest(manifest)

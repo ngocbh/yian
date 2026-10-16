@@ -15,7 +15,7 @@ It also owns the compile/runtime inversion seam by injecting
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Generator, Mapping, Sequence
 import copy
 from dataclasses import dataclass, field
 import os
@@ -101,6 +101,7 @@ from yian.runtime.memory_runtime import MemoryRuntime
 from yian.skills import Skill
 from yian.tools import FunctionTool, ToolSet
 from yian.tools.types import tool_types
+from yian.trampoline import drive
 from yian.typesys import Type, ValueKind, canonical_type_label
 from yian.typesys.pool import VariablePool
 from yian.typesys.seeding import default_run_id, seed_system_clock
@@ -979,6 +980,11 @@ def _check_templates(flow: Any, path: tuple[str, ...] = ()) -> None:
             Raised when a span can't run; the message names the node and binding, the flow
             output, or the prompt field.
     """
+    drive(_check_flow_templates(flow, path))
+
+
+def _check_flow_templates(flow: Any, path: tuple[str, ...]) -> Generator[Any, None, None]:
+    """Check one flow level's spans, yielding each child flow's check to `drive`."""
     owner = f"node {'/'.join(path)!r} " if path else ""
     for node_id, node in flow.nodes.items():
         node_path = "/".join((*path, node_id))
@@ -1000,7 +1006,7 @@ def _check_templates(flow: Any, path: tuple[str, ...] = ()) -> None:
             _check_template_source(binding, subject, {} if key in reserved else node.types)
         node.validate_prompts(path=node_path)
         for child in node.origin_children():
-            _check_templates(child, (*path, node_id))
+            yield _check_flow_templates(child, (*path, node_id))
 
 
 def _check_template_source(binding: Any, subject: str, types: Mapping[str, Any]) -> None:
@@ -1224,11 +1230,19 @@ def _static_nodes(flow: Any, path: tuple[str, ...] = ()) -> list[tuple[str, Any]
     boundary imports no node class.
     """
     found: list[tuple[str, Any]] = []
-    for node_id, node in flow.nodes.items():
-        node_path = (*path, node_id)
+    # An explicit stack, so a deeply nested flow doesn't recurse per level. Entries are
+    # pushed reversed so they pop in pre-order: a node, then its child flows' nodes.
+    pending: list[tuple[tuple[str, ...], Any]] = [
+        ((*path, node_id), node) for node_id, node in reversed(flow.nodes.items())
+    ]
+    while pending:
+        node_path, node = pending.pop()
         found.append(("/".join(node_path), node))
-        for child in node.origin_children():
-            found.extend(_static_nodes(child, node_path))
+        for child in reversed(node.origin_children()):
+            pending.extend(
+                ((*node_path, child_id), child_node)
+                for child_id, child_node in reversed(child.nodes.items())
+            )
     return found
 
 

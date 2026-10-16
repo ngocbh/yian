@@ -215,6 +215,21 @@ def test_expand_keeps_the_first_of_each_repeated_name():
     assert tools.expand(["box", "search", "box", "a", "search"]) == ["a", "b", "search"]
 
 
+def test_tool_ids_lists_the_resolvable_tools():
+    @register_tool("run_tools_ids_probe")
+    def probe(text: str) -> str:
+        """Global tool."""
+        return text
+
+    assert ToolSet({"b": _upper, "box": [_named("named_fn")]}).tool_ids == ("b", "named_fn")
+    assert ToolSet({"b": _upper, "ask_user": _recording_handler([])}).tool_ids == (
+        "ask_user",
+        "b",
+    )
+    assert ToolSet({}).tool_ids == ()
+    assert "run_tools_ids_probe" in ToolSet().tool_ids
+
+
 def _recording_handler(seen: list[dict[str, Any]], answer: Any = "answer"):
     """Build one host handler that records the complete trusted call record."""
 

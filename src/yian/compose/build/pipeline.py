@@ -2572,6 +2572,7 @@ def _assemble(
         type_names=frozenset(registry),
         local_contracts=local_contracts,
         partial_union_nodes=narrowing.unordered,
+        registry=registry,
         diagnostics=diagnostics,
     )
     # Lower the flow-level `asserts:` into node-local asserts stamped on the synthesized
@@ -2584,6 +2585,7 @@ def _assemble(
         asserts_section, flow_inputs, set(descriptors), producers,
         assert_ranges=flow_assertion_ranges,
         input_contracts=flow_input_contracts,
+        registry=registry,
         diagnostics=diagnostics,
     )
 

@@ -830,7 +830,8 @@ def output_contract_field_error(
         isinstance_hint (`bool`, *optional*, defaults to `False`):
             Whether a member-only field error tells the author to check the member
             with an `isinstance(..., T) and ...` conjunct before the read rather than
-            in a case, for a condition no case can route (a LOOP predicate).
+            in a case, for a condition no case can route (a LOOP predicate or an
+            assert).
         union_root (`str | None`, *optional*, defaults to `None`):
             The pool path the referenced value is bound from, when `path` reads a
             node-local name. A member-only field error's fix then names the union

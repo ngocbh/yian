@@ -182,6 +182,7 @@ def output_contract_path_error(
     *,
     partial_union_fields: bool = False,
     union_root: str | None = None,
+    isinstance_hint: bool = False,
 ) -> str | None:
     """Return the field-read error for an output path, else ``None``.
 
@@ -190,13 +191,16 @@ def output_contract_path_error(
     a union have (unless `partial_union_fields`).
     An opaque field inside a partial record remains lenient below that field,
     while the partial record's closed root name set is still enforced. A
-    member-only field's fix names the union from `union_root` when it is set.
+    member-only field's fix names the union from `union_root` when it is set, and
+    points at an `isinstance(..., <Type>) and ...` check before the read instead of a
+    case when `isinstance_hint` is set (for a read inside a condition).
     """
     return output_contract_field_error(
         contract,
         fields,
         path,
         partial_union_fields=partial_union_fields,
+        isinstance_hint=isinstance_hint,
         union_root=union_root,
     )
 

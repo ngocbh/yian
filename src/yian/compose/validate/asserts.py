@@ -36,8 +36,14 @@ the node's own output. It validates + classifies each PRE/POST and stamps
 the origin and validation range together from one retained item cursor, keyed by
 node id and authored list index; only the origin crosses into the semantic assertion.
 
+Both halves check an assert's field reads narrowed by the assert's own checks: `and`,
+`or` and `not` short-circuit, so an `isinstance` or union tag comparison before a read
+decides which union members it sees (`isinstance(v, Buy) and v.qty > 0`), and a check
+that can never be true is a load error (`helpers.condition_guards`,
+`helpers.narrowing_facts`).
+
 Imports flow DOWN only within the engine core (`compile.validation`, `expr`,
-`typesys.values`) plus two acknowledged validate-phase edges: `nodes` (Node/
+`typesys`) plus two acknowledged validate-phase edges: `nodes` (Node/
 CaseNode discrimination) and `desugar.inline_calls.desugar_call_directives`
 (inline-call rejection). Within the validate phase it reads `LocalInput` from
 `typed_bindings`. Nothing in helpers/nodes/parse/desugar/edges imports this back.
@@ -45,22 +51,38 @@ CaseNode discrimination) and `desugar.inline_calls.desugar_call_directives`
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass, field, replace
-from typing import Callable
+from typing import Callable, Collection, Mapping, NamedTuple, Optional
+
+from lark import Token, Tree
 
 from yian.compile.validation import _classify_path
 from yian.diagnostics import OriginRef, SourceRange
-from yian.expr import ExpressionError, condition_refs
+from yian.expr import ExpressionError, condition_refs, parse_condition
 from yian.expr.expressions import rewrite_condition_refs
 from yian.expr.template import flow_call_callees_in_spans
 from yian.compose.desugar.inline_calls import desugar_call_directives
+from yian.compose.helpers.condition_guards import Guard, guarded_refs
 from yian.compose.helpers.isinstance_types import (
     collect_constructor_names,
     collect_isinstance_names,
 )
+from yian.compose.helpers.narrowing_facts import (
+    NOT_NARROWABLE,
+    BaseTypeOf,
+    ImpossibleCheck,
+    NotNarrowable,
+    checked_refs,
+    guarded_read_types,
+    impossible_check_message,
+    impossible_checks,
+    narrowed_read_error,
+    unresolved_type,
+)
 from yian.compose.helpers.output_contracts import (
-    local_field_error,
     output_contract_path_error,
+    project_output_contract,
 )
 from yian.compose.validate.typed_bindings import LocalInput
 from yian.nodes.base import Node, NodeKind
@@ -71,7 +93,8 @@ from yian.nodes.contracts import (
     PartialRecordContract,
     ValueContract,
 )
-from yian.typesys.values import IntTooLongError, ValueKind
+from yian.typesys.types import TypeRegistry
+from yian.typesys.values import IntTooLongError, Type, ValueKind
 from yian.compose.helpers.errors import LoadDiagnostics
 
 
@@ -82,6 +105,154 @@ _SYNTH_PREFIX = "__assert_"
 # Kinds whose node asserts move onto the spawned child flow's END. MAP is absent because
 # every MAP node assert is already rejected.
 _SPAWNER_KINDS = frozenset({NodeKind.CALL, NodeKind.LOOP})
+
+
+def _root_of(path: str, roots: Collection[str]) -> str | None:
+    """The root `path` is at or below, else `None`."""
+    for root in roots:
+        if path == root or path.startswith(root + "."):
+            return root
+    return None
+
+
+def _root_base_type(choice: Mapping[str, OutputContract]) -> BaseTypeOf:
+    """The declared type of a base path below one of `choice`'s roots, under that
+    root's chosen contract; other bases are not narrowed."""
+
+    def base_type_of(base: str) -> Type | None | NotNarrowable:
+        root = _root_of(base, choice)
+        if root is None:
+            return NOT_NARROWABLE
+        rest = base[len(root) + 1 :].split(".") if base != root else []
+        projected = project_output_contract(choice[root], rest)
+        return projected.type if type(projected) is ValueContract else None
+
+    return base_type_of
+
+
+class _ChoiceView(NamedTuple):
+    """What a condition proves under one choice of root contracts."""
+
+    choice: dict[str, OutputContract]
+    base_type_of: BaseTypeOf
+    impossible: list[ImpossibleCheck]
+    checked: list[tuple[str, Optional[Guard]]]
+
+
+def _condition_errors(
+    tree: Tree | Token,
+    roots: Mapping[str, tuple[OutputContract, ...]],
+    registry: TypeRegistry,
+    *,
+    partial_union_roots: Collection[str] = frozenset(),
+) -> list[str]:
+    """Return an assert's impossible checks and field-read errors, each message once.
+
+    `roots` maps each path whose field reads are checked (a node-local name, `output`,
+    `input.X`, `<id>.output`) to the contracts its value may have. `and`, `or` and `not`
+    short-circuit, so the checks before a read (`isinstance` and union tag comparisons)
+    narrow the values it can see (`guarded_read_types`): a read is fine when any narrowed
+    type allows it, and otherwise the first one's error is reported, naming the narrowed
+    type when it lacks the field. A read nothing narrows is walked on the root's contract.
+    A read after a reported impossible check, or guarded by an `isinstance` whose type
+    name doesn't resolve, is not checked.
+
+    A root with several contracts (a node-local name's alternatives, which carry the
+    branch that routes the node) is checked under each: a read is an error only when
+    every choice rejects it, and a check is impossible only when it is impossible under
+    every choice. Each distinct (read, guard) pair is checked, since one path can be read
+    both narrowed and not.
+    """
+    refs = guarded_refs(tree)
+    used = [root for root in roots if any(_root_of(ref, (root,)) for ref, _ in refs)]
+    if not used:
+        return []
+    choices = [
+        dict(zip(used, picked)) for picked in itertools.product(*(roots[r] for r in used))
+    ]
+    views: list[_ChoiceView] = []
+    for choice in choices:
+        base_type_of = _root_base_type(choice)
+        views.append(
+            _ChoiceView(
+                choice,
+                base_type_of,
+                impossible_checks(tree, base_type_of, registry),
+                checked_refs(tree, base_type_of, registry),
+            )
+        )
+    messages = [
+        impossible_check_message(check)
+        for check in views[0].impossible
+        if all(any(seen.text == check.text for seen in view.impossible) for view in views[1:])
+    ]
+    seen_reads: set[tuple[str, Guard]] = set()
+    for index, (ref, guard) in enumerate(refs):
+        root = _root_of(ref, used)
+        if root is None or ref == root or (ref, guard) in seen_reads:
+            continue
+        seen_reads.add((ref, guard))
+        if unresolved_type(guard, registry):
+            # The type-table pass reports the unknown name.
+            continue
+        message = _read_error(
+            ref,
+            root,
+            index,
+            views,
+            registry,
+            partial_union_fields=root in partial_union_roots,
+        )
+        if message is not None:
+            messages.append(message)
+    return list(dict.fromkeys(messages))
+
+
+def _read_error(
+    ref: str,
+    root: str,
+    index: int,
+    views: list[_ChoiceView],
+    registry: TypeRegistry,
+    *,
+    partial_union_fields: bool,
+) -> str | None:
+    """Return why the `index`-th read `ref` below `root` can't work under any choice of
+    root contracts, else `None`; a narrowed error is preferred over an unnarrowed one."""
+    errors: list[tuple[bool, str]] = []
+    for choice, base_type_of, _, checked in views:
+        guard = checked[index][1]
+        if guard is None:
+            # A read after a reported check is reached by no value.
+            return None
+        candidates = guarded_read_types(ref, guard, base_type_of, registry)
+        if not candidates:
+            error = output_contract_path_error(
+                choice[root],
+                ref[len(root) + 1 :].split("."),
+                ref,
+                partial_union_fields=partial_union_fields,
+                isinstance_hint=True,
+            )
+            if error is None:
+                return None
+            errors.append((False, error))
+            continue
+        first: str | None = None
+        for candidate in candidates:
+            typ, fields, _ = candidate
+            error = output_contract_path_error(
+                ValueContract(typ),
+                list(fields),
+                ref,
+                partial_union_fields=partial_union_fields,
+                isinstance_hint=True,
+            )
+            if error is None:
+                return None
+            first = first or narrowed_read_error(ref, candidate, error, registry)
+        errors.append((True, first))
+    return next((error for narrowed, error in errors if narrowed), errors[0][1])
 
 
 @dataclass(frozen=True)
@@ -119,6 +290,7 @@ def lower_flow_asserts(
     assert_ranges: "list[SourceRange | None] | None" = None,
     *,
     input_contracts: dict[str, ValueContract] | None = None,
+    registry: TypeRegistry | None = None,
     diagnostics: LoadDiagnostics | None = None,
 ) -> LoweredAsserts:
     """Lower a flow's `asserts:` into node-local asserts for the START/END boundary nodes.
@@ -140,13 +312,20 @@ def lower_flow_asserts(
     check into a body node.
 
     A `${<id>.output.f}` read is field-checked against the producer's contract, and an
-    `${input.X.f}` read against `input_contracts[X]` when the flow input has one.
+    `${input.X.f}` read against `input_contracts[X]` when the flow input has one. The
+    assert's own checks narrow its reads: `and`, `or` and `not` short-circuit, so an
+    `isinstance` or union tag comparison before a read (`isinstance(input.o, Buy) and
+    input.o.qty > 0`, `not isinstance(input.o, Buy) or input.o.qty > 0`) decides which
+    members it sees. A shorthand check base (`isinstance(o, Buy)`) is qualified like a
+    read. A check that can never be true is a load error, and the `isinstance` types
+    resolve in ``registry`` (the flow's typedefs).
 
-    Raises `LoadError` on the first malformed assert, bad ref, bad field read, or
-    `${system}` ref.
+    Raises `LoadError` on the first malformed assert, bad ref, impossible check, bad
+    field read, or `${system}` ref.
     """
     diagnostics = diagnostics or LoadDiagnostics()
     input_contracts = input_contracts or {}
+    registry = registry or {}
     result = LoweredAsserts()
     # Retain exact and partial carriers so a closed partial root can reject an
     # unknown field without inventing a semantic Type for opaque siblings.
@@ -198,6 +377,17 @@ def lower_flow_asserts(
             return f"input.{path}"
         return path
 
+    def _qualified_or_none(path: str) -> str | None:
+        """The qualified path when `_qualify_flow_input` changes it, else `None`."""
+        qualified = _qualify_flow_input(path)
+        return qualified if qualified != path else None
+
+    # The values whose field reads are checked, with the one contract each has.
+    roots: dict[str, tuple[OutputContract, ...]] = {
+        **{f"input.{name}": (contract,) for name, contract in input_contracts.items()},
+        **{f"{node_id}.output": (contract,) for node_id, contract in producers.items()},
+    }
+
     for i, assertion in enumerate(assert_list):
         expr = assertion.expression
         rng = ranges[i] if i < len(ranges) else None
@@ -217,25 +407,6 @@ def lower_flow_asserts(
         is_post = False
         for path in dict.fromkeys(refs):
             err = _classify_path(path, valid_targets, flow_inputs, ())
-            parts = path.split(".")
-            if (
-                err is None
-                and len(parts) >= 2
-                and parts[1] == "output"
-                and parts[0] in producers
-            ):
-                err = output_contract_path_error(
-                    producers[parts[0]], parts[2:], path
-                )
-            elif (
-                err is None
-                and parts[0] == "input"
-                and len(parts) >= 3
-                and parts[1] in input_contracts
-            ):
-                err = output_contract_path_error(
-                    input_contracts[parts[1]], parts[2:], path
-                )
             if err is not None:
                 raise diagnostics.error(
                     f"assert {assertion.display!r}: {err}", range=rng
@@ -251,8 +422,16 @@ def lower_flow_asserts(
             if head not in ("input", "system"):
                 is_post = True
 
+        # 3. impossible checks and field reads, narrowed by the assert's own checks.
+        qualified = parse_condition(rewrite_condition_refs(expr, _qualified_or_none))
+        errors = _condition_errors(qualified, roots, registry)
+        if errors:
+            raise diagnostics.error(
+                f"assert {assertion.display!r}: {errors[0]}", range=rng
+            )
+
         if not is_post:
-            # 3. PRE (boundary): rewrite each `${input.X}` ref to `${output.X}`. START's boundary
+            # 4. PRE (boundary): rewrite each `${input.X}` ref to `${output.X}`. START's boundary
             # asserts now ride its ORDINARY `post_asserts`, fired by the wrapper/eval_node against
             # `{**inputs, "output": <START's bound record>}`. Reading `${output.X}` sees the
             # validated, defaulted value START binds. Unqualified flow-input names first
@@ -269,7 +448,7 @@ def lower_flow_asserts(
             result.start_pre.append(replace(assertion, expression=lowered))
             continue
 
-        # 4. POST: turn each non-`output` ref into a synth END param, wired as an edge.
+        # 5. POST: turn each non-`output` ref into a synth END param, wired as an edge.
         def _post_rename(path: str) -> "str | None":
             path = _qualify_flow_input(path)
             segs = path.split(".")
@@ -320,6 +499,7 @@ def validate_node_asserts(
     type_names: frozenset[str] = frozenset(),
     local_contracts: dict[str, dict[str, LocalInput]] | None = None,
     partial_union_nodes: frozenset[str] = frozenset(),
+    registry: TypeRegistry | None = None,
     diagnostics: LoadDiagnostics | None = None,
 ) -> None:
     """Validate + classify + stamp each node's `asserts:` — the per-node contract.
@@ -340,7 +520,13 @@ def validate_node_asserts(
     `${...}` to a name in ``type_names`` (the flow's `typedefs:` names) is a constructor,
     not an inline call.
     Classifies each PRE (no `${output}`) or POST (reads `${output}`) and stamps
-    `node.pre_asserts` / `node.post_asserts`. ``assertion_site_at`` optionally supplies
+    `node.pre_asserts` / `node.post_asserts`. An assert's own checks narrow its reads:
+    `and`, `or` and `not` short-circuit, so an `isinstance` or union tag comparison
+    before a read (`isinstance(v, Buy) and v.qty > 0`, `v.action != 'buy' or v.qty > 0`)
+    decides which members it sees, with the `isinstance` types resolved in ``registry``
+    (the flow's typedefs). A local name's alternatives carry the branch that routes the
+    node, so a check is a load error when it can never be true under every alternative.
+    ``assertion_site_at`` optionally supplies
     each carrier's opaque origin and validation range from the same authored occurrence,
     keyed by node id and original authored index. Runs in the shared `_assemble`, so a
     `defs:` child flow's internal nodes get this too. Accumulates all errors into one
@@ -349,6 +535,7 @@ def validate_node_asserts(
     """
     diagnostics = diagnostics or LoadDiagnostics()
     local_contracts = local_contracts or {}
+    registry = registry or {}
     errors: list[tuple[str, SourceRange | None]] = []
     for nid, node in nodes.items():
         desc = descriptors.get(nid)
@@ -437,6 +624,7 @@ def validate_node_asserts(
             # parse-check + collect refs on the ONE unified condition walk (any spelling).
             try:
                 refs = condition_refs(a)
+                tree = parse_condition(a)
             except ExpressionError as exc:
                 # A long int's text would repeat every digit; the range still points at it.
                 shown = "" if isinstance(exc.__cause__, IntTooLongError) else f" {a!r}"
@@ -448,6 +636,8 @@ def validate_node_asserts(
                 )
                 continue
             reads_output = False
+            # The values whose field reads are checked, with the contracts each may have.
+            roots: dict[str, tuple[OutputContract, ...]] = {}
             for ref in dict.fromkeys(refs):
                 segs = ref.split(".")
                 head = segs[0] if segs else ""
@@ -480,27 +670,11 @@ def validate_node_asserts(
                                 )
                             )
                         elif contract is not None:
-                            err = output_contract_path_error(contract, segs[1:], ref)
-                            if err is not None:
-                                errors.append(
-                                    (
-                                        f"node {nid!r} assert: {err}",
-                                        error_range,
-                                    )
-                                )
+                            roots["output"] = (contract,)
                 elif head in declared:
                     local = node_locals.get(head)
-                    if local is None or len(segs) < 2:
-                        continue
-                    err = local_field_error(
-                        local.alternatives,
-                        segs[1:],
-                        ref,
-                        source=local.source,
-                        partial_union_fields=nid in partial_union_nodes,
-                    )
-                    if err is not None:
-                        errors.append((f"node {nid!r} assert: {err}", error_range))
+                    if local is not None and local.alternatives:
+                        roots[head] = local.alternatives
                 elif head in _POOL_HEADS:
                     errors.append(
                         (
@@ -517,6 +691,19 @@ def validate_node_asserts(
                             error_range,
                         )
                     )
+            # A spawner assert with `isinstance` was rejected above, so its impossible
+            # checks are never reported on top of that error.
+            for message in _condition_errors(
+                tree,
+                roots,
+                registry,
+                partial_union_roots=(
+                    frozenset(roots) - {"output"}
+                    if nid in partial_union_nodes
+                    else frozenset()
+                ),
+            ):
+                errors.append((f"node {nid!r} assert: {message}", error_range))
             if reads_output:
                 post.append(Assertion(expression=a, display=a, origin=origin))
             else:

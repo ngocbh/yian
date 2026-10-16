@@ -1,26 +1,29 @@
 # Seed gallery — NEGATIVE examples (expected failures)
 
-These flows are **supposed to fail** — most at load/compile, some loudly at runtime. They pin
+These flows are **supposed to fail** — most at load/compile, some at run start or loudly at
+runtime. They pin
 the Compose loader and runtime contract that failures are loud and source-located, and double as
 the loader's negative test fixtures
 (`tests/engine/test_errors.py`). Each file's header states the expected diagnostic **and
-whether it fails at compile or runtime**, and isolates exactly **one** failure (everything
-else in the file is valid).
+whether it fails at compile, run start, or runtime**, and isolates exactly **one** failure
+(everything else in the file is valid).
 
 ## The rule — every behavior gets negative fixtures
 
 **For each seed or engine behavior in the gallery, add error fixtures here that capture its
-expected failure modes — both compile-time and runtime — that the engine can actually
+expected failure modes — compile-time, run-start, and runtime — that the engine can actually
 detect.** Concretely:
 
 - **Compile-time** failures load via `load_flow` and must raise `LoadError`; when a source position
   is available, assert the diagnostic frame's `SourceRange` against the offending
   `.yaml` site, not the IR.
+- **Run-start** failures load clean, and `run_flow` must raise `ValueError` before any log
+  exists; assert it with `pytest.raises` and check the log path was never created.
 - **Runtime** failures run via `run_flow` and must come back as
   `RunResult.status == "failed"` with the expected substring in
   `RunResult.failure.message` — never an uncaught crash.
-- Each fixture isolates **one** failure, states compile-vs-runtime + the expected diagnostic in
-  its header, and gets a matching assertion in `tests/engine/test_errors.py`.
+- Each fixture isolates **one** failure, states compile, run start, or runtime + the expected
+  diagnostic in its header, and gets a matching assertion in `tests/engine/test_errors.py`.
 - A failure mode whose check isn't built yet goes under `_future/errors/` until that check exists —
   never assert an error the engine can't yet capture.
 - **A failure the engine DOES catch but LOCATES WRONG is a third case** — it belongs here, marked ⚠
@@ -64,6 +67,12 @@ just what can.
 | `e35-bad-map-over-ref.yaml` | a dangling `${…}` in a MAP's reserved `over:` key | the caret boxes the `over:` line, not the `input:` block — `("field", "over")` is tuple-keyed |
 | `e36-bad-map-input-ref.yaml` | a dangling `${…}` in ONE of a MAP's per-element `input:` entries | the caret boxes that entry, not the whole block — the MAP per-element scan path |
 
+## Run-start failures (`run_flow` raises `ValueError` before any log exists)
+
+| File | Should fail with | Pins |
+|---|---|---|
+| `e23-unknown-tool.yaml` | a TOOL node naming a `tool_id` the run's tools lack | run-start TOOL tool-id check |
+
 ## Runtime failures (fail during the run; the header states the triggering inputs)
 
 | File | Should fail with | Pins |
@@ -74,7 +83,6 @@ just what can.
 | `e20-code-raises.yaml` | a CODE callable that raises → the run fails | node-failure → `RunFailed` |
 | `e21-code-wrong-type.yaml` | a CODE node returns the wrong type for its `output:` | typed write boundary |
 | `e22-required-missing.yaml` | `${x:?msg}` on an omitted value (run with it omitted) | `:?` use-site required |
-| `e23-unknown-tool.yaml` | a TOOL node naming an unregistered `tool_id` | TOOL registry lookup |
 | `e08-input-type-mismatch.yaml` | a non-coercible input value for a declared type (run `window: "soon"`) | typed read boundary (mirror of e21) |
 | `e24-nested-code-raise.yaml` | a CODE callable that raises INSIDE a called child (namespaced node id `run/boom`) | canonical outer CALL + inner CODE origins and `--engine-trace` |
 | `e25-external-raise.yaml` (+ `lib_boom.yaml`) | a CODE callable that raises inside an EXTERNAL `uses:` flow (`go/kaboom`) | ordered origin frames across a file boundary |

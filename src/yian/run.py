@@ -403,7 +403,8 @@ def run_flow(
             method named by its `__name__`. Each tool name calls one tool: the same tool may sit in
             several groups, but two different tools may not share a name, and
             no group tool may be named `ask_user` or `load_skill`. Every static AGENT grant must name a tool or
-            group in this set; this is checked before the log is created.
+            group in this set, and every static TOOL node's `tool_id` must name a
+            tool in it; this is checked before the log is created.
             Granting skills also binds the built-in ``load_skill`` tool,
             which is not part of this mapping.
         skills (`Mapping[str, Skill] | None`, *optional*, defaults to `None`):
@@ -455,8 +456,9 @@ def run_flow(
             ``base_url``, a `BaseTool` in
             `tools` is named differently from its key, a group tool's name
             clashes or is reserved, an AGENT grants a tool or group not in the
-            run's tools, a TOOL node's inputs or `output:` do not match the
-            names and types its tool declares (an input the tool does not take,
+            run's tools, a TOOL node names a tool not in the run's tools, a
+            TOOL node's inputs or `output:` do not match the names and types
+            its tool declares (an input the tool does not take,
             a missing required input, or a type that can never fit), an
             AGENT grants skills while `skills` is `None` or lacks a listed
             skill, a node assertion, CASE `when`, or LOOP `while`/`until`
@@ -776,7 +778,8 @@ def resume_flow(
             worker count violates its contract, a group tool's name clashes or
             is reserved, an unfinished run's AGENT grants a tool or group
             not in `tools` or grants skills while `skills` is `None` or lacks
-            a listed skill, an unfinished run's TOOL node's inputs or
+            a listed skill, an unfinished run's TOOL node names a tool not in
+            `tools`, an unfinished run's TOOL node's inputs or
             `output:` do not match the names and types its tool declares, or
             an unfinished run's node assertion, CASE `when`, or LOOP
             `while`/`until` set in Python is not a valid boolean expression, or

@@ -104,7 +104,7 @@ from yian.runtime.state import (
 )
 from yian.runtime.memory_runtime import MemoryRuntime
 from yian.skills import Skill
-from yian.tools import FunctionTool, ToolSet
+from yian.tools import FunctionTool, McpServer, ToolSet
 from yian.tools.types import tool_types
 from yian.typesys import Type, ValueKind, canonical_type_label
 from yian.typesys.pool import VariablePool
@@ -342,7 +342,7 @@ def run_flow(
     llm_config: dict[str, Any] | None = None,
     memory: Mapping[str, Memory] | None = None,
     learnable: bool = False,
-    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None = None,
+    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | McpServer | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
     context: Any = None,
@@ -405,7 +405,7 @@ def run_flow(
             call. Forward execution runs no memory learners or learned-mutation
             commits. Memory is optional; an enabled mapping supplies owned learners
             for that call. Automatic session history is independent of retention.
-        tools (`Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None`, *optional*, defaults to `None`):
+        tools (`Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | McpServer | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None`, *optional*, defaults to `None`):
             The tools this run sees, keyed by tool id. `None` uses the tools
             registered with `register_tool`. A mapping, even an empty one, is the
             whole set: registered tools are hidden. To keep them, pass
@@ -622,7 +622,7 @@ def _run_flow_controlled(
     llm_config: dict[str, Any] | None = None,
     memory: Mapping[str, Memory] | None = None,
     learnable: bool = False,
-    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None = None,
+    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | McpServer | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
     context: Any = None,
@@ -790,7 +790,7 @@ def resume_flow(
     on_event: EventHook | None = None,
     on_stream: StreamHook | None = None,
     memory: Mapping[str, Memory] | None = None,
-    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None = None,
+    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | McpServer | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
     api_key: str | SecretStr | None = None,
@@ -824,7 +824,7 @@ def resume_flow(
             recorded run enabled memory and still has unfinished forward execution. Terminal
             inspection opens no memories; supplied references remain available
             for later explicit backward calls.
-        tools (`Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None`, *optional*, defaults to `None`):
+        tools (`Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | McpServer | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None`, *optional*, defaults to `None`):
             The tools the resumed segment sees, with the same rules as
             `run_flow`. Tools are not recorded in the log, so pass the same
             mapping (including `ask_user`) that the original run used. Group
@@ -922,7 +922,7 @@ def _resume_flow_controlled(
     on_event: EventHook | None = None,
     on_stream: StreamHook | None = None,
     memory: Mapping[str, Memory] | None = None,
-    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None = None,
+    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | McpServer | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
     api_key: str | SecretStr | None = None,

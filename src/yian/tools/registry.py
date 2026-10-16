@@ -43,6 +43,7 @@ from yian.skills.tool import LOAD_SKILL
 from yian.tools.context import _STOP_EVENT, ToolContext
 from yian.tools.errors import ToolCheckError
 from yian.tools.function_tools import FunctionTool
+from yian.tools.mcp import McpServer
 from yian.tools.schema import _is_tool_context, function_schema
 from yian.tools.types import _input_type_from_json_schema
 from yian.typesys.values import Type, TypeCheckError, ValueKind, build_value_as
@@ -403,6 +404,8 @@ def _is_positional(param: inspect.Parameter) -> bool:
 def _group_tool(group: str, index: int, item: Any) -> BaseTool:
     """Return one group item as a tool named by its `name` or `__name__`."""
     where = f"tools[{group!r}][{index}]"
+    if isinstance(item, McpServer):
+        raise TypeError(f"{where} is an MCP server; pass it as its own tools= entry, which becomes its group")
     if isinstance(item, BaseTool):
         return item
     if isinstance(item, FunctionTool):
@@ -418,6 +421,35 @@ def _group_tool(group: str, index: int, item: Any) -> BaseTool:
         f"{where} must be a BaseTool, a FunctionTool, a function, or a method, "
         f"got {type(item).__name__}"
     )
+
+
+def _server_tools(key: str, server: McpServer) -> tuple[FunctionTool, ...]:
+    """Return the tools of the MCP server passed as `tools[key]`.
+
+    Args:
+        key (`str`):
+            The server's key in the `tools=` mapping.
+        server (`McpServer`):
+            The server.
+
+    Returns:
+        `tuple[FunctionTool, ...]`:
+            The server's tools, in the order it listed them.
+
+    Raises:
+        `TypeError`:
+            Raised when the server isn't open.
+        `ValueError`:
+            Raised when the server was open but has gone away.
+    """
+    if not server.is_open:
+        raise TypeError(
+            f"tools[{key!r}] is an MCP server that isn't open; open it with \"with server:\" "
+            "or pass it to run_flow/resume_flow, which open it"
+        )
+    if server._dead:
+        raise ValueError(f"tools[{key!r}]: MCP server '{server.label}' is closed")
+    return server.tools
 
 
 def _same_item(first: Any, other: Any) -> bool:
@@ -473,8 +505,9 @@ class ToolSet:
     empty one, the run sees only that mapping's entries; there is no fallback to
     the registry. Two runs with different `ToolSet`s never see each other's entries.
 
-    An entry whose value is a list or tuple is a tool group. An AGENT node grants a
-    group by its key, and `expand` replaces that key with the group's tool names.
+    An entry whose value is a list or tuple, or an opened `McpServer`, is a tool
+    group. An AGENT node grants a group by its key, and `expand` replaces that key
+    with the group's tool names.
     Every tool name in the run names one tool: the same tool object may sit in
     several groups, but a group tool may not share its name with a different tool
     or with a top-level key, or take a reserved name (`ask_user`, `load_skill`).
@@ -488,7 +521,7 @@ class ToolSet:
     of the run calling it through `yian.tools.context._current_stop()`.
 
     Args:
-        tools (`Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None`, *optional*, defaults to `None`):
+        tools (`Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | McpServer | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None`, *optional*, defaults to `None`):
             The run's tools keyed by tool id. A function or method becomes a tool
             named by its key; its type hints give the arguments, and its
             docstring's first text block and `Args` entries give the description
@@ -498,6 +531,7 @@ class ToolSet:
             already use its key as its name. A list or tuple is a group keyed by its
             group name; each item is a `BaseTool` or `FunctionTool` named by its
             `name`, or a function or method named by its `__name__` (not a lambda).
+            An opened `McpServer` is a group of the tools it listed when it opened.
             The `ask_user` entry must be a plain callable; it is wrapped so the
             model sees `question` and `options`, and it receives `question`,
             `questions`, `answer_schema`, `title`, `node_id`, and `options` as
@@ -512,15 +546,17 @@ class ToolSet:
     Raises:
         `TypeError`:
             `tools` is not a mapping or `None`, a key is not a non-empty string,
-            an entry is not a `BaseTool`, `FunctionTool`, function, method, or
-            group of them, a group item is a lambda, a function is async, an
+            an entry is not a `BaseTool`, `FunctionTool`, function, method,
+            `McpServer`, or group of them, a group item is a lambda or an
+            `McpServer`, an `McpServer` entry isn't open, a function is async, an
             annotation can't be resolved, a function puts `ToolContext` anywhere
             but its first parameter, or the `ask_user` handler cannot take its six
             keyword fields.
         `ValueError`:
-            A `BaseTool` or `FunctionTool` entry's name differs from its key, or
-            a group tool's name is `ask_user` or `load_skill`, is a top-level key,
-            or names a different tool elsewhere in the groups.
+            A `BaseTool` or `FunctionTool` entry's name differs from its key, an
+            `McpServer` entry was open but its server has gone away, or a group
+            tool's name is `ask_user` or `load_skill`, is a top-level key, or names
+            a different tool elsewhere in the groups.
 
     Example:
         ```python
@@ -551,7 +587,7 @@ class ToolSet:
 
     def __init__(
         self,
-        tools: Mapping[str, _Entry | Sequence[_Entry]] | None = None,
+        tools: Mapping[str, _Entry | McpServer | Sequence[_Entry]] | None = None,
         *,
         context: Any = None,
     ) -> None:
@@ -592,6 +628,10 @@ class ToolSet:
                 built[tool_id] = _tool_from_function_tool(entry)
             elif inspect.isroutine(entry):
                 built[tool_id] = _tool_from_function(tool_id, entry)
+            elif isinstance(entry, McpServer):
+                group_items[tool_id] = [
+                    (item, _tool_from_function_tool(item)) for item in _server_tools(tool_id, entry)
+                ]
             elif isinstance(entry, (list, tuple)):
                 group_items[tool_id] = [
                     (item, _group_tool(tool_id, index, item)) for index, item in enumerate(entry)

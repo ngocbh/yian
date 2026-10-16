@@ -14,10 +14,13 @@ optional name and description override. ``tools.errors`` holds
 ``ReportedToolError``, which a tool raises for a failure an AGENT's model reads as
 the call's result, ``PermanentToolError`` and ``TransientToolError``, which a tool
 raises to stop or steer a TOOL node's retries, and ``ToolCheckError``, raised when a
-check yian runs on a call's result fails.
+check yian runs on a call's result fails. ``tools.mcp`` holds ``mcp_server``, which
+describes a Model Context Protocol server, the ``McpServer`` it returns, whose opened
+tools a ``ToolSet`` takes as one group, and the ``McpError`` classes its calls raise;
+the MCP SDK is imported only when a server opens.
 
 Knows about: langchain-core, pydantic, typesys, the skills leaf, the stdlib-only
-yian.defaults, and the Python standard library.
+yian.defaults, the MCP SDK (lazily, in ``tools.mcp``), and the Python standard library.
 Never imports: nodes, compile, compose, runtime, the run boundary, or CLI.
 """
 
@@ -31,6 +34,19 @@ from yian.tools.errors import (
     TransientToolError,
 )
 from yian.tools.function_tools import FunctionTool, function_tool
+from yian.tools.mcp import (
+    McpCallCancelled,
+    McpConnectError,
+    McpError,
+    McpInvalidRequestError,
+    McpRequestError,
+    McpServer,
+    McpServerClosed,
+    McpTimeoutError,
+    McpToolError,
+    McpTransportError,
+    mcp_server,
+)
 from yian.tools.registry import (
     TOOL_REGISTRY,
     ToolSet,
@@ -44,6 +60,16 @@ from yian.tools.registry import (
 __all__ = [
     "TOOL_REGISTRY",
     "FunctionTool",
+    "McpCallCancelled",
+    "McpConnectError",
+    "McpError",
+    "McpInvalidRequestError",
+    "McpRequestError",
+    "McpServer",
+    "McpServerClosed",
+    "McpTimeoutError",
+    "McpToolError",
+    "McpTransportError",
     "PermanentToolError",
     "ReportedToolError",
     "ToolCheckError",
@@ -53,6 +79,7 @@ __all__ = [
     "function_tool",
     "invoke_tool",
     "invoke_tool_trusted",
+    "mcp_server",
     "register_tool",
     "registered_tools",
     "resolve_tools",

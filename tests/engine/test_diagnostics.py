@@ -583,6 +583,9 @@ expected = [
     "run_flow",
     "build_memories",
     "MemoryRegistry",
+    "ToolContext",
+    "FunctionTool",
+    "function_tool",
 ]
 assert yian.__all__ == expected
 assert set(expected) <= set(dir(yian))

@@ -18,7 +18,9 @@ A plain function or method becomes a tool through ``tools.schema.function_schema
 its type hints give the argument model, and its docstring's first text block and
 ``Args`` entries give the description and the parameter descriptions. A first
 parameter annotated ``ToolContext`` is hidden from the model; ``ToolSet.invoke``
-passes the call's context (``tools.context``) there.
+passes the call's context (``tools.context``) there. A ``FunctionTool``
+(``tools.function_tools``) supplies its own JSON Schema and ``on_invoke`` instead;
+``ToolSet`` checks its arguments against that schema before the call.
 """
 
 from __future__ import annotations
@@ -29,7 +31,7 @@ import inspect
 import json
 from threading import RLock
 from types import MappingProxyType
-from typing import Annotated, Any, Callable, get_type_hints
+from typing import Annotated, Any, Callable
 from uuid import uuid4
 
 from langchain_core.tools import BaseTool, InjectedToolArg, StructuredTool
@@ -38,36 +40,48 @@ from pydantic import BeforeValidator, Field
 from yian.defaults import current
 from yian.skills.tool import LOAD_SKILL
 from yian.tools.context import ToolContext
+from yian.tools.function_tools import FunctionTool
 from yian.tools.schema import _is_tool_context, function_schema
+from yian.tools.types import _input_type_from_json_schema
+from yian.typesys.values import TypeCheckError, ValueKind, build_value_as
 
-# Maps tool id -> a LangChain tool with a Pydantic argument schema. The supported
-# ``register_tool`` path guarantees that schema, which the strict invocation boundary needs.
+# Maps tool id -> a LangChain tool with a Pydantic argument schema, or a
+# ``FunctionTool``'s JSON Schema that yian checks itself. The supported ``register_tool``
+# path guarantees one of these, which the strict invocation boundary needs.
 TOOL_REGISTRY: dict[str, BaseTool] = {}
 _REGISTRY_LOCK = RLock()
 _ASK_USER_ID = "ask_user"
 # Names a group tool may not take: the run's ask_user handler and the skills tool.
 _RESERVED_TOOL_NAMES = frozenset({_ASK_USER_ID, LOAD_SKILL})
+# One entry of a host `tools=` mapping or of a tool group.
+_Entry = BaseTool | FunctionTool | Callable[..., Any]
 
 
-def register_tool(tool_id: str) -> Callable:
-    """Register the decorated function as a tool under `tool_id`.
+def register_tool(tool_id: str, *, description_override: str | None = None) -> Callable:
+    """Register the decorated function or `FunctionTool` as a tool under `tool_id`.
 
     The first text block of the function's docstring becomes the tool description the
     model sees, and its `Args` entries (Google, NumPy, or Sphinx style) describe the
     parameters. A first parameter annotated `ToolContext` or `ToolContext[T]` is hidden
-    from the model and receives the call's context. The original function is returned
-    unchanged; the built tool is stored in `TOOL_REGISTRY`.
+    from the model and receives the call's context. A `FunctionTool` keeps its own
+    schema and description. The target is returned unchanged; the built tool is
+    stored in `TOOL_REGISTRY`.
 
     Args:
         tool_id (`str`):
-            The unique id to register under; a duplicate id raises.
+            The unique id to register under; a duplicate id raises. A
+            `FunctionTool`'s name must equal it.
+        description_override (`str`, *optional*, defaults to `None`):
+            The description the model sees. `None` keeps the docstring's (for a
+            function) or the tool's own (for a `FunctionTool`).
 
     Returns:
         `Callable`: A decorator that registers its target and returns it unchanged.
 
     Raises:
         `ValueError`:
-            `tool_id` is already registered, or is the reserved `ask_user` id.
+            `tool_id` is already registered, is the reserved `ask_user` id, or
+            differs from a `FunctionTool`'s name.
         `TypeError`:
             The function is async, an annotation can't be resolved, or `ToolContext`
             appears anywhere but as the first parameter's type.
@@ -91,7 +105,7 @@ def register_tool(tool_id: str) -> Callable:
         ```
     """
 
-    def decorator(fn: Callable) -> Callable:
+    def decorator(fn: Callable | FunctionTool) -> Callable | FunctionTool:
         if tool_id == _ASK_USER_ID:
             raise ValueError(
                 f"tool id {_ASK_USER_ID!r} is reserved; pass "
@@ -100,7 +114,16 @@ def register_tool(tool_id: str) -> Callable:
         with _REGISTRY_LOCK:
             if tool_id in TOOL_REGISTRY:
                 raise ValueError(f"Duplicate tool id '{tool_id}'")
-            TOOL_REGISTRY[tool_id] = _tool_from_function(tool_id, fn)
+            if isinstance(fn, FunctionTool):
+                if fn.name != tool_id:
+                    raise ValueError(
+                        f"tool id {tool_id!r} names a FunctionTool named {fn.name!r}; "
+                        "its name must match its id"
+                    )
+                tool = _tool_from_function_tool(fn, description=description_override)
+            else:
+                tool = _tool_from_function(tool_id, fn, description=description_override)
+            TOOL_REGISTRY[tool_id] = tool
         return fn
 
     return decorator
@@ -151,6 +174,43 @@ def _tool_from_function(
         name=tool_id,
         description=schema.description or tool_id,
         args_schema=schema.params_model,
+        func=func,
+        yian_call=yian_call,
+    )
+
+
+def _tool_from_function_tool(ft: FunctionTool, *, description: str | None = None) -> _HostTool:
+    """Build the tool for `ft`, named by its name.
+
+    A tool from `function_tool` carries the function's pydantic model and return
+    annotation, as a plain function tool does; any other carries the JSON Schema,
+    which `ToolSet` checks before calling `on_invoke`. `description` replaces
+    `ft.description`.
+    """
+    schema = ft._schema
+
+    # Unannotated, so `tools.types` reads no return type from a JSON-Schema tool.
+    def func(*args, **kwargs):
+        raise TypeError(f"tool {ft.name!r} is a FunctionTool; invoke it through a run's ToolSet")
+
+    if schema is not None and schema.return_annotation is not inspect.Signature.empty:
+        func.__annotations__ = {"return": schema.return_annotation}
+
+    def yian_call(ctx: ToolContext[Any], payload: dict[str, Any]) -> Any:
+        result = ft.on_invoke(ctx, payload)
+        if inspect.isawaitable(result):
+            if inspect.iscoroutine(result):
+                result.close()  # Never awaited; closing avoids a "never awaited" warning.
+            raise TypeError(
+                f"tool {ft.name!r} returned an awaitable; yian calls tools synchronously, "
+                "so on_invoke must return the result"
+            )
+        return result
+
+    return _HostTool(
+        name=ft.name,
+        description=description or ft.description,
+        args_schema=ft.params_json_schema if schema is None else schema.params_model,
         func=func,
         yian_call=yian_call,
     )
@@ -208,14 +268,14 @@ def _normalize_options(value: Any) -> list[str] | None:
     return labels or None
 
 
-def _ask_user_tool(handler: Callable[..., Any]) -> _HostTool:
+def _ask_user_tool(handler: Callable[..., Any], takes_context: bool) -> _HostTool:
     """Wrap a host handler in the fixed `ask_user` tool.
 
     The model-visible schema contains `question` and optional `options`, which are
     cleaned by `_normalize_options`. Structured question and display metadata are
     injected fields, so only a trusted invocation can set them. The handler always
     receives all six fields as keyword arguments, after the call's `ToolContext`
-    when its first parameter is annotated `ToolContext`.
+    when `takes_context` (from `_handler_takes_context`) is true.
     """
 
     def ask_user(
@@ -245,7 +305,6 @@ def _ask_user_tool(handler: Callable[..., Any]) -> _HostTool:
             options=options,
         )
 
-    takes_context = _handler_takes_context(handler)
     fields = tuple(inspect.signature(ask_user).parameters)
 
     def yian_call(ctx: ToolContext[Any], payload: dict[str, Any]) -> Any:
@@ -270,18 +329,41 @@ def _ask_user_tool(handler: Callable[..., Any]) -> _HostTool:
 
 
 def _handler_takes_context(handler: Callable[..., Any]) -> bool:
-    """Return whether `handler`'s first parameter is a positional `ToolContext`."""
+    """Return whether `handler`'s first parameter is a positional `ToolContext`.
+
+    Works for functions, bound methods, callable objects and partials. A handler
+    with no readable signature takes no context.
+
+    Raises:
+        `TypeError`:
+            Raised when an annotation can't be resolved and the first parameter's
+            annotation mentions `ToolContext`.
+    """
     try:
-        params = list(inspect.signature(handler).parameters.values())
-        hints = get_type_hints(handler)
-    except Exception:
-        return False  # Unreadable signature or annotations: called with keywords only.
-    if not params or params[0].kind not in (
-        inspect.Parameter.POSITIONAL_ONLY,
-        inspect.Parameter.POSITIONAL_OR_KEYWORD,
-    ):
+        signature = inspect.signature(handler, eval_str=True)
+    except (NameError, AttributeError, SyntaxError, TypeError, ValueError) as exc:
+        # Evaluating a string annotation failed, or there is no signature at all.
+        try:
+            first = next(iter(inspect.signature(handler).parameters.values()), None)
+        except (TypeError, ValueError):
+            return False  # No readable signature: called with keywords only.
+        if first is None or not _is_positional(first):
+            return False
+        if not isinstance(first.annotation, str):
+            return _is_tool_context(first.annotation)
+        if "ToolContext" in first.annotation:
+            raise TypeError(
+                f"tools['ask_user'] handler parameter {first.name!r} is annotated "
+                f"{first.annotation!r}, which can't be resolved: {exc}"
+            ) from exc
         return False
-    return _is_tool_context(hints.get(params[0].name))
+    first = next(iter(signature.parameters.values()), None)
+    return first is not None and _is_positional(first) and _is_tool_context(first.annotation)
+
+
+def _is_positional(param: inspect.Parameter) -> bool:
+    """Return whether `param` can take the first positional argument."""
+    return param.kind in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD)
 
 
 def _group_tool(group: str, index: int, item: Any) -> BaseTool:
@@ -289,6 +371,8 @@ def _group_tool(group: str, index: int, item: Any) -> BaseTool:
     where = f"tools[{group!r}][{index}]"
     if isinstance(item, BaseTool):
         return item
+    if isinstance(item, FunctionTool):
+        return _tool_from_function_tool(item)
     if inspect.isroutine(item):
         if item.__name__ == "<lambda>":
             raise TypeError(
@@ -297,7 +381,8 @@ def _group_tool(group: str, index: int, item: Any) -> BaseTool:
             )
         return _tool_from_function(item.__name__, item)
     raise TypeError(
-        f"{where} must be a BaseTool, a function, or a method, got {type(item).__name__}"
+        f"{where} must be a BaseTool, a FunctionTool, a function, or a method, "
+        f"got {type(item).__name__}"
     )
 
 
@@ -308,16 +393,26 @@ def _same_item(first: Any, other: Any) -> bool:
     return first is other or (inspect.ismethod(first) and first == other)
 
 
-def _check_ask_user_handler(handler: Callable[..., Any]) -> None:
+def _check_ask_user_handler(handler: Callable[..., Any]) -> bool:
     """Reject an `ask_user` handler that cannot take the six keyword fields.
 
     A handler whose first parameter is annotated `ToolContext` takes them after it.
+
+    Returns:
+        `bool`:
+            Whether the handler takes the call's `ToolContext` first.
+
+    Raises:
+        `TypeError`:
+            Raised when the handler can't take the six keyword fields, or as
+            `_handler_takes_context` raises.
     """
+    takes_context = _handler_takes_context(handler)
     try:
         signature = inspect.signature(handler)
     except (TypeError, ValueError):
-        return  # No readable signature; the handler is called as is.
-    leading = (None,) if _handler_takes_context(handler) else ()
+        return takes_context  # No readable signature; the handler is called as is.
+    leading = (None,) if takes_context else ()
     try:
         signature.bind(
             *leading,
@@ -329,10 +424,12 @@ def _check_ask_user_handler(handler: Callable[..., Any]) -> None:
             options=None,
         )
     except TypeError as exc:
+        form = "ctx: ToolContext, **request" if takes_context else "**request"
         raise TypeError(
             "tools['ask_user'] must accept question, questions, answer_schema, title, "
-            "node_id, and options as keywords; define it as def handler(**request)"
+            f"node_id, and options as keywords; define it as def handler({form})"
         ) from exc
+    return takes_context
 
 
 class ToolSet:
@@ -351,25 +448,26 @@ class ToolSet:
     A function or method tool whose first parameter is annotated `ToolContext` or
     `ToolContext[T]` receives a `ToolContext` on each call: the call id, attempt,
     tool name, run id, calling node, and this set's `context`. The model never
-    sees that parameter.
+    sees that parameter. A `FunctionTool`'s `on_invoke` always receives one.
 
     Args:
-        tools (`Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None`, *optional*, defaults to `None`):
+        tools (`Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None`, *optional*, defaults to `None`):
             The run's tools keyed by tool id. A function or method becomes a tool
             named by its key; its type hints give the arguments, and its
             docstring's first text block and `Args` entries give the description
             and the parameter descriptions. It must be synchronous. To bind values
             such as a session, pass them as `context`, or use a closure or a bound
-            method, not `functools.partial`. A `BaseTool` must already use its key
-            as its name. A list or tuple is a group keyed by its group name; each
-            item is a `BaseTool` named by its `name`, or a function or method named
-            by its `__name__` (not a lambda). The `ask_user` entry must be a plain
-            callable; it is wrapped so the model sees `question` and `options`, and
-            it receives `question`, `questions`, `answer_schema`, `title`,
-            `node_id`, and `options` as keywords (define it as
-            `def handler(**request)`, or `def handler(ctx: ToolContext, **request)`
-            to receive the context first). `None` means the global registry. To
-            keep the registered tools and add more, pass `{**registered_tools(), ...}`.
+            method, not `functools.partial`. A `BaseTool` or `FunctionTool` must
+            already use its key as its name. A list or tuple is a group keyed by its
+            group name; each item is a `BaseTool` or `FunctionTool` named by its
+            `name`, or a function or method named by its `__name__` (not a lambda).
+            The `ask_user` entry must be a plain callable; it is wrapped so the
+            model sees `question` and `options`, and it receives `question`,
+            `questions`, `answer_schema`, `title`, `node_id`, and `options` as
+            keywords (define it as `def handler(**request)`, or
+            `def handler(ctx: ToolContext, **request)` to receive the context
+            first). `None` means the global registry. To keep the registered tools
+            and add more, pass `{**registered_tools(), ...}`.
         context (`Any`, *optional*, defaults to `None`):
             The host's app object, passed to tools as `ToolContext.context`. It is
             never recorded.
@@ -377,14 +475,15 @@ class ToolSet:
     Raises:
         `TypeError`:
             `tools` is not a mapping or `None`, a key is not a non-empty string,
-            an entry is not a `BaseTool`, function, method, or group of them, a
-            group item is a lambda, a function is async or puts `ToolContext`
-            anywhere but its first parameter, or the `ask_user` handler cannot
-            take its six keyword fields.
+            an entry is not a `BaseTool`, `FunctionTool`, function, method, or
+            group of them, a group item is a lambda, a function is async, an
+            annotation can't be resolved, a function puts `ToolContext` anywhere
+            but its first parameter, or the `ask_user` handler cannot take its six
+            keyword fields.
         `ValueError`:
-            A `BaseTool` entry's name differs from its key, or a group tool's name
-            is `ask_user` or `load_skill`, is a top-level key, or names a
-            different tool elsewhere in the groups.
+            A `BaseTool` or `FunctionTool` entry's name differs from its key, or
+            a group tool's name is `ask_user` or `load_skill`, is a top-level key,
+            or names a different tool elsewhere in the groups.
 
     Example:
         ```python
@@ -415,7 +514,7 @@ class ToolSet:
 
     def __init__(
         self,
-        tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
+        tools: Mapping[str, _Entry | Sequence[_Entry]] | None = None,
         *,
         context: Any = None,
     ) -> None:
@@ -438,8 +537,7 @@ class ToolSet:
                         "tools['ask_user'] must be a plain callable handler; "
                         "the engine supplies its schema"
                     )
-                _check_ask_user_handler(entry)
-                built[tool_id] = _ask_user_tool(entry)
+                built[tool_id] = _ask_user_tool(entry, _check_ask_user_handler(entry))
             elif isinstance(entry, BaseTool):
                 if entry.name != tool_id:
                     raise ValueError(
@@ -447,6 +545,13 @@ class ToolSet:
                         "its name must match its key"
                     )
                 built[tool_id] = entry
+            elif isinstance(entry, FunctionTool):
+                if entry.name != tool_id:
+                    raise ValueError(
+                        f"tool {tool_id!r} is a FunctionTool named {entry.name!r}; "
+                        "its name must match its key"
+                    )
+                built[tool_id] = _tool_from_function_tool(entry)
             elif inspect.isroutine(entry):
                 built[tool_id] = _tool_from_function(tool_id, entry)
             elif isinstance(entry, (list, tuple)):
@@ -455,9 +560,9 @@ class ToolSet:
                 ]
             else:
                 raise TypeError(
-                    f"tools[{tool_id!r}] must be a BaseTool, a function, a method, or a "
-                    f"list of them, got {type(entry).__name__}; bind values in a def or "
-                    "lambda, not functools.partial"
+                    f"tools[{tool_id!r}] must be a BaseTool, a FunctionTool, a function, a "
+                    f"method, or a list of them, got {type(entry).__name__}; bind values in "
+                    "a def or lambda, not functools.partial"
                 )
         groups: dict[str, tuple[str, ...]] = {}
         owners: dict[str, tuple[str, Any]] = {}  # tool name -> (first group, its item)
@@ -540,7 +645,7 @@ class ToolSet:
             `ToolSet`:
                 A new tool set; this one stays as it was.
         """
-        bound = ToolSet.__new__(ToolSet)
+        bound = type(self).__new__(type(self))
         bound._tools = self._tools
         bound._groups = self._groups
         bound._run_id = run_id
@@ -622,7 +727,7 @@ class ToolSet:
                 The expanded id of the calling node, passed as `ToolContext.node`.
             call_id (`str`, *optional*, defaults to `None`):
                 The call's id. `None` uses `"<run_id>/<node>"` on a run-bound set
-                and a fresh random hex id on an unbound one.
+                given a `node`, and a fresh random hex id otherwise.
             attempt (`int`, *optional*, defaults to `1`):
                 The attempt number of this call, starting at 1.
 
@@ -659,7 +764,7 @@ class ToolSet:
                 The expanded id of the calling node, passed as `ToolContext.node`.
             call_id (`str`, *optional*, defaults to `None`):
                 The call's id. `None` uses `"<run_id>/<node>"` on a run-bound set
-                and a fresh random hex id on an unbound one.
+                given a `node`, and a fresh random hex id otherwise.
             attempt (`int`, *optional*, defaults to `1`):
                 The attempt number of this call, starting at 1.
 
@@ -687,12 +792,17 @@ class ToolSet:
         call_id: str | None,
         attempt: int,
     ) -> Any:
-        """Call a validated tool: a yian-built tool with its context, any other through `invoke`."""
+        """Call a validated tool: a yian-built tool with its context, any other through `invoke`.
+
+        Host tools run directly, not inside LangChain's `invoke`, so LangChain
+        callbacks and tracing don't fire for them.
+        """
         if not isinstance(tool, _HostTool):
             return tool.invoke(payload)
         if call_id is None:
-            # Outside a run nothing makes two calls the same call, so each gets its own id.
-            call_id = f"{self._run_id}/{node}" if self._run_id else uuid4().hex
+            # Without a run and a node nothing makes two calls the same call, so
+            # each gets its own id.
+            call_id = f"{self._run_id}/{node}" if self._run_id and node else uuid4().hex
         ctx = ToolContext(
             call_id=call_id,
             attempt=attempt,
@@ -735,9 +845,16 @@ def _validate_invocation(
     *,
     trusted: bool,
 ) -> None:
-    """Reject extra keys, then validate a supported Pydantic argument schema."""
+    """Reject extra keys, then validate a supported Pydantic argument schema.
+
+    A `FunctionTool`'s JSON Schema is checked by `_validate_json_arguments`; any
+    other tool with a JSON Schema is rejected.
+    """
     schema = tool.args_schema if trusted else tool.tool_call_schema
     if isinstance(schema, dict):
+        if isinstance(tool, _HostTool):
+            _validate_json_arguments(tool_id, schema, inputs)
+            return
         raise TypeError(
             f"registered tool {tool_id!r} uses an unvalidated JSON args_schema; "
             "use a Pydantic argument schema or register the function with register_tool()"
@@ -761,6 +878,60 @@ def _validate_invocation(
             f"on its {scope} invocation path; allowed: {sorted(allowed)}"
         )
     validate(inputs)
+
+
+def _validate_json_arguments(
+    tool_id: str, schema: Mapping[str, Any], inputs: dict[str, Any]
+) -> None:
+    """Check call arguments against a `FunctionTool`'s JSON Schema.
+
+    Unknown keys are rejected unless `additionalProperties` is `true` or a schema,
+    in which case extra values are checked against that schema. Missing required
+    keys are rejected. Each value is checked against the yian type its JSON Schema
+    translates to; a schema with no translation is not checked, and an integral
+    float is accepted for an integer.
+
+    Raises:
+        `ValueError`:
+            Raised on an unknown or missing key.
+        `TypeCheckError`:
+            Raised when a value doesn't fit its property's translated type.
+    """
+    properties = schema.get("properties")
+    if not isinstance(properties, Mapping):
+        properties = {}
+    extra = schema.get("additionalProperties")
+    open_extra = extra is True or isinstance(extra, Mapping)
+    unsupported = sorted(set(inputs) - set(properties))
+    if unsupported and not open_extra:
+        raise ValueError(
+            f"tool {tool_id!r} received unsupported argument(s) {unsupported}; "
+            f"allowed: {sorted(properties)}"
+        )
+    required = schema.get("required")
+    missing = [
+        name
+        for name in (required if isinstance(required, list) else [])
+        if isinstance(name, str) and name not in inputs
+    ]
+    if missing:
+        raise ValueError(f"tool {tool_id!r} is missing required argument(s) {missing}")
+    for name, value in inputs.items():
+        prop = properties.get(name, extra if isinstance(extra, Mapping) else None)
+        if prop is None:
+            continue
+        typ = _input_type_from_json_schema(prop, root=schema)
+        if typ is None:
+            continue
+        # JSON decoders and models may send `3.0` for an integer; JSON Schema accepts it.
+        if typ.kind is ValueKind.INTEGER and type(value) is float and value.is_integer():
+            value = int(value)
+        try:
+            build_value_as(typ, value)
+        except TypeCheckError as exc:
+            raise TypeCheckError(
+                f"tool {tool_id!r} argument {name!r}: {exc}", path=(name, *exc.path)
+            ) from exc
 
 
 def invoke_tool(tool_id: str, inputs: dict[str, Any]) -> Any:

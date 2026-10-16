@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import re
 from typing import Any
 
@@ -18,6 +19,7 @@ from yian.tools import (
     register_tool,
 )
 from yian.tools.context import ToolContext
+from yian.tools import registry
 from yian.tools.registry import _check_ask_user_handler
 from yian.tools.types import tool_types
 from yian.typesys.values import Type, ValueKind
@@ -314,3 +316,111 @@ def test_tool_types_skip_the_context_and_read_the_return_annotation():
     assert set(types.inputs) == {"symbol", "qty"}
     assert types.required == frozenset({"symbol"})
     assert types.output == Type.scalar(ValueKind.STRING)
+
+
+class _AskWithContext:
+    def __init__(self) -> None:
+        self.seen: list[tuple[ToolContext[Any], dict[str, Any]]] = []
+
+    def __call__(self, ctx: ToolContext, **request: Any) -> str:
+        self.seen.append((ctx, request))
+        return "yes"
+
+
+def test_a_callable_object_ask_user_handler_receives_the_context():
+    handler = _AskWithContext()
+
+    ToolSet({"ask_user": handler}).for_run("r").invoke("ask_user", {"question": "Q?"}, node="a")
+
+    ((ctx, request),) = handler.seen
+    assert ctx.call_id == "r/a"
+    assert request["question"] == "Q?"
+
+
+def test_a_partial_ask_user_handler_receives_the_context():
+    seen: list[ToolContext[Any]] = []
+
+    def ask(ctx: ToolContext, prefix: str, **request: Any) -> str:
+        seen.append(ctx)
+        return prefix + request["question"]
+
+    tools = ToolSet({"ask_user": functools.partial(ask, prefix="> ")})
+
+    assert tools.invoke("ask_user", {"question": "Q?"}) == "> Q?"
+    assert isinstance(seen[0], ToolContext)
+
+
+def test_an_ask_user_handler_with_an_unresolvable_context_annotation_is_rejected():
+    def ask(ctx: ToolContext[Missing], **request: Any) -> str:  # noqa: F821
+        return "yes"
+
+    with pytest.raises(TypeError, match=r"ToolContext\[Missing\]"):
+        ToolSet({"ask_user": ask})
+
+
+def test_an_ask_user_handler_with_another_unresolvable_annotation_takes_no_context():
+    seen: list[dict[str, Any]] = []
+
+    def ask(**request: Missing) -> str:  # noqa: F821
+        seen.append(request)
+        return "yes"
+
+    assert ToolSet({"ask_user": ask}).invoke("ask_user", {"question": "Q?"}) == "yes"
+    assert seen[0]["question"] == "Q?"
+
+
+def test_ask_user_context_detection_runs_once_per_handler(monkeypatch):
+    calls: list[Any] = []
+    real = registry._handler_takes_context
+
+    def counting(handler: Any) -> bool:
+        calls.append(handler)
+        return real(handler)
+
+    monkeypatch.setattr(registry, "_handler_takes_context", counting)
+
+    def ask(ctx: ToolContext, **request: Any) -> str:
+        return "yes"
+
+    ToolSet({"ask_user": ask})
+
+    assert calls == [ask]
+
+
+def test_check_ask_user_handler_hint_shows_the_context_form():
+    def missing(ctx: ToolContext, *, question):
+        return None
+
+    def plain(*, question):
+        return None
+
+    with pytest.raises(TypeError, match=r"def handler\(ctx: ToolContext, \*\*request\)"):
+        _check_ask_user_handler(missing)
+    with pytest.raises(TypeError) as excinfo:
+        _check_ask_user_handler(plain)
+    assert "ctx: ToolContext" not in str(excinfo.value)
+    assert "def handler(**request)" in str(excinfo.value)
+
+
+def test_a_run_bound_call_without_a_node_gets_a_fresh_call_id():
+    tools = ToolSet({"place": place}).for_run("run-1")
+
+    tools.invoke("place", {"symbol": "X"})
+    tools.invoke("place", {"symbol": "Y"})
+
+    (first, _), (second, _) = _SEEN
+    assert first.run_id == "run-1"
+    assert _HEX32.fullmatch(first.call_id)
+    assert _HEX32.fullmatch(second.call_id)
+    assert first.call_id != second.call_id
+
+
+class _Sub(ToolSet):
+    __slots__ = ()
+
+
+def test_for_run_keeps_the_subclass():
+    bound = _Sub({"place": place}).for_run("r")
+
+    assert type(bound) is _Sub
+    assert bound.run_id == "r"

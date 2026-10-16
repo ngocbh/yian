@@ -732,7 +732,8 @@ def call_credentials(config: dict[str, Any] | LLMConfig | None) -> tuple[str, ..
     (``anthropic``) are listed whenever set, though the Azure token is sent only by
     a call given no key and the Anthropic token only by a 0.x SDK given no key. SDK
     header variables such as ``OPENAI_CUSTOM_HEADERS`` are never sent, since the
-    clients drop them, so their values are not listed. A config without connection
+    clients drop them, so their values are not listed. ``OLLAMA_API_KEY`` is never
+    sent, since the ollama client drops it. A config without connection
     metadata is resolved first, as `model_from_config` does; `None` resolves like
     ``{}``. Each step is guarded, so a failing one still leaves the others'
     credentials.

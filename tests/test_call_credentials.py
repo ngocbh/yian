@@ -198,7 +198,8 @@ def test_scrub_call_credentials_removes_a_masked_saved_key():
     assert key[:8] not in message and key[-4:] not in message
 
 
-def test_a_keyless_provider_sends_nothing():
+def test_a_keyless_provider_sends_nothing(monkeypatch):
+    monkeypatch.setenv("OLLAMA_API_KEY", "env-ollama-key")
     assert call_credentials({"provider": "ollama", "model": "m"}) == ()
 
 

@@ -9,17 +9,20 @@ OpenAI-compatible one.
 The `ollama` block of `llm_config` is merged into the `/api/chat` request as
 written. Nothing sets `think` by default: it is sent only when the block sets it,
 otherwise the model's own default applies.
+
+yian sends no key to Ollama: the `Authorization` header the ollama SDK builds from
+`OLLAMA_API_KEY` is dropped, while Basic auth from userinfo in `OLLAMA_BASE_URL` stays.
 """
 
 import copy
 import os
-from typing import Any, Optional
+from typing import Any, Optional, Self
 
 from langchain_core.messages import BaseMessage
 from langchain_ollama import ChatOllama
-from pydantic import Field
+from pydantic import Field, model_validator
 
-from .base_client import BaseLLMClient
+from .base_client import BaseLLMClient, warn_once
 from .provider_blocks import merge_request_body
 
 # Native endpoint (no `/v1` suffix — that's the OpenAI-compat path).
@@ -41,12 +44,48 @@ class NormalizedChatOllama(ChatOllama):
     `message.thinking` into `reasoning_content` (it does so only when its own
     `reasoning` is truthy); the answer still lands in `content`.
 
+    The `Authorization` header the SDK built from `OLLAMA_API_KEY` is dropped, with a
+    once-per-process warning, so no key is sent.
+
     Attributes:
         block (`dict[str, Any]`, *optional*, defaults to `{}`):
             The `ollama` block, merged into the request parameters as written.
     """
 
     block: dict[str, Any] = Field(default_factory=dict, exclude=True, repr=False)
+
+    @model_validator(mode="after")
+    def _drop_environment_key(self) -> Self:
+        """Remove the `Authorization` header the SDK built from `OLLAMA_API_KEY`.
+
+        Runs after langchain's `_set_clients`. An `Authorization` header equal to
+        `Bearer <OLLAMA_API_KEY>` is dropped from both SDK clients whatever its source, so
+        an explicit one with that value would go too (yian never passes one). Basic auth
+        from userinfo in the base URL never matches and stays.
+
+        Returns:
+            `Self`:
+                This model, with the header removed from its SDK clients.
+        """
+        # The ollama SDK reads the variable when the client is built and sends it as a
+        # Bearer token, but yian resolves no Ollama credential. yian never sets langchain's
+        # `validate_model_on_init`, which would send a request before this runs.
+        key = os.environ.get("OLLAMA_API_KEY")
+        if not key:
+            return self
+        dropped = False
+        for client in (self._client, self._async_client):
+            headers = client._client.headers
+            if headers.get("authorization") == f"Bearer {key}":
+                del headers["authorization"]
+                dropped = True
+        if dropped:
+            warn_once(
+                "yian sends no key to Ollama, so it dropped the Authorization header read "
+                "from OLLAMA_API_KEY. Unset the variable to silence this.",
+                stacklevel=2,
+            )
+        return self
 
     def _chat_params(
         self,
@@ -77,7 +116,10 @@ class NormalizedChatOllama(ChatOllama):
 
 
 class OllamaClient(BaseLLMClient):
-    """Local Ollama models via the native API, sending the `ollama` block as written."""
+    """Local Ollama models via the native API, sending the `ollama` block as written.
+
+    No key is sent: the model drops the header the SDK built from `OLLAMA_API_KEY`.
+    """
 
     provider = "ollama"
 

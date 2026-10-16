@@ -368,6 +368,13 @@ def test_drop_warning_shows_once_across_builds_and_tool_binding(poisoned_env):
     assert len([w for w in record if _DROP_WARNING in str(w.message)]) == 1
 
 
+def test_drop_warning_points_at_the_sdk_adapter(poisoned_env):
+    with pytest.warns(UserWarning, match=_DROP_WARNING) as record:
+        create_llm_client("openai", "gpt-5.5", api_key="sk-explicit").get_llm()
+    [warning] = [w for w in record if _DROP_WARNING in str(w.message)]
+    assert warning.filename.endswith("openai_client.py"), warning.filename
+
+
 def test_anthropic_warns_when_it_drops_env_headers(poisoned_env):
     chat = create_llm_client("anthropic", "claude-sonnet-4-5", api_key="sk-ant-explicit").get_llm()
     with pytest.warns(UserWarning, match=_DROP_WARNING) as record:

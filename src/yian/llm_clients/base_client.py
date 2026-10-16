@@ -5,10 +5,25 @@ import warnings
 
 from langchain_core.exceptions import OutputParserException
 
-# The header-drop warnings already shown in this process. Python's own once-per-location
+# The warnings `warn_once` already showed in this process. Python's own once-per-location
 # registry is cleared whenever `warnings.catch_warnings()` is entered, which langchain-core
-# does when binding tools, so without this the warning repeats on every agent invocation.
+# does when binding tools, so without this a warning repeats on every agent invocation.
 _warned: set[str] = set()
+
+
+def warn_once(message: str, *, stacklevel: int = 2) -> None:
+    """Warn `message` as a `UserWarning` the first time this process sees it.
+
+    Args:
+        message (`str`):
+            The full warning text, never holding secret values.
+        stacklevel (`int`, *optional*, defaults to `2`):
+            As for `warnings.warn`, counted from the caller.
+    """
+    if message in _warned:
+        return
+    _warned.add(message)
+    warnings.warn(message, UserWarning, stacklevel=stacklevel + 1)
 
 
 def normalize_content(response):
@@ -108,10 +123,7 @@ def drop_environment_headers(
         "this; code that builds models with create_llm_client can set headers on the "
         "http_client it passes."
     )
-    if message in _warned:
-        return
-    _warned.add(message)
-    warnings.warn(message, UserWarning, stacklevel=2)
+    warn_once(message, stacklevel=2)
 
 
 class MissingToolCallError(OutputParserException):

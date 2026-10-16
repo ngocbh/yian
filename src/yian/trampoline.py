@@ -63,6 +63,9 @@ def _close(stack: list[Generator[Any, Any, Any]]) -> None:
         stack (`list[Generator]`): The open walkers, outermost first. Emptied.
 
     Raises:
+        `RuntimeError`:
+            If a walker yields instead of finishing and no outer walker handles
+            the resulting error.
         `BaseException`:
             The error that escapes the outermost walker, if any.
     """
@@ -171,6 +174,14 @@ def flatten(steps: Generator[Any, Any, Any]) -> Generator[Any, None, None]:
     open walker, inner to outer. If closing a walker raises, the error is thrown
     into the next outer walker in place of closing it.
 
+    Two cases differ from `yield from`:
+
+    - Throwing `GeneratorExit` into this generator acts like `close()`: it closes
+      every open walker rather than throwing that object into the innermost one.
+    - A walker that yields while being closed (ignores `GeneratorExit`) makes
+      closing raise `RuntimeError`, as `close()` does, but this generator is
+      finished afterwards, whereas a `yield from` chain stays resumable.
+
     Nested streams wait on a list rather than on the Python stack, so a walker over
     nested flows does not recurse once per level.
 
@@ -218,13 +229,18 @@ def flatten(steps: Generator[Any, Any, Any]) -> Generator[Any, None, None]:
                 continue
             sent = None
             if not isinstance(item, Descend):
+                closing: GeneratorExit | None = None
                 try:
                     yield item
-                except GeneratorExit:
-                    # Closing is not forwarded; the `finally` below closes the walkers.
-                    raise
+                except GeneratorExit as exiting:
+                    closing = exiting
                 except BaseException as thrown_in:
                     error = thrown_in
+                if closing is not None:
+                    # Closed outside the handler, so errors raised while closing get
+                    # no `__context__` from this generator's `GeneratorExit`.
+                    _close(stack)
+                    raise closing
             elif isinstance(item.steps, Generator):
                 stack.append(item.steps)
             else:

@@ -22,6 +22,15 @@ class Own(Exception):
     """An error a walker raises after handling a nested one."""
 
 
+def _context_chain(error: BaseException | None) -> list[tuple[type, tuple]]:
+    """Return the type and args of `error` and of each `__context__` link below it."""
+    chain = []
+    while error is not None:
+        chain.append((type(error), error.args))
+        error = error.__context__
+    return chain
+
+
 def _random_tree(seed: int, size: int = 300) -> list:
     """Return a nested list of ints with `size` leaves, nesting chosen by `seed`."""
     rng = random.Random(seed)
@@ -427,7 +436,7 @@ def test_flatten_closes_every_walker_when_a_finally_raises_as_yield_from_does(ca
 
     assert items == expected == [0, 1, 2, 3]
     assert log == expected_log == [3, 2, 1, 0]
-    assert type(error) is type(expected_error)
+    assert _context_chain(error) == _context_chain(expected_error)
     assert (error is None) == (catch_at is not None)
 
 
@@ -551,12 +560,53 @@ def test_flatten_reports_a_walker_that_yields_while_closing_as_yield_from_does()
     expected_log: list = []
     recursive = chain_recursive(0, expected_log)
     assert [next(recursive) for _ in range(4)] == [0, 1, 2, 3]
-    with pytest.raises(RuntimeError, match="ignored GeneratorExit"):
+    with pytest.raises(RuntimeError, match="ignored GeneratorExit") as expected:
         recursive.close()
 
     log: list = []
     flat = flatten(chain(0, log))
     assert [next(flat) for _ in range(4)] == [0, 1, 2, 3]
-    with pytest.raises(RuntimeError, match="ignored GeneratorExit"):
+    with pytest.raises(RuntimeError, match="ignored GeneratorExit") as raised:
         flat.close()
     assert log == expected_log == [3, 2, 1, 0]
+    assert _context_chain(raised.value) == _context_chain(expected.value)
+
+
+def test_flatten_reports_a_walker_that_ignores_generator_exit_as_yield_from_does():
+    def chain_recursive(n: int, log: list):
+        try:
+            yield n
+            if n < 2:
+                yield from chain_recursive(n + 1, log)
+        except GeneratorExit:
+            log.append(n)
+            if n == 2:
+                yield "late"
+            raise
+
+    def chain(n: int, log: list):
+        try:
+            yield n
+            if n < 2:
+                yield Descend(chain(n + 1, log))
+        except GeneratorExit:
+            log.append(n)
+            if n == 2:
+                yield "late"
+            raise
+
+    expected_log: list = []
+    recursive = chain_recursive(0, expected_log)
+    assert [next(recursive) for _ in range(3)] == [0, 1, 2]
+    with pytest.raises(RuntimeError, match="ignored GeneratorExit") as expected:
+        recursive.close()
+
+    log: list = []
+    flat = flatten(chain(0, log))
+    assert [next(flat) for _ in range(3)] == [0, 1, 2]
+    with pytest.raises(RuntimeError, match="ignored GeneratorExit") as raised:
+        flat.close()
+    assert log == expected_log == [2]
+    assert _context_chain(raised.value) == _context_chain(expected.value)
+    # Unlike the `yield from` chain, flatten is finished once closing fails.
+    assert list(flat) == []

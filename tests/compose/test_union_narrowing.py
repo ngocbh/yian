@@ -780,6 +780,37 @@ def test_a_read_after_a_check_the_routing_decides_is_checked_against_the_routing
     assert "reads unknown field 'nosuch'" in msg
 
 
+def test_a_when_read_narrowed_only_by_the_routing_credits_the_routing():
+    """The check on `input.o` says nothing about `d.output`: the routing makes it Buy."""
+    msg = _load_error(_flow(
+        _case("route", _ON, [("buy", "inner")], else_="e"),
+        _case("inner", None, [('"isinstance(input.o, Text) and d.output.nosuch > 0"', "t")],
+              else_="m"),
+        _code("t"),
+        _code("m"),
+        _code("e"),
+        inputs="  s: !str\n  o: !Reply\n",
+    ))
+    assert (
+        "reference ${d.output.nosuch} reads field 'nosuch', which Buy doesn't have; d.output "
+        "is Buy here, by the case branch that routes this node"
+    ) in msg
+
+
+def test_a_when_read_past_a_check_the_checks_before_it_decide_is_checked_under_them():
+    when = "isinstance(d.output, Buy) and (isinstance(d.output, Buy) or d.output.limit > 0)"
+    _loads(_flow(_searched((f'"{when}"', "b")), _code("b"), _code("e")))
+    when = (
+        "isinstance(d.output, Buy) or isinstance(d.output, Hold) or isinstance(d.output, Sell) "
+        "or d.output.limit > 5"
+    )
+    msg = _load_error(_flow(_searched((f'"{when}"', "b")), _code("b"), _code("e")))
+    assert (
+        "reference ${d.output.limit} reads field 'limit', which Sell doesn't have; d.output is "
+        "Sell here, by the checks before this read"
+    ) in msg
+
+
 # --- impossible checks in a searched `when:` --- #
 
 

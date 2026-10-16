@@ -33,8 +33,10 @@ from collections import deque
 from dataclasses import dataclass, field, replace
 from typing import Mapping, Optional, Sequence, TypeAlias
 
+from lark import Token, Tree
+
 from yian.compile.model import Edge
-from yian.compose.helpers.condition_guards import guard_checks, proves
+from yian.compose.helpers.condition_guards import Guard, guard_checks, proves
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.narrowing_facts import (
     NOT_NARROWABLE,
@@ -346,7 +348,7 @@ def _base_type_of(
     return base_type_of
 
 
-def _parsed_when(when: object):
+def _parsed_when(when: object) -> Tree | Token | None:
     """A searched `when:` parsed, or `None` when it is no string or does not parse."""
     if not isinstance(when, str):
         return None
@@ -385,7 +387,7 @@ def _checked_param_guards(
 ) -> dict[str, list[GuardedRead]]:
     """Each searched CASE param's occurrences with the guard each is checked under."""
 
-    def guards_of(tree):
+    def guards_of(tree: Tree | Token) -> list[Optional[Guard]]:
         return [
             guard
             for _, guard in checked_refs(tree, base_type_of, registry, routing=env)
@@ -401,14 +403,16 @@ def _guarded_param_views(
     inputs: Mapping[str, ValueContract],
     base_type_of: BaseTypeOf,
     registry: TypeRegistry,
-) -> tuple[dict[str, Views], dict[str, Env]]:
+) -> tuple[dict[str, Views], dict[str, Env], dict[str, frozenset[str]]]:
     """The views and facts of a searched CASE's params whose every checked read is guarded.
 
     A param read under different guards gets the union of their facts, met with the
-    CASE's own environment. Occurrences that are not checked are left out.
+    CASE's own environment. Occurrences that are not checked are left out. The third map
+    holds each param's bases that only the CASE's own environment (its routing) narrows.
     """
     views: dict[str, Views] = {}
     envs: dict[str, Env] = {}
+    routed: dict[str, frozenset[str]] = {}
     for param, occurrences in params.items():
         guards = [guard for _, guard in occurrences if guard is not None]
         if not guards or not all(guard_checks(guard) for guard in guards):
@@ -421,7 +425,8 @@ def _guarded_param_views(
         if view[0] is not producers or view[1] is not inputs:
             views[param] = view
             envs[param] = met
-    return views, envs
+            routed[param] = frozenset(base for base in met if base not in guarded)
+    return views, envs, routed
 
 
 def _unchecked_params(params: Mapping[str, list[GuardedRead]]) -> frozenset[str]:
@@ -551,6 +556,9 @@ class Narrowing:
             read is guarded and a later one isn't: the first unguarded read's `when:`.
         param_envs (`dict[str, dict[str, Env]]`):
             Per searched CASE, the facts each param in `param_views` is read under.
+        param_routed (`dict[str, dict[str, frozenset[str]]]`):
+            Per searched CASE, the bases of each param's `param_envs` that only the
+            routing narrows, not the checks before the read.
         unchecked_params (`dict[str, frozenset[str]]`):
             Per searched CASE, the params whose every read follows a check
             `check_impossible_whens` reports, so no value reaches them.
@@ -568,6 +576,7 @@ class Narrowing:
         default_factory=dict
     )
     param_envs: dict[str, dict[str, Env]] = field(default_factory=dict)
+    param_routed: dict[str, dict[str, frozenset[str]]] = field(default_factory=dict)
     unchecked_params: dict[str, frozenset[str]] = field(default_factory=dict)
     unordered: frozenset[str] = frozenset()
 
@@ -634,6 +643,22 @@ class Narrowing:
                 The facts behind `for_param`'s guarded view, by base path.
         """
         return self.param_envs.get(node_id, {}).get(param, {})
+
+    def param_routed_bases(self, node_id: str, param: str) -> frozenset[str]:
+        """Return the bases of `param_env` that only the routing narrows.
+
+        Args:
+            node_id (`str`):
+                A node id.
+            param (`str`):
+                One of the node's params.
+
+        Returns:
+            `frozenset[str]`:
+                The base paths whose facts come from the case branch that routes the
+                node, not from the checks before the read.
+        """
+        return self.param_routed.get(node_id, {}).get(param, frozenset())
 
     def param_unchecked(self, node_id: str, param: str) -> bool:
         """Return whether no value reaches any read of a searched CASE's param.
@@ -759,6 +784,7 @@ def compute_narrowing(
     param_views: dict[str, dict[str, Views]] = {}
     param_sites: dict[str, dict[str, tuple[str, Optional[SourceRange]]]] = {}
     param_envs: dict[str, dict[str, Env]] = {}
+    param_routed: dict[str, dict[str, frozenset[str]]] = {}
     unchecked_params: dict[str, frozenset[str]] = {}
     handle_facts: dict[str, dict[str, Env]] = {}
     for node_id in order:
@@ -804,12 +830,13 @@ def compute_narrowing(
             )
             handle_facts[node_id] = _searched_case_facts(desc, base_type_of, registry)
             params = _checked_param_guards(desc, env, base_type_of, registry)
-            guarded, guarded_envs = _guarded_param_views(
+            guarded, guarded_envs, routed = _guarded_param_views(
                 params, env, producers, inputs, base_type_of, registry
             )
             if guarded:
                 param_views[node_id] = guarded
                 param_envs[node_id] = guarded_envs
+                param_routed[node_id] = routed
             unchecked = _unchecked_params(params)
             if unchecked:
                 unchecked_params[node_id] = unchecked
@@ -825,6 +852,7 @@ def compute_narrowing(
         param_views=param_views,
         param_sites=param_sites,
         param_envs=param_envs,
+        param_routed=param_routed,
         unchecked_params=unchecked_params,
         unordered=frozenset(descriptors) - frozenset(order),
     )

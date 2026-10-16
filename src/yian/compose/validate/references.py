@@ -240,6 +240,7 @@ def validate_references(
         partial_union_fields: bool = False,
         constructors: bool = True,
         read_facts: Env | None = None,
+        routed_bases: frozenset[str] = frozenset(),
     ) -> None:
         """Name-check every reference a BINDING `from:` reads (coalesce + nested-default
         split by `expr_refs_of`); a non-string source / literal yields no refs.
@@ -253,7 +254,8 @@ def validate_references(
         `constructors` checks its `${T(...)}` calls; a reserved key, where they are not
         supported, leaves that error to the type-table pass.
         `read_facts` are the facts a searched CASE's guarded param is read under; a read
-        of a field its narrowed type lacks names that type.
+        of a field its narrowed type lacks names that type, credited to the routing when
+        its base is in `routed_bases`.
         Each string nested in a `ValueTemplate` is scanned on its own and located at
         its authored site when that resolves."""
         source = binding_source(from_value)
@@ -275,6 +277,7 @@ def validate_references(
                 partial_union_fields=partial_union_fields,
                 constructors=constructors,
                 read_facts=read_facts,
+                routed_bases=routed_bases,
             )
 
     def scan_text(
@@ -289,6 +292,7 @@ def validate_references(
         partial_union_fields: bool,
         constructors: bool,
         read_facts: Env | None = None,
+        routed_bases: frozenset[str] = frozenset(),
     ) -> None:
         """Name-check every reference one template string reads; see `scan`.
 
@@ -367,7 +371,13 @@ def validate_references(
             if err is not None and read_facts:
                 candidate = env_read_type(path, read_facts)
                 if candidate is not None:
-                    err = narrowed_read_error(path, candidate, err, registry or {})
+                    err = narrowed_read_error(
+                        path,
+                        candidate,
+                        err,
+                        registry or {},
+                        by_routing=candidate[2] in routed_bases,
+                    )
             if err is not None:
                 errors.append((f"{where}: {err}", rng))
         try:
@@ -576,6 +586,7 @@ def validate_references(
             param_rng = franges.get(("input", param)) or input_rng
             param_producers, param_inputs = node_producers, node_inputs
             read_facts = None
+            routed_bases: frozenset[str] = frozenset()
             if narrowing is not None:
                 if narrowing.param_unchecked(node_id, param):
                     # Every read follows a check that can never be true, which
@@ -586,6 +597,7 @@ def validate_references(
                 # later read.
                 param_producers, param_inputs = narrowing.for_param(node_id, param)
                 read_facts = narrowing.param_env(node_id, param)
+                routed_bases = narrowing.param_routed_bases(node_id, param)
                 site = narrowing.param_site(node_id, param)
                 if site is not None:
                     label, param_rng = site[0], site[1] or param_rng
@@ -606,6 +618,7 @@ def validate_references(
                 site_inputs=param_inputs,
                 partial_union_fields=partial_union_fields,
                 read_facts=read_facts,
+                routed_bases=routed_bases,
             )
 
     # Flow outputs (the codomain): each binding `from:` is checked like a node input and

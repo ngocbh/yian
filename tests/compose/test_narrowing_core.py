@@ -8,6 +8,7 @@ from yian.compile.model import Edge
 from yian.compose.helpers import narrowing_facts
 from yian.compose.helpers.condition_guards import (
     NOTHING,
+    AllOf,
     Holds,
     IsinstanceCheck,
     TagCheck,
@@ -515,6 +516,10 @@ def test_a_read_after_a_reported_check_is_not_checked():
         ("(isinstance(v, Text) or isinstance(v, Text)) and v.qty > 0", DECISION),
         # A negated check a non-union type always passes.
         ("not isinstance(v, Buy) and v.qty > 0", BUY),
+        ("not isinstance(v, Decision) and v.qty > 0", BUY),
+        # No overlap, on a record and on a union.
+        ("isinstance(v, Hold) and v.qty > 0", BUY),
+        ("isinstance(v, str) and v.qty > 0", DECISION),
         # A text that is no tag never equals the tag field.
         ("v.action == 'biy' and v.qty > 0", DECISION),
         ("not (v.action != 'biy') and v.qty > 0", DECISION),
@@ -555,11 +560,18 @@ def test_a_read_after_a_check_the_known_type_decides_is_checked_without_it():
         "v.qty",
         Holds(IsinstanceCheck("v", "Buy"), False),
     )
-    # The checks before it decide the second check, not the type: nothing is reported, so
-    # the read is checked unnarrowed.
+    # A check the checks before it decide proves nothing either, so the read is checked
+    # under the checks before it.
     assert _checked("isinstance(v, Buy) and (isinstance(v, Buy) or v.qty > 0)", v=DECISION)[
         -1
-    ] == ("v.qty", NOTHING)
+    ] == ("v.qty", Holds(IsinstanceCheck("v", "Buy"), True))
+    condition = "isinstance(v, Buy) or isinstance(v, Hold) or isinstance(v, Sell) or v.qty > 0"
+    assert _checked(condition, v=DECISION)[-1] == (
+        "v.qty",
+        AllOf(
+            (Holds(IsinstanceCheck("v", "Buy"), False), Holds(IsinstanceCheck("v", "Hold"), False))
+        ),
+    )
 
 
 # --------------------------------------------------------------------------- #

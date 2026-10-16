@@ -995,11 +995,13 @@ under the checks before them and, at a CASE, its routing; an `isinstance` with n
 with the declared type; a tag comparison with a non-tag), a located load error at each
 site (`check_impossible_whens` for `when:`); a read that runs only when such a check has
 the value it never has isn't field-checked (`falsified` makes that check prove `NEVER`
-there), and one reached only past an unreported check the known type always decides is
-checked against that type (`checked_refs`). A searched CASE's `__rN` param gets one view: the union
+there), and one reached only past an unreported check the known type or the checks before
+it always decide is checked as without that check (`checked_refs`). A searched CASE's
+`__rN` param gets one view: the union
 over its reads of each read's guard facts, met with the node's routing facts
 (`Narrowing.for_param`); where that meet loses a fact (two unrelated exact types), the param
-sees its type without it.
+sees its type without it. A read error on a base only the routing narrows says so
+(`Narrowing.param_routed_bases`).
 A CASE that produces a value (it is
 read as `${case.output}`, or such a CASE routes to it) must be exhaustive: an `else:`,
 every tag of a non-nullable enum `on:`, or `true` and `false` for a non-nullable `bool`

@@ -1424,6 +1424,52 @@ def test_predicate_tag_comparison_with_a_value_that_is_no_tag_is_rejected():
     ) in str(e.value)
 
 
+# The same loop carrying a `Done` record rather than the union.
+DONE_STATE = _swap(UNION_STATE, 'r: !Step {"hint":"start"}', 'r: !Done {"answer":"x"}').replace(
+    "          r: Step\n", "          r: Done\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("state", "pred", "expected"),
+    [
+        (
+            DONE_STATE,
+            "until: not isinstance(r, Done) and r.nosuch == 'x'",
+            "`not isinstance(r, Done)` can never be true: r is declared Done",
+        ),
+        (
+            DONE_STATE,
+            "until: not isinstance(r, Step) and r.nosuch == 'x'",
+            "`not isinstance(r, Step)` can never be true: r is declared Done",
+        ),
+        (
+            DONE_STATE,
+            "until: isinstance(r, More) and r.nosuch == 'x'",
+            "`isinstance(r, More)` can never be true: r is declared Done, and no Done value "
+            "fits More",
+        ),
+        (
+            UNION_STATE,
+            "until: isinstance(r, str) and r.nosuch == 'x'",
+            "`isinstance(r, str)` can never be true: r is declared Step, and no Step value "
+            "fits str",
+        ),
+    ],
+    ids=["always", "always-union", "no-overlap", "no-overlap-union"],
+)
+def test_predicate_reports_only_the_impossible_check(state, pred, expected):
+    with pytest.raises(LoadError) as e:
+        load_flow(_swap(state, "PRED", pred))
+    assert f"loop node 'ask': `until:` {expected}" in str(e.value)
+    assert "'nosuch'" not in str(e.value)
+
+
+def test_predicate_read_past_a_check_the_checks_before_it_decide_is_checked_under_them():
+    pred = "until: isinstance(r, Done) and (isinstance(r, Done) or r.answer == 'ok')"
+    load_flow(_swap(UNION_STATE, "PRED", pred))
+
+
 def test_predicate_read_after_a_value_that_is_no_tag_is_not_checked():
     with pytest.raises(LoadError) as e:
         load_flow(_swap(TAGGED_STATE, "PRED", "until: r.kind == 'dnoe' and r.zz == 'x'"))

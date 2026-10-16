@@ -442,7 +442,9 @@ error. Conditions narrow this way in node and flow asserts, in a searched `case`
 (its own reads, and the branch it routes; see
 [Narrowing a union in a branch](#narrowing-a-union-in-a-branch)), and in a LOOP `while:` or
 `until:`. A check the value's type always decides, such as `isinstance(v, Order)`, narrows
-nothing: a read only reachable past it is checked against that type.
+nothing: a read only reachable past it is checked against that type. So does a check the
+checks before it always decide: in `isinstance(v, Buy) and (isinstance(v, Buy) or v.qty >
+0)`, `v.qty` is read on `Buy`.
 
 A read the narrowed type can't have is a load error that names it:
 
@@ -454,6 +456,9 @@ until: not isinstance(r, Done) or r.answr == "ok"
 reference ${r.answr} reads field 'answr', which Done doesn't have; r is Done here, by the
 checks before this read; did you mean 'answer'?
 ```
+
+In a `when:` whose read is narrowed by the `case` branch that routes the `case` and not by
+the checks before it, the error says `by the case branch that routes this node`.
 
 So is a check that can never be true: one the checks before it rule out (in a `when:`, also
 the `case` branch that routes the `case`), an `isinstance` whose type no value of the

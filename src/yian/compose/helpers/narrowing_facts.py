@@ -35,8 +35,6 @@ from yian.compose.helpers.condition_guards import (
     Holds,
     IsinstanceCheck,
     TagCheck,
-    all_of,
-    any_of,
     check_text,
     conjuncts,
     falsified,
@@ -595,48 +593,38 @@ def _guard_envs(guard: Guard, base_type_of: BaseTypeOf, registry: TypeRegistry) 
     return envs
 
 
-def _decided_by_type(
-    atom: Holds,
+def _decided_literals(
+    tree: Tree | Token,
     base_type_of: BaseTypeOf,
     registry: TypeRegistry,
     routing: Env,
-) -> bool:
-    """Whether the base's known type alone makes `atom` false, other than a non-tag text.
+) -> list[Tree | Token]:
+    """The check sub-trees of the literals whose value the known type and the checks
+    before them decide.
 
-    The known type is the declared type met with `routing`. Such an atom comes from a
-    check that type always decides, which is no error by itself. A tag comparison with a
-    text that is not a tag is always reported, so its atom is not counted here.
+    The known type is the declared type met with `routing`. Such a check, always true or
+    always false where it is evaluated, is no error by itself.
     """
-    base = atom.check.base
-    base_type = base_type_of(base)
-    if not isinstance(base_type, Type):
-        return False
-    check = atom.check
-    if isinstance(check, TagCheck):
-        members = base_type.variants
-        if members is None or check.field not in union_tag_fields(base_type):
-            return False
-        if not any(check.value in member.fields[check.field].tags for member in members):
-            return False
-    try:
-        fact = check_fact(check, base_type, atom.value, registry)
-    except TypeCheckError:
-        return False
-    return intersect_facts(routing.get(base), fact) == Members(())
-
-
-def _without_decided(
-    guard: Guard,
-    base_type_of: BaseTypeOf,
-    registry: TypeRegistry,
-    routing: Env,
-) -> Guard:
-    """`guard` with each atom the known type alone makes false proving nothing instead."""
-    if isinstance(guard, Holds):
-        decided = _decided_by_type(guard, base_type_of, registry, routing)
-        return NOTHING if decided else guard
-    parts = [_without_decided(part, base_type_of, registry, routing) for part in guard.parts]
-    return all_of(*parts) if isinstance(guard, AllOf) else any_of(*parts)
+    decided: list[Tree | Token] = []
+    for literal in literals_in_context(tree):
+        context_env = intersect_envs(
+            [routing, guard_env(literal.context, base_type_of, registry)]
+        )
+        if env_unsatisfiable(context_env):
+            continue
+        base = literal.check.base
+        base_type = _base_type(base, base_type_of, context_env)
+        if not isinstance(base_type, Type):
+            continue
+        for value in (True, False):
+            try:
+                fact = check_fact(literal.check, base_type, value, registry)
+            except TypeCheckError:
+                break
+            if fact is not None and intersect_facts(context_env.get(base), fact) == Members(()):
+                decided.append(literal.node)
+                break
+    return decided
 
 
 def _satisfiable(
@@ -663,10 +651,11 @@ def checked_refs(
     never have is not checked (`None`), whatever the report's reason: the report explains
     it, and errors on the code it makes dead would only repeat it. So is a read no value
     reaches because of a reported check. Otherwise a guard some value satisfies is kept. A
-    read no value reaches only because a check the known type always decides, and that is
-    not reported, went the other way (`isinstance(v, Decision) or v.nosuch > 0` with `v`
-    declared `Decision`) is no error by itself: such checks prove nothing here, so the read
-    is checked as without them (with `NOTHING` when the guard still can't hold).
+    read no value reaches only because an unreported check the known type or the checks
+    before it always decide went the other way (`isinstance(v, Decision) or v.nosuch > 0`
+    with `v` declared `Decision`, `isinstance(v, Buy) and (isinstance(v, Buy) or v.qty > 0)`)
+    is no error by itself: such checks prove nothing here, so the read is checked as
+    without them (with `NOTHING` when the guard still can't hold).
 
     Args:
         tree (`Tree | Token`):
@@ -687,22 +676,26 @@ def checked_refs(
 
     Example:
         With `v` a `Union[Buy, Hold, Sell]`, the `v.qty` read in
-        `isinstance(v, Decision) or v.qty > 0` gets `NOTHING`, and in
+        `isinstance(v, Decision) or v.qty > 0` gets `NOTHING`, in
+        `isinstance(v, Buy) and (isinstance(v, Buy) or v.qty > 0)` the guard of
+        `isinstance(v, Buy)`, and in
         `isinstance(v, Buy) and v.action == 'hold' and v.qty > 0` and
         `isinstance(v, Text) and v.qty > 0` gets `None`.
     """
     known = routing if routing and not env_unsatisfiable(routing) else {}
     refs = guarded_refs(tree)
     reported = _reported_literals(tree, base_type_of, registry, known)
+    reported_nodes = [literal.node for literal, _ in reported]
     if not reported:
         unreported = needing = refs
     else:
-        unreported = guarded_refs(masked(tree, [literal.node for literal, _ in reported]))
+        unreported = guarded_refs(masked(tree, reported_nodes))
         never = [(literal.node, _never_value(literal, found)) for literal, found in reported]
         needing = guarded_refs(falsified(tree, never))
+    undecided: Optional[list[tuple[str, Guard]]] = None
     checked: list[tuple[str, Optional[Guard]]] = []
-    for (ref, guard), (_, without_reported), (_, live) in zip(
-        refs, unreported, needing, strict=True
+    for index, ((ref, guard), (_, without_reported), (_, live)) in enumerate(
+        zip(refs, unreported, needing, strict=True)
     ):
         if live == NEVER:
             checked.append((ref, None))
@@ -711,7 +704,10 @@ def checked_refs(
         elif _satisfiable(without_reported, base_type_of, registry, known):
             checked.append((ref, None))
         else:
-            trimmed = _without_decided(without_reported, base_type_of, registry, known)
+            if undecided is None:
+                decided = _decided_literals(tree, base_type_of, registry, known)
+                undecided = guarded_refs(masked(tree, reported_nodes + decided))
+            trimmed = undecided[index][1]
             satisfiable = _satisfiable(trimmed, base_type_of, registry, known)
             checked.append((ref, trimmed if satisfiable else NOTHING))
     return checked
@@ -1149,6 +1145,8 @@ def narrowed_read_message(
     narrowed_label: str,
     base: str,
     fields: Iterable[str],
+    *,
+    by_routing: bool = False,
 ) -> str:
     """Return the load error text for a read of a field its narrowed type doesn't have.
 
@@ -1163,15 +1161,19 @@ def narrowed_read_message(
             The narrowed base path.
         fields (`Iterable[str]`):
             The narrowed type's field names, for a close-match hint.
+        by_routing (`bool`, *optional*, defaults to `False`):
+            Whether the case branch that routes the node narrowed the base, rather than
+            the checks before the read.
 
     Returns:
         `str`:
             Such as `reference ${r.answr} reads field 'answr', which Done doesn't have;
             r is Done here, by the checks before this read; did you mean 'answer'?`.
     """
+    why = "the case branch that routes this node" if by_routing else "the checks before this read"
     message = (
         f"reference ${{{ref}}} reads field {field!r}, which {narrowed_label} doesn't have; "
-        f"{base} is {narrowed_label} here, by the checks before this read"
+        f"{base} is {narrowed_label} here, by {why}"
     )
     close = _close_match(field, fields)
     return message if close is None else f"{message}; did you mean {close!r}?"
@@ -1194,6 +1196,8 @@ def narrowed_read_error(
     candidate: tuple[Type, tuple[str, ...], str],
     error: str,
     registry: TypeRegistry,
+    *,
+    by_routing: bool = False,
 ) -> str:
     """Return a narrowed read's error, naming the narrowed type when it lacks the field.
 
@@ -1206,6 +1210,9 @@ def narrowed_read_error(
             The site's own error for the read on the candidate's type.
         registry (`TypeRegistry`):
             The flow's typedefs, for the type label.
+        by_routing (`bool`, *optional*, defaults to `False`):
+            Whether the case branch that routes the node narrowed the base, rather than
+            the checks before the read.
 
     Returns:
         `str`:
@@ -1223,4 +1230,6 @@ def narrowed_read_error(
     if names is None or fields[0] in names:
         return error
     label = narrowed_type_label(typ, registry)
-    return narrowed_read_message(ref, fields[0], label, base, sorted(names))
+    return narrowed_read_message(
+        ref, fields[0], label, base, sorted(names), by_routing=by_routing
+    )

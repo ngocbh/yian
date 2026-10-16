@@ -1161,8 +1161,10 @@ a tag comparison whose text is no tag; `impossible_check_message` words them and
 locates them (`check_impossible_whens` for `when:`). `checked_refs` skips the field check
 of a read that runs only when a reported check has the value it never has, whatever the
 report's reason (`condition_guards.falsified` makes that check prove `NEVER` for it), and
-checks a read reached only past an unreported check the known type always decides against
-that type. Unguarded member-only reads in asserts and LOOP predicates hint
+checks a read reached only past an unreported check the known type or the checks before
+it always decide as without that check (`_decided_literals`, masked like reported ones). A
+searched `when:` read error credits a narrowed base only the routing narrows to "the case
+branch that routes this node" (`Narrowing.param_routed_bases`, `by_routing=True`). Unguarded member-only reads in asserts and LOOP predicates hint
 `isinstance(v, <Type>) and ...` (`isinstance_hint=True`), and in a CALL or LOOP node's
 asserts, where `isinstance` is rejected, a tagged union's hint compares the tag
 (`tag_hint=True`); searched `when:` reads keep the case hint. An assert combines only the

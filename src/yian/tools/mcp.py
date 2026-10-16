@@ -110,7 +110,7 @@ class McpTransportError(McpError, ReportedToolError, TransientToolError):
 
 
 class McpServerClosed(McpError, PermanentToolError):
-    """The MCP server is gone: yian closed it, or its process or connection ended.
+    """The MCP server is gone: yian closed it, its process or connection ended, or its session.
 
     Later calls to the same server raise it at once; the host still closes it.
     """
@@ -122,6 +122,7 @@ class McpCallCancelled(McpError, PermanentToolError):
 
 # JSON-RPC codes for a request the server can't parse, route or accept.
 _INVALID_REQUEST_CODES = frozenset({-32700, -32600, -32601, -32602})
+_INVALID_REQUEST = -32600
 _CONNECTION_CLOSED = -32000
 _REQUEST_TIMEOUT = -32001
 _INTERNAL_ERROR = -32603
@@ -129,6 +130,13 @@ _INTERNAL_ERROR = -32603
 _PING_SECONDS = 2
 # The slice a waiting call sleeps between checks of the run's stop event.
 _WAIT_SLICE_SECONDS = 0.1
+# How long past its call timeout a call may wait before yian gives up on it: the
+# SDK's clock starts only once the request is written and restarts each
+# input-required round.
+_CALL_GRACE_SECONDS = 30
+# The texts the SDK gives the -32600 answer to a request whose HTTP session the server
+# no longer knows, for example after a restart.
+_SESSION_GONE = frozenset({"Session not found", "Session terminated"})
 
 
 def mcp_server(
@@ -673,6 +681,7 @@ class McpServer:
             with self._failures_lock:
                 failures_before = self._transport_failures
             started = time.monotonic()
+            deadline = started + (self._call_timeout or math.inf) + _CALL_GRACE_SECONDS
             coro = client.call_tool(tool_name, args, read_timeout_seconds=self._call_timeout, meta=meta)
             try:
                 future = asyncio.run_coroutine_threadsafe(coro, loop)
@@ -686,8 +695,14 @@ class McpServer:
             while not concurrent.futures.wait([future], timeout=_WAIT_SLICE_SECONDS).done:
                 if stop is not None and stop.is_set():
                     # Cancels the request task; the SDK tells the server from a shielded scope.
+                    if future.cancel():
+                        raise self._cancelled(tool_name)
+                    # The result landed in the same slice as the stop: the call has
+                    # completed, so its result stands.
+                    break
+                if time.monotonic() > deadline:
                     future.cancel()
-                    raise self._cancelled(tool_name)
+                    raise self._timed_out(tool_name)
                 if thread is None or not thread.is_alive():
                     # The loop resolves its calls as it ends; give it one more slice.
                     if loop_gone:
@@ -753,12 +768,28 @@ class McpServer:
             # A server also answers -32000 when merely busy, and an HTTP stream that
             # ends without a response arrives as -32000 too; only a failed probe means
             # the connection is gone.
-            if code == _CONNECTION_CLOSED and not self._probe_alive():
+            if code == _CONNECTION_CLOSED:
+                if not self._probe_alive():
+                    return self._closed(ready)
+                with self._failures_lock:
+                    if self._transport_failures > failures_before:
+                        return McpTransportError(
+                            f"MCP server '{self._label}' transport error (connection failed)"
+                        )
+            if code == _INVALID_REQUEST and self._url is not None and exc.message in _SESSION_GONE:
+                # The server forgot the session; this client can't reach it again.
                 return self._closed(ready)
+            if code == _INVALID_REQUEST and exc.message.startswith("Redirect to "):
+                # The SDK's own text, which carries the redirect's URL.
+                return McpInvalidRequestError(
+                    f"MCP server '{self._label}' redirected the request; yian doesn't follow "
+                    "redirects to another origin",
+                    code,
+                )
             kind = McpInvalidRequestError if code in _INVALID_REQUEST_CODES else McpRequestError
             return kind(f"MCP server '{self._label}' tool '{tool_name}': {exc.message} (code {code})", code)
-        if isinstance(exc, TimeoutError):
-            return self._timed_out(tool_name)
+        # A raw TimeoutError (an OSError) is the transport's own send timing out, not
+        # the call timeout, which the SDK answers as -32001.
         if _is_transport_error(exc):
             return McpTransportError(f"MCP server '{self._label}' transport error ({type(exc).__name__})")
         return McpToolError(f"MCP server '{self._label}' tool '{tool_name}' failed ({type(exc).__name__})")
@@ -962,7 +993,8 @@ def _proxy_for(url: str) -> str | None:
     parts = urllib.parse.urlsplit(url)
     if parts.hostname and urllib.request.proxy_bypass(parts.hostname):
         return None
-    return urllib.request.getproxies().get(parts.scheme)
+    proxies = urllib.request.getproxies()
+    return proxies.get(parts.scheme) or proxies.get("all")
 
 
 def _soft_fail_transport(httpx2: Any, proxy: str | None, on_failure: Any) -> Any:
@@ -975,7 +1007,7 @@ def _soft_fail_transport(httpx2: Any, proxy: str | None, on_failure: Any) -> Any
     Args:
         httpx2 (`module`):
             The `httpx2` module.
-        proxy (`str`, *optional*):
+        proxy (`str | None`):
             The proxy URL, or `None` for a direct connection.
         on_failure (`Callable[[], None]`):
             Called once for each request that failed at the transport level.
@@ -986,10 +1018,22 @@ def _soft_fail_transport(httpx2: Any, proxy: str | None, on_failure: Any) -> Any
     """
 
     class _SoftFailTransport(httpx2.AsyncBaseTransport):
+        """An `httpx2` transport that answers a failed connection with a 502 response."""
+
         def __init__(self) -> None:
             self._inner = httpx2.AsyncHTTPTransport(proxy=proxy)
 
         async def handle_async_request(self, request: Any) -> Any:
+            """Send `request`; on a transport error, count it and return a 502 response.
+
+            Args:
+                request (`httpx2.Request`):
+                    The request to send.
+
+            Returns:
+                `httpx2.Response`:
+                    The server's response, or an empty 502 response.
+            """
             try:
                 return await self._inner.handle_async_request(request)
             except httpx2.TransportError:
@@ -997,6 +1041,7 @@ def _soft_fail_transport(httpx2: Any, proxy: str | None, on_failure: Any) -> Any
                 return httpx2.Response(502, request=request)
 
         async def aclose(self) -> None:
+            """Close the wrapped transport."""
             await self._inner.aclose()
 
     return _SoftFailTransport()

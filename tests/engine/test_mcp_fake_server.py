@@ -1,5 +1,7 @@
 """The fake MCP servers the MCP client tests use answer a bare SDK client."""
 
+import time
+
 import pytest
 
 pytest.importorskip("mcp")
@@ -170,12 +172,17 @@ def test_bad_output_server_runs():
 def test_stderr_flag_makes_the_child_exit_before_the_handshake():
     async def main():
         params = StdioServerParameters(**stdio_params("--stderr", "no good"))
-        with pytest.raises(Exception):
+        with pytest.raises(Exception) as raised:
             with anyio.fail_after(20):
                 async with Client(params):
                     pass
+        return raised.value
 
-    anyio.run(main)
+    start = time.monotonic()
+    error = anyio.run(main)
+    # A child that hung instead of exiting would end in fail_after's TimeoutError.
+    assert not isinstance(error, TimeoutError)
+    assert time.monotonic() - start < 10
 
 
 def test_child_env_lets_the_child_import_mcp():

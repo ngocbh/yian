@@ -1,6 +1,8 @@
 """MCP call failures map to yian's error and retry classes; stops and `close()` end waiting calls."""
 
+import asyncio
 import concurrent.futures
+import pickle
 import threading
 import time
 
@@ -11,6 +13,7 @@ pytest.importorskip("mcp")
 from langchain_core.messages import AIMessage, ToolMessage
 
 import yian.llm_clients as llm_clients
+import yian.tools.mcp as mcp_module
 from yian.compose import load_flow
 from yian.run import run_flow
 from yian.tools import ToolSet
@@ -23,6 +26,7 @@ from yian.tools.mcp import (
     McpTimeoutError,
     McpToolError,
     McpTransportError,
+    _proxy_for,
     mcp_server,
 )
 
@@ -285,3 +289,106 @@ def test_a_late_failure_from_an_earlier_connection_leaves_the_reopened_server_al
     assert isinstance(error, McpServerClosed)
     assert not server._dead
     assert _tools(server).invoke("echo", {"text": "alive"}) == "alive"
+
+
+def test_a_call_with_the_stop_already_set_is_cancelled_before_it_is_sent(server):
+    tools = _tools(server)
+    before = tools.invoke("calls", {})["result"]
+    stop = threading.Event()
+    stop.set()
+    with pytest.raises(McpCallCancelled):
+        tools.for_run("r", stop_event=stop).invoke("echo", {"text": "x"})
+    assert tools.invoke("calls", {})["result"] == before
+
+
+@pytest.mark.parametrize("kind", [McpRequestError, McpInvalidRequestError])
+def test_a_request_error_survives_a_pickle_round_trip(kind):
+    copy = pickle.loads(pickle.dumps(kind("MCP server 's' tool 't': nope (code -32602)", -32602)))
+    assert type(copy) is kind
+    assert str(copy) == "MCP server 's' tool 't': nope (code -32602)"
+    assert copy.code == -32602
+
+
+def test_a_restarted_session_http_server_is_closed():
+    http = HttpServer()
+    http.start()
+    try:
+        server = mcp_server(url=http.url, label="restarted")
+        server._mode = "legacy"
+        with server:
+            tools = _tools(server)
+            assert tools.invoke("echo", {"text": "up"}) == "up"
+            port = http.port
+            http.stop()
+            http.start(port=port)
+            with pytest.raises(McpServerClosed, match="'restarted' is closed"):
+                tools.invoke("echo", {"text": "lost session"})
+            assert server._dead
+    finally:
+        http.stop()
+
+
+def _error(server, exc):
+    return server._call_error("echo", exc, time.monotonic(), 0, server._ready)
+
+
+def test_a_closed_stream_after_a_transport_failure_is_a_transport_error(server, monkeypatch):
+    from mcp import MCPError
+
+    def probe():
+        # The soft-fail transport counted a failure while the probe ran, and the
+        # probe's own 502 still counts as an answer.
+        server._count_failure()
+        return True
+
+    monkeypatch.setattr(server, "_probe_alive", probe)
+    monkeypatch.setattr(server, "_transport_failures", 0)
+    error = _error(server, MCPError(-32000, "SSE stream ended without a response"))
+    assert type(error) is McpTransportError
+    assert str(error) == f"MCP server '{server.label}' transport error (connection failed)"
+    assert not server._dead
+
+
+def test_an_sdk_redirect_answer_hides_the_location(server):
+    from mcp import MCPError
+
+    message = "Redirect to https://elsewhere.example/mcp?token=SECRET not followed; use that URL"
+    error = _error(server, MCPError(-32600, message))
+    assert isinstance(error, McpInvalidRequestError)
+    assert error.code == -32600
+    assert str(error) == (
+        f"MCP server '{server.label}' redirected the request; yian doesn't follow redirects to another origin"
+    )
+
+
+def test_a_raw_timeout_is_a_transport_error(server):
+    error = _error(server, TimeoutError())
+    assert type(error) is McpTransportError
+    assert str(error) == f"MCP server '{server.label}' transport error (TimeoutError)"
+
+
+def test_a_call_that_never_resolves_times_out_on_its_own_deadline(server, monkeypatch):
+    class Stuck:
+        """A client whose call ignores its timeout and never resolves."""
+
+        async def call_tool(self, *args, **kwargs):
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(mcp_module, "_CALL_GRACE_SECONDS", 0.3)
+    monkeypatch.setattr(server, "_call_timeout", 0.2)
+    monkeypatch.setattr(server, "_client", Stuck())
+    start = time.monotonic()
+    with pytest.raises(McpTimeoutError, match="timed out after 0.2 s"):
+        _tools(server).invoke("echo", {"text": "x"})
+    assert time.monotonic() - start < 2
+    assert not server._calls
+
+
+def test_all_proxy_is_the_fallback_proxy(monkeypatch):
+    for name in ("http_proxy", "https_proxy", "no_proxy", "all_proxy"):
+        monkeypatch.delenv(name, raising=False)
+        monkeypatch.delenv(name.upper(), raising=False)
+    monkeypatch.setenv("ALL_PROXY", "http://proxy.example:3128")
+    assert _proxy_for("https://tools.example.com/mcp") == "http://proxy.example:3128"
+    monkeypatch.setenv("HTTPS_PROXY", "http://https-proxy.example:3128")
+    assert _proxy_for("https://tools.example.com/mcp") == "http://https-proxy.example:3128"

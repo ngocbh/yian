@@ -475,7 +475,7 @@ def test_listing_failure_on_a_terminal_asks_for_a_model_name(monkeypatch, checks
 
 @pytest.mark.parametrize(
     ("provider", "variable"),
-    [("anthropic", "ANTHROPIC_BASE_URL"), ("google", "GOOGLE_GENAI_USE_VERTEXAI")],
+    [("anthropic", "ANTHROPIC_BASE_URL"), ("google", "GOOGLE_GEMINI_BASE_URL")],
 )
 def test_base_url_variable_skips_the_listing(monkeypatch, checks, provider, variable):
     store, fake = checks
@@ -486,6 +486,17 @@ def test_base_url_variable_skips_the_listing(monkeypatch, checks, provider, vari
     assert fake.listings == []
     assert fake.answers == [(provider, "m1", "private-key", None)]
     assert store.selection(provider).model == "m1"
+
+
+def test_vertex_switch_does_not_skip_the_google_listing(monkeypatch, checks):
+    store, fake = checks
+    monkeypatch.setenv("GOOGLE_API_KEY", "private-key")
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    result = runner.invoke(app, ["auth", "google", "--model", "m1"])
+    assert result.exit_code == 0, result.output
+    assert fake.listings == [("google", "private-key", None)]
+    assert fake.answers == []
+    assert store.selection("google").model == "m1"
 
 
 def test_base_url_variable_on_a_terminal_asks_for_a_model_name(monkeypatch, checks):

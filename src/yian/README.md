@@ -226,7 +226,12 @@ organization and project from `OPENAI_ORG_ID`, `OPENAI_ORGANIZATION`, and
 with the names of any it drops. Flow runs cannot send these headers: `LLMConfig`
 has no `http_client`, and `model_from_config` passes none. Only code that builds a
 model with `create_llm_client(..., http_client=...)` can set them on that client.
-The Azure client passes
+The google client passes `vertexai=False`, and if google-genai still switched its
+genai client to Vertex AI from the environment, rebuilds it on the Gemini Developer
+API with the key yian resolved. So `GOOGLE_GENAI_USE_VERTEXAI` and
+`GOOGLE_GENAI_USE_ENTERPRISE` are ignored, and the client warns once per process
+naming either when set (`base_client.warn_once`, shared with the header-drop
+warning). The Azure client passes
 `azure_ad_token=None`, so the SDK reads `AZURE_OPENAI_AD_TOKEN` only when yian
 passes no key, and the Anthropic client clears the SDK's `auth_token` when it
 holds a key. Providers can echo a

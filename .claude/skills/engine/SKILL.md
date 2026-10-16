@@ -889,7 +889,12 @@ Most are just the functional model (above) made enforceable:
   headers yian or langchain set (`drop_environment_headers`): headers from
   `OPENAI_CUSTOM_HEADERS`/`ANTHROPIC_CUSTOM_HEADERS` and the org/project from
   `OPENAI_ORG_ID`/`OPENAI_ORGANIZATION`/`OPENAI_PROJECT_ID` are never sent; a
-  `UserWarning` names any it drops, once per process (`base_client._warned`).
+  `UserWarning` names any it drops, once per process (`base_client.warn_once`).
+  The google client passes `vertexai=False` and rebuilds the genai client on
+  the Gemini Developer API, with the resolved key, if google-genai switched it
+  from the environment, so `GOOGLE_GENAI_USE_VERTEXAI` and
+  `GOOGLE_GENAI_USE_ENTERPRISE` are ignored; a `UserWarning` names either when
+  set, once per process (`warn_once`, shared with the header-drop warning).
   Flow runs cannot send these headers (`LLMConfig` has no `http_client`;
   `model_from_config` passes none); only `create_llm_client(..., http_client=)`
   callers can, on that client.

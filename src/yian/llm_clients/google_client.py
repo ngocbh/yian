@@ -1,19 +1,23 @@
 import builtins
 import copy
 import json
+import os
 import typing
 from typing import Any, Optional
 
 import pydantic
+from google.genai import Client
 from google.genai.types import HttpOptions
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import Field, model_validator
 
-from .base_client import BaseLLMClient, check_no_redirects, normalize_content
+from .base_client import BaseLLMClient, check_no_redirects, normalize_content, warn_once
 from .provider_blocks import merge_request_body
 from .validators import validate_model
 
 _HTTP_CLIENT_KWARGS = ("http_client", "http_async_client")
+# google-genai's switches to Vertex AI; GOOGLE_GENAI_USE_ENTERPRISE is the newer name.
+_VERTEX_SWITCHES = ("GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_ENTERPRISE")
 
 
 def _class_name(cls: type) -> str:
@@ -147,9 +151,53 @@ class NormalizedChatGoogleGenerativeAI(ChatGoogleGenerativeAI):
     http_client: Any = Field(default=None, exclude=True, repr=False)
     http_async_client: Any = Field(default=None, exclude=True, repr=False)
 
+    # Declared above `_use_http_clients`: pydantic runs after-validators in declaration order,
+    # so the caller's httpx clients go onto the client this one may rebuild.
+    @model_validator(mode="after")
+    def _use_developer_api(self) -> "NormalizedChatGoogleGenerativeAI":
+        """Rebuild the genai client on the Gemini Developer API if the environment switched it.
+
+        Returns:
+            `NormalizedChatGoogleGenerativeAI`:
+                This model, its genai client calling the Gemini Developer API with the
+                model's key. A model built with an explicit ``vertexai=True`` is left alone.
+        """
+        # langchain builds the Developer API client without `vertexai`, so google-genai reads
+        # GOOGLE_GENAI_USE_ENTERPRISE / GOOGLE_GENAI_USE_VERTEXAI itself and switches to
+        # Vertex AI express mode; langchain has no slot to pass `vertexai=False`.
+        if self._use_vertexai or not self.client._api_client.vertexai:
+            return self
+        api = self.client._api_client
+        # google-genai sets Content-Type and x-goog-api-key from its own constructor arguments,
+        # and patch_http_options lays caller headers over those defaults, so a copied one would
+        # override them.
+        headers = {
+            name: value for name, value in (api._http_options.headers or {}).items()
+            if name.lower() not in ("x-goog-api-key", "content-type")
+        }
+        base = self.base_url["api_endpoint"] if isinstance(self.base_url, dict) else self.base_url
+        options = HttpOptions(
+            base_url=base,
+            api_version=self.api_version,
+            headers=headers,
+            client_args=self.client_args,
+            async_client_args=self.client_args,
+        )
+        # langchain's cleanup object closes a replaced client's own transports when it is
+        # dropped; the caller's httpx clients are attached only afterwards, so they stay
+        # open. Versions before 4.3.7 have none, and the replaced client is left to its
+        # transports' own `__del__`. Its type is reused because the class is private.
+        cleanup = getattr(self, "_client_cleanup", None)
+        self.client = Client(
+            vertexai=False, api_key=self.google_api_key.get_secret_value(), http_options=options
+        )
+        if cleanup is not None:
+            self._client_cleanup = type(cleanup)(self.client)
+        return self
+
     @model_validator(mode="after")
     def _use_http_clients(self) -> "NormalizedChatGoogleGenerativeAI":
-        """Hand the given httpx clients to the genai client langchain built.
+        """Hand the given httpx clients to the model's genai client.
 
         Returns:
             `NormalizedChatGoogleGenerativeAI`:
@@ -222,8 +270,10 @@ class NormalizedChatGoogleGenerativeAI(ChatGoogleGenerativeAI):
 class GoogleClient(BaseLLMClient):
     """Client for Google Gemini models.
 
-    With a ``base_url``, the model's httpx client does not follow redirects, so the
-    key goes only to that URL. ``http_client`` / ``http_async_client`` replace the SDK's
+    The model always calls the Gemini Developer API with the key yian resolved, even when
+    ``GOOGLE_GENAI_USE_VERTEXAI`` or ``GOOGLE_GENAI_USE_ENTERPRISE`` is set. With a
+    ``base_url``, the model's httpx client does not follow redirects, so the key goes only
+    to that URL. ``http_client`` / ``http_async_client`` replace the SDK's
     httpx clients; beside a ``base_url`` they must not follow redirects.
     """
 
@@ -242,9 +292,25 @@ class GoogleClient(BaseLLMClient):
                 Raised when a given ``http_client`` / ``http_async_client`` is not an httpx
                 client the SDK takes.
             `ValueError`:
-                Raised when a given client follows redirects beside a ``base_url``.
+                Raised when a given client follows redirects beside a ``base_url``, or when
+                no API key is given or found in the environment.
+
+        Warns:
+            `UserWarning`:
+                Once per process for each of ``GOOGLE_GENAI_USE_VERTEXAI`` and
+                ``GOOGLE_GENAI_USE_ENTERPRISE`` set to a non-empty value, naming the variable:
+                the model ignores it and calls the Gemini Developer API.
         """
         self.warn_if_unknown_model()
+        # Before the build, so a setup that relied on Vertex AI credentials and now fails
+        # for want of an API key sees why.
+        for name in _VERTEX_SWITCHES:
+            if os.environ.get(name):
+                warn_once(
+                    f"yian ignores {name}: the google provider always calls the Gemini "
+                    "Developer API with the key yian resolved, and Vertex AI is not supported. "
+                    "Unset the variable to silence this."
+                )
         llm_kwargs: dict[str, Any] = {"model": self.model}
 
         if self.base_url:
@@ -267,6 +333,9 @@ class GoogleClient(BaseLLMClient):
         # langchain-google-genai sends temperature=0.7 unless it is None; a temperature
         # comes only from the block's generationConfig.
         llm_kwargs["temperature"] = None
+        # Without it langchain reads GOOGLE_GENAI_USE_VERTEXAI, and its Vertex AI branch hands
+        # the key to google-genai only through the environment, where an env key wins.
+        llm_kwargs["vertexai"] = False
 
         # Unified api_key maps to provider-specific google_api_key
         google_api_key = self.kwargs.get("api_key") or self.kwargs.get("google_api_key")

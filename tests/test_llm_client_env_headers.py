@@ -5,9 +5,12 @@ yian's clients send exactly the credential and headers yian passes.
 """
 
 import asyncio
+import os
 import warnings
 
 import anthropic
+import google.auth
+import google.genai
 import httpx
 import pytest
 from langchain_core.tools import tool
@@ -16,7 +19,7 @@ from openai import Omit
 from tests.fixtures.openai_responses import ResponsesServer
 from tests.test_llm_client_blocks_anthropic import _anthropic_httpx, _Server
 from tests.test_llm_client_http_clients import _GEMINI_REPLY
-from yian.llm_clients import anthropic_client, base_client
+from yian.llm_clients import anthropic_client, base_client, google_client
 from yian.llm_clients.connection import call_credentials, resolve_model_config
 from yian.llm_clients.factory import create_llm_client
 from yian.llm_clients.openai_client import NormalizedChatOpenAI
@@ -47,6 +50,7 @@ _UNSET = (
     "OPENAI_API_KEY", "AZURE_OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY",
     "OPENAI_BASE_URL", "OPENAI_API_BASE", "ANTHROPIC_BASE_URL", "GOOGLE_GENAI_USE_VERTEXAI",
     "GOOGLE_GENAI_USE_ENTERPRISE", "GOOGLE_GEMINI_BASE_URL", "OPENAI_PROXY", "ANTHROPIC_PROXY",
+    "LANGSMITH_GATEWAY", "LANGSMITH_GATEWAY_API_KEY", "LANGSMITH_API_KEY",
 )
 
 CHAT_REPLY = {
@@ -63,7 +67,7 @@ CHAT_REPLY = {
 
 @pytest.fixture(autouse=True)
 def fresh_warned(monkeypatch):
-    """Forget which drop warnings this process has shown, so each test sees its own."""
+    """Forget which once-per-process warnings were shown, so each test sees its own."""
     monkeypatch.setattr(base_client, "_warned", set())
 
 
@@ -368,6 +372,13 @@ def test_drop_warning_shows_once_across_builds_and_tool_binding(poisoned_env):
     assert len([w for w in record if _DROP_WARNING in str(w.message)]) == 1
 
 
+def test_drop_warning_points_at_the_sdk_adapter(poisoned_env):
+    with pytest.warns(UserWarning, match=_DROP_WARNING) as record:
+        create_llm_client("openai", "gpt-5.5", api_key="sk-explicit").get_llm()
+    [warning] = [w for w in record if _DROP_WARNING in str(w.message)]
+    assert warning.filename.endswith("openai_client.py"), warning.filename
+
+
 def test_anthropic_warns_when_it_drops_env_headers(poisoned_env):
     chat = create_llm_client("anthropic", "claude-sonnet-4-5", api_key="sk-ant-explicit").get_llm()
     with pytest.warns(UserWarning, match=_DROP_WARNING) as record:
@@ -428,6 +439,12 @@ def _google(client, async_client):
     ).get_llm()
 
 
+def _google_without_key(client, async_client):
+    return create_llm_client(
+        "google", "gemini-2.5-flash", http_client=client, http_async_client=async_client,
+    ).get_llm()
+
+
 class GeminiServer:
     """Answer Gemini generateContent requests and record them."""
 
@@ -451,6 +468,163 @@ def test_google_sends_only_the_explicit_key(poisoned_env):
         assert_clean(request)
 
 
+_KEY_VARIABLES = ("GOOGLE_API_KEY", "GEMINI_API_KEY")
+
+
+def test_google_never_writes_the_key_to_the_environment(poisoned_env):
+    # langchain's Vertex AI branch hands a passed key to google-genai through os.environ.
+    poisoned_env.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    for name in _KEY_VARIABLES:
+        poisoned_env.delenv(name, raising=False)
+    written = []
+    original = os._Environ.__setitem__
+
+    def recorder(self, name, value):
+        written.append(name)
+        original(self, name, value)
+
+    poisoned_env.setattr(os._Environ, "__setitem__", recorder)
+    create_llm_client("google", "gemini-2.5-flash", api_key="g-explicit").get_llm()
+    assert "GOOGLE_API_KEY" not in written
+
+
+_GEMINI_HOST = "generativelanguage.googleapis.com"
+_GEMINI_PATH = "/v1beta/models/gemini-2.5-flash:generateContent"
+_VERTEX_SWITCHES = ("GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_ENTERPRISE")
+
+
+def _set_vertex_switch(env, switch):
+    env.setenv(switch, "true")
+    env.setenv("GOOGLE_API_KEY", "env-google-key")
+    env.setenv("GEMINI_API_KEY", "env-gemini-key")
+    env.setenv("GOOGLE_CLOUD_PROJECT", "p")
+    env.setenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+
+
+@pytest.mark.parametrize("key", ["g-explicit", None])
+@pytest.mark.parametrize("switch", _VERTEX_SWITCHES)
+def test_google_ignores_the_vertex_switch(poisoned_env, switch, key):
+    # google-genai reads the switch itself when langchain builds the Developer API client.
+    _set_vertex_switch(poisoned_env, switch)
+    server = GeminiServer()
+    invoke_both(_google if key else _google_without_key, server)
+    assert len(server.requests) == 2
+    for request in server.requests:
+        assert request.url.host == _GEMINI_HOST
+        assert request.url.path == _GEMINI_PATH
+        if key:
+            assert request.headers["x-goog-api-key"] == "g-explicit"
+            assert_clean(request)
+        else:
+            assert request.headers["x-goog-api-key"] == "env-google-key"
+
+
+def test_google_ignores_the_vertex_switch_beside_a_base_url(poisoned_env):
+    _set_vertex_switch(poisoned_env, "GOOGLE_GENAI_USE_VERTEXAI")
+    server = GeminiServer()
+
+    # invoke_both's clients keep httpx's default follow_redirects=False, as a base_url requires.
+    def build(client, async_client):
+        return create_llm_client(
+            "google", "gemini-2.5-flash", api_key="g-explicit", base_url="https://gw.example.com",
+            http_client=client, http_async_client=async_client,
+        ).get_llm()
+
+    invoke_both(build, server)
+    assert len(server.requests) == 2
+    for request in server.requests:
+        assert request.url.host == "gw.example.com"
+        assert request.url.path == _GEMINI_PATH
+        assert request.headers["x-goog-api-key"] == "g-explicit"
+        assert_clean(request)
+
+
+@pytest.mark.parametrize("base_url", [None, "https://gw.example.com"])
+def test_google_rebuilt_client_keeps_base_url_key_and_no_redirects(poisoned_env, base_url):
+    # Builds only: these models use the SDK's own transports, so they are never invoked.
+    poisoned_env.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    poisoned_env.setenv("GOOGLE_API_KEY", "env-google-key")
+    chat = create_llm_client(
+        "google", "gemini-2.5-flash", api_key="g-explicit", base_url=base_url
+    ).get_llm()
+    api = chat.client._api_client
+    assert not api.vertexai
+    assert api._http_options.base_url.startswith(base_url or f"https://{_GEMINI_HOST}")
+    assert api._http_options.headers["x-goog-api-key"] == "g-explicit"
+    if base_url:
+        assert api._httpx_client.follow_redirects is False
+        assert api._async_httpx_client.follow_redirects is False
+
+
+def test_google_rebuild_without_a_cleanup_object(poisoned_env):
+    # langchain-google-genai before 4.3.7 builds no cleanup object for its genai client.
+    poisoned_env.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    chat = create_llm_client("google", "gemini-2.5-flash", api_key="g-explicit").get_llm()
+    # 4.3.0 leaves `__pydantic_private__` as None, having no private attributes.
+    (chat.__pydantic_private__ or {}).pop("_client_cleanup", None)
+    chat.client = google.genai.Client(vertexai=True, api_key="g-explicit")
+    chat._use_developer_api()
+    assert not chat.client._api_client.vertexai
+    assert "_client_cleanup" not in (chat.__pydantic_private__ or {})
+
+
+def test_google_client_does_not_import_the_cleanup_class():
+    # The class is private to langchain-google-genai and missing before 4.3.7.
+    assert not hasattr(google_client, "_ClientCleanup")
+
+
+_VERTEX_WARNING = "yian ignores GOOGLE_GENAI_USE"
+
+
+def _vertex_warnings(record):
+    return [w for w in record if str(w.message).startswith(_VERTEX_WARNING)]
+
+
+def test_google_warns_once_about_the_vertex_switch(poisoned_env):
+    poisoned_env.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    poisoned_env.setenv("GOOGLE_API_KEY", "env-google-key")
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        for _ in range(2):
+            create_llm_client("google", "gemini-2.5-flash", api_key="g-explicit").get_llm()
+        [warning] = _vertex_warnings(record)
+        poisoned_env.setenv("GOOGLE_GENAI_USE_ENTERPRISE", "1")
+        create_llm_client("google", "gemini-2.5-flash", api_key="g-explicit").get_llm()
+    assert warning.category is UserWarning
+    assert warning.filename == __file__
+    message = str(warning.message)
+    assert "GOOGLE_GENAI_USE_VERTEXAI" in message
+    assert "env-google-key" not in message
+    [_, enterprise] = _vertex_warnings(record)
+    assert "GOOGLE_GENAI_USE_ENTERPRISE" in str(enterprise.message)
+
+
+def test_google_without_the_vertex_switch_does_not_warn(poisoned_env):
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        create_llm_client("google", "gemini-2.5-flash", api_key="g-explicit").get_llm()
+    assert not _vertex_warnings(record)
+
+
+def test_google_without_any_key_fails_on_the_developer_api(poisoned_env):
+    # A keyless setup that relied on Vertex AI's default credentials now fails, after the warning.
+    poisoned_env.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    poisoned_env.setenv("GOOGLE_CLOUD_PROJECT", "p")
+    for name in _KEY_VARIABLES:
+        poisoned_env.delenv(name, raising=False)
+
+    def default(*args, **kwargs):
+        raise AssertionError("google.auth.default must not be called")
+
+    poisoned_env.setattr(google.auth, "default", default)
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        with pytest.raises(ValueError, match="API key required"):
+            create_llm_client("google", "gemini-2.5-flash").get_llm()
+    [warning] = _vertex_warnings(record)
+    assert "GOOGLE_GENAI_USE_VERTEXAI" in str(warning.message)
+
+
 def _deepseek(client, async_client):
     return create_llm_client(
         "deepseek", "deepseek-chat", api_key="ds-explicit",
@@ -463,26 +637,42 @@ _TRACKED_CASES = {
     "openai": (
         _openai("sk-explicit"), lambda: ResponsesServer(tool_first=False), httpx,
         {"provider": "openai", "model": "gpt-5.5", "api_key": "sk-explicit"},
+        {},
     ),
     "deepseek": (
         _deepseek, ChatServer, httpx,
         {"provider": "deepseek", "model": "deepseek-chat", "api_key": "ds-explicit"},
+        {},
     ),
     "azure-key": (
         _azure(api_key="az-explicit"), ChatServer, httpx,
         {"provider": "azure", "model": "dep", "base_url": _AZURE_URL, "api_key": "az-explicit"},
+        {},
     ),
     "azure-no-key": (
         _azure(), ChatServer, httpx,
         {"provider": "azure", "model": "dep", "base_url": _AZURE_URL},
+        {},
     ),
     "anthropic": (
         _anthropic(), _Server, None,
         {"provider": "anthropic", "model": "claude-sonnet-4-5", "api_key": "sk-ant-explicit"},
+        {},
     ),
     "google": (
         _google, GeminiServer, httpx,
         {"provider": "google", "model": "gemini-2.5-flash", "api_key": "g-explicit"},
+        {},
+    ),
+    "google-vertex": (
+        _google, GeminiServer, httpx,
+        {"provider": "google", "model": "gemini-2.5-flash", "api_key": "g-explicit"},
+        {"GOOGLE_GENAI_USE_VERTEXAI": "true"},
+    ),
+    "google-vertex-no-key": (
+        _google_without_key, GeminiServer, httpx,
+        {"provider": "google", "model": "gemini-2.5-flash"},
+        {"GOOGLE_GENAI_USE_VERTEXAI": "true"},
     ),
 }
 
@@ -492,7 +682,9 @@ def test_wire_credentials_are_tracked(poisoned_env, case):
     # Every credential on the wire must be one call_credentials lists, so errors are scrubbed.
     for name, value in _GOOGLE_ENV.items():
         poisoned_env.setenv(name, value)
-    build, make_server, package, config = _TRACKED_CASES[case]
+    build, make_server, package, config, env = _TRACKED_CASES[case]
+    for name, value in env.items():
+        poisoned_env.setenv(name, value)
     server = make_server()
     invoke_both(build, server, package=package or _anthropic_httpx())
     tracked = call_credentials(resolve_model_config(config))

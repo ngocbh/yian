@@ -98,8 +98,14 @@ by setting them on the `http_client` it passes, e.g.
 Azure (a Python host's key or a saved login) is sent even when
 `AZURE_OPENAI_AD_TOKEN` is set. Endpoints still come from
 environment variables at run time (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`,
-`VLLM_BASE_URL`, `OLLAMA_BASE_URL`, ...); a saved login stores only the key, plus
-the endpoint for Azure. Azure's API version always comes from `OPENAI_API_VERSION`.
+`GOOGLE_GEMINI_BASE_URL`, `VLLM_BASE_URL`, `OLLAMA_BASE_URL`, ...); a saved login
+stores only the key, plus the endpoint for Azure. `GOOGLE_GENAI_USE_VERTEXAI` and
+`GOOGLE_GENAI_USE_ENTERPRISE` do not change the endpoint: the `google` provider
+always calls the Gemini Developer API with the key yian resolved, and yian warns
+once when either is set. Vertex AI is not supported, so a setup that relied on
+Vertex AI Application Default Credentials without an API key now fails with a
+missing-key error. This is a breaking change: earlier versions honored the
+variable. Azure's API version always comes from `OPENAI_API_VERSION`.
 
 A Python host can instead pass the key in `run_flow(..., llm_config={"provider": ...,
 "api_key": key})`, which takes precedence over the saved login and the variable and

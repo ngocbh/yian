@@ -37,7 +37,7 @@ _BASE_URL_ENV = {"ollama": "OLLAMA_BASE_URL", "vllm": "VLLM_BASE_URL"}
 # a gateway's key must not go to the public host's listing.
 _ELSEWHERE_ENV = {
     "anthropic": ("ANTHROPIC_API_URL", "ANTHROPIC_BASE_URL"),
-    "google": ("GOOGLE_GEMINI_BASE_URL", "GOOGLE_GENAI_USE_VERTEXAI"),
+    "google": ("GOOGLE_GEMINI_BASE_URL",),
 }
 
 

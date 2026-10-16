@@ -13,7 +13,9 @@ from openai import Omit
 
 from tests.fixtures.openai_responses import ResponsesServer
 from tests.test_llm_client_blocks_anthropic import _anthropic_httpx, _Server
+from tests.test_llm_client_http_clients import _GEMINI_REPLY
 from yian.llm_clients import anthropic_client
+from yian.llm_clients.connection import call_credentials, resolve_model_config
 from yian.llm_clients.factory import create_llm_client
 from yian.llm_clients.openai_client import NormalizedChatOpenAI
 from yian.llm_clients.openai_subscription import SubscriptionAccess, create_subscription_model
@@ -300,3 +302,99 @@ def test_drop_environment_headers_clears_an_env_auth_token():
     [request] = server.requests
     assert "authorization" not in request.headers
     assert request.headers["x-api-key"] == "k"
+
+
+_GOOGLE_ENV = {
+    "GOOGLE_GENAI_DEFAULT_HEADERS": '{"X-Env-Injected": "from-env"}',
+    "GOOGLE_GENAI_ACCESS_TOKEN": "env-google-access-token",
+    "GOOGLE_GENAI_API_KEY": "env-google-genai-key",
+    "GOOGLE_API_KEY": "env-google-key",
+    "GEMINI_API_KEY": "env-gemini-key",
+}
+
+
+def _google(client, async_client):
+    return create_llm_client(
+        "google", "gemini-2.5-flash", api_key="g-explicit",
+        http_client=client, http_async_client=async_client,
+    ).get_llm()
+
+
+class GeminiServer:
+    """Answer Gemini generateContent requests and record them."""
+
+    def __init__(self):
+        self.requests = []
+
+    def __call__(self, request):
+        self.requests.append(request)
+        return httpx.Response(200, json=_GEMINI_REPLY)
+
+
+def test_google_sends_only_the_explicit_key(poisoned_env):
+    # google-genai sends none of these variables beside a passed key; this guards a later SDK.
+    for name, value in _GOOGLE_ENV.items():
+        poisoned_env.setenv(name, value)
+    server = GeminiServer()
+    invoke_both(_google, server)
+    assert len(server.requests) == 2
+    for request in server.requests:
+        assert request.headers["x-goog-api-key"] == "g-explicit"
+        assert_clean(request)
+
+
+def _deepseek(client, async_client):
+    return create_llm_client(
+        "deepseek", "deepseek-chat", api_key="ds-explicit",
+        http_client=client, http_async_client=async_client,
+    ).get_llm()
+
+
+_AZURE_URL = "https://res.openai.azure.com"
+_TRACKED_CASES = {
+    "openai": (
+        _openai("sk-explicit"), lambda: ResponsesServer(tool_first=False), httpx,
+        {"provider": "openai", "model": "gpt-5.5", "api_key": "sk-explicit"},
+    ),
+    "deepseek": (
+        _deepseek, ChatServer, httpx,
+        {"provider": "deepseek", "model": "deepseek-chat", "api_key": "ds-explicit"},
+    ),
+    "azure-key": (
+        _azure(api_key="az-explicit"), ChatServer, httpx,
+        {"provider": "azure", "model": "dep", "base_url": _AZURE_URL, "api_key": "az-explicit"},
+    ),
+    "azure-no-key": (
+        _azure(), ChatServer, httpx,
+        {"provider": "azure", "model": "dep", "base_url": _AZURE_URL},
+    ),
+    "anthropic": (
+        _anthropic(), _Server, None,
+        {"provider": "anthropic", "model": "claude-sonnet-4-5", "api_key": "sk-ant-explicit"},
+    ),
+    "google": (
+        _google, GeminiServer, httpx,
+        {"provider": "google", "model": "gemini-2.5-flash", "api_key": "g-explicit"},
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(_TRACKED_CASES))
+def test_wire_credentials_are_tracked(poisoned_env, case):
+    # Every credential on the wire must be one call_credentials lists, so errors are scrubbed.
+    for name, value in _GOOGLE_ENV.items():
+        poisoned_env.setenv(name, value)
+    build, make_server, package, config = _TRACKED_CASES[case]
+    server = make_server()
+    invoke_both(build, server, package=package or _anthropic_httpx())
+    tracked = call_credentials(resolve_model_config(config))
+    assert len(server.requests) == 2
+    for request in server.requests:
+        sent = [
+            request.headers[name].removeprefix("Bearer ")
+            for name in ("authorization", "api-key", "x-api-key", "x-goog-api-key")
+            if name in request.headers
+        ]
+        assert sent
+        for value in sent:
+            assert value in tracked, (value, tracked)

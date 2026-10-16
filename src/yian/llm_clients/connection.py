@@ -69,8 +69,9 @@ _HOST_KEY_MISSING = (
 # Key variables a provider SDK reads after the provider's own, and only when yian
 # passes it no key.
 _KEY_ENV_FALLBACKS = {"google": ("GEMINI_API_KEY",), "azure": ("OPENAI_API_KEY",)}
-# Token variables a provider SDK may read and send whatever key yian passes it
-# (older Anthropic SDKs send ANTHROPIC_AUTH_TOKEN beside the key).
+# Token variables listed whenever set, though only a call yian passes no key sends
+# them: AZURE_OPENAI_AD_TOKEN from the Azure SDK, ANTHROPIC_AUTH_TOKEN from a 0.x
+# Anthropic SDK.
 _ALWAYS_SENT_ENV = {"azure": ("AZURE_OPENAI_AD_TOKEN",), "anthropic": ("ANTHROPIC_AUTH_TOKEN",)}
 
 
@@ -727,10 +728,14 @@ def call_credentials(config: dict[str, Any] | LLMConfig | None) -> tuple[str, ..
     without refresh, so expired subscription tokens count too. Otherwise (an
     ``environment`` or ``legacy_environment`` connection, or none) the client
     reads the first set variable of the provider's key variable, then the SDK
-    fallbacks. An ``azure`` or ``anthropic`` call may also send
-    ``AZURE_OPENAI_AD_TOKEN`` or ``ANTHROPIC_AUTH_TOKEN`` when set. A config without connection metadata is resolved first, as
-    `model_from_config` does; `None` resolves like ``{}``. Each step is guarded,
-    so a failing one still leaves the others' credentials.
+    fallbacks. ``AZURE_OPENAI_AD_TOKEN`` (``azure``) and ``ANTHROPIC_AUTH_TOKEN``
+    (``anthropic``) are listed whenever set, though the Azure token is sent only by
+    a call given no key and the Anthropic token only by a 0.x SDK given no key. SDK
+    header variables such as ``OPENAI_CUSTOM_HEADERS`` are never sent, since the
+    clients drop them, so their values are not listed. A config without connection
+    metadata is resolved first, as `model_from_config` does; `None` resolves like
+    ``{}``. Each step is guarded, so a failing one still leaves the others'
+    credentials.
 
     Args:
         config (`dict[str, Any] | LLMConfig | None`): The config the model call

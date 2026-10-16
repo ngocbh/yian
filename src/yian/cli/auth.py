@@ -330,8 +330,9 @@ def _model_answers(
     except ImportError as error:
         return str(error)
     except Exception as error:
-        # Besides the key, an SDK may send a token variable (AZURE_OPENAI_AD_TOKEN). A
-        # keyless check sends no saved or ambient key, so none is looked up.
+        # call_credentials also lists a set token variable (AZURE_OPENAI_AD_TOKEN,
+        # ANTHROPIC_AUTH_TOKEN), though a call given a key doesn't send it. A keyless
+        # check sends no saved or ambient key, so none is looked up.
         secrets = () if key is None else call_credentials({"provider": provider, "api_key": key})
         scrub_keys(error, secrets)
         # Some errors, such as pydantic's ValidationError, build their text from

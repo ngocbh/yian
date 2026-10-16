@@ -898,6 +898,10 @@ Most are just the functional model (above) made enforceable:
   Flow runs cannot send these headers (`LLMConfig` has no `http_client`;
   `model_from_config` passes none); only `create_llm_client(..., http_client=)`
   callers can, on that client.
+  The ollama client deletes the `Authorization` header the ollama SDK built
+  from `OLLAMA_API_KEY` (`NormalizedChatOllama`), so no key reaches Ollama; a
+  `UserWarning` says so, once per process (`warn_once`). Basic auth from
+  userinfo in `OLLAMA_BASE_URL` stays.
   Azure passes `azure_ad_token=None`, so `AZURE_OPENAI_AD_TOKEN` is used only
   without a key; Anthropic clears `auth_token` when it holds a key.
   `LLMConfig` keeps the key a `SecretStr` excluded from dumps, rejects

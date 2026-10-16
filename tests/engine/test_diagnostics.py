@@ -433,6 +433,127 @@ def test_resolver_table_rejects_delegate_results_outside_the_protocol() -> None:
         table.resolve(OriginRef("new"))
 
 
+def _route_chain(
+    depth: int, delegate: OriginResolver, origin: OriginRef
+) -> ResolverTable:
+    """Build `depth` nested tables that each route key ``"k"`` to the next one.
+
+    Args:
+        depth (`int`): Number of tables in the chain.
+        delegate (`OriginResolver`): Resolver behind the innermost table.
+        origin (`OriginRef`): Exact origin the innermost table passes to it.
+
+    Returns:
+        `ResolverTable`: The outermost table of the chain.
+    """
+    table = ResolverTable.from_entries([(OriginRef("k"), delegate, origin)])
+    for _ in range(depth - 1):
+        table = ResolverTable.from_entries([(OriginRef("k"), table, OriginRef("k"))])
+    return table
+
+
+def test_resolver_table_resolves_through_a_deep_chain_of_route_tables() -> None:
+    """A long chain of nested route tables resolves without exhausting the stack."""
+    frame = DiagnosticFrame(label="inner", text="x\n", range=SourceRange(1, 1, 1, 2))
+    calls: list[OriginRef] = []
+
+    class Resolver:
+        def resolve(self, origin: OriginRef) -> DiagnosticFrame | None:
+            calls.append(origin)
+            return frame
+
+    class LocalOrigin(OriginRef):
+        """Delegate-local identity that must reach the delegate unchanged."""
+
+    local = LocalOrigin("local")
+    table = _route_chain(5_000, Resolver(), local)
+
+    assert table.resolve(OriginRef("k")) is frame
+    assert calls[0] is local and len(calls) == 1
+    assert table.resolve(OriginRef("missing")) is None
+
+
+def test_resolver_table_chain_keeps_each_level_checks() -> None:
+    """Nested tables apply the same checks, errors, and misses as single tables."""
+
+    class BadResolver:
+        def resolve(self, origin: OriginRef) -> DiagnosticFrame | None:
+            return "not-a-frame"  # type: ignore[return-value]
+
+    class FailingResolver:
+        def resolve(self, origin: OriginRef) -> DiagnosticFrame | None:
+            raise RuntimeError(f"cannot resolve {origin.key}")
+
+    class NoneResolver:
+        def resolve(self, origin: OriginRef) -> DiagnosticFrame | None:
+            return None
+
+    with pytest.raises(
+        TypeError, match="delegate must return a DiagnosticFrame or None"
+    ):
+        _route_chain(5_000, BadResolver(), OriginRef("old")).resolve(OriginRef("k"))
+    with pytest.raises(RuntimeError, match="cannot resolve old"):
+        _route_chain(50, FailingResolver(), OriginRef("old")).resolve(OriginRef("k"))
+    assert _route_chain(50, NoneResolver(), OriginRef("old")).resolve(OriginRef("k")) is None
+
+    # A route that misses halfway down still yields no frame.
+    inner = _route_chain(25, NoneResolver(), OriginRef("old"))
+    outer = ResolverTable.from_entries([(OriginRef("k"), inner, OriginRef("gone"))])
+    assert _route_chain(25, outer, OriginRef("k")).resolve(OriginRef("k")) is None
+
+    class InvalidOrigin(OriginRef):
+        def __post_init__(self) -> None:
+            pass
+
+    with pytest.raises(TypeError, match="resolve requires an OriginRef"):
+        _route_chain(50, NoneResolver(), OriginRef("old")).resolve("k")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="origin key must be a non-empty string"):
+        _route_chain(50, NoneResolver(), OriginRef("old")).resolve(InvalidOrigin(""))
+
+    # An inner table still normalizes the origin it receives, so a delegate-local
+    # key invalidated after routing fails there exactly as a direct call would.
+    middle = InvalidOrigin("k")
+    inner = _route_chain(25, NoneResolver(), OriginRef("old"))
+    outer = ResolverTable.from_entries([(OriginRef("k"), inner, middle)])
+    object.__setattr__(middle, "key", "")
+    with pytest.raises(ValueError, match="origin key must be a non-empty string"):
+        _route_chain(25, outer, OriginRef("k")).resolve(OriginRef("k"))
+
+
+def test_resolver_table_chain_calls_non_table_delegates_in_the_middle() -> None:
+    """Plain resolvers and table subclasses inside a chain keep their own resolve."""
+    frame = DiagnosticFrame(label="inner", text="x\n", range=SourceRange(1, 1, 1, 2))
+    calls: list[str] = []
+
+    class Forwarder:
+        def __init__(self, table: ResolverTable) -> None:
+            self.table = table
+
+        def resolve(self, origin: OriginRef) -> DiagnosticFrame | None:
+            calls.append(f"forward {origin.key}")
+            return self.table.resolve(origin)
+
+    class Resolver:
+        def resolve(self, origin: OriginRef) -> DiagnosticFrame | None:
+            calls.append(f"leaf {origin.key}")
+            return frame
+
+    class AuditedTable(ResolverTable):
+        __slots__ = ()
+
+        def resolve(self, origin: OriginRef) -> DiagnosticFrame | None:
+            calls.append(f"audited {origin.key}")
+            return super().resolve(origin)
+
+    leaf = _route_chain(30, Resolver(), OriginRef("old"))
+    audited = AuditedTable.from_entries([(OriginRef("a"), leaf, OriginRef("k"))])
+    middle = _route_chain(30, Forwarder(audited), OriginRef("a"))
+    table = _route_chain(30, Forwarder(middle), OriginRef("k"))
+
+    assert table.resolve(OriginRef("k")) is frame
+    assert calls == ["forward k", "forward a", "audited a", "leaf old"]
+
+
 @pytest.mark.parametrize(
     ("operation", "message"),
     [

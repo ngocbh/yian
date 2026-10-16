@@ -384,12 +384,24 @@ class ResolverTable:
                 delegate returns neither a `DiagnosticFrame` nor `None`.
             ValueError: Raised when an origin subclass carries an invalid key.
         """
-        if not isinstance(origin, OriginRef):
-            raise TypeError("resolver table resolve requires an OriginRef")
-        origin_key = OriginRef(origin.key).key
-        target = self._targets.get(origin_key)
-        if target is None:
-            return None
+        # A `uses:` chain nests one table per file, so follow exact-table routes
+        # in a loop rather than one call per level. Each level repeats the checks
+        # its own call would make; an inner table only ever returns a frame or
+        # `None`, so the result checks the outer levels would apply on return
+        # cannot fail and only the final delegate's result needs checking.
+        # Subclasses are delegated to normally so they keep their own `resolve`.
+        table = self
+        while True:
+            if not isinstance(origin, OriginRef):
+                raise TypeError("resolver table resolve requires an OriginRef")
+            origin_key = OriginRef(origin.key).key
+            target = table._targets.get(origin_key)
+            if target is None:
+                return None
+            if type(target.resolver) is not ResolverTable:
+                break
+            table = target.resolver
+            origin = target.origin
         frame = target.resolver.resolve(target.origin)
         if frame is not None and not isinstance(frame, DiagnosticFrame):
             raise TypeError(

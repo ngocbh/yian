@@ -14,6 +14,11 @@ import httpx2
 
 
 def _yian_version() -> str:
+    """Return the installed yian version, for the User-Agent.
+
+    Returns:
+        `str`: The package version, or ``"0+unknown"`` when yian is not installed.
+    """
     try:
         return version("yian")
     except PackageNotFoundError:
@@ -60,7 +65,7 @@ def check_client(name: str, client: httpx2.Client) -> None:
         client (`httpx2.Client`): The client to check.
 
     Raises:
-        ValueError: If ``client.follow_redirects`` is true.
+        `ValueError`: If ``client.follow_redirects`` is true.
     """
     if client.follow_redirects:
         raise ValueError(f"{name} must not follow redirects; build it with follow_redirects=False")

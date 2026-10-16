@@ -25,7 +25,7 @@ class Auth(Protocol):
             `dict[str, str]`: Header names mapped to their values.
 
         Raises:
-            ValueError: If a resolved value is not valid header text.
+            `ValueError`: If a resolved value is not valid header text.
         """
         ...
 
@@ -42,7 +42,9 @@ def _check_header_value(name: str, value: Any) -> str:
     """Return ``value`` if it is valid header text, never echoing it on failure.
 
     This is the subscription-access rule widened to allow inner spaces, so a value such
-    as ``Bearer x`` passes while CR, LF, other control characters and non-ASCII fail.
+    as ``Bearer x`` passes while CR, LF, other control characters, non-ASCII and
+    leading or trailing spaces fail. HTTP strips the padding from a header value, so a
+    padded key would send something other than the secret it was given.
 
     Args:
         name (`str`): What the value is, for the error message.
@@ -52,11 +54,13 @@ def _check_header_value(name: str, value: Any) -> str:
         `str`: ``value`` unchanged.
 
     Raises:
-        ValueError: If ``value`` is not a non-empty string of printable ASCII and spaces.
+        `ValueError`: If ``value`` is not a non-empty string of printable ASCII and
+            inner spaces.
     """
     if (
         not isinstance(value, str)
         or not value
+        or value != value.strip(" ")
         or any((ord(char) < 0x21 and char != " ") or ord(char) >= 0x7F for char in value)
     ):
         raise ValueError(f"{name} must be non-empty HTTP header text")
@@ -106,6 +110,14 @@ class _KeyAuth:
             self._seen.add(key)
 
     def _resolve(self) -> str:
+        """Resolve the key for one request and record it for the scrub.
+
+        Returns:
+            `str`: The key, checked as header text.
+
+        Raises:
+            `ValueError`: If the key is not a non-empty string of valid header text.
+        """
         key = self._key() if callable(self._key) else self._key
         # Record before checking: a value that fails the check may still reach error
         # text elsewhere, and listing it only widens the scrub.
@@ -155,7 +167,7 @@ class BearerAuth(_KeyAuth):
             `dict[str, str]`: ``{"Authorization": "Bearer <key>"}``.
 
         Raises:
-            ValueError: If the key is not a non-empty string of valid header text.
+            `ValueError`: If the key is not a non-empty string of valid header text.
         """
         return {"Authorization": f"Bearer {self._resolve()}"}
 
@@ -180,7 +192,7 @@ class HeaderKeyAuth(_KeyAuth):
             `dict[str, str]`: ``{header: key}``.
 
         Raises:
-            ValueError: If the key is not a non-empty string of valid header text.
+            `ValueError`: If the key is not a non-empty string of valid header text.
         """
         return {self.header: self._resolve()}
 
@@ -207,7 +219,7 @@ class SubscriptionAuth:
             has a residency.
 
         Raises:
-            ValueError: If a resolved value is not a non-empty string of valid header
+            `ValueError`: If a resolved value is not a non-empty string of valid header
                 text.
         """
         access = self._source()

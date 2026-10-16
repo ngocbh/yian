@@ -7,17 +7,21 @@ from yian.llm.transport import DEFAULT_TIMEOUT, USER_AGENT, build_client, check_
 
 
 def test_client_refuses_redirects():
-    assert build_client().follow_redirects is False
+    with build_client() as client:
+        assert client.follow_redirects is False
 
 
 def test_user_agent():
     assert USER_AGENT.startswith("yian/")
-    assert build_client().headers["User-Agent"] == USER_AGENT
+    with build_client() as client:
+        assert client.headers["User-Agent"] == USER_AGENT
 
 
 def test_default_timeout():
-    assert build_client().timeout == DEFAULT_TIMEOUT
-    assert build_client(timeout=3.0).timeout == httpx2.Timeout(3.0)
+    with build_client() as client:
+        assert client.timeout == DEFAULT_TIMEOUT
+    with build_client(timeout=3.0) as client:
+        assert client.timeout == httpx2.Timeout(3.0)
 
 
 def test_redirect_response_is_not_followed():
@@ -37,8 +41,9 @@ def test_sends_no_environment_headers(monkeypatch):
     monkeypatch.setenv("OPENAI_CUSTOM_HEADERS", "Authorization: Bearer env")
     monkeypatch.setenv("ANTHROPIC_CUSTOM_HEADERS", "x-env: 1")
     monkeypatch.setenv("OPENAI_ORG_ID", "org-env")
-    # An unused address: the mock transport replaces the network, so no proxy connection
-    # is attempted, but httpx2 still reads the variable.
+    # httpx2 ignores environment proxies when a transport is passed
+    # (allow_env_proxies = trust_env and transport is None). The variables point at an
+    # unused address so a regression in that rule cannot reach the network.
     monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
     monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
     seen = []

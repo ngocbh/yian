@@ -97,7 +97,7 @@ class TestCallableKeys:
 
 
 BAD_VALUES = ["", "sk-abc\r\ninjected: 1", "sk-abc\nx", "sk-abc\rx", "sk-\x00abc", "sk-\tabc",
-              "sk-\x7fabc", "sk-é"]
+              "sk-\x7fabc", "sk-é", " sk-abc", "sk-abc "]
 
 
 class TestValueChecks:

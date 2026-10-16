@@ -16,6 +16,7 @@ import time
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from yian.defaults import current
+from yian.llm_clients.connection_settings import validate_headers, validate_organization
 
 from .common import ApiKeyCredentials, AuthError, HttpResponse, OAuthCredentials, _text
 from .http import _RequestCancelled, _request
@@ -422,13 +423,44 @@ class OpenAIAuth:
         )
         return self._tokens(self._data(response), credentials)
 
-    def api_models(self, credentials: ApiKeyCredentials) -> tuple[str, ...]:
-        """Validate an API key and return the model identifiers it can list."""
-        response = self._send(
-            "GET",
-            "https://api.openai.com/v1/models",
-            headers={"Authorization": "Bearer " + credentials.api_key},
-        )
+    def api_models(
+        self,
+        credentials: ApiKeyCredentials,
+        *,
+        organization: str | None = None,
+        project: str | None = None,
+    ) -> tuple[str, ...]:
+        """Validate an API key and return the model identifiers it can list.
+
+        The request carries the credential's connection headers and, when given, the
+        organization and project ids as ``OpenAI-Organization`` and ``OpenAI-Project``.
+
+        Args:
+            credentials (`ApiKeyCredentials`): The key and its connection headers.
+            organization (`str | None`): OpenAI organization id to send.
+            project (`str | None`): OpenAI project id to send.
+
+        Returns:
+            `tuple[str, ...]`: The model ids, sorted and without duplicates.
+
+        Raises:
+            `AuthError`: A setting is invalid (checked before any request, and the
+                message holds no header value or id), the request fails (a mismatched
+                organization or project is an HTTP status), or the list is invalid or
+                empty.
+        """
+        try:
+            headers = validate_headers(dict(credentials.headers), "openai")
+            for header, field, value in (
+                ("OpenAI-Organization", "organization", organization),
+                ("OpenAI-Project", "project", project),
+            ):
+                if value is not None:
+                    headers[header] = validate_organization(value, field)
+        except ValueError as error:
+            raise AuthError(f"Invalid OpenAI connection settings: {error}") from None
+        headers["Authorization"] = "Bearer " + credentials.api_key
+        response = self._send("GET", "https://api.openai.com/v1/models", headers=headers)
         data = self._data(response).get("data")
         if (
             not isinstance(data, list)

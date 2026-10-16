@@ -7,6 +7,7 @@ import time
 from urllib.error import URLError
 from urllib.parse import parse_qs, urlsplit
 
+from pydantic import SecretStr
 import pytest
 
 from yian.llm_clients import model_list
@@ -370,3 +371,173 @@ def test_slow_drip_body_stops_at_the_deadline(monkeypatch):
     assert elapsed < 1.0
     assert closed.is_set()
     assert not errors
+
+
+GATEWAY = "gw-SENTINEL-token-9876"
+ORG = "org-SENTINEL-1234"
+PROJECT = "proj_SENTINEL-5678"
+
+
+def _assert_no_settings(error):
+    for link in _chain(error):
+        for text in (str(link), repr(link)):
+            for value in (GATEWAY, ORG, PROJECT):
+                assert value not in text
+
+
+@pytest.mark.parametrize(
+    ("provider", "body", "key_header"),
+    [
+        ("openai", {"data": [{"id": "m"}]}, "authorization"),
+        ("openrouter", {"data": [{"id": "m"}]}, "authorization"),
+        ("anthropic", {"data": [{"id": "m"}], "has_more": False}, "x-api-key"),
+        ("google", {"models": []}, "x-goog-api-key"),
+    ],
+)
+def test_listing_sends_connection_headers_beside_the_key(provider, body, key_header):
+    server = _ok(body)
+    list_models(provider, KEY, headers={"X-Gateway": GATEWAY}, request=server)
+    headers = server.calls[0]["headers"]
+    assert headers["x-gateway"] == GATEWAY
+    assert KEY in headers[key_header]
+
+
+def test_listing_takes_secret_header_values():
+    server = _ok({"data": [{"id": "m"}]})
+    list_models("openai", KEY, headers={"X-Gateway": SecretStr(GATEWAY)}, request=server)
+    assert server.calls[0]["headers"]["x-gateway"] == GATEWAY
+
+
+def test_openai_listing_sends_organization_and_project():
+    server = _ok({"data": [{"id": "m"}]})
+    list_models("openai", KEY, organization=ORG, project=PROJECT, request=server)
+    headers = server.calls[0]["headers"]
+    assert headers["openai-organization"] == ORG
+    assert headers["openai-project"] == PROJECT
+    assert headers["authorization"] == f"Bearer {KEY}"
+
+
+def test_connection_headers_never_replace_the_protocol_headers():
+    server = _ok({"data": [{"id": "m"}], "has_more": False})
+    list_models("anthropic", KEY, headers={"Anthropic-Version": "1999-01-01"}, request=server)
+    versions = [v for k, v in server.calls[0]["headers"].items() if k == "anthropic-version"]
+    assert versions == ["2023-06-01"]
+
+
+@pytest.mark.parametrize(
+    ("provider", "api_key", "settings"),
+    [
+        # Settings travel with a key: none without one, and never to keyless ollama.
+        ("openai", None, {"headers": {"X-Gateway": GATEWAY}}),
+        ("vllm", None, {"headers": {"X-Gateway": GATEWAY}}),
+        ("ollama", KEY, {"headers": {"X-Gateway": GATEWAY}}),
+        ("openai", None, {"organization": ORG}),
+        # Organization and project are OpenAI's own.
+        ("anthropic", KEY, {"organization": ORG}),
+        ("openrouter", KEY, {"project": PROJECT}),
+        # Refused names and values.
+        ("openai", KEY, {"headers": {"Authorization": GATEWAY}}),
+        ("anthropic", KEY, {"headers": {"x-api-key": GATEWAY}}),
+        ("openai", KEY, {"headers": {"OpenAI-Organization": ORG}}),
+        ("openai", KEY, {"headers": {"X-Gateway": GATEWAY + "\n"}}),
+        ("openai", KEY, {"headers": {"X-Gateway": GATEWAY + "é"}}),
+        ("openai", KEY, {"headers": {"X Gateway": GATEWAY}}),
+        ("openai", KEY, {"headers": {"X-Gateway": 5}}),
+        ("openai", KEY, {"headers": {"x-a": GATEWAY, "X-A": GATEWAY}}),
+        ("openai", KEY, {"headers": [("X-Gateway", GATEWAY)]}),
+        ("openai", KEY, {"organization": ORG + " x"}),
+        ("openai", KEY, {"project": ""}),
+    ],
+)
+def test_invalid_connection_settings_send_nothing(provider, api_key, settings):
+    with pytest.raises(ModelListError) as info:
+        list_models(provider, api_key, request=_never_called, **settings)
+    _assert_clean(info.value, "invalid request")
+    _assert_no_settings(info.value)
+
+
+def test_gateway_header_name_openai_refuses_goes_to_other_providers():
+    server = _ok({"data": [{"id": "m"}]})
+    list_models("openrouter", KEY, headers={"OpenAI-Organization": ORG}, request=server)
+    assert server.calls[0]["headers"]["openai-organization"] == ORG
+
+
+def test_http_error_never_echoes_connection_settings():
+    echoed = f"{BODY_MARKER}: {GATEWAY} {ORG} {PROJECT}"
+    server = Server(lambda call: HttpResponse(401, {"error": {"message": echoed}}))
+    with pytest.raises(ModelListError) as info:
+        list_models(
+            "openai", KEY, headers={"X-Gateway": GATEWAY}, organization=ORG, project=PROJECT,
+            request=server,
+        )
+    _assert_clean(info.value, "HTTP 401")
+    _assert_no_settings(info.value)
+
+
+@pytest.mark.parametrize(
+    "raised", [RuntimeError(f"{GATEWAY} {ORG}"), URLError(GATEWAY), ValueError(PROJECT)]
+)
+def test_transport_failure_never_echoes_connection_settings(raised):
+    def request(*args, **kwargs):
+        raise raised
+
+    with pytest.raises(ModelListError) as info:
+        list_models(
+            "openai", KEY, headers={"X-Gateway": GATEWAY}, organization=ORG, project=PROJECT,
+            request=request,
+        )
+    assert info.value.__cause__ is None and info.value.__context__ is None
+    _assert_no_settings(info.value)
+
+
+def test_default_transport_does_not_follow_a_redirect_with_the_headers(monkeypatch):
+    # Real transport over loopback: the first host redirects to a second origin, which
+    # must never be contacted, so the gateway header goes only to the host asked.
+    monkeypatch.setenv("no_proxy", "*")
+    monkeypatch.setenv("NO_PROXY", "*")
+    errors, seen = [], []
+    with socket.socket() as first, socket.socket() as second:
+        for server in (first, second):
+            server.bind(("127.0.0.1", 0))
+            server.listen(1)
+        first.settimeout(5)
+        second.settimeout(0.5)
+        target = f"http://127.0.0.1:{second.getsockname()[1]}/v1/models"
+
+        def serve():
+            try:
+                connection, _ = first.accept()
+                with connection:
+                    connection.settimeout(5)
+                    request = bytearray()
+                    while b"\r\n\r\n" not in request:
+                        request.extend(connection.recv(4096))
+                    seen.append(bytes(request))
+                    connection.sendall(
+                        f"HTTP/1.1 307 Moved\r\nLocation: {target}\r\n"
+                        "Content-Length: 0\r\nConnection: close\r\n\r\n".encode()
+                    )
+            except Exception as error:
+                errors.append(error)
+
+        thread = threading.Thread(target=serve)
+        thread.start()
+        try:
+            with pytest.raises(ModelListError) as info:
+                list_models(
+                    "openai", KEY, f"http://127.0.0.1:{first.getsockname()[1]}/v1",
+                    headers={"X-Gateway": GATEWAY}, timeout=3,
+                )
+        finally:
+            thread.join(6)
+        with pytest.raises(socket.timeout):
+            second.accept()
+    assert not errors
+    assert GATEWAY.encode() in seen[0]
+    _assert_clean(info.value, "HTTP 307")
+    _assert_no_settings(info.value)
+
+
+def test_empty_headers_need_no_key():
+    server = _ok({"models": []})
+    assert list_models("ollama", headers={}, request=server) == ()

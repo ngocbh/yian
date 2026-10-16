@@ -663,6 +663,75 @@ def test_api_key_validation_lists_models_through_official_endpoint():
     assert http.calls[0][2]["headers"]["Authorization"] == "Bearer secret"
 
 
+GATEWAY = "gw-SENTINEL-token-9876"
+ORG = "org-SENTINEL-1234"
+PROJECT = "proj_SENTINEL-5678"
+
+
+def _assert_no_settings(error):
+    """Check the error and the chain a traceback prints for every setting value."""
+    while error is not None:
+        for value in (GATEWAY, ORG, PROJECT):
+            assert value not in str(error) and value not in repr(error)
+        error = error.__cause__ or (None if error.__suppress_context__ else error.__context__)
+
+
+def test_api_key_validation_sends_organization_project_and_headers():
+    http = HTTP(HttpResponse(200, {"data": [{"id": "m"}]}))
+    credentials = ApiKeyCredentials("secret", {"X-Gateway": GATEWAY})
+    auth = OpenAIAuth(request=http)
+    assert auth.api_models(credentials, organization=ORG, project=PROJECT) == ("m",)
+    assert http.calls[0][2]["headers"] == {
+        "User-Agent": "yian",
+        "X-Gateway": GATEWAY,
+        "OpenAI-Organization": ORG,
+        "OpenAI-Project": PROJECT,
+        "Authorization": "Bearer secret",
+    }
+
+
+def test_organization_mismatch_is_an_http_error_without_values():
+    body = {"error": {"code": "mismatched_organization", "message": f"{ORG} {PROJECT}"}}
+    http = HTTP(HttpResponse(401, body))
+    credentials = ApiKeyCredentials("secret", {"X-Gateway": GATEWAY})
+    failed = r"^OpenAI authentication request failed \(HTTP 401\)$"
+    with pytest.raises(AuthError, match=failed) as caught:
+        OpenAIAuth(request=http).api_models(credentials, organization=ORG, project=PROJECT)
+    _assert_no_settings(caught.value)
+    assert len(http.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "credentials,settings",
+    [
+        (ApiKeyCredentials("secret"), {"organization": ORG + " x"}),
+        (ApiKeyCredentials("secret"), {"project": ""}),
+        (ApiKeyCredentials("secret"), {"organization": 5}),
+        # OpenAI takes these through organization / project, not as headers.
+        (ApiKeyCredentials("secret", {"OpenAI-Organization": ORG}), {}),
+        (ApiKeyCredentials("secret", {"openai-project": PROJECT}), {}),
+    ],
+)
+def test_invalid_connection_settings_are_refused_before_any_request(credentials, settings):
+    http = HTTP()
+    with pytest.raises(AuthError, match="^Invalid OpenAI connection settings") as caught:
+        OpenAIAuth(request=http).api_models(credentials, **settings)
+    _assert_no_settings(caught.value)
+    assert caught.value.__suppress_context__
+    assert http.calls == []
+
+
+def test_transport_error_never_echoes_connection_settings():
+    def broken(*args, **kwargs):
+        raise OSError(f"{GATEWAY} {ORG} {PROJECT}")
+
+    credentials = ApiKeyCredentials("secret", {"X-Gateway": GATEWAY})
+    with pytest.raises(AuthError) as caught:
+        OpenAIAuth(request=broken).api_models(credentials, organization=ORG, project=PROJECT)
+    _assert_no_settings(caught.value)
+    assert caught.value.__suppress_context__
+
+
 def test_subscription_catalog_uses_account_routing_and_visibility_order():
     http = HTTP(
         HttpResponse(

@@ -11,9 +11,10 @@ receives the call's identity and the host's app object. ``tools.function_tools``
 holds ``FunctionTool`` (a tool given as a name, description, JSON Schema and
 ``on_invoke``) and ``function_tool``, which builds one from a function with an
 optional name and description override. ``tools.errors`` holds
-``PermanentToolError`` and ``TransientToolError``, which a tool raises to stop or
-steer a TOOL node's retries, and ``ToolCheckError``, raised when a check yian runs on
-a call's result fails.
+``ReportedToolError``, which a tool raises for a failure an AGENT's model reads as
+the call's result, ``PermanentToolError`` and ``TransientToolError``, which a tool
+raises to stop or steer a TOOL node's retries, and ``ToolCheckError``, raised when a
+check yian runs on a call's result fails.
 
 Knows about: langchain-core, pydantic, typesys, the skills leaf, the stdlib-only
 yian.defaults, and the Python standard library.
@@ -23,7 +24,12 @@ Never imports: nodes, compile, compose, runtime, the run boundary, or CLI.
 from __future__ import annotations
 
 from yian.tools.context import ToolContext
-from yian.tools.errors import PermanentToolError, ToolCheckError, TransientToolError
+from yian.tools.errors import (
+    PermanentToolError,
+    ReportedToolError,
+    ToolCheckError,
+    TransientToolError,
+)
 from yian.tools.function_tools import FunctionTool, function_tool
 from yian.tools.registry import (
     TOOL_REGISTRY,
@@ -39,6 +45,7 @@ __all__ = [
     "TOOL_REGISTRY",
     "FunctionTool",
     "PermanentToolError",
+    "ReportedToolError",
     "ToolCheckError",
     "ToolContext",
     "ToolSet",

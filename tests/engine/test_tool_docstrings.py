@@ -1,5 +1,7 @@
 """Tool docstrings parse into a description and per-parameter descriptions like the Agents SDK."""
 
+import inspect
+
 import pytest
 
 from yian.tools.docstrings import DocInfo, parse_docstring
@@ -162,6 +164,64 @@ def test_only_a_section_has_no_description():
 
     assert info.description is None
     assert info.params == {"x": "The x."}
+
+
+def test_text_after_a_leading_section_is_the_description():
+    info = parse_docstring("Args:\n    x: X.\n\nTrailing text.")
+
+    assert info.description == "Trailing text."
+    assert info.params == {"x": "X."}
+
+
+def test_args_first_docstring_parses_raw_and_cleaned_alike():
+    def place(x):
+        """
+        Args:
+            x: The x.
+        """
+
+    assert parse_docstring(place.__doc__) == DocInfo(None, {"x": "The x."})
+    assert parse_docstring(inspect.getdoc(place)) == DocInfo(None, {"x": "The x."})
+
+
+def test_summary_first_docstring_parses_raw_and_cleaned_alike():
+    def place(x):
+        """Place it.
+
+        Args:
+            x: The x.
+        """
+
+    assert parse_docstring(place.__doc__) == DocInfo("Place it.", {"x": "The x."})
+    assert parse_docstring(inspect.getdoc(place)) == DocInfo("Place it.", {"x": "The x."})
+
+
+def test_whitespace_only_parameter_section_is_not_a_section():
+    info = parse_docstring("Do it.\n\nArgs:\n    \nReturns:\n    y.")
+
+    assert info.params == {}
+
+
+def test_whitespace_only_parameter_section_in_a_function():
+    def place(y):
+        pass
+
+    place.__doc__ = "Do it.\n\n    Args:\n        \n    Returns:\n        y.\n    "
+
+    assert parse_docstring(place.__doc__).params == {}
+    assert parse_docstring(inspect.getdoc(place)).params == {}
+
+
+def test_numpy_multi_name_entry():
+    info = parse_docstring("Add.\n\nParameters\n----------\na, b : int\n    Operands.\n")
+
+    assert info.params == {"a": "Operands.", "b": "Operands."}
+
+
+def test_sphinx_param_with_a_second_paragraph():
+    info = parse_docstring("Add.\n\n:param a: First.\n\n    Para two.\n:param b: Second.")
+
+    assert info.params == {"a": "First.\n\nPara two.", "b": "Second."}
 
 
 def test_column_zero_colon_line_without_indented_block_is_text():

@@ -23,8 +23,10 @@ _Style = Literal["google", "numpy", "sphinx"]
 # griffe's admonition rule, which is also how it recognizes a Google section header.
 _GOOGLE_HEADER_RE = re.compile(r"^(?P<type>\w[\s\w-]*):(\s+(?P<title>[^\s].*))?\s*$", re.IGNORECASE)
 _GOOGLE_PARAM_SECTIONS = frozenset({"args", "arguments", "params", "parameters"})
+_PARAM_SECTION_RE = re.compile(
+    rf"^({'|'.join(sorted(_GOOGLE_PARAM_SECTIONS))}):\s*$", re.IGNORECASE
+)
 _GOOGLE_NAME_RE = re.compile(r"\*{0,2}\w+")
-_PARAM_SECTION_RE = re.compile(r"^(args|arguments|params|parameters):\s*$", re.IGNORECASE)
 _DASH_LINE_RE = re.compile(r"^\s*-{3,}\s*$")
 _SPHINX_FIELD_RE = re.compile(r"^:(?P<kind>\w+)(?P<args>[^:]*):(?P<value>.*)$")
 _SPHINX_PARAM_KINDS = frozenset({"param", "parameter", "arg", "argument", "key", "keyword"})
@@ -50,8 +52,8 @@ def parse_docstring(doc: str | None) -> DocInfo:
 
     Args:
         doc (`str` or `None`):
-            The raw docstring, for example a function's `__doc__`. It is cleaned
-            with `inspect.cleandoc` first. `None` or blank gives an empty result.
+            The docstring, either a function's raw `__doc__` or `inspect.getdoc`
+            output; both parse the same. `None` or blank gives an empty result.
 
     Returns:
         `DocInfo`:
@@ -65,7 +67,7 @@ def parse_docstring(doc: str | None) -> DocInfo:
     """
     if doc is None:
         return DocInfo(None, {})
-    cleaned = inspect.cleandoc(doc)
+    cleaned = _clean(doc)
     if not cleaned.strip():
         return DocInfo(None, {})
     style = _detect_style(cleaned)
@@ -74,6 +76,23 @@ def parse_docstring(doc: str | None) -> DocInfo:
     if style == "numpy":
         return _parse_numpy(cleaned.splitlines())
     return _parse_google(_ensure_blank_line_before_google_sections(cleaned).splitlines())
+
+
+def _clean(doc: str) -> str:
+    """Clean a raw `__doc__` or already-cleaned `inspect.getdoc` output the same way."""
+    cleaned = inspect.cleandoc(doc)
+    lines = cleaned.splitlines()
+    if (
+        len(lines) > 1
+        and _GOOGLE_HEADER_RE.match(lines[0])
+        and lines[1].strip()
+        and not lines[1].startswith((" ", "\t"))
+    ):
+        # Cleaning flattened the body under a first-line section header, which happens when
+        # the input was already cleaned. A leading newline keeps the header in the indent
+        # calculation, as the Agents SDK does before griffe cleans its input.
+        return inspect.cleandoc("\n" + doc)
+    return cleaned
 
 
 def _detect_style(doc: str) -> _Style:
@@ -136,9 +155,10 @@ def _text(lines: list[str]) -> str | None:
 
 
 def _parse_google(lines: list[str]) -> DocInfo:
-    description: str | None = None
+    """Parse Google style: the first text block, and entries of every parameter section."""
+    texts: list[str] = []
+    text_start = 0
     params: dict[str, str] = {}
-    seen_header = False
     index = 0
     while index < len(lines):
         line = lines[index]
@@ -148,27 +168,30 @@ def _parse_google(lines: list[str]) -> DocInfo:
             and (index == 0 or not lines[index - 1].strip())
             and index + 1 < len(lines)
             and lines[index + 1].startswith((" ", "\t"))
+            # A whitespace-only line is blank, as griffe treats it.
+            and lines[index + 1].strip() != ""
         )
         if not is_header:
             index += 1
             continue
-        if not seen_header:
-            description = _text(lines[:index])
-            seen_header = True
+        text = _text(lines[text_start:index])
+        if text is not None:
+            texts.append(text)
         end = index + 1
         while end < len(lines) and (not lines[end].strip() or lines[end].startswith((" ", "\t"))):
             end += 1
         if match["type"].strip().lower() in _GOOGLE_PARAM_SECTIONS:
             params.update(_google_params(lines[index + 1 : end]))
-        index = end
-    if not seen_header:
-        description = _text(lines)
-    return DocInfo(description, params)
+        index = text_start = end
+    text = _text(lines[text_start:])
+    if text is not None:
+        texts.append(text)
+    return DocInfo(texts[0] if texts else None, params)
 
 
 def _google_params(body: list[str]) -> dict[str, str]:
     """Read `name[ (type)]: rest` entries and their deeper-indented continuation lines."""
-    base = next(_indent(line) for line in body if line.strip())
+    base = next((_indent(line) for line in body if line.strip()), 0)
     entries: list[tuple[str, list[str]]] = []
     current: list[str] | None = None
     for line in body:
@@ -207,6 +230,7 @@ def _split_google_entry(text: str) -> tuple[str, str] | None:
 
 
 def _parse_numpy(lines: list[str]) -> DocInfo:
+    """Parse numpy style: text before the first header, and `Parameters` section entries."""
     headers = [
         index
         for index in range(len(lines) - 1)
@@ -225,11 +249,13 @@ def _parse_numpy(lines: list[str]) -> DocInfo:
                     current.append(line)
                 continue
             current = []
-            entries.append((line.split(":", 1)[0].strip().lstrip("*"), current))
+            for name in line.split(":", 1)[0].split(","):
+                entries.append((name.strip().lstrip("*"), current))
     return DocInfo(description, {name: _join(parts) for name, parts in entries})
 
 
 def _parse_sphinx(lines: list[str]) -> DocInfo:
+    """Parse sphinx style: text before the first field, and `:param` field entries."""
     first_field = next(
         (index for index, line in enumerate(lines) if line.startswith(":")), len(lines)
     )
@@ -237,7 +263,7 @@ def _parse_sphinx(lines: list[str]) -> DocInfo:
     entries: list[tuple[str, list[str]]] = []
     current: list[str] | None = None
     for line in lines[first_field:]:
-        if line.startswith((" ", "\t")):
+        if not line.strip() or line.startswith((" ", "\t")):
             if current is not None:
                 current.append(line)
             continue

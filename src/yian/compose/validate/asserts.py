@@ -43,10 +43,11 @@ that can never be true is a load error (`helpers.condition_guards`,
 `helpers.narrowing_facts`).
 
 Imports flow DOWN only within the engine core (`compile.validation`, `expr`,
-`typesys`) plus two acknowledged validate-phase edges: `nodes` (Node/
-CaseNode discrimination) and `desugar.inline_calls.desugar_call_directives`
-(inline-call rejection). Within the validate phase it reads `LocalInput` from
-`typed_bindings`. Nothing in helpers/nodes/parse/desugar/edges imports this back.
+`typesys`) and the `helpers` peers (`condition_guards`, `isinstance_types`,
+`narrowing_facts`, `output_contracts`, `errors`), plus two acknowledged validate-phase
+edges: `nodes` (Node/CaseNode discrimination) and
+`desugar.inline_calls.desugar_call_directives` (inline-call rejection). Within the
+validate phase it reads `LocalInput` from `typed_bindings`. Nothing in helpers/nodes/parse/desugar/edges imports this back.
 """
 
 from __future__ import annotations

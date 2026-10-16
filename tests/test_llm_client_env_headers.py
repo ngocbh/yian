@@ -698,3 +698,80 @@ def test_wire_credentials_are_tracked(poisoned_env, case):
         assert sent
         for value in sent:
             assert value in tracked, (value, tracked)
+
+
+_OLLAMA_REPLY = (
+    b'{"model": "llama3", "message": {"role": "assistant", "content": "ok"}, "done": true, '
+    b'"done_reason": "stop"}\n'
+)
+_OLLAMA_WARNING = "OLLAMA_API_KEY"
+
+
+def _ollama_wire(model):
+    """Call `invoke` and `ainvoke` once each on mock transports, keeping the SDK's headers.
+
+    Args:
+        model (`NormalizedChatOllama`):
+            The built chat model, whose SDK-built httpx clients get the mock transport.
+
+    Returns:
+        `list[httpx.Request]`:
+            The two recorded requests.
+    """
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, content=_OLLAMA_REPLY)
+
+    transport = httpx.MockTransport(handler)
+    for client in (model._client._client, model._async_client._client):
+        client._transport = transport
+        # httpx picks a proxy mount from the environment before `_transport`.
+        client._mounts = {}
+        assert client._transport_for_url(httpx.URL("http://localhost:11434/api/chat")) is transport
+    model.invoke("hi")
+    asyncio.run(model.ainvoke("hi"))
+    assert len(requests) == 2
+    return requests
+
+
+def _ollama_env(monkeypatch):
+    monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
+    monkeypatch.setenv("OLLAMA_API_KEY", "env-ollama-key")
+
+
+def test_ollama_does_not_send_the_environment_key(monkeypatch):
+    _ollama_env(monkeypatch)
+    for request in _ollama_wire(create_llm_client("ollama", "llama3").get_llm()):
+        assert "authorization" not in request.headers
+        for name, value in request.headers.multi_items():
+            assert "env-ollama-key" not in value, (name, value)
+
+
+def test_ollama_keeps_userinfo_auth_from_its_base_url(monkeypatch):
+    _ollama_env(monkeypatch)
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://user:pw@localhost:11434")
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        model = create_llm_client("ollama", "llama3").get_llm()
+    for request in _ollama_wire(model):
+        assert request.headers["authorization"] == "Basic dXNlcjpwdw=="
+    assert not [w for w in record if _OLLAMA_WARNING in str(w.message)]
+
+
+def test_ollama_warns_once_about_the_environment_key(monkeypatch):
+    _ollama_env(monkeypatch)
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        for _ in range(2):
+            create_llm_client("ollama", "llama3").get_llm()
+    [warning] = [w for w in record if _OLLAMA_WARNING in str(w.message)]
+    assert warning.category is UserWarning
+    assert "env-ollama-key" not in str(warning.message)
+    monkeypatch.setattr(base_client, "_warned", set())
+    monkeypatch.delenv("OLLAMA_API_KEY")
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        create_llm_client("ollama", "llama3").get_llm()
+    assert not [w for w in record if _OLLAMA_WARNING in str(w.message)]

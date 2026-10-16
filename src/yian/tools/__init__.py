@@ -5,6 +5,9 @@ Model-requested calls use the strict public schema. Host-owned interactions use
 the trusted path for injected metadata. ``ToolSet`` holds one run's tools: the
 global registry, or a host mapping (with its ``ask_user`` handler) that replaces it.
 ``tools.types`` reads a tool's declared argument and return types as yian types.
+``tools.schema`` builds a tool's argument model and description from a plain
+function, whose optional first ``ToolContext`` parameter (``tools.context``)
+receives the call's identity and the host's app object.
 
 Knows about: langchain-core, pydantic, typesys, the skills leaf, the stdlib-only
 yian.defaults, and the Python standard library.

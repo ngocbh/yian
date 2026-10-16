@@ -4,24 +4,38 @@ A fact says which part of its type a value at a base path can be: `Members` of t
 union, or an `Exact` type it satisfies. Facts join by union (either holds) and meet by
 intersection (both hold); losing a fact is always sound. The facts a check proves come
 from `check_fact`: a true or false `isinstance`, or a true or false comparison of a union's
-tag field with a text.
+tag field with a text. `guard_env` evaluates a guard from `condition_guards` into the facts
+that hold whenever it does, and `guarded_read_types` gives the types a field read under a
+guard is checked against.
 
-Knows about: `typesys` types and unions, `compile.validation`, and `isinstance` type
-resolution.
+Knows about: `typesys` types and unions, `compile.validation`, `isinstance` type
+resolution, condition guards, and output-contract projection.
 Never imports: `compose.validate`, runtime.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Optional, Sequence, TypeAlias
+from enum import Enum
+from typing import Callable, Optional, Sequence, TypeAlias
 
 from yian.compile.validation import types_compatible
-from yian.compose.helpers.condition_guards import Check, IsinstanceCheck
+from yian.compose.helpers.condition_guards import (
+    AllOf,
+    Check,
+    Guard,
+    Holds,
+    IsinstanceCheck,
+    conjuncts,
+    guard_checks,
+)
 from yian.compose.helpers.isinstance_types import (
     isinstance_members,
     resolve_isinstance_type,
 )
+from yian.compose.helpers.output_contracts import project_output_contract
+from yian.nodes.contracts import ValueContract
+from yian.typesys import TypeCheckError
 from yian.typesys.types import TypeRegistry
 from yian.typesys.values import (
     Type,
@@ -31,12 +45,18 @@ from yian.typesys.values import (
 )
 
 __all__ = [
+    "NOT_NARROWABLE",
+    "BaseTypeOf",
     "Env",
     "Exact",
     "Fact",
     "Members",
+    "NotNarrowable",
     "check_fact",
     "fact_type",
+    "guard_env",
+    "guard_unsatisfiable",
+    "guarded_read_types",
     "intersect_envs",
     "intersect_facts",
     "isinstance_fact",
@@ -45,6 +65,7 @@ __all__ = [
     "tag_fact",
     "union_envs",
     "union_facts",
+    "unresolved_type",
 ]
 
 
@@ -390,3 +411,213 @@ def fact_type(fact: Fact) -> Optional[Type]:
     if isinstance(fact, Exact):
         return fact.type
     return members_type(fact.members, fact.nullable)
+
+
+# --------------------------------------------------------------------------- #
+# Guards into facts
+# --------------------------------------------------------------------------- #
+
+
+class NotNarrowable(Enum):
+    """The answer of a `BaseTypeOf` for a base the site cannot narrow."""
+
+    NOT_NARROWABLE = "not narrowable"
+
+
+NOT_NARROWABLE = NotNarrowable.NOT_NARROWABLE
+"""A base the site cannot narrow, such as a path that is no pool path at a CASE."""
+
+BaseTypeOf: TypeAlias = Callable[[str], "Type | None | NotNarrowable"]
+"""A site's declared type of a dotted base path: a `Type` when proven, `None` when
+unproven, or `NOT_NARROWABLE` for a base the site cannot narrow."""
+
+
+def _base_type(base: str, base_type_of: BaseTypeOf, outer: Env) -> Type | None | NotNarrowable:
+    """The type a check on `base` is taken against.
+
+    A base whose declared type is unproven, such as a field only some members of an
+    outer union have, takes its type through the facts already proven for the longest
+    outer base it is below.
+    """
+    declared = base_type_of(base)
+    if declared is not None:
+        return declared
+    parts = base.split(".")
+    for cut in range(len(parts) - 1, 0, -1):
+        fact = outer.get(".".join(parts[:cut]))
+        if fact is None:
+            continue
+        typ = fact_type(fact)
+        if typ is None:
+            return None
+        projected = project_output_contract(ValueContract(typ), parts[cut:])
+        return projected.type if type(projected) is ValueContract else None
+    return None
+
+
+def _guard_env(
+    guard: Guard,
+    base_type_of: BaseTypeOf,
+    registry: TypeRegistry,
+    outer: Env,
+) -> Env:
+    """The facts `guard` proves, given that the facts in `outer` already hold."""
+    if isinstance(guard, Holds):
+        base = guard.check.base
+        base_type = _base_type(base, base_type_of, outer)
+        if base_type is NOT_NARROWABLE:
+            return {}
+        try:
+            fact = check_fact(guard.check, base_type, guard.value, registry)
+        except TypeCheckError:
+            # The type-table pass reports the unknown name.
+            return {}
+        return {} if fact is None else {base: fact}
+    if isinstance(guard, AllOf):
+        env: Env = {}
+        for part in guard.parts:
+            part_env = _guard_env(
+                part, base_type_of, registry, intersect_envs([outer, env])
+            )
+            env = intersect_envs([env, part_env])
+        return env
+    return union_envs(
+        [_guard_env(part, base_type_of, registry, outer) for part in guard.parts]
+    )
+
+
+def guard_env(guard: Guard, base_type_of: BaseTypeOf, registry: TypeRegistry) -> Env:
+    """Return the facts that hold whenever `guard` holds.
+
+    `Holds` gives its check's fact (`check_fact`), `AllOf` meets its parts and `AnyOf`
+    joins them. Facts are taken against each base's declared type, so facts from
+    different checks compare by member. The parts of an `AllOf` are taken left to right:
+    a base whose declared type is unproven because it sits below a union (a field only
+    some members have) takes its type through the facts the parts before it proved for an
+    outer base, in nested parts too. A check whose base `base_type_of` refuses, or whose
+    type name does not resolve, proves nothing.
+
+    Args:
+        guard (`Guard`):
+            A guard from `condition_guards`.
+        base_type_of (`BaseTypeOf`):
+            The site's declared type of a base path: a `Type`, `None` when unproven (a
+            true `isinstance` then gives `Exact` of its type), or `NOT_NARROWABLE`.
+        registry (`TypeRegistry`):
+            The flow's typedefs, for `isinstance` type names.
+
+    Returns:
+        `Env`:
+            The facts by base path.
+
+    Example:
+        With `d.output` a `Union[Buy, Hold, Sell]` and `leg` only on `Buy`, the guard of
+        `d.output.action == "buy" and d.output.leg.type == "limit"` gives
+        `{"d.output": Members((Buy,)), "d.output.leg": Members((Limit,))}`.
+    """
+    return _guard_env(guard, base_type_of, registry, {})
+
+
+def guard_unsatisfiable(env: Env) -> bool:
+    """Return whether no value can satisfy the facts in `env`.
+
+    Args:
+        env (`Env`):
+            Facts by base path.
+
+    Returns:
+        `bool`:
+            `True` when some base's fact is an empty member set that is not nullable.
+    """
+    return any(fact == Members(()) for fact in env.values())
+
+
+def unresolved_type(guard: Guard, registry: TypeRegistry) -> bool:
+    """Return whether an `isinstance` in `guard` names a type that does not resolve.
+
+    Args:
+        guard (`Guard`):
+            A guard from `condition_guards`.
+        registry (`TypeRegistry`):
+            The flow's typedefs.
+
+    Returns:
+        `bool`:
+            `True` when some `isinstance` type name is neither a typedef nor a builtin
+            name. A site then leaves the read alone, so the type-table pass reports the
+            name.
+    """
+    for check in guard_checks(guard):
+        if not isinstance(check, IsinstanceCheck):
+            continue
+        try:
+            resolve_isinstance_type(check.type_name, registry)
+        except TypeCheckError:
+            return True
+    return False
+
+
+def guarded_read_types(
+    read: str,
+    guard: Guard,
+    base_type_of: BaseTypeOf,
+    registry: TypeRegistry,
+) -> Optional[list[tuple[Type, tuple[str, ...], str]]]:
+    """Return the narrowed types a field read under `guard` is checked against.
+
+    Each of the guard's own facts and the facts of each of its top-level conjuncts gives
+    a candidate: the fact type of the longest base that is a strict prefix of `read`,
+    with the field names below it. A conjunct's candidate keeps what the whole guard's
+    meet can lose (two unrelated exact types). The read is fine when any candidate
+    accepts it.
+
+    Args:
+        read (`str`):
+            The dotted reference path read, such as `"v.qty"`.
+        guard (`Guard`):
+            The guard that holds whenever the read is evaluated.
+        base_type_of (`BaseTypeOf`):
+            The site's declared type of a base path, as for `guard_env`.
+        registry (`TypeRegistry`):
+            The flow's typedefs.
+
+    Returns:
+        `list[tuple[Type, tuple[str, ...], str]] | None`:
+            `(narrowed type, field names below it, narrowed base path)` per distinct
+            candidate, in order; `[]` when no fact applies to the read, so it is checked
+            unnarrowed; `None` when the guard can never hold, so the read is never
+            evaluated and is not checked (`impossible_checks` explains why).
+
+    Example:
+        With `v` a `Union[Buy, Hold, Sell]`, the read `v.qty` under the guard of
+        `isinstance(v, Buy)` gives `[(Buy, ("qty",), "v")]`.
+    """
+    envs: list[Env] = []
+    for part in (guard, *conjuncts(guard)):
+        env = guard_env(part, base_type_of, registry)
+        if env not in envs:
+            envs.append(env)
+    if any(guard_unsatisfiable(env) for env in envs):
+        return None
+    parts = read.split(".")
+    candidates: list[tuple[Type, tuple[str, ...], str]] = []
+    for env in envs:
+        longest: Optional[list[str]] = None
+        for base in env:
+            base_parts = base.split(".")
+            if (
+                len(base_parts) < len(parts)
+                and parts[: len(base_parts)] == base_parts
+                and (longest is None or len(base_parts) > len(longest))
+            ):
+                longest = base_parts
+        if longest is None:
+            continue
+        base = ".".join(longest)
+        typ = fact_type(env[base])
+        if typ is None:
+            continue
+        candidate = (typ, tuple(parts[len(longest) :]), base)
+        if candidate not in candidates:
+            candidates.append(candidate)
+    return candidates

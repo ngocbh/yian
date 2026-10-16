@@ -6,13 +6,23 @@ import pytest
 
 from yian.compile.model import Edge
 from yian.compose.helpers import narrowing_facts
-from yian.compose.helpers.condition_guards import IsinstanceCheck, TagCheck
+from yian.compose.helpers.condition_guards import (
+    NOTHING,
+    IsinstanceCheck,
+    TagCheck,
+    proves,
+)
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.isinstance_types import isinstance_members
 from yian.compose.helpers.narrowing_facts import (
+    NOT_NARROWABLE,
     check_fact,
+    guard_env,
+    guard_unsatisfiable,
+    guarded_read_types,
     not_isinstance_fact,
     tag_fact,
+    unresolved_type,
 )
 from yian.compose.helpers.types import read_type
 from yian.compose.nodes.base import BuildContext, NodeDescriptor
@@ -32,6 +42,7 @@ from yian.compose.validate.narrowing import (
     union_facts,
 )
 from yian.diagnostics import OriginRef, SourceRange
+from yian.expr import parse_condition
 from yian.nodes.contracts import ContractOrigins, PartialRecordContract, ValueContract
 from yian.typesys import Type, TypeCheckError, ValueKind
 from yian.typesys.types import read_typedefs
@@ -299,6 +310,160 @@ def test_check_fact_on_an_unproven_base():
 def test_check_fact_rejects_an_unknown_type_name():
     with pytest.raises(TypeCheckError):
         check_fact(IsinstanceCheck("v", "Nope"), DECISION, True, _REGISTRY)
+
+
+# --------------------------------------------------------------------------- #
+# Guards into facts
+# --------------------------------------------------------------------------- #
+
+MARKET = _t("Market")
+OBJECT = Type.scalar(ValueKind.OBJECT)
+
+
+def _g(condition: str):
+    """What `condition` proves when it is true."""
+    return proves(parse_condition(condition), True)
+
+
+def _types(**declared):
+    """A `base_type_of` over `declared` (dots spelled `__`); other bases are unproven."""
+    by_base = {base.replace("__", "."): typ for base, typ in declared.items()}
+    return lambda base: by_base.get(base)
+
+
+def _env(condition: str, **declared):
+    """The facts `condition` proves when true, with the bases typed by `declared`."""
+    return guard_env(_g(condition), _types(**declared), _REGISTRY)
+
+
+def test_guard_env_of_one_check():
+    assert _env("isinstance(v, Buy)", v=DECISION) == {"v": Members((BUY,))}
+    assert _env("not isinstance(v, Buy)", v=DECISION) == {"v": Members((HOLD, SELL))}
+    assert _env("v.action == 'sell'", v=DECISION) == {"v": Members((SELL,))}
+    assert _env("isinstance(v, Buy)", v=BUY) == {}
+    assert _env("isinstance(v, Buy)") == {"v": Exact(BUY)}
+    assert _env("v.action == 'sell'") == {}
+    assert guard_env(NOTHING, _types(), _REGISTRY) == {}
+
+
+def test_guard_env_meets_and_joins_on_one_base():
+    assert _env("isinstance(v, BuyOrSell) and v.action != 'buy'", v=DECISION) == {
+        "v": Members((SELL,))
+    }
+    assert _env("isinstance(v, Buy) or isinstance(v, Sell)", v=DECISION) == {
+        "v": Members((BUY, SELL))
+    }
+    assert _env("not (isinstance(v, Hold) or v.action == 'sell')", v=DECISION) == {
+        "v": Members((BUY,))
+    }
+
+
+def test_guard_env_over_two_bases():
+    assert _env("isinstance(v, Buy) and isinstance(w, Sell)", v=DECISION, w=DECISION) == {
+        "v": Members((BUY,)),
+        "w": Members((SELL,)),
+    }
+    # `w` is unconstrained when `v` is a `Buy`, so only the joined facts on `v` remain.
+    assert _env("isinstance(v, Buy) or isinstance(w, Sell)", v=DECISION, w=DECISION) == {
+        "v": Members((BUY, HOLD, SELL))
+    }
+    # Each way through the `or` proves something about `v`.
+    assert _env(
+        "isinstance(v, Buy) and isinstance(w, Sell) or isinstance(v, Hold)",
+        v=DECISION,
+        w=DECISION,
+    ) == {"v": Members((BUY, HOLD))}
+
+
+def test_guard_env_skips_unknown_types_and_bases_it_cannot_narrow():
+    assert _env("isinstance(v, Nope) and isinstance(w, Buy)", v=DECISION, w=DECISION) == {
+        "w": Members((BUY,))
+    }
+    assert unresolved_type(_g("isinstance(v, Nope) and isinstance(w, Buy)"), _REGISTRY)
+    assert not unresolved_type(_g("isinstance(w, Buy) and v.action == 'x'"), _REGISTRY)
+    assert not unresolved_type(_g("isinstance(w, Buy) or isinstance(v, int)"), _REGISTRY)
+
+    def base_type_of(base):
+        return DECISION if base == "v" else NOT_NARROWABLE
+
+    guard = _g("isinstance(v, Buy) and isinstance(x, Sell)")
+    assert guard_env(guard, base_type_of, _REGISTRY) == {"v": Members((BUY,))}
+
+
+def test_guard_env_types_a_member_only_base_through_the_checks_before_it():
+    assert _env("v.action == 'buy' and v.leg.type == 'limit'", v=DECISION) == {
+        "v": Members((BUY,)),
+        "v.leg": Members((LIMIT,)),
+    }
+    assert _env("isinstance(v, Buy) and not isinstance(v.leg, Limit)", v=DECISION) == {
+        "v": Members((BUY,)),
+        "v.leg": Members((MARKET,)),
+    }
+    # Into the parts of a nested `or`, and through the `and` inside it.
+    assert _env(
+        "v.action == 'buy' and (v.leg.type == 'limit' or v.leg.type == 'market')",
+        v=DECISION,
+    ) == {"v": Members((BUY,)), "v.leg": Members((LIMIT, MARKET))}
+    # With no check before it, the member-only base stays unproven.
+    assert _env("v.leg.type == 'limit' and v.action == 'buy'", v=DECISION) == {
+        "v": Members((BUY,))
+    }
+    assert _env("isinstance(v.leg, Limit) and v.action == 'buy'", v=DECISION) == {
+        "v": Members((BUY,)),
+        "v.leg": Exact(LIMIT),
+    }
+
+
+def test_guard_unsatisfiable():
+    assert guard_unsatisfiable({"v": Members(())})
+    assert guard_unsatisfiable({"w": Exact(BUY), "v": Members(())})
+    assert not guard_unsatisfiable({"v": Members((), nullable=True)})
+    assert not guard_unsatisfiable({"v": Exact(BUY)})
+    assert not guard_unsatisfiable({})
+    assert guard_unsatisfiable(_env("isinstance(v, Buy) and v.action == 'hold'", v=DECISION))
+
+
+def _reads(read: str, condition: str, **declared):
+    """The candidate types of `read` under what `condition` proves."""
+    return guarded_read_types(read, _g(condition), _types(**declared), _REGISTRY)
+
+
+def test_guarded_read_types_reads_below_the_narrowed_base():
+    assert _reads("v.qty", "isinstance(v, Buy)", v=DECISION) == [(BUY, ("qty",), "v")]
+    assert _reads("v.leg.price", "isinstance(v, Buy)", v=DECISION) == [
+        (BUY, ("leg", "price"), "v")
+    ]
+    assert _reads("v.qty", "isinstance(v, Buy) or isinstance(v, Sell)", v=DECISION) == [
+        (BUY_OR_SELL, ("qty",), "v")
+    ]
+
+
+def test_guarded_read_types_takes_the_longest_base():
+    condition = "isinstance(v, Buy) and isinstance(v.leg, Limit)"
+    assert _reads("v.leg.price", condition, v=DECISION) == [
+        (LIMIT, ("price",), "v.leg"),
+        (BUY, ("leg", "price"), "v"),
+    ]
+
+
+def test_guarded_read_types_without_a_fact_for_the_read():
+    assert _reads("v", "isinstance(v, Buy)", v=DECISION) == []
+    assert _reads("w.qty", "isinstance(v, Buy)", v=DECISION) == []
+    assert _reads("vv.qty", "isinstance(v, Buy)", v=DECISION) == []
+    assert _reads("v.qty", "n > 1", v=DECISION) == []
+
+
+def test_guarded_read_types_keeps_each_conjunct_s_candidate():
+    """Two unrelated exact types lose their meet, but each still narrows the read."""
+    assert _reads("v.qty", "isinstance(v, Buy) and isinstance(v, Text)", v=OBJECT) == [
+        (BUY, ("qty",), "v"),
+        (TEXT, ("qty",), "v"),
+    ]
+
+
+def test_guarded_read_types_of_an_unreachable_read_is_none():
+    assert _reads("v.qty", "isinstance(v, Buy) and v.action == 'hold'", v=DECISION) is None
+    assert _reads("v.qty", "v.action == 'zzz'", v=DECISION) is None
 
 
 def test_isinstance_members_keeps_the_shared_members_only_when_nothing_else_can_pass():

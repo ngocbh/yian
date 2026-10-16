@@ -7,6 +7,7 @@ from yian.llm_clients.config import LLMConfig
 from yian.llm_clients.connection_settings import (
     OPENAI_REFUSED_HEADER_NAMES,
     REFUSED_HEADER_NAMES,
+    openai_id_headers,
     validate_header_name,
     validate_header_value,
     validate_headers,
@@ -251,3 +252,15 @@ def test_module_functions_return_valid_input_and_raise_value_error():
     ):
         with pytest.raises(ValueError):
             call()
+
+
+def test_openai_id_headers_map_the_ids_to_their_headers():
+    assert openai_id_headers("org-abc123", "proj_XYZ") == {
+        "OpenAI-Organization": "org-abc123",
+        "OpenAI-Project": "proj_XYZ",
+    }
+    assert openai_id_headers(None, "proj_XYZ") == {"OpenAI-Project": "proj_XYZ"}
+    assert openai_id_headers(None, None) == {}
+    with pytest.raises(ValueError, match="project must be non-empty") as caught:
+        openai_id_headers("org-abc123", "proj secret")
+    assert "proj secret" not in str(caught.value)

@@ -34,7 +34,10 @@ _VERTEX_SWITCHES = ("GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_ENTERPRISE")
 # so every model that refuses redirects shares it; built per model, it was never closed.
 # `lru_cache` keeps its own bookkeeping thread-safe; two threads that miss at once may
 # each build a client, and one is kept. Like langchain-openai's cached clients, it reads
-# proxy variables such as HTTPS_PROXY when first built.
+# proxy variables such as HTTPS_PROXY when first built. It is shared across event loops,
+# like langchain-openai's cached default async client, so a host that runs a new loop per
+# request may see a closed-loop error on a reused keep-alive connection, as it would with
+# langchain's own client.
 @lru_cache(maxsize=None)
 def _no_redirect_async_client() -> httpx.AsyncClient:
     """Return the shared async HTTP client that never follows a redirect.

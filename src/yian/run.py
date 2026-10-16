@@ -34,6 +34,7 @@ from yian.llm_clients.connection import (
     HOST_KEY_MARKER,
     check_model_config,
     connection_snapshot,
+    header_name_diff,
     legacy_connection_config,
     legacy_connection_map,
     split_model_config,
@@ -553,24 +554,16 @@ def _check_host_header_names(
         `ValueError`: The names differ; the message names the missing and unrecorded
             header names, never a value.
     """
-    expected = {
-        name.lower(): name
+    expected = [
+        name
         for config in effective.values()
         if config.get(HOST_KEY_MARKER) is True
         for name in config.get(HEADER_NAMES_KEY, ())
-    }
-    given = {name.lower(): name for name in headers or ()}
-    missing = [expected[name] for name in sorted(expected) if name not in given]
-    extra = [given[name] for name in sorted(given) if name not in expected]
-    details = []
-    if missing:
-        details.append(f"missing {', '.join(missing)}")
-    if extra:
-        details.append(f"not recorded {', '.join(extra)}")
-    if details:
+    ]
+    diff = header_name_diff(expected, headers or ())
+    if diff is not None:
         raise ValueError(
-            "headers must have the header names this run recorded for its host key: "
-            + "; ".join(details)
+            "headers must have the header names this run recorded for its host key: " + diff
         )
 
 

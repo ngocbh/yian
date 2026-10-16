@@ -5,6 +5,7 @@ from pydantic import SecretStr
 
 from .auth import ApiKeyCredentials, AuthError
 from .config import LLMConfig, SUPPORTED_LLM_PROVIDERS
+from .connection_settings import openai_id_headers
 from .base_client import BaseLLMClient
 
 # Providers that use the OpenAI-compatible chat completions API. Dual-region
@@ -177,10 +178,10 @@ def _connection_headers(
         `dict[str, SecretStr]`: ``OpenAI-Organization`` and ``OpenAI-Project`` from
             ``organization`` and ``project`` when set, then ``headers``.
     """
-    result: dict[str, SecretStr] = {}
-    for name, value in (("OpenAI-Organization", organization), ("OpenAI-Project", project)):
-        if value is not None:
-            result[name] = SecretStr(value)
+    result = {
+        name: SecretStr(value)
+        for name, value in openai_id_headers(organization, project).items()
+    }
     result.update(headers or {})
     return result
 

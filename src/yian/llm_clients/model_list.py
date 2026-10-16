@@ -21,7 +21,7 @@ from .auth.common import HttpResponse, _text
 from .auth.http import _request
 from .config import validate_base_url
 from .connection import _API_ENDPOINT as _OPENAI_BASE_URL
-from .connection_settings import validate_headers, validate_organization
+from .connection_settings import openai_id_headers, validate_headers
 from .factory import _OPENAI_COMPATIBLE, _PROVIDER_BASE_URL
 
 _ANTHROPIC_BASE_URL = "https://api.anthropic.com"
@@ -191,6 +191,19 @@ def _connection_headers(
 
     The validators' messages are dropped: the caller raises a fixed reason, so no
     header value or id can reach the error.
+
+    Args:
+        provider (`str`): The provider listed; only ``"openai"`` takes the ids.
+        sends_key (`bool`): Whether the listing sends a key; settings need one.
+        headers (`Any`): The candidate extra headers, or `None`.
+        organization (`Any`): The candidate OpenAI organization id, or `None`.
+        project (`Any`): The candidate OpenAI project id, or `None`.
+
+    Returns:
+        `dict[str, str] | None`: The extra headers, then ``OpenAI-Organization`` and
+            ``OpenAI-Project`` for the ids set; `{}` when no setting is given; `None`
+            when a setting is refused, is given without a key, or gives ids to a
+            provider other than ``openai``.
     """
     no_headers = headers is None or (isinstance(headers, Mapping) and not headers)
     if no_headers and organization is None and project is None:
@@ -199,12 +212,7 @@ def _connection_headers(
         return None
     try:
         settings = validate_headers({} if headers is None else headers, provider)
-        for header, field, value in (
-            ("OpenAI-Organization", "organization", organization),
-            ("OpenAI-Project", "project", project),
-        ):
-            if value is not None:
-                settings[header] = validate_organization(value, field)
+        settings.update(openai_id_headers(organization, project))
     except ValueError:
         return None
     return settings

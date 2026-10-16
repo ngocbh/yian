@@ -16,6 +16,7 @@ from yian.llm_clients.connection import (
     HOST_KEY_MARKER,
     ConnectionSnapshot,
     connection_snapshot,
+    header_name_diff,
     legacy_connection_config,
     resolve_model_config,
     split_model_config,
@@ -771,3 +772,12 @@ def test_saved_headers_must_match_the_recorded_names(monkeypatch, names):
         factory.model_from_config(recorded)
     assert SAVED_HEADER not in str(error.value)
     assert captured == []
+
+
+def test_header_name_diff_names_missing_and_unrecorded_headers_ignoring_case():
+    assert header_name_diff(["X-Trace", "X-Gateway"], ["x-gateway", "X-TRACE"]) is None
+    assert header_name_diff([], []) is None
+    assert header_name_diff(["X-Trace", "X-Gateway"], ["x-gateway", "X-Extra", "A-New"]) == (
+        "missing X-Trace; not recorded A-New, X-Extra"
+    )
+    assert header_name_diff(["X-Trace"], []) == "missing X-Trace"

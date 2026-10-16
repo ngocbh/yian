@@ -16,7 +16,7 @@ import time
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from yian.defaults import current
-from yian.llm_clients.connection_settings import validate_headers, validate_organization
+from yian.llm_clients.connection_settings import openai_id_headers, validate_headers
 
 from .common import ApiKeyCredentials, AuthError, HttpResponse, OAuthCredentials, _text
 from .http import _RequestCancelled, _request
@@ -451,12 +451,7 @@ class OpenAIAuth:
         """
         try:
             headers = validate_headers(dict(credentials.headers), "openai")
-            for header, field, value in (
-                ("OpenAI-Organization", "organization", organization),
-                ("OpenAI-Project", "project", project),
-            ):
-                if value is not None:
-                    headers[header] = validate_organization(value, field)
+            headers.update(openai_id_headers(organization, project))
         except ValueError as error:
             raise AuthError(f"Invalid OpenAI connection settings: {error}") from None
         headers["Authorization"] = "Bearer " + credentials.api_key

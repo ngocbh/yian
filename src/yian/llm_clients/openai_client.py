@@ -40,8 +40,10 @@ _HTTP_CLIENT_KEYWORDS = ("http_client", "http_async_client")
 # were never closed. `lru_cache` keeps its own bookkeeping thread-safe; two threads that
 # miss at once may each build a client, and one is kept. The sync client is safe to share
 # across threads; the async one serves every event loop, as langchain's cached async
-# client does. Like langchain's cached clients, they read proxy variables such as
-# HTTPS_PROXY when first built.
+# client does, so a host that runs a new loop per request may see a closed-loop error on
+# a reused keep-alive connection, as it would with langchain's own client. Like
+# langchain's cached clients, they read proxy variables such as HTTPS_PROXY when first
+# built.
 @lru_cache(maxsize=None)
 def _no_redirect_client(
     is_async: bool, proxy: Optional[str]

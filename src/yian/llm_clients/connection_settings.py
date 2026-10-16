@@ -169,3 +169,27 @@ def validate_organization(value: Any, field: str) -> str:
     if not _VISIBLE_ASCII.fullmatch(value):
         raise ValueError(f"{field} must be non-empty visible ASCII, without spaces")
     return value
+
+
+def openai_id_headers(organization: Any, project: Any) -> dict[str, str]:
+    """Return the request headers that carry OpenAI organization and project ids.
+
+    Args:
+        organization (`Any`): The OpenAI organization id, or `None` to send none.
+        project (`Any`): The OpenAI project id, or `None` to send none.
+
+    Returns:
+        `dict[str, str]`: ``OpenAI-Organization`` and ``OpenAI-Project`` for the ids
+            that are set, in that order.
+
+    Raises:
+        `ValueError`: An id set is refused by `validate_organization`.
+    """
+    headers: dict[str, str] = {}
+    for header, field, value in (
+        ("OpenAI-Organization", "organization", organization),
+        ("OpenAI-Project", "project", project),
+    ):
+        if value is not None:
+            headers[header] = validate_organization(value, field)
+    return headers

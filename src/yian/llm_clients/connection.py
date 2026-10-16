@@ -14,7 +14,7 @@ effects.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 import copy
 from dataclasses import dataclass
 import hashlib
@@ -590,25 +590,42 @@ def _check_host_headers(raw: dict[str, Any], names: list[str]) -> None:
     if not isinstance(headers, Mapping):
         # `LLMConfig` names the malformed field.
         return
-    given = {name.lower(): name for name in headers if isinstance(name, str)}
-    expected = {name.lower(): name for name in names}
-    missing = [expected[name] for name in sorted(expected) if name not in given]
-    extra = [given[name] for name in sorted(given) if name not in expected]
-    if not missing and not extra:
+    diff = header_name_diff(names, [name for name in headers if isinstance(name, str)])
+    if diff is None:
         return
     if not headers:
+        expected = {name.lower(): name for name in names}
         raise AuthError(_HOST_HEADERS_MISSING.format(
-            provider=raw.get("provider"), names=", ".join(missing)
+            provider=raw.get("provider"),
+            names=", ".join(expected[name] for name in sorted(expected)),
         ))
+    raise AuthError(
+        "llm_config.headers must have the header names this run recorded for the host "
+        f"key: {diff}"
+    )
+
+
+def header_name_diff(expected: Iterable[str], given: Iterable[str]) -> str | None:
+    """Describe how the given header names differ from the expected ones, ignoring case.
+
+    Args:
+        expected (`Iterable[str]`): The header names that should be given.
+        given (`Iterable[str]`): The header names given.
+
+    Returns:
+        `str | None`: ``"missing A, B; not recorded C"`` (either part only when the
+            other is empty), names sorted ignoring case; `None` when the names match.
+    """
+    expected_names = {name.lower(): name for name in expected}
+    given_names = {name.lower(): name for name in given}
+    missing = [expected_names[name] for name in sorted(expected_names) if name not in given_names]
+    extra = [given_names[name] for name in sorted(given_names) if name not in expected_names]
     details = []
     if missing:
         details.append(f"missing {', '.join(missing)}")
     if extra:
         details.append(f"not recorded {', '.join(extra)}")
-    raise AuthError(
-        "llm_config.headers must have the header names this run recorded for the host "
-        f"key: {'; '.join(details)}"
-    )
+    return "; ".join(details) or None
 
 
 def split_model_config(

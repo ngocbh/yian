@@ -28,6 +28,7 @@ from langchain_core.tools import BaseTool
 from pydantic import SecretStr
 
 from yian.llm_clients.config import LLMConfig, pop_host_credentials
+from yian.llm_clients.connection_settings import validate_headers
 from yian.llm_clients.connection import (
     HEADER_NAMES_KEY,
     HOST_KEY_MARKER,
@@ -497,6 +498,61 @@ def run_flow(
     )
 
 
+def _secret_headers(raw: Any) -> dict[str, SecretStr]:
+    """Return host header values as secrets once every name and value may be sent.
+
+    Args:
+        raw (`Any`):
+            The host's mapping of header name to `str` or `SecretStr` value.
+
+    Returns:
+        `dict[str, SecretStr]`: The headers in their given order.
+
+    Raises:
+        `ValueError`: A name or value is refused, or there are too many headers; the
+            message never echoes a value.
+    """
+    return {name: SecretStr(value) for name, value in validate_headers(raw, None).items()}
+
+
+def _check_host_header_names(
+    effective: Mapping[str, Mapping[str, Any]], headers: Mapping[str, Any] | None,
+) -> None:
+    """Check that the host's headers have the names recorded for its key's agents.
+
+    Names compare without case, as HTTP compares them.
+
+    Args:
+        effective (`Mapping[str, Mapping[str, Any]]`):
+            The recorded effective model map, keyed by static agent path.
+        headers (`Mapping[str, Any] | None`):
+            The headers given for the host key; `None` gives none.
+
+    Raises:
+        `ValueError`: The names differ; the message names the missing and unrecorded
+            header names, never a value.
+    """
+    expected = {
+        name.lower(): name
+        for config in effective.values()
+        if config.get(HOST_KEY_MARKER) is True
+        for name in config.get(HEADER_NAMES_KEY, ())
+    }
+    given = {name.lower(): name for name in headers or ()}
+    missing = [expected[name] for name in sorted(expected) if name not in given]
+    extra = [given[name] for name in sorted(given) if name not in expected]
+    details = []
+    if missing:
+        details.append(f"missing {', '.join(missing)}")
+    if extra:
+        details.append(f"not recorded {', '.join(extra)}")
+    if details:
+        raise ValueError(
+            "headers must have the header names this run recorded for its host key: "
+            + "; ".join(details)
+        )
+
+
 def _secret_key(raw: str | SecretStr) -> SecretStr:
     """Validate a host key into a `SecretStr` without echoing it in errors."""
     return LLMConfig(api_key=raw).api_key
@@ -722,6 +778,7 @@ def resume_flow(
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
     api_key: str | SecretStr | None = None,
+    headers: Mapping[str, str | SecretStr] | None = None,
     context: Any = None,
 ) -> RunResult:
     """Recover primary execution or inspect a terminal run without backward work.
@@ -771,6 +828,12 @@ def resume_flow(
             log that marks no agent ignores it. Without it, marked agents fail
             when they call their model instead of reading the provider's key
             environment variable.
+        headers (`Mapping[str, str | SecretStr] | None`, *optional*, defaults to `None`):
+            The header values a run started with ``llm_config.headers`` sent
+            with its key. They go to the agents the log marks for the key, like
+            ``api_key``, and are never recorded. Their names must be the ones the
+            log recorded for those agents, compared without case; a log that
+            marks no agent ignores them.
         context (`Any`, *optional*, defaults to `None`):
             The host's app object, passed to tools as `ctx.context` as in
             `run_flow`. The log does not hold it and it is not part of the flow
@@ -799,7 +862,11 @@ def resume_flow(
             an unfinished run's binding, flow output, or prompt set in Python
             has a `${...}` span that doesn't parse or calls a function it can't
             (a builtin with arguments it doesn't take, a name outside the node's
-            type table, or in a prompt any non-builtin).
+            type table, or in a prompt any non-builtin). Also when ``headers``
+            has a name or value that can't be sent, or ``api_key`` or
+            ``headers`` is given for a log that marks agents for a host key and
+            the header names differ from the recorded ones (the message names
+            the header names, never a value).
         `DefaultsError`:
             A `YIAN_<NAME>` variable holds a value its entry does not accept.
         `DefaultsMismatchError`:
@@ -825,6 +892,7 @@ def resume_flow(
         skills=skills,
         steering=steering,
         api_key=api_key,
+        headers=headers,
         context=context,
         stop_event=threading.Event(),
     )
@@ -842,6 +910,7 @@ def _resume_flow_controlled(
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
     api_key: str | SecretStr | None = None,
+    headers: Mapping[str, str | SecretStr] | None = None,
     context: Any = None,
     check_llm_configs: Callable[[dict[str, dict[str, Any]]], None] | None = None,
     stop_event: threading.Event,
@@ -858,6 +927,7 @@ def _resume_flow_controlled(
     current()
     run_tools = ToolSet(tools, context=context)
     api_key = None if api_key is None else _secret_key(api_key)
+    host_headers = None if headers is None else _secret_headers(headers)
     require_steering(steering)
     log_path = Path(log)
     retained_locator = log_path.absolute()
@@ -865,9 +935,12 @@ def _resume_flow_controlled(
     memory_runtime: MemoryRuntime | None = None
     primary_error: BaseException | None = None
     try:
-        state = _replay_run_log(flow, authority, api_key=api_key)
-        if api_key is not None and not host_key_providers(state.effective_llm_by_static_path):
-            api_key = None
+        state = _replay_run_log(flow, authority, api_key=api_key, headers=host_headers)
+        if not host_key_providers(state.effective_llm_by_static_path):
+            api_key = host_headers = None
+        elif api_key is not None or host_headers is not None:
+            # Checked before the terminal return too, since the backward handle sends them.
+            _check_host_header_names(state.effective_llm_by_static_path, host_headers)
         retained_program = copy.deepcopy(flow.compiled) if state.learnable else None
         if state.result is not None:
             return _result_from_state(state, log_path, [],
@@ -1286,6 +1359,7 @@ def _static_nodes(flow: Any, path: tuple[str, ...] = ()) -> list[tuple[str, Any]
 
 def _replay_run_log(
     flow: ComposedFlow, log: RunLog, *, api_key: SecretStr | None = None,
+    headers: dict[str, SecretStr] | None = None,
 ) -> RunState:
     """Silently reconstruct one borrowed, locked authoritative log prefix.
 
@@ -1293,18 +1367,21 @@ def _replay_run_log(
     only the complete effective LLM map recorded by ``RunStarted``; recovery
     never consults the current LLM defaults.  Historical transitions use the
     same reducer and growth constructor as live execution.  A host ``api_key``
-    goes to the agents the map marks for it. The run result reads its files
-    through the flow's output contract, as ``run_flow``'s does.
+    and the ``headers`` sent with it go to the agents the map marks for it. The
+    run result reads its files through the flow's output contract, as
+    ``run_flow``'s does.
     """
     if not isinstance(flow, ComposedFlow):
         raise TypeError("_replay_run_log expects a ComposedFlow")
     return _replay_compiled_run_log(
-        flow.compiled, log, api_key=api_key, result_contract=child_signature(flow).output,
+        flow.compiled, log, api_key=api_key, headers=headers,
+        result_contract=child_signature(flow).output,
     )
 
 
 def _replay_compiled_run_log(
     flow: CompiledFlow, log: RunLog, *, api_key: SecretStr | None = None,
+    headers: dict[str, SecretStr] | None = None,
     result_contract: OutputContract | None = None,
 ) -> RunState:
     """Reuse canonical replay for a private original compiled program.
@@ -1370,9 +1447,9 @@ def _replay_compiled_run_log(
         legacy_connection_map(first.record.effective_llm_by_static_path),
     )
     if api_key is not None:
-        # A run that marked no agent ignores the key; bind_host_credentials finds no
-        # target.
-        bind_host_credentials(private_flow, api_key)
+        # A run that marked no agent ignores the key and headers; bind_host_credentials
+        # finds no target.
+        bind_host_credentials(private_flow, api_key, headers)
     if first.record.learnable:
         apply_execution_layout(private_flow, resolve_execution_layout(private_flow))
     if first.record.memories is not None:

@@ -403,6 +403,116 @@ def test_resume_with_the_key_keeps_the_recorded_organization(tmp_path, monkeypat
     assert seen == {"gpt-5.4": ("org-abc", "proj-abc", None)}
 
 
+_HEADERS = {"X-Gateway": HEADER_VALUE, "X-Trace": OTHER_VALUE}
+
+
+def _interrupted_header_run(tmp_path, llm_config=None):
+    path = tmp_path / "run.jsonl"
+    with pytest.raises(RuntimeError, match="host stopped"):
+        run_flow(
+            load_flow(_FLOW), {}, log=path, on_event=_stop_before_model,
+            llm_config=_ALL_SETTINGS if llm_config is None else llm_config,
+        )
+    return path
+
+
+def test_resume_sends_the_given_headers_to_the_key_agents(tmp_path, monkeypatch):
+    seen = _recording_models(monkeypatch)
+    path = _interrupted_header_run(tmp_path)
+    # Names compare without case, as they do in HTTP.
+    headers = {"x-gateway": HEADER_VALUE, "X-TRACE": SecretStr(OTHER_VALUE)}
+    result = resume_flow(load_flow(_FLOW), log=path, api_key=SENTINEL, headers=headers)
+    assert result.status == "succeeded", result.failure
+    assert seen == {"gpt-5.4": ("org-abc", "proj-abc", {
+        "x-gateway": HEADER_VALUE, "X-TRACE": OTHER_VALUE,
+    })}
+    assert HEADER_VALUE not in path.read_text()
+
+
+@pytest.mark.parametrize(
+    ("headers", "named"),
+    [
+        (None, "missing X-Gateway, X-Trace"),
+        ({"X-Gateway": HEADER_VALUE}, "missing X-Trace"),
+        ({**_HEADERS, "X-Extra": "extra-3f1c"}, "not recorded X-Extra"),
+    ],
+)
+def test_resume_needs_exactly_the_recorded_header_names(tmp_path, monkeypatch, headers, named):
+    seen = _recording_models(monkeypatch)
+    path = _interrupted_header_run(tmp_path)
+    before = path.read_bytes()
+    with pytest.raises(ValueError) as caught:
+        resume_flow(load_flow(_FLOW), log=path, api_key=SENTINEL, headers=headers)
+    message = str(caught.value)
+    assert message.endswith(named)
+    for value in (HEADER_VALUE, OTHER_VALUE, "extra-3f1c", SENTINEL):
+        assert value not in message
+    assert path.read_bytes() == before
+    assert seen == {}
+
+
+def test_resume_reports_extra_header_names_beside_missing_ones(tmp_path, monkeypatch):
+    _recording_models(monkeypatch)
+    path = _interrupted_header_run(tmp_path)
+    with pytest.raises(ValueError, match="missing X-Trace; not recorded X-Other"):
+        resume_flow(
+            load_flow(_FLOW), log=path, api_key=SENTINEL,
+            headers={"X-Gateway": HEADER_VALUE, "X-Other": OTHER_VALUE},
+        )
+
+
+def test_resume_without_recorded_headers_refuses_given_ones(tmp_path, monkeypatch):
+    _recording_models(monkeypatch)
+    path = _interrupted_header_run(tmp_path, llm_config=_KEYED)
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="not recorded X-Gateway"):
+        resume_flow(
+            load_flow(_FLOW), log=path, api_key=SENTINEL, headers={"X-Gateway": HEADER_VALUE},
+        )
+    assert path.read_bytes() == before
+
+
+def test_resume_checks_the_given_header_values(tmp_path, monkeypatch):
+    _recording_models(monkeypatch)
+    path = _interrupted_header_run(tmp_path)
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="header X-Trace value") as caught:
+        resume_flow(
+            load_flow(_FLOW), log=path, api_key=SENTINEL,
+            headers={"X-Gateway": HEADER_VALUE, "X-Trace": "bad\nvalue-77"},
+        )
+    assert "value-77" not in str(caught.value)
+    assert path.read_bytes() == before
+
+
+def test_resume_ignores_headers_on_a_run_with_no_key_agents(tmp_path, monkeypatch):
+    seen = _recording_models(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-env")
+    path = _interrupted_header_run(tmp_path, llm_config={"provider": "openai", "model": "gpt-5.4"})
+    result = resume_flow(
+        load_flow(_FLOW), log=path, api_key=SENTINEL, headers={"X-Anything": HEADER_VALUE},
+    )
+    assert result.status == "succeeded", result.failure
+    assert seen == {"gpt-5.4": (None, None, None)}
+
+
+def test_a_finished_run_checks_the_given_header_names(tmp_path, monkeypatch):
+    _recording_models(monkeypatch)
+    path = tmp_path / "run.jsonl"
+    first = run_flow(load_flow(_FLOW), {}, log=path, llm_config=_ALL_SETTINGS, learnable=True)
+    assert first.status == "succeeded", first.failure
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="missing X-Trace"):
+        resume_flow(
+            load_flow(_FLOW), log=path, api_key=SENTINEL, headers={"X-Gateway": HEADER_VALUE},
+        )
+    with pytest.raises(ValueError, match="X-Gateway, X-Trace"):
+        resume_flow(load_flow(_FLOW), log=path, api_key=SENTINEL)
+    replayed = resume_flow(load_flow(_FLOW), log=path, api_key=SENTINEL, headers=_HEADERS)
+    assert replayed.output == first.output
+    assert path.read_bytes() == before
+
+
 def test_recorded_header_names_pass_the_resume_field_check():
     marked = {
         "provider": "openai", "model": "gpt-5.4", "organization": "org-abc",

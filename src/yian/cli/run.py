@@ -1514,8 +1514,8 @@ def _check_resume_credentials(
     Args:
         effective (`dict[str, dict[str, Any]]`):
             The recorded effective model map, keyed by static agent path. Only
-            each config's ``provider``, ``_connection``, and host-key marker
-            are read.
+            each config's ``provider``, ``_connection``, host-key marker, and
+            recorded header names are read.
         ask_secret (`Callable[[str], Any]`):
             Asks one hidden question and returns the answer, or `None` when the
             user declines.
@@ -1530,7 +1530,11 @@ def _check_resume_credentials(
     """
     from yian.llm_clients.api_key_env import OPTIONAL_API_KEY_PROVIDERS, get_api_key_env
     from yian.llm_clients.auth import AuthError
-    from yian.llm_clients.connection import HOST_KEY_MARKER, connection_credentials
+    from yian.llm_clients.connection import (
+        HEADER_NAMES_KEY,
+        HOST_KEY_MARKER,
+        connection_credentials,
+    )
 
     connections: List[tuple[str, Dict[str, Any]]] = []
     providers: List[str] = []
@@ -1540,10 +1544,14 @@ def _check_resume_credentials(
         if config.get(HOST_KEY_MARKER) or (
             connection is not None and connection.get("source") == "host"
         ):
+            # Header values the host sent with its key are not recorded either.
+            arguments = "api_key=..."
+            if config.get(HEADER_NAMES_KEY):
+                arguments += ", headers=..."
             raise _ResumeKeyError(
                 f"this run's {provider} API key came from a Python host's "
                 "llm_config.api_key, which the CLI cannot supply; resume it from "
-                "Python with resume_flow(api_key=...)"
+                f"Python with resume_flow({arguments})"
             )
         if connection is not None and (
             provider == "openai" or connection.get("source") == "store"

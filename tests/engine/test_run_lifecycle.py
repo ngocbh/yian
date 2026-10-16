@@ -487,12 +487,13 @@ def test_final_run_boundary_signatures_and_result_fields_are_exact() -> None:
         "skills",
         "steering",
         "api_key",
+        "headers",
         "context",
     ]
     _assert_keyword_only(
         recovered,
         ("log", "num_workers", "on_event", "on_stream", "memory", "tools", "skills", "steering",
-         "api_key", "context"),
+         "api_key", "headers", "context"),
     )
     assert recovered.parameters["log"].default is inspect.Parameter.empty
     assert recovered.parameters["num_workers"].default is None
@@ -501,6 +502,7 @@ def test_final_run_boundary_signatures_and_result_fields_are_exact() -> None:
     assert recovered.parameters["skills"].default is None
     assert recovered.parameters["steering"].default is None
     assert recovered.parameters["api_key"].default is None
+    assert recovered.parameters["headers"].default is None
     assert recovered.parameters["context"].default is None
     assert "stop_event" not in recovered.parameters
 

@@ -123,6 +123,7 @@ def test_environment_header_values_are_not_listed(monkeypatch):
         config = {"provider": provider, "model": "m", "api_key": "sk-host"}
         assert call_credentials(config) == ("sk-host",)
 
+
 def test_unresolved_config_is_resolved_first():
     AuthStore().save("anthropic", ApiKeyCredentials("sk-saved-anthropic"), "claude-x")
     assert call_credentials({"provider": "anthropic", "model": "c"}) == ("sk-saved-anthropic",)

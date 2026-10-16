@@ -31,3 +31,12 @@ def test_python_floor_is_3_11():
     assert project["requires-python"] == ">=3.11"
     assert not any(c.endswith(":: 3.10") for c in classifiers)
     assert "Programming Language :: Python :: 3.11" in classifiers
+
+
+def test_mcp_extra_pins_the_mcp_sdk():
+    extras = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"][
+        "optional-dependencies"
+    ]
+
+    assert extras["mcp"] == ["mcp>=2.3,<3"]
+    assert "mcp>=2.3,<3" in extras["all"]

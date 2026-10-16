@@ -37,6 +37,7 @@ from yian.expr import eval_binding
 from yian.expr.grammar import whole_span_interior
 from yian.llm_clients import LLMConfig
 from yian.llm_clients.config import host_only_field_error
+from yian.llm_clients.provider_blocks import PROVIDER_BLOCKS, partial_block_problems
 from yian.memory.contracts import DeclSite, MemoryDecl
 from yian.nodes.agent import AgentNode
 from yian.nodes.agent.node import is_max_tool_iterations, is_text_output
@@ -176,6 +177,37 @@ def _holds_value(tree: Any) -> bool:
     return False
 
 
+def _is_value(part: Any) -> bool:
+    """Whether a layer part is itself a value: a tagged one, or text with a `${...}` span."""
+    return isinstance(part, Binding) or (isinstance(part, str) and has_span(part))
+
+
+def _unescape_literals(tree: Any) -> Any:
+    """Return `tree` with its values in place and its literal strings `$$`-unescaped."""
+    if _is_value(tree):
+        return tree
+    if type(tree) is dict:
+        return {key: _unescape_literals(item) for key, item in tree.items()}
+    if type(tree) is list:
+        return [_unescape_literals(item) for item in tree]
+    return _literal_part(tree)
+
+
+def _block_problem_range(
+    key: str, problem: str, field_ranges: Mapping[str, SourceRange]
+) -> SourceRange | None:
+    """Return the range of the deepest written key a `partial_block_problems` message names."""
+    # Each message starts with the backticked key path, such as `anthropic.thinking.type`.
+    path = key
+    if problem.startswith("`"):
+        rest = problem[1:].split("`", 1)[0].partition(".")[2]
+        if rest:
+            path = f"{key}.{rest}"
+    while path not in field_ranges and path != key:
+        path = path[: max(path.rfind("."), path.rfind("["))]
+    return field_ranges.get(path)
+
+
 def _literal_part(tree: Any) -> Any:
     """Return the value a literal template part binds: its strings `$$`-unescaped."""
     if isinstance(tree, str):
@@ -290,6 +322,15 @@ def _check_llm_config_value(
         for key, item in tree.items()
     }
     _check_literal_fields(literal, prefix, source_range, diagnostics)
+    for key, block in tree.items():
+        if key not in PROVIDER_BLOCKS or not _holds_value(block):
+            continue
+        problems = partial_block_problems(key, _unescape_literals(block), _is_value)
+        if problems:
+            raise diagnostics.error(
+                f"{prefix}: {problems[0]}",
+                range=_block_problem_range(key, problems[0], field_ranges) or source_range,
+            )
     return cfg, inherit
 
 

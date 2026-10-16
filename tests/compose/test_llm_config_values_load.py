@@ -247,3 +247,54 @@ def test_a_python_built_agent_keeps_its_literal_config():
     agent = AgentNode("a", prompt="p", llm_config={"model": "m"})
     assert agent.llm_config == {"model": "m"}
     assert agent.own_llm_config == {"model": "m"}
+
+
+def test_a_literal_block_field_beside_a_value_is_checked():
+    text = _flow(
+        "    llm_config:\n"
+        "      provider: anthropic\n"
+        "      anthropic:\n"
+        "        temperature: ${input.t}\n"
+        "        thinking: {type: enabled, budget_tokens: 10}\n"
+    )
+    error = _load_error(text)
+    message = str(error)
+    assert "node 'a': llm_config: `anthropic.thinking.budget_tokens`:" in message
+    assert "greater than or equal to 1024" in message
+    assert _line(error) == _line_of(text, "thinking:")
+
+
+def test_an_unknown_block_key_beside_a_value_fails():
+    text = _flow(
+        "    llm_config:\n"
+        "      provider: anthropic\n"
+        "      anthropic:\n"
+        "        temperature: ${input.t}\n"
+        "        max_tokns: 100\n"
+    )
+    error = _load_error(text)
+    message = str(error)
+    assert "node 'a': llm_config: `anthropic.max_tokns`" in message
+    assert "allowed:" in message
+    assert _line(error) == _line_of(text, "max_tokns:")
+
+
+def test_a_required_block_field_given_as_a_value_loads():
+    agent = _agent(
+        _flow(
+            "    llm_config:\n"
+            "      provider: anthropic\n"
+            "      anthropic: {thinking: {type: enabled, budget_tokens: !int '${input.t}'}}\n"
+        )
+    )
+    assert isinstance(agent.own_llm_config, ValueTemplate)
+
+
+def test_a_literal_block_beside_a_value_is_checked_whole():
+    text = _flow(
+        "    llm_config:\n"
+        "      provider: ${input.p}\n"
+        "      anthropic: {max_tokns: 100}\n"
+    )
+    error = _load_error(text)
+    assert "anthropic.max_tokns" in str(error)

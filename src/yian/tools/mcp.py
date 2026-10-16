@@ -4,16 +4,20 @@
 subprocess that speaks over stdio, or a streamable HTTP endpoint. ``McpServer.open``
 starts the server's client on a background thread with its own asyncio loop, lists
 the server's tools once, and exposes each as a ``FunctionTool``; ``close`` stops the
-client and the subprocess.
+client and the subprocess. A call returns the server's structured content, or its
+content rendered as text.
 
 Knows about: the ``mcp`` SDK and ``httpx2`` (imported when a server opens),
-``yian.defaults``, ``tools.context``, ``tools.function_tools``, and the Python
-standard library.
+``yian.defaults``, ``tools.context``, ``tools.errors``, ``tools.function_tools``,
+and the Python standard library.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
+import concurrent.futures
 import contextlib
 import copy
 import math
@@ -29,6 +33,7 @@ from typing import Any
 
 from yian.defaults import current
 from yian.tools.context import ToolContext
+from yian.tools.errors import ReportedToolError
 from yian.tools.function_tools import FunctionTool
 
 # A server that keeps returning cursors would otherwise keep `open()` listing forever.
@@ -48,6 +53,15 @@ class McpConnectError(McpError, RuntimeError):
     The message names the server's label. For a stdio server it ends with the last
     lines the server wrote to stderr; for an HTTP server it names only the error type
     and HTTP status, never the URL, which may hold a token.
+    """
+
+
+class McpToolError(McpError, ReportedToolError):
+    """An MCP server returned an error result for a tool call.
+
+    The message is the result's content rendered as text, as a successful call's
+    text result is: text blocks, then one-line markers for media. An AGENT's model
+    reads it as the call's result.
     """
 
 
@@ -516,8 +530,8 @@ class McpServer:
             on_invoke=on_invoke,
         )
 
-    def _call(self, tool_name: str, args: dict[str, Any], meta: dict[str, Any]) -> str:
-        """Call `tool_name` on the server and return its text content.
+    def _call(self, tool_name: str, args: dict[str, Any], meta: dict[str, Any]) -> Any:
+        """Call `tool_name` on the server and return its result as a yian value.
 
         Args:
             tool_name (`str`):
@@ -528,21 +542,33 @@ class McpServer:
                 The request `_meta`: the yian call id and attempt.
 
         Returns:
-            `str`:
-                The result's text blocks, joined by newlines.
+            `Any`:
+                The result's structured content, or its content rendered as text.
 
         Raises:
             `RuntimeError`:
                 Raised when the server is not open.
+            `McpToolError`:
+                Raised when the server returns an error result.
         """
         client, loop = self._client, self._loop
         if client is None or loop is None:
             raise RuntimeError(f"MCP server '{self._label}' is not open")
         future = asyncio.run_coroutine_threadsafe(
-            client.call_tool(tool_name, args, meta=meta), loop
+            client.call_tool(tool_name, args, read_timeout_seconds=self._timeout, meta=meta), loop
         )
-        result = future.result()
-        return "\n".join(block.text for block in result.content if getattr(block, "type", None) == "text")
+        try:
+            # Short waits, so a SIGINT in the main thread raises promptly.
+            while True:
+                try:
+                    result = future.result(timeout=0.1)
+                    break
+                except concurrent.futures.TimeoutError:
+                    continue
+        finally:
+            if not future.done():
+                future.cancel()
+        return _result_value(result)
 
     def _connect_error(self, exc: BaseException) -> McpConnectError:
         """Return the `McpConnectError` for a failure while the server was starting."""
@@ -578,6 +604,82 @@ class McpServer:
         if not lines:
             return ""
         return "\nserver stderr:\n" + "\n".join(lines)
+
+
+def _result_value(result: Any) -> Any:
+    """Return a tool call's result as a yian value.
+
+    Args:
+        result (`mcp_types.CallToolResult`):
+            The server's result.
+
+    Returns:
+        `Any`:
+            The structured content when the server sent it, else the content
+            rendered as one string (see `_render_content`).
+
+    Raises:
+        `McpToolError`:
+            Raised when the result is an error result; its message is the rendered
+            content.
+    """
+    if result.is_error:
+        raise McpToolError(_render_content(result.content))
+    if result.structured_content is not None:
+        return result.structured_content
+    return _render_content(result.content)
+
+
+def _render_content(content: Sequence[Any]) -> str:
+    """Render MCP content blocks as text, joined by blank lines.
+
+    Text blocks and embedded text resources give their text. Images, audio, embedded
+    blob resources and resource links give a one-line marker with the mime type,
+    when known, and the decoded size; their bytes are dropped.
+
+    Args:
+        content (`Sequence[mcp_types.ContentBlock]`):
+            The result's content blocks.
+
+    Returns:
+        `str`:
+            The rendered text; `""` for no content.
+    """
+    parts: list[str] = []
+    for block in content:
+        kind = getattr(block, "type", None)
+        if kind == "text":
+            parts.append(block.text)
+        elif kind in ("image", "audio"):
+            parts.append(f"[{kind} {block.mime_type}, {_size(block.data)}]")
+        elif kind == "resource":
+            resource = block.resource
+            text = getattr(resource, "text", None)
+            if text is not None:
+                parts.append(text)
+            else:
+                head = " ".join(str(part) for part in (resource.uri, resource.mime_type) if part)
+                parts.append(f"[resource {head}, {_size(resource.blob)}]")
+        elif kind == "resource_link":
+            head = " ".join(str(part) for part in (block.uri, block.mime_type) if part)
+            parts.append(f"[resource {head}]")
+        else:
+            parts.append(f"[{kind}]")
+    return "\n\n".join(parts)
+
+
+def _size(data: str) -> str:
+    """Return the size of base64 `data` once decoded: `<n> B`, `<x.y> KB` or `<x.y> MB`."""
+    try:
+        size = len(base64.b64decode(data))
+    except (binascii.Error, ValueError):
+        # Estimate from the encoded length when the server sent malformed base64.
+        size = len(data) * 3 // 4
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB"
+    return f"{size / (1024 * 1024):.1f} MB"
 
 
 def _leaf(exc: BaseException) -> BaseException:

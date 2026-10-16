@@ -123,7 +123,7 @@ def drop_environment_headers(
         "this; code that builds models with create_llm_client can set headers on the "
         "http_client it passes."
     )
-    warn_once(message, stacklevel=2)
+    warn_once(message)
 
 
 class MissingToolCallError(OutputParserException):

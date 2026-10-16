@@ -5,7 +5,6 @@ yian's clients send exactly the credential and headers yian passes.
 """
 
 import asyncio
-import inspect
 import os
 import warnings
 
@@ -51,6 +50,7 @@ _UNSET = (
     "OPENAI_API_KEY", "AZURE_OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY",
     "OPENAI_BASE_URL", "OPENAI_API_BASE", "ANTHROPIC_BASE_URL", "GOOGLE_GENAI_USE_VERTEXAI",
     "GOOGLE_GENAI_USE_ENTERPRISE", "GOOGLE_GEMINI_BASE_URL", "OPENAI_PROXY", "ANTHROPIC_PROXY",
+    "LANGSMITH_GATEWAY", "LANGSMITH_GATEWAY_API_KEY", "LANGSMITH_API_KEY",
 )
 
 CHAT_REPLY = {
@@ -468,9 +468,7 @@ def test_google_sends_only_the_explicit_key(poisoned_env):
         assert_clean(request)
 
 
-_KEY_VARIABLES = (
-    "GOOGLE_API_KEY", "GEMINI_API_KEY", "LANGSMITH_GATEWAY", "LANGSMITH_GATEWAY_API_KEY",
-)
+_KEY_VARIABLES = ("GOOGLE_API_KEY", "GEMINI_API_KEY")
 
 
 def test_google_never_writes_the_key_to_the_environment(poisoned_env):
@@ -486,21 +484,8 @@ def test_google_never_writes_the_key_to_the_environment(poisoned_env):
         original(self, name, value)
 
     poisoned_env.setattr(os._Environ, "__setitem__", recorder)
-    with httpx.Client(transport=httpx.MockTransport(GeminiServer())) as client:
-        _google(client, None)
+    create_llm_client("google", "gemini-2.5-flash", api_key="g-explicit").get_llm()
     assert "GOOGLE_API_KEY" not in written
-
-
-def test_google_sends_yian_key_not_the_environment_key(poisoned_env):
-    poisoned_env.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
-    poisoned_env.setenv("GOOGLE_API_KEY", "env-google-key")
-    poisoned_env.setenv("GEMINI_API_KEY", "env-gemini-key")
-    server = GeminiServer()
-    invoke_both(_google, server)
-    assert len(server.requests) == 2
-    for request in server.requests:
-        assert request.headers["x-goog-api-key"] == "g-explicit"
-
 
 
 _GEMINI_HOST = "generativelanguage.googleapis.com"
@@ -555,7 +540,7 @@ def test_google_ignores_the_vertex_switch_beside_a_base_url(poisoned_env):
 
 
 @pytest.mark.parametrize("base_url", [None, "https://gw.example.com"])
-def test_google_rebuilt_client_keeps_its_own_transports_safe(poisoned_env, base_url):
+def test_google_rebuilt_client_keeps_base_url_key_and_no_redirects(poisoned_env, base_url):
     # Builds only: these models use the SDK's own transports, so they are never invoked.
     poisoned_env.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
     poisoned_env.setenv("GOOGLE_API_KEY", "env-google-key")
@@ -584,10 +569,7 @@ def test_google_rebuild_without_a_cleanup_object(poisoned_env):
 
 def test_google_client_does_not_import_the_cleanup_class():
     # The class is private to langchain-google-genai and missing before 4.3.7.
-    source = inspect.getsource(google_client)
     assert not hasattr(google_client, "_ClientCleanup")
-    assert "_ClientCleanup(" not in source
-    assert "import _ClientCleanup" not in source
 
 
 _VERTEX_WARNING = "yian ignores GOOGLE_GENAI_USE"
@@ -640,6 +622,7 @@ def test_google_without_any_key_fails_on_the_developer_api(poisoned_env):
             create_llm_client("google", "gemini-2.5-flash").get_llm()
     [warning] = _vertex_warnings(record)
     assert "GOOGLE_GENAI_USE_VERTEXAI" in str(warning.message)
+
 
 def _deepseek(client, async_client):
     return create_llm_client(

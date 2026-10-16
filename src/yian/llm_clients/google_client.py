@@ -18,7 +18,6 @@ from .validators import validate_model
 _HTTP_CLIENT_KWARGS = ("http_client", "http_async_client")
 # google-genai's switches to Vertex AI; GOOGLE_GENAI_USE_ENTERPRISE is the newer name.
 _VERTEX_SWITCHES = ("GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_ENTERPRISE")
-_VERTEX_WARNING_PREFIX = "yian ignores GOOGLE_GENAI_USE"
 
 
 def _class_name(cls: type) -> str:
@@ -169,7 +168,9 @@ class NormalizedChatGoogleGenerativeAI(ChatGoogleGenerativeAI):
         if self._use_vertexai or not self.client._api_client.vertexai:
             return self
         api = self.client._api_client
-        # google-genai sets these two itself; the key header would carry the env key.
+        # google-genai sets Content-Type and x-goog-api-key from its own constructor arguments,
+        # and patch_http_options lays caller headers over those defaults, so a copied one would
+        # override them.
         headers = {
             name: value for name, value in (api._http_options.headers or {}).items()
             if name.lower() not in ("x-goog-api-key", "content-type")
@@ -306,10 +307,9 @@ class GoogleClient(BaseLLMClient):
         for name in _VERTEX_SWITCHES:
             if os.environ.get(name):
                 warn_once(
-                    f"{_VERTEX_WARNING_PREFIX}{name.removeprefix('GOOGLE_GENAI_USE')}: the google "
-                    "provider always calls the Gemini Developer API with the key yian resolved, "
-                    "and Vertex AI is not supported. Unset the variable to silence this.",
-                    stacklevel=2,
+                    f"yian ignores {name}: the google provider always calls the Gemini "
+                    "Developer API with the key yian resolved, and Vertex AI is not supported. "
+                    "Unset the variable to silence this."
                 )
         llm_kwargs: dict[str, Any] = {"model": self.model}
 

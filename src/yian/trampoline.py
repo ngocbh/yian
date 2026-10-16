@@ -39,15 +39,53 @@ class Descend:
     """A nested stream a `flatten` walker yields where it would `yield from` it.
 
     Attributes:
-        steps (`Generator`): The nested walker, not yet started.
+        steps (`Generator`): The nested walker, not yet started. Its return value
+            is sent back to the walker that yielded this marker.
     """
 
-    steps: Generator[Any, None, None]
+    steps: Generator[Any, Any, Any]
 
 
 def _not_a_walker(value: object) -> TypeError:
     """Return the error for a nested walker that is not a generator."""
     return TypeError(f"a nested walker must be a generator, not {type(value).__name__}")
+
+
+def _close(stack: list[Generator[Any, Any, Any]]) -> None:
+    """Close the walkers on `stack`, inner to outer, as a `yield from` chain closes.
+
+    Each walker is closed in turn. When closing one raises, the next outer walker
+    gets that error thrown in rather than being closed, as a `yield from` parent
+    gets its child's error, and may handle it. A walker that yields instead of
+    finishing gets `RuntimeError` passed on to its parent, as `close` reports it.
+
+    Args:
+        stack (`list[Generator]`): The open walkers, outermost first. Emptied.
+
+    Raises:
+        `BaseException`:
+            The error that escapes the outermost walker, if any.
+    """
+    error: BaseException | None = None
+    while stack:
+        walker = stack.pop()
+        try:
+            if error is None:
+                walker.close()
+                continue
+            thrown, error = error, None
+            walker.throw(thrown)
+        except (StopIteration, GeneratorExit):
+            continue
+        except BaseException as raised:
+            if not stack:
+                # A bare raise keeps the error's `__context__` as the walker left it.
+                raise
+            error = raised
+            continue
+        error = RuntimeError("generator ignored GeneratorExit")
+    if error is not None:
+        raise error
 
 
 def drive(steps: Generator[Any, Any, Any]) -> Any:
@@ -58,6 +96,8 @@ def drive(steps: Generator[Any, Any, Any]) -> Any:
     error a nested walker raises is thrown in at the `yield`, so the parent's
     `try`/`except` and `finally` blocks see it as they would see it raised by a
     call. Yielding anything but a generator throws `TypeError` in at the `yield`.
+    If drive itself is interrupted, it closes every open walker, inner to outer,
+    as `flatten` does when closed.
 
     Nested walkers wait on a list rather than on the Python stack, so a walker over
     nested flows does not recurse once per level.
@@ -69,8 +109,10 @@ def drive(steps: Generator[Any, Any, Any]) -> Any:
         `Any`: The outer walker's return value.
 
     Raises:
-        Exception: Any error that escapes the outer walker, after every open
-            walker's `finally` blocks have run, inner to outer.
+        `BaseException`:
+            Any exception that escapes the outer walker, `KeyboardInterrupt` and
+            other non-`Exception` errors included, after every open walker's
+            `finally` blocks have run, inner to outer.
 
     Example:
         >>> def depth(n):
@@ -81,44 +123,53 @@ def drive(steps: Generator[Any, Any, Any]) -> Any:
     stack = [steps]
     sent: Any = None
     error: BaseException | None = None
-    while True:
-        top = stack[-1]
-        try:
-            if error is None:
-                nested = top.send(sent)
+    try:
+        while True:
+            top = stack[-1]
+            try:
+                if error is None:
+                    nested = top.send(sent)
+                else:
+                    # Thrown here, outside the handler below, so an error the parent
+                    # raises after handling this one gets no `__context__` from drive.
+                    thrown, error = error, None
+                    nested = top.throw(thrown)
+            except StopIteration as stop:
+                stack.pop()
+                if not stack:
+                    return stop.value
+                sent = stop.value
+                continue
+            except BaseException as raised:
+                stack.pop()
+                if not stack:
+                    raise
+                error = raised
+                continue
+            if isinstance(nested, Generator):
+                stack.append(nested)
+                sent = None
             else:
-                # Thrown here, outside the handler below, so an error the parent
-                # raises after handling this one gets no `__context__` from drive.
-                thrown, error = error, None
-                nested = top.throw(thrown)
-        except StopIteration as stop:
-            stack.pop()
-            if not stack:
-                return stop.value
-            sent = stop.value
-            continue
-        except BaseException as raised:
-            stack.pop()
-            if not stack:
-                raise
-            error = raised
-            continue
-        if isinstance(nested, Generator):
-            stack.append(nested)
-            sent = None
-        else:
-            error = _not_a_walker(nested)
+                error = _not_a_walker(nested)
+    finally:
+        if stack:
+            _close(stack)
 
 
-def flatten(steps: Generator[Any, None, None]) -> Generator[Any, None, None]:
+def flatten(steps: Generator[Any, Any, Any]) -> Generator[Any, None, None]:
     """Yield the items of a generator walker and its nested streams, in order.
 
-    The walker yields `Descend(child(...))` where it would `yield from child(...)`;
-    every other value it yields is an item. Items come out in the order the
-    `yield from` walker would produce them. An error a nested stream raises is
-    thrown into its parent at the `Descend` point, and a `Descend` of anything but a
-    generator throws `TypeError` there. Closing this generator early closes every
-    open walker, inner to outer, as closing a `yield from` chain would.
+    The walker yields `Descend(child(...))` where it would `yield from child(...)`,
+    and gets the child's return value back as the value of that `yield`; every
+    other value it yields is an item. Items come out in the order the `yield from`
+    walker would produce them. An error a nested stream raises is thrown into its
+    parent at the `Descend` point, and a `Descend` of anything but a generator
+    throws `TypeError` there.
+
+    As with `yield from`, an error thrown into this generator with `throw` is
+    thrown into the innermost open walker, and closing this generator closes every
+    open walker, inner to outer. If closing a walker raises, the error is thrown
+    into the next outer walker in place of closing it.
 
     Nested streams wait on a list rather than on the Python stack, so a walker over
     nested flows does not recurse once per level.
@@ -130,7 +181,10 @@ def flatten(steps: Generator[Any, None, None]) -> Generator[Any, None, None]:
         `Any`: Each item the walkers yield, `Descend` markers excluded.
 
     Raises:
-        Exception: Any error that escapes the outer walker.
+        `BaseException`:
+            Any exception that escapes the outer walker, `KeyboardInterrupt` and
+            other non-`Exception` errors included, whether raised while running
+            the walkers or while closing them.
 
     Example:
         >>> def leaves(tree):
@@ -140,19 +194,21 @@ def flatten(steps: Generator[Any, None, None]) -> Generator[Any, None, None]:
         [1, 2, 3, 4]
     """
     stack = [steps]
+    sent: Any = None
     error: BaseException | None = None
     try:
         while stack:
             top = stack[-1]
             try:
                 if error is None:
-                    item = next(top)
+                    item = top.send(sent)
                 else:
                     # Thrown outside the handler below, as in `drive`.
                     thrown, error = error, None
                     item = top.throw(thrown)
-            except StopIteration:
+            except StopIteration as stop:
                 stack.pop()
+                sent = stop.value
                 continue
             except BaseException as raised:
                 stack.pop()
@@ -160,12 +216,19 @@ def flatten(steps: Generator[Any, None, None]) -> Generator[Any, None, None]:
                     raise
                 error = raised
                 continue
+            sent = None
             if not isinstance(item, Descend):
-                yield item
+                try:
+                    yield item
+                except GeneratorExit:
+                    # Closing is not forwarded; the `finally` below closes the walkers.
+                    raise
+                except BaseException as thrown_in:
+                    error = thrown_in
             elif isinstance(item.steps, Generator):
                 stack.append(item.steps)
             else:
                 error = _not_a_walker(item.steps)
     finally:
-        while stack:
-            stack.pop().close()
+        if stack:
+            _close(stack)

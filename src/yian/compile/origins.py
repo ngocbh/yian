@@ -9,7 +9,8 @@ inspecting arbitrary semantic payloads.
 
 from __future__ import annotations
 
-from typing import Callable, Iterator, TypeVar, cast
+from collections.abc import Generator
+from typing import Any, Callable, Iterator, TypeVar, cast
 
 from yian.diagnostics import OriginRef, OriginResolver, ResolverTable
 from yian.memory.contracts import (
@@ -21,6 +22,7 @@ from yian.nodes.contracts import (
     _iter_origin_carrier,
     _rewrite_origin_carrier,
 )
+from yian.trampoline import Descend, drive, flatten
 
 from .model import CompiledFlow, Flow, FlowOutput, copy_flow_graph
 
@@ -53,12 +55,12 @@ def iter_flow_origins(flow: Flow) -> Iterator[OriginRef]:
     """
     if not isinstance(flow, Flow):
         raise TypeError(f"flow must be a Flow, got {type(flow).__name__}")
-    return _iter_flow_origins(
+    return flatten(_iter_flow_origins(
         flow,
         seen_flows=set(),
         seen_nodes=set(),
         seen_carriers=set(),
-    )
+    ))
 
 
 def _iter_flow_origins(
@@ -67,8 +69,12 @@ def _iter_flow_origins(
     seen_flows: set[int],
     seen_nodes: set[int],
     seen_carriers: set[int],
-) -> Iterator[OriginRef]:
-    """Yield one flow identity and recursively visit each unseen static child."""
+) -> Generator[OriginRef | Descend, None, None]:
+    """Yield one flow's origins, then visit each unseen static child.
+
+    A walker for `flatten`: it yields `Descend` with each child flow's walker
+    rather than `yield from` it, so nesting doesn't grow the Python stack.
+    """
     flow_identity = id(flow)
     if flow_identity in seen_flows:
         return
@@ -107,12 +113,12 @@ def _iter_flow_origins(
                     f"node {node.id!r} origin child must be a Flow, "
                     f"got {type(child).__name__}"
                 )
-            yield from _iter_flow_origins(
+            yield Descend(_iter_flow_origins(
                 child,
                 seen_flows=seen_flows,
                 seen_nodes=seen_nodes,
                 seen_carriers=seen_carriers,
-            )
+            ))
 
 
 def rewrite_flow_origins(
@@ -156,13 +162,13 @@ def rewrite_flow_origins(
         pass
 
     working = copy_flow_graph(flow)
-    _rewrite_flow_origin_graph(
+    drive(_rewrite_flow_origin_graph(
         working,
         mapper=mapper,
         seen_flows=set(),
         seen_nodes=set(),
         seen_carriers=set(),
-    )
+    ))
     # Frozen carriers may also be keys or set members inside opaque payloads.
     # Re-copying the finalized working graph rebuilds those hash containers with
     # mapped hashes while preserving every alias and cycle.
@@ -261,8 +267,12 @@ def _rewrite_flow_origin_graph(
     seen_flows: set[int],
     seen_nodes: set[int],
     seen_carriers: set[int],
-) -> None:
-    """Rewrite one copied flow in place and recurse through unseen children."""
+) -> Generator[Any, None, None]:
+    """Rewrite one copied flow in place, then each unseen child.
+
+    A generator for `drive`: it yields each child flow's rewrite rather than
+    calling it, so nesting doesn't grow the Python stack.
+    """
     flow_identity = id(flow)
     if flow_identity in seen_flows:
         return
@@ -301,7 +311,7 @@ def _rewrite_flow_origin_graph(
                     f"node {node.id!r} origin child must be a Flow, "
                     f"got {type(child).__name__}"
                 )
-            _rewrite_flow_origin_graph(
+            yield _rewrite_flow_origin_graph(
                 child,
                 mapper=mapper,
                 seen_flows=seen_flows,

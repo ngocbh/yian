@@ -11,8 +11,9 @@ separate, all-or-nothing mutation over a private compiled graph.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
 from yian.compile.model import END_ID, START_ID, CompiledFlow, Flow
 from yian.diagnostics import OriginRef
@@ -32,6 +33,7 @@ from yian.nodes.agent.memory import compatibility
 from yian.nodes.base import Node
 from yian.nodes.end import EndNode
 from yian.nodes.start import StartNode
+from yian.trampoline import drive
 
 
 def _revalidate_memory_occurrence_path(
@@ -677,8 +679,12 @@ def _resolve_flow(
     declared: list[tuple[MemoryDecl, tuple[str, ...] | None]],
     active_flows: set[int],
     owner_origin: OriginRef | None = None,
-) -> None:
-    """Resolve one flow occurrence into node scopes and reachable declarations."""
+) -> Generator[Any, None, None]:
+    """Resolve one flow occurrence into node scopes and reachable declarations.
+
+    A generator for `drive`: it yields each child flow's resolution rather than
+    calling it, so nesting doesn't grow the Python stack.
+    """
     flow_identity = id(flow)
     if flow_identity in active_flows:
         raise _setup_error(
@@ -709,7 +715,7 @@ def _resolve_flow(
             )
             child = _node_child(node)
             if child is not None:
-                _resolve_flow(
+                yield _resolve_flow(
                     child,
                     locator=node_locator,
                     inherited=stack,
@@ -736,14 +742,14 @@ def resolve_memory_layout(flow: CompiledFlow) -> ResolvedMemoryLayout:
 
     targets: list[ResolvedMemoryTarget] = []
     declared: list[tuple[MemoryDecl, tuple[str, ...] | None]] = []
-    _resolve_flow(
+    drive(_resolve_flow(
         flow,
         locator=(),
         inherited=(),
         targets=targets,
         declared=declared,
         active_flows=set(),
-    )
+    ))
     if not declared:
         return ResolvedMemoryLayout(
             enabled=False,

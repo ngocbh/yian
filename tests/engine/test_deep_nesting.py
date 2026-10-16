@@ -4,13 +4,15 @@ Each test loads a chain far past the call nesting limit, then walks it with only
 frames of headroom, which a walker that recursed per nested flow would overflow.
 """
 
+import json
 import re
 
 from pydantic import SecretStr
 import pytest
 
 from tests.compose.test_call_nesting_limit import _defs_chain, _mixed_chain
-from tests.deep_chains import deep_load, tight_stack
+from tests.deep_chains import deep_load, lifted_limit, tight_stack
+from yian.compile.execution_layout import resolve_execution_layout
 from yian.compile.llm_cascade import (
     _static_agent_paths,
     apply_effective_llm_map,
@@ -19,14 +21,20 @@ from yian.compile.llm_cascade import (
     static_agent_labels,
 )
 from yian.compile.manifest import expansion_digest, flow_fingerprint
-from yian.compile.model import Flow, copy_flow_graph
+from yian.compile.memory_layout import resolve_memory_layout
+from yian.compile.model import CompiledFlow, Flow, copy_flow_graph
+from yian.compile.origins import iter_flow_origins, rebase_flow_origins
 from yian.compose import ComposedFlow, load_flow
+from yian.diagnostics import OriginRef
+from yian.events import NodeStarted
 from yian.expr import ExpressionError
 from yian.llm_clients.connection import HOST_KEY_MARKER, missing_model_message
+from yian.memory import MemorySetupError
+from yian.memory.contracts import _iter_memory_decl_origins
 from yian.nodes.base import Node
 from yian.nodes.call import CallNode
-from yian.nodes.contracts import Binding
-from yian.run import _check_templates, _static_nodes
+from yian.nodes.contracts import Binding, _iter_origin_carrier
+from yian.run import _check_templates, _static_nodes, resume_flow, run_flow
 
 _DEPTH = 300
 _HEADROOM = 150
@@ -34,6 +42,10 @@ _HEADROOM = 150
 # is shorter to keep the copies' quadratic cost down.
 _CASCADE_DEPTH = 120
 _CASCADE_HEADROOM = 80
+# Running or resuming a loaded chain takes about 40 frames whatever its depth, so this
+# headroom catches a run that recurses even once per nested flow over 60 levels.
+_RUN_DEPTH = 60
+_RUN_HEADROOM = 70
 
 
 @pytest.fixture(scope="module")
@@ -299,3 +311,127 @@ def test_a_deep_agent_without_a_model_is_named():
     with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
         with tight_stack(_CASCADE_HEADROOM):
             resolve_llm_cascade(flow.compiled, {}, defaults={})
+
+
+def _origins_reference(flow, seen_flows, seen_nodes, seen_carriers):
+    """Yield the origins `iter_flow_origins` yields, by recursing per child flow."""
+    if id(flow) in seen_flows:
+        return
+    seen_flows.add(id(flow))
+    if isinstance(flow, CompiledFlow):
+        yield from _iter_memory_decl_origins(flow.memories, seen_carriers)
+    for node_wiring in flow.wiring.values():
+        for binding in node_wiring.values():
+            yield from _iter_origin_carrier(binding, seen_carriers)
+    if isinstance(flow, CompiledFlow):
+        for output in flow.outputs:
+            yield from _iter_origin_carrier(output.binding, seen_carriers)
+    for node in flow.nodes.values():
+        if id(node) in seen_nodes:
+            continue
+        seen_nodes.add(id(node))
+        yield from node.iter_local_origins(_seen_carriers=seen_carriers)
+        for child in node.origin_children():
+            yield from _origins_reference(child, seen_flows, seen_nodes, seen_carriers)
+
+
+def test_origins_of_a_deep_chain_come_in_structural_order(mixed):
+    expected = list(_origins_reference(mixed.compiled, set(), set(), set()))
+    with tight_stack(_HEADROOM):
+        found = list(iter_flow_origins(mixed.compiled))
+    assert [id(origin) for origin in found] == [id(origin) for origin in expected]
+    assert len(found) > 3 * _DEPTH
+
+
+class _Resolver:
+    """An origin resolver that resolves nothing."""
+
+    def resolve(self, origin):
+        return None
+
+
+def test_origins_of_a_deep_chain_rebase_without_recursing(mixed):
+    original = list(iter_flow_origins(mixed.compiled))
+    with tight_stack(_HEADROOM):
+        rebased, _table = rebase_flow_origins(
+            mixed.compiled, lambda origin: OriginRef(f"rebased/{origin.key}"), resolver=_Resolver()
+        )
+        found = list(iter_flow_origins(rebased))
+    assert [origin.key for origin in found] == [f"rebased/{origin.key}" for origin in original]
+    assert not _graph_objects(mixed.compiled) & _graph_objects(rebased)
+
+
+def _layout_reference(flow, path=()):
+    """Return the (locator, node id) pairs a layout targets, by recursing per child flow.
+
+    Layouts visit a flow's nodes in sorted id order, each before its child flow.
+    """
+    found = []
+    for node_id in sorted(flow.nodes):
+        node = flow.nodes[node_id]
+        found.append(((*path, node_id), id(node)))
+        for child in node.origin_children():
+            found.extend(_layout_reference(child, (*path, node_id)))
+    return found
+
+
+def test_memory_layout_of_a_deep_chain(mixed):
+    with tight_stack(_HEADROOM):
+        layout = resolve_memory_layout(mixed.compiled)
+    assert [(target.locator, id(target.node)) for target in layout.targets] == (
+        _layout_reference(mixed.compiled)
+    )
+
+
+def test_execution_layout_of_a_deep_chain(mixed):
+    with tight_stack(_HEADROOM):
+        layout = resolve_execution_layout(mixed.compiled)
+    assert [(target.locator, id(target.node)) for target in layout.targets] == (
+        _layout_reference(mixed.compiled)
+    )
+    assert all(target.scope.flow_path == target.locator[:-1] for target in layout.targets)
+
+
+def test_a_child_flow_cycle_deep_in_a_chain_has_no_layout():
+    flow = load_flow(_defs_chain(4))
+    first = flow.compiled.nodes["top"].child
+    third = first.nodes["step"].child.nodes["step"].child
+    third.nodes["step"].child = first
+    with pytest.raises(
+        MemorySetupError, match="^recursive child-flow cycle is not memory-layout resolvable$"
+    ):
+        resolve_memory_layout(flow.compiled)
+    with pytest.raises(
+        ValueError, match="^recursive child-flow cycle is not execution-layout resolvable$"
+    ):
+        resolve_execution_layout(flow.compiled)
+
+
+@pytest.mark.parametrize("depth", [3, _RUN_DEPTH])
+def test_a_deep_chain_runs_and_resumes_without_recursing(tmp_path, depth):
+    """The 3-level case bounds the frames a run takes at any depth.
+
+    A learnable run with a memory mapping also resolves its execution and memory
+    layouts.
+    """
+    flow = deep_load(_mixed_chain(depth))
+    path = tmp_path / "run.jsonl"
+    with lifted_limit():
+        with tight_stack(_RUN_HEADROOM):
+            first = run_flow(
+                flow, {"v": "go"}, log=path, num_workers=0, learnable=True, memory={}
+            )
+        assert first.status == "succeeded", first.failure
+        # Cut the log after its last expansion, so resume replays every expansion
+        # and then runs the leaf.
+        lines = path.read_text().splitlines(keepends=True)
+        expanded = [
+            i for i, line in enumerate(lines) if json.loads(line)["kind"] == "node_expanded"
+        ]
+        assert len(expanded) == depth
+        path.write_text("".join(lines[: expanded[-1] + 1]))
+        with tight_stack(_RUN_HEADROOM):
+            resumed = resume_flow(flow, log=path, num_workers=0, memory={})
+    assert resumed.status == "succeeded", resumed.failure
+    assert resumed.output == first.output
+    assert any(isinstance(event, NodeStarted) for event in resumed.events)

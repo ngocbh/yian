@@ -12,13 +12,14 @@ Never imports: memory, compose, runtime, or the package-root run boundary.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterator
+from collections.abc import Generator
 
 from yian.compile.model import CompiledFlow, Flow
 from yian.nodes.base import Node
 from yian.nodes.contracts import ExecutionPosition, ExecutionScope
 from yian.nodes.end import EndNode
 from yian.nodes.start import StartNode
+from yian.trampoline import Descend, flatten
 
 
 def _revalidate_scope(scope: ExecutionScope) -> None:
@@ -117,8 +118,12 @@ def _walk_targets(
     flow: Flow,
     flow_path: tuple[str, ...],
     active_flows: set[int],
-) -> Iterator[ResolvedExecutionTarget]:
-    """Traverse every callsite while detecting recursive child-flow cycles."""
+) -> Generator[ResolvedExecutionTarget | Descend, None, None]:
+    """Traverse every callsite while detecting recursive child-flow cycles.
+
+    A walker for `flatten`: it yields `Descend` with each child flow's walker
+    rather than `yield from` it, so nesting doesn't grow the Python stack.
+    """
     identity = id(flow)
     if identity in active_flows:
         raise ValueError("recursive child-flow cycle is not execution-layout resolvable")
@@ -141,7 +146,7 @@ def _walk_targets(
             )
             child = _node_child(node)
             if child is not None:
-                yield from _walk_targets(child, locator, active_flows)
+                yield Descend(_walk_targets(child, locator, active_flows))
     finally:
         active_flows.remove(identity)
 
@@ -160,7 +165,7 @@ def resolve_execution_layout(flow: Flow) -> ResolvedExecutionLayout:
         `TypeError`: If graph or static-child carriers have noncanonical types.
         `ValueError`: If a graph identifier is malformed or static children cycle.
     """
-    return ResolvedExecutionLayout(tuple(_walk_targets(flow, (), set())))
+    return ResolvedExecutionLayout(tuple(flatten(_walk_targets(flow, (), set()))))
 
 
 def _validate_unique_targets(layout: ResolvedExecutionLayout) -> None:

@@ -53,7 +53,9 @@ def normalize_content(response):
     return response
 
 
-def check_no_redirects(name: str, http_client: Any) -> None:
+def check_no_redirects(
+    name: str, http_client: Any, reason: str = "the API key past base_url"
+) -> None:
     """Reject a caller's HTTP client that follows redirects.
 
     Args:
@@ -61,16 +63,18 @@ def check_no_redirects(name: str, http_client: Any) -> None:
             The keyword the client came in, for the message.
         http_client (`Any`):
             The caller's httpx client.
+        reason (`str`, *optional*, defaults to `"the API key past base_url"`):
+            What a redirect would send where, for the message.
 
     Raises:
         `ValueError`:
             Raised when the client follows redirects.
     """
-    # The SDKs that use this send the key in a custom header, which httpx re-sends on a
-    # cross-origin redirect.
+    # The SDKs that use this send the key (and any connection headers) in custom
+    # headers, which httpx re-sends on a cross-origin redirect.
     if getattr(http_client, "follow_redirects", False):
         raise ValueError(
-            f"{name} follows redirects, which would send the API key past base_url; "
+            f"{name} follows redirects, which would send {reason}; "
             "build it with follow_redirects=False"
         )
 
@@ -84,7 +88,9 @@ def drop_environment_headers(
     `explicit`, and sets `organization`/`project` to `None` and
     `_ambient_authorizations` to `frozenset()` where the client has them. Warns with a
     `UserWarning` naming the dropped headers (not their values) when it drops any, once
-    per process for each distinct message.
+    per process for each distinct message. An organization or project the client read
+    counts as dropped only when `explicit` has no header of that name (in any case),
+    since that header replaces it.
 
     Args:
         client (`Any`):
@@ -97,6 +103,7 @@ def drop_environment_headers(
     if client is None:
         return
     keep = set(explicit)
+    replaced = {name.lower() for name in keep}
     dropped = {name for name in client._custom_headers if name not in keep}
     # The SDK merges header variables into the private `_custom_headers`, and
     # `copy`/`with_options` re-read the environment, so this filters the built
@@ -108,7 +115,7 @@ def drop_environment_headers(
         ("organization", "OpenAI-Organization"), ("project", "OpenAI-Project")
     ):
         if hasattr(client, attribute):
-            if getattr(client, attribute) is not None:
+            if getattr(client, attribute) is not None and header.lower() not in replaced:
                 dropped.add(header)
             setattr(client, attribute, None)
     if hasattr(client, "_ambient_authorizations"):
@@ -119,9 +126,9 @@ def drop_environment_headers(
     sources = f"{', '.join(rest)} or {last}" if rest else last
     message = (
         f"yian sends only the headers it sets, so it dropped {', '.join(sorted(dropped))}, "
-        f"read from {sources}; flow runs cannot send them. Unset the variable to silence "
-        "this; code that builds models with create_llm_client can set headers on the "
-        "http_client it passes."
+        f"read from {sources}. To send them, set the host's llm_config.headers "
+        "(llm_config.organization and llm_config.project for OpenAI's ids) or save them "
+        "with yian auth; unset the variable to silence this."
     )
     warn_once(message)
 

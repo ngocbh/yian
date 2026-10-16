@@ -1,19 +1,27 @@
 import copy
 import inspect
 import os
+from collections.abc import Mapping
 from functools import cache
 from typing import Any, ClassVar, Literal, Optional
 
+import httpx
 from langchain_core.messages import AIMessage
 from langchain_openai import ChatOpenAI
 from langchain_openai.chat_models.base import BaseChatOpenAI
 from openai.resources.chat.completions import Completions
 from openai.resources.responses import Responses
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, model_validator
 
 from .api_key_env import OPTIONAL_API_KEY_PROVIDERS, get_api_key_env
-from .base_client import BaseLLMClient, drop_environment_headers, normalize_content
+from .base_client import (
+    BaseLLMClient,
+    check_no_redirects,
+    drop_environment_headers,
+    normalize_content,
+)
 from .capabilities import get_capabilities, has_open_schema
+from .connection_settings import validate_headers, validate_organization
 from .factory import _PROVIDER_BASE_URL
 from .provider_blocks import merge_request_body
 from .validators import validate_model
@@ -24,6 +32,85 @@ _TRANSPORT_KEYWORDS = frozenset({"self", "extra_headers", "extra_query", "extra_
 _OPENAI_HEADER_VARIABLES = (
     "OPENAI_CUSTOM_HEADERS", "OPENAI_ORG_ID", "OPENAI_ORGANIZATION", "OPENAI_PROJECT_ID"
 )
+# The headers that carry `provider: openai`'s organization and project ids, lowercase ->
+# the `llm_config` field they come from.
+_OPENAI_ID_HEADERS = {"openai-organization": "organization", "openai-project": "project"}
+_HEADERS_LEAK = "the API key or connection headers to another host"
+_HTTP_CLIENT_KEYWORDS = ("http_client", "http_async_client")
+
+
+def check_connection_headers(headers: Any, provider: str) -> dict[str, SecretStr]:
+    """Check the connection headers a caller gave a client and return them as secrets.
+
+    `create_llm_client` callers skip `LLMConfig`, so each client checks them itself. For
+    ``openai``, ``OpenAI-Organization`` and ``OpenAI-Project`` carry the organization and
+    project ids (as `model_from_config` passes them) and are checked as ids; every other
+    header is checked by `validate_headers`.
+
+    Args:
+        headers (`Any`): The candidate mapping of header name to `str` or `SecretStr`.
+        provider (`str`): The provider the headers go to.
+
+    Returns:
+        `dict[str, SecretStr]`: The headers, each value a `SecretStr`.
+
+    Raises:
+        `ValueError`: ``headers`` is not a mapping, or a name, value or id is refused;
+            the message never holds a value.
+    """
+    if not isinstance(headers, Mapping):
+        raise ValueError("connection_headers must be a mapping of header name to value")
+    ids: dict[str, Any] = {}
+    others: dict[Any, Any] = {}
+    for name, value in headers.items():
+        is_id = provider == "openai" and isinstance(name, str)
+        (ids if is_id and name.lower() in _OPENAI_ID_HEADERS else others)[name] = value
+    checked = validate_headers(others, provider)
+    seen = {name.lower() for name in checked}
+    for name, value in ids.items():
+        if name.lower() in seen:
+            raise ValueError(f"header {name} is given more than once (names ignore case)")
+        seen.add(name.lower())
+        if isinstance(value, SecretStr):
+            value = value.get_secret_value()
+        checked[name] = validate_organization(value, _OPENAI_ID_HEADERS[name.lower()])
+    return {name: SecretStr(value) for name, value in checked.items()}
+
+
+def connection_header_clients(
+    kwargs: dict[str, Any], proxy: Optional[str] = None
+) -> dict[str, Any]:
+    """Return the HTTP client keywords for a model that sends connection headers.
+
+    httpx re-sends custom headers on a cross-origin redirect, so a host client must not
+    follow redirects, and a missing one is a fresh client that doesn't. langchain-openai
+    caches its default clients per endpoint and shares them with other models, so they
+    are replaced rather than changed.
+
+    Args:
+        kwargs (`dict[str, Any]`): The client's keyword arguments, holding any host
+            ``http_client`` / ``http_async_client``.
+        proxy (`str`, *optional*, defaults to `None`): The proxy URL the fresh clients
+            use, as langchain's own clients would.
+
+    Returns:
+        `dict[str, Any]`: ``http_client`` and ``http_async_client`` (the host's or fresh
+            ones), plus ``openai_proxy=None`` when both are fresh, since langchain refuses
+            a proxy beside a passed client and the fresh ones carry it already.
+
+    Raises:
+        `ValueError`: A host client follows redirects.
+    """
+    clients: dict[str, Any] = {}
+    for key, fresh in zip(_HTTP_CLIENT_KEYWORDS, (httpx.Client, httpx.AsyncClient)):
+        if key in kwargs:
+            check_no_redirects(key, kwargs[key], reason=_HEADERS_LEAK)
+            clients[key] = kwargs[key]
+        else:
+            clients[key] = fresh(follow_redirects=False, proxy=proxy)
+    if not any(key in kwargs for key in _HTTP_CLIENT_KEYWORDS):
+        clients["openai_proxy"] = None
+    return clients
 
 
 @cache
@@ -80,9 +167,10 @@ class RequestBlockMixin(BaseChatOpenAI):
     written: keys the SDK method takes stay top-level, the rest go into ``extra_body``.
 
     The SDK clients keep only the headers passed in ``default_headers`` (plus the
-    subclass's `_sdk_header_names`); headers the SDK read from the environment are
-    dropped. The organization and project are always dropped: yian passes none, so a
-    Python caller's ``organization=`` is dropped too.
+    subclass's `_sdk_header_names`) and `connection_headers`; headers the SDK read from
+    the environment are dropped. The organization and project are always dropped, so a
+    Python caller's ``organization=`` is dropped too; they are sent only as
+    ``OpenAI-Organization`` / ``OpenAI-Project`` connection headers.
 
     Attributes:
         block (`dict[str, Any]`, *optional*, defaults to `{}`):
@@ -92,11 +180,18 @@ class RequestBlockMixin(BaseChatOpenAI):
             The provider whose block this is, named in errors.
         block_api (`Literal["chat", "responses"]`, *optional*, defaults to `"chat"`):
             The API whose request body the block mirrors: Chat Completions or Responses.
+        connection_headers (`dict[str, SecretStr]`, *optional*, defaults to `{}`):
+            Headers sent with every request, added to the SDK clients' custom headers.
+            Values are secrets: unlike ``default_headers``, this field is left out of
+            ``repr``, dumps and langchain serialization.
     """
 
     block: dict[str, Any] = Field(default_factory=dict, exclude=True, repr=False)
     block_provider: str = Field(default="", exclude=True, repr=False)
     block_api: Literal["chat", "responses"] = Field(default="chat", exclude=True, repr=False)
+    connection_headers: dict[str, SecretStr] = Field(
+        default_factory=dict, exclude=True, repr=False
+    )
     # Custom headers the langchain class itself passes to the SDK client.
     _sdk_header_names: ClassVar[tuple[str, ...]] = ()
 
@@ -104,18 +199,27 @@ class RequestBlockMixin(BaseChatOpenAI):
     def _drop_environment_headers(self):
         """Drop the environment's headers, organization and project from the SDK clients.
 
-        Runs after langchain's validator builds ``root_client``/``root_async_client``.
+        Runs after langchain's validator builds ``root_client``/``root_async_client``,
+        then adds `connection_headers` to both clients.
 
         Returns:
             `RequestBlockMixin`:
                 This model.
         """
         self.openai_organization = None
-        explicit = (*(self.default_headers or {}), *self._sdk_header_names)
+        explicit = (
+            *(self.default_headers or {}), *self._sdk_header_names, *self.connection_headers
+        )
+        values = {
+            name: value.get_secret_value() for name, value in self.connection_headers.items()
+        }
         # Both clients drop the same headers; `drop_environment_headers` shows that
         # message once per process.
         for client in (self.root_client, self.root_async_client):
             drop_environment_headers(client, explicit, _OPENAI_HEADER_VARIABLES)
+            if client is not None:
+                # The SDK sends `_custom_headers` last, after its own headers.
+                client._custom_headers.update(values)
         return self
 
     def _get_request_payload(self, input_, *, stop=None, **kwargs):
@@ -371,7 +475,16 @@ class OpenAIClient(BaseLLMClient):
         self.provider = provider.lower()
 
     def get_llm(self) -> Any:
-        """Return configured ChatOpenAI instance."""
+        """Return configured ChatOpenAI instance.
+
+        ``connection_headers`` (`dict[str, str | SecretStr]`, a keyword argument) are sent
+        with every request; such a model never follows a redirect.
+
+        Raises:
+            `ValueError`: The provider's API key is unset, a connection header is refused
+                (`check_connection_headers`), or a host HTTP client beside connection
+                headers follows redirects.
+        """
         self.warn_if_unknown_model()
         llm_kwargs = {"model": self.model}
 
@@ -406,6 +519,15 @@ class OpenAIClient(BaseLLMClient):
         for key in _PASSTHROUGH_KWARGS:
             if key in self.kwargs:
                 llm_kwargs[key] = self.kwargs[key]
+        if self.kwargs.get("connection_headers"):
+            llm_kwargs["connection_headers"] = check_connection_headers(
+                self.kwargs["connection_headers"], self.provider
+            )
+            # Only models with headers get their own clients; the rest keep langchain's
+            # defaults (and the stream_usage default that depends on them).
+            llm_kwargs.update(
+                connection_header_clients(self.kwargs, os.environ.get("OPENAI_PROXY") or None)
+            )
 
         # Native OpenAI: use Responses API for consistent behavior across
         # all model families. Third-party providers use Chat Completions.

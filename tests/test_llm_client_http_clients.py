@@ -112,7 +112,11 @@ def test_google_uses_a_non_redirecting_host_client_with_a_base_url(clean_env, ge
 def test_google_rejects_a_redirecting_host_client_beside_a_base_url(clean_env, key, factory):
     client = factory()
     try:
-        with pytest.raises(ValueError, match=f"{key} follows redirects.*follow_redirects=False"):
+        with pytest.raises(
+            ValueError,
+            match=f"{key} follows redirects, which would send the API key past base_url; "
+            "build it with follow_redirects=False",
+        ):
             _google(base_url="https://gateway.test", **{key: client})
     finally:
         if key == "http_client":

@@ -341,7 +341,8 @@ def test_openai_warns_when_it_drops_env_headers(poisoned_env):
     [message] = {str(w.message) for w in record if _DROP_WARNING in str(w.message)}
     _assert_names_without_values(
         message, "OpenAI-Organization", "X-Env-Injected", "OPENAI_CUSTOM_HEADERS",
-        "OPENAI_ORGANIZATION", "Unset", "create_llm_client", "http_client",
+        "OPENAI_ORGANIZATION", "llm_config.headers", "llm_config.organization",
+        "llm_config.project", "yian auth", "unset the variable",
     )
 
 
@@ -385,7 +386,7 @@ def test_anthropic_warns_when_it_drops_env_headers(poisoned_env):
         chat._client
     [message] = {str(w.message) for w in record if _DROP_WARNING in str(w.message)}
     _assert_names_without_values(
-        message, "X-Env-Injected", "ANTHROPIC_CUSTOM_HEADERS", "create_llm_client", "http_client"
+        message, "X-Env-Injected", "ANTHROPIC_CUSTOM_HEADERS", "llm_config.headers", "yian auth"
     )
 
 

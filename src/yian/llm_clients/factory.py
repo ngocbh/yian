@@ -99,7 +99,14 @@ def create_llm_client(
             ``max_retries`` and ``callbacks``; the OpenAI-compatible, Azure, Anthropic
             and Google clients also take ``http_client`` / ``http_async_client``, the
             SDK's own HTTP clients (beside a ``base_url``, Anthropic's and Google's
-            must not follow redirects); the Ollama client rejects them. Generation
+            must not follow redirects); the Ollama client rejects them. The
+            OpenAI-compatible and Azure clients take ``connection_headers``
+            (`dict[str, str | SecretStr]`), headers sent with every request and kept
+            out of the model's fields; for ``openai``, ``OpenAI-Organization`` and
+            ``OpenAI-Project`` there carry the organization and project ids. Their
+            names and values follow ``llm_config.headers``'s rules, and a model with
+            them never follows a redirect, so a host ``http_client`` /
+            ``http_async_client`` beside them must not follow redirects. Generation
             settings (``temperature``, ``max_tokens``, reasoning effort, …) are no
             longer taken as keyword arguments and are ignored; put them in ``block``.
 
@@ -152,6 +159,26 @@ def create_llm_client(
     raise ValueError(f"Unsupported LLM provider: {provider}")
 
 
+def _connection_headers(config: LLMConfig) -> dict[str, SecretStr]:
+    """Return the headers a config's connection settings send.
+
+    Args:
+        config (`LLMConfig`): The validated config.
+
+    Returns:
+        `dict[str, SecretStr]`: ``OpenAI-Organization`` and ``OpenAI-Project`` from
+            ``organization`` and ``project`` when set, then ``headers``.
+    """
+    headers: dict[str, SecretStr] = {}
+    for name, value in (
+        ("OpenAI-Organization", config.organization), ("OpenAI-Project", config.project)
+    ):
+        if value is not None:
+            headers[name] = SecretStr(value)
+    headers.update(config.headers or {})
+    return headers
+
+
 def model_from_config(config) -> BaseChatModel:
     """Resolve an `LLMConfig` OR a plain `dict` into a ready chat model.
 
@@ -169,7 +196,10 @@ def model_from_config(config) -> BaseChatModel:
     else the provider's client reads its key environment variable. A config
     `base_url`, which needs that key, replaces the provider's default endpoint. For
     `azure`, `base_url` is the required resource endpoint (a saved login supplies
-    it when unset) and `model` the deployment name.
+    it when unset) and `model` the deployment name. A config `organization`,
+    `project` and `headers`, which also need that key, are sent with every request
+    (the ids as `OpenAI-Organization` / `OpenAI-Project`), and the model then never
+    follows a redirect.
 
     The block named after the provider is passed to its client as ``block``, and every
     client sends it into the request body as written. The returned model supports
@@ -236,4 +266,7 @@ def model_from_config(config) -> BaseChatModel:
         # Validation ties a base_url to the config's key, or makes it the Azure
         # resource endpoint, so it is where this request goes.
         kwargs["base_url"] = config.base_url
+    connection_headers = _connection_headers(config)
+    if connection_headers:
+        kwargs["connection_headers"] = connection_headers
     return create_llm_client(provider=provider, model=model, **kwargs).get_llm()

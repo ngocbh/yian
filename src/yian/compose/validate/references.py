@@ -44,6 +44,7 @@ from typing import Any, Optional
 from yian.compile.validation import _classify_path
 from yian.compose.helpers.errors import LoadDiagnostics
 from yian.compose.helpers.isinstance_types import constructor_type_fn
+from yian.compose.helpers.narrowing_facts import Env, env_read_type, narrowed_read_error
 from yian.compose.helpers.output_contracts import (
     TypeFn,
     local_field_error,
@@ -238,6 +239,7 @@ def validate_references(
         extra_heads: tuple = (),
         partial_union_fields: bool = False,
         constructors: bool = True,
+        read_facts: Env | None = None,
     ) -> None:
         """Name-check every reference a BINDING `from:` reads (coalesce + nested-default
         split by `expr_refs_of`); a non-string source / literal yields no refs.
@@ -250,6 +252,8 @@ def validate_references(
         `partial_union_fields` lets a field only some union members have be read.
         `constructors` checks its `${T(...)}` calls; a reserved key, where they are not
         supported, leaves that error to the type-table pass.
+        `read_facts` are the facts a searched CASE's guarded param is read under; a read
+        of a field its narrowed type lacks names that type.
         Each string nested in a `ValueTemplate` is scanned on its own and located at
         its authored site when that resolves."""
         source = binding_source(from_value)
@@ -270,6 +274,7 @@ def validate_references(
                 extra_heads=extra_heads,
                 partial_union_fields=partial_union_fields,
                 constructors=constructors,
+                read_facts=read_facts,
             )
 
     def scan_text(
@@ -283,6 +288,7 @@ def validate_references(
         extra_heads: tuple,
         partial_union_fields: bool,
         constructors: bool,
+        read_facts: Env | None = None,
     ) -> None:
         """Name-check every reference one template string reads; see `scan`.
 
@@ -358,6 +364,10 @@ def validate_references(
                     path,
                     partial_union_fields=partial_union_fields,
                 )
+            if err is not None and read_facts:
+                candidate = env_read_type(path, read_facts)
+                if candidate is not None:
+                    err = narrowed_read_error(path, candidate, err, registry or {})
             if err is not None:
                 errors.append((f"{where}: {err}", rng))
         try:
@@ -565,10 +575,17 @@ def validate_references(
             label = node.wiring_ref_label(param)
             param_rng = franges.get(("input", param)) or input_rng
             param_producers, param_inputs = node_producers, node_inputs
+            read_facts = None
             if narrowing is not None:
-                # A searched CASE's param read only after an `isinstance` check has its own
-                # view; one read guarded first and unguarded later reports at the later read.
+                if narrowing.param_unchecked(node_id, param):
+                    # Every read follows a check that can never be true, which
+                    # `check_impossible_whens` reports; no value reaches them.
+                    continue
+                # A searched CASE's param read only after the checks before it in its `when:`
+                # has its own view; one read guarded first and unguarded later reports at the
+                # later read.
                 param_producers, param_inputs = narrowing.for_param(node_id, param)
+                read_facts = narrowing.param_env(node_id, param)
                 site = narrowing.param_site(node_id, param)
                 if site is not None:
                     label, param_rng = site[0], site[1] or param_rng
@@ -588,6 +605,7 @@ def validate_references(
                 site_producers=param_producers,
                 site_inputs=param_inputs,
                 partial_union_fields=partial_union_fields,
+                read_facts=read_facts,
             )
 
     # Flow outputs (the codomain): each binding `from:` is checked like a node input and

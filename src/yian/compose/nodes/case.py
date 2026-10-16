@@ -36,10 +36,10 @@ the flow's producer types, which are only assembled after every node is built, s
 in `.build()`. `.build()` lowers unconditionally; the loader runs `check_case_exhaustive` in the
 validate phase.
 
-Imports flow down/peer only: `lark` (parse-tree types), `expr` (ref scan/rewrite and the
-`isinstance` tree helpers), `nodes` (Case/CaseNode/Parameter), `compile.model` (Edge),
-`typesys` (the non-finite check), and the compose peers
-`source`/`helpers.errors`/`helpers.output_contracts`/`helpers.tags`/`nodes.base`.
+Imports flow down/peer only: `lark` (parse-tree types), `expr` (ref scan/rewrite),
+`nodes` (Case/CaseNode/Parameter), `compile.model` (Edge), `typesys` (the non-finite check),
+and the compose peers `source`/`helpers.condition_guards`/`helpers.errors`/`helpers.tags`/
+`nodes.base`.
 It imports NOTHING from parse/desugar/edges/validate/build/loader (the ladder), so it stays a
 leaf of the nodes package.
 """
@@ -47,7 +47,7 @@ leaf of the nodes package.
 from __future__ import annotations
 
 import datetime
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional
@@ -61,10 +61,7 @@ from yian.expr import (
     ExpressionError,
     binding_co_skips,
     condition_reads,
-    expr_refs,
     expr_refs_of,
-    isinstance_subject,
-    isinstance_type_names,
     parse_condition,
     rewrite_condition_reads,
 )
@@ -72,8 +69,8 @@ from yian.nodes.case import ELSE_HANDLE, Case, CaseNode
 from yian.nodes.contracts import Binding, Parameter, binding_source, iter_source_strings
 from yian.typesys import TypeCheckError
 from yian.typesys.values import IntTooLongError, reject_nonfinite
+from yian.compose.helpers.condition_guards import Guard, guarded_refs
 from yian.compose.helpers.errors import LoadDiagnostics, source_text
-from yian.compose.helpers.output_contracts import direct_reference_parts
 from yian.compose.helpers.tags import yaml_quoted
 from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor, reject_non_text
 from yian.compose.source import SourceCursor
@@ -639,34 +636,18 @@ def _desugar_on(
     )
 
 
-IsinstanceCheck = tuple[str, str]
-"""A top-level `isinstance(<base>, <T>)` conjunct: the dotted base path and the type name."""
+GuardedRead = tuple[int, Optional[Guard]]
+"""One read of a searched-case param: its case index and the guard it is checked under,
+`None` when it is not checked."""
+
+GuardsOf = Callable[[Tree | Token], list[Optional[Guard]]]
+"""The guard each reference occurrence of a parsed `when:` is checked under, in
+`guarded_refs` order."""
 
 
-def _isinstance_check(conjunct: Tree | Token) -> Optional[IsinstanceCheck]:
-    """The check a conjunct makes when it is `isinstance(<direct ref>, T)`, else `None`."""
-    subject = isinstance_subject(conjunct)
-    if subject is None:
-        return None
-    parts = direct_reference_parts(subject)
-    if parts is None:
-        return None
-    return ".".join(parts), isinstance_type_names(conjunct)[0]
-
-
-GuardedRead = tuple[int, tuple[IsinstanceCheck, ...]]
-"""One read of a searched-case param: its case index and the checks guarding it."""
-
-
-def _conjuncts(tree: Tree | Token) -> list[Tree | Token]:
-    """The operands of a top-level `and` chain; a lone operand otherwise."""
-    if isinstance(tree, Tree) and tree.data == "and_expr":
-        return [
-            child
-            for child in tree.children
-            if not (isinstance(child, Token) and child.type == "AND")
-        ]
-    return [tree]
+def _plain_guards(tree: Tree | Token) -> list[Optional[Guard]]:
+    """The guard that holds whenever each reference occurrence of `tree` is read."""
+    return [guard for _, guard in guarded_refs(tree)]
 
 
 @dataclass(frozen=True)
@@ -681,8 +662,8 @@ class _SearchedParams:
         case_locals (`list[list[str]]`):
             Per case, the local of each reference occurrence, in `condition_reads` order.
         guards (`dict[str, list[GuardedRead]]`):
-            For each local, the case index of each occurrence and the checks guarding it.
-            A join input has no occurrences.
+            For each local, the case index of each occurrence and the guard it is checked
+            under. A join input has no occurrences.
     """
 
     source_to_local: dict[str, str]
@@ -740,7 +721,11 @@ def _join_sources(reads: list[ConditionRead]) -> list[str]:
     ]
 
 
-def _searched_params(desc: CaseDescriptor, diagnostics: LoadDiagnostics) -> _SearchedParams:
+def _searched_params(
+    desc: CaseDescriptor,
+    diagnostics: LoadDiagnostics,
+    guards_of: GuardsOf = _plain_guards,
+) -> _SearchedParams:
     """Allocate one `__rN` local per distinct read across all searched `when:`s.
 
     A read is a reference (`${path}`), a node-output reference inside a `:-`/`:?`/`|`
@@ -749,8 +734,8 @@ def _searched_params(desc: CaseDescriptor, diagnostics: LoadDiagnostics) -> _Sea
     reads are allocated before its join inputs.
 
     Locals and guards come from the same parse, so every guarded occurrence has a local.
-    An occurrence inside a top-level `and` operand is guarded by the
-    `isinstance(<direct ref>, T)` operands before it; any other occurrence has no guards.
+    `guards_of` gives each occurrence's guard; by default, what the checks before it
+    prove through `and`, `or` and `not` (`guarded_refs`).
 
     Raises:
         `LoadError`:
@@ -797,88 +782,35 @@ def _searched_params(desc: CaseDescriptor, diagnostics: LoadDiagnostics) -> _Sea
         for source in _join_sources(reads):
             allocate(source, ci)
         # `guarded_refs` walks the same occurrences in the same order as `condition_reads`.
-        occurrences = guarded_refs(tree)
-        for local, (_, checks) in zip(locals_, occurrences, strict=True):
-            guards[local].append((ci, checks))
+        for local, guard in zip(locals_, guards_of(tree), strict=True):
+            guards[local].append((ci, guard))
         case_locals.append(locals_)
     return _SearchedParams(source_to_local, local_case_index, case_locals, guards)
 
 
-def guarded_refs(tree: Tree | Token) -> list[tuple[str, tuple[IsinstanceCheck, ...]]]:
-    """Return each reference occurrence in a parsed condition with the checks guarding it.
+def searched_param_guards(
+    desc: CaseDescriptor,
+    guards_of: Optional[GuardsOf] = None,
+) -> dict[str, list[GuardedRead]]:
+    """Return, per searched-case `__rN` param, each occurrence's case and guard.
 
-    An occurrence inside a top-level `and` operand is guarded by the
-    `isinstance(<direct ref>, T)` operands before it: `and` short-circuits, so the read
-    only runs once those checks pass. Any other occurrence has no guards.
-
-    Args:
-        tree (`Tree | Token`):
-            A condition parsed with `parse_condition`, in any spelling.
-
-    Returns:
-        `list[tuple[str, tuple[IsinstanceCheck, ...]]]`:
-            One `(ref path, guarding checks)` pair per occurrence, in source order.
-
-    Example:
-        For `isinstance(r, Done) and r.answer == 'ok'`, the pairs are
-        `("r", ())` and `("r.answer", (("r", "Done"),))`.
-    """
-    reads: list[tuple[str, tuple[IsinstanceCheck, ...]]] = []
-    checks: list[IsinstanceCheck] = []
-    for conjunct in _conjuncts(tree):
-        reads.extend((ref, tuple(checks)) for ref in expr_refs(conjunct))
-        check = _isinstance_check(conjunct)
-        if check is not None:
-            checks.append(check)
-    return reads
-
-
-def isinstance_conjuncts(when: Any) -> list[IsinstanceCheck]:
-    """Return the `isinstance(<direct ref>, T)` checks among a `when:`'s top-level conjuncts.
-
-    Only top-level `and` operands count: a check under `or` or `not` does not hold
-    whenever the case matches.
-
-    Args:
-        when (`Any`):
-            A searched case's original `when:` value, in any spelling. A non-string or
-            unparsable value makes no checks.
-
-    Returns:
-        `list[IsinstanceCheck]`:
-            `(base path, type name)` pairs in source order.
-
-    Example:
-        `isinstance_conjuncts("isinstance(d.output, Buy) and x > 1")` is
-        `[("d.output", "Buy")]`.
-    """
-    if not isinstance(when, str):
-        return []
-    try:
-        tree = parse_condition(when)
-    except ExpressionError:
-        return []
-    checks = (_isinstance_check(conjunct) for conjunct in _conjuncts(tree))
-    return [check for check in checks if check is not None]
-
-
-def searched_param_guards(desc: CaseDescriptor) -> dict[str, list[GuardedRead]]:
-    """Return, per searched-case `__rN` param, each occurrence's case and guarding checks.
-
-    An occurrence of a param's reference inside a top-level `and` operand is guarded by
-    the `isinstance(<direct ref>, T)` operands before it in the same chain: `and`
-    short-circuits, so the read only runs once those checks pass. An occurrence anywhere
-    else has no guards. The params are allocated exactly as the build allocates them; a
-    join input over a co-skipping escape's producers has no occurrences.
+    `and`, `or` and `not` short-circuit, so an occurrence of a param's reference is read
+    only once the checks before it decide (`guarded_refs`): its guard is what they prove.
+    A check after it never guards it. The params are allocated exactly as the build
+    allocates them; a join input over a co-skipping escape's producers has no occurrences.
 
     Args:
         desc (`CaseDescriptor`):
             A searched case that has already built. An `on:` case has no guards.
+        guards_of (`GuardsOf | None`, *optional*, defaults to `None`):
+            The guard each occurrence of a parsed `when:` is checked under, in
+            `guarded_refs` order, with `None` for an occurrence that is not checked.
+            `None` uses `guarded_refs`'s guards.
 
     Returns:
         `dict[str, list[GuardedRead]]`:
-            For each local, one `(case index, guarding checks)` pair per occurrence,
-            across all `when:`s in source order (empty for a join input).
+            For each local, one `(case index, guard)` pair per occurrence, across all
+            `when:`s in source order (empty for a join input).
 
     Raises:
         `LoadError`:
@@ -886,12 +818,12 @@ def searched_param_guards(desc: CaseDescriptor) -> dict[str, list[GuardedRead]]:
             the build succeeded, so the error is unlocated.
 
     Example:
-        For a first case `isinstance(d.output, Buy) and d.output.qty > 5`, the local
-        of `d.output.qty` maps to `[(0, (("d.output", "Buy"),))]`.
+        For a first case `not isinstance(d.output, Buy) or d.output.qty > 5`, the local
+        of `d.output.qty` maps to `[(0, Holds(IsinstanceCheck("d.output", "Buy"), True))]`.
     """
     if desc.on is not None:
         return {}
-    return _searched_params(desc, LoadDiagnostics()).guards
+    return _searched_params(desc, LoadDiagnostics(), guards_of or _plain_guards).guards
 
 
 def _desugar_searched(

@@ -19,9 +19,10 @@ from yian.compose.helpers.narrowing_facts import (
     NOT_NARROWABLE,
     ImpossibleReason,
     check_fact,
-    guard_env,
-    env_unsatisfiable,
     checked_refs,
+    env_read_type,
+    env_unsatisfiable,
+    guard_env,
     guarded_read_types,
     impossible_check_message,
     impossible_checks,
@@ -34,11 +35,7 @@ from yian.compose.helpers.narrowing_facts import (
 )
 from yian.compose.helpers.types import read_type
 from yian.compose.nodes.base import BuildContext, NodeDescriptor
-from yian.compose.nodes.case import (
-    CaseDescriptor,
-    isinstance_conjuncts,
-    searched_param_guards,
-)
+from yian.compose.nodes.case import CaseDescriptor, searched_param_guards
 from yian.compose.validate.case_exhaustive import check_case_when_values
 from yian.compose.validate.narrowing import (
     Exact,
@@ -476,6 +473,15 @@ def _checked(condition: str, routing=None, **declared):
     return checked_refs(tree, _types(**declared), _REGISTRY, routing=routing)
 
 
+def test_env_read_type():
+    env = {"v": Members((BUY,)), "v.leg": Members((LIMIT,))}
+    assert env_read_type("v.leg.price", env) == (LIMIT, ("price",), "v.leg")
+    assert env_read_type("v.qty", env) == (BUY, ("qty",), "v")
+    assert env_read_type("v", env) is None
+    assert env_read_type("w.qty", env) is None
+    assert env_read_type("v.qty", {"v": Members(())}) is None
+
+
 def test_checked_refs_keeps_a_guard_some_value_satisfies():
     assert _checked("isinstance(v, Buy) and v.qty > 0", v=DECISION) == [
         ("v", NOTHING),
@@ -773,25 +779,6 @@ def test_isinstance_members_keeps_the_shared_members_only_when_nothing_else_can_
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize(
-    ("when", "checks"),
-    [
-        ("isinstance(d.output, Buy)", [("d.output", "Buy")]),
-        ("x > 1 and isinstance(d.output.leg, Limit)", [("d.output.leg", "Limit")]),
-        ("${isinstance(input.d, Buy) and isinstance(e.output, Text)}",
-         [("input.d", "Buy"), ("e.output", "Text")]),
-        ("isinstance(d.output, Buy) or x", []),
-        ("not isinstance(d.output, Buy)", []),
-        ("isinstance(upper(d.output), Buy)", []),
-        ("isinstance(d.output.items[0], Buy)", []),
-        ("isinstance(", []),
-        (3, []),
-    ],
-)
-def test_isinstance_conjuncts_reads_top_level_and_operands(when, checks):
-    assert isinstance_conjuncts(when) == checks
-
-
 def test_searched_param_guards_lists_the_checks_before_each_read():
     desc, _ = _case(
         "c",
@@ -802,9 +789,13 @@ def test_searched_param_guards_lists_the_checks_before_each_read():
         ],
     )
     assert searched_param_guards(desc) == {
-        "__r0": [(0, ()), (1, ())],
-        "__r1": [(0, (("d.output", "Buy"),)), (1, ())],
+        "__r0": [(0, NOTHING), (1, NOTHING)],
+        "__r1": [(0, Holds(IsinstanceCheck("d.output", "Buy"), True)), (1, NOTHING)],
     }
+    desc, _ = _case("c", None, [("not isinstance(d.output, Buy) or d.output.qty > 5", "b")])
+    assert searched_param_guards(desc)["__r1"] == [
+        (0, Holds(IsinstanceCheck("d.output", "Buy"), True))
+    ]
     on_desc, _ = _case("o", "${d.output.action}", [("buy", "b")])
     assert searched_param_guards(on_desc) == {}
 
@@ -819,6 +810,42 @@ def _searched_view(cases, else_=None, typ: Type = DECISION, target: str = "b") -
 def test_an_isinstance_case_narrows_its_target_to_the_member_or_sub_union():
     assert _searched_view([("isinstance(d.output, Buy)", "b")]) == BUY
     assert _searched_view([("isinstance(d.output, BuyOrSell) and x", "b")]) == BUY_OR_SELL
+
+
+@pytest.mark.parametrize(
+    ("when", "expected"),
+    [
+        ("d.output.action == 'buy'", BUY),
+        ("'buy' == d.output.action", BUY),
+        ("d.output.action != 'hold'", BUY_OR_SELL),
+        ("not isinstance(d.output, Hold)", BUY_OR_SELL),
+        ("isinstance(d.output, Buy) or isinstance(d.output, Sell)", BUY_OR_SELL),
+        ("not (isinstance(d.output, Hold) or x > 1)", BUY_OR_SELL),
+    ],
+)
+def test_a_case_branch_sees_what_its_when_proves(when, expected):
+    assert _searched_view([(when, "b")]) == expected
+
+
+def test_a_case_branch_under_a_check_that_may_not_hold_is_not_narrowed():
+    assert _searched_view([("isinstance(d.output, Buy) or x > 1", "b")]) == DECISION
+    assert _searched_view([("not (isinstance(d.output, Buy) and x > 1)", "b")]) == DECISION
+
+
+def test_a_case_param_after_an_impossible_check_is_not_checked():
+    cases = [("isinstance(d.output, Buy) and d.output.action == 'hold' and d.output.qty > 0", "b")]
+    nodes = [_node("d"), _case("c", None, cases), _node("b")]
+    narrowing = _compute(nodes, [], {"d": ValueContract(DECISION)})
+    assert narrowing.param_unchecked("c", "__r2")
+    assert not narrowing.param_unchecked("c", "__r0")
+
+
+def test_a_case_param_after_a_check_the_type_decides_sees_the_case_s_view():
+    cases = [("isinstance(d.output, Decision) or d.output.qty > 0", "b")]
+    nodes = [_node("d"), _case("c", None, cases), _node("b")]
+    narrowing = _compute(nodes, [], {"d": ValueContract(DECISION)})
+    assert not narrowing.param_unchecked("c", "__r1")
+    assert narrowing.for_param("c", "__r1")[0]["d"].type == DECISION
 
 
 def test_an_isinstance_case_on_a_non_union_base_gives_the_exact_type():

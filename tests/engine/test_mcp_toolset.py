@@ -1,5 +1,6 @@
 """`ToolSet` takes an opened MCP server as a tool group, and `yian.tools` exports the MCP API."""
 
+import dataclasses
 import importlib
 import sys
 
@@ -66,6 +67,14 @@ def test_one_server_under_two_keys_lists_each_tool_once(server):
     names = [tool.name for tool in server.tools]
     assert tools.groups == ("a", "b")
     assert tools.expand(["a", "b"]) == names
+
+
+def test_a_renamed_tool_in_a_list_group_calls_the_servers_tool(server):
+    echo = next(tool for tool in server.tools if tool.name == "echo")
+    tools = ToolSet({"renamed": [dataclasses.replace(echo, name="other")]})
+
+    assert tools.expand(["renamed"]) == ["other"]
+    assert tools.invoke("other", {"text": "hi"}) == "hi"
 
 
 def test_a_dead_server_is_rejected():

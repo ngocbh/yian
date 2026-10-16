@@ -195,6 +195,54 @@ def test_unused_servers_with_colliding_tools_dont_fail_the_run(tmp_path):
     _assert_no_children(*markers.values())
 
 
+def test_a_tool_id_named_like_a_server_still_probes_for_the_tool(tmp_path):
+    markers = {name: tmp_path / f"{name}.pid" for name in ("echo", "fake")}
+    cfg = _config(
+        tmp_path / "cfg.json",
+        {
+            "echo": _stdio("--only", "add", "--marker", str(markers["echo"])),
+            "fake": _stdio("--only", "echo", "--marker", str(markers["fake"])),
+        },
+    )
+
+    result = _run(str(_tool_flow(tmp_path)), "--mcp-config", str(cfg))
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.strip().splitlines()[-1] == "hi"
+    # A TOOL node can't call a group, so server `echo` opened only to show its tools.
+    assert [len(_pids(marker)) for marker in markers.values()] == [1, 1]
+    _assert_no_children(*markers.values())
+
+
+def test_a_granted_server_that_supplies_the_missing_tool_skips_probing(tmp_path):
+    fake_marker = tmp_path / "fake.pid"
+    other_marker = tmp_path / "other.pid"
+    servers = load_mcp_config(
+        [
+            _config(
+                tmp_path / "cfg.json",
+                {
+                    "fake": _stdio("--marker", str(fake_marker)),
+                    "broken": {"command": str(tmp_path / "missing")},
+                    "other": _stdio("--marker", str(other_marker)),
+                },
+            )
+        ],
+        {},
+    )
+    warned: list[str] = []
+
+    with run_cli._open_mcp_servers(
+        servers, {"echo"}, {"fake"}, set(), stop_event=threading.Event(), warn=warned.append
+    ) as opened:
+        assert list(opened) == ["fake"]
+
+    assert len(_pids(fake_marker)) == 1
+    assert not other_marker.exists()
+    assert warned == []
+    _assert_no_children(fake_marker)
+
+
 def test_an_agent_grant_starts_only_the_granted_server(monkeypatch, tmp_path):
     flow = tmp_path / "flow.yaml"
     flow.write_text(_AGENT_FLOW, encoding="utf-8")
@@ -320,7 +368,9 @@ def test_a_stop_while_servers_start_opens_no_more(tmp_path):
     stop.set()
     warned: list[str] = []
 
-    with run_cli._open_mcp_servers(servers, {"echo"}, set(), stop_event=stop, warn=warned.append) as opened:
+    with run_cli._open_mcp_servers(
+        servers, {"echo"}, set(), set(), stop_event=stop, warn=warned.append
+    ) as opened:
         assert opened == {}
 
     assert not any(marker.exists() for marker in markers.values())

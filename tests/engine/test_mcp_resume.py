@@ -1,5 +1,7 @@
 """`resume_flow` opens the MCP servers passed to it unopened only for an unfinished run."""
 
+import threading
+
 import pytest
 
 pytest.importorskip("mcp")
@@ -7,7 +9,8 @@ pytest.importorskip("mcp")
 from yian.compose import load_flow
 from yian.events import RunStarted
 from yian.memory.contracts import MemorySetupError
-from yian.run import resume_flow, run_flow
+from yian.nodes.base import _HostStop
+from yian.run import _resume_flow_controlled, resume_flow, run_flow
 from yian.tools.context import ToolContext
 from yian.tools.mcp import McpConnectError, mcp_server
 
@@ -169,3 +172,22 @@ def test_resuming_without_the_runs_memory_fails_before_any_server_starts(tmp_pat
 
     assert not marker.exists()
     _assert_closed(server)
+
+
+def test_a_stop_before_the_servers_open_on_resume_starts_none(tmp_path):
+    log = tmp_path / "run.jsonl"
+    flow = load_flow(_WHOAMI_FLOW)
+    _crashed_run(log)
+    markers = [tmp_path / "a.pid", tmp_path / "b.pid"]
+    servers = [mcp_server(**stdio_params("--marker", str(marker))) for marker in markers]
+    stop = threading.Event()
+    stop.set()
+
+    with pytest.raises(_HostStop):
+        _resume_flow_controlled(flow, log=log, tools={"a": servers[0], "b": servers[1]}, stop_event=stop)
+
+    assert not any(marker.exists() for marker in markers)
+    for server in servers:
+        _assert_closed(server)
+    resumed = resume_flow(flow, log=log, tools={"fake": mcp_server(**stdio_params())})
+    assert resumed.status == "succeeded", resumed.failure

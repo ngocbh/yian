@@ -79,7 +79,7 @@ from yian.memory import (
     MemoryStack,
 )
 from yian.memory_host import MemoryRegistry
-from yian.nodes.base import Steering
+from yian.nodes.base import Steering, _HostStop
 from yian.nodes.binding import coerce_inputs
 from yian.nodes.contracts import HostToolCall, OutputContract, iter_source_strings
 from yian.runtime.engine import FlowEngine
@@ -658,7 +658,7 @@ def _run_flow_controlled(
     _check_templates(flow.compiled)
     skills = _check_skills(flow.compiled, skills)
     require_steering(steering)
-    run_servers = _open_run_servers(unopened)
+    run_servers = _open_run_servers(unopened, stop_event)
     primary_error: BaseException | None = None
     try:
         return _start_run(
@@ -1057,7 +1057,7 @@ def _resume_flow_controlled(
             raise MemorySetupError(
                 "resuming this run requires its enabled memory mapping"
             )
-        run_servers = _open_run_servers(unopened)
+        run_servers = _open_run_servers(unopened, stop_event)
         run_tools = ToolSet(tools, context=context)
         _check_tool_grants(flow.compiled, run_tools)
         _check_tool_types(flow.compiled, run_tools)
@@ -1805,12 +1805,19 @@ def _split_run_servers(
     return others, unopened
 
 
-def _open_run_servers(servers: Sequence[tuple[str, McpServer]]) -> list[McpServer]:
+def _open_run_servers(
+    servers: Sequence[tuple[str, McpServer]], stop_event: threading.Event
+) -> list[McpServer]:
     """Open the servers for one run, in order; if one fails, close the ones already open.
+
+    Once `stop_event` is set, no further server opens: the ones already open close
+    and the run stops as it would for a stop during its nodes.
 
     Args:
         servers (`Sequence[tuple[str, McpServer]]`):
             Unopened servers, each listed once with the `tools=` key it sits under.
+        stop_event (`threading.Event`):
+            The run's stop event.
 
     Returns:
         `list[McpServer]`:
@@ -1824,11 +1831,17 @@ def _open_run_servers(servers: Sequence[tuple[str, McpServer]]) -> list[McpServe
             Raised when the MCP SDK is not installed.
         `McpConnectError`:
             Raised when a server doesn't start or doesn't list its tools.
+        `_HostStop`:
+            Raised when `stop_event` is set before every server is open.
     """
     token = f"run-{uuid.uuid4().hex}"
     opened: list[McpServer] = []
     try:
         for key, server in servers:
+            if stop_event.is_set():
+                # The same signal the engine raises for a stop it observes; it is
+                # set before the run starts, so nothing is recorded.
+                raise _HostStop(primary=False)
             try:
                 server._open_for_run(token)
             except _AlreadyOpen as exc:

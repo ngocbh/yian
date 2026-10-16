@@ -485,6 +485,7 @@ class McpServer:
         Waits up to 10 s for the server to shut down. Safe to call from any thread and
         before `open()`.
         """
+        thread = None
         try:
             with self._lock:
                 self._close_requested = True
@@ -501,15 +502,20 @@ class McpServer:
         except Exception:
             pass
         finally:
-            self._owner = None
-            self._client = None
-            self._tools = None
-            self._thread = None
-            self._loop = None
-            stderr, self._stderr = self._stderr, None
-            if stderr is not None:
-                with contextlib.suppress(Exception):
-                    stderr.close()
+            # Under the lock, so an open() can't start halfway through the reset; and
+            # only for the thread joined here, since another close() and open() may
+            # have run while this one waited.
+            with self._lock:
+                if self._thread is thread:
+                    self._owner = None
+                    self._client = None
+                    self._tools = None
+                    self._thread = None
+                    self._loop = None
+                    stderr, self._stderr = self._stderr, None
+                    if stderr is not None:
+                        with contextlib.suppress(Exception):
+                            stderr.close()
 
     def _stop(self) -> None:
         """In the loop thread: end `_main`, cancelling a connect still in progress."""

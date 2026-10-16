@@ -11,7 +11,8 @@ from langchain_core.messages import AIMessage, ToolMessage
 
 import yian.llm_clients as llm_clients
 from yian.compose import load_flow
-from yian.run import run_flow
+from yian.nodes.base import _HostStop
+from yian.run import _run_flow_controlled, run_flow
 from yian.tools.mcp import McpConnectError, mcp_server
 
 from tests.engine.mcp_helpers import child_alive, mcp_threads, run_http_server, stdio_params
@@ -305,3 +306,46 @@ def test_a_failing_node_still_closes_the_server(tmp_path):
 
     assert result.status == "failed"
     _assert_closed(server, marker)
+
+
+def test_a_stop_before_the_servers_open_starts_none(tmp_path):
+    markers = [tmp_path / "a.pid", tmp_path / "b.pid"]
+    servers = [mcp_server(**stdio_params("--marker", str(marker))) for marker in markers]
+    stop = threading.Event()
+    stop.set()
+
+    with pytest.raises(_HostStop):
+        _run_flow_controlled(
+            load_flow(_tool_flow("echo", '{text: "hi"}')), {},
+            tools={"a": servers[0], "b": servers[1]}, stop_event=stop,
+        )
+
+    assert not any(marker.exists() for marker in markers)
+    for server in servers:
+        _assert_closed(server)
+
+
+def test_a_stop_while_the_servers_open_closes_the_opened_one_and_opens_no_more(monkeypatch, tmp_path):
+    markers = [tmp_path / "a.pid", tmp_path / "b.pid"]
+    first, second = (mcp_server(**stdio_params("--marker", str(marker))) for marker in markers)
+    stop = threading.Event()
+    open_for_run = type(first)._open_for_run
+
+    def open_then_stop(self, token):
+        """Open the server, then set the stop as if Ctrl-C came during the open."""
+        opened = open_for_run(self, token)
+        stop.set()
+        return opened
+
+    monkeypatch.setattr(type(first), "_open_for_run", open_then_stop)
+
+    with pytest.raises(_HostStop):
+        _run_flow_controlled(
+            load_flow(_tool_flow("echo", '{text: "hi"}')), {},
+            tools={"a": first, "b": second}, stop_event=stop,
+        )
+
+    assert len(_pids(markers[0])) == 1
+    assert not markers[1].exists()
+    _assert_closed(first, markers[0])
+    _assert_closed(second)

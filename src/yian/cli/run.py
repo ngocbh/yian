@@ -1685,30 +1685,33 @@ def _load_mcp_servers(paths: List[Path], known: set[str]) -> Dict[str, McpServer
     )
 
 
-def _mcp_needed_names(compiled: Any) -> set[str]:
-    """Return every tool id a static TOOL node calls and every id a static AGENT grants.
+def _mcp_needed_names(compiled: Any) -> tuple[set[str], set[str]]:
+    """Return the tool ids static TOOL nodes call and the ids static AGENTs grant.
 
     Args:
         compiled (`Any`):
             The loaded flow's compiled form.
 
     Returns:
-        `set[str]`:
-            The tool and tool-group ids the flow can use.
+        `tuple[set[str], set[str]]`:
+            The TOOL nodes' tool ids, which name single tools, and the AGENT grants,
+            which name tools or tool groups.
     """
-    needed: set[str] = set()
+    tool_ids: set[str] = set()
+    grants: set[str] = set()
     for _, node in _static_nodes(compiled):
         call = node.host_tool_call()
         if call is not None:
-            needed.add(call.tool_id)
-        needed.update(node.granted_tools())
-    return needed
+            tool_ids.add(call.tool_id)
+        grants.update(node.granted_tools())
+    return tool_ids, grants
 
 
 @contextmanager
 def _open_mcp_servers(
     servers: Dict[str, McpServer],
-    needed: set[str],
+    tool_ids: set[str],
+    grants: set[str],
     known: set[str],
     *,
     stop_event: threading.Event,
@@ -1716,21 +1719,25 @@ def _open_mcp_servers(
 ) -> Iterator[Dict[str, McpServer]]:
     """Select the configured MCP servers a flow needs, and close those opened here on exit.
 
-    A server whose name the flow needs (an AGENT grant of its group) is selected
-    unopened, so the run starts it after its own checks and closes it. When some
-    needed id is neither a known tool nor a server name, those servers open here
-    instead and every other server opens to show its tools; those that list such an
-    id stay open and the rest close before the run, so an unused server's tool names
-    can't collide with another's. A server opened only to show its tools that fails
-    to start is skipped with a `warn` call, unless the flow still lacks a needed id
-    afterwards. Once `stop_event` is set, no further server opens. Nothing is
-    selected when the flow needs no tools.
+    A server an AGENT grants by name (its tool group) is selected unopened, so the
+    run starts it after its own checks and closes it. A TOOL node's id names one
+    tool, never a group, so it counts as unresolved unless it is a known tool; so
+    does a grant that is neither a known tool nor a server name. When some id is
+    unresolved, the granted servers open here instead, and if their tools don't
+    supply every unresolved id, every other server opens to show its tools; those
+    that list a still-unresolved id stay open and the rest close before the run, so
+    an unused server's tool names can't collide with another's. A server opened only
+    to show its tools that fails to start is skipped with a `warn` call, unless the
+    flow still lacks a needed id afterwards. Once `stop_event` is set, no further
+    server opens. Nothing is selected when the flow needs no tools.
 
     Args:
         servers (`Dict[str, McpServer]`):
             The configured servers by name, none of them open.
-        needed (`set[str]`):
-            The tool and tool-group ids the flow's static nodes use.
+        tool_ids (`set[str]`):
+            The tool ids the flow's static TOOL nodes call.
+        grants (`set[str]`):
+            The tool and tool-group ids the flow's static AGENT nodes grant.
         known (`set[str]`):
             The tool ids the run supplies without MCP.
         stop_event (`threading.Event`):
@@ -1752,8 +1759,8 @@ def _open_mcp_servers(
     """
     selected: Dict[str, McpServer] = {}
     try:
-        named = {name: server for name, server in servers.items() if name in needed}
-        unresolved = needed - known - servers.keys()
+        named = {name: server for name, server in servers.items() if name in grants}
+        unresolved = (tool_ids - known) | (grants - known - servers.keys())
         if not unresolved:
             selected.update(named)
         else:
@@ -1761,9 +1768,11 @@ def _open_mcp_servers(
                 if stop_event.is_set():
                     break
                 selected[name] = server.open()
+            # No other server needs to start for an id a granted server supplies.
+            unresolved -= {tool.name for server in selected.values() for tool in server.tools}
             failed: List[McpConnectError] = []
             for name, server in servers.items():
-                if name in selected or stop_event.is_set():
+                if not unresolved or name in selected or stop_event.is_set():
                     continue
                 try:
                     server.open()
@@ -1929,9 +1938,9 @@ def run(
     # so a broken config file can't block flows that never use MCP. The servers stay
     # unopened here; each controller selects the ones the flow needs.
     mcp_known = {*registered_tools(), "ask_user", "load_skill"}
-    mcp_needed = _mcp_needed_names(loaded.compiled)
+    mcp_tool_ids, mcp_grants = _mcp_needed_names(loaded.compiled)
     mcp_servers: Dict[str, McpServer] = {}
-    if mcp_needed - mcp_known:
+    if (mcp_tool_ids | mcp_grants) - mcp_known:
         with warnings.catch_warnings(record=True) as config_warnings:
             warnings.simplefilter("always")
             try:
@@ -1955,7 +1964,7 @@ def run(
             render(lambda: err_console.print(Text(message, style="yellow"), soft_wrap=True))
 
         return _open_mcp_servers(
-            mcp_servers, mcp_needed, mcp_known, stop_event=stop_event, warn=warn
+            mcp_servers, mcp_tool_ids, mcp_grants, mcp_known, stop_event=stop_event, warn=warn
         )
 
     # The "what am I running" banner (flow name/description/version) — stderr, like

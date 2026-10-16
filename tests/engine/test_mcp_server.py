@@ -269,6 +269,38 @@ def test_close_from_another_thread_during_open_fails_the_open(tmp_path):
     assert not child_alive(int(marker.read_text()))
 
 
+def test_a_close_leaves_alone_a_connection_opened_while_it_waited(tmp_path):
+    server = _server("--only", "echo")
+    server.open()
+    joined = server._thread
+    newer = SimpleNamespace(is_alive=lambda: True)
+    newer_stderr = (tmp_path / "stderr").open("w+")
+
+    class _Joined:
+        """Stand in for the server thread; while close() joins it, another thread
+        closes the server and opens it again."""
+
+        def is_alive(self):
+            return joined.is_alive()
+
+        def join(self, timeout=None):
+            joined.join(timeout)
+            server._stderr.close()
+            server._thread, server._stderr, server._owner = newer, newer_stderr, "host"
+
+    server._thread = _Joined()
+    try:
+        server.close()
+
+        assert server._thread is newer
+        assert server._stderr is newer_stderr and not newer_stderr.closed
+        assert server._owner == "host"
+    finally:
+        newer_stderr.close()
+        server._thread = server._stderr = server._owner = None
+    assert mcp_threads() == []
+
+
 def test_open_without_the_sdk_names_the_extra(monkeypatch):
     import importlib
 

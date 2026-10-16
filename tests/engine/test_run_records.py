@@ -17,6 +17,7 @@ from yian.runtime.log import (
     NodeFailedRecord,
     NodeRoutedRecord,
     NodeStartedRecord,
+    NodeStepRecord,
     NodeSucceededRecord,
     RecordEnvelope,
     RunLog,
@@ -235,6 +236,7 @@ def _records():
         ),
         RunResumedRecord(retry_node_ids=("slow", "later"), num_workers=4),
         NodeStartedRecord(node_id="agent"),
+        NodeStepRecord(node_id="agent", step={"event": "started", "attempt": 2}),
         NodeSucceededRecord(
             node_id="agent",
             commit_target="agent",

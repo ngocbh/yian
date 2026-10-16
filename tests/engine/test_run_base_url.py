@@ -397,7 +397,7 @@ def test_memories_take_a_keyless_azure_endpoint(tmp_path):
     assert ReflectiveMemory(dict(config))._llm_config == config
     profile = ProfileMemory(FileMarkdownStore(tmp_path / "ada.md"), llm_config=dict(config))
     assert profile._llm_config == config
-    assert (profile._api_key, profile._base_url) == (None, None)
+    assert (profile._host.api_key, profile._host.base_url) == (None, None)
 
 
 # --- resume and backward reuse the recorded base_url ------------------------- #

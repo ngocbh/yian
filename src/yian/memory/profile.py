@@ -8,6 +8,7 @@ document from that run's feedback. Commits are compare-and-set writes to a
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 from threading import Lock
@@ -135,7 +136,8 @@ class ProfileMemory:
                 it authenticates the learner, is kept as a `SecretStr`, and is
                 never recorded. A ``base_url`` entry needs ``api_key`` and is
                 where the learner sends it; for ``provider: azure`` it is the
-                required resource endpoint and needs no key.
+                required resource endpoint and needs no key. ``organization``,
+                ``project`` and ``headers`` entries need ``api_key`` and go with it.
             max_chars (`int | None`, *optional*, defaults to `None`): Largest
                 document the learner may write. `None` uses `YIAN_PROFILE_MAX_CHARS`
                 (32,000, about 8k tokens). Host writes are not bounded.
@@ -148,8 +150,8 @@ class ProfileMemory:
                 a dict.
             `ValueError`: A budget is not a positive integer, ``api_key`` is
                 empty or lacks ``provider``, a non-Azure ``base_url`` lacks
-                ``api_key``, an Azure ``api_key`` lacks ``base_url``, or
-                ``base_url`` is not an allowed URL.
+                ``api_key``, an Azure ``api_key`` lacks ``base_url``, a connection
+                setting lacks ``api_key``, or ``base_url`` or a setting is not allowed.
             `DefaultsError`: A budget is `None` and a `YIAN_` variable holds a
                 value it does not accept.
         """
@@ -166,7 +168,7 @@ class ProfileMemory:
                 raise ValueError(f"{name} must be a positive integer")
         self._store = store
         self._llm_config = dict(llm_config or {})
-        self._api_key, self._base_url = pop_host_credentials(self._llm_config)
+        self._host = pop_host_credentials(self._llm_config)
         self.max_chars = max_chars
         self.input_budget_chars = input_budget_chars
         self._closed = False
@@ -359,10 +361,10 @@ class _ProfileSession:
         messages = [SystemMessage(content=_SYSTEM),
                     HumanMessage(content=self._material(context, current_text, current_version))]
         config = dict(memory._llm_config)
-        if memory._api_key is not None:
-            config["api_key"] = memory._api_key
-        if memory._base_url is not None:
-            config["base_url"] = memory._base_url
+        for field in dataclasses.fields(memory._host):
+            value = getattr(memory._host, field.name)
+            if value is not None:
+                config[field.name] = value
         try:
             model = model_from_config(resolve_model_config(config))
         except Exception as exc:

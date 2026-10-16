@@ -571,9 +571,11 @@ def _run_flow_controlled(
     retained_program = copy.deepcopy(private_flow) if learnable else None
 
     # The key stays out of the cascade so RunStarted never records it. Its
-    # base_url stays out too, so no authored layer can pair the key with another.
+    # base_url and connection settings stay out too, so no authored layer can pair
+    # the key with another.
     run_llm_config = dict(llm_config or {})
-    api_key, base_url = pop_host_credentials(run_llm_config)
+    host = pop_host_credentials(run_llm_config)
+    api_key, base_url = host.api_key, host.base_url
 
     # One selection snapshot determines every static agent before RunStarted.
     snapshot = connection_snapshot()

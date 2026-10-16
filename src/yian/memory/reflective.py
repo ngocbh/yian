@@ -612,9 +612,10 @@ class ReflectiveMemory:
                 settings for new sessions, filled from ambient defaults when absent.
                 Recorded sessions retain their exact pinned model configuration.
                 ``api_key`` is rejected, so the learner always authenticates with
-                environment or saved-connection credentials. ``base_url`` is
-                accepted only beside ``provider: azure``, as the resource
-                endpoint.
+                environment or saved-connection credentials; ``organization``,
+                ``project`` and ``headers``, which go with a key, are rejected too.
+                ``base_url`` is accepted only beside ``provider: azure``, as the
+                resource endpoint.
             max_items (`int | None`, defaults to `None`): Maximum retained
                 lessons. None adopts the stored or snapshot value, else
                 `YIAN_REFLECTIVE_MAX_ITEMS` (100).
@@ -642,6 +643,14 @@ class ReflectiveMemory:
         raw_config = (
             {} if llm_config is None else _copy_json_object(llm_config, "llm_config")
         )
+        for field in ("organization", "project", "headers"):
+            # Checked before validation, which would otherwise ask for an api_key
+            # that this backend refuses too.
+            if field in raw_config:
+                raise ValueError(
+                    f"llm_config.{field} is not supported by reflective memory, which "
+                    "records its model configuration"
+                )
         validated = LLMConfig.model_validate(raw_config, strict=True)
         if validated.api_key is not None:
             # Snapshots record this config; a key would be dropped or persisted.

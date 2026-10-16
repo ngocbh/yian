@@ -12,7 +12,12 @@ from langchain_core.messages import HumanMessage
 from pydantic import ValidationError
 
 from yian.llm_clients.auth import AuthStore, OAuthCredentials
-from yian.llm_clients.config import LLMConfig, host_only_field_error, pop_host_credentials
+from yian.llm_clients.config import (
+    HostConnection,
+    LLMConfig,
+    host_only_field_error,
+    pop_host_credentials,
+)
 from yian.llm_clients.connection import (
     check_model_config,
     resolve_model_config,
@@ -182,28 +187,28 @@ def test_azure_config_without_base_url_fails_the_model_check():
 
 def test_pop_host_credentials_takes_the_url_only_with_the_layers_key():
     layer = {"provider": "openai", "model": "gpt-5.4", "base_url": AZURE_V1, "api_key": SENTINEL}
-    key, url = pop_host_credentials(layer)
-    assert (key.get_secret_value(), url) == (SENTINEL, AZURE_V1)
+    host = pop_host_credentials(layer)
+    assert (host.api_key.get_secret_value(), host.base_url) == (SENTINEL, AZURE_V1)
     assert layer == {"provider": "openai", "model": "gpt-5.4"}
-    key, url = pop_host_credentials({"provider": "openai", "api_key": SENTINEL})
-    assert (key.get_secret_value(), url) == (SENTINEL, None)
-    assert pop_host_credentials({"provider": "openai"}) == (None, None)
+    host = pop_host_credentials({"provider": "openai", "api_key": SENTINEL})
+    assert (host.api_key.get_secret_value(), host.base_url) == (SENTINEL, None)
+    assert pop_host_credentials({"provider": "openai"}) == HostConnection()
 
     with pytest.raises(ValueError, match="api_key"):
         pop_host_credentials({"provider": "openai", "base_url": AZURE_V1})
 
     # Without a host key, an Azure endpoint is an ordinary layer setting.
     layer = {"provider": "azure", "model": "gpt-4o", "base_url": AZURE_RESOURCE}
-    assert pop_host_credentials(layer) == (None, None)
+    assert pop_host_credentials(layer) == HostConnection()
     assert layer == {"provider": "azure", "model": "gpt-4o", "base_url": AZURE_RESOURCE}
     # A host Azure key never goes to an endpoint another layer names.
     with pytest.raises(ValueError, match="base_url") as caught:
         pop_host_credentials({"provider": "azure", "model": "gpt-4o", "api_key": SENTINEL})
     assert SENTINEL not in str(caught.value)
-    key, url = pop_host_credentials(
+    host = pop_host_credentials(
         {"provider": "azure", "base_url": AZURE_RESOURCE, "api_key": SENTINEL}
     )
-    assert (key.get_secret_value(), url) == (SENTINEL, AZURE_RESOURCE)
+    assert (host.api_key.get_secret_value(), host.base_url) == (SENTINEL, AZURE_RESOURCE)
 
     unsafe = {"provider": "openai", "base_url": "http://gateway.example.com", "api_key": SENTINEL}
     with pytest.raises(ValueError, match="https") as caught:

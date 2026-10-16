@@ -239,19 +239,22 @@ def _declared_fields(typ: Type) -> set[str]:
     return names
 
 
-def _check_llm_config_value(
+def check_llm_config_value(
     cfg: ValueTemplate | Binding,
     prefix: str,
     source_range: SourceRange | None,
     diagnostics: LoadDiagnostics,
     field_ranges: Mapping[str, SourceRange],
+    *,
+    allow_inherit: bool = True,
 ) -> tuple[ValueTemplate | Binding, bool]:
     """Check an `llm_config` layer holding values, and split off its literal `inherit`.
 
     Fields that only the host sets may not appear, from a value or not, and a
     whole-record type may not declare them; ``base_url`` beside a literal
     ``provider: azure`` must itself be literal. ``inherit`` must be a literal boolean.
-    The literal top-level fields are checked as `LLMConfig` fields.
+    The literal top-level fields are checked as `LLMConfig` fields, and the literal
+    parts of a provider block holding values against that block.
 
     Args:
         cfg (`ValueTemplate | Binding`): The layer, or the whole-record value.
@@ -260,6 +263,8 @@ def _check_llm_config_value(
         diagnostics (`LoadDiagnostics`): Factory for located load errors.
         field_ranges (`Mapping[str, SourceRange]`): Value range of each key written
             in the layer, by dotted path.
+        allow_inherit (`bool`, *optional*, defaults to `True`): Whether the layer may
+            set ``inherit`` (an AGENT's own layer); elsewhere it is an unknown field.
 
     Returns:
         `tuple[ValueTemplate | Binding, bool]`: The layer without ``inherit``, then
@@ -286,7 +291,7 @@ def _check_llm_config_value(
         return field_ranges.get(path) or source_range
 
     inherit = True
-    if "inherit" in tree:
+    if allow_inherit and "inherit" in tree:
         inherit = tree["inherit"]
         if _holds_value(inherit):
             raise diagnostics.error(
@@ -375,7 +380,7 @@ def _validate_llm_config(
     `temparature`). Returns `(config_without_inherit, inherit)`. Raises `LoadError` (not
     pydantic ValidationError) so the surface speaks one error type. A layer holding
     `${...}` values (a `ValueTemplate`, or a `Binding` for the whole record) is checked by
-    `_check_llm_config_value`; its values are checked when they resolve.
+    `check_llm_config_value`; its values are checked when they resolve.
 
     Module-local to `agent.py`: agent is the only kind with an `llm_config:` field, so the
     validator lives next to its sole caller rather than in shared machinery.
@@ -406,7 +411,7 @@ def _validate_llm_config(
     if cfg is None:
         return {}, True
     if isinstance(cfg, (ValueTemplate, Binding)):
-        return _check_llm_config_value(
+        return check_llm_config_value(
             cfg, prefix, source_range, diagnostics, field_ranges or {}
         )
     if not isinstance(cfg, Mapping):

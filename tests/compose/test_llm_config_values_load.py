@@ -371,3 +371,110 @@ def test_a_literal_composer_layer_is_unchanged():
     agent = _composer(_ask("        provider: openai\n        model: gpt-x\n"))
     assert type(agent.own_llm_config) is dict
     assert agent.llm_config == {"provider": "openai", "model": "gpt-x"}
+
+
+def _flow_layer(flow_lines: str, *, typedefs: str = "") -> str:
+    """Return a flow with the flow-level lines `flow_lines` and one agent `a`."""
+    return f"id: f\nname: f\n{typedefs}{_INPUTS}{flow_lines}" + (
+        "nodes:\n  a: {kind: agent, prompt: Go.}\noutput: ${a.output}\n"
+    )
+
+
+def _def_layer(def_lines: str) -> str:
+    """Return a flow calling `sub`, a def whose body has the lines `def_lines` (indented 4)."""
+    return f"""\
+id: f
+name: f
+defs:
+  sub:
+    input: {{m: !str , cfg: !object }}
+{def_lines}    nodes:
+      a: {{kind: agent, prompt: Go.}}
+    output: ${{a.output}}
+nodes:
+  s: {{kind: call, call: sub, input: {{m: x, cfg: {{}}}}}}
+output: ${{s.output}}
+"""
+
+
+def _def_child(text: str):
+    (child,) = load_flow(text, source_label="f.yaml").compiled.nodes["s"].origin_children()
+    return child
+
+
+def test_a_flow_field_value_loads_as_a_template():
+    flow = load_flow(_flow_layer("llm_config: {model: '${input.m}'}\n"))
+    assert flow.compiled.flow_llm_config == ValueTemplate(
+        {"model": "${input.m}"}, flow.compiled.flow_llm_config.origins
+    )
+
+
+def test_a_flow_whole_record_value_loads_as_a_binding():
+    text = _flow_layer("llm_config: ${input.cfg}\n")
+    flow = load_flow(text, source_label="f.yaml")
+    layer = flow.compiled.flow_llm_config
+    assert isinstance(layer, Binding)
+    assert layer.source == "${input.cfg}"
+    frame = flow.origin_resolver.resolve(layer.origin)
+    assert frame.range.start_line == _line_of(text, "llm_config:")
+
+
+def test_a_flow_tag_is_read_and_consumed():
+    flow = load_flow(_flow_layer("llm_config: {model: !str '${input.m}'}\n"))
+    binding = flow.compiled.flow_llm_config.value["model"]
+    assert isinstance(binding, Binding)
+    assert binding.contract.type.kind.value == "str"
+
+
+def test_a_tag_on_a_typedef_still_fails_beside_a_flow_value():
+    typedefs = "typedefs:\n  Cfg:\n    model: !str str\n"
+    text = _flow_layer("llm_config: {model: !str '${input.m}'}\n", typedefs=typedefs)
+    error = _load_error(text)
+    assert "typedef 'Cfg': a type definition is written as a type" in str(error)
+
+
+def test_a_flow_excluded_field_from_a_value_fails_at_the_field():
+    text = _flow_layer("llm_config:\n  provider: openai\n  api_key: ${input.u}\n")
+    error = _load_error(text)
+    assert str(error.diagnostic.message).startswith(
+        "flow: llm_config.api_key is a host credential"
+    )
+    assert _line(error) == _line_of(text, "api_key:")
+
+
+@pytest.mark.parametrize("value", ["false", "${input.i}"])
+def test_inherit_at_flow_level_still_fails(value):
+    text = _flow_layer(f"llm_config:\n  model: ${{input.m}}\n  inherit: {value}\n")
+    error = _load_error(text)
+    assert "flow: llm_config:" in str(error)
+    assert "inherit" in str(error)
+
+
+def test_a_literal_flow_layer_is_still_a_plain_dict():
+    flow = load_flow(_flow_layer("llm_config: {provider: openai, model: \"a$$b\"}\n"))
+    assert flow.compiled.flow_llm_config == {"provider": "openai", "model": "a$b"}
+    assert type(flow.compiled.flow_llm_config) is dict
+
+
+def test_a_def_field_value_loads_as_a_template():
+    child = _def_child(_def_layer("    llm_config: {model: '${input.m}'}\n"))
+    assert isinstance(child.flow_llm_config, ValueTemplate)
+    assert child.flow_llm_config.value == {"model": "${input.m}"}
+
+
+def test_a_def_whole_record_value_loads_as_a_binding():
+    child = _def_child(_def_layer("    llm_config: !object ${input.cfg}\n"))
+    assert isinstance(child.flow_llm_config, Binding)
+    assert child.flow_llm_config.contract.type.kind.value == "object"
+
+
+def test_a_def_excluded_field_from_a_value_fails_at_the_field():
+    text = _def_layer("    llm_config: {provider: openai, project: '${input.m}'}\n")
+    error = _load_error(text)
+    assert "defs entry 'sub': llm_config.project goes wherever" in str(error)
+    assert _line(error) == _line_of(text, "llm_config:")
+
+
+def test_a_literal_def_layer_is_still_a_plain_dict():
+    child = _def_child(_def_layer("    llm_config: {model: m}\n"))
+    assert child.flow_llm_config == {"model": "m"}

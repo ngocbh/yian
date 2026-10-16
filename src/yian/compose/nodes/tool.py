@@ -25,22 +25,23 @@ from yian.nodes.tool import ToolNode
 class ToolDescriptor(NodeDescriptor):
     """kind=tool — a direct, deterministic call to one tool in the run's `ToolSet`.
 
-    Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env` +
-    the Compose-only `range`/`field_ranges` parse metadata), the normalized `inputs` binding
-    carrier, the optional normalized `outputs` declaration, and the template `parse` from
-    `NodeDescriptor`; its `_validate_fields` hook rejects a `tool_id:` YAML read as non-text
-    (including `null`) and a `retries:` that is not a non-negative integer, then runs the base
-    `input:` shape and asserts checks. Only the tool-specific fields (`tool_id`, `retries`,
-    `asserts`) are declared here; a tool's authored `input:`
-    is stored in the base's `inputs` map, the same binding surface every value-shaped leaf
-    kind uses.
+    Inherits the common descriptor fields (`id`/`node_name`/`depends_on`/`runs_after`/`env`,
+    plus the Compose-only `range`/`field_ranges` parse metadata), the normalized `inputs`
+    binding carrier, the optional normalized `outputs` declaration, and the template `parse`
+    from `NodeDescriptor`; its `_validate_fields` hook rejects a `tool_id:` YAML read as
+    non-text (including `null`) and a `retries:` that is not a non-negative integer, then
+    runs the base `input:` shape and asserts checks. Only the tool-specific fields
+    (`tool_id`, `retries`, `asserts`) are declared here; a tool's authored `input:` is
+    stored in the base's `inputs` map, the same binding surface every value-shaped leaf kind
+    uses.
 
     `output:` is optional. When present it becomes the node's output contract, and the
     engine validates the tool's return value against it on every call.
 
     Class attrs: `kind="tool"`; `allowed` adds `tool_id`, normalized `inputs`/`outputs`,
-    `retries`, and `asserts` to the commons; `required` is `{"tool_id"}`; `binding_fields=("inputs",)` — a
-    tool's input map is its sink-binding surface, walked kind-blind by `bindings.py`.
+    `retries`, and `asserts` to the commons; `required` is `{"tool_id"}`;
+    `binding_fields=("inputs",)` — a tool's input map is its sink-binding surface, walked
+    kind-blind by `bindings.py`.
     """
 
     kind = "tool"

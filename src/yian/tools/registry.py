@@ -737,6 +737,34 @@ class ToolSet:
         """
         return [self._get(tool_id) for tool_id in tool_ids]
 
+    def validate(self, tool_id: str, inputs: dict[str, Any]) -> None:
+        """Check one call's public arguments as `invoke` does, without calling the tool.
+
+        A caller that retries a call checks its arguments once up front, so a bad
+        argument fails before the first attempt instead of inside the retries.
+
+        Args:
+            tool_id (`str`):
+                The id of the tool the call is for.
+            inputs (`dict[str, Any]`):
+                Public arguments keyed by parameter name.
+
+        Raises:
+            `ValueError`:
+                The id is not visible to this run, an argument is not public, a
+                required argument is missing, or a value doesn't fit its parameter.
+            `TypeError`:
+                The tool's argument schema is not one yian can check.
+
+        Example:
+            ```python
+            tools = ToolSet({"weather": lookup})
+            tools.validate("weather", {"city": "Paris"})  # passes; lookup is not called
+            tools.validate("weather", {"town": "Paris"})  # raises ValueError
+            ```
+        """
+        _validate_invocation(tool_id, self._get(tool_id), dict(inputs), trusted=False)
+
     def invoke(
         self,
         tool_id: str,

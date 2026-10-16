@@ -153,9 +153,10 @@ def test_a_tools_mapping_hides_the_global_registry():
     flow = load_flow(_GLOBAL_TOOL_FLOW)
 
     assert run_flow(flow, {}).output == "global"
-    hidden = run_flow(flow, {}, tools={})
-    assert hidden.status == "failed"
-    assert "unknown tool id 'run_flow_global_probe'" in hidden.failure.message
+    with pytest.raises(ValueError, match=re.escape(
+        "names tool 'run_flow_global_probe', which isn't in this run's tools; known tools: []"
+    )):
+        run_flow(flow, {}, tools={})
 
 
 def test_concurrent_runs_never_see_each_others_tools_or_handler():

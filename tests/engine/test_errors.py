@@ -305,7 +305,6 @@ def test_inline_code_construction_errors_carry_ranges(filename, line):
         ("e20-code-raises.yaml", {"topic": "X"}, "intentional CODE failure"),
         ("e21-code-wrong-type.yaml", {"topic": "X"}, "int"),
         ("e22-required-missing.yaml", {}, "as_of is required"),
-        ("e23-unknown-tool.yaml", {"topic": "X"}, "unknown tool"),
         # e07 — the AGENT-form `:?`: binding (where `:?` fires) runs before the model
         # is built, so an omitted required ref fails the run with no LLM creds needed.
         ("e07-required-missing.yaml", {"topic": "X"}, "as_of is required"),
@@ -325,6 +324,17 @@ def test_runtime_error_gallery(filename, inputs, substr):
     assert result.status == "failed"
     assert result.failure is not None
     assert substr in result.failure.message
+
+
+def test_e23_unknown_tool_fails_at_run_start(tmp_path):
+    path = tmp_path / "run.jsonl"
+    flow = load_flow((_ERRORS / "e23-unknown-tool.yaml").read_text())
+
+    with pytest.raises(ValueError, match=re.escape(
+        "TOOL node 'fetch' names tool 'nonesuch_tool', which isn't in this run's tools"
+    )):
+        run_flow(flow, {"topic": "X"}, log=path, tools={})
+    assert not path.exists()
 
 
 def test_flow_input_type_failure_origin_resolves_to_declaration():

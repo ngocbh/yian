@@ -1,4 +1,5 @@
-# e23 — a TOOL node referencing an unknown tool id. RUNTIME: not in TOOL_REGISTRY.
+# e23 — a TOOL node referencing an unknown tool id. RUN START: run_flow raises ValueError
+# before any log exists, since the run's tools have no such id.
 id: err-unknown-tool
 name: err_unknown_tool
 input:
@@ -6,7 +7,7 @@ input:
 nodes:
   fetch:
     kind: tool
-    tool_id: nonesuch_tool       # ERROR at run: no such registered tool
+    tool_id: nonesuch_tool       # ERROR at run start: no such tool
     input:
       topic: ${input.topic}
 output: ${fetch.output}

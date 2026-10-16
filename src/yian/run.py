@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import copy
+import difflib
 from dataclasses import dataclass, field
 import os
 from pathlib import Path
@@ -54,6 +55,7 @@ from yian.compile.memory_layout import (
 )
 from yian.compile.model import CompiledFlow
 from yian.compile.validation import type_relation
+from yian.compose.helpers.tags import CLOSE_MATCH_CUTOFF
 from yian.compose.loader import ComposedFlow
 from yian.compose.nodes.resolver import child_signature
 from yian.defaults import check_recorded, current
@@ -927,11 +929,12 @@ def _resume_flow_controlled(
 
 
 def _check_tool_grants(flow: CompiledFlow, tools: ToolSet) -> None:
-    """Prove every static AGENT grant names a tool or tool group this run supplies.
+    """Prove every static AGENT grant and TOOL `tool_id` names a tool this run supplies.
 
-    Runs before any record is written and covers every static node, including
-    nodes that may never run, so an unresolvable grant raises `ValueError` from
-    `run_flow` or `resume_flow` instead of failing its node when the node starts.
+    An AGENT grant may name a tool group; a TOOL node must name one tool. Runs
+    before any record is written and covers every static node, including nodes
+    that may never run, so an unresolvable id raises `ValueError` from `run_flow`
+    or `resume_flow` instead of failing its node when the node starts.
     """
     for node_id, node in _static_nodes(flow):
         for tool_id in tools.expand(list(node.granted_tools())):
@@ -946,6 +949,25 @@ def _check_tool_grants(flow: CompiledFlow, tools: ToolSet) -> None:
                         f"{list(tools.groups)}"
                     )
                 raise ValueError(f"AGENT node {node_id!r} grants {reason}") from None
+        call = node.host_tool_call()
+        if call is None:
+            continue
+        try:
+            tools.resolve([call.tool_id])
+        except ValueError as exc:
+            if call.tool_id == "ask_user" or call.tool_id in tools.groups:
+                reason = f"{call.tool_id!r}: {exc}"
+            else:
+                reason = (
+                    f"tool {call.tool_id!r}, which isn't in this run's tools; "
+                    f"known tools: {list(tools.tool_ids)}"
+                )
+                close = difflib.get_close_matches(
+                    call.tool_id, tools.tool_ids, n=1, cutoff=CLOSE_MATCH_CUTOFF
+                )
+                if close:
+                    reason += f"; did you mean {close[0]!r}?"
+            raise ValueError(f"TOOL node {node_id!r} names {reason}") from None
 
 
 def _check_conditions(flow: CompiledFlow) -> None:
@@ -1016,8 +1038,7 @@ def _check_tool_types(flow: CompiledFlow, tools: ToolSet) -> None:
     """Prove every static TOOL node's inputs and output agree with its tool's types.
 
     Runs before any record is written and covers every static node, including
-    nodes that may never run. A node whose tool this run cannot resolve is
-    skipped; it fails when it runs.
+    nodes that may never run.
 
     Args:
         flow (`CompiledFlow`):
@@ -1035,10 +1056,7 @@ def _check_tool_types(flow: CompiledFlow, tools: ToolSet) -> None:
         call = node.host_tool_call()
         if call is None:
             continue
-        try:
-            tool = tools.resolve([call.tool_id])[0]
-        except ValueError:
-            continue
+        tool = tools.resolve([call.tool_id])[0]
         declared = tool_types(tool)
         if declared.inputs is not None:
             _check_tool_inputs(node_id, call, declared.inputs, declared.required)

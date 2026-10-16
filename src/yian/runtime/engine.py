@@ -78,9 +78,34 @@ class _RecordedStep:
     """
 
     node_id: str
-    step: Any
+    step: dict[str, Any]
     done: threading.Event = field(default_factory=threading.Event)
     error: list[Exception] = field(default_factory=list)
+
+
+class _StepRecorder:
+    """Record one start's node steps until its evaluation ends.
+
+    A call after ``close`` raises a capability fault without reaching the log or the
+    dispatcher queue, so a node that keeps its ``NodeSteps`` cannot write later.
+    """
+
+    __slots__ = ("_commit", "_closed")
+
+    def __init__(self, commit: Callable[[dict[str, Any]], None]) -> None:
+        """Wrap the serial or pooled commit for one start."""
+        self._commit = commit
+        self._closed = False
+
+    def __call__(self, step: dict[str, Any]) -> None:
+        """Commit one step, or raise a capability fault once the evaluation has ended."""
+        if self._closed:
+            raise _CapabilityFault(RuntimeError("node steps capability is closed"))
+        self._commit(step)
+
+    def close(self) -> None:
+        """End the capability; every later call fails."""
+        self._closed = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,8 +127,9 @@ class FlowEngine:
     reducer plan applied.  The optional event callback sees the same observers first;
     stream chunks are callback-only and never durable or yielded. Optional memory context is
     one source-neutral callback; evidence capture follows only recorded ``RunState.learnable``.
-    Each start gets a ``NodeSteps`` snapshot; a node declaring ``needs_steps`` records its
-    steps through the dispatcher, which appends and applies each one without an observer.
+    A node declaring ``needs_steps`` gets a ``NodeSteps`` snapshot taken on the dispatcher
+    right after its start; it records steps through the dispatcher, which appends and applies
+    each one without an observer, and its recorder closes when the evaluation ends.
     """
 
     def __init__(
@@ -217,7 +243,7 @@ class FlowEngine:
                 node_id = self.state.ready[0]
                 observers = self._commit_started(node_id)
                 invocation = ConversationInvocation(self.state.run_id, self.state.accepted_starts[node_id])
-                steps = self._node_steps(node_id, self._serial_recorder(node_id))
+                steps = self._node_steps(node_id, self._serial_commit(node_id))
                 yield from self._publish(observers)
                 self._raise_if_stopped()
 
@@ -260,7 +286,7 @@ class FlowEngine:
                     node_id = self.state.ready[0]
                     observers = self._commit_started(node_id)
                     invocation = ConversationInvocation(self.state.run_id, self.state.accepted_starts[node_id])
-                    steps = self._node_steps(node_id, self._pooled_recorder(node_id, messages))
+                    steps = self._node_steps(node_id, self._pooled_commit(node_id, messages))
                     yield from self._publish(observers)
                     self._raise_if_stopped()
 
@@ -345,33 +371,39 @@ class FlowEngine:
         return commit_prepared(self.log, self.state, prepared)
 
     def _node_steps(
-        self, node_id: str, record: Callable[[dict[str, Any]], None],
-    ) -> NodeSteps:
-        """Snapshot one accepted start's steps capability on the dispatcher thread."""
+        self, node_id: str, commit: Callable[[dict[str, Any]], None],
+    ) -> NodeSteps | None:
+        """Snapshot one accepted start's steps capability on the dispatcher thread.
+
+        Returns ``None`` for a node that does not declare ``needs_steps``.
+        """
+        if self.state.flow.nodes[node_id].needs_steps is not True:
+            return None
         return NodeSteps(
             starts=self.state.node_starts[node_id],
             prior=deepcopy(self.state.node_steps.get(node_id, ())),
-            record=record,
+            record=_StepRecorder(commit),
         )
 
-    def _serial_recorder(self, node_id: str) -> Callable[[dict[str, Any]], None]:
-        """Return a recorder that commits each step inline on the dispatcher thread."""
+    def _serial_commit(self, node_id: str) -> Callable[[dict[str, Any]], None]:
+        """Return a commit that appends each step inline on the dispatcher thread."""
 
-        def record(step: dict[str, Any]) -> None:
-            """Append and apply one step, carrying any fault out as a host fault."""
+        def commit(step: dict[str, Any]) -> None:
+            """Append and apply one step unless the run is stopping; faults are host faults."""
+            self._raise_if_stopped()
             try:
                 commit_prepared(self.log, self.state, prepare_node_step(self.state, node_id, step))
             except Exception as exc:
                 raise _CapabilityFault(exc) from exc
 
-        return record
+        return commit
 
-    def _pooled_recorder(
+    def _pooled_commit(
         self, node_id: str, messages: queue.Queue,
     ) -> Callable[[dict[str, Any]], None]:
-        """Return a worker-side recorder that waits for the dispatcher to commit each step."""
+        """Return a worker-side commit that waits for the dispatcher to append each step."""
 
-        def record(step: dict[str, Any]) -> None:
+        def commit(step: dict[str, Any]) -> None:
             """Queue one step and block until it is applied or the run stops."""
             message = _RecordedStep(node_id, step)
             messages.put(message)
@@ -386,7 +418,7 @@ class FlowEngine:
                     f"the engine did not record the node step: {type(error).__name__}: {error}"
                 ))
 
-        return record
+        return commit
 
     def _commit_step(self, message: _RecordedStep) -> None:
         """Append and apply one worker's step, then release the waiting worker.
@@ -552,34 +584,42 @@ class FlowEngine:
         emit_event: Callable[[Any], None] | None = None,
         steps: NodeSteps | None = None,
     ) -> EvaluatedOutcome:
-        """Read and execute one already-started node without mutating run state."""
+        """Read and execute one already-started node without mutating run state.
+
+        ``steps`` is closed when the evaluation ends, however it ends.
+        """
         node = self.state.flow.nodes[node_id]
-        return eval_node(
-            node,
-            self.state.flow,
-            self.state.pool,
-            wiring_override=self.state.wiring_overrides.get(node_id),
-            stop_event=self.stop_event,
-            emit_stream=emit_stream,
-            emit_event=emit_event,
-            capture_evidence=self.state.learnable,
-            capture_bindings=self.state.learnable,
-            effective_llm_by_static_path=self.state.effective_llm_by_static_path,
-            source_resolver=None if self.state.trace is None else self.state.trace.resolve,
-            memory_context_opener=self.memory_context_opener,
-            memory_invocation=invocation,
-            tools=self.tools,
-            skills=self.skills,
-            steering=self.steering,
-            steps=steps,
-        )
+        try:
+            return eval_node(
+                node,
+                self.state.flow,
+                self.state.pool,
+                wiring_override=self.state.wiring_overrides.get(node_id),
+                stop_event=self.stop_event,
+                emit_stream=emit_stream,
+                emit_event=emit_event,
+                capture_evidence=self.state.learnable,
+                capture_bindings=self.state.learnable,
+                effective_llm_by_static_path=self.state.effective_llm_by_static_path,
+                source_resolver=None if self.state.trace is None else self.state.trace.resolve,
+                memory_context_opener=self.memory_context_opener,
+                memory_invocation=invocation,
+                tools=self.tools,
+                skills=self.skills,
+                steering=self.steering,
+                steps=steps,
+            )
+        finally:
+            if steps is not None:
+                # The engine built this recorder; a node that keeps it cannot write later.
+                steps.record.close()
 
     def _evaluate_worker(
         self,
         node_id: str,
         invocation: ConversationInvocation,
         messages: queue.Queue,
-        steps: NodeSteps,
+        steps: NodeSteps | None,
     ) -> EvaluatedOutcome:
         """Evaluate one claimed node, enqueueing its transient chunks, observers, and steps."""
         return self._evaluate(

@@ -1050,6 +1050,9 @@ class NodeSteps:
             Changing them does not change the run.
         record (`Callable[[dict[str, Any]], None]`):
             Appends one step durably and returns once the engine has applied it.
+            Call it from the node's own evaluation, one call at a time, before the
+            node returns; after the evaluation ends it raises. An exception from it
+            does not prove the step was not recorded: a stop can land mid-commit.
 
     Raises:
         `TypeError`:

@@ -427,21 +427,26 @@ def test_defaults_leaf_imports_only_stdlib() -> None:
 
 
 def _llm_leaf_violations(
-    source: str, package: tuple[str, ...] = ("yian", "llm")
+    source: str,
+    package: tuple[str, ...] = ("yian", "llm"),
+    filename: str = "<import-ratchet>",
 ) -> list[str]:
     """Check one ``yian.llm`` module through the shared import target scanner.
 
     Args:
         source (`str`): The module source to scan.
-        package (`tuple[str, ...]`): The module's ``__package__`` parts, which
-            relative imports resolve against.
+        package (`tuple[str, ...]`, *optional*, defaults to `("yian", "llm")`):
+            The module's ``__package__`` parts, which relative imports resolve
+            against.
+        filename (`str`, *optional*, defaults to `"<import-ratchet>"`): The
+            file name a syntax error reports.
 
     Returns:
         `list[str]`: One ``line: statement -> target`` entry per undeclared import.
     """
     leaves = ("httpx2", "yian.defaults", "yian.llm")
     targets = _parse_import_targets(
-        source, package=package, include_from_bases=False
+        source, package=package, filename=filename, include_from_bases=False
     )
     violations = []
     for line, target, statement in targets:
@@ -461,7 +466,7 @@ def test_llm_leaf_imports_only_declared_leaves() -> None:
         f"{path.relative_to(SOURCE_ROOT)}:{violation}"
         for path in sorted(root.rglob("*.py"))
         for violation in _llm_leaf_violations(
-            path.read_text(), package=_package_parts(path)
+            path.read_text(), package=_package_parts(path), filename=str(path)
         )
     ]
     assert not violations, (

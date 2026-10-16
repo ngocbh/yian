@@ -72,6 +72,7 @@ _DROPPED_RESPONSE_HEADERS = frozenset({"content-encoding", "content-length", "tr
 _CHUNK = re.compile(r".*?(?:\r\n\r\n|\n\n|\r\r)|.+", re.DOTALL)
 _MAX_DIFFS = 10
 
+_UNICODE_ESCAPE = re.compile(r"\\u([0-9A-Fa-f]{4})")
 _NOT_PRECEDED = r"(?<![A-Za-z0-9_\-])"
 _SECRET_PATTERNS = (
     ("openai_key", re.compile(_NOT_PRECEDED + r"sk-[A-Za-z0-9_\-]{16,}")),
@@ -94,7 +95,8 @@ def find_secrets(text: str) -> list[str]:
     """Find text shaped like an API key, a JWT or a bearer token.
 
     Each pattern must start at a word boundary, so text such as ``task-0123...`` is not
-    read as an ``sk-`` key. ``Bearer <redacted>`` is not flagged.
+    read as an ``sk-`` key. ``Bearer <redacted>`` is not flagged. ``\\uXXXX`` escapes
+    are decoded first, so a key a JSON encoder escaped (``\\u0073k-...``) is flagged.
 
     Args:
         text (`str`): The text to search, e.g. a cassette's JSON.
@@ -104,6 +106,7 @@ def find_secrets(text: str) -> list[str]:
             ``google_api_key``, ``jwt``, ``bearer_token``), never the matched values;
             empty when nothing matches.
     """
+    text = _UNICODE_ESCAPE.sub(lambda match: chr(int(match[1], 16)), text)
     return [kind for kind, pattern in _SECRET_PATTERNS for _ in pattern.finditer(text)]
 
 
@@ -383,7 +386,8 @@ class RecordingTransport(httpx2.BaseTransport):
         secrets (`Iterable[str]`, *optional*, defaults to `()`): Values to replace with
             `REDACTED` in the URL, header values, JSON body and response text, e.g. the
             API key in use; also caught percent-encoded, plus-encoded and, in response
-            text, with ``/`` JSON-escaped as ``\\/``.
+            text and request body strings, JSON-escaped (including ``\\/`` and
+            ``\\uXXXX`` escapes).
     """
 
     def __init__(self, inner: httpx2.BaseTransport, *, secrets: Iterable[str] = ()) -> None:
@@ -423,28 +427,47 @@ class RecordingTransport(httpx2.BaseTransport):
         Args:
             text (`str`): The text to redact.
             json_escaped (`bool`, *optional*, defaults to `False`): Also replace the
-                form with ``/`` escaped as ``\\/``, which a JSON reply may use.
+                forms a JSON string may hold: escaped as `json.dumps` writes it (with
+                or without ASCII escapes, and with ``/`` as ``\\/``) and with every
+                character as a ``\\uXXXX`` escape, its hex digits in either case.
 
         Returns:
             `str`: ``text`` with each secret replaced plain, percent-encoded (``%20``
             for a space, as in a path) and plus-encoded (``+``, as in a query).
         """
         for secret in self._secrets:
-            forms = [secret, quote(secret, safe=""), quote_plus(secret, safe="")]
+            forms = {secret, quote(secret, safe=""), quote_plus(secret, safe="")}
             if json_escaped:
-                forms.append(secret.replace("/", "\\/"))
-            for form in forms:
+                for escaped in (
+                    json.dumps(secret)[1:-1],
+                    json.dumps(secret, ensure_ascii=False)[1:-1],
+                ):
+                    forms.update((escaped, escaped.replace("/", "\\/")))
+                units = secret.encode("utf-16-be", errors="surrogatepass")
+                codes = [int.from_bytes(units[i : i + 2], "big") for i in range(0, len(units), 2)]
+                # Every character \u-escaped, its hex digits in either case.
+                escaped_all = "".join(f"\\\\u{code:04x}" for code in codes)
+                text = re.sub(escaped_all, REDACTED, text, flags=re.IGNORECASE)
+            # Longest first, so a form that contains a shorter one is replaced whole.
+            for form in sorted(forms, key=len, reverse=True):
                 text = text.replace(form, REDACTED)
         return text
 
     def _redact_json(self, value: Any) -> Any:
-        """Return ``value`` with secrets replaced in every string and key."""
+        """Return ``value`` with secrets replaced in every string and key.
+
+        JSON-escaped forms are replaced too, since a string may itself hold JSON, such
+        as a tool call's arguments.
+        """
         if isinstance(value, dict):
-            return {self._redact(key): self._redact_json(item) for key, item in value.items()}
+            return {
+                self._redact(key, json_escaped=True): self._redact_json(item)
+                for key, item in value.items()
+            }
         if isinstance(value, list):
             return [self._redact_json(item) for item in value]
         if isinstance(value, str):
-            return self._redact(value)
+            return self._redact(value, json_escaped=True)
         return value
 
     def _headers(self, headers: httpx2.Headers, dropped: frozenset[str]) -> dict[str, str]:

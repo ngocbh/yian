@@ -405,3 +405,25 @@ class TestOtherTypes:
         assert response.usage.reasoning_tokens is None
         assert response.response_id is None
         assert hash(usage) == hash(Usage(1, 2, 3, cache_read_tokens=1))
+
+    @pytest.mark.parametrize(
+        "kwargs, path",
+        [
+            ({"input_tokens": 1.0}, "input_tokens"),
+            ({"output_tokens": True}, "output_tokens"),
+            ({"total_tokens": None}, "total_tokens"),
+            ({"total_tokens": "3"}, "total_tokens"),
+            ({"cache_read_tokens": False}, "cache_read_tokens"),
+            ({"cache_creation_tokens": 1.5}, "cache_creation_tokens"),
+            ({"reasoning_tokens": "0"}, "reasoning_tokens"),
+        ],
+    )
+    def test_usage_rejects_non_int_counts(self, kwargs, path):
+        fields = {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3, **kwargs}
+        with pytest.raises(MessageFormatError) as info:
+            Usage(**fields)
+        assert info.value.path == path
+
+    def test_usage_allows_none_optional_counts(self):
+        usage = Usage(0, 0, 0, cache_creation_tokens=4, reasoning_tokens=None)
+        assert usage.cache_creation_tokens == 4

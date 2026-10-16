@@ -338,6 +338,50 @@ def test_recording_redacts_percent_plus_and_json_escaped_secrets():
         assert form not in saved
 
 
+def unicode_escaped(text, upper=False):
+    """Escape every character of ``text`` as ``\\uXXXX``."""
+    return "".join(f"\\u{ord(c):04X}" if upper else f"\\u{ord(c):04x}" for c in text)
+
+
+def test_recording_redacts_unicode_escaped_secrets():
+    quoted = 'pa"ss\\wörd-' + "y" * 16
+    escaped_key = unicode_escaped(KEY)
+    reply = (
+        '{"a": "' + escaped_key + '", "b": "' + unicode_escaped(KEY, upper=True) + '", '
+        + '"c": ' + json.dumps(quoted) + ', "d": ' + json.dumps(quoted, ensure_ascii=False) + "}"
+    )
+
+    def handler(request):
+        return httpx2.Response(200, headers={"content-type": "application/json"}, text=reply)
+
+    recorder = RecordingTransport(httpx2.MockTransport(handler), secrets=[KEY, quoted])
+    arguments = '{"key": "' + escaped_key + '", "other": ' + json.dumps(quoted) + "}"
+    with build_client(transport=recorder) as client:
+        assert client.post(f"{BASE}/responses", json={"arguments": arguments}).json() == {
+            "a": KEY, "b": KEY, "c": quoted, "d": quoted
+        }
+    cassette = recorder.cassette(description="escaped secrets")
+    [interaction] = cassette["interactions"]
+    request, response = interaction["request"], interaction["response"]
+
+    assert response["chunks"] == [
+        '{"a": "<redacted>", "b": "<redacted>", "c": "<redacted>", "d": "<redacted>"}'
+    ]
+    assert request["json"] == {"arguments": '{"key": "<redacted>", "other": "<redacted>"}'}
+    saved = "".join(response["chunks"]) + request["json"]["arguments"]
+    for secret in (KEY, quoted):
+        forms = (
+            secret,
+            json.dumps(secret)[1:-1],
+            json.dumps(secret, ensure_ascii=False)[1:-1],
+            unicode_escaped(secret),
+            unicode_escaped(secret, upper=True),
+        )
+        for form in forms:
+            assert form not in saved
+    assert find_secrets(json.dumps(cassette)) == []
+
+
 def test_closing_a_stream_early_records_what_was_read():
     body = Body([b"data: one\n\n", b"data: two\n\n"])
     inner = httpx2.MockTransport(lambda request: httpx2.Response(200, stream=body))
@@ -368,6 +412,19 @@ def test_closing_a_stream_early_records_what_was_read():
     ],
 )
 def test_find_secrets_flags_each_pattern(text):
+    assert find_secrets(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "key \\u0073\\u006b\\u002dproj-abcdefghijklmnop1234",
+        "key \\u0073\\u006B\\u002Dproj-abcdefghijklmnop1234",
+        "key " + unicode_escaped(KEY),
+        '{"key": "\\u0041IzaSyA1234567890abcdefghijklmnopqrstu"}',
+    ],
+)
+def test_find_secrets_flags_an_escaped_key(text):
     assert find_secrets(text)
 
 

@@ -195,6 +195,16 @@ def _check_type(value: Any, expected: type, path: str, *, optional: bool = False
         raise MessageFormatError(path, _UNPAIRED_SURROGATE)
 
 
+def _check_int(value: Any, path: str, *, optional: bool = False) -> None:
+    """Raise `MessageFormatError` unless `value` is an `int` but not a `bool`.
+
+    `None` passes when ``optional``.
+    """
+    if isinstance(value, bool):
+        raise MessageFormatError(path, "expected int, got bool")
+    _check_type(value, int, path, optional=optional)
+
+
 def _set_object(instance: Any, name: str, *, optional: bool = True) -> None:
     """Check a JSON-object field of a frozen dataclass and replace it with a deep copy."""
     value = getattr(instance, name)
@@ -546,6 +556,12 @@ class Usage:
     cache_read_tokens: int | None = None
     cache_creation_tokens: int | None = None
     reasoning_tokens: int | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("input_tokens", "output_tokens", "total_tokens"):
+            _check_int(getattr(self, name), name)
+        for name in ("cache_read_tokens", "cache_creation_tokens", "reasoning_tokens"):
+            _check_int(getattr(self, name), name, optional=True)
 
 
 @dataclass(frozen=True)

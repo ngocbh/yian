@@ -172,7 +172,7 @@ class TestStrictDecode:
         data["parts"][1]["text"] = 3
         assert error_path(data) == "parts[1].text"
 
-    def test_bool_is_not_str(self):
+    def test_is_error_must_be_bool(self):
         data = canonical()
         data["parts"][6]["is_error"] = "yes"
         assert error_path(data) == "parts[6].is_error"
@@ -293,6 +293,46 @@ class TestConstruction:
         with pytest.raises(MessageFormatError):
             ToolCallPart("c", "f", {"n": -100000})
 
+    @pytest.mark.parametrize("bad", ["\ud800", "a\udfffb", "\ude00\ud83d"])
+    def test_payload_string_with_unpaired_surrogate(self, bad):
+        with pytest.raises(MessageFormatError) as info:
+            TextPart("x", provider_payload={"a": ["ok", bad]})
+        assert info.value.path == "provider_payload.a[1]"
+        assert "unpaired surrogate" in info.value.reason
+        with pytest.raises(MessageFormatError) as info:
+            TextPart("x", provider_payload={bad: 1})
+        assert info.value.path == "provider_payload"
+        assert "unpaired surrogate" in info.value.reason
+
+    @pytest.mark.parametrize(
+        "make, path",
+        [
+            (lambda bad: TextPart(bad), "text"),
+            (lambda bad: MediaPart("image/png", url=bad), "url"),
+            (lambda bad: ToolCallPart("c", bad, {}), "name"),
+            (lambda bad: ToolResultPart("c", "f", bad), "content"),
+            (lambda bad: ReasoningPart(bad), "text"),
+            (lambda bad: Message("user", (), protocol=bad), "protocol"),
+            (lambda bad: ToolSpec("f", bad, {}), "description"),
+        ],
+    )
+    def test_str_field_with_unpaired_surrogate(self, make, path):
+        with pytest.raises(MessageFormatError) as info:
+            make("x\ud800")
+        assert info.value.path == path
+        assert "unpaired surrogate" in info.value.reason
+
+    def test_paired_surrogates_are_one_character(self):
+        assert TextPart("\U0001f600").text == "\U0001f600"
+
+    def test_path_in_a_large_value(self):
+        wide = {"k": [{"a": list(range(50))} for _ in range(2000)]}
+        TextPart("x", provider_payload=wide)
+        wide["k"][1999]["a"][49] = (1,)
+        with pytest.raises(MessageFormatError) as info:
+            TextPart("x", provider_payload=wide)
+        assert info.value.path == "provider_payload.k[1999].a[49]"
+
     def test_key_paths_quote_odd_keys(self):
         with pytest.raises(MessageFormatError) as info:
             TextPart("x", provider_payload={"a b": (1,)})
@@ -323,6 +363,41 @@ class TestOtherTypes:
         request = Request((), tools=[spec], tool_choice=NamedTool("f"))
         assert request.tools == (spec,)
         assert request.tool_choice == NamedTool("f")
+
+    def test_request_rejects_non_message(self):
+        message = Message("user", (TextPart("hi"),))
+        with pytest.raises(MessageFormatError) as info:
+            Request([message, {"role": "user"}])
+        assert info.value.path == "messages[1]"
+        with pytest.raises(MessageFormatError) as info:
+            Request(message)
+        assert info.value.path == "messages"
+
+    def test_request_rejects_non_tool_spec(self):
+        with pytest.raises(MessageFormatError) as info:
+            Request((), tools=[{"name": "f"}])
+        assert info.value.path == "tools[0]"
+        with pytest.raises(MessageFormatError) as info:
+            Request((), tools="f")
+        assert info.value.path == "tools"
+
+    @pytest.mark.parametrize("choice", ["auto", "required", "none", NamedTool("f"), None])
+    def test_request_accepts_tool_choice(self, choice):
+        assert Request((), tool_choice=choice).tool_choice == choice
+
+    @pytest.mark.parametrize("choice", ["any", "Auto", {"name": "f"}, 1, True])
+    def test_request_rejects_tool_choice(self, choice):
+        with pytest.raises(MessageFormatError) as info:
+            Request((), tool_choice=choice)
+        assert info.value.path == "tool_choice"
+
+    def test_response_message_must_be_assistant(self):
+        with pytest.raises(MessageFormatError) as info:
+            Response(Message("user", ()))
+        assert info.value.path == "message.role"
+        with pytest.raises(MessageFormatError) as info:
+            Response({"role": "assistant"})
+        assert info.value.path == "message"
 
     def test_response_and_usage(self):
         usage = Usage(1, 2, 3, cache_read_tokens=1)

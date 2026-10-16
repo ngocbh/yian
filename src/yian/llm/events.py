@@ -24,7 +24,7 @@ from yian.llm.messages import (
     TextPart,
     ToolCallPart,
     Usage,
-    _check_json,
+    check_json_value,
 )
 
 
@@ -138,8 +138,8 @@ def parse_arguments(text: str) -> tuple[dict | None, str | None]:
 
     An empty text is an empty object. Otherwise the text must be a JSON object with
     no ``NaN`` or ``Infinity``, no non-finite float, no int past
-    `current().max_int_digits` digits, nested at most `current().max_value_nesting`
-    levels.
+    `current().max_int_digits` digits, no unpaired surrogate in a string or key,
+    nested at most `current().max_value_nesting` levels.
 
     Args:
         text (`str`): The arguments text as the model sent it.
@@ -155,7 +155,7 @@ def parse_arguments(text: str) -> tuple[dict | None, str | None]:
         if not isinstance(value, dict):
             return None, text
         # Also refuses a float that overflowed to infinity, e.g. ``1e400``.
-        _check_json(value, "")
+        check_json_value(value, "")
     except (ValueError, RecursionError):
         return None, text
     return value, None
@@ -193,6 +193,8 @@ def collect(events: Iterable[Event]) -> Response:
     value and its arguments parsed by `parse_arguments`. The finish reason, response
     id, and the message's protocol and provider payload come from the last `Finish`;
     usage comes from the last `UsageReport`. A stream without `Finish` still collects.
+    When collecting fails, ``events`` is closed if it has a ``close`` method, so a
+    generator or `EventStream` releases its connection.
 
     Args:
         events (`Iterable[Event]`): The events, in stream order.
@@ -206,6 +208,17 @@ def collect(events: Iterable[Event]) -> Response:
             ``PROTOCOL``).
         `TypeError`: An item is not an event.
     """
+    try:
+        return _collect(events)
+    except BaseException:
+        close = getattr(events, "close", None)
+        if close is not None:
+            close()
+        raise
+
+
+def _collect(events: Iterable[Event]) -> Response:
+    """Assemble a reply as `collect` does, without closing ``events`` on failure."""
     done: dict[int, Part] = {}
     assemblies: dict[int, _Assembly] = {}
     usage: Usage | None = None
@@ -324,7 +337,10 @@ class ChatModel(Protocol):
         ...
 
     def generate(self, request: Request) -> Response:
-        """Make a call and return the whole reply, usually ``collect(self.stream(request))``.
+        """Make a call and return the whole reply.
+
+        Implementations collect inside ``with self.stream(request) as events:``, so the
+        connection is released however collecting ends.
 
         Args:
             request (`Request`): The call's input.

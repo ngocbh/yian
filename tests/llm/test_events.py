@@ -42,6 +42,13 @@ class TestParseArguments:
         assert parse_arguments('{"a": {"b": [1]}}') == ({"a": {"b": [1]}}, None)
         assert parse_arguments('{"a": {"b": [[1]]}}') == (None, '{"a": {"b": [[1]]}}')
 
+    @pytest.mark.parametrize("text", ['{"a": "\\ud800"}', '{"\\udfff": 1}', '{"a": "\ud800"}'])
+    def test_unpaired_surrogate_is_a_failure(self, text):
+        assert parse_arguments(text) == (None, text)
+
+    def test_escaped_surrogate_pair_parses(self):
+        assert parse_arguments('{"a": "\\ud83d\\ude00"}') == ({"a": "\U0001f600"}, None)
+
     def test_deep_brackets_without_recursion_error(self):
         text = "[" * 100_000
         assert parse_arguments(text) == (None, text)
@@ -124,6 +131,43 @@ class TestCollect:
             collect([ToolCallDelta(0, "c", None, "{}")])
         assert info.value.kind is ErrorKind.PROTOCOL
 
+    def test_non_event_raises_and_closes_the_input(self):
+        state = []
+
+        def events():
+            try:
+                yield TextDelta(0, "a")
+                yield "not an event"
+                yield TextDelta(0, "b")
+            finally:
+                state.append("closed")
+
+        # Held here so garbage collection cannot be what closes it.
+        stream = events()
+        with pytest.raises(TypeError, match="not a stream event: str"):
+            collect(stream)
+        assert state == ["closed"]
+
+    def test_failure_after_exhaustion_closes_the_input(self):
+        closes = []
+
+        class Events:
+            def __init__(self):
+                self._items = iter([ToolCallDelta(0, None, "f", "{}")])
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                return next(self._items)
+
+            def close(self):
+                closes.append(1)
+
+        with pytest.raises(ProviderError):
+            collect(Events())
+        assert closes == [1]
+
     def test_empty_stream(self):
         response = collect([])
         assert response.message == Message("assistant", ())
@@ -170,6 +214,21 @@ class TestEventStream:
         next(stream)
         stream.close()
         assert state == ["closed"]
+
+    def test_closes_when_the_inner_iterator_raises(self):
+        closes = []
+
+        def events():
+            yield TextDelta(0, "a")
+            raise ProviderError(ErrorKind.CONNECTION, "dropped")
+
+        stream = EventStream(events(), close=lambda: closes.append(1))
+        assert next(stream) == TextDelta(0, "a")
+        with pytest.raises(ProviderError, match="dropped"):
+            next(stream)
+        assert closes == [1]
+        assert list(stream) == []
+        assert closes == [1]
 
     def test_collect_reads_an_event_stream(self):
         stream = EventStream(iter([TextDelta(0, "a"), Finish("stop")]))

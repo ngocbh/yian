@@ -25,6 +25,11 @@ Role = Literal["system", "user", "assistant", "tool"]
 _ROLES = frozenset({"system", "user", "assistant", "tool"})
 _MESSAGE_KEYS = frozenset({"format", "role", "parts", "protocol", "provider_payload"})
 _PLAIN_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# A Python str never pairs surrogates, so any code point in this range is unpaired and
+# cannot be encoded as UTF-8 or sent as JSON.
+_SURROGATE = re.compile("[\ud800-\udfff]")
+_UNPAIRED_SURROGATE = "string has an unpaired surrogate"
+_TOOL_CHOICES = frozenset({"auto", "required", "none"})
 
 
 class MessageFormatError(ValueError):
@@ -87,12 +92,26 @@ def _int_bound() -> int:
     return bound
 
 
-def _check_json(value: Any, path: str) -> None:
+# A path in `check_json_value`: the root path, or ``(parent, key or index)``.
+_Where = str | tuple[Any, str | int]
+
+
+def _format_path(where: _Where) -> str:
+    """Return the JSON path text for a `check_json_value` parent chain."""
+    segments = []
+    while isinstance(where, tuple):
+        where, segment = where
+        segments.append(f"[{segment}]" if isinstance(segment, int) else _key_segment(segment))
+    return where + "".join(reversed(segments))
+
+
+def check_json_value(value: Any, path: str) -> None:
     """Raise unless `value` is plain JSON within yian's nesting and int-digit limits.
 
     Allowed: `dict` with `str` keys, `list`, `str`, `int`, finite `float`, `bool` and
-    `None`. Each `dict` and `list` is one level. The walk uses an explicit stack, so
-    a value of any depth raises `MessageFormatError` rather than `RecursionError`.
+    `None`; no string or key may hold an unpaired surrogate. Each `dict` and `list` is
+    one level. The walk uses an explicit stack, so a value of any depth raises
+    `MessageFormatError` rather than `RecursionError`.
 
     Args:
         value (`Any`): The value to check.
@@ -103,40 +122,59 @@ def _check_json(value: Any, path: str) -> None:
     """
     limit = current().max_value_nesting
     bound = _int_bound()
-    stack: list[tuple[Any, str, int]] = [(value, path, 1)]
+    # Each entry keeps its parent chain and the path text is built only on failure, so
+    # a large valid value costs O(nodes) rather than O(nodes x depth).
+    stack: list[tuple[Any, _Where, int]] = [(value, path, 1)]
     while stack:
         item, where, level = stack.pop()
         if isinstance(item, dict):
             if level > limit:
-                raise MessageFormatError(where, f"value nests deeper than {limit} levels")
+                raise MessageFormatError(
+                    _format_path(where), f"value nests deeper than {limit} levels"
+                )
             children = []
             for key, child in item.items():
                 if not isinstance(key, str):
-                    raise MessageFormatError(where, f"object key is {type(key).__name__}, not str")
-                children.append((child, where + _key_segment(key), level + 1))
+                    raise MessageFormatError(
+                        _format_path(where), f"object key is {type(key).__name__}, not str"
+                    )
+                if _SURROGATE.search(key):
+                    raise MessageFormatError(
+                        _format_path(where), "object key has an unpaired surrogate"
+                    )
+                children.append((child, (where, key), level + 1))
             # Reversed so the first offending value in document order is reported.
             stack.extend(reversed(children))
         elif isinstance(item, list):
             if level > limit:
-                raise MessageFormatError(where, f"value nests deeper than {limit} levels")
+                raise MessageFormatError(
+                    _format_path(where), f"value nests deeper than {limit} levels"
+                )
             stack.extend(
-                (item[i], f"{where}[{i}]", level + 1) for i in range(len(item) - 1, -1, -1)
+                (item[i], (where, i), level + 1) for i in range(len(item) - 1, -1, -1)
             )
-        elif item is None or isinstance(item, (str, bool)):
+        elif isinstance(item, str):
+            if _SURROGATE.search(item):
+                raise MessageFormatError(_format_path(where), _UNPAIRED_SURROGATE)
+        elif item is None or isinstance(item, bool):
             continue
         elif isinstance(item, int):
             if abs(item) >= bound:
                 digits = current().max_int_digits
-                raise MessageFormatError(where, f"int has more than {digits} digits")
+                raise MessageFormatError(
+                    _format_path(where), f"int has more than {digits} digits"
+                )
         elif isinstance(item, float):
             if not math.isfinite(item):
-                raise MessageFormatError(where, "float is not finite")
+                raise MessageFormatError(_format_path(where), "float is not finite")
         else:
-            raise MessageFormatError(where, f"{type(item).__name__} is not a JSON value")
+            raise MessageFormatError(
+                _format_path(where), f"{type(item).__name__} is not a JSON value"
+            )
 
 
 def _copy_json(value: Any) -> Any:
-    """Deep-copy a value `_check_json` accepted; its depth bounds the recursion."""
+    """Deep-copy a value `check_json_value` accepted; its depth bounds the recursion."""
     if isinstance(value, dict):
         return {key: _copy_json(child) for key, child in value.items()}
     if isinstance(value, list):
@@ -145,11 +183,16 @@ def _copy_json(value: Any) -> Any:
 
 
 def _check_type(value: Any, expected: type, path: str, *, optional: bool = False) -> None:
-    """Raise `MessageFormatError` unless `value` is an `expected` (or `None` when `optional`)."""
+    """Raise `MessageFormatError` unless `value` is an `expected` (or `None` when `optional`).
+
+    A `str` must also hold no unpaired surrogate, which could not be sent as JSON.
+    """
     if value is None and optional:
         return
     if not isinstance(value, expected):
         raise MessageFormatError(path, f"expected {expected.__name__}, got {type(value).__name__}")
+    if isinstance(value, str) and _SURROGATE.search(value):
+        raise MessageFormatError(path, _UNPAIRED_SURROGATE)
 
 
 def _set_object(instance: Any, name: str, *, optional: bool = True) -> None:
@@ -159,8 +202,21 @@ def _set_object(instance: Any, name: str, *, optional: bool = True) -> None:
         return
     if not isinstance(value, dict):
         raise MessageFormatError(name, f"expected an object, got {type(value).__name__}")
-    _check_json(value, name)
+    check_json_value(value, name)
     object.__setattr__(instance, name, _copy_json(value))
+
+
+def _set_sequence(instance: Any, name: str, item_type: type) -> None:
+    """Check a list-or-tuple field of `item_type` items and store it as a tuple."""
+    value = getattr(instance, name)
+    if not isinstance(value, (list, tuple)):
+        raise MessageFormatError(name, f"expected a list, got {type(value).__name__}")
+    for index, item in enumerate(value):
+        if not isinstance(item, item_type):
+            raise MessageFormatError(
+                f"{name}[{index}]", f"expected a {item_type.__name__}, got {type(item).__name__}"
+            )
+    object.__setattr__(instance, name, tuple(value))
 
 
 @dataclass(frozen=True)
@@ -552,8 +608,17 @@ class Request:
     __hash__ = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "messages", tuple(self.messages))
-        object.__setattr__(self, "tools", tuple(self.tools))
+        _set_sequence(self, "messages", Message)
+        _set_sequence(self, "tools", ToolSpec)
+        choice = self.tool_choice
+        if not (
+            choice is None
+            or isinstance(choice, NamedTool)
+            or (isinstance(choice, str) and choice in _TOOL_CHOICES)
+        ):
+            raise MessageFormatError(
+                "tool_choice", "expected auto, required, none, a NamedTool or None"
+            )
 
 
 @dataclass(frozen=True)
@@ -574,3 +639,8 @@ class Response:
     response_id: str | None = None
 
     __hash__ = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        _check_type(self.message, Message, "message")
+        if self.message.role != "assistant":
+            raise MessageFormatError("message.role", "expected assistant")

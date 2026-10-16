@@ -23,6 +23,7 @@ from yian.llm_clients.auth import (
     HttpResponse,
     OAuthCredentials,
     OpenAIAuth,
+    ProviderSelection,
 )
 
 
@@ -286,7 +287,7 @@ def test_v1_store_without_new_fields_still_loads(tmp_path):
     assert store.credentials("openai", selection.credential_id).api_key == "sk-old"
 
 
-def _entry_store(**entry):
+def _entry_store(provider="p", **entry):
     value = {
         "method": "api_key",
         "model": "m",
@@ -295,7 +296,7 @@ def _entry_store(**entry):
     }
     value.update(entry)
     return json.dumps(
-        {"version": 1, "default_provider": None, "providers": {"p": value}}
+        {"version": 1, "default_provider": None, "providers": {provider: value}}
     )
 
 
@@ -310,6 +311,36 @@ def _entry_store(**entry):
         _entry_store(credentials=None),
         _entry_store(endpoint=["do-not-echo"]),
         _entry_store(secret="do-not-echo"),
+        _entry_store(header_names=["X-Gateway"]),
+        _entry_store("openai", organization=["do-not-echo"]),
+        _entry_store("openai", organization=""),
+        _entry_store("openai", project="do not echo"),
+        _entry_store(organization="do-not-echo"),
+        _entry_store("openai", organization=None),
+        _entry_store("openai", project=None),
+        _entry_store("ollama", credentials={"api_key": "k", "headers": {"X": "do-not-echo"}}),
+        _entry_store(
+            "openai",
+            method="subscription",
+            project="do-not-echo",
+            credentials={
+                "access_token": "a",
+                "refresh_token": "r",
+                "expires_at": 9000,
+                "account_id": "acct",
+                "residency": None,
+            },
+        ),
+        _entry_store(credentials={"api_key": "k", "headers": [["X", "do-not-echo"]]}),
+        _entry_store(credentials={"api_key": "k", "headers": {}}),
+        _entry_store(credentials={"api_key": "k", "headers": {"X": 1}}),
+        _entry_store(credentials={"api_key": "k", "headers": {"Authorization": "do-not-echo"}}),
+        _entry_store(credentials={"api_key": "k", "headers": {"X": "do-not-echo\n"}}),
+        _entry_store(credentials={"api_key": "k", "headers": {"X": "do-not-echo", "x": "v"}}),
+        _entry_store(credentials={"api_key": "k", "secret": "do-not-echo"}),
+        _entry_store(
+            "openai", credentials={"api_key": "k", "headers": {"OpenAI-Project": "do-not-echo"}}
+        ),
     ],
 )
 def test_malformed_store_fails_without_echoing_payload(tmp_path, contents):
@@ -320,6 +351,200 @@ def test_malformed_store_fails_without_echoing_payload(tmp_path, contents):
     with pytest.raises(AuthError) as caught:
         AuthStore(path).read()
     assert "do-not-echo" not in str(caught.value)
+
+
+def test_store_reads_a_null_endpoint(tmp_path):
+    path = tmp_path / "auth" / "auth.json"
+    path.parent.mkdir(mode=0o700)
+    path.write_text(_entry_store(endpoint=None))
+    path.chmod(0o600)
+    assert AuthStore(path).selection("p").endpoint is None
+
+
+def _gateway_credentials(key="sk-open"):
+    return ApiKeyCredentials(key, headers={"X-Gateway": "gw-secret", "A-Tag": "tag-secret"})
+
+
+def test_store_saves_connection_settings_with_a_login(tmp_path):
+    store = AuthStore(tmp_path / "auth" / "auth.json")
+    selection = store.save(
+        "openai", _gateway_credentials(), "gpt", organization="org-1", project="proj-1"
+    )
+    assert (selection.organization, selection.project) == ("org-1", "proj-1")
+    assert selection.header_names == ("A-Tag", "X-Gateway")
+    assert store.selection("openai") == selection
+    credentials = store.credentials("openai", selection.credential_id)
+    assert credentials == _gateway_credentials()
+    assert credentials.headers == (("A-Tag", "tag-secret"), ("X-Gateway", "gw-secret"))
+    entry = json.loads(store.path.read_text())["providers"]["openai"]
+    assert (entry["organization"], entry["project"]) == ("org-1", "proj-1")
+    assert entry["credentials"] == {
+        "api_key": "sk-open",
+        "headers": {"A-Tag": "tag-secret", "X-Gateway": "gw-secret"},
+    }
+
+    anthropic = store.save("anthropic", ApiKeyCredentials("k", headers={"X-G": "v"}), "c")
+    assert anthropic.header_names == ("X-G",)
+    assert (anthropic.organization, anthropic.project) == (None, None)
+    assert store.selection("openai") == selection
+
+    plain = store.save("openai", ApiKeyCredentials("sk-open"), "gpt")
+    assert (plain.organization, plain.project, plain.header_names) == (None, None, ())
+    assert store.credentials("openai", plain.credential_id).headers == ()
+    entry = json.loads(store.path.read_text())["providers"]["openai"]
+    assert set(entry) == {"method", "model", "credential_id", "credentials"}
+    assert entry["credentials"] == {"api_key": "sk-open"}
+
+
+def test_store_without_connection_settings_rewrites_byte_identically(tmp_path):
+    path = tmp_path / "auth" / "auth.json"
+    value = {
+        "version": 1,
+        "default_provider": "openai",
+        "providers": {
+            "anthropic": {
+                "method": "api_key",
+                "model": "claude-x",
+                "credential_id": "a" * 32,
+                "credentials": {"api_key": "k-anth"},
+            },
+            "azure": {
+                "method": "api_key",
+                "model": "dep",
+                "credential_id": "b" * 32,
+                "credentials": {"api_key": "k-az"},
+                "endpoint": "https://r.openai.azure.com/",
+            },
+            "ollama": {
+                "method": "none",
+                "model": "llama3",
+                "credential_id": "c" * 32,
+                "credentials": None,
+            },
+            "openai": {
+                "method": "subscription",
+                "model": "gpt",
+                "credential_id": "d" * 32,
+                "credentials": {
+                    "access_token": "access",
+                    "refresh_token": "refresh",
+                    "expires_at": 9000,
+                    "account_id": "acct",
+                    "residency": None,
+                },
+            },
+        },
+    }
+    raw = (json.dumps(value, sort_keys=True) + "\n").encode()
+    _write_store(path, value)
+    path.write_bytes(raw)
+    store = AuthStore(path)
+    store.set_default("anthropic")
+    store.set_default("openai")
+    assert path.read_bytes() == raw
+    assert all(
+        (item.organization, item.project, item.header_names) == (None, None, ())
+        for item in store.read().selections
+    )
+
+
+def test_connection_settings_values_stay_out_of_repr(tmp_path):
+    store = AuthStore(tmp_path / "auth" / "auth.json")
+    selection = store.save("openai", _gateway_credentials(), "gpt", organization="org-1")
+    credentials = store.credentials("openai", selection.credential_id)
+    for text in (repr(credentials), repr(selection), repr(store.read())):
+        assert "gw-secret" not in text
+        assert "tag-secret" not in text
+        assert "sk-open" not in text
+    assert "X-Gateway" in repr(selection)
+
+
+def test_saved_secrets_lists_header_values(tmp_path):
+    store = AuthStore(tmp_path / "auth" / "auth.json")
+    store.save("openai", _gateway_credentials(), "gpt")
+    assert store.saved_secrets("openai") == ("sk-open", "tag-secret", "gw-secret")
+
+
+@pytest.mark.parametrize(
+    "provider, credentials, settings",
+    [
+        ("anthropic", ApiKeyCredentials("k"), {"organization": "org-1"}),
+        ("azure", ApiKeyCredentials("k"), {"project": "proj-1"}),
+        ("ollama", None, {"organization": "org-1"}),
+        ("openai", OAuthCredentials("a", "r", 9000, "acct"), {"project": "proj-1"}),
+        ("openai", ApiKeyCredentials("k"), {"organization": "has space"}),
+        ("openai", ApiKeyCredentials("k"), {"project": ""}),
+        ("openai", ApiKeyCredentials("k"), {"organization": "o" * 257}),
+        ("openai", ApiKeyCredentials("k", headers={"OpenAI-Organization": "o"}), {}),
+    ],
+)
+def test_store_refuses_connection_settings_a_login_cannot_send(
+    tmp_path, provider, credentials, settings
+):
+    store = AuthStore(tmp_path / "auth" / "auth.json")
+    with pytest.raises(AuthError) as caught:
+        store.save(provider, credentials, "m", **settings)
+    for value in settings.values():
+        if value:
+            assert value not in str(caught.value)
+    assert not store.path.exists()
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Authorization": "do-not-echo"},
+        {"x-api-key": "do-not-echo"},
+        {"Content-Type": "do-not-echo"},
+        {"bad name": "do-not-echo"},
+        {"X": "do-not-echo\r\nY: z"},
+        {"X": " do-not-echo"},
+        {"X": ""},
+        {"X": 1},
+        {"X-G": "do-not-echo", "x-g": "other"},
+        (("X-G", "do-not-echo"), ("X-G", "other")),
+        {f"X-{n}": "v" for n in range(33)},
+        "X-G",
+    ],
+)
+def test_api_key_credentials_refuse_headers_that_cannot_be_sent(headers):
+    with pytest.raises(AuthError) as caught:
+        ApiKeyCredentials("k", headers=headers)
+    assert "do-not-echo" not in str(caught.value)
+
+
+def test_api_key_credentials_hold_sorted_immutable_headers():
+    credentials = ApiKeyCredentials("k", headers={"X-B": "2", "X-A": "1"})
+    assert credentials.headers == (("X-A", "1"), ("X-B", "2"))
+    assert credentials == ApiKeyCredentials("k", headers=(("X-B", "2"), ("X-A", "1")))
+    assert hash(credentials) == hash(ApiKeyCredentials("k", headers={"X-A": "1", "X-B": "2"}))
+    assert ApiKeyCredentials("k").headers == ()
+    assert "OpenAI-Project" in dict(
+        ApiKeyCredentials("k", headers={"OpenAI-Project": "p"}).headers
+    )
+
+
+def test_provider_selection_checks_connection_settings():
+    selection = ProviderSelection(
+        "openai", "api_key", "m", "c" * 32, None, "org-1", "proj-1", ("X-B", "X-A")
+    )
+    assert selection.header_names == ("X-A", "X-B")
+    assert ProviderSelection("p", "api_key", "m", "c" * 32).header_names == ()
+    for fields in (
+        {"method": "subscription", "header_names": ("X-A",)},
+        {"method": "none", "header_names": ("X-A",)},
+        {"header_names": ("Authorization",)},
+        {"header_names": ("OpenAI-Project",)},
+        {"header_names": ("X-A", "x-a")},
+        {"header_names": ["X-A"]},
+        {"method": "subscription", "organization": "org-1"},
+        {"provider": "anthropic", "project": "proj-1"},
+        {"organization": "has space"},
+        {"provider": "ollama", "header_names": ("X-A",)},
+    ):
+        values = {"provider": "openai", "method": "api_key", **fields}
+        with pytest.raises(AuthError):
+            ProviderSelection(model="m", credential_id="c" * 32, **values)
 
 
 @pytest.mark.parametrize("target", ["directory", "file", "symlink"])
@@ -436,6 +661,75 @@ def test_api_key_validation_lists_models_through_official_endpoint():
     )
     assert http.calls[0][0:2] == ("GET", "https://api.openai.com/v1/models")
     assert http.calls[0][2]["headers"]["Authorization"] == "Bearer secret"
+
+
+GATEWAY = "gw-SENTINEL-token-9876"
+ORG = "org-SENTINEL-1234"
+PROJECT = "proj_SENTINEL-5678"
+
+
+def _assert_no_settings(error):
+    """Check the error and the chain a traceback prints for every setting value."""
+    while error is not None:
+        for value in (GATEWAY, ORG, PROJECT):
+            assert value not in str(error) and value not in repr(error)
+        error = error.__cause__ or (None if error.__suppress_context__ else error.__context__)
+
+
+def test_api_key_validation_sends_organization_project_and_headers():
+    http = HTTP(HttpResponse(200, {"data": [{"id": "m"}]}))
+    credentials = ApiKeyCredentials("secret", {"X-Gateway": GATEWAY})
+    auth = OpenAIAuth(request=http)
+    assert auth.api_models(credentials, organization=ORG, project=PROJECT) == ("m",)
+    assert http.calls[0][2]["headers"] == {
+        "User-Agent": "yian",
+        "X-Gateway": GATEWAY,
+        "OpenAI-Organization": ORG,
+        "OpenAI-Project": PROJECT,
+        "Authorization": "Bearer secret",
+    }
+
+
+def test_organization_mismatch_is_an_http_error_without_values():
+    body = {"error": {"code": "mismatched_organization", "message": f"{ORG} {PROJECT}"}}
+    http = HTTP(HttpResponse(401, body))
+    credentials = ApiKeyCredentials("secret", {"X-Gateway": GATEWAY})
+    failed = r"^OpenAI authentication request failed \(HTTP 401\)$"
+    with pytest.raises(AuthError, match=failed) as caught:
+        OpenAIAuth(request=http).api_models(credentials, organization=ORG, project=PROJECT)
+    _assert_no_settings(caught.value)
+    assert len(http.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "credentials,settings",
+    [
+        (ApiKeyCredentials("secret"), {"organization": ORG + " x"}),
+        (ApiKeyCredentials("secret"), {"project": ""}),
+        (ApiKeyCredentials("secret"), {"organization": 5}),
+        # OpenAI takes these through organization / project, not as headers.
+        (ApiKeyCredentials("secret", {"OpenAI-Organization": ORG}), {}),
+        (ApiKeyCredentials("secret", {"openai-project": PROJECT}), {}),
+    ],
+)
+def test_invalid_connection_settings_are_refused_before_any_request(credentials, settings):
+    http = HTTP()
+    with pytest.raises(AuthError, match="^Invalid OpenAI connection settings") as caught:
+        OpenAIAuth(request=http).api_models(credentials, **settings)
+    _assert_no_settings(caught.value)
+    assert caught.value.__suppress_context__
+    assert http.calls == []
+
+
+def test_transport_error_never_echoes_connection_settings():
+    def broken(*args, **kwargs):
+        raise OSError(f"{GATEWAY} {ORG} {PROJECT}")
+
+    credentials = ApiKeyCredentials("secret", {"X-Gateway": GATEWAY})
+    with pytest.raises(AuthError) as caught:
+        OpenAIAuth(request=broken).api_models(credentials, organization=ORG, project=PROJECT)
+    _assert_no_settings(caught.value)
+    assert caught.value.__suppress_context__
 
 
 def test_subscription_catalog_uses_account_routing_and_visibility_order():

@@ -3,21 +3,49 @@ import copy
 import json
 import os
 import typing
+from functools import lru_cache
 from typing import Any, Optional
 
+import httpx
 import pydantic
 from google.genai import Client
 from google.genai.types import HttpOptions
 from langchain_google_genai import ChatGoogleGenerativeAI
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, model_validator
 
-from .base_client import BaseLLMClient, check_no_redirects, normalize_content, warn_once
+from .base_client import (
+    BASE_URL_LEAK,
+    HEADERS_LEAK,
+    BaseLLMClient,
+    check_connection_headers,
+    check_no_redirects,
+    normalize_content,
+    warn_once,
+)
 from .provider_blocks import merge_request_body
 from .validators import validate_model
 
 _HTTP_CLIENT_KWARGS = ("http_client", "http_async_client")
 # google-genai's switches to Vertex AI; GOOGLE_GENAI_USE_ENTERPRISE is the newer name.
 _VERTEX_SWITCHES = ("GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_ENTERPRISE")
+
+
+# The client holds no headers or per-model state (google-genai passes them per request),
+# so every model that refuses redirects shares it; built per model, it was never closed.
+# `lru_cache` keeps its own bookkeeping thread-safe; two threads that miss at once may
+# each build a client, and one is kept. Like langchain-openai's cached clients, it reads
+# proxy variables such as HTTPS_PROXY when first built. It is shared across event loops,
+# like langchain-openai's cached default async client, so a host that runs a new loop per
+# request may see a closed-loop error on a reused keep-alive connection, as it would with
+# langchain's own client.
+@lru_cache(maxsize=None)
+def _no_redirect_async_client() -> httpx.AsyncClient:
+    """Return the shared async HTTP client that never follows a redirect.
+
+    Returns:
+        `httpx.AsyncClient`: The same client on every call.
+    """
+    return httpx.AsyncClient(follow_redirects=False)
 
 
 def _class_name(cls: type) -> str:
@@ -145,11 +173,18 @@ class NormalizedChatGoogleGenerativeAI(ChatGoogleGenerativeAI):
         http_async_client (`Any`, *optional*, defaults to `None`):
             The SDK's async httpx client, used in place of its default one. `None` uses the
             SDK default.
+        connection_headers (`dict[str, SecretStr]`, *optional*, defaults to `{}`):
+            Headers sent with every request, added to the genai client's headers. Values
+            are secrets: unlike ``additional_headers``, this field is left out of ``repr``,
+            dumps, langchain serialization and the request metadata.
     """
 
     block: dict[str, Any] = Field(default_factory=dict, exclude=True, repr=False)
     http_client: Any = Field(default=None, exclude=True, repr=False)
     http_async_client: Any = Field(default=None, exclude=True, repr=False)
+    connection_headers: dict[str, SecretStr] = Field(
+        default_factory=dict, exclude=True, repr=False
+    )
 
     # Declared above `_use_http_clients`: pydantic runs after-validators in declaration order,
     # so the caller's httpx clients go onto the client this one may rebuild.
@@ -193,6 +228,29 @@ class NormalizedChatGoogleGenerativeAI(ChatGoogleGenerativeAI):
         )
         if cleanup is not None:
             self._client_cleanup = type(cleanup)(self.client)
+        return self
+
+    # Declared after `_use_developer_api`, which may rebuild the genai client.
+    @model_validator(mode="after")
+    def _add_connection_headers(self) -> "NormalizedChatGoogleGenerativeAI":
+        """Add `connection_headers` to the headers the genai client sends with every request.
+
+        Returns:
+            `NormalizedChatGoogleGenerativeAI`:
+                This model.
+        """
+        if self.connection_headers:
+            # google-genai lays each request's own headers over these, so they reach every
+            # call; langchain's `additional_headers` would also copy them into
+            # `default_metadata`, a model field.
+            options = self.client._api_client._http_options
+            options.headers = {
+                **(options.headers or {}),
+                **{
+                    name: value.get_secret_value()
+                    for name, value in self.connection_headers.items()
+                },
+            }
         return self
 
     @model_validator(mode="after")
@@ -272,9 +330,10 @@ class GoogleClient(BaseLLMClient):
 
     The model always calls the Gemini Developer API with the key yian resolved, even when
     ``GOOGLE_GENAI_USE_VERTEXAI`` or ``GOOGLE_GENAI_USE_ENTERPRISE`` is set. With a
-    ``base_url``, the model's httpx client does not follow redirects, so the key goes only
-    to that URL. ``http_client`` / ``http_async_client`` replace the SDK's
-    httpx clients; beside a ``base_url`` they must not follow redirects.
+    ``base_url`` or ``connection_headers``, the model's httpx clients do not follow
+    redirects, so the key and headers go only to that URL. ``http_client`` /
+    ``http_async_client`` replace the SDK's httpx clients; beside a ``base_url`` or
+    ``connection_headers`` they must not follow redirects.
     """
 
     def __init__(self, model: str, base_url: Optional[str] = None, **kwargs):
@@ -282,6 +341,9 @@ class GoogleClient(BaseLLMClient):
 
     def get_llm(self) -> Any:
         """Return configured ChatGoogleGenerativeAI instance.
+
+        ``connection_headers`` (`dict[str, str | SecretStr]`, a keyword argument) are sent
+        with every request; such a model never follows a redirect.
 
         Returns:
             `NormalizedChatGoogleGenerativeAI`:
@@ -292,8 +354,9 @@ class GoogleClient(BaseLLMClient):
                 Raised when a given ``http_client`` / ``http_async_client`` is not an httpx
                 client the SDK takes.
             `ValueError`:
-                Raised when a given client follows redirects beside a ``base_url``, or when
-                no API key is given or found in the environment.
+                Raised when a connection header is refused (`check_connection_headers`), a
+                given client follows redirects beside a ``base_url`` or connection
+                headers, or no API key is given or found in the environment.
 
         Warns:
             `UserWarning`:
@@ -315,8 +378,15 @@ class GoogleClient(BaseLLMClient):
 
         if self.base_url:
             llm_kwargs["base_url"] = self.base_url
-            # The SDK sends the key in x-goog-api-key, which httpx re-sends on a
-            # cross-origin redirect.
+        if self.kwargs.get("connection_headers"):
+            llm_kwargs["connection_headers"] = check_connection_headers(
+                self.kwargs["connection_headers"], "google"
+            )
+        # The SDK sends the key in x-goog-api-key, and the connection headers beside it,
+        # which httpx re-sends on a cross-origin redirect.
+        no_redirects = bool(self.base_url or llm_kwargs.get("connection_headers"))
+        leak = HEADERS_LEAK if llm_kwargs.get("connection_headers") else BASE_URL_LEAK
+        if no_redirects:
             llm_kwargs["client_args"] = {"follow_redirects": False}
 
         for key in ("timeout", "max_retries", "callbacks"):
@@ -327,9 +397,13 @@ class GoogleClient(BaseLLMClient):
             if value is None:
                 continue
             _check_http_client_type(key, value)
-            if self.base_url:
-                check_no_redirects(key, value)
+            if no_redirects:
+                check_no_redirects(key, value, reason=leak)
             llm_kwargs[key] = value
+        if no_redirects and "http_async_client" not in llm_kwargs:
+            # Without an httpx async client google-genai sends async calls through aiohttp
+            # when it is installed, and aiohttp follows redirects by default.
+            llm_kwargs["http_async_client"] = _no_redirect_async_client()
         # langchain-google-genai sends temperature=0.7 unless it is None; a temperature
         # comes only from the block's generationConfig.
         llm_kwargs["temperature"] = None

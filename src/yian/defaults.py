@@ -368,6 +368,30 @@ ENTRIES: tuple[Entry, ...] = (
         maximum=None,
     ),
     Entry(
+        "MAX_CONNECTION_HEADERS",
+        default=32,
+        description="Most extra request headers a provider connection may send",
+        group="input cap",
+        minimum=1,
+        maximum=None,
+    ),
+    Entry(
+        "MAX_HEADER_VALUE_CHARS",
+        default=8192,
+        description="Longest connection header name or value accepted",
+        group="input cap",
+        minimum=1,
+        maximum=None,
+    ),
+    Entry(
+        "MAX_ORGANIZATION_CHARS",
+        default=256,
+        description="Longest OpenAI organization or project id accepted",
+        group="input cap",
+        minimum=1,
+        maximum=None,
+    ),
+    Entry(
         "MAX_SKILL_FILE_BYTES",
         default=256 * 1024,
         description="Largest SKILL.md or bundled skill file returned to a model",
@@ -473,6 +497,9 @@ class Defaults:
     max_oauth_callback_bytes: int = 16 * 1024
     max_model_list_bytes: int = 16 * 1024 * 1024
     max_base_url_chars: int = 2048
+    max_connection_headers: int = 32
+    max_header_value_chars: int = 8192
+    max_organization_chars: int = 256
     max_skill_file_bytes: int = 256 * 1024
     max_skill_name_chars: int = 64
     max_skill_description_chars: int = 1024

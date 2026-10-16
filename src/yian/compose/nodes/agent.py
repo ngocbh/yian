@@ -102,9 +102,10 @@ def _validate_llm_config(
 
     Raises:
         `LoadError`: The config is not a mapping, sets a non-boolean `inherit`, sets
-            `api_key`, sets `base_url` other than beside `provider: azure`, or
-            violates `LLMConfig`. A text field YAML read as non-text (such as `model: 5`)
-            is named by `not_text_error`; any other violation keeps pydantic's message.
+            `api_key`, `organization`, `project` or `headers`, sets `base_url` other
+            than beside `provider: azure`, or violates `LLMConfig`. A text field YAML
+            read as non-text (such as `model: 5`) is named by `not_text_error`; any
+            other violation keeps pydantic's message.
     """
     diagnostics = diagnostics or LoadDiagnostics()
     if cfg is None:

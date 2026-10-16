@@ -372,8 +372,50 @@ def test_resume_of_a_host_key_run_points_to_python(monkeypatch, tmp_path):
 
     assert result.exit_code == 1, result.output
     output = _plain(result.output)
-    assert "resume_flow(api_key=" in output
+    assert "resume_flow(api_key=...)" in output
     assert "cannot supply" in output
+    assert log.read_bytes() == before
+
+
+def test_resume_of_a_host_key_run_with_headers_names_both(monkeypatch, tmp_path):
+    flow = _flow_file(tmp_path)
+    llm_config = {
+        "provider": "openai", "model": "m", "api_key": "sk-h",
+        "headers": {"X-Gateway": "gw-6a1f"},
+    }
+    log = _unfinished_log(monkeypatch, flow, env_var=None, llm_config=llm_config)
+    before = log.read_bytes()
+    _no_model(monkeypatch)
+
+    result = _resume(flow, log)
+
+    assert result.exit_code == 1, result.output
+    output = _plain(result.output)
+    assert "resume_flow(api_key=..., headers=...)" in output
+    assert "gw-6a1f" not in output
+    assert log.read_bytes() == before
+
+
+def test_resume_of_a_login_saved_again_with_other_settings_fails(monkeypatch, tmp_path):
+    flow = _flow_file(tmp_path)
+    AuthStore().save(
+        "openai", ApiKeyCredentials("saved-key", headers={"X-Gateway": "gw-1"}), "gpt-5.5",
+        organization="org-a",
+    )
+    log = _unfinished_log(monkeypatch, flow, env_var=None)
+    AuthStore().save(
+        "openai", ApiKeyCredentials("saved-key", headers={"X-Other": "gw-2"}), "gpt-5.5",
+        organization="org-b",
+    )
+    before = log.read_bytes()
+    _no_model(monkeypatch)
+
+    result = _resume(flow, log)
+
+    assert result.exit_code == 1, result.output
+    output = _plain(result.output)
+    assert "yian auth openai" in output
+    assert "start a new run" in output
     assert log.read_bytes() == before
 
 

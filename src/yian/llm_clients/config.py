@@ -8,6 +8,7 @@ and `factory.model_from_config` turns API selections into ready chat models.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 import ipaddress
 import re
 from typing import Any, Literal, Optional
@@ -17,12 +18,18 @@ from pydantic import (
     ConfigDict,
     Field,
     SecretStr,
+    ValidationInfo,
     field_validator,
     model_serializer,
     model_validator,
 )
 
 from yian.defaults import current
+from yian.llm_clients.connection_settings import (
+    validate_header_name,
+    validate_headers,
+    validate_organization,
+)
 from yian.llm_clients.provider_blocks import (
     PROVIDER_BLOCKS,
     AnthropicMessagesBlock,
@@ -138,6 +145,27 @@ class LLMConfig(BaseModel):
             is called; it needs no `api_key`, since the key may come from
             `AZURE_OPENAI_API_KEY`, and a flow file may set it beside
             `provider: azure`. Unlike the key, it appears in `model_dump` when set.
+        organization (`str`, *optional*, defaults to `None`):
+            OpenAI organization id, sent as the `OpenAI-Organization` header. Only
+            `provider="openai"` takes it, and it needs `api_key` and `provider` in the
+            same config, since it goes wherever that key is sent. It must be non-empty
+            visible ASCII of at most `YIAN_MAX_ORGANIZATION_CHARS` characters (default
+            256). It appears in `model_dump` when set.
+        project (`str`, *optional*, defaults to `None`):
+            OpenAI project id, sent as the `OpenAI-Project` header, with the same rules
+            as `organization`.
+        headers (`dict[str, SecretStr]`, *optional*, defaults to `None`):
+            Extra request headers, for example for a gateway. They need `api_key` and
+            `provider` in the same config, and `provider="ollama"` rejects them. Names
+            are HTTP tokens compared without case; credential and framing headers
+            (`Authorization`, `x-api-key`, `Host`, `Content-Type`, ...) are refused for
+            every provider, and `OpenAI-Organization`/`OpenAI-Project` for
+            `provider="openai"` (see `connection_settings.REFUSED_HEADER_NAMES`). Values
+            are visible ASCII, with spaces or tabs only between characters. Names and
+            values are at most `YIAN_MAX_HEADER_VALUE_CHARS` characters (default 8192),
+            with at most `YIAN_MAX_CONNECTION_HEADERS` headers (default 32). Values are
+            secrets: masked in `repr` and, like the key, left out of every
+            `model_dump`. An empty mapping is the same as `None`.
         <provider> (`_Block`, *optional*, defaults to `None`):
             One block per provider in `SUPPORTED_LLM_PROVIDERS` (`openai`, `qwen-cn`,
             `anthropic`, ...), named after it: request-body fields for the API that
@@ -159,6 +187,8 @@ class LLMConfig(BaseModel):
             base_url="https://<resource>.openai.azure.com/openai/v1/",
             api_key=key,
         )
+        LLMConfig(provider="openai", api_key=key, organization="org-abc123")
+        LLMConfig(provider="deepseek", api_key=key, headers={"X-Gateway-Token": token})
         LLMConfig(**{"provider": "qwen-cn", "qwen-cn": {"enable_thinking": True}})
         ```
     """
@@ -169,6 +199,10 @@ class LLMConfig(BaseModel):
     # a key dump exactly as they did before the field existed.
     api_key: Optional[SecretStr] = Field(default=None, exclude=True)
     base_url: Optional[str] = None
+    organization: Optional[str] = None
+    project: Optional[str] = None
+    # Header values are secrets, so they are excluded from dumps like the key.
+    headers: Optional[dict[str, SecretStr]] = Field(default=None, exclude=True)
     openai: Optional[OpenAIResponsesBlock] = None
     xai: Optional[XAIChatBlock] = None
     deepseek: Optional[DeepSeekChatBlock] = None
@@ -248,31 +282,76 @@ class LLMConfig(BaseModel):
         """Accept an HTTPS endpoint, or plain HTTP only on the local machine."""
         return value if value is None else validate_base_url(value)
 
-    @model_validator(mode="after")
-    def _bind_base_url_to_key(self) -> "LLMConfig":
-        """Require a base_url to travel with the key and provider it serves.
+    @field_validator("organization", "project")
+    @classmethod
+    def _require_visible_id(
+        cls, value: Optional[str], info: ValidationInfo
+    ) -> Optional[str]:
+        """Accept a short visible-ASCII OpenAI organization or project id."""
+        return value if value is None else validate_organization(value, info.field_name)
 
-        An Azure base_url is the resource endpoint and may come without a key.
+    @field_validator("headers")
+    @classmethod
+    def _require_sendable_headers(
+        cls, value: Optional[dict[str, SecretStr]]
+    ) -> Optional[dict[str, SecretStr]]:
+        """Accept headers whose names and values may be sent to any provider."""
+        if not value:
+            return None
+        validate_headers(value, provider=None)
+        return value
+
+    @model_validator(mode="after")
+    def _bind_connection_to_key(self) -> "LLMConfig":
+        """Require base_url and the connection settings to travel with the key they serve.
+
+        An Azure base_url is the resource endpoint and may come without a key. When
+        ``provider`` is set, the settings must also apply to it: organization and project
+        only to openai, headers to every provider but ollama, and openai refuses the
+        `OpenAI-Organization`/`OpenAI-Project` header names. A provider that does not
+        take a setting is reported before a missing key, since adding the key would not
+        fix it.
         """
-        if self.base_url is None or self.provider == "azure":
-            return self
-        if self.api_key is None or self.provider is None:
-            raise ValueError(
-                "llm_config.base_url needs llm_config.api_key and llm_config.provider in "
-                "the same config, since it decides where that key is sent"
-            )
-        if self.provider in _NO_BASE_URL_PROVIDERS:
-            raise ValueError(_NO_BASE_URL_PROVIDERS[self.provider])
+        if self.base_url is not None and self.provider != "azure":
+            if self.api_key is None or self.provider is None:
+                raise ValueError(
+                    "llm_config.base_url needs llm_config.api_key and llm_config.provider "
+                    "in the same config, since it decides where that key is sent"
+                )
+            if self.provider in _NO_BASE_URL_PROVIDERS:
+                raise ValueError(_NO_BASE_URL_PROVIDERS[self.provider])
+        if self.provider is not None:
+            if (self.organization or self.project) and self.provider != "openai":
+                raise ValueError(
+                    "llm_config.organization and llm_config.project apply only to "
+                    "provider openai"
+                )
+            if self.headers and self.provider == "ollama":
+                raise ValueError(
+                    "provider ollama does not take llm_config.headers; it sends no api_key"
+                )
+            # The field check could not see the provider; openai refuses more names.
+            for name in self.headers or ():
+                validate_header_name(name, self.provider)
+        for field in ("organization", "project", "headers"):
+            if getattr(self, field) is not None and (
+                self.api_key is None or self.provider is None
+            ):
+                raise ValueError(
+                    f"llm_config.{field} needs llm_config.api_key and llm_config.provider "
+                    "in the same config, since it goes wherever that key is sent"
+                )
         return self
 
     @model_serializer(mode="wrap")
     def _omit_unset_fields(self, handler):
-        """Dump an unset base_url or block as absent, so existing recorded dumps stay identical."""
+        """Dump an unset base_url, setting or block as absent, so recorded dumps stay identical."""
         data = handler(self)
         if not isinstance(data, dict):
             return data
-        if self.base_url is None:
-            data.pop("base_url", None)
+        for field in ("base_url", "organization", "project"):
+            if getattr(self, field) is None:
+                data.pop(field, None)
         for key, name in _BLOCK_ATTRIBUTES.items():
             if getattr(self, name) is None:
                 data.pop(key, None)
@@ -453,8 +532,12 @@ def azure_resource_endpoint(url: str) -> str:
     return base.rstrip("/")
 
 
+# The connection settings `pop_host_credentials` takes with the host key.
+_CONNECTION_SETTINGS = ("organization", "project", "headers")
+
 # Fields only the host's run layer may set. Authored layers reach the recorded
-# effective map, and a flow-level base_url could send the host key elsewhere.
+# effective map, a flow-level base_url could send the host key elsewhere, and
+# connection settings go wherever that key goes.
 # Each message starts with `llm_config.`: the AGENT load check swaps that for its own prefix.
 _HOST_ONLY_FIELDS = {
     "api_key": (
@@ -466,6 +549,14 @@ _HOST_ONLY_FIELDS = {
         "that key in the run's llm_config, not in a flow file. A flow file sets "
         "base_url only beside provider: azure, as the Azure resource endpoint"
     ),
+    **{
+        field: (
+            f"llm_config.{field} goes wherever the host's api_key is sent; pass it with "
+            "that key in the run's llm_config, or save it with the login by `yian auth`, "
+            "not in a flow file"
+        )
+        for field in _CONNECTION_SETTINGS
+    },
 }
 
 
@@ -520,47 +611,84 @@ def pop_api_key(config: dict[str, Any]) -> Optional[SecretStr]:
     return LLMConfig(provider=config["provider"], api_key=raw).api_key
 
 
-def pop_host_credentials(
-    config: dict[str, Any],
-) -> tuple[Optional[SecretStr], Optional[str]]:
-    """Pop a host ``api_key`` and the ``base_url`` it goes to from one config layer.
-
-    Popping both from the same layer is what binds the URL to the key: a base_url
-    decides where the key is sent, so it is accepted only beside that key and the
-    layer's ``provider``. For ``provider: azure`` without a key, ``base_url`` is the
-    resource endpoint the environment key goes to; it stays in the layer as an
-    ordinary setting. An Azure key needs a ``base_url`` beside it, so it is never sent
-    to an endpoint another layer names. Errors never echo the URL or the key.
+@dataclass(frozen=True)
+class HostConnection:
+    """The credential and connection settings popped from a host ``llm_config`` layer.
 
     Args:
-        config (`dict[str, Any]`): A mutable ``llm_config`` layer; ``api_key`` and
-            ``base_url`` are removed.
+        api_key (`SecretStr | None`, *optional*, defaults to `None`): The host key.
+        base_url (`str | None`, *optional*, defaults to `None`): Where the key is sent.
+        organization (`str | None`, *optional*, defaults to `None`): OpenAI organization
+            id sent with the key.
+        project (`str | None`, *optional*, defaults to `None`): OpenAI project id sent with
+            the key.
+        headers (`dict[str, SecretStr] | None`, *optional*, defaults to `None`): Extra
+            request headers sent with the key; values are secrets.
+    """
+
+    api_key: Optional[SecretStr] = None
+    base_url: Optional[str] = None
+    organization: Optional[str] = None
+    project: Optional[str] = None
+    headers: Optional[dict[str, SecretStr]] = None
+
+
+def pop_host_credentials(config: dict[str, Any]) -> HostConnection:
+    """Pop a host ``api_key`` and the connection it goes with from one config layer.
+
+    Popping them from the same layer is what binds the connection to the key: a
+    base_url decides where the key is sent, and the organization, project and headers
+    go wherever it is sent, so each is accepted only beside that key and the layer's
+    ``provider``. For ``provider: azure`` without a key, ``base_url`` is the resource
+    endpoint the environment key goes to; it stays in the layer as an ordinary
+    setting. An Azure key needs a ``base_url`` beside it, so it is never sent to an
+    endpoint another layer names. Errors never echo the URL, a header value or the key.
+
+    Args:
+        config (`dict[str, Any]`): A mutable ``llm_config`` layer; ``api_key``,
+            ``base_url`` (unless it is a keyless Azure endpoint), ``organization``,
+            ``project`` and ``headers`` are removed.
 
     Returns:
-        `tuple[SecretStr | None, str | None]`: The validated key and URL; either is
-            `None` when the layer has none.
+        `HostConnection`: The validated key and settings; each is `None` when the layer
+            has none, and an empty ``headers`` mapping is `None`.
 
     Raises:
         `ValueError`: The key is invalid or lacks ``provider`` (see `pop_api_key`),
-            the layer has a non-Azure ``base_url`` but no ``api_key``, an Azure key
-            has no ``base_url``, the URL is not allowed (see `validate_base_url`),
-            or the provider does not take a base_url.
+            the layer has a non-Azure ``base_url`` or a connection setting but no
+            ``api_key``, an Azure key has no ``base_url``, or a value is not allowed
+            (see `LLMConfig`).
     """
     api_key = pop_api_key(config)
-    azure = config.get("provider") == "azure"
-    if api_key is None and azure:
+    settings = {
+        field: value
+        for field in _CONNECTION_SETTINGS
+        if (value := config.pop(field, None)) is not None
+    }
+    provider = config.get("provider")
+    if api_key is None and provider == "azure":
         if config.get("base_url") is not None:
             validate_base_url(config["base_url"])
-        return None, None
-    raw = config.pop("base_url", None)
-    if raw is None:
-        if azure:
-            raise ValueError(
-                "llm_config.api_key for provider azure needs llm_config.base_url in "
-                "the same config, since it decides where that key is sent"
-            )
-        return api_key, None
-    return api_key, LLMConfig(provider=config.get("provider"), base_url=raw, api_key=api_key).base_url
+        if settings:
+            # Validation names the first setting that needs a key.
+            LLMConfig(provider=provider, **settings)
+        return HostConnection()
+    base_url = config.pop("base_url", None)
+    if base_url is None and api_key is not None and provider == "azure":
+        raise ValueError(
+            "llm_config.api_key for provider azure needs llm_config.base_url in "
+            "the same config, since it decides where that key is sent"
+        )
+    if api_key is None and base_url is None and not settings:
+        return HostConnection()
+    validated = LLMConfig(provider=provider, api_key=api_key, base_url=base_url, **settings)
+    return HostConnection(
+        api_key=validated.api_key,
+        base_url=validated.base_url,
+        organization=validated.organization,
+        project=validated.project,
+        headers=validated.headers,
+    )
 
 
 def merge_llm_config(specific: dict, base: dict) -> dict:

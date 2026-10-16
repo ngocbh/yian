@@ -91,17 +91,16 @@ organization and project from `OPENAI_ORG_ID`, `OPENAI_ORGANIZATION`, and
 `OPENAI_PROJECT_ID`, so an OpenAI organization or project can no longer be chosen
 through them. This is a breaking change: earlier versions sent them. yian warns
 once when it drops a header from these variables; unset the variable to silence it.
-Flow runs (the CLI, YAML, or a Python host's `llm_config`) cannot send these
-headers. Only Python code that builds a model itself with `create_llm_client` can,
-by setting them on the `http_client` it passes, e.g.
-`httpx.Client(headers={"OpenAI-Organization": "org-..."})`. yian never sends
-`OLLAMA_API_KEY` either (see [Local models with Ollama](#local-models-with-ollama)).
+Send them as [connection settings](#connection-settings) next to the key instead:
+saved with the login by `yian auth`, or beside a Python host's `llm_config.api_key`.
+yian never sends `OLLAMA_API_KEY` either (see [Local models with Ollama](#local-models-with-ollama)).
 A key yian passes to Azure (a Python host's key or a saved login) is sent even when
 `AZURE_OPENAI_AD_TOKEN` is set. Endpoints still come from
 environment variables at run time (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`,
 `GOOGLE_GEMINI_BASE_URL`, `VLLM_BASE_URL`, `OLLAMA_BASE_URL`, ...); a saved login
-stores only the key, plus the endpoint for Azure. `GOOGLE_GENAI_USE_VERTEXAI` and
-`GOOGLE_GENAI_USE_ENTERPRISE` do not change the endpoint: the `google` provider
+stores only the key and its connection settings, plus the endpoint for Azure.
+`GOOGLE_GENAI_USE_VERTEXAI` and `GOOGLE_GENAI_USE_ENTERPRISE` do not change the
+endpoint: the `google` provider
 always calls the Gemini Developer API with the key yian resolved, and yian warns
 once when either is set. Vertex AI is not supported, so a setup that relied on
 Vertex AI Application Default Credentials without an API key now fails with a
@@ -140,9 +139,10 @@ yian auth PROVIDER --remove     # delete PROVIDER's saved login
 ```
 
 The list shows each provider, its kind (`api-key`, `subscription`, or `none`), its
-model, an Azure endpoint, and which one is the default. It notes when
-`YIAN_DEFAULT_PROVIDER` or `YIAN_DEFAULT_MODEL` overrides the saved choice. It never
-prints a key or token.
+model, an Azure endpoint, its [connection settings](#connection-settings) (an
+OpenAI organization and project, and the names of its headers), and which one is
+the default. It notes when `YIAN_DEFAULT_PROVIDER` or `YIAN_DEFAULT_MODEL` overrides
+the saved choice. It never prints a key, token, or header value.
 
 Setup saves the provider's credential and its model together:
 
@@ -152,6 +152,9 @@ Setup saves the provider's credential and its model together:
 - Azure takes the resource endpoint with `--endpoint URL` and a key.
 - Ollama saves no credential. vLLM saves its key only if you give one; without a
   key the login's kind is `none`, and runs need no `VLLM_API_KEY`.
+- `--organization ID` and `--project ID` (OpenAI API key only) and
+  `--header NAME=VARIABLE` (any provider given a key) save
+  [connection settings](#connection-settings) with the key.
 
 `--model M` names the model; in a terminal, setup asks when it is omitted. The model
 is accepted when the provider's model listing has it. Otherwise, such as an alias the
@@ -212,6 +215,80 @@ Migrate native flows to `provider: openai` and remove `sandbox`, `cwd`, and
 `builtin_tools`. Grant registered Yian tools explicitly. Use fresh memory
 for old native sessions; ordinary message histories remain supported. Historical
 native execution requires the prior Yian version to resume.
+
+### Connection settings {#connection-settings}
+
+Some keys need more than the key: an OpenAI key in several organizations or
+projects, or a gateway in front of a provider that wants its own headers. These
+travel with the key as connection settings:
+
+- `organization` and `project` are the OpenAI organization and project ids, sent as
+  the `OpenAI-Organization` and `OpenAI-Project` headers. Only `provider: openai`
+  with an API key takes them, not a ChatGPT subscription. Each is non-empty visible
+  ASCII of at most 256 characters (`YIAN_MAX_ORGANIZATION_CHARS`).
+- `headers` are extra request headers, such as a gateway token, for every provider
+  yian sends a key to: not Ollama, a keyless vLLM server, or an OpenAI subscription.
+  Names are HTTP tokens compared without case, so two spellings of one name are
+  refused. Names yian sets itself are refused: the credential headers
+  `Authorization`, `Proxy-Authorization`, `x-api-key`, `api-key`, and
+  `x-goog-api-key`, the framing headers `Host`, `Content-Length`,
+  `Transfer-Encoding`, `Connection`, and `Content-Type`, and for `provider: openai`
+  also `OpenAI-Organization` and `OpenAI-Project` (use `organization` and `project`).
+  Values are visible ASCII, with spaces or tabs only between characters. A
+  connection sends at most 32 headers (`YIAN_MAX_CONNECTION_HEADERS`), and a name or
+  value is at most 8192 characters (`YIAN_MAX_HEADER_VALUE_CHARS`).
+
+The settings come with the key, from one place, never mixed:
+
+- A Python host passes them beside `api_key` and `provider` in the run's
+  `llm_config`, and they go to the agents that key goes to:
+
+  ```python
+  llm_config={
+      "provider": "openai",
+      "api_key": key,
+      "organization": "org-...",
+      "project": "proj_...",
+      "headers": {"X-Gateway-Token": token},
+  }
+  ```
+
+  The run records `organization`, `project`, and the header names on those agents,
+  never the header values. Pass the values again with the key, as
+  `resume_flow(..., api_key=key, headers={...})` and
+  `result.backward(..., api_key=key, headers={...})` (see [the Python
+  API](api.md#run_flow)).
+- A saved login sends the settings `yian auth` saved with it. The run records them
+  with the login's identity, header names only, and re-saving the login makes an
+  unfinished run fail on resume, as it does for a new key.
+- A key from the provider's variable, such as `OPENAI_API_KEY`, sends none.
+
+A flow file cannot set them at any level, and no `${...}` value supplies them.
+Header values are secrets: no run log, event, result, or manifest holds them, and a
+value a provider echoes in an error is replaced with `[REDACTED]`, however short it
+is. A model that sends any of these settings never follows a redirect, so neither the
+key nor the headers reach another host.
+
+To move off `OPENAI_ORG_ID`, `OPENAI_PROJECT_ID`, or the `*_CUSTOM_HEADERS`
+variables, save the settings with the login:
+
+```console
+yian auth openai --method api-key --api-key-env OPENAI_API_KEY \
+    --organization org-... --project proj_...
+yian auth anthropic --header X-Gateway-Token=GATEWAY_TOKEN
+```
+
+`--header NAME=VARIABLE` reads the value from the environment variable `VARIABLE`
+(`GATEWAY_TOKEN` above), and `--header NAME` asks for it with a hidden prompt; a
+value never comes from the command line. `--header` repeats for more headers. The
+model listing and the model check during setup send the settings too. Every save
+states them again: `yian auth PROVIDER` without them saves a login with none.
+
+Headers go only beside a key, so a keyless vLLM server (no `VLLM_API_KEY`) cannot
+take them, and `yian auth vllm --header ...` needs a key. When a gateway in front of
+vLLM wants a token, pass the token as the vLLM key instead (`VLLM_API_KEY`,
+`--api-key-env`, or the host's `api_key`); yian sends it as
+`Authorization: Bearer <token>`.
 
 ### Azure OpenAI
 

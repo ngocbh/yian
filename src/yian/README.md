@@ -185,11 +185,14 @@ API-key authentication uses the same Yian model/tool/memory pipeline.
 `llm_clients/auth/` owns staged login, private atomic credential storage, token
 refresh, and authenticated model discovery. The store keeps one login per
 provider (an API key, the OpenAI subscription, or no credential; Azure also its
-endpoint) and an optional default provider. `yian auth <provider>` saves a
-provider's credential and model together, and `--default` and `--remove` change
-the default or delete a login. `llm_clients/connection.py` records a `_connection`
-on every agent of a keyed provider (all but Ollama): a `store` connection pins
-the saved login by method, credential identity, endpoint, and store location; an
+endpoint; an API key also its connection settings) and an optional default
+provider. `yian auth <provider>` saves a provider's credential and model together,
+with `--organization`, `--project` (OpenAI API key), and `--header NAME=VARIABLE`
+connection settings, and `--default` and `--remove` change the default or delete a
+login. `llm_clients/connection.py` records a `_connection` on every agent of a
+keyed provider (all but Ollama): a `store` connection pins the saved login by
+method, credential identity, endpoint, and store location, plus an API-key login's
+`organization`, `project`, and sorted `header_names` when set; an
 `environment` connection names the provider's key variable, read when the model is
 built (OpenAI also records the key's hash). OpenAI request-time callbacks resolve
 credentials and refresh tokens for that identity; other providers resolve the
@@ -212,22 +215,26 @@ validation errors hide input values. Clients use it before the provider's key
 environment variable. `run_flow` pops the run layer's `api_key` before the cascade
 and `ConnectionSnapshot.bind` marks the effective config of every static agent of
 the run layer's provider with the nonsecret `_host_key: true` (OpenAI agents also
-record a `host` connection with no credential identity). `bind_api_key` then puts
-the key only on the run-local `llm_config` of marked agents, so `RunStarted`,
-events, results, and manifests never hold it. `resume_flow(api_key=...)` and
-`RunResult.backward(api_key=...)` bind a re-supplied key the same way on the
-replayed program; AGENT backward takes it from its live node config, the one live
-field it reads. `split_model_config` fails a marked config that has no key, so
-agents marked for the key never fall back to the environment. A key that marks no
-agent is dropped from the result and ignored by replay. Each OpenAI-family and
+record a `host` connection with no credential identity). The same agents record
+the run layer's `organization` and `project` as given and its header names, never
+their values, as the sorted `_header_names`. `bind_host_credentials` then puts the
+key and header values only on the run-local `llm_config` of marked agents, so
+`RunStarted`, events, results, and manifests never hold them.
+`resume_flow(api_key=..., headers=...)` and `RunResult.backward(api_key=...,
+headers=...)` bind a re-supplied key and header values the same way on the
+replayed program; AGENT backward takes them from its live node config, the one live
+field it reads. `split_model_config` fails a marked config that has no key, or
+whose headers lack the recorded names, so agents marked for the key never fall back
+to the environment. A key that marks no agent is dropped from the result, with its
+settings, and ignored by replay. Each OpenAI-family and
 Anthropic SDK client yian builds keeps only the custom headers yian or langchain
 set (`llm_clients.base_client.drop_environment_headers`): it drops those the SDK
 read from `OPENAI_CUSTOM_HEADERS` or `ANTHROPIC_CUSTOM_HEADERS` and the
 organization and project from `OPENAI_ORG_ID`, `OPENAI_ORGANIZATION`, and
 `OPENAI_PROJECT_ID`, so their values are never sent, and warns once per process
-with the names of any it drops. Flow runs cannot send these headers: `LLMConfig`
-has no `http_client`, and `model_from_config` passes none. Only code that builds a
-model with `create_llm_client(..., http_client=...)` can set them on that client.
+with the names of any it drops. Flow runs send such headers only as connection
+settings (below); a connection header replaces the environment's of the same name
+and is not reported as dropped.
 The ollama client deletes the `Authorization` header the ollama SDK built from
 `OLLAMA_API_KEY` (`NormalizedChatOllama`), so no key reaches Ollama, and warns once
 per process when it drops it (`base_client.warn_once`); Basic auth from userinfo in
@@ -248,15 +255,17 @@ access and refresh tokens, read without refresh); else the first set key
 variable of the provider (its own, then `GEMINI_API_KEY` for google or
 `OPENAI_API_KEY` for azure); plus `AZURE_OPENAI_AD_TOKEN` and
 `ANTHROPIC_AUTH_TOKEN` whenever set, though only a call given no key sends them
-(the Anthropic token only from a 0.x SDK).
+(the Anthropic token only from a 0.x SDK); plus every connection header value
+the call sends, however short.
 `AgentNode` forward and AGENT backward remove them and their masked fragments
 (`llm_clients.redact.scrub_keys`) before the kind-blind runtime records the
 failure, so the run log, results, events, and CLI output never carry them.
 `ProfileMemory.learn` and `ReflectiveMemory.learn` scrub the chained cause of
-their errors the same way, and `yian auth`'s model check scrubs the key it sends
-and the provider's token variable. Authored layers cannot set `api_key` or
-`_host_key`, because they reach the recorded effective map; the loader rejects a
-flow- or def-level `api_key`. The loader checks flow- and def-level `llm_config:` against
+their errors the same way, and `yian auth`'s model check scrubs the key and header
+values it sends and the provider's token variable. Authored layers cannot set
+`api_key`, the connection settings, `_host_key`, or `_header_names`, because they
+reach the recorded effective map; the loader rejects a flow- or def-level `api_key`
+or connection setting. The loader checks flow- and def-level `llm_config:` against
 `LLMConfig` as it does a node's, and the cascade rejects unknown keys in the host
 layer, so a typo never reaches the recorded map.
 
@@ -307,6 +316,32 @@ cannot redirect the key. It also re-checks a recorded `base_url` with
 backward reuse the recorded `base_url` with the re-supplied key; `ProfileMemory`
 takes one beside its own key; `ReflectiveMemory` rejects it, except an Azure
 endpoint.
+
+Connection settings travel with a key the same way: `organization` and `project`
+(OpenAI ids, `provider: openai` only, sent as `OpenAI-Organization` and
+`OpenAI-Project`) and `headers` (extra request headers such as a gateway token,
+refused for `ollama`). `llm_clients/connection_settings.py` holds their checks,
+shared by `LLMConfig`, the auth store, `yian auth`, and resume: header names are
+HTTP tokens compared without case, credential and framing headers are refused (and
+the OpenAI id headers for `openai`), values are visible ASCII, and
+`YIAN_MAX_CONNECTION_HEADERS`, `YIAN_MAX_HEADER_VALUE_CHARS`, and
+`YIAN_MAX_ORGANIZATION_CHARS` cap them. `LLMConfig.headers` is a
+`dict[str, SecretStr]` excluded from every dump, like `api_key`. `LLMConfig`
+accepts the settings only beside `api_key` and `provider`, and `run_flow` pops them
+with the key (`pop_host_credentials`). `ConnectionSnapshot.bind(host_settings=...)`
+records `organization` and `project` on the marked agents and the header names as
+`_header_names`, which is valid only beside `_host_key`. An agent on a saved login
+uses the settings saved with it (`organization`, `project`, and `header_names` in
+its `_connection`, pinned by its credential id), an environment key gets none, and
+a host key never picks up the saved login's. `resume_flow` and
+`RunResult.backward` check that given header names equal the recorded ones before
+appending anything. `model_from_config` passes the values to the client as
+`connection_headers`, a yian-only model field (`exclude=True`, `repr=False`) that
+each client adds to the SDK client's custom headers, so no langchain field, `repr`,
+or `dumpd` holds them. A model with connection headers never follows a redirect: the
+OpenAI-family and Azure clients give it yian's own cached non-redirecting httpx clients,
+leaving langchain's shared ones untouched, and a host `http_client` must not follow
+redirects.
 
 `provider: azure` is the one exception. Its `base_url` is the resource endpoint and
 its `model` the deployment name, and the client reads neither from the environment

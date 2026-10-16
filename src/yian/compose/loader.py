@@ -688,10 +688,11 @@ def _validate_authored_llm_config(
 ) -> None:
     """Check a flow- or def-level ``llm_config`` the way an AGENT node's own is checked.
 
-    The layer must be a mapping of `LLMConfig` fields without ``api_key``, or
-    ``base_url`` other than beside ``provider: azure``, which only the host sets. A text
-    field YAML read as non-text (such as ``model: 5``) is named by `not_text_error`; any
-    other violation keeps pydantic's message.
+    The layer must be a mapping of `LLMConfig` fields without ``api_key``,
+    ``organization``, ``project``, ``headers``, or ``base_url`` other than beside
+    ``provider: azure``, which only the host sets. A text field YAML read as non-text
+    (such as ``model: 5``) is named by `not_text_error`; any other violation keeps
+    pydantic's message.
     """
     if llm_config is None:
         return

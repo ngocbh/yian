@@ -579,6 +579,14 @@ the run's `llm_config` (it needs `provider`) and again to
 reaches every AGENT of that provider, `inherit: false` ones included. A
 `base_url` beside the key (https, or http for local hosts) is where that key is
 sent; the log records it on those agents and resume/backward reuse it.
+The connection settings `organization` and `project` (OpenAI ids, `provider: openai`
+only) and `headers` (extra request headers such as a gateway token; not `ollama`)
+follow the same rule: host-only, beside `api_key` and `provider`, never in a flow
+file. The log records `organization`, `project`, and the header names, never the
+header values, so pass them again as `resume_flow(..., api_key=key, headers={...})`
+or `result.backward(..., api_key=key, headers={...})`. A saved login brings the
+settings saved with it (`yian auth openai --organization ... --project ...`,
+`--header NAME=VARIABLE`); an environment key brings none.
 
 Model fields resolve **per field, most-specific wins**. An AGENT node fills only the fields
 it leaves unset from the layer outside it. Precedence (most specific first):
@@ -610,7 +618,7 @@ nodes:
 ### Provider blocks
 
 The top level of `llm_config:` holds only `provider`, `model`, and `inherit:` (plus the
-host-only `api_key`/`base_url`). Every request setting goes in a block named after a
+host-only `api_key`, `base_url`, `organization`, `project`, and `headers`). Every request setting goes in a block named after a
 provider. A node uses the block of its resolved provider; the other blocks are inert but
 still checked at load. A block mirrors the request body of the API yian calls (same
 names, nesting, and values) and is sent as written; the load check names the block,

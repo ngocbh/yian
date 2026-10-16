@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import os
 import sys
 from typing import Optional
@@ -22,6 +23,12 @@ from yian.llm_clients.api_key_env import (
 )
 from yian.llm_clients.config import SUPPORTED_LLM_PROVIDERS, validate_base_url
 from yian.llm_clients.connection import call_credentials
+from yian.llm_clients.connection_settings import (
+    validate_header_name,
+    validate_header_value,
+    validate_headers,
+    validate_organization,
+)
 from yian.llm_clients.factory import create_llm_client
 from yian.llm_clients.model_list import ModelListError, list_models
 from yian.llm_clients.redact import redact_keys, scrub_keys
@@ -39,6 +46,7 @@ _ELSEWHERE_ENV = {
     "anthropic": ("ANTHROPIC_API_URL", "ANTHROPIC_BASE_URL"),
     "google": ("GOOGLE_GEMINI_BASE_URL",),
 }
+_SETTINGS_NEED_API_KEY = "--organization, --project and --header apply to API-key authentication"
 
 
 def _require_terminal(option: str) -> None:
@@ -112,6 +120,87 @@ def _api_key(provider: str, variable: str, *, optional: bool = False) -> Optiona
     return key.strip()
 
 
+def _header_sources(specs: list[str], provider: str) -> dict[str, Optional[str]]:
+    """Check each ``--header`` and read the values given through environment variables.
+
+    ``NAME=VARIABLE`` reads the value from that variable; ``NAME`` alone leaves it to a
+    hidden prompt, which needs a terminal. Messages never contain a value or the
+    variable's name, since a mistyped option may put a value where the variable goes.
+
+    Args:
+        specs (`list[str]`): The ``--header`` options as given.
+        provider (`str`): The provider the headers go to.
+
+    Returns:
+        `dict[str, str | None]`: Each header name and its value, or `None` to prompt.
+
+    Raises:
+        AuthError: A name is not an HTTP token, is refused or repeated (names ignore
+            case), a variable is empty or unset, a value is not allowed, or a value
+            needs a prompt and no terminal is available.
+    """
+    sources: dict[str, Optional[str]] = {}
+    seen: set[str] = set()
+    for spec in specs:
+        name, has_variable, variable = spec.partition("=")
+        try:
+            validate_header_name(name, provider)
+        except ValueError as error:
+            raise AuthError(f"Invalid --header: {error}") from None
+        if name.lower() in seen:
+            raise AuthError(f"--header {name} is given more than once (names ignore case)")
+        seen.add(name.lower())
+        if not has_variable:
+            if not sys.stdin.isatty():
+                raise AuthError(
+                    f"--header {name} reads its value from a hidden prompt, which needs a "
+                    "terminal; use --header NAME=VARIABLE to read it from a variable"
+                )
+            sources[name] = None
+            continue
+        if not variable:
+            raise AuthError(f"--header {name}=VARIABLE needs an environment variable name")
+        value = os.environ.get(variable)
+        if not value:
+            raise AuthError(f"The environment variable given for --header {name} is not set")
+        try:
+            sources[name] = validate_header_value(name, value)
+        except ValueError as error:
+            raise AuthError(f"Invalid --header: {error}") from None
+    return sources
+
+
+def _headers(sources: Mapping[str, Optional[str]], provider: str) -> dict[str, str]:
+    """Prompt, hidden, for each header value not read yet, and check all of them.
+
+    Args:
+        sources (`Mapping[str, str | None]`): From `_header_sources`.
+        provider (`str`): The provider the headers go to.
+
+    Returns:
+        `dict[str, str]`: Each header name and its value.
+
+    Raises:
+        AuthError: A prompt is cancelled or left empty, or a value or the number of
+            headers is not allowed.
+    """
+    headers = {}
+    for name, value in sources.items():
+        if value is None:
+            import questionary
+
+            value = questionary.password(f"{name} header value:").ask()
+            if value is None:
+                raise AuthError(_CANCELLED)
+            if not value:
+                raise AuthError(f"Authentication cancelled; no value was given for {name}")
+        headers[name] = value
+    try:
+        return validate_headers(headers, provider)
+    except ValueError as error:
+        raise AuthError(f"Invalid --header: {error}") from None
+
+
 def _open_browser(url: str) -> None:
     """Present the login URL and open it with the host's browser."""
     typer.echo(f"Open this URL to sign in:\n{url}")
@@ -151,12 +240,18 @@ def _list() -> None:
     else:
         typer.echo("Saved logins:")
         for selection in state.selections:
-            endpoint = f", endpoint {selection.endpoint}" if selection.endpoint else ""
+            details = [_KINDS[selection.method], f"model {selection.model}"]
+            if selection.endpoint:
+                details.append(f"endpoint {selection.endpoint}")
+            if selection.organization:
+                details.append(f"organization {selection.organization}")
+            if selection.project:
+                details.append(f"project {selection.project}")
+            if selection.header_names:
+                # Header values are secrets; only their names are shown.
+                details.append(f"headers {', '.join(selection.header_names)}")
             default = " (default)" if selection.provider == state.default_provider else ""
-            typer.echo(
-                f"  {selection.provider}: {_KINDS[selection.method]}, "
-                f"model {selection.model}{endpoint}{default}"
-            )
+            typer.echo(f"  {selection.provider}: {', '.join(details)}{default}")
         if state.default_provider is None:
             typer.echo(_NO_DEFAULT)
     if overrides and state.selections:
@@ -189,14 +284,23 @@ def _check_options(
     endpoint: Optional[str],
     default: bool,
     remove: bool,
-) -> str:
-    """Validate the option combination and return the provider name to use.
+    organization: Optional[str] = None,
+    project: Optional[str] = None,
+    header: Optional[list[str]] = None,
+) -> tuple[str, dict[str, Optional[str]]]:
+    """Validate the option combination and return the provider name and headers to use.
 
     Azure setup also needs `OPENAI_API_VERSION` and a valid `endpoint`, when given.
+    `organization` and `project` apply to an OpenAI API key, and `header` to every
+    provider sent a key (see `_header_sources`).
+
+    Returns:
+        `tuple[str, dict[str, str | None]]`: The provider name, and each header name
+        with its value from the environment or `None` to prompt.
 
     Raises:
-        AuthError: The provider or an option does not apply, or Azure setup lacks
-            its API version or has an invalid endpoint.
+        AuthError: The provider or an option does not apply, a connection setting is
+            invalid, or Azure setup lacks its API version or has an invalid endpoint.
     """
     setup = {
         "--method": method,
@@ -204,6 +308,9 @@ def _check_options(
         "--model": model,
         "--api-key-env": api_key_env,
         "--endpoint": endpoint,
+        "--organization": organization,
+        "--project": project,
+        "--header": header or None,
     }
     given = [option for option, value in setup.items() if value is not None]
     if default and remove:
@@ -212,7 +319,8 @@ def _check_options(
         action = "--default" if default else "--remove"
         raise AuthError(f"{action} does not take {', '.join(given)}")
     if remove:
-        return provider  # A login saved by another yian version may name any provider.
+        # A login saved by another yian version may name any provider.
+        return provider, {}
     name = provider.lower()
     if name not in SUPPORTED_LLM_PROVIDERS:
         raise AuthError(
@@ -233,6 +341,22 @@ def _check_options(
         raise AuthError("Choose --login browser or --login device")
     if method == "api-key" and login is not None:
         raise AuthError("--login applies to subscription authentication")
+    if organization is not None or project is not None:
+        if name != "openai":
+            raise AuthError("--organization and --project apply only to openai")
+        if method == "subscription":
+            raise AuthError("--organization and --project apply to API-key authentication")
+        for field, value in (("organization", organization), ("project", project)):
+            if value is not None:
+                try:
+                    validate_organization(value, field)
+                except ValueError as error:
+                    raise AuthError(f"Invalid --{field}: {error}") from None
+    if header:
+        if name == "ollama":
+            raise AuthError("ollama takes no API key, so it takes no --header")
+        if method == "subscription":
+            raise AuthError("--header applies to API-key authentication")
     if name == "azure" and not default:
         # The Azure client reads the API version only from the environment.
         if not os.environ.get("OPENAI_API_VERSION"):
@@ -241,7 +365,7 @@ def _check_options(
             )
         if endpoint is not None:
             _check_endpoint(endpoint)
-    return name
+    return name, _header_sources(header or [], name)
 
 
 def _setup_openai(
@@ -251,14 +375,26 @@ def _setup_openai(
     model: Optional[str],
     api_key_env: str,
     make_default: bool,
+    organization: Optional[str] = None,
+    project: Optional[str] = None,
+    header_sources: Optional[Mapping[str, Optional[str]]] = None,
 ) -> None:
-    """Sign in to OpenAI, choose an available model, and save the login."""
+    """Sign in to OpenAI, choose an available model, and save the login.
+
+    An API key is saved with the given organization, project and headers, which its
+    model listing sends too; a subscription takes none of them.
+
+    Raises:
+        AuthError: Sign-in, a setting, the listing, or the model choice fails.
+    """
     method = method or _choose(
         "OpenAI authentication method:",
         ["subscription", "api-key"],
         default="subscription",
         option="--method",
     )
+    if method == "subscription" and (organization or project or header_sources):
+        raise AuthError(_SETTINGS_NEED_API_KEY)
     service = OpenAIAuth()
     if method == "subscription":
         login = login or _choose(
@@ -277,8 +413,16 @@ def _setup_openai(
     else:
         if login is not None:
             raise AuthError("--login applies to subscription authentication")
-        credentials = ApiKeyCredentials(_api_key("openai", api_key_env))
-        models = service.api_models(credentials)
+        key = _api_key("openai", api_key_env)
+        headers = _headers(header_sources or {}, "openai")
+        credentials = ApiKeyCredentials(key, headers)
+        try:
+            models = service.api_models(
+                credentials, organization=organization, project=project
+            )
+        except AuthError as error:
+            # The messages are fixed today; scrubbed so no sent secret can reach output.
+            raise AuthError(redact_keys(str(error), (key, *headers.values()))) from None
         choices = _text_models(models)
     if model is None:
         if not choices:
@@ -288,23 +432,36 @@ def _setup_openai(
         model = _choose("Model:", choices, default=choices[0], option="--model")
     if model not in models:
         raise AuthError("The selected model is not available for this connection")
-    store.save("openai", credentials, model, make_default=make_default)
+    store.save(
+        "openai",
+        credentials,
+        model,
+        organization=organization,
+        project=project,
+        make_default=make_default,
+    )
     typer.echo(f"Saved OpenAI {method} authentication with model {model}")
 
 
 def _model_answers(
-    provider: str, model: str, key: Optional[str], endpoint: Optional[str]
+    provider: str,
+    model: str,
+    key: Optional[str],
+    endpoint: Optional[str],
+    headers: Optional[Mapping[str, str]] = None,
 ) -> Optional[str]:
     """Send the model one short prompt and say why it failed, if it did.
 
-    The client is built from the given key and endpoint only. Without a key, vLLM
-    gets the dummy key its client sends to a keyless server, and Ollama sends none.
+    The client is built from the given key, endpoint and headers only. Without a
+    key, vLLM gets the dummy key its client sends to a keyless server, and Ollama
+    sends none.
 
     Args:
         provider (`str`): Provider name.
         model (`str`): Model id, or the Azure deployment name.
         key (`str | None`): API key to send, or `None` for none.
         endpoint (`str | None`): Azure resource endpoint, or `None`.
+        headers (`Mapping[str, str] | None`): Connection headers sent beside the key.
 
     Returns:
         `str | None`: `None` when the model replied; otherwise the error type and
@@ -319,6 +476,8 @@ def _model_answers(
         # Passed explicitly so an ambient VLLM_API_KEY doesn't stand in for the
         # keyless login being saved.
         options["api_key"] = "EMPTY"
+    if headers:
+        options["connection_headers"] = dict(headers)
     try:
         with warnings.catch_warnings():
             # The reply decides whether the model is usable, not yian's catalog.
@@ -333,7 +492,8 @@ def _model_answers(
         # call_credentials also lists a set token variable (AZURE_OPENAI_AD_TOKEN,
         # ANTHROPIC_AUTH_TOKEN), though a call given a key doesn't send it. A keyless
         # check sends no saved or ambient key, so none is looked up.
-        secrets = () if key is None else call_credentials({"provider": provider, "api_key": key})
+        sent = {"provider": provider, "api_key": key, "headers": dict(headers or {})}
+        secrets = tuple((headers or {}).values()) if key is None else call_credentials(sent)
         scrub_keys(error, secrets)
         # Some errors, such as pydantic's ValidationError, build their text from
         # fields scrub_keys does not rewrite, so the text is redacted again.
@@ -349,13 +509,16 @@ def _setup_provider(
     api_key_env: Optional[str],
     endpoint: Optional[str],
     make_default: bool,
+    header_sources: Optional[Mapping[str, Optional[str]]] = None,
 ) -> None:
     """Read a provider's key, endpoint, and model, check the model, and save the login.
 
     A model in the provider's listing is accepted as is. Any other model, every
     Azure deployment, and every model when a variable in `_ELSEWHERE_ENV` sends runs
     to another host, must answer one short prompt. vLLM's key is optional unless
-    `api_key_env` names its variable.
+    `api_key_env` names its variable or headers are given, since headers are sent
+    only beside a key. The listing and the reply check send the headers, which are
+    saved with the key.
 
     Raises:
         AuthError: A value is missing or invalid, or the model did not answer.
@@ -371,8 +534,11 @@ def _setup_provider(
         key = _api_key(
             provider,
             api_key_env or PROVIDER_API_KEY_ENV[provider],
-            optional=provider in OPTIONAL_API_KEY_PROVIDERS and api_key_env is None,
+            optional=provider in OPTIONAL_API_KEY_PROVIDERS
+            and api_key_env is None
+            and not header_sources,
         )
+    headers = _headers(header_sources or {}, provider)
     models = None
     if provider == "azure":
         model = model or _ask("Deployment name:", option="--model")
@@ -388,9 +554,10 @@ def _setup_provider(
         failure = None
         if elsewhere is None:
             try:
-                models = list_models(provider, key, base_url)
+                models = list_models(provider, key, base_url, headers=headers)
             except ModelListError as error:
-                failure = str(error)
+                # The reasons are fixed today; scrubbed so no sent secret can reach output.
+                failure = redact_keys(str(error), (key, *headers.values()))
         if model is None:
             if elsewhere is not None:
                 typer.echo(
@@ -409,14 +576,14 @@ def _setup_provider(
                 )
                 model = _ask("Model:", option="--model")
     if models is None or model not in models:
-        problem = _model_answers(provider, model, key, endpoint)
+        problem = _model_answers(provider, model, key, endpoint, headers)
         if problem:
             raise AuthError(
                 f"The model didn't answer: {problem}; the previous login is unchanged"
             )
     store.save(
         provider,
-        ApiKeyCredentials(key) if key else None,
+        ApiKeyCredentials(key, headers) if key else None,
         model,
         endpoint=endpoint,
         make_default=make_default,
@@ -446,6 +613,19 @@ def auth(
     endpoint: Optional[str] = typer.Option(
         None, help="Azure resource endpoint, such as https://NAME.openai.azure.com/."
     ),
+    organization: Optional[str] = typer.Option(
+        None, help="OpenAI API key only: organization id sent with each request."
+    ),
+    project: Optional[str] = typer.Option(
+        None, help="OpenAI API key only: project id sent with each request."
+    ),
+    header: Optional[list[str]] = typer.Option(
+        None,
+        "--header",
+        help="Extra request header, such as a gateway token, saved with the key; "
+        "repeatable. NAME=VARIABLE reads the value from that environment variable, "
+        "NAME alone from a hidden prompt.",
+    ),
     default: bool = typer.Option(
         False, "--default", help="Make an already-saved provider the default."
     ),
@@ -467,6 +647,13 @@ def auth(
     ANTHROPIC_BASE_URL set, the listing is skipped and the model must answer.
     azure also needs OPENAI_API_VERSION set.
 
+    An openai API key may be saved with --organization and --project, and
+    every provider sent a key with --header; the model listing and the reply
+    check send them too. Values never come from the command line: --header
+    NAME=VARIABLE reads one from an environment variable, and --header NAME
+    from a hidden prompt. Each save states them again: a save without them
+    keeps none.
+
     `yian auth PROVIDER --default` makes a saved login the default.
     `yian auth PROVIDER --remove` deletes one saved login.
 
@@ -483,6 +670,10 @@ def auth(
             entry in `PROVIDER_API_KEY_ENV` when omitted. Refused for ollama.
         endpoint (`str | None`): Azure resource endpoint; azure only; omitted values
             prompt.
+        organization (`str | None`): OpenAI organization id; openai API key only.
+        project (`str | None`): OpenAI project id; openai API key only.
+        header (`list[str] | None`): Connection headers as ``NAME=VARIABLE`` or
+            ``NAME``; refused for ollama and an openai subscription.
         default (`bool`): Make the saved provider the default without signing in.
         remove (`bool`): Delete the provider's saved login; accepts any saved name,
             and a lowercase saved name in any case.
@@ -494,12 +685,14 @@ def auth(
         if provider is None:
             if default or remove or any(
                 value is not None
-                for value in (method, login, model, api_key_env, endpoint)
-            ):
+                for value in (
+                    method, login, model, api_key_env, endpoint, organization, project
+                )
+            ) or header:
                 raise AuthError("Name a provider: yian auth <provider> [options]")
             _list()
             return
-        provider = _check_options(
+        provider, header_sources = _check_options(
             provider,
             method=method,
             login=login,
@@ -508,6 +701,9 @@ def auth(
             endpoint=endpoint,
             default=default,
             remove=remove,
+            organization=organization,
+            project=project,
+            header=header,
         )
         store = AuthStore()
         if remove:
@@ -529,10 +725,20 @@ def auth(
         current = store.read().default_provider
         if provider == "openai":
             _setup_openai(
-                store, method, login, model, api_key_env or "OPENAI_API_KEY", current is None
+                store,
+                method,
+                login,
+                model,
+                api_key_env or "OPENAI_API_KEY",
+                current is None,
+                organization,
+                project,
+                header_sources,
             )
         else:
-            _setup_provider(store, provider, model, api_key_env, endpoint, current is None)
+            _setup_provider(
+                store, provider, model, api_key_env, endpoint, current is None, header_sources
+            )
         if current in (None, provider):
             typer.echo(f"Default provider: {provider}")
         else:

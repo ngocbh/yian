@@ -159,3 +159,70 @@ def test_host_key_resume_and_backward(tmp_path, monkeypatch):
         assert provider == "anthropic"
         assert _plain(kwargs["api_key"]) == "host-key"
         assert "base_url" not in kwargs
+
+
+_SAVED_HEADER = "saved-gw-51ad0e"
+_CONNECTION_FIELDS = {"method", "source", "credential_id", "endpoint", "store_path"}
+
+
+def _connection_headers(kwargs):
+    return {name: value.get_secret_value() for name, value in kwargs["connection_headers"].items()}
+
+
+def test_saved_settings_are_recorded_by_name_and_sent_on_resume(tmp_path, monkeypatch):
+    AuthStore().save(
+        "openai", ApiKeyCredentials("sk-saved", {"X-Gateway": _SAVED_HEADER}), "gpt-x",
+        organization="org-saved", project="proj-saved",
+    )
+    flow = _flow("openai", "gpt-x")
+    path = tmp_path / "run.jsonl"
+    _interrupt(flow, path)
+    connection = _recorded(path)["_connection"]
+    assert connection["organization"] == "org-saved"
+    assert connection["project"] == "proj-saved"
+    assert connection["header_names"] == ["X-Gateway"]
+    assert _SAVED_HEADER.encode() not in path.read_bytes()
+    assert b"sk-saved" not in path.read_bytes()
+
+    built = _fake_clients(monkeypatch)
+    result = resume_flow(flow, log=path)
+
+    assert result.status == "succeeded", result.failure
+    [(provider, kwargs)] = built
+    assert provider == "openai"
+    assert _connection_headers(kwargs) == {
+        "OpenAI-Organization": "org-saved", "OpenAI-Project": "proj-saved",
+        "X-Gateway": _SAVED_HEADER,
+    }
+
+
+def test_a_login_without_settings_records_and_replays_the_old_fields(tmp_path, monkeypatch):
+    AuthStore().save("anthropic", ApiKeyCredentials("saved-key"), "claude-x")
+    flow = _flow("anthropic", "claude-x")
+    path = tmp_path / "run.jsonl"
+    _interrupt(flow, path)
+    assert set(_recorded(path)["_connection"]) == _CONNECTION_FIELDS
+
+    built = _fake_clients(monkeypatch)
+    result = resume_flow(flow, log=path)
+
+    assert result.status == "succeeded", result.failure
+    assert _plain(built[0][1]["api_key"]) == "saved-key"
+    assert "connection_headers" not in built[0][1]
+
+
+def test_a_host_key_run_never_sends_the_saved_settings(tmp_path, monkeypatch):
+    AuthStore().save("anthropic", ApiKeyCredentials("saved-key", {"X-Gateway": _SAVED_HEADER}),
+                     "claude-x")
+    flow = _flow("anthropic", "claude-x")
+    path = tmp_path / "run.jsonl"
+    _interrupt(flow, path, llm_config={"provider": "anthropic", "api_key": "host-key"})
+    recorded = _recorded(path)
+    assert "_connection" not in recorded and "_header_names" not in recorded
+
+    built = _fake_clients(monkeypatch)
+    result = resume_flow(flow, log=path, api_key="host-key")
+
+    assert result.status == "succeeded", result.failure
+    assert _plain(built[0][1]["api_key"]) == "host-key"
+    assert "connection_headers" not in built[0][1]

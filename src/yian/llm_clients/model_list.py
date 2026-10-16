@@ -1,14 +1,14 @@
 """List the model ids a provider's host offers, for model pickers and key checks.
 
-A listing uses only the key and base URL passed in, never a key from the
-environment, so a host can try a key before it saves it. Providers echo rejected
-keys in error bodies, so every failure raises a `ModelListError` with a short
-fixed reason and nothing chained to it.
+A listing uses only the key, base URL and connection settings passed in, never
+values from the environment, so a host can try a key before it saves it. Providers
+echo rejected keys and headers in error bodies, so every failure raises a
+`ModelListError` with a short fixed reason and nothing chained to it.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from functools import partial
 import math
 import time
@@ -21,6 +21,7 @@ from .auth.common import HttpResponse, _text
 from .auth.http import _request
 from .config import validate_base_url
 from .connection import _API_ENDPOINT as _OPENAI_BASE_URL
+from .connection_settings import openai_id_headers, validate_headers
 from .factory import _OPENAI_COMPATIBLE, _PROVIDER_BASE_URL
 
 _ANTHROPIC_BASE_URL = "https://api.anthropic.com"
@@ -40,7 +41,7 @@ class ModelListError(Exception):
 
     The message is one of `HTTP <status>`, `can't reach host`, `timed out`,
     `invalid request`, `invalid response`, or `unsupported provider`; it never holds
-    the key, the URL, or the response body.
+    the key, a header value, the URL, or the response body.
     """
 
 
@@ -51,6 +52,9 @@ def list_models(
     *,
     timeout: float = 8,
     request: Optional[Callable[..., HttpResponse]] = None,
+    headers: Optional[Mapping[str, Any]] = None,
+    organization: Optional[str] = None,
+    project: Optional[str] = None,
 ) -> Optional[tuple[str, ...]]:
     """Return the model ids the provider's host offers, sorted and without duplicates.
 
@@ -58,7 +62,7 @@ def list_models(
     following every page; Google keeps only models that support `generateContent`,
     without the `models/` prefix. OpenAI-compatible providers list `{base}/models`.
     Ollama lists its local tags at `{base}/api/tags`. Redirects are refused, so the
-    key goes only to the host asked.
+    key and connection settings go only to the host asked.
 
     Args:
         provider (`str`):
@@ -80,6 +84,15 @@ def list_models(
             Sends one GET, given the method, URL, and `headers` and `timeout`
             keywords; tests inject a fake. `None` uses the stdlib transport in
             `auth.http`, which refuses redirects.
+        headers (`Mapping[str, str | SecretStr]`, *optional*, defaults to `None`):
+            Extra request headers sent beside the key, such as a gateway token, checked
+            by `connection_settings.validate_headers`. Sent only with a key, so never
+            to Ollama; they never replace the key or protocol headers yian sends.
+        organization (`str`, *optional*, defaults to `None`):
+            OpenAI organization id, sent as `OpenAI-Organization`. Only for `openai`
+            with a key.
+        project (`str`, *optional*, defaults to `None`):
+            OpenAI project id, sent as `OpenAI-Project`. Only for `openai` with a key.
 
     Returns:
         `tuple[str, ...] | None`:
@@ -87,9 +100,10 @@ def list_models(
 
     Raises:
         `ModelListError`:
-            Raised for an unsupported provider, an invalid key, URL, or timeout, a
-            non-2xx status, an unreachable host, an exhausted timeout, or a response
-            that is not a model list.
+            Raised for an unsupported provider, an invalid key, URL, timeout, or
+            connection setting (or one given without a key), a non-2xx status, an
+            unreachable host, an exhausted timeout, or a response that is not a model
+            list.
 
     Example:
         >>> list_models("openrouter", api_key)  # doctest: +SKIP
@@ -98,10 +112,10 @@ def list_models(
     name = provider.lower() if isinstance(provider, str) else ""
     if name == "azure":
         return None
-    headers = {"User-Agent": "yian"}
+    protocol = {}
     if name == "anthropic":
         base, pages = base_url or _ANTHROPIC_BASE_URL, _anthropic_ids
-        headers["anthropic-version"] = _ANTHROPIC_VERSION
+        protocol["anthropic-version"] = _ANTHROPIC_VERSION
         auth = {"x-api-key": api_key}
     elif name == "google":
         base, pages = base_url or _GOOGLE_BASE_URL, _google_ids
@@ -122,6 +136,11 @@ def list_models(
     sends_key = bool(api_key) and bool(auth)
     if not _valid_request(base, api_key, timeout, check_url=sends_key and base_url is not None):
         raise ModelListError("invalid request")
+    settings = _connection_headers(name, sends_key, headers, organization, project)
+    if settings is None:
+        raise ModelListError("invalid request")
+    # Connection headers go first so the protocol and key headers win a name clash.
+    headers = {"User-Agent": "yian", **settings, **protocol}
     if sends_key:
         headers.update(auth)
     base = base.rstrip("/")
@@ -159,6 +178,44 @@ def _valid_request(base: Any, api_key: Any, timeout: Any, *, check_url: bool) ->
     except ValueError:
         return False
     return parts.scheme in ("http", "https") and bool(parts.netloc)
+
+
+def _connection_headers(
+    provider: str,
+    sends_key: bool,
+    headers: Any,
+    organization: Any,
+    project: Any,
+) -> Optional[dict[str, str]]:
+    """Return the connection settings as request headers, or `None` if they are refused.
+
+    The validators' messages are dropped: the caller raises a fixed reason, so no
+    header value or id can reach the error.
+
+    Args:
+        provider (`str`): The provider listed; only ``"openai"`` takes the ids.
+        sends_key (`bool`): Whether the listing sends a key; settings need one.
+        headers (`Any`): The candidate extra headers, or `None`.
+        organization (`Any`): The candidate OpenAI organization id, or `None`.
+        project (`Any`): The candidate OpenAI project id, or `None`.
+
+    Returns:
+        `dict[str, str] | None`: The extra headers, then ``OpenAI-Organization`` and
+            ``OpenAI-Project`` for the ids set; `{}` when no setting is given; `None`
+            when a setting is refused, is given without a key, or gives ids to a
+            provider other than ``openai``.
+    """
+    no_headers = headers is None or (isinstance(headers, Mapping) and not headers)
+    if no_headers and organization is None and project is None:
+        return {}
+    if not sends_key or (provider != "openai" and (organization, project) != (None, None)):
+        return None
+    try:
+        settings = validate_headers({} if headers is None else headers, provider)
+        settings.update(openai_id_headers(organization, project))
+    except ValueError:
+        return None
+    return settings
 
 
 def _fetch(

@@ -19,7 +19,7 @@ from openai import Omit
 from tests.fixtures.openai_responses import ResponsesServer
 from tests.test_llm_client_blocks_anthropic import _anthropic_httpx, _Server
 from tests.test_llm_client_http_clients import _GEMINI_REPLY
-from yian.llm_clients import anthropic_client, base_client, google_client
+from yian.llm_clients import anthropic_client, base_client, google_client, openai_client
 from yian.llm_clients.connection import call_credentials, resolve_model_config
 from yian.llm_clients.factory import create_llm_client
 from yian.llm_clients.openai_client import NormalizedChatOpenAI
@@ -69,6 +69,20 @@ CHAT_REPLY = {
 def fresh_warned(monkeypatch):
     """Forget which once-per-process warnings were shown, so each test sees its own."""
     monkeypatch.setattr(base_client, "_warned", set())
+
+
+@pytest.fixture(autouse=True)
+def fresh_http_clients():
+    """Forget the shared non-redirecting HTTP clients before and after each test.
+
+    Tests route those clients to mock transports and read proxy variables into them, so
+    no test may see another's.
+    """
+    openai_client._no_redirect_client.cache_clear()
+    google_client._no_redirect_async_client.cache_clear()
+    yield
+    openai_client._no_redirect_client.cache_clear()
+    google_client._no_redirect_async_client.cache_clear()
 
 
 @pytest.fixture
@@ -341,7 +355,9 @@ def test_openai_warns_when_it_drops_env_headers(poisoned_env):
     [message] = {str(w.message) for w in record if _DROP_WARNING in str(w.message)}
     _assert_names_without_values(
         message, "OpenAI-Organization", "X-Env-Injected", "OPENAI_CUSTOM_HEADERS",
-        "OPENAI_ORGANIZATION", "Unset", "create_llm_client", "http_client",
+        "OPENAI_ORGANIZATION", "llm_config.headers", "llm_config.organization",
+        "llm_config.project", "yian auth", "connection_headers to create_llm_client",
+        "unset the variable",
     )
 
 
@@ -385,8 +401,10 @@ def test_anthropic_warns_when_it_drops_env_headers(poisoned_env):
         chat._client
     [message] = {str(w.message) for w in record if _DROP_WARNING in str(w.message)}
     _assert_names_without_values(
-        message, "X-Env-Injected", "ANTHROPIC_CUSTOM_HEADERS", "create_llm_client", "http_client"
+        message, "X-Env-Injected", "ANTHROPIC_CUSTOM_HEADERS", "llm_config.headers", "yian auth",
+        "connection_headers to create_llm_client",
     )
+    assert "llm_config.organization" not in message
 
 
 def test_anthropic_without_env_headers_does_not_warn(poisoned_env):

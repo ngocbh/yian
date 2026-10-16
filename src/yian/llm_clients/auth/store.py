@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import asdict
 import fcntl
 import json
 import os
@@ -26,15 +25,44 @@ from .common import (
 )
 
 
+# Entry keys written only when set, so a login without them is stored as before.
+_OPTIONAL_ENTRY_KEYS = frozenset({"endpoint", "organization", "project"})
+
+
+def _header_names(credentials: Credentials | None) -> tuple[str, ...]:
+    if isinstance(credentials, ApiKeyCredentials):
+        return tuple(name for name, _ in credentials.headers)
+    return ()
+
+
+def _dump_credentials(credentials: Credentials | None) -> dict | None:
+    # Written field by field so a login without headers keeps its stored bytes.
+    if credentials is None:
+        return None
+    if isinstance(credentials, ApiKeyCredentials):
+        value: dict = {"api_key": credentials.api_key}
+        if credentials.headers:
+            value["headers"] = dict(credentials.headers)
+        return value
+    return {
+        "access_token": credentials.access_token,
+        "refresh_token": credentials.refresh_token,
+        "expires_at": credentials.expires_at,
+        "account_id": credentials.account_id,
+        "residency": credentials.residency,
+    }
+
+
 class AuthStore:
     """Persist one saved login per provider, with an optional default, privately.
 
     A login holds an API key, a subscription, or no credential; an Azure login
-    also holds its endpoint. Reading a missing store never creates a directory
-    or lock file. Selection and credentials are committed together by ``save``
-    after host validation; ``remove`` and ``set_default`` change a saved store
-    and never create one. Refresh reloads under the same lock and cannot
-    replace a newer connection.
+    also holds its endpoint. An API-key login may hold connection settings: extra
+    request headers and, for ``openai``, an organization and project id. Reading
+    a missing store never creates a directory or lock file. Selection and
+    credentials are committed together by ``save`` after host validation;
+    ``remove`` and ``set_default`` change a saved store and never create one.
+    Refresh reloads under the same lock and cannot replace a newer connection.
     """
 
     def __init__(
@@ -160,33 +188,28 @@ class AuthStore:
                 raise ValueError
             providers = {}
             for provider, entry in value["providers"].items():
-                if type(entry) is not dict or set(entry) - {"endpoint"} != {
+                if type(entry) is not dict or set(entry) - _OPTIONAL_ENTRY_KEYS != {
                     "method",
                     "model",
                     "credential_id",
                     "credentials",
                 }:
                     raise ValueError
+                # The writer omits unset ids, so a stored null is not canonical. A null
+                # endpoint stays readable, as stores before these ids allowed it.
+                if any(entry.get(key, "") is None for key in ("organization", "project")):
+                    raise ValueError
+                credentials = self._load_credentials(entry["method"], entry["credentials"])
                 selection = ProviderSelection(
                     provider,
                     entry["method"],
                     entry["model"],
                     entry["credential_id"],
                     entry.get("endpoint"),
+                    entry.get("organization"),
+                    entry.get("project"),
+                    _header_names(credentials),
                 )
-                if selection.method == "none":
-                    if entry["credentials"] is not None:
-                        raise ValueError
-                    credentials = None
-                else:
-                    if type(entry["credentials"]) is not dict:
-                        raise ValueError
-                    kind = (
-                        ApiKeyCredentials
-                        if selection.method == "api_key"
-                        else OAuthCredentials
-                    )
-                    credentials = kind(**entry["credentials"])
                 providers[provider] = (selection, credentials)
             default = value["default_provider"]
             if default is not None and (
@@ -199,6 +222,24 @@ class AuthStore:
                 "Credential storage is malformed; reconnect after repairing it"
             ) from None
 
+    @staticmethod
+    def _load_credentials(method: object, value: object) -> Credentials | None:
+        if method == "none":
+            if value is not None:
+                raise ValueError
+            return None
+        if type(value) is not dict:
+            raise ValueError
+        if method != "api_key":
+            return OAuthCredentials(**value)
+        if set(value) - {"headers"} != {"api_key"}:
+            raise ValueError
+        headers = value.get("headers", {})
+        # The writer omits empty headers, so a stored empty mapping is not canonical.
+        if "headers" in value and (type(headers) is not dict or not headers):
+            raise ValueError
+        return ApiKeyCredentials(value["api_key"], tuple(headers.items()))
+
     def _write(self, directory: int, default: str | None, providers: dict) -> None:
         value = {
             "version": 1,
@@ -208,12 +249,12 @@ class AuthStore:
                     "method": selection.method,
                     "model": selection.model,
                     "credential_id": selection.credential_id,
-                    "credentials": None if credentials is None else asdict(credentials),
-                    **(
-                        {}
-                        if selection.endpoint is None
-                        else {"endpoint": selection.endpoint}
-                    ),
+                    "credentials": _dump_credentials(credentials),
+                    **{
+                        key: getattr(selection, key)
+                        for key in sorted(_OPTIONAL_ENTRY_KEYS)
+                        if getattr(selection, key) is not None
+                    },
                 }
                 for provider, (selection, credentials) in providers.items()
             },
@@ -269,9 +310,9 @@ class AuthStore:
             provider (`str`): Saved provider name.
 
         Returns:
-            `tuple[str, ...]`: ``(api_key,)`` for an API-key login,
-                ``(access_token, refresh_token)`` for a subscription, and ``()``
-                for a login without a credential or no login.
+            `tuple[str, ...]`: ``(api_key, *header_values)`` for an API-key
+                login, ``(access_token, refresh_token)`` for a subscription, and
+                ``()`` for a login without a credential or no login.
 
         Raises:
             `AuthError`: The store is malformed or cannot be read.
@@ -281,7 +322,7 @@ class AuthStore:
             _, providers = self._load(directory)
         credentials = providers.get(provider, (None, None))[1]
         if isinstance(credentials, ApiKeyCredentials):
-            return (credentials.api_key,)
+            return (credentials.api_key, *(value for _, value in credentials.headers))
         if isinstance(credentials, OAuthCredentials):
             return (credentials.access_token, credentials.refresh_token)
         return ()
@@ -293,16 +334,25 @@ class AuthStore:
         model: str,
         *,
         endpoint: str | None = None,
+        organization: str | None = None,
+        project: str | None = None,
         make_default: bool = True,
     ) -> ProviderSelection:
         """Atomically reconnect a provider and optionally make it the default.
 
+        The new login replaces the old one with its settings: settings not given
+        here are not kept.
+
         Args:
             provider (str): Provider name to save the login under.
             credentials (Credentials | None): The validated credential, or
-                ``None`` for a provider that needs none.
+                ``None`` for a provider that needs none. An API key's headers
+                are saved with it.
             model (str): Model to select for the provider.
             endpoint (str | None): Provider base URL, such as an Azure resource.
+            organization (str | None): OpenAI organization id; ``openai`` API
+                key only.
+            project (str | None): OpenAI project id; ``openai`` API key only.
             make_default (bool): Whether the provider becomes the default.
 
         Returns:
@@ -318,7 +368,14 @@ class AuthStore:
             raise AuthError("Unsupported credential type")
         method = "none" if credentials is None else credentials.method
         selection = ProviderSelection(
-            provider, method, model, secrets.token_hex(16), endpoint
+            provider,
+            method,
+            model,
+            secrets.token_hex(16),
+            endpoint,
+            organization,
+            project,
+            _header_names(credentials),
         )
         self._check_stopped()
         with self._directory(create=True) as directory:

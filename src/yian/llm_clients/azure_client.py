@@ -17,7 +17,12 @@ from pydantic.fields import FieldInfo
 from .base_client import BaseLLMClient, normalize_content
 from .capabilities import has_open_schema
 from .config import AZURE_NEEDS_BASE_URL, azure_resource_endpoint
-from .openai_client import RequestBlockMixin, _strict_false_for_open_schema
+from .openai_client import (
+    RequestBlockMixin,
+    _strict_false_for_open_schema,
+    check_connection_headers,
+    connection_header_clients,
+)
 from .validators import validate_model
 
 _PASSTHROUGH_KWARGS = (
@@ -386,8 +391,13 @@ class AzureOpenAIClient(BaseLLMClient):
     def get_llm(self) -> Any:
         """Return configured AzureChatOpenAI instance.
 
+        ``connection_headers`` (`dict[str, str | SecretStr]`, a keyword argument) are sent
+        with every request; such a model never follows a redirect.
+
         Raises:
-            `ValueError`: No ``base_url`` was given.
+            `ValueError`: No ``base_url`` was given, a connection header is refused
+                (`check_connection_headers`), or a host HTTP client beside connection
+                headers follows redirects.
         """
         if not self.base_url:
             raise ValueError(AZURE_NEEDS_BASE_URL)
@@ -408,6 +418,16 @@ class AzureOpenAIClient(BaseLLMClient):
         for key in _PASSTHROUGH_KWARGS:
             if key in self.kwargs:
                 llm_kwargs[key] = self.kwargs[key]
+        if self.kwargs.get("connection_headers"):
+            llm_kwargs["connection_headers"] = check_connection_headers(
+                self.kwargs["connection_headers"], "azure"
+            )
+            # langchain's Azure client ignores OPENAI_PROXY, so the shared clients do too.
+            llm_kwargs.update(connection_header_clients(self.kwargs))
+            if not any(key in self.kwargs for key in ("http_client", "http_async_client")):
+                # langchain turns stream_usage on only when no HTTP client is passed, as
+                # it would have been without the shared clients.
+                llm_kwargs.setdefault("stream_usage", True)
 
         return NormalizedAzureChatOpenAI(
             **llm_kwargs, block=self.kwargs.get("block") or {}, block_provider="azure",

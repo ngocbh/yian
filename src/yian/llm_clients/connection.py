@@ -14,6 +14,7 @@ effects.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 import copy
 from dataclasses import dataclass
 import hashlib
@@ -35,17 +36,22 @@ from .auth import (
 from .config import (
     AZURE_NEEDS_BASE_URL,
     RETIRED_LLM_CONFIG_KEYS,
+    HostConnection,
     LLMConfig,
     SUPPORTED_LLM_PROVIDERS,
     azure_resource_endpoint,
     validate_base_url,
 )
+from .connection_settings import validate_header_name, validate_organization
 from .provider_blocks import block_schema
 from .redact import scrub_keys
 
 _API_ENDPOINT = "https://api.openai.com/v1"
 _SUBSCRIPTION_ENDPOINT = "https://chatgpt.com/backend-api/codex"
 _FIELDS = {"method", "source", "credential_id", "endpoint", "store_path"}
+# Optional fields of a saved API-key login's connection: the connection settings saved
+# with it, header names only. Records made before them carry none.
+_SETTINGS_FIELDS = {"organization", "project", "header_names"}
 # Providers whose agents authenticate with a key and so carry a connection.
 _KEYED = frozenset(SUPPORTED_LLM_PROVIDERS) - {"ollama"}
 # Providers whose saved login may hold no credential: Ollama sends none, and vLLM
@@ -65,6 +71,14 @@ HOST_KEY_MARKER = "_host_key"
 _HOST_KEY_MISSING = (
     "This run's {provider} API key came from the host's llm_config.api_key and is not "
     "recorded; pass api_key to resume_flow or RunResult.backward"
+)
+# Recorded beside HOST_KEY_MARKER: the sorted names of the headers the host sent with
+# its key. Their values, like the key, are never recorded.
+HEADER_NAMES_KEY = "_header_names"
+_HOST_HEADERS_MISSING = (
+    "This run's {provider} connection headers {names} came from the host's "
+    "llm_config.headers and are not recorded; pass headers to resume_flow or "
+    "RunResult.backward"
 )
 # Key variables a provider SDK reads after the provider's own, and only when yian
 # passes it no key.
@@ -147,6 +161,7 @@ class ConnectionSnapshot:
         *,
         host_key_provider: str | None = None,
         host_base_url: str | None = None,
+        host_settings: HostConnection | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Attach selected connection identity without changing any input maps.
 
@@ -162,14 +177,25 @@ class ConnectionSnapshot:
         OpenAI agent records a ``host`` connection instead of the saved or
         environment one; other providers record no connection. ``host_base_url``,
         the endpoint the host gave with that key, is recorded on those agents
-        only, and is the OpenAI host connection's endpoint.
+        only, and is the OpenAI host connection's endpoint. ``host_settings``, the
+        connection settings the host gave with that key, is recorded on the same
+        agents: ``organization`` and ``project`` as given, and the header names
+        (never their values) sorted under ``HEADER_NAMES_KEY``. Its key is ignored.
         """
+        recorded: dict[str, Any] = {}
+        if host_settings is not None:
+            for field in ("organization", "project"):
+                if getattr(host_settings, field) is not None:
+                    recorded[field] = getattr(host_settings, field)
+            if host_settings.headers:
+                recorded[HEADER_NAMES_KEY] = sorted(host_settings.headers)
         result = copy.deepcopy(effective)
         for config in result.values():
             if config["provider"] == host_key_provider:
                 config[HOST_KEY_MARKER] = True
                 if host_base_url is not None:
                     config["base_url"] = host_base_url
+                config.update(copy.deepcopy(recorded))
                 if config["provider"] == "openai":
                     config["_connection"] = self.host_connection(host_base_url)
                 continue
@@ -285,6 +311,8 @@ def connection_snapshot() -> ConnectionSnapshot:
                 "endpoint": selection.endpoint,
                 "store_path": str(store.path),
             }
+        if selection.method == "api_key":
+            connections[selection.provider].update(_selection_settings(selection))
     for keyed in SUPPORTED_LLM_PROVIDERS:
         if keyed in _KEYED and keyed != "openai" and keyed not in connections:
             connections[keyed] = copy.deepcopy(_ENVIRONMENT_CONNECTION)
@@ -318,6 +346,25 @@ def connection_snapshot() -> ConnectionSnapshot:
         environment.get("OPENAI_BASE_URL") or _API_ENDPOINT,
         stray_model,
     )
+
+
+def _selection_settings(selection: ProviderSelection) -> dict[str, Any]:
+    """Return the connection fields that record a saved login's settings.
+
+    Args:
+        selection (`ProviderSelection`): A saved API-key login.
+
+    Returns:
+        `dict[str, Any]`: ``organization`` and ``project`` when set, and the sorted
+            ``header_names`` when the login has headers; never a header value.
+    """
+    settings: dict[str, Any] = {}
+    for field in ("organization", "project"):
+        if getattr(selection, field) is not None:
+            settings[field] = getattr(selection, field)
+    if selection.header_names:
+        settings["header_names"] = sorted(selection.header_names)
+    return settings
 
 
 def _check_selection(selection: ProviderSelection) -> None:
@@ -356,7 +403,9 @@ def validate_connection(value: Any, provider: str | None = "openai") -> dict[str
     key, or a missing or legacy environment key. Another keyed provider's
     connection is an API key, either a saved login (``store``, pinned by
     credential id and store path, with the resource endpoint for ``azure``) or
-    the provider's key environment variable (``environment``, unpinned).
+    the provider's key environment variable (``environment``, unpinned). A saved
+    API-key login may also record the settings saved with it: ``organization``
+    and ``project`` (``openai`` only) and the sorted ``header_names``.
 
     Args:
         value (`Any`): The candidate metadata.
@@ -377,8 +426,9 @@ def validate_connection(value: Any, provider: str | None = "openai") -> dict[str
             else "an unsupported provider"
         )
         raise ValueError(f"Internal connection metadata is not used for {name}")
-    if type(value) is not dict or set(value) != _FIELDS:
+    if type(value) is not dict or not _FIELDS <= set(value) <= _FIELDS | _SETTINGS_FIELDS:
         raise ValueError("Invalid internal connection metadata fields")
+    _check_connection_settings(value, provider)
     if provider != "openai":
         return _validate_keyed_connection(value, provider)
     method, source = value["method"], value["source"]
@@ -429,11 +479,43 @@ def validate_connection(value: Any, provider: str | None = "openai") -> dict[str
     return copy.deepcopy(value)
 
 
+def _check_connection_settings(value: dict[str, Any], provider: str) -> None:
+    """Check the optional settings fields of a connection.
+
+    Args:
+        value (`dict[str, Any]`): Metadata with the connection fields.
+        provider (`str`): A keyed provider.
+
+    Raises:
+        `ValueError`: A settings field is on a connection other than a saved
+            API-key login, ``organization`` or ``project`` is on a provider other
+            than ``openai``, or a value is malformed. Errors name only the field.
+    """
+    if not set(value) & _SETTINGS_FIELDS:
+        return
+    if value["source"] != "store" or value["method"] != "api_key":
+        raise ValueError("Internal connection settings are only for a saved API-key login")
+    for field in ("organization", "project"):
+        if field not in value:
+            continue
+        if provider != "openai":
+            raise ValueError(f"Internal connection {field} is only for provider openai")
+        try:
+            validate_organization(value[field], field)
+        except ValueError:
+            raise ValueError(f"Invalid internal connection {field}") from None
+    if "header_names" in value:
+        try:
+            validate_header_names(value["header_names"], provider)
+        except ValueError:
+            raise ValueError("Invalid internal connection header_names") from None
+
+
 def _validate_keyed_connection(value: dict[str, Any], provider: str) -> dict[str, Any]:
     """Validate a non-OpenAI keyed provider's connection fields.
 
     Args:
-        value (`dict[str, Any]`): Metadata with exactly the connection fields.
+        value (`dict[str, Any]`): Metadata with the required connection fields and any optional ones.
         provider (`str`): A keyed provider other than ``openai``.
 
     Returns:
@@ -466,29 +548,122 @@ def _validate_keyed_connection(value: dict[str, Any], provider: str) -> dict[str
     return copy.deepcopy(value)
 
 
+def validate_header_names(value: Any, provider: Any) -> list[str]:
+    """Validate a recorded ``HEADER_NAMES_KEY`` value: the sorted names of host headers.
+
+    Args:
+        value (`Any`): The candidate value.
+        provider (`Any`): The provider of the config that carries it.
+
+    Returns:
+        `list[str]`: A copy of ``value``.
+
+    Raises:
+        `ValueError`: ``value`` is not a non-empty sorted list of distinct (ignoring
+            case) header names that ``provider`` may be sent; errors name only the key.
+    """
+    invalid = ValueError(f"Invalid internal {HEADER_NAMES_KEY}")
+    if type(value) is not list or not value or value != sorted(map(str, value)):
+        raise invalid
+    if len({name.lower() for name in value}) != len(value):
+        raise invalid
+    try:
+        for name in value:
+            validate_header_name(name, provider if isinstance(provider, str) else None)
+    except ValueError:
+        raise invalid from None
+    return list(value)
+
+
+def _check_host_headers(raw: dict[str, Any], names: list[str]) -> None:
+    """Require a marked config's headers to have exactly its recorded header names.
+
+    Args:
+        raw (`dict[str, Any]`): The config, ``HOST_KEY_MARKER`` already removed.
+        names (`list[str]`): The recorded header names; empty when none were recorded.
+
+    Raises:
+        `AuthError`: The header names differ, ignoring case; the message names the
+            missing and unexpected header names, never a value.
+    """
+    headers = raw.get("headers") or {}
+    if not isinstance(headers, Mapping):
+        # `LLMConfig` names the malformed field.
+        return
+    diff = header_name_diff(names, [name for name in headers if isinstance(name, str)])
+    if diff is None:
+        return
+    if not headers:
+        expected = {name.lower(): name for name in names}
+        raise AuthError(_HOST_HEADERS_MISSING.format(
+            provider=raw.get("provider"),
+            names=", ".join(expected[name] for name in sorted(expected)),
+        ))
+    raise AuthError(
+        "llm_config.headers must have the header names this run recorded for the host "
+        f"key: {diff}"
+    )
+
+
+def header_name_diff(expected: Iterable[str], given: Iterable[str]) -> str | None:
+    """Describe how the given header names differ from the expected ones, ignoring case.
+
+    Args:
+        expected (`Iterable[str]`): The header names that should be given.
+        given (`Iterable[str]`): The header names given.
+
+    Returns:
+        `str | None`: ``"missing A, B; not recorded C"`` (either part only when the
+            other is empty), names sorted ignoring case; `None` when the names match.
+    """
+    expected_names = {name.lower(): name for name in expected}
+    given_names = {name.lower(): name for name in given}
+    missing = [expected_names[name] for name in sorted(expected_names) if name not in given_names]
+    extra = [given_names[name] for name in sorted(given_names) if name not in expected_names]
+    details = []
+    if missing:
+        details.append(f"missing {', '.join(missing)}")
+    if extra:
+        details.append(f"not recorded {', '.join(extra)}")
+    return "; ".join(details) or None
+
+
 def split_model_config(
     config: dict[str, Any] | LLMConfig,
 ) -> tuple[LLMConfig, dict[str, Any] | None]:
     """Validate public fields separately from host-owned connection metadata.
 
+    A config marked with ``HOST_KEY_MARKER`` needs its ``api_key``, and ``headers``
+    with exactly the recorded ``HEADER_NAMES_KEY`` names (none when absent),
+    compared without case; both are popped from the validated fields.
+
     Raises:
-        `AuthError`: The config carries ``HOST_KEY_MARKER`` but no ``api_key``.
-        `ValueError`: A public field or the metadata is invalid, an OpenAI
-            ``base_url`` differs from the endpoint of its pinned host connection,
-            or an Azure ``base_url`` names another resource than its saved login.
+        `AuthError`: The config carries ``HOST_KEY_MARKER`` but no ``api_key``, or
+            its headers do not have the recorded names.
+        `ValueError`: A public field or the metadata is invalid, the header names
+            are malformed or appear without the marker, an OpenAI ``base_url``
+            differs from the endpoint of its pinned host connection, or an Azure
+            ``base_url`` names another resource than its saved login.
     """
     if isinstance(config, LLMConfig):
         raw = config.model_dump(exclude_none=True)
-        # Dumps leave the key out; carry it across explicitly.
-        if config.api_key is not None:
-            raw["api_key"] = config.api_key
+        # Dumps leave the key and header values out; carry them across explicitly.
+        for field in ("api_key", "headers"):
+            if getattr(config, field) is not None:
+                raw[field] = getattr(config, field)
     else:
         raw = dict(config)
+    header_names = raw.pop(HEADER_NAMES_KEY, None)
+    if header_names is not None:
+        header_names = validate_header_names(header_names, raw.get("provider"))
     if HOST_KEY_MARKER in raw:
         if raw.pop(HOST_KEY_MARKER) is not True:
             raise ValueError("Invalid internal host key marker")
         if raw.get("api_key") is None:
             raise AuthError(_HOST_KEY_MISSING.format(provider=raw.get("provider")))
+        _check_host_headers(raw, header_names or [])
+    elif header_names is not None:
+        raise ValueError(f"Internal {HEADER_NAMES_KEY} needs the host key marker")
     metadata = raw.pop("_connection", None)
     validated = LLMConfig(**raw)
     if metadata is not None:
@@ -585,8 +760,10 @@ def resolve_model_config(
     """
     validated, metadata = split_model_config(config)
     raw = validated.model_dump(exclude_none=True)
-    if validated.api_key is not None:
-        raw["api_key"] = validated.api_key
+    # Dumps leave the key and header values out; carry them across explicitly.
+    for field in ("api_key", "headers"):
+        if getattr(validated, field) is not None:
+            raw[field] = getattr(validated, field)
     if metadata is not None and validated.model:
         raw["_connection"] = metadata
         return raw
@@ -664,10 +841,10 @@ def connection_credentials(
     """Resolve fresh credentials while enforcing the recorded connection identity.
 
     A ``store`` connection resolves the saved login it was pinned to, so a later
-    login or removal fails instead of switching accounts. OpenAI also resolves
-    its environment key, checking that it is the recorded one. Another provider's
-    ``environment`` connection resolves nothing here: its client reads the key
-    variable itself.
+    login or removal fails instead of switching accounts; an API key comes with
+    the header values saved beside it. OpenAI also resolves its environment key,
+    checking that it is the recorded one. Another provider's ``environment``
+    connection resolves nothing here: its client reads the key variable itself.
 
     Args:
         connection (`dict[str, Any]`): The recorded connection metadata.
@@ -723,9 +900,11 @@ def call_credentials(config: dict[str, Any] | LLMConfig | None) -> tuple[str, ..
     """Return every credential the model call built from ``config`` may send.
 
     This follows the precedence of `model_from_config` and the provider SDKs. A
-    config ``api_key`` is sent in place of any saved login or key variable.
-    Otherwise a ``store`` connection sends its provider's saved login, read
-    without refresh, so expired subscription tokens count too. Otherwise (an
+    config ``api_key`` is sent in place of any saved login or key variable, and
+    the config's ``headers`` values (`SecretStr` or plain strings) are listed
+    whenever given. Otherwise a ``store`` connection sends its provider's saved
+    login, read without refresh: its key and saved header values, or its
+    subscription tokens, expired ones too. Otherwise (an
     ``environment`` or ``legacy_environment`` connection, or none) the client
     reads the first set variable of the provider's key variable, then the SDK
     fallbacks. ``AZURE_OPENAI_AD_TOKEN`` (``azure``) and ``ANTHROPIC_AUTH_TOKEN``
@@ -736,7 +915,8 @@ def call_credentials(config: dict[str, Any] | LLMConfig | None) -> tuple[str, ..
     sent, since the ollama client drops it. A config without connection
     metadata is resolved first, as `model_from_config` does; `None` resolves like
     ``{}``. Each step is guarded, so a failing one still leaves the others'
-    credentials.
+    credentials. Every header value is listed however short, so a value such as
+    ``prod`` is scrubbed wherever it appears.
 
     Args:
         config (`dict[str, Any] | LLMConfig | None`): The config the model call
@@ -746,21 +926,31 @@ def call_credentials(config: dict[str, Any] | LLMConfig | None) -> tuple[str, ..
         `tuple[str, ...]`: The distinct plain credentials, possibly empty. Never raises.
     """
     found: list[str] = []
-    provider = host_key = connection = None
+    provider = host_key = connection = headers = None
     try:
         if config is None:
             config = {}
         if isinstance(config, LLMConfig):
-            provider, host_key = config.provider, config.api_key
+            provider, host_key, headers = config.provider, config.api_key, config.headers
         elif isinstance(config, dict):
             provider, host_key = config.get("provider"), config.get("api_key")
-            connection = config.get("_connection")
+            connection, headers = config.get("_connection"), config.get("headers")
         if isinstance(host_key, SecretStr):
             host_key = host_key.get_secret_value()
         if isinstance(host_key, str) and host_key:
             found.append(host_key)
         else:
             host_key = None
+    except Exception:
+        pass
+    try:
+        if isinstance(headers, Mapping):
+            # A Python caller's dict may hold plain strings where LLMConfig holds SecretStr.
+            for value in headers.values():
+                if isinstance(value, SecretStr):
+                    value = value.get_secret_value()
+                if isinstance(value, str) and value:
+                    found.append(value)
     except Exception:
         pass
     if connection is None and (host_key is None or provider is None):

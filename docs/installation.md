@@ -269,7 +269,8 @@ The endpoint always comes from `OLLAMA_BASE_URL` (default
 yian sends no key to Ollama. It does not send `OLLAMA_API_KEY`, and warns once when
 it drops it; unset the variable to silence the warning. So a host that needs a key,
 such as Ollama's hosted API, can no longer be used, and nothing replaces it yet. This
-is a breaking change: earlier versions sent the variable as a Bearer token.
+is a breaking change: earlier versions sent the variable as a Bearer token. A user
+name and password written in `OLLAMA_BASE_URL` are still sent as Basic auth.
 
 `hello.yaml` is any flow file, for example this one-node flow:
 

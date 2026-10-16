@@ -411,7 +411,11 @@ def test_tool_nodes_that_may_never_run_are_checked(tmp_path: Path, source: str, 
 
 
 def _misspelled(source: str) -> str:
-    """Return `source` with its TOOL node naming `place_ordr` and taking valid inputs."""
+    """Return `source` with its TOOL node naming `place_ordr`.
+
+    It also renames the `qtty` input to `qty`, so each case has only one fault: the
+    unknown tool id.
+    """
     return source.replace("tool_id: place_order", "tool_id: place_ordr").replace("qtty", "qty")
 
 

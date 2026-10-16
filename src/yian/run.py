@@ -938,6 +938,18 @@ def _check_tool_grants(flow: CompiledFlow, tools: ToolSet) -> None:
     before any record is written and covers every static node, including nodes
     that may never run, so an unresolvable id raises `ValueError` from `run_flow`
     or `resume_flow` instead of failing its node when the node starts.
+
+    Args:
+        flow (`CompiledFlow`):
+            The flow whose static nodes are checked.
+        tools (`ToolSet`):
+            The run's tools.
+
+    Raises:
+        `ValueError`:
+            An AGENT grants a tool or group this run lacks, or `ask_user` with no
+            handler; or a TOOL node names a tool this run lacks, a tool group, or
+            `ask_user` with no handler.
     """
     for node_id, node in _static_nodes(flow):
         for tool_id in tools.expand(list(node.granted_tools())):
@@ -961,12 +973,13 @@ def _check_tool_grants(flow: CompiledFlow, tools: ToolSet) -> None:
             if call.tool_id == "ask_user" or call.tool_id in tools.groups:
                 reason = f"{call.tool_id!r}: {exc}"
             else:
+                known = tools.tool_ids
                 reason = (
                     f"tool {call.tool_id!r}, which isn't in this run's tools; "
-                    f"known tools: {list(tools.tool_ids)}"
+                    f"known tools: {list(known)}"
                 )
                 close = difflib.get_close_matches(
-                    call.tool_id, tools.tool_ids, n=1, cutoff=CLOSE_MATCH_CUTOFF
+                    call.tool_id, known, n=1, cutoff=CLOSE_MATCH_CUTOFF
                 )
                 if close:
                     reason += f"; did you mean {close[0]!r}?"

@@ -1953,8 +1953,9 @@ them by their own names. The graph stays fixed; only the groups' contents change
 between runs, and the YAML does not show them. The run fails before it starts when
 an AGENT grants a name the host did not supply (a missing group or tool), when a
 TOOL node names a tool the host did not supply, when two different tools share a
-name, or when a group contains a tool named `ask_user` or `load_skill`. Groups may share the same tool; the model sees it once.
-`ask_user` stays a separate top-level entry. `yian run` fills no groups, so a
+name, or when a group contains a tool named `ask_user` or `load_skill`. Groups may
+share the same tool; the model sees it once. `ask_user` stays a separate top-level
+entry. `yian run` fills no groups, so a
 flow that grants one needs a Python host. See [Tool groups](api.md#tool-groups).
 
 #### TOOL retries
@@ -2055,8 +2056,8 @@ skipped. A narrower binding, such as `Optional(int)` into `int` or `str` into a
 `Literal`, starts; the tool's own argument validation checks it on each call.
 Nothing is coerced: the string `"10"` or `true` into an `int` input, or a number into
 a `date` or `datetime` input, fails here, though the tool would have converted it.
-Before any of these, a `tool_id:` the run's tools lack fails, with a close match when
-there is one:
+Before any of these, a `tool_id:` the run's tools lack fails, naming a close match
+when there is one:
 `TOOL node 'place' names tool 'place_ordr', which isn't in this run's tools; known tools: ['place_order']; did you mean 'place_order'?`.
 A `tool_id:` naming a tool group, or `ask_user` with no handler, fails the same way.
 How yian reads a host tool's types is in

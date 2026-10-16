@@ -2056,12 +2056,11 @@ first resolves each call's `tool_id` in the run's `ToolSet` and raises `ValueErr
 when it does not resolve, listing `ToolSet.tool_ids` and a close match. Then
 `tools.types.tool_types` reads each tool's declared argument and return types, and
 the boundary compares them with `type_relation`. An unknown input, a missing required
-input, or a disjoint input or output type raises `ValueError` before any log work. A
-TOOL node built by GROW at runtime is not static, so its own lookup still fails the
-node when it runs. The
-`output:` gate is the ordinary success path: the engine validates each returned value
-against the node's output contract, so a host reports an expected outcome such as an
-interrupt by returning a variant of that type. An exception still fails the node.
+input, or a disjoint input or output type raises `ValueError` before any log work.
+The `output:` gate is the ordinary success path: the engine validates each returned
+value against the node's output contract, so a host reports an expected outcome such
+as an interrupt by returning a variant of that type. An exception still fails the
+node.
 
 Pooled drives own their executors through a full join: an abnormal dispatch exit
 signals cooperative stop before joining, so the boundary never releases its run-log

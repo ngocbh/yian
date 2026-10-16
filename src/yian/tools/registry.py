@@ -703,8 +703,11 @@ class ToolSet:
 
     @property
     def tool_ids(self) -> tuple[str, ...]:
-        """The sorted ids of the tools this run can resolve: the mapping's tools and
-        group members, or the global registry when there is no mapping."""
+        """The sorted ids of the tools this run can resolve.
+
+        With a mapping, these are the mapping's tools and group members; with no
+        mapping, the global registry's tools.
+        """
         if self._tools is not None:
             return tuple(sorted(self._tools))
         with _REGISTRY_LOCK:

@@ -331,7 +331,8 @@ def test_e23_unknown_tool_fails_at_run_start(tmp_path):
     flow = load_flow((_ERRORS / "e23-unknown-tool.yaml").read_text())
 
     with pytest.raises(ValueError, match=re.escape(
-        "TOOL node 'fetch' names tool 'nonesuch_tool', which isn't in this run's tools"
+        "TOOL node 'fetch' names tool 'nonesuch_tool', which isn't in this run's tools; "
+        "known tools: []"
     )):
         run_flow(flow, {"topic": "X"}, log=path, tools={})
     assert not path.exists()

@@ -90,7 +90,7 @@ def _own_headers(client: Any, explicit: Iterable[str]) -> Any:
         `anthropic.Client` or `anthropic.AsyncClient`:
             `client`.
     """
-    drop_environment_headers(client, explicit)
+    drop_environment_headers(client, explicit, ("ANTHROPIC_CUSTOM_HEADERS",))
     # The SDK sends both ``x-api-key`` and a bearer ``auth_token`` when it holds both, and
     # 0.x SDKs fill ``auth_token`` from ANTHROPIC_AUTH_TOKEN; a passed key is the only
     # credential yian means to send.

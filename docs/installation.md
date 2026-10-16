@@ -89,8 +89,12 @@ is recorded or printed. A request carries only one credential: yian does not sen
 the headers in `OPENAI_CUSTOM_HEADERS` or `ANTHROPIC_CUSTOM_HEADERS`, or the
 organization and project from `OPENAI_ORG_ID`, `OPENAI_ORGANIZATION`, and
 `OPENAI_PROJECT_ID`, so an OpenAI organization or project can no longer be chosen
-through them. This is a breaking change: earlier versions sent them. A key yian passes to Azure (a Python host's key or a saved login) is sent even
-when `AZURE_OPENAI_AD_TOKEN` is set. Endpoints still come from
+through them. This is a breaking change: earlier versions sent them. yian warns when
+it drops a header from these variables; a Python host that needs an organization,
+project or other header can set it on the `http_client` it passes, e.g.
+`httpx.Client(headers={"OpenAI-Organization": "org-..."})`. A key yian passes to
+Azure (a Python host's key or a saved login) is sent even when
+`AZURE_OPENAI_AD_TOKEN` is set. Endpoints still come from
 environment variables at run time (`OPENAI_BASE_URL`, `ANTHROPIC_BASE_URL`,
 `VLLM_BASE_URL`, `OLLAMA_BASE_URL`, ...); a saved login stores only the key, plus
 the endpoint for Azure. Azure's API version always comes from `OPENAI_API_VERSION`.

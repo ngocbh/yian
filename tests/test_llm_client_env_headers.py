@@ -5,6 +5,7 @@ yian's clients send exactly the credential and headers yian passes.
 """
 
 import asyncio
+import warnings
 
 import anthropic
 import httpx
@@ -312,6 +313,59 @@ def test_anthropic_hook_clears_an_env_auth_token():
     assert "authorization" not in request.headers
     assert request.headers["x-api-key"] == "k"
 
+
+
+_DROP_WARNING = "yian sends only the headers"
+
+
+def _assert_names_without_values(message, *names):
+    for name in names:
+        assert name in message, (name, message)
+    assert "env-" not in message, message
+    assert "from-env" not in message, message
+
+
+def test_openai_warns_when_it_drops_env_headers(poisoned_env):
+    with pytest.warns(UserWarning, match=_DROP_WARNING) as record:
+        create_llm_client("openai", "gpt-5.5", api_key="sk-explicit").get_llm()
+    [message] = {str(w.message) for w in record if _DROP_WARNING in str(w.message)}
+    _assert_names_without_values(
+        message, "OpenAI-Organization", "X-Env-Injected", "OPENAI_CUSTOM_HEADERS", "http_client"
+    )
+
+
+def test_anthropic_warns_when_it_drops_env_headers(poisoned_env):
+    chat = create_llm_client("anthropic", "claude-sonnet-4-5", api_key="sk-ant-explicit").get_llm()
+    with pytest.warns(UserWarning, match=_DROP_WARNING) as record:
+        chat._client
+    [message] = {str(w.message) for w in record if _DROP_WARNING in str(w.message)}
+    _assert_names_without_values(
+        message, "X-Env-Injected", "ANTHROPIC_CUSTOM_HEADERS", "http_client"
+    )
+
+
+def test_openai_without_env_headers_does_not_warn(poisoned_env):
+    for name in (
+        "OPENAI_CUSTOM_HEADERS", "OPENAI_ORG_ID", "OPENAI_ORGANIZATION", "OPENAI_PROJECT_ID"
+    ):
+        poisoned_env.delenv(name)
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        create_llm_client("openai", "gpt-5.5", api_key="sk-explicit").get_llm()
+    assert not [w for w in record if _DROP_WARNING in str(w.message)]
+
+
+def test_host_http_client_headers_are_sent(poisoned_env):
+    server = ResponsesServer(tool_first=False)
+    with httpx.Client(
+        transport=httpx.MockTransport(server), headers={"OpenAI-Organization": "org-host"}
+    ) as client:
+        create_llm_client(
+            "openai", "gpt-5.5", api_key="sk-explicit", http_client=client
+        ).get_llm().invoke("hi")
+    [request] = server.requests
+    assert request.headers["openai-organization"] == "org-host"
+    assert request.headers["authorization"] == "Bearer sk-explicit"
 
 _GOOGLE_ENV = {
     "GOOGLE_GENAI_DEFAULT_HEADERS": '{"X-Env-Injected": "from-env"}',

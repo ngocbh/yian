@@ -20,6 +20,8 @@ from .validators import validate_model
 
 # SDK keywords that configure the HTTP call rather than name a request-body field.
 _TRANSPORT_KEYWORDS = frozenset({"self", "extra_headers", "extra_query", "extra_body", "timeout"})
+# The environment variables the OpenAI SDK reads headers from when a client is built.
+_OPENAI_HEADER_VARIABLES = ("OPENAI_CUSTOM_HEADERS", "OPENAI_ORG_ID", "OPENAI_PROJECT_ID")
 
 
 @cache
@@ -108,8 +110,10 @@ class RequestBlockMixin(BaseChatOpenAI):
         """
         self.openai_organization = None
         explicit = (*(self.default_headers or {}), *self._sdk_header_names)
-        drop_environment_headers(self.root_client, explicit)
-        drop_environment_headers(self.root_async_client, explicit)
+        # One call site, so the default warning filter shows the clients' identical
+        # drop warning once.
+        for client in (self.root_client, self.root_async_client):
+            drop_environment_headers(client, explicit, _OPENAI_HEADER_VARIABLES)
         return self
 
     def _get_request_payload(self, input_, *, stop=None, **kwargs):

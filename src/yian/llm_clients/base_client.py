@@ -55,32 +55,53 @@ def check_no_redirects(name: str, http_client: Any) -> None:
         )
 
 
-def drop_environment_headers(client: Any, explicit: Iterable[str]) -> None:
+def drop_environment_headers(
+    client: Any, explicit: Iterable[str], variables: tuple[str, ...]
+) -> None:
     """Remove the headers an SDK client took from the environment when it was built.
 
     Keeps only the custom headers whose name is exactly (case-sensitive) one of
     `explicit`, and sets `organization`/`project` to `None` and
-    `_ambient_authorizations` to `frozenset()` where the client has them.
+    `_ambient_authorizations` to `frozenset()` where the client has them. Warns with a
+    `UserWarning` naming the dropped headers (not their values) when it drops any.
 
     Args:
         client (`Any`):
             An OpenAI or Anthropic SDK client, changed in place. `None` is skipped.
         explicit (`Iterable[str]`):
             Names of the custom headers the caller passed itself.
+        variables (`tuple[str, ...]`):
+            The environment variables this SDK reads headers from, for the warning.
     """
     if client is None:
         return
     keep = set(explicit)
+    dropped = {name for name in client._custom_headers if name not in keep}
     # The SDK merges header variables into the private `_custom_headers`, and
-    # `copy`/`with_options` re-read the environment, so this filters the built client's dict directly.
+    # `copy`/`with_options` re-read the environment, so this filters the built
+    # client's dict directly.
     client._custom_headers = {
         name: value for name, value in client._custom_headers.items() if name in keep
     }
-    for attribute in ("organization", "project"):
+    for attribute, header in (
+        ("organization", "OpenAI-Organization"), ("project", "OpenAI-Project")
+    ):
         if hasattr(client, attribute):
+            if getattr(client, attribute) is not None:
+                dropped.add(header)
             setattr(client, attribute, None)
     if hasattr(client, "_ambient_authorizations"):
         client._ambient_authorizations = frozenset()
+    if dropped:
+        *rest, last = variables
+        sources = f"{', '.join(rest)} or {last}" if rest else last
+        warnings.warn(
+            f"yian sends only the headers it sets, so it dropped {', '.join(sorted(dropped))}, "
+            f"which the SDK read from {sources}. A Python host can send extra headers by "
+            "setting them on the http_client it passes.",
+            UserWarning,
+            stacklevel=2,
+        )
 
 
 class MissingToolCallError(OutputParserException):

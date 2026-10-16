@@ -10,6 +10,7 @@ from yian.compose.helpers.condition_guards import (
     NOTHING,
     IsinstanceCheck,
     TagCheck,
+    guarded_refs,
     proves,
 )
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
@@ -470,6 +471,24 @@ def test_guarded_read_types_keeps_each_conjunct_s_candidate():
 def test_guarded_read_types_of_an_unreachable_read_is_none():
     assert _reads("v.qty", "isinstance(v, Buy) and v.action == 'hold'", v=DECISION) is None
     assert _reads("v.qty", "v.action == 'zzz'", v=DECISION) is None
+    assert _read_in("isinstance(v, Buy) and v.action == 'hold' and v.qty > 0", v=DECISION) is None
+    assert _read_in("v.action != 'biy' or v.qty > 0", v=DECISION) is None
+
+
+def _read_in(condition: str, **declared):
+    """The candidate types of the last read in `condition`, under the guard it is read with."""
+    read, guard = guarded_refs(parse_condition(condition))[-1]
+    return guarded_read_types(read, guard, _types(**declared), _REGISTRY)
+
+
+def test_a_read_after_a_check_the_declared_type_decides_is_checked_unnarrowed():
+    assert _read_in("isinstance(v, Decision) or v.nosuch > 0", v=DECISION) == []
+    assert _read_in("isinstance(v, Buy) or v.qty > 0", v=BUY) == []
+    assert _read_in("isinstance(v, BuyOrSell) or v.qty > 0", v=BUY) == []
+    # The other checks before the read still narrow it.
+    assert _read_in("v.action == 'buy' or isinstance(v, Decision) or v.qty > 0", v=DECISION) == [
+        (_t("Union(Hold, Sell)"), ("qty",), "v")
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -631,28 +650,15 @@ def test_each_impossible_check_is_reported_once_and_only_first():
     ) == ['`v.action == "hold"` can never be true here: v is Buy, by the checks before it']
 
 
-def test_code_after_an_always_true_check_is_reported():
+def test_code_after_an_always_true_check_is_not_reported():
     # The not-a-tag text is wrong whatever runs before it.
     assert _impossible("isinstance(v, Decision) or v.action == 'biy'", v=DECISION) == [
         "`v.action == \"biy\"` compares v.action with 'biy', which is not one of its tags "
         "(buy, hold, sell); did you mean 'buy'?"
     ]
-    found = impossible_checks(
-        parse_condition("isinstance(v, Decision) or v.nosuch > 0"), _types(v=DECISION), _REGISTRY
-    )
-    assert [(c.text, c.base, c.reason) for c in found] == [
-        ("v.nosuch", "v", ImpossibleReason.NEVER_RUNS)
-    ]
-    assert impossible_check_message(found[0]) == (
-        "reference ${v.nosuch} is never evaluated: no value of v can reach it, "
-        "by the checks before it"
-    )
-    condition = "v.action == 'buy' or isinstance(v, Decision) or v.qty > w"
-    assert _impossible(condition, v=DECISION) == [
-        "reference ${v.qty} is never evaluated: no value of v can reach it, "
-        "by the checks before it"
-    ]
-    # Another error in the condition already stops it from loading.
+    # A read after a check the declared type decides is checked by its site, unnarrowed.
+    assert _impossible("isinstance(v, Decision) or v.nosuch > 0", v=DECISION) == []
+    assert _impossible("v.action == 'buy' or isinstance(v, Decision) or v.qty > w", v=DECISION) == []
     assert _impossible("isinstance(v, Text) or isinstance(v, Decision) or v.x", v=DECISION) == [
         "`isinstance(v, Text)` can never be true: v is declared Decision, "
         "and no Decision value fits Text"
@@ -690,10 +696,7 @@ def test_routing_and_the_checks_together_use_the_checks_wording():
     ]
     assert _impossible(
         "isinstance(v, Buy) or v.qty > 0", routing={"v": Members((BUY,))}, v=DECISION
-    ) == [
-        "reference ${v.qty} is never evaluated: no value of v can reach it, "
-        "by the case branch that routes this node"
-    ]
+    ) == []
 
 
 def test_narrowed_type_label_names_members():

@@ -7,8 +7,7 @@ from `check_fact`: a true or false `isinstance`, or a true or false comparison o
 tag field with a text. `guard_env` evaluates a guard from `condition_guards` into the facts
 that hold whenever it does, and `guarded_read_types` gives the types a field read under a
 guard is checked against. `impossible_checks` finds the checks in a condition that are wrong
-whatever the values and the reads no value reaches, and the message helpers word those
-errors and a narrowed read's error.
+whatever the values, and the message helpers word those errors and a narrowed read's error.
 
 Knows about: `typesys` types and unions, `compile.validation`, `isinstance` type
 resolution, condition guards, output-contract projection, and type labels.
@@ -26,6 +25,7 @@ from lark import Token, Tree
 
 from yian.compile.validation import types_compatible
 from yian.compose.helpers.condition_guards import (
+    NOTHING,
     AllOf,
     Check,
     CheckLiteral,
@@ -33,10 +33,11 @@ from yian.compose.helpers.condition_guards import (
     Holds,
     IsinstanceCheck,
     TagCheck,
+    all_of,
+    any_of,
     check_text,
     conjuncts,
     guard_checks,
-    guarded_refs,
     literal_text,
     literals_in_context,
 )
@@ -586,6 +587,38 @@ def _guard_envs(guard: Guard, base_type_of: BaseTypeOf, registry: TypeRegistry) 
     return envs
 
 
+def _decided_by_type(atom: Holds, base_type_of: BaseTypeOf, registry: TypeRegistry) -> bool:
+    """Whether the base's declared type alone makes `atom` false, other than a non-tag text.
+
+    Such an atom comes from a check the declared type always decides, which is no error
+    by itself. A tag comparison with a text that is not a tag is always reported, so its
+    atom is not counted here.
+    """
+    base_type = base_type_of(atom.check.base)
+    if not isinstance(base_type, Type):
+        return False
+    check = atom.check
+    if isinstance(check, TagCheck):
+        members = base_type.variants
+        if members is None or check.field not in union_tag_fields(base_type):
+            return False
+        if not any(check.value in member.fields[check.field].tags for member in members):
+            return False
+    try:
+        fact = check_fact(check, base_type, atom.value, registry)
+    except TypeCheckError:
+        return False
+    return fact == Members(())
+
+
+def _without_decided(guard: Guard, base_type_of: BaseTypeOf, registry: TypeRegistry) -> Guard:
+    """`guard` with each atom the declared type alone makes false proving nothing instead."""
+    if isinstance(guard, Holds):
+        return NOTHING if _decided_by_type(guard, base_type_of, registry) else guard
+    parts = [_without_decided(part, base_type_of, registry) for part in guard.parts]
+    return all_of(*parts) if isinstance(guard, AllOf) else any_of(*parts)
+
+
 def guarded_read_types(
     read: str,
     guard: Guard,
@@ -599,6 +632,12 @@ def guarded_read_types(
     with the field names below it. A conjunct's candidate keeps what the whole guard's
     meet can lose (two unrelated exact types). The read is fine when any candidate
     accepts it.
+
+    A guard no value satisfies only because a check the declared type always decides
+    went the other way (`isinstance(v, Decision) or v.nosuch > 0` with `v` declared
+    `Decision`) is no error by itself: such checks prove nothing here, so the read is
+    checked as without them. A guard no value satisfies otherwise comes after a check
+    `impossible_checks` reports, so the read is left alone.
 
     Args:
         read (`str`):
@@ -614,17 +653,19 @@ def guarded_read_types(
         `list[tuple[Type, tuple[str, ...], str]] | None`:
             `(narrowed type, field names below it, narrowed base path)` per distinct
             candidate, in order; `[]` when no fact applies to the read, so it is checked
-            unnarrowed; `None` when the guard can never hold, so the read is never
-            evaluated and is not checked (`impossible_checks` then reports an error for the
-            condition).
+            unnarrowed; `None` when the guard can never hold because of a check
+            `impossible_checks` reports, so the read is not checked.
 
     Example:
         With `v` a `Union[Buy, Hold, Sell]`, the read `v.qty` under the guard of
-        `isinstance(v, Buy)` gives `[(Buy, ("qty",), "v")]`.
+        `isinstance(v, Buy)` gives `[(Buy, ("qty",), "v")]`; under the guard of
+        `isinstance(v, Decision) or v.qty > 0` it gives `[]`.
     """
     envs = _guard_envs(guard, base_type_of, registry)
     if any(env_unsatisfiable(env) for env in envs):
-        return None
+        envs = _guard_envs(_without_decided(guard, base_type_of, registry), base_type_of, registry)
+        if any(env_unsatisfiable(env) for env in envs):
+            return None
     parts = read.split(".")
     candidates: list[tuple[Type, tuple[str, ...], str]] = []
     for env in envs:
@@ -655,7 +696,7 @@ def guarded_read_types(
 
 
 class ImpossibleReason(Enum):
-    """Why `impossible_checks` reports a check or a read."""
+    """Why `impossible_checks` reports a check."""
 
     CONTEXT = "context"
     """The checks evaluated before the literal rule it out."""
@@ -668,22 +709,17 @@ class ImpossibleReason(Enum):
     NOT_A_TAG = "not a tag"
     """A tag comparison's text is not a tag of the base union's tag field: a misspelling,
     reported for `==` (never true) and `!=` (always true) alike."""
-    NEVER_RUNS = "never runs"
-    """A reference sits where no value can reach, such as after an always-true check in an
-    `or`."""
 
 
 @dataclass(frozen=True)
 class ImpossibleCheck:
-    """A check in a condition that is wrong whatever the values, or a read that never runs.
+    """A check in a condition that is wrong whatever the values.
 
     Args:
         text (`str`):
-            The literal's canonical source, such as `not isinstance(v, Buy)`, or for
-            `NEVER_RUNS` the reference path.
+            The literal's canonical source, such as `not isinstance(v, Buy)`.
         base (`str`):
-            The checked base path; for `NEVER_RUNS`, the base no value of which reaches
-            the reference.
+            The checked base path.
         reason (`ImpossibleReason`):
             Why it is reported.
         base_label (`str`, *optional*, defaults to `""`):
@@ -691,8 +727,7 @@ class ImpossibleCheck:
             is checked against.
         declared (`bool`, *optional*, defaults to `True`):
             For `NO_OVERLAP` and `ALWAYS`, whether the base's type is its declared type;
-            `False` when it comes from the checks before the literal. For `NEVER_RUNS`,
-            `False` when only the routing (with the checks) keeps values out.
+            `False` when it comes from the checks before the literal.
         type_label (`str`, *optional*, defaults to `""`):
             The type an `isinstance` names, for `NO_OVERLAP`.
         always_true (`str`, *optional*, defaults to `""`):
@@ -818,33 +853,6 @@ def _declared_impossible(
     )
 
 
-def _empty_base(envs: Sequence[Env]) -> Optional[str]:
-    """The first base some env leaves no value, else `None`."""
-    for env in envs:
-        for base, fact in env.items():
-            if fact == Members(()):
-                return base
-    return None
-
-
-def _never_runs(
-    tree: Tree | Token,
-    base_type_of: BaseTypeOf,
-    registry: TypeRegistry,
-    routing: Env,
-) -> Optional[ImpossibleCheck]:
-    """The first reference no value can reach, else `None`."""
-    for path, guard in guarded_refs(tree):
-        envs = _guard_envs(guard, base_type_of, registry)
-        base = _empty_base(envs)
-        if base is not None:
-            return ImpossibleCheck(path, base, ImpossibleReason.NEVER_RUNS)
-        base = _empty_base([intersect_envs([routing, env]) for env in envs])
-        if base is not None:
-            return ImpossibleCheck(path, base, ImpossibleReason.NEVER_RUNS, declared=False)
-    return None
-
-
 def impossible_checks(
     tree: Tree | Token,
     base_type_of: BaseTypeOf,
@@ -852,7 +860,7 @@ def impossible_checks(
     *,
     routing: Optional[Env] = None,
 ) -> list[ImpossibleCheck]:
-    """Return the checks in a condition that are wrong whatever the values, and dead reads.
+    """Return the checks in a condition that are wrong whatever the values.
 
     Each literal in a boolean position (a check, or `not` applied to one) is tested
     against its base's type and against what holds when it is evaluated:
@@ -867,13 +875,10 @@ def impossible_checks(
       literal the routing rules out together with the context is reported too, worded as
       routing only when the routing rules it out on its own.
 
-    No check silently hides what follows it. A reference can sit where no value reaches:
-    after a reported check, or after a check the types always decide (always true in an
-    `or`, always false in an `and`), which is no error by itself. Sites do not check such a
-    read (`guarded_read_types` gives `None`), and its literals get only the type test
-    above. So when nothing else in the condition is reported, the first unreachable
-    reference is (`NEVER_RUNS`): a condition with dead code never loads silently, and a
-    reported check does not cascade into errors on the code it makes dead.
+    A check the types always decide (always true in an `or`, always false in an `and`) is
+    no error by itself, and neither is the code after it that no value reaches: sites check
+    such a read as without that check (`guarded_read_types`). A read after a reported check
+    is not checked, so the report does not cascade into errors on the code it makes dead.
     Unproven, `object` and `Any` bases, unknown type names, bases `base_type_of` refuses,
     and facts lost to an intersection prove nothing. Each literal text is reported once.
 
@@ -891,7 +896,7 @@ def impossible_checks(
 
     Returns:
         `list[ImpossibleCheck]`:
-            The reported literals in source order, or the one unreachable reference.
+            The reported literals in source order.
 
     Example:
         With `v` a `Union[Buy, Hold, Sell]` tagged by `action`,
@@ -921,10 +926,6 @@ def impossible_checks(
             )
         if impossible is not None and all(impossible.text != seen.text for seen in found):
             found.append(impossible)
-    if not found:
-        never_runs = _never_runs(tree, base_type_of, registry, routing)
-        if never_runs is not None:
-            found.append(never_runs)
     return found
 
 
@@ -1000,16 +1001,6 @@ def impossible_check_message(check: ImpossibleCheck) -> str:
         return (
             f"{text} can never be true: {base}, and no {check.base_label} value fits "
             f"{check.type_label}"
-        )
-    if check.reason is ImpossibleReason.NEVER_RUNS:
-        why = (
-            "the checks before it"
-            if check.declared
-            else "the case branch that routes this node"
-        )
-        return (
-            f"reference ${{{check.text}}} is never evaluated: no value of {check.base} can "
-            f"reach it, by {why}"
         )
     message = (
         f"{text} compares {check.base}.{check.field} with {check.value!r}, which is not "

@@ -154,6 +154,9 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_MAX_SHOWN_VALUE_CHARS` | limit | 200 | 2 or more | Longest rendering of a value or key an error message shows |
 | `YIAN_AGENT_RETRIES` | setting | 2 | 0 or more | Extra attempts an AGENT gets to correct an invalid structured reply when the node sets none |
 | `YIAN_AGENT_MAX_TOOL_ITERATIONS` | setting | -1 | 1 or more, or -1 for no cap | AGENT tool-call turns when the node sets none; -1 is no cap |
+| `YIAN_TOOL_RETRIES` | setting | 0 | 0 or more | Extra attempts a TOOL node gets after a failed tool call when the node sets none |
+| `YIAN_TOOL_RETRY_DELAY_SECONDS` | setting | 1 | 0 or more | Seconds a TOOL node waits before its first retry; each later wait doubles |
+| `YIAN_TOOL_RETRY_MAX_DELAY_SECONDS` | setting | 30 | 0 or more | Longest wait in seconds before a TOOL node retries a failed tool call |
 | `YIAN_EPISODIC_MAX_EPISODES` | setting | 100 | 1 or more | Episodes an episodic memory keeps when it sets no limit |
 | `YIAN_EPISODIC_RECALL_LIMIT` | setting | 10 | 1 or more | Episodes an episodic memory recalls when it sets no limit |
 | `YIAN_REFLECTIVE_MAX_ITEMS` | setting | 100 | 1 or more | Lessons a reflective memory keeps when it sets no limit |

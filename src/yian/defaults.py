@@ -199,6 +199,38 @@ ENTRIES: tuple[Entry, ...] = (
         maximum=None,
         no_limit=-1,
     ),
+    # 0 keeps a TOOL node calling its tool once, since a retried call repeats any side
+    # effect the failed attempt already had.
+    Entry(
+        "TOOL_RETRIES",
+        default=0,
+        description=(
+            "Extra attempts a TOOL node gets after a failed tool call when the node sets none"
+        ),
+        group="setting",
+        minimum=0,
+        maximum=None,
+    ),
+    # Backoff doubles from this base (1 s, 2 s, 4 s, ...) up to the cap below, and
+    # jitter picks each wait between half and all of its step. No node sets the delays;
+    # a run reads them when it waits, so they don't change the loaded flow.
+    Entry(
+        "TOOL_RETRY_DELAY_SECONDS",
+        default=1,
+        description="Seconds a TOOL node waits before its first retry; each later wait doubles",
+        group="setting",
+        minimum=0,
+        maximum=None,
+    ),
+    # The cap also bounds a tool's own `retry_after`, so a tool can't stall a run longer.
+    Entry(
+        "TOOL_RETRY_MAX_DELAY_SECONDS",
+        default=30,
+        description="Longest wait in seconds before a TOOL node retries a failed tool call",
+        group="setting",
+        minimum=0,
+        maximum=None,
+    ),
     Entry(
         "EPISODIC_MAX_EPISODES",
         default=100,
@@ -418,6 +450,9 @@ class Defaults:
     max_shown_value_chars: int = 200
     agent_retries: int = 2
     agent_max_tool_iterations: int = -1
+    tool_retries: int = 0
+    tool_retry_delay_seconds: int = 1
+    tool_retry_max_delay_seconds: int = 30
     episodic_max_episodes: int = 100
     episodic_recall_limit: int = 10
     reflective_max_items: int = 100

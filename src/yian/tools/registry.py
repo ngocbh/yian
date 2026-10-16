@@ -41,6 +41,7 @@ from pydantic import BeforeValidator, Field
 from yian.defaults import current
 from yian.skills.tool import LOAD_SKILL
 from yian.tools.context import ToolContext
+from yian.tools.errors import ToolCheckError
 from yian.tools.function_tools import FunctionTool
 from yian.tools.schema import _is_tool_context, function_schema
 from yian.tools.types import _input_type_from_json_schema
@@ -213,7 +214,7 @@ def _tool_from_function_tool(ft: FunctionTool, *, description: str | None = None
         if inspect.isawaitable(result):
             if inspect.iscoroutine(result):
                 result.close()  # Never awaited; closing avoids a "never awaited" warning.
-            raise TypeError(
+            raise ToolCheckError(
                 f"tool {ft.name!r} returned an awaitable; yian calls tools synchronously, "
                 "so on_invoke must return the result"
             )

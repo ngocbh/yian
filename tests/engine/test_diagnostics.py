@@ -586,6 +586,8 @@ expected = [
     "ToolContext",
     "FunctionTool",
     "function_tool",
+    "PermanentToolError",
+    "TransientToolError",
 ]
 assert yian.__all__ == expected
 assert set(expected) <= set(dir(yian))

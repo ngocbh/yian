@@ -117,3 +117,19 @@ def test_a_server_that_fails_to_open_on_resume_closes_the_log(tmp_path):
     resumed = resume_flow(flow, log=log, tools={"fake": server})
     assert resumed.status == "succeeded", resumed.failure
     _assert_closed(server)
+
+
+def test_a_check_that_needs_no_tools_fails_before_the_server_starts(tmp_path):
+    log = tmp_path / "run.jsonl"
+    marker = tmp_path / "pid"
+    flow = load_flow(_WHOAMI_FLOW)
+    _crashed_run(log)
+    server = mcp_server(**stdio_params("--marker", str(marker)))
+
+    with pytest.raises(TypeError, match="skills"):
+        resume_flow(flow, log=log, tools={"fake": server}, skills={"x": object()})
+
+    assert not marker.exists()
+    _assert_closed(server)
+    resumed = resume_flow(flow, log=log, tools={"fake": server})
+    assert resumed.status == "succeeded", resumed.failure

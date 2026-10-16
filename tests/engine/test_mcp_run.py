@@ -139,7 +139,7 @@ def test_a_failed_run_start_check_closes_the_server(tmp_path):
     log = tmp_path / "run.jsonl"
     server = mcp_server(**stdio_params("--marker", str(marker)))
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=r"TOOL node 'call' input 'a': tool 'add' takes int"):
         run_flow(load_flow(_tool_flow("add", '{a: "x", b: 1}')), {}, log=log, tools={"fake": server})
 
     assert not log.exists()
@@ -171,7 +171,14 @@ def test_a_server_another_run_opened_is_rejected():
     server = mcp_server(**stdio_params())
     flow = load_flow(_tool_flow("slow", "{seconds: 2}"))
     results = []
-    first = threading.Thread(target=lambda: results.append(run_flow(flow, {}, tools={"fake": server})))
+
+    def run_a():
+        try:
+            results.append(run_flow(flow, {}, tools={"fake": server}))
+        except BaseException as exc:
+            results.append(exc)
+
+    first = threading.Thread(target=run_a)
     first.start()
     try:
         deadline = time.monotonic() + 30
@@ -188,7 +195,75 @@ def test_a_server_another_run_opened_is_rejected():
         'open it with "with server:" to share it between runs'
     )
     [result] = results
+    assert not isinstance(result, BaseException), repr(result)
     assert result.status == "succeeded", result.failure
+    _assert_closed(server)
+
+
+def test_two_runs_racing_for_one_unopened_server_start_it_once(tmp_path):
+    marker = tmp_path / "pid"
+    server = mcp_server(**stdio_params("--marker", str(marker)))
+    flow = load_flow(_tool_flow("slow", "{seconds: 1}"))
+    barrier = threading.Barrier(2)
+    outcomes = {}
+
+    def run(key):
+        barrier.wait()
+        try:
+            outcomes[key] = run_flow(flow, {}, tools={key: server})
+        except BaseException as exc:
+            outcomes[key] = exc
+
+    threads = [threading.Thread(target=run, args=(key,)) for key in ("a", "b")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(60)
+
+    errors = {key: out for key, out in outcomes.items() if isinstance(out, BaseException)}
+    results = {key: out for key, out in outcomes.items() if not isinstance(out, BaseException)}
+    assert len(results) == 1 and len(errors) == 1, outcomes
+    [(winner, result)] = results.items()
+    [(loser, error)] = errors.items()
+    assert result.status == "succeeded", result.failure
+    assert type(error) is ValueError
+    assert str(error) == (
+        f"tools[{loser!r}]: this MCP server was opened by another run; "
+        'open it with "with server:" to share it between runs'
+    )
+    assert len(_pids(marker)) == 1
+    _assert_closed(server, marker)
+
+
+@pytest.mark.parametrize(
+    ("key", "match"),
+    [
+        ("ask_user", r"tools\['ask_user'\] must be a plain callable handler"),
+        (1, "tool ids in tools must be non-empty strings"),
+    ],
+)
+def test_a_server_under_a_bad_key_fails_before_it_starts(tmp_path, key, match):
+    marker = tmp_path / "pid"
+    server = mcp_server(**stdio_params("--marker", str(marker)))
+
+    with pytest.raises(TypeError, match=match):
+        run_flow(load_flow(_tool_flow("echo", '{text: "hi"}')), {}, tools={key: server})
+
+    assert not marker.exists()
+    _assert_closed(server)
+
+
+def test_a_check_that_needs_no_tools_fails_before_any_server_starts(tmp_path):
+    marker = tmp_path / "pid"
+    server = mcp_server(**stdio_params("--marker", str(marker)))
+
+    with pytest.raises(TypeError, match="skills"):
+        run_flow(
+            load_flow(_tool_flow("echo", '{text: "hi"}')), {},
+            tools={"fake": server}, skills={"x": object()},
+        )
+
+    assert not marker.exists()
     _assert_closed(server)
 
 
@@ -211,7 +286,7 @@ def test_a_bad_entry_fails_before_any_server_starts(tmp_path):
     marker = tmp_path / "pid"
     server = mcp_server(**stdio_params("--marker", str(marker)))
 
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match=r"tools\['g'\]\[0\]"):
         run_flow(
             load_flow(_tool_flow("echo", '{text: "hi"}')), {},
             tools={"fake": server, "g": [lambda text: text]},

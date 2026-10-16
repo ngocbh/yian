@@ -273,6 +273,10 @@ def _check_seconds(name: str, value: float | None) -> None:
         raise ValueError(f"mcp_server {name} must be positive and finite, got {value!r}")
 
 
+class _AlreadyOpen(RuntimeError):
+    """Raised by `McpServer._open` when the server is already open or still opening."""
+
+
 class McpServer:
     """An MCP server whose tools a flow calls as host tools.
 
@@ -352,6 +356,12 @@ class McpServer:
         return self._owner is not None
 
     @property
+    def _opened_by_run(self) -> bool:
+        """`bool`: Whether a run, not the host, opened the server and has not closed it."""
+        owner = self._owner
+        return owner is not None and owner != "host"
+
+    @property
     def tools(self) -> tuple[FunctionTool, ...]:
         """`tuple[FunctionTool, ...]`: The server's tools, in the order it listed them.
 
@@ -403,7 +413,9 @@ class McpServer:
                 This server.
 
         Raises:
-            `RuntimeError`, `ImportError`, `McpConnectError`:
+            `_AlreadyOpen`:
+                Raised when the server is already open or another caller is opening it.
+            `ImportError`, `McpConnectError`:
                 Raised as `open()` raises them.
         """
         return self._open(token)
@@ -424,7 +436,7 @@ class McpServer:
         # interleave with the check and the reset.
         with self._lock:
             if self._owner is not None or self._thread is not None:
-                raise RuntimeError(f"MCP server '{self._label}' is already open")
+                raise _AlreadyOpen(f"MCP server '{self._label}' is already open")
             ready = self._ready = threading.Event()
             self._close_requested = False
             self._error = None

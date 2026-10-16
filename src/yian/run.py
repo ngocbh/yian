@@ -106,6 +106,7 @@ from yian.runtime.state import (
 from yian.runtime.memory_runtime import MemoryRuntime
 from yian.skills import Skill
 from yian.tools import FunctionTool, McpServer, ToolSet
+from yian.tools.mcp import _AlreadyOpen
 from yian.tools.types import tool_types
 from yian.typesys import Type, ValueKind, canonical_type_label
 from yian.typesys.pool import VariablePool
@@ -486,11 +487,11 @@ def run_flow(
             ``api_key`` lacks ``base_url``, an ``azure`` agent has no
             ``base_url``, a `BaseTool` in
             `tools` is named differently from its key, a group tool's name
-            clashes or is reserved, an `McpServer` in `tools` is open because
-            another run in progress opened it, an AGENT grants a tool or group not in the
-            run's tools, a TOOL node names a tool not in the run's tools, a
-            TOOL node's inputs or `output:` do not match the names and types
-            its tool declares (an input the tool does not take,
+            clashes or is reserved, an `McpServer` in `tools` is open, or being
+            opened, by another run in progress, an AGENT grants a tool or group
+            not in the run's tools, a TOOL node names a tool not in the run's
+            tools, a TOOL node's inputs or `output:` do not match the names and
+            types its tool declares (an input the tool does not take,
             a missing required input, or a type that can never fit), an
             AGENT grants skills while `skills` is `None` or lacks a listed
             skill, a node assertion, CASE `when`, or LOOP `while`/`until`
@@ -499,6 +500,9 @@ def run_flow(
             parse or calls a function it can't (a builtin with arguments it
             doesn't take, a name outside the node's type table, or in a prompt
             any non-builtin).
+        `ImportError`:
+            An `McpServer` in `tools` must be opened and the MCP SDK is not
+            installed.
         `McpConnectError`:
             An `McpServer` in `tools` that the run opens doesn't start or doesn't
             list its tools; the servers it already opened are closed.
@@ -647,8 +651,13 @@ def _run_flow_controlled(
     if type(learnable) is not bool:
         raise TypeError("learnable must be a bool")
     other_tools, unopened = _split_run_servers(tools)
-    # The other entries' TypeErrors and ValueErrors come before any server starts.
+    # The other entries' errors, and the checks that need no tools, come before any
+    # server starts.
     ToolSet(other_tools, context=context)
+    _check_conditions(flow.compiled)
+    _check_templates(flow.compiled)
+    skills = _check_skills(flow.compiled, skills)
+    require_steering(steering)
     run_servers = _open_run_servers(unopened)
     primary_error: BaseException | None = None
     try:
@@ -696,14 +705,10 @@ def _start_run(
     stop_event: threading.Event,
     run_defaults: Defaults,
 ) -> RunResult:
-    """Check, record, and drive a fresh run whose MCP servers are open."""
+    """Check the tools, then record and drive a fresh run whose MCP servers are open."""
     run_tools = ToolSet(tools, context=context)
     _check_tool_grants(flow.compiled, run_tools)
-    _check_conditions(flow.compiled)
-    _check_templates(flow.compiled)
     _check_tool_types(flow.compiled, run_tools)
-    skills = _check_skills(flow.compiled, skills)
-    require_steering(steering)
 
     # Identity belongs to the authored program, before cascade resolution or any
     # per-run copy can change object topology.
@@ -934,9 +939,9 @@ def resume_flow(
         `ValueError`:
             The prefix is invalid, the flow fingerprint differs, the selected
             worker count violates its contract, a group tool's name clashes or
-            is reserved, an `McpServer` in `tools` is open because another run
-            in progress opened it, an unfinished run's AGENT grants a tool or group
-            not in `tools` or grants skills while `skills` is `None` or lacks
+            is reserved, an `McpServer` in `tools` is open, or being opened, by
+            another run in progress, an unfinished run's AGENT grants a tool or
+            group not in `tools` or grants skills while `skills` is `None` or lacks
             a listed skill, an unfinished run's TOOL node names a tool not in
             `tools`, an unfinished run's TOOL node's inputs or
             `output:` do not match the names and types its tool declares, or
@@ -950,6 +955,9 @@ def resume_flow(
             ``headers`` is given for a log that marks agents for a host key and
             the header names differ from the recorded ones (the message names
             the header names, never a value).
+        `ImportError`:
+            An unfinished run's `McpServer` must be opened and the MCP SDK is not
+            installed.
         `McpConnectError`:
             An unfinished run's `McpServer` that the call opens doesn't start or
             doesn't list its tools; the servers it already opened are closed.
@@ -1038,16 +1046,17 @@ def _resume_flow_controlled(
                                           locator=retained_locator, api_key=api_key,
                                           headers=host_headers,
                                       ))
-        run_servers = _open_run_servers(unopened)
-        run_tools = ToolSet(tools, context=context)
-        _check_tool_grants(flow.compiled, run_tools)
+        # The checks that need no tools come before any server starts.
         _check_conditions(flow.compiled)
         _check_templates(flow.compiled)
-        _check_tool_types(flow.compiled, run_tools)
         skills = _check_skills(flow.compiled, skills)
         _check_recorded_llm_fields(state.effective_llm_by_static_path, static_agent_labels(flow.compiled))
         if check_llm_configs is not None:
             check_llm_configs(legacy_connection_map(state.effective_llm_by_static_path))
+        run_servers = _open_run_servers(unopened)
+        run_tools = ToolSet(tools, context=context)
+        _check_tool_grants(flow.compiled, run_tools)
+        _check_tool_types(flow.compiled, run_tools)
 
         if state.memories is not None:
             if memory is None:
@@ -1747,10 +1756,22 @@ def _close_owned_log(
         _note_cleanup_error(primary_error, "run-log close", cleanup_error)
 
 
+def _other_run_error(key: str) -> ValueError:
+    """Return the error for the server under `key`, which another run has open or is opening."""
+    return ValueError(
+        f"tools[{key!r}]: this MCP server was opened by another run; "
+        'open it with "with server:" to share it between runs'
+    )
+
+
 def _split_run_servers(
     tools: Mapping[str, Any] | None,
-) -> tuple[Mapping[str, Any] | None, list[McpServer]]:
+) -> tuple[Mapping[str, Any] | None, list[tuple[str, McpServer]]]:
     """Split the run's tools into the entries that need no opening and the unopened servers.
+
+    An unopened server under a key `ToolSet` rejects (not a non-empty string, or
+    `ask_user`) stays with the other entries, so `ToolSet` raises its usual error
+    before any server starts.
 
     Args:
         tools (`Mapping[str, Any] | None`):
@@ -1758,9 +1779,10 @@ def _split_run_servers(
             a mapping is returned as is, for `ToolSet` to reject.
 
     Returns:
-        `tuple[Mapping[str, Any] | None, list[McpServer]]`:
+        `tuple[Mapping[str, Any] | None, list[tuple[str, McpServer]]]`:
             `tools` without its unopened `McpServer` entries, and those servers in
-            mapping order, each once even when it sits under several keys.
+            mapping order with the first key each sits under, each once even when it
+            sits under several keys.
 
     Raises:
         `ValueError`:
@@ -1769,43 +1791,48 @@ def _split_run_servers(
     """
     if not isinstance(tools, Mapping):
         return tools, []
-    others: dict[str, Any] = {}
-    unopened: list[McpServer] = []
+    others: dict[Any, Any] = {}
+    unopened: list[tuple[str, McpServer]] = []
     for key, entry in tools.items():
-        if not isinstance(entry, McpServer):
+        if not isinstance(entry, McpServer) or not (type(key) is str and key and key != "ask_user"):
             others[key] = entry
         elif entry.is_open:
-            if entry._owner != "host":
-                raise ValueError(
-                    f"tools[{key!r}]: this MCP server was opened by another run; "
-                    'open it with "with server:" to share it between runs'
-                )
+            if entry._opened_by_run:
+                raise _other_run_error(key)
             others[key] = entry
-        elif not any(entry is seen for seen in unopened):
-            unopened.append(entry)
+        elif not any(entry is seen for _, seen in unopened):
+            unopened.append((key, entry))
     return others, unopened
 
 
-def _open_run_servers(servers: Sequence[McpServer]) -> list[McpServer]:
+def _open_run_servers(servers: Sequence[tuple[str, McpServer]]) -> list[McpServer]:
     """Open the servers for one run, in order; if one fails, close the ones already open.
 
     Args:
-        servers (`Sequence[McpServer]`):
-            Unopened servers, each listed once.
+        servers (`Sequence[tuple[str, McpServer]]`):
+            Unopened servers, each listed once with the `tools=` key it sits under.
 
     Returns:
         `list[McpServer]`:
             The opened servers, owned by a token unique to this run.
 
     Raises:
+        `ValueError`:
+            Raised when another caller opened or is opening a server since it was
+            found unopened.
+        `ImportError`:
+            Raised when the MCP SDK is not installed.
         `McpConnectError`:
             Raised when a server doesn't start or doesn't list its tools.
     """
     token = f"run-{uuid.uuid4().hex}"
     opened: list[McpServer] = []
     try:
-        for server in servers:
-            server._open_for_run(token)
+        for key, server in servers:
+            try:
+                server._open_for_run(token)
+            except _AlreadyOpen as exc:
+                raise _other_run_error(key) from exc
             opened.append(server)
     except BaseException as exc:
         _close_run_servers(opened, exc)
@@ -1825,6 +1852,11 @@ def _close_run_servers(
         primary_error (`BaseException | None`):
             The exception ending the run, which a close error is noted on. `None`
             raises the first close error instead.
+
+    Raises:
+        `BaseException`:
+            Raised when `primary_error` is `None` and a close fails: the first close
+            error, with any later ones noted on it.
     """
     pending = primary_error
     for server in servers:

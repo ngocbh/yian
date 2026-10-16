@@ -4,14 +4,25 @@ Each test loads a chain far past the call nesting limit, then walks it with only
 frames of headroom, which a walker that recursed per nested flow would overflow.
 """
 
+import re
+
+from pydantic import SecretStr
 import pytest
 
 from tests.compose.test_call_nesting_limit import _defs_chain, _mixed_chain
 from tests.deep_chains import deep_load, tight_stack
+from yian.compile.llm_cascade import (
+    _static_agent_paths,
+    apply_effective_llm_map,
+    bind_api_key,
+    resolve_llm_cascade,
+    static_agent_labels,
+)
 from yian.compile.manifest import expansion_digest, flow_fingerprint
 from yian.compile.model import Flow, copy_flow_graph
 from yian.compose import ComposedFlow, load_flow
 from yian.expr import ExpressionError
+from yian.llm_clients.connection import HOST_KEY_MARKER, missing_model_message
 from yian.nodes.base import Node
 from yian.nodes.call import CallNode
 from yian.nodes.contracts import Binding
@@ -19,6 +30,10 @@ from yian.run import _check_templates, _static_nodes
 
 _DEPTH = 300
 _HEADROOM = 150
+# Resolving and applying LLM configs copies each callsite's child, so their deep chain
+# is shorter to keep the copies' quadratic cost down.
+_CASCADE_DEPTH = 120
+_CASCADE_HEADROOM = 80
 
 
 @pytest.fixture(scope="module")
@@ -199,3 +214,88 @@ def test_objects_outside_the_child_flows_are_deep_copied():
     copied_payload = copied.nodes["call"].child.nodes["only"].extra
     assert copied_payload == payload and copied_payload is not payload
     assert copied.extra is copied_payload
+
+
+_CODE_LEAF = (
+    "        kind: code\n"
+    "        code: tests.engine._compose_codefns:echo\n"
+    "        input:\n"
+    "          topic: ${input.v}\n"
+    "        output: str\n"
+)
+
+
+def _agent_chain(depth, *, leaf_model=True):
+    """Return `_mixed_chain(depth)` with an AGENT leaf and a root-level provider.
+
+    The leaf sets its own model unless `leaf_model` is false.
+    """
+    leaf = "        kind: agent\n        input:\n          topic: ${input.v}\n        prompt: ${topic}\n"
+    if leaf_model:
+        leaf += "        llm_config: {model: leaf-model}\n"
+    text = _mixed_chain(depth).replace(_CODE_LEAF, leaf)
+    return text.replace("\ndefs:\n", "\nllm_config: {provider: anthropic}\ndefs:\n", 1)
+
+
+def _leaf_path(depth):
+    """Return the static path of a mixed chain's leaf node."""
+    return "/".join(["top", *["step"] * depth])
+
+
+def _leaf_node(flow):
+    """Return the node at the end of a chain's CALL, MAP, and LOOP children."""
+    node = flow.nodes["top"]
+    while getattr(node, "child", None) is not None:
+        node = node.child.nodes["step"]
+    return node
+
+
+@pytest.fixture(scope="module")
+def agents() -> ComposedFlow:
+    """A `_DEPTH`-level mixed chain whose leaf is a labelled AGENT marked for a host key."""
+    flow = deep_load(_agent_chain(_DEPTH))
+    leaf = _leaf_node(flow.compiled)
+    leaf.llm_config_label = "the leaf's llm_config"
+    leaf.llm_config = {"provider": "anthropic", "model": "leaf-model", HOST_KEY_MARKER: True}
+    return flow
+
+
+def test_agent_paths_and_labels_of_a_deep_chain(agents):
+    path = _leaf_path(_DEPTH)
+    parent = path.rsplit("/", 1)[0]
+    with tight_stack(_HEADROOM):
+        paths = _static_agent_paths(agents.compiled)
+        labels = static_agent_labels(agents.compiled)
+    assert paths == [path]
+    assert labels == {path: f"the leaf's llm_config in {parent!r}"}
+
+
+def test_a_host_key_binds_to_a_deep_agent(agents):
+    key = SecretStr("host-key")
+    with tight_stack(_HEADROOM):
+        bind_api_key(agents.compiled, key)
+    assert _leaf_node(agents.compiled).llm_config["api_key"] is key
+
+
+def test_llm_configs_of_a_deep_chain_resolve_and_apply_without_recursing():
+    flow = deep_load(_agent_chain(_CASCADE_DEPTH))
+    with tight_stack(_CASCADE_HEADROOM):
+        effective = resolve_llm_cascade(flow.compiled, {}, defaults={})
+    expected = {"provider": "anthropic", "model": "leaf-model"}
+    assert effective == {_leaf_path(_CASCADE_DEPTH): expected}
+    assert _leaf_node(flow.compiled).llm_config == expected
+
+    replayed = deep_load(_agent_chain(_CASCADE_DEPTH))
+    with tight_stack(_CASCADE_HEADROOM):
+        apply_effective_llm_map(replayed.compiled, effective)
+    leaf = _leaf_node(replayed.compiled)
+    assert leaf.llm_config == expected
+    assert leaf.llm_config is not effective[_leaf_path(_CASCADE_DEPTH)]
+
+
+def test_a_deep_agent_without_a_model_is_named():
+    flow = deep_load(_agent_chain(_CASCADE_DEPTH, leaf_model=False))
+    message = missing_model_message(_leaf_path(_CASCADE_DEPTH), "anthropic")
+    with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
+        with tight_stack(_CASCADE_HEADROOM):
+            resolve_llm_cascade(flow.compiled, {}, defaults={})

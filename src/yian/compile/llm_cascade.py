@@ -19,6 +19,7 @@ Defaults are injected by the host.
 from __future__ import annotations
 
 import copy
+from collections.abc import Generator, Iterator
 from typing import Any
 
 from pydantic import SecretStr
@@ -37,7 +38,9 @@ from yian.llm_clients.connection import (
     missing_model_message,
     validate_connection,
 )
+from yian.compile.model import copy_flow_graph
 from yian.nodes.agent import AgentNode
+from yian.trampoline import drive
 
 _REQUIRED_SELECTION_FIELDS = ("provider", "model")
 
@@ -89,7 +92,7 @@ def resolve_llm_cascade(
     if defaults.get("provider") and defaults.get("model"):
         models.setdefault(defaults["provider"], defaults["model"])
     effective: dict[str, dict[str, Any]] = {}
-    _resolve_flow(
+    drive(_resolve_flow(
         flow,
         copy.deepcopy(parent_config),
         defaults=copy.deepcopy(defaults),
@@ -97,7 +100,7 @@ def resolve_llm_cascade(
         stray_model=stray_model,
         path=(),
         effective=effective,
-    )
+    ))
     return effective
 
 
@@ -146,7 +149,7 @@ def apply_effective_llm_map(
             raise TypeError(f"effective LLM config for {subject} must be a dict")
         _require_concrete_selection(config, path=path, label=labels.get(path))
 
-    _apply_flow(flow, effective, path=())
+    drive(_apply_flow(flow, effective, path=()))
 
 
 def _resolve_flow(
@@ -158,8 +161,12 @@ def _resolve_flow(
     stray_model: bool,
     path: tuple[str, ...],
     effective: dict[str, dict[str, Any]],
-) -> None:
-    """Resolve one flow scope recursively into ``effective``."""
+) -> Generator[Any, None, None]:
+    """Resolve one flow scope into ``effective``.
+
+    A generator for `drive`: it yields each child flow's resolution rather than
+    calling it, so nesting doesn't grow the Python stack.
+    """
     authored_flow = copy.deepcopy(getattr(flow, "flow_llm_config", {}))
     _validate_layer(authored_flow)
     flow_layer = merge_llm_config(
@@ -197,8 +204,8 @@ def _resolve_flow(
         if child is not None:
             # Deep-copy at EACH callsite.  A deepcopy of only the root preserves shared
             # descendant aliases and lets differently configured parents interfere.
-            node.child = copy.deepcopy(child)
-            _resolve_flow(
+            node.child = copy_flow_graph(child)
+            yield _resolve_flow(
                 node.child,
                 flow_layer,
                 defaults=defaults,
@@ -209,20 +216,34 @@ def _resolve_flow(
             )
 
 
-def _static_agent_paths(
-    flow: Any,
-    path: tuple[str, ...] = (),
-) -> list[str]:
+def _static_agent_paths(flow: Any) -> list[str]:
     """Return all agent paths without mutating or de-aliasing the graph."""
-    paths: list[str] = []
-    for node_id, node in flow.nodes.items():
-        node_path = (*path, node_id)
-        if isinstance(node, AgentNode):
-            paths.append(_path_key(node_path))
+    return [
+        _path_key(node_path)
+        for node_path, node in _static_nodes(flow)
+        if isinstance(node, AgentNode)
+    ]
+
+
+def _static_nodes(flow: Any) -> Iterator[tuple[tuple[str, ...], Any]]:
+    """Yield every node of the static call tree with its path, in pre-order.
+
+    A node comes before the nodes of its child flow, and a shared child flow is
+    walked under each of its callsites. A node's child is read only after the
+    caller has handled the node.
+    """
+    # An explicit stack, so a deeply nested flow doesn't recurse per level. Entries
+    # are pushed reversed so they pop in pre-order.
+    pending = [((node_id,), node) for node_id, node in reversed(flow.nodes.items())]
+    while pending:
+        node_path, node = pending.pop()
+        yield node_path, node
         child = getattr(node, "child", None)
         if child is not None:
-            paths.extend(_static_agent_paths(child, node_path))
-    return paths
+            pending.extend(
+                ((*node_path, child_id), child_node)
+                for child_id, child_node in reversed(child.nodes.items())
+            )
 
 
 def static_agent_labels(flow: Any) -> dict[str, str]:
@@ -239,21 +260,12 @@ def static_agent_labels(flow: Any) -> dict[str, str]:
         `dict[str, str]`: The label of each labelled agent, keyed by static agent path.
     """
     labels: dict[str, str] = {}
-    _collect_agent_labels(flow, (), labels)
-    return labels
-
-
-def _collect_agent_labels(flow: Any, path: tuple[str, ...], labels: dict[str, str]) -> None:
-    """Add the labels of ``flow``'s static agents, at callsite ``path``, to ``labels``."""
-    for node_id, node in flow.nodes.items():
-        node_path = (*path, node_id)
+    for node_path, node in _static_nodes(flow):
         if isinstance(node, AgentNode):
-            label = _agent_label(node, path)
+            label = _agent_label(node, node_path[:-1])
             if label is not None:
                 labels[_path_key(node_path)] = label
-        child = getattr(node, "child", None)
-        if child is not None:
-            _collect_agent_labels(child, node_path, labels)
+    return labels
 
 
 def _agent_label(node: AgentNode, parent: tuple[str, ...]) -> str | None:
@@ -270,8 +282,12 @@ def _apply_flow(
     effective: dict[str, dict[str, Any]],
     *,
     path: tuple[str, ...],
-) -> None:
-    """Apply already-validated configs and de-alias children recursively."""
+) -> Generator[Any, None, None]:
+    """Apply already-validated configs to one flow scope and de-alias its children.
+
+    A generator for `drive`: it yields each child flow's application rather than
+    calling it, so nesting doesn't grow the Python stack.
+    """
     for node_id, node in flow.nodes.items():
         node_path = (*path, node_id)
         if isinstance(node, AgentNode):
@@ -279,8 +295,8 @@ def _apply_flow(
 
         child = getattr(node, "child", None)
         if child is not None:
-            node.child = copy.deepcopy(child)
-            _apply_flow(node.child, effective, path=node_path)
+            node.child = copy_flow_graph(child)
+            yield _apply_flow(node.child, effective, path=node_path)
 
 
 def bind_api_key(flow: Any, api_key: SecretStr) -> None:
@@ -297,12 +313,9 @@ def bind_api_key(flow: Any, api_key: SecretStr) -> None:
         api_key (`SecretStr`):
             The host-supplied key.
     """
-    for node in flow.nodes.values():
+    for _path, node in _static_nodes(flow):
         if isinstance(node, AgentNode) and node.llm_config.get(HOST_KEY_MARKER) is True:
             node.llm_config["api_key"] = api_key
-        child = getattr(node, "child", None)
-        if child is not None:
-            bind_api_key(child, api_key)
 
 
 def host_key_providers(effective: dict[str, dict[str, Any]]) -> set[str]:

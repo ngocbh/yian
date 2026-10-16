@@ -123,8 +123,8 @@ load, run, and resume with stack to spare:
   path, and 18 on 3.10 through the prompted path. The maximum is the smallest passing
   depth minus 2, a margin for the 3.10 provider-client paths that couldn't be measured
   offline. Under the deepest accepted load (50 imports whose last file calls a 50-level
-  chain), an AGENT at 16 levels builds its schema well above the load's peak. 3.11 has
-  not been re-measured; the value is unchanged.
+  chain), an AGENT at 16 levels builds its schema well above the load's peak. Python
+  3.11, now the oldest supported, has not been measured; 16 is kept.
 
 `YIAN_MAX_YAML_NODES` has no maximum, since counting a document's nodes takes no stack;
 raising it raises load time and run-log size in proportion.

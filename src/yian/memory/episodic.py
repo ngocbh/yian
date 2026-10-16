@@ -1017,9 +1017,7 @@ class _EpisodicSession:
         except BaseException as cleanup:
             if exc is None:
                 raise
-            exc.add_note(
-                f"Episodic session cleanup failed: {type(cleanup).__name__}"
-            )
+            exc.add_note(f"Episodic session cleanup failed: {type(cleanup).__name__}")
 
     def close(self) -> None:
         """Idempotently close this session, without closing its backend."""

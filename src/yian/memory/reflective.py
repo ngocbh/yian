@@ -809,9 +809,7 @@ class ReflectiveMemory:
         except BaseException as cleanup:
             if exc is None:
                 raise
-            exc.add_note(
-                f"ReflectiveMemory cleanup failed: {type(cleanup).__name__}"
-            )
+            exc.add_note(f"ReflectiveMemory cleanup failed: {type(cleanup).__name__}")
 
     def close(self) -> None:
         """Release storage and invalidate idle handles without waiting for work.

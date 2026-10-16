@@ -400,7 +400,8 @@ class AzureOpenAIClient(BaseLLMClient):
             # langchain reads AZURE_OPENAI_AD_TOKEN into this field, and the SDK then sends the
             # token instead of a passed key. With no key passed the SDK still picks the token or
             # AZURE_OPENAI_API_KEY from the environment itself; yian never reads the key variable,
-            # since the mixin's `api_key` field shadows langchain's Azure default.
+            # since the `openai_api_key` field the mixin inherits from `BaseChatOpenAI` (default
+            # None) shadows `AzureChatOpenAI`'s environment default.
             "azure_ad_token": None,
         }
 

@@ -276,52 +276,65 @@ def _reject_authored_private_callable_names(
         )
 
 
+# How many file loads the default file resolver nests above the file `_load_callee_first`
+# is loading before it hands the next import to the scheduler's stack. Nesting lets a
+# file load its imports in one pass, so a file that imports many files is loaded once;
+# the bound keeps a long import chain from nesting more file loads than that on the
+# Python stack.
+_MAX_NESTED_FILE_LOADS = 8
+
+
 @dataclass
 class _PendingFile:
-    """One `uses:` file on the callee-first load stack.
+    """One `uses:` file on the callee-first load stack, or one file load nested above it.
 
-    ``active_imports`` is the import count its load starts from, ``document`` is the
-    file's parsed source once read, and ``failures`` maps each import that failed to
-    load while this file was on top to the exception and traceback it failed with.
+    `active_imports` is the import count its load starts from, `outer` is the set of
+    files being loaded when it was imported, without itself, and `document` is the
+    file's parsed source once read. `failures` maps each import that failed to load
+    while this file was on top, keyed by the import and its `outer`, to the exception
+    and traceback it failed with.
     """
 
     path: Path
     active_imports: int
+    outer: frozenset[Path]
     document: SourceDocument | None = None
-    failures: dict[Path, tuple[Exception, Any]] = field(default_factory=dict)
+    failures: dict[tuple[Path, frozenset[Path]], tuple[Exception, Any]] = field(
+        default_factory=dict
+    )
 
 
 @dataclass
 class _LoadCtx:
     """Cross-file cycle state and successful compiled-flow reuse by resolved path.
 
-    ``loading`` holds the files on the callee-first load stack ``pending``, so it is
-    empty while no default file resolver of this context is loading a file.
+    `loading` holds the files being loaded, so it is empty while no default file
+    resolver of this context is loading a file. While one is, `pending` is the
+    callee-first load stack and `nested` the file loads nested above its top.
     """
 
     loading: set[Path] = field(default_factory=set)
     flows: dict[Path, ComposedFlow] = field(default_factory=dict)
     pending: list[_PendingFile] = field(default_factory=list)
+    nested: list[_PendingFile] = field(default_factory=list)
 
 
 class _LoadFirst(BaseException):
-    """Asks the scheduler loading `uses:` files callee-first to load `path` before its importer.
+    """Asks the scheduler loading `uses:` files callee-first to load a file before its importers.
 
     It is a `BaseException` so the `except Exception` sites a file load passes through
     let it reach the scheduler.
 
     Args:
         ctx (`_LoadCtx`): The load context whose scheduler handles it.
-        path (`Path`): The resolved file to load first.
-        active_imports (`int`): The imports being loaded around the import of `path`,
-            which the file's own load starts from.
+        chain (`list[_PendingFile]`): The file loads nested above the scheduler's top
+            when the import was made, outermost first, then the imported file.
     """
 
-    def __init__(self, ctx: _LoadCtx, path: Path, active_imports: int) -> None:
-        super().__init__(str(path))
+    def __init__(self, ctx: _LoadCtx, chain: list[_PendingFile]) -> None:
+        super().__init__(str(chain[-1].path))
         self.ctx = ctx
-        self.path = path
-        self.active_imports = active_imports
+        self.chain = chain
 
 
 # `uses:` imports being loaded around the current one. It spans files and is never reset
@@ -593,10 +606,11 @@ def make_file_resolver(search_paths, ctx: "_LoadCtx") -> ChildResolver:
     the search path (`<dir>/<path>.yaml`, first match wins); `@<version>` is never part of
     the filename but acts as a guard — the resolved file is loaded, then its declared
     `version:` must equal the pinned `<v>`. Each child loads with its own directory as
-    its search path, so its own `uses:`/`system.paths` re-root there; a chain of
-    imports loads callee-first (`_load_callee_first`) instead of nesting one load per
-    file. A `hub:`/scheme ref never reaches here (it is handled in the composite
-    resolver).
+    its search path, so its own `uses:`/`system.paths` re-root there. A file's imports
+    load nested inside it up to `_MAX_NESTED_FILE_LOADS` file loads deep, and
+    callee-first past that (`_load_callee_first`), so a long chain of imports does not
+    nest one load per file. A `hub:`/scheme ref never reaches here (it is handled in the
+    composite resolver).
 
     Args:
         search_paths (`list[str | Path]`):
@@ -633,13 +647,26 @@ def make_file_resolver(search_paths, ctx: "_LoadCtx") -> ChildResolver:
                 raise _UNLOCATED_DIAGNOSTICS.error(
                     f"flow-reference cycle across files: {cand}"
                 )
-            if ctx.loading:
-                failure = ctx.pending[-1].failures.get(cand)
-                if failure is not None:
-                    exc, traceback = failure
-                    raise exc.with_traceback(traceback)
-                raise _LoadFirst(ctx, cand, _ACTIVE_IMPORTS.get())
-            child = _load_callee_first(ctx, cand)
+            if not ctx.loading:
+                child = _load_callee_first(ctx, cand)
+                _check_version(child, path, version)
+                return child
+            imported = _PendingFile(cand, _ACTIVE_IMPORTS.get(), frozenset(ctx.loading))
+            failure = ctx.pending[-1].failures.get((cand, imported.outer))
+            if failure is not None:
+                exc, traceback = failure
+                raise exc.with_traceback(traceback)
+            if len(ctx.nested) >= _MAX_NESTED_FILE_LOADS:
+                raise _LoadFirst(ctx, [*ctx.nested, imported])
+            ctx.nested.append(imported)
+            ctx.loading.add(cand)
+            try:
+                imported.document = parse_source_document(cand.read_text(), cand.name)
+                child = _load_flow(imported.document, None, [cand.parent], ctx)
+            finally:
+                ctx.loading.discard(cand)
+                ctx.nested.pop()
+            ctx.flows[cand] = child
             _check_version(child, path, version)
             return child
         raise _UNLOCATED_DIAGNOSTICS.error(
@@ -650,25 +677,31 @@ def make_file_resolver(search_paths, ctx: "_LoadCtx") -> ChildResolver:
 
 
 def _load_callee_first(ctx: _LoadCtx, first: Path) -> ComposedFlow:
-    """Load `uses:` file `first` and each file it imports before it, without nesting loads.
+    """Load `uses:` file `first` and the files it imports, nesting at most a few file loads.
 
-    While this runs, a default file resolver of `ctx` asked for a file not loaded yet
-    raises `_LoadFirst`, which aborts the importer's load. The imported file is pushed
-    on a stack and loaded, and the importer is loaded again once it is done. While a
-    file loads, `ctx.loading` holds exactly the files on the stack and the active import
-    count is the one carried to it, which is what a load nested in its importers would
-    see, so cross-file cycles and the call nesting limit are checked as before.
+    While this runs, a default file resolver of `ctx` loads a file not loaded yet nested
+    inside its importer, as outside this, while fewer than `_MAX_NESTED_FILE_LOADS` file
+    loads are nested above the file on top of the stack. Past that it raises
+    `_LoadFirst`, which aborts the load on top. The nested files and then the imported
+    file are pushed on the stack, the imported file is loaded first, and each file below
+    it is loaded again once the file above it is done. A pushed file loads with the
+    files being loaded and the active import count it was imported with, which are what
+    a load nested in its importers sees, so cross-file cycles and the call nesting limit
+    are checked as before. Files the aborted load finished loading stay cached in
+    `ctx.flows`, so loading again finds them loaded, as a nested load would.
 
-    When an imported file fails, its exception is recorded for the importer now on top,
-    and the resolver asked for that file raises it again while that importer loads, so
-    the importer's own error handling wraps it as if the file had been loaded nested.
-    The records are dropped when the importer leaves the stack. The failure of `first`
-    is raised.
+    When a file on the stack fails, its exception is recorded for the file below it,
+    keyed by the failed file and the files being loaded when it was imported. While the
+    file below loads again, the resolver asked for the failed file with those same files
+    being loaded raises it again, so the importer's own error handling wraps it as if
+    the file had been loaded nested. The records are dropped when the file below leaves
+    the stack. The failure of `first` is raised.
 
     Each file is read and parsed once; loading it again reuses its document, which a
     load only reads. This relies on a file's load being deterministic given `ctx`, and
-    on an aborted load leaving no trace: each load has its own callable scope and
-    catalog, and only a successful load is cached in `ctx.flows`.
+    on an aborted load leaving no trace but the files it finished loading: each load
+    has its own callable scope and catalog, and only a successful load is cached in
+    `ctx.flows`.
 
     Args:
         ctx (`_LoadCtx`): The load context, with no file loading.
@@ -678,15 +711,16 @@ def _load_callee_first(ctx: _LoadCtx, first: Path) -> ComposedFlow:
         `ComposedFlow`: The loaded `first`, also cached in `ctx.flows`.
 
     Raises:
-        `LoadError`: Raised when `first`, or a file it imports, fails to load.
+        `Exception`: Re-raises the recorded failure of `first` or of a file it imports,
+            which may be any `Exception`.
     """
-    ctx.pending = [_PendingFile(first, _ACTIVE_IMPORTS.get())]
+    ctx.pending = [_PendingFile(first, _ACTIVE_IMPORTS.get(), frozenset())]
     try:
         while ctx.pending:
             top = ctx.pending[-1]
             ctx.loading.clear()
-            ctx.loading.update(pending.path for pending in ctx.pending)
-            imported: _LoadFirst | None = None
+            ctx.loading.update({*top.outer, top.path})
+            abort: _LoadFirst | None = None
             failure: Exception | None = None
             token = _ACTIVE_IMPORTS.set(top.active_imports)
             try:
@@ -696,23 +730,27 @@ def _load_callee_first(ctx: _LoadCtx, first: Path) -> ComposedFlow:
             except _LoadFirst as exc:
                 if exc.ctx is not ctx:
                     raise
-                imported = exc
+                abort = exc
             except Exception as exc:
                 failure = exc
             finally:
                 _ACTIVE_IMPORTS.reset(token)
             # Acted on after the handlers exit, so the next load and a replayed failure
             # don't carry the handled exception as their `__context__`.
-            if imported is not None:
-                ctx.pending.append(_PendingFile(imported.path, imported.active_imports))
+            if abort is not None:
+                ctx.pending.extend(abort.chain)
                 continue
             ctx.pending.pop()
             if failure is not None:
+                # The traceback starts at this frame; raising it here or replaying it in
+                # the resolver adds the raising frame, so this one would show twice.
+                traceback = failure.__traceback__.tb_next
                 if not ctx.pending:
-                    raise failure
-                ctx.pending[-1].failures[top.path] = (failure, failure.__traceback__)
+                    raise failure.with_traceback(traceback)
+                ctx.pending[-1].failures[(top.path, top.outer)] = (failure, traceback)
     finally:
         ctx.pending = []
+        ctx.nested = []
         ctx.loading.clear()
     return ctx.flows[first]
 
@@ -1380,7 +1418,7 @@ class _CallableScope:
                     )
                 limit = current().max_call_nesting
                 active = _ACTIVE_IMPORTS.get()
-                # Checked before loading: loading the file would recurse another level.
+                # Checked before loading: loading the file would nest another level.
                 if active >= limit:
                     raise self._import_too_deep(flow_id, active + 1, limit)
                 token = _ACTIVE_IMPORTS.set(active + 1)

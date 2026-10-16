@@ -2,10 +2,11 @@
 
 A def builds the defs it calls nested, up to a few def builds deep; past that, the defs
 being built are set aside, the callee is built first, and each def set aside is built
-again once the def it called is done. A file that imports a file not loaded yet is
-likewise loaded again once its import is loaded. Results are the same as building each
-callee nested inside its caller: the same flow, the same call nesting limit failures, and
-the same error, frames, and cause chain when a def or file in the chain fails.
+again once the def it called is done. A file likewise loads the files it imports nested,
+up to a few file loads deep, and past that each file set aside is loaded again once the
+file it imported is loaded. Results are the same as building each callee nested inside
+its caller: the same flow, the same call nesting limit failures, and the same error,
+frames, and cause chain when a def or file in the chain fails.
 """
 
 from collections import Counter
@@ -17,6 +18,7 @@ from tests.compose.test_call_nesting_limit import (
     _LEAF,
     _chain_texts,
     _defs_chain,
+    _importing,
     _uses_files,
     _write_files,
 )
@@ -568,30 +570,6 @@ def test_a_uses_chain_loads_to_the_same_flow(tmp_path: Path) -> None:
     assert flow_fingerprint(flow.compiled) == _MAIN_USES_FINGERPRINT_30
 
 
-def test_each_file_is_parsed_once_though_its_load_is_repeated(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    parses: Counter[str] = Counter()
-    loads: Counter[str] = Counter()
-    parse = loader.parse_source_document
-    load = loader._load_flow
-
-    def counting_parse(text, label, *args, **kwargs):
-        parses[label] += 1
-        return parse(text, label, *args, **kwargs)
-
-    def counting_load(document, *args, **kwargs):
-        loads[document.label] += 1
-        return load(document, *args, **kwargs)
-
-    monkeypatch.setattr(loader, "parse_source_document", counting_parse)
-    monkeypatch.setattr(loader, "_load_flow", counting_load)
-    load_flow(_uses_files(tmp_path, 30), search_paths=[tmp_path])
-
-    assert dict(parses) == {"<flow>": 1, **{f"u{i}.yaml": 1 for i in range(30)}}
-    assert dict(loads) == {"<flow>": 1, **{f"u{i}.yaml": 2 if i < 29 else 1 for i in range(30)}}
-
-
 _USES_ROOT = (
     "id: root\nname: root\ninput:\n  x: !str\nuses:\n  first: {first}\nnodes:\n"
     "  top:\n"
@@ -601,6 +579,84 @@ _USES_ROOT = (
     "      x: ${{input.x}}\n"
     "output: ${{top.output}}\n"
 )
+
+
+def _count_file_loads(monkeypatch: pytest.MonkeyPatch) -> Counter[str]:
+    """Count each load of a flow document by label, from now until the test ends."""
+    loads: Counter[str] = Counter()
+    load = loader._load_flow
+
+    def counting_load(document, *args, **kwargs):
+        loads[document.label] += 1
+        return load(document, *args, **kwargs)
+
+    monkeypatch.setattr(loader, "_load_flow", counting_load)
+    return loads
+
+
+def test_each_file_is_parsed_once_though_its_load_is_repeated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parses: Counter[str] = Counter()
+    parse = loader.parse_source_document
+
+    def counting_parse(text, label, *args, **kwargs):
+        parses[label] += 1
+        return parse(text, label, *args, **kwargs)
+
+    monkeypatch.setattr(loader, "parse_source_document", counting_parse)
+    loads = _count_file_loads(monkeypatch)
+    load_flow(_uses_files(tmp_path, 30), search_paths=[tmp_path])
+
+    assert dict(parses) == {"<flow>": 1, **{f"u{i}.yaml": 1 for i in range(30)}}
+    # `u27` is the last file set aside, and it loads `u28` and `u29` nested; each file
+    # set aside before it is loaded again once its import is loaded.
+    assert dict(loads) == {"<flow>": 1, **{f"u{i}.yaml": 2 if i < 27 else 1 for i in range(30)}}
+
+
+def test_a_file_importing_many_files_is_loaded_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    aliases = {f"a{i}": f"leaf{i}" for i in range(150)}
+    texts = {"hub": _importing("hub", aliases)}
+    texts.update((leaf, _importing(leaf, {})) for leaf in aliases.values())
+    _write_files(tmp_path, texts)
+    loads = _count_file_loads(monkeypatch)
+    rebases: Counter[str] = Counter()
+    rebase = loader._rebase_external_child
+
+    def counting_rebase(alias, child):
+        rebases[alias] += 1
+        return rebase(alias, child)
+
+    monkeypatch.setattr(loader, "_rebase_external_child", counting_rebase)
+    load_flow(_USES_ROOT.format(first="hub"), search_paths=[tmp_path])
+
+    assert dict(loads) == {
+        "<flow>": 1,
+        "hub.yaml": 1,
+        **{f"{leaf}.yaml": 1 for leaf in aliases.values()},
+    }
+    assert dict(rebases) == {"first": 1, **{alias: 1 for alias in aliases}}
+
+
+def test_a_file_loaded_before_a_deep_import_is_not_loaded_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `a` loads the chain from `x0` nested, then its chain from `b0` nests too deep and
+    # is set aside; `b19` and `a` loaded again find `x0` loaded, as nested loads do.
+    texts = {"a": _importing("a", {"short": "x0", "long": "b0"})}
+    texts.update(_chain_texts(5, prefix="x", calls=False))
+    texts.update(_chain_texts(20, prefix="b", calls=False, last_imports="x0"))
+    _write_files(tmp_path, texts)
+    loads = _count_file_loads(monkeypatch)
+    flow = load_flow(_USES_ROOT.format(first="a"), search_paths=[tmp_path])
+
+    assert flow.import_depth == 26
+    assert {label: loads[label] for label in loads if label.startswith("x")} == {
+        f"x{i}.yaml": 1 for i in range(5)
+    }
+    assert loads["a.yaml"] == 2
 
 
 def _broken_file_chain() -> dict[str, str]:

@@ -41,6 +41,7 @@ from pydantic import BeforeValidator, Field
 from yian.defaults import current
 from yian.skills.tool import LOAD_SKILL
 from yian.tools.context import ToolContext
+from yian.tools.errors import ToolCheckError
 from yian.tools.function_tools import FunctionTool
 from yian.tools.schema import _is_tool_context, function_schema
 from yian.tools.types import _input_type_from_json_schema
@@ -213,7 +214,7 @@ def _tool_from_function_tool(ft: FunctionTool, *, description: str | None = None
         if inspect.isawaitable(result):
             if inspect.iscoroutine(result):
                 result.close()  # Never awaited; closing avoids a "never awaited" warning.
-            raise TypeError(
+            raise ToolCheckError(
                 f"tool {ft.name!r} returned an awaitable; yian calls tools synchronously, "
                 "so on_invoke must return the result"
             )
@@ -735,6 +736,34 @@ class ToolSet:
                 An id is not visible to this run.
         """
         return [self._get(tool_id) for tool_id in tool_ids]
+
+    def validate(self, tool_id: str, inputs: dict[str, Any]) -> None:
+        """Check one call's public arguments as `invoke` does, without calling the tool.
+
+        A caller that retries a call checks its arguments once up front, so a bad
+        argument fails before the first attempt instead of inside the retries.
+
+        Args:
+            tool_id (`str`):
+                The id of the tool the call is for.
+            inputs (`dict[str, Any]`):
+                Public arguments keyed by parameter name.
+
+        Raises:
+            `ValueError`:
+                The id is not visible to this run, an argument is not public, a
+                required argument is missing, or a value doesn't fit its parameter.
+            `TypeError`:
+                The tool's argument schema is not one yian can check.
+
+        Example:
+            ```python
+            tools = ToolSet({"weather": lookup})
+            tools.validate("weather", {"city": "Paris"})  # passes; lookup is not called
+            tools.validate("weather", {"town": "Paris"})  # raises ValueError
+            ```
+        """
+        _validate_invocation(tool_id, self._get(tool_id), dict(inputs), trusted=False)
 
     def invoke(
         self,

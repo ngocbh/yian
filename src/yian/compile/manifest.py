@@ -106,7 +106,7 @@ _KIND_FIELDS: dict[NodeKind, frozenset[str]] = {
         }
     ),
     NodeKind.CODE: frozenset({"code"}),
-    NodeKind.TOOL: frozenset({"tool_id"}),
+    NodeKind.TOOL: frozenset({"tool_id", "retries"}),
     NodeKind.CASE: frozenset({"cases"}),
     NodeKind.HUMAN_INPUT: frozenset(
         {"prompt", "answer_schema", "questions", "questions_input"}
@@ -887,6 +887,9 @@ def _node_manifest(
         manifest["code"] = node.code
     elif node.kind is NodeKind.TOOL:
         manifest["tool_id"] = node.tool_id
+        # Omitted when zero so flows that never opt in keep their identity.
+        if node.retries:
+            manifest["retries"] = node.retries
     elif node.kind is NodeKind.CASE:
         manifest["cases"] = [
             _case_manifest(case, ctx, f"{path}.cases[{index}]")

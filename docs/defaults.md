@@ -8,9 +8,11 @@ entry's name. `YIAN_MAX_TOTAL_NODES=20000` raises the node budget from 10,000 to
 - **limit**: a language safety limit, such as how deep a value may nest or how many
   live nodes a run may grow to, or a bound on what yian writes in a message, such as
   how much of a value an error message shows;
-- **setting**: the default for a setting a flow author can write. A value written in
-  the flow wins; the variable changes only what applies when the flow sets none (an
-  AGENT's `retries:`, its `env: {max_tool_iterations: ...}`, a memory's `config:`);
+- **setting**: the default for how a node or memory behaves. Where a flow can write
+  the setting (an AGENT's or TOOL's `retries:`, its `env: {max_tool_iterations: ...}`,
+  a memory's `config:`), the written value wins and the variable changes only what
+  applies when the flow sets none. The rest, such as the TOOL retry delays and the
+  reflective prompt budgets, have no flow-level form, so only the variable changes them;
 - **input cap**: the largest input yian reads from a file, a server, or the user.
 
 The Python names are in `yian.defaults`: `current()` returns this process's values as
@@ -58,10 +60,11 @@ built-in values. Every entry is recorded, input caps included.
 Resuming a run (`resume_flow`, `yian run --resume`) and replaying it for backward
 learning compare the recorded values with this process's values before checking the
 flow fingerprint. Some values change the loaded flow (`YIAN_AGENT_RETRIES` is baked
-into each AGENT), so checking them first names the variable instead of failing on the
-flow fingerprint. The comparison is by effective value: a recorded value equal to the
-built-in one matches an unset variable. A difference raises `DefaultsMismatchError` (a
-`ValueError`) with one line per variable:
+into each AGENT and `YIAN_TOOL_RETRIES` into each TOOL), so checking them first names
+the variable instead of failing on the flow fingerprint. The comparison is by
+effective value: a recorded value equal to the built-in one matches an unset
+variable. A difference raises `DefaultsMismatchError` (a `ValueError`) with one line
+per variable:
 
 ```text
 YIAN_MAX_TOTAL_NODES is 20000 here, but this run started with 5000; set YIAN_MAX_TOTAL_NODES=5000 to resume it
@@ -154,6 +157,9 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_MAX_SHOWN_VALUE_CHARS` | limit | 200 | 2 or more | Longest rendering of a value or key an error message shows |
 | `YIAN_AGENT_RETRIES` | setting | 2 | 0 or more | Extra attempts an AGENT gets to correct an invalid structured reply when the node sets none |
 | `YIAN_AGENT_MAX_TOOL_ITERATIONS` | setting | -1 | 1 or more, or -1 for no cap | AGENT tool-call turns when the node sets none; -1 is no cap |
+| `YIAN_TOOL_RETRIES` | setting | 0 | 0 or more | Extra attempts a TOOL node gets after a failed tool call when the node sets none |
+| `YIAN_TOOL_RETRY_DELAY_SECONDS` | setting | 1 | 0 or more | Base wait in seconds before a TOOL node's first retry; each later wait doubles, up to the cap |
+| `YIAN_TOOL_RETRY_MAX_DELAY_SECONDS` | setting | 30 | 0 or more | Longest wait in seconds before a TOOL node retries a failed tool call |
 | `YIAN_EPISODIC_MAX_EPISODES` | setting | 100 | 1 or more | Episodes an episodic memory keeps when it sets no limit |
 | `YIAN_EPISODIC_RECALL_LIMIT` | setting | 10 | 1 or more | Episodes an episodic memory recalls when it sets no limit |
 | `YIAN_REFLECTIVE_MAX_ITEMS` | setting | 100 | 1 or more | Lessons a reflective memory keeps when it sets no limit |

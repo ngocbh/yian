@@ -42,7 +42,7 @@ def test_entries_match_defaults_fields() -> None:
 
 def test_variable_names_are_prefixed_and_do_not_collide() -> None:
     taken = {"YIAN_DEFAULT_PROVIDER", "YIAN_DEFAULT_MODEL", "YIAN_AUTH_FILE"}
-    owners = {"MAX", "AGENT", "EPISODIC", "REFLECTIVE", "SESSION", "PROFILE"}
+    owners = {"MAX", "AGENT", "TOOL", "EPISODIC", "REFLECTIVE", "SESSION", "PROFILE"}
     for entry in ENTRIES:
         assert re.fullmatch(r"[A-Z]+(_[A-Z]+)+", entry.name), entry.name
         assert entry.name.split("_")[0] in owners, entry.name

@@ -71,6 +71,7 @@ from yian.nodes.binding import (
     _resolve_source,
     bind_params,
 )
+from yian.nodes.contracts import NodeSteps
 from yian.runtime.contracts import BackwardCapture
 from yian.runtime.log import canonical_seed
 from yian.tools import ToolSet
@@ -493,6 +494,7 @@ def _evaluate_node_stream(
     live_stream: Callable[[StreamChunk], None] | None = None,
     live_event: Callable[[Any], None] | None = None,
     steering: Steering | None = None,
+    steps: NodeSteps | None = None,
 ) -> Generator[StreamChunk, None, WorkerOutcome]:
     """Bind and run one node, yielding chunks and returning one normalized result.
 
@@ -511,6 +513,9 @@ def _evaluate_node_stream(
 
     `skills` is the run's host-supplied skill mapping, passed as ``caps['skills']`` only to
     a node declaring `needs_skills`.
+
+    `steps` is this start's ``NodeSteps``, passed as ``caps['steps']`` only to a node
+    declaring `needs_steps`.
 
     Returns:
         `WorkerOutcome`:
@@ -655,6 +660,8 @@ def _evaluate_node_stream(
         caps["skills"] = skills
     if steering is not None and node.needs_steering is True:
         caps["steering"] = _SteeringCapability(steering)
+    if steps is not None and node.needs_steps is True:
+        caps["steps"] = steps
 
     try:
         with _memory_context_capability(
@@ -776,6 +783,7 @@ def eval_node(
     effective_llm_by_static_path: dict[str, dict[str, Any]] | None = None,
     tools: ToolSet | None = None,
     steering: Steering | None = None,
+    steps: NodeSteps | None = None,
 ) -> EvaluatedOutcome:
     """Evaluate one node into a wrapped worker result and transient stream callback.
 
@@ -815,6 +823,9 @@ def eval_node(
     receives it. ``None`` gives such a node the global registry.
     ``steering`` is the run's host inbox, delivered only to nodes declaring
     ``needs_steering``; its exceptions and malformed answers escape as host faults.
+    ``steps`` is this start's ``NodeSteps`` from the engine, delivered only to nodes
+    declaring ``needs_steps``; a non-``NodeSteps`` value raises ``TypeError``. Its
+    recorder raises its faults as capability faults, so they escape as host faults.
     """
     require_steering(steering)
     if type(capture_evidence) is not bool:
@@ -833,6 +844,8 @@ def eval_node(
         raise TypeError("tools must be a ToolSet or None")
     if skills is not None and not isinstance(skills, Mapping):
         raise TypeError("skills must be a mapping or None")
+    if steps is not None and type(steps) is not NodeSteps:
+        raise TypeError("steps must be a NodeSteps or None")
     if memory_invocation is not None:
         if type(memory_invocation) is not ConversationInvocation:
             raise TypeError("memory_invocation must be a ConversationInvocation or None")
@@ -945,6 +958,7 @@ def eval_node(
         live_stream=live_stream,
         live_event=live_event,
         steering=steering,
+        steps=steps,
     )
     try:
         while True:

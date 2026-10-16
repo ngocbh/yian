@@ -196,21 +196,29 @@ rejection as `contract.growth`.
 
 **Capabilities (`caps`)** are narrow, engine-owned effects passed as keyword args to
 `run`; each is gated by a node trait. A mapped call gets `caps['bind_item']`
-(per-element bind, gated on `binds_per_item`). The AGENT and WAIT nodes get the exact
-run-owned `caps['stop_event']` (gated on `needs_stop_event`): the AGENT node checks it
-between external model/tool effects, while WAIT blocks on it so host shutdown or
-sibling failure wakes the deadline wait. TOOL, HUMAN_INPUT, and the AGENT node get
-the run's `caps['tools']` (gated on `needs_tools`): one immutable `ToolSet` that
-`run_flow` / `resume_flow` build from `tools=`: the global registry when `None`,
-otherwise only the mapping's entries, and `ask_user` only from the run. A list value
-is a named tool group; the AGENT's tool loop expands granted groups through
-`ToolSet.expand` before binding and the grant check, and the run boundary checks
-every static `Node.granted_tools()` grant against the `ToolSet` before any record.
+(per-element bind, gated on `binds_per_item`). The AGENT, WAIT, and TOOL nodes get the
+exact run-owned `caps['stop_event']` (gated on `needs_stop_event`): the AGENT node
+checks it between external model/tool effects, while WAIT and a TOOL's retry backoff
+block on it so host shutdown or sibling failure wakes the wait. TOOL, HUMAN_INPUT,
+and the AGENT node get the run's `caps['tools']` (gated on `needs_tools`): one
+immutable `ToolSet` that `run_flow` / `resume_flow` build from `tools=`: the global
+registry when `None`, otherwise only the mapping's entries, and `ask_user` only from
+the run. A list value is a named tool group; the AGENT's tool loop expands granted
+groups through `ToolSet.expand` before binding and the grant check, and the run
+boundary checks every static `Node.granted_tools()` grant against the `ToolSet`
+before any record.
 The `ToolSet` also holds the host's unrecorded `context=` object; `FlowEngine` binds
 it to the run id with `ToolSet.for_run`, and `ToolSet.invoke(tool_id, inputs, *, node,
 call_id, attempt)` builds the `ToolContext` for a tool that declares one (call id
 `"<run_id>/<node id>"` from TOOL and HUMAN_INPUT, stable across resume; per call and
 not stable from the AGENT loop; a fresh id outside a run).
+A node declaring `needs_steps` gets `caps['steps']`, a `NodeSteps(starts, prior,
+record)`: its accepted start count (`RunState.node_starts`, including the current
+start), copies of the steps its earlier starts recorded (`RunState.node_steps`), and
+`record(step)`, which prepares, appends, and applies one `NodeStepRecord` before it
+returns (inline when serial; through the dispatcher queue when pooled, where a stop
+releases the worker as a host stop). The TOOL node records its retried attempts this
+way, so `ToolContext.attempt` and its remaining retries survive resume and replay.
 The same walk reads `Node.host_tool_call()`: TOOL returns a `HostToolCall` (tool id,
 input names, proven input types, declared output type), and the boundary compares it
 with `tools.types.tool_types(tool)` through `type_relation`. Unknown or missing inputs
@@ -240,9 +248,10 @@ Runtime and compile validation read these node members instead of branching on
 | `skipped_output_target() -> str` | route reducer and growth validation: select the logical output whose out-edges receive this physical node's absence | baked `commit_as` or own id → LOOP `origin_id` |
 | `grow_depth_delta: int\|None` | growth core: nested-call depth increment stamped on the spliced spawners + terminal | `None` non-spawner → `0` loop (inherit) → `1` call/map |
 | `is_loop: bool` | growth reducer: gate the origin-keyed single-live-expansion invariant (the driver self-respawns, so each iteration's grow is attributed to `origin_id` and supersedes the prior expansion) | `False` → `True` on `loop` |
-| `needs_stop_event: bool` | read boundary (`eval_node`): pass the exact cooperative run-stop event | `False` → `True` on agent/wait |
+| `needs_stop_event: bool` | read boundary (`eval_node`): pass the exact cooperative run-stop event | `False` → `True` on agent/wait/tool |
 | `needs_tools: bool` | read boundary (`eval_node`): pass the run's `ToolSet` as `caps['tools']` | `False` → `True` on tool/human_input/agent |
 | `host_tool_call() -> HostToolCall \| None` | run boundary only (`run.py`): check a direct tool call against the run's tool types before any record | `None` → the TOOL node's call |
+| `needs_steps: bool` | read boundary (`eval_node`): pass this start's `NodeSteps` as `caps['steps']` | `False` → `True` on tool |
 | `needs_live_events: bool` | read boundary (`eval_node`): pass `emit_stream`/`emit_event` for the host sinks that exist; faults escape as host faults | `False` → `True` on agent |
 | `needs_steering: bool` | read boundary (`eval_node`): pass the run's `Steering` inbox as `caps['steering']` when the host supplied one; faults and wrong return types escape as host faults | `False` → the AGENT's authored `steerable:` |
 
@@ -302,6 +311,7 @@ Kind-specific diagnostics stay with their kind.
 | `RunStartedRecord` | complete initial pool, flow fingerprint, START override, resolved LLM map, worker count, optional memory configuration, and the `yian.defaults` values that differ from the built-in ones (`defaults`, omitted when empty) |
 | `RunResumedRecord` | eligible ordered unfinished starts to retry and the selected worker count |
 | `NodeStartedRecord` | move the exact ready head into the ordered in-flight set before evaluation/submission |
+| `NodeStepRecord` | append one opaque JSON step an in-flight node recorded to `RunState.node_steps`; kept across `RunResumed` until the node settles; no observer |
 | `NodeSucceededRecord` | commit one canonical typed value under an already-resolved target, with optional evaluation evidence |
 | `NodeRoutedRecord` | select one named outgoing handle and retain optional terminal failure and evaluation evidence |
 | `NodeExpandedRecord` | rebuild and verify one canonical seed/digest with optional evaluation evidence, then splice its fragment |

@@ -77,6 +77,7 @@ from yian.runtime.log import (
     NodeRoutedRecord,
     NodeSucceededRecord,
     NodeStartedRecord,
+    NodeStepRecord,
     RecordEnvelope,
     RunLog,
     RunRecord,
@@ -228,6 +229,13 @@ class RunState:
             Ordered set of durably started nodes without a durable outcome.
         accepted_starts (`dict[str, int]`):
             Original accepted start sequence for each unfinished invocation.
+        node_starts (`dict[str, int]`):
+            Number of accepted ``NodeStarted`` records for each unsettled node,
+            counting starts before and after a resume; a node's entry goes when
+            its outcome is applied.
+        node_steps (`dict[str, tuple[dict[str, Any], ...]]`):
+            Canonical steps each unsettled node recorded, in record order. They
+            survive a resume and go when the node's outcome is applied.
         result (`RunSucceeded | RunFailed | None`):
             Derived terminal result, or ``None`` while the run remains live.
         terminal_unreachable_failure (`Failure | None`):
@@ -311,6 +319,8 @@ class RunState:
         self.ready: deque[str] = deque()
         self.in_flight: dict[str, None] = {}
         self.accepted_starts: dict[str, int] = {}
+        self.node_starts: dict[str, int] = {}
+        self.node_steps: dict[str, tuple[dict[str, Any], ...]] = {}
         self.result: RunSucceeded | RunFailed | None = None
         self.terminal_unreachable_failure: Failure | None = None
         self.depth: dict[str, int] = {}
@@ -434,7 +444,7 @@ class _RunStartedApply:
 
 @dataclass(frozen=True, slots=True)
 class _FrontierPlan:
-    """Opaque authority anchors and one immutable dispatch/recovery delta.
+    """Opaque authority anchors and one immutable dispatch, recovery, or step delta.
 
     The private single-writer reducer owns the frontier between records.  State/flow
     identity plus the next durable coordinate therefore make a complete stale-plan
@@ -448,7 +458,7 @@ class _FrontierPlan:
     start_node_identity: int
     end_id: str
     end_node_identity: int | None
-    delta: _NodeStartedDelta | _RunResumedDelta
+    delta: _NodeStartedDelta | _RunResumedDelta | _NodeStepDelta
     trace_delta: TraceDelta | None = None
 
 
@@ -465,6 +475,14 @@ class _RunResumedDelta:
 
     retry_node_ids: tuple[str, ...]
     num_workers: int
+
+
+@dataclass(frozen=True, slots=True)
+class _NodeStepDelta:
+    """Prevalidated append of one canonical step to an in-flight node's steps."""
+
+    node_id: str
+    step: dict[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -922,6 +940,49 @@ def prepare_node_started(state: RunState, node_id: str) -> PreparedTransition:
     return prepare_record(state, NodeStartedRecord(node_id=node_id))
 
 
+def prepare_node_step(state: RunState, node_id: str, step: dict[str, Any]) -> PreparedTransition:
+    """Prepare appending one step an in-flight node recorded while it runs.
+
+    Args:
+        state (`RunState`):
+            Initialized nonterminal state in which ``node_id`` is in flight.
+        node_id (`str`):
+            Exact ID of the in-flight node recording the step.
+        step (`dict[str, Any]`):
+            JSON object with text keys and finite numbers, nested no deeper than
+            the value nesting limit. Only the node gives it meaning.
+
+    Returns:
+        `PreparedTransition`:
+            Canonical ``NodeStepRecord`` plus a detached append-before-apply plan,
+            with no observers.
+
+    Raises:
+        `TypeError`:
+            ``state``, ``node_id``, or ``step`` has the wrong exact type.
+        `ValueError`:
+            State is uninitialized or terminal, ``node_id`` is not in flight, or
+            ``step`` is not a JSON object within the limits.
+
+    Example:
+        ```python
+        prepared = prepare_node_step(state, "place", {"event": "started", "attempt": 2})
+        commit_prepared(log, state, prepared)
+        assert state.node_steps["place"][-1] == {"attempt": 2, "event": "started"}
+        ```
+    """
+    if type(state) is not RunState:
+        raise TypeError("prepare_node_step expects a RunState")
+    if type(node_id) is not str:
+        raise TypeError("node_id must be a string")
+    if type(step) is not dict:
+        raise TypeError("node step must be a JSON object")
+    # Live steps only, like live outputs: replay folds recorded steps without the
+    # process limit, so a log stays readable under a different limit.
+    reject_deep_nesting(step, "node step")
+    return prepare_record(state, NodeStepRecord(node_id=node_id, step=step))
+
+
 def prepare_node_succeeded(
     state: RunState,
     node_id: str,
@@ -1303,6 +1364,8 @@ def prepare_record(
         _validate_node_started(state, record)
     elif isinstance(record, RunResumedRecord):
         _validate_run_resumed(state, record)
+    elif isinstance(record, NodeStepRecord):
+        _validate_node_step(state, record)
     else:
         raise TypeError(
             f"unsupported run record for state preparation: {type(record).__name__}"
@@ -1331,6 +1394,12 @@ def prepare_record(
             raise TypeError("run-resume envelope decoded to a different record kind")
         _validate_run_resumed(state, canonical_record)
         observers = (RunResumed(),)
+    elif isinstance(record, NodeStepRecord):
+        if not isinstance(canonical_record, NodeStepRecord):
+            raise TypeError("node-step envelope decoded to a different record kind")
+        _validate_node_step(state, canonical_record)
+        # A step is node-owned detail; no observer event announces it.
+        observers = ()
     else:  # protected by the supported-record dispatch above
         raise TypeError("frontier envelope decoded to a different record kind")
 
@@ -1352,7 +1421,7 @@ def prepare_record(
             **common_plan,
             delta=_NodeStartedDelta(node_id=canonical_record.node_id),
         )
-    else:
+    elif isinstance(canonical_record, RunResumedRecord):
         plan = _FrontierPlan(
             **common_plan,
             delta=_RunResumedDelta(
@@ -1360,6 +1429,17 @@ def prepare_record(
                 num_workers=canonical_record.num_workers,
             ),
         )
+    elif isinstance(canonical_record, NodeStepRecord):
+        # The decoded copy keeps the applied step apart from the returned record.
+        plan = _FrontierPlan(
+            **common_plan,
+            delta=_NodeStepDelta(
+                node_id=canonical_record.node_id,
+                step=canonical_seed(canonical_record.step)[1],
+            ),
+        )
+    else:  # protected by the supported-record dispatch above
+        raise TypeError("frontier envelope decoded to a different record kind")
     return PreparedTransition(
         record=canonical_record,
         expected_run_id=canonical_envelope.run_id,
@@ -2078,15 +2158,15 @@ def _commit_frontier(
     state: RunState,
     prepared: PreparedTransition,
 ) -> tuple[Any, ...]:
-    """Validate, append, and apply one sparse dispatch or recovery delta."""
+    """Validate, append, and apply one sparse dispatch, recovery, or node-step delta."""
     plan = prepared._plan
     if not isinstance(plan, _FrontierPlan):
         raise TypeError("frontier commit requires a frontier plan")
     if not isinstance(
         prepared.record,
-        (NodeStartedRecord, RunResumedRecord),
+        (NodeStartedRecord, RunResumedRecord, NodeStepRecord),
     ):
-        raise TypeError("frontier plan requires a dispatch or resume record")
+        raise TypeError("frontier plan requires a dispatch, resume, or step record")
     _require_prepared_origin(state, plan)
     _require_initialized_nonterminal(state)
     _require_authority_coordinates(log, state, prepared, initialized=True)
@@ -2106,6 +2186,13 @@ def _commit_frontier(
                 or delta.num_workers != prepared.record.num_workers):
             raise ValueError("frontier resume delta disagrees with its record")
         observers = (RunResumed(),)
+    elif isinstance(prepared.record, NodeStepRecord) and isinstance(
+        delta, _NodeStepDelta
+    ):
+        if (delta.node_id != prepared.record.node_id
+                or delta.step != prepared.record.step):
+            raise ValueError("frontier step delta disagrees with its record")
+        observers = ()
     else:
         raise TypeError("frontier record and prevalidated delta disagree")
 
@@ -2114,11 +2201,17 @@ def _commit_frontier(
         state.ready.popleft()
         state.in_flight[delta.node_id] = None
         state.accepted_starts[delta.node_id] = prepared.expected_sequence
-    else:
+        state.node_starts[delta.node_id] = state.node_starts.get(delta.node_id, 0) + 1
+    elif isinstance(delta, _RunResumedDelta):
+        # Steps and start counts outlive the segment: a retried node reads them back.
         state.ready.extendleft(reversed(delta.retry_node_ids))
         state.in_flight.clear()
         state.accepted_starts.clear()
         state.num_workers = delta.num_workers
+    elif isinstance(delta, _NodeStepDelta):
+        state.node_steps[delta.node_id] = (*state.node_steps.get(delta.node_id, ()), delta.step)
+    else:  # protected by the record and delta agreement above
+        raise TypeError("frontier delta has an unsupported type")
     state.next_sequence = prepared.expected_sequence + 1
     return observers
 
@@ -2155,6 +2248,7 @@ def _commit_success(
         state.edge_state[edge_id] = NodeState.TAKEN
     del state.in_flight[delta.node_id]
     del state.accepted_starts[delta.node_id]
+    _forget_node_steps(state, delta.node_id)
     state.ready.extend(delta.newly_ready_ids)
     if apply.terminal is not None:
         state.result = apply.terminal.result
@@ -2200,6 +2294,7 @@ def _commit_route(
         state.node_state[node_id] = NodeState.SKIPPED
     del state.in_flight[delta.node_id]
     del state.accepted_starts[delta.node_id]
+    _forget_node_steps(state, delta.node_id)
     state.ready.extend(delta.newly_ready_ids)
     state.terminal_unreachable_failure = delta.terminal_unreachable_failure
     if apply.terminal is not None:
@@ -2236,6 +2331,7 @@ def _commit_failure(
     state.node_state[node_id] = NodeState.TAKEN
     del state.in_flight[node_id]
     del state.accepted_starts[node_id]
+    _forget_node_steps(state, node_id)
     state.result = apply.result
     state.next_sequence = prepared.expected_sequence + 1
     return apply.observers
@@ -2292,7 +2388,7 @@ def _require_postterminal_trace_delta(
 
 
 def _require_frontier_trace_delta(state: RunState, prepared: PreparedTransition) -> None:
-    """Permit only the canonical dispatch or resume operation before append."""
+    """Permit only the canonical dispatch, resume, or step operation before append."""
     delta, record = prepared._plan.trace_delta, prepared.record
     if state.trace is None:
         if delta is not None:
@@ -2310,8 +2406,11 @@ def _require_frontier_trace_delta(state: RunState, prepared: PreparedTransition)
     elif isinstance(record, RunResumedRecord):
         if delta.started is not None or delta.resumed is not True:
             raise ValueError("frontier trace resume disagrees with its canonical record")
+    elif isinstance(record, NodeStepRecord):
+        if delta.started is not None or delta.resumed is not False:
+            raise ValueError("frontier trace step must only advance the accepted sequence")
     else:
-        raise ValueError("frontier trace requires a dispatch or resume record")
+        raise ValueError("frontier trace requires a dispatch, resume, or step record")
     if any(value is not None for value in (
         delta.initialized, delta.occurrence, delta.handler, delta.writer,
         delta.consumed_connection, delta.boundary_update, delta.root_start_source,
@@ -2445,6 +2544,8 @@ def _require_initialized(state: RunState) -> None:
         and type(state.ready) is deque
         and type(state.in_flight) is dict
         and type(state.accepted_starts) is dict
+        and type(state.node_starts) is dict
+        and type(state.node_steps) is dict
         and type(state.depth) is dict
         and type(state.growth_owner) is dict
         and type(state.deferred_prune) is frozenset
@@ -2468,6 +2569,15 @@ def _require_initialized(state: RunState) -> None:
                    for sequence in state.accepted_starts.values())
             or len(set(state.accepted_starts.values())) != len(state.accepted_starts)):
         raise ValueError("accepted starts must match the unfinished invocation inventory")
+    # Every apply path indexes these maps by node, so a broken map must fail here,
+    # before the append, rather than as a KeyError between append and apply.
+    if (any(node_id not in state.node_starts for node_id in state.in_flight)
+            or any(type(count) is not int or count < 1 for count in state.node_starts.values())
+            or not state.node_steps.keys() <= state.node_starts.keys()
+            or any(type(steps) is not tuple or not steps
+                   or any(type(step) is not dict for step in steps)
+                   for steps in state.node_steps.values())):
+        raise ValueError("node starts and steps must match the unsettled invocations")
     if type(state.num_workers) is not int or state.num_workers < 0:
         raise ValueError("run state has an invalid worker count")
     if state.terminal_unreachable_failure is not None:
@@ -2574,6 +2684,25 @@ def _validate_run_resumed(state: RunState, record: RunResumedRecord) -> None:
             )
         if state.in_flight[node_id] is not None:
             raise ValueError("in-flight must be an ordered set with None values")
+
+
+def _validate_node_step(state: RunState, record: NodeStepRecord) -> None:
+    """Require a step record to name an existing unknown in-flight node."""
+    node_id = record.node_id
+    if type(node_id) is not str:
+        raise TypeError("NodeStepRecord node_id must be a string")
+    if node_id not in state.flow.nodes:
+        raise ValueError(f"NodeStep node {node_id!r} does not exist in the flow")
+    if state.node_state.get(node_id) is not NodeState.UNKNOWN:
+        raise ValueError(f"NodeStep node {node_id!r} must have UNKNOWN disposition")
+    if node_id not in state.in_flight:
+        raise ValueError(f"NodeStep node {node_id!r} is not in-flight")
+
+
+def _forget_node_steps(state: RunState, node_id: str) -> None:
+    """Drop a settled node's start count and recorded steps."""
+    del state.node_starts[node_id]
+    state.node_steps.pop(node_id, None)
 
 
 def _require_succeeding_node(state: RunState, node_id: str) -> None:
@@ -4410,6 +4539,8 @@ def _require_pristine(state: RunState) -> None:
         and type(state.ready) is deque
         and type(state.in_flight) is dict
         and type(state.accepted_starts) is dict
+        and type(state.node_starts) is dict
+        and type(state.node_steps) is dict
         and type(state.depth) is dict
         and type(state.growth_owner) is dict
         and type(state.deferred_prune) is frozenset
@@ -4434,6 +4565,8 @@ def _require_pristine(state: RunState) -> None:
         and not state.ready
         and not state.in_flight
         and not state.accepted_starts
+        and not state.node_starts
+        and not state.node_steps
         and state.result is None
         and state.terminal_unreachable_failure is None
         and not state.depth
@@ -4817,6 +4950,7 @@ def _apply_growth(
         state.edge_state[edge_id] = NodeState.UNKNOWN
     del state.in_flight[delta.spawner_id]
     del state.accepted_starts[delta.spawner_id]
+    _forget_node_steps(state, delta.spawner_id)
     state.ready.append(delta.fragment_start_id)
     state.depth.update(topology.depth)
     state.deferred_prune = topology.deferred_prune
@@ -4837,6 +4971,7 @@ __all__ = [
     "prepare_node_failed",
     "prepare_node_routed",
     "prepare_node_started",
+    "prepare_node_step",
     "prepare_node_succeeded",
     "prepare_record",
     "prepare_run_resumed",

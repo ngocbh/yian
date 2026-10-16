@@ -162,7 +162,9 @@ node's inputs and `output:` are checked against the argument and return types it
 tool declares; see [Typed tools](docs/api.md#typed-tools). A tool whose first parameter is a
 `ToolContext` receives its call id and the app object passed as `run_flow(..., context=obj)`;
 a TOOL node's call id stays the same when `resume_flow` re-runs it, so it can serve as an
-idempotency key (see [Tool context](docs/api.md#tool-context)). A `FunctionTool` gives a
+idempotency key (see [Tool context](docs/api.md#tool-context)). A TOOL node with `retries:`
+calls its tool again after a failure, with backoff, and a resumed run continues the attempt
+count (see [TOOL retries](docs/api.md#tool-retries)). A `FunctionTool` gives a
 tool as a name, a description, a JSON Schema, and a call. To pass a provider key without an
 environment variable, add it to the run's config, as in
 `llm_config={"provider": "anthropic", "model": "claude-sonnet-4-5", "api_key": key}`;

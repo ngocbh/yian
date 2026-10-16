@@ -166,9 +166,10 @@ branching on kind.
 | `binds_per_item` | map | bind inputs per element via `caps["bind_item"]`, not once up front |
 | `bind_reserved` / `reserved_wiring_keys` | wait, map | reserved keys resolved before `run` (`until`, `over`); the names for load-time checks |
 | `grow_depth_delta` / `is_loop` | spawners | recursion-depth stamp; loop bookkeeping |
-| `needs_stop_event` | agent, wait | receive the run-owned cooperative stop event |
+| `needs_stop_event` | agent, wait, tool | receive the run-owned cooperative stop event |
 | `needs_tools` | tool, human_input, agent | receive the run's `ToolSet` (its tools, tool groups, and `ask_user` handler) |
 | `granted_tools()` | base; agent overrides | tool and group ids the run boundary checks against the run's tools before the run starts |
+| `needs_steps` | tool | receive `caps["steps"]`, a `NodeSteps`: the node's start count, the steps its earlier starts recorded, and `record(step)`, which appends a step to the run log and returns once it is applied |
 | `needs_live_events` | agent | receive transient `emit_stream`/`emit_event` sinks for the host callbacks that exist |
 | `skipped_output_target()` | base; loop overrides | logical target whose out-edges receive this physical node's absence |
 

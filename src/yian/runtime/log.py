@@ -168,6 +168,36 @@ class NodeStartedRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class NodeStepRecord:
+    """Append one step an in-flight node recorded while it runs.
+
+    The step is opaque to the runtime: the node that writes it gives it meaning,
+    and a later evaluation of the same node reads its recorded steps back.
+
+    Attributes:
+        node_id (`str`):
+            Non-empty ID of the in-flight node that recorded the step.
+        step (`dict[str, Any]`):
+            JSON object with text keys and finite numbers. The record keeps a
+            detached canonical copy, so tuples become lists.
+    """
+
+    node_id: str
+    step: dict[str, Any]
+
+    def __post_init__(self) -> None:
+        """Validate the node ID and keep a canonical copy of the step."""
+        _require_nonempty_string(self.node_id, "node_id")
+        if type(self.step) is not dict:
+            raise TypeError("node step must be a JSON object")
+        try:
+            reject_non_json(self.step, "node step")
+        except RecursionError as exc:
+            raise ValueError("node step nesting exceeds the supported depth") from exc
+        object.__setattr__(self, "step", canonical_seed(self.step)[0])
+
+
+@dataclass(frozen=True, slots=True)
 class NodeSucceededRecord:
     """Commit one canonical typed value under an already-resolved target."""
 
@@ -428,6 +458,7 @@ RunRecord: TypeAlias = (
     RunStartedRecord
     | RunResumedRecord
     | NodeStartedRecord
+    | NodeStepRecord
     | NodeSucceededRecord
     | NodeRoutedRecord
     | NodeExpandedRecord
@@ -445,6 +476,7 @@ _RUN_RECORD_TYPES = (
     RunStartedRecord,
     RunResumedRecord,
     NodeStartedRecord,
+    NodeStepRecord,
     NodeSucceededRecord,
     NodeRoutedRecord,
     NodeExpandedRecord,
@@ -962,6 +994,13 @@ class _NodeStartedPayload(_StrictModel):
     node_id: str = Field(min_length=1)
 
 
+class _NodeStepPayload(_StrictModel):
+    """Strict wire payload for :class:`NodeStepRecord`."""
+
+    node_id: str = Field(min_length=1)
+    step: dict[str, Any]
+
+
 class _SourceRefPayload(_StrictModel):
     """Strict source identity and value-relative projection."""
 
@@ -1382,6 +1421,7 @@ _KIND_TO_MODEL: dict[str, type[_StrictModel]] = {
     "run_started": _RunStartedPayload,
     "run_resumed": _RunResumedPayload,
     "node_started": _NodeStartedPayload,
+    "node_step": _NodeStepPayload,
     "node_succeeded": _NodeSucceededPayload,
     "node_routed": _NodeRoutedPayload,
     "node_expanded": _NodeExpandedPayload,
@@ -1398,6 +1438,7 @@ _TYPE_TO_KIND: dict[type[Any], str] = {
     RunStartedRecord: "run_started",
     RunResumedRecord: "run_resumed",
     NodeStartedRecord: "node_started",
+    NodeStepRecord: "node_step",
     NodeSucceededRecord: "node_succeeded",
     NodeRoutedRecord: "node_routed",
     NodeExpandedRecord: "node_expanded",
@@ -1411,7 +1452,7 @@ _TYPE_TO_KIND: dict[type[Any], str] = {
 }
 
 _RECORD_KINDS = frozenset({
-    "run_started", "run_resumed", "node_started", "node_succeeded", "node_routed",
+    "run_started", "run_resumed", "node_started", "node_step", "node_succeeded", "node_routed",
     "node_expanded", "node_failed", "memory_commit_requested",
     "memory_commit_succeeded", "memory_commit_failed", "backward_started",
     "backward_ready", "backward_finished",
@@ -2334,6 +2375,9 @@ def _revalidate_run_record(record: RunRecord) -> None:
     if type(record) is NodeStartedRecord:
         NodeStartedRecord(record.node_id)
         return
+    if type(record) is NodeStepRecord:
+        NodeStepRecord(record.node_id, record.step)
+        return
     if type(record) is NodeSucceededRecord:
         NodeSucceededRecord(
             record.node_id,
@@ -2445,6 +2489,8 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
         }
     elif isinstance(record, NodeStartedRecord):
         raw = asdict(record)
+    elif isinstance(record, NodeStepRecord):
+        raw = {"node_id": record.node_id, "step": canonical_seed(record.step)[0]}
     elif isinstance(record, NodeSucceededRecord):
         decoded = _decode_typed(record.value)
         canonical = ANY_VALUE_ADAPTER.dump_python(decoded, mode="json", warnings="error")
@@ -2584,6 +2630,8 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
         )
     if kind == "node_started":
         return NodeStartedRecord(node_id=values["node_id"])
+    if kind == "node_step":
+        return NodeStepRecord(node_id=values["node_id"], step=values["step"])
     if kind == "node_succeeded":
         decoded = _decode_typed(values["value"])
         canonical = ANY_VALUE_ADAPTER.dump_python(decoded, mode="json", warnings="error")
@@ -2939,6 +2987,7 @@ __all__ = [
     "NodeFailedRecord",
     "NodeRoutedRecord",
     "NodeStartedRecord",
+    "NodeStepRecord",
     "NodeSucceededRecord",
     "RecordEnvelope",
     "RunLog",

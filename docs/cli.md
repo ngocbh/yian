@@ -119,7 +119,10 @@ with different ones exits 1 naming each variable and how to set it (see
 
 An eligible unfinished log appends a resume segment and retries nodes with a durable
 start but no durable outcome. Requests and tool actions may repeat; the run log neither reconstructs
-session memory nor provides exactly-once execution. See the
+session memory nor provides exactly-once execution. An interrupted TOOL node is re-run
+with the same call id and the next attempt number, and a TOOL with `retries:` keeps the
+retries it had left (see [TOOL retries](api.md#tool-retries)). A log that recorded a
+TOOL retry can't be read by a yian version from before such records existed. See the
 [Python API recovery contract](api.md#durable-recovery-with-resume_flow).
 
 `--resume` fails on a log holding an int longer than 4300 digits, with `run-record
@@ -405,8 +408,10 @@ yian run examples/debate.yaml \
   single-writer dispatcher commits their outcomes. The worker count changes only
   ready-work scheduling, not the graph or output binding; effectful nodes may
   still be nondeterministic.
-- Each blocking HUMAN_INPUT, `ask_user` call from an AGENT node, or future-deadline WAIT occupies one worker;
+- Each blocking HUMAN_INPUT, `ask_user` call from an AGENT node, future-deadline WAIT, or
+  TOOL waiting to retry occupies one worker;
   independent ready nodes use any remaining workers and wait when all are occupied.
+  With `-w 0` a TOOL waiting to retry blocks the whole run until its wait ends.
 
 The dispatcher appends every node start and outcome to the selected authoritative
 log before publishing the progress event that the CLI renders.

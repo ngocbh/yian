@@ -210,7 +210,7 @@ ordering semantics; `JsonlRunLog` holds a nonblocking exclusive lock and fsyncs 
 canonical JSONL append. The closed record vocabulary is:
 
 ```
-RunStartedRecord | RunResumedRecord | NodeStartedRecord |
+RunStartedRecord | RunResumedRecord | NodeStartedRecord | NodeStepRecord |
 NodeSucceededRecord | NodeRoutedRecord | NodeExpandedRecord | NodeFailedRecord |
 MemoryCommitRequestedRecord |
 MemoryCommitSucceededRecord | MemoryCommitFailedRecord |
@@ -221,6 +221,15 @@ Records use schema 9, and readers accept only schema 9. A log written with
 schema 7 or 8 is rejected on read with "run log schema N predates schema 9 and
 is not supported"; other versions are rejected too. Recovery preserves the
 accepted prefix's canonical bytes and appends new records without rewriting it.
+
+A `NodeStepRecord` holds one step an in-flight node recorded, such as a TOOL retry's
+failed attempt. A node that declares `needs_steps` gets `caps["steps"]`, whose
+`record(step)` returns once the step is appended and applied. In a pooled run the
+worker hands the step to the dispatcher and waits; a serial run commits it inline.
+The reducer keeps a node's steps and its accepted start count across `RunResumed`
+until the node settles, so a resumed node reads them back. The runtime gives a step
+no meaning and publishes no observer for it. A log holding one can't be read by a
+yian version from before the record existed.
 
 Node outcome records require forward capture when the recorded run
 has `learnable=True` and omit it when `learnable=False`. Optional model/tool evaluation

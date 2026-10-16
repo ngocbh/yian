@@ -5,7 +5,9 @@ subprocess that speaks over stdio, or a streamable HTTP endpoint. ``McpServer.op
 starts the server's client on a background thread with its own asyncio loop, lists
 the server's tools once, and exposes each as a ``FunctionTool``; ``close`` stops the
 client and the subprocess. A call returns the server's structured content, or its
-content rendered as text.
+content rendered as text. A failed call raises an ``McpError`` whose classes tell an
+AGENT's tool loop whether its model reads the error and a TOOL node whether
+``retries:`` apply; a stop of the calling run or ``close()`` ends a waiting call.
 
 Knows about: the ``mcp`` SDK and ``httpx2`` (imported when a server opens),
 ``yian.defaults``, ``tools.context``, ``tools.errors``, ``tools.function_tools``,
@@ -32,8 +34,8 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from yian.defaults import current
-from yian.tools.context import ToolContext
-from yian.tools.errors import ReportedToolError
+from yian.tools.context import ToolContext, _current_stop
+from yian.tools.errors import PermanentToolError, ReportedToolError, TransientToolError
 from yian.tools.function_tools import FunctionTool
 
 # A server that keeps returning cursors would otherwise keep `open()` listing forever.
@@ -57,12 +59,76 @@ class McpConnectError(McpError, RuntimeError):
 
 
 class McpToolError(McpError, ReportedToolError):
-    """An MCP server returned an error result for a tool call.
+    """An MCP server returned an error result for a tool call, or the call failed locally.
 
-    The message is the result's content rendered as text, as a successful call's
-    text result is: text blocks, then one-line markers for media. An AGENT's model
-    reads it as the call's result.
+    For an error result the message is the result's content rendered as text, as a
+    successful call's text result is: text blocks, then one-line markers for media.
+    For any other failure while the server is up (for example structured content
+    that fails the tool's output schema) it names only the server, the tool and the
+    exception type. An AGENT's model reads it as the call's result.
     """
+
+
+class McpRequestError(McpError, ReportedToolError):
+    """An MCP server answered a tool call with a JSON-RPC error.
+
+    The message names the server and the tool and holds the server's error message
+    and code. An AGENT's model reads it as the call's result.
+
+    Args:
+        message (`str`):
+            The error message.
+        code (`int`):
+            The JSON-RPC error code.
+    """
+
+    def __init__(self, message: str, code: int) -> None:
+        super().__init__(message)
+        self.code = code
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        return (type(self), (str(self), self.code))
+
+
+class McpInvalidRequestError(McpRequestError, PermanentToolError):
+    """An MCP server rejected a tool call as malformed or unknown; retrying can't help.
+
+    Raised for the JSON-RPC codes -32700, -32600, -32601 and -32602.
+    """
+
+
+class McpTimeoutError(McpError, ReportedToolError, TransientToolError):
+    """A tool call took longer than the server's call timeout."""
+
+
+class McpTransportError(McpError, ReportedToolError, TransientToolError):
+    """A tool call failed because the HTTP connection to the server failed.
+
+    The message names only the server and the error type, never the URL or the error
+    text, which may hold a token.
+    """
+
+
+class McpServerClosed(McpError, PermanentToolError):
+    """The MCP server is gone: yian closed it, or its process or connection ended.
+
+    Later calls to the same server raise it at once; the host still closes it.
+    """
+
+
+class McpCallCancelled(McpError, PermanentToolError):
+    """The calling run stopped while the tool call waited, so the call was cancelled."""
+
+
+# JSON-RPC codes for a request the server can't parse, route or accept.
+_INVALID_REQUEST_CODES = frozenset({-32700, -32600, -32601, -32602})
+_CONNECTION_CLOSED = -32000
+_REQUEST_TIMEOUT = -32001
+_INTERNAL_ERROR = -32603
+# How long the liveness probe after a -32000 answer may take.
+_PING_SECONDS = 2
+# The slice a waiting call sleeps between checks of the run's stop event.
+_WAIT_SLICE_SECONDS = 0.1
 
 
 def mcp_server(
@@ -261,6 +327,11 @@ class McpServer:
         self._stderr: Any = None
         self._transport_failures = 0
         self._failures_lock = threading.Lock()
+        self._call_timeout: float | None = None
+        # Set once the server is known gone; calls then fail at once until reopened.
+        self._dead = False
+        # Futures of the calls in flight, which close() cancels; guarded by `_lock`.
+        self._calls: set[concurrent.futures.Future[Any]] = set()
 
     @property
     def label(self) -> str:
@@ -349,6 +420,8 @@ class McpServer:
         self._loop = self._closing = self._scope = None
         self._client = self._tools = None
         self._transport_failures = 0
+        self._call_timeout = call_timeout
+        self._dead = False
         if self._url is None:
             # A real file, not a pipe yian must drain: the subprocess writes it directly,
             # and its stderr never reaches the host's.
@@ -390,6 +463,10 @@ class McpServer:
             with self._lock:
                 self._close_requested = True
                 loop, thread = self._loop, self._thread
+                calls, self._calls = self._calls, set()
+            # Waiting calls end now, not after the SDK's shutdown, and raise McpServerClosed.
+            for future in calls:
+                future.cancel()
             if loop is not None and thread is not None and thread.is_alive():
                 with contextlib.suppress(RuntimeError):
                     loop.call_soon_threadsafe(self._stop)
@@ -417,11 +494,18 @@ class McpServer:
 
     def _run(self, connect_timeout: float, call_timeout: float) -> None:
         """The thread's target: run `_main` on a fresh asyncio loop."""
+        ready = self._ready
         try:
             asyncio.run(self._main(connect_timeout, call_timeout))
         except BaseException as exc:
             if not self._ready.is_set() and self._error is None:
                 self._error = self._connect_error(exc)
+        finally:
+            # Once the loop has ended no call can reach the server, whether close()
+            # ended it or the server went away. A later open() replaces `_ready`, so a
+            # thread that outlived close() leaves the new connection alone.
+            if ready.is_set() and self._ready is ready:
+                self._dead = True
 
     async def _main(self, connect_timeout: float, call_timeout: float) -> None:
         """Connect, list the tools, then hold the client open until `close()`."""
@@ -441,9 +525,9 @@ class McpServer:
                 self._scope = scope
                 async with contextlib.AsyncExitStack() as stack:
                     transport = await self._enter_transport(stack, call_timeout)
-                    client = await stack.enter_async_context(
-                        Client(transport, read_timeout_seconds=call_timeout, mode=self._mode)
-                    )
+                    # No client-wide read timeout: it would bound the handshake too,
+                    # which the connect deadline covers; each call passes its own.
+                    client = await stack.enter_async_context(Client(transport, mode=self._mode))
                     tools = await self._list_all(client)
                     scope.deadline = math.inf
                     self._client = client
@@ -533,6 +617,9 @@ class McpServer:
     def _call(self, tool_name: str, args: dict[str, Any], meta: dict[str, Any]) -> Any:
         """Call `tool_name` on the server and return its result as a yian value.
 
+        Waits in short slices, so a SIGINT, a stop of the calling run, or `close()`
+        ends the wait promptly.
+
         Args:
             tool_name (`str`):
                 The server's name for the tool.
@@ -547,28 +634,172 @@ class McpServer:
 
         Raises:
             `RuntimeError`:
-                Raised when the server is not open.
+                Raised when the server was never opened.
             `McpToolError`:
-                Raised when the server returns an error result.
+                Raised when the server returns an error result, or the call fails in
+                a way no other error here covers.
+            `McpRequestError`:
+                Raised when the server answers with a JSON-RPC error;
+                `McpInvalidRequestError` for a malformed or unknown request.
+            `McpTimeoutError`:
+                Raised when the call outlasts the call timeout.
+            `McpTransportError`:
+                Raised when the HTTP connection to the server fails.
+            `McpServerClosed`:
+                Raised when the server is closed or gone.
+            `McpCallCancelled`:
+                Raised when the calling run's stop event is set while the call waits.
         """
-        client, loop = self._client, self._loop
-        if client is None or loop is None:
-            raise RuntimeError(f"MCP server '{self._label}' is not open")
-        future = asyncio.run_coroutine_threadsafe(
-            client.call_tool(tool_name, args, read_timeout_seconds=self._timeout, meta=meta), loop
-        )
+        stop = _current_stop()
+        with self._lock:
+            client, loop = self._client, self._loop
+            if self._close_requested or self._dead:
+                raise self._closed()
+            if client is None or loop is None:
+                raise RuntimeError(f"MCP server '{self._label}' is not open")
+            if stop is not None and stop.is_set():
+                raise self._cancelled(tool_name)
+            with self._failures_lock:
+                failures_before = self._transport_failures
+            started = time.monotonic()
+            coro = client.call_tool(tool_name, args, read_timeout_seconds=self._call_timeout, meta=meta)
+            try:
+                future = asyncio.run_coroutine_threadsafe(coro, loop)
+            except RuntimeError as exc:
+                # The loop has closed: the server went away.
+                coro.close()
+                raise self._closed() from exc
+            self._calls.add(future)
         try:
-            # Short waits, so a SIGINT in the main thread raises promptly.
-            while True:
-                try:
-                    result = future.result(timeout=0.1)
-                    break
-                except concurrent.futures.TimeoutError:
-                    continue
+            loop_gone = False
+            while not concurrent.futures.wait([future], timeout=_WAIT_SLICE_SECONDS).done:
+                if stop is not None and stop.is_set():
+                    # Cancels the request task; the SDK tells the server from a shielded scope.
+                    future.cancel()
+                    raise self._cancelled(tool_name)
+                thread = self._thread
+                if thread is None or not thread.is_alive():
+                    # The loop resolves its calls as it ends; give it one more slice.
+                    if loop_gone:
+                        raise self._closed()
+                    loop_gone = True
+            try:
+                result = future.result()
+            except Exception as exc:
+                raise self._call_error(tool_name, exc, started, failures_before) from exc
         finally:
             if not future.done():
                 future.cancel()
+            with self._lock:
+                self._calls.discard(future)
         return _result_value(result)
+
+    def _call_error(
+        self, tool_name: str, exc: Exception, started: float, failures_before: int
+    ) -> McpError:
+        """Return the error a failed tool call raises.
+
+        Only the server's own JSON-RPC message reaches the returned error's text; for
+        everything else the text is fixed, since an exception's text may hold the URL.
+
+        Args:
+            tool_name (`str`):
+                The server's name for the tool.
+            exc (`Exception`):
+                What the call raised.
+            started (`float`):
+                The `time.monotonic()` at which the call was sent.
+            failures_before (`int`):
+                The HTTP transport failure count when the call was sent.
+
+        Returns:
+            `McpError`:
+                The error to raise.
+        """
+        from mcp import MCPError
+
+        if self._close_requested or not self._loop_alive():
+            return self._closed()
+        if isinstance(exc, concurrent.futures.CancelledError):
+            # Not a stop of the calling run: that raised McpCallCancelled already.
+            return self._closed()
+        if isinstance(exc, MCPError):
+            code = exc.code
+            elapsed = time.monotonic() - started
+            if code == _REQUEST_TIMEOUT and elapsed >= (self._call_timeout or math.inf):
+                return self._timed_out(tool_name)
+            with self._failures_lock:
+                failed_since = self._transport_failures > failures_before
+            if code == _INTERNAL_ERROR and failed_since:
+                # The soft-fail transport turned a connection error into this answer.
+                return McpTransportError(f"MCP server '{self._label}' transport error (connection failed)")
+            # A server also answers -32000 when merely busy, and an HTTP stream that
+            # ends without a response arrives as -32000 too; only a failed probe means
+            # the connection is gone.
+            if code == _CONNECTION_CLOSED and not self._probe_alive():
+                return self._closed()
+            kind = McpInvalidRequestError if code in _INVALID_REQUEST_CODES else McpRequestError
+            return kind(f"MCP server '{self._label}' tool '{tool_name}': {exc.message} (code {code})", code)
+        if isinstance(exc, TimeoutError):
+            return self._timed_out(tool_name)
+        if _is_transport_error(exc):
+            return McpTransportError(f"MCP server '{self._label}' transport error ({type(exc).__name__})")
+        return McpToolError(f"MCP server '{self._label}' tool '{tool_name}' failed ({type(exc).__name__})")
+
+    def _loop_alive(self) -> bool:
+        """Return whether the client's loop thread still runs and the server isn't known gone."""
+        thread = self._thread
+        return not self._dead and thread is not None and thread.is_alive()
+
+    def _probe_alive(self) -> bool:
+        """Ping the server and return whether it answered at all within 2 s.
+
+        Any answer, even an error other than a closed connection, or no answer in
+        time, counts as alive; a closed connection or an ended loop does not.
+        """
+        from mcp import MCPError
+
+        client, loop = self._client, self._loop
+        if client is None or loop is None:
+            return False
+
+        async def ping() -> None:
+            await asyncio.wait_for(client.session.send_ping(), _PING_SECONDS)
+
+        coro = ping()
+        try:
+            future = asyncio.run_coroutine_threadsafe(coro, loop)
+        except RuntimeError:
+            coro.close()
+            return False
+        try:
+            future.result(timeout=_PING_SECONDS + 1)
+        except concurrent.futures.CancelledError:
+            return False
+        except MCPError as exc:
+            return exc.code != _CONNECTION_CLOSED
+        except TimeoutError:
+            future.cancel()
+            return self._loop_alive()
+        except Exception:
+            return True
+        return True
+
+    def _closed(self) -> McpServerClosed:
+        """Mark the server gone and return the `McpServerClosed` a call raises."""
+        self._dead = True
+        return McpServerClosed(f"MCP server '{self._label}' is closed")
+
+    def _timed_out(self, tool_name: str) -> McpTimeoutError:
+        """Return the `McpTimeoutError` for a call to `tool_name`."""
+        return McpTimeoutError(
+            f"MCP server '{self._label}' tool '{tool_name}' timed out after {self._call_timeout:g} s"
+        )
+
+    @staticmethod
+    def _cancelled(tool_name: str) -> McpCallCancelled:
+        """Return the `McpCallCancelled` for a call to `tool_name`."""
+        return McpCallCancelled(f"MCP call to '{tool_name}' cancelled by a run stop")
 
     def _connect_error(self, exc: BaseException) -> McpConnectError:
         """Return the `McpConnectError` for a failure while the server was starting."""
@@ -687,6 +918,17 @@ def _leaf(exc: BaseException) -> BaseException:
     while isinstance(exc, BaseExceptionGroup) and exc.exceptions:
         exc = exc.exceptions[0]
     return exc
+
+
+def _is_transport_error(exc: BaseException) -> bool:
+    """Return whether `exc` is a network-level failure: an `OSError` or an `httpx2` transport error."""
+    if isinstance(exc, OSError):
+        return True
+    try:
+        import httpx2
+    except ImportError:
+        return False
+    return isinstance(exc, httpx2.TransportError)
 
 
 def _proxy_for(url: str) -> str | None:

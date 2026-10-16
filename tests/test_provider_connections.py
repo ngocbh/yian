@@ -4,13 +4,14 @@ import json
 import time
 
 import pytest
+from pydantic import SecretStr
 
-from yian.compile.llm_cascade import _validate_layer
+from yian.compile.llm_cascade import _require_concrete_selection, _validate_layer
 from yian.compose.loader import load_flow
 from yian.llm_clients import connection as connection_module
 from yian.llm_clients import factory
-from yian.llm_clients.auth import ApiKeyCredentials, AuthStore, OAuthCredentials
-from yian.llm_clients.config import azure_resource_endpoint
+from yian.llm_clients.auth import ApiKeyCredentials, AuthError, AuthStore, OAuthCredentials
+from yian.llm_clients.config import HostConnection, LLMConfig, azure_resource_endpoint
 from yian.llm_clients.connection import (
     HOST_KEY_MARKER,
     ConnectionSnapshot,
@@ -449,3 +450,138 @@ def test_connection_credentials_per_provider():
         connection_credentials(pinned, "anthropic")
     with pytest.raises(ValueError, match="read by its client"):
         connection_credentials(ENVIRONMENT, "anthropic")
+
+
+# --- host connection settings: recorded names, carried values --------------- #
+
+HEADER_VALUE = "gw-token-3f9a20c1"
+_MARKED = {"provider": "anthropic", "model": "m", HOST_KEY_MARKER: True, "api_key": "k"}
+
+
+def _plain_headers(headers):
+    assert all(isinstance(value, SecretStr) for value in headers.values())
+    return {name: value.get_secret_value() for name, value in headers.items()}
+
+
+def test_bind_records_host_settings_on_marked_agents_only(monkeypatch):
+    _no_provider_keys(monkeypatch)
+    host = HostConnection(
+        api_key=SecretStr("sk-host-6d1e"),
+        organization="org-abc",
+        project="proj-abc",
+        headers={"X-Trace": SecretStr("t"), "X-Gateway": SecretStr(HEADER_VALUE)},
+    )
+    effective = {
+        "o": {"provider": "openai", "model": "m"},
+        "a": {"provider": "anthropic", "model": "m"},
+    }
+    bound = connection_snapshot().bind(
+        effective, host_key_provider="openai", host_settings=host
+    )
+    assert bound["o"]["organization"] == "org-abc"
+    assert bound["o"]["project"] == "proj-abc"
+    assert bound["o"]["_header_names"] == ["X-Gateway", "X-Trace"]
+    assert bound["a"] == {"provider": "anthropic", "model": "m", "_connection": ENVIRONMENT}
+    assert HEADER_VALUE not in json.dumps(bound)
+    assert "sk-host-6d1e" not in json.dumps(bound)
+    assert "api_key" not in bound["o"]
+    assert "organization" not in effective["o"]
+
+    plain = connection_snapshot().bind(
+        effective, host_key_provider="openai", host_settings=HostConnection(api_key=SecretStr("k"))
+    )
+    for key in ("organization", "project", "_header_names"):
+        assert key not in plain["o"]
+
+
+def test_split_model_config_needs_the_recorded_headers():
+    names = ["X-Gateway", "X-Trace"]
+    with pytest.raises(AuthError) as caught:
+        split_model_config({**_MARKED, "_header_names": names})
+    message = str(caught.value)
+    assert "X-Gateway" in message and "X-Trace" in message
+    assert "resume_flow" in message
+    with pytest.raises(AuthError) as caught:
+        split_model_config({
+            **_MARKED, "_header_names": names,
+            "headers": {"X-Gateway": HEADER_VALUE, "X-Other": HEADER_VALUE},
+        })
+    message = str(caught.value)
+    assert "X-Trace" in message and "X-Other" in message
+    assert HEADER_VALUE not in message
+    with pytest.raises(AuthError, match="X-Gateway"):
+        split_model_config({**_MARKED, "headers": {"X-Gateway": HEADER_VALUE}})
+
+    # Names compare without case.
+    validated, _ = split_model_config({
+        **_MARKED, "_header_names": names,
+        "headers": {"x-gateway": HEADER_VALUE, "X-TRACE": "t"},
+    })
+    assert _plain_headers(validated.headers) == {"x-gateway": HEADER_VALUE, "X-TRACE": "t"}
+
+
+@pytest.mark.parametrize(
+    "names",
+    [[], ["X-Trace", "X-Gateway"], ["X-Gateway", "x-gateway"], ["bad name"],
+     ["Authorization"], "X-Gateway", [1]],
+    ids=["empty", "unsorted", "case-duplicate", "not-a-token", "refused", "not-a-list",
+         "not-text"],
+)
+def test_split_model_config_rejects_malformed_header_names(names):
+    with pytest.raises(ValueError, match="_header_names"):
+        split_model_config({**_MARKED, "_header_names": names, "headers": {"X-Gateway": "v"}})
+
+
+def test_split_model_config_refuses_header_names_without_the_marker():
+    unmarked = {key: value for key, value in _MARKED.items() if key != HOST_KEY_MARKER}
+    with pytest.raises(ValueError, match="_header_names"):
+        split_model_config(
+            {**unmarked, "_header_names": ["X-Gateway"], "headers": {"X-Gateway": "v"}}
+        )
+
+
+def test_split_and_resolve_carry_headers_beside_the_key():
+    config = LLMConfig(
+        provider="anthropic", model="m", api_key="k", headers={"X-Gateway": HEADER_VALUE}
+    )
+    validated, _ = split_model_config(config)
+    assert _plain_headers(validated.headers) == {"X-Gateway": HEADER_VALUE}
+    resolved = resolve_model_config(config)
+    assert _plain_headers(resolved["headers"]) == {"X-Gateway": HEADER_VALUE}
+    assert resolved["api_key"].get_secret_value() == "k"
+    resolved = resolve_model_config(
+        {**_MARKED, "_header_names": ["X-Gateway"], "headers": {"X-Gateway": HEADER_VALUE}}
+    )
+    assert _plain_headers(resolved["headers"]) == {"X-Gateway": HEADER_VALUE}
+    assert "_header_names" not in resolved
+    # The OpenAI route resolves through the snapshot and still keeps them.
+    resolved = resolve_model_config({
+        "provider": "openai", "model": "m", "api_key": "k", "organization": "org-abc",
+        "headers": {"X-Gateway": HEADER_VALUE},
+    })
+    assert resolved["organization"] == "org-abc"
+    assert _plain_headers(resolved["headers"]) == {"X-Gateway": HEADER_VALUE}
+
+
+def test_layers_refuse_recorded_header_names():
+    with pytest.raises(ValueError, match="_header_names is internal to recorded runs"):
+        _validate_layer({"provider": "anthropic", "_header_names": ["X-Gateway"]})
+
+
+def test_a_recorded_map_takes_settings_only_beside_the_marker():
+    marked = {
+        "provider": "openai", "model": "m", HOST_KEY_MARKER: True,
+        "organization": "org-abc", "project": "proj-abc", "_header_names": ["X-Gateway"],
+    }
+    _require_concrete_selection(marked, path="agent")
+    for key in ("organization", "project", "_header_names"):
+        unmarked = {"provider": "openai", "model": "m", key: marked[key]}
+        with pytest.raises(ValueError, match=f"'agent' has {key} without a host key"):
+            _require_concrete_selection(unmarked, path="agent")
+    for names in ([], ["X-B", "X-A"], ["Authorization"], "X-A"):
+        with pytest.raises(ValueError, match="'agent'.*_header_names"):
+            _require_concrete_selection({**marked, "_header_names": names}, path="agent")
+    with pytest.raises(ValueError, match="'agent'.*organization"):
+        _require_concrete_selection({**marked, "organization": "has space"}, path="agent")
+    with pytest.raises(ValueError, match="headers"):
+        _require_concrete_selection({**marked, "headers": {"X-Gateway": "v"}}, path="agent")

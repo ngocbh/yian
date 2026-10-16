@@ -33,13 +33,18 @@ from yian.llm_clients.config import (
     validate_base_url,
 )
 from yian.llm_clients.connection import (
+    HEADER_NAMES_KEY,
     HOST_KEY_MARKER,
     missing_model_message,
     validate_connection,
+    validate_header_names,
 )
+from yian.llm_clients.connection_settings import validate_organization
 from yian.nodes.agent import AgentNode
 
 _REQUIRED_SELECTION_FIELDS = ("provider", "model")
+# Recorded only on agents marked for a host key: the nonsecret settings sent with it.
+_HOST_SETTING_KEYS = ("organization", "project", HEADER_NAMES_KEY)
 
 
 def resolve_llm_cascade(
@@ -283,26 +288,33 @@ def _apply_flow(
             _apply_flow(node.child, effective, path=node_path)
 
 
-def bind_api_key(flow: Any, api_key: SecretStr) -> None:
-    """Give every static AGENT marked for a host key that key.
+def bind_host_credentials(
+    flow: Any, api_key: SecretStr, headers: dict[str, SecretStr] | None = None,
+) -> None:
+    """Give every static AGENT marked for a host key that key and its header values.
 
     `ConnectionSnapshot.bind` marks the agents of the key's provider in the
-    effective map. The key goes on each marked node's run-local ``llm_config``
-    only, never into the map that ``RunStarted`` records. Call it after
-    `apply_effective_llm_map`, which has already de-aliased every child callsite.
+    effective map. The key and header values go on each marked node's run-local
+    ``llm_config`` only, never into the map that ``RunStarted`` records. Call it
+    after `apply_effective_llm_map`, which has already de-aliased every child
+    callsite.
 
     Args:
         flow (`CompiledFlow`):
             A flow whose static agents already carry their effective configs.
         api_key (`SecretStr`):
             The host-supplied key.
+        headers (`dict[str, SecretStr] | None`, *optional*, defaults to `None`):
+            The header values sent with that key; `None` or empty binds none.
     """
     for node in flow.nodes.values():
         if isinstance(node, AgentNode) and node.llm_config.get(HOST_KEY_MARKER) is True:
             node.llm_config["api_key"] = api_key
+            if headers:
+                node.llm_config["headers"] = dict(headers)
         child = getattr(node, "child", None)
         if child is not None:
-            bind_api_key(child, api_key)
+            bind_host_credentials(child, api_key, headers)
 
 
 def host_key_providers(effective: dict[str, dict[str, Any]]) -> set[str]:
@@ -333,12 +345,25 @@ def _require_concrete_selection(
 
     Raises:
         `ValueError`:
-            If the config has an invalid marker or base_url, a bad field, or no
-            concrete provider/model.
+            If the config has an invalid marker, base_url or host setting, a bad
+            field, or no concrete provider/model.
     """
     subject = label or repr(path)
     if config.get(HOST_KEY_MARKER, True) is not True:
         raise ValueError(f"effective LLM config for {subject} has an invalid host key marker")
+    for key in _HOST_SETTING_KEYS:
+        if key not in config:
+            continue
+        # Only the host's settings, sent with its key, are recorded beside the marker.
+        if HOST_KEY_MARKER not in config:
+            raise ValueError(f"effective LLM config for {subject} has {key} without a host key")
+        try:
+            if key == HEADER_NAMES_KEY:
+                validate_header_names(config[key], config.get("provider"))
+            else:
+                validate_organization(config[key], key)
+        except ValueError as exc:
+            raise ValueError(f"effective LLM config for {subject}: {exc}") from None
     if "base_url" in config:
         # An Azure base_url is its resource endpoint; any other serves only a host key.
         if HOST_KEY_MARKER not in config and config.get("provider") != "azure":
@@ -351,14 +376,15 @@ def _require_concrete_selection(
             validate_base_url(config["base_url"])
         except ValueError as exc:
             raise ValueError(f"effective LLM config for {subject}: {exc}") from None
-    # Only a resolved map carries the marker and the host key's base_url;
-    # authored layers may not (except an Azure endpoint, checked above). A retired
-    # key can only come from a map recorded before it retired; such a finished run
-    # still replays, and resuming an unfinished one refuses it per agent.
+    # Only a resolved map carries the marker and the host key's base_url and
+    # settings; authored layers may not (except an Azure endpoint, checked above). A
+    # retired key can only come from a map recorded before it retired; such a finished
+    # run still replays, and resuming an unfinished one refuses it per agent.
     _validate_layer({
         key: value
         for key, value in config.items()
-        if key not in (HOST_KEY_MARKER, "base_url") and key not in RETIRED_LLM_CONFIG_KEYS
+        if key not in (HOST_KEY_MARKER, "base_url", *_HOST_SETTING_KEYS)
+        and key not in RETIRED_LLM_CONFIG_KEYS
     })
     missing = [
         field
@@ -378,8 +404,9 @@ def _validate_layer(config: dict[str, Any]) -> None:
         # Every layer here ends up in the recorded effective map, and a lower
         # layer's base_url would redirect the host key.
         raise ValueError(host_only)
-    if HOST_KEY_MARKER in config:
-        raise ValueError(f"llm_config.{HOST_KEY_MARKER} is internal to recorded runs")
+    for internal in (HOST_KEY_MARKER, HEADER_NAMES_KEY):
+        if internal in config:
+            raise ValueError(f"llm_config.{internal} is internal to recorded runs")
     provider = config.get("provider")
     if (isinstance(provider, str) and provider.lower() == "codex") or any(
         key in config for key in ("sandbox", "cwd")

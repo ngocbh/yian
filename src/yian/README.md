@@ -212,13 +212,16 @@ validation errors hide input values. Clients use it before the provider's key
 environment variable. `run_flow` pops the run layer's `api_key` before the cascade
 and `ConnectionSnapshot.bind` marks the effective config of every static agent of
 the run layer's provider with the nonsecret `_host_key: true` (OpenAI agents also
-record a `host` connection with no credential identity). `bind_api_key` then puts
-the key only on the run-local `llm_config` of marked agents, so `RunStarted`,
-events, results, and manifests never hold it. `resume_flow(api_key=...)` and
+record a `host` connection with no credential identity). The same agents record
+the run layer's `organization` and `project` as given and its header names, never
+their values, as the sorted `_header_names`. `bind_host_credentials` then puts the
+key and header values only on the run-local `llm_config` of marked agents, so
+`RunStarted`, events, results, and manifests never hold them. `resume_flow(api_key=...)` and
 `RunResult.backward(api_key=...)` bind a re-supplied key the same way on the
 replayed program; AGENT backward takes it from its live node config, the one live
-field it reads. `split_model_config` fails a marked config that has no key, so
-agents marked for the key never fall back to the environment. A key that marks no
+field it reads. `split_model_config` fails a marked config that has no key, or whose headers
+lack the recorded names, so agents marked for the key never fall back to the
+environment. A key that marks no
 agent is dropped from the result and ignored by replay. Each OpenAI-family and
 Anthropic SDK client yian builds keeps only the custom headers yian or langchain
 set (`llm_clients.base_client.drop_environment_headers`): it drops those the SDK

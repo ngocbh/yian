@@ -1,6 +1,7 @@
 """Connection settings come only from the host layer and travel with the host key."""
 
 import dataclasses
+import json
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -9,11 +10,14 @@ from pydantic import SecretStr
 import yian.llm_clients as clients
 from yian.compose import load_flow
 from yian.compose.helpers.errors import LoadError
+from yian.events import NodeStarted
 from yian.llm_clients.config import HostConnection, pop_host_credentials
+import yian.memory.profile as profile_module
 from yian.memory.profile import ProfileMemory
 from yian.memory.reflective import ReflectiveMemory
 from yian.memory.storage import FileMarkdownStore
-from yian.run import run_flow
+from yian.run import _check_recorded_llm_fields, resume_flow, run_flow
+from tests.engine.test_run_api_key import _NO_FEEDBACK
 
 SENTINEL = "sk-sentinel-5e0c27b4"
 HEADER_VALUE = "gw-token-91c3d0aa"
@@ -243,3 +247,206 @@ def test_profile_memory_needs_its_key_beside_the_settings(tmp_path):
     store = FileMarkdownStore(tmp_path / "ada.md")
     with pytest.raises(ValueError, match="api_key"):
         ProfileMemory(store, llm_config={"provider": "openai", "organization": "org-abc"})
+
+
+# --- the run records the settings without secrets and binds the values ------- #
+
+OTHER_VALUE = "gw-trace-0b7d41e2"
+_HOST_CONNECTION = {
+    "method": "api_key", "source": "host", "credential_id": None,
+    "endpoint": "https://api.openai.com/v1", "store_path": None,
+}
+_TWO_PROVIDERS = """id: two
+name: two
+defs:
+  body:
+    nodes:
+      nested: {kind: agent, prompt: hi, llm_config: {model: nested-model}}
+    output: ${nested.output}
+nodes:
+  agent: {kind: agent, prompt: hi}
+  child: {kind: call, call: body, depends_on: [agent]}
+  other:
+    kind: agent
+    prompt: hi
+    depends_on: [agent]
+    llm_config: {provider: anthropic, model: claude-sonnet-4-5}
+output: ${other.output}
+"""
+_ALL_SETTINGS = {
+    **_KEYED,
+    "organization": "org-abc",
+    "project": "proj-abc",
+    "headers": {"X-Gateway": HEADER_VALUE, "X-Trace": OTHER_VALUE},
+}
+
+
+def _effective(path):
+    return json.loads(path.read_text().splitlines()[0])["payload"]["effective_llm_by_static_path"]
+
+
+def _recording_models(monkeypatch, target=clients):
+    """Record each agent's connection settings by model id instead of calling a provider."""
+    seen = {}
+
+    class Model:
+        def invoke(self, messages):
+            return AIMessage(content="ok")
+
+    def factory(config):
+        headers = config.get("headers")
+        assert headers is None or all(isinstance(v, SecretStr) for v in headers.values())
+        seen[config["model"]] = (
+            config.get("organization"),
+            config.get("project"),
+            None if headers is None else {k: v.get_secret_value() for k, v in headers.items()},
+        )
+        return Model()
+
+    monkeypatch.setattr(target, "model_from_config", factory)
+    return seen
+
+
+def test_the_run_records_the_settings_on_the_key_agents_only(tmp_path, monkeypatch):
+    seen = _recording_models(monkeypatch)
+    path = tmp_path / "run.jsonl"
+    result = run_flow(load_flow(_TWO_PROVIDERS), {}, log=path, llm_config=_ALL_SETTINGS)
+    assert result.status == "succeeded", result.failure
+    effective = _effective(path)
+    recorded = {
+        "provider": "openai", "organization": "org-abc", "project": "proj-abc",
+        "_header_names": ["X-Gateway", "X-Trace"], "_host_key": True,
+        "_connection": _HOST_CONNECTION,
+    }
+    assert effective["agent"] == {**recorded, "model": "gpt-5.4"}
+    assert effective["child/nested"] == {**recorded, "model": "nested-model"}
+    # Another provider's agent gets none of the key's settings.
+    assert effective["other"] == {
+        "provider": "anthropic", "model": "claude-sonnet-4-5",
+        "_connection": {
+            "method": "api_key", "source": "environment", "credential_id": None,
+            "endpoint": None, "store_path": None,
+        },
+    }
+    log = path.read_text()
+    for secret in (HEADER_VALUE, OTHER_VALUE, SENTINEL):
+        assert secret not in log
+    # The in-memory node configs carry the values next to the key.
+    headers = {"X-Gateway": HEADER_VALUE, "X-Trace": OTHER_VALUE}
+    assert seen == {
+        "gpt-5.4": ("org-abc", "proj-abc", headers),
+        "nested-model": ("org-abc", "proj-abc", headers),
+        "claude-sonnet-4-5": (None, None, None),
+    }
+
+
+def test_header_names_are_recorded_sorted_for_any_keyed_provider(tmp_path, monkeypatch):
+    seen = _recording_models(monkeypatch)
+    path = tmp_path / "run.jsonl"
+    llm_config = {
+        "provider": "anthropic", "model": "claude-sonnet-4-5", "api_key": SENTINEL,
+        "headers": {"x-trace": OTHER_VALUE, "X-Gateway": HEADER_VALUE},
+    }
+    result = run_flow(load_flow(_FLOW), {}, log=path, llm_config=llm_config)
+    assert result.status == "succeeded", result.failure
+    assert _effective(path)["agent"] == {
+        "provider": "anthropic", "model": "claude-sonnet-4-5",
+        "_header_names": ["X-Gateway", "x-trace"], "_host_key": True,
+    }
+    assert seen["claude-sonnet-4-5"] == (
+        None, None, {"x-trace": OTHER_VALUE, "X-Gateway": HEADER_VALUE},
+    )
+    assert HEADER_VALUE not in path.read_text()
+
+
+def test_a_key_that_marks_no_agent_records_no_settings(tmp_path, monkeypatch):
+    seen = _recording_models(monkeypatch)
+    path = tmp_path / "run.jsonl"
+    flow = load_flow(_FLOW.replace(
+        "prompt: hi}", "prompt: hi, llm_config: {provider: anthropic, model: claude-sonnet-4-5}}"
+    ))
+    result = run_flow(flow, {}, log=path, llm_config=_ALL_SETTINGS)
+    assert result.status == "succeeded", result.failure
+    assert seen == {"claude-sonnet-4-5": (None, None, None)}
+    agent = _effective(path)["agent"]
+    for key in ("organization", "project", "_header_names", "_host_key"):
+        assert key not in agent
+    assert "org-abc" not in path.read_text()
+    assert HEADER_VALUE not in path.read_text()
+
+
+def test_a_finished_run_with_recorded_settings_replays_without_the_key(tmp_path, monkeypatch):
+    _recording_models(monkeypatch)
+    path = tmp_path / "run.jsonl"
+    first = run_flow(load_flow(_FLOW), {}, log=path, llm_config=_ALL_SETTINGS)
+    assert first.status == "succeeded", first.failure
+    replayed = resume_flow(load_flow(_FLOW), log=path)
+    assert replayed.status == "succeeded", replayed.failure
+    assert replayed.output == first.output
+
+
+def _stop_before_model(event):
+    if isinstance(event, NodeStarted) and event.node_id == "agent":
+        raise RuntimeError("host stopped before model")
+
+
+def test_resume_with_the_key_keeps_the_recorded_organization(tmp_path, monkeypatch):
+    seen = _recording_models(monkeypatch)
+    path = tmp_path / "run.jsonl"
+    llm_config = {**_KEYED, "organization": "org-abc", "project": "proj-abc"}
+    with pytest.raises(RuntimeError, match="host stopped"):
+        run_flow(
+            load_flow(_FLOW), {}, log=path, on_event=_stop_before_model, llm_config=llm_config
+        )
+    result = resume_flow(load_flow(_FLOW), log=path, api_key=SENTINEL)
+    assert result.status == "succeeded", result.failure
+    assert seen == {"gpt-5.4": ("org-abc", "proj-abc", None)}
+
+
+def test_recorded_header_names_pass_the_resume_field_check():
+    marked = {
+        "provider": "openai", "model": "gpt-5.4", "organization": "org-abc",
+        "_header_names": ["X-Gateway"], "_host_key": True, "_connection": _HOST_CONNECTION,
+    }
+    _check_recorded_llm_fields({"agent": marked}, {})
+    unmarked = {key: value for key, value in marked.items() if key != "_host_key"}
+    with pytest.raises(ValueError, match="Agent 'agent'"):
+        _check_recorded_llm_fields({"agent": unmarked}, {})
+
+
+def test_profile_memory_settings_reach_its_model(tmp_path, monkeypatch):
+    flow = load_flow(_FLOW.replace("nodes:", "long_term_memory: profile\nnodes:"))
+    (tmp_path / "profile").mkdir()
+    store = FileMarkdownStore(tmp_path / "profile" / "ada.md")
+    store.write("# Ada\n", base_version=store.read()[1])
+    memory = ProfileMemory(store, llm_config={**_ALL_SETTINGS, "model": "profiler"})
+    built = []
+
+    class Learner:
+        def invoke(self, messages):
+            return AIMessage(content="<profile>\n# Ada\n- Prefers brief replies.\n</profile>")
+
+    def learner(config):
+        built.append(config)
+        return Learner()
+
+    monkeypatch.setattr(profile_module, "model_from_config", learner)
+    replies = iter(["ok", _NO_FEEDBACK])
+
+    class Model:
+        def invoke(self, messages):
+            return AIMessage(content=next(replies))
+
+    monkeypatch.setattr(clients, "model_from_config", lambda config: Model())
+    result = run_flow(
+        flow, {}, learnable=True, memory={"profile": memory},
+        llm_config={"provider": "anthropic", "model": "claude-sonnet-4-5"},
+    )
+    outcome = result.backward("Be brief.")
+    assert outcome.status == "succeeded", outcome.failure
+    [config] = built
+    assert (config["organization"], config["project"]) == ("org-abc", "proj-abc")
+    assert config["api_key"].get_secret_value() == SENTINEL
+    assert {name: value.get_secret_value() for name, value in config["headers"].items()} == {
+        "X-Gateway": HEADER_VALUE, "X-Trace": OTHER_VALUE,
+    }

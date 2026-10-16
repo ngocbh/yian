@@ -29,6 +29,7 @@ from pydantic import SecretStr
 
 from yian.llm_clients.config import LLMConfig, pop_host_credentials
 from yian.llm_clients.connection import (
+    HEADER_NAMES_KEY,
     HOST_KEY_MARKER,
     check_model_config,
     connection_snapshot,
@@ -40,7 +41,7 @@ from yian.compile.execution_layout import apply_execution_layout, resolve_execut
 from yian.compile.expand import build_grow
 from yian.compile.llm_cascade import (
     apply_effective_llm_map,
-    bind_api_key,
+    bind_host_credentials,
     host_key_providers,
     resolve_llm_cascade,
     static_agent_labels,
@@ -503,7 +504,8 @@ def _secret_key(raw: str | SecretStr) -> SecretStr:
 
 def _check_effective_llm(
     effective_llm: Mapping[str, dict[str, Any]],
-    api_key: str | None,
+    api_key: SecretStr | None,
+    headers: dict[str, SecretStr] | None,
     labels: Mapping[str, str],
 ) -> None:
     """Reject any agent config its model call would reject, before the run starts.
@@ -511,8 +513,10 @@ def _check_effective_llm(
     Args:
         effective_llm (`Mapping[str, dict[str, Any]]`):
             The effective model map, keyed by static agent path.
-        api_key (`str | None`):
+        api_key (`SecretStr | None`):
             The host key, supplied to each config marked for it.
+        headers (`dict[str, SecretStr] | None`):
+            The header values sent with the host key, supplied beside it.
         labels (`Mapping[str, str]`):
             The authored site of each synthesized agent's ``llm_config``, keyed by
             static agent path; a message names it instead of the path.
@@ -522,8 +526,13 @@ def _check_effective_llm(
             its agent path, or the authored site of a synthesized agent.
     """
     for path, config in effective_llm.items():
-        # The host key stays out of the map; supply it where the marker expects it.
-        probe = {**config, "api_key": api_key} if HOST_KEY_MARKER in config else config
+        # The host key and header values stay out of the map; supply them where the
+        # marker expects them.
+        probe = config
+        if HOST_KEY_MARKER in config:
+            probe = {**config, "api_key": api_key}
+            if headers:
+                probe["headers"] = headers
         try:
             check_model_config(probe)
         except ValueError as exc:
@@ -575,7 +584,7 @@ def _run_flow_controlled(
     # the key with another.
     run_llm_config = dict(llm_config or {})
     host = pop_host_credentials(run_llm_config)
-    api_key, base_url = host.api_key, host.base_url
+    api_key, headers = host.api_key, host.headers
 
     # One selection snapshot determines every static agent before RunStarted.
     snapshot = connection_snapshot()
@@ -588,15 +597,17 @@ def _run_flow_controlled(
             stray_model=snapshot.stray_model,
         ),
         host_key_provider=None if api_key is None else run_llm_config["provider"],
-        host_base_url=base_url,
+        host_base_url=host.base_url,
+        host_settings=host,
     )
     apply_effective_llm_map(private_flow, effective_llm)
-    # A key that marks no agent has nothing to authenticate, so the result keeps none.
+    # A key that marks no agent has nothing to authenticate, so the result keeps
+    # neither it nor the headers sent with it.
     if api_key is not None and not host_key_providers(effective_llm):
-        api_key = None
+        api_key = headers = None
     if api_key is not None:
-        bind_api_key(private_flow, api_key)
-    _check_effective_llm(effective_llm, api_key, static_agent_labels(private_flow))
+        bind_host_credentials(private_flow, api_key, headers)
+    _check_effective_llm(effective_llm, api_key, headers, static_agent_labels(private_flow))
 
     if learnable:
         apply_execution_layout(private_flow, resolve_execution_layout(private_flow))
@@ -1188,8 +1199,9 @@ def _check_recorded_llm_fields(
 
     A record written before a key was retired may carry it set; resuming would then
     run with a config the current carrier refuses. No key is required here, so the
-    host-key marker is left out, and with it the base_url bound to that key (replay
-    has already checked the URL; the model call checks it against its connection).
+    host-key marker is left out, and with it the base_url and connection settings
+    bound to that key (replay has already checked them; the model call checks the URL
+    against its connection and the header names against the headers given).
 
     Args:
         effective (`Mapping[str, Mapping[str, Any]]`):
@@ -1204,7 +1216,11 @@ def _check_recorded_llm_fields(
             values.
     """
     for path, config in effective.items():
-        host_only = (HOST_KEY_MARKER, "base_url") if HOST_KEY_MARKER in config else ()
+        host_only = (
+            (HOST_KEY_MARKER, "base_url", "organization", "project", HEADER_NAMES_KEY)
+            if HOST_KEY_MARKER in config
+            else ()
+        )
         public = {key: value for key, value in config.items() if key not in host_only}
         try:
             split_model_config(legacy_connection_config(public))
@@ -1354,8 +1370,9 @@ def _replay_compiled_run_log(
         legacy_connection_map(first.record.effective_llm_by_static_path),
     )
     if api_key is not None:
-        # A run that marked no agent ignores the key; bind_api_key finds no target.
-        bind_api_key(private_flow, api_key)
+        # A run that marked no agent ignores the key; bind_host_credentials finds no
+        # target.
+        bind_host_credentials(private_flow, api_key)
     if first.record.learnable:
         apply_execution_layout(private_flow, resolve_execution_layout(private_flow))
     if first.record.memories is not None:

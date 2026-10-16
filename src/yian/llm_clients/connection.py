@@ -14,6 +14,7 @@ effects.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import copy
 from dataclasses import dataclass
 import hashlib
@@ -35,11 +36,13 @@ from .auth import (
 from .config import (
     AZURE_NEEDS_BASE_URL,
     RETIRED_LLM_CONFIG_KEYS,
+    HostConnection,
     LLMConfig,
     SUPPORTED_LLM_PROVIDERS,
     azure_resource_endpoint,
     validate_base_url,
 )
+from .connection_settings import validate_header_name
 from .provider_blocks import block_schema
 from .redact import scrub_keys
 
@@ -65,6 +68,14 @@ HOST_KEY_MARKER = "_host_key"
 _HOST_KEY_MISSING = (
     "This run's {provider} API key came from the host's llm_config.api_key and is not "
     "recorded; pass api_key to resume_flow or RunResult.backward"
+)
+# Recorded beside HOST_KEY_MARKER: the sorted names of the headers the host sent with
+# its key. Their values, like the key, are never recorded.
+HEADER_NAMES_KEY = "_header_names"
+_HOST_HEADERS_MISSING = (
+    "This run's {provider} connection headers {names} came from the host's "
+    "llm_config.headers and are not recorded; pass headers to resume_flow or "
+    "RunResult.backward"
 )
 # Key variables a provider SDK reads after the provider's own, and only when yian
 # passes it no key.
@@ -147,6 +158,7 @@ class ConnectionSnapshot:
         *,
         host_key_provider: str | None = None,
         host_base_url: str | None = None,
+        host_settings: HostConnection | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Attach selected connection identity without changing any input maps.
 
@@ -162,14 +174,25 @@ class ConnectionSnapshot:
         OpenAI agent records a ``host`` connection instead of the saved or
         environment one; other providers record no connection. ``host_base_url``,
         the endpoint the host gave with that key, is recorded on those agents
-        only, and is the OpenAI host connection's endpoint.
+        only, and is the OpenAI host connection's endpoint. ``host_settings``, the
+        connection settings the host gave with that key, is recorded on the same
+        agents: ``organization`` and ``project`` as given, and the header names
+        (never their values) sorted under ``HEADER_NAMES_KEY``. Its key is ignored.
         """
+        recorded: dict[str, Any] = {}
+        if host_settings is not None:
+            for field in ("organization", "project"):
+                if getattr(host_settings, field) is not None:
+                    recorded[field] = getattr(host_settings, field)
+            if host_settings.headers:
+                recorded[HEADER_NAMES_KEY] = sorted(host_settings.headers)
         result = copy.deepcopy(effective)
         for config in result.values():
             if config["provider"] == host_key_provider:
                 config[HOST_KEY_MARKER] = True
                 if host_base_url is not None:
                     config["base_url"] = host_base_url
+                config.update(copy.deepcopy(recorded))
                 if config["provider"] == "openai":
                     config["_connection"] = self.host_connection(host_base_url)
                 continue
@@ -466,29 +489,105 @@ def _validate_keyed_connection(value: dict[str, Any], provider: str) -> dict[str
     return copy.deepcopy(value)
 
 
+def validate_header_names(value: Any, provider: Any) -> list[str]:
+    """Validate a recorded ``HEADER_NAMES_KEY`` value: the sorted names of host headers.
+
+    Args:
+        value (`Any`): The candidate value.
+        provider (`Any`): The provider of the config that carries it.
+
+    Returns:
+        `list[str]`: A copy of ``value``.
+
+    Raises:
+        `ValueError`: ``value`` is not a non-empty sorted list of distinct (ignoring
+            case) header names that ``provider`` may be sent; errors name only the key.
+    """
+    invalid = ValueError(f"Invalid internal {HEADER_NAMES_KEY}")
+    if type(value) is not list or not value or value != sorted(map(str, value)):
+        raise invalid
+    if len({name.lower() for name in value}) != len(value):
+        raise invalid
+    try:
+        for name in value:
+            validate_header_name(name, provider if isinstance(provider, str) else None)
+    except ValueError:
+        raise invalid from None
+    return list(value)
+
+
+def _check_host_headers(raw: dict[str, Any], names: list[str]) -> None:
+    """Require a marked config's headers to have exactly its recorded header names.
+
+    Args:
+        raw (`dict[str, Any]`): The config, ``HOST_KEY_MARKER`` already removed.
+        names (`list[str]`): The recorded header names; empty when none were recorded.
+
+    Raises:
+        `AuthError`: The header names differ, ignoring case; the message names the
+            missing and unexpected header names, never a value.
+    """
+    headers = raw.get("headers") or {}
+    if not isinstance(headers, Mapping):
+        # `LLMConfig` names the malformed field.
+        return
+    given = {name.lower(): name for name in headers if isinstance(name, str)}
+    expected = {name.lower(): name for name in names}
+    missing = [expected[name] for name in sorted(expected) if name not in given]
+    extra = [given[name] for name in sorted(given) if name not in expected]
+    if not missing and not extra:
+        return
+    if not headers:
+        raise AuthError(_HOST_HEADERS_MISSING.format(
+            provider=raw.get("provider"), names=", ".join(missing)
+        ))
+    details = []
+    if missing:
+        details.append(f"missing {', '.join(missing)}")
+    if extra:
+        details.append(f"not recorded {', '.join(extra)}")
+    raise AuthError(
+        "llm_config.headers must have the header names this run recorded for the host "
+        f"key: {'; '.join(details)}"
+    )
+
+
 def split_model_config(
     config: dict[str, Any] | LLMConfig,
 ) -> tuple[LLMConfig, dict[str, Any] | None]:
     """Validate public fields separately from host-owned connection metadata.
 
+    A config marked with ``HOST_KEY_MARKER`` needs its ``api_key``, and ``headers``
+    with exactly the recorded ``HEADER_NAMES_KEY`` names (none when absent),
+    compared without case; both are popped from the validated fields.
+
     Raises:
-        `AuthError`: The config carries ``HOST_KEY_MARKER`` but no ``api_key``.
-        `ValueError`: A public field or the metadata is invalid, an OpenAI
-            ``base_url`` differs from the endpoint of its pinned host connection,
-            or an Azure ``base_url`` names another resource than its saved login.
+        `AuthError`: The config carries ``HOST_KEY_MARKER`` but no ``api_key``, or
+            its headers do not have the recorded names.
+        `ValueError`: A public field or the metadata is invalid, the header names
+            are malformed or appear without the marker, an OpenAI ``base_url``
+            differs from the endpoint of its pinned host connection, or an Azure
+            ``base_url`` names another resource than its saved login.
     """
     if isinstance(config, LLMConfig):
         raw = config.model_dump(exclude_none=True)
-        # Dumps leave the key out; carry it across explicitly.
-        if config.api_key is not None:
-            raw["api_key"] = config.api_key
+        # Dumps leave the key and header values out; carry them across explicitly.
+        for field in ("api_key", "headers"):
+            if getattr(config, field) is not None:
+                raw[field] = getattr(config, field)
     else:
         raw = dict(config)
+    header_names = raw.pop(HEADER_NAMES_KEY, None)
+    if header_names is not None:
+        header_names = validate_header_names(header_names, raw.get("provider"))
     if HOST_KEY_MARKER in raw:
         if raw.pop(HOST_KEY_MARKER) is not True:
             raise ValueError("Invalid internal host key marker")
         if raw.get("api_key") is None:
             raise AuthError(_HOST_KEY_MISSING.format(provider=raw.get("provider")))
+        _check_host_headers(raw, header_names or [])
+    elif header_names is not None:
+        raise ValueError(f"Internal {HEADER_NAMES_KEY} needs the host key marker")
     metadata = raw.pop("_connection", None)
     validated = LLMConfig(**raw)
     if metadata is not None:
@@ -585,8 +684,10 @@ def resolve_model_config(
     """
     validated, metadata = split_model_config(config)
     raw = validated.model_dump(exclude_none=True)
-    if validated.api_key is not None:
-        raw["api_key"] = validated.api_key
+    # Dumps leave the key and header values out; carry them across explicitly.
+    for field in ("api_key", "headers"):
+        if getattr(validated, field) is not None:
+            raw[field] = getattr(validated, field)
     if metadata is not None and validated.model:
         raw["_connection"] = metadata
         return raw

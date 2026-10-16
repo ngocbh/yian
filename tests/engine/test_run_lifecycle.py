@@ -446,6 +446,7 @@ def test_final_run_boundary_signatures_and_result_fields_are_exact() -> None:
         "tools",
         "skills",
         "steering",
+        "context",
     ]
     _assert_keyword_only(
         fresh,
@@ -461,6 +462,7 @@ def test_final_run_boundary_signatures_and_result_fields_are_exact() -> None:
             "tools",
             "skills",
             "steering",
+            "context",
         ),
     )
     assert fresh.parameters["log"].default is None
@@ -471,6 +473,7 @@ def test_final_run_boundary_signatures_and_result_fields_are_exact() -> None:
     assert fresh.parameters["tools"].default is None
     assert fresh.parameters["skills"].default is None
     assert fresh.parameters["steering"].default is None
+    assert fresh.parameters["context"].default is None
     assert "stop_event" not in fresh.parameters
 
     assert list(recovered.parameters) == [
@@ -484,11 +487,12 @@ def test_final_run_boundary_signatures_and_result_fields_are_exact() -> None:
         "skills",
         "steering",
         "api_key",
+        "context",
     ]
     _assert_keyword_only(
         recovered,
         ("log", "num_workers", "on_event", "on_stream", "memory", "tools", "skills", "steering",
-         "api_key"),
+         "api_key", "context"),
     )
     assert recovered.parameters["log"].default is inspect.Parameter.empty
     assert recovered.parameters["num_workers"].default is None
@@ -497,6 +501,7 @@ def test_final_run_boundary_signatures_and_result_fields_are_exact() -> None:
     assert recovered.parameters["skills"].default is None
     assert recovered.parameters["steering"].default is None
     assert recovered.parameters["api_key"].default is None
+    assert recovered.parameters["context"].default is None
     assert "stop_event" not in recovered.parameters
 
     assert list(controlled_fresh.parameters) == [

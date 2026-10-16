@@ -171,6 +171,7 @@ def test_final_log_only_runtime_and_public_surface():
         "tools",
         "skills",
         "steering",
+        "context",
     ]
     assert list(inspect.signature(run.resume_flow).parameters) == [
         "flow",
@@ -183,6 +184,7 @@ def test_final_log_only_runtime_and_public_surface():
         "skills",
         "steering",
         "api_key",
+        "context",
     ]
     assert [field.name for field in fields(run.RunResult)] == [
         "input",

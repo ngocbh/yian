@@ -319,6 +319,7 @@ def run_flow(
     tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
+    context: Any = None,
 ) -> RunResult:
     """Start and drive one flow through an in-memory or durable run log.
 
@@ -419,6 +420,11 @@ def run_flow(
             stops its loop at the next safe point and succeeds with the text
             it has so far. Calls come from worker threads. Pass the same inbox
             to `resume_flow`.
+        context (`Any`, *optional*, defaults to `None`):
+            The host's app object, such as a database session or a broker
+            client. A tool whose first parameter is annotated `ToolContext`
+            receives it as `ctx.context`. It is never recorded and is not part
+            of the flow fingerprint, so pass it again to `resume_flow`.
 
     Returns:
         `RunResult`:
@@ -480,6 +486,7 @@ def run_flow(
         tools=tools,
         skills=skills,
         steering=steering,
+        context=context,
         stop_event=threading.Event(),
     )
 
@@ -534,6 +541,7 @@ def _run_flow_controlled(
     tools: Mapping[str, BaseTool | Callable[..., Any] | Sequence[BaseTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
+    context: Any = None,
     stop_event: threading.Event,
 ) -> RunResult:
     """Drive a fresh run with one host-owned cooperative stop event."""
@@ -543,7 +551,7 @@ def _run_flow_controlled(
         raise TypeError("run_flow expects a ComposedFlow")
     if type(learnable) is not bool:
         raise TypeError("learnable must be a bool")
-    run_tools = ToolSet(tools)
+    run_tools = ToolSet(tools, context=context)
     _check_tool_grants(flow.compiled, run_tools)
     _check_conditions(flow.compiled)
     _check_templates(flow.compiled)
@@ -696,6 +704,7 @@ def resume_flow(
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
     api_key: str | SecretStr | None = None,
+    context: Any = None,
 ) -> RunResult:
     """Recover primary execution or inspect a terminal run without backward work.
 
@@ -744,6 +753,10 @@ def resume_flow(
             log that marks no agent ignores it. Without it, marked agents fail
             when they call their model instead of reading the provider's key
             environment variable.
+        context (`Any`, *optional*, defaults to `None`):
+            The host's app object, passed to tools as `ctx.context` as in
+            `run_flow`. The log does not hold it, so pass it again here; without
+            it, tools in the resumed segment see `None`.
 
     Returns:
         `RunResult`:
@@ -792,6 +805,7 @@ def resume_flow(
         skills=skills,
         steering=steering,
         api_key=api_key,
+        context=context,
         stop_event=threading.Event(),
     )
 
@@ -808,6 +822,7 @@ def _resume_flow_controlled(
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
     api_key: str | SecretStr | None = None,
+    context: Any = None,
     check_llm_configs: Callable[[dict[str, dict[str, Any]]], None] | None = None,
     stop_event: threading.Event,
 ) -> RunResult:
@@ -821,7 +836,7 @@ def _resume_flow_controlled(
     """
     # A bad YIAN_<NAME> value fails here, before the log is opened.
     current()
-    run_tools = ToolSet(tools)
+    run_tools = ToolSet(tools, context=context)
     api_key = None if api_key is None else _secret_key(api_key)
     require_steering(steering)
     log_path = Path(log)

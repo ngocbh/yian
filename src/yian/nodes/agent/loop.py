@@ -215,7 +215,17 @@ def run_agent(ctx: AgentRunContext) -> Output:
             if skills and name == LOAD_SKILL:
                 invoke = partial(invoke_load_skill, skills, arguments)
             elif name in granted:
-                invoke = partial(ctx.toolset.invoke, name, arguments)
+                # Unlike a TOOL node's id, this one is not stable across resume: a resumed
+                # AGENT asks its model again, and reusing an id for a possibly different
+                # call would let an idempotency key dedupe the wrong side effect. Outside
+                # a run (no run id) the tool set gives each call a fresh id.
+                run_id = ctx.toolset.run_id
+                call_id = (
+                    f"{run_id}/{ctx.node_id}/{exchange_id}/{call_index}" if run_id else None
+                )
+                invoke = partial(
+                    ctx.toolset.invoke, name, arguments, node=ctx.node_id, call_id=call_id
+                )
             else:
                 raise AgentLoopError(
                     f"agent node {ctx.node_id!r} requested tool {name!r}, but it is not "

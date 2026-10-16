@@ -31,11 +31,7 @@ def _error(reason: str, message: str) -> MemoryOperationError:
 
 def _io_error(error: OSError | sqlite3.Error) -> MemoryOperationError:
     code = getattr(error, "sqlite_errorcode", 0) & 0xFF
-    # Python 3.10 does not expose SQLite's numeric error attributes.
-    busy = code in (5, 6) or (
-        isinstance(error, sqlite3.OperationalError)
-        and str(error) in ("database is locked", "database table is locked")
-    )
+    busy = code in (5, 6)
     if busy:
         return _error("busy", "Memory storage is already owned or busy.")
     if code in (11, 26):

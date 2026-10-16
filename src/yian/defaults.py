@@ -546,8 +546,8 @@ def _maximum(entry: Entry) -> int:
     """Return the largest value `entry` accepts from the environment now."""
     maximum = _LARGEST if entry.maximum is None else entry.maximum
     if entry.maximum_from_interpreter:
-        # The function is missing before Python 3.10.7; 0 means the limit is off.
-        interpreter = getattr(sys, "get_int_max_str_digits", lambda: 0)()
+        # 0 means the limit is off.
+        interpreter = sys.get_int_max_str_digits()
         if interpreter:
             maximum = min(maximum, interpreter)
     return maximum

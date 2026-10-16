@@ -494,15 +494,6 @@ def _site_label(site: DeclSite) -> str:
     return f"{'.'.join(site.scope)}: {label}" if site.scope else label
 
 
-def _note(error: BaseException, text: str) -> None:
-    """Attach one note; ``BaseException.add_note`` is new in Python 3.11."""
-    notes = getattr(error, "__notes__", None)
-    if notes is None:
-        notes = []
-        error.__notes__ = notes
-    notes.append(text)
-
-
 def _canonical_json(value: object) -> str:
     """Encode one JSON value for exact comparison, so ``1``, ``1.0`` and ``true`` differ."""
     return json.dumps(
@@ -547,7 +538,7 @@ def _memory_table(
                 related=tuple(decl.origin for decl in others),
             )
             for decl in others:
-                _note(error, f"also declared at {_site_label(decl.site)}")
+                error.add_note(f"also declared at {_site_label(decl.site)}")
             raise error
         by_site: dict[DeclSite, MemoryDecl] = {}
         for decl in declarations:
@@ -570,7 +561,7 @@ def _memory_table(
                     related=tuple(decl.origin for decl in ordered[1:]),
                 )
                 for decl in ordered[1:]:
-                    _note(error, f"also owned at {_site_label(decl.site)}")
+                    error.add_note(f"also owned at {_site_label(decl.site)}")
                 raise error
         owners = tuple(decl.site for decl in ordered)
         table.append(
@@ -599,7 +590,7 @@ def _memory_table(
                 related=tuple(memory.origin for memory in sessions[1:]),
             )
             for memory in sessions[1:]:
-                _note(error, f"also declares {memory.key!r}")
+                error.add_note(f"also declares {memory.key!r}")
             raise error
     return tuple(table)
 

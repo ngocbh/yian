@@ -523,8 +523,7 @@ def python_refuses_long_ints() -> bool:
     Returns:
         `bool`: `True` if Python's limit is on and at most `YIAN_MAX_INT_DIGITS`.
     """
-    get_limit = getattr(sys, "get_int_max_str_digits", None)
-    limit = get_limit() if get_limit is not None else 0
+    limit = sys.get_int_max_str_digits()
     return 0 < limit <= current().max_int_digits
 
 

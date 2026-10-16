@@ -27,7 +27,8 @@ class ToolContext(Generic[T]):
             until AGENT steps are recorded. Outside a run (an unbound tool set)
             each call gets a fresh id.
         attempt (`int`):
-            Starts at 1 and goes up by one on each retry of the same call.
+            The attempt number, starting at 1. It is always 1 until TOOL nodes
+            can retry; a resumed re-run of a call also sees 1.
         tool_name (`str`):
             The id the tool is registered under.
         run_id (`str`):

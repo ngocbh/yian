@@ -298,8 +298,7 @@ run before appending any record.
   object such as a session, pass it as `context`, or use a closure or a bound
   method; `functools.partial` and other callable objects are rejected. A
   `FunctionTool` or LangChain `BaseTool` must already use its key as its name.
-  The `ask_user`
-  entry is the run's human handler (see
+  The `ask_user` entry is the run's human handler (see
   [Blocking human interaction](#blocking-human-interaction)). Tools are host
   callables, so the run log does not record them. An AGENT that grants skills
   also gets the built-in `load_skill` tool, which is not part of this mapping.
@@ -357,8 +356,8 @@ positional, and annotated `ToolContext`, `ToolContext[T]`, or a subclass; its
 name doesn't matter. It is hidden from the schema the model sees and from the
 TOOL node's input names. `ToolContext` anywhere else, such as a later parameter,
 a keyword-only one, or `Optional[ToolContext]`, raises `TypeError` when the tool
-is built: in `run_flow` or `resume_flow` before the log is created for a `tools=`
-entry, and at decoration for `register_tool`. An `async def` tool raises
+is built: in `run_flow` or `resume_flow` before the log is created or opened for
+a `tools=` entry, and at decoration for `register_tool`. An `async def` tool raises
 `TypeError` the same way, since yian calls tools synchronously.
 
 | Field | Meaning |
@@ -491,8 +490,8 @@ result = run_flow(
 
 `worker` sees `search_tickets`, `read_ticket`, `read_file_tool`, and `ask_user`.
 Each group item is a LangChain `BaseTool` or `FunctionTool` named by its `name`,
-or a function or bound method named by its `__name__` (a lambda has no usable name and is
-rejected). Groups expand before the grant check, so the model calls the tools by
+or a function or bound method named by its `__name__` (a lambda has no usable
+name and is rejected). Groups expand before the grant check, so the model calls the tools by
 their own names, never by the group name. A group is not a tool: a TOOL node's
 `tool_id:` may name a tool inside a group, but not the group itself. Before the
 log is created, `run_flow` raises:
@@ -1541,9 +1540,9 @@ keys, for example `build_memories(flow, root=...)` with the original root, to
 
 The log does not record `tools` or `context`. To continue an unfinished run whose
 nodes use per-run tools or ask the human, pass the same `tools` (including
-`ask_user`) and `context` to `resume_flow` again. Tool group contents may differ from the original run's:
-completed nodes keep their recorded results, and nodes that restart see the
-groups passed to `resume_flow`. Every grant must still resolve, as in `run_flow`.
+`ask_user`) and `context` to `resume_flow` again. Tool group contents may differ
+from the original run's: completed nodes keep their recorded results, and nodes
+that restart see the groups passed to `resume_flow`. Every grant must still resolve, as in `run_flow`.
 
 If primary execution is unfinished and eligible for retry, recovery appends one
 `RunResumedRecord`, retries the exact ordered set of nodes that have a durable start but no durable
@@ -1551,13 +1550,11 @@ outcome, and continues the ready frontier. `num_workers=None` preserves the
 recorded worker count; an integer selects and records the new segment's count.
 Fresh inputs, `run_id`, and LLM configuration cannot be supplied during recovery.
 
-A retried node may
-resend requests and repeat tool actions; recovery does not provide exactly-once
-execution or resume an external request midway through. A retried TOOL node
-passes its tool the same `ctx.call_id` as before, so a tool can use it as an
-idempotency key; a retried AGENT's tool calls get new ids (see
-[Tool context](#tool-context)). The new accepted start
-receives a new sequence, and metadata for its old unfinished start is rejected.
+A retried node may resend requests and repeat tool actions; recovery does not
+provide exactly-once execution or resume an external request midway through. A
+retried TOOL node passes its tool the same `ctx.call_id` as before, so a tool can
+use it as an idempotency key; a retried AGENT's tool calls get new ids (see
+[Tool context](#tool-context)). The new accepted start receives a new sequence, and metadata for its old unfinished start is rejected.
 Runtime neither reconstructs a transcript from the run log nor fabricates results
 for unknown effects. SessionMemory owns whatever conversation history was saved;
 the run log is not a durable replacement for that memory backend.
@@ -1678,15 +1675,17 @@ result = run_flow(
 
 The handler receives `question`, `questions`, `answer_schema`, `title`,
 `node_id`, and `options` as keyword arguments, so define it as
-`def handler(**request)`, or as `def handler(ctx: ToolContext[App], **request)`
-to receive the call's [tool context](#tool-context) first. A handler that cannot
-take all six is rejected before the run starts. `human_input` uses the trusted metadata path; model-requested
-`ask_user` calls can supply only the public `question` and `options` arguments.
-`options` is `None` or a cleaned list of up to six short answer labels the model
-suggested. Show them as choices, but still let the human type another answer. Each run has its own handler, so
-concurrent runs in one process never share one. Within one run, the default
-`num_workers=8` lets several nodes (for example two MAP items) call the handler at
-the same time, so the handler must be thread-safe.
+`def handler(**request)`, or as
+`def handler(ctx: ToolContext[App], **request)` to receive the call's
+[tool context](#tool-context) first. A handler that cannot take all six is
+rejected before the run starts. `human_input` uses the trusted metadata path;
+model-requested `ask_user` calls can supply only the public `question` and
+`options` arguments. `options` is `None` or a cleaned list of up to six short
+answer labels the model suggested. Show them as choices, but still let the human
+type another answer. Each run has its own handler, so concurrent runs in one
+process never share one. Within one run, the default `num_workers=8` lets several
+nodes (for example two MAP items) call the handler at the same time, so the
+handler must be thread-safe.
 If another node fails the run while a handler is waiting, `on_event` receives
 `NodeFailed` and `RunFailed` right away, before the run waits for its in-flight
 nodes. `run_flow` returns only after every pending handler returns or raises, and

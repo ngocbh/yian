@@ -14,8 +14,10 @@ new check form adds a dataclass here, its recognition in `check_in`, and its fac
 `narrowing_facts`.
 
 `proves(<and chain>, False)` repeats each prefix of the chain, so a guard grows
-quadratically with the length of one chain. Operands that make no check prove `NOTHING`
-and drop out, so guards of authored conditions stay small.
+quadratically with the length of one chain. An operand that makes no check proves `NOTHING`:
+it drops out of a true `and` chain (a false `or` chain), and it makes a false `and` chain (a
+true `or` chain) prove `NOTHING`, since it may be the operand that decided the chain. So guards
+of authored conditions stay small.
 
 Knows about: `expr` parse trees and `direct_reference_parts`.
 Never imports: types, `compose.validate`.
@@ -37,10 +39,10 @@ __all__ = [
     "AllOf",
     "AnyOf",
     "Check",
+    "CheckLiteral",
     "Guard",
     "Holds",
     "IsinstanceCheck",
-    "Literal",
     "TagCheck",
     "all_of",
     "any_of",
@@ -255,8 +257,10 @@ def proves(tree: Tree | Token, value: bool) -> Guard:
 
     A check gives `Holds`; `not` proves what its operand proves for the other value;
     an `and` chain is true when every operand is, and false when some operand is false
-    after the ones before it were true (an `or` chain the other way round). Anything
-    else (a comparison that is no check, `:-`, a call, a literal) proves `NOTHING`.
+    after the ones before it were true (an `or` chain the other way round); a false
+    `and` chain with an operand that proves nothing when false proves `NOTHING`, since
+    that operand may have decided it. Anything else (a comparison that is no check,
+    `:-`, a call, a literal) proves `NOTHING`.
 
     Args:
         tree (`Tree | Token`):
@@ -288,10 +292,14 @@ def proves(tree: Tree | Token, value: bool) -> Guard:
     deciding = tree.data == "or_expr"
     if value != deciding:
         return all_of(*(proves(operand, value) for operand in operands))
+    decided = [proves(operand, deciding) for operand in operands]
+    # An operand that proves nothing may be the one that decided the chain.
+    if NOTHING in decided:
+        return NOTHING
     branches: list[Guard] = []
     passed: list[Guard] = []
-    for operand in operands:
-        branches.append(all_of(*passed, proves(operand, deciding)))
+    for operand, guard in zip(operands, decided):
+        branches.append(all_of(*passed, guard))
         passed.append(proves(operand, not deciding))
     return any_of(*branches)
 
@@ -311,12 +319,13 @@ def _value_args(refcall: Tree) -> Optional[list[Tree]]:
 
 def _operand_contexts(node: Tree, context: Guard) -> list[tuple[Tree | Token, Guard]]:
     """Each operand of an `and_expr`/`or_expr` with what holds whenever it is evaluated."""
-    reached = node.data == "and_expr"
+    # The value an operand must have for the next one to run.
+    continues = node.data == "and_expr"
     contexts = []
     passed: list[Guard] = [context]
     for operand in _operands(node):
         contexts.append((operand, all_of(*passed)))
-        passed.append(proves(operand, reached))
+        passed.append(proves(operand, continues))
     return contexts
 
 
@@ -369,7 +378,7 @@ def guarded_refs(tree: Tree | Token) -> list[tuple[str, Guard]]:
 
 
 @dataclass(frozen=True)
-class Literal:
+class CheckLiteral:
     """A check, or `not` applied to a check, in a boolean position of a condition.
 
     Args:
@@ -389,7 +398,7 @@ class Literal:
     negated: bool
 
 
-def literals_in_context(tree: Tree | Token) -> list[Literal]:
+def literals_in_context(tree: Tree | Token) -> list[CheckLiteral]:
     """Return each literal in a condition's boolean positions with what holds when it is evaluated.
 
     Boolean positions are the condition itself, the operands of `and`, `or` and `not`,
@@ -402,21 +411,21 @@ def literals_in_context(tree: Tree | Token) -> list[Literal]:
             A condition parsed with `parse_condition`, in any spelling.
 
     Returns:
-        `list[Literal]`:
+        `list[CheckLiteral]`:
             The literals in source order.
 
     Example:
         For `isinstance(v, Buy) and v.action == 'hold'`, the second literal is
-        `Literal(Holds(IsinstanceCheck("v", "Buy"), True), TagCheck("v", "action",
+        `CheckLiteral(Holds(IsinstanceCheck("v", "Buy"), True), TagCheck("v", "action",
         "hold"), True, False)`.
     """
-    literals: list[Literal] = []
+    literals: list[CheckLiteral] = []
 
     def walk(node: Tree | Token, context: Guard, negated: bool) -> None:
         found = check_in(node)
         if found is not None:
             check, positive = found
-            literals.append(Literal(context, check, positive != negated, negated))
+            literals.append(CheckLiteral(context, check, positive != negated, negated))
             return
         if not isinstance(node, Tree):
             return
@@ -457,11 +466,11 @@ def check_text(check: Check, value: bool = True) -> str:
     return f"{check.base}.{check.field} {op} {_quoted(check.value)}"
 
 
-def literal_text(literal: Literal) -> str:
+def literal_text(literal: CheckLiteral) -> str:
     """Return the canonical source of a literal.
 
     Args:
-        literal (`Literal`):
+        literal (`CheckLiteral`):
             A literal from `literals_in_context`.
 
     Returns:

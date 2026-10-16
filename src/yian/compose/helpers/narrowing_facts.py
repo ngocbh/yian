@@ -6,8 +6,9 @@ intersection (both hold); losing a fact is always sound. The facts a check prove
 from `check_fact`: a true or false `isinstance`, or a true or false comparison of a union's
 tag field with a text. `guard_env` evaluates a guard from `condition_guards` into the facts
 that hold whenever it does, and `guarded_read_types` gives the types a field read under a
-guard is checked against. `impossible_checks` finds the checks in a condition that can never
-be true, and the message helpers word those errors and a narrowed read's error.
+guard is checked against. `impossible_checks` finds the checks in a condition that are wrong
+whatever the values and the reads no value reaches, and the message helpers word those
+errors and a narrowed read's error.
 
 Knows about: `typesys` types and unions, `compile.validation`, `isinstance` type
 resolution, condition guards, output-contract projection, and type labels.
@@ -27,14 +28,15 @@ from yian.compile.validation import types_compatible
 from yian.compose.helpers.condition_guards import (
     AllOf,
     Check,
+    CheckLiteral,
     Guard,
     Holds,
     IsinstanceCheck,
-    Literal,
     TagCheck,
-    all_of,
+    check_text,
     conjuncts,
     guard_checks,
+    guarded_refs,
     literal_text,
     literals_in_context,
 )
@@ -66,9 +68,9 @@ __all__ = [
     "Members",
     "NotNarrowable",
     "check_fact",
+    "env_unsatisfiable",
     "fact_type",
     "guard_env",
-    "guard_unsatisfiable",
     "guarded_read_types",
     "impossible_check_message",
     "impossible_checks",
@@ -535,7 +537,7 @@ def guard_env(guard: Guard, base_type_of: BaseTypeOf, registry: TypeRegistry) ->
     return _guard_env(guard, base_type_of, registry, {})
 
 
-def guard_unsatisfiable(env: Env) -> bool:
+def env_unsatisfiable(env: Env) -> bool:
     """Return whether no value can satisfy the facts in `env`.
 
     Args:
@@ -574,6 +576,16 @@ def unresolved_type(guard: Guard, registry: TypeRegistry) -> bool:
     return False
 
 
+def _guard_envs(guard: Guard, base_type_of: BaseTypeOf, registry: TypeRegistry) -> list[Env]:
+    """The distinct facts of `guard` and of each of its top-level conjuncts."""
+    envs: list[Env] = []
+    for part in (guard, *conjuncts(guard)):
+        env = guard_env(part, base_type_of, registry)
+        if env not in envs:
+            envs.append(env)
+    return envs
+
+
 def guarded_read_types(
     read: str,
     guard: Guard,
@@ -603,18 +615,15 @@ def guarded_read_types(
             `(narrowed type, field names below it, narrowed base path)` per distinct
             candidate, in order; `[]` when no fact applies to the read, so it is checked
             unnarrowed; `None` when the guard can never hold, so the read is never
-            evaluated and is not checked (`impossible_checks` explains why).
+            evaluated and is not checked (`impossible_checks` then reports an error for the
+            condition).
 
     Example:
         With `v` a `Union[Buy, Hold, Sell]`, the read `v.qty` under the guard of
         `isinstance(v, Buy)` gives `[(Buy, ("qty",), "v")]`.
     """
-    envs: list[Env] = []
-    for part in (guard, *conjuncts(guard)):
-        env = guard_env(part, base_type_of, registry)
-        if env not in envs:
-            envs.append(env)
-    if any(guard_unsatisfiable(env) for env in envs):
+    envs = _guard_envs(guard, base_type_of, registry)
+    if any(env_unsatisfiable(env) for env in envs):
         return None
     parts = read.split(".")
     candidates: list[tuple[Type, tuple[str, ...], str]] = []
@@ -646,36 +655,50 @@ def guarded_read_types(
 
 
 class ImpossibleReason(Enum):
-    """Why a check in a condition can never be true."""
+    """Why `impossible_checks` reports a check or a read."""
 
     CONTEXT = "context"
-    """The checks evaluated before it rule it out."""
+    """The checks evaluated before the literal rule it out."""
     ROUTING = "routing"
-    """The case branch that routes the node rules it out."""
+    """The case branch that routes the node rules the literal out on its own."""
     NO_OVERLAP = "no overlap"
-    """An `isinstance` names a type no value of the base's declared type can be."""
+    """An `isinstance` names a type no value of the base's type can be."""
     ALWAYS = "always"
-    """A negated `isinstance` names a type every value of the base's declared type is."""
+    """A negated `isinstance` names a type every value of the base's type is."""
     NOT_A_TAG = "not a tag"
-    """A tag comparison's text is not a tag of the base union's tag field."""
+    """A tag comparison's text is not a tag of the base union's tag field: a misspelling,
+    reported for `==` (never true) and `!=` (always true) alike."""
+    NEVER_RUNS = "never runs"
+    """A reference sits where no value can reach, such as after an always-true check in an
+    `or`."""
 
 
 @dataclass(frozen=True)
 class ImpossibleCheck:
-    """A check in a condition that can never be true, and why.
+    """A check in a condition that is wrong whatever the values, or a read that never runs.
 
     Args:
         text (`str`):
-            The literal's canonical source, such as `not isinstance(v, Buy)`.
+            The literal's canonical source, such as `not isinstance(v, Buy)`, or for
+            `NEVER_RUNS` the reference path.
         base (`str`):
-            The checked base path.
+            The checked base path; for `NEVER_RUNS`, the base no value of which reaches
+            the reference.
         reason (`ImpossibleReason`):
-            Why it can never be true.
-        base_label (`str`):
-            The base's type: narrowed for `CONTEXT` and `ROUTING`, declared for
-            `NO_OVERLAP`, `ALWAYS` and `NOT_A_TAG`.
+            Why it is reported.
+        base_label (`str`, *optional*, defaults to `""`):
+            The base's type: narrowed for `CONTEXT` and `ROUTING`, else the type the base
+            is checked against.
+        declared (`bool`, *optional*, defaults to `True`):
+            For `NO_OVERLAP` and `ALWAYS`, whether the base's type is its declared type;
+            `False` when it comes from the checks before the literal. For `NEVER_RUNS`,
+            `False` when only the routing (with the checks) keeps values out.
         type_label (`str`, *optional*, defaults to `""`):
-            The type an `isinstance` names, for `NO_OVERLAP` and `ALWAYS`.
+            The type an `isinstance` names, for `NO_OVERLAP`.
+        always_true (`str`, *optional*, defaults to `""`):
+            The canonical source of the check that is always true where the literal needs
+            it false, such as `isinstance(v, Buy)` for `not isinstance(v, Buy)`; `""` when
+            the literal needs it true.
         value (`str`, *optional*, defaults to `""`):
             The compared text, for `NOT_A_TAG`.
         field (`str`, *optional*, defaults to `""`):
@@ -687,8 +710,10 @@ class ImpossibleCheck:
     text: str
     base: str
     reason: ImpossibleReason
-    base_label: str
+    base_label: str = ""
+    declared: bool = True
     type_label: str = ""
+    always_true: str = ""
     value: str = ""
     field: str = ""
     tags: tuple[str, ...] = ()
@@ -730,14 +755,21 @@ def _is_open(typ: Type) -> bool:
     return typ.kind is ValueKind.OBJECT and typ.fields is None and typ.variants is None
 
 
+def _always_true(literal: CheckLiteral) -> str:
+    """The check that is always true when `literal` can never be true, if it needs it false."""
+    return "" if literal.value else check_text(literal.check, True)
+
+
 def _declared_impossible(
-    literal: Literal,
+    literal: CheckLiteral,
     base_type: Type,
+    declared: bool,
     registry: TypeRegistry,
 ) -> Optional[ImpossibleCheck]:
-    """The impossible check a literal is against its base's declared type alone, else `None`."""
+    """The report a literal gets against its base's type alone, else `None`."""
     check = literal.check
     text = literal_text(literal)
+    label = named_type_label(base_type, registry)
     if isinstance(check, TagCheck):
         if base_type.variants is None or check.field not in union_tag_fields(base_type):
             return None
@@ -750,7 +782,7 @@ def _declared_impossible(
             text,
             check.base,
             ImpossibleReason.NOT_A_TAG,
-            named_type_label(base_type, registry),
+            label,
             value=check.value,
             field=check.field,
             tags=tags,
@@ -761,12 +793,18 @@ def _declared_impossible(
         typ = resolve_isinstance_type(check.type_name, registry)
     except TypeCheckError:
         return None
-    labels = (named_type_label(base_type, registry), named_type_label(typ, registry))
     if literal.value:
         # A missing value is checked as null, which a nullable type admits.
         if typ.nullable or types_overlap(base_type, typ):
             return None
-        return ImpossibleCheck(text, check.base, ImpossibleReason.NO_OVERLAP, *labels)
+        return ImpossibleCheck(
+            text,
+            check.base,
+            ImpossibleReason.NO_OVERLAP,
+            label,
+            declared,
+            type_label=named_type_label(typ, registry),
+        )
     # A null base fails a non-nullable check, so its negation can hold.
     if base_type.nullable and not typ.nullable:
         return None
@@ -774,7 +812,37 @@ def _declared_impossible(
     wanted = strict.variants or (strict,)
     if not all(_contains(wanted, member) for member in strict_base.variants or (strict_base,)):
         return None
-    return ImpossibleCheck(text, check.base, ImpossibleReason.ALWAYS, *labels)
+    always_true = _always_true(literal)
+    return ImpossibleCheck(
+        text, check.base, ImpossibleReason.ALWAYS, label, declared, always_true=always_true
+    )
+
+
+def _empty_base(envs: Sequence[Env]) -> Optional[str]:
+    """The first base some env leaves no value, else `None`."""
+    for env in envs:
+        for base, fact in env.items():
+            if fact == Members(()):
+                return base
+    return None
+
+
+def _never_runs(
+    tree: Tree | Token,
+    base_type_of: BaseTypeOf,
+    registry: TypeRegistry,
+    routing: Env,
+) -> Optional[ImpossibleCheck]:
+    """The first reference no value can reach, else `None`."""
+    for path, guard in guarded_refs(tree):
+        envs = _guard_envs(guard, base_type_of, registry)
+        base = _empty_base(envs)
+        if base is not None:
+            return ImpossibleCheck(path, base, ImpossibleReason.NEVER_RUNS)
+        base = _empty_base([intersect_envs([routing, env]) for env in envs])
+        if base is not None:
+            return ImpossibleCheck(path, base, ImpossibleReason.NEVER_RUNS, declared=False)
+    return None
 
 
 def impossible_checks(
@@ -784,19 +852,30 @@ def impossible_checks(
     *,
     routing: Optional[Env] = None,
 ) -> list[ImpossibleCheck]:
-    """Return the checks in a condition that can never be true.
+    """Return the checks in a condition that are wrong whatever the values, and dead reads.
 
     Each literal in a boolean position (a check, or `not` applied to one) is tested
-    against what holds when it is evaluated. It can never be true when, against its
-    base's declared type alone, an `isinstance` names a type no value of it can be (not
-    for a nullable type: a missing value is checked as null), a negated `isinstance`
-    names a type every value of it is, or a tag comparison's text is not a tag of the
-    union's tag field; or when the checks before it, met with what the literal proves,
-    leave its base no member and no null. With `routing`, a literal the routing facts
-    rule out is reported too. Unproven, `object` and `Any` bases, unknown type names,
-    bases `base_type_of` refuses, and facts lost to an intersection prove nothing
-    impossible. A literal whose context already can't hold (an earlier literal is
-    impossible) is not reported, and each literal text is reported once.
+    against its base's type and against what holds when it is evaluated:
+
+    - Against the base's type alone, whatever the context: an `isinstance` naming a type
+      no value of it can be (not a nullable type: a missing value is checked as null), a
+      negated `isinstance` naming a type every value of it is, and a tag comparison whose
+      text is not a tag of the union's tag field, reported as a misspelling for `==` and
+      `!=` alike.
+    - Against the context, when the context can hold: the checks before the literal, met
+      with what it proves, leave its base no member and no null. With `routing`, a
+      literal the routing rules out together with the context is reported too, worded as
+      routing only when the routing rules it out on its own.
+
+    No check silently hides what follows it. A reference can sit where no value reaches:
+    after a reported check, or after a check the types always decide (always true in an
+    `or`, always false in an `and`), which is no error by itself. Sites do not check such a
+    read (`guarded_read_types` gives `None`), and its literals get only the type test
+    above. So when nothing else in the condition is reported, the first unreachable
+    reference is (`NEVER_RUNS`): a condition with dead code never loads silently, and a
+    reported check does not cascade into errors on the code it makes dead.
+    Unproven, `object` and `Any` bases, unknown type names, bases `base_type_of` refuses,
+    and facts lost to an intersection prove nothing. Each literal text is reported once.
 
     Args:
         tree (`Tree | Token`):
@@ -807,11 +886,12 @@ def impossible_checks(
             The flow's typedefs.
         routing (`Env | None`, *optional*, defaults to `None`):
             The facts that hold wherever the condition is evaluated, such as a CASE
-            node's routing facts. `None` is none.
+            node's routing facts. `None` is none. When no value satisfies them, the
+            condition never runs and nothing is reported.
 
     Returns:
         `list[ImpossibleCheck]`:
-            The impossible literals in source order.
+            The reported literals in source order, or the one unreachable reference.
 
     Example:
         With `v` a `Union[Buy, Hold, Sell]` tagged by `action`,
@@ -819,35 +899,64 @@ def impossible_checks(
         `v.action == "hold"`, whose base is narrowed to `Buy`.
     """
     routing = routing or {}
+    if env_unsatisfiable(routing):
+        return []
     found: list[ImpossibleCheck] = []
     for literal in literals_in_context(tree):
         context_env = guard_env(literal.context, base_type_of, registry)
         routed_env = intersect_envs([routing, context_env])
-        if guard_unsatisfiable(context_env) or guard_unsatisfiable(routed_env):
-            continue
         base = literal.check.base
         base_type = _base_type(base, base_type_of, context_env)
         if base_type is NOT_NARROWABLE:
             continue
         impossible = None
         if base_type is not None:
-            impossible = _declared_impossible(literal, base_type, registry)
-        if impossible is None:
-            own = Holds(literal.check, literal.value)
-            met = guard_env(all_of(literal.context, own), base_type_of, registry)
-            if met.get(base) == Members(()):
-                label = _fact_label(context_env.get(base), base_type, registry)
-                impossible = ImpossibleCheck(
-                    literal_text(literal), base, ImpossibleReason.CONTEXT, label
-                )
-            elif intersect_envs([routing, met]).get(base) == Members(()):
-                label = _fact_label(routed_env.get(base), base_type, registry)
-                impossible = ImpossibleCheck(
-                    literal_text(literal), base, ImpossibleReason.ROUTING, label
-                )
+            declared = base_type_of(base) is not None
+            impossible = _declared_impossible(literal, base_type, declared, registry)
+        if impossible is None and not (
+            env_unsatisfiable(context_env) or env_unsatisfiable(routed_env)
+        ):
+            impossible = _context_impossible(
+                literal, base_type, context_env, routed_env, base_type_of, registry, routing
+            )
         if impossible is not None and all(impossible.text != seen.text for seen in found):
             found.append(impossible)
+    if not found:
+        never_runs = _never_runs(tree, base_type_of, registry, routing)
+        if never_runs is not None:
+            found.append(never_runs)
     return found
+
+
+def _context_impossible(
+    literal: CheckLiteral,
+    base_type: Optional[Type],
+    context_env: Env,
+    routed_env: Env,
+    base_type_of: BaseTypeOf,
+    registry: TypeRegistry,
+    routing: Env,
+) -> Optional[ImpossibleCheck]:
+    """The report a literal gets from what holds when it is evaluated, else `None`."""
+    base = literal.check.base
+    own = Holds(literal.check, literal.value)
+    text = literal_text(literal)
+    met = intersect_envs([context_env, _guard_env(own, base_type_of, registry, context_env)])
+    if met.get(base) == Members(()):
+        label = _fact_label(context_env.get(base), base_type, registry)
+        return ImpossibleCheck(
+            text, base, ImpossibleReason.CONTEXT, label, always_true=_always_true(literal)
+        )
+    if intersect_envs([routing, met]).get(base) != Members(()):
+        return None
+    routed_own = intersect_envs([routing, _guard_env(own, base_type_of, registry, routing)])
+    if routed_own.get(base) == Members(()):
+        label = _fact_label(routing.get(base), base_type, registry)
+        reason = ImpossibleReason.ROUTING
+    else:
+        label = _fact_label(routed_env.get(base), base_type, registry)
+        reason = ImpossibleReason.CONTEXT
+    return ImpossibleCheck(text, base, reason, label, always_true=_always_true(literal))
 
 
 def _close_match(word: str, options: Iterable[str]) -> Optional[str]:
@@ -857,7 +966,7 @@ def _close_match(word: str, options: Iterable[str]) -> Optional[str]:
 
 
 def impossible_check_message(check: ImpossibleCheck) -> str:
-    """Return the load error text for a check that can never be true.
+    """Return the load error text for an item of `impossible_checks`.
 
     Args:
         check (`ImpossibleCheck`):
@@ -866,28 +975,41 @@ def impossible_check_message(check: ImpossibleCheck) -> str:
     Returns:
         `str`:
             The message without a site prefix, such as: `` `isinstance(d.output, Text)`
-            can never be true: d.output is Decision, and no Decision value is a Text ``.
+            can never be true: d.output is declared Decision, and no Decision value fits
+            Text ``.
     """
     text = f"`{check.text}`"
-    if check.reason is ImpossibleReason.CONTEXT:
+    always = f", so `{check.always_true}` is always true" if check.always_true else ""
+    if check.reason in (ImpossibleReason.CONTEXT, ImpossibleReason.ROUTING):
+        why = (
+            "the checks before it"
+            if check.reason is ImpossibleReason.CONTEXT
+            else "the case branch that routes this node"
+        )
         return (
             f"{text} can never be true here: {check.base} is {check.base_label}, "
-            "by the checks before it"
+            f"by {why}{always}"
         )
-    if check.reason is ImpossibleReason.ROUTING:
+    if check.reason in (ImpossibleReason.NO_OVERLAP, ImpossibleReason.ALWAYS):
+        if check.declared:
+            base = f"{check.base} is declared {check.base_label}"
+        else:
+            base = f"{check.base} is {check.base_label} here, by the checks before it"
+        if check.reason is ImpossibleReason.ALWAYS:
+            return f"{text} can never be true: {base}{always}"
         return (
-            f"{text} can never be true here: {check.base} is {check.base_label}, "
-            "by the case branch that routes this node"
+            f"{text} can never be true: {base}, and no {check.base_label} value fits "
+            f"{check.type_label}"
         )
-    if check.reason is ImpossibleReason.NO_OVERLAP:
-        return (
-            f"{text} can never be true: {check.base} is {check.base_label}, "
-            f"and no {check.base_label} value is a {check.type_label}"
+    if check.reason is ImpossibleReason.NEVER_RUNS:
+        why = (
+            "the checks before it"
+            if check.declared
+            else "the case branch that routes this node"
         )
-    if check.reason is ImpossibleReason.ALWAYS:
         return (
-            f"{text} can never be true: {check.base} is {check.base_label}, "
-            f"and every {check.base_label} value is a {check.type_label}"
+            f"reference ${{{check.text}}} is never evaluated: no value of {check.base} can "
+            f"reach it, by {why}"
         )
     message = (
         f"{text} compares {check.base}.{check.field} with {check.value!r}, which is not "

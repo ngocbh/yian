@@ -6,9 +6,9 @@ from yian.compose.helpers.condition_guards import (
     NOTHING,
     AllOf,
     AnyOf,
+    CheckLiteral,
     Holds,
     IsinstanceCheck,
-    Literal,
     TagCheck,
     all_of,
     any_of,
@@ -164,6 +164,12 @@ def test_proves_nothing_for_other_expressions():
     assert _p(f"n > 1 or {_A}") == NOTHING
     assert _p(f"({_A}) :- false") == NOTHING
     assert _p("true") == NOTHING
+    # A false `and` (a true `or`) may be decided by an operand that proves nothing.
+    assert _p(f"{_A} and n > 1", False) == NOTHING
+    assert _p(f"{_A} and n > 1 and {_B}", False) == NOTHING
+    assert _p(f"not {_A} or n > 1") == NOTHING
+    assert _p(f"{_A} and n > 1") == Holds(A, True)
+    assert _p(f"not {_A} or n > 1", False) == Holds(A, True)
 
 
 # --------------------------------------------------------------------------- #
@@ -179,6 +185,11 @@ def test_a_read_after_an_or_check_is_guarded_by_its_falsity():
     assert _guard_of("not isinstance(v, Buy) or v.qty > 0", "v.qty") == Holds(A, True)
     assert _guard_of('v.action != "sell" or v.qty > 0', "v.qty") == Holds(B, True)
     assert _guard_of("isinstance(v, Buy) or v.qty > 0", "v.qty") == Holds(A, False)
+
+
+def test_a_read_after_an_and_with_a_non_check_is_unguarded():
+    assert _guard_of("(isinstance(v, Buy) and n > 1) or v.qty > 0", "v.qty") == NOTHING
+    assert _guard_of("(not isinstance(v, Buy) or n > 1) and v.qty > 0", "v.qty") == NOTHING
 
 
 def test_a_check_after_the_read_does_not_guard_it():
@@ -259,7 +270,7 @@ def test_guard_checks_and_conjuncts():
 # --------------------------------------------------------------------------- #
 
 
-def _literals(text: str) -> list[Literal]:
+def _literals(text: str) -> list[CheckLiteral]:
     """Each literal of `text` with its context."""
     return literals_in_context(parse_condition(text))
 
@@ -267,19 +278,19 @@ def _literals(text: str) -> list[Literal]:
 def test_a_literal_carries_the_context_before_it():
     literals = _literals("isinstance(v, Buy) and v.action == 'hold'")
     assert literals == [
-        Literal(NOTHING, A, True, False),
-        Literal(Holds(A, True), TagCheck("v", "action", "hold"), True, False),
+        CheckLiteral(NOTHING, A, True, False),
+        CheckLiteral(Holds(A, True), TagCheck("v", "action", "hold"), True, False),
     ]
 
 
 def test_a_negated_check_is_one_literal():
     literals = _literals("not isinstance(v, Buy) or x")
-    assert literals == [Literal(NOTHING, A, False, True)]
+    assert literals == [CheckLiteral(NOTHING, A, False, True)]
     assert _literals("not not isinstance(v, T)") == [
-        Literal(NOTHING, IsinstanceCheck("v", "T"), True, False)
+        CheckLiteral(NOTHING, IsinstanceCheck("v", "T"), True, False)
     ]
     assert _literals("v.action != 'buy'") == [
-        Literal(NOTHING, TagCheck("v", "action", "buy"), False, False)
+        CheckLiteral(NOTHING, TagCheck("v", "action", "buy"), False, False)
     ]
 
 
@@ -289,16 +300,16 @@ def test_literals_are_only_in_boolean_positions():
     assert _literals("[isinstance(v, Buy)] == x") == []
     assert _literals("(v.action == 'buy') | false") == []
     assert _literals("(isinstance(v, Buy) and n > 1) :- false") == [
-        Literal(NOTHING, A, True, False)
+        CheckLiteral(NOTHING, A, True, False)
     ]
-    assert _literals("isinstance(v, Buy) :? 'need v'") == [Literal(NOTHING, A, True, False)]
+    assert _literals("isinstance(v, Buy) :? 'need v'") == [CheckLiteral(NOTHING, A, True, False)]
 
 
 def test_literals_under_not_of_a_group_see_their_own_context():
     literals = _literals(f"not ({_A} and {_B})")
     assert literals == [
-        Literal(NOTHING, A, True, False),
-        Literal(Holds(A, True), B, True, False),
+        CheckLiteral(NOTHING, A, True, False),
+        CheckLiteral(Holds(A, True), B, True, False),
     ]
 
 

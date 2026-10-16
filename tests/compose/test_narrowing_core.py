@@ -19,7 +19,7 @@ from yian.compose.helpers.narrowing_facts import (
     ImpossibleReason,
     check_fact,
     guard_env,
-    guard_unsatisfiable,
+    env_unsatisfiable,
     guarded_read_types,
     impossible_check_message,
     impossible_checks,
@@ -418,13 +418,13 @@ def test_guard_env_types_a_member_only_base_through_the_checks_before_it():
     }
 
 
-def test_guard_unsatisfiable():
-    assert guard_unsatisfiable({"v": Members(())})
-    assert guard_unsatisfiable({"w": Exact(BUY), "v": Members(())})
-    assert not guard_unsatisfiable({"v": Members((), nullable=True)})
-    assert not guard_unsatisfiable({"v": Exact(BUY)})
-    assert not guard_unsatisfiable({})
-    assert guard_unsatisfiable(_env("isinstance(v, Buy) and v.action == 'hold'", v=DECISION))
+def test_env_unsatisfiable():
+    assert env_unsatisfiable({"v": Members(())})
+    assert env_unsatisfiable({"w": Exact(BUY), "v": Members(())})
+    assert not env_unsatisfiable({"v": Members((), nullable=True)})
+    assert not env_unsatisfiable({"v": Exact(BUY)})
+    assert not env_unsatisfiable({})
+    assert env_unsatisfiable(_env("isinstance(v, Buy) and v.action == 'hold'", v=DECISION))
 
 
 def _reads(read: str, condition: str, **declared):
@@ -455,6 +455,8 @@ def test_guarded_read_types_without_a_fact_for_the_read():
     assert _reads("w.qty", "isinstance(v, Buy)", v=DECISION) == []
     assert _reads("vv.qty", "isinstance(v, Buy)", v=DECISION) == []
     assert _reads("v.qty", "n > 1", v=DECISION) == []
+    # `isinstance(v, Buy) and n > 1` may be false through `n > 1`, so `v` keeps every member.
+    assert _reads("v.qty", "not (isinstance(v, Buy) and n > 1)", v=DECISION) == []
 
 
 def test_guarded_read_types_keeps_each_conjunct_s_candidate():
@@ -474,7 +476,10 @@ def test_guarded_read_types_of_an_unreachable_read_is_none():
 # Impossible checks and narrowed read messages
 # --------------------------------------------------------------------------- #
 
-_MAYBE_REGISTRY = read_typedefs({**_TYPEDEFS, "MaybeText": "Optional(Text)"})
+_MORE_REGISTRY = read_typedefs(
+    {**_TYPEDEFS, "MaybeText": "Optional(Text)", "OptBuy": "Optional(Buy)"}
+)
+BOOL = _t("bool")
 
 
 def _impossible(condition: str, registry=_REGISTRY, routing=None, **declared) -> list[str]:
@@ -497,9 +502,6 @@ def test_a_check_the_checks_before_it_rule_out_is_impossible():
     assert impossible_check_message(found[0]) == (
         '`v.action == "hold"` can never be true here: v is Buy, by the checks before it'
     )
-    assert _impossible("isinstance(v, Buy) and not isinstance(v, Buy)", v=DECISION) == [
-        "`not isinstance(v, Buy)` can never be true here: v is Buy, by the checks before it"
-    ]
     assert _impossible("not isinstance(v, Buy) or v.action == 'hold'", v=DECISION) == [
         '`v.action == "hold"` can never be true here: v is Buy, by the checks before it'
     ]
@@ -509,7 +511,18 @@ def test_a_check_the_checks_before_it_rule_out_is_impossible():
     ]
 
 
-def test_a_tag_value_no_member_has_is_impossible():
+def test_a_check_the_checks_before_it_make_always_true_says_so():
+    assert _impossible("isinstance(v, Buy) and not isinstance(v, Buy)", v=DECISION) == [
+        "`not isinstance(v, Buy)` can never be true here: v is Buy, by the checks before it, "
+        "so `isinstance(v, Buy)` is always true"
+    ]
+    assert _impossible("isinstance(v, Buy) and v.action != 'buy'", v=DECISION) == [
+        '`v.action != "buy"` can never be true here: v is Buy, by the checks before it, '
+        'so `v.action == "buy"` is always true'
+    ]
+
+
+def test_a_tag_value_no_member_has_is_reported():
     message = (
         "compares v.action with 'biy', which is not one of its tags (buy, hold, sell); "
         "did you mean 'buy'?"
@@ -529,29 +542,57 @@ def test_a_tag_value_no_member_has_is_impossible():
 
 def test_an_isinstance_the_declared_type_rules_out_is_impossible():
     message = (
-        "`isinstance(v, Text)` can never be true: v is Decision, and no Decision value is a Text"
+        "`isinstance(v, Text)` can never be true: v is declared Decision, "
+        "and no Decision value fits Text"
     )
     assert _impossible("isinstance(v, Text)", v=DECISION) == [message]
     assert _impossible("not not isinstance(v, Text)", v=DECISION) == [message]
     assert _impossible("not isinstance(v, Text)", v=DECISION) == []
     # A missing value is checked as null, which a nullable type admits.
-    assert _impossible("isinstance(v, MaybeText)", registry=_MAYBE_REGISTRY, v=DECISION) == []
+    assert _impossible("isinstance(v, MaybeText)", registry=_MORE_REGISTRY, v=DECISION) == []
+    assert _impossible("isinstance(v, int)", v=BOOL) == [
+        "`isinstance(v, int)` can never be true: v is declared bool, and no bool value fits int"
+    ]
+
+
+def test_an_isinstance_on_a_nested_base_the_type_rules_out_is_impossible():
+    assert _impossible("isinstance(v.leg, Text)", v=BUY, v__leg=_t("Leg")) == [
+        "`isinstance(v.leg, Text)` can never be true: v.leg is declared Leg, "
+        "and no Leg value fits Text"
+    ]
+    # `leg` is only on `Buy`, so its type comes from the check before it.
+    assert _impossible("isinstance(v, Buy) and isinstance(v.leg, Text)", v=DECISION) == [
+        "`isinstance(v.leg, Text)` can never be true: v.leg is Leg here, "
+        "by the checks before it, and no Leg value fits Text"
+    ]
 
 
 def test_a_negated_isinstance_the_declared_type_always_passes_is_impossible():
     assert _impossible("not isinstance(v, Buy)", v=BUY) == [
-        "`not isinstance(v, Buy)` can never be true: v is Buy, and every Buy value is a Buy"
+        "`not isinstance(v, Buy)` can never be true: v is declared Buy, "
+        "so `isinstance(v, Buy)` is always true"
     ]
     assert _impossible("not isinstance(v, BuyOrSell)", v=BUY) == [
-        "`not isinstance(v, BuyOrSell)` can never be true: v is Buy, and every Buy value is "
-        "a BuyOrSell"
+        "`not isinstance(v, BuyOrSell)` can never be true: v is declared Buy, "
+        "so `isinstance(v, BuyOrSell)` is always true"
     ]
     assert _impossible("not isinstance(v, Decision)", v=DECISION) == [
-        "`not isinstance(v, Decision)` can never be true: v is Decision, and every Decision "
-        "value is a Decision"
+        "`not isinstance(v, Decision)` can never be true: v is declared Decision, "
+        "so `isinstance(v, Decision)` is always true"
     ]
     assert _impossible("not isinstance(v, Buy)", v=replace(BUY, nullable=True)) == []
     assert _impossible("isinstance(v, Buy)", v=BUY) == []
+
+
+def test_a_negated_isinstance_of_a_nullable_typedef():
+    nullable_buy = replace(BUY, nullable=True)
+    expected = "so `isinstance(v, OptBuy)` is always true"
+    assert _impossible("not isinstance(v, OptBuy)", registry=_MORE_REGISTRY, v=nullable_buy) == [
+        f"`not isinstance(v, OptBuy)` can never be true: v is declared Optional(Buy), {expected}"
+    ]
+    assert _impossible("not isinstance(v, OptBuy)", registry=_MORE_REGISTRY, v=BUY) == [
+        f"`not isinstance(v, OptBuy)` can never be true: v is declared Buy, {expected}"
+    ]
 
 
 def test_possible_checks_are_not_reported():
@@ -559,6 +600,9 @@ def test_possible_checks_are_not_reported():
     assert _impossible("isinstance(v, Buy) and v.action == 'buy'", v=DECISION) == []
     assert _impossible("(v.action == 'biy') == true", v=DECISION) == []
     assert _impossible("v.qty == 'x'", v=DECISION) == []
+    # An always-true check is no error on its own.
+    assert _impossible("isinstance(v, Decision)", v=DECISION) == []
+    assert _impossible("isinstance(v, Decision) and v.qty > 0", v=DECISION) == []
 
 
 def test_unproven_bases_and_lost_facts_prove_nothing_impossible():
@@ -587,6 +631,34 @@ def test_each_impossible_check_is_reported_once_and_only_first():
     ) == ['`v.action == "hold"` can never be true here: v is Buy, by the checks before it']
 
 
+def test_code_after_an_always_true_check_is_reported():
+    # The not-a-tag text is wrong whatever runs before it.
+    assert _impossible("isinstance(v, Decision) or v.action == 'biy'", v=DECISION) == [
+        "`v.action == \"biy\"` compares v.action with 'biy', which is not one of its tags "
+        "(buy, hold, sell); did you mean 'buy'?"
+    ]
+    found = impossible_checks(
+        parse_condition("isinstance(v, Decision) or v.nosuch > 0"), _types(v=DECISION), _REGISTRY
+    )
+    assert [(c.text, c.base, c.reason) for c in found] == [
+        ("v.nosuch", "v", ImpossibleReason.NEVER_RUNS)
+    ]
+    assert impossible_check_message(found[0]) == (
+        "reference ${v.nosuch} is never evaluated: no value of v can reach it, "
+        "by the checks before it"
+    )
+    condition = "v.action == 'buy' or isinstance(v, Decision) or v.qty > w"
+    assert _impossible(condition, v=DECISION) == [
+        "reference ${v.qty} is never evaluated: no value of v can reach it, "
+        "by the checks before it"
+    ]
+    # Another error in the condition already stops it from loading.
+    assert _impossible("isinstance(v, Text) or isinstance(v, Decision) or v.x", v=DECISION) == [
+        "`isinstance(v, Text)` can never be true: v is declared Decision, "
+        "and no Decision value fits Text"
+    ]
+
+
 def test_a_check_the_routing_rules_out_is_impossible():
     assert _impossible("v.action == 'hold'", routing={"v": Members((BUY,))}, v=DECISION) == [
         '`v.action == "hold"` can never be true here: v is Buy, '
@@ -595,8 +667,33 @@ def test_a_check_the_routing_rules_out_is_impossible():
     assert _impossible(
         "v.action == 'buy'", routing={"v": Members((BUY, SELL))}, v=DECISION
     ) == []
+    assert _impossible(
+        "not isinstance(v, Sell) and isinstance(v, Hold)",
+        routing={"v": Members((BUY, SELL))},
+        v=DECISION,
+    ) == [
+        "`isinstance(v, Hold)` can never be true here: v is Buy | Sell, "
+        "by the case branch that routes this node"
+    ]
     # A node the routing never runs gets no impossible checks.
     assert _impossible("v.action == 'hold'", routing={"v": Members(())}, v=DECISION) == []
+
+
+def test_routing_and_the_checks_together_use_the_checks_wording():
+    assert _impossible(
+        "not isinstance(v, Buy) and v.action != 'sell'",
+        routing={"v": Members((BUY, SELL))},
+        v=DECISION,
+    ) == [
+        '`v.action != "sell"` can never be true here: v is Sell, by the checks before it, '
+        'so `v.action == "sell"` is always true'
+    ]
+    assert _impossible(
+        "isinstance(v, Buy) or v.qty > 0", routing={"v": Members((BUY,))}, v=DECISION
+    ) == [
+        "reference ${v.qty} is never evaluated: no value of v can reach it, "
+        "by the case branch that routes this node"
+    ]
 
 
 def test_narrowed_type_label_names_members():

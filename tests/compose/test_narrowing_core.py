@@ -16,10 +16,15 @@ from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.isinstance_types import isinstance_members
 from yian.compose.helpers.narrowing_facts import (
     NOT_NARROWABLE,
+    ImpossibleReason,
     check_fact,
     guard_env,
     guard_unsatisfiable,
     guarded_read_types,
+    impossible_check_message,
+    impossible_checks,
+    narrowed_read_message,
+    narrowed_type_label,
     not_isinstance_fact,
     tag_fact,
     unresolved_type,
@@ -46,26 +51,25 @@ from yian.expr import parse_condition
 from yian.nodes.contracts import ContractOrigins, PartialRecordContract, ValueContract
 from yian.typesys import Type, TypeCheckError, ValueKind
 from yian.typesys.types import read_typedefs
-from yian.typesys.values import types_overlap
+from yian.typesys.values import canonical_type_label, types_overlap
 
-_REGISTRY = read_typedefs(
-    {
-        "Limit": {"type": "Literal(limit)", "price": "float"},
-        "Market": {"type": "Literal(market)"},
-        "Leg": "Union(Limit, Market)",
-        "Buy": {"action": "Literal(buy)", "qty": "int", "leg": "Leg"},
-        "Hold": {"action": "Literal(hold)"},
-        "Sell": {"action": "Literal(sell)", "qty": "int", "price": "float"},
-        "Decision": "Union(Buy, Hold, Sell)",
-        "BuyOrSell": "Union(Buy, Sell)",
-        "Text": {"text": "str"},
-        "Cancel": {"action": "Literal(cancel)", "reason": "str"},
-        "Rest": "Union(Hold, Sell, Cancel)",
-        "Wide": {"action": "Literal(buy, cancel)", "qty": "int", "leg": "Leg"},
-        "SellOrWide": "Union(Sell, Wide)",
-        "TextOrWide": "Union(Text, Wide)",
-    }
-)
+_TYPEDEFS = {
+    "Limit": {"type": "Literal(limit)", "price": "float"},
+    "Market": {"type": "Literal(market)"},
+    "Leg": "Union(Limit, Market)",
+    "Buy": {"action": "Literal(buy)", "qty": "int", "leg": "Leg"},
+    "Hold": {"action": "Literal(hold)"},
+    "Sell": {"action": "Literal(sell)", "qty": "int", "price": "float"},
+    "Decision": "Union(Buy, Hold, Sell)",
+    "BuyOrSell": "Union(Buy, Sell)",
+    "Text": {"text": "str"},
+    "Cancel": {"action": "Literal(cancel)", "reason": "str"},
+    "Rest": "Union(Hold, Sell, Cancel)",
+    "Wide": {"action": "Literal(buy, cancel)", "qty": "int", "leg": "Leg"},
+    "SellOrWide": "Union(Sell, Wide)",
+    "TextOrWide": "Union(Text, Wide)",
+}
+_REGISTRY = read_typedefs(_TYPEDEFS)
 
 
 def _t(name: str) -> Type:
@@ -464,6 +468,158 @@ def test_guarded_read_types_keeps_each_conjunct_s_candidate():
 def test_guarded_read_types_of_an_unreachable_read_is_none():
     assert _reads("v.qty", "isinstance(v, Buy) and v.action == 'hold'", v=DECISION) is None
     assert _reads("v.qty", "v.action == 'zzz'", v=DECISION) is None
+
+
+# --------------------------------------------------------------------------- #
+# Impossible checks and narrowed read messages
+# --------------------------------------------------------------------------- #
+
+_MAYBE_REGISTRY = read_typedefs({**_TYPEDEFS, "MaybeText": "Optional(Text)"})
+
+
+def _impossible(condition: str, registry=_REGISTRY, routing=None, **declared) -> list[str]:
+    """The impossible-check messages of `condition`, with the bases typed by `declared`."""
+    found = impossible_checks(
+        parse_condition(condition), _types(**declared), registry, routing=routing
+    )
+    return [impossible_check_message(check) for check in found]
+
+
+def test_a_check_the_checks_before_it_rule_out_is_impossible():
+    found = impossible_checks(
+        parse_condition("isinstance(v, Buy) and v.action == 'hold'"),
+        _types(v=DECISION),
+        _REGISTRY,
+    )
+    assert [(c.text, c.base, c.reason) for c in found] == [
+        ('v.action == "hold"', "v", ImpossibleReason.CONTEXT)
+    ]
+    assert impossible_check_message(found[0]) == (
+        '`v.action == "hold"` can never be true here: v is Buy, by the checks before it'
+    )
+    assert _impossible("isinstance(v, Buy) and not isinstance(v, Buy)", v=DECISION) == [
+        "`not isinstance(v, Buy)` can never be true here: v is Buy, by the checks before it"
+    ]
+    assert _impossible("not isinstance(v, Buy) or v.action == 'hold'", v=DECISION) == [
+        '`v.action == "hold"` can never be true here: v is Buy, by the checks before it'
+    ]
+    assert _impossible("v.action != 'buy' and isinstance(v, Buy)", v=DECISION) == [
+        "`isinstance(v, Buy)` can never be true here: v is Hold | Sell, "
+        "by the checks before it"
+    ]
+
+
+def test_a_tag_value_no_member_has_is_impossible():
+    message = (
+        "compares v.action with 'biy', which is not one of its tags (buy, hold, sell); "
+        "did you mean 'buy'?"
+    )
+    assert _impossible("v.action == 'biy'", v=DECISION) == [f'`v.action == "biy"` {message}']
+    assert _impossible("v.action != 'biy'", v=DECISION) == [f'`v.action != "biy"` {message}']
+    assert _impossible("v.action == 'zzzz'", v=DECISION) == [
+        "`v.action == \"zzzz\"` compares v.action with 'zzzz', which is not one of its tags "
+        "(buy, hold, sell)"
+    ]
+    # A field only `Buy` has is typed through the check before it.
+    assert _impossible("v.action == 'buy' and v.leg.type == 'lmit'", v=DECISION) == [
+        "`v.leg.type == \"lmit\"` compares v.leg.type with 'lmit', which is not one of its "
+        "tags (limit, market); did you mean 'limit'?"
+    ]
+
+
+def test_an_isinstance_the_declared_type_rules_out_is_impossible():
+    message = (
+        "`isinstance(v, Text)` can never be true: v is Decision, and no Decision value is a Text"
+    )
+    assert _impossible("isinstance(v, Text)", v=DECISION) == [message]
+    assert _impossible("not not isinstance(v, Text)", v=DECISION) == [message]
+    assert _impossible("not isinstance(v, Text)", v=DECISION) == []
+    # A missing value is checked as null, which a nullable type admits.
+    assert _impossible("isinstance(v, MaybeText)", registry=_MAYBE_REGISTRY, v=DECISION) == []
+
+
+def test_a_negated_isinstance_the_declared_type_always_passes_is_impossible():
+    assert _impossible("not isinstance(v, Buy)", v=BUY) == [
+        "`not isinstance(v, Buy)` can never be true: v is Buy, and every Buy value is a Buy"
+    ]
+    assert _impossible("not isinstance(v, BuyOrSell)", v=BUY) == [
+        "`not isinstance(v, BuyOrSell)` can never be true: v is Buy, and every Buy value is "
+        "a BuyOrSell"
+    ]
+    assert _impossible("not isinstance(v, Decision)", v=DECISION) == [
+        "`not isinstance(v, Decision)` can never be true: v is Decision, and every Decision "
+        "value is a Decision"
+    ]
+    assert _impossible("not isinstance(v, Buy)", v=replace(BUY, nullable=True)) == []
+    assert _impossible("isinstance(v, Buy)", v=BUY) == []
+
+
+def test_possible_checks_are_not_reported():
+    assert _impossible("isinstance(v, Buy) or isinstance(v, Sell)", v=DECISION) == []
+    assert _impossible("isinstance(v, Buy) and v.action == 'buy'", v=DECISION) == []
+    assert _impossible("(v.action == 'biy') == true", v=DECISION) == []
+    assert _impossible("v.qty == 'x'", v=DECISION) == []
+
+
+def test_unproven_bases_and_lost_facts_prove_nothing_impossible():
+    assert _impossible("isinstance(v, Buy) and v.action == 'hold'", v=OBJECT) == []
+    assert _impossible("isinstance(v, Buy) and v.action == 'hold'") == []
+    assert _impossible("isinstance(v, Buy) and isinstance(v, Text)", v=OBJECT) == []
+    assert _impossible("isinstance(v, Buy) and isinstance(v, Text)") == []
+    assert _impossible("isinstance(v, Nope)", v=DECISION) == []
+    assert _impossible("isinstance(v, Nope) and not isinstance(v, Nope)", v=DECISION) == []
+
+    def base_type_of(base):
+        return NOT_NARROWABLE
+
+    tree = parse_condition("isinstance(v, Text) and v.action == 'biy'")
+    assert impossible_checks(tree, base_type_of, _REGISTRY) == []
+
+
+def test_each_impossible_check_is_reported_once_and_only_first():
+    assert _impossible("v.action == 'biy' or v.action == 'biy'", v=DECISION) == [
+        '`v.action == "biy"` compares v.action with \'biy\', which is not one of its tags '
+        "(buy, hold, sell); did you mean 'buy'?"
+    ]
+    # Once the checks before a literal can't all hold, it is not reported again.
+    assert _impossible(
+        "isinstance(v, Buy) and v.action == 'hold' and v.action == 'sell'", v=DECISION
+    ) == ['`v.action == "hold"` can never be true here: v is Buy, by the checks before it']
+
+
+def test_a_check_the_routing_rules_out_is_impossible():
+    assert _impossible("v.action == 'hold'", routing={"v": Members((BUY,))}, v=DECISION) == [
+        '`v.action == "hold"` can never be true here: v is Buy, '
+        "by the case branch that routes this node"
+    ]
+    assert _impossible(
+        "v.action == 'buy'", routing={"v": Members((BUY, SELL))}, v=DECISION
+    ) == []
+    # A node the routing never runs gets no impossible checks.
+    assert _impossible("v.action == 'hold'", routing={"v": Members(())}, v=DECISION) == []
+
+
+def test_narrowed_type_label_names_members():
+    assert narrowed_type_label(BUY, _REGISTRY) == "Buy"
+    assert narrowed_type_label(BUY_OR_SELL, _REGISTRY) == "Buy | Sell"
+    assert narrowed_type_label(replace(BUY_OR_SELL, nullable=True), _REGISTRY) == (
+        "Optional(Buy | Sell)"
+    )
+    assert narrowed_type_label(replace(BUY, nullable=True), _REGISTRY) == "Optional(Buy)"
+    anonymous = replace(TEXT, fields={"note": Type.scalar(ValueKind.STRING)})
+    assert narrowed_type_label(anonymous, _REGISTRY) == canonical_type_label(anonymous)
+    assert narrowed_type_label(_t("SellOrWide"), _REGISTRY) == "Wide | Sell"
+
+
+def test_narrowed_read_message():
+    assert narrowed_read_message("r.answr", "answr", "Done", "r", ["answer"]) == (
+        "reference ${r.answr} reads field 'answr', which Done doesn't have; r is Done here, "
+        "by the checks before this read; did you mean 'answer'?"
+    )
+    assert narrowed_read_message("v.qty", "qty", "Hold", "v", ["action"]) == (
+        "reference ${v.qty} reads field 'qty', which Hold doesn't have; v is Hold here, "
+        "by the checks before this read"
+    )
 
 
 def test_isinstance_members_keeps_the_shared_members_only_when_nothing_else_can_pass():

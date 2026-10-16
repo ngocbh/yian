@@ -6,18 +6,22 @@ intersection (both hold); losing a fact is always sound. The facts a check prove
 from `check_fact`: a true or false `isinstance`, or a true or false comparison of a union's
 tag field with a text. `guard_env` evaluates a guard from `condition_guards` into the facts
 that hold whenever it does, and `guarded_read_types` gives the types a field read under a
-guard is checked against.
+guard is checked against. `impossible_checks` finds the checks in a condition that can never
+be true, and the message helpers word those errors and a narrowed read's error.
 
 Knows about: `typesys` types and unions, `compile.validation`, `isinstance` type
-resolution, condition guards, and output-contract projection.
+resolution, condition guards, output-contract projection, and type labels.
 Never imports: `compose.validate`, runtime.
 """
 
 from __future__ import annotations
 
+import difflib
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Callable, Optional, Sequence, TypeAlias
+from typing import Callable, Iterable, Optional, Sequence, TypeAlias
+
+from lark import Token, Tree
 
 from yian.compile.validation import types_compatible
 from yian.compose.helpers.condition_guards import (
@@ -26,14 +30,20 @@ from yian.compose.helpers.condition_guards import (
     Guard,
     Holds,
     IsinstanceCheck,
+    Literal,
+    TagCheck,
+    all_of,
     conjuncts,
     guard_checks,
+    literal_text,
+    literals_in_context,
 )
 from yian.compose.helpers.isinstance_types import (
     isinstance_members,
     resolve_isinstance_type,
 )
 from yian.compose.helpers.output_contracts import project_output_contract
+from yian.compose.helpers.tags import CLOSE_MATCH_CUTOFF, named_type_label
 from yian.nodes.contracts import ValueContract
 from yian.typesys import TypeCheckError
 from yian.typesys.types import TypeRegistry
@@ -41,6 +51,7 @@ from yian.typesys.values import (
     Type,
     ValueKind,
     canonical_union_order,
+    types_overlap,
     union_tag_fields,
 )
 
@@ -50,6 +61,8 @@ __all__ = [
     "Env",
     "Exact",
     "Fact",
+    "ImpossibleCheck",
+    "ImpossibleReason",
     "Members",
     "NotNarrowable",
     "check_fact",
@@ -57,10 +70,14 @@ __all__ = [
     "guard_env",
     "guard_unsatisfiable",
     "guarded_read_types",
+    "impossible_check_message",
+    "impossible_checks",
     "intersect_envs",
     "intersect_facts",
     "isinstance_fact",
     "members_type",
+    "narrowed_read_message",
+    "narrowed_type_label",
     "not_isinstance_fact",
     "tag_fact",
     "union_envs",
@@ -621,3 +638,294 @@ def guarded_read_types(
         if candidate not in candidates:
             candidates.append(candidate)
     return candidates
+
+
+# --------------------------------------------------------------------------- #
+# Impossible checks and messages
+# --------------------------------------------------------------------------- #
+
+
+class ImpossibleReason(Enum):
+    """Why a check in a condition can never be true."""
+
+    CONTEXT = "context"
+    """The checks evaluated before it rule it out."""
+    ROUTING = "routing"
+    """The case branch that routes the node rules it out."""
+    NO_OVERLAP = "no overlap"
+    """An `isinstance` names a type no value of the base's declared type can be."""
+    ALWAYS = "always"
+    """A negated `isinstance` names a type every value of the base's declared type is."""
+    NOT_A_TAG = "not a tag"
+    """A tag comparison's text is not a tag of the base union's tag field."""
+
+
+@dataclass(frozen=True)
+class ImpossibleCheck:
+    """A check in a condition that can never be true, and why.
+
+    Args:
+        text (`str`):
+            The literal's canonical source, such as `not isinstance(v, Buy)`.
+        base (`str`):
+            The checked base path.
+        reason (`ImpossibleReason`):
+            Why it can never be true.
+        base_label (`str`):
+            The base's type: narrowed for `CONTEXT` and `ROUTING`, declared for
+            `NO_OVERLAP`, `ALWAYS` and `NOT_A_TAG`.
+        type_label (`str`, *optional*, defaults to `""`):
+            The type an `isinstance` names, for `NO_OVERLAP` and `ALWAYS`.
+        value (`str`, *optional*, defaults to `""`):
+            The compared text, for `NOT_A_TAG`.
+        field (`str`, *optional*, defaults to `""`):
+            The compared field, for `NOT_A_TAG`.
+        tags (`tuple[str, ...]`, *optional*, defaults to `()`):
+            The tag field's tags, sorted, for `NOT_A_TAG`.
+    """
+
+    text: str
+    base: str
+    reason: ImpossibleReason
+    base_label: str
+    type_label: str = ""
+    value: str = ""
+    field: str = ""
+    tags: tuple[str, ...] = ()
+
+
+def narrowed_type_label(typ: Type, registry: TypeRegistry) -> str:
+    """Return a narrowed type's label for a message, naming a union member by member.
+
+    Args:
+        typ (`Type`):
+            A narrowed type, such as a `fact_type` result.
+        registry (`TypeRegistry`):
+            The flow's typedefs.
+
+    Returns:
+        `str`:
+            A union's members by typedef name joined by ` | ` (`Buy | Sell`), inside
+            `Optional(...)` when it is nullable; any other type by `named_type_label`,
+            which falls back to the structural label for an anonymous type.
+    """
+    if typ.variants is None:
+        return named_type_label(typ, registry)
+    label = " | ".join(named_type_label(member, registry) for member in typ.variants)
+    return f"Optional({label})" if typ.nullable else label
+
+
+def _fact_label(fact: Optional[Fact], fallback: Optional[Type], registry: TypeRegistry) -> str:
+    """The label of the type a base has under `fact`, else of `fallback`."""
+    typ = fact_type(fact) if fact is not None else None
+    if typ is None:
+        typ = fallback
+    return narrowed_type_label(typ, registry) if typ is not None else "unknown"
+
+
+def _is_open(typ: Type) -> bool:
+    """Whether every value fits `typ`'s kind: `Any`, or a plain `object`."""
+    if typ.kind is ValueKind.ANY:
+        return True
+    return typ.kind is ValueKind.OBJECT and typ.fields is None and typ.variants is None
+
+
+def _declared_impossible(
+    literal: Literal,
+    base_type: Type,
+    registry: TypeRegistry,
+) -> Optional[ImpossibleCheck]:
+    """The impossible check a literal is against its base's declared type alone, else `None`."""
+    check = literal.check
+    text = literal_text(literal)
+    if isinstance(check, TagCheck):
+        if base_type.variants is None or check.field not in union_tag_fields(base_type):
+            return None
+        tags = tuple(
+            sorted(tag for member in base_type.variants for tag in member.fields[check.field].tags)
+        )
+        if check.value in tags:
+            return None
+        return ImpossibleCheck(
+            text,
+            check.base,
+            ImpossibleReason.NOT_A_TAG,
+            named_type_label(base_type, registry),
+            value=check.value,
+            field=check.field,
+            tags=tags,
+        )
+    if _is_open(base_type):
+        return None
+    try:
+        typ = resolve_isinstance_type(check.type_name, registry)
+    except TypeCheckError:
+        return None
+    labels = (named_type_label(base_type, registry), named_type_label(typ, registry))
+    if literal.value:
+        # A missing value is checked as null, which a nullable type admits.
+        if typ.nullable or types_overlap(base_type, typ):
+            return None
+        return ImpossibleCheck(text, check.base, ImpossibleReason.NO_OVERLAP, *labels)
+    # A null base fails a non-nullable check, so its negation can hold.
+    if base_type.nullable and not typ.nullable:
+        return None
+    strict, strict_base = replace(typ, nullable=False), replace(base_type, nullable=False)
+    wanted = strict.variants or (strict,)
+    if not all(_contains(wanted, member) for member in strict_base.variants or (strict_base,)):
+        return None
+    return ImpossibleCheck(text, check.base, ImpossibleReason.ALWAYS, *labels)
+
+
+def impossible_checks(
+    tree: Tree | Token,
+    base_type_of: BaseTypeOf,
+    registry: TypeRegistry,
+    *,
+    routing: Optional[Env] = None,
+) -> list[ImpossibleCheck]:
+    """Return the checks in a condition that can never be true.
+
+    Each literal in a boolean position (a check, or `not` applied to one) is tested
+    against what holds when it is evaluated. It can never be true when, against its
+    base's declared type alone, an `isinstance` names a type no value of it can be (not
+    for a nullable type: a missing value is checked as null), a negated `isinstance`
+    names a type every value of it is, or a tag comparison's text is not a tag of the
+    union's tag field; or when the checks before it, met with what the literal proves,
+    leave its base no member and no null. With `routing`, a literal the routing facts
+    rule out is reported too. Unproven, `object` and `Any` bases, unknown type names,
+    bases `base_type_of` refuses, and facts lost to an intersection prove nothing
+    impossible. A literal whose context already can't hold (an earlier literal is
+    impossible) is not reported, and each literal text is reported once.
+
+    Args:
+        tree (`Tree | Token`):
+            A condition parsed with `parse_condition`.
+        base_type_of (`BaseTypeOf`):
+            The site's declared type of a base path, as for `guard_env`.
+        registry (`TypeRegistry`):
+            The flow's typedefs.
+        routing (`Env | None`, *optional*, defaults to `None`):
+            The facts that hold wherever the condition is evaluated, such as a CASE
+            node's routing facts. `None` is none.
+
+    Returns:
+        `list[ImpossibleCheck]`:
+            The impossible literals in source order.
+
+    Example:
+        With `v` a `Union[Buy, Hold, Sell]` tagged by `action`,
+        `isinstance(v, Buy) and v.action == 'hold'` gives one `CONTEXT` check on
+        `v.action == "hold"`, whose base is narrowed to `Buy`.
+    """
+    routing = routing or {}
+    found: list[ImpossibleCheck] = []
+    for literal in literals_in_context(tree):
+        context_env = guard_env(literal.context, base_type_of, registry)
+        routed_env = intersect_envs([routing, context_env])
+        if guard_unsatisfiable(context_env) or guard_unsatisfiable(routed_env):
+            continue
+        base = literal.check.base
+        base_type = _base_type(base, base_type_of, context_env)
+        if base_type is NOT_NARROWABLE:
+            continue
+        impossible = None
+        if base_type is not None:
+            impossible = _declared_impossible(literal, base_type, registry)
+        if impossible is None:
+            own = Holds(literal.check, literal.value)
+            met = guard_env(all_of(literal.context, own), base_type_of, registry)
+            if met.get(base) == Members(()):
+                label = _fact_label(context_env.get(base), base_type, registry)
+                impossible = ImpossibleCheck(
+                    literal_text(literal), base, ImpossibleReason.CONTEXT, label
+                )
+            elif intersect_envs([routing, met]).get(base) == Members(()):
+                label = _fact_label(routed_env.get(base), base_type, registry)
+                impossible = ImpossibleCheck(
+                    literal_text(literal), base, ImpossibleReason.ROUTING, label
+                )
+        if impossible is not None and all(impossible.text != seen.text for seen in found):
+            found.append(impossible)
+    return found
+
+
+def _close_match(word: str, options: Iterable[str]) -> Optional[str]:
+    """The option closest to `word`, if one is close enough."""
+    matches = difflib.get_close_matches(word, list(options), n=1, cutoff=CLOSE_MATCH_CUTOFF)
+    return matches[0] if matches else None
+
+
+def impossible_check_message(check: ImpossibleCheck) -> str:
+    """Return the load error text for a check that can never be true.
+
+    Args:
+        check (`ImpossibleCheck`):
+            An item of `impossible_checks`.
+
+    Returns:
+        `str`:
+            The message without a site prefix, such as: `` `isinstance(d.output, Text)`
+            can never be true: d.output is Decision, and no Decision value is a Text ``.
+    """
+    text = f"`{check.text}`"
+    if check.reason is ImpossibleReason.CONTEXT:
+        return (
+            f"{text} can never be true here: {check.base} is {check.base_label}, "
+            "by the checks before it"
+        )
+    if check.reason is ImpossibleReason.ROUTING:
+        return (
+            f"{text} can never be true here: {check.base} is {check.base_label}, "
+            "by the case branch that routes this node"
+        )
+    if check.reason is ImpossibleReason.NO_OVERLAP:
+        return (
+            f"{text} can never be true: {check.base} is {check.base_label}, "
+            f"and no {check.base_label} value is a {check.type_label}"
+        )
+    if check.reason is ImpossibleReason.ALWAYS:
+        return (
+            f"{text} can never be true: {check.base} is {check.base_label}, "
+            f"and every {check.base_label} value is a {check.type_label}"
+        )
+    message = (
+        f"{text} compares {check.base}.{check.field} with {check.value!r}, which is not "
+        f"one of its tags ({', '.join(check.tags)})"
+    )
+    close = _close_match(check.value, check.tags)
+    return message if close is None else f"{message}; did you mean {close!r}?"
+
+
+def narrowed_read_message(
+    ref: str,
+    field: str,
+    narrowed_label: str,
+    base: str,
+    fields: Iterable[str],
+) -> str:
+    """Return the load error text for a read of a field its narrowed type doesn't have.
+
+    Args:
+        ref (`str`):
+            The dotted reference path read, such as `"r.answr"`.
+        field (`str`):
+            The field name the narrowed type lacks.
+        narrowed_label (`str`):
+            The narrowed type's label, from `narrowed_type_label`.
+        base (`str`):
+            The narrowed base path.
+        fields (`Iterable[str]`):
+            The narrowed type's field names, for a close-match hint.
+
+    Returns:
+        `str`:
+            Such as `reference ${r.answr} reads field 'answr', which Done doesn't have;
+            r is Done here, by the checks before this read; did you mean 'answer'?`.
+    """
+    message = (
+        f"reference ${{{ref}}} reads field {field!r}, which {narrowed_label} doesn't have; "
+        f"{base} is {narrowed_label} here, by the checks before this read"
+    )
+    close = _close_match(field, fields)
+    return message if close is None else f"{message}; did you mean {close!r}?"

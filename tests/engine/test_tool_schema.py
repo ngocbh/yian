@@ -1,10 +1,12 @@
 """Tool schemas come from a function's signature and docstring, with an optional ToolContext."""
 
 import dataclasses
-from typing import Annotated, Optional
+import functools
+import warnings
+from typing import Annotated, Optional, get_args, get_origin
 
 import pytest
-from pydantic import Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from pydantic.errors import PydanticInvalidForJsonSchema
 
 from yian.tools.context import ToolContext
@@ -47,7 +49,9 @@ def test_tool_context_is_a_frozen_generic_dataclass():
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
         ctx.attempt = 2
-    assert ToolContext[int] is not None
+    alias = ToolContext[int]
+    assert get_origin(alias) is ToolContext
+    assert get_args(alias) == (int,)
 
 
 def test_context_parameter_is_skipped_in_the_schema():
@@ -349,3 +353,92 @@ def test_async_functions_are_rejected():
         function_schema(f)
     with pytest.raises(TypeError, match="synchronously"):
         function_schema(Session().lookup)
+
+
+def test_variadic_items_keep_only_annotated_constraints():
+    def f(*args: Annotated[int, Field(ge=1, description="each")]) -> None:
+        return None
+
+    def g(**kwargs: Annotated[int, Field(ge=1, description="each")]) -> None:
+        return None
+
+    args_prop = function_schema(f).params_json_schema["properties"]["args"]
+    assert args_prop["items"] == {"type": "integer", "minimum": 1}
+    kwargs_prop = function_schema(g).params_json_schema["properties"]["kwargs"]
+    assert kwargs_prop["additionalProperties"] == {"type": "integer", "minimum": 1}
+
+
+def test_variadic_field_default_is_dropped_without_a_warning():
+    def f(*args: Annotated[int, Field(default=5)]) -> None:
+        return None
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        schema = function_schema(f)
+        prop = schema.params_json_schema["properties"]["args"]
+
+    assert caught == []
+    assert prop["items"] == {"type": "integer"}
+
+
+def test_parameter_pydantic_drops_is_rejected():
+    def f(model_config: str) -> None:
+        return None
+
+    with pytest.raises(TypeError, match="'f'.*'model_config'"):
+        function_schema(f)
+
+
+class _NoName:
+    def __call__(self, x: int) -> int:
+        return x
+
+
+def test_callable_without_a_name_needs_an_override():
+    with pytest.raises(TypeError, match="name_override"):
+        function_schema(_NoName())
+
+
+def test_nameless_callable_errors_use_the_override():
+    def add(x: int, y: int) -> int:
+        return x + y
+
+    with pytest.raises(TypeError, match="'adder'"):
+        function_schema(functools.partial(add, y=1), name_override="adder")
+
+
+class Order(BaseModel):
+    symbol: str
+
+
+def test_model_arguments_arrive_as_model_instances():
+    def f(order: Order, orders: list[Order]) -> None:
+        return None
+
+    schema = function_schema(f)
+    data = schema.params_model.model_validate(
+        {"order": {"symbol": "A"}, "orders": [{"symbol": "B"}]}
+    )
+
+    args, kwargs = schema.to_call_args(data)
+    assert kwargs == {}
+    assert args[0] == Order(symbol="A")
+    assert args[1] == [Order(symbol="B")]
+
+
+def test_positional_only_name_may_be_a_var_keyword_key():
+    def f(a: int, /, **kw: int) -> None:
+        return None
+
+    schema = function_schema(f)
+
+    assert schema.to_call_args(schema.params_model(a=1, kw={"a": 9})) == ([1], {"a": 9})
+
+
+def test_annotated_with_several_metadata_items():
+    def f(n: Annotated[int, "first", Field(ge=1), "second", Field(le=5)]) -> int:
+        return n
+
+    prop = function_schema(f).params_json_schema["properties"]["n"]
+
+    assert (prop["description"], prop["minimum"], prop["maximum"]) == ("first", 1, 5)

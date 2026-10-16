@@ -148,7 +148,7 @@ def function_schema(
             Its first parameter may be annotated `ToolContext` or `ToolContext[T]`
             (or a subclass); no other parameter may mention `ToolContext`.
         name_override (`str`, *optional*, defaults to `None`):
-            The tool name. `None` uses `func.__name__`.
+            The tool name. `None` uses `func.__name__`, which must then exist.
         description_override (`str`, *optional*, defaults to `None`):
             The tool description. `None` uses the docstring's first text block.
 
@@ -158,10 +158,11 @@ def function_schema(
 
     Raises:
         `TypeError`:
-            Raised when `func` is async, an annotation can't be resolved,
-            `ToolContext` appears anywhere other than as the first positional
-            parameter's own type, `*args` is a fixed-length tuple, or pydantic
-            can't build the argument model (for example a `_x` parameter).
+            Raised when `func` has no name, is async, an annotation can't be
+            resolved, `ToolContext` appears anywhere other than as the first
+            positional parameter's own type, `*args` is a fixed-length tuple, or
+            pydantic can't build the argument model or drops a parameter from it
+            (for example a `_x` or `model_config` parameter).
 
     Example:
         ```python
@@ -173,13 +174,16 @@ def function_schema(
         assert schema.params_json_schema["required"] == ["symbol"]
         ```
     """
-    func_name = func.__name__
+    name = name_override or getattr(func, "__name__", None)
+    if not name:
+        raise TypeError(f"tool callable {func!r} has no __name__; pass name_override")
+    # Callable objects such as functools.partial have no `__name__`; messages use the tool name.
+    func_name = getattr(func, "__name__", None) or name
     if inspect.iscoroutinefunction(func):
         raise TypeError(
             f"tool function {func_name!r} is async; yian calls tools synchronously, "
             "so define it with def"
         )
-    name = name_override or func_name
     doc = parse_docstring(inspect.getdoc(func))
     param_descs = dict(doc.params)
 
@@ -240,6 +244,14 @@ def function_schema(
         raise TypeError(
             f"tool function {func_name!r} can't become tool {name!r}: {exc}"
         ) from exc
+    # Pydantic takes some names (`model_config`) as model settings rather than fields;
+    # a parameter that vanished from the model would never receive the model's value.
+    for field_name in fields:
+        if field_name not in model.model_fields:
+            raise TypeError(
+                f"tool function {func_name!r} parameter {field_name!r} can't be a field of "
+                f"tool {name!r}; rename the parameter"
+            )
 
     return FuncSchema(
         name=name,
@@ -263,22 +275,22 @@ def _field(
     base = stripped.get(param.name, Any)
     if param.kind == param.VAR_POSITIONAL:
         # `*args: X` types each positional argument as X (PEP 484), so the field is a list of X.
-        item = hint
+        item = _variadic_item(base, hint)
         if get_origin(base) is tuple:
-            tuple_args = get_args(base)
-            if len(tuple_args) == 2 and tuple_args[1] is Ellipsis:
-                pass
-            elif hasattr(base, "__args__"):
+            tuple_args = getattr(base, "__args__", None)
+            if tuple_args is not None and not (len(tuple_args) == 2 and tuple_args[1] is Ellipsis):
                 raise TypeError(
                     f"tool function {func_name!r} annotates *{param.name} with the "
                     f"fixed-length tuple {base!r}; a variadic annotation describes each "
                     "positional argument, so use tuple[T, ...] or list[T]"
                 )
-            else:
+            if tuple_args is None:
+                # A bare `typing.Tuple` carries no element type.
                 item = Any
         return (list[item], Field(default_factory=list, description=description))
     if param.kind == param.VAR_KEYWORD:
-        return (dict[str, hint], Field(default_factory=dict, description=description))
+        item = _variadic_item(base, hint)
+        return (dict[str, item], Field(default_factory=dict, description=description))
 
     # Pydantic merges the `Field`s inside `Annotated` left to right and the assigned
     # `Field` last, keeping only the attributes each one sets. So a `Field(...)` default
@@ -294,6 +306,18 @@ def _field(
     if description is not None:
         overrides["description"] = description
     return (annotation, Field(**overrides))
+
+
+def _variadic_item(base: Any, hint: Any) -> Any:
+    """Return the type of each `*args` or `**kwargs` value.
+
+    Only the `Annotated` constraints apply to each value; a description or default
+    describes the whole parameter, not its items.
+    """
+    if get_origin(hint) is not Annotated:
+        return base
+    constraints = FieldInfo.from_annotation(hint).metadata
+    return Annotated[(base, *constraints)] if constraints else base
 
 
 def _strip_annotated(annotation: Any) -> tuple[Any, tuple[Any, ...]]:

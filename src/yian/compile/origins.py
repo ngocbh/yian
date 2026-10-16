@@ -139,7 +139,9 @@ def rewrite_flow_origins(
             Compiled topology or compile-owned fragment to copy and rewrite.
         mapper (`Callable[[OriginRef], OriginRef]`):
             Transform for every present semantic origin. It must return an
-            `OriginRef`; it may raise to abort the rewrite.
+            `OriginRef`; it may raise to abort the rewrite. It runs inside a
+            generator walker, so a `StopIteration` escaping it surfaces as
+            `RuntimeError` (PEP 479).
 
     Returns:
         `Flow`:

@@ -24,6 +24,7 @@ from typing import Any
 
 from pydantic import SecretStr
 
+from yian.compile.model import copy_flow_graph
 from yian.llm_clients.config import (
     LLM_CONFIG_KEYS,
     RETIRED_LLM_CONFIG_KEYS,
@@ -38,7 +39,6 @@ from yian.llm_clients.connection import (
     missing_model_message,
     validate_connection,
 )
-from yian.compile.model import copy_flow_graph
 from yian.nodes.agent import AgentNode
 from yian.trampoline import drive
 

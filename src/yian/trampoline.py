@@ -174,13 +174,22 @@ def flatten(steps: Generator[Any, Any, Any]) -> Generator[Any, None, None]:
     open walker, inner to outer. If closing a walker raises, the error is thrown
     into the next outer walker in place of closing it.
 
-    Two cases differ from `yield from`:
+    Throwing `GeneratorExit` into this generator closes every open walker, as
+    `yield from` does: there `yield from` closes its subiterator rather than
+    throwing that object into it, so the innermost walker never receives it. An
+    inner walker that yields while being closed (ignores `GeneratorExit`) makes
+    closing raise `RuntimeError` through every outer walker, and both this
+    generator and a `yield from` chain are finished afterwards.
 
-    - Throwing `GeneratorExit` into this generator acts like `close()`: it closes
-      every open walker rather than throwing that object into the innermost one.
-    - A walker that yields while being closed (ignores `GeneratorExit`) makes
-      closing raise `RuntimeError`, as `close()` does, but this generator is
-      finished afterwards, whereas a `yield from` chain stays resumable.
+    The two differ only when the outermost walker catches `GeneratorExit` and
+    yields:
+
+    - `throw(GeneratorExit)` raises `RuntimeError` here, as `close()` does,
+      whereas a `yield from` chain hands the thrown object to the outermost
+      walker, so `throw` returns the value it yields.
+    - After `throw(GeneratorExit)` or a failed `close()`, this generator is
+      finished, whereas the `yield from` chain stays suspended at that walker's
+      `yield` and can be resumed.
 
     Nested streams wait on a list rather than on the Python stack, so a walker over
     nested flows does not recurse once per level.

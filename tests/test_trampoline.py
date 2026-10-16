@@ -608,5 +608,55 @@ def test_flatten_reports_a_walker_that_ignores_generator_exit_as_yield_from_does
         flat.close()
     assert log == expected_log == [2]
     assert _context_chain(raised.value) == _context_chain(expected.value)
-    # Unlike the `yield from` chain, flatten is finished once closing fails.
-    assert list(flat) == []
+    # The failure crosses every outer `yield from` frame, so both are finished.
+    assert list(flat) == list(recursive) == []
+
+
+def test_flatten_is_finished_when_the_outer_walker_yields_on_generator_exit():
+    def chain_recursive(n: int, log: list):
+        try:
+            yield n
+            if n < 2:
+                yield from chain_recursive(n + 1, log)
+        except GeneratorExit:
+            log.append(n)
+            if n != 0:
+                raise
+            yield "late"
+            yield "later"
+
+    def chain(n: int, log: list):
+        try:
+            yield n
+            if n < 2:
+                yield Descend(chain(n + 1, log))
+        except GeneratorExit:
+            log.append(n)
+            if n != 0:
+                raise
+            yield "late"
+            yield "later"
+
+    for finish in ("close", "throw"):
+        expected_log: list = []
+        recursive = chain_recursive(0, expected_log)
+        assert [next(recursive) for _ in range(3)] == [0, 1, 2]
+        if finish == "close":
+            with pytest.raises(RuntimeError, match="ignored GeneratorExit"):
+                recursive.close()
+        else:
+            # The outer walker gets the thrown object and yields back from `throw`.
+            assert recursive.throw(GeneratorExit()) == "late"
+        # The `yield from` chain stays suspended in the outer walker.
+        assert list(recursive) == ["later"]
+
+        log: list = []
+        flat = flatten(chain(0, log))
+        assert [next(flat) for _ in range(3)] == [0, 1, 2]
+        with pytest.raises(RuntimeError, match="ignored GeneratorExit"):
+            if finish == "close":
+                flat.close()
+            else:
+                flat.throw(GeneratorExit())
+        assert log == expected_log == [2, 1, 0]
+        assert list(flat) == []

@@ -11,8 +11,8 @@ Never imports: memory, compose, runtime, or the package-root run boundary.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from collections.abc import Generator
+from dataclasses import dataclass, field
 
 from yian.compile.model import CompiledFlow, Flow
 from yian.nodes.base import Node

@@ -104,18 +104,14 @@ def test_a_long_int_in_a_prompted_reply_retries_to_a_good_value():
 
 @pytest.mark.parametrize("python_limit", [None, 0, 6000])
 def test_a_prompted_long_int_fails_the_same_whatever_pythons_limit(python_limit):
-    get_limit = getattr(sys, "get_int_max_str_digits", None)
-    if python_limit is not None and get_limit is None:
-        pytest.skip("this Python has no int/str digit limit")
-    before = get_limit() if get_limit is not None else None
+    before = sys.get_int_max_str_digits()
     try:
         if python_limit is not None:
             sys.set_int_max_str_digits(python_limit)
         with pytest.raises(TypeCheckError) as caught:
             _generate(_texts(f'{{"n": {D}}}'), _RECORD, max_retries=0)
     finally:
-        if before is not None:
-            sys.set_int_max_str_digits(before)
+        sys.set_int_max_str_digits(before)
     assert str(caught.value) == "structured output at n: " + LIMIT_MSG
 
 
@@ -215,19 +211,15 @@ def test_an_invalid_tool_call_with_unrelated_bad_json_keeps_todays_behaviour(mon
 @pytest.mark.parametrize("python_limit", [None, 0])
 @pytest.mark.parametrize("session", [False, True])
 def test_a_tool_returning_a_long_int_fails_naming_the_tool(monkeypatch, session, python_limit):
-    get = getattr(sys, "get_int_max_str_digits", None)
-    if python_limit is not None and get is None:
-        pytest.skip("this Python has no int/str digit limit")
     tool, _ = _setup_long_result_tool(monkeypatch)
     flow, memory = _tool_flow(session)
-    saved = get() if get is not None else None
+    saved = sys.get_int_max_str_digits()
     try:
         if python_limit is not None:
             sys.set_int_max_str_digits(python_limit)
         result = run_flow(flow, {"question": "q"}, memory=memory)
     finally:
-        if saved is not None:
-            sys.set_int_max_str_digits(saved)
+        sys.set_int_max_str_digits(saved)
     assert result.status == "failed" and result.failure.node_id == "agent"
     assert "tool 'lookup' result: " + LIMIT_MSG in result.failure.message
     _assert_clean(result.failure.message)

@@ -8,8 +8,6 @@ VALUES, the three missing-ref-by-mode behaviors, and the load-bearing semantics
 `else:` routing depends on.
 """
 
-import sys
-
 import pytest
 
 from yian.expr.expressions import (
@@ -19,11 +17,6 @@ from yian.expr.expressions import (
     eval_expr,
 )
 from yian.expr.grammar import parse_expr
-
-# Python 3.10.0-3.10.6 has no int-to-str digit limit, so a huge int's repr works there.
-needs_digit_limit = pytest.mark.skipif(
-    not hasattr(sys, "get_int_max_str_digits"), reason="no int-to-str digit limit"
-)
 
 
 def _eval(text, resolve=None, item=None, mode=ResolveMode.BINDING_NONE):
@@ -123,25 +116,21 @@ def test_missing_format_key_is_an_expression_error():
         _eval('"%(k)s" % r', _from({"r": {"j": 1}}))
 
 
-@needs_digit_limit
 def test_type_error_with_a_huge_int_names_the_operand_type():
     with pytest.raises(ExpressionError, match="<int with 5001 digits>"):
         _eval('n + "a"', _from({"n": 10**5000}))
 
 
-@needs_digit_limit
 def test_division_by_zero_with_a_huge_int():
     with pytest.raises(ExpressionError, match="division by zero: <int with 5001 digits>"):
         _eval("n / 0", _from({"n": 10**5000}))
 
 
-@needs_digit_limit
 def test_comparison_type_error_with_a_huge_int():
     with pytest.raises(ExpressionError, match="<int with 5001 digits>"):
         _eval('n < "a"', _from({"n": 10**5000}))
 
 
-@needs_digit_limit
 def test_unary_minus_on_a_list_holding_a_huge_int():
     with pytest.raises(
         ExpressionError, match="unary minus on non-number <list holding an int with 5001 digits>"

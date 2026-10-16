@@ -661,8 +661,8 @@ tool uses `response_format="content_and_artifact"`, or the return type is not
 JSON-like (a pydantic model, dataclass, set, date, or enum; most such values fail
 the `output:` gate anyway, and with no `output:` they fail the untyped output check,
 `contract.output`; an enum that subclasses `str` or `int` passes as its value). On
-Python 3.10 and 3.11, use `typing_extensions.TypedDict`;
-pydantic rejects `typing.TypedDict` there.
+Python 3.11, use `typing_extensions.TypedDict`; pydantic rejects
+`typing.TypedDict` there.
 
 ```python
 from typing import Literal, Optional, Union

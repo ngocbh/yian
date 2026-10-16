@@ -115,7 +115,7 @@ def test_invalid_node_result_closes_failed_before_failure_conversion(result, cle
     assert events[-1][0] == "failed"
     assert "_ResultContractError" not in outcome.failure.traceback
     assert f"RuntimeError: {outcome.failure.message}" in outcome.failure.traceback
-    if cleanup_fails and hasattr(RuntimeError(), "add_note"):
+    if cleanup_fails:
         assert "result cleanup failed" in outcome.failure.traceback
 
 
@@ -171,8 +171,7 @@ def test_primary_stop_is_set_before_turn_cleanup_and_keeps_identity(streaming):
     assert caught.value is error
     assert events[-1][0] == "failed"
     assert events[-1][2] is True
-    if hasattr(error, "add_note"):
-        assert any("cleanup" in note for note in getattr(error, "__notes__", []))
+    assert any("cleanup" in note for note in getattr(error, "__notes__", []))
 
 
 def test_stream_lifetime_includes_drain_and_callback_failure_cleanup():
@@ -256,9 +255,8 @@ def test_callback_error_retains_conversation_cleanup_notes_without_throwing_into
         assert stop.is_set() is host_stop
         if not real_backend:
             assert isinstance(events[-1][1], GeneratorExit)
-        if hasattr(error, "add_note"):
-            notes = getattr(error, "__notes__", [])
-            assert sum("conversation close failed" in note for note in notes) == 1
+        notes = getattr(error, "__notes__", [])
+        assert sum("conversation close failed" in note for note in notes) == 1
     finally:
         if runtime is not None:
             runtime.close()
@@ -399,9 +397,8 @@ def test_real_backend_cleanup_note_survives_node_error_unwrapping(monkeypatch):
     try:
         outcome = _evaluate(node, runtime.open_context)
         assert outcome.failure.code == "node.execute"
-        if hasattr(error, "add_note"):
-            assert "close storage failed" in outcome.failure.traceback
-            assert any("close storage failed" in note for note in getattr(error, "__notes__", []))
+        assert "close storage failed" in outcome.failure.traceback
+        assert any("close storage failed" in note for note in getattr(error, "__notes__", []))
     finally:
         runtime.close()
 

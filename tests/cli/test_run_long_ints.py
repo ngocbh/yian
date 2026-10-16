@@ -24,11 +24,7 @@ _ANSI_SGR = re.compile(r"\x1b\[[0-9;]*m")
 @pytest.fixture(autouse=True)
 def _default_int_digit_limit():
     """Run each test under Python's default int/str digit limit."""
-    get = getattr(sys, "get_int_max_str_digits", None)
-    if get is None:
-        yield  # this Python has no limit
-        return
-    before = get()
+    before = sys.get_int_max_str_digits()
     sys.set_int_max_str_digits(4300)
     try:
         yield

@@ -88,9 +88,6 @@ def test_leading_zeros_do_not_count():
     assert result.output == 1
 
 
-@pytest.mark.skipif(
-    getattr(sys, "get_int_max_str_digits", None) is None, reason="this Python has no digit limit"
-)
 @pytest.mark.parametrize("binding", [D, "${" + D + "}"], ids=["yaml", "expression"])
 def test_the_limit_holds_with_pythons_own_limit_off(binding):
     before = sys.get_int_max_str_digits()

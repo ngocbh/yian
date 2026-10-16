@@ -26,10 +26,9 @@ from yian.memory.contracts import (
 
 def _note_cleanup(target: BaseException, cleanup: BaseException, label: str) -> None:
     """Attach one cleanup failure, and the notes it carries, to ``target``."""
-    if hasattr(target, "add_note"):
-        target.add_note(f"{label}: {type(cleanup).__name__}: {cleanup}")
-        for note in getattr(cleanup, "__notes__", ()):
-            target.add_note(note)
+    target.add_note(f"{label}: {type(cleanup).__name__}: {cleanup}")
+    for note in getattr(cleanup, "__notes__", ()):
+        target.add_note(note)
 
 
 def _close_all(

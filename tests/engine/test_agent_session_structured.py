@@ -352,8 +352,7 @@ def test_provider_error_and_failed_publication_bypass_retry_with_original_public
     with pytest.raises(error_type) as caught:
         run_flow(_typed_flow(native), {"question": "first"}, memory={"session": memory})
     assert caught.value is primary and len(model.calls) == 1
-    if hasattr(primary, "add_note"):
-        assert any("cannot publish failure" in note for note in primary.__notes__)
+    assert any("cannot publish failure" in note for note in primary.__notes__)
     view = _view(memory)
     assert len(view.effects) == 1 and view.effects[0].status == "pending"
     assert view.closed_invocations[-1].status == "failed"

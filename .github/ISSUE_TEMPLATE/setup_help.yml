@@ -10,7 +10,7 @@ body:
 
         **Quick checks first:**
         - Install with the extras you need: `pip install -e ".[all,dev]"` (see [CONTRIBUTING](https://github.com/ngocbh/yian/blob/main/CONTRIBUTING.md#development-setup))
-        - The package requires **Python 3.11+** — a 3.9 interpreter cannot import it. Confirm with `python --version`.
+        - The package requires **Python 3.11+**; pip will not install it on 3.10 or older. Confirm with `python --version`.
         - Run the engine anywhere with `PYTHONPATH=src`.
         - Check the [README](https://github.com/ngocbh/yian/blob/main/README.md).
 

@@ -130,9 +130,9 @@ def test_no_limit_sentinel() -> None:
 
 
 def test_int_digits_cannot_exceed_the_interpreter_limit() -> None:
-    limit = getattr(sys, "get_int_max_str_digits", lambda: 0)()
+    limit = sys.get_int_max_str_digits()
     if not limit:
-        pytest.skip("this interpreter has no int digit limit")
+        pytest.skip("Python's int digit limit is switched off")
     entry = _entry("MAX_INT_DIGITS")
     assert entry.maximum_from_interpreter
     assert read({entry.variable: str(limit)}).max_int_digits == limit
@@ -144,14 +144,7 @@ def test_int_digits_cannot_exceed_the_interpreter_limit() -> None:
 def test_int_digits_has_no_upper_bound_without_an_interpreter_limit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(sys, "get_int_max_str_digits", lambda: 0, raising=False)
-    assert read({"YIAN_MAX_INT_DIGITS": "100000"}).max_int_digits == 100_000
-
-
-def test_int_digits_has_no_upper_bound_on_an_interpreter_without_the_limit(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delattr(sys, "get_int_max_str_digits", raising=False)
+    monkeypatch.setattr(sys, "get_int_max_str_digits", lambda: 0)
     assert read({"YIAN_MAX_INT_DIGITS": "100000"}).max_int_digits == 100_000
 
 

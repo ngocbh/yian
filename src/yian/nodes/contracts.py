@@ -72,7 +72,7 @@ def _validate_path(path: ValuePath, *, field_name: str) -> None:
 
 
 def _path_sort_key(path: ValuePath) -> tuple[tuple[int, str | int], ...]:
-    """Return a Python-3.10-safe total key with strings before integers."""
+    """Return a total sort key that orders strings before integers."""
     return tuple(
         (0, segment) if type(segment) is str else (1, segment) for segment in path
     )

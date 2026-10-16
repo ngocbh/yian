@@ -5,7 +5,7 @@ clear, and tied to a GitHub issue.
 
 ## Development setup
 
-Yian supports Python 3.10 or newer.
+Yian supports Python 3.11 or newer.
 
 ```bash
 git clone https://github.com/ngocbh/yian

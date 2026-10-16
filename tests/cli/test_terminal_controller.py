@@ -1150,10 +1150,6 @@ def _run_with_sigint_at_opcode(index: int, *, first_cause: str) -> dict[str, Any
 
 @pytest.mark.skipif(not hasattr(signal, "pthread_kill"), reason="needs pthread_kill")
 @pytest.mark.skipif(sys.gettrace() is not None, reason="replaces the active tracer")
-@pytest.mark.skipif(
-    sys.version_info < (3, 11),
-    reason="3.10 writes a frame's locals back after each trace call, undoing the handler's stores",
-)
 @pytest.mark.parametrize("first_cause", ["sigint", "render", "none"])
 def test_sigint_at_any_cleanup_opcode_still_joins_and_stops(first_cause: str) -> None:
     """A Ctrl-C at any helper bytecode after the first cause never cuts cleanup short."""

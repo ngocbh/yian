@@ -1,10 +1,7 @@
 """The wheel ships every runtime data file under `src/yian`."""
 
+import tomllib
 from pathlib import Path
-
-import pytest
-
-tomllib = pytest.importorskip("tomllib")
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "src" / "yian"
@@ -25,3 +22,12 @@ def test_package_data_covers_every_runtime_data_file():
     }
 
     assert sorted(p.relative_to(PACKAGE).as_posix() for p in data_files - shipped) == []
+
+
+def test_python_floor_is_3_11():
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    classifiers = project["classifiers"]
+
+    assert project["requires-python"] == ">=3.11"
+    assert not any(c.endswith(":: 3.10") for c in classifiers)
+    assert "Programming Language :: Python :: 3.11" in classifiers

@@ -92,6 +92,7 @@ ENTRIES: tuple[Entry, ...] = (
     # the 3.10 provider-client paths that couldn't be measured offline. Under the worst
     # accepted load, 50 `uses:` imports ending in a 50-level chain, an AGENT at 16 levels
     # builds its schema well above the load's peak. The variable can only lower it.
+    # Python 3.11, now the oldest supported, has not been measured; 16 is kept.
     Entry(
         "MAX_AGENT_OUTPUT_NESTING",
         default=16,
@@ -546,8 +547,8 @@ def _maximum(entry: Entry) -> int:
     """Return the largest value `entry` accepts from the environment now."""
     maximum = _LARGEST if entry.maximum is None else entry.maximum
     if entry.maximum_from_interpreter:
-        # The function is missing before Python 3.10.7; 0 means the limit is off.
-        interpreter = getattr(sys, "get_int_max_str_digits", lambda: 0)()
+        # 0 means the limit is off.
+        interpreter = sys.get_int_max_str_digits()
         if interpreter:
             maximum = min(maximum, interpreter)
     return maximum

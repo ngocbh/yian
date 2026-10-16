@@ -1014,10 +1014,9 @@ class _Session:
 def _secondary(primary: BaseException, cleanup: BaseException) -> None:
     """Preserve a primary host failure while reporting a secondary cleanup fault."""
     try:
-        if hasattr(primary, "add_note"):
-            primary.add_note(
-                f"Conversation cleanup also failed: {type(cleanup).__name__}: {cleanup}"
-            )
+        primary.add_note(
+            f"Conversation cleanup also failed: {type(cleanup).__name__}: {cleanup}"
+        )
     except BaseException:
         pass
 

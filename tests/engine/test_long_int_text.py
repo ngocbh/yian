@@ -16,12 +16,8 @@ LIMIT_MSG = "integer with 5000 digits is larger than yian allows (4300 digits)"
 
 @pytest.fixture
 def python_limit_off():
-    """Turn off Python's own int/str digit limit for one test, where Python has one."""
-    get_limit = getattr(sys, "get_int_max_str_digits", None)
-    if get_limit is None:
-        yield
-        return
-    before = get_limit()
+    """Turn off Python's own int/str digit limit for one test."""
+    before = sys.get_int_max_str_digits()
     sys.set_int_max_str_digits(0)
     try:
         yield
@@ -32,10 +28,7 @@ def python_limit_off():
 @pytest.fixture
 def python_limit_lowered():
     """Lower Python's own int/str digit limit to 1000 digits for one test."""
-    get_limit = getattr(sys, "get_int_max_str_digits", None)
-    if get_limit is None:
-        pytest.skip("Python has no int/str digit limit")
-    before = get_limit()
+    before = sys.get_int_max_str_digits()
     sys.set_int_max_str_digits(1000)
     try:
         yield

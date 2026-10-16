@@ -23,6 +23,7 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("memory/storage/sqlite.py", "_VERSION"): "sqlite store format version",
     ("compile/validation.py", "_RELATION_RANK"): "ordering of type relations",
     ("cli/chat/tools.py", "_open_no_follow.mode"): "file permission bits, as os.open",
+    ("llm/errors.py", "_STATUS_KINDS"): "HTTP status codes mapped to error kinds",
     # Display and message formatting.
     ("cli/run.py", "_ERR_CONTEXT"): "lines of YAML shown around an error",
     ("compose/validate/case_branches.py", "_SHOWN_LIMIT"): "width of a value shown in a message",
@@ -30,9 +31,12 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("expr/builtins.py", "_render_as_json.indent"): "JSON indent of the render_as_json builtin",
     ("llm_clients/redact.py", "_MIN_VISIBLE"): "key characters a masked echo must show to count",
     ("llm_clients/base_client.py", "warn_once.stacklevel"): "frames to skip, as warnings.warn",
+    ("llm/errors.py", "_MAX_DETAIL_CHARS"): "length of provider error text kept in a message",
+    ("llm/testing.py", "_MAX_DIFFS"): "differences listed in a cassette mismatch message",
     # Internal sizes that no user input reaches.
     ("expr/lineage.py", "_MAX_SNAPSHOT_DEPTH"): "diagnostic retention depth, internal",
     ("typesys/values.py", "_LOG10_2"): "log10(2), a math constant for counting digits",
+    ("llm/executor.py", "_MAX_ERROR_BODY"): "bytes of an error response read, internal",
     # Host call options and network tuning, passed per call.
     ("run.py", "run_flow.num_workers"): "host run option, passed per call",
     ("run.py", "_run_flow_controlled.num_workers"): "host run option, passed per call",
@@ -44,6 +48,7 @@ ALLOWED: dict[tuple[str, str], str] = {
         "seconds before token expiry to refresh"
     ),
     ("llm_clients/model_list.py", "list_models.timeout"): "network timeout",
+    ("llm/route.py", "Route.max_retries"): "transport retries, set per route",
     ("llm_clients/openai_subscription.py", "create_subscription_model.max_retries"): (
         "SDK transport retries"
     ),

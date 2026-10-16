@@ -3,6 +3,7 @@ import copy
 import json
 import os
 import typing
+from functools import lru_cache
 from typing import Any, Optional
 
 import httpx
@@ -13,6 +14,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import Field, SecretStr, model_validator
 
 from .base_client import (
+    BASE_URL_LEAK,
     HEADERS_LEAK,
     BaseLLMClient,
     check_connection_headers,
@@ -26,6 +28,21 @@ from .validators import validate_model
 _HTTP_CLIENT_KWARGS = ("http_client", "http_async_client")
 # google-genai's switches to Vertex AI; GOOGLE_GENAI_USE_ENTERPRISE is the newer name.
 _VERTEX_SWITCHES = ("GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_ENTERPRISE")
+
+
+# The client holds no headers or per-model state (google-genai passes them per request),
+# so every model that refuses redirects shares it; built per model, it was never closed.
+# `lru_cache` keeps its own bookkeeping thread-safe; two threads that miss at once may
+# each build a client, and one is kept. Like langchain-openai's cached clients, it reads
+# proxy variables such as HTTPS_PROXY when first built.
+@lru_cache(maxsize=None)
+def _no_redirect_async_client() -> httpx.AsyncClient:
+    """Return the shared async HTTP client that never follows a redirect.
+
+    Returns:
+        `httpx.AsyncClient`: The same client on every call.
+    """
+    return httpx.AsyncClient(follow_redirects=False)
 
 
 def _class_name(cls: type) -> str:
@@ -365,7 +382,7 @@ class GoogleClient(BaseLLMClient):
         # The SDK sends the key in x-goog-api-key, and the connection headers beside it,
         # which httpx re-sends on a cross-origin redirect.
         no_redirects = bool(self.base_url or llm_kwargs.get("connection_headers"))
-        leak = {"reason": HEADERS_LEAK} if llm_kwargs.get("connection_headers") else {}
+        leak = HEADERS_LEAK if llm_kwargs.get("connection_headers") else BASE_URL_LEAK
         if no_redirects:
             llm_kwargs["client_args"] = {"follow_redirects": False}
 
@@ -378,12 +395,12 @@ class GoogleClient(BaseLLMClient):
                 continue
             _check_http_client_type(key, value)
             if no_redirects:
-                check_no_redirects(key, value, **leak)
+                check_no_redirects(key, value, reason=leak)
             llm_kwargs[key] = value
         if no_redirects and "http_async_client" not in llm_kwargs:
             # Without an httpx async client google-genai sends async calls through aiohttp
             # when it is installed, and aiohttp follows redirects by default.
-            llm_kwargs["http_async_client"] = httpx.AsyncClient(follow_redirects=False)
+            llm_kwargs["http_async_client"] = _no_redirect_async_client()
         # langchain-google-genai sends temperature=0.7 unless it is None; a temperature
         # comes only from the block's generationConfig.
         llm_kwargs["temperature"] = None

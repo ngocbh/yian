@@ -19,6 +19,7 @@ from langchain_core.utils.pydantic import is_basemodel_subclass
 from pydantic import Field, SecretStr
 
 from .base_client import (
+    BASE_URL_LEAK,
     HEADERS_LEAK,
     BaseLLMClient,
     check_connection_headers,
@@ -173,7 +174,7 @@ class NormalizedChatAnthropic(ChatAnthropic):
         client = super()._client
         if self.http_client is not None:
             if not self.follow_redirects:
-                check_no_redirects("http_client", self.http_client, **self._leak())
+                check_no_redirects("http_client", self.http_client, reason=self._leak)
             return client.with_options(http_client=self.http_client)
         if self.follow_redirects:
             return client
@@ -184,7 +185,9 @@ class NormalizedChatAnthropic(ChatAnthropic):
         client = super()._async_client
         if self.http_async_client is not None:
             if not self.follow_redirects:
-                check_no_redirects("http_async_client", self.http_async_client, **self._leak())
+                check_no_redirects(
+                    "http_async_client", self.http_async_client, reason=self._leak
+                )
             return client.with_options(http_client=self.http_async_client)
         if self.follow_redirects:
             return client
@@ -192,9 +195,10 @@ class NormalizedChatAnthropic(ChatAnthropic):
             http_client=anthropic.DefaultAsyncHttpxClient(**self._http_options())
         )
 
-    def _leak(self) -> dict[str, str]:
-        """Keyword arguments naming, for `check_no_redirects`, what a redirect would leak."""
-        return {"reason": HEADERS_LEAK} if self.connection_headers else {}
+    @property
+    def _leak(self) -> str:
+        """What a redirect would leak, for `check_no_redirects`."""
+        return HEADERS_LEAK if self.connection_headers else BASE_URL_LEAK
 
     def _http_options(self) -> dict[str, Any]:
         """Keyword arguments for an HTTP client that never follows a redirect."""

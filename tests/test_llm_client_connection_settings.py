@@ -6,6 +6,7 @@ a redirect, which would re-send them to another host.
 """
 
 import asyncio
+import importlib
 import warnings
 
 import anthropic
@@ -19,10 +20,12 @@ from langchain_core.load import dumpd
 from tests.fixtures.openai_responses import ResponsesServer
 from tests.test_llm_client_blocks_anthropic import _anthropic_httpx
 from tests.test_llm_client_blocks_anthropic import _Server as _AnthropicServer
+from tests.test_llm_clients import _sse_server
 from tests.test_llm_client_env_headers import (
     CHAT_REPLY,
     ChatServer,
     GeminiServer,
+    fresh_http_clients,  # noqa: F401  (autouse fixture)
     fresh_warned,  # noqa: F401  (autouse fixture)
     invoke_both,
     poisoned_env,  # noqa: F401  (fixture)
@@ -153,9 +156,35 @@ def test_header_values_stay_out_of_the_model_fields(poisoned_env, provider):
         assert "org-config" not in text
 
 
+def _openai_httpx():
+    """Return the httpx package the OpenAI SDK's own clients use (newer SDKs use `httpx2`)."""
+    client = next(c for c in openai.DefaultHttpxClient.__mro__ if c.__name__ == "Client")
+    return importlib.import_module(client.__module__.split(".")[0])
+
+
+def _openai_transport(handler):
+    """Return a mock transport in the OpenAI SDK's httpx package that serves `handler`.
+
+    `handler` takes an `httpx.Request` and returns an `httpx.Response`, whichever package
+    the SDK is built on.
+    """
+    package = _openai_httpx()
+
+    def serve(request):
+        response = handler(httpx.Request(
+            request.method, str(request.url), headers=request.headers.raw,
+            content=request.read(),
+        ))
+        return package.Response(
+            response.status_code, headers=response.headers.raw, content=response.read()
+        )
+
+    return package.MockTransport(serve)
+
+
 def _route(model, handler):
     """Send the model's SDK-built HTTP clients to `handler`, keeping their other settings."""
-    transport = httpx.MockTransport(handler)
+    transport = _openai_transport(handler)
     for client in (model.root_client._client, model.root_async_client._client):
         client._transport = transport
         # httpx picks a proxy mount from the environment before `_transport`.
@@ -223,6 +252,57 @@ def test_a_model_without_headers_keeps_the_shared_client(poisoned_env):
     assert (again.root_client._client, again.root_async_client._client) == shared
     assert all(client.follow_redirects for client in shared)
     assert "x-gateway" not in {name.lower() for name in again.root_client._custom_headers}
+
+
+@pytest.mark.parametrize("provider", list(_REDIRECT_BUILDS))
+def test_models_with_headers_share_their_http_clients(poisoned_env, provider):
+    first, second = _BUILDS[provider](), _BUILDS[provider]()
+    for attribute, cls in (
+        ("root_client", openai.DefaultHttpxClient),
+        ("root_async_client", openai.DefaultAsyncHttpxClient),
+    ):
+        client = getattr(first, attribute)._client
+        assert client is getattr(second, attribute)._client
+        assert isinstance(client, cls)
+        assert client.follow_redirects is False
+
+
+def test_an_azure_model_without_headers_keeps_the_sdk_client(poisoned_env):
+    def build(**kwargs):
+        return create_llm_client(
+            "azure", "dep", base_url=_AZURE_URL, api_key="az-explicit", **kwargs
+        ).get_llm()
+
+    with_headers = build(connection_headers={"X-Gateway": _GATEWAY})
+    plain = build()
+    for attribute in ("root_client", "root_async_client"):
+        client = getattr(plain, attribute)._client
+        assert client.follow_redirects
+        assert client is not getattr(with_headers, attribute)._client
+    assert plain.stream_usage is True
+
+
+def test_azure_with_headers_streams_usage(poisoned_env):
+    model = _BUILDS["azure"]()
+    bodies = []
+    _route(model, _sse_server(bodies).handler)
+    chunks = list(model.stream("hi"))
+    assert bodies[0]["stream_options"] == {"include_usage": True}
+    assert sum(chunks[1:], chunks[0]).usage_metadata["output_tokens"] == 2
+
+
+def test_an_env_header_named_like_a_connection_header_is_not_reported(poisoned_env):
+    poisoned_env.setenv("OPENAI_CUSTOM_HEADERS", "x-gateway: env-gw")
+    for name in ("OPENAI_ORG_ID", "OPENAI_ORGANIZATION", "OPENAI_PROJECT_ID"):
+        poisoned_env.delenv(name)
+    server = ResponsesServer(tool_first=False)
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        invoke_both(_openai({"X-Gateway": _GATEWAY}), server)
+    assert not [w for w in record if _DROP_WARNING in str(w.message)]
+    assert len(server.requests) == 2
+    for request in server.requests:
+        assert request.headers.get_list("x-gateway") == [_GATEWAY]
 
 
 def test_a_model_with_headers_uses_openai_proxy(poisoned_env):
@@ -349,6 +429,33 @@ def test_google_sends_headers(poisoned_env):
         assert request.headers["content-type"] == "application/json"
         assert request.headers.get_list("x-gateway") == [_GATEWAY]
         _assert_no_env_values(request)
+
+
+def test_google_with_headers_ignores_the_vertex_switch(poisoned_env):
+    poisoned_env.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    poisoned_env.setenv("GOOGLE_API_KEY", "env-google-key")
+    poisoned_env.setenv("GOOGLE_CLOUD_PROJECT", "p")
+    poisoned_env.setenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+    server = GeminiServer()
+    invoke_both(_google({"X-Gateway": _GATEWAY}), server)
+    assert len(server.requests) == 2
+    for request in server.requests:
+        assert request.url.host == "generativelanguage.googleapis.com"
+        assert request.url.path == "/v1beta/models/gemini-2.5-flash:generateContent"
+        assert request.headers["x-goog-api-key"] == "g-explicit"
+        assert request.headers.get_list("x-gateway") == [_GATEWAY]
+        _assert_no_env_values(request)
+
+
+def test_google_models_with_headers_share_their_async_client(poisoned_env):
+    first, second, plain = (
+        _FAMILY_BUILDS["google"](), _FAMILY_BUILDS["google"](),
+        create_llm_client("google", "gemini-2.5-flash", api_key="g-explicit").get_llm(),
+    )
+    shared = first.client._api_client._async_httpx_client
+    assert shared is second.client._api_client._async_httpx_client
+    assert shared.follow_redirects is False
+    assert plain.client._api_client._async_httpx_client is not shared
 
 
 _FAMILY_BUILDS = {

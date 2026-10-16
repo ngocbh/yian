@@ -422,8 +422,12 @@ class AzureOpenAIClient(BaseLLMClient):
             llm_kwargs["connection_headers"] = check_connection_headers(
                 self.kwargs["connection_headers"], "azure"
             )
-            # langchain's Azure client ignores OPENAI_PROXY, so the fresh clients do too.
+            # langchain's Azure client ignores OPENAI_PROXY, so the shared clients do too.
             llm_kwargs.update(connection_header_clients(self.kwargs))
+            if not any(key in self.kwargs for key in ("http_client", "http_async_client")):
+                # langchain turns stream_usage on only when no HTTP client is passed, as
+                # it would have been without the shared clients.
+                llm_kwargs.setdefault("stream_usage", True)
 
         return NormalizedAzureChatOpenAI(
             **llm_kwargs, block=self.kwargs.get("block") or {}, block_provider="azure",

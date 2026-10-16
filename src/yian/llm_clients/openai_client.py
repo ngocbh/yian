@@ -1,10 +1,10 @@
 import copy
 import inspect
 import os
-from functools import cache
+from functools import cache, lru_cache
 from typing import Any, ClassVar, Literal, Optional
 
-import httpx
+import openai
 from langchain_core.messages import AIMessage
 from langchain_openai import ChatOpenAI
 from langchain_openai.chat_models.base import BaseChatOpenAI
@@ -35,37 +35,62 @@ _OPENAI_HEADER_VARIABLES = (
 _HTTP_CLIENT_KEYWORDS = ("http_client", "http_async_client")
 
 
+# The clients hold no headers or per-model state, so every model with connection headers
+# shares them, as langchain's models share its default clients; built per model, they
+# were never closed. `lru_cache` keeps its own bookkeeping thread-safe; two threads that
+# miss at once may each build a client, and one is kept. The sync client is safe to share
+# across threads; the async one serves every event loop, as langchain's cached async
+# client does. Like langchain's cached clients, they read proxy variables such as
+# HTTPS_PROXY when first built.
+@lru_cache(maxsize=None)
+def _no_redirect_client(
+    is_async: bool, proxy: Optional[str]
+) -> openai.DefaultHttpxClient | openai.DefaultAsyncHttpxClient:
+    """Return the shared OpenAI SDK HTTP client that never follows a redirect.
+
+    Args:
+        is_async (`bool`): `True` for the async client, `False` for the sync one.
+        proxy (`str`, *optional*): The proxy URL the client uses, or `None`.
+
+    Returns:
+        `openai.DefaultHttpxClient | openai.DefaultAsyncHttpxClient`: The client, the
+            same object for the same arguments.
+    """
+    cls = openai.DefaultAsyncHttpxClient if is_async else openai.DefaultHttpxClient
+    return cls(follow_redirects=False, proxy=proxy)
+
+
 def connection_header_clients(
     kwargs: dict[str, Any], proxy: Optional[str] = None
 ) -> dict[str, Any]:
     """Return the HTTP client keywords for a model that sends connection headers.
 
     httpx re-sends custom headers on a cross-origin redirect, so a host client must not
-    follow redirects, and a missing one is a fresh client that doesn't. langchain-openai
+    follow redirects, and a missing one is a shared client that doesn't. langchain-openai
     caches its default clients per endpoint and shares them with other models, so they
     are replaced rather than changed.
 
     Args:
         kwargs (`dict[str, Any]`): The client's keyword arguments, holding any host
             ``http_client`` / ``http_async_client``.
-        proxy (`str`, *optional*, defaults to `None`): The proxy URL the fresh clients
+        proxy (`str`, *optional*, defaults to `None`): The proxy URL the shared clients
             use, as langchain's own clients would.
 
     Returns:
-        `dict[str, Any]`: ``http_client`` and ``http_async_client`` (the host's or fresh
-            ones), plus ``openai_proxy=None`` when both are fresh, since langchain refuses
-            a proxy beside a passed client and the fresh ones carry it already.
+        `dict[str, Any]`: ``http_client`` and ``http_async_client`` (the host's or shared
+            ones), plus ``openai_proxy=None`` when both are shared, since langchain refuses
+            a proxy beside a passed client and the shared ones carry it already.
 
     Raises:
         `ValueError`: A host client follows redirects.
     """
     clients: dict[str, Any] = {}
-    for key, fresh in zip(_HTTP_CLIENT_KEYWORDS, (httpx.Client, httpx.AsyncClient)):
+    for key, is_async in zip(_HTTP_CLIENT_KEYWORDS, (False, True)):
         if key in kwargs:
             check_no_redirects(key, kwargs[key], reason=HEADERS_LEAK)
             clients[key] = kwargs[key]
         else:
-            clients[key] = fresh(follow_redirects=False, proxy=proxy)
+            clients[key] = _no_redirect_client(is_async, proxy)
     if not any(key in kwargs for key in _HTTP_CLIENT_KEYWORDS):
         clients["openai_proxy"] = None
     return clients
@@ -481,8 +506,8 @@ class OpenAIClient(BaseLLMClient):
             llm_kwargs["connection_headers"] = check_connection_headers(
                 self.kwargs["connection_headers"], self.provider
             )
-            # Only models with headers get their own clients; the rest keep langchain's
-            # defaults (and the stream_usage default that depends on them).
+            # Only models with headers get the non-redirecting clients; the rest keep
+            # langchain's defaults (and the stream_usage default that depends on them).
             llm_kwargs.update(
                 connection_header_clients(self.kwargs, os.environ.get("OPENAI_PROXY") or None)
             )

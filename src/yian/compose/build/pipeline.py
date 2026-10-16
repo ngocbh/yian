@@ -64,6 +64,7 @@ from yian.compose.build.inline_inputs import (
 )
 from yian.compose.edges.data import infer_data_edges
 from yian.compose.edges.producers import _binding_producers
+from yian.compose.nodes.agent import AgentDescriptor, read_llm_config
 from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from yian.compose.nodes.call import CallDescriptor
 from yian.compose.nodes.case import CaseDescriptor
@@ -873,6 +874,69 @@ def _split_typed_inputs(
             if changed
             else descriptor
         )
+    return split
+
+
+def _split_typed_llm_config(
+    descriptors: dict[str, NodeDescriptor],
+    nodes_cursor: SourceCursor,
+    *,
+    registry,
+    owner: tuple[str, ...],
+    catalog_builder: _SourceCatalogBuilder,
+    diagnostics: LoadDiagnostics,
+) -> dict[str, NodeDescriptor]:
+    """Read each AGENT's `llm_config:` with the `${...}` values and tags in it.
+
+    A layer holding values becomes a `ValueTemplate` (a `Binding` for a whole record
+    written as one value), and the value range of each key in it lands in the
+    descriptor's `field_ranges` under `("llm_config", "<dotted.path>")`, so its errors
+    point at the field. A layer without values stays a plain dict.
+
+    Args:
+        descriptors (`dict[str, NodeDescriptor]`): Located descriptors keyed by node id.
+        nodes_cursor (`SourceCursor`): Retained view of the flow's node mapping.
+        registry (`TypeRegistry`): The file's typedefs the tags resolve against.
+        owner (`tuple[str, ...]`): Complete lexical owner path for catalog sites.
+        catalog_builder (`_SourceCatalogBuilder`): File-owned origin catalog builder.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
+
+    Returns:
+        `dict[str, NodeDescriptor]`: The descriptors, each AGENT's layer read.
+
+    Raises:
+        `LoadError`: Raised when a tag in a layer is malformed or misplaced, or a
+            retained cursor cannot be traversed.
+    """
+    split = dict(descriptors)
+    try:
+        for node_id, descriptor in descriptors.items():
+            if not isinstance(descriptor, AgentDescriptor) or not nodes_cursor.has(node_id):
+                continue
+            node_cursor = normalize_node_signature_cursor(nodes_cursor.child(node_id))
+            if not node_cursor.has("llm_config"):
+                continue
+            cursor = node_cursor.child("llm_config")
+            if not cursor.holds(descriptor.llm_config):
+                continue
+            layer, ranges = read_llm_config(
+                cursor,
+                registry,
+                prefix=f"node {node_id!r}: llm_config",
+                site_path=(*owner, "node", node_id, "llm_config"),
+                catalog_builder=catalog_builder,
+                diagnostics=diagnostics,
+            )
+            split[node_id] = replace(
+                descriptor,
+                llm_config=layer,
+                field_ranges={
+                    **descriptor.field_ranges,
+                    **{("llm_config", path): rng for path, rng in ranges.items()},
+                },
+            )
+    except SourceAccessError as exc:
+        raise diagnostics.error(str(exc), range=exc.range) from exc
     return split
 
 
@@ -2093,6 +2157,14 @@ def _assemble(
     # desugar reads their values, so an inline `call(...)` or
     # `${case.output}` in the value desugars as usual.
     descriptors = _split_typed_inputs(
+        descriptors,
+        nodes_cursor,
+        registry=registry,
+        owner=owner,
+        catalog_builder=catalog_builder,
+        diagnostics=diagnostics,
+    )
+    descriptors = _split_typed_llm_config(
         descriptors,
         nodes_cursor,
         registry=registry,

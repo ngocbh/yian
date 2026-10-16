@@ -19,6 +19,7 @@ from pydantic import ValidationError
 
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.memory import parse_memory_declarations
+from yian.compose.helpers.tags import has_span, read_tagged_value
 from yian.compose.helpers.types import read_variables
 from yian.compose.helpers.yaml_words import former_boolean_fix
 from yian.compose.nodes.base import (
@@ -32,18 +33,21 @@ from yian.compose.nodes.base import (
 from yian.compose.source import SourceCursor
 from yian.defaults import current
 from yian.diagnostics import SourceRange
+from yian.expr import eval_binding
+from yian.expr.grammar import whole_span_interior
 from yian.llm_clients import LLMConfig
 from yian.llm_clients.config import host_only_field_error
 from yian.memory.contracts import DeclSite, MemoryDecl
 from yian.nodes.agent import AgentNode
 from yian.nodes.agent.node import is_max_tool_iterations, is_text_output
 from yian.nodes.agent.structured import type_to_schema
-from yian.nodes.contracts import Parameter, ValueContract
+from yian.nodes.contracts import Binding, Parameter, ValueContract, ValueTemplate
 from yian.skills import SkillError
-from yian.typesys.values import type_levels
+from yian.typesys.values import Type, type_levels
 
 if TYPE_CHECKING:
     from yian.compose.source.catalog import _SourceCatalogBuilder
+    from yian.typesys.types import TypeRegistry
 
 # Shared by the AGENT and `adaptive_questions:` errors for the removed `mode:` key.
 MODE_REMOVED_FIX = (
@@ -75,41 +79,295 @@ def _former_boolean_hint(value: Any) -> str:
     return "" if fix is None else f"; {fix[1]}"
 
 
+def read_llm_config(
+    cursor: SourceCursor,
+    registry: "TypeRegistry",
+    *,
+    prefix: str,
+    site_path: tuple[str | int, ...],
+    catalog_builder: "_SourceCatalogBuilder",
+    diagnostics: LoadDiagnostics,
+) -> tuple[Any, dict[str, SourceRange]]:
+    """Read one authored `llm_config` layer with the `${...}` values and tags in it.
+
+    A layer without values or tags is a plain dict whose strings are `$$`-unescaped.
+    One holding them is a `ValueTemplate`. A whole record written as exactly one
+    `${...}` (optionally tagged) is a `Binding`; any other top-level text or scalar is
+    returned as written for the shape check to reject.
+
+    Args:
+        cursor (`SourceCursor`): The authored `llm_config:` value.
+        registry (`TypeRegistry`): The flow's typedefs the tags resolve against.
+        prefix (`str`): Message prefix naming the layer, such as
+            ``"node 'a': llm_config"``.
+        site_path (`tuple[str | int, ...]`): Catalog site prefix for the layer.
+        catalog_builder (`_SourceCatalogBuilder`): File-owned origin catalog builder.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
+
+    Returns:
+        `tuple[Any, dict[str, SourceRange]]`: The layer, and for a `ValueTemplate` the
+            value range of each key written in it, keyed by its dotted path
+            (``"anthropic.thinking"``); empty otherwise.
+
+    Raises:
+        `LoadError`: A tag is malformed or names no type, a tag sits on the whole
+            mapping, a tag has no value, or the tag reader rejects the value.
+    """
+    slot = read_tagged_value(
+        cursor,
+        registry,
+        label="llm_config",
+        site_path=site_path,
+        catalog_builder=catalog_builder,
+        diagnostics=diagnostics,
+        ledger=catalog_builder.consumed_tags,
+    )
+    if not slot.has_value:
+        raise diagnostics.error(
+            f"{prefix}: a tag needs a value: `llm_config: !{cursor.tag} ${{...}}`",
+            range=cursor.range,
+        )
+    value = slot.value
+    if isinstance(value, str):
+        if whole_span_interior(value) is None:
+            return value, {}
+        origin = catalog_builder.register((*site_path, "path"), cursor)
+        return Binding(source=value, origin=origin, contract=slot.contract), {}
+    if slot.contract is not None:
+        raise diagnostics.error(
+            f"{prefix}: a tag on the whole mapping types nothing; tag a field's value, "
+            "or write the whole record as one value: `llm_config: !T ${...}`",
+            range=cursor.range,
+        )
+    if not isinstance(value, ValueTemplate):
+        return value, {}
+    ranges: dict[str, SourceRange] = {}
+    _collect_key_ranges(cursor, "", ranges)
+    return value, ranges
+
+
+def _collect_key_ranges(
+    cursor: SourceCursor, prefix: str, ranges: dict[str, SourceRange]
+) -> None:
+    """Record the value range of every mapping key under `cursor` by its dotted path."""
+    value = cursor.value
+    if type(value) is not dict:
+        return
+    for key in value:
+        if not isinstance(key, str):
+            continue
+        child = cursor.child(key)
+        path = f"{prefix}{key}"
+        if child.range is not None:
+            ranges[path] = child.range
+        _collect_key_ranges(child, f"{path}.", ranges)
+
+
+def _holds_value(tree: Any) -> bool:
+    """Whether a layer part is, or holds, a value resolved later."""
+    if isinstance(tree, Binding):
+        return True
+    if isinstance(tree, str):
+        return has_span(tree)
+    if type(tree) is dict:
+        return any(_holds_value(item) for item in tree.values())
+    if type(tree) is list:
+        return any(_holds_value(item) for item in tree)
+    return False
+
+
+def _literal_part(tree: Any) -> Any:
+    """Return the value a literal template part binds: its strings `$$`-unescaped."""
+    if isinstance(tree, str):
+        return eval_binding(tree, lambda path: None)
+    if type(tree) is dict:
+        return {key: _literal_part(item) for key, item in tree.items()}
+    if type(tree) is list:
+        return [_literal_part(item) for item in tree]
+    return tree
+
+
+def _host_only_message(prefix: str, message: str) -> str:
+    """Put `prefix` in place of the leading `llm_config` of a host-only field message."""
+    # A message that does not start with `llm_config` is kept whole after the prefix.
+    rest = message.removeprefix("llm_config")
+    return prefix + rest if rest != message else f"{prefix}: {message}"
+
+
+def _host_only_field(message: str) -> str:
+    """Return the field a `host_only_field_error` message names (`llm_config.<field> ...`)."""
+    return message.removeprefix("llm_config.").split(" ", 1)[0]
+
+
+def _declared_fields(typ: Type) -> set[str]:
+    """Return the field names a record type, or any member of a record union, declares."""
+    names = set(typ.fields or ())
+    for member in typ.variants or ():
+        names |= set(member.fields or ())
+    return names
+
+
+def _check_llm_config_value(
+    cfg: ValueTemplate | Binding,
+    prefix: str,
+    source_range: SourceRange | None,
+    diagnostics: LoadDiagnostics,
+    field_ranges: Mapping[str, SourceRange],
+) -> tuple[ValueTemplate | Binding, bool]:
+    """Check an `llm_config` layer holding values, and split off its literal `inherit`.
+
+    Fields that only the host sets may not appear, from a value or not, and a
+    whole-record type may not declare them; ``base_url`` beside a literal
+    ``provider: azure`` must itself be literal. ``inherit`` must be a literal boolean.
+    The literal top-level fields are checked as `LLMConfig` fields.
+
+    Args:
+        cfg (`ValueTemplate | Binding`): The layer, or the whole-record value.
+        prefix (`str`): Message prefix naming the layer.
+        source_range (`SourceRange | None`): The layer's location, when retained.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
+        field_ranges (`Mapping[str, SourceRange]`): Value range of each key written
+            in the layer, by dotted path.
+
+    Returns:
+        `tuple[ValueTemplate | Binding, bool]`: The layer without ``inherit``, then
+            ``inherit``.
+
+    Raises:
+        `LoadError`: Located at the offending field when its range is known.
+    """
+    if isinstance(cfg, Binding):
+        if cfg.contract is not None:
+            declared = _declared_fields(cfg.contract.type)
+            message = host_only_field_error(dict.fromkeys(declared))
+            if message is not None:
+                raise diagnostics.error(
+                    f"{prefix}: its type declares `{_host_only_field(message)}`; {message}",
+                    range=source_range,
+                )
+        return cfg, True
+    tree = cfg.value
+    if type(tree) is not dict:
+        raise diagnostics.error(f"{prefix} must be a mapping", range=source_range)
+
+    def at(path: str) -> SourceRange | None:
+        return field_ranges.get(path) or source_range
+
+    inherit = True
+    if "inherit" in tree:
+        inherit = tree["inherit"]
+        if _holds_value(inherit):
+            raise diagnostics.error(
+                f"{prefix} `inherit:` must be written as true or false; it decides which "
+                "layers apply before any value is known",
+                range=at("inherit"),
+            )
+        if type(inherit) is not bool:
+            raise diagnostics.error(
+                f"{prefix} `inherit:` must be true or false, got "
+                f"{inherit!r}{_former_boolean_hint(inherit)}",
+                range=at("inherit"),
+            )
+        tree = {key: item for key, item in tree.items() if key != "inherit"}
+        origins = tuple(
+            (path, origin) for path, origin in cfg.origins if path[:1] != ("inherit",)
+        )
+        cfg = ValueTemplate(tree, origins)
+    host_only = host_only_field_error(tree)
+    if host_only is not None:
+        raise diagnostics.error(
+            _host_only_message(prefix, host_only), range=at(_host_only_field(host_only))
+        )
+    if "base_url" in tree and _holds_value(tree["base_url"]):
+        raise diagnostics.error(
+            f"{prefix}.base_url can't come from a value: it decides where the key is "
+            "sent, which stays with the host or `yian auth`; write the Azure resource "
+            "endpoint as literal text",
+            range=at("base_url"),
+        )
+    literal = {
+        key: None if _holds_value(item) else _literal_part(item)
+        for key, item in tree.items()
+    }
+    _check_literal_fields(literal, prefix, source_range, diagnostics)
+    return cfg, inherit
+
+
+def _check_literal_fields(
+    cfg: dict[str, Any],
+    prefix: str,
+    source_range: SourceRange | None,
+    diagnostics: LoadDiagnostics,
+) -> None:
+    """Check literal `llm_config` fields as `LLMConfig` fields.
+
+    Raises:
+        `LoadError`: A field violates `LLMConfig`; a text field YAML read as non-text
+            is named by `not_text_error`, any other violation keeps pydantic's message.
+    """
+    try:
+        LLMConfig(**cfg)
+    except ValidationError as exc:
+        detail = not_text_detail(exc)
+        raise diagnostics.error(
+            f"{prefix}: " + (not_text_error(*detail) if detail is not None else str(exc)),
+            range=source_range,
+        ) from exc
+    except Exception as exc:
+        raise diagnostics.error(
+            f"{prefix}: {exc}",
+            range=source_range,
+        ) from exc
+
+
 def _validate_llm_config(
-    cfg: Mapping[str, Any] | None,
+    cfg: Mapping[str, Any] | ValueTemplate | Binding | None,
     prefix: str,
     source_range: SourceRange | None = None,
     diagnostics: LoadDiagnostics | None = None,
-) -> tuple[dict[str, Any], bool]:
-    """Validate a raw llm_config mapping at LOAD time and split off `inherit`.
+    field_ranges: Mapping[str, SourceRange] | None = None,
+) -> tuple[dict[str, Any] | ValueTemplate | Binding, bool]:
+    """Validate an authored llm_config layer at LOAD time and split off `inherit`.
 
     `inherit` (whole-node cascade opt-out, default True) is NOT an `LLMConfig` field, so it
     must be popped before the `extra="forbid"` round-trip that fires on typo'd keys (e.g.
     `temparature`). Returns `(config_without_inherit, inherit)`. Raises `LoadError` (not
-    pydantic ValidationError) so the surface speaks one error type.
+    pydantic ValidationError) so the surface speaks one error type. A layer holding
+    `${...}` values (a `ValueTemplate`, or a `Binding` for the whole record) is checked by
+    `_check_llm_config_value`; its values are checked when they resolve.
 
     Module-local to `agent.py`: agent is the only kind with an `llm_config:` field, so the
     validator lives next to its sole caller rather than in shared machinery.
 
     Args:
-        cfg (`Mapping[str, Any] | None`): Authored config, or `None` for defaults.
+        cfg (`Mapping[str, Any] | ValueTemplate | Binding | None`): Authored config, or
+            `None` for defaults.
         prefix (`str`): Message prefix naming the config, such as
             ``"node 'a': llm_config"``.
         source_range (`SourceRange | None`): Authored config location, when retained.
+        diagnostics (`LoadDiagnostics | None`): Factory for located load errors.
+        field_ranges (`Mapping[str, SourceRange] | None`): For a layer holding values,
+            the value range of each key written in it, by dotted path.
 
     Returns:
-        `tuple[dict[str, Any], bool]`: Config without `inherit`, then its boolean value.
+        `tuple[dict[str, Any] | ValueTemplate | Binding, bool]`: Config without
+            `inherit`, then its boolean value.
 
     Raises:
-        `LoadError`: The config is not a mapping, sets a non-boolean `inherit`, sets
-            `api_key`, `organization`, `project` or `headers`, sets `base_url` other
-            than beside `provider: azure`, or violates `LLMConfig`. A text field YAML
-            read as non-text (such as `model: 5`) is named by `not_text_error`; any
-            other violation keeps pydantic's message.
+        `LoadError`: The config is not a mapping, sets a non-boolean `inherit` or one
+            from a value, sets `api_key`, `organization`, `project` or `headers`, sets
+            `base_url` other than beside `provider: azure` or from a value, has a
+            whole-record type declaring one of those, or violates `LLMConfig`. A text
+            field YAML read as non-text (such as `model: 5`) is named by
+            `not_text_error`; any other violation keeps pydantic's message.
     """
     diagnostics = diagnostics or LoadDiagnostics()
     if cfg is None:
         return {}, True
+    if isinstance(cfg, (ValueTemplate, Binding)):
+        return _check_llm_config_value(
+            cfg, prefix, source_range, diagnostics, field_ranges or {}
+        )
     if not isinstance(cfg, Mapping):
         raise diagnostics.error(
             f"{prefix} must be a mapping",
@@ -127,24 +385,8 @@ def _validate_llm_config(
         )
     host_only = host_only_field_error(cfg)
     if host_only is not None:
-        # Each host-only message starts with `llm_config.`, which the prefix replaces; a
-        # message that does not is kept whole after the prefix.
-        rest = host_only.removeprefix("llm_config")
-        message = prefix + rest if rest != host_only else f"{prefix}: {host_only}"
-        raise diagnostics.error(message, range=source_range)
-    try:
-        LLMConfig(**cfg)
-    except ValidationError as exc:
-        detail = not_text_detail(exc)
-        raise diagnostics.error(
-            f"{prefix}: " + (not_text_error(*detail) if detail is not None else str(exc)),
-            range=source_range,
-        ) from exc
-    except Exception as exc:
-        raise diagnostics.error(
-            f"{prefix}: {exc}",
-            range=source_range,
-        ) from exc
+        raise diagnostics.error(_host_only_message(prefix, host_only), range=source_range)
+    _check_literal_fields(cfg, prefix, source_range, diagnostics)
     return cfg, inherit
 
 
@@ -190,7 +432,8 @@ class AgentDescriptor(NodeDescriptor):
     variables: dict[str, Any] = field(default_factory=dict)
     tools: list[str] = field(default_factory=list)
     skills: list[str] | str = field(default_factory=list)
-    llm_config: dict[str, Any] = field(default_factory=dict)
+    # A plain dict, or a `ValueTemplate`/`Binding` once read with the values in it.
+    llm_config: dict[str, Any] | ValueTemplate | Binding = field(default_factory=dict)
     # The effective count, so the manifest holds it and a default flow keeps its identity.
     retries: int = field(default_factory=lambda: current().agent_retries)
     asserts: list[str] = field(default_factory=list)
@@ -357,6 +600,11 @@ class AgentDescriptor(NodeDescriptor):
             self.field_labels.get("llm_config") or f"node {self.id!r}: llm_config",
             llm_config_range,
             ctx.diagnostics,
+            {
+                path: rng
+                for (kind, path), rng in self.field_ranges.items()
+                if kind == "llm_config"
+            },
         )
         steerable_range = self.field_ranges.get(("field", "steerable")) or self.range
         if "max_tool_iterations" in self.env and not is_max_tool_iterations(

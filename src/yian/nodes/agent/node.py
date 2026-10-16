@@ -46,8 +46,10 @@ from yian.nodes.base import (
 )
 from yian.nodes.binding import BindingError, apply_defaults
 from yian.nodes.contracts import (
+    Binding,
     Parameter,
     ValueContract,
+    ValueTemplate,
     _iter_origin_carrier,
     _rewrite_origin_carrier,
 )
@@ -100,7 +102,7 @@ class AgentNode(Node):
         prompt: str = "",
         system_prompt: str | None = None,
         tools: Optional[list[str]] = None,
-        llm_config: Optional[dict[str, Any]] = None,
+        llm_config: dict[str, Any] | ValueTemplate | Binding | None = None,
         llm_inherit: bool = True,
         retries: int | None = None,
         title: Optional[str] = None,
@@ -123,9 +125,15 @@ class AgentNode(Node):
                 "Remove it and grant registered Yian tools explicitly."
             )
         # own_llm_config is the authored source re-resolved by each cascade pass;
-        # llm_config is the effective config baked for this run.
-        self.own_llm_config: dict[str, Any] = dict(llm_config) if llm_config else {}
-        self.llm_config = llm_config
+        # llm_config is the effective config baked for this run. A layer holding values
+        # (a template, or a binding for the whole record) has no config until they resolve.
+        self.own_llm_config: dict[str, Any] | ValueTemplate | Binding
+        if isinstance(llm_config, (ValueTemplate, Binding)):
+            self.own_llm_config = llm_config
+            self.llm_config = None
+        else:
+            self.own_llm_config = dict(llm_config) if llm_config else {}
+            self.llm_config = llm_config
         self.llm_inherit = llm_inherit
         self.retries = current().agent_retries if retries is None else retries
         if type(memories) is not tuple or any(
@@ -243,12 +251,14 @@ class AgentNode(Node):
         *,
         _seen_carriers: Optional[set[int]] = None,
     ) -> Iterator[OriginRef]:
-        """Yield common origins, variable declarations, and memory declaration sites."""
+        """Yield common, variable, memory declaration and authored `llm_config` value origins."""
         seen = _seen_carriers if _seen_carriers is not None else set()
         yield from super().iter_local_origins(_seen_carriers=seen)
         for variable in self.variables:
             yield from _iter_origin_carrier(variable, seen)
         yield from _iter_memory_decl_origins(self.memories, seen)
+        if isinstance(self.own_llm_config, (ValueTemplate, Binding)):
+            yield from _iter_origin_carrier(self.own_llm_config, seen)
 
     def rewrite_local_origins(
         self,
@@ -256,12 +266,17 @@ class AgentNode(Node):
         *,
         _seen_carriers: Optional[set[int]] = None,
     ) -> None:
-        """Rewrite common, variable, and memory declaration origins while retaining aliases."""
+        """Rewrite common, variable, memory declaration and `llm_config` value origins.
+
+        Carrier aliases are retained.
+        """
         seen = _seen_carriers if _seen_carriers is not None else set()
         super().rewrite_local_origins(mapper, _seen_carriers=seen)
         for variable in self.variables:
             _rewrite_origin_carrier(variable, mapper, seen)
         _rewrite_memory_decl_origins(self.memories, mapper, seen)
+        if isinstance(self.own_llm_config, (ValueTemplate, Binding)):
+            _rewrite_origin_carrier(self.own_llm_config, mapper, seen)
 
     def _max_tool_iterations(self) -> int:
         """Return the authored or default positive loop bound, or ``-1`` for no bound."""

@@ -402,8 +402,6 @@ class McpServer:
 
     def _open(self, owner: str) -> McpServer:
         """Start the server and record `owner` once its tools are listed."""
-        if self._owner is not None or self._thread is not None:
-            raise RuntimeError(f"MCP server '{self._label}' is already open")
         try:
             import mcp  # noqa: F401
         except ImportError as exc:
@@ -414,43 +412,51 @@ class McpServer:
         connect_timeout = self._connect_timeout or settings.mcp_connect_timeout_seconds
         call_timeout = self._timeout or settings.mcp_call_timeout_seconds
 
-        self._ready = threading.Event()
-        self._close_requested = False
-        self._error = None
-        self._loop = self._closing = self._scope = None
-        self._client = self._tools = None
-        self._transport_failures = 0
-        self._call_timeout = call_timeout
-        self._dead = False
-        if self._url is None:
-            # A real file, not a pipe yian must drain: the subprocess writes it directly,
-            # and its stderr never reaches the host's.
-            self._stderr = tempfile.TemporaryFile("w+")
-        self._thread = threading.Thread(
-            target=self._run,
-            args=(connect_timeout, call_timeout),
-            name=f"yian-mcp-{self._label}",
-            daemon=True,
-        )
+        # Under the lock, so two open() calls, or a close() from another thread, can't
+        # interleave with the check and the reset.
+        with self._lock:
+            if self._owner is not None or self._thread is not None:
+                raise RuntimeError(f"MCP server '{self._label}' is already open")
+            ready = self._ready = threading.Event()
+            self._close_requested = False
+            self._error = None
+            self._loop = self._closing = self._scope = None
+            self._client = self._tools = None
+            self._transport_failures = 0
+            self._call_timeout = call_timeout
+            self._dead = False
+            if self._url is None:
+                # A real file, not a pipe yian must drain: the subprocess writes it
+                # directly, and its stderr never reaches the host's.
+                self._stderr = tempfile.TemporaryFile("w+")
+            thread = self._thread = threading.Thread(
+                target=self._run,
+                args=(connect_timeout, call_timeout),
+                name=f"yian-mcp-{self._label}",
+                daemon=True,
+            )
         try:
-            self._thread.start()
+            thread.start()
             deadline = time.monotonic() + connect_timeout + 10
             # Short waits, so a SIGINT in the main thread raises promptly.
-            while not self._ready.wait(0.1):
-                if not self._thread.is_alive():
+            while not ready.wait(0.1):
+                if not thread.is_alive():
                     break
                 if time.monotonic() > deadline:
                     raise McpConnectError(
                         f"MCP server '{self._label}' didn't start within {connect_timeout:g} s"
                     )
-            if not self._ready.is_set():
-                raise self._error or McpConnectError(
-                    f"MCP server '{self._label}' stopped while starting"
-                )
+            with self._lock:
+                if self._close_requested:
+                    raise McpConnectError(f"MCP server '{self._label}' was closed while starting")
+                if not ready.is_set():
+                    raise self._error or McpConnectError(
+                        f"MCP server '{self._label}' stopped while starting"
+                    )
+                self._owner = owner
         except BaseException:
             self.close()
             raise
-        self._owner = owner
         return self
 
     def close(self) -> None:
@@ -534,11 +540,15 @@ class McpServer:
                     self._tools = tools
                     self._ready.set()
                     await self._closing.wait()
+                    # Bounds the shutdown: an HTTP close sends a DELETE that a silent
+                    # host could hold past close()'s join. The SDK shields stdio's.
+                    scope.deadline = anyio.current_time() + 5
         except BaseException as exc:
             if not self._ready.is_set():
                 self._error = self._connect_error(exc)
             return
-        if scope.cancelled_caught and not self._ready.is_set():
+        # A close() during the connect cancels the scope too; open() reports that itself.
+        if scope.cancelled_caught and not self._ready.is_set() and not self._close_requested:
             self._error = McpConnectError(
                 f"MCP server '{self._label}' didn't start within {connect_timeout:g} s"
                 + self._stderr_tail()
@@ -652,7 +662,8 @@ class McpServer:
         """
         stop = _current_stop()
         with self._lock:
-            client, loop = self._client, self._loop
+            # The connection this call goes to; a later re-open replaces all three.
+            client, loop, thread, ready = self._client, self._loop, self._thread, self._ready
             if self._close_requested or self._dead:
                 raise self._closed()
             if client is None or loop is None:
@@ -668,7 +679,7 @@ class McpServer:
             except RuntimeError as exc:
                 # The loop has closed: the server went away.
                 coro.close()
-                raise self._closed() from exc
+                raise self._closed(ready) from exc
             self._calls.add(future)
         try:
             loop_gone = False
@@ -677,16 +688,15 @@ class McpServer:
                     # Cancels the request task; the SDK tells the server from a shielded scope.
                     future.cancel()
                     raise self._cancelled(tool_name)
-                thread = self._thread
                 if thread is None or not thread.is_alive():
                     # The loop resolves its calls as it ends; give it one more slice.
                     if loop_gone:
-                        raise self._closed()
+                        raise self._closed(ready)
                     loop_gone = True
             try:
                 result = future.result()
             except Exception as exc:
-                raise self._call_error(tool_name, exc, started, failures_before) from exc
+                raise self._call_error(tool_name, exc, started, failures_before, ready) from exc
         finally:
             if not future.done():
                 future.cancel()
@@ -695,7 +705,12 @@ class McpServer:
         return _result_value(result)
 
     def _call_error(
-        self, tool_name: str, exc: Exception, started: float, failures_before: int
+        self,
+        tool_name: str,
+        exc: Exception,
+        started: float,
+        failures_before: int,
+        ready: threading.Event,
     ) -> McpError:
         """Return the error a failed tool call raises.
 
@@ -711,6 +726,8 @@ class McpServer:
                 The `time.monotonic()` at which the call was sent.
             failures_before (`int`):
                 The HTTP transport failure count when the call was sent.
+            ready (`threading.Event`):
+                The connection generation (`_ready`) the call was sent on.
 
         Returns:
             `McpError`:
@@ -719,10 +736,10 @@ class McpServer:
         from mcp import MCPError
 
         if self._close_requested or not self._loop_alive():
-            return self._closed()
+            return self._closed(ready)
         if isinstance(exc, concurrent.futures.CancelledError):
             # Not a stop of the calling run: that raised McpCallCancelled already.
-            return self._closed()
+            return self._closed(ready)
         if isinstance(exc, MCPError):
             code = exc.code
             elapsed = time.monotonic() - started
@@ -737,7 +754,7 @@ class McpServer:
             # ends without a response arrives as -32000 too; only a failed probe means
             # the connection is gone.
             if code == _CONNECTION_CLOSED and not self._probe_alive():
-                return self._closed()
+                return self._closed(ready)
             kind = McpInvalidRequestError if code in _INVALID_REQUEST_CODES else McpRequestError
             return kind(f"MCP server '{self._label}' tool '{tool_name}': {exc.message} (code {code})", code)
         if isinstance(exc, TimeoutError):
@@ -785,9 +802,18 @@ class McpServer:
             return True
         return True
 
-    def _closed(self) -> McpServerClosed:
-        """Mark the server gone and return the `McpServerClosed` a call raises."""
-        self._dead = True
+    def _closed(self, ready: threading.Event | None = None) -> McpServerClosed:
+        """Mark the server gone and return the `McpServerClosed` a call raises.
+
+        Args:
+            ready (`threading.Event`, *optional*, defaults to `None`):
+                The connection generation (`_ready`) the failed call was sent on. The
+                server is marked gone only while that generation is current, so a call
+                that resolves after a re-open leaves the new connection alone. `None`
+                means the current one.
+        """
+        if ready is None or ready is self._ready:
+            self._dead = True
         return McpServerClosed(f"MCP server '{self._label}' is closed")
 
     def _timed_out(self, tool_name: str) -> McpTimeoutError:

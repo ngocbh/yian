@@ -1,5 +1,6 @@
 """MCP call failures map to yian's error and retry classes; stops and `close()` end waiting calls."""
 
+import concurrent.futures
 import threading
 import time
 
@@ -274,3 +275,13 @@ def test_an_agent_model_reads_an_mcp_error_result_and_the_node_succeeds(monkeypa
     [message] = [m for m in model.calls[1] if isinstance(m, ToolMessage)]
     assert message.status == "error"
     assert "no luck" in message.content
+
+
+def test_a_late_failure_from_an_earlier_connection_leaves_the_reopened_server_alive(server):
+    # A call close() cancelled can resolve after a quick re-open; its connection
+    # generation (`_ready`) is then stale.
+    stale = threading.Event()
+    error = server._call_error("echo", concurrent.futures.CancelledError(), time.monotonic(), 0, stale)
+    assert isinstance(error, McpServerClosed)
+    assert not server._dead
+    assert _tools(server).invoke("echo", {"text": "alive"}) == "alive"

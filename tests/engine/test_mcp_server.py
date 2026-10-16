@@ -251,6 +251,24 @@ def test_keyboard_interrupt_during_open_closes_the_server(tmp_path):
     assert not child_alive(int(marker.read_text()))
 
 
+def test_close_from_another_thread_during_open_fails_the_open(tmp_path):
+    marker = tmp_path / "pid"
+    server = _server("--hang", "--marker", str(marker), connect_timeout=20, label="starting")
+    timer = threading.Timer(0.5, server.close)
+    start = time.monotonic()
+    timer.start()
+    try:
+        with pytest.raises(McpConnectError, match="'starting' was closed while starting"):
+            server.open()
+    finally:
+        timer.cancel()
+        timer.join(15)
+    assert time.monotonic() - start < 0.5 + 10
+    assert not server.is_open
+    assert mcp_threads() == []
+    assert not child_alive(int(marker.read_text()))
+
+
 def test_open_without_the_sdk_names_the_extra(monkeypatch):
     import importlib
 

@@ -1343,7 +1343,9 @@ def _agent_connections(
     gap-fill layer and values read from the run's inputs) on a throwaway copy of the
     compiled flow, and binds each agent's connection as a fresh run would. The
     effective map covers the whole static call tree, and every provider in it is
-    concrete.
+    concrete. An agent whose config resolves only when it runs counts when its
+    provider is already known (`known_provider`); otherwise its key is checked at
+    its model call.
 
     Args:
         loaded (`ComposedFlow`):
@@ -1367,12 +1369,20 @@ def _agent_connections(
     """
     import copy
 
+    from yian.compile.llm_cascade import known_call_time_providers
     from yian.llm_clients.connection import connection_snapshot
 
     probe = copy.deepcopy(loaded.compiled)
     snapshot = connection_snapshot()
     coerced = coerce_inputs(loaded.input, dict(inputs or {}))
-    effective = _run_start_llm(probe, coerced, dict(cli_cfg), snapshot).effective
+    run_llm = _run_start_llm(probe, coerced, dict(cli_cfg), snapshot)
+    # A call-time agent whose provider no value can change needs its key as surely as
+    # a static agent; finding out at its model call would waste the nodes before it.
+    known = known_call_time_providers(probe, run_llm.call_time, snapshot.defaults)
+    effective = {
+        **run_llm.effective,
+        **{path: {"provider": provider} for path, provider in known.items() if provider},
+    }
 
     seen: List[tuple[str, Optional[Dict[str, Any]]]] = []
     for config in snapshot.bind(effective).values():

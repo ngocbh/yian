@@ -123,3 +123,72 @@ def test_a_bad_provider_input_fails_before_the_log_exists(tmp_path):
     assert result.exit_code == 1
     assert _compact("llm_config.provider: not a known provider") in output
     assert not log.exists()
+
+
+def _call_time_flow(chat_llm: str, *, pick: str = "str", value: str = "'m1'", typedefs="") -> str:
+    """A flow whose ``chat`` agent's config takes ``pick``'s output, below an Anthropic flow."""
+    return f"""id: picked
+name: picked
+{typedefs}nodes:
+  pick: {{kind: code, output: {pick}, code: "return {value}"}}
+  chat:
+    kind: agent
+    prompt: hi
+    llm_config: {chat_llm}
+output: ${{chat.output}}
+llm_config: {{provider: anthropic}}
+"""
+
+
+def _answer_locally(monkeypatch: pytest.MonkeyPatch) -> list:
+    from langchain_core.messages import AIMessage
+    import yian.llm_clients as llm_clients
+
+    built = []
+
+    class _Model:
+        def invoke(self, messages):
+            return AIMessage(content="answered")
+
+    def model_from_config(config):
+        built.append(config)
+        return _Model()
+
+    monkeypatch.setattr(llm_clients, "model_from_config", model_from_config)
+    return built
+
+
+def test_the_key_check_covers_a_call_time_agent_with_a_known_provider(monkeypatch, tmp_path):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    built = _answer_locally(monkeypatch)
+    flow = tmp_path / "flow.yaml"
+    flow.write_text(_call_time_flow("{model: '${pick.output}'}"))
+    log = tmp_path / "run.jsonl"
+    result = runner.invoke(app, ["run", str(flow), "--log", str(log)])
+    output = _compact(result.output)
+    assert result.exit_code == 1, result.output
+    assert "ANTHROPIC_API_KEY" in output
+    assert not log.exists()
+    assert built == []
+
+
+@pytest.mark.parametrize("text", [
+    _call_time_flow("{provider: '${pick.output}'}", pick="Optional(str)", value="'openai'"),
+    _call_time_flow(
+        "!Cfg ${pick.output}", pick="Cfg", value="{'provider': 'openai', 'model': 'm1'}",
+        typedefs="typedefs:\n  Cfg: {provider: Optional(str), model: str}\n",
+    ),
+], ids=["nullable provider", "whole record"])
+def test_a_provider_a_value_may_still_set_is_not_checked_up_front(monkeypatch, tmp_path, text):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    built = _answer_locally(monkeypatch)
+    flow = tmp_path / "flow.yaml"
+    flow.write_text(text.replace("llm_config: {provider: anthropic}", (
+        "llm_config: {provider: anthropic, model: claude-x}"
+    )))
+    log = tmp_path / "run.jsonl"
+    result = runner.invoke(app, ["run", str(flow), "--log", str(log)])
+    assert result.exit_code == 0, result.output
+    assert log.exists()
+    [config] = built
+    assert config["provider"] == "openai"

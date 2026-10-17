@@ -208,8 +208,9 @@ declared type fits, or a tag comparison (`==` or `!=`) with text that is no tag
 (`` `v.action != "biy"` compares v.action with 'biy', which is not one of its tags (buy,
 sell); did you mean 'buy'? ``). A `while:` first runs on the seeds, so a check is impossible
 there only when it is on the seed's type too (a seed of another or unproven type leaves it
-unknown), and a flow assert reads a producer the flow may skip as null, so
-`not isinstance(d.output, Order)` can hold there.
+unknown), and a flow assert reads every producer it names as possibly null (END binds
+each with `:- null`), for its checks and reads alike, so `not isinstance(d.output, Order)`
+is not reported even on an always-run `d`; read errors still name the declared type.
 
 **Operators inside `${...}`** — one expression grammar, everywhere:
 

@@ -362,6 +362,7 @@ def _condition_errors(
             registry,
             site,
             partial_union_fields=root in partial_union_roots,
+            nullable=root in nullable_roots,
         )
         if message is not None:
             messages.append(message)
@@ -399,13 +400,16 @@ def _read_error(
     site: _ReadSite,
     *,
     partial_union_fields: bool,
+    nullable: bool = False,
 ) -> str | None:
     """Return why the `index`-th read `ref` below `root` can't work, else `None`.
 
     The read is an error when every view in `live` (those trying `root`'s contracts
     where it runs) rejects it: on each of the `unnarrowed` contracts when no check
     narrows `root`, else on the view's narrowed types or chosen contract. A narrowed
-    error is preferred over an unnarrowed one.
+    error is preferred over an unnarrowed one. When `root` is `nullable` only because
+    its producer may be skipped, the error names the declared type, not the nullable
+    one the checks narrowed.
     """
     fields = ref[len(root) + 1 :].split(".")
     union_root = site.union_roots.get(root)
@@ -450,13 +454,73 @@ def _read_error(
             )
             if error is None:
                 return None
-            narrowed_error = narrowed_error or narrowed_read_error(
-                ref, candidate, error, registry
-            )
+            if narrowed_error is not None:
+                continue
+            if nullable:
+                narrowed_error = _declared_read_error(
+                    ref,
+                    candidate,
+                    error,
+                    choice[root],
+                    fields,
+                    _root_base_type(choice)(candidate[2]),
+                    registry,
+                    site,
+                    partial_union_fields=partial_union_fields,
+                    union_root=union_root,
+                )
+            else:
+                narrowed_error = narrowed_read_error(ref, candidate, error, registry)
         errors.append((True, narrowed_error))
     if not errors:
         return None
     return next((error for narrowed, error in errors if narrowed), errors[0][1])
+
+
+def _declared_read_error(
+    ref: str,
+    candidate: tuple[Type, tuple[str, ...], str],
+    error: str,
+    contract: OutputContract,
+    fields: list[str],
+    declared: Type | None | NotNarrowable,
+    registry: TypeRegistry,
+    site: _ReadSite,
+    *,
+    partial_union_fields: bool,
+    union_root: str | None,
+) -> str:
+    """A narrowed read's error below a root that is nullable only because its producer
+    may be skipped, worded on the `declared` type of the candidate's base.
+
+    The narrowed type loses that null, and when the checks leave only null the read
+    (`fields` below the root) is walked on the root's chosen `contract` instead.
+    """
+    typ, below, base = candidate
+    if not isinstance(declared, Type) or declared.nullable:
+        return narrowed_read_error(ref, candidate, error, registry)
+    if typ.kind is ValueKind.NONE:
+        return (
+            site.error(
+                contract,
+                fields,
+                ref,
+                partial_union_fields=partial_union_fields,
+                union_root=union_root,
+            )
+            or error
+        )
+    stripped = replace(typ, nullable=False)
+    error = (
+        site.error(
+            ValueContract(stripped),
+            list(below),
+            ref,
+            partial_union_fields=partial_union_fields,
+        )
+        or error
+    )
+    return narrowed_read_error(ref, (stripped, below, base), error, registry)
 
 
 @dataclass(frozen=True)
@@ -524,7 +588,8 @@ def lower_flow_asserts(
     read, and reported as written. A check that can never be true is a load error, and the
     `isinstance` types resolve in ``registry`` (the flow's typedefs). A producer read may
     be null, since END binds it as `${<id>.output :- null}` and a skipped producer reads
-    null, so checks take each producer's type as nullable.
+    null, so checks and reads take each producer's type as nullable; their errors name
+    the declared type.
 
     Raises `LoadError` on the first malformed assert, bad ref, impossible check, bad
     field read, or `${system}` ref.

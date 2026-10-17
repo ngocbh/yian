@@ -927,6 +927,39 @@ def test_flow_assert_check_impossible_even_on_null_is_reported(assertion, expect
     assert expected in message
 
 
+@pytest.mark.parametrize("skippable", [True, False], ids=["skippable", "always-run"])
+@pytest.mark.parametrize(
+    ("assertion", "expected"),
+    [
+        (
+            "isinstance(d.output, Sell) or d.output.qtty > 0",
+            "reference ${d.output.qtty} reads field 'qtty', which Buy doesn't have; "
+            "d.output is Buy here, by the checks before this read; did you mean 'qty'?",
+        ),
+        (
+            "d.output != null and not isinstance(d.output, Buy) and d.output.qty > 0",
+            "reference ${d.output.qty} reads field 'qty', which Sell doesn't have; "
+            "d.output is Sell here, by the checks before this read",
+        ),
+        (
+            "d.output.action == 'buy' or d.output.action == 'sell' or d.output.zz > 0",
+            "reference ${d.output.zz} reads unknown field 'zz' on record",
+        ),
+    ],
+    ids=["narrowed-typo", "null-ruled-out", "only-null-left"],
+)
+def test_flow_assert_read_error_names_the_declared_type(assertion, expected, skippable):
+    """A producer read may be null, but its read errors name the declared type."""
+    if skippable:
+        text = _skippable_assert(assertion)
+    else:
+        text = _flow(_producer("d", "Order"), "${step.output}", tail=_asserts(assertion))
+    message = _load_error(text)
+    assert expected in message
+    assert "Optional(" not in message
+    assert "type None" not in message
+
+
 def test_flow_assert_shorthand_check_is_reported_as_written():
     message = _load_error(_flow_assert("isinstance(o, Rec)"))
     assert (

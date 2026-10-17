@@ -1177,9 +1177,11 @@ distinct contracts of the roots some check can narrow, each root's contracts wit
 multi-contract roots unnarrowed (facts never cross roots, so this is linear in the
 alternatives): a check is impossible only under every contract of its base's root, a read
 is skipped only when every contract of one root kills it, and a read is an error only when
-every contract of its root where it runs rejects it. A flow assert takes each producer root
-as nullable for checks, since END binds it as `${<id>.output :- null}` and a skipped
-producer reads null, and spells a check as written.
+every contract of its root where it runs rejects it. A flow assert takes every producer
+root as nullable (`nullable_roots`) for its checks and narrowed reads alike, since END binds
+each as `${<id>.output :- null}` and a skipped producer reads null; impossible-check and
+read errors name the declared type (`_declared_label`, `_declared_read_error`), and a check
+is spelled as written.
 
 Compose output derivation, builders, child signatures, and producer maps retain the
 complete output-contract sum. `ChildSignature.declared_outputs` retains ordered

@@ -477,19 +477,21 @@ declared type fits (or, under `not`, one every value fits), and a tag comparison
 sell); did you mean 'buy'?
 ```
 
-A read that runs only when such a check is true isn't field-checked, since no value
-reaches it (the read in `v.action != "biy" and v.qty > 0` still is: a `!=` with text that
-is no tag is always true). A node
-assert's local name that may have several types (a typed binding's declared and inferred
-ones) reports a check only when it is impossible under each, and skips a read only when
-no value reaches it under each. A flow assert names a flow input as written: `isinstance(o,
-Text)` is reported as `isinstance(o, Text)`. It reads a producer the flow may skip as null,
-so `not isinstance(d.output, Order)` can be true there even with `d` typed `Order`. A LOOP
-`while:` first runs on the seed, so a check is reported only when it can't be true on the
-seed either: with a body returning `r: Done` and the seed `r: null`, `while: not
-isinstance(r, Done)` loads, and a seed whose type neither fits the body's nor holds it (a
-literal record of another shape, an untyped producer) leaves `r`'s type unknown there. `until:` runs after the
-body, so it is checked against the body's type alone.
+A read that runs only when such a check is true isn't field-checked, since no value reaches
+it (the read in `v.action != "biy" and v.qty > 0` still is: a `!=` with text that is no tag
+is always true). A node assert's local name that may have several types (a typed binding's
+declared and inferred ones) reports a check only when it is impossible under each, and
+skips a read only when no value reaches it under each. A flow assert names a flow input as
+written: `isinstance(o, Text)` is reported as `isinstance(o, Text)`. It reads every
+producer it names as possibly null, since END binds each one with `:- null` and a skipped
+producer reads null: `not isinstance(d.output, Order)` is not reported even with `d` typed
+`Order` and always run. Its read errors still name the declared type (`d.output is Buy
+here`, not `Optional(Buy)`). A LOOP `while:` first runs on the seed, so a check is reported
+only when it can't be true on the seed either: with a body returning `r: Done` and the seed
+`r: null`, `while: not isinstance(r, Done)` loads, and a seed whose type neither fits the
+body's nor holds it (a literal record of another shape, an untyped producer) leaves `r`'s
+type unknown there. `until:` runs after the body, so it is checked against the body's type
+alone.
 
 Changed: an `isinstance` or tag check inside a condition now narrows reads after it through
 `and`, `or` and `not`. Asserts guarded this way load again (they briefly failed to load),

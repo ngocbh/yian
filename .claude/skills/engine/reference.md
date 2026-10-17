@@ -1121,7 +1121,12 @@ shares some and no other base member overlaps `T`, and `Exact(T)` otherwise; a b
 type already fits `T` gets none (`isinstance_members` in
 `compose/helpers/isinstance_types.py`). A false one keeps the base members not in `T`
 (`not_isinstance_fact`), and a tag comparison the members with, or without, that tag
-(`tag_fact`, as an `on:` branch selects them). A searched CASE's `__rN` param whose every
+(`tag_fact`, as an `on:` branch selects them). A true null check gives an `Optional`
+union's members, not nullable, or `Exact` of the non-null type (`not_null_fact`); a false
+one gives none. Two `Exact` facts meet to the one whose type fits the other, with null
+removed when either side is non-null. A non-null fact on a nested path makes each record
+above it non-null with that field required (`_narrow_type`). A searched CASE's `__rN`
+param whose every
 read is guarded by the checks before it gets its own view: the union over its reads of
 each read's guard facts, met with the node's routing facts (`Narrowing.param_views`, read
 through `for_param`); where that meet loses a fact (two unrelated exact types), the param
@@ -1138,15 +1143,25 @@ check of a LOOP seed against its body's input, like a CALL argument's, uses the 
 view. `compose/validate/loop_types.py` then checks each returned LOOP field against the
 parameter the next iteration binds it to: a named body's input or an inline body's
 generated parameter. Over a typed seed, a nullable returned field whose non-null type fits
-is left to the runtime input check.
+is left to the runtime input check. Both checks compare against `loop_entry_inputs`
+(`compose/nodes/loop.py`): each input read as nullable at a path a `while:` null check
+proves (`while_non_null_paths`: `and` parts and `not (x == null)`, not `or` parts;
+`until:`/`times:` none) and at each record above it (`with_nullability`). `child_inputs`
+stay declared, so errors name the declared input and the body's start checks each value.
+A seed only that reading admits must also fit the carried field type
+(`carried_field_types`), since a zero-iteration run outputs the seeds
+(`_breaks_zero_iteration_output`); an inline body's generated inputs stay typed from the
+seeds.
 
 Every condition narrows by short-circuit logic through two kind-agnostic modules that
 CASE (`compose/nodes/case.py`, `narrowing.py`), LOOP (`compose/nodes/loop.py`), and node
 and flow asserts (`compose/validate/asserts.py`) share; they sit in `compose/helpers/` so
 `compose/nodes` can use them without importing `compose/validate`.
 `compose/helpers/condition_guards.py` is syntax only. Checks are `IsinstanceCheck`
-(`isinstance(<direct ref>, T)`) and `TagCheck` (`<direct ref>.<field> == "<text>"`, either
-side; `!=` is the same check negated). Guards are in negation normal form (`Holds`,
+(`isinstance(<direct ref>, T)`), `TagCheck` (`<direct ref>.<field> == "<text>"`, either
+side; `!=` is the same check negated), and `NotNullCheck` (`<direct ref> != null`, either
+side, `none` included; `==` is the same check negated). Guards are in negation normal
+form (`Holds`,
 `AllOf`, `AnyOf`, `NOTHING`): `proves(tree, value)` is what holds when a condition
 evaluates to `value`; `guarded_refs` gives each reference occurrence the guard that holds
 whenever it is evaluated (the operands before it true in an `and`, false in an `or`; `not`
@@ -1164,7 +1179,8 @@ which Done doesn't have; r is Done here, by the checks before this read; did you
 that can never be true: its context met with its own fact is an empty, non-nullable member
 set (under the checks before it, or at a CASE its routing too), an `isinstance` whose type
 doesn't overlap the declared type (or, under `not`, one the declared type always fits), or
-a tag comparison whose text is no tag; `impossible_check_message` words them and each site
+a tag comparison whose text is no tag (a null check only by its context, never by its
+declared type alone); `impossible_check_message` words them and each site
 locates them (`check_impossible_whens` for `when:`). `checked_refs` skips the field check
 of a read that runs only when a reported check has the value it never has, whatever the
 report's reason (`condition_guards.falsified` makes that check prove `NEVER` for it), and

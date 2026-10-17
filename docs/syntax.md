@@ -416,15 +416,19 @@ the value; quote it.
 
 ### Narrowing inside a condition
 
-A condition narrows a [union](#unions-of-records-union) value as it goes, because `and` and
-`or` short-circuit: in `A and B`, `B` runs only once `A` is true, and in `A or B` only once
-`A` is false; `not` flips what a check proves. Two checks narrow a plain reference
-`<ref>`:
+A condition narrows a [union](#unions-of-records-union) or `Optional` value as it goes,
+because `and` and `or` short-circuit: in `A and B`, `B` runs only once `A` is true, and in
+`A or B` only once `A` is false; `not` flips what a check proves. Three checks narrow a
+plain reference `<ref>`:
 
 - `isinstance(<ref>, T)`, which keeps the members `T` allows, by the rule a searched `case`
   uses (see [Narrowing a union in a branch](#narrowing-a-union-in-a-branch));
 - a comparison of a union's tag field with text, `<ref>.<tag> == "<text>"` (either side),
-  which keeps the members with that tag; `!=` proves the opposite.
+  which keeps the members with that tag; `!=` proves the opposite;
+- a null check, `<ref> != null` (either side), which proves `<ref>` is not null: it
+  narrows `Optional(T)` to `T`, and an `Optional` union to its members. `<ref> == null`
+  proves it when false, so `not (x == null)` and the read in `x == null or x.qty > 0` see
+  `x` as not null. `none` is the same as `null`. There is no `x is not null` form.
 
 The narrowed type replaces the declared one for the reads after the check, the same way for
 `and`, `or` and `not`. With `Order: Union(Buy, Sell)`, where only `Buy` has `qty`, each of
@@ -445,6 +449,17 @@ error. Conditions narrow this way in node and flow asserts, in a searched `case`
 nothing: a read only reachable past it is checked against that type. So does a check the
 checks before it always decide: in `isinstance(v, Buy) and (isinstance(v, Buy) or v.qty >
 0)`, `v.qty` is read on `Buy`.
+
+Two checks on one value meet, and when each proves a type, the narrower one wins:
+`x != null and isinstance(x, Item)` over `x: Optional(Any)` sees `x` as `Item`, either
+way round, and so does `isinstance(x, Wide) and isinstance(x, Item)` when `Item` fits
+`Wide`. A check that proves a nested field is not null (`!= null` or `isinstance`) also
+proves each record above it is not null and has that field: with `A: {b: Optional(str),
+m: Literal(p, q)}` and `a: !Optional(A)`, in a branch under `when: input.a.b != null`,
+`${input.a.b}` is `str`, `${input.a}` is `A`, and an `on: ${input.a.m}` that lists `p` and
+`q` is exhaustive. No check proves a value is null, so a null check narrows nothing when it
+is false: over `x: Optional(Order)`, `x == null or isinstance(x, Buy)` doesn't narrow `x`
+to `Optional(Buy)`.
 
 A read the narrowed type can't have is a load error that names it:
 
@@ -477,11 +492,26 @@ declared type fits (or, under `not`, one every value fits), and a tag comparison
 sell); did you mean 'buy'?
 ```
 
-A read that runs only when such a check is true isn't field-checked, since no value reaches
-it (the read in `v.action != "biy" and v.qty > 0` still is: a `!=` with text that is no tag
-is always true). A node assert's local name that may have several types (a typed binding's
-declared and inferred ones) reports a check only when it is impossible under each, and
-skips a read only when no value reaches it under each. A flow assert names a flow input as
+A null check is reported the same way when the checks before it leave only null. Over
+`x: Optional(Order)`, both `not isinstance(x, Buy) and not isinstance(x, Sell) and x !=
+null` and `isinstance(x, Buy) or isinstance(x, Sell) or x != null` report the null check,
+and `x != null and not isinstance(x, Buy) and not isinstance(x, Sell)` reports the last
+check:
+
+```
+`x != null` can never be true here: x is None, by the checks before it
+`not isinstance(x, Sell)` can never be true here: x is Sell, by the checks before it, so
+`isinstance(x, Sell)` is always true
+```
+
+A null check on a value that can't be null, such as `x != null` with `x: Order`, is
+defensive code and is never reported.
+
+A read that runs only when an impossible check is true isn't field-checked, since no value
+reaches it (the read in `v.action != "biy" and v.qty > 0` still is: a `!=` with text that
+is no tag is always true). A node assert's local name that may have several types (a
+typed binding's declared and inferred ones) reports a check only when it is impossible
+under each, and skips a read only when no value reaches it under each. A flow assert names a flow input as
 written: `isinstance(o, Text)` is reported as `isinstance(o, Text)`. It reads every
 producer it names as possibly null, since END binds each one with `:- null` and a skipped
 producer reads null: `not isinstance(d.output, Order)` is not reported even with `d` typed
@@ -499,6 +529,15 @@ and a check under `or` or `not` now narrows in a `when:` and a LOOP predicate to
 under such a check of a field the checked type can't have, which could only miss at run,
 is now a load error, and so is a check the checks before it make impossible (or that the
 value's type makes impossible, such as a tag value no member has).
+
+Changed: a null check (`x != null`, `not (x == null)`) used to narrow nothing, so a
+searched `case` branch under `when: x.output != null` couldn't pass `${x.output}` to a
+strict input without a tag. It now narrows like `isinstance`, in asserts, `when:` and LOOP
+predicates. A `while:` null check also lets an `Optional` seed or returned value fill a
+strict named-body input (see [`loop`](#a-while-null-check-guards-the-body)). A
+narrowed non-null nested field now marks its parent records non-null too, and two checks
+that each prove a type on one value now keep the narrower one instead of neither. A null
+check the checks before it make impossible is now a load error.
 
 ### Operators inside `${...}`
 
@@ -1130,7 +1169,8 @@ typed.
 - An untyped nullable source into a strict child or LOOP body parameter is still a
   load error, including a child output that is `Optional` because a `case` may skip
   its node. A tag (`x: !int ${maybe.output}`) accepts the narrowing and checks it at
-  runtime.
+  runtime. A null check that proves the source set, in a `case` `when:` that routes the
+  node or a named body's LOOP `while:`, makes the tag unnecessary.
 - An untagged `Any` source fills only an `Any` or `Optional(Any)` parameter. Into any
   other one it is a load error that says to tag the slot (`x: !str ${...}`) or to narrow
   the value with `isinstance` in a `case`.
@@ -2846,8 +2886,8 @@ place_buy:
 
 A searched `case` narrows each branch, and the branch's chain, by what its `when:` proves
 true (see [Narrowing inside a condition](#narrowing-inside-a-condition)): its
-[`isinstance`](expressions.md#isinstance-the-type-test) checks and tag comparisons, through
-`and`, `or` and `not`. So `when: decide.output.action == "buy"`,
+[`isinstance`](expressions.md#isinstance-the-type-test) checks, tag comparisons and null
+checks, through `and`, `or` and `not`. So `when: decide.output.action == "buy"`,
 `when: not isinstance(decide.output, Hold)`, and
 `when: isinstance(decide.output, Buy) or isinstance(decide.output, Sell)` each narrow
 their branch. In `isinstance(<ref>, T)`, `T` may be a member, a union of members, or any
@@ -2870,6 +2910,11 @@ gate:
       then: place_sell
   else: log_other
 ```
+
+A null check narrows its branch the same way. Under `when: lookup.output != null`, a
+branch may pass `${lookup.output}`, typed `Optional(Item)`, to a child input typed `Item`
+with no tag, and under `when: input.a.b != null` it may pass `${input.a.b}` to a `str`
+input. The `else:` still sees the value as `Optional`.
 
 ### `human_input` — a deterministic human gate
 
@@ -3144,10 +3189,12 @@ argument, so these fail at load: a seed whose type doesn't fit, such as `n: ${in
 or `n: !str "abc"` into an `int` input, and an `Optional` reference such as
 `n: ${input.m}` into a strict input, which used to run whenever the value was set. Tag
 a value you know is set: `n: !int ${input.m}`. A seed that may be null, such as a
-pagination cursor that `while: cursor != null` keeps out of the body, needs an
-`Optional` body input (`cursor: !Optional(str)`); tag it inside the body where a strict
-value is needed. A tag on the seed doesn't help there: the seed is evaluated even when
-the loop runs zero times, so a null fails the tag.
+pagination cursor that `while: cursor != null` keeps out of the body, needed an
+`Optional` body input (`cursor: !Optional(str)`) until a `while:` null check came to
+guard the body (see
+[A `while:` null check guards the body](#a-while-null-check-guards-the-body)). A tag on
+the seed doesn't help: the seed is evaluated even when the loop runs zero times, so a
+null fails the tag.
 
 #### Call nesting limit
 
@@ -3435,9 +3482,9 @@ returns the whole carried record.
   `n: "1"` into an `int` input is a load error (write `1`), a `str` reference does not
   fit an `int` input, and `null`, `${null}`, or an `Optional` reference fits only an
   `Optional` input (tag a value you know is set: `n: !int ${input.m}`). This holds
-  even when a `while:` loop would run zero times, so a seed the `while:` keeps out of
-  the body when it is null still needs an `Optional` body input; tag it inside the body
-  where a strict value is needed.
+  even when a `while:` loop would run zero times, except at a path a `while:` null
+  check guards: there an `Optional` seed fills a named body's strict input (see
+  [A `while:` null check guards the body](#a-while-null-check-guards-the-body)).
 - **`call:` / `nodes:`** names a reusable body or defines a one-off body inline.
   The body is one level toward the [call nesting limit](#call-nesting-limit), however
   many iterations run. The body's `output:` returns a **subset** of the carried record:
@@ -3466,7 +3513,8 @@ returns the whole carried record.
   seed is compatible with a nullable body field, including inside a typed list, when
   the body is a named `defs:` body or the seed is tagged. Each returned field must
   fit, at load, the parameter the next iteration binds it to: a named body's own
-  input, or the parameter an inline body types from its seed. An untyped `${null}`
+  input, read as `Optional` where a `while:` null check guards it, or the parameter an
+  inline body types from its seed. An untyped `${null}`
   seed gives the type `None`, so with an inline body, tag the seed:
   `seen: !Optional(list(str)) ${null}`. Over a tagged seed (`note: !str "start"`), a
   returned field typed `Optional(str)` loads, and the next iteration's input check
@@ -3496,11 +3544,10 @@ returns the whole carried record.
 
 Changed: a named LOOP body whose returned field can't fit its own input
 (`Optional(int)` or `float` into `n: !int`) used to load; it is now a load error, as
-for an inline body. This includes a `while: ${n != null}` loop whose null ends the
-loop before it reaches the input: make the body's input `Optional(int)`, or tag the
-seed (`n: !int ${input.z}`) to leave the check of the returned value to runtime.
-(This is about the value the body returns; a seed that may be null still needs an
-`Optional` body input, as before.)
+for an inline body. This included a `while: ${n != null}` loop whose null ends the loop
+before it reaches the input; such a loop loads again now that a `while:` null check
+guards the body (see
+[A `while:` null check guards the body](#a-while-null-check-guards-the-body)).
 
 A chat body carries `person` and `talking_to` unchanged every turn and returns only
 what changes:
@@ -3610,6 +3657,64 @@ overlap the next iteration, whatever `num_workers` is. It runs to completion, an
 run waits for it before it ends; a failure there fails the run. Until it finishes, it
 stays live with the nodes it reads and the nodes grown under it, and the next iteration
 that continues after it has finished prunes them.
+
+#### A `while:` null check guards the body
+
+`while:` runs before every iteration, the first included, so a carried value it proves not
+null never enters the body as null. The load checks read a named body's input as
+`Optional` at that path: an `Optional` seed, and a returned value that may be null, both
+fit a strict input. So pagination needs no `Optional` cursor in the body:
+
+```yaml
+input:
+  start: !Optional(str)
+defs:
+  fetch_page:
+    input:
+      cursor: !str               # never null here
+    nodes:
+      get:
+        kind: code
+        input:
+          cursor: ${input.cursor}
+        output: Optional(str)    # null after the last page
+        code: ...
+    output:
+      cursor: ${get.output}
+nodes:
+  pages:
+    kind: loop
+    while: cursor != null
+    input:
+      cursor: ${input.start}     # Optional(str); null runs zero iterations
+    call: fetch_page
+output: ${pages.output}
+```
+
+- The guarded paths come from `<path> != null` and `not (<path> == null)` in the
+  `while:` or in the parts of its `and`, not from parts under `or`. A nested
+  `page.next != null` guards `page` too: with `Page: {next: Optional(str), n: int}` and
+  `Strict: {next: str, n: int}`, an `Optional(Page)` seed fills a `page: !Strict` input.
+- `until:` and `times:` guard nothing, and an `isinstance` or tag check in `while:`
+  doesn't relax the seed check.
+- With no iteration the loop outputs its seeds, so a guarded seed must also fit what the
+  loop outputs, and a returned field must still keep its carried type. With a body that
+  returns `cursor: str`, the seeds `cursor: ${input.start}` and `cursor: null` still
+  fail, as shown below.
+- An inline `nodes:` body's inputs stay typed from the seeds, so there `cursor` is still
+  `Optional(str)`; tag it where a strict value is needed
+  (`cursor: !str ${input.cursor}`).
+- The body's start still checks each value against the declared input, and a seed or
+  returned field that fails a load check gets the same error as before, naming the
+  declared input.
+
+The two failing seeds above, into a body that returns `cursor: str`:
+
+```
+loop node 'pages': carried field 'cursor' — body output is 'str', carried source is
+'Optional(str)' (a returned field must keep its carried type)
+loop node 'pages': binding 'cursor' — child expects 'str', but the value null does not fit
+```
 
 ## Effects from inside an AGENT node — the `ask_user` tool
 

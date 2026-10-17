@@ -295,7 +295,7 @@ alias in `typedefs:` first. Each flow resolves the names against its own `typede
 (a `uses:` child against its own, and a parent can't name a child's type). An unknown name
 is a located load error: `unknown type 'list'; isinstance takes a typedefs: name or one of
 str, int, float, bool, date, datetime, object`. `Any` is not a target, since it would
-only test for null. The call must be exactly
+only test for null: write `x != null`. The call must be exactly
 `isinstance(<expr>, <TypeName>)`: two positional arguments, and no field read on the
 result.
 
@@ -318,8 +318,11 @@ evaluates with it. `isinstance` works in:
 - flow outputs.
 
 In every condition (`when:`, asserts, `while:` / `until:`), a check narrows the reads after
-it through `and`, `or` and `not` (see
-[Flow syntax → Narrowing inside a condition](syntax.md#narrowing-inside-a-condition)).
+it through `and`, `or` and `not`: an `isinstance`, a tag comparison, or a null check
+`x != null`, which narrows `Optional(T)` to `T` (see
+[Flow syntax → Narrowing inside a condition](syntax.md#narrowing-inside-a-condition)). A
+`while:` null check also lets an `Optional` seed fill a named body's strict input (see
+[Flow syntax → `loop`](syntax.md#a-while-null-check-guards-the-body)).
 
 It is a load error in:
 

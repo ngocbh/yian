@@ -412,7 +412,9 @@ branch only fields every member has can be read. For an untagged union, use a se
 `case` with `when: isinstance(d.output, Text)`; a tagged one may also use a tag comparison
 there (`when: d.output.action == "buy"`). A searched branch sees what its `when:` proves
 (through `and`/`or`/`not`), and a check in any condition (asserts, `when:`, LOOP
-`while:`/`until:`) narrows the reads after it. Return a member field from the flow by
+`while:`/`until:`) narrows the reads after it. A null check `x != null` is a check too:
+under `when: x.output != null` the branch sees `x.output` as not null, so it fills a
+strict input untagged. Return a member field from the flow by
 joining branch nodes (`${b.output | s.output}`); flow outputs are never narrowed. A
 searched `case` whose `when:` reads a node only under such a default doesn't pass that
 node's narrowing to its branches.
@@ -543,6 +545,11 @@ only the fields that change; a field it omits keeps its value. This is the shape
   some union members have needs a check before the read that narrows it, such as
   `isinstance(r, T) and ...` or `r.kind != "more" or ...`), and
   `max:` (when given) and `times:` must be a plain integer `>= 1`.
+  A `while:` null check (`while: cursor != null`, in an `and` part, not under `or`)
+  keeps a null out of a named body, so an `Optional` seed or returned value fills a
+  strict body input there; the seed must still fit the loop's zero-iteration output.
+  `until:` and `times:` don't do this, and an inline body's input stays typed from its
+  seed.
 - **Node-local `asserts:` reading `${output}` are POST checks** — they fire once the
   node's value is committed, and fail the run loudly on a false/raising expr. This
   includes a `call` node: its POST asserts may read `${output}` **and** the call's

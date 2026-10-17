@@ -1930,23 +1930,16 @@ output: ${{loop.output}}
 """
 
 
-def test_while_guarded_optional_seed_needs_an_optional_body_input():
-    # Like a CALL argument, an `Optional` seed can't fill a strict input even when the
-    # `while:` would keep its null out of the body.
-    with pytest.raises(
-        LoadError,
-        match="loop node 'loop': binding 'cursor' — "
-        r"child expects 'str', source is 'Optional\(str\)'",
-    ):
-        load_flow(_PAGES.format(cursor="str"))
-
-    # An `Optional` body input, tagged `str` inside the body, runs with a cursor and
+def test_while_null_check_lets_an_optional_seed_fill_a_strict_body_input():
+    # `while:` keeps a null cursor out of the body, so the `Optional` seed fills a strict
+    # input, and an `Optional` body input works as before; each runs with a cursor and
     # without one.
-    flow = load_flow(_PAGES.format(cursor="Optional(str)"))
-    for start, seen in (("c1", 1), (None, 0)):
-        result = run_flow(flow, {"start": start})
-        assert result.status == "succeeded", result.failure
-        assert result.output == {"cursor": None, "seen": seen}
+    for cursor in ("str", "Optional(str)"):
+        flow = load_flow(_PAGES.format(cursor=cursor))
+        for start, seen in (("c1", 1), (None, 0)):
+            result = run_flow(flow, {"start": start})
+            assert result.status == "succeeded", result.failure
+            assert result.output == {"cursor": None, "seen": seen}
 
 
 # A LOOP routed by a `case` on a `Union(Buy, Hold)` producer, seeding the whole record into

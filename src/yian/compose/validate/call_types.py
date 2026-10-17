@@ -4,18 +4,20 @@ A loader post-build pass (run after the flow's leaves + child signatures are ass
 Each binding's SOURCE contract is resolved from its reference over the PARENT producer +
 flow-input contracts (a MAP's `${item...}` from the element type of `over:`), then its
 `Type` is checked with `types_compatible` against the CHILD input's declared `Type` (a
-LOOP's body input for a seed). A literal, a constant operand of a `:-`/`|` escape, or
-each element of a literal `over:` list read through `${item...}`, is validated by value
-instead, as the child's start validates it: a CALL/MAP/LOOP edge is not a flow boundary,
-so text is never converted to a number or bool across it. Its range anchor comes from
-the call, map, or loop node's transient Compose
+LOOP's body input for a seed, read as nullable where the LOOP's `while:` proves the seed
+not null, since that seed never enters the body as null). A literal, a constant operand
+of a `:-`/`|` escape, or each element of a literal `over:` list read through
+`${item...}`, is validated by value instead, as the child's start validates it: a
+CALL/MAP/LOOP edge is not a flow boundary, so text is never converted to a number or bool
+across it. Its range anchor comes from the call, map, or loop node's transient Compose
 `BuildResult.field_ranges[("field", "inputs")]` (the coarse `input:` mapping span).
 
 Imports flow down only: `compile.validation` (the type comparator), `expr` (the binding-null
 analysis and escape parsing), `compose.helpers` (shared output-contract inference and load
-diagnostics), `compose.validate.typed_bindings` (literal and `${item}` helpers), and
-`nodes.binding` (the run boundary's string conversion, named in a hint only).
-Only the loader (and the compose package facade) import this back.
+diagnostics), `compose.nodes.loop` (a LOOP body's inputs as its seeds enter them),
+`compose.validate.typed_bindings` (literal and `${item}` helpers), and `nodes.binding`
+(the run boundary's string conversion, named in a hint only). Only the loader (and the
+compose package facade) import this back.
 """
 
 from __future__ import annotations
@@ -39,6 +41,7 @@ from yian.compose.helpers.output_contracts import (
 from yian.compose.helpers.tags import any_source_hint, yaml_quoted
 from yian.compose.helpers.yaml_words import former_boolean_fix
 from yian.compose.nodes.base import BuildResult
+from yian.compose.nodes.loop import loop_entry_inputs
 from yian.compose.validate.narrowing import Narrowing
 from yian.compose.validate.typed_bindings import (
     NOT_LITERAL,
@@ -91,7 +94,8 @@ def check_call_map_types(
     `input:` mapping range, else its authored node range. Iterates the WIRING (not the
     params) so a mis-named binding still surfaces here when its child decl is absent
     rather than being silently skipped. A LOOP's seeds are checked the same way against
-    its body's inputs. ``type_fn`` types a `T(...)` constructor source as `T`;
+    its body's inputs, read as nullable at each path its `while:` proves not null (see
+    `loop_entry_inputs`). ``type_fn`` types a `T(...)` constructor source as `T`;
     ``registry`` (the flow's typedefs) spells the tag suggested for an `Any` source by a
     typedef name."""
     diagnostics = diagnostics or LoadDiagnostics()
@@ -118,13 +122,16 @@ def check_call_map_types(
     for nid, result in build_results.items():
         node = result.node
         # CALL/MAP/LOOP carry `child_inputs` to type-check against. A LOOP's seeds fill its
-        # body's START like CALL arguments, so they get the same checks;
-        # check_loop_type_contract also checks returned fields against the body output.
+        # body's START like CALL arguments, so they get the same checks, except that a
+        # seed path its `while:` proves not null never reaches the body when null, so the
+        # body input reads as nullable there; check_loop_type_contract also checks
+        # returned fields against the body output.
         # A leaf has no `child_inputs` attr, and a zero-input child gives [] (falsy), so skip.
         if not getattr(node, "child_inputs", None):
             continue
         kind = "loop" if node.is_loop else "call"
-        child_decls = {d.name: d for d in node.child_inputs}
+        decls = loop_entry_inputs(node) if node.is_loop else node.child_inputs
+        child_decls = {d.name: d for d in decls}
         node_producers, node_inputs = (
             narrowing.for_node(nid) if narrowing is not None else (producers, flow_inputs)
         )

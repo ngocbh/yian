@@ -2,7 +2,9 @@
 
 A `call:` body's declared input is the parameter each returned field is bound to on the
 next iteration. A returned field that can never fit it is a load error; over a typed seed,
-a nullable returned field whose non-null type fits is left to the runtime input check.
+a nullable returned field whose non-null type fits is left to the runtime input check. A
+field a `while:` null check proves not null never enters the body as null, so it may be
+returned as nullable into a strict input.
 """
 
 from __future__ import annotations
@@ -108,11 +110,14 @@ def test_typed_seed_with_an_optional_returned_field_runs() -> None:
     assert result.output == {"n": 2}
 
 
-def test_while_loop_ending_on_null_over_an_untyped_seed_is_rejected() -> None:
-    with pytest.raises(LoadError, match=re.escape(_nullable_message("${input.z}"))):
-        load_flow(
-            _named_loop("int", "Optional(int)", _PAGINATE, "${input.z}", driver=_WHILE)
-        )
+def test_while_loop_ending_on_null_over_an_untyped_seed_runs() -> None:
+    # The `while:` null check keeps the returned null out of the body's `n: int`.
+    flow = load_flow(
+        _named_loop("int", "Optional(int)", _PAGINATE, "${input.z}", driver=_WHILE)
+    )
+    result = run_flow(flow, {"z": 0})
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"n": None}
 
 
 def test_while_loop_ending_on_null_over_a_typed_seed_runs() -> None:

@@ -12,7 +12,7 @@ into `KINDS`/`BINDING_FIELDS` at import so the shared dispatch routes here.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 
 from lark import Token, Tree
@@ -21,14 +21,15 @@ from yian.diagnostics import SourceRange
 from yian.expr import ExpressionError, expr_refs, parse_condition
 from yian.nodes.contracts import (
     OutputContract,
+    Parameter,
     PartialRecordContract,
     ValueContract,
     output_contract_field_error,
 )
 from yian.nodes.loop import LoopNode
 from yian.typesys.types import TypeRegistry
-from yian.typesys.values import Type
-from yian.compose.helpers.condition_guards import Guard
+from yian.typesys.values import Type, ValueKind
+from yian.compose.helpers.condition_guards import AllOf, Guard, Holds, NotNullCheck, proves
 from yian.compose.helpers.narrowing_facts import (
     BaseTypeOf,
     checked_refs,
@@ -518,3 +519,113 @@ def _predicate_field_error(
         if first is None:
             first = narrowed_read_error(ref, candidate, error, registry)
     return first
+
+
+def while_non_null_paths(
+    kind: str | None, predicate: str | None
+) -> frozenset[tuple[str, ...]]:
+    """Return the carried paths a loop's condition proves not null whenever the body starts.
+
+    Only `while:` is checked before each iteration, the first included; `until:` is
+    checked after the body and `times:` has no condition, so they prove nothing. A path
+    comes from a `<path> != null` check the condition proves when true: each part of an
+    `and` adds its paths, and an `or` keeps only the paths every part proves.
+
+    Args:
+        kind (`str | None`):
+            The loop's driver: `"while"`, `"until"` or `"times"`.
+        predicate (`str | None`):
+            The condition text, bare or whole-span.
+
+    Returns:
+        `frozenset[tuple[str, ...]]`:
+            Each proven path as field names from the carried record.
+
+    Example:
+        `while_non_null_paths("while", "n < 3 and page.next != null")` is
+        `frozenset({("page", "next")})`.
+    """
+    if kind != "while" or predicate is None:
+        return frozenset()
+    try:
+        tree = parse_condition(predicate)
+    except ExpressionError:
+        return frozenset()  # the build already reported the condition
+    return _non_null_paths(proves(tree, True))
+
+
+def _non_null_paths(guard: Guard) -> frozenset[tuple[str, ...]]:
+    """Return the paths `guard` proves not null (see `while_non_null_paths`)."""
+    if isinstance(guard, Holds):
+        if isinstance(guard.check, NotNullCheck) and guard.value:
+            return frozenset({tuple(guard.check.base.split("."))})
+        return frozenset()
+    parts = [_non_null_paths(part) for part in guard.parts]
+    if isinstance(guard, AllOf):
+        return frozenset().union(*parts)
+    return frozenset.intersection(*parts) if parts else frozenset()
+
+
+def with_nullability(typ: Type, path: tuple[str, ...], nullable: bool) -> Type:
+    """Return `typ` with the value at `path`, and each record above it, nullable or not.
+
+    The path is followed through record fields; where it names an absent field or meets a
+    union or a non-record, the rest of it is left as is. A field made not nullable becomes
+    required in its record and one made nullable stops being required, since a field read
+    through a null or absent record is null.
+
+    Args:
+        typ (`Type`):
+            The type to change.
+        path (`tuple[str, ...]`):
+            Field names from `typ` to the value. `()` is `typ` itself.
+        nullable (`bool`):
+            Whether each value on the path may be null.
+
+    Returns:
+        `Type`:
+            The changed copy; `typ` itself is not changed.
+
+    Example:
+        `with_nullability(Optional({next: Optional(str)}), ("next",), False)` is
+        `{next: str}` with `next` required.
+    """
+    if path and typ.variants is None and typ.fields is not None and path[0] in typ.fields:
+        inner = with_nullability(typ.fields[path[0]], path[1:], nullable)
+        required = typ.required or frozenset()
+        required = required - {path[0]} if nullable else required | {path[0]}
+        typ = replace(typ, fields={**typ.fields, path[0]: inner}, required=required)
+    if typ.kind is ValueKind.NONE:
+        return typ  # the null type has no non-null form
+    return replace(typ, nullable=nullable)
+
+
+def loop_entry_inputs(node: LoopNode) -> list[Parameter]:
+    """Return a loop body's inputs as the values that enter the body may fill them.
+
+    A path the loop's `while:` proves not null is never null when the body starts, so
+    each input type is read as nullable at such a path and at each record above it. The
+    seed check and the returned-field check compare against these, while the node's
+    `child_inputs` stay as declared.
+
+    Args:
+        node (`LoopNode`):
+            The built loop node.
+
+    Returns:
+        `list[Parameter]`:
+            The body's inputs in order, each relaxed copy keeping its origins.
+    """
+    paths = while_non_null_paths(node.predicate_kind, node.predicate)
+    inputs: list[Parameter] = []
+    for parameter in node.child_inputs or ():
+        contract = parameter.contract
+        if contract is not None:
+            typ = contract.type
+            for path in sorted(paths):
+                if path[0] == parameter.name:
+                    typ = with_nullability(typ, path[1:], True)
+            if typ is not contract.type:
+                parameter = replace(parameter, contract=replace(contract, type=typ))
+        inputs.append(parameter)
+    return inputs

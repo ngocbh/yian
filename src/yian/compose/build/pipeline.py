@@ -72,7 +72,11 @@ from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from yian.compose.nodes.call import CallDescriptor
 from yian.compose.nodes.case import CaseDescriptor
 from yian.compose.nodes.human_input import HumanInputDescriptor
-from yian.compose.nodes.loop import LoopDescriptor
+from yian.compose.nodes.loop import (
+    LoopDescriptor,
+    while_non_null_paths,
+    with_nullability,
+)
 from yian.compose.nodes.map import MapDescriptor
 from yian.compose.desugar.inline_bodies import (
     InlineBody,
@@ -2443,6 +2447,13 @@ def _assemble(
 
             item_type = map_item_type
 
+        # A seed path a `while:` proves not null is never null when the body starts, so
+        # the body reads it, and each record above it, as not null.
+        non_null_paths = (
+            while_non_null_paths("while", descriptor.while_)
+            if isinstance(descriptor, LoopDescriptor)
+            else frozenset()
+        )
         child_inputs: list[Parameter] = []
         for key, value in (descriptor.inputs or {}).items():
             binding_label = f"{descriptor.id}.input.{key}"
@@ -2463,6 +2474,9 @@ def _assemble(
                     binding_range=binding_range,
                     diagnostics=diagnostics,
                 )
+            for path in sorted(non_null_paths):
+                if path[0] == key:
+                    parameter_type = with_nullability(parameter_type, path[1:], False)
             canonical = canonicalize_inline_type(parameter_type)
             child_inputs.append(
                 Parameter(

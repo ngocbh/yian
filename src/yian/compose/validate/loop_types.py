@@ -12,12 +12,14 @@ exists. This pass carries a range anchor from
 `BuildResult.field_ranges[("field", "inputs")]` (the coarse `input:` mapping span).
 Each proven returned field must also fit the body parameter it is bound to on the next
 iteration (a named body's declared input, or the parameter an inline body generates from
-its seed); that error points at the seed binding.
+its seed), read as nullable where the loop's `while:` proves the field not null; that
+error points at the seed binding.
 A literal seed stays lenient here (its contract is not inferred); `check_call_map_types`
 checks every seed against the body's declared input.
 
-Imports flow down only: `compile.validation` (the type comparator) and
-`compose.helpers` (shared output-contract inference and load diagnostics). Only
+Imports flow down only: `compile.validation` (the type comparator),
+`compose.helpers` (shared output-contract inference and load diagnostics), and
+`compose.nodes.loop` (a body's inputs as the carried values enter them). Only
 the loader (and the compose package facade) import this back.
 """
 
@@ -36,6 +38,7 @@ from yian.compose.helpers.output_contracts import (
     resolve_output_binding_contract,
 )
 from yian.compose.nodes.base import BuildResult
+from yian.compose.nodes.loop import loop_entry_inputs
 from yian.diagnostics import SourceRange
 from yian.nodes.contracts import (
     Binding,
@@ -83,9 +86,9 @@ def check_loop_type_contract(
 
     Each returned field is bound to the body's parameter again on the next iteration (a
     named body's declared input, or the parameter an inline body generates from its seed),
-    so every statically proven returned field must also fit that parameter. Over a typed
-    seed, a nullable returned field whose non-null type fits is left to the runtime input
-    check.
+    so every statically proven returned field must also fit that parameter, read as
+    nullable where the loop's `while:` proves the field not null. Over a typed seed, a
+    nullable returned field whose non-null type fits is left to the runtime input check.
 
     Args:
         build_results (`dict[str, BuildResult]`): The built nodes keyed by node id.
@@ -224,9 +227,11 @@ def _check_returned_fields(
     """Require each returned field of a loop body to fit the parameter it is bound to next.
 
     The parameter is the body's declared input for a named body, or the one generated
-    from the seed for an inline body. Over a typed seed, a nullable returned field whose
-    non-null type fits the parameter is accepted; a null it returns fails the next
-    iteration's input check.
+    from the seed for an inline body. A path the loop's `while:` proves not null is never
+    null when the body starts, so the parameter is read as nullable there and at each
+    record above it (see `loop_entry_inputs`). Otherwise, over a typed seed, a nullable
+    returned field whose non-null type fits the parameter is accepted; a null it returns
+    fails the next iteration's input check.
 
     Args:
         result (`BuildResult`): The built loop node and its source ranges.
@@ -245,7 +250,7 @@ def _check_returned_fields(
     returned = node.returned_fields
     parameters = {
         parameter.name: parameter.contract
-        for parameter in node.child_inputs or ()
+        for parameter in loop_entry_inputs(node)
         if parameter.contract is not None
     }
     for field_name, seed in wiring.items():

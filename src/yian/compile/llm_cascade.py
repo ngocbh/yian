@@ -29,6 +29,7 @@ from yian.diagnostics import OriginRef
 from yian.llm_clients.config import (
     PROVIDER_BLOCKS,
     SUPPORTED_LLM_PROVIDERS,
+    HostConnection,
     LLMConfig,
     merge_llm_config,
 )
@@ -42,6 +43,7 @@ from yian.llm_clients.layers import (
 from yian.nodes.agent import AgentNode
 from yian.nodes.agent.llm_values import (
     LLM_CONFIG_KEY,
+    CallTimeLLM,
     Nullable,
     contract_nullable,
     contributing,
@@ -108,7 +110,8 @@ class RunLLM:
         effective (`dict[str, dict[str, Any]]`): Each agent resolved at run start, its
             complete effective configuration keyed by static agent path.
         call_time (`dict[str, dict[str, Any]]`): Each agent whose configuration is
-            resolved only when it runs, keyed by static agent path.
+            resolved only when it runs, keyed by static agent path: its base, the
+            layers below its node and own-flow layers (`CallTimeLLM.base`).
     """
 
     effective: dict[str, dict[str, Any]]
@@ -137,6 +140,10 @@ def resolve_run_llm(
     omitted, and its contract. A value resolving to null leaves its field unset. A
     flow layer passes down only its literal and resolved fields; Compose has refused
     any other value an inheriting agent could read (`find_inherited_llm_value`).
+    Any other agent whose layers carry values resolves its configuration only when
+    it runs; run start fixes its base: the enclosing flows' layers and the
+    caller layer, merged, or nothing under ``inherit: false``. Its node and own-flow
+    layers ride its reserved ``__llm_config`` binding.
     Every returned value and every node-owned value is an independent deep copy.
 
     Args:
@@ -164,9 +171,8 @@ def resolve_run_llm(
         `ValueError`:
             If a provider or model selection is invalid, an agent has no provider or
             model, an input a value reads is missing or breaks its contract, a value
-            fails to resolve, a child flow's agent would inherit an `llm_config` value
-            read only when its flow runs (`find_inherited_llm_value`), or an agent's
-            config reads a value known only when it runs.
+            fails to resolve, or a child flow's agent would inherit an `llm_config`
+            value read only when its flow runs (`find_inherited_llm_value`).
     """
     inherited = find_inherited_llm_value(flow)
     if inherited is not None:
@@ -182,6 +188,7 @@ def resolve_run_llm(
     validate_layer(parent_config)
     validate_layer(defaults)
     effective: dict[str, dict[str, Any]] = {}
+    call_time: dict[str, dict[str, Any]] = {}
     _resolve_flow(
         flow,
         copy.deepcopy(parent_config),
@@ -190,10 +197,10 @@ def resolve_run_llm(
         stray_model=stray_model,
         path=(),
         effective=effective,
+        call_time=call_time,
         inputs=_RunInputs(flow, run_inputs or {}),
     )
-    # `_resolve_carried` refuses an agent whose config reads a value known only when it runs.
-    return RunLLM(effective, {})
+    return RunLLM(effective, call_time)
 
 
 class _RunInputs:
@@ -395,49 +402,77 @@ def _value_origin(layer: Any, field: ValuePath, leaf: Any) -> Optional[OriginRef
 def apply_effective_llm_map(
     flow: Any,
     effective: dict[str, dict[str, Any]],
+    call_time: dict[str, dict[str, Any]] | None = None,
 ) -> None:
-    """Apply one recorded complete effective map to a static flow tree.
+    """Apply one recorded complete effective map, and call-time bases, to a static flow tree.
 
-    The map must name exactly the flow's static agent paths.  Validation finishes
-    before mutation.  Applying the map deep-copies each config and de-aliases every
-    static child callsite, without importing settings or reading the environment.
+    Together the two maps must name exactly the flow's static agent paths, each once.
+    Validation finishes before mutation. Applying deep-copies each config onto its
+    agent's ``llm_config``, gives each call-time agent a `CallTimeLLM` with its base
+    (its ``llm_config`` stays unset until it runs), and de-aliases every static child
+    callsite, without importing settings or reading the environment.
 
     Args:
         flow (`CompiledFlow`):
             A clean compiled flow to mutate in place.
         effective (`dict[str, dict[str, Any]]`):
             Recorded complete configurations keyed by static agent path.
+        call_time (`dict[str, dict[str, Any]] | None`, *optional*, defaults to `None`):
+            Recorded bases of the agents whose configs resolve only when they run, keyed
+            by static agent path; `None` is none.
 
     Raises:
         `ValueError`:
-            If paths are missing/extra or a config lacks provider/model.
+            If paths are missing, extra or in both maps, a config lacks provider/model,
+            a call-time path names an agent with no ``llm_config`` value, or a base is
+            not a valid layer.
         `TypeError`:
-            If the map or one of its configurations is not a dictionary.
+            If a map or one of its entries is not a dictionary.
     """
     if not isinstance(effective, dict):
         raise TypeError("effective LLM map must be a dict keyed by static agent path")
+    call_time = {} if call_time is None else call_time
+    if not isinstance(call_time, dict):
+        raise TypeError("call-time LLM map must be a dict keyed by static agent path")
 
     expected = set(_static_agent_paths(flow))
-    supplied = set(effective)
+    supplied = set(effective) | set(call_time)
     missing = sorted(expected - supplied)
     extra = sorted(supplied - expected)
-    if missing or extra:
+    both = sorted(set(effective) & set(call_time))
+    if missing or extra or both:
         details = []
         if missing:
             details.append(f"missing paths: {missing}")
         if extra:
             details.append(f"extra paths: {extra}")
+        if both:
+            details.append(f"paths in both maps: {both}")
         raise ValueError("effective LLM map path mismatch; " + "; ".join(details))
 
     labels = static_agent_labels(flow)
-    for path in sorted(expected):
+    for path in sorted(effective):
         config = effective[path]
         if not isinstance(config, dict):
             subject = labels.get(path) or repr(path)
             raise TypeError(f"effective LLM config for {subject} must be a dict")
         require_concrete_selection(config, path=path, label=labels.get(path))
+    carrying = _carrying_agent_paths(flow)
+    for path in sorted(call_time):
+        subject = labels.get(path) or repr(path)
+        if path not in carrying:
+            raise ValueError(
+                f"call-time LLM base for {subject}: the agent has no llm_config value"
+            )
+        base = call_time[path]
+        if not isinstance(base, dict):
+            raise TypeError(f"call-time LLM base for {subject} must be a dict")
+        try:
+            validate_layer(base)
+        except ValueError as exc:
+            raise ValueError(f"call-time LLM base for {subject}: {exc}") from None
 
-    _apply_flow(flow, effective, path=())
+    _apply_flow(flow, effective, call_time, path=())
 
 
 def _resolve_flow(
@@ -449,9 +484,10 @@ def _resolve_flow(
     stray_model: bool,
     path: tuple[str, ...],
     effective: dict[str, dict[str, Any]],
+    call_time: dict[str, dict[str, Any]],
     inputs: _RunInputs,
 ) -> None:
-    """Resolve one flow scope recursively into ``effective``."""
+    """Resolve one flow scope recursively into ``effective`` and ``call_time``."""
     flow_layer = merge_llm_config(
         _run_start_flow_layer(flow, root=not path, inputs=inputs),
         parent_config,
@@ -463,6 +499,12 @@ def _resolve_flow(
             path_key = _path_key(node_path)
             label = _agent_label(node, path)
             carried = flow.wiring.get(node_id, {}).get(LLM_CONFIG_KEY)
+            if carried is not None and (path or not reads_only_inputs(carried)):
+                # Its own layers resolve when it runs; only the layers below them are
+                # known now.
+                call_time[path_key] = copy.deepcopy(parent_config) if node.llm_inherit else {}
+                node.llm_config = None
+                continue
             if carried is None:
                 own = _literal_layer(node.own_llm_config, inputs)
                 validate_layer(own)
@@ -470,8 +512,7 @@ def _resolve_flow(
                 authored = merge_llm_config(own, base)
             else:
                 authored = _resolve_carried(
-                    carried, node, parent_config,
-                    root=not path, path=path_key, label=label, inputs=inputs,
+                    carried, node, parent_config, path=path_key, label=label, inputs=inputs,
                 )
             config = resolve_agent_config(
                 authored,
@@ -497,6 +538,7 @@ def _resolve_flow(
                 stray_model=stray_model,
                 path=node_path,
                 effective=effective,
+                call_time=call_time,
                 inputs=inputs,
             )
 
@@ -539,22 +581,15 @@ def _resolve_carried(
     node: AgentNode,
     parent_config: dict[str, Any],
     *,
-    root: bool,
     path: str,
     label: Optional[str],
     inputs: _RunInputs,
 ) -> dict[str, Any]:
     """Resolve an agent's reserved ``__llm_config`` layers and merge them over the caller's.
 
-    Only an agent of the run's flow whose values read just the run's inputs is
-    resolved here.
+    The agent is in the run's flow, and its values read just the run's inputs.
     """
     subject = label or f"node {path!r} llm_config"
-    if not root or not reads_only_inputs(carried):
-        raise ValueError(
-            f"{subject} reads a value known only when the agent runs; only values "
-            "that read the run's inputs are supported"
-        )
 
     def where(field: ValuePath) -> str:
         part, *rest = field
@@ -659,6 +694,19 @@ def _static_agent_paths(
     return paths
 
 
+def _carrying_agent_paths(flow: Any, path: tuple[str, ...] = ()) -> set[str]:
+    """Return the static paths of the agents whose layers ride ``__llm_config``."""
+    paths: set[str] = set()
+    for node_id, node in flow.nodes.items():
+        node_path = (*path, node_id)
+        if isinstance(node, AgentNode) and LLM_CONFIG_KEY in flow.wiring.get(node_id, {}):
+            paths.add(_path_key(node_path))
+        child = getattr(node, "child", None)
+        if child is not None:
+            paths |= _carrying_agent_paths(child, node_path)
+    return paths
+
+
 def static_agent_labels(flow: Any) -> dict[str, str]:
     """Map each synthesized agent's static path to the authored site of its ``llm_config``.
 
@@ -702,19 +750,26 @@ def _agent_label(node: AgentNode, parent: tuple[str, ...]) -> str | None:
 def _apply_flow(
     flow: Any,
     effective: dict[str, dict[str, Any]],
+    call_time: dict[str, dict[str, Any]],
     *,
     path: tuple[str, ...],
 ) -> None:
-    """Apply already-validated configs and de-alias children recursively."""
+    """Apply already-validated configs and bases, and de-alias children recursively."""
     for node_id, node in flow.nodes.items():
         node_path = (*path, node_id)
         if isinstance(node, AgentNode):
-            node.llm_config = copy.deepcopy(effective[_path_key(node_path)])
+            path_key = _path_key(node_path)
+            if path_key in call_time:
+                node.llm_config = None
+                node.call_time = CallTimeLLM(path_key, copy.deepcopy(call_time[path_key]))
+            else:
+                node.llm_config = copy.deepcopy(effective[path_key])
+                node.call_time = None
 
         child = getattr(node, "child", None)
         if child is not None:
             node.child = copy.deepcopy(child)
-            _apply_flow(node.child, effective, path=node_path)
+            _apply_flow(node.child, effective, call_time, path=node_path)
 
 
 def bind_host_credentials(
@@ -724,7 +779,9 @@ def bind_host_credentials(
 
     `ConnectionSnapshot.bind` marks the agents of the key's provider in the
     effective map. The key and header values go on each marked node's run-local
-    ``llm_config`` only, never into the map that ``RunStarted`` records. Call it
+    ``llm_config`` only, never into the map that ``RunStarted`` records. Each
+    call-time agent gets them as its run-local ``host_credentials``, never merged
+    into a config; it uses them only if it resolves to the key's provider. Call it
     after `apply_effective_llm_map`, which has already de-aliased every child
     callsite.
 
@@ -737,7 +794,11 @@ def bind_host_credentials(
             The header values sent with that key; `None` or empty binds none.
     """
     for node in flow.nodes.values():
-        if isinstance(node, AgentNode) and node.llm_config.get(HOST_KEY_MARKER) is True:
+        if isinstance(node, AgentNode) and node.call_time is not None:
+            node.host_credentials = HostConnection(
+                api_key=api_key, headers=dict(headers) if headers else None
+            )
+        elif isinstance(node, AgentNode) and node.llm_config.get(HOST_KEY_MARKER) is True:
             node.llm_config["api_key"] = api_key
             if headers:
                 node.llm_config["headers"] = dict(headers)

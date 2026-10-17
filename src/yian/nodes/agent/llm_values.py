@@ -10,6 +10,7 @@ against a pool. Precedence and merge granularity follow ``merge_llm_config``.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Optional, TypeAlias
 
 from yian.expr.expressions import ExpressionError
@@ -26,6 +27,21 @@ Nullable: TypeAlias = Callable[[Any, ValuePath], bool]
 
 LLM_CONFIG_KEY = "__llm_config"
 """The reserved AGENT wiring key that carries the node and own-flow layers."""
+
+
+@dataclass(frozen=True)
+class CallTimeLLM:
+    """What run start fixes for an agent whose ``llm_config`` resolves only when it runs.
+
+    Attributes:
+        path (`str`): The agent's static path.
+        base (`dict[str, Any]`): The layers below the agent's node and own-flow layers:
+            the enclosing flows' layers and the host layer, merged; empty under
+            ``inherit: false``. It holds no key or header value.
+    """
+
+    path: str
+    base: dict[str, Any]
 
 
 def is_value(leaf: Any) -> bool:

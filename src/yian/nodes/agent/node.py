@@ -19,6 +19,7 @@ from yian.defaults import current
 from yian.diagnostics import OriginRef
 from yian.expr.template import render_template_record
 from yian.expr.lineage import FeedbackValue
+from yian.llm_clients.config import HostConnection
 from yian.llm_clients.connection import scrub_call_credentials
 from yian.memory.contracts import (
     MemoryContext,
@@ -29,7 +30,12 @@ from yian.memory.contracts import (
     _rewrite_memory_decl_origins,
 )
 from yian.nodes.agent.context import DEFAULT_SYSTEM, AgentRunContext
-from yian.nodes.agent.llm_values import LLM_CONFIG_KEY, Nullable, types_nullable
+from yian.nodes.agent.llm_values import (
+    LLM_CONFIG_KEY,
+    CallTimeLLM,
+    Nullable,
+    types_nullable,
+)
 from yian.nodes.agent.memory import compatibility
 from yian.nodes.agent.backward import backward_agent
 from yian.nodes.agent.loop import run_agent
@@ -164,6 +170,12 @@ class AgentNode(Node):
         # proven), which decides whether it always overrides a lower layer's field.
         self.wires_llm_config = False
         self.llm_value_types: dict[ValuePath, Type | None] = {}
+        # Both set per run on the run's private flow, never on the authored one.
+        # `call_time`: what run start fixed when this agent's config resolves only when it
+        # runs; `None` when run start resolved it into `llm_config`. `host_credentials`:
+        # the host key and header values, given only to such an agent.
+        self.call_time: CallTimeLLM | None = None
+        self.host_credentials: HostConnection | None = None
 
     def reserved_wiring_keys(self) -> set[str]:
         """Declare ``__llm_config`` when values in the layers can reach this agent's config."""

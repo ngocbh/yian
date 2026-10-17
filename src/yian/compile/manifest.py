@@ -136,8 +136,16 @@ _IGNORED_KIND_FIELDS: dict[NodeKind, frozenset[str]] = {
     # llm_config is always run-resolved; own_llm_config is the authored identity source.
     # llm_config_label is render-only. wires_llm_config and llm_value_types are derived
     # from the layers; the reserved wiring they decide is manifested with the wiring.
+    # call_time and host_credentials are run-resolved like llm_config.
     NodeKind.AGENT: frozenset(
-        {"llm_config", "llm_config_label", "wires_llm_config", "llm_value_types"}
+        {
+            "llm_config",
+            "llm_config_label",
+            "wires_llm_config",
+            "llm_value_types",
+            "call_time",
+            "host_credentials",
+        }
     ),
     # _mode/ref are derived from code; _code is a process-local compiled-code cache.
     # CODE origins are diagnostic metadata resolved only by the authoring front end.

@@ -235,6 +235,24 @@ ENTRIES: tuple[Entry, ...] = (
         minimum=0,
         maximum=None,
     ),
+    # A hung MCP server would otherwise stall the run forever; a run reads these when it
+    # talks to a server, so they don't change the loaded flow.
+    Entry(
+        "MCP_CONNECT_TIMEOUT_SECONDS",
+        default=30,
+        description="Longest wait in seconds for an MCP server to start and list its tools",
+        group="setting",
+        minimum=1,
+        maximum=None,
+    ),
+    Entry(
+        "MCP_CALL_TIMEOUT_SECONDS",
+        default=300,
+        description="Longest wait in seconds for one MCP tool call",
+        group="setting",
+        minimum=1,
+        maximum=None,
+    ),
     Entry(
         "EPISODIC_MAX_EPISODES",
         default=100,
@@ -481,6 +499,8 @@ class Defaults:
     tool_retries: int = 0
     tool_retry_delay_seconds: int = 1
     tool_retry_max_delay_seconds: int = 30
+    mcp_connect_timeout_seconds: int = 30
+    mcp_call_timeout_seconds: int = 300
     episodic_max_episodes: int = 100
     episodic_recall_limit: int = 10
     reflective_max_items: int = 100

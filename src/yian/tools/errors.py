@@ -1,7 +1,9 @@
-"""Errors a host tool raises to steer a TOOL node's retries, and yian's own check error.
+"""Errors a host tool raises to report a failure or steer retries, and yian's own check error.
 
-A TOOL node with `retries:` retries a failed call unless the tool raised
-`PermanentToolError` or a check yian runs failed (`ToolCheckError`). A tool raises
+A tool raises `ReportedToolError` for a failure an AGENT's model should read and act
+on; in a TOOL node it fails the node like any other error. A TOOL node with
+`retries:` retries a failed call unless the tool raised `PermanentToolError` or a
+check yian runs failed (`ToolCheckError`). A tool raises
 `TransientToolError(retry_after=...)` to say how long to wait before the next attempt.
 
 Uses only the Python standard library.
@@ -20,6 +22,27 @@ class PermanentToolError(Exception):
         def place(order: dict) -> str:
             if order["qty"] <= 0:
                 raise PermanentToolError("quantity must be positive")
+            ...
+        ```
+    """
+
+
+class ReportedToolError(Exception):
+    """A tool call failed in a way the calling model should read and act on.
+
+    In an AGENT's tool loop, the model reads `str(exc)` as the call's result (an
+    error tool message, or the exception's type name when the text is empty) and the
+    loop continues. In a TOOL node it is an ordinary failure: the node fails, and
+    `retries:` retries it unless it is also a `PermanentToolError`. The message goes
+    to the model provider and the session transcript, so it must not hold secrets.
+
+    Example:
+        ```python
+        import os
+
+        def read_file(path: str) -> str:
+            if not os.path.exists(path):
+                raise ReportedToolError(f"no such file: {path}")
             ...
         ```
     """

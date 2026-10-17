@@ -23,6 +23,7 @@ import os
 from pathlib import Path
 import threading
 from typing import Any, Callable, Mapping
+import uuid
 
 from langchain_core.tools import BaseTool
 from pydantic import SecretStr
@@ -68,7 +69,7 @@ from yian.compile.validation import type_relation
 from yian.compose.helpers.tags import CLOSE_MATCH_CUTOFF
 from yian.compose.loader import ComposedFlow
 from yian.compose.nodes.resolver import child_signature
-from yian.defaults import check_recorded, current
+from yian.defaults import Defaults, check_recorded, current
 from yian.diagnostics import Failure, OriginRef
 from yian.events import (
     RunFailed,
@@ -85,7 +86,7 @@ from yian.memory import (
     MemoryStack,
 )
 from yian.memory_host import MemoryRegistry
-from yian.nodes.base import Steering
+from yian.nodes.base import Steering, _HostStop
 from yian.nodes.binding import BindingError, apply_defaults, coerce_inputs
 from yian.nodes.contracts import (
     HostToolCall,
@@ -116,7 +117,8 @@ from yian.runtime.state import (
 )
 from yian.runtime.memory_runtime import MemoryRuntime
 from yian.skills import Skill
-from yian.tools import FunctionTool, ToolSet
+from yian.tools import FunctionTool, McpServer, ToolSet
+from yian.tools.mcp import _AlreadyOpen
 from yian.tools.types import tool_types
 from yian.typesys import Type, ValueKind, canonical_type_label
 from yian.typesys.pool import VariablePool
@@ -361,7 +363,7 @@ def run_flow(
     llm_config: dict[str, Any] | None = None,
     memory: Mapping[str, Memory] | None = None,
     learnable: bool = False,
-    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None = None,
+    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | McpServer | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
     context: Any = None,
@@ -428,7 +430,7 @@ def run_flow(
             call. Forward execution runs no memory learners or learned-mutation
             commits. Memory is optional; an enabled mapping supplies owned learners
             for that call. Automatic session history is independent of retention.
-        tools (`Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None`, *optional*, defaults to `None`):
+        tools (`Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | McpServer | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None`, *optional*, defaults to `None`):
             The tools this run sees, keyed by tool id. `None` uses the tools
             registered with `register_tool`. A mapping, even an empty one, is the
             whole set: registered tools are hidden. To keep them, pass
@@ -449,7 +451,13 @@ def run_flow(
             `FunctionTool` or `BaseTool` named by its `name`, or a function or
             method named by its `__name__`. Each tool name calls one tool: the same tool may sit in
             several groups, but two different tools may not share a name, and
-            no group tool may be named `ask_user` or `load_skill`. Every static AGENT grant must name a tool or
+            no group tool may be named `ask_user` or `load_skill`. An `McpServer`
+            from `mcp_server` is a group of the tools it lists. One that isn't open
+            belongs to this run: it is opened, after the other entries are checked
+            and before the run-start checks, and closed when `run_flow` returns or
+            raises; the same server under several keys opens once. One opened with
+            `with server:` belongs to the host, is used as is, and stays open, so
+            several runs can share it. Every static AGENT grant must name a tool or
             group in this set, and every static TOOL node's `tool_id` must name a
             tool in it; this is checked before the log is created.
             Granting skills also binds the built-in ``load_skill`` tool,
@@ -505,10 +513,11 @@ def run_flow(
             ``api_key`` lacks ``base_url``, an ``azure`` agent has no
             ``base_url``, a `BaseTool` in
             `tools` is named differently from its key, a group tool's name
-            clashes or is reserved, an AGENT grants a tool or group not in the
-            run's tools, a TOOL node names a tool not in the run's tools, a
-            TOOL node's inputs or `output:` do not match the names and types
-            its tool declares (an input the tool does not take,
+            clashes or is reserved, an `McpServer` in `tools` is open, or being
+            opened, by another run in progress, an AGENT grants a tool or group
+            not in the run's tools, a TOOL node names a tool not in the run's
+            tools, a TOOL node's inputs or `output:` do not match the names and
+            types its tool declares (an input the tool does not take,
             a missing required input, or a type that can never fit), an
             AGENT grants skills while `skills` is `None` or lacks a listed
             skill, a node assertion, CASE `when`, or LOOP `while`/`until`
@@ -517,6 +526,12 @@ def run_flow(
             parse or calls a function it can't (a builtin with arguments it
             doesn't take, a name outside the node's type table, or in a prompt
             any non-builtin).
+        `ImportError`:
+            An `McpServer` in `tools` must be opened and the MCP SDK is not
+            installed.
+        `McpConnectError`:
+            An `McpServer` in `tools` that the run opens doesn't start or doesn't
+            list its tools; the servers it already opened are closed.
         `DefaultsError`:
             A `YIAN_<NAME>` variable holds a value its entry does not accept.
         `MemorySetupError`:
@@ -771,26 +786,78 @@ def _run_flow_controlled(
     llm_config: dict[str, Any] | None = None,
     memory: Mapping[str, Memory] | None = None,
     learnable: bool = False,
-    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None = None,
+    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | McpServer | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
     context: Any = None,
     stop_event: threading.Event,
 ) -> RunResult:
-    """Drive a fresh run with one host-owned cooperative stop event."""
+    """Drive a fresh run with one host-owned cooperative stop event and its own MCP servers."""
     # A bad YIAN_<NAME> value fails here, before any work.
     run_defaults = current()
     if not isinstance(flow, ComposedFlow):
         raise TypeError("run_flow expects a ComposedFlow")
     if type(learnable) is not bool:
         raise TypeError("learnable must be a bool")
-    run_tools = ToolSet(tools, context=context)
-    _check_tool_grants(flow.compiled, run_tools)
+    other_tools, unopened = _split_run_servers(tools)
+    # The other entries' errors, and the checks that need no tools, come before any
+    # server starts.
+    ToolSet(other_tools, context=context)
     _check_conditions(flow.compiled)
     _check_templates(flow.compiled)
-    _check_tool_types(flow.compiled, run_tools)
     skills = _check_skills(flow.compiled, skills)
     require_steering(steering)
+    run_servers = _open_run_servers(unopened, stop_event)
+    primary_error: BaseException | None = None
+    try:
+        return _start_run(
+            flow,
+            inputs,
+            log=log,
+            run_id=run_id,
+            num_workers=num_workers,
+            on_event=on_event,
+            on_stream=on_stream,
+            llm_config=llm_config,
+            memory=memory,
+            learnable=learnable,
+            tools=tools,
+            skills=skills,
+            steering=steering,
+            context=context,
+            stop_event=stop_event,
+            run_defaults=run_defaults,
+        )
+    except BaseException as exc:
+        primary_error = exc
+        raise
+    finally:
+        _close_run_servers(run_servers, primary_error)
+
+
+def _start_run(
+    flow: ComposedFlow,
+    inputs: dict[str, Any],
+    *,
+    log: str | os.PathLike[str] | None,
+    run_id: str | None,
+    num_workers: int,
+    on_event: EventHook | None,
+    on_stream: StreamHook | None,
+    llm_config: dict[str, Any] | None,
+    memory: Mapping[str, Memory] | None,
+    learnable: bool,
+    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | McpServer | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None,
+    skills: Mapping[str, Skill] | None,
+    steering: Steering | None,
+    context: Any,
+    stop_event: threading.Event,
+    run_defaults: Defaults,
+) -> RunResult:
+    """Check the tools, then record and drive a fresh run whose MCP servers are open."""
+    run_tools = ToolSet(tools, context=context)
+    _check_tool_grants(flow.compiled, run_tools)
+    _check_tool_types(flow.compiled, run_tools)
 
     # Identity belongs to the authored program, before cascade resolution or any
     # per-run copy can change object topology.
@@ -961,7 +1028,7 @@ def resume_flow(
     on_event: EventHook | None = None,
     on_stream: StreamHook | None = None,
     memory: Mapping[str, Memory] | None = None,
-    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None = None,
+    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | McpServer | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
     api_key: str | SecretStr | None = None,
@@ -995,11 +1062,15 @@ def resume_flow(
             recorded run enabled memory and still has unfinished forward execution. Terminal
             inspection opens no memories; supplied references remain available
             for later explicit backward calls.
-        tools (`Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None`, *optional*, defaults to `None`):
+        tools (`Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | McpServer | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None`, *optional*, defaults to `None`):
             The tools the resumed segment sees, with the same rules as
             `run_flow`. Tools are not recorded in the log, so pass the same
             mapping (including `ask_user`) that the original run used. Group
             contents may differ: nodes that restart see the groups passed here.
+            An unopened `McpServer` belongs to this call: it is opened only when
+            the run is unfinished, after the log is replayed and before the
+            resume checks, and closed when `resume_flow` returns or raises.
+            Terminal inspection opens no server.
         skills (`Mapping[str, Skill] | None`, *optional*, defaults to `None`):
             The skills passed to the original `run_flow`. Nodes that restart see
             this mapping. An unfinished run of a flow that grants skills needs
@@ -1041,8 +1112,9 @@ def resume_flow(
         `ValueError`:
             The prefix is invalid, the flow fingerprint differs, the selected
             worker count violates its contract, a group tool's name clashes or
-            is reserved, an unfinished run's AGENT grants a tool or group
-            not in `tools` or grants skills while `skills` is `None` or lacks
+            is reserved, an `McpServer` in `tools` is open, or being opened, by
+            another run in progress, an unfinished run's AGENT grants a tool or
+            group not in `tools` or grants skills while `skills` is `None` or lacks
             a listed skill, an unfinished run's TOOL node names a tool not in
             `tools`, an unfinished run's TOOL node's inputs or
             `output:` do not match the names and types its tool declares, or
@@ -1063,6 +1135,12 @@ def resume_flow(
             (`yian.llm_clients.auth.AuthError`) An agent resolving its
             ``llm_config`` when it runs resolves to the host key's provider, and
             ``api_key`` (or the recorded header names) was not given.
+        `ImportError`:
+            An unfinished run's `McpServer` must be opened and the MCP SDK is not
+            installed.
+        `McpConnectError`:
+            An unfinished run's `McpServer` that the call opens doesn't start or
+            doesn't list its tools; the servers it already opened are closed.
         `DefaultsError`:
             A `YIAN_<NAME>` variable holds a value its entry does not accept.
         `DefaultsMismatchError`:
@@ -1102,7 +1180,7 @@ def _resume_flow_controlled(
     on_event: EventHook | None = None,
     on_stream: StreamHook | None = None,
     memory: Mapping[str, Memory] | None = None,
-    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None = None,
+    tools: Mapping[str, BaseTool | FunctionTool | Callable[..., Any] | McpServer | Sequence[BaseTool | FunctionTool | Callable[..., Any]]] | None = None,
     skills: Mapping[str, Skill] | None = None,
     steering: Steering | None = None,
     api_key: str | SecretStr | None = None,
@@ -1123,7 +1201,9 @@ def _resume_flow_controlled(
     """
     # A bad YIAN_<NAME> value fails here, before the log is opened.
     current()
-    run_tools = ToolSet(tools, context=context)
+    other_tools, unopened = _split_run_servers(tools)
+    # The other entries' TypeErrors and ValueErrors come before the log is opened.
+    ToolSet(other_tools, context=context)
     api_key = None if api_key is None else _secret_key(api_key)
     host_headers = None if headers is None else _secret_headers(headers)
     require_steering(steering)
@@ -1131,6 +1211,7 @@ def _resume_flow_controlled(
     retained_locator = log_path.absolute()
     authority = JsonlRunLog.resume(retained_locator)
     memory_runtime: MemoryRuntime | None = None
+    run_servers: list[McpServer] = []
     primary_error: BaseException | None = None
     try:
         state = _replay_run_log(flow, authority, api_key=api_key, headers=host_headers)
@@ -1149,10 +1230,9 @@ def _resume_flow_controlled(
                                           locator=retained_locator, api_key=api_key,
                                           headers=host_headers,
                                       ))
-        _check_tool_grants(flow.compiled, run_tools)
+        # The checks that need no tools come before any server starts.
         _check_conditions(flow.compiled)
         _check_templates(flow.compiled)
-        _check_tool_types(flow.compiled, run_tools)
         skills = _check_skills(flow.compiled, skills)
         # A started call-time agent resumes with the config it recorded; one not yet
         # started is checked when it resolves.
@@ -1167,12 +1247,16 @@ def _resume_flow_controlled(
                 legacy_connection_map(recorded_llm),
                 call_time_host=_selection_host(state.call_time_llm),
             )
+        if state.memories is not None and memory is None:
+            raise MemorySetupError(
+                "resuming this run requires its enabled memory mapping"
+            )
+        run_servers = _open_run_servers(unopened, stop_event)
+        run_tools = ToolSet(tools, context=context)
+        _check_tool_grants(flow.compiled, run_tools)
+        _check_tool_types(flow.compiled, run_tools)
 
         if state.memories is not None:
-            if memory is None:
-                raise MemorySetupError(
-                    "resuming this run requires its enabled memory mapping"
-                )
             _check_registry_types(memory, state.memories)
             memory_table, memory_origins, memory_stack_set = _resolve_authored_memory_layout(flow)
             _check_recorded_memory_table(
@@ -1230,7 +1314,10 @@ def _resume_flow_controlled(
         primary_error = exc
         raise
     finally:
-        _close_run_resources(memory_runtime, authority, primary_error)
+        try:
+            _close_run_servers(run_servers, primary_error)
+        finally:
+            _close_run_resources(memory_runtime, authority, primary_error)
 
 
 def _check_tool_grants(flow: CompiledFlow, tools: ToolSet) -> None:
@@ -1891,6 +1978,135 @@ def _close_owned_log(
         if primary_error is None:
             raise
         _note_cleanup_error(primary_error, "run-log close", cleanup_error)
+
+
+def _other_run_error(key: str) -> ValueError:
+    """Return the error for the server under `key`, which another run has open or is opening."""
+    return ValueError(
+        f"tools[{key!r}]: this MCP server was opened by another run; "
+        'open it with "with server:" to share it between runs'
+    )
+
+
+def _split_run_servers(
+    tools: Any,
+) -> tuple[Any, list[tuple[str, McpServer]]]:
+    """Split the run's tools into the entries that need no opening and the unopened servers.
+
+    An unopened server under a key `ToolSet` rejects (not a non-empty string, or
+    `ask_user`) stays with the other entries, so `ToolSet` raises its usual error
+    before any server starts.
+
+    Args:
+        tools (`Any`):
+            The `tools=` argument of `run_flow` or `resume_flow`. Anything other than
+            a mapping is returned as is, for `ToolSet` to reject.
+
+    Returns:
+        `tuple[Any, list[tuple[str, McpServer]]]`:
+            `tools` without its unopened `McpServer` entries, and those servers in
+            mapping order with the first key each sits under, each once even when it
+            sits under several keys.
+
+    Raises:
+        `ValueError`:
+            Raised when a server entry is open because another run in progress
+            opened it.
+    """
+    if not isinstance(tools, Mapping):
+        return tools, []
+    others: dict[Any, Any] = {}
+    unopened: list[tuple[str, McpServer]] = []
+    for key, entry in tools.items():
+        if not isinstance(entry, McpServer) or not (type(key) is str and key and key != "ask_user"):
+            others[key] = entry
+        elif entry.is_open:
+            if entry._opened_by_run:
+                raise _other_run_error(key)
+            others[key] = entry
+        elif not any(entry is seen for _, seen in unopened):
+            unopened.append((key, entry))
+    return others, unopened
+
+
+def _open_run_servers(
+    servers: Sequence[tuple[str, McpServer]], stop_event: threading.Event
+) -> list[McpServer]:
+    """Open the servers for one run, in order; if one fails, close the ones already open.
+
+    Once `stop_event` is set, no further server opens: the ones already open close
+    and the run stops as it would for a stop during its nodes.
+
+    Args:
+        servers (`Sequence[tuple[str, McpServer]]`):
+            Unopened servers, each listed once with the `tools=` key it sits under.
+        stop_event (`threading.Event`):
+            The run's stop event.
+
+    Returns:
+        `list[McpServer]`:
+            The opened servers, owned by a token unique to this run.
+
+    Raises:
+        `ValueError`:
+            Raised when another caller opened or is opening a server since it was
+            found unopened.
+        `ImportError`:
+            Raised when the MCP SDK is not installed.
+        `McpConnectError`:
+            Raised when a server doesn't start or doesn't list its tools.
+        `_HostStop`:
+            Raised when `stop_event` is set before every server is open.
+    """
+    token = f"run-{uuid.uuid4().hex}"
+    opened: list[McpServer] = []
+    try:
+        for key, server in servers:
+            if stop_event.is_set():
+                # The same signal the engine raises for a stop it observes; it is
+                # set before the run starts, so nothing is recorded.
+                raise _HostStop(primary=False)
+            try:
+                server._open_for_run(token)
+            except _AlreadyOpen as exc:
+                raise _other_run_error(key) from exc
+            opened.append(server)
+    except BaseException as exc:
+        _close_run_servers(opened, exc)
+        raise
+    return opened
+
+
+def _close_run_servers(
+    servers: Sequence[McpServer],
+    primary_error: BaseException | None,
+) -> None:
+    """Close the run's servers while preserving one initiating exception.
+
+    Args:
+        servers (`Sequence[McpServer]`):
+            The servers the run opened.
+        primary_error (`BaseException | None`):
+            The exception ending the run, which a close error is noted on. `None`
+            raises the first close error instead.
+
+    Raises:
+        `BaseException`:
+            Raised when `primary_error` is `None` and a close fails: the first close
+            error, with any later ones noted on it.
+    """
+    pending = primary_error
+    for server in servers:
+        # close() never raises; this keeps an unexpected error from skipping the rest.
+        try:
+            server.close()
+        except BaseException as cleanup_error:
+            if pending is None:
+                pending = cleanup_error
+            else:
+                _note_cleanup_error(pending, f"MCP server '{server.label}' close", cleanup_error)
+    if primary_error is None and pending is not None:
+        raise pending
 
 
 def _close_run_resources(

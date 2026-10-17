@@ -660,17 +660,247 @@ def test_an_isinstance_and_conjunct_narrows(when):
     "when",
     [
         "isinstance(d.output, Buy) or input.s == 'x'",
-        "not isinstance(d.output, Hold)",
         "not (isinstance(d.output, Buy) and input.s == 'x')",
+        "not isinstance(d.output, Hold)",
     ],
 )
-def test_isinstance_under_or_or_not_does_not_narrow(when):
+def test_isinstance_under_or_narrows_only_what_the_when_proves(when):
+    # The check may not hold when `input.s` decides, and `Sell` passes `not Hold` too.
     msg = _load_error(_flow(
         _searched((f'"{when}"', "b")),
         _code("b", {"l": "${d.output.limit}"}),
         _code("e"),
     ))
     assert f"node 'b' input 'l' from: {_LIMIT_ERROR}" in msg
+
+
+@pytest.mark.parametrize("when", ["d.output.action == 'buy'", "'buy' == d.output.action"])
+def test_a_branch_sees_a_tag_comparison(when):
+    _loads(_flow(
+        _searched((f'"{when}"', "b")),
+        _code("b", {"l": "${d.output.limit}"}),
+        _code("e"),
+    ))
+
+
+@pytest.mark.parametrize(
+    "when",
+    [
+        "not isinstance(d.output, Hold)",
+        "isinstance(d.output, Buy) or isinstance(d.output, Sell)",
+        "d.output.action != 'hold'",
+    ],
+)
+def test_a_branch_reads_the_fields_the_members_its_when_proves_share(when):
+    _loads(_flow(
+        _searched((f'"{when}"', "b")),
+        _code("b", {"q": "${d.output.qty}"}),
+        _code("e"),
+    ))
+    msg = _load_error(_flow(
+        _searched((f'"{when}"', "b")),
+        _code("b"),
+        _code("e", {"l": "${d.output.limit}"}),
+    ))
+    assert f"node 'e' input 'l' from: {_LIMIT_ERROR}" in msg
+
+
+@pytest.mark.parametrize(
+    "when",
+    [
+        "not isinstance(d.output, Buy) or d.output.limit > 5",
+        "d.output.action == 'buy' and d.output.limit > 5",
+        "d.output.action != 'buy' or d.output.limit > 5",
+        "not (isinstance(d.output, Buy) and d.output.limit > 5)",
+        "(isinstance(d.output, Buy) and d.output.limit > 5) or d.output.action == 'hold'",
+        "isinstance(d.output, Rest) or d.output.limit > 5",
+    ],
+)
+def test_a_read_in_a_when_is_narrowed_through_and_or_and_not(when):
+    _loads(_flow(_searched((f'"{when}"', "b")), _code("b"), _code("e")))
+
+
+@pytest.mark.parametrize(
+    ("when", "narrowed"),
+    [
+        ("isinstance(d.output, Buy) or d.output.limit > 5", "Hold | Sell"),
+        # `Buy` is no `Rest`, so only the shared `Hold` and `Sell` reach the read.
+        ("not isinstance(d.output, Rest) or d.output.limit > 5", "Hold | Sell"),
+    ],
+)
+def test_a_read_in_a_when_of_a_field_the_narrowed_members_lack_is_an_error(when, narrowed):
+    msg = _load_error(_flow(_searched((f'"{when}"', "b")), _code("b"), _code("e")))
+    assert (
+        f"node 'route' cases[0].when from: reference ${{d.output.limit}} reads field 'limit', "
+        f"which {narrowed} doesn't have; d.output is {narrowed} here, by the checks before "
+        "this read"
+    ) in msg
+
+
+def test_a_misspelled_read_in_a_when_names_the_narrowed_type():
+    msg = _load_error(_flow(
+        _searched(('"isinstance(d.output, Buy) and d.output.limt > 5"', "b")),
+        _code("b"),
+        _code("e"),
+    ))
+    assert (
+        "node 'route' cases[0].when from: reference ${d.output.limt} reads field 'limt', "
+        "which Buy doesn't have; d.output is Buy here, by the checks before this read; "
+        "did you mean 'limit'?"
+    ) in msg
+
+
+def test_a_branch_of_a_negated_partly_shared_check_keeps_the_overlapping_member():
+    when = '"not isinstance(d.output, SellOrNarrow)"'
+    msg = _load_error(_flow(
+        _searched((when, "b")), _code("b", {"l": "${d.output.limit}"}), _code("e")
+    ))
+    assert (
+        "node 'b' input 'l' from: reference ${d.output.limit} reads field 'limit', which only "
+        "union members with action buy have"
+    ) in msg
+    msg = _load_error(_flow(
+        _searched((when, "b")), _code("b", {"p": "${d.output.price}"}), _code("e")
+    ))
+    assert "node 'b' input 'p' from: reference ${d.output.price} reads unknown field 'price'" in msg
+
+
+def test_a_read_after_a_check_the_routing_decides_is_checked_against_the_routing():
+    def flow(when: str) -> str:
+        return _flow(
+            _case("route", _ON, [("buy", "inner")], else_="e"),
+            _case("inner", None, [(f'"{when}"', "t")], else_="m"),
+            _code("t"),
+            _code("m"),
+            _code("e"),
+        )
+
+    _loads(flow("isinstance(d.output, Buy) or d.output.limit > 5"))
+    msg = _load_error(flow("isinstance(d.output, Decision) or d.output.nosuch > 5"))
+    assert "reads unknown field 'nosuch'" in msg
+
+
+def test_a_when_read_narrowed_only_by_the_routing_credits_the_routing():
+    """The check on `input.o` says nothing about `d.output`: the routing makes it Buy."""
+    msg = _load_error(_flow(
+        _case("route", _ON, [("buy", "inner")], else_="e"),
+        _case("inner", None, [('"isinstance(input.o, Text) and d.output.nosuch > 0"', "t")],
+              else_="m"),
+        _code("t"),
+        _code("m"),
+        _code("e"),
+        inputs="  s: !str\n  o: !Reply\n",
+    ))
+    assert (
+        "reference ${d.output.nosuch} reads field 'nosuch', which Buy doesn't have; d.output "
+        "is Buy here, by the case branch that routes this node"
+    ) in msg
+
+
+def test_a_when_read_past_a_check_the_checks_before_it_decide_is_checked_under_them():
+    when = "isinstance(d.output, Buy) and (isinstance(d.output, Buy) or d.output.limit > 0)"
+    _loads(_flow(_searched((f'"{when}"', "b")), _code("b"), _code("e")))
+    when = (
+        "isinstance(d.output, Buy) or isinstance(d.output, Hold) or isinstance(d.output, Sell) "
+        "or d.output.limit > 5"
+    )
+    msg = _load_error(_flow(_searched((f'"{when}"', "b")), _code("b"), _code("e")))
+    assert (
+        "reference ${d.output.limit} reads field 'limit', which Sell doesn't have; d.output is "
+        "Sell here, by the checks before this read"
+    ) in msg
+
+
+# --- impossible checks in a searched `when:` --- #
+
+
+@pytest.mark.parametrize(
+    ("when", "message"),
+    [
+        (
+            "isinstance(d.output, Buy) and d.output.action == 'hold'",
+            '`d.output.action == "hold"` can never be true here: d.output is Buy, by the '
+            "checks before it",
+        ),
+        (
+            "isinstance(d.output, Buy) and d.output.action != 'buy' and d.output.limit > 0",
+            '`d.output.action != "buy"` can never be true here: d.output is Buy, by the checks '
+            'before it, so `d.output.action == "buy"` is always true',
+        ),
+        (
+            "d.output.action == 'biy'",
+            "`d.output.action == \"biy\"` compares d.output.action with 'biy', which is not one "
+            "of its tags (buy, hold, sell); did you mean 'buy'?",
+        ),
+        (
+            "isinstance(d.output, Text)",
+            "`isinstance(d.output, Text)` can never be true: d.output is declared Decision, "
+            "and no Decision value fits Text",
+        ),
+        (
+            "not not isinstance(d.output, Text)",
+            "`isinstance(d.output, Text)` can never be true: d.output is declared Decision, "
+            "and no Decision value fits Text",
+        ),
+    ],
+)
+def test_a_when_check_that_can_never_be_true_is_a_located_error(when, message):
+    text = _flow(
+        _searched(("input.s == 'x'", "b"), (f'"{when}"', "b")),
+        _code("b"),
+        _code("e"),
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    error = str(caught.value)
+    assert f"case node 'route': `cases[1].when`: {message}" in error
+    # A read after the impossible check is not checked on top of it.
+    assert "'limit'" not in error
+    line = next(n for n, row in enumerate(text.splitlines(), 1) if when in row)
+    assert caught.value.diagnostic.frames[-1].range.start_line == line
+
+
+def test_a_when_check_the_routing_rules_out_is_an_error():
+    msg = _load_error(_flow(
+        _case("route", _ON, [("buy", "inner")], else_="e"),
+        _case("inner", None, [("\"d.output.action == 'hold'\"", "t")], else_="m"),
+        _code("t"),
+        _code("m"),
+        _code("e"),
+    ))
+    assert (
+        "case node 'inner': `cases[0].when`: `d.output.action == \"hold\"` can never be true "
+        "here: d.output is Buy, by the case branch that routes this node"
+    ) in msg
+
+
+def test_a_searched_when_with_a_tag_check_and_a_member_read_runs():
+    text = (
+        "id: p\nname: p\n"
+        + _TYPEDEFS
+        + "input:\n  s: !str\n"
+        + "nodes:\n"
+        "  d:\n"
+        "    kind: code\n"
+        "    input:\n      s: ${input.s}\n"
+        "    output: Decision\n"
+        "    code: |\n"
+        "      if inputs['s'] == 'buy':\n"
+        "          return {'action': 'buy', 'qty': 1, 'limit': 6.0,"
+        " 'leg': {'type': 'market'}}\n"
+        "      return {'action': 'sell', 'qty': 2, 'price': 1.5, 'note': 'n'}\n"
+        + _searched(("\"d.output.action == 'buy' and d.output.limit > 5\"", "t"))
+        + "  t:\n    kind: code\n    output: str\n    code: return 'branch'\n"
+        + "  e:\n    kind: code\n    output: str\n    code: return 'else'\n"
+        + "output: ${route.output}\n"
+    )
+    flow = load_flow(text)
+    result = run_flow(flow, {"s": "buy"})
+    assert result.status == "succeeded", result.failure
+    assert result.output == "branch"
+    result = run_flow(flow, {"s": "sell"})
+    assert result.status == "succeeded", result.failure
+    assert result.output == "else"
 
 
 def test_overlapping_checks_narrow_each_branch_by_its_own_check():

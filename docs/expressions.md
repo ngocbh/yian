@@ -88,9 +88,10 @@ load and asks for a `:-` default (see `syntax.md`, "Skipped branches and flow ou
 
 In bindings, CASE conditions, LOOP predicates, flow outputs, prompts, and asserts the
 loader rejects field reads a known type can't have, including a field only some members of
-a union have outside a narrowing `case` branch (or, in a LOOP predicate or a searched
-`case` `when:`, an `isinstance` conjunct before it; see `syntax.md`), so a `None` there is
-a null, skipped, or untyped value, not a misspelled field.
+a union have outside a narrowing `case` branch (or, in a condition, without a check before
+it that narrows it; see
+[Flow syntax → Narrowing inside a condition](syntax.md#narrowing-inside-a-condition)), so a
+`None` there is a null, skipped, or untyped value, not a misspelled field.
 
 **`ResolveMode`** — how the caller wants a miss treated:
 
@@ -310,12 +311,15 @@ Compose gives each node a type table (`Node.types`) of the names its expressions
 evaluates with it. `isinstance` works in:
 
 - bindings: node inputs, MAP per-item inputs, `call(...)` arguments, LOOP seeds;
-- `case` `when:` conditions, where a searched `case` also narrows (see
+- `case` `when:` conditions, where a searched `case` also narrows its branch (see
   [Flow syntax → `case`](syntax.md#narrowing-a-union-in-a-branch));
 - node asserts and flow asserts;
-- LOOP `while:` / `until:`, where a top-level `and` part also narrows (see
-  [Flow syntax → References](syntax.md#references-naming-a-value));
+- LOOP `while:` / `until:`;
 - flow outputs.
+
+In every condition (`when:`, asserts, `while:` / `until:`), a check narrows the reads after
+it through `and`, `or` and `not` (see
+[Flow syntax → Narrowing inside a condition](syntax.md#narrowing-inside-a-condition)).
 
 It is a load error in:
 

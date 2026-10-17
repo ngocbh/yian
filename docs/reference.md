@@ -368,15 +368,18 @@ untyped or its contract accepts null (a nullable or `None`-kind type).
 
 The core ships no domain tools; a host registers its own into the shared registry
 or passes the whole set for one run with `run_flow(..., tools=...)`. A list value
-in that mapping is a tool group an AGENT can grant by name. `ToolContext`,
-`FunctionTool`, `function_tool`, `PermanentToolError`, and `TransientToolError` are
-also exported from `yian`.
+in that mapping, or an `McpServer`, is a tool group an AGENT can grant by name.
+`ToolContext`, `FunctionTool`, `function_tool`, `PermanentToolError`,
+`TransientToolError`, and `ReportedToolError` are also exported from `yian`; the MCP
+names are exported from `yian.tools`.
 
 ::: yian.tools.ToolContext
 
 ::: yian.tools.FunctionTool
 
 ::: yian.tools.function_tool
+
+::: yian.tools.ReportedToolError
 
 ::: yian.tools.PermanentToolError
 
@@ -395,6 +398,33 @@ also exported from `yian`.
 ::: yian.tools.invoke_tool
 
 ::: yian.tools.invoke_tool_trusted
+
+### MCP servers
+
+`mcp_server` describes a server whose tools a run calls as host tools; see
+[MCP servers](api.md#mcp-servers).
+
+::: yian.tools.mcp.mcp_server
+
+::: yian.tools.mcp.McpServer
+
+::: yian.tools.mcp.McpError
+
+::: yian.tools.mcp.McpConnectError
+
+::: yian.tools.mcp.McpToolError
+
+::: yian.tools.mcp.McpRequestError
+
+::: yian.tools.mcp.McpInvalidRequestError
+
+::: yian.tools.mcp.McpTimeoutError
+
+::: yian.tools.mcp.McpTransportError
+
+::: yian.tools.mcp.McpServerClosed
+
+::: yian.tools.mcp.McpCallCancelled
 
 ## Skills
 

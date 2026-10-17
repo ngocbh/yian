@@ -173,7 +173,11 @@ compiled memory table and imports only the selected built-in backend modules.
 `cli/memory.py` parses `--memory-root` and `--memory-storage KEY=PATH` and calls
 it; `cli/run.py` passes the registry to the run and closes it only after engine
 work drains. Storage flags remain host-only; runtime never imports either module
-or constructs memory.
+or constructs memory. `cli/mcp_config.py` reads `~/.yian/mcp.json` and each
+`--mcp-config` file (`mcpServers` JSON) into unopened `McpServer`s; `cli/run.py`
+passes the servers the flow grants to the run unopened, as tool groups, and the run
+opens them after its own checks and closes them when it ends. The CLI opens servers
+itself only to probe for an unresolved tool name.
 
 The `memory` facade exports contracts only: concrete session, episodic,
 reflection, and profile backends must be imported from their own modules, not eagerly from
@@ -195,11 +199,15 @@ argument and return types as yian `Type`s for the run-start TOOL check.
 `context.py` holds `ToolContext`; `docstrings.py` parses tool docstrings (stdlib
 only); `schema.py` builds a tool's argument model from a function signature;
 `function_tools.py` holds `FunctionTool` and `function_tool`; `errors.py` holds
+`ReportedToolError`, whose message an AGENT's model reads as the call's result,
 `PermanentToolError` and `TransientToolError`, which steer a TOOL node's retries, and
 `ToolCheckError`, raised when a check yian runs on a call fails (stdlib only).
-`tools/` imports langchain-core, pydantic, `typesys`, and the skills leaf, never
-nodes, compile, compose, runtime, `run.py`, or CLI. The run boundary compares the
-types; `tools/` only reads them.
+`mcp.py` holds `mcp_server`, the `McpServer` it returns (the MCP SDK client on its own
+thread and loop, exposing the listed tools as `FunctionTool`s), and the `McpError`
+classes; it imports the MCP SDK and httpx2 only when a server opens.
+`tools/` imports langchain-core, pydantic, `typesys`, the skills leaf, and
+`yian.defaults`, never nodes, compile, compose, runtime, `run.py`, or CLI. The run
+boundary compares the types; `tools/` only reads them.
 
 `llm/` is a leaf beside `llm_clients/`: yian's provider-neutral message, stream
 and error vocabulary, an httpx2 transport that refuses redirects, SSE and NDJSON
@@ -296,10 +304,14 @@ a second runtime authority.
 resolves them against the owning flow's `typedefs:`; `compose/build` stores the result on
 `Node.types` after the START/END boundary is synthesized, so the evaluator never sees a
 registry. `isinstance_types.py` also decides which union members an `isinstance` check
-narrows to. `compose/validate/narrowing.py` computes union narrowing from built CASE
-descriptors and edges and hands each node a view of the producer and flow-input contracts;
-the reference, call-type, and exhaustiveness validators read that view, while the
-field-read rule itself stays in `nodes/contracts.py`. Narrowing is load-time only and adds
+narrows to. `compose/helpers/condition_guards.py` (syntax only) says what a condition
+proves at each read and check through `and`/`or`/`not`, and
+`compose/helpers/narrowing_facts.py` turns that into narrowing facts, narrowed read types,
+and impossible-check errors; CASE, LOOP, and node and flow asserts share both, which is why
+they sit in `helpers` rather than `validate`. `compose/validate/narrowing.py` computes union
+narrowing from built CASE descriptors and edges and hands each node a view of the producer
+and flow-input contracts; the reference, call-type, and exhaustiveness validators read that
+view, while the field-read rule itself stays in `nodes/contracts.py`. Narrowing is load-time only and adds
 nothing to runtime.
 `compose/validate/skips.py` models which nodes of one flow level CASE routing may skip,
 mirroring the runtime join rule over compiled edges (`case_exhaustive.exhaustive_cases`

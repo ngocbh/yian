@@ -1114,13 +1114,18 @@ Compose's narrowing pass (`compose/validate/narrowing.py`) runs after the CASE d
 node builds. A fact for a base path (`<node>.output[.path]`, `input.<name>[.path]`) is
 `Members(S)` (members of the base's own union, with nullability) or `Exact(T)`. An `on:`
 CASE over a union tag gives each `when:` handle its members and `else:` the unlisted ones;
-a searched CASE's top-level `isinstance(<direct ref>, T)` conjunct gives its handle a
-fact. The fact is `Members` of the base members `T` shares, when it shares some and no
-other base member overlaps `T`, and `Exact(T)` otherwise; a base whose type already fits
-`T` gets none. The LOOP predicate walk uses the same rule (`isinstance_members` in
-`compose/helpers/isinstance_types.py`). A searched CASE's `__rN` param whose every read
-follows an `isinstance` conjunct in the same `and` chain gets its own view
-(`Narrowing.param_views`, read through `for_param`). Facts propagate in Kahn's order over
+a searched CASE gives each handle what its `when:` proves true
+(`guard_env(proves(when, True), ...)`), and its `else:` none. A true
+`isinstance(<direct ref>, T)` gives `Members` of the base members `T` shares, when it
+shares some and no other base member overlaps `T`, and `Exact(T)` otherwise; a base whose
+type already fits `T` gets none (`isinstance_members` in
+`compose/helpers/isinstance_types.py`). A false one keeps the base members not in `T`
+(`not_isinstance_fact`), and a tag comparison the members with, or without, that tag
+(`tag_fact`, as an `on:` branch selects them). A searched CASE's `__rN` param whose every
+read is guarded by the checks before it gets its own view: the union over its reads of
+each read's guard facts, met with the node's routing facts (`Narrowing.param_views`, read
+through `for_param`); where that meet loses a fact (two unrelated exact types), the param
+sees its type without it. Facts propagate in Kahn's order over
 data, CASE, and `depends_on` edges: control edges union, each required data group unions
 its producers, and contributions intersect (`union_facts`/`intersect_facts`; losing
 information is always sound). Optional groups (including a searched CASE's read inside
@@ -1134,6 +1139,56 @@ view. `compose/validate/loop_types.py` then checks each returned LOOP field agai
 parameter the next iteration binds it to: a named body's input or an inline body's
 generated parameter. Over a typed seed, a nullable returned field whose non-null type fits
 is left to the runtime input check.
+
+Every condition narrows by short-circuit logic through two kind-agnostic modules that
+CASE (`compose/nodes/case.py`, `narrowing.py`), LOOP (`compose/nodes/loop.py`), and node
+and flow asserts (`compose/validate/asserts.py`) share; they sit in `compose/helpers/` so
+`compose/nodes` can use them without importing `compose/validate`.
+`compose/helpers/condition_guards.py` is syntax only. Checks are `IsinstanceCheck`
+(`isinstance(<direct ref>, T)`) and `TagCheck` (`<direct ref>.<field> == "<text>"`, either
+side; `!=` is the same check negated). Guards are in negation normal form (`Holds`,
+`AllOf`, `AnyOf`, `NOTHING`): `proves(tree, value)` is what holds when a condition
+evaluates to `value`; `guarded_refs` gives each reference occurrence the guard that holds
+whenever it is evaluated (the operands before it true in an `and`, false in an `or`; `not`
+and parentheses pass it down), so a check after a read never guards it; and
+`literals_in_context` gives each check (or `not` of one) in a boolean position its context.
+`compose/helpers/narrowing_facts.py` holds the fact algebra (`Members`, `Exact`,
+`union_facts`, `intersect_facts`; `narrowing.py` re-exports them), `check_fact`, and
+`guard_env`, which evaluates a guard into facts against each base's declared type (a site's
+`base_type_of` returns `NOT_NARROWABLE` for a base it can't narrow). The read rule:
+`guarded_read_types` gives a field read the narrowed types from its whole guard and from
+each top-level conjunct; the read is fine when any allows it, else it fails with the first
+one's error, worded by `narrowed_read_message` (`reference ${r.answr} reads field 'answr',
+which Done doesn't have; r is Done here, by the checks before this read; did you mean
+'answer'?`) when the narrowed type lacks the field. `impossible_checks` reports a check
+that can never be true: its context met with its own fact is an empty, non-nullable member
+set (under the checks before it, or at a CASE its routing too), an `isinstance` whose type
+doesn't overlap the declared type (or, under `not`, one the declared type always fits), or
+a tag comparison whose text is no tag; `impossible_check_message` words them and each site
+locates them (`check_impossible_whens` for `when:`). `checked_refs` skips the field check
+of a read that runs only when a reported check has the value it never has, whatever the
+report's reason (`condition_guards.falsified` makes that check prove `NEVER` for it), and
+checks a read reached only past an unreported check the known type or the checks before
+it always decide as without that check (`_decided_literals`, masked like reported ones). A
+searched `when:` read error credits a narrowed base only the routing narrows to "the case
+branch that routes this node" (`Narrowing.param_routed_bases`, `by_routing=True`), for a
+param whose every checked read follows a check that proves a fact (`_guarded_param_views`);
+an unguarded read gets the plain field error. A LOOP `while:` is first evaluated on the
+seeds, so its checks and narrowed reads take each carried path's type from
+`_seeded_base_type`: the wider of the carried and the seed's type (`wider_type`), else
+unproven; `until:` uses the carried type. Unguarded member-only reads in asserts and LOOP predicates hint
+`isinstance(v, <Type>) and ...` (`isinstance_hint=True`), and in a CALL or LOOP node's
+asserts, where `isinstance` is rejected, a tagged union's hint compares the tag
+(`tag_hint=True`); searched `when:` reads keep the case hint. An assert tries only the
+distinct contracts of the roots some check can narrow, each root's contracts with the other
+multi-contract roots unnarrowed (facts never cross roots, so this is linear in the
+alternatives): a check is impossible only under every contract of its base's root, a read
+is skipped only when every contract of one root kills it, and a read is an error only when
+every contract of its root where it runs rejects it. A flow assert takes every producer
+root as nullable (`nullable_roots`) for its checks and narrowed reads alike, since END binds
+each as `${<id>.output :- null}` and a skipped producer reads null; impossible-check and
+read errors name the declared type (`_declared_label`, `_declared_read_error`), and a check
+is spelled as written.
 
 Compose output derivation, builders, child signatures, and producer maps retain the
 complete output-contract sum. `ChildSignature.declared_outputs` retains ordered

@@ -188,11 +188,29 @@ is a load error outside a narrowing `case` branch (see `case` below): `reference
 ${d.output.qty} reads field 'qty', which only union members with action buy, sell have;
 read it inside a case on ${d.output.action}`. Flow outputs are never narrowed; a node's
 prompt and assert reads of its inputs are checked too, and narrowed when the node sits in
-a `case` branch. A LOOP
-`while:`/`until:` predicate narrows with a top-level `and` part before the read, as a
-searched `case` `when:` does: `until: isinstance(r, Done) and r.answer == "ok"` (a check
-under `or`/`not` doesn't narrow); unnarrowed, the error says to check the member first
-with `isinstance(r, <Type>) and ...`.
+a `case` branch.
+
+**Narrowing inside a condition.** In node and flow asserts, a searched `case` `when:`,
+and a LOOP `while:`/`until:`, a check narrows the reads after it by short-circuit logic:
+in `A and B`, `B` knows `A` is true; in `A or B`, that `A` is false; `not` flips it. The
+checks are `isinstance(<ref>, T)` and a tag comparison `<ref>.<tag> == "<text>"` (`!=`
+proves the opposite), and the narrowed type replaces the declared one. So
+`isinstance(v, Buy) and v.qty > 0`, `not isinstance(v, Buy) or v.qty > 0`, and
+`v.action != "buy" or v.qty > 0` all load; a check after the read doesn't narrow, and an
+unguarded member-only read in an assert or predicate says to check the member first with
+`isinstance(v, <Type>) and ...` (in a `call` or `loop` node's asserts, which can't use
+`isinstance`, with `v.<tag> == "<value>" and ...` for a tagged union). A read the narrowed type lacks is a load error
+(`reference ${r.answr} reads field 'answr', which Done doesn't have; r is Done here, by the
+checks before this read; did you mean 'answer'?`), and so is a check that can never be
+true: ruled out by the checks before it or the routing (`` `v.action == "sell"` can never
+be true here: v is Buy, by the checks before it ``), an `isinstance` no value of the
+declared type fits, or a tag comparison (`==` or `!=`) with text that is no tag
+(`` `v.action != "biy"` compares v.action with 'biy', which is not one of its tags (buy,
+sell); did you mean 'buy'? ``). A `while:` first runs on the seeds, so a check is impossible
+there only when it is on the seed's type too (a seed of another or unproven type leaves it
+unknown), and a flow assert reads every producer it names as possibly null (END binds
+each with `:- null`), for its checks and reads alike, so `not isinstance(d.output, Order)`
+is not reported even on an always-run `d`; read errors still name the declared type.
 
 **Operators inside `${...}`** — one expression grammar, everywhere:
 
@@ -652,6 +670,9 @@ AGENT's tool-calling loop (default `-1` = no cap, `YIAN_AGENT_MAX_TOOL_ITERATION
 and must not contain themselves.
 `retries` bounds typed-output correction, not tool, transport, authentication, or stop
 failures. A TOOL node's `retries:` is different: it retries a failed tool call.
+In the tool loop, a tool that raises `ReportedToolError` (from `yian`) doesn't fail the
+node: the model reads the message as that call's result and carries on. Any other tool
+exception fails the AGENT.
 
 ### Agent-owned variables — `variables:`
 
@@ -805,7 +826,8 @@ covers a tool with no Python signature. See `docs/api.md` "Tool context".
 **TOOL retries.** `retries: N` on a TOOL node (default 0, `YIAN_TOOL_RETRIES`) calls the
 tool again after a failure, up to N more times, waiting a jittered backoff (at most 1, 2,
 4, … s, capped at 30 s). Every exception retries except `PermanentToolError` (from `yian`)
-and yian's own argument and `output:` checks; a tool raises
+and yian's own argument and `output:` checks; a `ReportedToolError` retries too unless it
+is also permanent (it only changes what an AGENT does). A tool raises
 `TransientToolError(msg, retry_after=s)` to set the wait (up to the cap). `ctx.call_id`
 stays the same across attempts and `ctx.attempt` counts them, so make side effects
 idempotent on `ctx.call_id`. Attempts are recorded, so a resumed run continues the count,
@@ -827,9 +849,21 @@ function (named by `__name__`). The model sees and calls the group's tools by th
 own names. Groups may share the same tool object; the model sees it once. The run
 fails before it starts if a granted group is missing, two different tools share a
 name (or a group tool's name is a top-level key), or a group has a tool named
-`ask_user` or `load_skill`; the handler stays the top-level `ask_user` entry. `yian run`
-fills no groups, so such flows need a Python host. Pass groups again to `resume_flow`;
-restarted nodes use the contents passed there.
+`ask_user` or `load_skill`; the handler stays the top-level `ask_user` entry. Pass groups
+again to `resume_flow`; restarted nodes use the contents passed there.
+
+**MCP servers.** An MCP server's tools are a group named by its key: grant the key
+(`tools: [github]`) for every tool it lists, or single tools by name; a TOOL node's
+`tool_id:` names one tool, never the server. The YAML is unchanged and holds no
+credentials. In Python: `run_flow(..., tools={"github": mcp_server(url=..., headers=...)})`
+(`mcp_server` from `yian.tools`, extra `yian[mcp]`); the run opens and closes an unopened
+server, and one opened with `with server:` is the host's to share across runs. With
+`yian run`, list servers in `~/.yian/mcp.json` or `--mcp-config FILE` (`mcpServers`
+JSON); only the servers the flow needs start. These are the only groups `yian run`
+fills; any other group needs a Python host. Error results, JSON-RPC errors, timeouts
+and transport errors reach an AGENT's model as `ReportedToolError`s; a gone server or a
+stopped run fails the node. See `docs/api.md` "MCP servers" and `docs/cli.md`
+"MCP servers".
 Note `tool` uses `tool_id:` + `input:`, with an optional `output:`. A `tool_id:` the
 run's tools lack fails at run start, even on a node that may never run. ML inference
 goes through a host tool (`kind: tool`); `kind: model` was removed.
@@ -919,10 +953,11 @@ value is a load error asking for `:-`.
 ref to the tag (not a coalesce); a `when:` that isn't a tag is a load error (``case node
 'route': `when: buyy` is not a tag of `on: ${d.output.action}` (`Literal(buy, sell)`);
 use one of: buy, sell``). A searched `case`
-narrows with a top-level `and` part `isinstance(<ref>, T)`:
-`when: isinstance(d.output, Buy) and d.output.qty > 5`. A union `T` sharing some
-members narrows to just those members, unless another member could also pass the check.
-Its `else:` doesn't narrow.
+narrows each branch by what its `when:` proves true (`isinstance` and tag checks through
+`and`/`or`/`not`; see "Narrowing inside a condition" above):
+`when: isinstance(d.output, Buy) and d.output.qty > 5`, `when: d.output.action == "buy"`.
+A union `T` in `isinstance(<ref>, T)` sharing some members narrows to just those members,
+unless another member could also pass the check. Its `else:` doesn't narrow.
 A searched `case` whose `when:` reads a node only under such a default doesn't pass
 that node's narrowing to its branches. Inline
 child bodies are typed before narrowing; read member fields in a branch node.
@@ -1273,7 +1308,7 @@ starts, and a `human_input` node fails when it asks. There is no authored
 - [ ] Every variable has a tagged default (`n: !int 4`) and a name distinct from local inputs.
 - [ ] Every `long_term_memory:` declaration is on a full flow or `agent`, uses one of the three forms with only allowlisted built-in config keys (or a custom type a Python host builds), and puts each `session` on exactly one AGENT.
 - [ ] Each `case` whose result is used has an `else:`, lists every tag of a non-nullable `Literal` `on:`, or is a non-nullable `bool` `on:` with `when: true` and `when: false`; its result is read with `${case.output}` and tagged where read; every branch names a node (a value entry for a fixed result) or calls a flow.
-- [ ] `tool` ids are registered or passed per run with `tools=` (AGENT `tools:` may name a host-filled group); a `code` `module:function` is importable (or an inline `code: |` body `return`s a value); `call`/`uses:` targets resolve on the search path.
+- [ ] `tool` ids are registered or passed per run with `tools=` (AGENT `tools:` may name a host-filled group or an MCP server's key); a `code` `module:function` is importable (or an inline `code: |` body `return`s a value); `call`/`uses:` targets resolve on the search path.
 - [ ] Every CALL/MAP/LOOP has exactly one child form: named `call:`, or non-empty inline `nodes:` plus an `output:` key; inline parent/item dependencies cross through outer `input:`.
 - [ ] A child-flow call is written `call(f, ...)` as a whole value, never `${flow(args)}`; string `:-` defaults and `:?` messages are quoted.
 - [ ] Every typed slot uses a tag (`name: !T value`), never `name: T = value`; multi-argument types in a tag are named in `typedefs:`.

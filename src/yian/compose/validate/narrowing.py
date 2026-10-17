@@ -3,21 +3,27 @@
 A narrowing fact says which part of a union a value at a base path can be. A base path is
 `<node>.output[.field...]` or `input.<name>[.field...]`. Facts come from CASE branches: an
 `on:` CASE over a tag field of a union gives each `when:` edge the member with that tag and the
-`else:` edge the unlisted members. A searched CASE gives each case's edge the facts of its
-top-level `isinstance(<base>, T)` conjuncts; its `else:` edge carries none.
+`else:` edge the unlisted members. A searched CASE gives each case's edge what its `when:`
+proves true (`isinstance` checks and tag comparisons through `and`, `or` and `not`); its
+`else:` edge carries none.
 
 Facts flow along the graph in topological order. A node's control edges join by union (it ran
 because one of them fired), each required data group joins its producers by union, and every
 contribution (control, required data groups, `depends_on`) meets by intersection. Each node
 then gets a view of the producer and flow-input contracts with its narrowed bases rebuilt, so
 the reference and type checks can read member fields inside a branch. A searched CASE's own
-param whose every read follows an `isinstance` conjunct in the same `and` chain gets a view
-narrowed by those checks too.
+param whose every read is guarded by the checks before it in its `when:` gets a view
+narrowed by what they prove too; a param read only after a check that can never be true is
+not checked, since `check_impossible_whens` reports that check.
 
 The pass reads built, desugared CASE descriptors and their edges, so it runs after
 `desugar_case_call_targets` and the node builds.
 
-Knows about: descriptors, compiled edges, output contracts, and `typesys` unions.
+The fact algebra (`Members`, `Exact`, their union and intersection) lives in
+`helpers.narrowing_facts`; this module re-exports it.
+
+Knows about: descriptors, compiled edges, output contracts, condition guards, narrowing
+facts, and `typesys` unions.
 Never imports: runtime.
 """
 
@@ -27,8 +33,31 @@ from collections import deque
 from dataclasses import dataclass, field, replace
 from typing import Mapping, Optional, Sequence, TypeAlias
 
+from lark import Token, Tree
+
 from yian.compile.model import Edge
-from yian.compile.validation import types_compatible
+from yian.compose.helpers.condition_guards import Guard, guard_checks, proves
+from yian.compose.helpers.errors import LoadDiagnostics
+from yian.compose.helpers.narrowing_facts import (
+    NOT_NARROWABLE,
+    BaseTypeOf,
+    Env,
+    Exact,
+    Fact,
+    Members,
+    NotNarrowable,
+    checked_refs,
+    fact_type,
+    guard_env,
+    impossible_check_message,
+    impossible_checks,
+    intersect_envs,
+    intersect_facts,
+    isinstance_fact,
+    members_type,
+    union_envs,
+    union_facts,
+)
 from yian.compose.helpers.output_contracts import (
     combine_output_contracts,
     direct_reference_parts,
@@ -37,18 +66,13 @@ from yian.compose.helpers.output_contracts import (
 )
 from yian.compose.nodes.base import NodeDescriptor
 from yian.diagnostics import SourceRange
-from yian.compose.helpers.isinstance_types import (
-    isinstance_members,
-    resolve_isinstance_type,
-)
 from yian.compose.nodes.case import (
     CaseDescriptor,
-    IsinstanceCheck,
-    isinstance_conjuncts,
+    GuardedRead,
     on_match_value,
     searched_param_guards,
 )
-from yian.expr import ExpressionError
+from yian.expr import ExpressionError, parse_condition
 from yian.expr.template import Span, scan_template
 from yian.nodes.case import ELSE_HANDLE
 from yian.nodes.contracts import (
@@ -56,185 +80,12 @@ from yian.nodes.contracts import (
     PartialRecordContract,
     ValueContract,
 )
-from yian.typesys import TypeCheckError
 from yian.typesys.types import TypeRegistry
-from yian.typesys.values import (
-    Type,
-    ValueKind,
-    canonical_union_order,
-    union_tag_fields,
-)
+from yian.typesys.values import Type, union_tag_fields
 
-
-@dataclass(frozen=True)
-class Members:
-    """The value is one of `members`, all members of the base's union, or `None` if nullable.
-
-    Members are deduplicated by `==` and kept in canonical union order. An empty set
-    that is not nullable means no value satisfies the facts, so the node never runs.
-
-    Args:
-        members (`tuple[Type, ...]`):
-            Non-nullable record members of the base's union.
-        nullable (`bool`, *optional*, defaults to `False`):
-            Whether the value may also be `None`.
-    """
-
-    members: tuple[Type, ...]
-    nullable: bool = False
-
-    def __post_init__(self) -> None:
-        """Deduplicate the members and put them in canonical order."""
-        unique: list[Type] = []
-        for member in self.members:
-            if not any(member == seen for seen in unique):
-                unique.append(member)
-        object.__setattr__(self, "members", canonical_union_order(unique))
-
-
-@dataclass(frozen=True)
-class Exact:
-    """The value satisfies `type`.
-
-    Args:
-        type (`Type`):
-            The type the value is known to satisfy.
-    """
-
-    type: Type
-
-
-Fact: TypeAlias = Members | Exact
-"""One narrowing fact for a base path."""
-
-Env: TypeAlias = dict[str, Fact]
-"""Facts keyed by dotted base path; an absent base is unconstrained."""
 
 Views: TypeAlias = tuple[Mapping[str, OutputContract], Mapping[str, ValueContract]]
 """The producer contracts and the flow-input contracts one node or param reads against."""
-
-
-def _contains(members: Sequence[Type], typ: Type) -> bool:
-    """Whether `typ` equals one of `members`."""
-    return any(member == typ for member in members)
-
-
-def union_facts(a: Optional[Fact], b: Optional[Fact]) -> Optional[Fact]:
-    """Return what holds when either fact holds, or `None` for no fact.
-
-    Args:
-        a (`Fact | None`):
-            One fact; `None` is unconstrained.
-        b (`Fact | None`):
-            The other fact; `None` is unconstrained.
-
-    Returns:
-        `Fact | None`:
-            The set union of two `Members`, an `Exact` both sides share, or `None`.
-
-    Example:
-        `union_facts(Members((Buy,)), Members((Sell,)))` is `Members((Buy, Sell))`;
-        `union_facts(Members((Buy,)), None)` is `None`.
-    """
-    if isinstance(a, Members) and isinstance(b, Members):
-        return Members(a.members + b.members, a.nullable or b.nullable)
-    if isinstance(a, Exact) and isinstance(b, Exact) and a.type == b.type:
-        return a
-    return None
-
-
-def intersect_facts(a: Optional[Fact], b: Optional[Fact]) -> Optional[Fact]:
-    """Return what holds when both facts hold, or `None` for no fact.
-
-    Losing information is always sound, so a pair that cannot be combined gives `None`.
-
-    Args:
-        a (`Fact | None`):
-            One fact; `None` is unconstrained.
-        b (`Fact | None`):
-            The other fact; `None` is unconstrained.
-
-    Returns:
-        `Fact | None`:
-            The set intersection of two `Members`; `Members` of the one member an
-            `Exact` names, else that `Exact`; an `Exact` both sides share; the other
-            fact when one side is `None`; otherwise `None`.
-
-    Example:
-        `intersect_facts(Members((Buy, Sell)), Members((Sell, Hold)))` is
-        `Members((Sell,))`; `intersect_facts(Exact(Buy), Members((Buy, Sell)))` is
-        `Members((Buy,))`.
-    """
-    if a is None:
-        return b
-    if b is None:
-        return a
-    if isinstance(a, Members) and isinstance(b, Members):
-        kept = tuple(member for member in a.members if _contains(b.members, member))
-        return Members(kept, a.nullable and b.nullable)
-    if isinstance(a, Exact) and isinstance(b, Exact):
-        return a if a.type == b.type else None
-    exact, members = (a, b) if isinstance(a, Exact) else (b, a)
-    if _contains(members.members, exact.type):
-        return Members((exact.type,))
-    return exact
-
-
-def isinstance_fact(base_type: Type, typ: Type) -> Optional[Fact]:
-    """Return the fact that a value of `base_type` satisfies `typ`, or `None` for no fact.
-
-    Args:
-        base_type (`Type`):
-            The type of the value being tested.
-        typ (`Type`):
-            The type it satisfies. A nullable `typ` also admits `None`.
-
-    Returns:
-        `Fact | None`:
-            `None` when every `base_type` value already satisfies `typ`, since `typ`
-            would only widen it (`object`, say, would turn off field checks);
-            `Members` of the base union's members that `typ` (ignoring nullability)
-            shares, when no other member could pass it; otherwise `Exact(typ)`.
-
-    Example:
-        For `Union[Buy, Hold, Sell]`, `Buy` gives `Members((Buy,))`,
-        `Union[Hold, Sell, Cancel]` gives `Members((Hold, Sell))`, an unrelated record
-        gives `Exact` of that record, and `object` gives `None`.
-    """
-    if types_compatible(base_type, typ):
-        return None
-    kept = isinstance_members(base_type, typ)
-    if kept is not None:
-        return Members(kept, typ.nullable)
-    return Exact(typ)
-
-
-def _union_envs(envs: Sequence[Env]) -> Env:
-    """Join environments by per-base union; a base missing from any is dropped."""
-    if not envs:
-        return {}
-    joined: Env = {}
-    for base, fact in envs[0].items():
-        for env in envs[1:]:
-            fact = union_facts(fact, env.get(base))
-            if fact is None:
-                break
-        if fact is not None:
-            joined[base] = fact
-    return joined
-
-
-def _intersect_envs(envs: Sequence[Env]) -> Env:
-    """Meet environments by per-base intersection."""
-    met: Env = {}
-    for env in envs:
-        for base, fact in env.items():
-            combined = intersect_facts(met.get(base), fact)
-            if combined is None:
-                met.pop(base, None)
-            else:
-                met[base] = combined
-    return met
 
 
 # --------------------------------------------------------------------------- #
@@ -318,33 +169,6 @@ def narrow_contract_at(
     return PartialRecordContract(tuple(fields.items()))
 
 
-def _members_type(members: Sequence[Type], nullable: bool) -> Optional[Type]:
-    """The type of a value that is one of `members`, or `None` if it may be `None`.
-
-    Returns `None` for an empty set that is not nullable: no value fits.
-    """
-    if not members:
-        return Type.scalar(ValueKind.NONE) if nullable else None
-    if len(members) == 1:
-        return replace(members[0], nullable=nullable)
-    return Type(
-        kind=ValueKind.OBJECT,
-        variants=canonical_union_order(members),
-        nullable=nullable,
-    )
-
-
-def _fact_type(fact: Fact) -> Optional[Type]:
-    """The type a node sees for a base under `fact`, or `None` for no view.
-
-    An empty member set on a nullable base can only be `None`; on a non-nullable base
-    the node never runs, so it gets no view.
-    """
-    if isinstance(fact, Exact):
-        return fact.type
-    return _members_type(fact.members, fact.nullable)
-
-
 def _split_base(base: str) -> Optional[tuple[str, str, tuple[str, ...]]]:
     """Split a base path into `("producer"|"input", root name, field path)`."""
     parts = tuple(base.split("."))
@@ -385,7 +209,7 @@ def _build_views(
         key=lambda item: (len(item[1][2]), item[0]),
     )
     for base, (space, name, path) in ordered:
-        target = _fact_type(env[base])
+        target = fact_type(env[base])
         if target is None:
             continue
         view = producer_view if space == "producer" else input_view
@@ -445,7 +269,7 @@ def _members_fact(
         return Members((), nullable)
     if reference is None:
         # The base has no union of its own outside this branch, so the set is only an exact type.
-        return Exact(_members_type(members, nullable))
+        return Exact(members_type(members, nullable))
     return Members(tuple(members), nullable)
 
 
@@ -500,44 +324,46 @@ def _on_case_facts(
     return facts
 
 
-def _checks_env(
-    checks: Sequence[IsinstanceCheck],
+def _base_type_of(
     producers: Mapping[str, OutputContract],
     inputs: Mapping[str, ValueContract],
-    registry: TypeRegistry,
-) -> Env:
-    """The facts that hold when every `isinstance` check in `checks` passes.
+    view: Views,
+) -> BaseTypeOf:
+    """The declared type of a base path at a CASE, for a check on it.
 
-    Each fact is taken against the base's unnarrowed type, so facts from different
-    CASEs on the same base compare by member. A check whose base is not a node output or
-    flow input, or whose type name does not resolve, gives no fact; the type-table pass
-    reports an unknown name.
+    Facts are taken against each base's unnarrowed type, so facts from different CASEs
+    on the same base compare by member. A base below a union, such as a field only some
+    members have, takes its type from `view`, the CASE node's routing view. A base that is
+    not a node output or flow input cannot be narrowed.
     """
-    facts: list[Env] = []
-    for base, type_name in checks:
+
+    def base_type_of(base: str) -> Type | None | NotNarrowable:
         if _split_base(base) is None:
-            continue
-        try:
-            typ = resolve_isinstance_type(type_name, registry)
-        except TypeCheckError:
-            continue
+            return NOT_NARROWABLE
         contract = _base_contract(base, producers, inputs)
-        if type(contract) is not ValueContract:
-            facts.append({base: Exact(typ)})
-            continue
-        fact = isinstance_fact(contract.type, typ)
-        if fact is not None:
-            facts.append({base: fact})
-    return _intersect_envs(facts)
+        if contract is None:
+            contract = _base_contract(base, *view)
+        return contract.type if type(contract) is ValueContract else None
+
+    return base_type_of
+
+
+def _parsed_when(when: object) -> Tree | Token | None:
+    """A searched `when:` parsed, or `None` when it is no string or does not parse."""
+    if not isinstance(when, str):
+        return None
+    try:
+        return parse_condition(when)
+    except ExpressionError:
+        return None
 
 
 def _searched_case_facts(
     desc: CaseDescriptor,
-    producers: Mapping[str, OutputContract],
-    inputs: Mapping[str, ValueContract],
+    base_type_of: BaseTypeOf,
     registry: TypeRegistry,
 ) -> dict[str, Env]:
-    """The facts each handle of a searched CASE carries.
+    """The facts each handle of a searched CASE carries: what its `when:` proves true.
 
     Cases routing to one target join by union. The `else:` handle carries no fact.
     """
@@ -546,59 +372,162 @@ def _searched_case_facts(
         then = case.get("then")
         if then is None:
             continue
-        checks = isinstance_conjuncts(case.get("when"))
-        by_handle.setdefault(then, []).append(
-            _checks_env(checks, producers, inputs, registry)
-        )
-    facts = {handle: _union_envs(envs) for handle, envs in by_handle.items()}
+        tree = _parsed_when(case.get("when"))
+        env = {} if tree is None else guard_env(proves(tree, True), base_type_of, registry)
+        by_handle.setdefault(then, []).append(env)
+    facts = {handle: union_envs(envs) for handle, envs in by_handle.items()}
     return {handle: env for handle, env in facts.items() if env}
 
 
-def _guarded_param_views(
+def _checked_param_guards(
     desc: CaseDescriptor,
+    env: Env,
+    base_type_of: BaseTypeOf,
+    registry: TypeRegistry,
+) -> dict[str, list[GuardedRead]]:
+    """Each searched CASE param's occurrences with the guard each is checked under."""
+
+    def guards_of(tree: Tree | Token) -> list[Optional[Guard]]:
+        return [
+            guard
+            for _, guard in checked_refs(tree, base_type_of, registry, routing=env)
+        ]
+
+    return searched_param_guards(desc, guards_of)
+
+
+def _guarded_param_views(
+    params: Mapping[str, list[GuardedRead]],
     env: Env,
     producers: Mapping[str, OutputContract],
     inputs: Mapping[str, ValueContract],
+    base_type_of: BaseTypeOf,
     registry: TypeRegistry,
-) -> dict[str, Views]:
-    """The views of a searched CASE's params that every read guards with `isinstance`.
+) -> tuple[dict[str, Views], dict[str, Env], dict[str, frozenset[str]]]:
+    """The views and facts of a searched CASE's params whose every checked read is guarded.
 
-    A param read under different checks gets the union of their facts, met with the
-    CASE's own environment.
+    A param read under different guards gets the union of their facts, met with the
+    CASE's own environment. Occurrences that are not checked are left out. The third map
+    holds each param's bases that only the CASE's own environment (its routing) narrows.
     """
     views: dict[str, Views] = {}
-    for param, occurrences in searched_param_guards(desc).items():
-        if not occurrences or not all(checks for _, checks in occurrences):
+    envs: dict[str, Env] = {}
+    routed: dict[str, frozenset[str]] = {}
+    for param, occurrences in params.items():
+        guards = [guard for _, guard in occurrences if guard is not None]
+        if not guards or not all(guard_checks(guard) for guard in guards):
             continue
-        guard = _union_envs(
-            [_checks_env(checks, producers, inputs, registry) for _, checks in occurrences]
-        )
-        if not guard:
+        guarded = union_envs([guard_env(guard, base_type_of, registry) for guard in guards])
+        if not guarded:
             continue
-        view = _build_views(_intersect_envs([env, guard]), producers, inputs)
+        met = intersect_envs([env, guarded])
+        view = _build_views(met, producers, inputs)
         if view[0] is not producers or view[1] is not inputs:
             views[param] = view
-    return views
+            envs[param] = met
+            routed[param] = frozenset(base for base in met if base not in guarded)
+    return views, envs, routed
+
+
+def _unchecked_params(params: Mapping[str, list[GuardedRead]]) -> frozenset[str]:
+    """The searched CASE params whose every read follows a reported impossible check."""
+    return frozenset(
+        param
+        for param, occurrences in params.items()
+        if occurrences and all(guard is None for _, guard in occurrences)
+    )
 
 
 def _unguarded_read_sites(
     desc: CaseDescriptor,
+    params: Mapping[str, list[GuardedRead]],
 ) -> dict[str, tuple[str, Optional[SourceRange]]]:
     """Where to report a searched CASE param whose first read is guarded and a later one isn't.
 
     The guarded read is fine, so an error on the param belongs to its first unguarded
-    read: the label and range of that read's `when:`.
+    read: the label and range of that read's `when:`. Reads that are not checked are
+    left out.
     """
     sites: dict[str, tuple[str, Optional[SourceRange]]] = {}
-    for param, occurrences in searched_param_guards(desc).items():
-        if not occurrences or not occurrences[0][1]:
+    for param, occurrences in params.items():
+        checked = [(index, guard) for index, guard in occurrences if guard is not None]
+        if not checked or not guard_checks(checked[0][1]):
             continue
-        unguarded = next((index for index, checks in occurrences if not checks), None)
+        unguarded = next(
+            (index for index, guard in checked if not guard_checks(guard)), None
+        )
         if unguarded is None:
             continue
         when_range = desc.when_ranges[unguarded] if unguarded < len(desc.when_ranges) else None
         sites[param] = (f"cases[{unguarded}].when", when_range)
     return sites
+
+
+def check_impossible_whens(
+    descriptors: Mapping[str, NodeDescriptor],
+    producers: Mapping[str, OutputContract],
+    inputs: Mapping[str, ValueContract],
+    narrowing: "Narrowing",
+    *,
+    registry: TypeRegistry | None = None,
+    diagnostics: LoadDiagnostics | None = None,
+) -> None:
+    """Reject a searched CASE `when:` with a check that can never be true.
+
+    Each `when:` is checked with `impossible_checks`, met with the facts of the branch
+    that routes its CASE node, so a check the routing rules out is reported too.
+
+    Args:
+        descriptors (`Mapping[str, NodeDescriptor]`):
+            The flow's node descriptors by id; only searched CASEs are checked.
+        producers (`Mapping[str, OutputContract]`):
+            Each node's output contract by id.
+        inputs (`Mapping[str, ValueContract]`):
+            The flow-input contracts by name.
+        narrowing (`Narrowing`):
+            The flow's narrowing, for each CASE node's routing facts and view.
+        registry (`TypeRegistry | None`, *optional*, defaults to `None`):
+            The flow's `typedefs:` registry, for `isinstance` type names. `None` knows
+            only the builtin names.
+        diagnostics (`LoadDiagnostics | None`, *optional*, defaults to `None`):
+            Factory for located load errors.
+
+    Raises:
+        `LoadError`:
+            A `when:` has a check that can never be true, located at the first such
+            `when:`; every such check in the flow is listed.
+
+    Example:
+        With `d` a `Union[Buy, Hold, Sell]`, the searched case `gate` with
+        `when: isinstance(d.output, Buy) and d.output.action == "hold"` fails with
+        ``case node 'gate': `cases[0].when`: `d.output.action == "hold"` can never be
+        true here: d.output is Buy, by the checks before it``.
+    """
+    registry = registry or {}
+    diagnostics = diagnostics or LoadDiagnostics()
+    problems: list[tuple[str, Optional[SourceRange]]] = []
+    for node_id, desc in descriptors.items():
+        if not isinstance(desc, CaseDescriptor) or desc.on is not None:
+            continue
+        env = narrowing.environment(node_id)
+        base_type_of = _base_type_of(producers, inputs, narrowing.for_node(node_id))
+        for index, case in enumerate(desc.cases):
+            tree = _parsed_when(case.get("when"))
+            if tree is None:
+                continue
+            when_range = desc.when_ranges[index] if index < len(desc.when_ranges) else None
+            for check in impossible_checks(tree, base_type_of, registry, routing=env):
+                problems.append(
+                    (
+                        f"case node {node_id!r}: `cases[{index}].when`: "
+                        f"{impossible_check_message(check)}",
+                        when_range or desc.range,
+                    )
+                )
+    if problems:
+        raise diagnostics.error(
+            "\n  ".join(message for message, _ in problems), range=problems[0][1]
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -621,10 +550,18 @@ class Narrowing:
             The narrowed contract maps of nodes that narrow something.
         param_views (`dict[str, dict[str, Views]]`):
             Per searched CASE, the narrowed contract maps of its params whose every read
-            follows an `isinstance` conjunct.
+            is guarded by checks before it in its `when:`.
         param_sites (`dict[str, dict[str, tuple[str, SourceRange | None]]]`):
             Per searched CASE, the label and range to report a param at when its first
             read is guarded and a later one isn't: the first unguarded read's `when:`.
+        param_envs (`dict[str, dict[str, Env]]`):
+            Per searched CASE, the facts each param in `param_views` is read under.
+        param_routed (`dict[str, dict[str, frozenset[str]]]`):
+            Per searched CASE, the bases of each param's `param_envs` that only the
+            routing narrows, not the checks before the read.
+        unchecked_params (`dict[str, frozenset[str]]`):
+            Per searched CASE, the params whose every read follows a check
+            `check_impossible_whens` reports, so no value reaches them.
         unordered (`frozenset[str]`):
             Nodes a topological order could not reach, on or after a cycle. They
             get no facts.
@@ -638,6 +575,9 @@ class Narrowing:
     param_sites: dict[str, dict[str, tuple[str, Optional[SourceRange]]]] = field(
         default_factory=dict
     )
+    param_envs: dict[str, dict[str, Env]] = field(default_factory=dict)
+    param_routed: dict[str, dict[str, frozenset[str]]] = field(default_factory=dict)
+    unchecked_params: dict[str, frozenset[str]] = field(default_factory=dict)
     unordered: frozenset[str] = frozenset()
 
     def for_node(self, node_id: str) -> Views:
@@ -660,8 +600,8 @@ class Narrowing:
             node_id (`str`):
                 A node id.
             param (`str`):
-                One of the node's params. A searched CASE's `isinstance`-guarded param
-                gets its guarded view; any other param gets the node's view.
+                One of the node's params. A searched CASE's guarded param gets its
+                guarded view; any other param gets the node's view.
 
         Returns:
             `Views`:
@@ -688,6 +628,54 @@ class Narrowing:
                 and the param keeps the site of its first read.
         """
         return self.param_sites.get(node_id, {}).get(param)
+
+    def param_env(self, node_id: str, param: str) -> Env:
+        """Return the facts a searched CASE's guarded param is read under; `{}` otherwise.
+
+        Args:
+            node_id (`str`):
+                A node id.
+            param (`str`):
+                One of the node's params.
+
+        Returns:
+            `Env`:
+                The facts behind `for_param`'s guarded view, by base path.
+        """
+        return self.param_envs.get(node_id, {}).get(param, {})
+
+    def param_routed_bases(self, node_id: str, param: str) -> frozenset[str]:
+        """Return the bases of `param_env` that only the routing narrows.
+
+        Args:
+            node_id (`str`):
+                A node id.
+            param (`str`):
+                One of the node's params.
+
+        Returns:
+            `frozenset[str]`:
+                The base paths whose facts come from the case branch that routes the
+                node, not from the checks before the read.
+        """
+        return self.param_routed.get(node_id, {}).get(param, frozenset())
+
+    def param_unchecked(self, node_id: str, param: str) -> bool:
+        """Return whether no value reaches any read of a searched CASE's param.
+
+        Args:
+            node_id (`str`):
+                A node id.
+            param (`str`):
+                One of the node's params.
+
+        Returns:
+            `bool`:
+                `True` when every read of the param follows a check that can never be
+                true, which `check_impossible_whens` reports; its fields are then not
+                checked.
+        """
+        return param in self.unchecked_params.get(node_id, frozenset())
 
     def environment(self, node_id: str) -> Env:
         """Return node `node_id`'s facts by base path; `{}` when it has none."""
@@ -755,8 +743,8 @@ def compute_narrowing(
       an optional group gives nothing;
     - each required ordering edge (`depends_on`), giving its source's environment.
 
-    A searched CASE's edge carries the facts of its case's top-level `isinstance`
-    conjuncts, and its `else:` edge none.
+    A searched CASE's edge carries what its case's `when:` proves true, and its `else:`
+    edge none.
 
     Edges and dependencies that name unknown nodes are ignored. Nodes on or after a
     cycle get no facts and are reported in `unordered`.
@@ -795,6 +783,9 @@ def compute_narrowing(
     views: dict[str, Views] = {}
     param_views: dict[str, dict[str, Views]] = {}
     param_sites: dict[str, dict[str, tuple[str, Optional[SourceRange]]]] = {}
+    param_envs: dict[str, dict[str, Env]] = {}
+    param_routed: dict[str, dict[str, frozenset[str]]] = {}
+    unchecked_params: dict[str, frozenset[str]] = {}
     handle_facts: dict[str, dict[str, Env]] = {}
     for node_id in order:
         control: list[Env] = []
@@ -804,7 +795,7 @@ def compute_narrowing(
             source_env = environments.get(edge.from_, {})
             if edge.source_handle is not None:
                 edge_facts = handle_facts.get(edge.from_, {}).get(edge.source_handle, {})
-                control.append(_intersect_envs([source_env, edge_facts]))
+                control.append(intersect_envs([source_env, edge_facts]))
             elif edge.ordering:
                 if not edge.optional:
                     contributions.append(source_env)
@@ -813,11 +804,11 @@ def compute_narrowing(
                 optional, members = groups.setdefault(edge.input_group, (edge.optional, []))
                 members.append(source_env)
         if control:
-            contributions.append(_union_envs(control))
+            contributions.append(union_envs(control))
         contributions.extend(
-            _union_envs(members) for optional, members in groups.values() if not optional
+            union_envs(members) for optional, members in groups.values() if not optional
         )
-        env = _intersect_envs(contributions)
+        env = intersect_envs(contributions)
         if env:
             environments[node_id] = env
             view = _build_views(env, producers, inputs)
@@ -834,11 +825,22 @@ def compute_narrowing(
                 inputs,
             )
         elif isinstance(desc, CaseDescriptor):
-            handle_facts[node_id] = _searched_case_facts(desc, producers, inputs, registry)
-            guarded = _guarded_param_views(desc, env, producers, inputs, registry)
+            base_type_of = _base_type_of(
+                producers, inputs, views.get(node_id, (producers, inputs))
+            )
+            handle_facts[node_id] = _searched_case_facts(desc, base_type_of, registry)
+            params = _checked_param_guards(desc, env, base_type_of, registry)
+            guarded, guarded_envs, routed = _guarded_param_views(
+                params, env, producers, inputs, base_type_of, registry
+            )
             if guarded:
                 param_views[node_id] = guarded
-            sites = _unguarded_read_sites(desc)
+                param_envs[node_id] = guarded_envs
+                param_routed[node_id] = routed
+            unchecked = _unchecked_params(params)
+            if unchecked:
+                unchecked_params[node_id] = unchecked
+            sites = _unguarded_read_sites(desc, params)
             if sites:
                 param_sites[node_id] = sites
 
@@ -849,6 +851,9 @@ def compute_narrowing(
         views=views,
         param_views=param_views,
         param_sites=param_sites,
+        param_envs=param_envs,
+        param_routed=param_routed,
+        unchecked_params=unchecked_params,
         unordered=frozenset(descriptors) - frozenset(order),
     )
 
@@ -860,6 +865,7 @@ __all__ = [
     "Members",
     "Narrowing",
     "Views",
+    "check_impossible_whens",
     "compute_narrowing",
     "intersect_facts",
     "isinstance_fact",

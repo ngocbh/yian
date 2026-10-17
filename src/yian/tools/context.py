@@ -8,10 +8,29 @@ Uses only the Python standard library.
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from dataclasses import dataclass
+import threading
 from typing import Generic, TypeVar
 
 T = TypeVar("T")
+
+# Set by `ToolSet` around each call, so a tool reads its own run's event even when
+# several runs share the tool.
+_STOP_EVENT: ContextVar[threading.Event | None] = ContextVar("yian_tool_stop_event", default=None)
+
+
+def _current_stop() -> threading.Event | None:
+    """Return the stop event of the run whose tool call is running on this thread.
+
+    For tools that wait and must end early when the run stops (used by MCP tools).
+
+    Returns:
+        `threading.Event | None`:
+            The calling run's stop event, or `None` outside a tool call or when the
+            calling tool set has no stop event.
+    """
+    return _STOP_EVENT.get()
 
 
 @dataclass(frozen=True)

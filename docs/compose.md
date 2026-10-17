@@ -72,7 +72,10 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   │                            copies of the host's case routes and depends_on/runs_after,
   │                            and data gates on the host's other inputs
   ├─ compute_narrowing      → each node's view of union contracts under the CASE
-  │                            branches (`on:` tag, `isinstance`) that route it
+  │                            branches that route it (`on:` tag; a `when:`'s
+  │                            `isinstance` and tag checks through and/or/not)
+  ├─ check impossible whens → a searched `when:` check that can never be true (by
+  │                            the checks before it, the routing, or the type)
   ├─ check typed inputs     → a typed node input whose inferred type (read against
   │                            its node's narrowed view) is disjoint from its declared
   │                            type is rejected, before the call/loop type checks

@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [{ name = "Ngoc Bui" }]
-keywords = ["llm", "agents", "workflow", "orchestration", "langchain", "yaml"]
+keywords = ["llm", "agents", "workflow", "orchestration", "langchain", "yaml", "mcp"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -45,12 +45,15 @@ openai = ["langchain-openai==1.6.2", "openai>=3.4.0"]
 # `all` extra.
 google = ["langchain-google-genai>=4.3.0"]
 ollama = ["langchain-ollama>=1.1.0"]
+# The official MCP SDK, used to call tools on MCP servers.
+mcp = ["mcp>=2.3,<3"]
 all = [
     "langchain-anthropic>=0.3.15",
     "langchain-openai==1.6.2",
     "openai>=3.4.0",
     "langchain-google-genai>=4.3.0",
     "langchain-ollama>=1.1.0",
+    "mcp>=2.3,<3",
 ]
 dev = [
     "pytest>=8.0",

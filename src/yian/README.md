@@ -1017,19 +1017,43 @@ node a view of the producer and flow-input contracts with narrowed union bases r
 fact for a base path (`<node>.output[.path]` or `input.<name>[.path]`) is `Members(S)` (a
 subset of the base's own union members, with nullability) or `Exact(T)`. An `on:` CASE
 over a union tag field gives each `when:` handle its tagged members and `else:` the
-unlisted ones. A searched CASE's top-level `isinstance(<ref>, T)` conjunct gives its
-handle a fact; its `else:` carries none. That fact is `Members` of the base members `T`
-shares, when it shares some and no other base member overlaps `T`, and `Exact(T)`
-otherwise; a base whose type already fits `T` gets none. The LOOP predicate walk uses the
-same rule (`isinstance_members` in `compose/helpers/isinstance_types.py`). A later
-conjunct of the same `and` chain is checked against the narrowed base
-(`Narrowing.for_param`). Facts flow in Kahn's order over data, CASE, and `depends_on`
+unlisted ones. A searched CASE gives each handle what its `when:` proves true
+(`guard_env(proves(when, True), ...)`); its `else:` carries none. A true
+`isinstance(<ref>, T)` gives `Members` of the base members `T` shares, when it shares some
+and no other base member overlaps `T`, and `Exact(T)` otherwise; a base whose type already
+fits `T` gets none (`isinstance_members` in `compose/helpers/isinstance_types.py`). A
+false one keeps the members not in `T`, and a tag comparison the members with (or
+without) that tag, as an `on:` branch does.
+Facts flow in Kahn's order over data, CASE, and `depends_on`
 edges: control edges join by union, each required data
 group joins its producers by union, and all contributions meet by intersection. Optional
 groups and `runs_after` contribute nothing; nodes on a cycle get no facts and are left for
 `reject_cycles`. The call-type and CASE-exhaustiveness checks read
 `Narrowing.for_node(id)`, and the reference and typed-input checks read `for_param`, which
-falls back to it; flow outputs are checked unnarrowed. A CASE that produces a value (it is
+falls back to it; flow outputs are checked unnarrowed.
+Conditions narrow by short-circuit logic, through two kind-agnostic helpers that CASE,
+LOOP, and both kinds of assert share. `compose/helpers/condition_guards.py` is syntax only:
+it turns a parsed condition into guards (`Holds`/`AllOf`/`AnyOf` over `isinstance` and
+tag checks): `proves(tree, value)` is what holds when the condition evaluates to `value`,
+`guarded_refs` what holds whenever each reference is read (the operands before it in an
+`and` true, in an `or` false), and `literals_in_context` what holds whenever each check is
+evaluated. `compose/helpers/narrowing_facts.py` turns guards into facts (`guard_env`) and
+gives a field read under a guard the narrowed types it is checked against
+(`guarded_read_types`): the read is fine when any of them allows it, else it fails with
+the first one's error, worded by `narrowed_read_message` when the narrowed type lacks the
+field. `impossible_checks` finds the checks that can never be true (an empty member set
+under the checks before them and, at a CASE, its routing; an `isinstance` with no overlap
+with the declared type; a tag comparison with a non-tag), a located load error at each
+site (`check_impossible_whens` for `when:`); a read that runs only when such a check has
+the value it never has isn't field-checked (`falsified` makes that check prove `NEVER`
+there), and one reached only past an unreported check the known type or the checks before
+it always decide is checked as without that check (`checked_refs`). A searched CASE's
+`__rN` param gets one view: the union
+over its reads of each read's guard facts, met with the node's routing facts
+(`Narrowing.for_param`); where that meet loses a fact (two unrelated exact types), the param
+sees its type without it. A read error on a base only the routing narrows says so
+(`Narrowing.param_routed_bases`).
+A CASE that produces a value (it is
 read as `${case.output}`, or such a CASE routes to it) must be exhaustive: an `else:`,
 every tag of a non-nullable enum `on:`, or `true` and `false` for a non-nullable `bool`
 `on:`, with a flow-input `on:` resolved for it too; `when:` values compare as typed
@@ -2115,7 +2139,8 @@ run-owned stop signal between model/tool effects; WAIT blocks on that signal. Ea
 returns `Output` from the same invocation.
 
 Tools reach nodes the same kind-blind way. `run_flow` and `resume_flow` build one
-immutable `ToolSet` from `tools=` before any log work. `FlowEngine` passes it to
+immutable `ToolSet` from `tools=` before any record is appended (`run_flow` before
+the log is created). `FlowEngine` passes it to
 `eval_node`, which adds `caps["tools"]` only for nodes whose `needs_tools` trait
 is set (TOOL, HUMAN_INPUT, and AGENT). `tools=None` reads the global registry. A
 mapping is the run's whole tool set. Hosts that want both pass
@@ -2127,8 +2152,12 @@ thread-safe. Tools are host callables: the log does not record them, and a host
 passes them again on resume.
 
 A `ToolSet` also holds the host's `context=` object, which is never recorded.
-`FlowEngine` binds the set to the run id (`ToolSet.for_run`), so every node that
-receives `caps["tools"]` passes run identity with no new capability. A function
+`FlowEngine` binds the set to the run id and the run's stop event
+(`ToolSet.for_run(run_id, stop_event=...)`), so every node that receives
+`caps["tools"]` passes run identity with no new capability. `ToolSet.invoke` sets
+that event in a context variable for the length of each call, so a waiting tool
+(an MCP call) reads the stop of the run calling it, even when several runs share
+the tool. A function
 tool whose first parameter is annotated `ToolContext` gets one per call: call id,
 attempt, tool name, run id, node, and the context. TOOL and HUMAN_INPUT calls use
 the call id `"<run_id>/<node id>"`, which recovery rebuilds, so a re-run of an
@@ -2149,6 +2178,18 @@ tool. The same tool object may sit in several groups, since host permission grou
 overlap. An AGENT's `tools:` grant may name a group; the tool loop calls
 `ToolSet.expand`, which drops repeated names, before binding tools and before its
 grant check, so the model and the check see each tool name once.
+An opened `McpServer` (`tools/mcp.py`) is a group too: its tools are the
+`FunctionTool`s it listed when it opened. `McpServer` runs the MCP SDK client on its
+own thread and asyncio loop, so tool calls stay synchronous for nodes. The run
+boundary splits unopened servers out of `tools=`, builds a `ToolSet` from the other
+entries first, runs the checks that need no tools, then opens the servers under a
+token unique to the run, builds the full `ToolSet`, and closes them in its
+`finally`. A server opened by the host stays the host's. `resume_flow` opens servers
+only for an unfinished run, after replay. `cli/mcp_config.py` reads `mcpServers`
+files into unopened servers; `cli/run.py` passes the servers the flow grants to the
+run unopened, as groups, and the run opens them after its own checks. The CLI opens
+servers itself only to probe for an unresolved tool name: a TOOL node's `tool_id`
+that no registered tool supplies, or a grant that names neither a tool nor a server.
 Before any log work, fresh runs and unfinished resumes walk static nodes and their
 `origin_children()` through the kind-blind `Node.granted_tools()` hook (AGENT
 returns its `tools:`) and raise `ValueError` when a grant does not resolve in the
@@ -2170,6 +2211,17 @@ The `output:` gate is the ordinary success path: the engine validates each retur
 value against the node's output contract, so a host reports an expected outcome such
 as an interrupt by returning a variant of that type. An exception still fails the
 node.
+
+An AGENT's tool loop treats `ReportedToolError` (`tools/errors.py`) differently:
+`invoke_tool_effect` turns it into an error `ToolMessage` holding the exception's
+text (its type name when empty), records the effect `completed`, and the loop
+continues, so the model reads the error and can act on it. A stop pending when the
+tool raises still wins and records the effect `interrupted`. Any other exception
+fails the AGENT node. A TOOL node treats a `ReportedToolError` like any failure,
+retried under `retries:` unless it is also a `PermanentToolError`. The MCP errors a
+model can act on (error results, JSON-RPC errors, timeouts, transport errors)
+subclass it; a gone server and a stop-cancelled call are `PermanentToolError`s and
+fail the node.
 
 Pooled drives own their executors through a full join: an abnormal dispatch exit
 signals cooperative stop before joining, so the boundary never releases its run-log

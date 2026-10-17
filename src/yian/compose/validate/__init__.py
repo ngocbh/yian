@@ -29,12 +29,16 @@ reject an ill-formed flow before it is compiled:
   originated carriers) and `validate_node_asserts` + `_POOL_HEADS` (the per-node
   `asserts:` contract). Node validation accepts a source-neutral callback that returns
   each authored occurrence's origin and temporary range together by source-order index;
-  it never navigates Compose cursors itself.
+  it never navigates Compose cursors itself. Both halves check field reads narrowed by
+  the assert's own checks, and reject a check that can never be true.
 - `handles.py` — `check_case_handles`: a `CaseNode`'s handles align with its
   outgoing control edges.
 - `narrowing.py` — `compute_narrowing`: the union narrowing facts each node gets from
-  the CASE branches that route it, and the per-node views of the producer and
-  flow-input contracts with each narrowed base rebuilt (`Narrowing.for_node`).
+  the CASE branches that route it (an `on:` tag, or what a searched `when:` proves
+  true), and the per-node views of the producer and flow-input contracts with each
+  narrowed base rebuilt (`Narrowing.for_node`); `check_impossible_whens`: a searched
+  `when:` check that can never be true. The facts come from
+  `helpers.narrowing_facts`.
 - `typed_bindings.py` — `check_typed_inputs` / `check_typed_outputs`: a typed node
   input or flow output can fit its declared type (literal text exactly; a reference
   unless its inferred type is disjoint, leaving a narrower one to the runtime check);

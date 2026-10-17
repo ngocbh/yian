@@ -24,6 +24,11 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("compile/validation.py", "_RELATION_RANK"): "ordering of type relations",
     ("cli/chat/tools.py", "_open_no_follow.mode"): "file permission bits, as os.open",
     ("llm/errors.py", "_STATUS_KINDS"): "HTTP status codes mapped to error kinds",
+    ("tools/mcp.py", "_CONNECTION_CLOSED"): "MCP SDK error code",
+    ("tools/mcp.py", "_REQUEST_TIMEOUT"): "MCP SDK error code",
+    ("tools/mcp.py", "_INTERNAL_ERROR"): "JSON-RPC error code",
+    ("tools/mcp.py", "_INVALID_REQUEST"): "JSON-RPC error code",
+    ("tools/mcp.py", "_INVALID_REQUEST_CODES"): "JSON-RPC error codes",
     # Display and message formatting.
     ("cli/run.py", "_ERR_CONTEXT"): "lines of YAML shown around an error",
     ("compose/validate/case_branches.py", "_SHOWN_LIMIT"): "width of a value shown in a message",
@@ -33,6 +38,7 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("llm_clients/base_client.py", "warn_once.stacklevel"): "frames to skip, as warnings.warn",
     ("llm/errors.py", "_MAX_DETAIL_CHARS"): "length of provider error text kept in a message",
     ("llm/testing.py", "_MAX_DIFFS"): "differences listed in a cassette mismatch message",
+    ("tools/mcp.py", "_STDERR_LINES"): "MCP server stderr lines shown in a start error",
     # Internal sizes that no user input reaches.
     ("expr/lineage.py", "_MAX_SNAPSHOT_DEPTH"): "diagnostic retention depth, internal",
     ("typesys/values.py", "_LOG10_2"): "log10(2), a math constant for counting digits",
@@ -49,6 +55,10 @@ ALLOWED: dict[tuple[str, str], str] = {
     ),
     ("llm_clients/model_list.py", "list_models.timeout"): "network timeout",
     ("llm/route.py", "Route.max_retries"): "transport retries, set per route",
+    ("tools/mcp.py", "_MAX_PAGES"): "tool-list pages read from an MCP server, as the SDK's cap",
+    ("tools/mcp.py", "_CALL_GRACE_SECONDS"): "margin past an MCP call's own timeout",
+    ("tools/mcp.py", "_PING_SECONDS"): "MCP liveness probe timeout",
+    ("tools/mcp.py", "_CLOSE_JOIN_SECONDS"): "wait for an MCP server's thread, covering stdio shutdown",
     ("llm_clients/openai_subscription.py", "create_subscription_model.max_retries"): (
         "SDK transport retries"
     ),

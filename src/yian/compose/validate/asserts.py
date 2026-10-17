@@ -68,6 +68,7 @@ from yian.compose.helpers.condition_guards import (
     CheckLiteral,
     Guard,
     IsinstanceCheck,
+    NotNullCheck,
     TagCheck,
     check_text,
     guarded_refs,
@@ -159,18 +160,29 @@ def _distinct(contracts: tuple[OutputContract, ...]) -> tuple[OutputContract, ..
     return tuple(kept)
 
 
-def _narrows(check: Check, root: str, contracts: tuple[OutputContract, ...]) -> bool:
+def _narrows(
+    check: Check,
+    root: str,
+    contracts: tuple[OutputContract, ...],
+    nullable: bool = False,
+) -> bool:
     """Whether `check` can prove or rule out anything about `root` under some contract.
 
     A tag comparison on a value that is no union with that tag field (`v.a == 'x'` on a
-    record) is an ordinary comparison, so it narrows nothing.
+    record) is an ordinary comparison, so it narrows nothing; nor does a null check on a
+    value that is never null. `nullable` says the root may be null whatever its contracts
+    say, which makes every value below it nullable too.
     """
     if _root_of(check.base, (root,)) is None:
         return False
     if isinstance(check, IsinstanceCheck):
         return True
-    if not isinstance(check, TagCheck):
+    if not isinstance(check, (TagCheck, NotNullCheck)):
         raise unknown_check(check)
+    # `_root_base_type` makes every base below such a root nullable, so a null check
+    # there narrows even when no contract lets the value be null.
+    if isinstance(check, NotNullCheck) and nullable:
+        return True
     rest = check.base[len(root) + 1 :].split(".") if check.base != root else []
     for contract in contracts:
         projected = project_output_contract(contract, rest)
@@ -178,7 +190,10 @@ def _narrows(check: Check, root: str, contracts: tuple[OutputContract, ...]) -> 
             # An unproven base takes its type from the checks on the value around it.
             return True
         typ = projected.type
-        if typ.variants is not None and check.field in union_tag_fields(typ):
+        if isinstance(check, NotNullCheck):
+            if typ.nullable:
+                return True
+        elif typ.variants is not None and check.field in union_tag_fields(typ):
             return True
     return False
 
@@ -295,7 +310,10 @@ def _condition_errors(
     narrowed = [
         root
         for root in used
-        if any(_narrows(literal.check, root, contracts[root]) for literal in literals)
+        if any(
+            _narrows(literal.check, root, contracts[root], root in nullable_roots)
+            for literal in literals
+        )
     ]
     fixed = {root: contracts[root][0] for root in narrowed if len(contracts[root]) == 1}
     varied = [root for root in narrowed if len(contracts[root]) > 1]

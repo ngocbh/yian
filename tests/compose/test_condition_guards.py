@@ -10,6 +10,7 @@ from yian.compose.helpers.condition_guards import (
     CheckLiteral,
     Holds,
     IsinstanceCheck,
+    NotNullCheck,
     TagCheck,
     all_of,
     any_of,
@@ -86,14 +87,14 @@ def test_constructors_flatten_and_drop_nothing():
         ("isinstance(f(x), Buy)", None),
         ("v.action == other.action", None),
         ("v.action == 1", None),
-        ("v.action == null", None),
+        ("v.action == null", (NotNullCheck("v.action"), False)),
         ("v.action == true", None),
         ("upper(v).action == 'buy'", None),
         ("not isinstance(v, Buy)", None),
         ("n > 1", None),
     ],
 )
-def test_check_in_recognizes_isinstance_and_tag_comparisons(text, expected):
+def test_check_in_recognizes_isinstance_tag_and_null_comparisons(text, expected):
     assert check_in(parse_condition(text)) == expected
 
 

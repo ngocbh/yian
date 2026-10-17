@@ -1,6 +1,7 @@
 """Run start prepares agents whose `llm_config` resolves only when they run."""
 
 import copy
+import json
 
 import pytest
 from pydantic import SecretStr
@@ -8,11 +9,18 @@ from pydantic import SecretStr
 from yian.compile.llm_cascade import (
     apply_effective_llm_map,
     bind_host_credentials,
+    call_time_selection,
+    known_call_time_providers,
     resolve_run_llm,
 )
 from yian.compile.manifest import flow_fingerprint
 from yian.compose import load_flow
 from yian.llm_clients.config import HostConnection, pop_host_credentials
+from yian.llm_clients.connection import (
+    ConnectionSnapshot,
+    record_selection,
+    restore_selection,
+)
 
 _DEFAULTS = {"provider": "openai", "model": "default-model"}
 
@@ -169,3 +177,236 @@ def test_the_fingerprint_ignores_the_call_time_attributes():
     bind_host_credentials(private, SecretStr("sk-x"))
     assert private.nodes["chat"].call_time is not None
     assert flow_fingerprint(private) == before
+
+
+# The recorded connection selection.
+
+_STORE = "/tmp/yian-auth/auth.json"
+_OPENAI_STORE = {
+    "method": "api_key",
+    "source": "store",
+    "credential_id": "openai-login",
+    "endpoint": "https://api.openai.com/v1",
+    "store_path": _STORE,
+    "organization": "org-saved",
+}
+_ANTHROPIC_STORE = {
+    "method": "api_key",
+    "source": "store",
+    "credential_id": "anthropic-login",
+    "endpoint": None,
+    "store_path": _STORE,
+}
+_ENVIRONMENT = {
+    "method": "api_key",
+    "source": "environment",
+    "credential_id": None,
+    "endpoint": None,
+    "store_path": None,
+}
+
+
+def _snapshot(**overrides):
+    fields = {
+        "defaults": {"provider": "openai", "model": "gpt-saved"},
+        "provider_models": {"openai": "gpt-saved", "anthropic": "claude-saved"},
+        "connections": {
+            "openai": dict(_OPENAI_STORE),
+            "anthropic": dict(_ANTHROPIC_STORE),
+            "google": dict(_ENVIRONMENT),
+        },
+        "api_endpoint": "https://api.openai.com/v1",
+        "stray_model": False,
+    }
+    fields.update(overrides)
+    return ConnectionSnapshot(**fields)
+
+
+_HOST = HostConnection(
+    api_key=SecretStr("sk-secret-host"),
+    base_url="https://proxy.example.com/v1",
+    organization="org-host",
+    project="proj-host",
+    headers={"X-Tenant": SecretStr("tenant-secret"), "X-Alpha": SecretStr("alpha-secret")},
+)
+
+
+def _host_record(providers=None, snapshot=None):
+    return record_selection(
+        snapshot or _snapshot(),
+        providers=providers,
+        host_key_provider="openai",
+        host_base_url=_HOST.base_url,
+        host_settings=_HOST,
+    )
+
+
+def test_a_recorded_selection_round_trips_and_binds_as_the_snapshot_does():
+    snapshot = _snapshot()
+    record = json.loads(json.dumps(_host_record(snapshot=snapshot)))
+    restored = restore_selection(record)
+    assert restored.snapshot == snapshot
+    for config in (
+        {"provider": "openai", "model": "gpt-x"},
+        {"provider": "anthropic", "model": "claude-x"},
+        {"provider": "ollama", "model": "llama"},
+    ):
+        expected = snapshot.bind(
+            {"a": config},
+            host_key_provider="openai",
+            host_base_url=_HOST.base_url,
+            host_settings=_HOST,
+        )["a"]
+        assert restored.bind(config) == expected
+    assert restored.bind({"provider": "openai", "model": "gpt-x"})["_header_names"] == [
+        "X-Alpha", "X-Tenant",
+    ]
+
+
+def test_a_selection_without_a_host_key_binds_saved_connections():
+    record = record_selection(_snapshot(), providers=None)
+    assert record["host"] is None
+    restored = restore_selection(json.loads(json.dumps(record)))
+    assert restored.host_key_provider is None
+    assert restored.bind({"provider": "openai", "model": "gpt-x"}) == {
+        "provider": "openai", "model": "gpt-x", "_connection": _OPENAI_STORE,
+    }
+
+
+def test_no_secret_appears_in_a_recorded_selection():
+    text = json.dumps(_host_record())
+    for secret in ("sk-secret-host", "tenant-secret", "alpha-secret"):
+        assert secret not in text
+
+
+def _tampered(edit):
+    record = copy.deepcopy(_host_record())
+    edit(record)
+    return record
+
+
+@pytest.mark.parametrize(
+    "edit",
+    [
+        lambda r: r["connections"]["openai"].update(source="bogus"),
+        lambda r: r["connections"]["openai"].update(store_path="relative"),
+        lambda r: r["connections"].update(ollama=dict(_ENVIRONMENT)),
+        lambda r: r["connections"].update(nope=dict(_ENVIRONMENT)),
+        lambda r: r.update(extra=1),
+        lambda r: r.pop("stray_model"),
+        lambda r: r.update(stray_model="no"),
+        lambda r: r.update(api_endpoint="ftp://example.com"),
+        lambda r: r["defaults"].update(provider="nope"),
+        lambda r: r["defaults"].update(temperature=1),
+        lambda r: r["provider_models"].update(openai=""),
+        lambda r: r["host"].update(provider="nope"),
+        lambda r: r["host"].update(base_url="http://example.com/v1"),
+        lambda r: r["host"].update(header_names=["X-Tenant", "X-Alpha"]),
+        lambda r: r["host"].update(organization=""),
+        lambda r: r["host"].update(api_key="sk-x"),
+    ],
+)
+def test_a_tampered_selection_fails_to_restore(edit):
+    with pytest.raises(ValueError, match="recorded connection selection"):
+        restore_selection(_tampered(edit))
+
+
+def test_a_selection_limited_to_providers_names_only_their_connections():
+    record = _host_record(providers={"anthropic"})
+    assert record["connections"] == {"anthropic": _ANTHROPIC_STORE}
+    assert record["provider_models"] == {"anthropic": "claude-saved"}
+    # The default provider and the host key's provider are not reachable.
+    assert record["defaults"] == {}
+    assert record["host"] is None
+    assert "openai-login" not in json.dumps(record)
+    restored = restore_selection(record)
+    assert restored.snapshot.connections == {"anthropic": _ANTHROPIC_STORE}
+
+
+_LITERAL_PROVIDERS = """id: f
+name: f
+llm_config: {provider: google}
+nodes:
+  pick: {kind: agent, prompt: Pick., output: str, llm_config: {model: pick-model}}
+  chat: {kind: agent, prompt: Go., llm_config: {provider: anthropic, model: '${pick.output}'}}
+  flowed: {kind: agent, prompt: Go., llm_config: {model: '${pick.output}'}}
+  solo:
+    kind: agent
+    prompt: Go.
+    llm_config: {inherit: false, model: '${pick.output}'}
+output: ${chat.output}
+"""
+
+_VALUE_PROVIDER = """id: f
+name: f
+llm_config: {provider: google}
+nodes:
+  pick: {kind: agent, prompt: Pick., output: str, llm_config: {model: pick-model}}
+  chat: {kind: agent, prompt: Go., llm_config: {provider: '${pick.output}', model: m}}
+output: ${chat.output}
+"""
+
+
+def _call_time_record(text):
+    private = copy.deepcopy(load_flow(text).compiled)
+    snapshot = _snapshot()
+    run_llm = resolve_run_llm(private, {}, defaults=snapshot.defaults)
+    return call_time_selection(
+        private, run_llm.call_time, snapshot,
+        host_key_provider="openai", host_base_url=_HOST.base_url, host_settings=_HOST,
+    )
+
+
+def test_known_providers_decide_which_connections_are_recorded():
+    private = copy.deepcopy(load_flow(_LITERAL_PROVIDERS).compiled)
+    run_llm = resolve_run_llm(private, {}, defaults=_snapshot().defaults)
+    # Literal node, own-flow, and (under inherit: false) default providers.
+    assert known_call_time_providers(private, run_llm.call_time, _snapshot().defaults) == {
+        "chat": "anthropic", "flowed": "google", "solo": "openai",
+    }
+    record = _call_time_record(_LITERAL_PROVIDERS)
+    assert set(record["connections"]) == {"anthropic", "google", "openai"}
+    assert record["host"]["provider"] == "openai"
+
+
+def test_only_literal_provider_agents_record_only_their_connections():
+    text = _LITERAL_PROVIDERS.replace(
+        "  solo:\n    kind: agent\n    prompt: Go.\n"
+        "    llm_config: {inherit: false, model: '${pick.output}'}\n",
+        "",
+    )
+    record = _call_time_record(text)
+    assert set(record["connections"]) == {"anthropic", "google"}
+    assert set(record["provider_models"]) == {"anthropic"}
+    assert record["defaults"] == {}
+    assert record["host"] is None
+
+
+def test_a_provider_from_a_value_records_every_connection():
+    private = copy.deepcopy(load_flow(_VALUE_PROVIDER).compiled)
+    run_llm = resolve_run_llm(private, {}, defaults=_snapshot().defaults)
+    assert known_call_time_providers(private, run_llm.call_time, {}) == {"chat": None}
+    record = _call_time_record(_VALUE_PROVIDER)
+    assert set(record["connections"]) == {"anthropic", "google", "openai"}
+    assert record["defaults"] == _snapshot().defaults
+    assert record["host"]["provider"] == "openai"
+
+
+def test_a_nullable_provider_value_above_a_literal_is_not_known():
+    text = """id: f
+name: f
+input: {p: !Optional(str) }
+llm_config: {provider: anthropic}
+defs:
+  child:
+    input: {p: !Optional(str) }
+    nodes:
+      a: {kind: agent, prompt: Go., llm_config: {provider: '${input.p}', model: m}}
+    output: ${a.output}
+nodes:
+  c: {kind: call, call: child, input: {p: '${input.p}'}}
+output: ${c.output}
+"""
+    private = copy.deepcopy(load_flow(text).compiled)
+    run_llm = resolve_run_llm(private, {}, defaults={})
+    assert known_call_time_providers(private, run_llm.call_time, {}) == {"c/a": None}

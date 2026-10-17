@@ -5,8 +5,9 @@ There is no built-in provider or model: defaults come only from the environment
 storage owns credentials and refresh. This module resolves selection, records
 on every keyed agent which connection it uses (the saved login or the
 provider's key environment variable; OpenAI also a host key, subscription, or
-missing key), provides injected credential callables to model transports, and
-lists the credentials a call sends so its errors can be scrubbed of them.
+missing key), provides injected credential callables to model transports,
+lists the credentials a call sends so its errors can be scrubbed of them, and
+records the selection an agent whose config resolves only when it runs binds from.
 Recorded metadata is internal, never a YAML option, and never contains a token
 or API key. Compilation may use the detached snapshot without authentication
 effects.
@@ -182,25 +183,37 @@ class ConnectionSnapshot:
         agents: ``organization`` and ``project`` as given, and the header names
         (never their values) sorted under ``HEADER_NAMES_KEY``. Its key is ignored.
         """
-        recorded: dict[str, Any] = {}
-        if host_settings is not None:
-            for field in ("organization", "project"):
-                if getattr(host_settings, field) is not None:
-                    recorded[field] = getattr(host_settings, field)
-            if host_settings.headers:
-                recorded[HEADER_NAMES_KEY] = sorted(host_settings.headers)
+        recorded = _host_settings_record(host_settings)
         result = copy.deepcopy(effective)
         for config in result.values():
-            if config["provider"] == host_key_provider:
-                config[HOST_KEY_MARKER] = True
-                if host_base_url is not None:
-                    config["base_url"] = host_base_url
-                config.update(copy.deepcopy(recorded))
-                if config["provider"] == "openai":
-                    config["_connection"] = self.host_connection(host_base_url)
-                continue
-            self._attach(config)
+            self._bind_one(config, host_key_provider, host_base_url, recorded)
         return result
+
+    def _bind_one(
+        self,
+        config: dict[str, Any],
+        host_key_provider: str | None,
+        host_base_url: str | None,
+        recorded: dict[str, Any],
+    ) -> None:
+        """Mark one config for the host key, or attach its snapshot connection, in place.
+
+        Args:
+            config (`dict[str, Any]`): A mutable config with its ``provider`` set.
+            host_key_provider (`str | None`): The host key's provider, if any.
+            host_base_url (`str | None`): Where the host key is sent, if given.
+            recorded (`dict[str, Any]`): The host settings recorded beside the marker:
+                ``organization``, ``project`` and ``HEADER_NAMES_KEY``, each when set.
+        """
+        if config["provider"] == host_key_provider:
+            config[HOST_KEY_MARKER] = True
+            if host_base_url is not None:
+                config["base_url"] = host_base_url
+            config.update(copy.deepcopy(recorded))
+            if config["provider"] == "openai":
+                config["_connection"] = self.host_connection(host_base_url)
+            return
+        self._attach(config)
 
     def _attach(self, config: dict[str, Any]) -> None:
         """Record the provider's snapshot connection on one config without a host key.
@@ -245,6 +258,230 @@ class ConnectionSnapshot:
             "endpoint": self.api_endpoint if endpoint is None else endpoint,
             "store_path": None,
         })
+
+
+def _host_settings_record(host_settings: HostConnection | None) -> dict[str, Any]:
+    """Return the nonsecret host settings recorded beside ``HOST_KEY_MARKER``.
+
+    Args:
+        host_settings (`HostConnection | None`): The host's connection; its key and
+            header values are ignored.
+
+    Returns:
+        `dict[str, Any]`: ``organization`` and ``project`` when set, and the sorted
+            header names under ``HEADER_NAMES_KEY`` when there are headers.
+    """
+    recorded: dict[str, Any] = {}
+    if host_settings is not None:
+        for field in ("organization", "project"):
+            if getattr(host_settings, field) is not None:
+                recorded[field] = getattr(host_settings, field)
+        if host_settings.headers:
+            recorded[HEADER_NAMES_KEY] = sorted(host_settings.headers)
+    return recorded
+
+
+_SELECTION_FIELDS = frozenset(
+    {"defaults", "provider_models", "connections", "api_endpoint", "stray_model", "host"}
+)
+_HOST_RECORD_FIELDS = frozenset(
+    {"provider", "base_url", "organization", "project", "header_names"}
+)
+
+
+@dataclass(frozen=True)
+class ConnectionSelection:
+    """A recorded selection that binds the connection of a config resolved later.
+
+    Attributes:
+        snapshot (`ConnectionSnapshot`): The snapshot, holding only the recorded
+            providers' saved models and connections.
+        host_key_provider (`str | None`): The provider whose agents use the host key;
+            `None` when the selection names none.
+        host_base_url (`str | None`): Where the host key is sent, if the host gave it.
+        host_settings (`dict[str, Any]`): The nonsecret settings sent with the host key:
+            ``organization``, ``project`` and ``HEADER_NAMES_KEY``, each when set.
+    """
+
+    snapshot: ConnectionSnapshot
+    host_key_provider: str | None
+    host_base_url: str | None
+    host_settings: dict[str, Any]
+
+    def bind(self, config: dict[str, Any]) -> dict[str, Any]:
+        """Return ``config`` with its connection bound as `ConnectionSnapshot.bind` binds it.
+
+        Args:
+            config (`dict[str, Any]`): One agent's resolved config with its ``provider``
+                set. Not mutated.
+
+        Returns:
+            `dict[str, Any]`: A new config: marked for the host key with its base_url and
+                settings when its provider is the host key's, else with the recorded
+                connection of its provider.
+        """
+        result = copy.deepcopy(config)
+        self.snapshot._bind_one(
+            result, self.host_key_provider, self.host_base_url, self.host_settings
+        )
+        return result
+
+
+def record_selection(
+    snapshot: ConnectionSnapshot,
+    *,
+    providers: Iterable[str] | None,
+    host_key_provider: str | None = None,
+    host_base_url: str | None = None,
+    host_settings: HostConnection | None = None,
+) -> dict[str, Any]:
+    """Return the JSON record of a selection, limited to the given providers.
+
+    Only the given providers' saved models and connections are recorded; the defaults
+    only when their provider is one of them; and the host key's provider, endpoint and
+    settings only when it is one of them. The record never holds a key or header value.
+
+    Args:
+        snapshot (`ConnectionSnapshot`): The run's selection snapshot.
+        providers (`Iterable[str] | None`): The providers whose connections may be
+            needed; `None` records every one.
+        host_key_provider (`str | None`, *optional*, defaults to `None`): The provider
+            of the host key, if the host gave one.
+        host_base_url (`str | None`, *optional*, defaults to `None`): Where the host key
+            is sent, if the host gave it.
+        host_settings (`HostConnection | None`, *optional*, defaults to `None`): The
+            host's connection; only its organization, project and header names are
+            recorded.
+
+    Returns:
+        `dict[str, Any]`: The record `restore_selection` reads.
+    """
+    allowed = None if providers is None else frozenset(providers)
+
+    def reachable(provider: str | None) -> bool:
+        return provider is not None and (allowed is None or provider in allowed)
+
+    host = None
+    if reachable(host_key_provider):
+        settings = _host_settings_record(host_settings)
+        host = {"provider": host_key_provider}
+        if host_base_url is not None:
+            host["base_url"] = host_base_url
+        for name in ("organization", "project"):
+            if name in settings:
+                host[name] = settings[name]
+        if HEADER_NAMES_KEY in settings:
+            host["header_names"] = settings[HEADER_NAMES_KEY]
+    return {
+        "defaults": (
+            copy.deepcopy(snapshot.defaults)
+            if reachable(snapshot.defaults.get("provider")) else {}
+        ),
+        "provider_models": {
+            name: model for name, model in snapshot.provider_models.items() if reachable(name)
+        },
+        "connections": {
+            name: copy.deepcopy(connection)
+            for name, connection in snapshot.connections.items()
+            if reachable(name)
+        },
+        "api_endpoint": snapshot.api_endpoint,
+        "stray_model": snapshot.stray_model,
+        "host": host,
+    }
+
+
+def restore_selection(record: Any) -> ConnectionSelection:
+    """Validate a `record_selection` record and return the selection it holds.
+
+    Args:
+        record (`Any`): The recorded selection.
+
+    Returns:
+        `ConnectionSelection`: The selection, sharing no value with ``record``.
+
+    Raises:
+        `ValueError`: The record does not have the recorded shape, names an
+            unsupported provider, or holds an invalid connection, endpoint or host
+            setting. Errors never echo values.
+    """
+    try:
+        return _restore_selection(record)
+    except ValueError as exc:
+        raise ValueError(f"Invalid recorded connection selection: {exc}") from None
+
+
+def _restore_selection(record: Any) -> ConnectionSelection:
+    """Validate and restore a selection record; `restore_selection` prefixes errors."""
+    if type(record) is not dict or set(record) != _SELECTION_FIELDS:
+        raise ValueError("fields")
+    defaults = record["defaults"]
+    if (
+        type(defaults) is not dict
+        or not set(defaults) <= {"provider", "model"}
+        or ("model" in defaults and "provider" not in defaults)
+    ):
+        raise ValueError("defaults")
+    for value in defaults.values():
+        _nonempty(value, "defaults")
+    if "provider" in defaults:
+        _supported(defaults["provider"], "defaults")
+    models = record["provider_models"]
+    if type(models) is not dict:
+        raise ValueError("provider_models")
+    for name, model in models.items():
+        _supported(name, "provider_models")
+        _nonempty(model, "provider_models")
+    connections = record["connections"]
+    if type(connections) is not dict:
+        raise ValueError("connections")
+    for name, connection in connections.items():
+        _supported(name, "connections")
+        validate_connection(connection, name)
+    if type(record["stray_model"]) is not bool:
+        raise ValueError("stray_model")
+    _nonempty(record["api_endpoint"], "api_endpoint")
+    snapshot = ConnectionSnapshot(
+        copy.deepcopy(defaults),
+        dict(models),
+        copy.deepcopy(connections),
+        record["api_endpoint"],
+        record["stray_model"],
+    )
+    # The OpenAI host connection is the one use of the endpoint; check it the same way.
+    snapshot.host_connection()
+    host = record["host"]
+    if host is None:
+        return ConnectionSelection(snapshot, None, None, {})
+    if type(host) is not dict or "provider" not in host or not set(host) <= _HOST_RECORD_FIELDS:
+        raise ValueError("host fields")
+    provider = _supported(host["provider"], "host provider")
+    base_url = host.get("base_url")
+    if base_url is not None:
+        validate_base_url(base_url)
+    settings: dict[str, Any] = {}
+    for name in ("organization", "project"):
+        if name in host:
+            if provider != "openai":
+                raise ValueError(f"host {name} applies only to provider openai")
+            settings[name] = validate_organization(host[name], name)
+    if "header_names" in host:
+        settings[HEADER_NAMES_KEY] = validate_header_names(host["header_names"], provider)
+    return ConnectionSelection(snapshot, provider, base_url, settings)
+
+
+def _nonempty(value: Any, where: str) -> str:
+    """Return ``value`` if it is a non-empty string; otherwise name ``where``."""
+    if type(value) is not str or not value:
+        raise ValueError(where)
+    return value
+
+
+def _supported(value: Any, where: str) -> str:
+    """Return ``value`` if it names a supported provider; otherwise name ``where``."""
+    if value not in SUPPORTED_LLM_PROVIDERS:
+        raise ValueError(f"{where} names an unsupported provider")
+    return value
 
 
 def key_identity(key: str) -> str:

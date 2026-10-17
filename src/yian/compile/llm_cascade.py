@@ -34,7 +34,11 @@ from yian.llm_clients.config import (
     merge_llm_config,
 )
 from yian.llm_clients.provider_blocks import partial_block_problems
-from yian.llm_clients.connection import HOST_KEY_MARKER
+from yian.llm_clients.connection import (
+    HOST_KEY_MARKER,
+    ConnectionSnapshot,
+    record_selection,
+)
 from yian.llm_clients.layers import (
     require_concrete_selection,
     resolve_agent_config,
@@ -604,6 +608,101 @@ def _resolve_carried(
     return merge_llm_config(node_layer, merge_llm_config(flow_layer, parent_config))
 
 
+def known_provider(
+    node: AgentNode, flow: Any, base: dict[str, Any], defaults: dict[str, Any]
+) -> Optional[str]:
+    """Return a call-time agent's provider when run start already knows it.
+
+    It is known when a literal sets it and no value in a higher layer can override
+    it: the first provider set walking down the node layer, the own-flow layer (unless
+    ``inherit: false``), ``base`` and ``defaults``, with no provider or whole-record
+    value above it.
+
+    Args:
+        node (`AgentNode`): The agent.
+        flow (`CompiledFlow`): The flow ``node`` is in, whose layer is its own-flow layer.
+        base (`dict[str, Any]`): The agent's call-time base.
+        defaults (`dict[str, Any]`): The host defaults.
+
+    Returns:
+        `str | None`: The provider, or `None` when a value may set it or nothing does.
+    """
+    layers = [node.own_llm_config]
+    if node.llm_inherit:
+        layers.append(getattr(flow, "flow_llm_config", None) or {})
+    for layer in layers:
+        if any(path[:1] in ((), ("provider",)) for path in value_leaves(layer)):
+            return None
+        if not isinstance(layer, dict):
+            pool = VariablePool(start_id=flow.start_id)
+            layer = resolve_layer(keep_values(layer, lambda _leaf: False), pool)
+        if layer.get("provider") is not None:
+            return layer["provider"]
+    return base.get("provider") or defaults.get("provider") or None
+
+
+def known_call_time_providers(
+    flow: Any, call_time: Mapping[str, dict[str, Any]], defaults: dict[str, Any]
+) -> dict[str, Optional[str]]:
+    """Return each call-time agent's `known_provider`, keyed by static agent path.
+
+    Args:
+        flow (`CompiledFlow`): The run's flow; its static call tree is walked, unchanged.
+        call_time (`Mapping[str, dict[str, Any]]`): Each call-time agent's base, keyed by
+            static agent path.
+        defaults (`dict[str, Any]`): The host defaults.
+
+    Returns:
+        `dict[str, str | None]`: The provider, or `None` when not known, per path in
+            ``call_time``.
+    """
+    return {
+        path: known_provider(node, owner, call_time[path], defaults)
+        for path, node, owner in _static_agents(flow)
+        if path in call_time
+    }
+
+
+def call_time_selection(
+    flow: Any,
+    call_time: Mapping[str, dict[str, Any]],
+    snapshot: ConnectionSnapshot,
+    *,
+    host_key_provider: str | None = None,
+    host_base_url: str | None = None,
+    host_settings: HostConnection | None = None,
+) -> dict[str, Any]:
+    """Record the connection selection the call-time agents may need.
+
+    When every call-time agent's provider is known (`known_provider`), only those
+    providers' connections are recorded; otherwise every connection is.
+
+    Args:
+        flow (`CompiledFlow`): The run's flow.
+        call_time (`Mapping[str, dict[str, Any]]`): Each call-time agent's base, keyed by
+            static agent path.
+        snapshot (`ConnectionSnapshot`): The run's selection snapshot.
+        host_key_provider (`str | None`, *optional*, defaults to `None`): The host key's
+            provider, if the host gave one.
+        host_base_url (`str | None`, *optional*, defaults to `None`): Where the host key
+            is sent, if the host gave it.
+        host_settings (`HostConnection | None`, *optional*, defaults to `None`): The
+            host's connection; only its nonsecret settings are recorded.
+
+    Returns:
+        `dict[str, Any]`: The `record_selection` record.
+    """
+    known = known_call_time_providers(flow, call_time, snapshot.defaults)
+    providers = None if None in known.values() else {p for p in known.values() if p}
+    return record_selection(
+        snapshot,
+        providers=providers,
+        host_key_provider=host_key_provider,
+        host_base_url=host_base_url,
+        host_settings=host_settings,
+    )
+
+
 def check_resolved_layer(layer: dict[str, Any], subject: str) -> None:
     """Check a layer resolved from values as an authored layer is checked, naming the field.
 
@@ -694,17 +793,26 @@ def _static_agent_paths(
     return paths
 
 
-def _carrying_agent_paths(flow: Any, path: tuple[str, ...] = ()) -> set[str]:
-    """Return the static paths of the agents whose layers ride ``__llm_config``."""
-    paths: set[str] = set()
+def _static_agents(flow: Any, path: tuple[str, ...] = ()) -> list[tuple[str, AgentNode, Any]]:
+    """Return each static agent's path, node and the flow it is in, without mutating."""
+    agents: list[tuple[str, AgentNode, Any]] = []
     for node_id, node in flow.nodes.items():
         node_path = (*path, node_id)
-        if isinstance(node, AgentNode) and LLM_CONFIG_KEY in flow.wiring.get(node_id, {}):
-            paths.add(_path_key(node_path))
+        if isinstance(node, AgentNode):
+            agents.append((_path_key(node_path), node, flow))
         child = getattr(node, "child", None)
         if child is not None:
-            paths |= _carrying_agent_paths(child, node_path)
-    return paths
+            agents.extend(_static_agents(child, node_path))
+    return agents
+
+
+def _carrying_agent_paths(flow: Any) -> set[str]:
+    """Return the static paths of the agents whose layers ride ``__llm_config``."""
+    return {
+        path
+        for path, _node, owner in _static_agents(flow)
+        if LLM_CONFIG_KEY in owner.wiring.get(path.rsplit("/", 1)[-1], {})
+    }
 
 
 def static_agent_labels(flow: Any) -> dict[str, str]:

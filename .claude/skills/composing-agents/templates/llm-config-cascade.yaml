@@ -11,12 +11,19 @@
 # like that provider's API request body. Blocks merge the same way, one field at a time,
 # and a node uses only the block of the provider it resolves to.
 #
+# Any field can come from a `${...}` value (`reviewer` below). One that reads only the run's
+# inputs resolves when the run starts; one that reads a node's output resolves just before
+# that agent calls its model. A value that resolves to null leaves the field unset.
+#
 # Try the CLI layer (fills the gaps nothing else set):
 #   yian run llm-config-cascade.yaml --provider anthropic --model claude-opus-4-8
 
 id: llm-config-cascade
 name: llm_config_cascade
-description: Show the llm_config cascade — flow default, per-node override, inherit:false.
+description: Show the llm_config cascade — flow default, per-node override, a value, inherit:false.
+
+input:
+  model: !Optional(str)           # omitted: the layers outside the node pick the model
 
 llm_config:                       # the flow layer: every AGENT node inherits these defaults
   provider: anthropic
@@ -33,9 +40,16 @@ nodes:
       anthropic:
         output_config: {effort: high}   # replaces the flow's output_config whole
 
-  grader:                         # own selection + process defaults; no flow/CLI layer
+  reviewer:                       # inherits provider; its model comes from the run's input
     kind: agent
     depends_on: [drafter]
+    prompt: Review the draft.
+    llm_config:
+      model: ${input.model}       # null when omitted: the field stays unset
+
+  grader:                         # own selection + process defaults; no flow/CLI layer
+    kind: agent
+    depends_on: [reviewer]
     prompt: Grade the draft pass/fail.
     llm_config:
       provider: openai

@@ -18,4 +18,6 @@ def test_template_loads(path):
 
 def test_llm_config_cascade_template_loads():
     p = _TEMPLATES / "llm-config-cascade.yaml"
-    load_flow(p.read_text(), search_paths=[p.parent])
+    flow = load_flow(p.read_text(), search_paths=[p.parent])
+    # The `reviewer` agent shows an `llm_config` field taken from a value.
+    assert "__llm_config" in flow.compiled.wiring["reviewer"]

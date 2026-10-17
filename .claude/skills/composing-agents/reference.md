@@ -198,7 +198,9 @@ Contract:
   MAP field but is currently inert; run-level workers control concurrency.
   There is no inline child flow-level `llm_config:`/`env:`/`asserts:` block, and
   `llm_config:` remains invalid on composite nodes. The enclosing flow's LLM
-  cascade reaches body AGENT nodes exactly as for an unconfigured named child;
+  cascade reaches body AGENT nodes exactly as for an unconfigured named child, with
+  its literal and root-input fields only (a flow value a body agent would inherit
+  is a load error);
   configure an individual AGENT node or factor a `defs:` child when it needs its own
   supported flow-level surface.
 
@@ -614,6 +616,47 @@ nodes:
   a: {kind: agent, prompt: hi, llm_config: {model: claude-opus-4-8}}        # fills `model`
   b: {kind: agent, prompt: hi, llm_config: {provider: openai, model: gpt-5.5, inherit: false}}
 ```
+
+### Values in `llm_config`
+
+Any field can come from a `${...}` value, at node, flow, `defs:`, and
+`adaptive_questions:` level: a field, a block field, a whole block, or the whole
+record. Strings in a flow file's `llm_config` are templates; `$$` is a literal `$`.
+
+```yaml
+typedefs:
+  Cfg: {provider: str, model: str}
+input:
+  model: !Optional(str)                     # omitted: null, the field stays unset
+  cfg: !Cfg
+nodes:
+  a: {kind: agent, prompt: hi, llm_config: {model: "${input.model}"}}  # run start
+  pick: {kind: agent, prompt: Name a model., output: str}
+  b: {kind: agent, prompt: hi, llm_config: {model: !str "${pick.output}" }} # call time
+  c: {kind: agent, prompt: hi, llm_config: "${input.cfg}"}             # whole record
+```
+
+- Each value needs a proven type or a tag; `provider`/`model` take `str`, a block
+  field its API type; a whole record or block is a record of its fields or `object`.
+  A disjoint type is a load error, a narrower one is checked when the value resolves.
+- `api_key`, `base_url`, `organization`, `project`, and `headers` never come from a
+  value, nor through a whole-record or block type declaring them; `base_url` beside
+  `provider: ${...}` is a load error. `inherit:` is literal. No `isinstance`,
+  constructor, or `call(...)`.
+- Null means unset; a null whole record is `{}`.
+- A root-flow agent whose values read only `${input.*}` resolves at run start with
+  every check; a missing or mistyped input it reads raises `ValueError` before the
+  log, naming the field. Others resolve just before the model call; a refused config
+  fails the node with `contract.input` (`binding.type` for a broken tag), message
+  `node 'b' llm_config.<field>: ...` (a composer: `node '<gate>'
+  adaptive_questions.llm_config.<field>`). The run log records the resolved config;
+  resume and backward use it.
+- Values read the flow they are written in. Node > own flow > outer flows > CLI/host >
+  defaults, per field; a value a higher layer always overrides adds no dependency or
+  skip. A value reading a skippable node skips the agent.
+- Child flows (`defs:` calls, `uses:` imports, inline and MAP/LOOP bodies) inherit
+  only literal and root-input flow fields. Inheriting another flow value is a load
+  error: pass it as an input and write `model: ${input.model}` in the child agent.
 
 ### Provider blocks
 

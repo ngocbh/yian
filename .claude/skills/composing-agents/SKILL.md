@@ -613,6 +613,30 @@ values again to `resume_flow`/`result.backward` as `api_key=key, headers={...}`.
 They reach every AGENT of that provider, `inherit: false` ones included. A saved
 login brings the settings `yian auth` saved with it (`--organization`,
 `--project`, `--header NAME=VARIABLE`).
+Any `llm_config` field may come from a `${...}` value: a field
+(`model: ${input.model}`), a block field (`openai: {temperature: "${input.t}"}`), a
+whole block, or the whole record (`llm_config: ${input.cfg}`, typed `!Cfg` or
+`object`). It works at node, flow, `defs:`, and `adaptive_questions:` level. Strings
+there are templates (`$$` is a literal `$`). Each value needs a typed source or a tag
+(`model: !str ${pick.output}`); `provider`/`model` take `str`, a block field its API
+type. `api_key`, `base_url`, `organization`, `project`, and `headers` never come
+from a value (nor from a whole record or block type that declares them), `base_url`
+beside `provider: ${...}` is a load error, `inherit:` stays literal, and there is no
+`isinstance`, constructor, or `call(...)` in these values. A value that resolves to
+null leaves the field unset (an omitted `!Optional(str)` model means "use the
+default"); a null whole record is `{}`. A root-flow agent whose values read only
+`${input.*}` resolves at run start with every check, and a missing or mistyped input
+it reads raises before the log (`node 'chat' llm_config.model: input 'm' is required
+and was not given`). Any other agent resolves just before its model call, and a
+refused config fails the node with `contract.input` (`binding.type` for a broken
+tag), located at the field: `node 'chat' llm_config.provider: not a known provider;
+...`. A value reads the flow it is written in; node fields still override flow
+fields, and a value a higher layer always overrides adds no dependency or skip. A
+value reading a node that may be skipped skips the agent. A child flow's agents
+(`defs:` call, `uses:` import, inline or MAP/LOOP body) inherit only the flow's
+literal and root-input fields: inheriting any other value is a load error, so pass
+it as an input and write `model: ${input.model}` in the child agent's `llm_config:`.
+See [`templates/llm-config-cascade.yaml`](templates/llm-config-cascade.yaml).
 No provider or model is built in. Process defaults are `YIAN_DEFAULT_PROVIDER`/
 `YIAN_DEFAULT_MODEL`, then the login saved by `yian auth <provider>` (one per
 provider, each with its model); a default model applies only to its provider. An
@@ -951,7 +975,9 @@ The prompt, the adaptive brief, and a literal list's question text (`question`, 
 `label`/`description`) read the gate's `input:` names bare and are checked at load; `header`
 is not a template. A bad brief is reported as `node '<gate>' adaptive_questions.prompt`,
 and a bad `llm_config` as `node '<gate>' adaptive_questions.llm_config`. A cycle through
-the gate and a model-config error at run start also name the gate, not `<gate>__compose`.
+the gate and a model-config error at run start or at call time (`node '<gate>'
+adaptive_questions.llm_config.provider: ...` for a value) also name the gate, not
+`<gate>__compose`.
 `adaptive_questions:` takes only `prompt`, `llm_config`, and `retries`; any other key is a
 load error.
 `questions:` is a list or exactly one `${name}` naming a declared input;
@@ -1051,7 +1077,8 @@ fields keep their outer-node meaning (LOOP drivers, `env:`, and CALL/LOOP
 asserts; MAP asserts remain invalid); `parallel:` remains accepted but inert.
 Inline child flow configuration is not a separate surface, and `llm_config:`
 remains invalid on composite nodes. The enclosing flow's LLM cascade still
-reaches body AGENT nodes. See
+reaches body AGENT nodes, with its literal and root-input fields only: a flow
+`llm_config` value a body agent would inherit is a load error. See
 [`templates/inline-composites.yaml`](templates/inline-composites.yaml).
 
 ### `loop` — iterate a body until a predicate goes false (the engine's `while`)

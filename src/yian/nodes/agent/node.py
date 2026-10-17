@@ -264,6 +264,32 @@ class AgentNode(Node):
                 return deepcopy(step[_CONFIG_STEP])
         return None
 
+    def backward_input_names(self) -> tuple[str, ...]:
+        """Return the declared inputs eligible for feedback, never ``__llm_config``.
+
+        The model config is not material the model reasons about, so the node that
+        produced a value in it never receives this agent's input feedback.
+
+        Returns:
+            `tuple[str, ...]`: Canonical parameter names in declaration order.
+        """
+        return tuple(
+            name for name in super().backward_input_names() if name != LLM_CONFIG_KEY
+        )
+
+    def bound_llm_config(self, inputs: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Return the config a call-time agent bound as ``__llm_config``, if any.
+
+        Args:
+            inputs (`Mapping[str, Any]`): The invocation's bound inputs.
+
+        Returns:
+            `dict[str, Any] | None`: The resolved config, with no key or header value;
+                `None` for an agent run start resolved, which binds none.
+        """
+        config = inputs.get(LLM_CONFIG_KEY)
+        return config if isinstance(config, dict) else None
+
     def validate_execution_setup(self) -> None:
         """Reject a steerable agent whose output contract is not plain text.
 

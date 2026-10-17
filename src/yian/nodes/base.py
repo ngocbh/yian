@@ -20,7 +20,7 @@ Invariant: a node never writes the pool. It *describes* its one output value as
 
 import copy
 from abc import ABC
-from collections.abc import Generator
+from collections.abc import Generator, Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from math import isfinite
@@ -1307,6 +1307,22 @@ class Node(ABC):
                 of string fields or non-negative list indices into the output.
         """
         return {}
+
+    def bound_llm_config(self, inputs: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Return the model config this invocation bound as an input, if any.
+
+        Backward then records it as the invocation's ``effective_llm_config`` instead
+        of the run's entry for the node's static path.
+
+        Args:
+            inputs (`Mapping[str, Any]`): The invocation's bound inputs, reserved keys
+                included.
+
+        Returns:
+            `dict[str, Any] | None`: The bound config; `None` by default, which reads
+                the run's recorded map.
+        """
+        return None
 
     def backward(
         self, context: BackwardContext, feedback: tuple[FeedbackValue, ...],

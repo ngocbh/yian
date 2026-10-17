@@ -876,19 +876,30 @@ def eval_node(
     render_enabled = capture_bindings and node.needs_render_capture is True
     render_closed = False
     render_recorded = False
-    effective_config = None
-    if render_enabled and backward_capture.scope is not None and effective_llm_by_static_path is not None:
-        key = "/".join(backward_capture.scope.static_path)
-        if key not in effective_llm_by_static_path:
-            raise ValueError(f"recorded effective model configuration is missing static path {key!r}")
-        config = effective_llm_by_static_path[key]
+    bound_record = None
+
+    def recorded_model_config():
+        """Return the config backward records: the bound one, else the run's map entry."""
+        if backward_capture.scope is None or effective_llm_by_static_path is None:
+            return None
+        # A config resolved only when the node ran is bound with its inputs, so it
+        # is looked up once `capture_inputs` has seen them.
+        config = None if bound_record is None else node.bound_llm_config(bound_record)
+        if config is None:
+            key = "/".join(backward_capture.scope.static_path)
+            if key not in effective_llm_by_static_path:
+                raise ValueError(
+                    f"recorded effective model configuration is missing static path {key!r}"
+                )
+            config = effective_llm_by_static_path[key]
         if type(config) is not dict:
             raise TypeError("recorded effective model configuration must be a dictionary")
-        effective_config = canonical_seed(config)[1]
+        return canonical_seed(config)[1]
 
     def capture_inputs(inputs):
         """Snapshot completed inputs and static material before the body can mutate them."""
-        nonlocal backward_capture
+        nonlocal backward_capture, bound_record
+        bound_record = inputs
         binding_collector.finish(inputs)
         data = node.capture_backward_context()
         if type(data) is not dict:
@@ -918,7 +929,7 @@ def eval_node(
                 raise ValueError("render capture cannot replace static node data")
             backward_capture = BackwardCapture(
                 backward_capture.input_names, backward_capture.variable_names, backward_capture.scope,
-                {**static_data, **snapshot, "effective_llm_config": effective_config},
+                {**static_data, **snapshot, "effective_llm_config": recorded_model_config()},
             )
             render_recorded = True
         except (_CapabilityFault, _HostStop):

@@ -172,6 +172,29 @@ def test_the_key_check_covers_a_call_time_agent_with_a_known_provider(monkeypatc
     assert built == []
 
 
+def test_the_key_check_sends_a_known_azure_agent_to_its_literal_base_url(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
+    AuthStore().save(
+        "azure", ApiKeyCredentials("az"), "dep",
+        endpoint="https://r.openai.azure.com/", make_default=False,
+    )
+    built = _answer_locally(monkeypatch)
+    flow = tmp_path / "flow.yaml"
+    # The saved key belongs to its own resource; this agent calls another one.
+    flow.write_text(_call_time_flow("{model: '${pick.output}'}").replace(
+        "llm_config: {provider: anthropic}",
+        "llm_config: {provider: azure, base_url: 'https://other.openai.azure.com/'}",
+    ))
+    log = tmp_path / "run.jsonl"
+    result = runner.invoke(app, ["run", str(flow), "--log", str(log)])
+    assert result.exit_code == 1, result.output
+    assert "AZURE_OPENAI_API_KEY" in _compact(result.output)
+    assert not log.exists()
+    assert built == []
+
+
 @pytest.mark.parametrize("text", [
     _call_time_flow("{provider: '${pick.output}'}", pick="Optional(str)", value="'openai'"),
     _call_time_flow(

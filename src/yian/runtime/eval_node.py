@@ -892,30 +892,34 @@ def eval_node(
     render_enabled = capture_bindings and node.needs_render_capture is True
     render_closed = False
     render_recorded = False
-    bound_record = None
+    bound_config = None
 
     def recorded_model_config():
         """Return the config backward records: the bound one, else the run's map entry."""
         if backward_capture.scope is None or effective_llm_by_static_path is None:
             return None
-        # A config resolved only when the node ran is bound with its inputs, so it
-        # is looked up once `capture_inputs` has seen them.
-        config = None if bound_record is None else node.bound_llm_config(bound_record)
-        if config is None:
-            key = "/".join(backward_capture.scope.static_path)
-            if key not in effective_llm_by_static_path:
-                raise ValueError(
-                    f"recorded effective model configuration is missing static path {key!r}"
-                )
-            config = effective_llm_by_static_path[key]
+        # A config resolved only when the node ran is bound with its inputs, so
+        # `capture_inputs` has snapshotted it.
+        if bound_config is not None:
+            return bound_config
+        key = "/".join(backward_capture.scope.static_path)
+        if key not in effective_llm_by_static_path:
+            raise ValueError(
+                f"recorded effective model configuration is missing static path {key!r}"
+            )
+        config = effective_llm_by_static_path[key]
         if type(config) is not dict:
             raise TypeError("recorded effective model configuration must be a dictionary")
         return canonical_seed(config)[1]
 
     def capture_inputs(inputs):
         """Snapshot completed inputs and static material before the body can mutate them."""
-        nonlocal backward_capture, bound_record
-        bound_record = inputs
+        nonlocal backward_capture, bound_config
+        config = node.bound_llm_config(inputs)
+        if config is not None:
+            if type(config) is not dict:
+                raise TypeError("bound model configuration must be a dictionary")
+            bound_config = canonical_seed(config)[1]
         binding_collector.finish(inputs)
         data = node.capture_backward_context()
         if type(data) is not dict:

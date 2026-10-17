@@ -37,7 +37,7 @@ from yian.expr import eval_binding
 from yian.expr.grammar import whole_span_interior
 from yian.llm_clients import LLMConfig
 from yian.llm_clients.config import host_only_field_error
-from yian.llm_clients.provider_blocks import PROVIDER_BLOCKS, partial_block_problems
+from yian.llm_clients.provider_blocks import PROVIDER_BLOCKS, located_block_problems
 from yian.memory.contracts import DeclSite, MemoryDecl
 from yian.nodes.agent import AgentNode
 from yian.nodes.agent.llm_values import LLM_CONFIG_KEY, is_value, value_leaves
@@ -226,18 +226,24 @@ def _unescape_literals(tree: Any) -> Any:
 
 
 def _block_problem_range(
-    key: str, problem: str, field_ranges: Mapping[str, SourceRange]
+    keys: tuple[str | int, ...], field_ranges: Mapping[str, SourceRange]
 ) -> SourceRange | None:
-    """Return the range of the deepest written key a `partial_block_problems` message names."""
-    # Each message starts with the backticked key path, such as `anthropic.thinking.type`.
-    path = key
-    if problem.startswith("`"):
-        rest = problem[1:].split("`", 1)[0].partition(".")[2]
-        if rest:
-            path = f"{key}.{rest}"
-    while path not in field_ranges and path != key:
-        path = path[: max(path.rfind("."), path.rfind("["))]
-    return field_ranges.get(path)
+    """Return the range of the deepest written mapping key on a block problem's key path.
+
+    Args:
+        keys (`tuple[str | int, ...]`): The block's key, then the problem's key path in it.
+        field_ranges (`Mapping[str, SourceRange]`): Value range of each key written in
+            the layer, by dotted path; list items have none.
+
+    Returns:
+        `SourceRange | None`: The range, or `None` when no key on the path has one.
+    """
+    for end in range(len(keys), 0, -1):
+        if all(isinstance(part, str) for part in keys[:end]):
+            found = field_ranges.get(".".join(keys[:end]))
+            if found is not None:
+                return found
+    return None
 
 
 def _literal_part(tree: Any) -> Any:
@@ -366,11 +372,12 @@ def check_llm_config_value(
     for key, block in tree.items():
         if key not in PROVIDER_BLOCKS or not _holds_value(block):
             continue
-        problems = partial_block_problems(key, _unescape_literals(block), is_value)
+        problems = located_block_problems(key, _unescape_literals(block), is_value)
         if problems:
             raise diagnostics.error(
-                f"{prefix}: {problems[0]}",
-                range=_block_problem_range(key, problems[0], field_ranges) or source_range,
+                f"{prefix}: {problems[0].message}",
+                range=_block_problem_range((key, *problems[0].keys), field_ranges)
+                or source_range,
             )
     return cfg, inherit
 

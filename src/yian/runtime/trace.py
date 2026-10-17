@@ -143,7 +143,9 @@ class TraceOccurrence:
 
     Private memory ownership is detached from the physical node before pruning.
     Replay reconstructs it from that node; it never replaces execution scope or
-    adds memory ownership to the accepted outcome payload.
+    adds memory ownership to the accepted outcome payload. ``hidden_inputs``
+    names the bound inputs that node keeps from models, so memory episodes leave
+    them out.
     """
 
     source: SourceRef
@@ -152,6 +154,7 @@ class TraceOccurrence:
     _record_bytes: bytes = field(repr=False)
     input_route: ValueRoute
     _memory_scope: MemoryScope | None = field(default=None, repr=False)
+    hidden_inputs: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         """Keep the detached memory scope alongside the historical record."""
@@ -537,7 +540,10 @@ def prepare_trace(
             for name, route in zip(capture.route.names, capture.route.children)
         )
     _validate_sources(trace, input_route, envelope.seq)
-    occurrence = TraceOccurrence(source, node.id, envelope.seq, encode_record(envelope), input_route, node.memory_scope)
+    occurrence = TraceOccurrence(
+        source, node.id, envelope.seq, encode_record(envelope), input_route, node.memory_scope,
+        node.model_hidden_inputs(),
+    )
     boundary_update = None
     boundary_target = trace._current_boundaries.get(node.id)
     if boundary_target is not None:

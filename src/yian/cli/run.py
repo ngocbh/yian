@@ -1344,7 +1344,8 @@ def _agent_connections(
     compiled flow, and binds each agent's connection as a fresh run would. The
     effective map covers the whole static call tree, and every provider in it is
     concrete. An agent whose config resolves only when it runs counts when its
-    provider is already known (`known_provider`); otherwise its key is checked at
+    provider is already known (`known_provider`), an Azure one with the
+    ``base_url`` its layers set (`known_base_url`); otherwise its key is checked at
     its model call.
 
     Args:
@@ -1369,7 +1370,7 @@ def _agent_connections(
     """
     import copy
 
-    from yian.compile.llm_cascade import known_call_time_providers
+    from yian.compile.llm_cascade import known_call_time_base_urls, known_call_time_providers
     from yian.llm_clients.connection import connection_snapshot
 
     probe = copy.deepcopy(loaded.compiled)
@@ -1379,10 +1380,14 @@ def _agent_connections(
     # A call-time agent whose provider no value can change needs its key as surely as
     # a static agent; finding out at its model call would waste the nodes before it.
     known = known_call_time_providers(probe, run_llm.call_time, snapshot.defaults)
-    effective = {
-        **run_llm.effective,
-        **{path: {"provider": provider} for path, provider in known.items() if provider},
-    }
+    base_urls = known_call_time_base_urls(probe, run_llm.call_time)
+    effective: Dict[str, Dict[str, Any]] = dict(run_llm.effective)
+    for path, provider in known.items():
+        if provider:
+            effective[path] = {"provider": provider}
+            # A saved Azure key covers only its own resource, so the endpoint picks the key.
+            if provider == "azure" and path in base_urls:
+                effective[path]["base_url"] = base_urls[path]
 
     seen: List[tuple[str, Optional[Dict[str, Any]]]] = []
     for config in snapshot.bind(effective).values():
@@ -1508,9 +1513,31 @@ def _resume_env_key(
     raise _ResumeKeyError(cancelled)
 
 
+def _host_key_refusal(provider: str, header_names: Any) -> _ResumeKeyError:
+    """Return the error refusing a resume whose ``provider`` key came from a Python host.
+
+    Args:
+        provider (`str`): The host key's provider.
+        header_names (`Any`): The recorded names of headers sent with the key, if any.
+
+    Returns:
+        `_ResumeKeyError`: The refusal, pointing to ``resume_flow``.
+    """
+    # Header values the host sent with its key are not recorded either.
+    arguments = "api_key=..."
+    if header_names:
+        arguments += ", headers=..."
+    return _ResumeKeyError(
+        f"this run's {provider} API key came from a Python host's "
+        "llm_config.api_key, which the CLI cannot supply; resume it from "
+        f"Python with resume_flow({arguments})"
+    )
+
+
 def _check_resume_credentials(
     effective: Dict[str, Dict[str, Any]],
     *,
+    call_time_host: Optional[Dict[str, Any]] = None,
     ask_secret: Callable[[str], Any],
     prompt_available: bool,
 ) -> None:
@@ -1529,10 +1556,13 @@ def _check_resume_credentials(
     Args:
         effective (`dict[str, dict[str, Any]]`):
             The recorded effective model map, keyed by static agent path, with the
-            config each started call-time agent recorded and, when the call-time
-            agents' selection names a host key, a config marked for it. Only
-            each config's ``provider``, ``_connection``, host-key marker, and
-            recorded header names are read.
+            config each started call-time agent recorded. Only each config's
+            ``provider``, ``_connection``, host-key marker, and recorded header
+            names are read.
+        call_time_host (`dict[str, Any] | None`, *optional*, defaults to `None`):
+            The host key the call-time agents' selection names (``provider`` and
+            any ``header_names``); a call-time agent that has not started may
+            still resolve to it, so it is refused like a marked agent.
         ask_secret (`Callable[[str], Any]`):
             Asks one hidden question and returns the answer, or `None` when the
             user declines.
@@ -1561,15 +1591,7 @@ def _check_resume_credentials(
         if config.get(HOST_KEY_MARKER) or (
             connection is not None and connection.get("source") == "host"
         ):
-            # Header values the host sent with its key are not recorded either.
-            arguments = "api_key=..."
-            if config.get(HEADER_NAMES_KEY):
-                arguments += ", headers=..."
-            raise _ResumeKeyError(
-                f"this run's {provider} API key came from a Python host's "
-                "llm_config.api_key, which the CLI cannot supply; resume it from "
-                f"Python with resume_flow({arguments})"
-            )
+            raise _host_key_refusal(provider, config.get(HEADER_NAMES_KEY))
         if connection is not None and (
             provider == "openai" or connection.get("source") == "store"
         ):
@@ -1577,6 +1599,8 @@ def _check_resume_credentials(
                 connections.append((provider, connection))
         elif provider not in providers:
             providers.append(provider)
+    if call_time_host is not None:
+        raise _host_key_refusal(call_time_host["provider"], call_time_host.get("header_names"))
 
     for provider, connection in connections:
         if provider == "openai" and connection.get("source") in (
@@ -1814,10 +1838,13 @@ def run(
                     on_event=on_event,
                     stop_event=stop_event,
                     tools={**registered_tools(), "ask_user": ask_user},
-                    check_llm_configs=lambda effective: _check_resume_credentials(
-                        effective,
-                        ask_secret=lambda question: ask_user(question=question, secret=True),
-                        prompt_available=prompt_available,
+                    check_llm_configs=lambda effective, *, call_time_host: (
+                        _check_resume_credentials(
+                            effective,
+                            call_time_host=call_time_host,
+                            ask_secret=lambda question: ask_user(question=question, secret=True),
+                            prompt_available=prompt_available,
+                        )
                     ),
                     **memory_options,
                     **skill_options,

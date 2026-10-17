@@ -1025,12 +1025,20 @@ def project_owner_contexts(
                 "execution_scope": execution_scope,
             }
             entries = [{**coordinates, **entry} for entry in feedback_by_source[occurrence.source]]
+            inputs = capture.bound_inputs
+            if inputs is not None and occurrence.hidden_inputs:
+                # Episodes reach learn prompts and storage; inputs that only configured
+                # the call stay in the bound record for backward and resume.
+                inputs = {
+                    name: value for name, value in inputs.items()
+                    if name not in occurrence.hidden_inputs
+                }
             try:
                 episodes.append(MemoryEpisode(
                     run_id=trace.run_id,
                     occurrence_path=scope.occurrence_path,
                     owner_static_path=scope.static_path,
-                    status=status, inputs=capture.bound_inputs, output=output, failure=failure,
+                    status=status, inputs=inputs, output=output, failure=failure,
                     interactions=() if evidence is None else evidence.interactions,
                     base_system_prompt=None if evidence is None else evidence.base_system_prompt,
                     prompt=None if evidence is None else evidence.prompt,

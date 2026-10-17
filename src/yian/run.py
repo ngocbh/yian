@@ -15,7 +15,7 @@ It also owns the compile/runtime inversion seam by injecting
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 import copy
 import difflib
 from dataclasses import dataclass, field
@@ -583,15 +583,8 @@ def _uses_host_key(
     )
 
 
-_SELECTION_HOST_KEY = "call_time_llm.selection"
-"""The key under which a resume check sees the host key a call-time selection names.
-
-No agent path holds a ``.``, so it never shadows an agent's config.
-"""
-
-
-def _selection_host_entry(call_time: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
-    """Return a config marked for the host key the call-time agents' selection names.
+def _selection_host(call_time: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Return the host key the call-time agents' selection names, for a resume check.
 
     A call-time agent that has not started may still resolve to that key's provider,
     so a resume that can't supply the key is refused up front, as for a marked agent.
@@ -601,17 +594,16 @@ def _selection_host_entry(call_time: Mapping[str, Any] | None) -> dict[str, dict
             The recorded ``RunStarted.call_time_llm``, or `None`.
 
     Returns:
-        `dict[str, dict[str, Any]]`: ``{_SELECTION_HOST_KEY: <config>}`` with the host
-            key's provider, the marker and its recorded header names; empty when the
-            selection names no host key.
+        `dict[str, Any] | None`: ``{"provider": ..., "header_names": [...]}`` (header
+            names only when recorded), or `None` when the selection names no host key.
     """
     host = None if call_time is None else call_time["selection"]["host"]
     if host is None:
-        return {}
-    config: dict[str, Any] = {"provider": host["provider"], HOST_KEY_MARKER: True}
+        return None
+    selected: dict[str, Any] = {"provider": host["provider"]}
     if host.get("header_names"):
-        config[HEADER_NAMES_KEY] = list(host["header_names"])
-    return {_SELECTION_HOST_KEY: config}
+        selected["header_names"] = list(host["header_names"])
+    return selected
 
 
 def _check_host_header_names(
@@ -1116,17 +1108,16 @@ def _resume_flow_controlled(
     api_key: str | SecretStr | None = None,
     headers: Mapping[str, str | SecretStr] | None = None,
     context: Any = None,
-    check_llm_configs: Callable[[dict[str, dict[str, Any]]], None] | None = None,
+    check_llm_configs: Callable[..., None] | None = None,
     stop_event: threading.Event,
 ) -> RunResult:
     """Recover and drive a durable run with a host-owned stop event.
 
     ``check_llm_configs`` receives a copy of the recorded effective model map, plus
-    the config each started call-time agent recorded keyed by its node id and, when
-    the call-time agents' selection names the host key, a config marked for it under
-    ``_SELECTION_HOST_KEY`` (old OpenAI records adapted to their legacy connection),
-    after the terminal check,
-    before an unfinished run opens memory or appends ``RunResumed``. An exception
+    the config each started call-time agent recorded keyed by its node id (old OpenAI
+    records adapted to their legacy connection), and as ``call_time_host`` the host
+    key the call-time agents' selection names (`_selection_host`), after the terminal
+    check, before an unfinished run opens memory or appends ``RunResumed``. An exception
     it raises stops recovery and appends nothing. The CLI uses it to check
     provider credentials.
     """
@@ -1165,15 +1156,17 @@ def _resume_flow_controlled(
         skills = _check_skills(flow.compiled, skills)
         # A started call-time agent resumes with the config it recorded; one not yet
         # started is checked when it resolves.
-        recorded_llm = {
-            **state.effective_llm_by_static_path,
-            **in_flight_llm_configs(state.flow.nodes, state.node_steps),
-        }
-        _check_recorded_llm_fields(recorded_llm, static_agent_labels(flow.compiled))
+        in_flight = in_flight_llm_configs(state.flow.nodes, state.node_steps)
+        recorded_llm = {**state.effective_llm_by_static_path, **in_flight}
+        _check_recorded_llm_fields(
+            recorded_llm, static_agent_labels(flow.compiled),
+            _static_path_keys(state.flow.nodes, in_flight),
+        )
         if check_llm_configs is not None:
-            check_llm_configs(legacy_connection_map(
-                {**recorded_llm, **_selection_host_entry(state.call_time_llm)}
-            ))
+            check_llm_configs(
+                legacy_connection_map(recorded_llm),
+                call_time_host=_selection_host(state.call_time_llm),
+            )
 
         if state.memories is not None:
             if memory is None:
@@ -1488,8 +1481,28 @@ def _binding_label(typ: Type) -> str:
     return canonical_type_label(typ)
 
 
+def _static_path_keys(nodes: Mapping[str, Any], node_ids: Iterable[str]) -> dict[str, str]:
+    """Map each runtime node id to its encoded static path, read from its execution scope.
+
+    Args:
+        nodes (`Mapping[str, Any]`): The run's live nodes, keyed by node id.
+        node_ids (`Iterable[str]`): The runtime ids to map.
+
+    Returns:
+        `dict[str, str]`: The ``/``-joined static path of each id whose node has an
+            execution scope.
+    """
+    keys: dict[str, str] = {}
+    for node_id in node_ids:
+        scope = nodes[node_id].execution_scope
+        if scope is not None:
+            keys[node_id] = "/".join(scope.static_path)
+    return keys
+
+
 def _check_recorded_llm_fields(
     effective: Mapping[str, Mapping[str, Any]], labels: Mapping[str, str],
+    static_paths: Mapping[str, str] | None = None,
 ) -> None:
     """Check the public fields of each recorded agent config before a resume appends.
 
@@ -1501,16 +1514,21 @@ def _check_recorded_llm_fields(
 
     Args:
         effective (`Mapping[str, Mapping[str, Any]]`):
-            The recorded effective model map, keyed by static agent path.
+            The recorded configs: the effective model map keyed by static agent path,
+            and the config of each started call-time agent keyed by its runtime id.
         labels (`Mapping[str, str]`):
             The authored site of each synthesized agent's ``llm_config``, keyed by
             static agent path; a message names it instead of the path.
+        static_paths (`Mapping[str, str] | None`, *optional*, defaults to `None`):
+            The static path of each runtime id in ``effective``, under which its label
+            is looked up; other keys are static paths already.
 
     Raises:
         `ValueError`: A config has an invalid or retired field; the message names its
-            agent path, or the authored site of a synthesized agent, and never echoes
-            values.
+            agent path or runtime id, or the authored site of a synthesized agent, and
+            never echoes values.
     """
+    static_paths = static_paths or {}
     for path, config in effective.items():
         host_only = (
             (HOST_KEY_MARKER, "base_url", "organization", "project", HEADER_NAMES_KEY)
@@ -1521,7 +1539,7 @@ def _check_recorded_llm_fields(
         try:
             split_model_config(legacy_connection_config(public))
         except ValueError as exc:
-            where = labels.get(path) or f"Agent {path!r}"
+            where = labels.get(static_paths.get(path, path)) or f"Agent {path!r}"
             raise ValueError(f"{where}: {exc}") from exc
 
 

@@ -638,18 +638,50 @@ def known_provider(
     Returns:
         `str | None`: The provider, or `None` when a value may set it or nothing does.
     """
+    for layer in _own_layers(node, flow):
+        if any(path[:1] in ((), ("provider",)) for path in value_leaves(layer)):
+            return None
+        literal = _literal_fields(layer, flow)
+        if literal.get("provider") is not None:
+            return literal["provider"]
+    return base.get("provider") or defaults.get("provider") or None
+
+
+def known_base_url(node: AgentNode, flow: Any, base: dict[str, Any]) -> Optional[str]:
+    """Return the ``base_url`` a call-time agent's layers set, when one does.
+
+    ``base_url`` is never a value, so the first layer setting it, walking down the
+    node layer, the own-flow layer (unless ``inherit: false``) and ``base``, gives it.
+
+    Args:
+        node (`AgentNode`): The agent.
+        flow (`CompiledFlow`): The flow ``node`` is in, whose layer is its own-flow layer.
+        base (`dict[str, Any]`): The agent's call-time base.
+
+    Returns:
+        `str | None`: The endpoint, or `None` when no layer sets one.
+    """
+    for layer in _own_layers(node, flow):
+        literal = _literal_fields(layer, flow)
+        if literal.get("base_url") is not None:
+            return literal["base_url"]
+    return base.get("base_url")
+
+
+def _own_layers(node: AgentNode, flow: Any) -> list[Any]:
+    """Return a call-time agent's node layer and, unless it opts out, its own-flow layer."""
     layers = [node.own_llm_config]
     if node.llm_inherit:
         layers.append(getattr(flow, "flow_llm_config", None) or {})
-    for layer in layers:
-        if any(path[:1] in ((), ("provider",)) for path in value_leaves(layer)):
-            return None
-        if not isinstance(layer, dict):
-            pool = VariablePool(start_id=flow.start_id)
-            layer = resolve_layer(keep_values(layer, lambda _leaf: False), pool)
-        if layer.get("provider") is not None:
-            return layer["provider"]
-    return base.get("provider") or defaults.get("provider") or None
+    return layers
+
+
+def _literal_fields(layer: Any, flow: Any) -> dict[str, Any]:
+    """Return a layer's literal fields, dropping every value in it."""
+    if isinstance(layer, dict):
+        return layer
+    pool = VariablePool(start_id=flow.start_id)
+    return resolve_layer(keep_values(layer, lambda _leaf: False), pool)
 
 
 def known_call_time_providers(
@@ -672,6 +704,29 @@ def known_call_time_providers(
         for path, node, owner in _static_agents(flow)
         if path in call_time
     }
+
+
+def known_call_time_base_urls(
+    flow: Any, call_time: Mapping[str, dict[str, Any]]
+) -> dict[str, str]:
+    """Return the `known_base_url` of each call-time agent that has one.
+
+    Args:
+        flow (`CompiledFlow`): The run's flow; its static call tree is walked, unchanged.
+        call_time (`Mapping[str, dict[str, Any]]`): Each call-time agent's base, keyed by
+            static agent path.
+
+    Returns:
+        `dict[str, str]`: The endpoint, keyed by static agent path, for each agent in
+            ``call_time`` whose layers set one.
+    """
+    urls: dict[str, str] = {}
+    for path, node, owner in _static_agents(flow):
+        if path in call_time:
+            url = known_base_url(node, owner, call_time[path])
+            if url is not None:
+                urls[path] = url
+    return urls
 
 
 def in_flight_llm_configs(

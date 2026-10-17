@@ -166,24 +166,24 @@ output: ${later.output}
 """
 
 
-def _resume_checks(log, flow_text):
-    """Resume ``log`` and return the map its key check received, appending nothing."""
+def _resume_checks(log, flow_text, **options):
+    """Resume ``log``; return the map and host its key check received, appending nothing."""
     seen = []
 
     class _Stop(Exception):
         pass
 
-    def check(effective):
-        seen.append(effective)
+    def check(effective, *, call_time_host):
+        seen.append((effective, call_time_host))
         raise _Stop()
 
     with pytest.raises(_Stop):
         run_module._resume_flow_controlled(
             load_flow(flow_text), log=log, check_llm_configs=check,
-            stop_event=threading.Event(),
+            stop_event=threading.Event(), **options,
         )
-    [effective] = seen
-    return effective
+    [checked] = seen
+    return checked
 
 
 def test_resume_checks_the_provider_an_in_flight_call_time_agent_recorded(
@@ -194,7 +194,8 @@ def test_resume_checks_the_provider_an_in_flight_call_time_agent_recorded(
     fake_model.crash = True
     with pytest.raises(_HostCrash):
         run_flow(load_flow(_TWO_CALL_TIME), {}, log=log)
-    effective = _resume_checks(log, _TWO_CALL_TIME)
+    effective, call_time_host = _resume_checks(log, _TWO_CALL_TIME)
+    assert call_time_host is None
     assert effective["chat"]["provider"] == "anthropic"
     assert effective["chat"]["model"] == "claude-picked"
     # `later` has not started, so its provider is checked when it resolves.
@@ -203,6 +204,27 @@ def test_resume_checks_the_provider_an_in_flight_call_time_agent_recorded(
     with pytest.raises(_ResumeKeyError, match="ANTHROPIC_API_KEY"):
         _check_resume_credentials(
             effective, ask_secret=lambda _question: None, prompt_available=False,
+        )
+
+
+def test_resume_passes_the_host_key_a_call_time_selection_names_beside_the_map(
+    tmp_path, fake_model,
+):
+    log = tmp_path / "run.jsonl"
+    _stopped_before_chat(log, llm_config=_HOST)
+    effective, call_time_host = _resume_checks(
+        log, _PICKED, api_key="sk-host-secret", headers={"X-Tenant": "tenant-secret"},
+    )
+    # `chat` has not started, so the map holds no config; the host key comes separately.
+    assert effective == {}
+    assert call_time_host == {"provider": "openai", "header_names": ["X-Tenant"]}
+    with pytest.raises(_ResumeKeyError, match=(
+        r"this run's openai API key came from a Python host's llm_config.api_key.*"
+        r"resume_flow\(api_key=\.\.\., headers=\.\.\.\)"
+    )):
+        _check_resume_credentials(
+            effective, call_time_host=call_time_host,
+            ask_secret=lambda _question: None, prompt_available=False,
         )
 
 
@@ -316,6 +338,44 @@ def test_llm_config_is_not_model_visible(tmp_path, fake_model, monkeypatch):
     [messages] = fake_model.calls
     assert "__llm_config" not in str(messages[-1].content)
     assert "gpt-picked" not in str(messages[-1].content)
+
+
+def test_memory_episodes_leave_out_the_bound_llm_config(fake_model, monkeypatch):
+    import yian.memory.reflective as reflective
+    from yian.memory.episodic import EpisodicMemory
+    from yian.memory.reflective import ReflectiveMemory
+
+    prompts = []
+
+    class Reflector:
+        def with_structured_output(self, _schema):
+            return self
+
+        def invoke(self, messages):
+            prompts.append(str(messages[-1].content))
+            return {"actions": [{"action": "noop", "lesson_id": None, "text": None}]}
+
+    monkeypatch.setattr(reflective, "model_from_config", lambda _config: Reflector())
+    text = _PICKED.replace(
+        "    prompt: Go.\n",
+        "    prompt: Go.\n    long_term_memory: {notes: episodic, lessons: reflective}\n",
+    )
+    episodic = EpisodicMemory()
+    memory = {
+        "notes": episodic,
+        "lessons": ReflectiveMemory({"provider": "ollama", "model": "reflector"}),
+    }
+    result = run_flow(load_flow(text), {}, learnable=True, memory=memory)
+    assert result.status == "succeeded"
+    fake_model.replies.append(_NO_FEEDBACK)
+    outcome = result.backward("Shorter.")
+    assert outcome.status == "succeeded", outcome.failure
+    [prompt] = prompts
+    with episodic.open_run() as session:
+        stored = json.dumps(session.snapshot)
+    assert "ok" in stored
+    for text in (prompt, stored):
+        assert "__llm_config" not in text and "gpt-picked" not in text
 
 
 def test_backward_never_routes_feedback_to_the_model_value_producer(fake_model, monkeypatch):
@@ -483,3 +543,12 @@ def test_resume_refuses_a_defs_call_instance_whose_recorded_config_differs(
         run_module.resume_flow(load_flow(_DEFS_CALL_TIME), log=log)
     assert "node_failed" not in [record["kind"] for record in _records(log)[before:]]
     assert fake_model == []
+
+
+def test_a_recorded_runtime_instance_config_is_labelled_by_its_static_path():
+    recorded = {"b/chat": {"provider": "openai", "model": "m", "temperature": 0.5}}
+    label = "node 'ask' adaptive_questions.llm_config"
+    with pytest.raises(ValueError, match=r"^node 'ask' adaptive_questions\.llm_config: "):
+        run_module._check_recorded_llm_fields(recorded, {"a/chat": label}, {"b/chat": "a/chat"})
+    with pytest.raises(ValueError, match=r"^Agent 'b/chat': "):
+        run_module._check_recorded_llm_fields(recorded, {"b/chat": label}, {"b/chat": "a/chat"})

@@ -31,6 +31,7 @@ from yian.llm_clients.config import (
 from yian.llm_clients.connection import (
     HOST_KEY_MARKER,
     ConnectionSelection,
+    block_problem,
     check_model_config,
     refused_block,
 )
@@ -48,6 +49,9 @@ from yian.typesys.values import FieldRead, union_field
 
 Nullable: TypeAlias = Callable[[Any, ValuePath], bool]
 """Says whether a value leaf's value, or the part at a path inside it, may be null or absent."""
+
+FieldWhere: TypeAlias = Callable[[ValuePath], str]
+"""Names a field of a layer in an error message, from its path in the layer."""
 
 LLM_CONFIG_KEY = "__llm_config"
 """The reserved AGENT wiring key that carries the node and own-flow layers."""
@@ -297,18 +301,25 @@ def split_layers(
 
 
 def resolve_layers(
-    template: Binding, pool: VariablePool, *, label: Optional[str] = None
+    template: Binding,
+    pool: VariablePool,
+    *,
+    node_where: FieldWhere,
+    flow_where: FieldWhere,
 ) -> tuple[dict, dict]:
     """Resolve a ``split_layers`` binding into the node and flow layers.
 
-    A null field stays null, which ``merge_llm_config`` reads as unset; a null whole
-    record is an empty layer.
+    Each layer resolves on its own, so an error names the field under that layer's
+    subject. A null field stays null, which ``merge_llm_config`` reads as unset; a null
+    whole record is an empty layer.
 
     Args:
         template (`Binding`): The binding ``split_layers`` built.
         pool (`VariablePool`): The pool the values read.
-        label (`str`, *optional*, defaults to `None`): Names the config in an error
-            message in place of ``binding '__llm_config'``.
+        node_where (`FieldWhere`): Names a node-layer field in an error message, from
+            its path in the layer, such as ``node 'chat' llm_config.model``.
+        flow_where (`FieldWhere`): Names a flow-layer field the same way, such as
+            ``flow llm_config.model``.
 
     Returns:
         `tuple[dict, dict]`: The node layer and the flow layer.
@@ -318,12 +329,28 @@ def resolve_layers(
             (``binding.type``), or a whole record resolves to something other than a
             mapping or null (``contract.input``).
     """
-    resolved = _resolve_source(template, pool, name=LLM_CONFIG_KEY, label=label)
-    tree = template.source.value
+    source = template.source
     return (
-        _resolved_layer(resolved.get("node"), tree.get("node"), label),
-        _resolved_layer(resolved.get("flow"), tree.get("flow"), label),
+        _resolve_part(source, "node", pool, node_where),
+        _resolve_part(source, "flow", pool, flow_where),
     )
+
+
+def _resolve_part(
+    source: ValueTemplate, part: str, pool: VariablePool, where: FieldWhere
+) -> dict:
+    """Resolve the ``part`` layer of a `split_layers` template, naming fields with ``where``."""
+    if part not in source.value:
+        return {}
+    layer = source.value[part]
+    template = Binding(ValueTemplate(
+        {part: layer},
+        tuple((path, origin) for path, origin in source.origins if path[:1] == (part,)),
+    ))
+    resolved = _resolve_source(
+        template, pool, name=LLM_CONFIG_KEY, label=lambda path: where(path[1:])
+    )
+    return _resolved_layer(resolved[part], layer, where(()))
 
 
 def keep_values(layer: Any, keep: Callable[[Any], bool]) -> Any:
@@ -361,7 +388,9 @@ def keep_values(layer: Any, keep: Callable[[Any], bool]) -> Any:
     )
 
 
-def resolve_layer(layer: Any, pool: VariablePool) -> dict:
+def resolve_layer(
+    layer: Any, pool: VariablePool, *, where: Optional[FieldWhere] = None
+) -> dict:
     """Resolve one layer against a pool into a plain configuration dict.
 
     Literal text resolves to itself (``$$`` reads as ``$``), and typed values are
@@ -370,6 +399,8 @@ def resolve_layer(layer: Any, pool: VariablePool) -> dict:
     Args:
         layer (`Any`): A layer: ``dict``, ``ValueTemplate``, ``Binding`` or ``None``.
         pool (`VariablePool`): The pool the values read.
+        where (`FieldWhere`, *optional*, defaults to `None`): Names a field in an error
+            message, from its path in the layer, such as ``flow llm_config.model``.
 
     Returns:
         `dict`: The resolved layer.
@@ -381,8 +412,9 @@ def resolve_layer(layer: Any, pool: VariablePool) -> dict:
     template = Binding(
         ValueTemplate({"layer": part}, tuple((("layer", *path), o) for path, o in origins))
     )
-    resolved = _resolve_source(template, pool, name=LLM_CONFIG_KEY)
-    return _resolved_layer(resolved.get("layer"), part, None)
+    label = None if where is None else (lambda path: where(path[1:]))
+    resolved = _resolve_source(template, pool, name=LLM_CONFIG_KEY, label=label)
+    return _resolved_layer(resolved.get("layer"), part, None if where is None else where(()))
 
 
 def refused_resolved_field(
@@ -465,7 +497,7 @@ def check_resolved_layer(
         problems = located_block_problems(block, layer[block], lambda _leaf: False)
         if problems:
             raise LayerFieldError(
-                f"{field_where(subject, (block,))}{callsite}: {problems[0].message}",
+                block_problem(subject, block, problems[0].message, callsite),
                 (block, *problems[0].keys),
             )
     try:
@@ -473,16 +505,17 @@ def check_resolved_layer(
     except ValidationError as exc:
         error = exc.errors(include_input=False, include_url=False)[0]
         loc = tuple(error["loc"])
+        field = loc[:1]
         if loc == ("provider",) and error["type"] == "literal_error":
             text = f"not a known provider; use one of: {', '.join(SUPPORTED_LLM_PROVIDERS)}"
         elif error["type"] == "value_error":
             text = str(error["ctx"]["error"])
-        elif len(loc) > 1:
-            text = f"`{'.'.join(str(part) for part in loc)}`: {error['msg']}"
         else:
+            # A block's field is named in full, as in `<subject>.openai.temperature`.
             text = error["msg"]
+            field = loc
         raise LayerFieldError(
-            f"{field_where(subject, loc[:1])}{callsite}: {text}", loc[:1]
+            f"{field_where(subject, field)}{callsite}: {text}", field
         ) from None
 
 
@@ -579,7 +612,12 @@ def call_time_config(
     callsite = subject[len(site):]
     flow_subject = f"flow {parent!r} llm_config" if parent else "flow llm_config"
     tree = template.source.value
-    node_layer, flow_layer = resolve_layers(template, pool, label=subject)
+    node_layer, flow_layer = resolve_layers(
+        template,
+        pool,
+        node_where=lambda field: field_where(site, field) + callsite,
+        flow_where=lambda field: field_where(flow_subject, field),
+    )
     for part, layer, where, after in (
         ("node", node_layer, site, callsite), ("flow", flow_layer, flow_subject, ""),
     ):
@@ -614,7 +652,7 @@ def call_time_config(
             origin = _field_origin(template, ("node", block[1:])) or _field_origin(
                 template, ("flow", block[1:])
             )
-        raise _refused(f"{site}{block}{callsite}: {exc}", origin) from None
+        raise _refused(block_problem(site, block[1:], str(exc), callsite), origin) from None
     return canonical
 
 

@@ -69,6 +69,52 @@ def test_a_run_time_flow_value_a_child_agent_would_inherit_fails_at_the_flow_fie
     assert _line(error) == _line_of(text, "llm_config: {model: '${pick.output}'}")
 
 
+_COMPOSER_IN_CHILD = """\
+id: f
+name: f
+llm_config: {model: '${pick.output}'}
+nodes:
+  pick:
+    kind: agent
+    prompt: Pick.
+    output: str
+    llm_config: {model: m0}
+  c:
+    kind: call
+    input: {}
+    nodes:
+      ask:
+        kind: human_input
+        prompt: hi
+        adaptive_questions:
+          prompt: Q
+    output: ${ask.output}
+    depends_on: [pick]
+output: ${c.output}
+"""
+
+
+def test_a_composer_in_a_child_flow_is_named_by_its_gate():
+    message = _error(_COMPOSER_IN_CHILD).diagnostic.message
+    assert message.startswith(
+        "flow llm_config.model: node 'ask' adaptive_questions.llm_config in 'c' would inherit "
+    ), message
+    assert "__compose" not in message
+    assert _FIX in message
+
+
+def test_the_cascade_check_names_a_composer_by_its_gate():
+    flow = load_flow(_COMPOSER_IN_CHILD.replace("'${pick.output}'", "m1")).compiled
+    flow.flow_llm_config = ValueTemplate({"model": "${pick.output}"})
+    with pytest.raises(ValueError) as caught:
+        resolve_llm_cascade(flow, {}, defaults={"provider": "openai", "model": "gpt-x"})
+    message = str(caught.value)
+    assert message.startswith(
+        "node 'ask' adaptive_questions.llm_config in 'c' would inherit llm_config.model "
+    ), message
+    assert "__compose" not in message
+
+
 def test_a_child_agent_that_sets_the_field_loads():
     load_flow(_def_call(child_llm="        llm_config: {model: m1}\n"))
 

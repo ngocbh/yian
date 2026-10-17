@@ -174,7 +174,7 @@ def test_a_composer_whole_record_error_names_the_gate_field(fake_model):
     result = run_flow(load_flow(text), {"proj": "x"})
     assert result.status == "failed"
     assert result.failure.code == "contract.input"
-    assert result.failure.message.startswith(f"{_SITE}.openai: `openai.temperature`: ")
+    assert result.failure.message.startswith(f"{_SITE}.openai.temperature: ")
     assert fake_model == []
 
 
@@ -200,4 +200,32 @@ output: ${sub.output}
     assert result.status == "failed"
     assert result.failure.code == "contract.input"
     assert result.failure.message.startswith(f"{_SITE}.provider in 'sub': not a known provider")
+    assert fake_model == []
+
+
+def test_a_composer_value_that_breaks_its_tag_in_a_defs_call_names_the_field_and_callsite(
+    fake_model,
+):
+    text = """id: f
+name: f
+llm_config: {provider: openai}
+defs:
+  child:
+    input: {m: !Optional(str) }
+    nodes:
+      ask:
+        kind: human_input
+        adaptive_questions:
+          prompt: "Q"
+          llm_config: {model: !str '${input.m}'}
+    output: ${ask.output}
+nodes:
+  pick: {kind: code, output: Optional(str), code: "return None"}
+  sub: {kind: call, call: child, input: {m: '${pick.output}'}}
+output: ${sub.output}
+"""
+    result = run_flow(load_flow(text), {})
+    assert result.status == "failed"
+    assert result.failure.code == "binding.type"
+    assert result.failure.message.startswith(f"{_SITE}.model in 'sub': "), result.failure.message
     assert fake_model == []

@@ -182,8 +182,9 @@ def resolve_run_llm(
             "the run's flow" if not inherited.owner
             else f"the flow node {_path_key(inherited.owner)!r} calls"
         )
+        agent = inherited.gate or f"node {_path_key(inherited.agent)!r}"
         raise ValueError(
-            f"node {_path_key(inherited.agent)!r} would inherit "
+            f"{agent} would inherit "
             f"{field_label(inherited.field)} from {where}, a value read only when that flow "
             f"runs; {inherited_value_fix(inherited.field)}"
         )
@@ -287,6 +288,8 @@ class InheritedValue:
             record.
         origin (`OriginRef | None`): The value's authored site, when known.
         agent (`tuple[str, ...]`): The static path of the agent that inherits it.
+        label (`str | None`): The agent's ``llm_config_label``; `None` for an authored
+            agent.
     """
 
     owner: tuple[str, ...]
@@ -294,6 +297,12 @@ class InheritedValue:
     field: ValuePath
     origin: Optional[OriginRef]
     agent: tuple[str, ...]
+    label: Optional[str] = None
+
+    @property
+    def gate(self) -> Optional[str]:
+        """Name a synthesized agent by its authored site, with its callsite; else `None`."""
+        return agent_label(self.label, "/".join(self.agent[:-1]))
 
 
 def find_inherited_llm_value(flow: Any) -> Optional[InheritedValue]:
@@ -387,6 +396,7 @@ def _inherited_by(
                 field=field,
                 origin=_value_origin(outer.layer, field, leaf),
                 agent=agent,
+                label=node.llm_config_label,
             )
         higher.append((outer.layer, outer.nullable))
     return None
@@ -576,7 +586,9 @@ def _run_start_flow_layer(flow: Any, *, root: bool, inputs: _RunInputs) -> dict[
             inputs.pool_for(known, lambda field: field_where(_FLOW_SUBJECT, field))
             if root else inputs.empty_pool()
         )
-        layer = _resolved(lambda: resolve_layer(known, pool), _FLOW_SUBJECT)
+        layer = _resolved(lambda: resolve_layer(
+            known, pool, where=lambda field: field_where(_FLOW_SUBJECT, field)
+        ))
         if root:
             check_resolved_layer(layer, _FLOW_SUBJECT, written=known)
     validate_layer(layer)
@@ -605,12 +617,20 @@ def _resolve_carried(
     """
     subject = label or f"node {path!r} llm_config"
 
+    def node_where(field: ValuePath) -> str:
+        return field_where(subject, field)
+
+    def flow_where(field: ValuePath) -> str:
+        return field_where(_FLOW_SUBJECT, field)
+
     def where(field: ValuePath) -> str:
         part, *rest = field
-        return field_where(subject if part == "node" else _FLOW_SUBJECT, tuple(rest))
+        return (node_where if part == "node" else flow_where)(tuple(rest))
 
     pool = inputs.pool_for(carried.source, where)
-    node_layer, flow_layer = _resolved(lambda: resolve_layers(carried, pool), subject)
+    node_layer, flow_layer = _resolved(lambda: resolve_layers(
+        carried, pool, node_where=node_where, flow_where=flow_where
+    ))
     written = carried.source.value
     check_resolved_layer(node_layer, subject, written=written.get("node"))
     check_resolved_layer(flow_layer, _FLOW_SUBJECT, written=written.get("flow"))
@@ -823,12 +843,12 @@ def value_config_subjects(flow: Any) -> dict[str, str]:
     return subjects
 
 
-def _resolved(resolve: Callable[[], Any], subject: str) -> Any:
-    """Run one resolution, reporting a binding failure as a `ValueError` naming ``subject``."""
+def _resolved(resolve: Callable[[], Any]) -> Any:
+    """Run one resolution, reporting a binding failure (it names its field) as a `ValueError`."""
     try:
         return resolve()
     except BindingError as exc:
-        raise ValueError(f"{subject}: {exc}") from None
+        raise ValueError(str(exc)) from None
 
 
 def _static_agent_paths(

@@ -335,8 +335,10 @@ def test_a_block_field_from_a_value_is_checked_at_call_time(fake_model):
     assert result.status == "failed"
     failure = result.failure
     assert failure.code == "contract.input"
-    assert failure.message.startswith("node 'chat' llm_config.anthropic: ")
-    assert "`anthropic.thinking.budget_tokens`" in failure.message
+    assert failure.message.startswith(
+        "node 'chat' llm_config.anthropic.thinking.budget_tokens: "
+    ), failure.message
+    assert "`anthropic.thinking.budget_tokens`" not in failure.message
     assert "1024" in failure.message
     assert failure.trace[-1] == _wired(flow).origin_at(("node", "anthropic", "thinking"))
     assert fake_model == []
@@ -348,8 +350,69 @@ def test_a_value_that_breaks_its_tag_fails_with_binding_type(fake_model):
     ))
     result = run_flow(flow, {})
     assert result.status == "failed"
-    assert result.failure.code == "binding.type"
-    assert "node 'chat' llm_config" in result.failure.message
+    failure = result.failure
+    assert failure.code == "binding.type"
+    assert failure.message.startswith("node 'chat' llm_config.model: "), failure.message
+    assert failure.trace[-1] == _wired(flow).value["node"]["model"].origin  # the tag
+    assert fake_model == []
+
+
+def test_a_flow_value_that_breaks_its_tag_names_the_flow_field(fake_model):
+    flow = load_flow(_picking(
+        "Optional(str)", "None", "{provider: openai}",
+        flow_llm="llm_config: {model: !str '${pick.output}'}\n",
+    ))
+    result = run_flow(flow, {})
+    assert result.status == "failed"
+    failure = result.failure
+    assert failure.code == "binding.type"
+    assert failure.message.startswith("flow llm_config.model: "), failure.message
+    assert failure.trace[-1] == _wired(flow).value["flow"]["model"].origin  # the tag
+    assert fake_model == []
+
+
+def test_a_value_that_fails_to_evaluate_names_the_field(fake_model):
+    flow = load_flow(_picking(
+        "Optional(str)", "None",
+        "{provider: openai, model: !str '${pick.output :? \"no model\"}'}",
+    ))
+    result = run_flow(flow, {})
+    assert result.status == "failed"
+    failure = result.failure
+    assert failure.message.startswith("node 'chat' llm_config.model: "), failure.message
+    assert "no model" in failure.message
+    assert failure.trace[-1] == _wired(flow).origin_at(("node", "model"))
+    assert fake_model == []
+
+
+def test_a_non_finite_value_names_the_block_field(fake_model):
+    flow = load_flow(_picking(
+        "float", "1e308",
+        "{provider: openai, model: m, openai: {temperature: !float '${pick.output * 10}'}}",
+    ))
+    result = run_flow(flow, {})
+    assert result.status == "failed"
+    failure = result.failure
+    assert failure.code == "binding.evaluate"
+    assert failure.message.startswith(
+        "node 'chat' llm_config.openai.temperature: non-finite number inf"
+    ), failure.message
+    tagged = _wired(flow).value["node"]["openai"]["temperature"]
+    assert failure.trace[-1] == tagged.origin
+    assert fake_model == []
+
+
+def test_a_block_value_out_of_bounds_names_the_field_once(fake_model):
+    flow = load_flow(_picking(
+        "float", "5.0", "{provider: openai, model: m, openai: {temperature: '${pick.output}'}}",
+    ))
+    result = run_flow(flow, {})
+    assert result.status == "failed"
+    failure = result.failure
+    assert failure.code == "contract.input"
+    assert failure.message == (
+        "node 'chat' llm_config.openai.temperature: Input should be less than or equal to 2"
+    )
     assert fake_model == []
 
 

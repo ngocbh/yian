@@ -733,9 +733,10 @@ def _refuse_inherited_llm_values(flow: ComposedFlow) -> None:
             subject = f"{field} of the flow imported through uses: {name!r} ({called})"
         else:
             subject = f"defs entry {name!r} {field} ({called})"
+    agent = found.gate or f"agent {'/'.join(found.agent)!r} in a child flow"
     raise _UNLOCATED_DIAGNOSTICS.error(
-        f"{subject}: agent {'/'.join(found.agent)!r} in a child flow would inherit this "
-        f"value, which is read only when the flow runs; {inherited_value_fix(found.field)}",
+        f"{subject}: {agent} would inherit this value, which is read only when the flow "
+        f"runs; {inherited_value_fix(found.field)}",
         frames=() if value_frame is None else (value_frame,),
     )
 

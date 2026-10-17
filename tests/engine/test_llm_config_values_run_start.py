@@ -435,7 +435,7 @@ def test_a_block_field_from_an_input_out_of_range_fails_at_its_field(tmp_path, f
         "{type: enabled, budget_tokens: '${input.b}'}}}",
     )
     _fails_before_any_node(
-        text, {"b": 5}, r"^node 'chat' llm_config\.anthropic: .*budget_tokens.*1024",
+        text, {"b": 5}, r"^node 'chat' llm_config\.anthropic\.thinking\.budget_tokens: .*1024",
         tmp_path, fake_model,
     )
 
@@ -715,3 +715,80 @@ def test_a_null_node_value_falls_to_the_flow_value_then_the_host_layer(
         "succeeded"
     )
     assert _models(log) == {"chat": ("openai", model)}
+
+
+_TAGGED = """id: f
+name: f
+typedefs: {D: "dict(str, str)"}
+input:
+  d: !D
+  t: !float 1.0
+llm_config: FLOW
+nodes:
+  chat:
+    kind: agent
+    prompt: Go.
+    llm_config: NODE
+output: ${chat.output}
+"""
+
+
+def _tagged(node: str, flow: str = "{provider: openai}") -> str:
+    return _TAGGED.replace("NODE", node).replace("FLOW", flow)
+
+
+def test_a_node_value_that_breaks_its_tag_names_the_field(tmp_path, fake_model):
+    _fails_before_any_node(
+        _tagged("{model: !str '${input.d.zzz}'}"), {"d": {}},
+        r"^node 'chat' llm_config\.model: None does not match declared type str$",
+        tmp_path, fake_model,
+    )
+
+
+def test_a_flow_value_that_breaks_its_tag_names_the_flow_field(tmp_path, fake_model):
+    _fails_before_any_node(
+        _tagged("{}", "{provider: openai, model: !str '${input.d.zzz}'}"), {"d": {}},
+        r"^flow llm_config\.model: None does not match declared type str$",
+        tmp_path, fake_model,
+    )
+
+
+def test_a_composer_value_that_breaks_its_tag_names_the_gate_field(tmp_path, fake_model):
+    text = """id: f
+name: f
+typedefs: {D: "dict(str, str)"}
+input: {d: !D }
+llm_config: {provider: openai}
+nodes:
+  ask:
+    kind: human_input
+    prompt: hi
+    adaptive_questions:
+      prompt: Q
+      llm_config: {model: !str '${input.d.zzz}'}
+output: ${ask.output}
+"""
+    _fails_before_any_node(
+        text, {"d": {}},
+        r"^node 'ask' adaptive_questions\.llm_config\.model: None does not match declared "
+        r"type str$",
+        tmp_path, fake_model,
+    )
+
+
+def test_a_non_finite_value_names_the_block_field(tmp_path, fake_model):
+    _fails_before_any_node(
+        _tagged("{model: m, openai: {temperature: !float '${input.t * 10}'}}"),
+        {"d": {}, "t": 1e308},
+        r"^node 'chat' llm_config\.openai\.temperature: non-finite number inf ",
+        tmp_path, fake_model,
+    )
+
+
+def test_a_block_value_out_of_bounds_names_the_field_once(tmp_path, fake_model):
+    _fails_before_any_node(
+        _tagged("{model: m, openai: {temperature: '${input.t}'}}"), {"d": {}, "t": 5.0},
+        r"^node 'chat' llm_config\.openai\.temperature: Input should be less than or equal "
+        r"to 2$",
+        tmp_path, fake_model,
+    )

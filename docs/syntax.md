@@ -1864,11 +1864,13 @@ resolves to `null` is `{}`.
   node 'chat' llm_config.provider: not a known provider; use one of: openai, ...
   ```
 
-  A flow-layer field reads `flow llm_config.<field>`, and a composer's agent uses its
-  label, `node 'ask' adaptive_questions.llm_config.<field>`. A refused field's
-  message never shows its value. The defaults and saved logins it falls back to are the ones captured at run
-  start. The run log records the config it resolved, without keys or header values,
-  and resume and backward use the recorded one.
+  A block field reads `node 'chat' llm_config.openai.temperature`, a flow-layer field
+  `flow llm_config.<field>`, and a composer's agent uses its label,
+  `node 'ask' adaptive_questions.llm_config.<field>`. Run start names fields the same
+  way. A refused field's message never shows its value. The defaults and saved logins
+  it falls back to are the ones captured at run start. The run log records the config
+  it resolved, without keys or header values, and resume and backward use the recorded
+  one.
 
 **Scope and precedence.** A value reads the flow where it is written: a node's or a
 flow layer's from that flow's inputs and nodes, a `defs:` entry's from that entry.

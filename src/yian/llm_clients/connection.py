@@ -20,6 +20,7 @@ import copy
 from dataclasses import dataclass
 import hashlib
 import os
+import re
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -972,6 +973,35 @@ def refused_block(config: Mapping[str, Any]) -> str:
     ):
         return ""
     return f".{validated.provider}"
+
+
+_LEADING_KEY_PATH = re.compile(r"`[^`.]+\.([^`]+)`: (.*)", re.DOTALL)
+
+
+def block_problem(where: str, block: str, message: str, callsite: str = "") -> str:
+    """Name a provider block's problem under ``where``, giving its key path once.
+
+    A single problem that opens with its backticked key path and a colon, such as
+    ``openai.temperature``, reads ``<where>.openai.temperature<callsite>: ...``. Any
+    other reads ``<where>.<block><callsite>: <message>``, or
+    ``<where><callsite>: <message>`` when ``block`` is empty.
+
+    Args:
+        where (`str`): Names the layer, such as ``node 'chat' llm_config``.
+        block (`str`): The block refused, such as ``openai``; empty when unknown.
+        message (`str`): The problem, as a block check words it.
+        callsite (`str`, *optional*, defaults to `""`): Follows the field, such as
+            `` in 'sub'``.
+
+    Returns:
+        `str`: The message.
+    """
+    match = _LEADING_KEY_PATH.fullmatch(message)
+    # Several problems are joined with "; "; moving the first one's path would misname
+    # the rest.
+    if block and match is not None and "; `" not in match[2]:
+        return f"{where}.{block}.{match[1]}{callsite}: {match[2]}"
+    return f"{where}{'.' + block if block else ''}{callsite}: {message}"
 
 
 def _check_block(validated: LLMConfig, connection: dict[str, Any] | None) -> None:

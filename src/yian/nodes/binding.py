@@ -73,6 +73,8 @@ BindingFailureCode: TypeAlias = Literal[
 ]
 SourceResolver: TypeAlias = Callable[[str], ResolvedValue]
 ReservedBinder: TypeAlias = Callable[[str, Any, Callable[[Any], Any]], Any]
+# Names the place inside a parameter's value an error is at, from its path there.
+ErrorLabel: TypeAlias = str | Callable[[ValuePath], str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -381,15 +383,17 @@ def _path_label(name: str, path: ValuePath) -> str:
     )
 
 
-def _binding_where(name: str, path: ValuePath, label: str | None) -> str:
+def _binding_where(name: str, path: ValuePath, label: ErrorLabel | None) -> str:
     """Name a binding error's location: a parameter (or its label) and a path inside it.
 
-    Without a label this is ``binding 'p.b[0]'``. With one it is the label, followed by
-    `` at <path>`` when ``path`` is not empty, the path rendered as the non-finite check
-    renders it (``a[1].b``).
+    Without a label this is ``binding 'p.b[0]'``. With a text label it is the label,
+    followed by `` at <path>`` when ``path`` is not empty, the path rendered as the
+    non-finite check renders it (``a[1].b``). A callable label names ``path`` itself.
     """
     if label is None:
         return f"binding {_path_label(name, path)!r}"
+    if callable(label):
+        return label(path)
     return f"{label} at {_render_value_path(path)}" if path else label
 
 
@@ -446,7 +450,7 @@ class _SourceReader:
         name: str,
         template: ValueTemplate,
         origin: OriginRef | None,
-        label: str | None = None,
+        label: ErrorLabel | None = None,
     ) -> tuple[Any, ValueRoute | None, bool]:
         """Evaluate one node of a template tree at ``path``.
 
@@ -536,7 +540,7 @@ def _resolve_source(
     *,
     collector: BindingCollector | None = None,
     name: str = "",
-    label: str | None = None,
+    label: ErrorLabel | None = None,
     source_resolver: SourceResolver | None = None,
     types: dict[str, Type] | None = None,
 ) -> Any:
@@ -562,7 +566,8 @@ def _resolve_source(
     ``types`` is the table an ``isinstance(x, T)`` or a ``T(...)`` constructor looks ``T``
     up in (``None`` means no types); a failed constructor check is a ``binding.type``
     failure. ``label``, when set, names the parameter in a template error message in place
-    of ``binding '<name>'``.
+    of ``binding '<name>'``; a callable label names the path inside the template the
+    error is at.
     """
     origin = _source_origin(source)
     source_value = binding_source(source)

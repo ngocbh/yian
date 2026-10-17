@@ -34,6 +34,7 @@ from yian.llm_clients.connection import (
     HEADER_NAMES_KEY,
     HOST_KEY_MARKER,
     ConnectionSnapshot,
+    block_problem,
     check_model_config,
     connection_snapshot,
     header_name_diff,
@@ -704,9 +705,10 @@ def _check_effective_llm(
         except ValueError as exc:
             subject = (located or {}).get(path)
             if subject is not None:
-                where = subject + refused_block(probe)
-            else:
-                where = labels.get(path) or f"Agent {path!r}"
+                raise ValueError(
+                    block_problem(subject, refused_block(probe)[1:], str(exc))
+                ) from exc
+            where = labels.get(path) or f"Agent {path!r}"
             raise ValueError(f"{where}: {exc}") from exc
 
 

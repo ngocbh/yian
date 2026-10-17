@@ -272,7 +272,7 @@ def test_split_layers_escapes_a_literal_layer():
     carried = values.split_layers(node, {"provider": "a${b}$"}, True, values.contract_nullable)
 
     assert carried.source.value["flow"] == {"provider": "a$${b}$$"}
-    assert values.resolve_layers(carried, _pool(pick="m")) == (
+    assert values.resolve_layers(carried, _pool(pick="m"), **_WHERE) == (
         {"model": "m"},
         {"provider": "a${b}$"},
     )
@@ -325,6 +325,12 @@ def test_split_layers_carries_a_whole_record():
 # ---------- resolve_layers ----------
 
 
+_WHERE = {
+    "node_where": lambda field: "node 'chat' llm_config" + "".join(f".{p}" for p in field),
+    "flow_where": lambda field: "flow llm_config" + "".join(f".{p}" for p in field),
+}
+
+
 def _pool(start=None, **outputs):
     pool = VariablePool()
     pool.set(pool.start_id, start or {})
@@ -339,7 +345,7 @@ def test_resolve_layers_against_a_pool():
     flow = ValueTemplate({"provider": "anthropic", "temperature": "${input.t}"})
     carried = values.split_layers(node, flow, True, values.contract_nullable)
 
-    resolved = values.resolve_layers(carried, _pool({"k": 5, "t": None}, pick="claude"))
+    resolved = values.resolve_layers(carried, _pool({"k": 5, "t": None}, pick="claude"), **_WHERE)
 
     assert resolved == (
         {"model": "claude", "anthropic": {"top_k": 5}},
@@ -353,9 +359,22 @@ def test_resolve_layers_raises_on_a_nested_tag_mismatch():
     carried = values.split_layers(node, {}, True, values.contract_nullable)
 
     with pytest.raises(BindingError) as caught:
-        values.resolve_layers(carried, _pool(pick=3))
+        values.resolve_layers(carried, _pool(pick=3), **_WHERE)
 
     assert caught.value.failure_code == "binding.type"
+    assert str(caught.value).startswith("node 'chat' llm_config.model: "), str(caught.value)
+
+
+def test_resolve_layers_names_a_flow_field_under_the_flow():
+    values = _values()
+    flow = ValueTemplate({"model": _typed("${pick.output}", STR)})
+    carried = values.split_layers({}, flow, True, values.contract_nullable)
+
+    with pytest.raises(BindingError) as caught:
+        values.resolve_layers(carried, _pool(pick=3), **_WHERE)
+
+    assert caught.value.failure_code == "binding.type"
+    assert str(caught.value).startswith("flow llm_config.model: "), str(caught.value)
 
 
 def test_a_null_whole_record_resolves_to_an_empty_layer():
@@ -363,8 +382,8 @@ def test_a_null_whole_record_resolves_to_an_empty_layer():
     node = Binding("${input.cfg}")
     carried = values.split_layers(node, {"model": "m"}, True, values.contract_nullable)
 
-    assert values.resolve_layers(carried, _pool({"cfg": None})) == ({}, {"model": "m"})
-    assert values.resolve_layers(carried, _pool({"cfg": {"model": "x"}})) == (
+    assert values.resolve_layers(carried, _pool({"cfg": None}), **_WHERE) == ({}, {"model": "m"})
+    assert values.resolve_layers(carried, _pool({"cfg": {"model": "x"}}), **_WHERE) == (
         {"model": "x"},
         {"model": "m"},
     )
@@ -375,7 +394,7 @@ def test_a_whole_record_that_is_not_a_mapping_fails():
     carried = values.split_layers(Binding("${input.cfg}"), {}, True, values.contract_nullable)
 
     with pytest.raises(BindingError) as caught:
-        values.resolve_layers(carried, _pool({"cfg": "gpt-4"}))
+        values.resolve_layers(carried, _pool({"cfg": "gpt-4"}), **_WHERE)
 
     assert caught.value.failure_code == "contract.input"
     assert "gpt-4" not in str(caught.value)
@@ -407,7 +426,7 @@ def test_a_call_time_whole_record_may_not_set_a_host_only_field():
     values = _values()
     carried = values.split_layers(Binding("${pick.output}"), {}, True, values.contract_nullable)
     record = {"provider": "azure", "model": "dep", "base_url": "https://elsewhere.example"}
-    node_layer, _ = values.resolve_layers(carried, _pool(pick=record))
+    node_layer, _ = values.resolve_layers(carried, _pool(pick=record), **_WHERE)
 
     message = _refused(carried.source.value["node"], node_layer)
 
@@ -419,7 +438,7 @@ def test_a_call_time_flow_whole_record_may_not_set_a_host_only_field():
     carried = values.split_layers(
         {"model": "m"}, Binding("${pick.output}"), True, values.contract_nullable
     )
-    _, flow_layer = values.resolve_layers(carried, _pool(pick={"api_key": "sk-x"}))
+    _, flow_layer = values.resolve_layers(carried, _pool(pick={"api_key": "sk-x"}), **_WHERE)
 
     message = values.refused_resolved_field(
         carried.source.value["flow"], flow_layer, "flow llm_config"

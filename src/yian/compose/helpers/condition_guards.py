@@ -10,9 +10,18 @@ and `NEVER` never holds.
 and in `A or B` once `A` is false; `not` flips what a check proves. `proves` says what holds
 when a condition evaluates to a value, `guarded_refs` says what holds whenever each reference
 is read, and `literals_in_context` says what holds whenever each check is evaluated. This
-module is syntax only: what a guard means for a value's type is `narrowing_facts`'s job. A
-new check form adds a dataclass here, its recognition in `check_in`, and its facts in
-`narrowing_facts`.
+module is syntax only: what a guard means for a value's type is `narrowing_facts`'s job.
+
+A new check form adds a frozen dataclass with a `base` path, adds it to `Check`, and
+handles it in every function that dispatches on the check's kind; each of those raises
+`unknown_check` for a kind it doesn't know, so a form left out fails loudly:
+
+- here: its recognition in `check_in` and its source in `check_text`;
+- `narrowing_facts.check_fact`: the facts it proves, true and false;
+- `narrowing_facts.unresolved_type`: whether it names a type that does not resolve;
+- `narrowing_facts._declared_impossible`: when its base's type alone decides it, and
+  `narrowing_facts._never_value`: the value such a reported check never has;
+- `validate.asserts._narrows`: whether it can narrow an assert's root.
 
 `proves(<and chain>, False)` repeats each prefix of the chain, so a guard grows
 quadratically with the length of one chain. An operand that makes no check proves `NOTHING`:
@@ -58,6 +67,7 @@ __all__ = [
     "literals_in_context",
     "masked",
     "proves",
+    "unknown_check",
 ]
 
 
@@ -100,6 +110,20 @@ class TagCheck:
 
 Check: TypeAlias = IsinstanceCheck | TagCheck
 """One check a condition can make on a value."""
+
+
+def unknown_check(check: object) -> TypeError:
+    """Return the error a dispatch on a check's kind raises for a kind it doesn't handle.
+
+    Args:
+        check (`object`):
+            The check.
+
+    Returns:
+        `TypeError`:
+            The error, naming the check's class.
+    """
+    return TypeError(f"unhandled check kind {type(check).__name__}")
 
 
 @dataclass(frozen=True)
@@ -557,8 +581,10 @@ def check_text(check: Check, value: bool = True) -> str:
     """
     if isinstance(check, IsinstanceCheck):
         return f"{ISINSTANCE}({check.base}, {check.type_name})"
-    op = "==" if value else "!="
-    return f"{check.base}.{check.field} {op} {_quoted(check.value)}"
+    if isinstance(check, TagCheck):
+        op = "==" if value else "!="
+        return f"{check.base}.{check.field} {op} {_quoted(check.value)}"
+    raise unknown_check(check)
 
 
 def literal_text(literal: CheckLiteral) -> str:

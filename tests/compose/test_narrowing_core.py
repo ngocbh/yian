@@ -1,6 +1,6 @@
 """Union narrowing from CASE branches: the fact domain, propagation, and node views."""
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 import pytest
 
@@ -1478,3 +1478,37 @@ def test_narrowed_read_error_names_the_narrowed_type_only_for_a_field_it_lacks()
         "v.leg.prise", (BUY, ("leg", "prise"), "v"), "plain", _REGISTRY
     ) == "plain"
     assert narrowed_read_error("v.x", (BOOL, ("x",), "v"), "plain", _REGISTRY) == "plain"
+
+
+@dataclass(frozen=True)
+class _OtherCheck:
+    """A check kind no dispatch knows, as a new form would be before it is wired in."""
+
+    base: str
+
+
+def _dispatches_over_check_kinds():
+    """Each function that dispatches on a check's kind, applied to `_OtherCheck`."""
+    from yian.compose.helpers.condition_guards import CheckLiteral, check_text
+    from yian.compose.validate.asserts import _narrows
+
+    other = _OtherCheck("v")
+    literal = CheckLiteral(NOTHING, other, True, False)
+    impossible = narrowing_facts.ImpossibleCheck("x", "v", ImpossibleReason.CONTEXT)
+    decision = ValueContract(_t("Decision"))
+    return {
+        "check_text": lambda: check_text(other),
+        "check_fact": lambda: check_fact(other, _t("Decision"), True, _REGISTRY),
+        "unresolved_type": lambda: unresolved_type(Holds(other, True), _REGISTRY),
+        "declared_impossible": lambda: narrowing_facts._declared_impossible(
+            literal, _t("Decision"), True, _REGISTRY
+        ),
+        "never_value": lambda: narrowing_facts._never_value(literal, impossible),
+        "narrows": lambda: _narrows(other, "v", (decision,)),
+    }
+
+
+@pytest.mark.parametrize("site", sorted(_dispatches_over_check_kinds()))
+def test_an_unknown_check_kind_fails_loudly(site):
+    with pytest.raises(TypeError, match="_OtherCheck"):
+        _dispatches_over_check_kinds()[site]()

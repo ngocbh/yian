@@ -206,7 +206,10 @@ true: ruled out by the checks before it or the routing (`` `v.action == "sell"` 
 be true here: v is Buy, by the checks before it ``), an `isinstance` no value of the
 declared type fits, or a tag comparison (`==` or `!=`) with text that is no tag
 (`` `v.action != "biy"` compares v.action with 'biy', which is not one of its tags (buy,
-sell); did you mean 'buy'? ``).
+sell); did you mean 'buy'? ``). A `while:` first runs on the seeds, so a check is impossible
+there only when it is on the seed's type too (a seed of another or unproven type leaves it
+unknown), and a flow assert reads a producer the flow may skip as null, so
+`not isinstance(d.output, Order)` can hold there.
 
 **Operators inside `${...}`** — one expression grammar, everywhere:
 

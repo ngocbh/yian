@@ -43,6 +43,7 @@ from yian.compose.helpers.condition_guards import (
     literal_text,
     literals_in_context,
     masked,
+    unknown_check,
 )
 from yian.compose.helpers.isinstance_types import (
     isinstance_members,
@@ -92,6 +93,7 @@ __all__ = [
     "union_envs",
     "union_facts",
     "unresolved_type",
+    "wider_type",
 ]
 
 
@@ -344,9 +346,11 @@ def check_fact(
         if holds:
             return isinstance_fact(base_type, typ)
         return not_isinstance_fact(base_type, typ)
-    if base_type is None:
-        return None
-    return tag_fact(base_type, check.field, check.value, holds)
+    if isinstance(check, TagCheck):
+        if base_type is None:
+            return None
+        return tag_fact(base_type, check.field, check.value, holds)
+    raise unknown_check(check)
 
 
 def union_envs(envs: Sequence[Env]) -> Env:
@@ -418,6 +422,31 @@ def members_type(members: Sequence[Type], nullable: bool) -> Optional[Type]:
         variants=canonical_union_order(members),
         nullable=nullable,
     )
+
+
+def wider_type(a: Type, b: Type) -> Optional[Type]:
+    """Return whichever of two types admits every value of the other, or `None`.
+
+    Args:
+        a (`Type`):
+            One type; preferred when each admits the other's values.
+        b (`Type`):
+            The other type.
+
+    Returns:
+        `Type | None`:
+            `a` when every `b` value fits it, else `b` when every `a` value fits it, else
+            `None`: no type both name holds every value of either.
+
+    Example:
+        `wider_type(Done, Optional(Done))` is `Optional(Done)`; `wider_type(Done, None's
+        type)` is `None`.
+    """
+    if types_compatible(b, a):
+        return a
+    if types_compatible(a, b):
+        return b
+    return None
 
 
 def fact_type(fact: Fact) -> Optional[Type]:
@@ -574,8 +603,10 @@ def unresolved_type(guard: Guard, registry: TypeRegistry) -> bool:
             name.
     """
     for check in guard_checks(guard):
-        if not isinstance(check, IsinstanceCheck):
+        if isinstance(check, TagCheck):
             continue
+        if not isinstance(check, IsinstanceCheck):
+            raise unknown_check(check)
         try:
             resolve_isinstance_type(check.type_name, registry)
         except TypeCheckError:
@@ -720,7 +751,13 @@ def _never_value(literal: CheckLiteral, impossible: "ImpossibleCheck") -> bool:
     A text that is no tag never equals the tag field, whichever way the literal compares
     it; any other reported literal can never be true.
     """
-    check_never = True if impossible.reason is ImpossibleReason.NOT_A_TAG else literal.value
+    check = literal.check
+    if isinstance(check, TagCheck):
+        check_never = True if impossible.reason is ImpossibleReason.NOT_A_TAG else literal.value
+    elif isinstance(check, IsinstanceCheck):
+        check_never = literal.value
+    else:
+        raise unknown_check(check)
     # `!=` spells the check negatively: the sub-tree is true when the check is false.
     positive = literal.value != literal.negated
     return check_never == positive
@@ -938,6 +975,8 @@ def _declared_impossible(
             field=check.field,
             tags=tags,
         )
+    if not isinstance(check, IsinstanceCheck):
+        raise unknown_check(check)
     if _is_open(base_type):
         return None
     try:

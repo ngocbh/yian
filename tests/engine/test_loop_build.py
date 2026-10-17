@@ -1477,6 +1477,94 @@ def test_predicate_read_after_a_value_that_is_no_tag_is_not_checked():
     assert "${r.zz}" not in str(e.value)
 
 
+# A named body returning `r: Done`, whose seed the type contract does not force to fit:
+# `while:` first runs on the seed, so it is checked against the seed's type too.
+SEEDED_BODY = """
+id: loop-seed
+name: loop_seed
+typedefs:
+  Done: {answer: str}
+  More: {hint: str}
+defs:
+  body:
+    input:
+      n: !int
+    nodes:
+      step:
+        kind: code
+        input:
+          n: ${input.n}
+        output:
+          n: int
+          r: Done
+        code: |
+          return {"n": inputs["n"] + 1, "r": {"answer": "ok"}}
+    output: ${step.output}
+nodes:
+  prev:
+    kind: code
+    code: return dict(hint="x")
+  ask:
+    kind: loop
+    call: body
+    PRED
+    max: 5
+    input:
+      n: 0
+      r: SEED
+output: ${ask.output}
+"""
+
+
+@pytest.mark.parametrize(
+    ("seed", "pred"),
+    [
+        ("null", "while: not isinstance(r, Done)"),
+        ('{"hint": "start"}', "while: not isinstance(r, Done)"),
+        ("${prev.output}", "while: not isinstance(r, Done)"),
+        ('{"hint": "start"}', "while: isinstance(r, More)"),
+        ("${prev.output}", "while: isinstance(r, More)"),
+        ('{"hint": "start"}', "while: isinstance(r, More) and r.hint == 'start'"),
+    ],
+)
+def test_predicate_while_is_checked_against_the_seed_too(seed, pred):
+    flow = load_flow(_swap(_swap(SEEDED_BODY, "PRED", pred), "SEED", seed))
+    result = run_flow(flow, {})
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"n": 1, "r": {"answer": "ok"}}
+
+
+@pytest.mark.parametrize(
+    ("seed", "pred", "expected"),
+    [
+        (
+            '!Done {"answer": "x"}',
+            "while: isinstance(r, More)",
+            "`isinstance(r, More)` can never be true: r is declared Done, and no Done value "
+            "fits More",
+        ),
+        (
+            '!Done {"answer": "x"}',
+            "while: not isinstance(r, Done)",
+            "`not isinstance(r, Done)` can never be true: r is declared Done, so "
+            "`isinstance(r, Done)` is always true",
+        ),
+        (
+            '{"hint": "start"}',
+            "until: isinstance(r, More)",
+            "`isinstance(r, More)` can never be true: r is declared Done, and no Done value "
+            "fits More",
+        ),
+    ],
+    ids=["typed-seed", "typed-seed-always", "until-sees-no-seed"],
+)
+def test_predicate_impossible_on_the_seed_and_the_body_is_rejected(seed, pred, expected):
+    kw = pred.split(":", 1)[0]
+    with pytest.raises(LoadError) as e:
+        load_flow(_swap(_swap(SEEDED_BODY, "PRED", pred), "SEED", seed))
+    assert f"loop node 'ask': `{kw}:` {expected}" in str(e.value)
+
+
 def test_predicate_isinstance_check_on_an_object_field_checks_reads_on_the_type():
     src = _swap(UNION_STATE, 'r: !Step {"hint":"start"}', 'r: !object {"hint":"start"}').replace(
         "          r: Step\n", "          r: object\n"

@@ -871,6 +871,62 @@ def test_node_assert_output_read_after_a_reported_check_is_not_checked():
     assert "${output.action}" not in message
 
 
+def test_node_assert_over_many_locals_with_two_alternatives_loads():
+    """Each local is checked against its own alternatives, not every combination."""
+    names = [f"v{i}" for i in range(12)]
+    assertion = " and ".join(f"(isinstance({x}, Buy) or {x}.action == 'sell')" for x in names)
+    text = _locals_assert(assertion, {"d": "Buy"}, {x: "!Order ${d.output}" for x in names})
+    load_flow(text)
+
+
+def _skippable_assert(assertion: str) -> str:
+    """A flow whose `case` runs `d` (typed `Order`) only for `s: go`, asserting `assertion`."""
+    nodes = (
+        "  route:\n    kind: case\n    cases:\n"
+        "      - when: \"input.s == 'go'\"\n        then: d\n"
+        "    else: e\n"
+        + _producer("d", "Order")
+        + "  e:\n    kind: code\n    input:\n      s: ${input.s}\n    code: return 1\n"
+    )
+    return _flow(nodes, "${step.output}", tail=_asserts(assertion))
+
+
+@pytest.mark.parametrize(
+    "assertion",
+    [
+        "not isinstance(d.output, Order) or d.output.action == 'sell'",
+        "not isinstance(d.output, Buy) and not isinstance(d.output, Sell)",
+    ],
+    ids=["always-on-the-declared-type", "every-member-ruled-out"],
+)
+def test_flow_assert_on_a_skippable_producer_reads_null(assertion):
+    """END binds a producer it reads with `:- null`, so a skipped one reads null."""
+    flow = load_flow(_skippable_assert(assertion))
+    result = run_flow(flow, {"s": "stop", "r": {"a": "x"}})
+    assert result.status == "succeeded", result.failure
+
+
+@pytest.mark.parametrize(
+    ("assertion", "expected"),
+    [
+        (
+            "isinstance(d.output, Rec)",
+            "`isinstance(d.output, Rec)` can never be true: d.output is declared Order, and "
+            "no Order value fits Rec",
+        ),
+        (
+            "isinstance(d.output, Buy) and isinstance(d.output, Sell)",
+            "`isinstance(d.output, Sell)` can never be true here: d.output is Buy, by the "
+            "checks before it",
+        ),
+    ],
+    ids=["no-overlap", "context"],
+)
+def test_flow_assert_check_impossible_even_on_null_is_reported(assertion, expected):
+    message = _load_error(_skippable_assert(assertion))
+    assert expected in message
+
+
 def test_flow_assert_shorthand_check_is_reported_as_written():
     message = _load_error(_flow_assert("isinstance(o, Rec)"))
     assert (

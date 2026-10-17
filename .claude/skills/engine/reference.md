@@ -1164,12 +1164,22 @@ report's reason (`condition_guards.falsified` makes that check prove `NEVER` for
 checks a read reached only past an unreported check the known type or the checks before
 it always decide as without that check (`_decided_literals`, masked like reported ones). A
 searched `when:` read error credits a narrowed base only the routing narrows to "the case
-branch that routes this node" (`Narrowing.param_routed_bases`, `by_routing=True`). Unguarded member-only reads in asserts and LOOP predicates hint
+branch that routes this node" (`Narrowing.param_routed_bases`, `by_routing=True`), for a
+param whose every checked read follows a check that proves a fact (`_guarded_param_views`);
+an unguarded read gets the plain field error. A LOOP `while:` is first evaluated on the
+seeds, so its checks and narrowed reads take each carried path's type from
+`_seeded_base_type`: the wider of the carried and the seed's type (`wider_type`), else
+unproven; `until:` uses the carried type. Unguarded member-only reads in asserts and LOOP predicates hint
 `isinstance(v, <Type>) and ...` (`isinstance_hint=True`), and in a CALL or LOOP node's
 asserts, where `isinstance` is rejected, a tagged union's hint compares the tag
-(`tag_hint=True`); searched `when:` reads keep the case hint. An assert combines only the
-distinct contracts of the roots some check can narrow, skips a read only when it is dead
-under every combination, and spells a flow-assert check as written.
+(`tag_hint=True`); searched `when:` reads keep the case hint. An assert tries only the
+distinct contracts of the roots some check can narrow, each root's contracts with the other
+multi-contract roots unnarrowed (facts never cross roots, so this is linear in the
+alternatives): a check is impossible only under every contract of its base's root, a read
+is skipped only when every contract of one root kills it, and a read is an error only when
+every contract of its root where it runs rejects it. A flow assert takes each producer root
+as nullable for checks, since END binds it as `${<id>.output :- null}` and a skipped
+producer reads null, and spells a check as written.
 
 Compose output derivation, builders, child signatures, and producer maps retain the
 complete output-contract sum. `ChildSignature.declared_outputs` retains ordered

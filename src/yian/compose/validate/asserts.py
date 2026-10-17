@@ -52,7 +52,6 @@ validate phase it reads `LocalInput` from `typed_bindings`. Nothing in helpers/n
 
 from __future__ import annotations
 
-import itertools
 from dataclasses import dataclass, field, replace
 from typing import Callable, Collection, Mapping, NamedTuple, Optional
 
@@ -60,7 +59,7 @@ from lark import Token, Tree
 
 from yian.compile.validation import _classify_path
 from yian.diagnostics import OriginRef, SourceRange
-from yian.expr import ExpressionError, condition_refs, parse_condition
+from yian.expr import ExpressionError, condition_refs, expr_refs, parse_condition
 from yian.expr.expressions import rewrite_condition_refs
 from yian.expr.template import flow_call_callees_in_spans
 from yian.compose.desugar.inline_calls import desugar_call_directives
@@ -69,10 +68,12 @@ from yian.compose.helpers.condition_guards import (
     CheckLiteral,
     Guard,
     IsinstanceCheck,
+    TagCheck,
     check_text,
     guarded_refs,
     literal_text,
     literals_in_context,
+    unknown_check,
 )
 from yian.compose.helpers.isinstance_types import (
     collect_constructor_names,
@@ -82,6 +83,7 @@ from yian.compose.helpers.narrowing_facts import (
     NOT_NARROWABLE,
     BaseTypeOf,
     ImpossibleCheck,
+    ImpossibleReason,
     NotNarrowable,
     checked_refs,
     guarded_read_types,
@@ -90,6 +92,7 @@ from yian.compose.helpers.narrowing_facts import (
     narrowed_read_error,
     unresolved_type,
 )
+from yian.compose.helpers.tags import named_type_label
 from yian.compose.helpers.output_contracts import (
     output_contract_path_error,
     project_output_contract,
@@ -125,9 +128,12 @@ def _root_of(path: str, roots: Collection[str]) -> str | None:
     return None
 
 
-def _root_base_type(choice: Mapping[str, OutputContract]) -> BaseTypeOf:
+def _root_base_type(
+    choice: Mapping[str, OutputContract], nullable_roots: Collection[str] = frozenset()
+) -> BaseTypeOf:
     """The declared type of a base path below one of `choice`'s roots, under that
-    root's chosen contract; other bases are not narrowed."""
+    root's chosen contract, made nullable below a root in `nullable_roots`; other bases
+    are not narrowed."""
 
     def base_type_of(base: str) -> Type | None | NotNarrowable:
         root = _root_of(base, choice)
@@ -135,7 +141,11 @@ def _root_base_type(choice: Mapping[str, OutputContract]) -> BaseTypeOf:
             return NOT_NARROWABLE
         rest = base[len(root) + 1 :].split(".") if base != root else []
         projected = project_output_contract(choice[root], rest)
-        return projected.type if type(projected) is ValueContract else None
+        if type(projected) is not ValueContract:
+            return None
+        if root in nullable_roots:
+            return replace(projected.type, nullable=True)
+        return projected.type
 
     return base_type_of
 
@@ -159,6 +169,8 @@ def _narrows(check: Check, root: str, contracts: tuple[OutputContract, ...]) -> 
         return False
     if isinstance(check, IsinstanceCheck):
         return True
+    if not isinstance(check, TagCheck):
+        raise unknown_check(check)
     rest = check.base[len(root) + 1 :].split(".") if check.base != root else []
     for contract in contracts:
         projected = project_output_contract(contract, rest)
@@ -245,6 +257,7 @@ def _condition_errors(
     *,
     partial_union_roots: Collection[str] = frozenset(),
     unwalked_roots: Collection[str] = frozenset(),
+    nullable_roots: Collection[str] = frozenset(),
     site: _ReadSite = _ReadSite(),
     authored: Tree | Token | None = None,
 ) -> list[str]:
@@ -252,9 +265,10 @@ def _condition_errors(
 
     `roots` maps each path whose field reads are checked (a node-local name, `output`,
     `input.X`, `<id>.output`) to the contracts its value may have; reads below a root in
-    `unwalked_roots` are left to the site. `and`, `or` and `not` short-circuit, so the
-    checks before a read (`isinstance` and union tag comparisons) narrow the values it can
-    see (`guarded_read_types`): a read is fine when any narrowed type allows it, and
+    `unwalked_roots` are left to the site, and a root in `nullable_roots` may also be
+    null whatever its contract says. `and`, `or` and `not` short-circuit, so the checks
+    before a read (`isinstance` and union tag comparisons) narrow the values it can see
+    (`guarded_read_types`): a read is fine when any narrowed type allows it, and
     otherwise the first one's error is reported, naming the narrowed type when it lacks
     the field. A read nothing narrows is walked on the root's contract. A read that runs
     only when a reported impossible check is true (`checked_refs`), or guarded by an
@@ -264,11 +278,13 @@ def _condition_errors(
 
     A root with several distinct contracts (a node-local name's alternatives, which carry
     the branch that routes the node) is checked under each: a check is impossible only
-    when it is impossible under every choice, a read is skipped only when it is dead under
-    every choice, and a read is an error only when every choice where it runs rejects it.
-    Only roots some check can narrow are combined; reads below the others are walked on
-    each contract. Each distinct (read, guard) pair is checked, since one path can be read
-    both narrowed and not.
+    when it is impossible under every contract of its base's root, a read is skipped only
+    when it is dead under every contract of some root, and a read is an error only when
+    every contract of its root where it runs rejects it. Facts never cross roots, so each
+    root's contracts are tried with every other such root left unnarrowed, which costs
+    the sum of the alternatives rather than their product. Only roots some check can
+    narrow are tried; reads below the others are walked on each contract. Each distinct
+    (read, guard) pair is checked, since one path can be read both narrowed and not.
     """
     refs = guarded_refs(tree)
     used = [root for root in roots if any(_root_of(ref, (root,)) for ref, _ in refs)]
@@ -281,25 +297,48 @@ def _condition_errors(
         for root in used
         if any(_narrows(literal.check, root, contracts[root]) for literal in literals)
     ]
+    fixed = {root: contracts[root][0] for root in narrowed if len(contracts[root]) == 1}
+    varied = [root for root in narrowed if len(contracts[root]) > 1]
+    choices = [{**fixed, root: contract} for root in varied for contract in contracts[root]]
+    if narrowed and not varied:
+        choices = [fixed]
     views: list[_ChoiceView] = []
-    if narrowed:
-        for picked in itertools.product(*(contracts[root] for root in narrowed)):
-            choice = dict(zip(narrowed, picked))
-            base_type_of = _root_base_type(choice)
-            views.append(
-                _ChoiceView(
-                    choice,
-                    base_type_of,
-                    impossible_checks(tree, base_type_of, registry),
-                    checked_refs(tree, base_type_of, registry),
-                )
+    for choice in choices:
+        base_type_of = _root_base_type(choice, nullable_roots)
+        views.append(
+            _ChoiceView(
+                choice,
+                base_type_of,
+                impossible_checks(tree, base_type_of, registry),
+                checked_refs(tree, base_type_of, registry),
             )
+        )
+
+    def views_of(root: str | None) -> list[_ChoiceView]:
+        """The views that try each of `root`'s contracts; all views for any other root."""
+        if root not in varied:
+            return views
+        return [view for view in views if root in view.choice]
+
     spell = _authored_spelling(tree, authored)
-    messages = [
-        impossible_check_message(spell(check))
-        for check in (views[0].impossible if views else [])
-        if all(any(seen.text == check.text for seen in view.impossible) for view in views[1:])
-    ]
+    order: dict[str, int] = {}
+    for index, literal in enumerate(literals):
+        order.setdefault(literal_text(literal), index)
+    reported: dict[str, ImpossibleCheck] = {}
+    for view in views:
+        for check in view.impossible:
+            reported.setdefault(check.text, check)
+    messages = []
+    for text in sorted(reported, key=lambda text: order.get(text, len(order))):
+        check = reported[text]
+        group = views_of(_root_of(check.base, narrowed))
+        if all(any(seen.text == text for seen in view.impossible) for view in group):
+            check = _declared_label(check, group[0].choice, nullable_roots, registry)
+            messages.append(impossible_check_message(spell(check)))
+    # A read is dead under every combination of contracts when every contract of one
+    # root kills it, since what kills it under one root's contract holds whatever the
+    # others are.
+    groups = [views_of(root) for root in varied] or [views]
     seen_reads: set[tuple[str, Guard]] = set()
     for index, (ref, guard) in enumerate(refs):
         root = _root_of(ref, used)
@@ -309,11 +348,16 @@ def _condition_errors(
         if unresolved_type(guard, registry):
             # The type-table pass reports the unknown name.
             continue
+        if views and any(
+            all(view.checked[index][1] is None for view in group) for group in groups
+        ):
+            # Reached by no value under any choice: a reported check explains it.
+            continue
         message = _read_error(
             ref,
             root,
             index,
-            views,
+            [view for view in views_of(root) if view.checked[index][1] is not None],
             contracts[root] if root not in narrowed else None,
             registry,
             site,
@@ -324,11 +368,32 @@ def _condition_errors(
     return list(dict.fromkeys(messages))
 
 
+def _declared_label(
+    check: ImpossibleCheck,
+    choice: Mapping[str, OutputContract],
+    nullable_roots: Collection[str],
+    registry: TypeRegistry,
+) -> ImpossibleCheck:
+    """`check` with its declared base type labelled as declared, for a base below a
+    root that is nullable only because its producer may be skipped."""
+    if not check.declared or check.reason not in (
+        ImpossibleReason.NO_OVERLAP,
+        ImpossibleReason.ALWAYS,
+    ):
+        return check
+    if _root_of(check.base, nullable_roots) is None:
+        return check
+    declared = _root_base_type(choice)(check.base)
+    if not isinstance(declared, Type):
+        return check
+    return replace(check, base_label=named_type_label(declared, registry))
+
+
 def _read_error(
     ref: str,
     root: str,
     index: int,
-    views: list[_ChoiceView],
+    live: list[_ChoiceView],
     unnarrowed: tuple[OutputContract, ...] | None,
     registry: TypeRegistry,
     site: _ReadSite,
@@ -337,15 +402,11 @@ def _read_error(
 ) -> str | None:
     """Return why the `index`-th read `ref` below `root` can't work, else `None`.
 
-    The read is skipped when it is dead under every view. Otherwise it is an error when
-    every view where it runs rejects it: on each of the `unnarrowed` contracts when no
-    check narrows `root`, else on the view's narrowed types or chosen contract. A narrowed
+    The read is an error when every view in `live` (those trying `root`'s contracts
+    where it runs) rejects it: on each of the `unnarrowed` contracts when no check
+    narrows `root`, else on the view's narrowed types or chosen contract. A narrowed
     error is preferred over an unnarrowed one.
     """
-    live = [view for view in views if view.checked[index][1] is not None]
-    if views and not live:
-        # Reached by no value under any choice: a reported check explains it.
-        return None
     fields = ref[len(root) + 1 :].split(".")
     union_root = site.union_roots.get(root)
     if unnarrowed is not None:
@@ -393,6 +454,8 @@ def _read_error(
                 ref, candidate, error, registry
             )
         errors.append((True, narrowed_error))
+    if not errors:
+        return None
     return next((error for narrowed, error in errors if narrowed), errors[0][1])
 
 
@@ -459,7 +522,9 @@ def lower_flow_asserts(
     input.o.qty > 0`, `not isinstance(input.o, Buy) or input.o.qty > 0`) decides which
     members it sees. A shorthand check base (`isinstance(o, Buy)`) is qualified like a
     read, and reported as written. A check that can never be true is a load error, and the
-    `isinstance` types resolve in ``registry`` (the flow's typedefs).
+    `isinstance` types resolve in ``registry`` (the flow's typedefs). A producer read may
+    be null, since END binds it as `${<id>.output :- null}` and a skipped producer reads
+    null, so checks take each producer's type as nullable.
 
     Raises `LoadError` on the first malformed assert, bad ref, impossible check, bad
     field read, or `${system}` ref.
@@ -528,13 +593,14 @@ def lower_flow_asserts(
         **{f"input.{name}": (contract,) for name, contract in input_contracts.items()},
         **{f"{node_id}.output": (contract,) for node_id, contract in producers.items()},
     }
+    producer_roots = frozenset(f"{node_id}.output" for node_id in producers)
 
     for i, assertion in enumerate(assert_list):
         expr = assertion.expression
         rng = ranges[i] if i < len(ranges) else None
         # 1. parse-check + collect refs on the ONE unified condition walk (any brace spelling).
         try:
-            refs = [_qualify_flow_input(path) for path in condition_refs(expr)]
+            authored = parse_condition(expr)
         except ExpressionError as exc:
             # A long int's text would repeat every digit; the range still points at it.
             long_int = isinstance(exc.__cause__, IntTooLongError)
@@ -543,6 +609,7 @@ def lower_flow_asserts(
                 f"assert{shown} is not a valid boolean expression: {exc}",
                 range=rng,
             ) from exc
+        refs = [_qualify_flow_input(path) for path in expr_refs(authored)]
 
         # 2. validate each ref + forbid `${system}` + detect any outputs-head ref (-> post).
         is_post = False
@@ -565,8 +632,14 @@ def lower_flow_asserts(
 
         # 3. impossible checks and field reads, narrowed by the assert's own checks.
         qualified = parse_condition(rewrite_condition_refs(expr, _qualified_or_none))
+        # END binds each producer it reads as `${<id>.output :- null}`, so a producer
+        # the flow's routing skips reads null.
         errors = _condition_errors(
-            qualified, roots, registry, authored=parse_condition(expr)
+            qualified,
+            roots,
+            registry,
+            nullable_roots=producer_roots,
+            authored=authored,
         )
         if errors:
             raise diagnostics.error(
@@ -768,7 +841,6 @@ def validate_node_asserts(
                     continue
             # parse-check + collect refs on the ONE unified condition walk (any spelling).
             try:
-                refs = condition_refs(a)
                 tree = parse_condition(a)
             except ExpressionError as exc:
                 # A long int's text would repeat every digit; the range still points at it.
@@ -780,6 +852,7 @@ def validate_node_asserts(
                     )
                 )
                 continue
+            refs = expr_refs(tree)
             reads_output = False
             # The values whose checks and field reads are checked, with the contracts each
             # may have, and where each local is bound from.

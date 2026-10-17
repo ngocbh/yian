@@ -37,6 +37,7 @@ from yian.compose.helpers.narrowing_facts import (
     impossible_checks,
     narrowed_read_error,
     unresolved_type,
+    wider_type,
 )
 from yian.compose.helpers.output_contracts import (
     combine_output_contracts,
@@ -340,7 +341,16 @@ class LoopDescriptor(NodeDescriptor):
             if tree is not None and not errors and node.output_contract is not None:
                 # With the field names valid, `output_contract` is the carried record's
                 # contract (the body's for a total loop, merged with typed seeds otherwise).
-                for message in _predicate_errors(node.output_contract, tree, ctx.registry):
+                base_type_of = _carried_base_type(node.output_contract)
+                if pred_kw == "while":
+                    # `while:` is first evaluated on the seeds, which the type contract
+                    # does not always force to fit the body (a literal, an untyped
+                    # producer), so its checks must hold on a seed's type too.
+                    seeds = {head: self._seed_contract(ctx, head) for head in sorted(heads)}
+                    base_type_of = _seeded_base_type(base_type_of, seeds)
+                for message in _predicate_errors(
+                    node.output_contract, tree, base_type_of, ctx.registry
+                ):
                     errors.append(f"loop node {self.id!r}: `{pred_kw}:` {message}")
             # A body that returns none of the fields the predicate reads can never change it,
             # so without `max:` the loop never ends. `returned_fields` is set only when the
@@ -426,17 +436,41 @@ def _carried_base_type(contract: OutputContract) -> BaseTypeOf:
     return base_type_of
 
 
+def _seeded_base_type(
+    carried: BaseTypeOf, seeds: dict[str, OutputContract | None]
+) -> BaseTypeOf:
+    """The type a carried-record path has on every evaluation of a `while:`, seed included.
+
+    That is the carried type when the seed's type fits it, the seed's when the carried
+    type fits the seed's, and otherwise, or when either is unproven, `None`.
+    """
+
+    def base_type_of(base: str) -> Type | None:
+        carried_type = carried(base)
+        head, *rest = base.split(".")
+        seed = seeds.get(head)
+        if not isinstance(carried_type, Type) or seed is None:
+            return None
+        projected = project_output_contract(seed, rest)
+        if type(projected) is not ValueContract:
+            return None
+        return wider_type(carried_type, projected.type)
+
+    return base_type_of
+
+
 def _predicate_errors(
     contract: OutputContract,
     tree: Tree | Token,
+    base_type_of: BaseTypeOf,
     registry: TypeRegistry,
 ) -> list[str]:
     """Return the predicate's impossible checks and field-read errors, each message once.
 
-    A read is checked under each distinct guard it is read with, since the same path can
-    be read both narrowed and not.
+    Checks and narrowed reads take each path's type from `base_type_of`; a read nothing
+    narrows is walked on `contract`, the carried record. A read is checked under each
+    distinct guard it is read with, since the same path can be read both narrowed and not.
     """
-    base_type_of = _carried_base_type(contract)
     messages = [
         impossible_check_message(check)
         for check in impossible_checks(tree, base_type_of, registry)

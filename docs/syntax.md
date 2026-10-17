@@ -457,8 +457,12 @@ reference ${r.answr} reads field 'answr', which Done doesn't have; r is Done her
 checks before this read; did you mean 'answer'?
 ```
 
-In a `when:` whose read is narrowed by the `case` branch that routes the `case` and not by
-the checks before it, the error says `by the case branch that routes this node`.
+In a `when:`, the error says `by the case branch that routes this node` instead when every
+read of that value in the `case`'s `when:`s follows a check that proves something, on any
+value, and only the routing narrows the value read: `d.output.nosuch` in
+`isinstance(input.o, Text) and d.output.nosuch > 0`, in a `case` the `buy` branch routes. A
+read with no check before it, such as `d.output.limt > 0` alone, gets the plain
+unknown-field error.
 
 So is a check that can never be true: one the checks before it rule out (in a `when:`, also
 the `case` branch that routes the `case`), an `isinstance` whose type no value of the
@@ -479,7 +483,13 @@ is no tag is always true). A node
 assert's local name that may have several types (a typed binding's declared and inferred
 ones) reports a check only when it is impossible under each, and skips a read only when
 no value reaches it under each. A flow assert names a flow input as written: `isinstance(o,
-Text)` is reported as `isinstance(o, Text)`.
+Text)` is reported as `isinstance(o, Text)`. It reads a producer the flow may skip as null,
+so `not isinstance(d.output, Order)` can be true there even with `d` typed `Order`. A LOOP
+`while:` first runs on the seed, so a check is reported only when it can't be true on the
+seed either: with a body returning `r: Done` and the seed `r: null`, `while: not
+isinstance(r, Done)` loads, and a seed whose type neither fits the body's nor holds it (a
+literal record of another shape, an untyped producer) leaves `r`'s type unknown there. `until:` runs after the
+body, so it is checked against the body's type alone.
 
 Changed: an `isinstance` or tag check inside a condition now narrows reads after it through
 `and`, `or` and `not`. Asserts guarded this way load again (they briefly failed to load),

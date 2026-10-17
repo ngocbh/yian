@@ -577,6 +577,8 @@ def _evaluate_node_stream(
     if capture_inputs is not None and not uses_base_template:
         capture_inputs(record)
 
+    hidden = node.model_hidden_inputs()
+    visible = {name: value for name, value in record.items() if name not in hidden}
     canonical_inputs = {}
     invalid_inputs = False
     if memory_scope is not None and memory_scope.memories:
@@ -585,7 +587,7 @@ def _evaluate_node_stream(
                 f"scoped node {node.id!r} requires an injected memory context callback"
             )
         try:
-            canonical_inputs = canonical_seed(record)[0]
+            canonical_inputs = canonical_seed(visible)[0]
             if type(canonical_inputs) is not dict:
                 raise TypeError("bound node inputs did not canonicalize to an exact dict")
         except (TypeError, ValueError, RecursionError):
@@ -593,7 +595,7 @@ def _evaluate_node_stream(
 
     if evaluation_trace is not None:
         try:
-            bound_inputs = canonical_seed(record)[0]
+            bound_inputs = canonical_seed(visible)[0]
             if type(bound_inputs) is not dict:
                 raise TypeError(
                     "bound node inputs did not canonicalize to an exact dict"

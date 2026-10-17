@@ -189,6 +189,15 @@ class AgentNode(Node):
         """Declare ``__llm_config`` when values in the layers can reach this agent's config."""
         return {LLM_CONFIG_KEY} if self.wires_llm_config else set()
 
+    def model_hidden_inputs(self) -> frozenset[str]:
+        """Hide ``__llm_config`` from recall and evidence: it configures the call.
+
+        Returns:
+            `frozenset[str]`: ``{"__llm_config"}`` when this agent has the key, else
+                empty.
+        """
+        return frozenset({LLM_CONFIG_KEY}) if self.wires_llm_config else frozenset()
+
     def bind_reserved(
         self, node_wiring: dict, pool: VariablePool, *, bind: ReservedBinder | None = None,
     ) -> dict[str, Any]:

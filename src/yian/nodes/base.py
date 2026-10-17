@@ -1308,6 +1308,16 @@ class Node(ABC):
         """
         return {}
 
+    def model_hidden_inputs(self) -> frozenset[str]:
+        """Return the bound inputs a model never sees: not recalled on, nor evidence.
+
+        They stay in the bound record, so backward and resume read what ran.
+
+        Returns:
+            `frozenset[str]`: Input names; empty by default.
+        """
+        return frozenset()
+
     def bound_llm_config(self, inputs: Mapping[str, Any]) -> dict[str, Any] | None:
         """Return the model config this invocation bound as an input, if any.
 

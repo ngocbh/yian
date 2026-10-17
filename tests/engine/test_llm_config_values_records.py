@@ -282,3 +282,75 @@ def test_a_learnable_host_key_call_time_run_records_no_secret(tmp_path, monkeypa
     assert "gpt-picked" in capture
     for text in (json.dumps(record), capture, evidence, log.read_text()):
         assert "sk-host-secret" not in text and "tenant-secret" not in text
+
+
+def test_llm_config_is_not_model_visible(tmp_path, fake_model, monkeypatch):
+    import yian.runtime.eval_node as evaluator
+    from yian.memory.session import SessionMemory
+
+    recall_inputs = []
+    real_recall = evaluator.RecallContext
+
+    def recall_spy(base_system_prompt, rendered_prompt, inputs, static_path):
+        recall_inputs.append(inputs)
+        return real_recall(base_system_prompt, rendered_prompt, inputs, static_path)
+
+    monkeypatch.setattr(evaluator, "RecallContext", recall_spy)
+    text = _PICKED.replace("    prompt: Go.\n", "    prompt: Go.\n    long_term_memory: session\n")
+    log = tmp_path / "run.jsonl"
+    result = run_flow(
+        load_flow(text), {}, log=log, learnable=True, memory={"session": SessionMemory()},
+    )
+    assert result.status == "succeeded"
+    assert recall_inputs == [{}]
+    [succeeded] = [
+        entry["payload"] for entry in _records(log)
+        if entry["kind"] == "node_succeeded" and entry["payload"]["node_id"] == "chat"
+    ]
+    assert succeeded["evidence"]["bound_inputs"] == {}
+    # The bound record keeps it, so backward and resume read what ran.
+    assert succeeded["forward_capture"]["bound_inputs"]["__llm_config"]["model"] == "gpt-picked"
+    fake_model.calls.clear()
+    fake_model.replies.append(_NO_FEEDBACK)
+    assert result.backward("Shorter.").status == "succeeded"
+    [messages] = fake_model.calls
+    assert "__llm_config" not in str(messages[-1].content)
+    assert "gpt-picked" not in str(messages[-1].content)
+
+
+def test_backward_never_routes_feedback_to_the_model_value_producer(fake_model, monkeypatch):
+    flow = load_flow(_PICKED)
+    producer = type(flow.compiled.nodes["pick"])
+    reached = []
+    original = producer.backward
+
+    def spy(self, context, feedback):
+        reached.append(self.id)
+        return original(self, context, feedback)
+
+    monkeypatch.setattr(producer, "backward", spy)
+    result = run_flow(flow, {}, learnable=True)
+    assert result.status == "succeeded"
+    fake_model.replies.append(json.dumps({
+        "input_feedback": {"__llm_config": ["Use a bigger model."]},
+        "self_feedback": [],
+        "variable_feedback": {},
+    }))
+    outcome = result.backward("Shorter.")
+    assert outcome.status == "failed"
+    assert reached == []
+
+
+def test_only_an_agent_with_the_key_hides_it_from_the_model():
+    from yian.nodes.base import Node
+    from yian.nodes.map.node import MapNode
+    from yian.nodes.wait.node import WaitNode
+
+    flow = load_flow(_PICKED)
+    assert flow.compiled.nodes["chat"].model_hidden_inputs() == frozenset({"__llm_config"})
+    static = load_flow(_PICKED.replace("{model: '${pick.output}'}", "{model: m1}"))
+    assert static.compiled.nodes["chat"].model_hidden_inputs() == frozenset()
+    # WAIT and MAP keep their reserved inputs; neither records evidence.
+    for kind in (WaitNode, MapNode):
+        assert kind.model_hidden_inputs is Node.model_hidden_inputs
+        assert kind.needs_evaluation_trace is False

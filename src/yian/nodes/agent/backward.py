@@ -17,6 +17,7 @@ from pydantic import SecretStr
 import yian.llm_clients as llm_clients
 from yian.llm_clients.connection import legacy_connection_config, scrub_call_credentials
 from yian.expr.lineage import FeedbackValue, has_feedback, validate_feedback
+from yian.nodes.agent.llm_values import LLM_CONFIG_KEY
 from yian.nodes.agent.text import text_of
 from yian.nodes.base import BackwardContext, BackwardResult
 from yian.typesys.values import parse_json_int, reject_deep_nesting, reject_long_ints
@@ -113,6 +114,13 @@ def _parse_result(text: str) -> BackwardResult:
     )
 
 
+def _model_visible(inputs: Any) -> Any:
+    """Return the recorded inputs without ``__llm_config``, which configured the call."""
+    if isinstance(inputs, dict) and LLM_CONFIG_KEY in inputs:
+        return {name: value for name, value in inputs.items() if name != LLM_CONFIG_KEY}
+    return inputs
+
+
 def backward_agent(
     context: BackwardContext, feedback: tuple[FeedbackValue, ...], *, api_key: SecretStr | None = None,
     headers: dict[str, SecretStr] | None = None,
@@ -151,7 +159,7 @@ def backward_agent(
     material = {
         "forward": {
             "run_id": context.run_id, "node_id": context.node_id, "node_started_seq": context.node_started_seq,
-            "inputs": context.inputs, "input_names": context.input_names,
+            "inputs": _model_visible(context.inputs), "input_names": context.input_names,
             "output": output,
             "failure": None if failure is None else {
                 "code": failure.code, "message": failure.message, "cause_type": failure.cause_type,

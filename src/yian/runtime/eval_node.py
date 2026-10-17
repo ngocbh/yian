@@ -511,7 +511,8 @@ def _evaluate_node_stream(
     a node declaring `needs_skills`.
 
     `steps` is this start's ``NodeSteps``, passed as ``caps['steps']`` only to a node
-    declaring `needs_steps`.
+    declaring `needs_steps`. Such a node whose reserved keys fail to bind after an
+    earlier start recorded steps raises ``ValueError`` (a host fault) instead of failing.
 
     Returns:
         `WorkerOutcome`:
@@ -521,6 +522,9 @@ def _evaluate_node_stream(
     Raises:
         `_HostStop`:
             Host-control flow is outside the node failure sum and propagates unchanged.
+        `ValueError`:
+            A node reading its steps fails to bind its reserved keys after an earlier
+            start recorded steps.
     """
     # Host cancellation is control flow outside the node-result sum.
     if stop_event is not None and stop_event.is_set():
@@ -558,7 +562,17 @@ def _evaluate_node_stream(
                 source_resolver=source_resolver, types=node.types,
                 labels=node.binding_labels, _finish_capture=False,
             )
-        reserved = node.bind_reserved(node_wiring, pool, bind=reserved_binder)
+        try:
+            reserved = node.bind_reserved(node_wiring, pool, bind=reserved_binder)
+        except BindingError as exc:
+            if steps is not None and node.needs_steps is True and steps.prior:
+                # A start records steps only after binding, and resume restores the
+                # pool, so the code that resolves these keys changed since then.
+                raise ValueError(
+                    f"{exc}; an earlier start of this node resolved it, so resume the run "
+                    "with the flow and yian version that started it"
+                ) from None
+            raise
         record.update(reserved)
         if binding_collector is not None:
             for name, value in reserved.items():
@@ -577,6 +591,8 @@ def _evaluate_node_stream(
     if capture_inputs is not None and not uses_base_template:
         capture_inputs(record)
 
+    hidden = node.model_hidden_inputs()
+    visible = {name: value for name, value in record.items() if name not in hidden}
     canonical_inputs = {}
     invalid_inputs = False
     if memory_scope is not None and memory_scope.memories:
@@ -585,7 +601,7 @@ def _evaluate_node_stream(
                 f"scoped node {node.id!r} requires an injected memory context callback"
             )
         try:
-            canonical_inputs = canonical_seed(record)[0]
+            canonical_inputs = canonical_seed(visible)[0]
             if type(canonical_inputs) is not dict:
                 raise TypeError("bound node inputs did not canonicalize to an exact dict")
         except (TypeError, ValueError, RecursionError):
@@ -593,7 +609,7 @@ def _evaluate_node_stream(
 
     if evaluation_trace is not None:
         try:
-            bound_inputs = canonical_seed(record)[0]
+            bound_inputs = canonical_seed(visible)[0]
             if type(bound_inputs) is not dict:
                 raise TypeError(
                     "bound node inputs did not canonicalize to an exact dict"
@@ -876,19 +892,34 @@ def eval_node(
     render_enabled = capture_bindings and node.needs_render_capture is True
     render_closed = False
     render_recorded = False
-    effective_config = None
-    if render_enabled and backward_capture.scope is not None and effective_llm_by_static_path is not None:
+    bound_config = None
+
+    def recorded_model_config():
+        """Return the config backward records: the bound one, else the run's map entry."""
+        if backward_capture.scope is None or effective_llm_by_static_path is None:
+            return None
+        # A config resolved only when the node ran is bound with its inputs, so
+        # `capture_inputs` has snapshotted it.
+        if bound_config is not None:
+            return bound_config
         key = "/".join(backward_capture.scope.static_path)
         if key not in effective_llm_by_static_path:
-            raise ValueError(f"recorded effective model configuration is missing static path {key!r}")
+            raise ValueError(
+                f"recorded effective model configuration is missing static path {key!r}"
+            )
         config = effective_llm_by_static_path[key]
         if type(config) is not dict:
             raise TypeError("recorded effective model configuration must be a dictionary")
-        effective_config = canonical_seed(config)[1]
+        return canonical_seed(config)[1]
 
     def capture_inputs(inputs):
         """Snapshot completed inputs and static material before the body can mutate them."""
-        nonlocal backward_capture
+        nonlocal backward_capture, bound_config
+        config = node.bound_llm_config(inputs)
+        if config is not None:
+            if type(config) is not dict:
+                raise TypeError("bound model configuration must be a dictionary")
+            bound_config = canonical_seed(config)[1]
         binding_collector.finish(inputs)
         data = node.capture_backward_context()
         if type(data) is not dict:
@@ -918,7 +949,7 @@ def eval_node(
                 raise ValueError("render capture cannot replace static node data")
             backward_capture = BackwardCapture(
                 backward_capture.input_names, backward_capture.variable_names, backward_capture.scope,
-                {**static_data, **snapshot, "effective_llm_config": effective_config},
+                {**static_data, **snapshot, "effective_llm_config": recorded_model_config()},
             )
             render_recorded = True
         except (_CapabilityFault, _HostStop):

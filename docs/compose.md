@@ -33,6 +33,14 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   │                          compose/helpers/tags.py: its tag becomes a declared
   │                          ValueContract; nested `${...}` or nested tags make a
   │                          ValueTemplate; a tag anywhere else is a load error
+  ├─ read llm_config values → each AGENT's `llm_config:` and each adaptive gate's
+  │                          `adaptive_questions.llm_config` go through the same
+  │                          reader: a layer holding `${...}` becomes a ValueTemplate
+  │                          (a whole record written as one `${...}` a Binding), and
+  │                          each written key's range lands in `field_ranges`; a
+  │                          layer without values stays a plain dict (the flow and
+  │                          `defs:` layers are read the same way by the loader,
+  │                          after `typedefs:`)
   │
   ├─ check_case_branches   → a CASE branch names a node or calls a flow; a value
   │                          branch or a CASE `output:` is a load error that shows
@@ -50,6 +58,13 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   ├─ stamp node wiring       → ordinary Parameter key origins + ordinary/reserved
   │                             final Binding value origins; declared input types
   │                             land on Binding.contract
+  ├─ wire llm_config values  → an AGENT whose own or flow-layer `llm_config` value
+  │                             can still reach its config (a higher layer that
+  │                             always sets the field drops it) gets the reserved
+  │                             `__llm_config` wiring key carrying both layers, so
+  │                             edges, references, skips, and child re-namespacing
+  │                             treat it as a binding; an authored input of that
+  │                             name is a load error
   │
   ├─ infer_data_edges       → read every ${...} and add the corresponding data edges;
   │                            append each case's own data+control edges from its build
@@ -78,6 +93,11 @@ One function, `load_flow()`, drives a fixed pipeline. Read it like a compiler:
   ├─ check typed outputs    → a typed flow output whose inferred type is disjoint
   │                            from its declared type is rejected (narrower or
   │                            unknown is left to the runtime check)
+  ├─ check llm_config sources → every `llm_config` value, node or flow layer, has a
+  │                            proven type or a tag that fits its field (`provider`
+  │                            and `model` take str, a block field its API type, a
+  │                            whole record or block a record of its fields); no
+  │                            `isinstance` or constructor
   ├─ synthesize boundary    → START/END nodes, edges, and binding-preserving wiring;
   │                            END is a value or a record by the shape of `output:`;
   │                            END's output contract comes from declared output types
@@ -286,7 +306,11 @@ field_labels = result.field_labels
   `node 'ask' input 'proj'` for an adaptive gate's composer. Assembly drops all three
   before `CompiledFlow.from_parts`; compile and runtime never receive them. The
   composer's `llm_config` label is also copied to the render-only
-  `AgentNode.llm_config_label`, which run-start messages use.
+  `AgentNode.llm_config_label`, which run-start and call-time messages use. A node
+  names its reserved wiring keys in reference and skip messages through its
+  `reserved_key_label(key)` hook (default `<kind> <key>`, such as `wait until`;
+  AGENT's `__llm_config` reads `llm_config`); `BuildResult.site_name` puts a
+  composer's `field_labels` entry in its place.
 
 Leaf kinds (`agent`/`code`/`tool`) ignore `ctx.resolver`; `call`/`map`/`loop` use
 it to resolve the child flow they expand into. CODE alone also reads

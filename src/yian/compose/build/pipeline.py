@@ -39,6 +39,8 @@ from yian.diagnostics import (
     OriginResolver,
     SourceRange,
 )
+from yian.nodes.agent import AgentNode
+from yian.nodes.agent.llm_values import LLM_CONFIG_KEY, split_layers, value_leaves
 from yian.nodes.base import Node, NodeKind
 from yian.nodes.contracts import (
     Assertion,
@@ -48,6 +50,7 @@ from yian.nodes.contracts import (
     PartialRecordContract,
     ValueContract,
     ValuePath,
+    ValueTemplate,
     as_binding,
 )
 from yian.expr import ExpressionError
@@ -64,9 +67,11 @@ from yian.compose.build.inline_inputs import (
 )
 from yian.compose.edges.data import infer_data_edges
 from yian.compose.edges.producers import _binding_producers
+from yian.compose.nodes.agent import AgentDescriptor, read_llm_config
 from yian.compose.nodes.base import BuildContext, BuildResult, NodeDescriptor
 from yian.compose.nodes.call import CallDescriptor
 from yian.compose.nodes.case import CaseDescriptor
+from yian.compose.nodes.human_input import HumanInputDescriptor
 from yian.compose.nodes.loop import LoopDescriptor
 from yian.compose.nodes.map import MapDescriptor
 from yian.compose.desugar.inline_bodies import (
@@ -89,7 +94,7 @@ from yian.compose.helpers.isinstance_types import (
     resolve_constructor_type,
     resolve_isinstance_type,
 )
-from yian.compose.helpers.output_contracts import resolve_output_binding_contract
+from yian.compose.helpers.output_contracts import TypeFn, resolve_output_binding_contract
 from yian.compose.helpers.source import nth, one_line_text
 from yian.compose.helpers.tags import (
     QUOTED_STYLES,
@@ -111,6 +116,7 @@ from yian.compose.validate.case_exhaustive import (
 from yian.compose.validate.case_branches import check_case_branches
 from yian.compose.validate.cycles import reject_cycles
 from yian.compose.validate.human_questions import validate_human_questions
+from yian.compose.validate.llm_config_sources import check_llm_config_sources
 from yian.compose.validate.loop_types import check_loop_type_contract
 from yian.compose.validate.narrowing import check_impossible_whens, compute_narrowing
 from yian.compose.edges.hosts import host_control_edges
@@ -128,6 +134,7 @@ from yian.compose.validate.value_nesting import check_written_values
 from yian.compose.validate.typed_bindings import (
     check_typed_inputs,
     check_typed_outputs,
+    infer_binding_type,
     local_input_contracts,
 )
 from yian.compose.validate.wiring_parity import check_wiring_parity
@@ -874,6 +881,165 @@ def _split_typed_inputs(
             else descriptor
         )
     return split
+
+
+def _split_typed_llm_config(
+    descriptors: dict[str, NodeDescriptor],
+    nodes_cursor: SourceCursor,
+    *,
+    registry,
+    owner: tuple[str, ...],
+    catalog_builder: _SourceCatalogBuilder,
+    diagnostics: LoadDiagnostics,
+) -> dict[str, NodeDescriptor]:
+    """Read each AGENT's and adaptive gate's `llm_config:` with the values and tags in it.
+
+    An AGENT's own layer and an adaptive gate's `adaptive_questions.llm_config` are
+    read. A layer holding values becomes a `ValueTemplate` (a `Binding` for a whole
+    record written as one value), and the value range of each key in it lands in the
+    descriptor's `field_ranges` under `("llm_config", "<dotted.path>")`, so its errors
+    point at the field; the adaptive desugar copies both to the composer agent. A
+    layer without values stays a plain dict.
+
+    Args:
+        descriptors (`dict[str, NodeDescriptor]`): Located descriptors keyed by node id.
+        nodes_cursor (`SourceCursor`): Retained view of the flow's node mapping.
+        registry (`TypeRegistry`): The file's typedefs the tags resolve against.
+        owner (`tuple[str, ...]`): Complete lexical owner path for catalog sites.
+        catalog_builder (`_SourceCatalogBuilder`): File-owned origin catalog builder.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
+
+    Returns:
+        `dict[str, NodeDescriptor]`: The descriptors, each layer read.
+
+    Raises:
+        `LoadError`: Raised when a tag in a layer is malformed or misplaced, or a
+            retained cursor cannot be traversed.
+    """
+    split = dict(descriptors)
+    try:
+        for node_id, descriptor in descriptors.items():
+            if not nodes_cursor.has(node_id):
+                continue
+            if isinstance(descriptor, AgentDescriptor):
+                path: tuple[str, ...] = ("llm_config",)
+                written = descriptor.llm_config
+                prefix = f"node {node_id!r}: llm_config"
+            elif isinstance(descriptor, HumanInputDescriptor) and isinstance(
+                descriptor.adaptive_questions, dict
+            ):
+                path = ("adaptive_questions", "llm_config")
+                written = descriptor.adaptive_questions.get("llm_config")
+                prefix = f"node {node_id!r} adaptive_questions.llm_config"
+            else:
+                continue
+            cursor = normalize_node_signature_cursor(nodes_cursor.child(node_id))
+            for key in path:
+                cursor = cursor.child(key) if cursor.has(key) else None
+                if cursor is None:
+                    break
+            if cursor is None or not cursor.holds(written):
+                continue
+            layer, ranges = read_llm_config(
+                cursor,
+                registry,
+                prefix=prefix,
+                site_path=(*owner, "node", node_id, *path),
+                catalog_builder=catalog_builder,
+                diagnostics=diagnostics,
+            )
+            field_ranges = {
+                **descriptor.field_ranges,
+                **{("llm_config", key): rng for key, rng in ranges.items()},
+            }
+            if isinstance(descriptor, AgentDescriptor):
+                split[node_id] = replace(
+                    descriptor, llm_config=layer, field_ranges=field_ranges
+                )
+            else:
+                split[node_id] = replace(
+                    descriptor,
+                    adaptive_questions={
+                        **descriptor.adaptive_questions,
+                        "llm_config": layer,
+                    },
+                    field_ranges=field_ranges,
+                )
+    except SourceAccessError as exc:
+        raise diagnostics.error(str(exc), range=exc.range) from exc
+    return split
+
+
+def _attach_llm_config_wiring(
+    build_results: dict[str, BuildResult],
+    flow_wiring: dict[str, dict],
+    flow_llm_config: Any,
+    producers: dict[str, OutputContract],
+    flow_inputs: dict[str, ValueContract],
+    *,
+    type_fn: TypeFn | None = None,
+) -> dict[ValuePath, Type | None]:
+    """Wire each AGENT's `llm_config` values as its reserved `__llm_config` input.
+
+    Each value in an agent's own layer, and in the flow's layer, gets its static type,
+    read over the flow's contracts as written (no CASE narrowing applies to a config).
+    An agent gets the key
+    when a value in its own layer, or one in the flow's layer that its own layer doesn't
+    always override, can reach its config. A higher value overrides only when its type
+    can't be null. The key carries both layers whole (`split_layers`), so edges,
+    reference checks, skips and child re-namespacing treat the values as any other
+    binding, and a dropped value adds no edge.
+
+    The agent's runtime binding errors about the key name its `llm_config` field (an
+    adaptive composer's, the gate's `adaptive_questions.llm_config`).
+
+    Args:
+        build_results (`dict[str, BuildResult]`): Built nodes keyed by final descriptor id.
+        flow_wiring (`dict[str, dict]`): Mutable binding maps keyed by node id.
+        flow_llm_config (`Any`): The flow's authored `llm_config:` layer: a dict, a
+            `ValueTemplate` or a `Binding`.
+        producers (`dict[str, OutputContract]`): Node output contracts by producer id.
+        flow_inputs (`dict[str, ValueContract]`): Flow input contracts by name.
+        type_fn (`TypeFn | None`, *optional*, defaults to `None`): Resolves a
+            constructor name to its type for inference.
+
+    Returns:
+        `dict[ValuePath, Type | None]`: The static type of each value in the flow's
+            layer by its field path; `None` when it is not proven.
+    """
+    for node_id, result in build_results.items():
+        node = result.node
+        if not isinstance(node, AgentNode):
+            continue
+        node.llm_value_types = _llm_value_types(
+            node.own_llm_config, producers, flow_inputs, type_fn
+        )
+        carried = split_layers(
+            node.own_llm_config, flow_llm_config, node.llm_inherit, node.llm_nullable()
+        )
+        if carried is not None:
+            flow_wiring[node_id][LLM_CONFIG_KEY] = carried
+            node.wires_llm_config = True
+            node.binding_labels[LLM_CONFIG_KEY] = result.site_name(
+                node_id, node.reserved_key_label(LLM_CONFIG_KEY)
+            )
+    return _llm_value_types(flow_llm_config, producers, flow_inputs, type_fn)
+
+
+def _llm_value_types(
+    layer: Any,
+    producers: dict[str, OutputContract],
+    flow_inputs: dict[str, ValueContract],
+    type_fn: TypeFn | None,
+) -> dict[ValuePath, Type | None]:
+    """Return the static type of each value in an `llm_config` layer, by field path."""
+    types: dict[ValuePath, Type | None] = {}
+    for path, leaf in value_leaves(layer).items():
+        try:
+            types[path] = infer_binding_type(leaf, producers, flow_inputs, type_fn=type_fn)
+        except ExpressionError:
+            types[path] = None  # the reference pass reports it, located
+    return types
 
 
 def _binding_style(
@@ -1731,7 +1897,7 @@ def _assemble(
     version: Optional[str] = None,
     name: Optional[str] = None,
     description: Optional[str] = None,
-    flow_llm_config: Optional[dict] = None,
+    flow_llm_config: dict | ValueTemplate | Binding | None = None,
     flow_env: Optional[dict] = None,
     boundary_field_ranges: Optional[dict] = None,
     asserts_cursor: SourceCursor | None = None,
@@ -2100,6 +2266,14 @@ def _assemble(
         catalog_builder=catalog_builder,
         diagnostics=diagnostics,
     )
+    descriptors = _split_typed_llm_config(
+        descriptors,
+        nodes_cursor,
+        registry=registry,
+        owner=owner,
+        catalog_builder=catalog_builder,
+        diagnostics=diagnostics,
+    )
     outputs_section, output_types = _split_typed_outputs(
         outputs_section,
         outputs_cursor,
@@ -2418,6 +2592,15 @@ def _assemble(
             )
         producers[nid] = contract
 
+    flow_llm_value_types = _attach_llm_config_wiring(
+        build_results,
+        flow_wiring,
+        flow_llm_config or {},
+        producers,
+        flow_input_contracts,
+        type_fn=constructor_type,
+    )
+
     # Data edges — the projection of flow.wiring (leaf + WAIT + call/map); a case owns its own
     # data+control edges (`case_edges`, from each `CaseDescriptor.build`), appended below.
     data_edges = infer_data_edges(descriptors, flow_wiring)
@@ -2690,6 +2873,18 @@ def _assemble(
     flow_wiring.update(boundary_wiring)
     edges: list[Edge] = structural + boundary_edges
 
+    # Before the type tables, so a constructor in a config value gets the config's message.
+    check_llm_config_sources(
+        build_results,
+        flow_llm_config or {},
+        f"defs entry {owner[1]!r} llm_config" if owner[:1] == ("def",) else "flow llm_config",
+        producers,
+        flow_input_contracts,
+        type_fn=constructor_type,
+        registry=registry,
+        resolve_origin=catalog_builder.resolve_registered,
+        diagnostics=diagnostics,
+    )
     # Type tables for `isinstance`, once START/END carry the lowered flow asserts and outputs.
     _fill_type_tables(
         nodes,
@@ -2755,6 +2950,7 @@ def _assemble(
         flow_id=flow_id,
         memories=memories,
     )
+    compiled.flow_llm_value_types = flow_llm_value_types
     return ComposedFlow(
         compiled=compiled,
         version=version,

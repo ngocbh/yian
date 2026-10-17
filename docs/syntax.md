@@ -935,6 +935,8 @@ Tags go on slots:
   and the arguments of a CALL or MAP node and of an inline body;
 - a flow's `output:` fields, and a single `output: !T ${...}`;
 - an AGENT's `variables:`;
+- a value in `llm_config:`: a field, a block field, a whole block, or the whole record
+  (see [Values in `llm_config`](#values-in-llm_config));
 - a value entry in `nodes:` (see [Values in `nodes:`](#values-in-nodes));
 - records and lists nested in any of these.
 
@@ -1684,12 +1686,16 @@ Every `llm_config:` in a flow file (node, `defs:` entry, or top level) is checke
 when the flow loads: an unknown key such as `modle:`, a bad value such as
 `openai: {temperature: hot}`, a non-finite number such as
 `openai: {temperature: .nan}`, or an unknown provider fails at that `llm_config:`.
+A field computed from a `${...}` value is checked when the value resolves (see
+[Values in `llm_config`](#values-in-llm_config)).
 `inherit:` is valid only in a node's `llm_config:`. A host
 `run_flow(..., llm_config=...)` layer with an unknown key fails before any node runs.
+A top-level `llm_config: null` is the same as no `llm_config:`.
 
 A flow file cannot set `api_key` at any level, nor `base_url` except beside
 `provider: azure`, nor the connection settings `organization`, `project`, and
-`headers`; loading such a flow fails, and the error points at the host's
+`headers`, and none of them can come from a `${...}` value;
+loading such a flow fails, and the error points at the host's
 `llm_config` and `yian auth`. A library host passes the provider key, and optionally
 the endpoint it goes to and its connection settings, in
 `run_flow(..., llm_config={..., "api_key": key, "base_url": url, "headers": {...}})`
@@ -1729,6 +1735,9 @@ config has no `base_url` fails before the run's first node.
 The CLI flags are the *outermost authored* layer — they fill gaps, they do **not**
 override an AGENT node or flow that set the field. The run resolves the complete
 static tree of AGENT nodes up front, so later environment changes cannot alter a model selection.
+An agent whose `llm_config` reads a value known only when it runs resolves then, from
+the defaults and saved logins captured at run start (see
+[Values in `llm_config`](#values-in-llm_config)).
 To ignore the authored outer layers, set `inherit: false` in a node's
 `llm_config:`. The node then uses its own dict plus the snapshotted process
 provider/model defaults; it ignores enclosing flow, parent-flow, and CLI layers:
@@ -1744,6 +1753,158 @@ provider/model defaults; it ignores enclosing flow, parent-flow, and CLI layers:
 ```
 
 `inherit:` must be `true` or `false`; a quoted `"false"` or `null` fails at load.
+
+#### Values in `llm_config`
+
+Any `llm_config` field can come from a `${...}` value: a top-level field, a field
+inside a [provider block](#provider-blocks-request-settings), a whole block, or the
+whole record. This works in a node's `llm_config:`, a flow's or a `defs:` entry's
+top-level `llm_config:`, and `adaptive_questions: {llm_config: ...}`:
+
+```yaml
+typedefs:
+  Cfg: {provider: str, model: str}
+input:
+  model: !Optional(str)          # omitted: null, so the model stays unset
+  temperature: !float 0.2
+  cfg: !Cfg
+llm_config:
+  provider: openai
+nodes:
+  pick:
+    kind: agent
+    prompt: Name the model that suits this task.
+    output: str
+  draft:
+    kind: agent
+    prompt: Draft it.
+    llm_config:
+      model: ${input.model}                  # a field
+      openai:
+        temperature: ${input.temperature}    # a provider-block field
+  review:
+    kind: agent
+    input:
+      draft: ${draft.output}
+    prompt: Review ${draft}.
+    llm_config:
+      model: !str ${pick.output}             # read when review runs
+  grade:
+    kind: agent
+    input:
+      draft: ${draft.output}
+    prompt: Grade ${draft}.
+    llm_config: ${input.cfg}                 # the whole record
+output: ${grade.output}
+```
+
+The values follow the rules of [nested values](#nested-values), with these limits:
+
+- Every string in a flow file's `llm_config` is a template: `${...}` is evaluated and
+  `$$` is a literal `$`. Text around a span makes the field text:
+  `model: "gpt-${input.size}"`.
+- A value needs a known type: a typed source, such as a `!str` input or a node with an
+  `output:` type, or a tag, `model: !str ${pick.output}`. Tags are allowed on any
+  value here; a tag on the whole mapping (`llm_config: !T {...}`) is a load error.
+  An untyped value fails at load:
+
+  ```text
+  node 'chat' llm_config.model: the value's type isn't known; tag it with the type it holds, e.g. `model: !str ${...}`
+  ```
+
+- `provider` and `model` take `str`. A `Literal` provider type needs at least one
+  known provider among its members; the resolved value must be a known provider. A
+  block field whose API type is text, a number (with its bounds), a boolean, or a
+  fixed set of values takes that type; other block fields are checked when the value
+  resolves. A disjoint type fails at load (`node 'chat' llm_config.openai.temperature:
+  must be float(0.0..2.0), but the value is str`); a narrower one loads and is checked
+  when the value resolves, as for a [tag](#load-check).
+- A whole record has a record type whose fields are `llm_config` fields, or
+  `object`. A whole block has a record type of that block's fields, or `object`. The
+  whole record is exactly one `${...}`; other text there, such as
+  `llm_config: 'x${input.a}'`, fails with "llm_config must be a mapping".
+- `inherit:` is written as `true` or `false`, never as a value, since it decides
+  which layers apply before any value is known. A whole-record type can't declare it.
+- No `isinstance` or `T(...)` constructor, and no `call(...)` anywhere inside an
+  `llm_config` string. Compute such a value in a node and read that node's output
+  with `${...}`.
+
+Credentials and where they go stay with the host or `yian auth`. `api_key`,
+`base_url`, `organization`, `project`, and `headers` can't come from a value: not as a
+field, and not through a whole-record or whole-block type that declares them. Either
+is a load error. A literal `base_url` beside a literal `provider: azure` stays
+allowed, but `base_url` beside `provider: ${...}` is a load error, because the value
+may not be `azure`. An `object` value that resolves to a record holding one fails
+the agent when it resolves (`node 'chat' llm_config.base_url: ...`).
+
+A value that resolves to `null` leaves its field unset, so the next layer, the
+provider's saved model, or the defaults apply. An omitted `!Optional(str)` input in
+`model: ${input.model}` therefore means "use the default model". A whole record that
+resolves to `null` is `{}`.
+
+**When a value is checked.** Every value is checked at load as above. Then:
+
+- An agent in the run's root flow whose values read only the run's inputs
+  (`${input.*}`) is resolved when the run starts, like a literal config: every check
+  a literal config gets runs, and the CLI checks its provider key up front. Before
+  the log is created, each input those values read is checked: present, and of its
+  declared type. A failure raises `ValueError` naming the field, such as
+  `node 'chat' llm_config.model: input 'm' is required and was not given`. A bad
+  input that no `llm_config` reads stays a logged START failure.
+- Every other agent resolves its config just before its model call: after its
+  inputs bind, before memory and the model. That covers a value that reads a node's
+  output, `${system.*}`, or the inputs of a child flow, `defs:` entry, or imported
+  flow. The resolved config gets the same checks: field types, a known provider, no
+  host-only field, the provider's block against the connection it reaches, and a
+  concrete provider and model. A failure fails the node before any model call, with
+  `contract.input` (`binding.type` when a value breaks its tag), located at the
+  field:
+
+  ```text
+  node 'chat' llm_config.provider: not a known provider; use one of: openai, ...
+  ```
+
+  A block field reads `node 'chat' llm_config.openai.temperature`, a flow-layer field
+  `flow llm_config.<field>`, and a composer's agent uses its label,
+  `node 'ask' adaptive_questions.llm_config.<field>`. Run start names fields the same
+  way. A refused field's message never shows its value. The defaults and saved logins
+  it falls back to are the ones captured at run start. The run log records the config
+  it resolved, without keys or header values, and resume and backward use the recorded
+  one.
+
+**Scope and precedence.** A value reads the flow where it is written: a node's or a
+flow layer's from that flow's inputs and nodes, a `defs:` entry's from that entry.
+Precedence is unchanged: the node, its own flow, the outer flows, the host or CLI
+layer, then the defaults, per top-level field and per block field. A value that a
+higher layer always overrides is dropped for that agent: a node field set to a
+non-null literal, or to a value whose type is not `Optional`, shields the flow's
+value for that field. A dropped value adds no dependency and no skip.
+
+**Skips.** A value that reads a node that may be skipped skips the agent, as any
+binding does.
+
+**Child flows.** A child flow's agents (a `defs:` call, a `uses:` import, an inline
+body, a MAP or LOOP body) inherit the enclosing flow's literal fields and its fields
+read only from the run's inputs. A flow field from any other value is read only when
+that flow runs, so a child agent that would inherit it is a load error at the field:
+
+```text
+flow llm_config.model: agent 'c/a' in a child flow would inherit this value, which is read only when the flow runs; pass it to the child as an input and write `${input.model}` in the child's llm_config
+```
+
+Pass the value through the call's `input:` and write `model: ${input.model}` in the
+child agent's `llm_config:`. A child agent that sets the field itself loads.
+
+The run's fingerprint covers `llm_config` as written, so editing a value's
+expression changes it, and the value it resolves to does not. A Python-built
+`AgentNode(llm_config={...})`, the host `run_flow(..., llm_config=...)` layer, and
+the CLI flags stay literal: `${...}` there is text.
+
+Changed: `${...}` in an `llm_config` string used to be literal text, so
+`model: "${input.m}"` selected a model named `${input.m}`. It is now a value, and
+`$$` is a literal `$`. A literal layer that holds `$$` reads differently, so its
+flow's fingerprint changes. A `call(...)` inside an `llm_config` string is now a load
+error.
 
 #### Provider blocks — request settings
 
@@ -1838,6 +1999,15 @@ Blocks follow the cascade one level deep: a node's block and the flow's block of
 same name merge per block field, the node's fields winning. A value inside a field is
 replaced whole, so a node's `thinking: {type: disabled}` replaces the flow's whole
 `thinking` mapping. `null` means unset at every level.
+
+A block may hold [values](#values-in-llm_config), or be one. Its literal parts are
+checked at load against the block's schema, so an unknown key or a bad literal still
+fails there, and the whole block is checked once its values resolve. A node uses the
+block of the provider it resolves to, so a block is checked against that provider's
+connection when the provider is known: at run start, or just before the model call
+when the provider comes from a value read then. With `provider: ${pick.output}` and
+`openai: {max_output_tokens: 100}`, an agent that resolves to `openai` on a ChatGPT
+subscription fails with `node 'chat' llm_config.openai: ...`.
 
 The provider-specific keys yian used to translate are gone. Each one is a load error
 that shows its block form:
@@ -3113,9 +3283,11 @@ Inline-body rules:
   `parallel:` remains an accepted outer MAP field but is currently inert.
   `llm_config:` remains invalid on a composite node; the enclosing flow's LLM
   cascade still descends into body AGENT nodes exactly as it does for an unconfigured
-  named child. There is no separate inline-child
-  `llm_config:`/`env:`/`asserts:` surface; configure individual body AGENT nodes or use
-  `defs:` when the child needs its own supported flow-level configuration or
+  named child. Only its literal fields and its fields read from the run's inputs reach
+  body agents: a field from any other value, which a body agent would inherit, is a
+  load error (see [Values in `llm_config`](#values-in-llm_config)). There is no
+  separate inline-child `llm_config:`/`env:`/`asserts:` surface; configure
+  individual body AGENT nodes or use `defs:` when the child needs its own supported flow-level configuration or
   assertions.
 
 Inline bodies may contain further CALL/MAP/LOOP nodes, including further inline
@@ -3486,6 +3658,10 @@ One `${...}` grammar serves every context — the difference is what each contex
   evaluated too, and a typedef name builds or checks a typed value
   (`${Buy(x)}`, see [Constructors](expressions.md#constructors-t)). Calling a builtin
   with arguments it doesn't take is a load error at that binding.
+- **`llm_config` values**: a field, block, or whole record written as `${...}` is
+  **evaluated** like a binding, when the run starts or just before the agent's model
+  call (see [Values in `llm_config`](#values-in-llm_config)). It takes a tag, but no
+  `isinstance`, no constructor, and no `call(...)`.
 - **`when:` / `asserts:`**: the expression is **tested** as a boolean. Same
   operators. Write conditions in the canonical **bare** form (`a.output > 5`) — no
   `${}`. Braces around the whole expression (`${a.output > 5}`) load and evaluate

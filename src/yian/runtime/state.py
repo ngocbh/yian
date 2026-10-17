@@ -265,6 +265,10 @@ class RunState:
             Canonical caller-supplied START priming record retained across START's commit.
         effective_llm_by_static_path (`dict[str, dict[str, Any]]`):
             Run-resolved agent configuration keyed by stable static node path.
+        call_time_llm (`dict[str, Any] | None`):
+            The recorded agents whose configuration resolves only when they run,
+            with the selection they bind from (`RunStartedRecord.call_time_llm`);
+            `None` when there are none.
         memory_snapshots (`tuple[MemorySnapshotEnvelope, ...] | None`):
             Canonical recorded snapshots, one per memory key.
         learnable (`bool`):
@@ -333,6 +337,7 @@ class RunState:
         self.num_workers = 0
         self.input: dict[str, Any] = {}
         self.effective_llm_by_static_path: dict[str, dict[str, Any]] = {}
+        self.call_time_llm: dict[str, Any] | None = None
         self.memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None = None
         self.memories: tuple[MemorySpec, ...] | None = None
         self.memory_stacks: tuple[MemoryStack, ...] | None = None
@@ -379,6 +384,9 @@ class RunStartData:
         defaults (`Mapping[str, int]`, *optional*, defaults to `{}`):
             The `yian.defaults` values that differ from the built-in ones, keyed
             by entry name; empty means the run uses the built-in values.
+        call_time_llm (`dict[str, Any] | None`, *optional*, defaults to `None`):
+            The agents whose configuration resolves only when they run, as
+            `RunStartedRecord.call_time_llm`; `None` when there are none.
     """
 
     run_id: str
@@ -392,6 +400,7 @@ class RunStartData:
     memories: tuple[MemorySpec, ...] | None = None
     memory_stacks: tuple[MemoryStack, ...] | None = None
     defaults: Mapping[str, int] = field(default_factory=dict)
+    call_time_llm: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -432,6 +441,7 @@ class _RunStartedApply:
     num_workers: int
     input: dict[str, Any]
     effective_llm_by_static_path: dict[str, dict[str, Any]]
+    call_time_llm: dict[str, Any] | None
     memory_snapshots: tuple[MemorySnapshotEnvelope, ...] | None
     memories: tuple[MemorySpec, ...] | None
     memory_stacks: tuple[MemoryStack, ...] | None
@@ -875,6 +885,7 @@ def prepare_run_started(
         memories=data.memories,
         memory_stacks=data.memory_stacks,
         defaults=data.defaults,
+        call_time_llm=data.call_time_llm,
     )
     # The public envelope codec is the sole payload authority.  Decode its canonical
     # bytes immediately so the prepared record is exactly what either log will retain.
@@ -2114,6 +2125,7 @@ def _replay_records(
             memories=start.memories,
             memory_stacks=start.memory_stacks,
             defaults=start.defaults,
+            call_time_llm=start.call_time_llm,
         ),
         schema=first.schema,
     )
@@ -4581,6 +4593,7 @@ def _require_pristine(state: RunState) -> None:
         and state.num_workers == 0
         and not state.input
         and not state.effective_llm_by_static_path
+        and state.call_time_llm is None
         and state.memory_snapshots is None
         and state.memories is None
         and state.memory_stacks is None
@@ -4695,6 +4708,7 @@ def _materialize_run_started(
         num_workers=record.num_workers,
         input=canonical_input,
         effective_llm_by_static_path=canonical_effective,
+        call_time_llm=copy.deepcopy(record.call_time_llm),
         memory_snapshots=record.memory_snapshots,
         memories=record.memories,
         memory_stacks=record.memory_stacks,
@@ -4724,6 +4738,7 @@ def _apply_run_started(state: RunState, apply: _RunStartedApply) -> None:
     state.num_workers = apply.num_workers
     state.input = apply.input
     state.effective_llm_by_static_path = apply.effective_llm_by_static_path
+    state.call_time_llm = apply.call_time_llm
     state.memory_snapshots = apply.memory_snapshots
     state.memories = apply.memories
     state.memory_stacks = apply.memory_stacks

@@ -17,6 +17,9 @@ runtime check:
 - a value template is inferred from its structure, and each typed binding nested in
   it is checked the same way at its own path and origin.
 
+An AGENT's reserved `__llm_config` input is skipped: `llm_config_sources` checks its
+tags at the authored `llm_config` field (`typed_value_error`), without CASE narrowing.
+
 `infer_binding_type` returns the type one binding is proven to produce (a typed
 binding's declared type, a literal's exact type, or a reference's inferred type), for
 passes that record binding types rather than reject them. `local_input_contracts`
@@ -30,7 +33,8 @@ the binding's registered value origin, else its `input:` entry range, else the n
 range; a flow output error at its registered origin, else the `output:` range.
 
 Imports flow down only: `compile.validation` (the type relation), `expr` (template
-scanning), `typesys`, `nodes` (binding carriers and the LOOP node), and
+scanning), `typesys`, `nodes` (binding carriers, the LOOP node, the AGENT's reserved
+key), and
 `compose.helpers` (output-contract inference and load diagnostics). The loader, the
 compose package facade, and the CALL/MAP check (`call_types`, for its literal and
 `${item}` helpers) import this back.
@@ -75,6 +79,7 @@ from yian.nodes.contracts import (
     ValueTemplate,
     binding_source,
 )
+from yian.nodes.agent.llm_values import LLM_CONFIG_KEY
 from yian.nodes.loop import LoopNode
 from yian.typesys import (
     Type,
@@ -154,6 +159,8 @@ def check_typed_inputs(
         )
         item = item_contract(result, wiring, node_producers, node_inputs, type_fn)
         for name, binding in wiring.items():
+            if name == LLM_CONFIG_KEY:
+                continue
             param_producers, param_inputs = (
                 narrowing.for_param(node_id, name)
                 if narrowing is not None
@@ -182,6 +189,48 @@ def check_typed_inputs(
                     resolve_origin,
                     diagnostics,
                 )
+
+
+def typed_value_error(
+    binding: Any,
+    producers: dict[str, OutputContract],
+    flow_inputs: dict[str, ValueContract],
+    *,
+    type_fn: TypeFn | None = None,
+    registry: TypeRegistry | None = None,
+    slot: str = "",
+) -> str | None:
+    """Return why a typed binding, or one nested in its value, can never fit its type.
+
+    Nested bindings are checked first, innermost first, as `check_typed_inputs` checks
+    a node input; the contracts are used as given.
+
+    Args:
+        binding (`Any`): A binding; untyped ones with no typed binding inside pass.
+        producers (`dict[str, OutputContract]`): Node output contracts by producer id.
+        flow_inputs (`dict[str, ValueContract]`): Flow input contracts by name.
+        type_fn (`TypeFn | None`, *optional*, defaults to `None`): Resolves a
+            constructor name to its type.
+        registry (`TypeRegistry | None`, *optional*, defaults to `None`): The flow's
+            typedefs, so the message names a declared record or union by its typedef.
+        slot (`str`, *optional*, defaults to `""`): The binding's slot as the message
+            names a path inside it.
+
+    Returns:
+        `str | None`: The first error message, without the binding's name, or `None`.
+    """
+    for path, typed in _typed_sites(binding):
+        message = _binding_error(
+            typed,
+            producers,
+            flow_inputs,
+            type_fn=type_fn,
+            registry=registry,
+            slot=path_label(slot, path),
+        )
+        if message is not None:
+            return message
+    return None
 
 
 def check_typed_outputs(

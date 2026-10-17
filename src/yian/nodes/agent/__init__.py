@@ -15,6 +15,9 @@ it neither rerenders the forward prompt nor updates local variables.
 ``live`` publishes transient streamed reply text, model/tool call observers, and
 provider token usage to evaluator-supplied sinks; it records and retains nothing.
 ``interrupts`` holds the signal a host interrupt raises out of a streamed reply.
+``llm_values`` holds the helpers for ``llm_config`` layers that hold values: their
+leaves and references, which lower values still contribute, and the reserved
+binding that carries the node and own-flow layers and resolves them.
 
 Knows about: nodes.base, events, expr, typesys, tools, llm_clients, memory contracts, peer AGENT modules,
              LangChain, and Pydantic.

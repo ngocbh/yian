@@ -19,6 +19,8 @@ from yian.memory.contracts import (
 )
 from yian.nodes.base import Node
 from yian.nodes.contracts import (
+    Binding,
+    ValueTemplate,
     _iter_origin_carrier,
     _rewrite_origin_carrier,
 )
@@ -33,8 +35,9 @@ def iter_flow_origins(flow: Flow) -> Iterator[OriginRef]:
     """Iterate declared provenance slots in one static flow graph.
 
     Traversal follows wiring and outputs, then nodes and their baked children in
-    deterministic structural order. Flow, node, and frozen-carrier identities are
-    visited once, so shared children and deliberate object cycles terminate. Equal
+    deterministic structural order; a compiled flow's memory declarations and its
+    `llm_config` layer holding values come first. Flow, node, and frozen-carrier
+    identities are visited once, so shared children and deliberate object cycles terminate. Equal
     origins in distinct carriers remain distinct occurrences. Binding sources
     other than value templates, parameter defaults, node environments, and render
     metadata stay opaque.
@@ -77,6 +80,8 @@ def _iter_flow_origins(
 
     if isinstance(flow, CompiledFlow):
         yield from _iter_memory_decl_origins(flow.memories, seen_carriers)
+        if isinstance(flow.flow_llm_config, (Binding, ValueTemplate)):
+            yield from _iter_origin_carrier(flow.flow_llm_config, seen_carriers)
 
     for node_wiring in flow.wiring.values():
         for binding in node_wiring.values():
@@ -271,6 +276,8 @@ def _rewrite_flow_origin_graph(
 
     if isinstance(flow, CompiledFlow):
         _rewrite_memory_decl_origins(flow.memories, mapper, seen_carriers)
+        if isinstance(flow.flow_llm_config, (Binding, ValueTemplate)):
+            _rewrite_origin_carrier(flow.flow_llm_config, mapper, seen_carriers)
 
     for node_wiring in flow.wiring.values():
         for binding in node_wiring.values():

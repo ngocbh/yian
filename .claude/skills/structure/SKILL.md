@@ -164,6 +164,9 @@ run outside the backend lock under its existing lease.
 bracketing model/tool calls, and projecting provider usage. It imports `events`
 and publishes only through evaluator-supplied sinks; it never records, retains,
 or prices anything.
+`nodes/agent/llm_values.py` holds the helpers for `llm_config` layers that hold
+values (`${...}`): value leaves and references, which lower values still
+contribute, the reserved node/flow binding, and its resolution against a pool.
 Package-root `memory_host.py` builds the memories a flow declares
 (`build_memories`) and owns their lifetime in a `MemoryRegistry`. It reads the
 compiled memory table and imports only the selected built-in backend modules.
@@ -224,6 +227,10 @@ connection identity. Keep tokens out of model configuration and history.
 `llm_clients/connection.py` combines saved selections with environment defaults
 and supplies pinned request-time credential callbacks. The run host owns the
 snapshot; compiler resolution stays pure and receives provider-scoped defaults.
+`llm_clients/layers.py` checks one `llm_config` layer (`validate_layer`), resolves an
+agent's merged layers with the host defaults and saved models (`resolve_agent_config`),
+and checks a complete or recorded config (`require_concrete_selection`); the
+compile-time cascade calls it per agent.
 `llm_clients/connection_settings.py` checks the connection settings that travel
 with a key: OpenAI organization and project ids and extra request headers (names,
 values, refused names, caps). It imports only pydantic, the standard library, and
@@ -311,6 +318,10 @@ mirroring the runtime join rule over compiled edges (`case_exhaustive.exhaustive
 says which CASEs always take a branch). `compose/build` uses it to give a flow output
 whose producers may all be skipped the explicit null default and to reject arithmetic
 over a maybe-skipped value; runtime is unchanged.
+`compose/validate/llm_config_sources.py` checks the sources of `llm_config` values where
+they are written (AGENT, composer and flow layers): each needs a proven type or a tag, and
+only a type disjoint from its field (`provider`, `model`, a simple provider-block field,
+a whole record or block) is a load error.
 For authored node outputs, `compose/build` injects a Compose-owned optional reader through
 `BuildContext`; the base descriptor invokes it only when an output-authoring leaf reaches
 its established contract step. This preserves earlier kind-owned validation order while

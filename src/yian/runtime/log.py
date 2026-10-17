@@ -118,6 +118,13 @@ class RunStartedRecord:
         defaults (`Mapping[str, int]`):
             The `yian.defaults` values the run started with that differ from the
             built-in ones, keyed by entry name; empty means all built-in values.
+        call_time_llm (`dict[str, Any] | None`):
+            The agents whose configuration resolves only when they run, which
+            ``effective_llm_by_static_path`` leaves out: ``agents`` maps each one's
+            static path to its base layer, and ``selection`` holds the connection
+            selection they bind from (`yian.llm_clients.connection.record_selection`).
+            Neither holds a key or header value. `None` when the run has no such
+            agent; the payload then omits it, so those logs read as before.
     """
 
     flow_fingerprint: str
@@ -130,9 +137,10 @@ class RunStartedRecord:
     memories: tuple[MemorySpec, ...] | None = None
     memory_stacks: tuple[MemoryStack, ...] | None = None
     defaults: Mapping[str, int] = field(default_factory=dict)
+    call_time_llm: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
-        """Validate the enabled-memory shape, its key table, and recorded defaults."""
+        """Validate the memory shape, its key table, recorded defaults and call-time agents."""
         _validate_run_memory_configuration(
             self.memories, self.memory_stacks, self.memory_snapshots, self.learnable,
         )
@@ -141,6 +149,49 @@ class RunStartedRecord:
         # A private copy keeps a caller's later edits out of the frozen record.
         object.__setattr__(self, "defaults", dict(self.defaults))
         _validate_recorded_defaults(self.defaults)
+        if self.call_time_llm is not None:
+            object.__setattr__(
+                self, "call_time_llm", _validated_call_time_llm(self.call_time_llm)
+            )
+
+
+def _validated_call_time_llm(value: Any) -> dict[str, Any]:
+    """Return a canonical copy of a ``RunStarted.call_time_llm`` value after checking its shape.
+
+    The shape is ``{"selection": {...}, "agents": {path: {...}, ...}}`` with at least
+    one agent. The contents are checked when the run applies them.
+
+    Args:
+        value (`Any`): The decoded ``call_time_llm`` value.
+
+    Returns:
+        `dict[str, Any]`: A canonical JSON copy of ``value``.
+
+    Raises:
+        `TypeError`: The value or one of its parts is not a JSON object.
+        `ValueError`: A field is missing or extra, ``agents`` is empty or has an empty
+            path, or a value is not canonical JSON.
+    """
+    if type(value) is not dict:
+        raise TypeError("RunStarted call_time_llm must be a dict")
+    if set(value) != {"selection", "agents"}:
+        raise ValueError("RunStarted call_time_llm must have exactly selection and agents")
+    if type(value["selection"]) is not dict:
+        raise TypeError("RunStarted call_time_llm selection must be a dict")
+    agents = value["agents"]
+    if type(agents) is not dict:
+        raise TypeError("RunStarted call_time_llm agents must be a dict")
+    if not agents:
+        raise ValueError("RunStarted call_time_llm agents must not be empty")
+    for path, base in agents.items():
+        if type(path) is not str or not path:
+            raise ValueError("RunStarted call_time_llm agent paths must be non-empty strings")
+        if type(base) is not dict:
+            raise TypeError(f"RunStarted call_time_llm base for {path!r} must be a dict")
+    try:
+        return _copy_json(value)
+    except ValueError as exc:
+        raise ValueError(f"RunStarted call_time_llm: {exc}") from None
 
 
 def _validate_recorded_defaults(recorded: Mapping[str, int]) -> None:
@@ -961,6 +1012,7 @@ class _RunStartedPayload(_StrictModel):
     memories: list[_MemorySpecPayload] | None
     memory_stacks: list[_MemoryStackPayload] | None
     defaults: dict[str, int] = {}
+    call_time_llm: dict[str, Any] | None = None
 
     @field_validator("defaults")
     @classmethod
@@ -969,6 +1021,17 @@ class _RunStartedPayload(_StrictModel):
         if any(not name for name in value):
             raise ValueError("recorded default names must be non-empty")
         return value
+
+    @field_validator("call_time_llm", mode="before")
+    @classmethod
+    def _call_time_llm_shape(cls, value: Any) -> dict[str, Any]:
+        """Check the shape; a run without call-time agents omits the field, never nulls it."""
+        if value is None:
+            raise ValueError("call_time_llm is omitted, not null, when there is none")
+        try:
+            return _validated_call_time_llm(value)
+        except TypeError as exc:
+            raise ValueError(str(exc)) from None
 
 
 class _RunResumedPayload(_StrictModel):
@@ -2367,6 +2430,7 @@ def _revalidate_run_record(record: RunRecord) -> None:
             record.memories,
             record.memory_stacks,
             record.defaults,
+            record.call_time_llm,
         )
         return
     if type(record) is RunResumedRecord:
@@ -2480,6 +2544,8 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
             ),
             "defaults": dict(sorted(record.defaults.items())),
         }
+        if record.call_time_llm is not None:
+            raw["call_time_llm"] = record.call_time_llm
     elif isinstance(record, RunResumedRecord):
         raw = {
             "retry_node_ids": _validated_id_tuple(
@@ -2581,6 +2647,9 @@ def _payload_for_record(record: RunRecord) -> dict[str, Any]:
         # The dump re-adds the defaulted key; omitting it keeps all-default logs
         # byte-identical to logs written before values were recorded.
         del payload["defaults"]
+    if kind == "run_started" and payload["call_time_llm"] is None:
+        # Likewise, logs of runs without call-time agents stay as they were.
+        del payload["call_time_llm"]
     copied = _copy_json(payload)
     if not isinstance(copied, dict):  # defensive: every payload model is an object
         raise ValueError("run-record payload did not encode to a JSON object")
@@ -2622,6 +2691,7 @@ def _record_from_payload(kind: str, payload: _StrictModel) -> RunRecord:
                 )
             ),
             defaults=values["defaults"],
+            call_time_llm=values["call_time_llm"],
         )
     if kind == "run_resumed":
         return RunResumedRecord(

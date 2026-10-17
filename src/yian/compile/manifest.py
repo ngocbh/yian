@@ -134,8 +134,19 @@ _IGNORED_KIND_FIELDS: dict[NodeKind, frozenset[str]] = {
     NodeKind.START: frozenset(),
     NodeKind.END: frozenset(),
     # llm_config is always run-resolved; own_llm_config is the authored identity source.
-    # llm_config_label is render-only.
-    NodeKind.AGENT: frozenset({"llm_config", "llm_config_label"}),
+    # llm_config_label is render-only. wires_llm_config and llm_value_types are derived
+    # from the layers; the reserved wiring they decide is manifested with the wiring.
+    # call_time and host_credentials are run-resolved like llm_config.
+    NodeKind.AGENT: frozenset(
+        {
+            "llm_config",
+            "llm_config_label",
+            "wires_llm_config",
+            "llm_value_types",
+            "call_time",
+            "host_credentials",
+        }
+    ),
     # _mode/ref are derived from code; _code is a process-local compiled-code cache.
     # CODE origins are diagnostic metadata resolved only by the authoring front end.
     NodeKind.CODE: frozenset(
@@ -362,6 +373,30 @@ def _sorted_mapping(value: dict, ctx: _ManifestContext, path: str) -> dict[str, 
             f"{path}: mapping keys must be strings, got {type(bad_key).__name__}"
         )
     return _canonical_mapping(value, ctx, path)
+
+
+def _llm_layer_manifest(layer: Any, ctx: _ManifestContext, path: str) -> Any:
+    """Canonicalize one authored `llm_config` layer as written.
+
+    A literal layer keeps its sorted-mapping encoding, a layer holding values encodes
+    as its `ValueTemplate`, and a whole record written as one value as its `Binding`.
+
+    Args:
+        layer (`Any`): The layer: a dict, a `ValueTemplate` or a `Binding`.
+        ctx (`_ManifestContext`): Recursion stacks for cycle detection.
+        path (`str`): Location used in error messages.
+
+    Returns:
+        `Any`: The layer's canonical record.
+
+    Raises:
+        TypeError: If a literal layer has a key that is not a string.
+    """
+    if isinstance(layer, Binding):
+        return _template_tree_manifest(layer, ctx, path)
+    if isinstance(layer, ValueTemplate):
+        return _canonical_value(layer, ctx, path)
+    return _sorted_mapping(layer, ctx, path)
 
 
 def _canonical_sequence(value: Any, ctx: _ManifestContext, path: str) -> list[Any]:
@@ -875,7 +910,7 @@ def _node_manifest(
                 "prompt": node.prompt,
                 "retries": node.retries,
                 "tools": _canonical_sequence(node.tools, ctx, f"{path}.tools"),
-                "own_llm_config": _sorted_mapping(
+                "own_llm_config": _llm_layer_manifest(
                     node.own_llm_config, ctx, f"{path}.own_llm_config"
                 ),
             }
@@ -1031,6 +1066,8 @@ def _flow_manifest(
                     "child_boundaries",
                     "outputs",
                     "flow_llm_config",
+                    # Derived from the layer and the flow's contracts; not identity.
+                    "flow_llm_value_types",
                     "flow_id",
                     "memories",
                     "_incoming",
@@ -1132,7 +1169,7 @@ def _flow_manifest(
                 manifest["memories"] = _memories_manifest(
                     flow.memories, ctx, f"{path}.memories"
                 )
-            manifest["flow_llm_config"] = _sorted_mapping(
+            manifest["flow_llm_config"] = _llm_layer_manifest(
                 flow.flow_llm_config, ctx, f"{path}.flow_llm_config"
             )
             manifest["outputs"] = [

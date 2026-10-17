@@ -20,7 +20,7 @@ Invariant: a node never writes the pool. It *describes* its one output value as
 
 import copy
 from abc import ABC
-from collections.abc import Generator
+from collections.abc import Generator, Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from math import isfinite
@@ -1308,6 +1308,32 @@ class Node(ABC):
         """
         return {}
 
+    def model_hidden_inputs(self) -> frozenset[str]:
+        """Return the bound inputs a model never sees: not recalled on, nor evidence.
+
+        They stay in the bound record, so backward and resume read what ran.
+
+        Returns:
+            `frozenset[str]`: Input names; empty by default.
+        """
+        return frozenset()
+
+    def bound_llm_config(self, inputs: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Return the model config this invocation bound as an input, if any.
+
+        Backward then records it as the invocation's ``effective_llm_config`` instead
+        of the run's entry for the node's static path.
+
+        Args:
+            inputs (`Mapping[str, Any]`): The invocation's bound inputs, reserved keys
+                included.
+
+        Returns:
+            `dict[str, Any] | None`: The bound config; `None` by default, which reads
+                the run's recorded map.
+        """
+        return None
+
     def backward(
         self, context: BackwardContext, feedback: tuple[FeedbackValue, ...],
     ) -> BackwardResult:
@@ -1359,6 +1385,20 @@ class Node(ABC):
         (WAIT: `until`; MAP: `over`), but returned with NO pool — load-time only. Default:
         the empty set (an ordinary node reserves no keys)."""
         return set()
+
+    def reserved_key_label(self, key: str) -> str:
+        """The author-facing phrase naming a reserved wiring key in a message.
+
+        It follows the node in a message, as in `node 'w' wait until`. Default:
+        `<kind> <key>` (WAIT: `wait until`; MAP: `map over`).
+
+        Args:
+            key (`str`): One of `reserved_wiring_keys()`.
+
+        Returns:
+            `str`: The phrase, without the node.
+        """
+        return f"{self.kind.value} {key}"
 
     def wiring_ref_label(self, param: str) -> str:
         """The author-facing phrase for a wiring `param` in a reference error — e.g. `input 'x'`

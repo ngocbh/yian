@@ -523,7 +523,7 @@ def validate_references(
             reserved_rng = franges.get(("field", key)) or input_rng
             scan(
                 nwiring.get(key),
-                f"node {node_id!r} {node.kind.value} {key}",
+                result.site_name(node_id, node.reserved_key_label(key)),
                 reserved_rng,
                 site_producers=node_producers,
                 site_inputs=node_inputs,

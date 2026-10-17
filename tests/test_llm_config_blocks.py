@@ -6,9 +6,9 @@ import typing
 import pytest
 from pydantic import ValidationError
 
-from yian.compile.llm_cascade import _validate_layer
 from yian.llm_clients import LLM_CONFIG_KEYS
 from yian.llm_clients.config import LLMConfig, SUPPORTED_LLM_PROVIDERS, merge_llm_config
+from yian.llm_clients.layers import validate_layer
 from yian.llm_clients.provider_blocks import PROVIDER_BLOCKS
 
 SENTINEL = "sk-sentinel-5f0c2a9e"
@@ -243,14 +243,14 @@ def test_merge_is_associative(node, flow, host):
 
 def test_host_layer_rejects_the_python_spelling_of_a_dash_block():
     with pytest.raises(ValueError, match="`qwen_cn` is not an llm_config key; write `qwen-cn`"):
-        _validate_layer({"qwen_cn": {"enable_thinking": True}})
+        validate_layer({"qwen_cn": {"enable_thinking": True}})
 
 
 def test_host_layer_unknown_key_lists_the_authored_keys():
     with pytest.raises(ValueError, match=r"unknown field\(s\) \['modle'\]") as caught:
-        _validate_layer({"modle": "x"})
+        validate_layer({"modle": "x"})
     assert ", ".join(sorted(LLM_CONFIG_KEYS)) in str(caught.value)
 
 
 def test_host_layer_accepts_a_dash_block():
-    _validate_layer({"qwen-cn": {"enable_thinking": True}})
+    validate_layer({"qwen-cn": {"enable_thinking": True}})

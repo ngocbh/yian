@@ -49,7 +49,10 @@ It is imported only when a server opens; opening one without it raises an
 There is no built-in provider or model. Each AGENT node takes its provider and
 model from the first of these that sets them:
 
-1. the flow's `llm_config` (the node, then its flow, then each parent flow);
+1. the flow's `llm_config` (the node, then its flow, then each parent flow); a field
+   there may come from a `${...}` value, such as `model: ${input.model}`, and one
+   that resolves to null is unset (see
+   [Values in `llm_config`](syntax.md#values-in-llm_config));
 2. `yian run --provider/--model`, or the `llm_config` a Python host passes to
    `run_flow`;
 3. the environment: `YIAN_DEFAULT_PROVIDER` and `YIAN_DEFAULT_MODEL`;

@@ -81,7 +81,9 @@ depth. The first boundary that sees one rejects it and names where it sits:
 - a binding's value (expression result, literal, or default): the node
   fails with `binding.evaluate`;
 - a node output: the node fails with `contract.output`, naming the field path;
-- an `llm_config` value: a load error, or `ValueError` before the run for a host config;
+- an `llm_config` value: a load error for a literal; `ValueError` before the run for a
+  host config or a `${...}` value resolved at run start; `binding.evaluate` for a
+  `${...}` value resolved when its agent runs;
 - the run-log codecs (`canonical_typed`, `canonical_seed`, `encode_pool`): `TypeCheckError`
   with a path. Nothing is recorded as `null` in its place;
 - a model reply: in an AGENT's structured reply it is a schema deviation, retried

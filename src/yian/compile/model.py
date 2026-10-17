@@ -26,10 +26,13 @@ from yian.nodes.contracts import (
     ExecutionScope,
     Parameter,
     SeedConnection,
+    ValuePath,
+    ValueTemplate,
     as_binding,
 )
 from yian.nodes.end import EndNode
 from yian.nodes.start import StartNode
+from yian.typesys import Type
 
 # The synthesized boundary-node ids. Canonical source is the node class; re-exported here.
 START_ID = StartNode.ID
@@ -295,11 +298,17 @@ class CompiledFlow(Flow):
         outputs (`list[FlowOutput]`):
             The declared flow `output:` carriers END reads; empty for a flow without
             `output:` (END returns `None`) or with `output: {}` (END returns `{}`).
-        flow_llm_config (`dict[str, Any]`):
+        flow_llm_config (`dict[str, Any] | ValueTemplate | Binding`):
             The flow's authored `llm_config:` model-selection defaults (the cascade's flow
             layer); `{}` when absent. `resolve_llm_cascade` gap-fills each AGENT node's
             effective config from this, the parent chain, the CLI layer, and process defaults
             captured once at run initialization. It returns the complete static-path map.
+            A layer holding `${...}` values is kept as written: a `ValueTemplate`, or a
+            `Binding` for a whole record written as one value.
+        flow_llm_value_types (`dict[ValuePath, Type | None]`):
+            The static type Compose proved for each value in ``flow_llm_config``, by its
+            field path; `None` when unproven. Derived, so not part of the fingerprint;
+            empty for a flow built in Python, whose values answer from their tags.
         flow_id (`str | None`):
             Stable authored semantic identity. Direct memoryless Python graphs may omit it.
         memories (`tuple[MemoryDecl, ...]`):
@@ -309,7 +318,7 @@ class CompiledFlow(Flow):
     def __init__(self, nodes: dict[str, Node], edges: list[Edge],
                  outputs: Optional[list[FlowOutput]] = None,
                  wiring: Optional[dict[str, dict[str, Any]]] = None,
-                 flow_llm_config: Optional[dict] = None,
+                 flow_llm_config: dict | ValueTemplate | Binding | None = None,
                  flow_id: str | None = None,
                  memories: tuple[MemoryDecl, ...] = ()) -> None:
         # The top-level compiled flow always roots at the synthesized START and returns END.
@@ -317,7 +326,8 @@ class CompiledFlow(Flow):
                          start_id=START_ID, end_id=END_ID)
         self.outputs = outputs or []                    # declared outputs END reads
         # The flow's authored llm_config: defaults — the cascade's flow layer; {} when absent.
-        self.flow_llm_config: dict = flow_llm_config or {}
+        self.flow_llm_config: dict | ValueTemplate | Binding = flow_llm_config or {}
+        self.flow_llm_value_types: dict[ValuePath, Type | None] = {}
         if flow_id is not None:
             if type(flow_id) is not str:
                 raise TypeError("flow_id must be an exact string or None")
@@ -356,7 +366,7 @@ class CompiledFlow(Flow):
     def from_parts(cls, nodes: dict[str, Node], edges: list[Edge],
                    outputs: Optional[list[FlowOutput]] = None,
                    wiring: Optional[dict[str, dict[str, Any]]] = None,
-                   flow_llm_config: Optional[dict] = None,
+                   flow_llm_config: dict | ValueTemplate | Binding | None = None,
                    flow_id: str | None = None,
                    memories: tuple[MemoryDecl, ...] = ()) -> "CompiledFlow":
         """Build a CompiledFlow. The entry is always the synthesized START node (StartNode.ID),

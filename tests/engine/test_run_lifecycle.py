@@ -1115,10 +1115,14 @@ def test_resume_hook_sees_recorded_configs_before_run_resumed(
     effective = _agent_resume_prefix(path)
     captured = _offline_agent(monkeypatch)
     seen: list[dict[str, dict[str, Any]]] = []
+    hosts: list[dict[str, Any] | None] = []
     resumed_at_hook: list[bool] = []
 
-    def hook(configs: dict[str, dict[str, Any]]) -> None:
+    def hook(
+        configs: dict[str, dict[str, Any]], *, call_time_host: dict[str, Any] | None,
+    ) -> None:
         seen.append(copy.deepcopy(configs))
+        hosts.append(call_time_host)
         resumed_at_hook.append(any(
             isinstance(decode_record(line).record, RunResumedRecord)
             for line in path.read_bytes().splitlines()
@@ -1135,6 +1139,7 @@ def test_resume_hook_sees_recorded_configs_before_run_resumed(
 
     assert result.status == "succeeded"
     assert seen == [legacy_connection_map(effective)]
+    assert hosts == [None]
     assert seen[0]["answer"]["_connection"]["source"] == "legacy_environment"
     assert resumed_at_hook == [False]
     assert [config["model"] for config in captured] == ["recorded-model"]
@@ -1151,7 +1156,9 @@ def test_resume_hook_failure_leaves_the_log_unchanged(
     before = path.read_bytes()
     expected = RuntimeError("no key")
 
-    def hook(configs: dict[str, dict[str, Any]]) -> None:
+    def hook(
+        configs: dict[str, dict[str, Any]], *, call_time_host: dict[str, Any] | None,
+    ) -> None:
         raise expected
 
     with pytest.raises(RuntimeError) as caught:

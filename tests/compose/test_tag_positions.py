@@ -24,7 +24,8 @@ def _generic(key: str) -> str:
     """Return the message for a tag at `key:`, which is not a typed slot."""
     return (
         "a tag types a value — a flow input, a binding, a flow output, an agent "
-        f"variable, a value entry in `nodes:`, or a value inside one; `{key}:` is not one"
+        f"variable, an `llm_config` value, a value entry in `nodes:`, or a value inside "
+        f"one; `{key}:` is not one"
     )
 
 
@@ -245,7 +246,7 @@ output: ${settle.output}
 
 
 def test_tag_inside_a_non_slot_value_names_its_key():
-    line = "llm_config: {provider: openai, openai: {temperature: !float 0.5}}"
+    line = "env: {sampling: {temperature: !float 0.5}}"
     text = _CODE.replace("name: f\n", f"name: f\n{line}\n")
     _assert_error(text, _generic("temperature"), line)
 

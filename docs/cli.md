@@ -90,6 +90,16 @@ variable, so a saved OpenAI subscription wins over an ambient `OPENAI_API_KEY`.
 model. Changing an account or billing method requires running setup again. See
 [Saved logins](installation.md#saved-logins-yian-auth).
 
+After it has the inputs, and before it creates the log, `yian run` checks the key of
+every provider the flow's agents use, and prompts for a missing one in a terminal (see
+[Choosing a provider and model](installation.md#choosing-a-provider-and-model)). The
+check reads the inputs, so a provider an `llm_config` value takes from them counts
+(see [Values in `llm_config`](syntax.md#values-in-llm_config)). An agent whose
+`llm_config` resolves only when it runs counts too when no value can change its
+provider. Any other agent's key is checked at its model
+call. An input or value that `llm_config` reads and that fails its check is reported
+here, before the log exists.
+
 ## Durable logs and recovery
 
 Before execution, a fresh invocation reports its selected JSONL path on stderr,
@@ -135,7 +145,10 @@ nothing, so the log stays resumable. A run started from Python with
 `llm_config.api_key` can only be resumed from Python, with
 `resume_flow(..., api_key=...)`; when that run also sent `llm_config.headers`, the
 error says `resume_flow(api_key=..., headers=...)`, since the header values are not
-recorded either. A saved login's connection settings need nothing: they are pinned
+recorded either. The same holds for a run whose agents resolve their `llm_config` when
+they run and may use that key. An agent of that kind that had started before the
+crash recorded its config, and its key is checked like the others; one that had not
+started is checked when it resolves. A saved login's connection settings need nothing: they are pinned
 with the login.
 
 `--resume` also needs the `YIAN_<NAME>` defaults and limits the run started with. A

@@ -48,6 +48,12 @@ reject an ill-formed flow before it is compiled:
 - `reserved_sources.py` — `check_reserved_sources`: a MAP `over:` reference infers a
   list and a WAIT `until:` reference a type that overlaps `date` or `datetime`; a
   literal is left to the parse stage and an unproven type to the run-time check.
+- `llm_config_sources.py` — `check_llm_config_sources`: each value in an AGENT's,
+  composer's or flow's `llm_config` has a proven type or a tag, no `isinstance` or
+  constructor call, and a type that can fit its field (`provider`/`model` take `str`, a
+  `Literal` provider names a known provider, a simple provider-block field its annotated
+  type, a whole record or block a record of its fields or `object`); a flow-layer value
+  every agent overrides is still checked, its references included.
 - `constructors.py` — `constructor_errors`: a `${T(...)}` constructor call that can never
   succeed (mixed keyword and positional arguments or several positional ones, a field
   `T` doesn't have, a missing required field, or an argument whose inferred type is

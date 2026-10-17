@@ -184,7 +184,8 @@ def chat(
         _render_load_error(err)
         raise typer.Exit(code=1)
     try:
-        _ensure_provider_keys(loaded, cli_cfg)
+        # Check with the inputs the first attempt runs with, which `llm_config` may read.
+        _ensure_provider_keys(loaded, cli_cfg, {"opening": ""})
     except (RuntimeError, ValueError) as exc:
         err_console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)

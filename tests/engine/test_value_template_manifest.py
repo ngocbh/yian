@@ -237,3 +237,86 @@ def test_a_flow_without_templates_keeps_its_fingerprint():
     assert flow_fingerprint(load_flow(_UNTYPED_FLOW).compiled) == (
         "c5ea81e947585f9000040c8446b8c14ed3114e12a14c3584338d1b4db3b3d5e7"
     )
+
+
+_LLM_FLOW = """\
+id: f
+name: f
+input: {m: !str , n: !str , cfg: !object }
+FLOW_LAYER
+nodes:
+  a:
+    kind: agent
+    prompt: Go.
+    llm_config: NODE_LAYER
+output: ${a.output}
+"""
+
+
+def _llm_fingerprint(
+    node_layer: str,
+    flow_layer: str = "llm_config: {provider: anthropic, anthropic: {max_tokens: 900}}",
+) -> str:
+    """Fingerprint `_LLM_FLOW` with the node and flow `llm_config` layers given."""
+    text = _LLM_FLOW.replace("NODE_LAYER", node_layer).replace("FLOW_LAYER", flow_layer)
+    return flow_fingerprint(load_flow(text).compiled)
+
+
+def test_a_literal_llm_config_flow_keeps_its_fingerprint():
+    # The fingerprint main gives this flow, from before `llm_config` read values.
+    text = """\
+id: f
+name: f
+llm_config: {provider: anthropic, anthropic: {max_tokens: 900}}
+nodes:
+  a:
+    kind: agent
+    prompt: Go.
+    llm_config: {model: claude-x, inherit: true, anthropic: {temperature: 0.2}}
+output: ${a.output}
+"""
+    assert flow_fingerprint(load_flow(text).compiled) == (
+        "0f2c73ac336010ede82bbbc2f9a6584bbe70a5c7453285d4a2eedbdb81e4376e"
+    )
+
+
+def test_llm_config_values_are_fingerprinted_as_written():
+    assert _llm_fingerprint("{model: '${input.m}'}") != _llm_fingerprint(
+        "{model: '${input.n}'}"
+    )
+    assert _llm_fingerprint("{model: '${input.m}'}") != _llm_fingerprint("{model: m}")
+
+
+def test_a_tag_on_an_llm_config_value_changes_the_fingerprint():
+    assert _llm_fingerprint("{model: !str '${input.m}'}") != _llm_fingerprint(
+        "{model: '${input.m}'}"
+    )
+
+
+def test_whole_record_llm_config_values_are_fingerprinted():
+    node = _llm_fingerprint("${input.cfg}")
+    assert node != _llm_fingerprint("!object ${input.cfg}")
+    assert node != _llm_fingerprint("{model: '${input.m}'}")
+    flow = _llm_fingerprint("{model: m}", flow_layer="llm_config: ${input.cfg}")
+    assert flow != _llm_fingerprint("{model: m}", flow_layer="llm_config: !object ${input.cfg}")
+    assert flow != _llm_fingerprint("{model: m}", flow_layer="llm_config: {model: x}")
+
+
+def test_a_flow_llm_config_value_is_fingerprinted_as_written():
+    assert _llm_fingerprint(
+        "{model: m}", flow_layer="llm_config: {provider: '${input.m}'}"
+    ) != _llm_fingerprint("{model: m}", flow_layer="llm_config: {provider: '${input.n}'}")
+
+
+def test_a_literal_llm_config_with_a_doubled_dollar_reads_unescaped():
+    # A literal layer is read as a template would be, so `$$` is one `$` and the
+    # fingerprint is that of the unescaped text.
+    assert _llm_fingerprint('{model: "a$$b"}') == _llm_fingerprint('{model: "a$b"}')
+    flow = load_flow(
+        _LLM_FLOW.replace("NODE_LAYER", '{model: "a$$b"}').replace("FLOW_LAYER", "")
+    )
+    assert flow_manifest(flow.compiled)["nodes"]["a"]["own_llm_config"] == {
+        "entries": [{"key": {"type": "str", "value": "model"},
+                     "value": {"type": "str", "value": "a$b"}}],
+        "type": "mapping",
+    }

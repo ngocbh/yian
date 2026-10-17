@@ -53,6 +53,11 @@ from yian.compile.memory_layout import (
     resolve_memory_layout,
     scope_memory_declarations,
 )
+from yian.compile.llm_cascade import (
+    field_label,
+    find_inherited_llm_value,
+    inherited_value_fix,
+)
 from yian.compile.model import CompiledFlow
 from yian.compile.origins import iter_flow_origins, rebase_flow_origins
 from yian.defaults import current
@@ -61,12 +66,14 @@ from yian.diagnostics import (
     OriginRef,
     OriginResolver,
     ResolverTable,
+    SourceRange,
 )
 from yian.memory.contracts import DeclSite, MemorySetupError
 from yian.typesys.values import TypeCheckError
 from yian.typesys.types import read_typedefs
 from yian.compose.build.pipeline import _assemble, ComposedFlow
 from yian.compose.desugar.inline_bodies import INLINE_FLOW_PREFIX
+from yian.compose.nodes.agent import check_llm_config_value, read_llm_config
 from yian.compose.nodes.base import not_text_detail, not_text_error
 from yian.compose.nodes.resolver import ChildResolver, call_nesting_scope
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
@@ -90,6 +97,7 @@ from yian.compose.source.catalog import _SourceCatalogBuilder, _scope_origin
 from yian.llm_clients import LLMConfig
 from yian.llm_clients.config import host_only_field_error
 from yian.nodes.agent.node import is_max_tool_iterations
+from yian.nodes.contracts import Binding, ValueTemplate
 
 
 _UNLOCATED_DIAGNOSTICS = LoadDiagnostics()
@@ -680,27 +688,130 @@ def load_flow(
         resolve_memory_layout(flow.compiled)
     except MemorySetupError as exc:
         raise _memory_setup_load_error(flow, exc) from exc
+    # Which flow is the run's root, and so which inputs are known at run start, is
+    # decided only here.
+    _refuse_inherited_llm_values(flow)
     return flow
 
 
-def _validate_authored_llm_config(
-    llm_config: Any, where: str, *, diagnostics: LoadDiagnostics, cursor: SourceCursor | None,
-) -> None:
-    """Check a flow- or def-level ``llm_config`` the way an AGENT node's own is checked.
+def _refuse_inherited_llm_values(flow: ComposedFlow) -> None:
+    """Reject an `llm_config` value a child flow's agent would inherit before it is known.
 
-    The layer must be a mapping of `LLMConfig` fields without ``api_key``,
-    ``organization``, ``project``, ``headers``, or ``base_url`` other than beside
-    ``provider: azure``, which only the host sets. A text field YAML read as non-text
-    (such as ``model: 5``) is named by `not_text_error`; any other violation keeps
-    pydantic's message.
+    Only the root flow's values that read just its inputs are known when the run starts;
+    any other value in a flow's layer is read when that flow runs, so a child flow's
+    agent can't inherit it (`find_inherited_llm_value`). The error is located at the
+    value and names the agent and the fix; a value in an imported file names the
+    `uses:` alias and the node that calls it. A value or callsite with no source
+    location names the callee as the callsite does, without saying whether it is an
+    import or a `defs:` entry.
+
+    Args:
+        flow (`ComposedFlow`): The loaded root flow, imports included.
+
+    Raises:
+        `LoadError`: A child flow's agent would inherit such a value.
     """
-    if llm_config is None:
+    found = find_inherited_llm_value(flow.compiled)
+    if found is None:
         return
-    source_range = (
-        cursor.range_of("llm_config")
-        if cursor is not None and cursor.has("llm_config")
-        else None
+    resolver = flow.origin_resolver
+
+    def frame(origin: OriginRef | None) -> DiagnosticFrame | None:
+        return None if origin is None or resolver is None else resolver.resolve(origin)
+
+    value_frame = frame(found.origin)
+    field = field_label(found.field)
+    if found.callsite is None:
+        subject = f"flow {field}"
+    else:
+        name = getattr(found.callsite, "flow_id", None)
+        called = f"called by node {'/'.join(found.owner)!r}"
+        callsite_frame = frame(found.callsite.origin)
+        if value_frame is None or callsite_frame is None:
+            subject = f"{field} of the flow {name!r} ({called})"
+        elif value_frame.label != callsite_frame.label:
+            subject = f"{field} of the flow imported through uses: {name!r} ({called})"
+        else:
+            subject = f"defs entry {name!r} {field} ({called})"
+    agent = found.gate or f"agent {'/'.join(found.agent)!r} in a child flow"
+    raise _UNLOCATED_DIAGNOSTICS.error(
+        f"{subject}: {agent} would inherit this value, which is read only when the flow "
+        f"runs; {inherited_value_fix(found.field)}",
+        frames=() if value_frame is None else (value_frame,),
     )
+
+
+def _read_authored_llm_config(
+    llm_config: Any,
+    where: str,
+    *,
+    registry,
+    site_path: tuple[str | int, ...],
+    catalog_builder: _SourceCatalogBuilder,
+    diagnostics: LoadDiagnostics,
+    cursor: SourceCursor | None,
+) -> Any:
+    """Read a flow- or def-level ``llm_config`` with its values and tags, and check it.
+
+    The layer is read through its tags the way an AGENT node's own is: a layer holding
+    `${...}` values becomes a `ValueTemplate`, or a `Binding` for a whole record
+    written as one value, and is checked by `check_llm_config_value`. Otherwise it must
+    be a mapping of `LLMConfig` fields without ``api_key``, ``organization``,
+    ``project``, ``headers``, or ``base_url`` other than beside ``provider: azure``,
+    which only the host sets. A text field YAML read as non-text (such as
+    ``model: 5``) is named by `not_text_error`; any other violation keeps pydantic's
+    message. ``inherit`` is an AGENT-only key.
+
+    Args:
+        llm_config (`Any`): The authored layer; `None` means absent.
+        where (`str`): The layer's owner in messages, such as ``"flow"``.
+        registry (`TypeRegistry`): The file's typedefs the tags resolve against.
+        site_path (`tuple[str | int, ...]`): Catalog site prefix for the layer.
+        catalog_builder (`_SourceCatalogBuilder`): File-owned origin catalog builder.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
+        cursor (`SourceCursor | None`): The authored flow or def body, when retained.
+
+    Returns:
+        `Any`: The layer: a dict, a `ValueTemplate` or a `Binding`; `{}` when absent.
+
+    Raises:
+        `LoadError`: The layer is malformed or sets a field a flow file may not set.
+    """
+    # `llm_config: !T` with nothing after the tag reads as null; the reader rejects it.
+    tagged = (
+        cursor is not None
+        and cursor.has("llm_config")
+        and cursor.child("llm_config").tag is not None
+    )
+    if llm_config is None and not tagged:
+        return {}
+    source_range = None
+    ranges: dict[str, SourceRange] = {}
+    if cursor is not None and cursor.has("llm_config"):
+        source_range = cursor.range_of("llm_config")
+        layer_cursor = cursor.child("llm_config")
+        if layer_cursor.holds(llm_config):
+            try:
+                llm_config, ranges = read_llm_config(
+                    layer_cursor,
+                    registry,
+                    prefix=f"{where}: llm_config",
+                    site_path=site_path,
+                    catalog_builder=catalog_builder,
+                    diagnostics=diagnostics,
+                )
+            except SourceAccessError as exc:
+                raise diagnostics.error(str(exc), range=exc.range) from exc
+    if isinstance(llm_config, (ValueTemplate, Binding)):
+        layer, _ = check_llm_config_value(
+            llm_config,
+            f"{where}: llm_config",
+            source_range,
+            diagnostics,
+            ranges,
+            allow_inherit=False,
+        )
+        return layer
     if not isinstance(llm_config, Mapping):
         raise diagnostics.error(f"{where}: llm_config must be a mapping", range=source_range)
     message = host_only_field_error(llm_config)
@@ -717,6 +828,7 @@ def _validate_authored_llm_config(
         ) from exc
     except Exception as exc:
         raise diagnostics.error(f"{where}: llm_config: {exc}", range=source_range) from exc
+    return llm_config
 
 
 def _validate_flow_env(
@@ -784,7 +896,6 @@ def _load_flow_body(
     diagnostics = LoadDiagnostics.from_document(document)
     f = parse_file(document)
     _reject_authored_private_callable_names(root, f.defs, f.uses)
-    _validate_authored_llm_config(f.llm_config, "flow", diagnostics=diagnostics, cursor=root)
     _validate_flow_env(f.env, diagnostics=diagnostics, cursor=root)
     _validate_system(
         f.system,
@@ -833,6 +944,16 @@ def _load_flow_body(
         uses_cursor=uses_cursor,
         diagnostics=diagnostics,
     )
+    # Read after the typedefs, which its tags resolve against.
+    flow_llm_config = _read_authored_llm_config(
+        f.llm_config,
+        "flow",
+        registry=registry,
+        site_path=("root", "llm_config"),
+        catalog_builder=callable_scope.catalog_builder,
+        diagnostics=diagnostics,
+        cursor=root,
+    )
     root_memories = (
         parse_memory_declarations(
             f.long_term_memory,
@@ -866,7 +987,7 @@ def _load_flow_body(
         version=f.version,
         name=f.name,
         description=f.description,
-        flow_llm_config=f.llm_config,
+        flow_llm_config=flow_llm_config,
         flow_env=f.env,
         boundary_field_ranges=_boundary_field_ranges(root),
         asserts_cursor=(
@@ -1371,8 +1492,14 @@ def _load_def(
                 else None
             ),
         )
-    _validate_authored_llm_config(
-        body.get("llm_config"), f"defs entry {name!r}", diagnostics=diagnostics, cursor=def_cursor
+    def_llm_config = _read_authored_llm_config(
+        body.get("llm_config"),
+        f"defs entry {name!r}",
+        registry=registry,
+        site_path=("def", name, "llm_config"),
+        catalog_builder=scope.catalog_builder,
+        diagnostics=diagnostics,
+        cursor=def_cursor,
     )
     def_env = body.get("env")
     if def_env is not None and (
@@ -1418,7 +1545,7 @@ def _load_def(
             registry=registry,
             scope=scope,
             owner=("def", name),
-            flow_llm_config=body.get("llm_config") or {},
+            flow_llm_config=def_llm_config,
             flow_env=def_env or {},
             boundary_field_ranges=(
                 _boundary_field_ranges(def_cursor)

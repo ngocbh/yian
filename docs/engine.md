@@ -222,8 +222,18 @@ schema 7 or 8 is rejected on read with "run log schema N predates schema 9 and
 is not supported"; other versions are rejected too. Recovery preserves the
 accepted prefix's canonical bytes and appends new records without rewriting it.
 
+`RunStartedRecord` holds the complete effective model map of the agents resolved at
+run start. An agent whose `llm_config` reads a value known only when it runs (see
+[Values in `llm_config`](syntax.md#values-in-llm_config)) is in the optional
+`call_time_llm` instead: its base (the layers below its own) and the nonsecret
+connection selection it binds from. A run without such an agent omits the field, so
+its log is unchanged. The schema stays 9, but a yian version from before the field
+can't read a log that holds it.
+
 A `NodeStepRecord` holds one step an in-flight node recorded, such as a TOOL retry's
-failed attempt. A node that declares `needs_steps` gets `caps["steps"]`, whose
+failed attempt, or the config a call-time AGENT resolved
+(`{"effective_llm_config": {...}}`, without keys or header values), recorded before
+it opens memory or calls its model. Resume and backward use that recorded config. A node that declares `needs_steps` gets `caps["steps"]`, whose
 `record(step)` returns once the step is appended and applied. In a pooled run the
 worker hands the step to the dispatcher and waits; a serial run commits it inline.
 The reducer keeps a node's steps and its accepted start count across `RunResumed`

@@ -19,7 +19,8 @@ from yian.defaults import current
 from yian.diagnostics import OriginRef
 from yian.expr.template import render_template_record
 from yian.expr.lineage import FeedbackValue
-from yian.llm_clients.connection import scrub_call_credentials
+from yian.llm_clients.config import HostConnection
+from yian.llm_clients.connection import HOST_KEY_MARKER, scrub_call_credentials
 from yian.memory.contracts import (
     MemoryContext,
     EvaluationTrace,
@@ -29,6 +30,14 @@ from yian.memory.contracts import (
     _rewrite_memory_decl_origins,
 )
 from yian.nodes.agent.context import DEFAULT_SYSTEM, AgentRunContext
+from yian.nodes.agent.llm_values import (
+    LLM_CONFIG_KEY,
+    CallTimeLLM,
+    Nullable,
+    call_time_config,
+    invocation_config,
+    types_nullable,
+)
 from yian.nodes.agent.memory import compatibility
 from yian.nodes.agent.backward import backward_agent
 from yian.nodes.agent.loop import run_agent
@@ -44,17 +53,27 @@ from yian.nodes.base import (
     _HostStop,
     _check_named_prompt,
 )
-from yian.nodes.binding import BindingError, apply_defaults
+from yian.nodes.binding import BindingError, ReservedBinder, apply_defaults
 from yian.nodes.contracts import (
+    Binding,
+    NodeSteps,
     Parameter,
     ValueContract,
+    ValueTemplate,
     _iter_origin_carrier,
+    ValuePath,
     _rewrite_origin_carrier,
 )
 from yian.skills.catalog import Skill, SkillError, check_skill_name
 from yian.skills.tool import LOAD_SKILL, system_prompt_with_skills
 from yian.tools import ToolSet
+from yian.typesys import Type
+from yian.typesys.pool import VariablePool
 from yian.typesys.values import ValueKind, build_value_as, canonical_type_label
+
+
+_CONFIG_STEP = "effective_llm_config"
+"""The node-step key under which a call-time agent records its resolved config."""
 
 
 def is_text_output(contract: Any) -> bool:
@@ -100,7 +119,7 @@ class AgentNode(Node):
         prompt: str = "",
         system_prompt: str | None = None,
         tools: Optional[list[str]] = None,
-        llm_config: Optional[dict[str, Any]] = None,
+        llm_config: dict[str, Any] | ValueTemplate | Binding | None = None,
         llm_inherit: bool = True,
         retries: int | None = None,
         title: Optional[str] = None,
@@ -123,9 +142,15 @@ class AgentNode(Node):
                 "Remove it and grant registered Yian tools explicitly."
             )
         # own_llm_config is the authored source re-resolved by each cascade pass;
-        # llm_config is the effective config baked for this run.
-        self.own_llm_config: dict[str, Any] = dict(llm_config) if llm_config else {}
-        self.llm_config = llm_config
+        # llm_config is the effective config baked for this run. A layer holding values
+        # (a template, or a binding for the whole record) has no config until they resolve.
+        self.own_llm_config: dict[str, Any] | ValueTemplate | Binding
+        if isinstance(llm_config, (ValueTemplate, Binding)):
+            self.own_llm_config = llm_config
+            self.llm_config = None
+        else:
+            self.own_llm_config = dict(llm_config) if llm_config else {}
+            self.llm_config = llm_config
         self.llm_inherit = llm_inherit
         self.retries = current().agent_retries if retries is None else retries
         if type(memories) is not tuple or any(
@@ -147,11 +172,134 @@ class AgentNode(Node):
         #   `node 'ask' adaptive_questions.llm_config`). Render-only and absent from run records
         #   and the manifest. `None` for an authored agent, whose messages name its path.
         self.llm_config_label: str | None = None
+        # Both set by Compose, derived from the layers. `wires_llm_config`: the node and
+        # own-flow layers ride the reserved `__llm_config` wiring. `llm_value_types`: the
+        # static type of each value in `own_llm_config` by field path (`None` when not
+        # proven), which decides whether it always overrides a lower layer's field.
+        self.wires_llm_config = False
+        self.llm_value_types: dict[ValuePath, Type | None] = {}
+        # Both set per run on the run's private flow, never on the authored one.
+        # `call_time`: what run start fixed when this agent's config resolves only when it
+        # runs; `None` when run start resolved it into `llm_config`. `host_credentials`:
+        # the host key and header values, given only to such an agent.
+        self.call_time: CallTimeLLM | None = None
+        self.host_credentials: HostConnection | None = None
+
+    def reserved_wiring_keys(self) -> set[str]:
+        """Declare ``__llm_config`` when values in the layers can reach this agent's config."""
+        return {LLM_CONFIG_KEY} if self.wires_llm_config else set()
+
+    def model_hidden_inputs(self) -> frozenset[str]:
+        """Hide ``__llm_config`` from recall and evidence: it configures the call.
+
+        Returns:
+            `frozenset[str]`: ``{"__llm_config"}`` when this agent has the key, else
+                empty.
+        """
+        return frozenset({LLM_CONFIG_KEY}) if self.wires_llm_config else frozenset()
+
+    def bind_reserved(
+        self, node_wiring: dict, pool: VariablePool, *, bind: ReservedBinder | None = None,
+    ) -> dict[str, Any]:
+        """Resolve and check a call-time agent's ``llm_config`` before its model call.
+
+        The node and own-flow layers resolve against ``pool``, merge over the base run
+        start recorded, and are checked as run start checks a static agent's config
+        (`call_time_config`). Nothing is rendered, recalled or sent to a model first.
+
+        Args:
+            node_wiring (`dict`): This node's wiring, holding ``__llm_config``.
+            pool (`VariablePool`): The live pool the values read.
+            bind (`ReservedBinder | None`, *optional*, defaults to `None`): Unused; the
+                bound value is the resolved config, not the values it was read from.
+
+        Returns:
+            `dict[str, Any]`: ``{"__llm_config": <config>}``, the resolved config with no
+                key or header value, the shape of a ``RunStarted`` map entry; ``{}`` for
+                an agent run start resolved.
+
+        Raises:
+            `BindingError`: A value breaks its tag (``binding.type``) or fails to
+                resolve, or the resolved config is refused (``contract.input``); the
+                message names the field.
+            `AuthError`: The config is marked for the host key the run does not hold;
+                the host's to fix, not a failure of this node.
+        """
+        if self.call_time is None:
+            return {}
+        return {
+            LLM_CONFIG_KEY: call_time_config(
+                node_wiring[LLM_CONFIG_KEY],
+                pool,
+                self.call_time,
+                label=self.llm_config_label,
+                credentials=self.host_credentials,
+            )
+        }
+
+    def reserved_key_label(self, key: str) -> str:
+        """Name the reserved ``__llm_config`` key as the authored ``llm_config`` field."""
+        return "llm_config" if key == LLM_CONFIG_KEY else super().reserved_key_label(key)
+
+    def llm_nullable(self) -> Nullable:
+        """Return whether a value in ``own_llm_config``, or a part of it, may be null.
+
+        Returns:
+            `Nullable`: Answers from ``llm_value_types``; a value with no proven type
+                may be null.
+        """
+        return types_nullable(self.own_llm_config, self.llm_value_types)
 
     @property
     def needs_steering(self) -> bool:
         """Receive the host's steering inbox only when authored ``steerable: true``."""
         return self.steerable
+
+    @property
+    def needs_steps(self) -> bool:
+        """Receive node steps only when this agent's config resolves when it runs."""
+        return self.call_time is not None
+
+    def recorded_llm_config(self, steps: tuple[dict[str, Any], ...]) -> dict[str, Any] | None:
+        """Return the config an earlier start of this agent recorded in its steps, if any.
+
+        Args:
+            steps (`tuple[dict[str, Any], ...]`): The node's recorded steps, in order.
+
+        Returns:
+            `dict[str, Any] | None`: The last recorded ``effective_llm_config``, with no
+                key or header value; `None` when no step records one.
+        """
+        for step in reversed(steps):
+            if isinstance(step, dict) and isinstance(step.get(_CONFIG_STEP), dict):
+                return deepcopy(step[_CONFIG_STEP])
+        return None
+
+    def backward_input_names(self) -> tuple[str, ...]:
+        """Return the declared inputs eligible for feedback, never ``__llm_config``.
+
+        The model config is not material the model reasons about, so the node that
+        produced a value in it never receives this agent's input feedback.
+
+        Returns:
+            `tuple[str, ...]`: Canonical parameter names in declaration order.
+        """
+        return tuple(
+            name for name in super().backward_input_names() if name != LLM_CONFIG_KEY
+        )
+
+    def bound_llm_config(self, inputs: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Return the config a call-time agent bound as ``__llm_config``, if any.
+
+        Args:
+            inputs (`Mapping[str, Any]`): The invocation's bound inputs.
+
+        Returns:
+            `dict[str, Any] | None`: The resolved config, with no key or header value;
+                `None` for an agent run start resolved, which binds none.
+        """
+        config = inputs.get(LLM_CONFIG_KEY)
+        return config if isinstance(config, dict) else None
 
     def validate_execution_setup(self) -> None:
         """Reject a steerable agent whose output contract is not plain text.
@@ -243,12 +391,14 @@ class AgentNode(Node):
         *,
         _seen_carriers: Optional[set[int]] = None,
     ) -> Iterator[OriginRef]:
-        """Yield common origins, variable declarations, and memory declaration sites."""
+        """Yield common, variable, memory declaration and authored `llm_config` value origins."""
         seen = _seen_carriers if _seen_carriers is not None else set()
         yield from super().iter_local_origins(_seen_carriers=seen)
         for variable in self.variables:
             yield from _iter_origin_carrier(variable, seen)
         yield from _iter_memory_decl_origins(self.memories, seen)
+        if isinstance(self.own_llm_config, (ValueTemplate, Binding)):
+            yield from _iter_origin_carrier(self.own_llm_config, seen)
 
     def rewrite_local_origins(
         self,
@@ -256,12 +406,17 @@ class AgentNode(Node):
         *,
         _seen_carriers: Optional[set[int]] = None,
     ) -> None:
-        """Rewrite common, variable, and memory declaration origins while retaining aliases."""
+        """Rewrite common, variable, memory declaration and `llm_config` value origins.
+
+        Carrier aliases are retained.
+        """
         seen = _seen_carriers if _seen_carriers is not None else set()
         super().rewrite_local_origins(mapper, _seen_carriers=seen)
         for variable in self.variables:
             _rewrite_origin_carrier(variable, mapper, seen)
         _rewrite_memory_decl_origins(self.memories, mapper, seen)
+        if isinstance(self.own_llm_config, (ValueTemplate, Binding)):
+            _rewrite_origin_carrier(self.own_llm_config, mapper, seen)
 
     def _max_tool_iterations(self) -> int:
         """Return the authored or default positive loop bound, or ``-1`` for no bound."""
@@ -277,6 +432,7 @@ class AgentNode(Node):
         self,
         prompt: str,
         *,
+        llm_config: dict[str, Any] | None = None,
         stop_event=None,
         evaluation_trace: EvaluationTrace | None = None,
         memory_context: MemoryContext | None = None,
@@ -287,7 +443,12 @@ class AgentNode(Node):
         skills: tuple[Skill, ...] = (),
         steering: Steering | None = None,
     ) -> AgentRunContext:
-        """Build the complete process-local context for one invocation."""
+        """Build the complete process-local context for one invocation.
+
+        ``llm_config`` is the config this invocation's model call uses, host secrets
+        included; it lives only in the returned context. `None` uses the run's
+        ``llm_config``.
+        """
         output_type = (
             self.output_contract.type
             if type(self.output_contract) is ValueContract
@@ -297,7 +458,7 @@ class AgentNode(Node):
             node_id=self.id,
             prompt=prompt,
             tools=list(self.tools),
-            llm_config=self.llm_config,
+            llm_config=self.llm_config if llm_config is None else llm_config,
             output_type=output_type,
             retries=self.retries,
             max_tool_iterations=self._max_tool_iterations(),
@@ -349,6 +510,7 @@ class AgentNode(Node):
         emit_event: Callable[[Any], None] | None = None,
         skills: Mapping[str, Skill] | None = None,
         steering: Steering | None = None,
+        steps: NodeSteps | None = None,
     ) -> Output:
         """Render fresh locals once, publish established capture, and run the loop.
 
@@ -359,6 +521,12 @@ class AgentNode(Node):
         once, including established partial locals if preparation fails. Unknown
         variables or an unfinished prompt remain None; capture faults propagate.
         No invocation state is stored on the node.
+
+        A call-time agent's model config is its bound ``__llm_config`` with the run's
+        host key and header values joined when it is marked for the host key; any
+        other agent uses its run's ``llm_config``. Before anything renders, a
+        call-time agent checks the bound config against the one an earlier start
+        recorded in its steps, then records it as a step.
 
         Args:
             inputs (`dict`): Delivered inputs, kept separate from local variables.
@@ -385,6 +553,10 @@ class AgentNode(Node):
             steering (`Steering | None`, *optional*, defaults to `None`):
                 The host inbox, supplied only when this node is steerable. The
                 tool loop drains steer messages and honors interrupts.
+            steps (`NodeSteps | None`, *optional*, defaults to `None`):
+                This start's recorded steps, supplied only to a call-time agent.
+                It records ``{"effective_llm_config": <config>}``, which holds no
+                key or header value.
 
         Returns:
             `Output`: The model's answer.
@@ -394,10 +566,13 @@ class AgentNode(Node):
             `ExpressionError`: The prompt or system prompt names a missing value or
                 renders a null.
             `SkillError`: The node grants skills the host did not supply.
-            `_CapabilityFault`: Capture or conversation access fails; the
+            `_CapabilityFault`: Capture or conversation access fails, or the bound
+                config differs from the one an earlier start recorded; the
                 evaluator re-raises its original host exception.
             `_HostStop`: The host has requested cooperative cancellation.
         """
+        if steps is not None and self.call_time is not None:
+            self._record_config(inputs[LLM_CONFIG_KEY], steps)
         captured = None if capture_render is None else {
             "prompt_template": self.prompt, "variables": None,
             "variable_domains": None, "rendered_prompt": None,
@@ -441,17 +616,19 @@ class AgentNode(Node):
             raise _HostStop(primary=False)
         granted = self._granted_skills(skills)
         base_system_prompt = system_prompt_with_skills(system_prompt, granted)
+        config = self._call_config(inputs)
         # Recall sees the system prompt without the skill listing, so grants never change recall.
         memory_context = (
             MemoryContext()
             if open_memory_context is None
-            else open_memory_context(system_prompt, prompt, compatibility(self.llm_config))
+            else open_memory_context(system_prompt, prompt, compatibility(config))
         )
         if stop_event is not None and stop_event.is_set():
             raise _HostStop(primary=False)
         try:
             return run_agent(self._ctx(
                 prompt,
+                llm_config=config,
                 stop_event=stop_event,
                 evaluation_trace=evaluation_trace,
                 memory_context=memory_context,
@@ -464,16 +641,66 @@ class AgentNode(Node):
             ))
         except BaseException as exc:
             # Providers may echo any credential the call sent; the failure record must not carry it.
-            scrub_call_credentials(exc, self.llm_config)
+            scrub_call_credentials(exc, config)
             raise
 
-    def _host_api_key(self) -> Any:
-        """Return the host key bound to this node for the run, if any."""
-        return self.llm_config.get("api_key") if isinstance(self.llm_config, dict) else None
+    def _record_config(self, config: dict[str, Any], steps: NodeSteps) -> None:
+        """Check ``config`` against the config an earlier start recorded, then record it.
 
-    def _host_headers(self) -> Any:
-        """Return the host header values bound to this node with its key, if any."""
-        return self.llm_config.get("headers") if isinstance(self.llm_config, dict) else None
+        Args:
+            config (`dict[str, Any]`): The bound config, with no secrets.
+            steps (`NodeSteps`): This start's steps.
+
+        Raises:
+            `_CapabilityFault`: An earlier start recorded another config. The code
+                that resolves it has changed since then, which is the host's to fix,
+                not a failure of this node.
+        """
+        recorded = self.recorded_llm_config(steps.prior)
+        if recorded is not None and recorded != config:
+            assert self.call_time is not None  # only call-time agents record a config
+            raise _CapabilityFault(ValueError(
+                f"node {self.call_time.path!r} llm_config: recorded config differs from the "
+                "recomputed one; resume the run with the flow and yian version that "
+                "started it"
+            ))
+        steps.record({_CONFIG_STEP: deepcopy(config)})
+
+    def _call_config(self, inputs: Mapping[str, Any]) -> dict[str, Any] | None:
+        """Return the config this invocation's model call uses; never stored.
+
+        Args:
+            inputs (`Mapping[str, Any]`): The delivered inputs; a call-time agent's
+                hold its resolved ``__llm_config``.
+
+        Returns:
+            `dict[str, Any] | None`: For a call-time agent, a new config with the host
+                secrets joined when it is marked; otherwise the run's ``llm_config``.
+        """
+        if self.call_time is None:
+            return self.llm_config
+        return invocation_config(inputs[LLM_CONFIG_KEY], self.host_credentials)
+
+    def _host_secrets(self, recorded: Any) -> tuple[Any, Any]:
+        """Return the host key and header values bound to this node for the run, if any.
+
+        Args:
+            recorded (`Any`): The recorded config of the invocation backward revisits.
+                A call-time agent gets the host's secrets only when it is marked.
+
+        Returns:
+            `tuple[Any, Any]`: The key and the header values, each `None` when unbound.
+        """
+        if self.call_time is not None:
+            credentials = self.host_credentials
+            if credentials is None or not (
+                isinstance(recorded, dict) and recorded.get(HOST_KEY_MARKER) is True
+            ):
+                return None, None
+            return credentials.api_key, credentials.headers
+        if not isinstance(self.llm_config, dict):
+            return None, None
+        return self.llm_config.get("api_key"), self.llm_config.get("headers")
 
     def _resolve_variables(self) -> dict[str, Any]:
         """Resolve validated literal defaults into one detached invocation record."""
@@ -506,9 +733,8 @@ class AgentNode(Node):
         """
         # The only live fields: a host key and its header values, which are never
         # recorded, bound for this call.
-        return backward_agent(
-            context, feedback, api_key=self._host_api_key(), headers=self._host_headers()
-        )
+        api_key, headers = self._host_secrets(context.node_data.get("effective_llm_config"))
+        return backward_agent(context, feedback, api_key=api_key, headers=headers)
 
     def declared_variables(self) -> tuple[Parameter, ...]:
         """Return the canonical local declarations in their authored order."""

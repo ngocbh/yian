@@ -328,7 +328,8 @@ def test_tagged_wrong_literal_reports_the_type_first():
     error = _error(text)
     assert error.diagnostic.message == (
         "a tag types a value — a flow input, a binding, a flow output, an agent "
-        "variable, a value entry in `nodes:`, or a value inside one; `until:` is not one"
+        "variable, an `llm_config` value, a value entry in `nodes:`, or a value inside "
+        "one; `until:` is not one"
     )
     assert _start_line(error) == _line(text, "until: ")
 

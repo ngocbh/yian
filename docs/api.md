@@ -204,7 +204,8 @@ run before appending any record.
   records only a nonsecret marker on those agents, so pass the key again as
   `resume_flow(..., api_key=key)` or `result.backward(..., api_key=key)`; without
   it, agents marked for the key fail when they call their model instead of reading
-  the environment. A key that marks no agent is ignored. The result of `run_flow`
+  the environment. A key that marks no agent, and that no agent resolving its config
+  when it runs could use, is ignored. The result of `run_flow`
   or `resume_flow` keeps the key in memory for its own `backward` calls. Flow files
   cannot set `api_key`. `ReflectiveMemory` rejects it, because its snapshots record
   the model configuration, so it always uses the saved login or environment
@@ -230,6 +231,21 @@ run before appending any record.
 
   A retired key (`temperature`, `anthropic_effort`, `openai_reasoning_effort`,
   `google_thinking_level`) raises `ValueError` showing its block form.
+
+  This layer is literal: `${...}` in it is text. A flow file's `llm_config` may
+  compute fields from `${...}` values (see
+  [Values in `llm_config`](syntax.md#values-in-llm_config)). `run_flow` coerces the
+  supplied `inputs` before it resolves the cascade. An agent in the root flow whose
+  values read only the run's inputs is resolved then, omitted inputs taking their
+  defaults, and gets every check a literal config gets. Each input those values read
+  must be given (or have a default) and match its declared type; otherwise
+  `run_flow` raises `ValueError` naming the field before the log is created
+  (`node 'chat' llm_config.model: input 'm' is required and was not given`). A bad
+  input that no `llm_config` reads stays a START failure in the log. Every other
+  agent with a value resolves its config just before its model call, from the
+  defaults and saved logins captured at run start; a config refused then fails that
+  node with `contract.input`. Such an agent gets the host key only when it resolves
+  to the key's provider, as a static agent does.
 
   Each layer is checked as a `yian.llm_clients.LLMConfig`. Its blocks are fields
   named like the keys, except that the dashed ones are the attributes `qwen_cn`,
@@ -1774,7 +1790,18 @@ The closed durable record vocabulary is `RunStartedRecord`,
 run started with that differ from the built-in ones, keyed by entry name
 (`{"MAX_TOTAL_NODES": 20000}`); it is omitted from the line when empty, so a run with
 every built-in value writes the same bytes as before, and a log without it counts as
-all built-in values. A `NodeStepRecord` holds one step an in-flight node recorded,
+all built-in values. `RunStartedRecord.call_time_llm` lists the agents whose
+`llm_config` resolves only when they run (see
+[Values in `llm_config`](syntax.md#values-in-llm_config)), which
+`effective_llm_by_static_path` leaves out: `agents` maps each one's static path to the
+layers below its own (the outer flows and the host layer), and `selection` holds the
+defaults, saved models, and connection identities they may resolve to, limited to
+their providers when run start knows them. Neither holds a key or header value. It is
+omitted when no agent resolves at call time, so such logs are unchanged; a yian
+version from before the field can't read a log that holds it, although the schema
+stays 9. Each such agent records the config it resolved, without keys or header
+values, as a `NodeStepRecord` step `{"effective_llm_config": {...}}` before it opens
+memory or calls its model. A `NodeStepRecord` holds one step an in-flight node recorded,
 such as a [TOOL retry](#tool-retries); the node gives it meaning, and a resumed node
 reads its steps back. A log holding one can't be read by a yian version from before
 the record existed. The four node
@@ -1875,7 +1902,13 @@ A log that marks no agent ignores it. `headers` re-supplies the header values th
 run sent with its key (`llm_config.headers`) the same way. Their names must be the
 ones the log recorded, compared without case: missing or extra names raise
 `ValueError` naming them, before anything is appended, and so does `api_key`
-alone on a log that recorded header names. `context` re-supplies the host's app
+alone on a log that recorded header names. An agent that resolves its `llm_config`
+when it runs (`RunStartedRecord.call_time_llm`) gets the key when the config it
+resolves is the key's provider; a log whose call-time agents may resolve to it keeps
+the key, and checks the header names, as for a marked agent. Resuming such a run
+without the key raises `yian.llm_clients.auth.AuthError` when such an agent resolves
+to the key's provider, before its model call; it is a host error, not a failure of the node, so resume again
+with the key. `context` re-supplies the host's app
 object; the log does not hold it (see [Tool context](#tool-context)).
 
 Recovery locks the existing file before reading it and validates the complete
@@ -1896,7 +1929,14 @@ than yian allows (4300 digits); a log written while yian accepted such ints can'
 read`.
 It reconstructs the typed pool,
 dynamic expansions, original input, run identity, diagnostics, and snapshotted LLM
-configuration without reading the current LLM defaults. A run started before the
+configuration without reading the current LLM defaults. An agent that resolves its
+`llm_config` when it runs uses the defaults and saved logins the log recorded. One that
+had started before the crash recorded the config it resolved; `resume_flow` checks
+that config as it checks the recorded map, and the restarted node must resolve to the
+same config. A different one means the flow or yian version changed, and
+`resume_flow` raises `ValueError` naming the node (`node 'chat' llm_config: recorded
+config differs from the recomputed one; ...`) before any model call; the node does
+not fail. A run started before the
 AGENT `mode:` field was removed cannot be resumed: the AGENT manifest changed, so
 every AGENT flow has a new fingerprint.
 

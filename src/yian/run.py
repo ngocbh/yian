@@ -15,7 +15,7 @@ It also owns the compile/runtime inversion seam by injecting
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 import copy
 import difflib
 from dataclasses import dataclass, field
@@ -33,11 +33,14 @@ from yian.llm_clients.connection_settings import validate_headers
 from yian.llm_clients.connection import (
     HEADER_NAMES_KEY,
     HOST_KEY_MARKER,
+    ConnectionSnapshot,
+    block_problem,
     check_model_config,
     connection_snapshot,
     header_name_diff,
     legacy_connection_config,
     legacy_connection_map,
+    refused_block,
     split_model_config,
 )
 from yian.compile.execution_layout import apply_execution_layout, resolve_execution_layout
@@ -45,9 +48,14 @@ from yian.compile.expand import build_grow
 from yian.compile.llm_cascade import (
     apply_effective_llm_map,
     bind_host_credentials,
+    call_time_selection,
+    in_flight_llm_configs,
+    known_call_time_providers,
+    RunLLM,
     host_key_providers,
-    resolve_llm_cascade,
+    resolve_run_llm,
     static_agent_labels,
+    value_config_subjects,
 )
 from yian.compile.manifest import flow_fingerprint
 from yian.compile.memory_layout import (
@@ -80,8 +88,13 @@ from yian.memory import (
 )
 from yian.memory_host import MemoryRegistry
 from yian.nodes.base import Steering, _HostStop
-from yian.nodes.binding import coerce_inputs
-from yian.nodes.contracts import HostToolCall, OutputContract, iter_source_strings
+from yian.nodes.binding import BindingError, apply_defaults, coerce_inputs
+from yian.nodes.contracts import (
+    HostToolCall,
+    OutputContract,
+    Parameter,
+    iter_source_strings,
+)
 from yian.runtime.engine import FlowEngine
 from yian.runtime.eval_node import require_steering
 from yian.runtime.backward import drive_backward
@@ -272,9 +285,13 @@ class _BackwardHandle:
             )
             if state.run_id != self.run_id:
                 raise ValueError("backward log identity differs from the retained run")
-            if headers is not None and host_key_providers(state.effective_llm_by_static_path):
+            if headers is not None and _uses_host_key(
+                state.effective_llm_by_static_path, state.call_time_llm
+            ):
                 # Before the attempt is appended; kept headers were checked when kept.
-                _check_host_header_names(state.effective_llm_by_static_path, headers)
+                _check_host_header_names(
+                    state.effective_llm_by_static_path, headers, state.call_time_llm
+                )
             replay_sequence = state.next_sequence
 
             def open_memory() -> MemoryRuntime:
@@ -282,7 +299,10 @@ class _BackwardHandle:
                     raise MemorySetupError("backward requires this run's enabled memory mapping")
                 _check_registry_types(self.memory, state.memories)
                 program = copy.deepcopy(self.program)
-                apply_effective_llm_map(program, legacy_connection_map(state.effective_llm_by_static_path))
+                apply_effective_llm_map(
+                    program, legacy_connection_map(state.effective_llm_by_static_path),
+                    state.call_time_llm,
+                )
                 memory_table, origins, memory_stack_set = _resolve_runtime_memory_layout(program)
                 _check_recorded_memory_table(
                     state.memories, state.memory_stacks, memory_table, memory_stack_set,
@@ -380,12 +400,16 @@ def run_flow(
             Callback for transient stream chunks, which are never durable records.
             When set, AGENT chat replies stream their visible text.
         llm_config (`dict[str, Any] | None`, *optional*, defaults to `None`):
-            Per-run outer model configuration layer. The fully resolved static map
-            is captured in the initialization record. An ``api_key`` entry (a
+            Per-run outer model configuration layer, taken literally: ``${...}``
+            in it is text. The fully resolved static map is captured in the
+            initialization record. An agent whose flow-file ``llm_config`` reads
+            a value known only when it runs is recorded instead with the layers
+            below its own and the connection selection it resolves from, and
+            resolves just before its model call. An ``api_key`` entry (a
             `str` or `SecretStr`) is the provider key for this run and needs
-            ``provider``. Every static AGENT whose effective provider matches
-            uses it in place of the provider's saved login or key environment
-            variable; agents of other providers are unaffected.
+            ``provider``. Every AGENT whose effective provider matches, static or
+            resolved when it runs, uses it in place of the provider's saved login
+            or key environment variable; agents of other providers are unaffected.
             An ``inherit: false`` agent of that provider uses it too. The key is
             never recorded; the log marks which agents use it, so pass it again
             to `resume_flow` or `RunResult.backward`, where those agents
@@ -480,7 +504,10 @@ def run_flow(
             identity, worker count,
             model configuration, or prepared run state violates its contract,
             an AGENT has no provider or model (no layer, environment default,
-            or saved login sets one; there is no built-in default),
+            or saved login sets one; there is no built-in default), an input an
+            ``llm_config`` value resolved at run start reads is missing or fails
+            its declared type, or the config resolved from it is refused (the
+            message names the field, as ``node 'chat' llm_config.model: ...``),
             ``llm_config.api_key`` lacks ``llm_config.provider``,
             ``llm_config.base_url`` lacks
             ``llm_config.api_key`` or is not an allowed URL, an ``azure``
@@ -552,8 +579,52 @@ def _secret_headers(raw: Any) -> dict[str, SecretStr]:
     return {name: SecretStr(value) for name, value in validate_headers(raw, None).items()}
 
 
+def _uses_host_key(
+    effective: Mapping[str, Mapping[str, Any]], call_time: Mapping[str, Any] | None,
+) -> bool:
+    """Return whether a run's recorded agents may use the host key.
+
+    Args:
+        effective (`Mapping[str, Mapping[str, Any]]`):
+            The recorded effective model map, keyed by static agent path.
+        call_time (`Mapping[str, Any] | None`):
+            The recorded ``RunStarted.call_time_llm``, or `None`.
+
+    Returns:
+        `bool`: Whether a static agent is marked for the host key, or the call-time
+            agents' selection names the host key's provider.
+    """
+    return bool(host_key_providers(dict(effective))) or (
+        call_time is not None and call_time["selection"]["host"] is not None
+    )
+
+
+def _selection_host(call_time: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Return the host key the call-time agents' selection names, for a resume check.
+
+    A call-time agent that has not started may still resolve to that key's provider,
+    so a resume that can't supply the key is refused up front, as for a marked agent.
+
+    Args:
+        call_time (`Mapping[str, Any] | None`):
+            The recorded ``RunStarted.call_time_llm``, or `None`.
+
+    Returns:
+        `dict[str, Any] | None`: ``{"provider": ..., "header_names": [...]}`` (header
+            names only when recorded), or `None` when the selection names no host key.
+    """
+    host = None if call_time is None else call_time["selection"]["host"]
+    if host is None:
+        return None
+    selected: dict[str, Any] = {"provider": host["provider"]}
+    if host.get("header_names"):
+        selected["header_names"] = list(host["header_names"])
+    return selected
+
+
 def _check_host_header_names(
     effective: Mapping[str, Mapping[str, Any]], headers: Mapping[str, Any] | None,
+    call_time: Mapping[str, Any] | None = None,
 ) -> None:
     """Check that the host's headers have the names recorded for its key's agents.
 
@@ -564,6 +635,9 @@ def _check_host_header_names(
             The recorded effective model map, keyed by static agent path.
         headers (`Mapping[str, Any] | None`):
             The headers given for the host key; `None` gives none.
+        call_time (`Mapping[str, Any] | None`, *optional*, defaults to `None`):
+            The recorded ``RunStarted.call_time_llm``; the header names its selection
+            records for the host key are expected too.
 
     Raises:
         `ValueError`: The names differ; the message names the missing and unrecorded
@@ -575,6 +649,9 @@ def _check_host_header_names(
         if config.get(HOST_KEY_MARKER) is True
         for name in config.get(HEADER_NAMES_KEY, ())
     ]
+    host = None if call_time is None else call_time["selection"]["host"]
+    if host is not None:
+        expected.extend(host.get("header_names", ()))
     diff = header_name_diff(expected, headers or ())
     if diff is not None:
         raise ValueError(
@@ -592,6 +669,7 @@ def _check_effective_llm(
     api_key: SecretStr | None,
     headers: dict[str, SecretStr] | None,
     labels: Mapping[str, str],
+    located: Mapping[str, str] | None = None,
 ) -> None:
     """Reject any agent config its model call would reject, before the run starts.
 
@@ -605,6 +683,10 @@ def _check_effective_llm(
         labels (`Mapping[str, str]`):
             The authored site of each synthesized agent's ``llm_config``, keyed by
             static agent path; a message names it instead of the path.
+        located (`Mapping[str, str] | None`, *optional*, defaults to `None`):
+            The ``llm_config`` subject of each agent whose layers carry values
+            (`value_config_subjects`), keyed by static agent path; its message names
+            the subject, and the provider's block when the block is what is refused.
 
     Raises:
         `ValueError`: A config would be rejected by its model call; the message names
@@ -621,8 +703,77 @@ def _check_effective_llm(
         try:
             check_model_config(probe)
         except ValueError as exc:
+            subject = (located or {}).get(path)
+            if subject is not None:
+                raise ValueError(
+                    block_problem(subject, refused_block(probe)[1:], str(exc))
+                ) from exc
             where = labels.get(path) or f"Agent {path!r}"
             raise ValueError(f"{where}: {exc}") from exc
+
+
+def _run_start_inputs(
+    params: list[Parameter], coerced: dict[str, Any]
+) -> dict[str, Any]:
+    """Return the run's inputs as run start resolves against them, defaults filled.
+
+    START still binds and checks the inputs, so a missing required input or a
+    default that fails its check stays START's logged failure: such a default is
+    left out here rather than raised before the log exists.
+
+    Args:
+        params (`list[Parameter]`):
+            The flow's declared inputs.
+        coerced (`dict[str, Any]`):
+            The supplied inputs, already coerced at the run boundary.
+
+    Returns:
+        `dict[str, Any]`: The supplied inputs plus each omitted input's valid default.
+    """
+    run_inputs = dict(coerced)
+    for parameter in params:
+        try:
+            run_inputs = apply_defaults([parameter], run_inputs)
+        except BindingError:
+            continue
+    return run_inputs
+
+
+def _run_start_llm(
+    compiled: CompiledFlow,
+    coerced: Mapping[str, Any],
+    llm_config: dict[str, Any],
+    snapshot: ConnectionSnapshot,
+) -> RunLLM:
+    """Resolve a fresh run's llm cascade over ``compiled``, in place, with its inputs.
+
+    Values that read only the run's inputs resolve against the supplied inputs, with
+    omitted inputs' defaults filled.
+
+    Args:
+        compiled (`CompiledFlow`):
+            The run's private flow copy; its agents get their effective configs.
+        coerced (`Mapping[str, Any]`):
+            The supplied inputs, already coerced at the run boundary.
+        llm_config (`dict[str, Any]`):
+            The host layer, without the host key and its settings.
+        snapshot (`ConnectionSnapshot`):
+            The one selection snapshot that determines every agent's defaults.
+
+    Returns:
+        `RunLLM`: The resolved configurations, before any connection is bound.
+
+    Raises:
+        `ValueError`: As `resolve_run_llm` raises it.
+    """
+    return resolve_run_llm(
+        compiled,
+        llm_config,
+        defaults=snapshot.defaults,
+        provider_models=snapshot.provider_models,
+        stray_model=snapshot.stray_model,
+        run_inputs=_run_start_inputs(compiled.nodes[compiled.start_id].params, dict(coerced)),
+    )
 
 
 def _run_flow_controlled(
@@ -716,6 +867,17 @@ def _start_run(
     private_flow = copy.deepcopy(flow.compiled)
     retained_program = copy.deepcopy(private_flow) if learnable else None
 
+    # Convert supplied boundary strings before RunStarted persists its input, and
+    # before the cascade, so a bad supplied input is reported first. This is the only
+    # string conversion: the generic binder converts nothing, so a value crossing a
+    # CALL/MAP/LOOP edge is validated as is, and START stays the authority for
+    # required/default handling and contract validation.
+    coerced = coerce_inputs(flow.input, inputs)
+    for name, value in coerced.items():
+        reject_deep_nesting(value, f"input {name!r}")
+        reject_nonfinite(value, f"input {name!r}")
+        reject_non_text_keys(value, f"input {name!r}")
+
     # The key stays out of the cascade so RunStarted never records it. Its
     # base_url and connection settings stay out too, so no authored layer can pair
     # the key with another.
@@ -723,42 +885,51 @@ def _start_run(
     host = pop_host_credentials(run_llm_config)
     api_key, headers = host.api_key, host.headers
 
-    # One selection snapshot determines every static agent before RunStarted.
+    # One selection snapshot determines every static agent before RunStarted, and
+    # what each agent resolved only when it runs binds from.
     snapshot = connection_snapshot()
+    host_key_provider = None if api_key is None else run_llm_config["provider"]
+    run_llm = _run_start_llm(private_flow, coerced, run_llm_config, snapshot)
     effective_llm = snapshot.bind(
-        resolve_llm_cascade(
-            private_flow,
-            run_llm_config,
-            defaults=snapshot.defaults,
-            provider_models=snapshot.provider_models,
-            stray_model=snapshot.stray_model,
-        ),
-        host_key_provider=None if api_key is None else run_llm_config["provider"],
+        run_llm.effective,
+        host_key_provider=host_key_provider,
         host_base_url=host.base_url,
         host_settings=host,
     )
-    apply_effective_llm_map(private_flow, effective_llm)
-    # A key that marks no agent has nothing to authenticate, so the result keeps
-    # neither it nor the headers sent with it.
-    if api_key is not None and not host_key_providers(effective_llm):
+    # Each call-time agent's provider when run start already knows it: it limits the
+    # recorded selection and the session check.
+    known = known_call_time_providers(private_flow, run_llm.call_time, snapshot.defaults)
+    call_time_llm = None
+    if run_llm.call_time:
+        call_time_llm = {
+            "selection": call_time_selection(
+                snapshot,
+                known=known,
+                host_key_provider=host_key_provider,
+                host_base_url=host.base_url,
+                host_settings=host,
+            ),
+            "agents": run_llm.call_time,
+        }
+    apply_effective_llm_map(private_flow, effective_llm, call_time_llm)
+    # A key that neither marks an agent nor is in the call-time agents' selection has
+    # nothing to authenticate, so the result keeps neither it nor its headers.
+    if api_key is not None and not _uses_host_key(effective_llm, call_time_llm):
         api_key = headers = None
     if api_key is not None:
         bind_host_credentials(private_flow, api_key, headers)
-    _check_effective_llm(effective_llm, api_key, headers, static_agent_labels(private_flow))
+    _check_effective_llm(
+        effective_llm,
+        api_key,
+        headers,
+        static_agent_labels(private_flow),
+        value_config_subjects(private_flow),
+    )
 
     if learnable:
         apply_execution_layout(private_flow, resolve_execution_layout(private_flow))
 
     canonical_run_id = run_id if run_id is not None else default_run_id()
-    # Convert supplied boundary strings before RunStarted persists its input. This is
-    # the only string conversion: the generic binder converts nothing, so a value
-    # crossing a CALL/MAP/LOOP edge is validated as is, and it stays the authority for
-    # required/default handling and contract validation.
-    coerced = coerce_inputs(flow.input, inputs)
-    for name, value in coerced.items():
-        reject_deep_nesting(value, f"input {name!r}")
-        reject_nonfinite(value, f"input {name!r}")
-        reject_non_text_keys(value, f"input {name!r}")
     pool = VariablePool(start_id=private_flow.start_id)
     pool.set(private_flow.start_id, copy.deepcopy(coerced))
     seed_system_clock(pool)
@@ -773,6 +944,7 @@ def _start_run(
     if memory is not None:
         memory_table, memory_origins, memory_stack_set = _resolve_runtime_memory_layout(
             private_flow, effective_llm=effective_llm,
+            call_time_known=known,
         )
         _check_registry_types(memory, memory_table)
         memory_runtime = MemoryRuntime.open(
@@ -792,6 +964,7 @@ def _start_run(
                 initial_pool=pool,
                 start_wiring_override=start_wiring_override,
                 effective_llm_by_static_path=effective_llm,
+                call_time_llm=call_time_llm,
                 num_workers=num_workers,
                 memory_snapshots=(
                     None if memory_runtime is None else memory_runtime.snapshots
@@ -914,7 +1087,9 @@ def resume_flow(
             never recorded, and stays with the result for `RunResult.backward`. A
             log that marks no agent ignores it. Without it, marked agents fail
             when they call their model instead of reading the provider's key
-            environment variable.
+            environment variable. An agent that resolves its ``llm_config`` when
+            it runs gets it when it resolves to the key's provider; without it,
+            such an agent raises `AuthError` before its model call.
         headers (`Mapping[str, str | SecretStr] | None`, *optional*, defaults to `None`):
             The header values a run started with ``llm_config.headers`` sent
             with its key. They go to the agents the log marks for the key, like
@@ -954,7 +1129,14 @@ def resume_flow(
             has a name or value that can't be sent, or ``api_key`` or
             ``headers`` is given for a log that marks agents for a host key and
             the header names differ from the recorded ones (the message names
-            the header names, never a value).
+            the header names, never a value). Also when an agent that resolves
+            its ``llm_config`` when it runs, and had started before, resolves to
+            a config other than the one it recorded (the flow or yian version
+            changed); no model call happens.
+        `AuthError`:
+            (`yian.llm_clients.auth.AuthError`) An agent resolving its
+            ``llm_config`` when it runs resolves to the host key's provider, and
+            ``api_key`` (or the recorded header names) was not given.
         `ImportError`:
             An unfinished run's `McpServer` must be opened and the MCP SDK is not
             installed.
@@ -1006,14 +1188,16 @@ def _resume_flow_controlled(
     api_key: str | SecretStr | None = None,
     headers: Mapping[str, str | SecretStr] | None = None,
     context: Any = None,
-    check_llm_configs: Callable[[dict[str, dict[str, Any]]], None] | None = None,
+    check_llm_configs: Callable[..., None] | None = None,
     stop_event: threading.Event,
 ) -> RunResult:
     """Recover and drive a durable run with a host-owned stop event.
 
-    ``check_llm_configs`` receives a copy of the recorded effective model map (old
-    OpenAI records adapted to their legacy connection) after the terminal check,
-    before an unfinished run opens memory or appends ``RunResumed``. An exception
+    ``check_llm_configs`` receives a copy of the recorded effective model map, plus
+    the config each started call-time agent recorded keyed by its node id (old OpenAI
+    records adapted to their legacy connection), and as ``call_time_host`` the host
+    key the call-time agents' selection names (`_selection_host`), after the terminal
+    check, before an unfinished run opens memory or appends ``RunResumed``. An exception
     it raises stops recovery and appends nothing. The CLI uses it to check
     provider credentials.
     """
@@ -1033,11 +1217,13 @@ def _resume_flow_controlled(
     primary_error: BaseException | None = None
     try:
         state = _replay_run_log(flow, authority, api_key=api_key, headers=host_headers)
-        if not host_key_providers(state.effective_llm_by_static_path):
+        if not _uses_host_key(state.effective_llm_by_static_path, state.call_time_llm):
             api_key = host_headers = None
         elif api_key is not None or host_headers is not None:
             # Checked before the terminal return too, since the backward handle sends them.
-            _check_host_header_names(state.effective_llm_by_static_path, host_headers)
+            _check_host_header_names(
+                state.effective_llm_by_static_path, host_headers, state.call_time_llm
+            )
         retained_program = copy.deepcopy(flow.compiled) if state.learnable else None
         if state.result is not None:
             return _result_from_state(state, log_path, [],
@@ -1050,9 +1236,19 @@ def _resume_flow_controlled(
         _check_conditions(flow.compiled)
         _check_templates(flow.compiled)
         skills = _check_skills(flow.compiled, skills)
-        _check_recorded_llm_fields(state.effective_llm_by_static_path, static_agent_labels(flow.compiled))
+        # A started call-time agent resumes with the config it recorded; one not yet
+        # started is checked when it resolves.
+        in_flight = in_flight_llm_configs(state.flow.nodes, state.node_steps)
+        recorded_llm = {**state.effective_llm_by_static_path, **in_flight}
+        _check_recorded_llm_fields(
+            recorded_llm, static_agent_labels(flow.compiled),
+            _static_path_keys(state.flow.nodes, in_flight),
+        )
         if check_llm_configs is not None:
-            check_llm_configs(legacy_connection_map(state.effective_llm_by_static_path))
+            check_llm_configs(
+                legacy_connection_map(recorded_llm),
+                call_time_host=_selection_host(state.call_time_llm),
+            )
         if state.memories is not None and memory is None:
             raise MemorySetupError(
                 "resuming this run requires its enabled memory mapping"
@@ -1224,7 +1420,7 @@ def _check_templates(flow: Any, path: tuple[str, ...] = ()) -> None:
                 # reads as its authored site; a CASE param keeps its wiring site name.
                 subject = f"{owner}{node.binding_labels[key]}"
             elif key in reserved:
-                subject = f"node {node_path!r} {node.kind.value} {key}"
+                subject = f"node {node_path!r} {node.reserved_key_label(key)}"
             elif node.binds_per_item:
                 subject = f"node {node_path!r} map input {key!r}"
             else:
@@ -1374,8 +1570,28 @@ def _binding_label(typ: Type) -> str:
     return canonical_type_label(typ)
 
 
+def _static_path_keys(nodes: Mapping[str, Any], node_ids: Iterable[str]) -> dict[str, str]:
+    """Map each runtime node id to its encoded static path, read from its execution scope.
+
+    Args:
+        nodes (`Mapping[str, Any]`): The run's live nodes, keyed by node id.
+        node_ids (`Iterable[str]`): The runtime ids to map.
+
+    Returns:
+        `dict[str, str]`: The ``/``-joined static path of each id whose node has an
+            execution scope.
+    """
+    keys: dict[str, str] = {}
+    for node_id in node_ids:
+        scope = nodes[node_id].execution_scope
+        if scope is not None:
+            keys[node_id] = "/".join(scope.static_path)
+    return keys
+
+
 def _check_recorded_llm_fields(
     effective: Mapping[str, Mapping[str, Any]], labels: Mapping[str, str],
+    static_paths: Mapping[str, str] | None = None,
 ) -> None:
     """Check the public fields of each recorded agent config before a resume appends.
 
@@ -1387,16 +1603,21 @@ def _check_recorded_llm_fields(
 
     Args:
         effective (`Mapping[str, Mapping[str, Any]]`):
-            The recorded effective model map, keyed by static agent path.
+            The recorded configs: the effective model map keyed by static agent path,
+            and the config of each started call-time agent keyed by its runtime id.
         labels (`Mapping[str, str]`):
             The authored site of each synthesized agent's ``llm_config``, keyed by
             static agent path; a message names it instead of the path.
+        static_paths (`Mapping[str, str] | None`, *optional*, defaults to `None`):
+            The static path of each runtime id in ``effective``, under which its label
+            is looked up; other keys are static paths already.
 
     Raises:
         `ValueError`: A config has an invalid or retired field; the message names its
-            agent path, or the authored site of a synthesized agent, and never echoes
-            values.
+            agent path or runtime id, or the authored site of a synthesized agent, and
+            never echoes values.
     """
+    static_paths = static_paths or {}
     for path, config in effective.items():
         host_only = (
             (HOST_KEY_MARKER, "base_url", "organization", "project", HEADER_NAMES_KEY)
@@ -1407,7 +1628,7 @@ def _check_recorded_llm_fields(
         try:
             split_model_config(legacy_connection_config(public))
         except ValueError as exc:
-            where = labels.get(path) or f"Agent {path!r}"
+            where = labels.get(static_paths.get(path, path)) or f"Agent {path!r}"
             raise ValueError(f"{where}: {exc}") from exc
 
 
@@ -1473,12 +1694,12 @@ def _replay_run_log(
     """Silently reconstruct one borrowed, locked authoritative log prefix.
 
     The authored fingerprint is checked before copying.  The private graph gets
-    only the complete effective LLM map recorded by ``RunStarted``; recovery
-    never consults the current LLM defaults.  Historical transitions use the
-    same reducer and growth constructor as live execution.  A host ``api_key``
-    and the ``headers`` sent with it go to the agents the map marks for it. The
-    run result reads its files through the flow's output contract, as
-    ``run_flow``'s does.
+    only the complete effective LLM map and the call-time agents recorded by
+    ``RunStarted``; recovery never consults the current LLM defaults.  Historical
+    transitions use the same reducer and growth constructor as live execution.  A
+    host ``api_key`` and the ``headers`` sent with it go to the agents the map marks
+    for it, and to the call-time agents. The run result reads its files through the
+    flow's output contract, as ``run_flow``'s does.
     """
     if not isinstance(flow, ComposedFlow):
         raise TypeError("_replay_run_log expects a ComposedFlow")
@@ -1554,10 +1775,12 @@ def _replay_compiled_run_log(
     apply_effective_llm_map(
         private_flow,
         legacy_connection_map(first.record.effective_llm_by_static_path),
+        first.record.call_time_llm,
     )
     if api_key is not None:
-        # A run that marked no agent ignores the key and headers; bind_host_credentials
-        # finds no target.
+        # A run that marked no agent ignores the key and headers: no static agent is
+        # marked, and a call-time agent gets them only when its selection names the
+        # key's provider, and uses them only when its resolved config is marked.
         bind_host_credentials(private_flow, api_key, headers)
     if first.record.learnable:
         apply_execution_layout(private_flow, resolve_execution_layout(private_flow))
@@ -1581,6 +1804,7 @@ def _resolve_runtime_memory_layout(
     flow: CompiledFlow,
     *,
     effective_llm: dict[str, dict] | None = None,
+    call_time_known: Mapping[str, str | None] | None = None,
 ) -> tuple[
     tuple[MemorySpec, ...],
     dict[str, OriginRef | None],
@@ -1589,11 +1813,13 @@ def _resolve_runtime_memory_layout(
     """Derive the key table, origins and stacks, and stamp one private graph.
 
     With ``effective_llm``, first check that each session key resolves one
-    conversation compatibility across its placements.
+    conversation compatibility across its placements; ``call_time_known`` gives the
+    provider of each placement resolved only when it runs, when run start knows it
+    (`check_session_compatibility`).
     """
     resolved = resolve_memory_layout(flow)
     if effective_llm is not None:
-        check_session_compatibility(resolved, effective_llm)
+        check_session_compatibility(resolved, effective_llm, call_time_known=call_time_known)
     apply_memory_layout(flow, resolved)
     return _memory_layout_parts(resolved)
 

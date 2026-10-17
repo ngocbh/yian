@@ -436,7 +436,7 @@ def check_skipped_arithmetic(
             if result is not None:
                 if param in reserved:
                     # A reserved key (`over`, `until`) is a kind field, not an input.
-                    label = f"{result.node.kind.value} {param}"
+                    label = result.node.reserved_key_label(param)
                     own = result.field_ranges.get(("field", param))
                 else:
                     label = result.node.wiring_ref_label(param)

@@ -12,7 +12,7 @@ from yian.compile.memory_layout import check_session_compatibility, resolve_memo
 from yian.compose import load_flow
 from yian.events import NodeStarted
 from yian.llm_clients import connection as connection_module
-from yian.llm_clients.auth import AuthStore, OAuthCredentials
+from yian.llm_clients.auth import ApiKeyCredentials, AuthStore, OAuthCredentials
 from yian.memory.session import SessionMemory
 from yian.memory.contracts import MemorySetupError
 from yian.nodes.agent import AgentNode
@@ -439,3 +439,134 @@ output: ${chat.output}
     assert LLM_CONFIG_KEY in flow.compiled.wiring["chat"]
     assert run_flow(flow, {"m": "gpt-x"}).status == "succeeded"
     assert bound == [("chat", {})]
+
+
+# Calling the model with the resolved config.
+
+
+def _seen(fake_model):
+    """Return the one config the fake model was built from, as plain values."""
+    [config] = fake_model
+    plain = dict(config)
+    if isinstance(plain.get("api_key"), SecretStr):
+        plain["api_key"] = plain["api_key"].get_secret_value()
+    if plain.get("headers"):
+        plain["headers"] = {
+            name: value.get_secret_value() if isinstance(value, SecretStr) else value
+            for name, value in plain["headers"].items()
+        }
+    return plain
+
+
+def test_the_model_comes_from_an_upstream_node(fake_model):
+    flow = load_flow(_PICKED)
+    assert run_flow(flow, {}).status == "succeeded"
+    seen = _seen(fake_model)
+    assert (seen["provider"], seen["model"]) == ("openai", "gpt-picked")
+    assert seen["openai"] == {"temperature": 0.5}
+
+
+def test_the_saved_model_of_a_provider_known_only_at_call_time_is_used(fake_model):
+    AuthStore().save("anthropic", ApiKeyCredentials("saved-anthropic-key"), "claude-saved")
+    flow = load_flow(_picking("str", "'anthropic'", "{provider: '${pick.output}'}"))
+    assert run_flow(flow, {}).status == "succeeded"
+    seen = _seen(fake_model)
+    assert (seen["provider"], seen["model"]) == ("anthropic", "claude-saved")
+    assert seen["_connection"]["source"] == "store"
+
+
+def test_a_null_value_falls_through_to_the_flow_layer(fake_model):
+    flow = load_flow(_picking(
+        "Optional(str)", "None", "{model: '${pick.output}'}",
+        flow_llm="llm_config: {provider: openai, model: flow-model}\n",
+    ))
+    assert run_flow(flow, {}).status == "succeeded"
+    assert _seen(fake_model)["model"] == "flow-model"
+
+
+def test_a_flow_level_whole_record_from_a_node_works_at_call_time(fake_model):
+    text = """id: f
+name: f
+typedefs:
+  Cfg: {provider: str, model: str}
+llm_config: !Cfg ${pick.output}
+nodes:
+  pick: {kind: code, output: Cfg, code: "return {'provider': 'openai', 'model': 'whole'}"}
+  chat: {kind: agent, prompt: Go.}
+output: ${chat.output}
+"""
+    assert run_flow(load_flow(text), {}).status == "succeeded"
+    seen = _seen(fake_model)
+    assert (seen["provider"], seen["model"]) == ("openai", "whole")
+
+
+def test_a_defs_field_from_a_child_input_works_at_call_time(fake_model):
+    text = """id: f
+name: f
+defs:
+  ask:
+    input: {m: !str }
+    llm_config: {model: '${input.m}'}
+    nodes:
+      chat: {kind: agent, prompt: Go., llm_config: {provider: openai}}
+    output: ${chat.output}
+nodes:
+  a: {kind: call, call: ask, input: {m: def-model}}
+output: ${a.output}
+"""
+    assert run_flow(load_flow(text), {}).status == "succeeded"
+    seen = _seen(fake_model)
+    assert (seen["provider"], seen["model"]) == ("openai", "def-model")
+
+
+def test_the_host_key_authenticates_a_call_time_agent(tmp_path, fake_model):
+    log = tmp_path / "run.jsonl"
+    assert run_flow(load_flow(_PICKED), {}, log=log, llm_config=_HOST).status == "succeeded"
+    seen = _seen(fake_model)
+    assert seen["api_key"] == "sk-host-secret"
+    assert seen["headers"] == {"X-Tenant": "tenant-secret"}
+    assert seen["_host_key"] is True
+    data = log.read_bytes()
+    assert b"sk-host-secret" not in data and b"tenant-secret" not in data
+
+
+def test_a_call_time_agent_of_another_provider_gets_no_host_key(fake_model):
+    flow = load_flow(_picking("str", "'anthropic'", "{provider: '${pick.output}', model: c}"))
+    assert run_flow(flow, {}, llm_config=_HOST).status == "succeeded"
+    seen = _seen(fake_model)
+    assert seen["provider"] == "anthropic"
+    assert "api_key" not in seen and "headers" not in seen and "_host_key" not in seen
+
+
+def test_an_azure_call_time_agent_gets_no_openai_host_key(fake_model):
+    flow = load_flow(_picking(
+        "str", "'deployment'", "{model: '${pick.output}'}",
+        flow_llm="llm_config: {provider: azure, base_url: 'https://res.openai.azure.com'}\n",
+    ))
+    assert run_flow(flow, {}, llm_config=_HOST).status == "succeeded"
+    seen = _seen(fake_model)
+    assert (seen["provider"], seen["model"]) == ("azure", "deployment")
+    assert "api_key" not in seen and "headers" not in seen and "_host_key" not in seen
+
+
+def test_a_composer_call_time_error_names_the_gate(fake_model):
+    text = """id: f
+name: f
+typedefs:
+  Some: Literal(openai, nope)
+nodes:
+  pick: {kind: code, output: Some, code: "return 'nope'"}
+  ask:
+    kind: human_input
+    adaptive_questions:
+      prompt: "Ask about the project"
+      llm_config: {provider: '${pick.output}', model: m}
+output: ${ask.output}
+"""
+    result = run_flow(load_flow(text), {})
+    assert result.status == "failed"
+    assert result.failure.code == "contract.input"
+    assert result.failure.message.startswith(
+        "node 'ask' adaptive_questions.llm_config.provider: not a known provider"
+    )
+    assert fake_model == []

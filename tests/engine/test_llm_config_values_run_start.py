@@ -526,3 +526,192 @@ def test_a_composer_value_error_names_the_gate(tmp_path, fake_model):
         _COMPOSER, {"proj": "x", "m": "m", "p": "nope"},
         rf"^{site}\.provider: not a known provider", tmp_path, fake_model,
     )
+
+
+_HOST_ONLY = "credentials and where they are sent stay with the host or yian auth"
+_HOST_ONLY_CASES = [
+    ("base_url", "https://elsewhere.example/v1"),
+    ("api_key", "sk-from-input"),
+    ("organization", "org-from-input"),
+    ("project", "proj-from-input"),
+    ("headers", {"X-From-Input": "secret-header"}),
+]
+
+
+@pytest.mark.parametrize(("field", "value"), _HOST_ONLY_CASES)
+def test_a_node_whole_record_from_an_input_may_not_set_a_host_only_field(
+    tmp_path, fake_model, field, value
+):
+    # The record also says `provider: azure`, which must not let its base_url through.
+    text = _values("  cfg: !object", "'${input.cfg}'")
+    cfg = {"provider": "azure", "model": "dep", field: value}
+    message = _fails_before_any_node(
+        text, {"cfg": cfg}, rf"^node 'chat' llm_config\.{field}: {_HOST_ONLY}$",
+        tmp_path, fake_model,
+    )
+    assert str(value) not in message
+
+
+_FLOW_RECORD = """id: f
+name: f
+input: {cfg: !object }
+llm_config: ${input.cfg}
+nodes:
+  chat: {kind: agent, prompt: Go.}
+output: ${chat.output}
+"""
+
+
+@pytest.mark.parametrize(("field", "value"), _HOST_ONLY_CASES)
+def test_a_flow_whole_record_from_an_input_may_not_set_a_host_only_field(
+    tmp_path, fake_model, field, value
+):
+    cfg = {"provider": "azure", "model": "dep", field: value}
+    message = _fails_before_any_node(
+        _FLOW_RECORD, {"cfg": cfg}, rf"^flow llm_config\.{field}: {_HOST_ONLY}$",
+        tmp_path, fake_model,
+    )
+    assert str(value) not in message
+
+
+def test_a_literal_azure_base_url_beside_a_literal_azure_provider_still_resolves():
+    from yian.compile.llm_cascade import resolve_run_llm
+
+    text = _values(
+        "  m: !str",
+        "{provider: azure, base_url: 'https://res.openai.azure.com', model: '${input.m}'}",
+    )
+    effective = resolve_run_llm(
+        load_flow(text).compiled, {}, defaults={}, run_inputs={"m": "dep"},
+    ).effective
+    assert effective["chat"]["base_url"] == "https://res.openai.azure.com"
+    assert effective["chat"]["model"] == "dep"
+
+
+def test_a_whole_record_from_an_input_may_not_set_a_recorded_connection(
+    tmp_path, fake_model
+):
+    text = _values("  cfg: !object", "'${input.cfg}'")
+    connection = {
+        "credential_id": None,
+        "endpoint": "https://api.openai.com/v1",
+        "method": "api_key",
+        "source": "env",
+        "store_path": None,
+    }
+    _fails_before_any_node(
+        text, {"cfg": {"provider": "openai", "model": "m", "_connection": connection}},
+        r"^node 'chat' llm_config\._connection: internal to recorded runs$",
+        tmp_path, fake_model,
+    )
+
+
+_INHERITED_BLOCK = """id: f
+name: f
+input: {p: !str }
+llm_config: {provider: '${input.p}', openai: {temperature: 0.2}}
+defs:
+  child:
+    nodes:
+      a: {kind: agent, prompt: Go.}
+    output: ${a.output}
+nodes:
+  c: {kind: call, call: child, input: {}}
+output: ${c.output}
+"""
+
+
+def test_a_child_agent_refused_for_an_inherited_input_value_names_the_flow_layer(
+    tmp_path, monkeypatch, fake_model
+):
+    import time
+
+    from yian.llm_clients.auth import AuthStore, OAuthCredentials
+
+    auth = tmp_path / "auth"
+    auth.mkdir(mode=0o700)
+    monkeypatch.setenv("YIAN_AUTH_FILE", str(auth / "auth.json"))
+    AuthStore().save(
+        "openai",
+        OAuthCredentials("access-secret", "refresh-secret", time.time() + 3600, "account"),
+        "gpt-5.5",
+    )
+    message = _fails_before_any_node(
+        _INHERITED_BLOCK, {"p": "openai"},
+        r"^Agent 'c/a' \(flow llm_config\)\.openai: `openai\.temperature` is not accepted "
+        r"by the ChatGPT subscription endpoint",
+        tmp_path, fake_model,
+    )
+    assert "secret" not in message
+
+
+_UNREAD_INPUT = """id: f
+name: f
+input:
+  m: !str
+  n: !int
+nodes:
+  chat:
+    kind: agent
+    input: {n: "${input.n}"}
+    prompt: "Go ${n}."
+    llm_config: {provider: openai, model: '${input.m}'}
+output: ${chat.output}
+"""
+
+
+@pytest.mark.parametrize(
+    ("inputs", "message"),
+    [
+        ({"m": "gpt-x"}, "required input 'n' is unbound"),
+        ({"m": "gpt-x", "n": "abc"}, "input 'n'"),
+    ],
+)
+def test_an_input_the_config_does_not_read_stays_a_logged_start_failure(
+    tmp_path, fake_model, inputs, message
+):
+    log = tmp_path / "run.jsonl"
+    result = run_flow(load_flow(_UNREAD_INPUT), inputs, log=log)
+    assert result.status == "failed"
+    records = _records(log)
+    assert records[0]["kind"] == "run_started"
+    assert _models(log) == {"chat": ("openai", "gpt-x")}
+    failed = [r for r in records if r["kind"] == "node_failed"]
+    assert [f["payload"]["failure"]["node_id"] for f in failed] == ["__start__"]
+    assert message in failed[0]["payload"]["failure"]["message"]
+    assert fake_model == []
+
+
+_PRECEDENCE = """id: f
+name: f
+input:
+  nm: !Optional(str)
+  fm: !Optional(str)
+llm_config: {model: '${input.fm}'}
+nodes:
+  chat:
+    kind: agent
+    prompt: Go.
+    llm_config: {model: '${input.nm}'}
+output: ${chat.output}
+"""
+
+
+@pytest.mark.parametrize(
+    ("inputs", "model"),
+    [
+        ({"nm": "node-model", "fm": "flow-model"}, "node-model"),
+        ({"fm": "flow-model"}, "flow-model"),
+        ({"nm": None, "fm": "flow-model"}, "flow-model"),
+        ({}, "host-model"),
+    ],
+)
+def test_a_null_node_value_falls_to_the_flow_value_then_the_host_layer(
+    tmp_path, inputs, model
+):
+    log = tmp_path / "run.jsonl"
+    host = {"provider": "openai", "model": "host-model"}
+    assert run_flow(load_flow(_PRECEDENCE), inputs, log=log, llm_config=host).status == (
+        "succeeded"
+    )
+    assert _models(log) == {"chat": ("openai", model)}

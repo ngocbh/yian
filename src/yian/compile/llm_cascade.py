@@ -56,6 +56,7 @@ from yian.nodes.agent.llm_values import (
     keep_values,
     layer_refs,
     reads_only_inputs,
+    refused_resolved_field,
     resolve_layer,
     resolve_layers,
     types_nullable,
@@ -580,7 +581,7 @@ def _run_start_flow_layer(flow: Any, *, root: bool, inputs: _RunInputs) -> dict[
         )
         layer = _resolved(lambda: resolve_layer(known, pool), _FLOW_SUBJECT)
         if root:
-            check_resolved_layer(layer, _FLOW_SUBJECT)
+            check_resolved_layer(layer, _FLOW_SUBJECT, written=known)
     validate_layer(layer)
     return layer
 
@@ -613,8 +614,9 @@ def _resolve_carried(
 
     pool = inputs.pool_for(carried.source, where)
     node_layer, flow_layer = _resolved(lambda: resolve_layers(carried, pool), subject)
-    check_resolved_layer(node_layer, subject)
-    check_resolved_layer(flow_layer, _FLOW_SUBJECT)
+    written = carried.source.value
+    check_resolved_layer(node_layer, subject, written=written.get("node"))
+    check_resolved_layer(flow_layer, _FLOW_SUBJECT, written=written.get("flow"))
     if not node.llm_inherit:
         return node_layer
     return merge_llm_config(node_layer, merge_llm_config(flow_layer, parent_config))
@@ -715,21 +717,27 @@ def call_time_selection(
     )
 
 
-def check_resolved_layer(layer: dict[str, Any], subject: str) -> None:
+def check_resolved_layer(layer: dict[str, Any], subject: str, *, written: Any) -> None:
     """Check a layer resolved from values as an authored layer is checked, naming the field.
 
     Messages read ``<subject>.<field>: ...`` for the first field at fault (a provider
     block's problems name their key path), or ``<subject>: ...`` for a problem of the
-    layer as a whole, and never echo a value.
+    layer as a whole, and never echo a value. A host-only field or ``_connection``
+    is refused first (`refused_resolved_field`).
 
     Args:
         layer (`dict[str, Any]`): The resolved layer.
         subject (`str`): Names the layer, such as ``node 'chat' llm_config``.
+        written (`Any`): The layer as written, which tells a literal field from one a
+            value set.
 
     Raises:
         `ValueError`: The layer sets a field a flow file may not set, an unknown or
             retired field, an unknown provider, or a field or block its schema refuses.
     """
+    refused = refused_resolved_field(written, layer, subject)
+    if refused is not None:
+        raise ValueError(refused)
     try:
         validate_layer(layer)
     except ValueError as exc:
@@ -757,23 +765,32 @@ def check_resolved_layer(layer: dict[str, Any], subject: str) -> None:
 
 
 def value_config_subjects(flow: Any) -> dict[str, str]:
-    """Name the ``llm_config`` of each agent of the run's flow whose layers carry values.
+    """Name the ``llm_config`` of each run-start agent whose config takes values.
 
     A run-start check of such an agent's effective config names the field at fault
-    under this subject.
+    under this subject. An agent of the run's flow whose layers carry values is named
+    by its own layer. When the run's flow layer holds values, every other agent that
+    inherits it, at any depth, is named with ``(flow llm_config)``.
 
     Args:
         flow (`CompiledFlow`): The run's flow.
 
     Returns:
-        `dict[str, str]`: The subject, such as ``node 'chat' llm_config`` or a
-            synthesized agent's label, keyed by static agent path.
+        `dict[str, str]`: The subject, such as ``node 'chat' llm_config``,
+            ``Agent 'c/a' (flow llm_config)`` or a synthesized agent's label, keyed by
+            static agent path.
     """
-    return {
-        node_id: _agent_label(node, ()) or f"node {node_id!r} llm_config"
-        for node_id, node in flow.nodes.items()
-        if isinstance(node, AgentNode) and LLM_CONFIG_KEY in flow.wiring.get(node_id, {})
-    }
+    flow_values = bool(value_leaves(getattr(flow, "flow_llm_config", None)))
+    subjects: dict[str, str] = {}
+    for path, node, owner in _static_agents(flow):
+        *parent, node_id = path.split("/")
+        if LLM_CONFIG_KEY in owner.wiring.get(node_id, {}):
+            if owner is flow:
+                subjects[path] = _agent_label(node, ()) or f"node {node_id!r} llm_config"
+        elif flow_values and node.llm_inherit:
+            agent = _agent_label(node, tuple(parent)) or f"Agent {path!r}"
+            subjects[path] = f"{agent} ({_FLOW_SUBJECT})"
+    return subjects
 
 
 def _resolved(resolve: Callable[[], Any], subject: str) -> Any:

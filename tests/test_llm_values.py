@@ -391,3 +391,70 @@ def test_types_nullable_answers_from_the_stored_types():
     assert proven(tagged, ()) is False
     unproven = values.types_nullable(layer, {("model",): None})
     assert unproven(layer.value["model"], ()) is True
+
+
+# ---------- refused_resolved_field ----------
+
+_HOST_ONLY = "credentials and where they are sent stay with the host or yian auth"
+_SUBJECT = "node 'c/a' llm_config"
+
+
+def _refused(written, resolved):
+    return _values().refused_resolved_field(written, resolved, _SUBJECT)
+
+
+def test_a_call_time_whole_record_may_not_set_a_host_only_field():
+    values = _values()
+    carried = values.split_layers(Binding("${pick.output}"), {}, True, values.contract_nullable)
+    record = {"provider": "azure", "model": "dep", "base_url": "https://elsewhere.example"}
+    node_layer, _ = values.resolve_layers(carried, _pool(pick=record))
+
+    message = _refused(carried.source.value["node"], node_layer)
+
+    assert message == f"{_SUBJECT}.base_url: {_HOST_ONLY}"
+
+
+def test_a_call_time_flow_whole_record_may_not_set_a_host_only_field():
+    values = _values()
+    carried = values.split_layers(
+        {"model": "m"}, Binding("${pick.output}"), True, values.contract_nullable
+    )
+    _, flow_layer = values.resolve_layers(carried, _pool(pick={"api_key": "sk-x"}))
+
+    message = values.refused_resolved_field(
+        carried.source.value["flow"], flow_layer, "flow llm_config"
+    )
+
+    assert message == f"flow llm_config.api_key: {_HOST_ONLY}"
+
+
+def test_a_host_only_field_value_is_refused_even_beside_a_literal_azure_provider():
+    layer = ValueTemplate({"provider": "azure", "base_url": "${input.url}"})
+    resolved = {"provider": "azure", "base_url": "https://elsewhere.example"}
+
+    assert _refused(layer, resolved) == f"{_SUBJECT}.base_url: {_HOST_ONLY}"
+
+
+def test_a_literal_base_url_passes_only_beside_a_literal_azure_provider():
+    resolved = {"provider": "azure", "base_url": "https://res.openai.azure.com"}
+    literal = ValueTemplate({"provider": "azure", "base_url": resolved["base_url"]})
+    from_value = ValueTemplate({"provider": "${input.p}", "base_url": resolved["base_url"]})
+    tagged = ValueTemplate({"provider": Binding("azure"), "base_url": resolved["base_url"]})
+
+    assert _refused(literal, resolved) is None
+    assert _refused(tagged, resolved) is None
+    assert _refused(from_value, resolved).startswith(f"{_SUBJECT}: llm_config.base_url ")
+
+
+def test_a_layer_resolved_from_values_may_not_set_a_recorded_connection():
+    carried = Binding("${input.cfg}")
+    resolved = {"model": "m", "_connection": {"method": "api_key"}}
+
+    assert _refused(carried, resolved) == f"{_SUBJECT}._connection: internal to recorded runs"
+
+
+def test_a_layer_without_refused_fields_passes():
+    layer = ValueTemplate({"provider": "${input.p}", "model": "m"})
+
+    assert _refused(layer, {"provider": "openai", "model": "m"}) is None
+    assert _refused(Binding("${input.cfg}"), {}) is None

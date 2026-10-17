@@ -15,7 +15,7 @@ from typing import Any, Callable, Mapping, Optional, TypeAlias
 
 from yian.expr.expressions import ExpressionError
 from yian.expr.template import Span, expr_refs_of, scan_template
-from yian.llm_clients.config import PROVIDER_BLOCKS
+from yian.llm_clients.config import PROVIDER_BLOCKS, host_only_field_error
 from yian.llm_clients.connection import ConnectionSelection
 from yian.nodes.binding import BindingError, _resolve_source
 from yian.nodes.contracts import Binding, ValuePath, ValueTemplate, iter_source_strings
@@ -28,6 +28,9 @@ Nullable: TypeAlias = Callable[[Any, ValuePath], bool]
 
 LLM_CONFIG_KEY = "__llm_config"
 """The reserved AGENT wiring key that carries the node and own-flow layers."""
+
+HOST_ONLY_FROM_VALUE = "credentials and where they are sent stay with the host or yian auth"
+"""Why a host-only field may not come from a value."""
 
 
 @dataclass(frozen=True)
@@ -335,7 +338,7 @@ def keep_values(layer: Any, keep: Callable[[Any], bool]) -> Any:
     )
 
 
-def resolve_layer(layer: Any, pool: VariablePool, *, label: Optional[str] = None) -> dict:
+def resolve_layer(layer: Any, pool: VariablePool) -> dict:
     """Resolve one layer against a pool into a plain configuration dict.
 
     Literal text resolves to itself (``$$`` reads as ``$``), and typed values are
@@ -344,8 +347,6 @@ def resolve_layer(layer: Any, pool: VariablePool, *, label: Optional[str] = None
     Args:
         layer (`Any`): A layer: ``dict``, ``ValueTemplate``, ``Binding`` or ``None``.
         pool (`VariablePool`): The pool the values read.
-        label (`str`, *optional*, defaults to `None`): Names the config in an error
-            message in place of ``binding '__llm_config'``.
 
     Returns:
         `dict`: The resolved layer.
@@ -357,8 +358,67 @@ def resolve_layer(layer: Any, pool: VariablePool, *, label: Optional[str] = None
     template = Binding(
         ValueTemplate({"layer": part}, tuple((("layer", *path), o) for path, o in origins))
     )
-    resolved = _resolve_source(template, pool, name=LLM_CONFIG_KEY, label=label)
-    return _resolved_layer(resolved.get("layer"), part, label)
+    resolved = _resolve_source(template, pool, name=LLM_CONFIG_KEY)
+    return _resolved_layer(resolved.get("layer"), part, None)
+
+
+def refused_resolved_field(
+    written: Any, resolved: Mapping[str, Any], subject: str
+) -> Optional[str]:
+    """Return why a layer resolved from values sets a field no flow file may set, or `None`.
+
+    ``_connection`` is internal to recorded runs. A host-only field (``api_key``,
+    ``base_url``, ``organization``, ``project``, ``headers``) that a value set, as the
+    whole record, a whole block or the field itself, is refused whatever it resolved
+    beside, since the same value may have set the provider too. A host-only field
+    written as a literal key is checked as an authored layer is, against the layer's
+    literal keys only: ``base_url`` passes only beside a literal ``provider: azure``.
+
+    Args:
+        written (`Any`): The layer as written: a layer (``dict``, ``ValueTemplate``,
+            ``Binding`` or ``None``), or its part of a `split_layers` binding.
+        resolved (`Mapping[str, Any]`): What ``written`` resolved to.
+        subject (`str`): Names the layer, such as ``node 'chat' llm_config``.
+
+    Returns:
+        `str | None`: The message, naming the field under ``subject``; it never echoes
+            a value.
+    """
+    if "_connection" in resolved:
+        return f"{subject}._connection: internal to recorded runs"
+    literal = _literal_fields(written)
+    for field in resolved:
+        if host_only_field_error({field: None}) is None:
+            continue
+        if literal is None or field not in literal:
+            return f"{subject}.{field}: {HOST_ONLY_FROM_VALUE}"
+    message = host_only_field_error(literal or {})
+    return None if message is None else f"{subject}: {message}"
+
+
+def _literal_fields(written: Any) -> Optional[dict[str, Any]]:
+    """Return a written layer's literal top-level fields, or `None` for a whole-record value.
+
+    A field holding a value anywhere inside it is left out; a tagged literal counts
+    as the literal it tags.
+    """
+    tree = _unwrapped(written)
+    if is_value(tree):
+        return None
+    if type(tree) is not dict:
+        return {}
+    return {key: _unwrapped(item) for key, item in tree.items() if not _dynamic(item)}
+
+
+def _unwrapped(node: Any) -> Any:
+    """Look through templates and tagged literals to the tree they hold."""
+    while True:
+        if isinstance(node, ValueTemplate):
+            node = node.value
+        elif isinstance(node, Binding) and not is_value(node):
+            node = node.source
+        else:
+            return node
 
 
 def _has_span(text: str) -> bool:

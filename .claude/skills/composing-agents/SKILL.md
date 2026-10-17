@@ -1152,7 +1152,8 @@ paths come from the `while:`'s `and` parts and `not (x == null)`, not from `or` 
 guard nothing. The seed must still fit the loop's zero-iteration output, so `cursor:
 null` into a body returning `cursor: str` fails, and a returned field must keep its
 carried type. An inline body's input stays typed from the seed: tag it inside
-(`!str ${input.cursor}`) where a strict value is needed.
+(`!str ${input.cursor}`) where a strict value is needed. Its returned fields are
+relaxed the same way, so with the seed `cursor: p1` it may return `Optional(str)`.
 A named body's returned field must fit the body's own input (read as `Optional` where
 a `while:` null check guards it), since the next iteration
 binds it there: returning `Optional(int)` into `n: !int` is a load error that asks you to

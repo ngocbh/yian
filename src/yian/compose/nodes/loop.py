@@ -7,7 +7,11 @@ the `'a -> 'a` field-name contract: a body returns a subset of the carried recor
 omitted field carries over, so the loop's output contract merges the returned body fields with
 the seeds of the omitted ones). `_finish` keeps concrete ranges on the Compose-owned
 `BuildResult` and stamps only the descriptor's opaque origin onto the runtime node. Registered
-into `KINDS`/`BINDING_FIELDS` at import so the shared dispatch routes here.
+into `KINDS`/`BINDING_FIELDS` at import so the shared dispatch routes here. It also holds the
+loop-entry helpers the load checks use: `while_non_null_paths` finds the carried paths a
+`while:` null check proves, `nullable_at` relaxes a type along such a path,
+`loop_entry_inputs` gives the body's inputs read that way, and `carried_field_types` gives the
+carried record's proven field types.
 """
 
 from __future__ import annotations
@@ -566,39 +570,35 @@ def _non_null_paths(guard: Guard) -> frozenset[tuple[str, ...]]:
     return frozenset.intersection(*parts) if parts else frozenset()
 
 
-def with_nullability(typ: Type, path: tuple[str, ...], nullable: bool) -> Type:
-    """Return `typ` with the value at `path`, and each record above it, nullable or not.
+def nullable_at(typ: Type, path: tuple[str, ...]) -> Type:
+    """Return `typ` with the value at `path`, and each record above it, made nullable.
 
     The path is followed through record fields. Where it names an absent field, or stops
     at a union or a non-record before its end, the rest of it is left as is, but the value
-    it stopped at still gets the new nullability. A field made not nullable becomes
-    required in its record and one made nullable stops being required, since a field read
-    through a null or absent record is null.
+    it stopped at is still made nullable. Each field on the path stops being required in
+    its record, since a field read through a null or absent record is null.
 
     Args:
         typ (`Type`):
             The type to change.
         path (`tuple[str, ...]`):
             Field names from `typ` to the value. `()` is `typ` itself.
-        nullable (`bool`):
-            Whether each value on the path may be null.
 
     Returns:
         `Type`:
             The changed copy; `typ` itself is not changed.
 
     Example:
-        `with_nullability(Optional({next: Optional(str)}), ("next",), False)` is
-        `{next: str}` with `next` required.
+        `nullable_at({next: str}, ("next",))` with `next` required is
+        `Optional({next: Optional(str)})` with `next` not required.
     """
     if path and typ.variants is None and typ.fields is not None and path[0] in typ.fields:
-        inner = with_nullability(typ.fields[path[0]], path[1:], nullable)
-        required = typ.required or frozenset()
-        required = required - {path[0]} if nullable else required | {path[0]}
+        inner = nullable_at(typ.fields[path[0]], path[1:])
+        required = (typ.required or frozenset()) - {path[0]}
         typ = replace(typ, fields={**typ.fields, path[0]: inner}, required=required)
     if typ.kind is ValueKind.NONE:
-        return typ  # the null type has no non-null form
-    return replace(typ, nullable=nullable)
+        return typ  # the null type is already nullable
+    return replace(typ, nullable=True)
 
 
 def loop_entry_inputs(node: LoopNode) -> list[Parameter]:
@@ -625,7 +625,7 @@ def loop_entry_inputs(node: LoopNode) -> list[Parameter]:
             typ = contract.type
             for path in sorted(paths):
                 if path[0] == parameter.name:
-                    typ = with_nullability(typ, path[1:], True)
+                    typ = nullable_at(typ, path[1:])
             if typ is not contract.type:
                 parameter = replace(parameter, contract=replace(contract, type=typ))
         inputs.append(parameter)

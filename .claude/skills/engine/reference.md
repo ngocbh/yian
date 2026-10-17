@@ -1146,7 +1146,7 @@ generated parameter. Over a typed seed, a nullable returned field whose non-null
 is left to the runtime input check. Both checks compare against `loop_entry_inputs`
 (`compose/nodes/loop.py`): each input read as nullable at a path a `while:` null check
 proves (`while_non_null_paths`: `and` parts and `not (x == null)`, not `or` parts;
-`until:`/`times:` none) and at each record above it (`with_nullability`). `child_inputs`
+`until:`/`times:` none) and at each record above it (`nullable_at`). `child_inputs`
 stay declared, so errors name the declared input and the body's start checks each value.
 A seed only that reading admits must also fit the carried field type
 (`carried_field_types`), since a zero-iteration run outputs the seeds

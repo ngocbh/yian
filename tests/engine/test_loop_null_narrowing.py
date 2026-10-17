@@ -476,7 +476,6 @@ def test_while_null_check_lets_a_seed_record_omit_the_checked_field() -> None:
         )
 
 
-
 def test_while_null_check_rejects_a_record_seed_the_zero_iteration_output_cannot_carry() -> None:
     # With zero iterations the loop outputs `{n: 0}` as the body's `Optional(Strict)`
     # output, whose `next` is required, so the `while:` can't admit the seed.
@@ -507,6 +506,7 @@ def test_while_null_check_admits_a_null_seed_the_body_output_can_carry() -> None
     assert result.status == "succeeded", result.failure
     assert result.output == {"cursor": None}
     assert _body_runs(result) == 0
+
 
 def test_seed_of_the_wrong_type_names_the_declared_input_under_a_while_null_check() -> None:
     message = (

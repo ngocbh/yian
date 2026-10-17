@@ -452,8 +452,7 @@ checks before it always decide: in `isinstance(v, Buy) and (isinstance(v, Buy) o
 
 Two checks on one value meet, and when each proves a type, the narrower one wins:
 `x != null and isinstance(x, Item)` over `x: Optional(Any)` sees `x` as `Item`, either
-way round, and so does `isinstance(x, Wide) and isinstance(x, Item)` when `Item` fits
-`Wide`. A check that proves a nested field is not null (`!= null` or `isinstance`) also
+way round. A check that proves a nested field is not null (`!= null` or `isinstance`) also
 proves each record above it is not null and has that field: with `A: {b: Optional(str),
 m: Literal(p, q)}` and `a: !Optional(A)`, in a branch under `when: input.a.b != null`,
 `${input.a.b}` is `str`, `${input.a}` is `A`, and an `on: ${input.a.m}` that lists `p` and
@@ -3513,8 +3512,10 @@ returns the whole carried record.
   seed is compatible with a nullable body field, including inside a typed list, when
   the body is a named `defs:` body or the seed is tagged. Each returned field must
   fit, at load, the parameter the next iteration binds it to: a named body's own
-  input, read as `Optional` where a `while:` null check guards it, or the parameter an
-  inline body types from its seed. An untyped `${null}`
+  input, or the parameter an inline body types from its seed, either read as `Optional`
+  where a `while:` null check guards it. So under `while: cursor != null`, an inline body
+  with the seed `cursor: p1` may return `Optional(str)`, though its generated input is
+  still `str`. An untyped `${null}`
   seed gives the type `None`, so with an inline body, tag the seed:
   `seen: !Optional(list(str)) ${null}`. Over a tagged seed (`note: !str "start"`), a
   returned field typed `Optional(str)` loads, and the next iteration's input check
@@ -3661,7 +3662,7 @@ that continues after it has finished prunes them.
 #### A `while:` null check guards the body
 
 `while:` runs before every iteration, the first included, so a carried value it proves not
-null never enters the body as null. The load checks read a named body's input as
+null never enters the body as null. The load checks read the body's input as
 `Optional` at that path: an `Optional` seed, and a returned value that may be null, both
 fit a strict input. So pagination needs no `Optional` cursor in the body:
 
@@ -3703,7 +3704,8 @@ output: ${pages.output}
   fail, as shown below.
 - An inline `nodes:` body's inputs stay typed from the seeds, so there `cursor` is still
   `Optional(str)`; tag it where a strict value is needed
-  (`cursor: !str ${input.cursor}`).
+  (`cursor: !str ${input.cursor}`). Its returned fields are relaxed the same way: with
+  the seed `cursor: p1`, the input is `str` and the body may return `Optional(str)`.
 - The body's start still checks each value against the declared input, and a seed or
   returned field that fails a load check gets the same error as before, naming the
   declared input.

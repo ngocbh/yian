@@ -621,7 +621,10 @@ Most are just the functional model (above) made enforceable:
   model config; visible tool interactions are inert evidence, never executable
   grants. No ambient/node config fallback, recall, render, or default replay; the
   one live field it reads is a marked agent's host `api_key`, which is never
-  recorded, from the replayed node's `llm_config`.
+  recorded, from the replayed node's `llm_config` (a call-time agent's run-local
+  `host_credentials`, passed only when its recorded config is marked). A call-time
+  agent's config is its bound `__llm_config` from the accepted capture, read at
+  `capture_render`; a static agent's is the RunStarted map entry.
 - **Reverse traversal follows accepted outcome order** — gather all incoming
   feedback before invoking an occurrence once, and validate every returned
   channel before routing any message. Use trace-owned terminal identity and
@@ -977,6 +980,33 @@ Most are just the functional model (above) made enforceable:
   send the block as written (`merge_request_body`) with no translation; the only
   default is Anthropic `max_tokens`. Keep `provider`, `_connection`, `_host_key`,
   and `_header_names` top-level in recorded configs (resume reads them there).
+  `llm_config` values (`${...}` in a field, block field, whole block, or whole record):
+  Compose reads each layer through the tag reader (`ValueTemplate`, or `Binding` for
+  a whole record; a plain dict when it holds none), refuses host-only fields from a
+  value or a declared whole-record type and `base_url` beside a non-literal provider,
+  type-checks sources (`compose/validate/llm_config_sources.py`), and wires an AGENT
+  whose values can still contribute with the reserved key `__llm_config`
+  (`Binding(ValueTemplate({"node": ..., "flow": ...}))`; `reserved_key_label` names
+  it `llm_config` in messages). Input-only root-flow agents resolve at run start
+  after `coerce_inputs`, only the inputs they read checked before the log;
+  `find_inherited_llm_value` refuses a non-root-input flow value a child agent would
+  inherit. Call-time agents get a `CallTimeLLM` (base plus restored selection) from
+  `RunStarted.call_time_llm` (optional, omitted when empty; schema stays 9, older
+  yian can't read logs that hold it). `bind_reserved` → `call_time_config` resolves,
+  checks (`check_resolved_layer`, `llm_clients.layers`), binds the connection,
+  marks a host-key provider, runs `check_model_config` on a per-invocation copy with
+  secrets joined only when marked, and returns the secret-free canonical config;
+  failures are located `BindingError`s (`binding.type`/`contract.input`), a missing
+  host key an `AuthError` (host error). The node records it as a `NodeStep`
+  `{"effective_llm_config": ...}` before memory and the model; a restart whose
+  recomputed config differs raises a host fault. `model_hidden_inputs` and
+  `backward_input_names` keep `__llm_config` away from the model and from feedback
+  routing (memory recall, episodes, evidence). Resume checks in-flight call-time
+  configs with the static map, the CLI refuses a recorded host-key selection (passed
+  to `_check_resume_credentials` as `call_time_host`), its up-front key check counts
+  a call-time agent whose provider is known (an Azure one with its literal
+  `base_url`), and the result keeps the host key when the call-time selection names
+  its provider.
 - **One attempt barrier precedes commits** — accept Started, complete backward
   results and all memory proposals, then accept Ready. Commit each memory key
   once in sorted key order, even with an empty batch, accepting its positive-attempt

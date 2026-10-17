@@ -633,7 +633,14 @@ model made enforceable.
   `apply_effective_llm_map` replays a recorded complete map without reading ambient
   settings and deep-copies every callsite again. `RunStartedRecord` stores that complete
   map; recovery applies it to a private copy of the supplied static graph before folding
-  later records.
+  later records. An authored layer may take fields from `${...}` values: a root-flow
+  agent whose values read only `input.*` is resolved at run start with the coerced
+  inputs (`resolve_run_llm`) and baked like a literal config; every other agent with
+  the reserved `__llm_config` wiring key is a call-time agent, recorded in the optional
+  `RunStartedRecord.call_time_llm` (its base and the nonsecret connection selection) and
+  resolved by `AgentNode.bind_reserved` just before its model call, which records the
+  canonical config as a `NodeStep`. A flow-layer value other than a root input that a
+  child flow's agent would inherit is a load error.
 - **Stable program and expansion identity** — compile-owned `flow_manifest`
   canonicalizes execution semantics, `flow_fingerprint` hashes it, and
   `expansion_digest` covers an expanded fragment's entry/end ids and topology.

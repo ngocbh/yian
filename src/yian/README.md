@@ -28,7 +28,8 @@ know the shape of it:
   ordered feedback tuple, returning input, self, and variable channels. Its base
   implementation returns empty channels; structural nodes own their routing rules.
   AGENT backward reads one live field, the unrecorded host `api_key` in its node's
-  `llm_config`, because the record never holds the key.
+  `llm_config` (for an agent whose config resolves when it runs, its run-local
+  `host_credentials`), because the record never holds the key.
 - The **program structure is fixed by the author**, as a function's call graph is
   fixed by its source. The LLM fills leaf boxes; it does not rewrite the graph at
   runtime. The authoritative record prefix makes engine state recoverable; it
@@ -269,6 +270,55 @@ or connection setting. The loader checks flow- and def-level `llm_config:` again
 `LLMConfig` as it does a node's, and the cascade rejects unknown keys in the host
 layer, so a typo never reaches the recorded map.
 
+An authored `llm_config` may take any field from a `${...}` value: a top-level field,
+a block field, a whole block, or the whole record. The loader reads each node, flow,
+`defs:` and `adaptive_questions:` layer through the tag reader. A layer holding values
+becomes a `ValueTemplate`, a whole record written as one value a `Binding`, and a
+layer without them stays a plain dict whose strings are `$$`-unescaped, so its
+fingerprint is unchanged unless it holds `$$`. `compose/nodes/agent.py`
+(`check_llm_config_value`) refuses a host-only field from a value or declared by a
+whole-record type, a `base_url` beside a provider that is not the literal `azure`,
+and an `inherit` that is not a literal boolean, and checks the literal parts
+(`partial_block_problems` for a block holding values).
+`compose/validate/llm_config_sources.py` requires a proven type or a tag for each
+value and rejects one disjoint from its field. An AGENT whose own or own-flow layer
+holds a value that can still reach its config gets the reserved wiring key
+`__llm_config` (`nodes/agent/llm_values.py`). It carries both layers whole, as
+`Binding(ValueTemplate({"node": ..., "flow": ...}))`, minus the values a higher layer
+always overrides (a non-null literal, or a value whose type can't be null), so
+edges, references, skips, child re-namespacing and binding capture treat it as any
+binding. `find_inherited_llm_value` refuses a flow-layer value other than a root
+input that a child flow's agent would inherit: at load in `load_flow`'s root-only
+pass, and in the cascade for a flow built in Python.
+
+`resolve_run_llm` runs the cascade with the run's inputs, coerced and with their
+defaults filled. A root-flow agent whose values read only `input.*` is resolved
+there and baked into the effective map like a literal config, and its
+`bind_reserved` returns nothing. Every other agent with the key is a call-time
+agent: `RunLLM.call_time` maps its static path to its base (the outer flow layers
+and the host layer merged; `{}` under `inherit: false`), and `call_time_selection`
+records the nonsecret connection selection it binds from (`record_selection`,
+limited to the providers it can reach when `known_call_time_providers` knows them).
+Both land in `RunStarted.call_time_llm`; `apply_effective_llm_map(flow, effective,
+call_time)` sets `AgentNode.call_time` from them on fresh runs, replay, and resume.
+At call time `AgentNode.bind_reserved` calls `call_time_config`: it resolves the
+layers, checks each one as an authored layer (`check_resolved_layer`), merges them
+over the base, fills the defaults and the provider's saved model from the recorded
+selection (`llm_clients.layers.resolve_agent_config`), and binds the connection,
+marking a config of the host key's provider as `ConnectionSnapshot.bind` does. It
+runs `check_model_config` on a per-invocation copy that joins the host key and
+header values only when the config is marked (`invocation_config`), and returns the
+canonical config, shaped like a `RunStarted` map entry and holding no secret, as the
+bound `__llm_config`. A refused value is a `BindingError` (`binding.type` for a tag
+mismatch, else `contract.input`) whose message names the field
+(`node 'chat' llm_config.provider: ...`) and whose origin is that field's site. A
+config marked for a host key the run does not hold raises `AuthError`, a host error.
+`forward` rebuilds the per-invocation copy for the model, the memory check, and
+credential scrubbing; the copy is never stored. `model_hidden_inputs()` keeps
+`__llm_config` out of memory recall inputs, memory episodes, and evaluation evidence, and
+`backward_input_names()` leaves it out, so AGENT backward never routes feedback to
+the value's producer.
+
 Request settings live in provider blocks: `LLMConfig` has one optional block per
 provider, named after it (`openai`, `qwen-cn`, `anthropic`, ...), beside `provider`,
 `model`, `api_key`, and `base_url`. `llm_clients/provider_blocks.py` holds one class
@@ -277,7 +327,8 @@ for that provider, with the same names, nesting, and allowed values, plus a tabl
 of reserved paths that yian builds itself (messages, system prompt, tools,
 structured output, streaming, conversation state, reply count). A block is checked
 in three places. The loader validates every authored layer against `LLMConfig`, so
-every block, used or not, is checked at load. The cascade (`_validate_layer`)
+every block, used or not, is checked at load, and a block holding values again when
+they resolve. The cascade (`llm_clients.layers.validate_layer`)
 rejects unknown and retired keys in the host layer, and `merge_llm_config` merges a
 block per block field, one level deep, replacing nested values whole. At run start
 `check_model_config` re-checks each agent's resolved block against the schema of
@@ -1316,7 +1367,12 @@ or body mutation. An incomplete binding has `bound_inputs=None`; partial routes
 remain available for inspection. The node-owned `bind_reserved(..., bind=None)`
 hook can use the injected `bind(name, source, normalize)` callable to retain a
 reserved input's route and normalized value. Materialized hook results without
-that call have literal routes. MAP passes `bind_item(element, index)` its actual
+that call have literal routes. `Node.reserved_key_label(key)` names a reserved key in
+reference, skip, and run-start messages (default `<kind> <key>`, such as `wait until`;
+AGENT's `__llm_config` reads `llm_config`), and `Node.model_hidden_inputs()` lists the
+reserved inputs left out of memory recall inputs, memory episodes, and evaluation
+evidence (AGENT's
+`__llm_config`). MAP passes `bind_item(element, index)` its actual
 enumeration index and projects each item's routes from the captured `over`
 collection, including concatenated or repeated collections.
 
@@ -1428,6 +1484,11 @@ there is no migration. Preparation and replay retain each envelope's canonical
 bytes, including trace comparison, prepared-record tamper checks, and append
 verification.
 
+`RunStartedRecord.call_time_llm` (`{"selection": {...}, "agents": {path: base}}`) is
+optional and added within schema 9: a run with no call-time agent omits it, so its
+log is byte-identical to before, but a yian version from before the field can't read
+a log that holds it. Neither part holds a key or header value.
+
 `NodeStepRecord(node_id, step)` holds one opaque JSON step an in-flight node
 recorded; it was added within schema 9, so older logs replay unchanged, but a log
 holding one can't be read by a yian version from before it. A node declaring
@@ -1440,7 +1501,11 @@ for it, and a stop releases the worker as a host stop. The reducer accepts a ste
 only for an in-flight node and keeps the node's steps and start count
 (`RunState.node_steps`, `RunState.node_starts`) across `RunResumed` until its outcome
 is applied. A step publishes no observer. The TOOL node uses steps to record retried
-attempts.
+attempts. A call-time AGENT (one with `call_time` set) records its canonical resolved
+config, `{"effective_llm_config": {...}}` with no key or header value, before memory
+and the model. When it restarts with a recorded config, a recomputed config that
+differs raises a host fault (`_CapabilityFault`) naming the node, before any model
+call, since the flow or yian version changed.
 
 The recorded `learnable` flag controls forward retention:
 `learnable=True` requires every accepted node outcome to carry a `ForwardCapture`;
@@ -1468,7 +1533,10 @@ snapshot, rejects repeated or post-close writes, and keeps capture faults as hos
 faults. Supported values use canonical seed conversion, which rejects NaN,
 infinity, and complex numbers like every codec; static capture validation is unchanged. Model configuration comes
 only from the accepted RunStarted map entry selected by the authored execution
-path, never a dynamic ID or mutable ambient/node config. No default or prompt is
+path, never a dynamic ID or mutable ambient/node config. A call-time agent's comes
+from its bound `__llm_config` in the accepted capture, looked up at
+`capture_render`, after `capture_inputs` has seen the bound record; AGENT backward
+passes it the host key and headers only when it is marked. No default or prompt is
 evaluated a second time to capture it.
 
 Model/tool evaluation evidence is separate and may
@@ -2150,6 +2218,7 @@ each predicate origin. Thus source formatting, origin rebasing, and Python objec
 identity cannot change program or expansion identity. Credentials stay out of flow
 files by convention, not by a name check: no name is special at load.
 `resolve_llm_cascade` returns a complete map keyed by slash-separated paths of static
-AGENT nodes. The run boundary reads process provider/model defaults and nonsecret
+AGENT nodes; `resolve_run_llm` returns that map for the agents resolved at run start
+and the call-time agents' bases. The run boundary reads process provider/model defaults and nonsecret
 connection selections once at fresh-run initialization; `apply_effective_llm_map` restores
-the recorded map during recovery without consulting the environment.
+the recorded map and call-time agents during recovery without consulting the environment.

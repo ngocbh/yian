@@ -1,4 +1,4 @@
-"""Run start checks the run's inputs before it resolves the llm cascade."""
+"""Run start checks the run's inputs, then resolves and checks `llm_config` values reading them."""
 
 import json
 
@@ -379,3 +379,150 @@ def test_a_mixed_flow_layer_passes_its_literal_and_input_fields_and_drops_the_re
     assert _models(log) == {"pick": ("openai", "pick-model"), "c/a": ("openai", "child-model")}
     assert effective["c/a"]["openai"] == {"temperature": 0.5}
     assert effective["pick"]["openai"] == {"temperature": 0.5}
+
+
+def _fails_before_any_node(text, inputs, match, tmp_path, fake_model):
+    """Run ``text`` and expect run start to fail with ``match``, with no log and no node run."""
+    log = tmp_path / "failed.jsonl"
+    events = []
+    with pytest.raises(ValueError, match=match) as caught:
+        run_flow(load_flow(text), inputs, log=log, on_event=events.append)
+    assert not log.exists()
+    assert events == []
+    assert fake_model == []
+    return str(caught.value)
+
+
+def test_a_provider_from_an_input_is_checked_against_its_connection(
+    tmp_path, monkeypatch, fake_model
+):
+    import time
+
+    from yian.llm_clients.auth import AuthStore, OAuthCredentials
+
+    auth = tmp_path / "auth"
+    auth.mkdir(mode=0o700)
+    monkeypatch.setenv("YIAN_AUTH_FILE", str(auth / "auth.json"))
+    AuthStore().save(
+        "openai",
+        OAuthCredentials("access-secret", "refresh-secret", time.time() + 3600, "account"),
+        "gpt-5.5",
+    )
+    text = _values("  p: !str", "{provider: '${input.p}', openai: {temperature: 0.2}}")
+    message = _fails_before_any_node(
+        text, {"p": "openai"},
+        r"^node 'chat' llm_config\.openai: `openai\.temperature` is not accepted by the "
+        r"ChatGPT subscription endpoint",
+        tmp_path, fake_model,
+    )
+    assert "secret" not in message
+
+
+def test_a_whole_block_from_an_input_that_breaks_the_schema_fails_at_run_start(
+    tmp_path, fake_model
+):
+    text = _values("  blk: !object", "{openai: '${input.blk}'}")
+    _fails_before_any_node(
+        text, {"blk": {"bogus": 1}},
+        r"^node 'chat' llm_config\.openai: `openai\.bogus` is not a supported field",
+        tmp_path, fake_model,
+    )
+
+
+def test_a_block_field_from_an_input_out_of_range_fails_at_its_field(tmp_path, fake_model):
+    text = _values(
+        "  b: !int", "{provider: anthropic, model: m, anthropic: {thinking: "
+        "{type: enabled, budget_tokens: '${input.b}'}}}",
+    )
+    _fails_before_any_node(
+        text, {"b": 5}, r"^node 'chat' llm_config\.anthropic: .*budget_tokens.*1024",
+        tmp_path, fake_model,
+    )
+
+
+def test_an_unknown_provider_from_an_input_fails_naming_the_field(tmp_path, fake_model):
+    text = _values("  p: !str", "{provider: '${input.p}'}")
+    message = _fails_before_any_node(
+        text, {"p": "bogus-provider"},
+        r"^node 'chat' llm_config\.provider: not a known provider; use one of: openai, ",
+        tmp_path, fake_model,
+    )
+    assert "bogus-provider" not in message
+
+
+def test_a_literal_typed_provider_given_an_unknown_member_fails_at_run_start(
+    tmp_path, fake_model
+):
+    text = _values("  p: !Some", "{provider: '${input.p}'}").replace(
+        "input:", "typedefs:\n  Some: Literal(openai, nope)\ninput:"
+    )
+    assert run_flow(load_flow(text), {"p": "openai"}).status == "succeeded"
+    fake_model.clear()
+    _fails_before_any_node(
+        text, {"p": "nope"}, r"^node 'chat' llm_config\.provider: not a known provider",
+        tmp_path, fake_model,
+    )
+
+
+def test_a_flow_level_unknown_provider_from_an_input_fails_at_the_flow_field(
+    tmp_path, fake_model
+):
+    text = _PASS_DOWN.replace("provider: anthropic", "provider: '${input.p}'").replace(
+        "input: {m: !str }", "input: {m: !str , p: !str }"
+    )
+    _fails_before_any_node(
+        text, {"m": "x", "p": "nope"}, r"^flow llm_config\.provider: not a known provider",
+        tmp_path, fake_model,
+    )
+
+
+def test_an_unknown_field_in_a_whole_record_from_an_input_fails_at_run_start(
+    tmp_path, fake_model
+):
+    text = _values("  cfg: !object", "'${input.cfg}'")
+    _fails_before_any_node(
+        text, {"cfg": {"model": "m", "bogus": 1}},
+        r"^node 'chat' llm_config: llm_config has unknown field\(s\) \['bogus'\]",
+        tmp_path, fake_model,
+    )
+
+
+_COMPOSER = """id: f
+name: f
+input: {proj: !str , m: !str , p: !str }
+nodes:
+  ask:
+    kind: human_input
+    input: {proj: '${input.proj}'}
+    adaptive_questions:
+      prompt: "Q ${proj}"
+      llm_config: {provider: '${input.p}', model: '${input.m}'}
+output: ${ask.output}
+"""
+
+
+def test_a_composer_value_from_an_input_resolves_at_run_start(tmp_path, fake_model):
+    from yian.compile.llm_cascade import resolve_run_llm
+
+    flow = load_flow(_COMPOSER).compiled
+    composer = next(
+        node_id for node_id, node in flow.nodes.items()
+        if getattr(node, "llm_config_label", None) is not None
+    )
+    effective = resolve_run_llm(
+        flow, {}, defaults={}, run_inputs={"proj": "x", "m": "claude-c", "p": "anthropic"},
+    ).effective
+    assert effective[composer]["provider"] == "anthropic"
+    assert effective[composer]["model"] == "claude-c"
+
+
+def test_a_composer_value_error_names_the_gate(tmp_path, fake_model):
+    site = r"node 'ask' adaptive_questions\.llm_config"
+    _fails_before_any_node(
+        _COMPOSER, {"proj": "x", "p": "openai"},
+        rf"^{site}\.model: input 'm' is required and was not given", tmp_path, fake_model,
+    )
+    _fails_before_any_node(
+        _COMPOSER, {"proj": "x", "m": "m", "p": "nope"},
+        rf"^{site}\.provider: not a known provider", tmp_path, fake_model,
+    )

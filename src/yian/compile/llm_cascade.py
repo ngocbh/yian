@@ -22,11 +22,17 @@ import copy
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Optional
 
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from yian.diagnostics import OriginRef
 
-from yian.llm_clients.config import merge_llm_config
+from yian.llm_clients.config import (
+    PROVIDER_BLOCKS,
+    SUPPORTED_LLM_PROVIDERS,
+    LLMConfig,
+    merge_llm_config,
+)
+from yian.llm_clients.provider_blocks import partial_block_problems
 from yian.llm_clients.connection import HOST_KEY_MARKER
 from yian.llm_clients.layers import (
     require_concrete_selection,
@@ -508,6 +514,8 @@ def _run_start_flow_layer(flow: Any, *, root: bool, inputs: _RunInputs) -> dict[
             if root else inputs.empty_pool()
         )
         layer = _resolved(lambda: resolve_layer(known, pool), _FLOW_SUBJECT)
+        if root:
+            check_resolved_layer(layer, _FLOW_SUBJECT)
     validate_layer(layer)
     return layer
 
@@ -547,11 +555,72 @@ def _resolve_carried(
 
     pool = inputs.pool_for(carried.source, where)
     node_layer, flow_layer = _resolved(lambda: resolve_layers(carried, pool), subject)
-    validate_layer(node_layer)
-    validate_layer(flow_layer)
+    check_resolved_layer(node_layer, subject)
+    check_resolved_layer(flow_layer, _FLOW_SUBJECT)
     if not node.llm_inherit:
         return node_layer
     return merge_llm_config(node_layer, merge_llm_config(flow_layer, parent_config))
+
+
+def check_resolved_layer(layer: dict[str, Any], subject: str) -> None:
+    """Check a layer resolved from values as an authored layer is checked, naming the field.
+
+    Messages read ``<subject>.<field>: ...`` for the first field at fault (a provider
+    block's problems name their key path), or ``<subject>: ...`` for a problem of the
+    layer as a whole, and never echo a value.
+
+    Args:
+        layer (`dict[str, Any]`): The resolved layer.
+        subject (`str`): Names the layer, such as ``node 'chat' llm_config``.
+
+    Raises:
+        `ValueError`: The layer sets a field a flow file may not set, an unknown or
+            retired field, an unknown provider, or a field or block its schema refuses.
+    """
+    try:
+        validate_layer(layer)
+    except ValueError as exc:
+        raise ValueError(f"{subject}: {exc}") from None
+    for block in PROVIDER_BLOCKS:
+        if layer.get(block) is None:
+            continue
+        problems = partial_block_problems(block, layer[block], lambda _leaf: False)
+        if problems:
+            raise ValueError(f"{_field_where(subject, (block,))}: {problems[0]}")
+    try:
+        LLMConfig(**layer)
+    except ValidationError as exc:
+        error = exc.errors(include_input=False, include_url=False)[0]
+        loc = tuple(error["loc"])
+        if loc == ("provider",) and error["type"] == "literal_error":
+            text = f"not a known provider; use one of: {', '.join(SUPPORTED_LLM_PROVIDERS)}"
+        elif error["type"] == "value_error":
+            text = str(error["ctx"]["error"])
+        elif len(loc) > 1:
+            text = f"`{'.'.join(str(part) for part in loc)}`: {error['msg']}"
+        else:
+            text = error["msg"]
+        raise ValueError(f"{_field_where(subject, loc[:1])}: {text}") from None
+
+
+def value_config_subjects(flow: Any) -> dict[str, str]:
+    """Name the ``llm_config`` of each agent of the run's flow whose layers carry values.
+
+    A run-start check of such an agent's effective config names the field at fault
+    under this subject.
+
+    Args:
+        flow (`CompiledFlow`): The run's flow.
+
+    Returns:
+        `dict[str, str]`: The subject, such as ``node 'chat' llm_config`` or a
+            synthesized agent's label, keyed by static agent path.
+    """
+    return {
+        node_id: _agent_label(node, ()) or f"node {node_id!r} llm_config"
+        for node_id, node in flow.nodes.items()
+        if isinstance(node, AgentNode) and LLM_CONFIG_KEY in flow.wiring.get(node_id, {})
+    }
 
 
 def _resolved(resolve: Callable[[], Any], subject: str) -> Any:

@@ -49,6 +49,7 @@ from yian.compile.llm_cascade import (
     host_key_providers,
     resolve_run_llm,
     static_agent_labels,
+    value_config_subjects,
 )
 from yian.compile.manifest import flow_fingerprint
 from yian.compile.memory_layout import (
@@ -584,6 +585,7 @@ def _check_effective_llm(
     api_key: SecretStr | None,
     headers: dict[str, SecretStr] | None,
     labels: Mapping[str, str],
+    located: Mapping[str, str] | None = None,
 ) -> None:
     """Reject any agent config its model call would reject, before the run starts.
 
@@ -597,6 +599,10 @@ def _check_effective_llm(
         labels (`Mapping[str, str]`):
             The authored site of each synthesized agent's ``llm_config``, keyed by
             static agent path; a message names it instead of the path.
+        located (`Mapping[str, str] | None`, *optional*, defaults to `None`):
+            The ``llm_config`` subject of each agent whose layers carry values
+            (`value_config_subjects`), keyed by static agent path; its message names
+            the subject, and the provider's block when the block is what is refused.
 
     Raises:
         `ValueError`: A config would be rejected by its model call; the message names
@@ -613,8 +619,29 @@ def _check_effective_llm(
         try:
             check_model_config(probe)
         except ValueError as exc:
-            where = labels.get(path) or f"Agent {path!r}"
+            subject = (located or {}).get(path)
+            if subject is not None:
+                where = subject + _refused_block(probe)
+            else:
+                where = labels.get(path) or f"Agent {path!r}"
             raise ValueError(f"{where}: {exc}") from exc
+
+
+def _refused_block(config: dict[str, Any]) -> str:
+    """Return ``.<provider>`` when `check_model_config` refused only the provider's block.
+
+    Its fields and connection are checked first and an Azure config needs a
+    ``base_url``; a config that passes those was refused for its block alone.
+    """
+    try:
+        validated, _ = split_model_config(config)
+    except ValueError:
+        return ""
+    if validated.provider is None or (
+        validated.provider == "azure" and validated.base_url is None
+    ):
+        return ""
+    return f".{validated.provider}"
 
 
 def _run_start_inputs(
@@ -753,7 +780,13 @@ def _run_flow_controlled(
         api_key = headers = None
     if api_key is not None:
         bind_host_credentials(private_flow, api_key, headers)
-    _check_effective_llm(effective_llm, api_key, headers, static_agent_labels(private_flow))
+    _check_effective_llm(
+        effective_llm,
+        api_key,
+        headers,
+        static_agent_labels(private_flow),
+        value_config_subjects(private_flow),
+    )
 
     if learnable:
         apply_execution_layout(private_flow, resolve_execution_layout(private_flow))

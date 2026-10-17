@@ -978,11 +978,12 @@ def _attach_llm_config_wiring(
     flow_inputs: dict[str, ValueContract],
     *,
     type_fn: TypeFn | None = None,
-) -> None:
+) -> dict[ValuePath, Type | None]:
     """Wire each AGENT's `llm_config` values as its reserved `__llm_config` input.
 
-    Each value in an agent's own layer gets its static type, read over the flow's
-    contracts as written (no CASE narrowing applies to a config). An agent gets the key
+    Each value in an agent's own layer, and in the flow's layer, gets its static type,
+    read over the flow's contracts as written (no CASE narrowing applies to a config).
+    An agent gets the key
     when a value in its own layer, or one in the flow's layer that its own layer doesn't
     always override, can reach its config. A higher value overrides only when its type
     can't be null. The key carries both layers whole (`split_layers`), so edges,
@@ -1001,18 +1002,18 @@ def _attach_llm_config_wiring(
         flow_inputs (`dict[str, ValueContract]`): Flow input contracts by name.
         type_fn (`TypeFn | None`, *optional*, defaults to `None`): Resolves a
             constructor name to its type for inference.
+
+    Returns:
+        `dict[ValuePath, Type | None]`: The static type of each value in the flow's
+            layer by its field path; `None` when it is not proven.
     """
     for node_id, result in build_results.items():
         node = result.node
         if not isinstance(node, AgentNode):
             continue
-        types: dict[ValuePath, Type | None] = {}
-        for path, leaf in value_leaves(node.own_llm_config).items():
-            try:
-                types[path] = infer_binding_type(leaf, producers, flow_inputs, type_fn=type_fn)
-            except ExpressionError:
-                types[path] = None  # the reference pass reports it, located
-        node.llm_value_types = types
+        node.llm_value_types = _llm_value_types(
+            node.own_llm_config, producers, flow_inputs, type_fn
+        )
         carried = split_layers(
             node.own_llm_config, flow_llm_config, node.llm_inherit, node.llm_nullable()
         )
@@ -1022,6 +1023,23 @@ def _attach_llm_config_wiring(
             node.binding_labels[LLM_CONFIG_KEY] = result.site_name(
                 node_id, node.reserved_key_label(LLM_CONFIG_KEY)
             )
+    return _llm_value_types(flow_llm_config, producers, flow_inputs, type_fn)
+
+
+def _llm_value_types(
+    layer: Any,
+    producers: dict[str, OutputContract],
+    flow_inputs: dict[str, ValueContract],
+    type_fn: TypeFn | None,
+) -> dict[ValuePath, Type | None]:
+    """Return the static type of each value in an `llm_config` layer, by field path."""
+    types: dict[ValuePath, Type | None] = {}
+    for path, leaf in value_leaves(layer).items():
+        try:
+            types[path] = infer_binding_type(leaf, producers, flow_inputs, type_fn=type_fn)
+        except ExpressionError:
+            types[path] = None  # the reference pass reports it, located
+    return types
 
 
 def _binding_style(
@@ -2574,7 +2592,7 @@ def _assemble(
             )
         producers[nid] = contract
 
-    _attach_llm_config_wiring(
+    flow_llm_value_types = _attach_llm_config_wiring(
         build_results,
         flow_wiring,
         flow_llm_config or {},
@@ -2920,6 +2938,7 @@ def _assemble(
         flow_id=flow_id,
         memories=memories,
     )
+    compiled.flow_llm_value_types = flow_llm_value_types
     return ComposedFlow(
         compiled=compiled,
         version=version,

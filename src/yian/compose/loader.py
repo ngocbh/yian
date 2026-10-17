@@ -701,7 +701,9 @@ def _refuse_inherited_llm_values(flow: ComposedFlow) -> None:
     any other value in a flow's layer is read when that flow runs, so a child flow's
     agent can't inherit it (`find_inherited_llm_value`). The error is located at the
     value and names the agent and the fix; a value in an imported file names the
-    `uses:` alias and the node that calls it.
+    `uses:` alias and the node that calls it. A value or callsite with no source
+    location names the callee as the callsite does, without saying whether it is an
+    import or a `defs:` entry.
 
     Args:
         flow (`ComposedFlow`): The loaded root flow, imports included.
@@ -725,12 +727,9 @@ def _refuse_inherited_llm_values(flow: ComposedFlow) -> None:
         name = getattr(found.callsite, "flow_id", None)
         called = f"called by node {'/'.join(found.owner)!r}"
         callsite_frame = frame(found.callsite.origin)
-        imported = (
-            value_frame is not None
-            and callsite_frame is not None
-            and value_frame.label != callsite_frame.label
-        )
-        if imported:
+        if value_frame is None or callsite_frame is None:
+            subject = f"{field} of the flow {name!r} ({called})"
+        elif value_frame.label != callsite_frame.label:
             subject = f"{field} of the flow imported through uses: {name!r} ({called})"
         else:
             subject = f"defs entry {name!r} {field} ({called})"

@@ -222,9 +222,9 @@ def split_layers(
 
     The template is ``{"node": <node layer>, "flow": <flow layer>}``, each carried
     whole with its literal fields; only flow values the node layer always overrides
-    are dropped. Under ``inherit: false`` the flow part is left out, as it is for an
-    empty flow layer. Literal text is escaped so it resolves to itself, and origins
-    are re-keyed under ``node`` and ``flow``.
+    are dropped. Under ``inherit: false`` the flow part is left out, as it is when
+    nothing of the flow layer is left. Literal text is escaped so it resolves to
+    itself, and origins are re-keyed under ``node`` and ``flow``.
 
     Args:
         node_layer (`Any`): The agent's own layer.
@@ -241,9 +241,10 @@ def split_layers(
     tree: dict[str, Any] = {}
     origins: list[tuple[ValuePath, Any]] = []
     for part, layer in (("node", node_layer), ("flow", flow)):
-        if part == "flow" and not flow:
+        carried, part_origins = _carried(layer)
+        if part == "flow" and carried == {}:
             continue
-        tree[part], part_origins = _carried(layer)
+        tree[part] = carried
         origins.extend(((part, *path), origin) for path, origin in part_origins)
     return Binding(ValueTemplate(tree, tuple(origins)))
 

@@ -26,11 +26,13 @@ from yian.nodes.contracts import (
     ExecutionScope,
     Parameter,
     SeedConnection,
+    ValuePath,
     ValueTemplate,
     as_binding,
 )
 from yian.nodes.end import EndNode
 from yian.nodes.start import StartNode
+from yian.typesys import Type
 
 # The synthesized boundary-node ids. Canonical source is the node class; re-exported here.
 START_ID = StartNode.ID
@@ -303,6 +305,10 @@ class CompiledFlow(Flow):
             captured once at run initialization. It returns the complete static-path map.
             A layer holding `${...}` values is kept as written: a `ValueTemplate`, or a
             `Binding` for a whole record written as one value.
+        flow_llm_value_types (`dict[ValuePath, Type | None]`):
+            The static type Compose proved for each value in ``flow_llm_config``, by its
+            field path; `None` when unproven. Derived, so not part of the fingerprint;
+            empty for a flow built in Python, whose values answer from their tags.
         flow_id (`str | None`):
             Stable authored semantic identity. Direct memoryless Python graphs may omit it.
         memories (`tuple[MemoryDecl, ...]`):
@@ -321,6 +327,7 @@ class CompiledFlow(Flow):
         self.outputs = outputs or []                    # declared outputs END reads
         # The flow's authored llm_config: defaults — the cascade's flow layer; {} when absent.
         self.flow_llm_config: dict | ValueTemplate | Binding = flow_llm_config or {}
+        self.flow_llm_value_types: dict[ValuePath, Type | None] = {}
         if flow_id is not None:
             if type(flow_id) is not str:
                 raise TypeError("flow_id must be an exact string or None")

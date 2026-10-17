@@ -5,7 +5,7 @@ A value in an AGENT's own `llm_config`, in an adaptive composer's, or in the flo
 written (a config sees no CASE narrowing):
 
 - the source needs a proven type or a tag; an unproven or untagged `Any` source is
-  rejected with "tag it";
+  rejected with "tag it", and a tagged source must be able to fit its tag;
 - `provider` and `model` take `str`, and a `Literal` provider needs at least one known
   provider among its members;
 - a provider-block field whose annotation is `str`, `int`, `float` or `bool` (with its
@@ -39,7 +39,11 @@ from yian.compose.helpers.isinstance_types import (
 from yian.compose.helpers.output_contracts import TypeFn
 from yian.compose.helpers.tags import named_type_label
 from yian.compose.nodes.base import BuildResult
-from yian.compose.validate.typed_bindings import ResolveOrigin, infer_binding_type
+from yian.compose.validate.typed_bindings import (
+    ResolveOrigin,
+    infer_binding_type,
+    typed_value_error,
+)
 from yian.diagnostics import SourceRange
 from yian.expr import ExpressionError, expr_refs_of
 from yian.llm_clients.config import (
@@ -175,6 +179,7 @@ class _Checker:
                 return self.diagnostics.error(f"{where}: {message}", range=fallback)
 
             self._names(leaf, check_refs, fail)
+            self._tag(path, leaf, fail)
             self._type(path, leaf, tree, fail)
 
     def _names(self, leaf: Any, check_refs: bool, fail) -> None:
@@ -197,6 +202,19 @@ class _Checker:
             problem = _classify_path(ref, self.node_ids, set(self.flow_inputs))
             if problem is not None:
                 raise fail(problem)
+
+    def _tag(self, path: ValuePath, leaf: Any, fail) -> None:
+        """Reject a tagged value whose source can never fit its tag."""
+        message = typed_value_error(
+            leaf,
+            self.producers,
+            self.flow_inputs,
+            type_fn=self.type_fn,
+            registry=self.registry,
+            slot="llm_config" + "".join(f".{part}" for part in path),
+        )
+        if message is not None:
+            raise fail(message)
 
     def _type(self, path: ValuePath, leaf: Any, tree: Any, fail) -> None:
         """Reject a value with no proven type, or one disjoint from its field."""

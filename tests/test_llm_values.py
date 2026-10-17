@@ -300,6 +300,19 @@ def test_split_layers_drops_shielded_flow_values():
     assert kept.source.value == {"node": {}, "flow": flow.value}
 
 
+def test_split_layers_leaves_out_a_flow_layer_the_node_wholly_overrides():
+    values = _values()
+    node = ValueTemplate({"model": _typed("${pick.output}", STR)})
+    flow = ValueTemplate({"model": "${pick2.output}"})
+
+    carried = values.split_layers(node, flow, True, values.contract_nullable)
+
+    assert carried.source.value == {"node": node.value}
+    assert values.split_layers(node, {}, True, values.contract_nullable).source.value == {
+        "node": node.value
+    }
+
+
 def test_split_layers_carries_a_whole_record():
     values = _values()
     node = Binding("${input.cfg}", origin=OriginRef("node/cfg"))

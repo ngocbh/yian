@@ -18,6 +18,12 @@ typedefs:
   WithBogus:
     model: str
     bogus: int
+  WithUrl:
+    model: str
+    base_url: str
+  WithHeaders:
+    model: str
+    headers: object
   Fine:
     provider: Optional(str)
     model: str
@@ -39,6 +45,8 @@ input:
   key: !WithKey
   inh: !WithInherit
   bogus: !WithBogus
+  url: !WithUrl
+  headers: !WithHeaders
   fine: !Fine
   obj: !object
   bad_block: !BadBlock
@@ -128,7 +136,13 @@ def test_a_block_field_takes_its_annotation_type():
 
 @pytest.mark.parametrize(
     ("source", "field"),
-    [("${input.key}", "api_key"), ("${input.inh}", "inherit"), ("${input.bogus}", "bogus")],
+    [
+        ("${input.key}", "api_key"),
+        ("${input.url}", "base_url"),
+        ("${input.headers}", "headers"),
+        ("${input.inh}", "inherit"),
+        ("${input.bogus}", "bogus"),
+    ],
 )
 def test_a_whole_record_type_must_declare_only_llm_config_fields(source, field):
     message = _error(_flow(f"    llm_config: {source}\n"))
@@ -158,6 +172,45 @@ def test_a_constructor_fails():
     message = _error(text)
     assert message.startswith("node 'chat' llm_config.model: "), message
     assert "Fine(...)" in message
+
+
+@pytest.mark.parametrize(
+    ("llm_lines", "flow_layer", "subject"),
+    [
+        ("    llm_config: {model: '${isinstance(input.s, str)}'}\n", "", "node 'chat'"),
+        (
+            "    llm_config: {model: m0}\n",
+            "llm_config: {model: '${isinstance(input.s, str)}'}\n",
+            "flow",
+        ),
+    ],
+)
+def test_isinstance_fails(llm_lines, flow_layer, subject):
+    message = _error(_flow(llm_lines, flow_layer=flow_layer))
+    assert message.startswith(f"{subject} llm_config.model: "), message
+    assert "isinstance is not supported" in message
+
+
+@pytest.mark.parametrize(
+    ("llm_lines", "flow_layer", "subject"),
+    [
+        ("    llm_config: {model: !str '${input.i}'}\n", "", "node 'chat' llm_config.model"),
+        ("", "llm_config: {model: !str '${input.i}'}\n", "flow llm_config.model"),
+        (
+            "    llm_config: {model: m0}\n",
+            "llm_config: {model: !str '${input.i}'}\n",
+            "flow llm_config.model",
+        ),
+        ("    llm_config: !Fine ${input.s}\n", "", "node 'chat' llm_config"),
+    ],
+    ids=["node", "flow-carried", "flow-shielded", "whole-record"],
+)
+def test_a_tag_the_source_cannot_fit_fails_at_the_field(llm_lines, flow_layer, subject):
+    text = _flow(llm_lines, flow_layer=flow_layer)
+    message = _error(text)
+    assert message.startswith(f"{subject}: declared "), message
+    assert "__llm_config" not in message
+    assert _line(text) == _line_of(text, "${input.")
 
 
 def test_a_flow_layer_value_no_agent_carries_is_still_checked():

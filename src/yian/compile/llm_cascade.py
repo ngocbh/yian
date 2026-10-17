@@ -50,6 +50,7 @@ from yian.nodes.agent.llm_values import (
     reads_only_inputs,
     resolve_layer,
     resolve_layers,
+    types_nullable,
     value_leaves,
 )
 from yian.nodes.base import Node
@@ -291,8 +292,8 @@ def find_inherited_llm_value(flow: Any) -> Optional[InheritedValue]:
 
     The walk follows the cascade: a child's agent inherits every enclosing flow's layer
     unless it has ``inherit: false``. A value reaches it unless a layer closer to the
-    agent (its own, its flow's, a nearer enclosing flow's) always sets that field; the
-    agent's own values answer from their static types, others from their tags.
+    agent (its own, its flow's, a nearer enclosing flow's) always sets that field. A
+    value answers from the static type Compose proved for it, else from its tag.
 
     Args:
         flow (`CompiledFlow`): The run's flow; its static call tree is walked, unchanged.
@@ -322,8 +323,15 @@ class _Enclosing:
     """One enclosing flow's layer on the way down to a child flow."""
 
     layer: Any
+    nullable: Nullable
     owner: tuple[str, ...]
     callsite: Optional[Node]
+
+
+def _flow_nullable(flow: Any, layer: Any) -> Nullable:
+    """Answer from the static types Compose proved for a flow layer's values, else tags."""
+    types = getattr(flow, "flow_llm_value_types", None)
+    return types_nullable(layer, types) if types else contract_nullable
 
 
 def _find_inherited(
@@ -333,7 +341,8 @@ def _find_inherited(
     enclosing: list[_Enclosing],
 ) -> Optional[InheritedValue]:
     """Search ``flow``, reached at callsite ``path`` under ``enclosing``, and its children."""
-    own = getattr(flow, "flow_llm_config", None) or {}
+    layer = getattr(flow, "flow_llm_config", None) or {}
+    own = _Enclosing(layer, _flow_nullable(flow, layer), path, callsite)
     for node_id, node in flow.nodes.items():
         node_path = (*path, node_id)
         if isinstance(node, AgentNode) and node.llm_inherit and enclosing:
@@ -342,21 +351,19 @@ def _find_inherited(
                 return found
         child = getattr(node, "child", None)
         if child is not None:
-            found = _find_inherited(
-                child, node_path, node, [*enclosing, _Enclosing(own, path, callsite)]
-            )
+            found = _find_inherited(child, node_path, node, [*enclosing, own])
             if found is not None:
                 return found
     return None
 
 
 def _inherited_by(
-    node: AgentNode, own: Any, enclosing: list[_Enclosing], agent: tuple[str, ...]
+    node: AgentNode, own: _Enclosing, enclosing: list[_Enclosing], agent: tuple[str, ...]
 ) -> Optional[InheritedValue]:
     """Return the first enclosing value that can reach ``node``, innermost layer first."""
     higher: list[tuple[Any, Nullable]] = [
         (node.own_llm_config, node.llm_nullable()),
-        (own, contract_nullable),
+        (own.layer, own.nullable),
     ]
     for outer in reversed(enclosing):
         remaining = outer.layer
@@ -372,7 +379,7 @@ def _inherited_by(
                 origin=_value_origin(outer.layer, field, leaf),
                 agent=agent,
             )
-        higher.append((outer.layer, contract_nullable))
+        higher.append((outer.layer, outer.nullable))
     return None
 
 

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from yian.compile.llm_cascade import resolve_llm_cascade
+from yian.compile.llm_cascade import resolve_llm_cascade, resolve_run_llm
 from yian.compose.helpers.errors import LoadError
 from yian.compose.loader import load_flow
 from yian.nodes.contracts import ValueTemplate
@@ -216,5 +216,51 @@ output: ${repeat.output}
 def test_a_flow_built_around_compose_hits_the_cascade_check():
     flow = load_flow(_def_call(root_model="m0")).compiled
     flow.flow_llm_config = ValueTemplate({"model": "${pick.output}"})
-    with pytest.raises(ValueError, match=r"node 'c/a' would inherit llm_config\.model"):
+    with pytest.raises(ValueError, match=r"node 'c/a' would inherit llm_config\.model") as caught:
         resolve_llm_cascade(flow, {}, defaults={"provider": "openai", "model": "gpt-x"})
+    assert _FIX in str(caught.value)
+
+
+def test_a_root_input_value_or_a_literal_passes_the_cascade_check():
+    defaults = {"provider": "openai", "model": "gpt-x"}
+    flow = load_flow(_def_call(root_model="m0")).compiled
+    assert resolve_llm_cascade(flow, {}, defaults=defaults)["c/a"]["model"] == "m0"
+    flow.flow_llm_config = ValueTemplate({"model": "${input.m}"})
+    run = resolve_run_llm(flow, {}, defaults=defaults, run_inputs={"m": "gpt-y"})
+    assert run.effective["c/a"]["model"] == "gpt-y"
+
+
+_TYPED_CHILD = """\
+id: f
+name: f
+llm_config: {model: '${pick.output}'}
+defs:
+  child:
+    input: {model: MODEL_TAG }
+    llm_config: {model: '${input.model}'}
+    nodes:
+      a: {kind: agent, prompt: Go.}
+    output: ${a.output}
+nodes:
+  pick:
+    kind: agent
+    prompt: Pick a model.
+    output: str
+    llm_config: {model: m0}
+  c:
+    kind: call
+    call: child
+    input: {model: x}
+    depends_on: [pick]
+output: ${c.output}
+"""
+
+
+def test_a_child_flow_value_that_cannot_be_null_shields_the_outer_value():
+    load_flow(_TYPED_CHILD.replace("MODEL_TAG", "!str"))
+
+
+def test_a_child_flow_value_that_may_be_null_leaves_the_outer_value_reaching():
+    message = _error(_TYPED_CHILD.replace("MODEL_TAG", "!Optional(str)")).diagnostic.message
+    assert message.startswith("flow llm_config.model: "), message
+    assert "agent 'c/a'" in message

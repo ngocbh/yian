@@ -1058,6 +1058,8 @@ def _flow_manifest(
                     "child_boundaries",
                     "outputs",
                     "flow_llm_config",
+                    # Derived from the layer and the flow's contracts; not identity.
+                    "flow_llm_value_types",
                     "flow_id",
                     "memories",
                     "_incoming",

@@ -229,9 +229,9 @@ def _check_returned_fields(
     The parameter is the body's declared input for a named body, or the one generated
     from the seed for an inline body. A path the loop's `while:` proves not null is never
     null when the body starts, so the parameter is read as nullable there and at each
-    record above it (see `loop_entry_inputs`). Otherwise, over a typed seed, a nullable
-    returned field whose non-null type fits the parameter is accepted; a null it returns
-    fails the next iteration's input check.
+    record above it (see `loop_entry_inputs`); the error still names the declared type.
+    Otherwise, over a typed seed, a nullable returned field whose non-null type fits the
+    parameter is accepted; a null it returns fails the next iteration's input check.
 
     Args:
         result (`BuildResult`): The built loop node and its source ranges.
@@ -250,6 +250,13 @@ def _check_returned_fields(
     returned = node.returned_fields
     parameters = {
         parameter.name: parameter.contract
+        for parameter in node.child_inputs or ()
+        if parameter.contract is not None
+    }
+    # The comparison reads the inputs as values enter the body; messages name the
+    # declared input, which the body's start checks values against.
+    entry_types = {
+        parameter.name: parameter.contract.type
         for parameter in loop_entry_inputs(node)
         if parameter.contract is not None
     }
@@ -260,10 +267,11 @@ def _check_returned_fields(
         parameter = parameters.get(field_name)
         if body_field is None or parameter is None:
             continue  # opaque on either side, or not a body input: nothing to compare
-        if types_compatible(body_field, parameter.type):
+        entry_type = entry_types[field_name]
+        if types_compatible(body_field, entry_type):
             continue
         typed = isinstance(seed, Binding) and seed.contract is not None
-        non_null_fits = types_compatible(replace(body_field, nullable=False), parameter.type)
+        non_null_fits = types_compatible(replace(body_field, nullable=False), entry_type)
         # The next iteration's input check rejects a null.
         if typed and non_null_fits:
             continue

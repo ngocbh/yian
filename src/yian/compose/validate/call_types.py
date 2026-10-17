@@ -95,9 +95,9 @@ def check_call_map_types(
     params) so a mis-named binding still surfaces here when its child decl is absent
     rather than being silently skipped. A LOOP's seeds are checked the same way against
     its body's inputs, read as nullable at each path its `while:` proves not null (see
-    `loop_entry_inputs`). ``type_fn`` types a `T(...)` constructor source as `T`;
-    ``registry`` (the flow's typedefs) spells the tag suggested for an `Any` source by a
-    typedef name."""
+    `loop_entry_inputs`); the error still names the declared input. ``type_fn`` types a
+    `T(...)` constructor source as `T`; ``registry`` (the flow's typedefs) spells the tag
+    suggested for an `Any` source by a typedef name."""
     diagnostics = diagnostics or LoadDiagnostics()
     for label, contracts in (
         ("output producer", producers),
@@ -130,8 +130,10 @@ def check_call_map_types(
         if not getattr(node, "child_inputs", None):
             continue
         kind = "loop" if node.is_loop else "call"
-        decls = loop_entry_inputs(node) if node.is_loop else node.child_inputs
-        child_decls = {d.name: d for d in decls}
+        child_decls = {d.name: d for d in node.child_inputs}
+        entry_decls = (
+            {d.name: d for d in loop_entry_inputs(node)} if node.is_loop else child_decls
+        )
         node_producers, node_inputs = (
             narrowing.for_node(nid) if narrowing is not None else (producers, flow_inputs)
         )
@@ -148,7 +150,11 @@ def check_call_map_types(
             decl = child_decls.get(param)
             if decl is None or decl.contract is None:
                 continue  # `over`/name-caught-in-build/opaque child input -> lenient
-            message = _binding_mismatch(src, decl, scope)
+            entry = entry_decls[param]
+            message = _binding_mismatch(src, entry, scope)
+            if message is not None and entry is not decl:
+                # Name the declared input, which the body's start checks values against.
+                message = _binding_mismatch(src, decl, scope) or message
             if message is not None:
                 rng: Optional[SourceRange] = (
                     result.field_ranges.get(("field", "inputs"))

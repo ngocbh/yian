@@ -3,8 +3,9 @@
 `while:` is checked before each iteration, the first included, so a carried value it proves
 not null is never null when the body starts. The seed check and the check that each returned
 field fits its body input therefore read such a value, and each record above it, as
-possibly null; an inline body's generated input is not null there. `until:` is checked after
-the body and `times:` has no condition, so neither narrows anything.
+possibly null. An inline body's generated input stays typed from its seed, so a node in the
+body reads the value as the seed types it. `until:` is checked after the body and `times:`
+has no condition, so neither narrows anything.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import pytest
 
 from yian.compose.helpers.errors import LoadError
 from yian.compose.loader import load_flow
+from yian.typesys import canonical_type_label
 from yian.compose.nodes.loop import while_non_null_paths
 from yian.events import NodeStarted
 from yian.run import resume_flow, run_flow
@@ -415,6 +417,79 @@ def test_nested_null_check_keeps_the_carried_type_of_the_returned_record() -> No
     assert "a returned field must keep its carried type" in message
 
 
+def test_body_inputs_keep_their_declared_types_after_load() -> None:
+    # Only the checks read a null-checked input as nullable; the node keeps `str`, which
+    # the body's start checks each value against.
+    (cursor,) = load_flow(_page()).compiled.nodes["pages"].child_inputs
+    assert canonical_type_label(cursor.contract.type) == "str"
+    assert cursor.required
+
+
+# The body takes a `Strict` page whose `next` is required and returns a `Page` whose `next`
+# may be absent, and the literal seed has no `next`.
+_MISSING_NEXT = """id: mn
+name: mn
+typedefs:
+  Page:
+    next: Optional(str)
+    n: int
+  Strict:
+    next: str
+    n: int
+defs:
+  step:
+    input:
+      page: !Strict
+    nodes:
+      get:
+        kind: code
+        input:
+          page: ${{input.page}}
+        output:
+          page: Optional(Page)
+        code: return dict(page=None)
+    output: ${{get.output}}
+nodes:
+  pages:
+    kind: loop
+    {driver}
+    input:
+      page: {{n: 0}}
+    call: step
+output: ${{pages.output}}
+"""
+
+
+def test_while_null_check_lets_a_seed_record_omit_the_checked_field() -> None:
+    # An absent `next` reads as null, so the `while:` never lets the record into the body.
+    flow = load_flow(_MISSING_NEXT.format(driver="while: page.next != null"))
+    result = run_flow(flow, {})
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"page": {"n": 0}}
+    assert _body_runs(result) == 0
+
+    with pytest.raises(LoadError, match="loop node 'pages': binding 'page'"):
+        load_flow(_MISSING_NEXT.format(driver="until: page.next == null"))
+
+
+def test_seed_of_the_wrong_type_names_the_declared_input_under_a_while_null_check() -> None:
+    message = (
+        "loop node 'pages': binding 'cursor' — child expects 'str', source is 'Optional(int)'"
+    )
+    with pytest.raises(LoadError, match=re.escape(message)):
+        load_flow(_page(seed="${input.n}", inputs="n: !Optional(int)"))
+
+
+def test_returned_field_of_the_wrong_type_names_the_declared_input_under_a_while_check() -> None:
+    source = _page(seed="p1").replace("output: Optional(str)", "output: Optional(int)")
+    message = (
+        "loop node 'pages': the body 'fetch_page' returns 'cursor' as Optional(int), "
+        "but takes 'cursor' as str; change the body's input or output type so they agree"
+    )
+    with pytest.raises(LoadError, match=re.escape(message)):
+        load_flow(source)
+
+
 # Pagination over an inline body whose CALL node passes `cursor` to a strict `str` input.
 _INLINE = """id: pages
 name: pages
@@ -429,7 +504,7 @@ defs:
         kind: code
         input:
           cursor: ${{input.cursor}}
-        output: Optional(str)
+        output: {returned}
         code: |
           assert inputs["cursor"] is not None, "body saw a null cursor"
           return {{"p1": "p2", "p2": None}}.get(inputs["cursor"])
@@ -445,27 +520,57 @@ nodes:
         kind: call
         call: fetch_page
         input:
-          cursor: ${{input.cursor}}
+          cursor: {argument}
     output:
       cursor: ${{fetch.output}}
 output: ${{pages.output}}
 """
 
 
-def _inline(seed: str = "${input.start}", driver: str = "while: cursor != null") -> str:
-    """Return the inline pagination flow with the given seed and driver."""
-    return _INLINE.format(seed=seed, driver=driver)
+def _inline(
+    seed: str = "${input.start}",
+    driver: str = "while: cursor != null",
+    argument: str = "${input.cursor}",
+    returned: str = "Optional(str)",
+) -> str:
+    """Return the inline pagination flow with the given seed, driver, argument and output."""
+    return _INLINE.format(seed=seed, driver=driver, argument=argument, returned=returned)
 
 
-@pytest.mark.parametrize("seed", ["${input.start}", "p1"])
-def test_inline_body_reads_a_while_null_checked_seed_as_not_null(seed: str) -> None:
-    flow = load_flow(_inline(seed=seed))
-    for start in (None, "p1"):
-        runs = 2 if seed == "p1" or start == "p1" else 0
+def test_inline_body_reads_a_while_null_checked_seed_as_its_seed_types_it() -> None:
+    # The body's generated input is `Optional(str)` from the seed, and the `while:` does
+    # not change it, so a strict CALL argument in the body still rejects it.
+    message = (
+        "call node 'fetch': binding 'cursor' — child expects 'str', source is 'Optional(str)'"
+    )
+    with pytest.raises(LoadError, match=re.escape(message)):
+        load_flow(_inline())
+
+
+def test_a_tag_in_the_inline_body_admits_the_while_null_checked_seed() -> None:
+    flow = load_flow(_inline(argument="!str ${input.cursor}"))
+    for start, runs in ((None, 0), ("p1", 2)):
         result = run_flow(flow, {"start": start})
         assert result.status == "succeeded", result.failure
         assert result.output == {"cursor": None}
         assert _body_runs(result) == runs
+
+
+def test_inline_body_returns_null_into_a_literal_seed_under_a_while_null_check() -> None:
+    flow = load_flow(_inline(seed="p1"))
+    result = run_flow(flow, {"start": None})
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"cursor": None}
+    assert _body_runs(result) == 2
+
+
+def test_inline_returned_field_of_the_wrong_type_names_the_seed_type() -> None:
+    message = (
+        "loop node 'pages': the body returns 'cursor' as Optional(int), "
+        "but the carried field is typed str from its seed"
+    )
+    with pytest.raises(LoadError, match=re.escape(message)):
+        load_flow(_inline(seed="p1", returned="Optional(int)"))
 
 
 def test_inline_body_under_until_reads_the_seed_as_optional() -> None:
@@ -479,3 +584,83 @@ def test_inline_body_under_until_reads_the_seed_as_optional() -> None:
     )
     with pytest.raises(LoadError, match=re.escape(message)):
         load_flow(_inline(seed="p1", driver=driver))
+
+
+# Inline bodies that return a null-checked field unchanged, flat and nested in a record.
+_PASS_THROUGH = """id: p
+name: p
+input:
+  tok: !Optional(str)
+nodes:
+  pages:
+    kind: loop
+    while: token != null and n < 2
+    max: 5
+    input:
+      token: ${input.tok}
+      n: 0
+    nodes:
+      step:
+        kind: code
+        input:
+          n: ${input.n}
+        output: int
+        code: return inputs["n"] + 1
+    output:
+      token: ${input.token}
+      n: ${step.output}
+output: ${pages.output}
+"""
+_NESTED_PASS_THROUGH = """id: p
+name: p
+typedefs:
+  Page:
+    next: Optional(str)
+    n: int
+input:
+  start: !Optional(Page)
+nodes:
+  pages:
+    kind: loop
+    while: page.next != null and k < 2
+    max: 5
+    input:
+      page: ${input.start}
+      k: 0
+    nodes:
+      step:
+        kind: code
+        input:
+          k: ${input.k}
+        output: int
+        code: return inputs["k"] + 1
+    output:
+      page: ${input.page}
+      k: ${step.output}
+output: ${pages.output}
+"""
+
+
+@pytest.mark.parametrize(
+    "source, runs",
+    [
+        (
+            _PASS_THROUGH,
+            [({"tok": None}, {"token": None, "n": 0}), ({"tok": "t"}, {"token": "t", "n": 2})],
+        ),
+        (
+            _NESTED_PASS_THROUGH,
+            [
+                ({"start": None}, {"page": None, "k": 0}),
+                ({"start": {"next": "x", "n": 0}}, {"page": {"next": "x", "n": 0}, "k": 2}),
+            ],
+        ),
+    ],
+    ids=["flat", "nested"],
+)
+def test_inline_body_returning_a_while_null_checked_field_unchanged_runs(source, runs) -> None:
+    flow = load_flow(source)
+    for flow_inputs, output in runs:
+        result = run_flow(flow, flow_inputs)
+        assert result.status == "succeeded", result.failure
+        assert result.output == output

@@ -569,8 +569,9 @@ def _non_null_paths(guard: Guard) -> frozenset[tuple[str, ...]]:
 def with_nullability(typ: Type, path: tuple[str, ...], nullable: bool) -> Type:
     """Return `typ` with the value at `path`, and each record above it, nullable or not.
 
-    The path is followed through record fields; where it names an absent field or meets a
-    union or a non-record, the rest of it is left as is. A field made not nullable becomes
+    The path is followed through record fields. Where it names an absent field, or stops
+    at a union or a non-record before its end, the rest of it is left as is, but the value
+    it stopped at still gets the new nullability. A field made not nullable becomes
     required in its record and one made nullable stops being required, since a field read
     through a null or absent record is null.
 

@@ -132,12 +132,12 @@ output: ${{use.output :- skip.output}}
 def test_a_null_checked_producer_output_runs_down_the_branch_it_takes(use, s, expected):
     flow = load_flow(_PRODUCER_FLOW.replace("USE", use))
     out = run_flow(flow, {"s": s, "items": [1, 2]})
-    assert out.status == "succeeded"
+    assert out.status == "succeeded", out.failure
     assert out.output == expected
 
 
 @pytest.mark.parametrize(("item", "expected"), [({"qty": 3}, 3), (None, 0)])
 def test_a_null_checked_input_runs_down_the_branch_it_takes(item, expected):
     out = run_flow(load_flow(_INPUT_FLOW), {"item": item})
-    assert out.status == "succeeded"
+    assert out.status == "succeeded", out.failure
     assert out.output == expected

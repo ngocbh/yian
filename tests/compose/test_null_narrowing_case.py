@@ -10,7 +10,7 @@ of a searched CASE's params, and the guards of reads in a node assert.
 import pytest
 
 from yian.compose import LoadError, load_flow
-from yian.compose.helpers.condition_guards import Holds, NotNullCheck
+from yian.compose.helpers.condition_guards import NOTHING, Holds, NotNullCheck
 from yian.compose.helpers.narrowing_facts import (
     Exact,
     checked_refs,
@@ -191,7 +191,7 @@ def test_a_read_after_an_is_null_check_in_an_or_is_guarded():
 
     (_, first), (_, second) = checked_refs(tree, base_type_of, registry)
     assert second == Holds(NotNullCheck("x.output"), True)
-    assert first != second
+    assert first == NOTHING
     env = guard_env(second, base_type_of, registry)
     assert env == {"x.output": Exact(read_type("int", registry))}
 
@@ -207,7 +207,7 @@ def test_a_node_two_null_checking_cases_route_is_narrowed():
     )
 
 
-def test_a_node_only_one_of_two_cases_proves_not_null_for_is_not_narrowed():
+def test_a_node_that_only_one_of_two_cases_proves_not_null_is_not_narrowed():
     with pytest.raises(LoadError, match=_CHILD_EXPECTS):
         load_flow(_producer_flow([("x.output != null", "use"), ("input.y", "use")]))
 

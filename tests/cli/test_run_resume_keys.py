@@ -489,3 +489,46 @@ def test_resume_of_keyless_vllm_run_needs_no_key(monkeypatch, tmp_path):
 
     assert result.exit_code == 0, result.output
     assert "written offline" in result.stdout
+
+
+_CALL_TIME_FLOW = _FLOW.replace(
+    '    prompt: "Write about ${text}"\n',
+    '    prompt: "Write about ${text}"\n'
+    "    llm_config: {model: '${prep.output}'}\n",
+).replace(
+    "llm_config: {provider: PROVIDER, model: offline-model}", "llm_config: {provider: openai}"
+)
+
+
+def _call_time_flow_file(tmp_path: Path) -> Path:
+    path = tmp_path / "flow.yaml"
+    path.write_text(_CALL_TIME_FLOW)
+    return path
+
+
+def test_resume_of_a_call_time_host_key_selection_points_to_python(monkeypatch, tmp_path):
+    flow = _call_time_flow_file(tmp_path)
+    llm_config = {
+        "provider": "openai", "api_key": "sk-h", "headers": {"X-Gateway": "gw-6a1f"},
+    }
+    log = _unfinished_log(monkeypatch, flow, env_var=None, llm_config=llm_config)
+    before = log.read_bytes()
+    assert b'"call_time_llm"' in before
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-h")
+    _no_model(monkeypatch)
+
+    result = _resume(flow, log)
+
+    assert result.exit_code == 1, result.output
+    output = _plain(result.output)
+    assert "this run's openai API key came from a Python host's llm_config.api_key" in output
+    assert "resume_flow(api_key=..., headers=...)" in output
+    assert "gw-6a1f" not in output and "sk-h" not in output
+    assert log.read_bytes() == before
+
+
+def test_resume_of_a_call_time_selection_without_a_host_key_runs(monkeypatch, tmp_path):
+    flow = _call_time_flow_file(tmp_path)
+    log = _unfinished_log(monkeypatch, flow)
+    assert b'"call_time_llm"' in log.read_bytes()
+    _resumes_with_the_key(monkeypatch, flow, log)

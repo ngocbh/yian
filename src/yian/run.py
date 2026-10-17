@@ -576,6 +576,37 @@ def _uses_host_key(
     )
 
 
+_SELECTION_HOST_KEY = "call_time_llm.selection"
+"""The key under which a resume check sees the host key a call-time selection names.
+
+No agent path holds a ``.``, so it never shadows an agent's config.
+"""
+
+
+def _selection_host_entry(call_time: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Return a config marked for the host key the call-time agents' selection names.
+
+    A call-time agent that has not started may still resolve to that key's provider,
+    so a resume that can't supply the key is refused up front, as for a marked agent.
+
+    Args:
+        call_time (`Mapping[str, Any] | None`):
+            The recorded ``RunStarted.call_time_llm``, or `None`.
+
+    Returns:
+        `dict[str, dict[str, Any]]`: ``{_SELECTION_HOST_KEY: <config>}`` with the host
+            key's provider, the marker and its recorded header names; empty when the
+            selection names no host key.
+    """
+    host = None if call_time is None else call_time["selection"]["host"]
+    if host is None:
+        return {}
+    config: dict[str, Any] = {"provider": host["provider"], HOST_KEY_MARKER: True}
+    if host.get("header_names"):
+        config[HEADER_NAMES_KEY] = list(host["header_names"])
+    return {_SELECTION_HOST_KEY: config}
+
+
 def _check_host_header_names(
     effective: Mapping[str, Mapping[str, Any]], headers: Mapping[str, Any] | None,
     call_time: Mapping[str, Any] | None = None,
@@ -1071,8 +1102,10 @@ def _resume_flow_controlled(
     """Recover and drive a durable run with a host-owned stop event.
 
     ``check_llm_configs`` receives a copy of the recorded effective model map, plus
-    the config each started call-time agent recorded keyed by its node id (old
-    OpenAI records adapted to their legacy connection), after the terminal check,
+    the config each started call-time agent recorded keyed by its node id and, when
+    the call-time agents' selection names the host key, a config marked for it under
+    ``_SELECTION_HOST_KEY`` (old OpenAI records adapted to their legacy connection),
+    after the terminal check,
     before an unfinished run opens memory or appends ``RunResumed``. An exception
     it raises stops recovery and appends nothing. The CLI uses it to check
     provider credentials.
@@ -1118,7 +1151,9 @@ def _resume_flow_controlled(
         }
         _check_recorded_llm_fields(recorded_llm, static_agent_labels(flow.compiled))
         if check_llm_configs is not None:
-            check_llm_configs(legacy_connection_map(recorded_llm))
+            check_llm_configs(legacy_connection_map(
+                {**recorded_llm, **_selection_host_entry(state.call_time_llm)}
+            ))
 
         if state.memories is not None:
             if memory is None:

@@ -1518,7 +1518,9 @@ def _check_resume_credentials(
 
     Args:
         effective (`dict[str, dict[str, Any]]`):
-            The recorded effective model map, keyed by static agent path. Only
+            The recorded effective model map, keyed by static agent path, with the
+            config each started call-time agent recorded and, when the call-time
+            agents' selection names a host key, a config marked for it. Only
             each config's ``provider``, ``_connection``, host-key marker, and
             recorded header names are read.
         ask_secret (`Callable[[str], Any]`):

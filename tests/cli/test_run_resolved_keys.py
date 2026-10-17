@@ -85,3 +85,41 @@ def test_a_rejected_key_is_neither_printed_nor_logged(monkeypatch, tmp_path, sou
     for fragment in _FRAGMENTS:
         assert fragment not in output
         assert fragment not in log.read_text()
+
+
+_INPUT_PROVIDER_FLOW = """\
+id: chosen
+name: chosen
+input:
+  provider: !str openai
+nodes:
+  agent: {kind: agent, prompt: hi}
+output: ${agent.output}
+llm_config: {provider: '${input.provider}', model: chosen-model}
+"""
+
+
+def test_the_key_check_asks_for_the_provider_an_input_selects(monkeypatch, tmp_path):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    flow = tmp_path / "flow.yaml"
+    flow.write_text(_INPUT_PROVIDER_FLOW)
+    log = tmp_path / "run.jsonl"
+    result = runner.invoke(
+        app, ["run", str(flow), "--input", "provider=anthropic", "--log", str(log)]
+    )
+    output = _compact(result.output)
+    assert result.exit_code == 1
+    assert "ANTHROPIC_API_KEY" in output
+    assert "OPENAI_API_KEY" not in output
+    assert not log.exists()
+
+
+def test_a_bad_provider_input_fails_before_the_log_exists(tmp_path):
+    flow = tmp_path / "flow.yaml"
+    flow.write_text(_INPUT_PROVIDER_FLOW)
+    log = tmp_path / "run.jsonl"
+    result = runner.invoke(app, ["run", str(flow), "--input", "provider=nope", "--log", str(log)])
+    output = _compact(result.output)
+    assert result.exit_code == 1
+    assert _compact("llm_config.provider: not a known provider") in output
+    assert not log.exists()

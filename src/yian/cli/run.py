@@ -46,7 +46,7 @@ import sys
 import threading
 import warnings
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 import typer
 from rich.console import Console, Group
@@ -70,11 +70,12 @@ from yian.run import (
     RunResult,
     _resume_flow_controlled,
     _run_flow_controlled,
+    _run_start_llm,
     _skill_grants,
 )
 from yian.events import NodeFailed
 from yian.nodes.base import _HostStop
-from yian.nodes.binding import check_input_names
+from yian.nodes.binding import check_input_names, coerce_inputs
 from yian.nodes.contracts import Parameter
 from yian.tools import registered_tools
 from yian.typesys import (
@@ -1333,15 +1334,16 @@ def _prompt_request(request: PromptRequest) -> Any:
 
 
 def _agent_connections(
-    loaded, cli_cfg: Dict[str, Any]
+    loaded, cli_cfg: Dict[str, Any], inputs: Optional[Mapping[str, Any]] = None
 ) -> List[tuple[str, Optional[Dict[str, Any]]]]:
     """Collect the distinct provider and connection of every agent node in `loaded`.
 
     Snapshots the process provider/model defaults and connections once, resolves
-    the `llm_config` cascade (with `cli_cfg` as the outermost gap-fill layer) on a
-    throwaway copy of the compiled flow, and binds each agent's connection as a
-    fresh run would. The effective map covers the whole static call tree, and
-    every provider in it is concrete.
+    the `llm_config` cascade as a fresh run would (with `cli_cfg` as the outermost
+    gap-fill layer and values read from the run's inputs) on a throwaway copy of the
+    compiled flow, and binds each agent's connection as a fresh run would. The
+    effective map covers the whole static call tree, and every provider in it is
+    concrete.
 
     Args:
         loaded (`ComposedFlow`):
@@ -1349,6 +1351,8 @@ def _agent_connections(
         cli_cfg (`dict[str, Any]`):
             The `--provider`/`--model` CLI layer (may be empty) — the cascade's
             outermost authored gap-fill layer.
+        inputs (`Mapping[str, Any] | None`, *optional*, defaults to `None`):
+            The run's supplied inputs, before coercion; `None` supplies none.
 
     Returns:
         `List[tuple[str, Optional[dict[str, Any]]]]`:
@@ -1357,23 +1361,18 @@ def _agent_connections(
 
     Raises:
         `ValueError`:
-            No layer gives an agent a provider and model, or the saved logins or
-            default-provider environment are invalid.
+            No layer gives an agent a provider and model, a supplied input can't be
+            coerced, an input or a value the `llm_config` reads is invalid, or the
+            saved logins or default-provider environment are invalid.
     """
     import copy
 
     from yian.llm_clients.connection import connection_snapshot
-    from yian.compile.llm_cascade import resolve_llm_cascade
 
     probe = copy.deepcopy(loaded.compiled)
     snapshot = connection_snapshot()
-    effective = resolve_llm_cascade(
-        probe,
-        dict(cli_cfg),
-        defaults=snapshot.defaults,
-        provider_models=snapshot.provider_models,
-        stray_model=snapshot.stray_model,
-    )
+    coerced = coerce_inputs(loaded.input, dict(inputs or {}))
+    effective = _run_start_llm(probe, coerced, dict(cli_cfg), snapshot).effective
 
     seen: List[tuple[str, Optional[Dict[str, Any]]]] = []
     for config in snapshot.bind(effective).values():
@@ -1383,7 +1382,9 @@ def _agent_connections(
     return seen
 
 
-def _ensure_provider_keys(loaded, cli_cfg: Dict[str, Any]) -> None:
+def _ensure_provider_keys(
+    loaded, cli_cfg: Dict[str, Any], supplied: Optional[Mapping[str, Any]] = None
+) -> None:
     """Check every key the flow's agents will need before the run starts, prompting if missing.
 
     Turns a cryptic mid-run "missing key" API failure into an upfront check. Each
@@ -1400,6 +1401,9 @@ def _ensure_provider_keys(loaded, cli_cfg: Dict[str, Any]) -> None:
             The compiled flow whose agents' connections determine the keys to check.
         cli_cfg (`dict[str, Any]`):
             The `--provider`/`--model` CLI layer, threaded into provider resolution.
+        supplied (`Mapping[str, Any] | None`, *optional*, defaults to `None`):
+            The run's supplied inputs, which `llm_config` values may read to select
+            a provider; `None` supplies none.
 
     Raises:
         `RuntimeError`:
@@ -1407,13 +1411,14 @@ def _ensure_provider_keys(loaded, cli_cfg: Dict[str, Any]) -> None:
             `yian auth <provider>`), or a required key is missing and cannot be
             prompted for.
         `ValueError`:
-            No layer gives an agent a provider and model, or the saved logins or
-            default-provider environment are invalid.
+            No layer gives an agent a provider and model, a supplied input can't be
+            coerced, an input or a value the `llm_config` reads is invalid, or the
+            saved logins or default-provider environment are invalid.
     """
     from yian.cli.utils import ensure_env_key
     from yian.llm_clients.connection import connection_credentials
 
-    for provider, connection in _agent_connections(loaded, cli_cfg):
+    for provider, connection in _agent_connections(loaded, cli_cfg, supplied):
         if connection is not None and connection["source"] == "store":
             connection_credentials(connection, provider)
         else:
@@ -1837,7 +1842,7 @@ def run(
         }
         # Prompt for any required API key before the run creates its durable file.
         try:
-            _ensure_provider_keys(loaded, cli_cfg)
+            _ensure_provider_keys(loaded, cli_cfg, supplied)
         except RuntimeError as exc:
             err_console.print(f"[red]{exc}[/red]")
             raise typer.Exit(code=1)

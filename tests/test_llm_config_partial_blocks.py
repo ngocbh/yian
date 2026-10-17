@@ -115,6 +115,27 @@ def test_list_items_are_walked_for_key_paths():
     assert problems[1] == "`google.safetySettings[1].threshold` is required"
 
 
+def test_located_problems_give_each_key_path_as_parts():
+    from yian.llm_clients.provider_blocks import BlockProblem, located_block_problems
+
+    tree = {
+        "safetySettings": [{"category": _Value(), "treshold": "OFF"}],
+        "generationConfig": {"topK": "3"},
+    }
+
+    problems = located_block_problems("google", tree, _is_value)
+
+    assert [problem.keys for problem in problems] == [
+        ("safetySettings", 0, "treshold"),
+        ("safetySettings", 0, "threshold"),
+        ("generationConfig", "topK"),
+    ]
+    assert [problem.message for problem in problems] == _problems("google", tree)
+    assert located_block_problems("anthropic", [], _is_value) == [
+        BlockProblem((), "`anthropic` must be a mapping")
+    ]
+
+
 def test_a_literal_list_is_checked_whole():
     problems = _problems("anthropic", {"stop_sequences": ["a", 1], "max_tokens": _Value()})
 

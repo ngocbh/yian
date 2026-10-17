@@ -6,7 +6,8 @@ itself (model, messages, tools, structured output, streaming, conversation state
 reserved: setting one is a load error that says so. Error messages name the block and the
 key path and never echo values; the key path can include keys the author wrote in a mapping
 field (e.g. a ``metadata`` key), since keys are names rather than values.
-`partial_block_problems` checks a block whose leaves may be values resolved later, and
+`partial_block_problems` checks a block whose leaves may be values resolved later
+(`located_block_problems` also gives each problem's key path), and
 `block_field_annotation` gives the simple type a value for one field must have.
 """
 
@@ -1203,6 +1204,20 @@ class BlockFieldType:
 _SIMPLE_TYPES = (str, int, float, bool)
 
 
+@dataclass(frozen=True)
+class BlockProblem:
+    """One problem `located_block_problems` finds in a provider block.
+
+    Attributes:
+        keys (`tuple[str | int, ...]`): The deepest written key path inside the block the
+            problem names, with list indexes as ``int``; empty for the block itself.
+        message (`str`): The message, starting with the backticked key path.
+    """
+
+    keys: tuple[Union[str, int], ...]
+    message: str
+
+
 def partial_block_problems(
     block: str, tree: Any, is_value: Callable[[Any], bool]
 ) -> list[str]:
@@ -1240,13 +1255,37 @@ def partial_block_problems(
         # ["`anthropic.thinking.budget_tokens`: Input should be greater than or equal to 1024"]
         ```
     """
+    return [problem.message for problem in located_block_problems(block, tree, is_value)]
+
+
+def located_block_problems(
+    block: str, tree: Any, is_value: Callable[[Any], bool]
+) -> list[BlockProblem]:
+    """Check a block as `partial_block_problems` does; give each problem's key path too.
+
+    Args:
+        block (`str`):
+            A key of `PROVIDER_BLOCKS`, e.g. ``"anthropic"``.
+        tree (`Any`):
+            The block as written, with values in place of some leaves or subtrees.
+        is_value (`Callable[[Any], bool]`):
+            Whether a leaf or subtree is a value.
+
+    Returns:
+        `list[BlockProblem]`: One per problem, in the order written; empty when none.
+
+    Raises:
+        `KeyError`:
+            Raised when ``block`` has no block class.
+    """
     top = PROVIDER_BLOCKS[block]
     if is_value(tree):
         return []
     if not isinstance(tree, Mapping):
-        return [f"`{top.default_block}` must be a mapping"]
-    problems: list[str] = []
-    _partial_problems(top, tree, top=top, prefix="", is_value=is_value, problems=problems)
+        return [BlockProblem((), f"`{top.default_block}` must be a mapping")]
+    problems: list[BlockProblem] = []
+    _partial_problems(top, tree, top=top, prefix="", keys=(), is_value=is_value,
+                      problems=problems)
     return problems
 
 
@@ -1256,22 +1295,29 @@ def _partial_problems(
     *,
     top: type[_Block],
     prefix: str,
+    keys: tuple[Union[str, int], ...],
     is_value: Callable[[Any], bool],
-    problems: list[str],
+    problems: list[BlockProblem],
 ) -> None:
-    """Append the problems of the partial object ``data`` checked against ``model``."""
+    """Append the problems of the partial object ``data`` checked against ``model``.
+
+    ``prefix`` is the written key path of ``data`` as messages show it, and ``keys`` the
+    same path as parts.
+    """
     names = {field.alias or name: name for name, field in model.model_fields.items()}
     for key, value in data.items():
         path = f"{prefix}{key}"
         problem = _bad_key(top, path, key, names)
         if problem is not None:
-            problems.append(problem)
+            problems.append(BlockProblem((*keys, key), problem))
         else:
-            _partial_field(model, names[key], value, top=top, path=path,
+            _partial_field(model, names[key], value, top=top, path=path, keys=(*keys, key),
                            is_value=is_value, problems=problems)
     for key, name in names.items():
         if key not in data and model.model_fields[name].is_required():
-            problems.append(f"`{top.default_block}.{prefix}{key}` is required")
+            problems.append(BlockProblem(
+                (*keys, key), f"`{top.default_block}.{prefix}{key}` is required"
+            ))
 
 
 def _partial_field(
@@ -1281,8 +1327,9 @@ def _partial_field(
     *,
     top: type[_Block],
     path: str,
+    keys: tuple[Union[str, int], ...],
     is_value: Callable[[Any], bool],
-    problems: list[str],
+    problems: list[BlockProblem],
 ) -> None:
     """Append the problems of one field's partial ``value``; values are never checked."""
     if is_value(value):
@@ -1291,18 +1338,20 @@ def _partial_field(
     if isinstance(value, Mapping):
         part = _nested_block(annotation, value)
         if part is not None:
-            _partial_problems(part, value, top=top, prefix=f"{path}.", is_value=is_value,
-                              problems=problems)
+            _partial_problems(part, value, top=top, prefix=f"{path}.", keys=keys,
+                              is_value=is_value, problems=problems)
             return
         if _holds_value(value, is_value):
             if any(typing.get_origin(m) is dict for m in _members(annotation)):
                 # Only the value-free items can be checked; the item count waits for the rest.
                 written = {k: v for k, v in value.items() if not _holds_value(v, is_value)}
-                _check_literal(model, name, written, top=top, path=path, problems=problems)
+                _check_literal(model, name, written, top=top, path=path, keys=keys,
+                               problems=problems)
             # Several variants and no literal tag: only the tag itself can be checked.
             elif len(_block_members(annotation)) > 1 and not is_value(value.get("type")):
                 tag = {"type": value["type"]} if "type" in value else {}
-                _check_literal(model, name, tag, top=top, path=path, problems=problems)
+                _check_literal(model, name, tag, top=top, path=path, keys=keys,
+                               problems=problems)
             return
     elif isinstance(value, list) and _holds_value(value, is_value):
         items = [typing.get_args(m)[0] for m in _members(annotation) if _is_list(m)]
@@ -1312,9 +1361,10 @@ def _partial_field(
                 part = _nested_block(item, entry) if item is not None else None
                 if part is not None:
                     _partial_problems(part, entry, top=top, prefix=f"{path}[{index}].",
-                                      is_value=is_value, problems=problems)
+                                      keys=(*keys, index), is_value=is_value,
+                                      problems=problems)
         return
-    _check_literal(model, name, value, top=top, path=path, problems=problems)
+    _check_literal(model, name, value, top=top, path=path, keys=keys, problems=problems)
 
 
 def _check_literal(
@@ -1324,7 +1374,8 @@ def _check_literal(
     *,
     top: type[_Block],
     path: str,
-    problems: list[str],
+    keys: tuple[Union[str, int], ...],
+    problems: list[BlockProblem],
 ) -> None:
     """Append why the value-free ``value`` is not valid for field ``name`` of ``model``.
 
@@ -1335,14 +1386,16 @@ def _check_literal(
         model.__pydantic_validator__.validate_assignment(model.model_construct(), name, value)
     except ValidationError as exc:
         for error in exc.errors(include_input=False, include_url=False):
-            problem = f"`{top.default_block}.{_written_path(path, value, error['loc'][1:])}`: "
-            problem += error["msg"]
+            written, parts = _written_path(path, keys, value, error["loc"][1:])
+            problem = BlockProblem(parts, f"`{top.default_block}.{written}`: {error['msg']}")
             if problem not in problems:
                 problems.append(problem)
 
 
-def _written_path(path: str, value: Any, loc: tuple) -> str:
-    """Return ``path`` extended by the parts of ``loc`` that index into ``value`` as written."""
+def _written_path(
+    path: str, keys: tuple[Union[str, int], ...], value: Any, loc: tuple
+) -> tuple[str, tuple[Union[str, int], ...]]:
+    """Extend ``path`` and its parts ``keys`` by the parts of ``loc`` written in ``value``."""
     node = value
     for part in loc:
         if isinstance(part, int) and isinstance(node, list) and 0 <= part < len(node):
@@ -1351,8 +1404,9 @@ def _written_path(path: str, value: Any, loc: tuple) -> str:
             path += f".{part}"
         else:
             continue
+        keys = (*keys, part)
         node = node[part]
-    return path
+    return path, keys
 
 
 def _holds_value(tree: Any, is_value: Callable[[Any], bool]) -> bool:

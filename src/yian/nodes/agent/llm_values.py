@@ -12,7 +12,6 @@ Precedence and merge granularity follow ``merge_llm_config``.
 from __future__ import annotations
 
 import copy
-import re
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Optional, TypeAlias
 
@@ -21,7 +20,6 @@ from pydantic import ValidationError
 from yian.diagnostics import OriginRef
 from yian.expr.expressions import ExpressionError
 from yian.expr.template import Span, expr_refs_of, scan_template
-from yian.llm_clients.auth import AuthError
 from yian.llm_clients.config import (
     PROVIDER_BLOCKS,
     SUPPORTED_LLM_PROVIDERS,
@@ -34,14 +32,14 @@ from yian.llm_clients.connection import (
     HOST_KEY_MARKER,
     ConnectionSelection,
     check_model_config,
-    split_model_config,
+    refused_block,
 )
 from yian.llm_clients.layers import (
     require_concrete_selection,
     resolve_agent_config,
     validate_layer,
 )
-from yian.llm_clients.provider_blocks import partial_block_problems
+from yian.llm_clients.provider_blocks import located_block_problems
 from yian.nodes.binding import BindingError, _resolve_source
 from yian.nodes.contracts import Binding, ValuePath, ValueTemplate, iter_source_strings
 from yian.typesys import Type, ValueKind
@@ -460,14 +458,11 @@ def check_resolved_layer(layer: dict[str, Any], subject: str, *, written: Any) -
     for block in PROVIDER_BLOCKS:
         if layer.get(block) is None:
             continue
-        problems = partial_block_problems(block, layer[block], lambda _leaf: False)
+        problems = located_block_problems(block, layer[block], lambda _leaf: False)
         if problems:
-            # Each problem starts with its backticked key path, such as `anthropic.thinking`.
-            named = re.match(r"`([^`]+)`", problems[0])
-            field = tuple(named.group(1).split(".")) if named else (block,)
             raise LayerFieldError(
-                f"{field_where(subject, (block,))}: {problems[0]}",
-                field if field[:1] == (block,) else (block,),
+                f"{field_where(subject, (block,))}: {problems[0].message}",
+                (block, *problems[0].keys),
             )
     try:
         LLMConfig(**layer)
@@ -485,32 +480,27 @@ def check_resolved_layer(layer: dict[str, Any], subject: str, *, written: Any) -
         raise LayerFieldError(f"{field_where(subject, loc[:1])}: {text}", loc[:1]) from None
 
 
+def agent_label(label: Optional[str], parent: str) -> Optional[str]:
+    """Return a synthesized agent's ``llm_config`` label, with its callsite when nested.
+
+    Args:
+        label (`str | None`): The agent's ``llm_config_label``; ``None`` for an
+            authored agent.
+        parent (`str`): The static path of the callsite the agent is in; empty at the
+            run's flow.
+
+    Returns:
+        `str | None`: ``label``, or ``<label> in '<parent>'`` when nested; ``None`` for
+            an authored agent, whose messages name its path instead.
+    """
+    if label is None:
+        return None
+    return f"{label} in {parent!r}" if parent else label
+
+
 def field_where(subject: str, field: ValuePath) -> str:
     """Name a field under an ``llm_config`` subject, as in ``node 'a' llm_config.model``."""
     return subject + "".join(f".{part}" for part in field)
-
-
-def refused_block(config: Mapping[str, Any]) -> str:
-    """Return ``.<provider>`` when `check_model_config` refused only the provider's block.
-
-    Its fields and connection are checked first and an Azure config needs a
-    ``base_url``; a config that passes those was refused for its block alone.
-
-    Args:
-        config (`Mapping[str, Any]`): The config `check_model_config` refused.
-
-    Returns:
-        `str`: ``.<provider>``, or ``""`` when something else was refused.
-    """
-    try:
-        validated, _ = split_model_config(dict(config))
-    except (ValueError, AuthError):
-        return ""
-    if validated.provider is None or (
-        validated.provider == "azure" and validated.base_url is None
-    ):
-        return ""
-    return f".{validated.provider}"
 
 
 def invocation_config(
@@ -572,13 +562,12 @@ def call_time_config(
             (its own code), or the resolved config is refused (``contract.input``).
             The message names the field, under ``node '<path>' llm_config`` or the
             label, and the origin is that field's authored site when known.
+        `AuthError`: The config is marked for the host key, but the run holds no key,
+            or header names other than those run start recorded.
     """
     path = call_time.path
     parent = path.rpartition("/")[0]
-    if label is not None:
-        subject = label if not parent else f"{label} in {parent!r}"
-    else:
-        subject = f"node {path!r} llm_config"
+    subject = agent_label(label, parent) or f"node {path!r} llm_config"
     flow_subject = f"flow {parent!r} llm_config" if parent else "flow llm_config"
     tree = template.source.value
     node_layer, flow_layer = resolve_layers(template, pool, label=subject)
@@ -607,7 +596,9 @@ def call_time_config(
     probe = invocation_config(canonical, credentials)
     try:
         check_model_config(probe)
-    except (ValueError, AuthError) as exc:
+    except ValueError as exc:
+        # An `AuthError` (the host key or a header missing) propagates: it is the host's
+        # to fix by resuming with the key, not a failure of this node.
         block = refused_block(probe)
         origin = None
         if block:

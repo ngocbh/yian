@@ -951,6 +951,29 @@ def check_model_config(
     return validated, connection
 
 
+def refused_block(config: Mapping[str, Any]) -> str:
+    """Return ``.<provider>`` when `check_model_config` refused only the provider's block.
+
+    Its fields and connection are checked first and an Azure config needs a
+    ``base_url``; a config that passes those was refused for its block alone.
+
+    Args:
+        config (`Mapping[str, Any]`): The config `check_model_config` refused.
+
+    Returns:
+        `str`: ``.<provider>``, or ``""`` when something else was refused.
+    """
+    try:
+        validated, _ = split_model_config(dict(config))
+    except (ValueError, AuthError):
+        return ""
+    if validated.provider is None or (
+        validated.provider == "azure" and validated.base_url is None
+    ):
+        return ""
+    return f".{validated.provider}"
+
+
 def _check_block(validated: LLMConfig, connection: dict[str, Any] | None) -> None:
     """Check the provider's block against the schema of the API the call reaches.
 

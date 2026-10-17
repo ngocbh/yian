@@ -511,7 +511,8 @@ def _evaluate_node_stream(
     a node declaring `needs_skills`.
 
     `steps` is this start's ``NodeSteps``, passed as ``caps['steps']`` only to a node
-    declaring `needs_steps`.
+    declaring `needs_steps`. Such a node whose reserved keys fail to bind after an
+    earlier start recorded steps raises ``ValueError`` (a host fault) instead of failing.
 
     Returns:
         `WorkerOutcome`:
@@ -521,6 +522,9 @@ def _evaluate_node_stream(
     Raises:
         `_HostStop`:
             Host-control flow is outside the node failure sum and propagates unchanged.
+        `ValueError`:
+            A node reading its steps fails to bind its reserved keys after an earlier
+            start recorded steps.
     """
     # Host cancellation is control flow outside the node-result sum.
     if stop_event is not None and stop_event.is_set():
@@ -558,7 +562,17 @@ def _evaluate_node_stream(
                 source_resolver=source_resolver, types=node.types,
                 labels=node.binding_labels, _finish_capture=False,
             )
-        reserved = node.bind_reserved(node_wiring, pool, bind=reserved_binder)
+        try:
+            reserved = node.bind_reserved(node_wiring, pool, bind=reserved_binder)
+        except BindingError as exc:
+            if steps is not None and node.needs_steps is True and steps.prior:
+                # A start records steps only after binding, and resume restores the
+                # pool, so the code that resolves these keys changed since then.
+                raise ValueError(
+                    f"{exc}; an earlier start of this node resolved it, so resume the run "
+                    "with the flow and yian version that started it"
+                ) from None
+            raise
         record.update(reserved)
         if binding_collector is not None:
             for name, value in reserved.items():

@@ -44,6 +44,7 @@ from yian.nodes.agent.llm_values import (
     LLM_CONFIG_KEY,
     CallTimeLLM,
     Nullable,
+    agent_label,
     check_resolved_layer,
     contract_nullable,
     contributing,
@@ -510,7 +511,7 @@ def _resolve_flow(
         node_path = (*path, node_id)
         if isinstance(node, AgentNode):
             path_key = _path_key(node_path)
-            label = _agent_label(node, path)
+            label = agent_label(node.llm_config_label, _path_key(path))
             carried = flow.wiring.get(node_id, {}).get(LLM_CONFIG_KEY)
             if carried is not None and (path or not reads_only_inputs(carried)):
                 # Its own layers resolve when it runs; only the layers below them are
@@ -759,9 +760,10 @@ def value_config_subjects(flow: Any) -> dict[str, str]:
         *parent, node_id = path.split("/")
         if LLM_CONFIG_KEY in owner.wiring.get(node_id, {}):
             if owner is flow:
-                subjects[path] = _agent_label(node, ()) or f"node {node_id!r} llm_config"
+                label = agent_label(node.llm_config_label, "")
+                subjects[path] = label or f"node {node_id!r} llm_config"
         elif flow_values and node.llm_inherit:
-            agent = _agent_label(node, tuple(parent)) or f"Agent {path!r}"
+            agent = agent_label(node.llm_config_label, "/".join(parent)) or f"Agent {path!r}"
             subjects[path] = f"{agent} ({_FLOW_SUBJECT})"
     return subjects
 
@@ -835,21 +837,12 @@ def _collect_agent_labels(flow: Any, path: tuple[str, ...], labels: dict[str, st
     for node_id, node in flow.nodes.items():
         node_path = (*path, node_id)
         if isinstance(node, AgentNode):
-            label = _agent_label(node, path)
+            label = agent_label(node.llm_config_label, _path_key(path))
             if label is not None:
                 labels[_path_key(node_path)] = label
         child = getattr(node, "child", None)
         if child is not None:
             _collect_agent_labels(child, node_path, labels)
-
-
-def _agent_label(node: AgentNode, parent: tuple[str, ...]) -> str | None:
-    """Return a synthesized agent's ``llm_config`` label, with its callsite when nested."""
-    if node.llm_config_label is None:
-        return None
-    if not parent:
-        return node.llm_config_label
-    return f"{node.llm_config_label} in {_path_key(parent)!r}"
 
 
 def _apply_flow(

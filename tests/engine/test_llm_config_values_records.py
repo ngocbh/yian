@@ -354,3 +354,132 @@ def test_only_an_agent_with_the_key_hides_it_from_the_model():
     for kind in (WaitNode, MapNode):
         assert kind.model_hidden_inputs is Node.model_hidden_inputs
         assert kind.needs_evaluation_trace is False
+
+
+def _stopped_before_chat(log, text=_PICKED, **options):
+    """Run ``text`` to ``log``, stopping the host as ``chat`` starts."""
+    from yian.events import NodeStarted
+
+    def stop(event):
+        if isinstance(event, NodeStarted) and event.node_id == "chat":
+            raise RuntimeError("host stopped before the agent")
+
+    with pytest.raises(RuntimeError, match="host stopped"):
+        run_flow(load_flow(text), {}, log=log, on_event=stop, **options)
+
+
+def test_resume_without_the_host_key_raises_before_a_call_time_agent_calls(
+    tmp_path, fake_model,
+):
+    from yian.llm_clients.auth import AuthError
+
+    log = tmp_path / "run.jsonl"
+    _stopped_before_chat(log, llm_config={"provider": "openai", "api_key": "sk-host-secret"})
+    before = len(_records(log))
+    with pytest.raises(AuthError):
+        run_module.resume_flow(load_flow(_PICKED), log=log)
+    failed = [
+        record for record in _records(log)[before:]
+        if record["kind"] == "node_failed" and record["payload"]["node_id"] == "chat"
+    ]
+    assert failed == []
+    assert fake_model == []
+
+
+def test_resume_refuses_a_recorded_config_that_no_longer_resolves(
+    tmp_path, fake_model, monkeypatch,
+):
+    from yian.nodes.binding import BindingError
+
+    log = _crashed_in_chat(tmp_path, fake_model)
+
+    def drifted(*_args, **_kwargs):
+        raise BindingError("node 'chat' llm_config.model: drifted", failure_code="contract.input")
+
+    monkeypatch.setattr("yian.nodes.agent.node.call_time_config", drifted)
+    before = len(_records(log))
+    with pytest.raises(ValueError, match=(
+        r"^node 'chat' llm_config.model: drifted; an earlier start of this node resolved it"
+    )):
+        run_module.resume_flow(load_flow(_PICKED), log=log)
+    kinds = [record["kind"] for record in _records(log)[before:]]
+    assert "node_failed" not in kinds
+    assert fake_model == []
+
+
+_DEFS_CALL_TIME = """id: f
+name: f
+llm_config: {provider: openai}
+defs:
+  ask:
+    input: {m: !str }
+    nodes:
+      chat: {kind: agent, prompt: Go., llm_config: {model: '${input.m}'}}
+    output: ${chat.output}
+nodes:
+  a: {kind: call, call: ask, input: {m: model-a}}
+  b: {kind: call, call: ask, input: {m: '${a.output}'}}
+output: ${b.output}
+"""
+
+
+def _crashed_in_second_call(tmp_path, fake_model):
+    """Run ``_DEFS_CALL_TIME`` until the model call of ``b``'s agent dies; return the log."""
+    log = tmp_path / "run.jsonl"
+    original = fake_model.append
+
+    def append(config):
+        # The second agent's model dies on its call.
+        fake_model.crash = config["model"] == "ok"
+        original(config)
+
+    fake_model.append = append
+    with pytest.raises(_HostCrash):
+        run_flow(load_flow(_DEFS_CALL_TIME), {}, log=log)
+    del fake_model.append
+    fake_model.crash = False
+    fake_model.clear()
+    return log
+
+
+def _instance_steps(log):
+    return [
+        record["payload"] for record in _records(log) if record["kind"] == "node_step"
+    ]
+
+
+def test_resume_recomputes_the_config_of_each_defs_call_instance(tmp_path, fake_model):
+    log = _crashed_in_second_call(tmp_path, fake_model)
+    [first, second] = _instance_steps(log)
+    assert first["node_id"] != second["node_id"]
+    assert first["step"]["effective_llm_config"]["model"] == "model-a"
+    assert second["step"]["effective_llm_config"]["model"] == "ok"
+    result = run_module.resume_flow(load_flow(_DEFS_CALL_TIME), log=log)
+    assert result.status == "succeeded"
+    steps = _instance_steps(log)
+    assert len(steps) == 3 and steps[2] == second
+    assert [config["model"] for config in fake_model] == ["ok"]
+
+
+def test_resume_refuses_a_defs_call_instance_whose_recorded_config_differs(
+    tmp_path, fake_model,
+):
+    log = _crashed_in_second_call(tmp_path, fake_model)
+    lines = log.read_text().splitlines()
+    edited = 0
+    for index, line in enumerate(lines):
+        record = json.loads(line)
+        step = record["payload"].get("step") if record["kind"] == "node_step" else None
+        if step and step["effective_llm_config"]["model"] == "ok":
+            step["effective_llm_config"]["model"] = "gpt-tampered"
+            lines[index] = json.dumps(record)
+            edited += 1
+    assert edited == 1
+    log.write_text("\n".join(lines) + "\n")
+    before = len(_records(log))
+    with pytest.raises(ValueError, match=(
+        r"^node 'b/chat' llm_config: recorded config differs from the recomputed one"
+    )):
+        run_module.resume_flow(load_flow(_DEFS_CALL_TIME), log=log)
+    assert "node_failed" not in [record["kind"] for record in _records(log)[before:]]
+    assert fake_model == []

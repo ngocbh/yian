@@ -38,6 +38,7 @@ from yian.llm_clients.connection import (
     header_name_diff,
     legacy_connection_config,
     legacy_connection_map,
+    refused_block,
     split_model_config,
 )
 from yian.compile.execution_layout import apply_execution_layout, resolve_execution_layout
@@ -84,7 +85,6 @@ from yian.memory import (
     MemoryStack,
 )
 from yian.memory_host import MemoryRegistry
-from yian.nodes.agent.llm_values import refused_block
 from yian.nodes.base import Steering
 from yian.nodes.binding import BindingError, apply_defaults, coerce_inputs
 from yian.nodes.contracts import (

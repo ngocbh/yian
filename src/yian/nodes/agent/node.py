@@ -222,6 +222,8 @@ class AgentNode(Node):
             `BindingError`: A value breaks its tag (``binding.type``) or fails to
                 resolve, or the resolved config is refused (``contract.input``); the
                 message names the field.
+            `AuthError`: The config is marked for the host key the run does not hold;
+                the host's to fix, not a failure of this node.
         """
         if self.call_time is None:
             return {}

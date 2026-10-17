@@ -83,6 +83,7 @@ from yian.memory import (
     MemoryStack,
 )
 from yian.memory_host import MemoryRegistry
+from yian.nodes.agent.llm_values import refused_block
 from yian.nodes.base import Steering
 from yian.nodes.binding import BindingError, apply_defaults, coerce_inputs
 from yian.nodes.contracts import (
@@ -626,27 +627,10 @@ def _check_effective_llm(
         except ValueError as exc:
             subject = (located or {}).get(path)
             if subject is not None:
-                where = subject + _refused_block(probe)
+                where = subject + refused_block(probe)
             else:
                 where = labels.get(path) or f"Agent {path!r}"
             raise ValueError(f"{where}: {exc}") from exc
-
-
-def _refused_block(config: dict[str, Any]) -> str:
-    """Return ``.<provider>`` when `check_model_config` refused only the provider's block.
-
-    Its fields and connection are checked first and an Azure config needs a
-    ``base_url``; a config that passes those was refused for its block alone.
-    """
-    try:
-        validated, _ = split_model_config(config)
-    except ValueError:
-        return ""
-    if validated.provider is None or (
-        validated.provider == "azure" and validated.base_url is None
-    ):
-        return ""
-    return f".{validated.provider}"
 
 
 def _run_start_inputs(

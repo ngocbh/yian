@@ -22,18 +22,11 @@ import copy
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Optional
 
-from pydantic import SecretStr, ValidationError
+from pydantic import SecretStr
 
 from yian.diagnostics import OriginRef
 
-from yian.llm_clients.config import (
-    PROVIDER_BLOCKS,
-    SUPPORTED_LLM_PROVIDERS,
-    HostConnection,
-    LLMConfig,
-    merge_llm_config,
-)
-from yian.llm_clients.provider_blocks import partial_block_problems
+from yian.llm_clients.config import HostConnection, merge_llm_config
 from yian.llm_clients.connection import (
     HOST_KEY_MARKER,
     ConnectionSelection,
@@ -51,12 +44,13 @@ from yian.nodes.agent.llm_values import (
     LLM_CONFIG_KEY,
     CallTimeLLM,
     Nullable,
+    check_resolved_layer,
     contract_nullable,
     contributing,
+    field_where,
     keep_values,
     layer_refs,
     reads_only_inputs,
-    refused_resolved_field,
     resolve_layer,
     resolve_layers,
     types_nullable,
@@ -576,7 +570,7 @@ def _run_start_flow_layer(flow: Any, *, root: bool, inputs: _RunInputs) -> dict[
     else:
         known = keep_values(authored, reads_only_inputs if root else lambda _leaf: False)
         pool = (
-            inputs.pool_for(known, lambda field: _field_where(_FLOW_SUBJECT, field))
+            inputs.pool_for(known, lambda field: field_where(_FLOW_SUBJECT, field))
             if root else inputs.empty_pool()
         )
         layer = _resolved(lambda: resolve_layer(known, pool), _FLOW_SUBJECT)
@@ -610,7 +604,7 @@ def _resolve_carried(
 
     def where(field: ValuePath) -> str:
         part, *rest = field
-        return _field_where(subject if part == "node" else _FLOW_SUBJECT, tuple(rest))
+        return field_where(subject if part == "node" else _FLOW_SUBJECT, tuple(rest))
 
     pool = inputs.pool_for(carried.source, where)
     node_layer, flow_layer = _resolved(lambda: resolve_layers(carried, pool), subject)
@@ -717,53 +711,6 @@ def call_time_selection(
     )
 
 
-def check_resolved_layer(layer: dict[str, Any], subject: str, *, written: Any) -> None:
-    """Check a layer resolved from values as an authored layer is checked, naming the field.
-
-    Messages read ``<subject>.<field>: ...`` for the first field at fault (a provider
-    block's problems name their key path), or ``<subject>: ...`` for a problem of the
-    layer as a whole, and never echo a value. A host-only field or ``_connection``
-    is refused first (`refused_resolved_field`).
-
-    Args:
-        layer (`dict[str, Any]`): The resolved layer.
-        subject (`str`): Names the layer, such as ``node 'chat' llm_config``.
-        written (`Any`): The layer as written, which tells a literal field from one a
-            value set.
-
-    Raises:
-        `ValueError`: The layer sets a field a flow file may not set, an unknown or
-            retired field, an unknown provider, or a field or block its schema refuses.
-    """
-    refused = refused_resolved_field(written, layer, subject)
-    if refused is not None:
-        raise ValueError(refused)
-    try:
-        validate_layer(layer)
-    except ValueError as exc:
-        raise ValueError(f"{subject}: {exc}") from None
-    for block in PROVIDER_BLOCKS:
-        if layer.get(block) is None:
-            continue
-        problems = partial_block_problems(block, layer[block], lambda _leaf: False)
-        if problems:
-            raise ValueError(f"{_field_where(subject, (block,))}: {problems[0]}")
-    try:
-        LLMConfig(**layer)
-    except ValidationError as exc:
-        error = exc.errors(include_input=False, include_url=False)[0]
-        loc = tuple(error["loc"])
-        if loc == ("provider",) and error["type"] == "literal_error":
-            text = f"not a known provider; use one of: {', '.join(SUPPORTED_LLM_PROVIDERS)}"
-        elif error["type"] == "value_error":
-            text = str(error["ctx"]["error"])
-        elif len(loc) > 1:
-            text = f"`{'.'.join(str(part) for part in loc)}`: {error['msg']}"
-        else:
-            text = error["msg"]
-        raise ValueError(f"{_field_where(subject, loc[:1])}: {text}") from None
-
-
 def value_config_subjects(flow: Any) -> dict[str, str]:
     """Name the ``llm_config`` of each run-start agent whose config takes values.
 
@@ -799,11 +746,6 @@ def _resolved(resolve: Callable[[], Any], subject: str) -> Any:
         return resolve()
     except BindingError as exc:
         raise ValueError(f"{subject}: {exc}") from None
-
-
-def _field_where(subject: str, field: ValuePath) -> str:
-    """Name a field under an ``llm_config`` subject, as in ``node 'a' llm_config.model``."""
-    return subject + "".join(f".{part}" for part in field)
 
 
 def _static_agent_paths(

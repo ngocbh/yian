@@ -32,7 +32,7 @@ from yian.compose.nodes.base import (
 )
 from yian.compose.source import SourceCursor
 from yian.defaults import current
-from yian.diagnostics import SourceRange
+from yian.diagnostics import OriginRef, SourceRange
 from yian.expr import eval_binding
 from yian.expr.grammar import whole_span_interior
 from yian.llm_clients import LLMConfig
@@ -151,7 +151,39 @@ def read_llm_config(
         return _literal_part(value.value), {}
     ranges: dict[str, SourceRange] = {}
     _collect_key_ranges(cursor, "", ranges)
-    return value, ranges
+    return _with_key_origins(value, cursor, site_path, catalog_builder), ranges
+
+
+def _with_key_origins(
+    template: ValueTemplate,
+    cursor: SourceCursor,
+    site_path: tuple[str | int, ...],
+    catalog_builder: "_SourceCatalogBuilder",
+) -> ValueTemplate:
+    """Give every written key of a template layer an origin, literal keys included.
+
+    A call-time check of the resolved config can refuse a literal field (a provider
+    block the connection does not take), and its failure points at that field.
+    """
+    known = {path for path, _ in template.origins}
+    added: list[tuple[tuple[str, ...], OriginRef]] = []
+
+    def visit(at: SourceCursor, path: tuple[str, ...]) -> None:
+        if type(at.value) is not dict:
+            return
+        for key in at.value:
+            if not isinstance(key, str):
+                continue
+            child = at.child(key)
+            here = (*path, key)
+            if here not in known:
+                origin = catalog_builder.register((*site_path, "key", *here), child)
+                if origin is not None:
+                    added.append((here, origin))
+            visit(child, here)
+
+    visit(cursor, ())
+    return ValueTemplate(template.value, template.origins + tuple(added))
 
 
 def _collect_key_ranges(

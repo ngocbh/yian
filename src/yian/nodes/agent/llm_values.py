@@ -4,19 +4,44 @@ A layer is a plain ``dict`` (all literal), a ``ValueTemplate`` (fields, block
 fields or whole blocks from values), or a ``Binding`` (the whole record from one
 value). The helpers here find a layer's value leaves and the references they read,
 decide which lower-layer values a higher layer leaves able to contribute, carry an
-agent's node and own-flow layers as one reserved binding, and resolve that binding
-against a pool. Precedence and merge granularity follow ``merge_llm_config``.
+agent's node and own-flow layers as one reserved binding, resolve that binding
+against a pool, check the resolved layers, and build a call-time agent's config.
+Precedence and merge granularity follow ``merge_llm_config``.
 """
 
 from __future__ import annotations
 
+import copy
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Optional, TypeAlias
 
+from pydantic import ValidationError
+
+from yian.diagnostics import OriginRef
 from yian.expr.expressions import ExpressionError
 from yian.expr.template import Span, expr_refs_of, scan_template
-from yian.llm_clients.config import PROVIDER_BLOCKS, host_only_field_error
-from yian.llm_clients.connection import ConnectionSelection
+from yian.llm_clients.auth import AuthError
+from yian.llm_clients.config import (
+    PROVIDER_BLOCKS,
+    SUPPORTED_LLM_PROVIDERS,
+    HostConnection,
+    LLMConfig,
+    host_only_field_error,
+    merge_llm_config,
+)
+from yian.llm_clients.connection import (
+    HOST_KEY_MARKER,
+    ConnectionSelection,
+    check_model_config,
+    split_model_config,
+)
+from yian.llm_clients.layers import (
+    require_concrete_selection,
+    resolve_agent_config,
+    validate_layer,
+)
+from yian.llm_clients.provider_blocks import partial_block_problems
 from yian.nodes.binding import BindingError, _resolve_source
 from yian.nodes.contracts import Binding, ValuePath, ValueTemplate, iter_source_strings
 from yian.typesys import Type, ValueKind
@@ -384,16 +409,249 @@ def refused_resolved_field(
         `str | None`: The message, naming the field under ``subject``; it never echoes
             a value.
     """
+    refusal = _refusal(written, resolved)
+    if refusal is None:
+        return None
+    field, text = refusal
+    return f"{field_where(subject, field)}: {text}"
+
+
+class LayerFieldError(ValueError):
+    """A layer resolved from values, refused at one of its fields.
+
+    Attributes:
+        field (`ValuePath`): The field at fault; empty for the layer as a whole. A
+            provider block's problem names the deepest key path it reports, such as
+            ``("anthropic", "thinking", "budget_tokens")``.
+    """
+
+    def __init__(self, message: str, field: ValuePath) -> None:
+        """Hold the message and the field it names."""
+        super().__init__(message)
+        self.field = field
+
+
+def check_resolved_layer(layer: dict[str, Any], subject: str, *, written: Any) -> None:
+    """Check a layer resolved from values as an authored layer is checked, naming the field.
+
+    Messages read ``<subject>.<field>: ...`` for the first field at fault (a provider
+    block's problems name their key path), or ``<subject>: ...`` for a problem of the
+    layer as a whole, and never echo a value. A host-only field or ``_connection``
+    is refused first (`refused_resolved_field`).
+
+    Args:
+        layer (`dict[str, Any]`): The resolved layer.
+        subject (`str`): Names the layer, such as ``node 'chat' llm_config``.
+        written (`Any`): The layer as written, which tells a literal field from one a
+            value set.
+
+    Raises:
+        `LayerFieldError`: The layer sets a field a flow file may not set, an unknown or
+            retired field, an unknown provider, or a field or block its schema refuses.
+    """
+    refusal = _refusal(written, layer)
+    if refusal is not None:
+        field, text = refusal
+        raise LayerFieldError(f"{field_where(subject, field)}: {text}", field)
+    try:
+        validate_layer(layer)
+    except ValueError as exc:
+        raise LayerFieldError(f"{subject}: {exc}", ()) from None
+    for block in PROVIDER_BLOCKS:
+        if layer.get(block) is None:
+            continue
+        problems = partial_block_problems(block, layer[block], lambda _leaf: False)
+        if problems:
+            # Each problem starts with its backticked key path, such as `anthropic.thinking`.
+            named = re.match(r"`([^`]+)`", problems[0])
+            field = tuple(named.group(1).split(".")) if named else (block,)
+            raise LayerFieldError(
+                f"{field_where(subject, (block,))}: {problems[0]}",
+                field if field[:1] == (block,) else (block,),
+            )
+    try:
+        LLMConfig(**layer)
+    except ValidationError as exc:
+        error = exc.errors(include_input=False, include_url=False)[0]
+        loc = tuple(error["loc"])
+        if loc == ("provider",) and error["type"] == "literal_error":
+            text = f"not a known provider; use one of: {', '.join(SUPPORTED_LLM_PROVIDERS)}"
+        elif error["type"] == "value_error":
+            text = str(error["ctx"]["error"])
+        elif len(loc) > 1:
+            text = f"`{'.'.join(str(part) for part in loc)}`: {error['msg']}"
+        else:
+            text = error["msg"]
+        raise LayerFieldError(f"{field_where(subject, loc[:1])}: {text}", loc[:1]) from None
+
+
+def field_where(subject: str, field: ValuePath) -> str:
+    """Name a field under an ``llm_config`` subject, as in ``node 'a' llm_config.model``."""
+    return subject + "".join(f".{part}" for part in field)
+
+
+def refused_block(config: Mapping[str, Any]) -> str:
+    """Return ``.<provider>`` when `check_model_config` refused only the provider's block.
+
+    Its fields and connection are checked first and an Azure config needs a
+    ``base_url``; a config that passes those was refused for its block alone.
+
+    Args:
+        config (`Mapping[str, Any]`): The config `check_model_config` refused.
+
+    Returns:
+        `str`: ``.<provider>``, or ``""`` when something else was refused.
+    """
+    try:
+        validated, _ = split_model_config(dict(config))
+    except ValueError:
+        return ""
+    if validated.provider is None or (
+        validated.provider == "azure" and validated.base_url is None
+    ):
+        return ""
+    return f".{validated.provider}"
+
+
+def invocation_config(
+    canonical: Mapping[str, Any], credentials: Optional[HostConnection]
+) -> dict[str, Any]:
+    """Return the config one model call uses: ``canonical`` with the host's secrets joined.
+
+    The host key and header values are joined only when ``canonical`` is marked for the
+    host key (``HOST_KEY_MARKER``). The result is for that call alone; it is never
+    stored or recorded.
+
+    Args:
+        canonical (`Mapping[str, Any]`): A resolved config with no secrets.
+        credentials (`HostConnection | None`): The run's host key and header values.
+
+    Returns:
+        `dict[str, Any]`: A new config.
+    """
+    config = copy.deepcopy(dict(canonical))
+    if config.get(HOST_KEY_MARKER) is True and credentials is not None:
+        if credentials.api_key is not None:
+            config["api_key"] = credentials.api_key
+        if credentials.headers:
+            config["headers"] = dict(credentials.headers)
+    return config
+
+
+def call_time_config(
+    template: Binding,
+    pool: VariablePool,
+    call_time: CallTimeLLM,
+    *,
+    label: Optional[str],
+    credentials: Optional[HostConnection],
+) -> dict[str, Any]:
+    """Resolve and check a call-time agent's config; return it with no secrets.
+
+    The node and own-flow layers resolve against ``pool`` and are each checked as
+    an authored layer is. They merge over the recorded base, the defaults and saved
+    models of the recorded selection fill the gaps, and the selection binds the
+    connection: an agent of the host key's provider is marked for it with the host's
+    base_url and nonsecret settings, as run start marks a static agent. The result
+    has the shape of a ``RunStarted`` map entry. It is then checked as the model call
+    would check it, with the host's secrets joined only when it is marked.
+
+    Args:
+        template (`Binding`): The agent's reserved ``__llm_config`` binding.
+        pool (`VariablePool`): The pool its values read.
+        call_time (`CallTimeLLM`): What run start fixed for the agent.
+        label (`str | None`): The authored site of a synthesized agent's
+            ``llm_config``, named instead of its path.
+        credentials (`HostConnection | None`): The run's host key and header values.
+
+    Returns:
+        `dict[str, Any]`: The canonical config: no key, header value or ``SecretStr``.
+
+    Raises:
+        `BindingError`: A value breaks its tag (``binding.type``) or fails to resolve
+            (its own code), or the resolved config is refused (``contract.input``).
+            The message names the field, under ``node '<path>' llm_config`` or the
+            label, and the origin is that field's authored site when known.
+    """
+    path = call_time.path
+    parent = path.rpartition("/")[0]
+    if label is not None:
+        subject = label if not parent else f"{label} in {parent!r}"
+    else:
+        subject = f"node {path!r} llm_config"
+    flow_subject = f"flow {parent!r} llm_config" if parent else "flow llm_config"
+    tree = template.source.value
+    node_layer, flow_layer = resolve_layers(template, pool, label=subject)
+    for part, layer, where in (
+        ("node", node_layer, subject), ("flow", flow_layer, flow_subject),
+    ):
+        try:
+            check_resolved_layer(layer, where, written=tree.get(part))
+        except LayerFieldError as exc:
+            raise _refused(str(exc), _field_origin(template, (part, *exc.field))) from None
+    selection = call_time.selection
+    snapshot = selection.snapshot
+    try:
+        config = resolve_agent_config(
+            merge_llm_config(node_layer, merge_llm_config(flow_layer, call_time.base)),
+            defaults=snapshot.defaults,
+            provider_models=snapshot.provider_models,
+            stray_model=snapshot.stray_model,
+            path=path,
+            label=label,
+        )
+        canonical = selection.bind(config)
+        require_concrete_selection(canonical, path=path, label=label)
+    except ValueError as exc:
+        raise _refused(str(exc), None) from None
+    probe = invocation_config(canonical, credentials)
+    try:
+        check_model_config(probe)
+    except (ValueError, AuthError) as exc:
+        block = refused_block(probe)
+        origin = None
+        if block:
+            origin = _field_origin(template, ("node", block[1:])) or _field_origin(
+                template, ("flow", block[1:])
+            )
+        raise _refused(f"{subject}{block}: {exc}", origin) from None
+    return canonical
+
+
+def _refused(message: str, origin: Optional[OriginRef]) -> BindingError:
+    """Return the ``contract.input`` failure of a resolved config refused at a field."""
+    return BindingError(message, failure_code="contract.input", origin=origin)
+
+
+def _field_origin(template: Binding, field: ValuePath) -> Optional[OriginRef]:
+    """Return the authored site of ``field`` (under ``node`` or ``flow``), or its nearest.
+
+    The deepest written key on the way down that has a site is used; a part written
+    as one whole-record value is that value's site.
+    """
+    source = template.source
+    for end in range(len(field), 1, -1):
+        origin = source.origin_at(field[:end])
+        if origin is not None:
+            return origin
+    part = source.value.get(field[0]) if field else None
+    return part.origin if isinstance(part, Binding) else None
+
+
+def _refusal(written: Any, resolved: Mapping[str, Any]) -> Optional[tuple[ValuePath, str]]:
+    """Return the field `refused_resolved_field` refuses and why, or `None`."""
     if "_connection" in resolved:
-        return f"{subject}._connection: internal to recorded runs"
+        return ("_connection",), "internal to recorded runs"
     literal = _literal_fields(written)
     for field in resolved:
         if host_only_field_error({field: None}) is None:
             continue
         if literal is None or field not in literal:
-            return f"{subject}.{field}: {HOST_ONLY_FROM_VALUE}"
+            return (field,), HOST_ONLY_FROM_VALUE
     message = host_only_field_error(literal or {})
-    return None if message is None else f"{subject}: {message}"
+    if message is None:
+        return None
+    return (), message
 
 
 def _literal_fields(written: Any) -> Optional[dict[str, Any]]:

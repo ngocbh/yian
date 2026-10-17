@@ -34,6 +34,7 @@ from yian.nodes.agent.llm_values import (
     LLM_CONFIG_KEY,
     CallTimeLLM,
     Nullable,
+    call_time_config,
     types_nullable,
 )
 from yian.nodes.agent.memory import compatibility
@@ -51,7 +52,7 @@ from yian.nodes.base import (
     _HostStop,
     _check_named_prompt,
 )
-from yian.nodes.binding import BindingError, apply_defaults
+from yian.nodes.binding import BindingError, ReservedBinder, apply_defaults
 from yian.nodes.contracts import (
     Binding,
     Parameter,
@@ -65,6 +66,7 @@ from yian.skills.catalog import Skill, SkillError, check_skill_name
 from yian.skills.tool import LOAD_SKILL, system_prompt_with_skills
 from yian.tools import ToolSet
 from yian.typesys import Type
+from yian.typesys.pool import VariablePool
 from yian.typesys.values import ValueKind, build_value_as, canonical_type_label
 
 
@@ -180,6 +182,43 @@ class AgentNode(Node):
     def reserved_wiring_keys(self) -> set[str]:
         """Declare ``__llm_config`` when values in the layers can reach this agent's config."""
         return {LLM_CONFIG_KEY} if self.wires_llm_config else set()
+
+    def bind_reserved(
+        self, node_wiring: dict, pool: VariablePool, *, bind: ReservedBinder | None = None,
+    ) -> dict[str, Any]:
+        """Resolve and check a call-time agent's ``llm_config`` before its model call.
+
+        The node and own-flow layers resolve against ``pool``, merge over the base run
+        start recorded, and are checked as run start checks a static agent's config
+        (`call_time_config`). Nothing is rendered, recalled or sent to a model first.
+
+        Args:
+            node_wiring (`dict`): This node's wiring, holding ``__llm_config``.
+            pool (`VariablePool`): The live pool the values read.
+            bind (`ReservedBinder | None`, *optional*, defaults to `None`): Unused; the
+                bound value is the resolved config, not the values it was read from.
+
+        Returns:
+            `dict[str, Any]`: ``{"__llm_config": <config>}``, the resolved config with no
+                key or header value, the shape of a ``RunStarted`` map entry; ``{}`` for
+                an agent run start resolved.
+
+        Raises:
+            `BindingError`: A value breaks its tag (``binding.type``) or fails to
+                resolve, or the resolved config is refused (``contract.input``); the
+                message names the field.
+        """
+        if self.call_time is None:
+            return {}
+        return {
+            LLM_CONFIG_KEY: call_time_config(
+                node_wiring[LLM_CONFIG_KEY],
+                pool,
+                self.call_time,
+                label=self.llm_config_label,
+                credentials=self.host_credentials,
+            )
+        }
 
     def reserved_key_label(self, key: str) -> str:
         """Name the reserved ``__llm_config`` key as the authored ``llm_config`` field."""

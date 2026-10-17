@@ -1,7 +1,9 @@
-"""`llm_config` values known only when their agent runs: run start, the session check, replay."""
+"""`llm_config` values known only when their agent runs: run start, sessions, replay, the call."""
 
 import json
+import time
 
+from langchain_core.messages import AIMessage
 from pydantic import SecretStr
 import pytest
 
@@ -10,25 +12,47 @@ from yian.compile.memory_layout import check_session_compatibility, resolve_memo
 from yian.compose import load_flow
 from yian.events import NodeStarted
 from yian.llm_clients import connection as connection_module
+from yian.llm_clients.auth import AuthStore, OAuthCredentials
 from yian.memory.session import SessionMemory
 from yian.memory.contracts import MemorySetupError
+from yian.nodes.agent import AgentNode
+from yian.nodes.agent.llm_values import LLM_CONFIG_KEY
 from yian.run import _replay_run_log, run_flow
-from yian.runtime.log import JsonlRunLog
+from yian.runtime.log import JsonlRunLog, canonical_seed
 
 
 @pytest.fixture(autouse=True)
 def fake_model(monkeypatch):
-    """Record every model built; no test here may reach a call-time agent's model."""
+    """Record the config of every model built, and answer each call with ``ok``."""
     for name in ("OPENAI_API_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     built = []
 
+    class Model:
+        def invoke(self, messages):
+            return AIMessage(content="ok")
+
     def model_from_config(config):
         built.append(config)
-        raise AssertionError("no model is built in these tests")
+        return Model()
 
     monkeypatch.setattr("yian.llm_clients.model_from_config", model_from_config)
     return built
+
+
+@pytest.fixture
+def bound(monkeypatch):
+    """Record what each AGENT's ``bind_reserved`` returns, by node id."""
+    seen = []
+    original = AgentNode.bind_reserved
+
+    def spy(self, node_wiring, pool, *, bind=None):
+        result = original(self, node_wiring, pool, bind=bind)
+        seen.append((self.id, result))
+        return result
+
+    monkeypatch.setattr(AgentNode, "bind_reserved", spy)
+    return seen
 
 
 def _records(path):
@@ -255,3 +279,163 @@ def test_replay_applies_the_recorded_call_time_agents_without_ambient_settings(
     assert chat.host_credentials.api_key.get_secret_value() == "sk-host-secret"
     assert flow.compiled.nodes["chat"].call_time is None
     assert fake_model == []
+
+
+# Resolving and checking the config before the model call.
+
+
+def _picking(pick_output, pick_value, llm_config, *, typedefs="", flow_llm=""):
+    """A flow whose ``chat`` agent takes ``llm_config`` and may read ``pick``'s output."""
+    return f"""id: f
+name: f
+{typedefs}{flow_llm}nodes:
+  pick: {{kind: code, output: {pick_output}, code: "return {pick_value}"}}
+  chat:
+    kind: agent
+    prompt: Go.
+    llm_config: {llm_config}
+output: ${{chat.output}}
+"""
+
+
+def _wired(flow, node="chat"):
+    return flow.compiled.wiring[node][LLM_CONFIG_KEY].source
+
+
+def test_a_block_the_resolved_connection_refuses_fails_at_its_field(fake_model):
+    AuthStore().save(
+        "openai",
+        OAuthCredentials("access-secret", "refresh-secret", time.time() + 3600, "account"),
+        "gpt-selected",
+    )
+    flow = load_flow(_picking(
+        "str", "'openai'",
+        "{provider: '${pick.output}', openai: {max_output_tokens: 100}}",
+    ))
+    result = run_flow(flow, {})
+    assert result.status == "failed"
+    failure = result.failure
+    assert failure.node_id == "chat"
+    assert failure.code == "contract.input"
+    assert failure.message.startswith("node 'chat' llm_config.openai: ")
+    assert "`openai.max_output_tokens`" in failure.message
+    assert "ChatGPT subscription" in failure.message
+    origin = _wired(flow).origin_at(("node", "openai"))
+    assert origin is not None and failure.trace[-1] == origin
+    assert fake_model == []
+
+
+def test_a_block_field_from_a_value_is_checked_at_call_time(fake_model):
+    flow = load_flow(_picking(
+        "Thinking", "{'type': 'enabled', 'budget_tokens': 10}",
+        "{provider: anthropic, model: claude-x, anthropic: {thinking: '${pick.output}'}}",
+        typedefs="typedefs:\n  Thinking: {type: str, budget_tokens: int}\n",
+    ))
+    result = run_flow(flow, {})
+    assert result.status == "failed"
+    failure = result.failure
+    assert failure.code == "contract.input"
+    assert failure.message.startswith("node 'chat' llm_config.anthropic: ")
+    assert "`anthropic.thinking.budget_tokens`" in failure.message
+    assert "1024" in failure.message
+    assert failure.trace[-1] == _wired(flow).origin_at(("node", "anthropic", "thinking"))
+    assert fake_model == []
+
+
+def test_a_value_that_breaks_its_tag_fails_with_binding_type(fake_model):
+    flow = load_flow(_picking(
+        "Optional(str)", "None", "{provider: openai, model: !str '${pick.output}'}",
+    ))
+    result = run_flow(flow, {})
+    assert result.status == "failed"
+    assert result.failure.code == "binding.type"
+    assert "node 'chat' llm_config" in result.failure.message
+    assert fake_model == []
+
+
+def test_a_literal_typed_provider_resolving_to_an_unknown_member_names_the_field(fake_model):
+    flow = load_flow(_picking(
+        "Some", "'nope'", "{provider: '${pick.output}', model: m}",
+        typedefs="typedefs:\n  Some: Literal(openai, nope)\n",
+    ))
+    result = run_flow(flow, {})
+    assert result.status == "failed"
+    failure = result.failure
+    assert failure.code == "contract.input"
+    assert failure.message.startswith("node 'chat' llm_config.provider: not a known provider")
+    assert failure.trace[-1] == _wired(flow).origin_at(("node", "provider"))
+    assert fake_model == []
+
+
+def test_a_host_only_field_from_a_whole_record_value_is_refused_at_call_time(fake_model):
+    record = (
+        "{'provider': 'azure', 'model': 'dep', "
+        "'base_url': 'https://res.openai.azure.com'}"
+    )
+    flow = load_flow(_picking("object", record, "'${pick.output}'"))
+    result = run_flow(flow, {})
+    assert result.status == "failed"
+    failure = result.failure
+    assert failure.code == "contract.input"
+    assert failure.message.startswith("node 'chat' llm_config.base_url: ")
+    assert "stay with the host or yian auth" in failure.message
+    assert "res.openai.azure.com" not in failure.message
+    assert fake_model == []
+
+
+def _walk(value):
+    """Yield every value nested in ``value``, ``value`` included."""
+    yield value
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from _walk(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _walk(item)
+
+
+_HOST = {
+    "provider": "openai",
+    "api_key": "sk-host-secret",
+    "headers": {"X-Tenant": "tenant-secret"},
+}
+
+
+def test_the_bound_config_is_a_secret_free_map_entry(tmp_path, bound):
+    static_log = tmp_path / "static.jsonl"
+    static = _picking(
+        "str", "'gpt-picked'", "{model: gpt-picked}", flow_llm="llm_config: {provider: openai}\n"
+    )
+    assert run_flow(load_flow(static), {}, log=static_log, llm_config=_HOST).status == "succeeded"
+    entry = _records(static_log)[0]["payload"]["effective_llm_by_static_path"]["chat"]
+    assert entry["_header_names"] == ["X-Tenant"]
+    bound.clear()
+
+    text = static.replace("{model: gpt-picked}", "{model: '${pick.output}'}")
+    assert run_flow(load_flow(text), {}, llm_config=_HOST).status == "succeeded"
+    [(node_id, reserved)] = bound
+    assert node_id == "chat"
+    assert reserved == {LLM_CONFIG_KEY: entry}
+    for item in _walk(reserved):
+        assert not isinstance(item, SecretStr)
+        assert item not in ("sk-host-secret", "tenant-secret")
+    assert "api_key" not in reserved[LLM_CONFIG_KEY]
+    assert "headers" not in reserved[LLM_CONFIG_KEY]
+    assert canonical_seed(reserved)[0] == reserved
+
+
+def test_an_agent_resolved_at_run_start_binds_no_config(bound):
+    text = """id: f
+name: f
+input: {m: !str }
+nodes:
+  chat:
+    kind: agent
+    prompt: Go.
+    llm_config: {provider: openai, model: '${input.m}'}
+output: ${chat.output}
+"""
+    flow = load_flow(text)
+    assert LLM_CONFIG_KEY in flow.compiled.wiring["chat"]
+    assert run_flow(flow, {"m": "gpt-x"}).status == "succeeded"
+    assert bound == [("chat", {})]

@@ -2,6 +2,7 @@
 
 import pytest
 
+from yian.compose import LoadError, load_flow
 from yian.compose.helpers import narrowing_facts
 from yian.compose.helpers.condition_guards import (
     NOTHING,
@@ -25,6 +26,7 @@ from yian.compose.helpers.narrowing_facts import (
     unresolved_type,
 )
 from yian.compose.helpers.types import read_type
+from yian.compose.validate.narrowing import _narrow_type
 from yian.expr import parse_condition
 from yian.typesys import Type, ValueKind
 from yian.typesys.types import read_typedefs
@@ -38,6 +40,8 @@ _REGISTRY = read_typedefs(
         "Wide": {"name": "str"},
         "Other": {"flag": "bool"},
         "MaybeA": "Optional(A)",
+        "Holder": {"b": "Optional(str)"},
+        "Outer": {"h": "Optional(Holder)"},
     }
 )
 
@@ -252,3 +256,104 @@ def test_a_null_check_the_routing_proves_null_is_reported():
         "this node"
     ]
     assert _impossible("x == null", routing={"x": Members((), nullable=True)}) == []
+
+
+# --------------------------------------------------------------------------- #
+# Nested optional fields
+# --------------------------------------------------------------------------- #
+
+
+def test_a_non_null_field_is_present_in_every_record_around_it():
+    narrowed = _narrow_type(_t("Optional(Outer)"), ("h", "b"), STR)
+    assert narrowed.nullable is False
+    assert "h" in narrowed.required
+    holder = narrowed.fields["h"]
+    assert holder.nullable is False
+    assert "b" in holder.required
+    assert holder.fields["b"] == STR
+
+
+def test_a_nullable_field_leaves_the_records_around_it_alone():
+    outer = _t("Optional(Outer)")
+    narrowed = _narrow_type(outer, ("h", "b"), _t("Optional(str)"))
+    assert narrowed.nullable is True
+    assert narrowed.required == outer.required
+    assert narrowed.fields["h"].required == outer.fields["h"].required
+    assert narrowed.fields["h"].nullable is True
+
+
+def test_a_field_narrowed_to_null_leaves_the_records_around_it_alone():
+    holder = _t("Optional(Holder)")
+    narrowed = _narrow_type(holder, ("b",), NULL)
+    assert narrowed.nullable is True
+    assert narrowed.required == holder.required
+
+
+def _nested_flow(when: str, a_type: str = "A", source: str = "${input.a.b}", sink: str = "str"):
+    """A flow whose searched CASE passes `source` to a def taking `!<sink>` when `when`."""
+    return (
+        "id: p\nname: p\n"
+        "typedefs:\n  A: {b: Optional(str)}\n"
+        f"input:\n  a: !{a_type}\n"
+        "nodes:\n"
+        "  route:\n    kind: case\n    cases:\n"
+        f'      - when: "{when}"\n'
+        f"        then: call(need, v={source})\n"
+        "    else: e\n"
+        "  e:\n    kind: code\n    code: return 1\n"
+        "output: ${route.output}\n"
+        "defs:\n  need:\n"
+        f"    input:\n      v: !{sink}\n"
+        "    nodes:\n      p:\n        kind: code\n"
+        "        input:\n          o: ${input.v}\n        code: return 1\n"
+        "    output: ${p.output}\n"
+    )
+
+
+@pytest.mark.parametrize("when", ["isinstance(input.a.b, str)", "input.a.b != null"])
+@pytest.mark.parametrize("a_type", ["A", "Optional(A)"])
+def test_a_narrowed_optional_field_fills_a_required_input(when, a_type):
+    load_flow(_nested_flow(when, a_type))
+
+
+@pytest.mark.parametrize("when", ["isinstance(input.a.b, str)", "input.a.b != null"])
+def test_a_narrowed_field_makes_its_parent_non_null(when):
+    load_flow(_nested_flow(when, "Optional(A)", source="${input.a}", sink="A"))
+
+
+def test_an_unnarrowed_optional_field_still_cannot_fill_a_required_input():
+    with pytest.raises(LoadError, match="child expects 'str', source is 'Optional\\(str\\)'"):
+        load_flow(_nested_flow("input.a.b == null"))
+
+
+def _inner_on_flow(when: str) -> str:
+    """A flow with an `on:` CASE over `input.a.b` inside the branch where it is not null."""
+    return (
+        "id: p\nname: p\n"
+        "typedefs:\n  A: {b: Optional(str)}\n"
+        "input:\n  a: !A\n"
+        "nodes:\n"
+        "  route:\n    kind: case\n    cases:\n"
+        '      - when: "input.a.b != null"\n        then: inner\n'
+        "    else: e\n"
+        "  inner:\n    kind: case\n    on: ${input.a.b}\n    cases:\n"
+        f"      - when: {when}\n        then: n\n"
+        "    else: e2\n"
+        "  n:\n    kind: code\n    code: return 1\n"
+        "  e:\n    kind: code\n    code: return 1\n"
+        "  e2:\n    kind: code\n    code: return 1\n"
+        "output: ${route.output}\n"
+    )
+
+
+def test_a_null_when_is_no_on_value_even_on_a_narrowed_field():
+    # YAML `null` is no `when:` value at all; the build rejects it before any typing.
+    with pytest.raises(LoadError, match="each on:-form case needs a `when:` value"):
+        load_flow(_inner_on_flow("null"))
+
+
+def test_a_when_is_typed_by_the_unnarrowed_field():
+    # An `on:` value is typed by the unnarrowed inputs first, so narrowing changes no
+    # `when:` check.
+    load_flow(_inner_on_flow("'null'"))
+    load_flow(_inner_on_flow("x"))

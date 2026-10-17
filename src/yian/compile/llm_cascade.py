@@ -36,8 +36,10 @@ from yian.llm_clients.config import (
 from yian.llm_clients.provider_blocks import partial_block_problems
 from yian.llm_clients.connection import (
     HOST_KEY_MARKER,
+    ConnectionSelection,
     ConnectionSnapshot,
     record_selection,
+    restore_selection,
 )
 from yian.llm_clients.layers import (
     require_concrete_selection,
@@ -406,14 +408,15 @@ def _value_origin(layer: Any, field: ValuePath, leaf: Any) -> Optional[OriginRef
 def apply_effective_llm_map(
     flow: Any,
     effective: dict[str, dict[str, Any]],
-    call_time: dict[str, dict[str, Any]] | None = None,
+    call_time: Mapping[str, Any] | None = None,
 ) -> None:
-    """Apply one recorded complete effective map, and call-time bases, to a static flow tree.
+    """Apply one recorded complete effective map, and call-time agents, to a static flow tree.
 
-    Together the two maps must name exactly the flow's static agent paths, each once.
-    Validation finishes before mutation. Applying deep-copies each config onto its
-    agent's ``llm_config``, gives each call-time agent a `CallTimeLLM` with its base
-    (its ``llm_config`` stays unset until it runs), and de-aliases every static child
+    The effective map and the call-time ``agents`` together must name exactly the
+    flow's static agent paths, each once. Validation finishes before mutation.
+    Applying deep-copies each config onto its agent's ``llm_config``, gives each
+    call-time agent a `CallTimeLLM` with its base and the restored selection (its
+    ``llm_config`` stays unset until it runs), and de-aliases every static child
     callsite, without importing settings or reading the environment.
 
     Args:
@@ -421,23 +424,32 @@ def apply_effective_llm_map(
             A clean compiled flow to mutate in place.
         effective (`dict[str, dict[str, Any]]`):
             Recorded complete configurations keyed by static agent path.
-        call_time (`dict[str, dict[str, Any]] | None`, *optional*, defaults to `None`):
-            Recorded bases of the agents whose configs resolve only when they run, keyed
-            by static agent path; `None` is none.
+        call_time (`Mapping[str, Any] | None`, *optional*, defaults to `None`):
+            The recorded ``RunStarted.call_time_llm``: ``agents``, the base of each
+            agent whose config resolves only when it runs, keyed by static agent path,
+            and ``selection``, the `record_selection` record they bind from. `None`
+            when there are none.
 
     Raises:
         `ValueError`:
             If paths are missing, extra or in both maps, a config lacks provider/model,
-            a call-time path names an agent with no ``llm_config`` value, or a base is
-            not a valid layer.
+            a call-time path names an agent with no ``llm_config`` value, a base is not
+            a valid layer, or the selection is invalid.
         `TypeError`:
             If a map or one of its entries is not a dictionary.
     """
     if not isinstance(effective, dict):
         raise TypeError("effective LLM map must be a dict keyed by static agent path")
-    call_time = {} if call_time is None else call_time
-    if not isinstance(call_time, dict):
-        raise TypeError("call-time LLM map must be a dict keyed by static agent path")
+    selection = None
+    if call_time is None:
+        call_time = {}
+    else:
+        if not isinstance(call_time, Mapping) or set(call_time) != {"selection", "agents"}:
+            raise TypeError("call-time LLM record must be a dict of selection and agents")
+        selection = restore_selection(call_time["selection"])
+        call_time = call_time["agents"]
+        if not isinstance(call_time, dict):
+            raise TypeError("call-time LLM agents must be a dict keyed by static agent path")
 
     expected = set(_static_agent_paths(flow))
     supplied = set(effective) | set(call_time)
@@ -476,7 +488,7 @@ def apply_effective_llm_map(
         except ValueError as exc:
             raise ValueError(f"call-time LLM base for {subject}: {exc}") from None
 
-    _apply_flow(flow, effective, call_time, path=())
+    _apply_flow(flow, effective, call_time, selection, path=())
 
 
 def _resolve_flow(
@@ -859,6 +871,7 @@ def _apply_flow(
     flow: Any,
     effective: dict[str, dict[str, Any]],
     call_time: dict[str, dict[str, Any]],
+    selection: Optional[ConnectionSelection],
     *,
     path: tuple[str, ...],
 ) -> None:
@@ -868,8 +881,11 @@ def _apply_flow(
         if isinstance(node, AgentNode):
             path_key = _path_key(node_path)
             if path_key in call_time:
+                assert selection is not None  # a call-time record always has one
                 node.llm_config = None
-                node.call_time = CallTimeLLM(path_key, copy.deepcopy(call_time[path_key]))
+                node.call_time = CallTimeLLM(
+                    path_key, copy.deepcopy(call_time[path_key]), copy.deepcopy(selection)
+                )
             else:
                 node.llm_config = copy.deepcopy(effective[path_key])
                 node.call_time = None
@@ -877,7 +893,7 @@ def _apply_flow(
         child = getattr(node, "child", None)
         if child is not None:
             node.child = copy.deepcopy(child)
-            _apply_flow(node.child, effective, call_time, path=node_path)
+            _apply_flow(node.child, effective, call_time, selection, path=node_path)
 
 
 def bind_host_credentials(

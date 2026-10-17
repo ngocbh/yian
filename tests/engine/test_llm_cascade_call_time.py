@@ -61,6 +61,11 @@ def _resolve(text, host=None):
     return flow, private, run_llm
 
 
+def _record(agents):
+    """Return a ``RunStarted.call_time_llm`` record holding ``agents``."""
+    return {"selection": record_selection(_snapshot(), providers=None), "agents": agents}
+
+
 def _node(flow, path):
     *callsites, node_id = path.split("/")
     for callsite in callsites:
@@ -84,10 +89,11 @@ def test_a_nested_call_time_agent_gets_the_outer_layers_without_its_own_flow_lay
 def test_apply_sets_each_call_time_agent_and_leaves_it_unresolved():
     _, private, run_llm = _resolve(_NESTED, host={"model": "host-model"})
     fresh = copy.deepcopy(load_flow(_NESTED).compiled)
-    apply_effective_llm_map(fresh, run_llm.effective, run_llm.call_time)
+    apply_effective_llm_map(fresh, run_llm.effective, _record(run_llm.call_time))
     a, b = _node(fresh, "c/a"), _node(fresh, "c/b")
     assert a.call_time.path == "c/a"
     assert a.call_time.base == {"provider": "anthropic", "model": "host-model"}
+    assert a.call_time.selection.snapshot == _snapshot()
     assert a.llm_config is None
     assert b.call_time is None
     assert b.llm_config == run_llm.effective["c/b"]
@@ -101,14 +107,16 @@ def test_the_two_maps_must_cover_every_agent_once():
     effective, call_time = run_llm.effective, run_llm.call_time
     without_chat = {k: v for k, v in call_time.items() if k != "chat"}
     with pytest.raises(ValueError, match=r"missing paths: \['chat'\]"):
-        apply_effective_llm_map(copy.deepcopy(flow), effective, without_chat)
+        apply_effective_llm_map(copy.deepcopy(flow), effective, _record(without_chat))
     with pytest.raises(ValueError, match=r"missing paths: \['chat', 'solo'\]"):
         apply_effective_llm_map(copy.deepcopy(flow), effective)
     with pytest.raises(ValueError, match=r"extra paths: \['ghost'\]"):
-        apply_effective_llm_map(copy.deepcopy(flow), effective, {**call_time, "ghost": {}})
+        apply_effective_llm_map(
+            copy.deepcopy(flow), effective, _record({**call_time, "ghost": {}})
+        )
     overlap = {**effective, "chat": effective["pick"]}
     with pytest.raises(ValueError, match=r"in both maps: \['chat'\]"):
-        apply_effective_llm_map(copy.deepcopy(flow), overlap, call_time)
+        apply_effective_llm_map(copy.deepcopy(flow), overlap, _record(call_time))
 
 
 def test_a_call_time_path_must_name_an_agent_with_llm_config_values():
@@ -116,7 +124,7 @@ def test_a_call_time_path_must_name_an_agent_with_llm_config_values():
     effective = {k: v for k, v in run_llm.effective.items() if k != "pick"}
     with pytest.raises(ValueError, match="'pick'.*no llm_config value"):
         apply_effective_llm_map(
-            copy.deepcopy(flow), effective, {**run_llm.call_time, "pick": {}}
+            copy.deepcopy(flow), effective, _record({**run_llm.call_time, "pick": {}})
         )
 
 
@@ -124,16 +132,17 @@ def test_a_call_time_base_must_be_a_valid_layer():
     flow, _, run_llm = _resolve(_ROOT)
     with pytest.raises(TypeError, match="'chat' must be a dict"):
         apply_effective_llm_map(
-            copy.deepcopy(flow), run_llm.effective, {**run_llm.call_time, "chat": "x"}
+            copy.deepcopy(flow), run_llm.effective, _record({**run_llm.call_time, "chat": "x"})
         )
     with pytest.raises(ValueError, match="'chat'.*unknown field"):
         apply_effective_llm_map(
-            copy.deepcopy(flow), run_llm.effective, {**run_llm.call_time, "chat": {"bogus": 1}}
+            copy.deepcopy(flow), run_llm.effective,
+            _record({**run_llm.call_time, "chat": {"bogus": 1}}),
         )
     with pytest.raises(ValueError, match="'chat'.*api_key"):
         apply_effective_llm_map(
             copy.deepcopy(flow), run_llm.effective,
-            {**run_llm.call_time, "chat": {"provider": "openai", "api_key": "k"}},
+            _record({**run_llm.call_time, "chat": {"provider": "openai", "api_key": "k"}}),
         )
 
 
@@ -147,7 +156,7 @@ def test_the_host_key_reaches_call_time_agents_on_the_private_flow_only():
     connection = pop_host_credentials(host)
     flow, private, run_llm = _resolve(_NESTED, host=host)
     assert "secret" not in repr(run_llm.call_time)
-    apply_effective_llm_map(private, run_llm.effective, run_llm.call_time)
+    apply_effective_llm_map(private, run_llm.effective, _record(run_llm.call_time))
     bind_host_credentials(private, connection.api_key, connection.headers)
 
     joined = _node(private, "c/a").host_credentials
@@ -165,7 +174,7 @@ def test_the_host_key_reaches_call_time_agents_on_the_private_flow_only():
 
 def test_bind_host_credentials_without_headers_gives_none():
     _, private, run_llm = _resolve(_ROOT)
-    apply_effective_llm_map(private, run_llm.effective, run_llm.call_time)
+    apply_effective_llm_map(private, run_llm.effective, _record(run_llm.call_time))
     bind_host_credentials(private, SecretStr("sk-x"))
     assert private.nodes["chat"].host_credentials.headers is None
 
@@ -173,7 +182,7 @@ def test_bind_host_credentials_without_headers_gives_none():
 def test_the_fingerprint_ignores_the_call_time_attributes():
     flow, private, run_llm = _resolve(_ROOT)
     before = flow_fingerprint(flow)
-    apply_effective_llm_map(private, run_llm.effective, run_llm.call_time)
+    apply_effective_llm_map(private, run_llm.effective, _record(run_llm.call_time))
     bind_host_credentials(private, SecretStr("sk-x"))
     assert private.nodes["chat"].call_time is not None
     assert flow_fingerprint(private) == before
@@ -410,3 +419,13 @@ output: ${c.output}
     private = copy.deepcopy(load_flow(text).compiled)
     run_llm = resolve_run_llm(private, {}, defaults={})
     assert known_call_time_providers(private, run_llm.call_time, {}) == {"c/a": None}
+
+
+def test_a_call_time_record_needs_a_valid_selection():
+    flow, _, run_llm = _resolve(_ROOT)
+    record = _record(run_llm.call_time)
+    record["selection"]["connections"]["openai"]["source"] = "bogus"
+    with pytest.raises(ValueError, match="recorded connection selection"):
+        apply_effective_llm_map(copy.deepcopy(flow), run_llm.effective, record)
+    with pytest.raises(TypeError, match="selection and agents"):
+        apply_effective_llm_map(copy.deepcopy(flow), run_llm.effective, run_llm.call_time)

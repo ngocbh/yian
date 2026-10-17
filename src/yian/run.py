@@ -45,6 +45,8 @@ from yian.compile.expand import build_grow
 from yian.compile.llm_cascade import (
     apply_effective_llm_map,
     bind_host_credentials,
+    call_time_selection,
+    known_call_time_providers,
     RunLLM,
     host_key_providers,
     resolve_run_llm,
@@ -288,7 +290,10 @@ class _BackwardHandle:
                     raise MemorySetupError("backward requires this run's enabled memory mapping")
                 _check_registry_types(self.memory, state.memories)
                 program = copy.deepcopy(self.program)
-                apply_effective_llm_map(program, legacy_connection_map(state.effective_llm_by_static_path))
+                apply_effective_llm_map(
+                    program, legacy_connection_map(state.effective_llm_by_static_path),
+                    state.call_time_llm,
+                )
                 memory_table, origins, memory_stack_set = _resolve_runtime_memory_layout(program)
                 _check_recorded_memory_table(
                     state.memories, state.memory_stacks, memory_table, memory_stack_set,
@@ -765,18 +770,36 @@ def _run_flow_controlled(
     host = pop_host_credentials(run_llm_config)
     api_key, headers = host.api_key, host.headers
 
-    # One selection snapshot determines every static agent before RunStarted.
+    # One selection snapshot determines every static agent before RunStarted, and
+    # what each agent resolved only when it runs binds from.
     snapshot = connection_snapshot()
+    host_key_provider = None if api_key is None else run_llm_config["provider"]
+    run_llm = _run_start_llm(private_flow, coerced, run_llm_config, snapshot)
     effective_llm = snapshot.bind(
-        _run_start_llm(private_flow, coerced, run_llm_config, snapshot).effective,
-        host_key_provider=None if api_key is None else run_llm_config["provider"],
+        run_llm.effective,
+        host_key_provider=host_key_provider,
         host_base_url=host.base_url,
         host_settings=host,
     )
-    apply_effective_llm_map(private_flow, effective_llm)
-    # A key that marks no agent has nothing to authenticate, so the result keeps
-    # neither it nor the headers sent with it.
-    if api_key is not None and not host_key_providers(effective_llm):
+    call_time_llm = None
+    if run_llm.call_time:
+        call_time_llm = {
+            "selection": call_time_selection(
+                private_flow, run_llm.call_time, snapshot,
+                host_key_provider=host_key_provider,
+                host_base_url=host.base_url,
+                host_settings=host,
+            ),
+            "agents": run_llm.call_time,
+        }
+    apply_effective_llm_map(private_flow, effective_llm, call_time_llm)
+    # A key that neither marks an agent nor is in the call-time agents' selection has
+    # nothing to authenticate, so the result keeps neither it nor its headers.
+    if (
+        api_key is not None
+        and not host_key_providers(effective_llm)
+        and (call_time_llm is None or call_time_llm["selection"]["host"] is None)
+    ):
         api_key = headers = None
     if api_key is not None:
         bind_host_credentials(private_flow, api_key, headers)
@@ -806,6 +829,7 @@ def _run_flow_controlled(
     if memory is not None:
         memory_table, memory_origins, memory_stack_set = _resolve_runtime_memory_layout(
             private_flow, effective_llm=effective_llm,
+            call_time_known=_call_time_known(private_flow, call_time_llm),
         )
         _check_registry_types(memory, memory_table)
         memory_runtime = MemoryRuntime.open(
@@ -825,6 +849,7 @@ def _run_flow_controlled(
                 initial_pool=pool,
                 start_wiring_override=start_wiring_override,
                 effective_llm_by_static_path=effective_llm,
+                call_time_llm=call_time_llm,
                 num_workers=num_workers,
                 memory_snapshots=(
                     None if memory_runtime is None else memory_runtime.snapshots
@@ -1486,12 +1511,12 @@ def _replay_run_log(
     """Silently reconstruct one borrowed, locked authoritative log prefix.
 
     The authored fingerprint is checked before copying.  The private graph gets
-    only the complete effective LLM map recorded by ``RunStarted``; recovery
-    never consults the current LLM defaults.  Historical transitions use the
-    same reducer and growth constructor as live execution.  A host ``api_key``
-    and the ``headers`` sent with it go to the agents the map marks for it. The
-    run result reads its files through the flow's output contract, as
-    ``run_flow``'s does.
+    only the complete effective LLM map and the call-time agents recorded by
+    ``RunStarted``; recovery never consults the current LLM defaults.  Historical
+    transitions use the same reducer and growth constructor as live execution.  A
+    host ``api_key`` and the ``headers`` sent with it go to the agents the map marks
+    for it, and to the call-time agents. The run result reads its files through the
+    flow's output contract, as ``run_flow``'s does.
     """
     if not isinstance(flow, ComposedFlow):
         raise TypeError("_replay_run_log expects a ComposedFlow")
@@ -1567,10 +1592,11 @@ def _replay_compiled_run_log(
     apply_effective_llm_map(
         private_flow,
         legacy_connection_map(first.record.effective_llm_by_static_path),
+        first.record.call_time_llm,
     )
     if api_key is not None:
-        # A run that marked no agent ignores the key and headers; bind_host_credentials
-        # finds no target.
+        # A run that marked no agent ignores the key and headers: no static agent is
+        # marked, and a call-time agent uses them only when its resolved config is.
         bind_host_credentials(private_flow, api_key, headers)
     if first.record.learnable:
         apply_execution_layout(private_flow, resolve_execution_layout(private_flow))
@@ -1594,6 +1620,7 @@ def _resolve_runtime_memory_layout(
     flow: CompiledFlow,
     *,
     effective_llm: dict[str, dict] | None = None,
+    call_time_known: Mapping[str, str | None] | None = None,
 ) -> tuple[
     tuple[MemorySpec, ...],
     dict[str, OriginRef | None],
@@ -1602,13 +1629,35 @@ def _resolve_runtime_memory_layout(
     """Derive the key table, origins and stacks, and stamp one private graph.
 
     With ``effective_llm``, first check that each session key resolves one
-    conversation compatibility across its placements.
+    conversation compatibility across its placements; ``call_time_known`` gives the
+    provider of each placement resolved only when it runs, when run start knows it
+    (`check_session_compatibility`).
     """
     resolved = resolve_memory_layout(flow)
     if effective_llm is not None:
-        check_session_compatibility(resolved, effective_llm)
+        check_session_compatibility(resolved, effective_llm, call_time_known=call_time_known)
     apply_memory_layout(flow, resolved)
     return _memory_layout_parts(resolved)
+
+
+def _call_time_known(
+    flow: CompiledFlow, call_time_llm: Mapping[str, Any] | None
+) -> dict[str, str | None]:
+    """Return each recorded call-time agent's provider when run start knows it, else `None`.
+
+    Args:
+        flow (`CompiledFlow`): The run's flow.
+        call_time_llm (`Mapping[str, Any] | None`): The ``RunStarted.call_time_llm``
+            record, or `None` when there is none.
+
+    Returns:
+        `dict[str, str | None]`: Keyed by static agent path; empty without the record.
+    """
+    if call_time_llm is None:
+        return {}
+    return known_call_time_providers(
+        flow, call_time_llm["agents"], call_time_llm["selection"]["defaults"]
+    )
 
 
 def _memory_layout_parts(

@@ -16,6 +16,7 @@ from typing import Any, Callable, Mapping, Optional, TypeAlias
 from yian.expr.expressions import ExpressionError
 from yian.expr.template import Span, expr_refs_of, scan_template
 from yian.llm_clients.config import PROVIDER_BLOCKS
+from yian.llm_clients.connection import ConnectionSelection
 from yian.nodes.binding import BindingError, _resolve_source
 from yian.nodes.contracts import Binding, ValuePath, ValueTemplate, iter_source_strings
 from yian.typesys import Type, ValueKind
@@ -38,10 +39,14 @@ class CallTimeLLM:
         base (`dict[str, Any]`): The layers below the agent's node and own-flow layers:
             the enclosing flows' layers and the host layer, merged; empty under
             ``inherit: false``. It holds no key or header value.
+        selection (`ConnectionSelection`): The run's recorded selection: the defaults
+            and saved models the resolved config falls back to, and the connection it
+            binds.
     """
 
     path: str
     base: dict[str, Any]
+    selection: ConnectionSelection
 
 
 def is_value(leaf: Any) -> bool:

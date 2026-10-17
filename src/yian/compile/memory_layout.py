@@ -641,24 +641,37 @@ def memory_stacks(layout: ResolvedMemoryLayout) -> tuple[MemoryStack, ...]:
 def check_session_compatibility(
     layout: ResolvedMemoryLayout,
     effective_llm: Mapping[str, object],
+    *,
+    call_time_known: Mapping[str, str | None] | None = None,
 ) -> None:
     """Require every placement of a session key to resolve one compatibility.
 
     ``effective_llm`` is the run's resolved LLM map keyed by ``"/".join``
-    of root-relative node ids. Compatibility is provider plus message
-    format; model differences are allowed. Every placement must have an
-    entry in ``effective_llm``; a missing entry is a ``KeyError``, because
-    the cascade and the layout then disagree about the flow.
+    of root-relative node ids. ``call_time_known`` gives each placement whose
+    config resolves only when it runs its provider when run start knows it, else
+    `None`; such a placement is skipped, and the session checks it when the agent
+    runs. Compatibility is provider plus message format; model differences are
+    allowed. Every placement must have an entry in one of the two; a missing entry
+    is a ``KeyError``, because the cascade and the layout then disagree about the flow.
     """
     _revalidate_resolved_layout(layout)
+    known = {} if call_time_known is None else call_time_known
     for memory in layout.memories:
         if memory.type != "session" or len(memory.placements) < 2:
             continue
-        first_path = "/".join(memory.placements[0])
-        first = compatibility(effective_llm[first_path])
-        for placement in memory.placements[1:]:
+        configs: dict[str, object] = {}
+        for placement in memory.placements:
             path = "/".join(placement)
-            other = compatibility(effective_llm[path])
+            if path not in known:
+                configs[path] = effective_llm[path]
+            elif known[path] is not None:
+                configs[path] = {"provider": known[path]}
+        if len(configs) < 2:
+            continue
+        (first_path, first_config), *others = configs.items()
+        first = compatibility(first_config)
+        for path, config in others:
+            other = compatibility(config)
             if _canonical_json(other) != _canonical_json(first):
                 raise _setup_error(
                     f"session memory {memory.key!r} resolves provider "

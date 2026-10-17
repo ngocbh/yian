@@ -485,6 +485,41 @@ def test_a_def_calling_many_defs_written_after_it_is_built_once(
     assert dict(builds) == {"a": 1, **{leaf: 1 for leaf in leaves}}
 
 
+def _caller_of_deep_chains(k: int, depth: int, callee_first: bool) -> str:
+    """Return a flow whose def `a` calls `k` chains of `depth` defs each.
+
+    Chain `i` is `k{i}_0` .. `k{i}_{depth-1}`, each def calling the next and the last
+    echoing. Written caller-first, `a` comes before its chains and each chain def before
+    the def it calls; written callee-first, the order is reversed.
+    """
+    entries = [_def("a", _calls([f"k{i}_0" for i in range(k)]) + _ECHO)]
+    for i in range(k):
+        entries.extend(
+            _def(f"k{i}_{j}", _step_calling(f"k{i}_{j + 1}") if j < depth - 1 else _ECHO)
+            for j in range(depth)
+        )
+    if callee_first:
+        entries.reverse()
+    return _flow(*entries)
+
+
+def test_a_def_calling_chains_deeper_than_the_nesting_bound_is_built_once_per_chain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Each chain nests past `_MAX_NESTED_DEF_BUILDS` and aborts `a`'s build, so `a` is
+    # built again once per chain, then once more to finish.
+    k, depth = 5, 10
+    assert depth > loader._MAX_NESTED_DEF_BUILDS
+    expected = flow_fingerprint(
+        load_flow(_caller_of_deep_chains(k, depth, callee_first=True)).compiled
+    )
+    builds = _count_def_builds(monkeypatch)
+    flow = load_flow(_caller_of_deep_chains(k, depth, callee_first=False))
+
+    assert builds["a"] == k + 1
+    assert flow_fingerprint(flow.compiled) == expected
+
+
 def _chain_with_leaves(n: int, broken: str) -> str:
     """Return a chain `c0` .. `c{n-1}` whose defs each also call five leaves written after.
 

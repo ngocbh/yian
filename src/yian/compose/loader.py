@@ -1057,8 +1057,11 @@ class _PrivateCallable:
 
 # How many def builds `resolve` nests above the def `eager_load_defs` is building before
 # it hands the next callee to the scheduler's stack. Nesting lets a def build its callees
-# in one pass, so a def that calls many defs written after it is built once; the bound
-# keeps a long def chain to about a hundred Python frames per build the scheduler runs.
+# in one pass, so a def that calls many defs written after it is built once when their
+# def subtrees fit under the bound. It does not spare every rebuild: each callee whose def
+# subtree goes deeper than the bound aborts its caller's build, so a def is built again
+# once per such callee, and a def calling k deep chains is built k + 1 times. The bound
+# keeps a long def chain to one to two hundred Python frames per build the scheduler runs.
 _MAX_NESTED_DEF_BUILDS = 8
 
 
@@ -1090,9 +1093,10 @@ class _BuildFirst(BaseException):
         scope (`_CallableScope`): The scope whose scheduler handles it.
         chain (`list[_PendingDef]`): The def builds nested on the Python stack when the
             call was made, outermost first, then the called def.
-        built (`list[_PendingDef]`): The defs built nested in the aborted build and not
-            rolled back, in the order they were built. Aborting rolls them back, so they
-            are built again before the called def, which would find them built.
+        built (`list[_PendingDef]`): The defs built nested in the aborted build and still
+            built when the call was made (a failed nested build rolls its defs back), in
+            the order they were built. Aborting rolls them back, so they are built again
+            before the called def, which would find them built.
     """
 
     def __init__(
@@ -1339,6 +1343,10 @@ class _CallableScope:
             `LoadError`:
                 Raised when the callable is unknown, recursive, fails to build, or its
                 import chain is past the limit; a `uses:` failure is located at its alias.
+            `_BuildFirst`:
+                Raised while `eager_load_defs` runs when a def not built yet would nest
+                past `_MAX_NESTED_DEF_BUILDS` def builds; the scope's scheduler in
+                `_build_callee_first` catches it.
         """
         if flow_id in self._built:
             return self._built[flow_id]
@@ -1526,6 +1534,13 @@ class _CallableScope:
         called with, which are what a build nested in its callers sees, so recursion and
         the call nesting limit are checked as before.
 
+        Nesting does not spare every rebuild. Each callee whose def subtree goes deeper
+        than `_MAX_NESTED_DEF_BUILDS` aborts its caller's build, so a def is built again
+        once per such callee: a def calling k chains written after it, each deeper than
+        the bound, is built k + 1 times. Build counts stay linear in the defs, but each
+        rebuild repeats the caller's whole build, so a wide caller of deep chains loads
+        slower than building each callee nested would.
+
         When a def on the stack fails, its exception is recorded for the def below it,
         keyed by the failed def and the in-progress set it was called with. While the
         def below builds again, `resolve` of the failed def with that same set raises
@@ -1579,7 +1594,10 @@ class _CallableScope:
                         raise failure.with_traceback(traceback)
                     self._pending[-1].failures[(top.name, top.outer)] = (failure, traceback)
         finally:
+            # `resolve` pushes onto `_nested` before its `try`, so an interrupt there
+            # would leave an entry no `finally` pops.
             self._pending = []
+            self._nested = []
             self._nested_built = {}
             self._in_progress = set()
 

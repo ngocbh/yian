@@ -777,7 +777,13 @@ def _read_authored_llm_config(
     Raises:
         `LoadError`: The layer is malformed or sets a field a flow file may not set.
     """
-    if llm_config is None:
+    # `llm_config: !T` with nothing after the tag reads as null; the reader rejects it.
+    tagged = (
+        cursor is not None
+        and cursor.has("llm_config")
+        and cursor.child("llm_config").tag is not None
+    )
+    if llm_config is None and not tagged:
         return {}
     source_range = None
     ranges: dict[str, SourceRange] = {}

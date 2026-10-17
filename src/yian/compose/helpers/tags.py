@@ -570,6 +570,7 @@ def read_tagged_value(
     diagnostics: LoadDiagnostics,
     ledger: set[int],
     literal_only: bool = False,
+    nested_call_fix: str = "bind it at the top level, or reword the text",
 ) -> TaggedSlot:
     """Read one slot's authored value and the tags on and inside it.
 
@@ -598,6 +599,8 @@ def read_tagged_value(
         literal_only (`bool`, *optional*, defaults to `False`): Read a literal (a
             default): strings are text, never templates, and are not unescaped;
             nested tags are checked and dropped, so the value is plain.
+        nested_call_fix (`str`, *optional*, defaults to binding it at the top level):
+            The fix a nested string starting with `call(` is told to make.
 
     Returns:
         `TaggedSlot`: The value, the top-level contract, and whether a value follows
@@ -618,6 +621,7 @@ def read_tagged_value(
         diagnostics=diagnostics,
         ledger=ledger,
         literal_only=literal_only,
+        nested_call_fix=nested_call_fix,
     )
     try:
         return reader.read(cursor)
@@ -657,6 +661,7 @@ class _TaggedValueReader:
         diagnostics: LoadDiagnostics,
         ledger: set[int],
         literal_only: bool,
+        nested_call_fix: str,
     ) -> None:
         self.registry = registry
         self.label = label
@@ -665,6 +670,7 @@ class _TaggedValueReader:
         self.diagnostics = diagnostics
         self.ledger = ledger
         self.literal_only = literal_only
+        self.nested_call_fix = nested_call_fix
         self.leaf_sites: list[tuple[ValuePath, SourceCursor]] = []
 
     def read(self, cursor: SourceCursor) -> TaggedSlot:
@@ -744,7 +750,7 @@ class _TaggedValueReader:
             if CALL_HEAD.match(value.strip()):
                 raise self.diagnostics.error(
                     f"{path_label(self.label, path)!r}: a `call(...)` inside a value "
-                    "isn't supported; bind it at the top level, or reword the text",
+                    f"isn't supported; {self.nested_call_fix}",
                     range=cursor.range,
                 )
             self.leaf_sites.append((path, cursor))
@@ -997,11 +1003,12 @@ def reject_unread_tags(
 ) -> None:
     """Reject the first tag in `document` that no slot reader consumed.
 
-    A tag types a flow input, a binding, a flow output, an agent variable, a value
-    entry in `nodes:`, or a value inside one; anywhere else it would be silently
-    ignored. Tags reached only through top-level `x-*` keys are exempt. Tags under
-    `typedefs:` and on mapping keys get their own messages. Keys are spelled as
-    written, so `on:` stays `on:` although YAML reads it as `True`.
+    A tag types a flow input, a binding, a flow output, an agent variable, an
+    `llm_config` value (the whole record or a field), a value entry in `nodes:`, or a
+    value inside one; anywhere else it would be silently ignored. Tags reached only
+    through top-level `x-*` keys are exempt. Tags under `typedefs:` and on mapping keys
+    get their own messages. Keys are spelled as written, so `on:` stays `on:` although
+    YAML reads it as `True`.
 
     Args:
         document (`SourceDocument`): The loaded document.
@@ -1036,8 +1043,8 @@ def reject_unread_tags(
         where = f"`{key}:`" if key is not None else "the document root"
         raise diagnostics.error(
             "a tag types a value — a flow input, a binding, a flow output, an agent "
-            f"variable, a value entry in `nodes:`, or a value inside one; {where} is "
-            "not one",
+            "variable, an `llm_config` value, a value entry in `nodes:`, or a value "
+            f"inside one; {where} is not one",
             range=node.range,
         )
 

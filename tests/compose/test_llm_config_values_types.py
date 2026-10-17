@@ -172,3 +172,16 @@ def test_a_flow_layer_value_no_agent_carries_is_still_checked():
         "    llm_config: {model: m0}\n", flow_layer="llm_config: {model: '${input.nope}'}\n"
     )
     assert "unknown flow input 'nope'" in _error(unknown)
+
+
+@pytest.mark.parametrize(
+    ("llm_lines", "flow_layer"),
+    [
+        ("    llm_config: !WithInherit ${input.obj}\n", ""),
+        ("    llm_config: {model: m0}\n", "llm_config: ${input.inh}\n"),
+        ("    llm_config: {model: m0}\n", "llm_config: !WithInherit ${input.obj}\n"),
+    ],
+)
+def test_a_whole_record_type_declaring_inherit_is_refused(llm_lines, flow_layer):
+    message = _error(_flow(llm_lines, flow_layer=flow_layer))
+    assert "llm_config" in message and "`inherit`" in message, message

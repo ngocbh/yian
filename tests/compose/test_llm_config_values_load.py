@@ -469,12 +469,132 @@ def test_a_def_whole_record_value_loads_as_a_binding():
 
 
 def test_a_def_excluded_field_from_a_value_fails_at_the_field():
-    text = _def_layer("    llm_config: {provider: openai, project: '${input.m}'}\n")
+    text = _def_layer(
+        "    llm_config:\n"
+        "      provider: openai\n"
+        "      project: ${input.m}\n"
+    )
     error = _load_error(text)
     assert "defs entry 'sub': llm_config.project goes wherever" in str(error)
-    assert _line(error) == _line_of(text, "llm_config:")
+    assert _line(error) == _line_of(text, "project:")
 
 
 def test_a_literal_def_layer_is_still_a_plain_dict():
     child = _def_child(_def_layer("    llm_config: {model: m}\n"))
     assert child.flow_llm_config == {"model": "m"}
+
+
+@pytest.mark.parametrize("beside", ["", ", model: '${input.m}'"])
+def test_a_tagged_unknown_provider_is_checked_as_a_literal(beside):
+    error = _load_error(_flow(f"    llm_config: {{provider: !str nope{beside}}}\n"))
+    message = str(error)
+    assert message.startswith("node 'a': llm_config:"), message
+    assert "provider\n  Input should be 'openai'" in message
+
+
+@pytest.mark.parametrize("beside", ["", "        temperature: ${input.t}\n"])
+def test_a_tagged_literal_block_field_is_checked(beside):
+    text = _flow(
+        "    llm_config:\n"
+        "      provider: anthropic\n"
+        "      anthropic:\n"
+        f"{beside}"
+        "        thinking: {type: enabled, budget_tokens: !int 10}\n"
+    )
+    message = str(_load_error(text))
+    assert message.startswith("node 'a': llm_config:"), message
+    assert "greater than or equal to 1024" in message
+
+
+def test_a_tagged_literal_azure_allows_a_literal_base_url():
+    agent = _agent(
+        _flow(
+            "    llm_config:\n"
+            "      provider: !str azure\n"
+            "      model: ${input.m}\n"
+            "      base_url: https://x.openai.azure.com\n"
+        )
+    )
+    assert agent.own_llm_config.value["base_url"] == "https://x.openai.azure.com"
+
+
+@pytest.mark.parametrize("model", ["m", "${input.m}"])
+def test_a_tagged_literal_inherit_is_accepted(model):
+    agent = _agent(_flow(f"    llm_config:\n      inherit: !bool false\n      model: {model}\n"))
+    assert agent.llm_inherit is False
+
+
+def test_a_layer_of_only_tagged_literals_is_a_literal_layer():
+    agent = _agent(_flow("    llm_config: {provider: !str openai, model: !str 'a$$b'}\n"))
+    assert type(agent.own_llm_config) is dict
+    assert agent.own_llm_config == {"provider": "openai", "model": "a$b"}
+    flow = load_flow(_flow_layer("llm_config: {model: !str m}\n"))
+    assert type(flow.compiled.flow_llm_config) is dict
+    assert flow.compiled.flow_llm_config == {"model": "m"}
+    child = _def_child(_def_layer("    llm_config: {model: !str m}\n"))
+    assert child.flow_llm_config == {"model": "m"}
+
+
+def test_a_call_inside_an_llm_config_string_fails():
+    text = _flow("    llm_config:\n      model: call(pick)\n")
+    error = _load_error(text)
+    message = str(error)
+    assert "'llm_config.model': a `call(...)`" in message
+    assert "top level" not in message
+    assert _line(error) == _line_of(text, "model:")
+
+
+def test_a_null_flow_layer_loads_as_empty():
+    flow = load_flow(_flow_layer("llm_config: null\n"))
+    assert flow.compiled.flow_llm_config == {}
+
+
+@pytest.mark.parametrize("value", ["gpt-4", "[a]"])
+def test_a_flow_layer_that_is_not_a_mapping_fails(value):
+    text = _flow_layer(f"llm_config: {value}\n")
+    error = _load_error(text)
+    assert "flow: llm_config must be a mapping" in str(error)
+    assert _line(error) == _line_of(text, "llm_config:")
+
+
+@pytest.mark.parametrize("site", ["flow", "node"])
+def test_a_tag_with_no_value_on_the_layer_fails(site):
+    text = (
+        _flow_layer("llm_config: !object\n")
+        if site == "flow"
+        else _flow("    llm_config: !object\n")
+    )
+    error = _load_error(text)
+    assert "llm_config: a tag needs a value" in str(error)
+    assert _line(error) == _line_of(text, "llm_config:")
+
+
+@pytest.mark.parametrize(
+    ("line", "needle"),
+    [("temparature: 1", "temparature"), ("model: 5", "`model:`")],
+)
+def test_a_literal_field_error_in_a_value_layer_points_at_the_field(line, needle):
+    text = _flow(f"    llm_config:\n      provider: ${{input.p}}\n      {line}\n")
+    error = _load_error(text)
+    assert str(error).startswith("node 'a': llm_config:"), str(error)
+    assert needle in str(error)
+    assert _line(error) == _line_of(text, line)
+
+
+def test_a_literal_field_error_in_a_flow_value_layer_points_at_the_field():
+    text = _flow_layer("llm_config:\n  provider: ${input.p}\n  temparature: 1\n")
+    error = _load_error(text)
+    assert str(error).startswith("flow: llm_config:"), str(error)
+    assert _line(error) == _line_of(text, "temparature:")
+
+
+@pytest.mark.parametrize("site", ["flow", "node"])
+def test_a_malformed_span_is_a_located_load_error(site):
+    text = (
+        _flow_layer("llm_config:\n  model: 'a${b'\n")
+        if site == "flow"
+        else _flow("    llm_config:\n      model: 'a${b'\n")
+    )
+    error = _load_error(text)
+    assert "llm_config" in str(error)
+    assert _line(error) == _line_of(text, "a${b")

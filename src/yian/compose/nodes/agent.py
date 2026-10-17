@@ -11,7 +11,7 @@ routes here.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -19,7 +19,7 @@ from pydantic import ValidationError
 
 from yian.compose.helpers.errors import LoadDiagnostics, LoadError
 from yian.compose.helpers.memory import parse_memory_declarations
-from yian.compose.helpers.tags import has_span, read_tagged_value
+from yian.compose.helpers.tags import read_tagged_value
 from yian.compose.helpers.types import read_variables
 from yian.compose.helpers.yaml_words import former_boolean_fix
 from yian.compose.nodes.base import (
@@ -40,7 +40,7 @@ from yian.llm_clients.config import host_only_field_error
 from yian.llm_clients.provider_blocks import PROVIDER_BLOCKS, partial_block_problems
 from yian.memory.contracts import DeclSite, MemoryDecl
 from yian.nodes.agent import AgentNode
-from yian.nodes.agent.llm_values import LLM_CONFIG_KEY
+from yian.nodes.agent.llm_values import LLM_CONFIG_KEY, is_value, value_leaves
 from yian.nodes.agent.node import is_max_tool_iterations, is_text_output
 from yian.nodes.agent.structured import type_to_schema
 from yian.nodes.contracts import Binding, Parameter, ValueContract, ValueTemplate
@@ -92,10 +92,11 @@ def read_llm_config(
 ) -> tuple[Any, dict[str, SourceRange]]:
     """Read one authored `llm_config` layer with the `${...}` values and tags in it.
 
-    A layer without values or tags is a plain dict whose strings are `$$`-unescaped.
-    One holding them is a `ValueTemplate`. A whole record written as exactly one
-    `${...}` (optionally tagged) is a `Binding`; any other top-level text or scalar is
-    returned as written for the shape check to reject.
+    A layer without values is a plain dict whose strings are `$$`-unescaped; a tagged
+    literal in it stands for its value. One holding values is a `ValueTemplate`. A
+    whole record written as exactly one `${...}` (optionally tagged) is a `Binding`;
+    any other top-level text or scalar is returned as written for the shape check to
+    reject.
 
     Args:
         cursor (`SourceCursor`): The authored `llm_config:` value.
@@ -123,6 +124,8 @@ def read_llm_config(
         catalog_builder=catalog_builder,
         diagnostics=diagnostics,
         ledger=catalog_builder.consumed_tags,
+        nested_call_fix="compute it in a node and read that node's output with `${...}`, "
+        "or reword the text",
     )
     if not slot.has_value:
         raise diagnostics.error(
@@ -143,6 +146,9 @@ def read_llm_config(
         )
     if not isinstance(value, ValueTemplate):
         return value, {}
+    if not value_leaves(value):
+        # Only tagged literals, already checked against their tags: a literal layer.
+        return _literal_part(value.value), {}
     ranges: dict[str, SourceRange] = {}
     _collect_key_ranges(cursor, "", ranges)
     return value, ranges
@@ -166,11 +172,9 @@ def _collect_key_ranges(
 
 
 def _holds_value(tree: Any) -> bool:
-    """Whether a layer part is, or holds, a value resolved later."""
-    if isinstance(tree, Binding):
+    """Whether a layer part is, or holds, a value resolved later; a tagged literal is not."""
+    if is_value(tree):
         return True
-    if isinstance(tree, str):
-        return has_span(tree)
     if type(tree) is dict:
         return any(_holds_value(item) for item in tree.values())
     if type(tree) is list:
@@ -178,14 +182,9 @@ def _holds_value(tree: Any) -> bool:
     return False
 
 
-def _is_value(part: Any) -> bool:
-    """Whether a layer part is itself a value: a tagged one, or text with a `${...}` span."""
-    return isinstance(part, Binding) or (isinstance(part, str) and has_span(part))
-
-
 def _unescape_literals(tree: Any) -> Any:
-    """Return `tree` with its values in place and its literal strings `$$`-unescaped."""
-    if _is_value(tree):
+    """Return `tree` with its values in place and its literals as the values they bind."""
+    if is_value(tree):
         return tree
     if type(tree) is dict:
         return {key: _unescape_literals(item) for key, item in tree.items()}
@@ -210,7 +209,9 @@ def _block_problem_range(
 
 
 def _literal_part(tree: Any) -> Any:
-    """Return the value a literal template part binds: its strings `$$`-unescaped."""
+    """Return the value a literal template part binds: tags dropped, strings `$$`-unescaped."""
+    if isinstance(tree, Binding):
+        return _literal_part(tree.source)
     if isinstance(tree, str):
         return eval_binding(tree, lambda path: None)
     if type(tree) is dict:
@@ -293,13 +294,13 @@ def check_llm_config_value(
 
     inherit = True
     if allow_inherit and "inherit" in tree:
-        inherit = tree["inherit"]
-        if _holds_value(inherit):
+        if _holds_value(tree["inherit"]):
             raise diagnostics.error(
                 f"{prefix} `inherit:` must be written as true or false; it decides which "
                 "layers apply before any value is known",
                 range=at("inherit"),
             )
+        inherit = _literal_part(tree["inherit"])
         if type(inherit) is not bool:
             raise diagnostics.error(
                 f"{prefix} `inherit:` must be true or false, got "
@@ -311,7 +312,13 @@ def check_llm_config_value(
             (path, origin) for path, origin in cfg.origins if path[:1] != ("inherit",)
         )
         cfg = ValueTemplate(tree, origins)
-    host_only = host_only_field_error(tree)
+    # Each literal field as the value it binds, so a tagged `provider: !str azure`
+    # counts as `azure`; a field holding a value is None here.
+    literal = {
+        key: None if _holds_value(item) else _literal_part(item)
+        for key, item in tree.items()
+    }
+    host_only = host_only_field_error(literal)
     if host_only is not None:
         raise diagnostics.error(
             _host_only_message(prefix, host_only), range=at(_host_only_field(host_only))
@@ -323,15 +330,11 @@ def check_llm_config_value(
             "endpoint as literal text",
             range=at("base_url"),
         )
-    literal = {
-        key: None if _holds_value(item) else _literal_part(item)
-        for key, item in tree.items()
-    }
-    _check_literal_fields(literal, prefix, source_range, diagnostics)
+    _check_literal_fields(literal, prefix, source_range, diagnostics, at)
     for key, block in tree.items():
         if key not in PROVIDER_BLOCKS or not _holds_value(block):
             continue
-        problems = partial_block_problems(key, _unescape_literals(block), _is_value)
+        problems = partial_block_problems(key, _unescape_literals(block), is_value)
         if problems:
             raise diagnostics.error(
                 f"{prefix}: {problems[0]}",
@@ -345,8 +348,18 @@ def _check_literal_fields(
     prefix: str,
     source_range: SourceRange | None,
     diagnostics: LoadDiagnostics,
+    field_range: Callable[[str], SourceRange | None] | None = None,
 ) -> None:
     """Check literal `llm_config` fields as `LLMConfig` fields.
+
+    Args:
+        cfg (`dict[str, Any]`): The literal fields; a field holding a value is `None`.
+        prefix (`str`): Message prefix naming the layer.
+        source_range (`SourceRange | None`): The layer's location, when retained.
+        diagnostics (`LoadDiagnostics`): Factory for located load errors.
+        field_range (`Callable[[str], SourceRange | None] | None`, *optional*, defaults
+            to `None`): The location of a top-level field by its key; `None` locates
+            every error at the layer.
 
     Raises:
         `LoadError`: A field violates `LLMConfig`; a text field YAML read as non-text
@@ -356,9 +369,14 @@ def _check_literal_fields(
         LLMConfig(**cfg)
     except ValidationError as exc:
         detail = not_text_detail(exc)
+        where = source_range
+        errors = exc.errors(include_input=False, include_url=False)
+        loc = errors[0]["loc"] if errors else ()
+        if field_range is not None and loc and isinstance(loc[0], str):
+            where = field_range(loc[0])
         raise diagnostics.error(
             f"{prefix}: " + (not_text_error(*detail) if detail is not None else str(exc)),
-            range=source_range,
+            range=where,
         ) from exc
     except Exception as exc:
         raise diagnostics.error(

@@ -7,6 +7,7 @@ import json
 import pytest
 
 from yian.compile.expand import clone_child
+from yian.compile.llm_cascade import resolve_llm_cascade
 from yian.compile.manifest import flow_fingerprint, flow_manifest
 from yian.compose.helpers.errors import LoadError
 from yian.compose.loader import load_flow
@@ -366,3 +367,26 @@ def test_an_authored_input_named_like_the_reserved_key_fails():
     error = _load_error(text)
     assert "'__llm_config' is reserved" in error.diagnostic.message, error
     assert error.diagnostic.message.startswith("node 'chat'")
+
+
+_TAGGED_LITERALS = """\
+id: f
+name: f
+llm_config: {provider: !str openai}
+nodes:
+  chat:
+    kind: agent
+    prompt: Go.
+    llm_config: {model: !str gpt-x, inherit: !bool true}
+output: ${chat.output}
+"""
+
+
+def test_a_layer_of_only_tagged_literals_is_wired_as_a_literal_layer():
+    flow = _compiled(_TAGGED_LITERALS)
+    assert LLM_CONFIG_KEY not in flow.wiring["chat"]
+    assert flow.nodes["chat"].reserved_wiring_keys() == set()
+    assert flow.flow_llm_config == {"provider": "openai"}
+    effective = resolve_llm_cascade(flow, {}, defaults={})
+    assert effective["chat"]["provider"] == "openai"
+    assert effective["chat"]["model"] == "gpt-x"

@@ -19,8 +19,8 @@ checks every seed against the body's declared input.
 
 Imports flow down only: `compile.validation` (the type comparator),
 `compose.helpers` (shared output-contract inference and load diagnostics), and
-`compose.nodes.loop` (a body's inputs as the carried values enter them). Only
-the loader (and the compose package facade) import this back.
+`compose.nodes.loop` (a body's inputs as the carried values enter them, and the
+carried field types). Only the loader (and the compose package facade) import this back.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ from yian.compose.helpers.output_contracts import (
     resolve_output_binding_contract,
 )
 from yian.compose.nodes.base import BuildResult
-from yian.compose.nodes.loop import loop_entry_inputs
+from yian.compose.nodes.loop import carried_field_types, loop_entry_inputs
 from yian.diagnostics import SourceRange
 from yian.nodes.contracts import (
     Binding,
@@ -147,21 +147,7 @@ def check_loop_type_contract(
                 "PartialRecordContract, or None, "
                 f"got {type(loop_contract).__name__}"
             )
-        loop_out = (
-            loop_contract.type
-            if type(loop_contract) is ValueContract
-            else None
-        )
-        if loop_out is not None and loop_out.fields is not None:
-            carried_fields = loop_out.fields
-        elif type(loop_contract) is PartialRecordContract:
-            carried_fields = {
-                field_name: field_contract.type
-                for field_name, field_contract in loop_contract.fields
-                if field_contract is not None
-            }
-        else:
-            carried_fields = {}
+        carried_fields = carried_field_types(loop_contract)
         # A non-record / absent carried contract was already caught by the field-name half in
         # nodes.loop.build. With no independently proven fields, nothing remains to compare.
         if not carried_fields:

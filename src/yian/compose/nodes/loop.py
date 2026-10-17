@@ -630,3 +630,29 @@ def loop_entry_inputs(node: LoopNode) -> list[Parameter]:
                 parameter = replace(parameter, contract=replace(contract, type=typ))
         inputs.append(parameter)
     return inputs
+
+
+def carried_field_types(contract: OutputContract | None) -> dict[str, Type]:
+    """Return the proven field types of a loop's carried-record contract.
+
+    An exact record gives its fields' types and a partially typed record its proven
+    field contracts' types; anything else proves no field.
+
+    Args:
+        contract (`OutputContract | None`):
+            The loop node's `output_contract`: the body's own contract for a total loop,
+            or the merged returned-plus-seeded contract for a partial one.
+
+    Returns:
+        `dict[str, Type]`:
+            Each proven carried field's type, keyed by field name.
+    """
+    if type(contract) is ValueContract and contract.type.fields is not None:
+        return dict(contract.type.fields)
+    if type(contract) is PartialRecordContract:
+        return {
+            field_name: field_contract.type
+            for field_name, field_contract in contract.fields
+            if field_contract is not None
+        }
+    return {}

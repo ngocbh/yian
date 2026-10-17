@@ -425,8 +425,8 @@ def test_body_inputs_keep_their_declared_types_after_load() -> None:
     assert cursor.required
 
 
-# The body takes a `Strict` page whose `next` is required and returns a `Page` whose `next`
-# may be absent, and the literal seed has no `next`.
+# The body takes a `Strict` page whose `next` is required and returns `{returned}` for it,
+# and the literal seed has no `next`.
 _MISSING_NEXT = """id: mn
 name: mn
 typedefs:
@@ -446,7 +446,7 @@ defs:
         input:
           page: ${{input.page}}
         output:
-          page: Optional(Page)
+          page: {returned}
         code: return dict(page=None)
     output: ${{get.output}}
 nodes:
@@ -462,15 +462,51 @@ output: ${{pages.output}}
 
 def test_while_null_check_lets_a_seed_record_omit_the_checked_field() -> None:
     # An absent `next` reads as null, so the `while:` never lets the record into the body.
-    flow = load_flow(_MISSING_NEXT.format(driver="while: page.next != null"))
+    flow = load_flow(
+        _MISSING_NEXT.format(driver="while: page.next != null", returned="Optional(Page)")
+    )
     result = run_flow(flow, {})
     assert result.status == "succeeded", result.failure
     assert result.output == {"page": {"n": 0}}
     assert _body_runs(result) == 0
 
     with pytest.raises(LoadError, match="loop node 'pages': binding 'page'"):
-        load_flow(_MISSING_NEXT.format(driver="until: page.next == null"))
+        load_flow(
+            _MISSING_NEXT.format(driver="until: page.next == null", returned="Optional(Page)")
+        )
 
+
+
+def test_while_null_check_rejects_a_record_seed_the_zero_iteration_output_cannot_carry() -> None:
+    # With zero iterations the loop outputs `{n: 0}` as the body's `Optional(Strict)`
+    # output, whose `next` is required, so the `while:` can't admit the seed.
+    message = (
+        "loop node 'pages': binding 'page' — child expects '{\"n\":int,\"next\":str}', "
+        "but the value {\"n\": 0} does not fit (record missing required fields: ['next'])"
+    )
+    with pytest.raises(LoadError, match=re.escape(message)):
+        load_flow(
+            _MISSING_NEXT.format(driver="while: page.next != null", returned="Optional(Strict)")
+        )
+
+
+def test_while_null_check_rejects_a_null_seed_the_zero_iteration_output_cannot_carry() -> None:
+    # With zero iterations the loop outputs the null seed as the body's `str` output.
+    source = _page(seed="null").replace("output: Optional(str)", "output: str")
+    message = (
+        "loop node 'pages': binding 'cursor' — child expects 'str', "
+        "but the value null does not fit"
+    )
+    with pytest.raises(LoadError, match=re.escape(message)):
+        load_flow(source)
+
+
+def test_while_null_check_admits_a_null_seed_the_body_output_can_carry() -> None:
+    flow = load_flow(_page(seed="null"))
+    result = run_flow(flow, {"start": None})
+    assert result.status == "succeeded", result.failure
+    assert result.output == {"cursor": None}
+    assert _body_runs(result) == 0
 
 def test_seed_of_the_wrong_type_names_the_declared_input_under_a_while_null_check() -> None:
     message = (

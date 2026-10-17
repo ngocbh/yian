@@ -29,6 +29,7 @@ from yian.memory.contracts import (
     _rewrite_memory_decl_origins,
 )
 from yian.nodes.agent.context import DEFAULT_SYSTEM, AgentRunContext
+from yian.nodes.agent.llm_values import LLM_CONFIG_KEY, Nullable, types_nullable
 from yian.nodes.agent.memory import compatibility
 from yian.nodes.agent.backward import backward_agent
 from yian.nodes.agent.loop import run_agent
@@ -51,11 +52,13 @@ from yian.nodes.contracts import (
     ValueContract,
     ValueTemplate,
     _iter_origin_carrier,
+    ValuePath,
     _rewrite_origin_carrier,
 )
 from yian.skills.catalog import Skill, SkillError, check_skill_name
 from yian.skills.tool import LOAD_SKILL, system_prompt_with_skills
 from yian.tools import ToolSet
+from yian.typesys import Type
 from yian.typesys.values import ValueKind, build_value_as, canonical_type_label
 
 
@@ -155,6 +158,25 @@ class AgentNode(Node):
         #   `node 'ask' adaptive_questions.llm_config`). Render-only and absent from run records
         #   and the manifest. `None` for an authored agent, whose messages name its path.
         self.llm_config_label: str | None = None
+        # Both set by Compose, derived from the layers. `wires_llm_config`: the node and
+        # own-flow layers ride the reserved `__llm_config` wiring. `llm_value_types`: the
+        # static type of each value in `own_llm_config` by field path (`None` when not
+        # proven), which decides whether it always overrides a lower layer's field.
+        self.wires_llm_config = False
+        self.llm_value_types: dict[ValuePath, Type | None] = {}
+
+    def reserved_wiring_keys(self) -> set[str]:
+        """Declare ``__llm_config`` when values in the layers can reach this agent's config."""
+        return {LLM_CONFIG_KEY} if self.wires_llm_config else set()
+
+    def llm_nullable(self) -> Nullable:
+        """Return whether a value in ``own_llm_config``, or a part of it, may be null.
+
+        Returns:
+            `Nullable`: Answers from ``llm_value_types``; a value with no proven type
+                may be null.
+        """
+        return types_nullable(self.own_llm_config, self.llm_value_types)
 
     @property
     def needs_steering(self) -> bool:

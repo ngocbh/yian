@@ -366,3 +366,15 @@ def test_a_whole_record_that_is_not_a_mapping_fails():
 
     assert caught.value.failure_code == "contract.input"
     assert "gpt-4" not in str(caught.value)
+
+
+def test_types_nullable_answers_from_the_stored_types():
+    values = _values()
+    tagged = Binding("${input.m}", contract=ValueContract(Type.scalar(ValueKind.STRING)))
+    layer = ValueTemplate({"model": "${pick.output}", "provider": tagged})
+    proven = values.types_nullable(layer, {("model",): Type.scalar(ValueKind.STRING)})
+    assert proven(layer.value["model"], ()) is False
+    # A leaf without a stored type answers from its tag.
+    assert proven(tagged, ()) is False
+    unproven = values.types_nullable(layer, {("model",): None})
+    assert unproven(layer.value["model"], ()) is True

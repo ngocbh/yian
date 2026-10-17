@@ -151,6 +151,31 @@ def contract_nullable(leaf: Any, inner: ValuePath) -> bool:
     return True
 
 
+def types_nullable(layer: Any, types: Mapping[ValuePath, Optional[Type]]) -> Nullable:
+    """A ``Nullable`` that answers from the static type of each value in ``layer``.
+
+    Args:
+        layer (`Any`): The layer whose value leaves are asked about.
+        types (`Mapping[ValuePath, Type | None]`): Each value leaf's type by its field
+            path; ``None`` is not proven, so the value may be null. A leaf whose path is
+            missing answers as ``contract_nullable`` does.
+
+    Returns:
+        `Nullable`: Whether a leaf of ``layer``, or its part at a path, may be null or
+            absent.
+    """
+    # Leaves are matched by identity; two leaves with equal text read the same value.
+    paths = {id(leaf): path for path, leaf in value_leaves(layer).items()}
+
+    def nullable(leaf: Any, inner: ValuePath) -> bool:
+        path = paths.get(id(leaf))
+        if path is None or path not in types:
+            return contract_nullable(leaf, inner)
+        return type_nullable(types[path], inner)
+
+    return nullable
+
+
 def contributing(lower: Any, higher: Any, nullable: Nullable) -> Any:
     """Return ``lower`` without the values ``higher`` always overrides.
 

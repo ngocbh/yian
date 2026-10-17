@@ -39,6 +39,8 @@ from yian.diagnostics import (
     OriginResolver,
     SourceRange,
 )
+from yian.nodes.agent import AgentNode
+from yian.nodes.agent.llm_values import LLM_CONFIG_KEY, split_layers
 from yian.nodes.base import Node, NodeKind
 from yian.nodes.contracts import (
     Assertion,
@@ -48,6 +50,7 @@ from yian.nodes.contracts import (
     PartialRecordContract,
     ValueContract,
     ValuePath,
+    ValueTemplate,
     as_binding,
 )
 from yian.expr import ExpressionError
@@ -965,6 +968,35 @@ def _split_typed_llm_config(
     return split
 
 
+def _attach_llm_config_wiring(
+    nodes: dict[str, Node],
+    flow_wiring: dict[str, dict],
+    flow_llm_config: Any,
+) -> None:
+    """Wire each AGENT's `llm_config` values as its reserved `__llm_config` input.
+
+    An agent gets the key when a value in its own layer, or one in the flow's layer
+    that its own layer doesn't always override, can reach its config. The key carries
+    both layers whole (`split_layers`), so edges, reference checks, skips and child
+    re-namespacing treat the values as any other binding.
+
+    Args:
+        nodes (`dict[str, Node]`): Built nodes keyed by final descriptor id.
+        flow_wiring (`dict[str, dict]`): Mutable binding maps keyed by node id.
+        flow_llm_config (`Any`): The flow's authored `llm_config:` layer: a dict, a
+            `ValueTemplate` or a `Binding`.
+    """
+    for node_id, node in nodes.items():
+        if not isinstance(node, AgentNode):
+            continue
+        carried = split_layers(
+            node.own_llm_config, flow_llm_config, node.llm_inherit, node.llm_nullable()
+        )
+        if carried is not None:
+            flow_wiring[node_id][LLM_CONFIG_KEY] = carried
+            node.wires_llm_config = True
+
+
 def _binding_style(
     nodes_cursor: SourceCursor,
     node_id: str,
@@ -1820,7 +1852,7 @@ def _assemble(
     version: Optional[str] = None,
     name: Optional[str] = None,
     description: Optional[str] = None,
-    flow_llm_config: Optional[dict] = None,
+    flow_llm_config: dict | ValueTemplate | Binding | None = None,
     flow_env: Optional[dict] = None,
     boundary_field_ranges: Optional[dict] = None,
     asserts_cursor: SourceCursor | None = None,
@@ -2514,6 +2546,8 @@ def _assemble(
                 f"got {type(contract).__name__} for {nid!r}"
             )
         producers[nid] = contract
+
+    _attach_llm_config_wiring(nodes_built, flow_wiring, flow_llm_config or {})
 
     # Data edges — the projection of flow.wiring (leaf + WAIT + call/map); a case owns its own
     # data+control edges (`case_edges`, from each `CaseDescriptor.build`), appended below.

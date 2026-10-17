@@ -4,8 +4,8 @@ A narrowing fact says which part of a union a value at a base path can be. A bas
 `<node>.output[.field...]` or `input.<name>[.field...]`. Facts come from CASE branches: an
 `on:` CASE over a tag field of a union gives each `when:` edge the member with that tag and the
 `else:` edge the unlisted members. A searched CASE gives each case's edge what its `when:`
-proves true (`isinstance` checks and tag comparisons through `and`, `or` and `not`); its
-`else:` edge carries none.
+proves true (`isinstance` checks, tag comparisons and null checks through `and`, `or` and
+`not`); its `else:` edge carries none.
 
 Facts flow along the graph in topological order. A node's control edges join by union (it ran
 because one of them fired), each required data group joins its producers by union, and every
@@ -81,7 +81,7 @@ from yian.nodes.contracts import (
     ValueContract,
 )
 from yian.typesys.types import TypeRegistry
-from yian.typesys.values import Type, union_tag_fields
+from yian.typesys.values import Type, ValueKind, union_tag_fields
 
 
 Views: TypeAlias = tuple[Mapping[str, OutputContract], Mapping[str, ValueContract]]
@@ -94,7 +94,29 @@ Views: TypeAlias = tuple[Mapping[str, OutputContract], Mapping[str, ValueContrac
 
 
 def _narrow_type(typ: Type, path: tuple[str, ...], narrowed: Type) -> Optional[Type]:
-    """Replace the type at `path` through record fields, or `None` if unreachable."""
+    """Replace the type at `path` through record fields, or `None` if unreachable.
+
+    When the narrowed value is never null, each record on the path is not null either and
+    has each step's field present, since a field read through a null or absent value gives
+    null.
+
+    Args:
+        typ (`Type`):
+            The type to narrow inside.
+        path (`tuple[str, ...]`):
+            Field names from `typ` to the narrowed value. `()` is `typ` itself.
+        narrowed (`Type`):
+            The narrowed type.
+
+    Returns:
+        `Type | None`:
+            The narrowed type, or `None` when `path` names an absent field or crosses a
+            union or a non-record.
+
+    Example:
+        Narrowing `Optional({b: Optional(str)})` at `("b",)` to `str` gives `{b: str}`
+        with `b` required.
+    """
     if not path:
         return narrowed
     # A union is never entered: rewriting its members would break member identity.
@@ -103,7 +125,11 @@ def _narrow_type(typ: Type, path: tuple[str, ...], narrowed: Type) -> Optional[T
     inner = _narrow_type(typ.fields[path[0]], path[1:], narrowed)
     if inner is None:
         return None
-    return replace(typ, fields={**typ.fields, path[0]: inner})
+    fields = {**typ.fields, path[0]: inner}
+    if inner.nullable or inner.kind is ValueKind.NONE:
+        return replace(typ, fields=fields)
+    required = (typ.required or frozenset()) | {path[0]}
+    return replace(typ, fields=fields, required=required, nullable=False)
 
 
 def narrow_contract_at(
@@ -113,8 +139,9 @@ def narrow_contract_at(
 ) -> Optional[OutputContract]:
     """Return `contract` with the type at `path` replaced by `typ`, keeping origins.
 
-    The path is followed through record fields only. An exact contract keeps its
-    origins unchanged, since narrowing does not move any path. Replacing a whole
+    The path is followed through record fields only; a `typ` that is never null makes
+    each record on the path non-null with the field below it present. An exact contract
+    keeps its origins unchanged, since narrowing does not move any path. Replacing a whole
     partial record gives an exact contract with each proven field's origins rebased
     under its name; narrowing a partial record's last opaque field gives the exact
     record.

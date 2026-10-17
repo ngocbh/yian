@@ -193,8 +193,13 @@ a `case` branch.
 **Narrowing inside a condition.** In node and flow asserts, a searched `case` `when:`,
 and a LOOP `while:`/`until:`, a check narrows the reads after it by short-circuit logic:
 in `A and B`, `B` knows `A` is true; in `A or B`, that `A` is false; `not` flips it. The
-checks are `isinstance(<ref>, T)` and a tag comparison `<ref>.<tag> == "<text>"` (`!=`
-proves the opposite), and the narrowed type replaces the declared one. So
+checks are `isinstance(<ref>, T)`, a tag comparison `<ref>.<tag> == "<text>"` (`!=`
+proves the opposite), and a null check `<ref> != null` (`== null` proves it when false;
+`none` is `null`), which narrows `Optional(T)` to `T`; the narrowed type replaces the
+declared one. Two checks on one value keep the narrower type
+(`x != null and isinstance(x, Item)` over `Optional(Any)` is `Item`), and a non-null
+nested field makes its parents non-null and present (`input.a.b != null` narrows
+`input.a`). No check proves a value is null, so a false null check narrows nothing. So
 `isinstance(v, Buy) and v.qty > 0`, `not isinstance(v, Buy) or v.qty > 0`, and
 `v.action != "buy" or v.qty > 0` all load; a check after the read doesn't narrow, and an
 unguarded member-only read in an assert or predicate says to check the member first with
@@ -206,7 +211,10 @@ true: ruled out by the checks before it or the routing (`` `v.action == "sell"` 
 be true here: v is Buy, by the checks before it ``), an `isinstance` no value of the
 declared type fits, or a tag comparison (`==` or `!=`) with text that is no tag
 (`` `v.action != "biy"` compares v.action with 'biy', which is not one of its tags (buy,
-sell); did you mean 'buy'? ``). A `while:` first runs on the seeds, so a check is impossible
+sell); did you mean 'buy'? ``). A null check the checks before it leave only null is
+reported too (`` `x != null` can never be true here: x is None, by the checks before
+it ``), but one on a value that is never null is not. A `while:` first runs on the
+seeds, so a check is impossible
 there only when it is on the seed's type too (a seed of another or unproven type leaves it
 unknown), and a flow assert reads every producer it names as possibly null (END binds
 each with `:- null`), for its checks and reads alike, so `not isinstance(d.output, Order)`
@@ -953,9 +961,11 @@ value is a load error asking for `:-`.
 ref to the tag (not a coalesce); a `when:` that isn't a tag is a load error (``case node
 'route': `when: buyy` is not a tag of `on: ${d.output.action}` (`Literal(buy, sell)`);
 use one of: buy, sell``). A searched `case`
-narrows each branch by what its `when:` proves true (`isinstance` and tag checks through
-`and`/`or`/`not`; see "Narrowing inside a condition" above):
-`when: isinstance(d.output, Buy) and d.output.qty > 5`, `when: d.output.action == "buy"`.
+narrows each branch by what its `when:` proves true (`isinstance`, tag and null checks
+through `and`/`or`/`not`; see "Narrowing inside a condition" above):
+`when: isinstance(d.output, Buy) and d.output.qty > 5`, `when: d.output.action == "buy"`;
+under `when: x.output != null` the branch may pass an `Optional(Item)` `${x.output}` to an
+`Item` input untagged.
 A union `T` in `isinstance(<ref>, T)` sharing some members narrows to just those members,
 unless another member could also pass the check. Its `else:` doesn't narrow.
 A searched `case` whose `when:` reads a node only under such a default doesn't pass
@@ -1134,10 +1144,18 @@ error, so list each field (`n: ${seed.output.n}`).
 A tagged seed (`n: !int 0`) checks the starting value; a field the body omits
 keeps its declared type. Every seed must fit the body's input like a CALL argument
 (`n: "1"` into `int` fails; write `1`). Tag an `Optional` reference that is always set
-(`n: !int ${input.m}`); a seed that may be null, such as a cursor a
-`while: cursor != null` guards, needs an `Optional` body input, narrowed inside the
-body with a tag where a strict value is needed.
-A named body's returned field must fit the body's own input, since the next iteration
+(`n: !int ${input.m}`). A `while:` null check guards a named body: `while: cursor !=
+null` runs before every iteration, so an `Optional(str)` seed, and a returned
+`Optional(str)`, fill a `cursor: !str` input (a null start runs zero iterations). The
+paths come from the `while:`'s `and` parts and `not (x == null)`, not from `or` parts;
+`page.next != null` guards `page` too. `until:`, `times:`, and `isinstance`/tag checks
+guard nothing. The seed must still fit the loop's zero-iteration output, so `cursor:
+null` into a body returning `cursor: str` fails, and a returned field must keep its
+carried type. An inline body's input stays typed from the seed: tag it inside
+(`!str ${input.cursor}`) where a strict value is needed. Its returned fields are
+relaxed the same way, so with the seed `cursor: p1` it may return `Optional(str)`.
+A named body's returned field must fit the body's own input (read as `Optional` where
+a `while:` null check guards it), since the next iteration
 binds it there: returning `Optional(int)` into `n: !int` is a load error that asks you to
 make the input `Optional(int)` or tag the seed (`n: !int ${input.m}`) to leave the
 null check to runtime; an `Any` field needs `isinstance` narrowing in a `case` or a typed

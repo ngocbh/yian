@@ -1,10 +1,11 @@
 """What a condition proves at each of its reads: checks, guards, and literals.
 
-A **check** is a test a condition makes on one value: `isinstance(<ref>, T)`, or a tag
-comparison `<ref>.<field> == "<text>"` (`!=` is the same check, negated). A **guard** is a
-small boolean formula over checks in negation normal form: `Holds(check, value)` says the
-check evaluated to `value`; `AllOf` and `AnyOf` combine guards; `NOTHING` proves nothing,
-and `NEVER` never holds.
+A **check** is a test a condition makes on one value: `isinstance(<ref>, T)`, a tag
+comparison `<ref>.<field> == "<text>"` (`!=` is the same check, negated), or a null check
+`<ref> != null` (`==` is the same check, negated). A **guard** is a small boolean formula
+over checks in negation normal form: `Holds(check, value)` says the check evaluated to
+`value`; `AllOf` and `AnyOf` combine guards; `NOTHING` proves nothing, and `NEVER` never
+holds.
 
 `and` and `or` short-circuit, so in `A and B` the operand `B` only runs once `A` is true,
 and in `A or B` once `A` is false; `not` flips what a check proves. `proves` says what holds
@@ -54,6 +55,7 @@ __all__ = [
     "Guard",
     "Holds",
     "IsinstanceCheck",
+    "NotNullCheck",
     "TagCheck",
     "all_of",
     "any_of",
@@ -108,7 +110,22 @@ class TagCheck:
     value: str
 
 
-Check: TypeAlias = IsinstanceCheck | TagCheck
+@dataclass(frozen=True)
+class NotNullCheck:
+    """A comparison of a plain reference with `null`: the check that its value is not null.
+
+    `<base> != null` and `null != <base>` are this check, true when the value is not
+    null; `==` is the same check, negated. `none` spells `null` too.
+
+    Args:
+        base (`str`):
+            The dotted path of the compared reference, such as `"input.a.b"`.
+    """
+
+    base: str
+
+
+Check: TypeAlias = IsinstanceCheck | TagCheck | NotNullCheck
 """One check a condition can make on a value."""
 
 
@@ -246,6 +263,11 @@ def _is_text(node: Tree | Token) -> bool:
     return isinstance(node, Token) and node.type == "STRING"
 
 
+def _is_null(node: Tree | Token) -> bool:
+    """Whether `node` is the `null` (or `none`) literal token."""
+    return isinstance(node, Token) and node.type == "NULL"
+
+
 def check_in(tree: Tree | Token) -> Optional[tuple[Check, bool]]:
     """Return the check a sub-expression is, and the value it has when the sub-expression is true.
 
@@ -257,12 +279,15 @@ def check_in(tree: Tree | Token) -> Optional[tuple[Check, bool]]:
         `tuple[Check, bool] | None`:
             `(IsinstanceCheck, True)` for `isinstance(<plain ref>, T)`;
             `(TagCheck, True)` for `<plain ref>.<field> == "<text>"` either way round, and
-            `(TagCheck, False)` for `!=`; `None` for anything else (a number, `null` or
-            bool operand, a call, a reference without a field, `not`, ...).
+            `(TagCheck, False)` for `!=`; `(NotNullCheck, True)` for `<plain ref> != null`
+            either way round, and `(NotNullCheck, False)` for `==`; `None` for anything
+            else (a number or bool operand, a call, a tag comparison on a reference
+            without a field, `not`, ...).
 
     Example:
         `check_in(parse_condition("v.action != 'buy'"))` is
-        `(TagCheck("v", "action", "buy"), False)`.
+        `(TagCheck("v", "action", "buy"), False)`, and
+        `check_in(parse_condition("v != null"))` is `(NotNullCheck("v"), True)`.
     """
     subject = isinstance_subject(tree)
     if subject is not None:
@@ -275,6 +300,13 @@ def check_in(tree: Tree | Token) -> Optional[tuple[Check, bool]]:
     left, op, right = tree.children
     if str(op) not in ("==", "!="):
         return None
+    if _is_null(left):
+        left, right = right, left
+    if _is_null(right):
+        parts = direct_reference_parts(left)
+        if parts is None:
+            return None
+        return NotNullCheck(".".join(parts)), str(op) == "!="
     if _is_text(left):
         left, right = right, left
     if not _is_text(right):
@@ -572,18 +604,21 @@ def check_text(check: Check, value: bool = True) -> str:
         check (`Check`):
             The check.
         value (`bool`, *optional*, defaults to `True`):
-            For a `TagCheck`, `False` spells the comparison with `!=`. An
-            `IsinstanceCheck` is always spelled positively.
+            For a `TagCheck`, `False` spells the comparison with `!=`; for a
+            `NotNullCheck`, with `==`. An `IsinstanceCheck` is always spelled positively.
 
     Returns:
         `str`:
-            Such as `isinstance(d.output, Buy)` or `v.action != "buy"`.
+            Such as `isinstance(d.output, Buy)`, `v.action != "buy"` or `v == null`.
     """
     if isinstance(check, IsinstanceCheck):
         return f"{ISINSTANCE}({check.base}, {check.type_name})"
     if isinstance(check, TagCheck):
         op = "==" if value else "!="
         return f"{check.base}.{check.field} {op} {_quoted(check.value)}"
+    if isinstance(check, NotNullCheck):
+        op = "!=" if value else "=="
+        return f"{check.base} {op} null"
     raise unknown_check(check)
 
 

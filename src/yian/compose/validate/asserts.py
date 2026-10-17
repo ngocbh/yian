@@ -37,10 +37,10 @@ the origin and validation range together from one retained item cursor, keyed by
 node id and authored list index; only the origin crosses into the semantic assertion.
 
 Both halves check an assert's field reads narrowed by the assert's own checks: `and`,
-`or` and `not` short-circuit, so an `isinstance` or union tag comparison before a read
-decides which union members it sees (`isinstance(v, Buy) and v.qty > 0`), and a check
-that can never be true is a load error (`helpers.condition_guards`,
-`helpers.narrowing_facts`).
+`or` and `not` short-circuit, so an `isinstance`, union tag comparison or null check before
+a read decides which union members it sees and whether it may be null
+(`isinstance(v, Buy) and v.qty > 0`, `v != null and v.qty > 0`), and a check that can
+never be true is a load error (`helpers.condition_guards`, `helpers.narrowing_facts`).
 
 Imports flow DOWN only within the engine core (`compile.validation`, `expr`,
 `typesys`) and the `helpers` peers (`condition_guards`, `isinstance_types`,
@@ -68,6 +68,7 @@ from yian.compose.helpers.condition_guards import (
     CheckLiteral,
     Guard,
     IsinstanceCheck,
+    NotNullCheck,
     TagCheck,
     check_text,
     guarded_refs,
@@ -159,18 +160,29 @@ def _distinct(contracts: tuple[OutputContract, ...]) -> tuple[OutputContract, ..
     return tuple(kept)
 
 
-def _narrows(check: Check, root: str, contracts: tuple[OutputContract, ...]) -> bool:
+def _narrows(
+    check: Check,
+    root: str,
+    contracts: tuple[OutputContract, ...],
+    nullable: bool = False,
+) -> bool:
     """Whether `check` can prove or rule out anything about `root` under some contract.
 
     A tag comparison on a value that is no union with that tag field (`v.a == 'x'` on a
-    record) is an ordinary comparison, so it narrows nothing.
+    record) is an ordinary comparison, so it narrows nothing; nor does a null check on a
+    value that is never null. `nullable` says the root may be null whatever its contracts
+    say, which makes every value below it nullable too.
     """
     if _root_of(check.base, (root,)) is None:
         return False
     if isinstance(check, IsinstanceCheck):
         return True
-    if not isinstance(check, TagCheck):
+    if not isinstance(check, (TagCheck, NotNullCheck)):
         raise unknown_check(check)
+    # `_root_base_type` makes every base below such a root nullable, so a null check
+    # there narrows even when no contract lets the value be null.
+    if isinstance(check, NotNullCheck) and nullable:
+        return True
     rest = check.base[len(root) + 1 :].split(".") if check.base != root else []
     for contract in contracts:
         projected = project_output_contract(contract, rest)
@@ -178,7 +190,10 @@ def _narrows(check: Check, root: str, contracts: tuple[OutputContract, ...]) -> 
             # An unproven base takes its type from the checks on the value around it.
             return True
         typ = projected.type
-        if typ.variants is not None and check.field in union_tag_fields(typ):
+        if isinstance(check, NotNullCheck):
+            if typ.nullable:
+                return True
+        elif typ.variants is not None and check.field in union_tag_fields(typ):
             return True
     return False
 
@@ -265,16 +280,15 @@ def _condition_errors(
 
     `roots` maps each path whose field reads are checked (a node-local name, `output`,
     `input.X`, `<id>.output`) to the contracts its value may have; reads below a root in
-    `unwalked_roots` are left to the site, and a root in `nullable_roots` may also be
-    null whatever its contract says. `and`, `or` and `not` short-circuit, so the checks
-    before a read (`isinstance` and union tag comparisons) narrow the values it can see
-    (`guarded_read_types`): a read is fine when any narrowed type allows it, and
-    otherwise the first one's error is reported, naming the narrowed type when it lacks
-    the field. A read nothing narrows is walked on the root's contract. A read that runs
-    only when a reported impossible check is true (`checked_refs`), or guarded by an
-    `isinstance` whose type name doesn't resolve, is not checked. `authored` is the
-    condition as written when `tree` has its references rewritten; reports spell checks
-    as written.
+    `unwalked_roots` are left to the site, and a root in `nullable_roots` may also be null
+    whatever its contract says. `and`, `or` and `not` short-circuit, so the checks before a
+    read (`isinstance`, union tag comparisons and null checks) narrow the values it can see
+    (`guarded_read_types`): a read is fine when any narrowed type allows it, and otherwise
+    the first one's error is reported, naming the narrowed type when it lacks the field. A
+    read nothing narrows is walked on the root's contract. A read that runs only when a
+    reported impossible check is true (`checked_refs`), or guarded by an `isinstance` whose
+    type name doesn't resolve, is not checked. `authored` is the condition as written when
+    `tree` has its references rewritten; reports spell checks as written.
 
     A root with several distinct contracts (a node-local name's alternatives, which carry
     the branch that routes the node) is checked under each: a check is impossible only
@@ -295,7 +309,10 @@ def _condition_errors(
     narrowed = [
         root
         for root in used
-        if any(_narrows(literal.check, root, contracts[root]) for literal in literals)
+        if any(
+            _narrows(literal.check, root, contracts[root], root in nullable_roots)
+            for literal in literals
+        )
     ]
     fixed = {root: contracts[root][0] for root in narrowed if len(contracts[root]) == 1}
     varied = [root for root in narrowed if len(contracts[root]) > 1]

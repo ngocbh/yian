@@ -7,12 +7,16 @@ the `'a -> 'a` field-name contract: a body returns a subset of the carried recor
 omitted field carries over, so the loop's output contract merges the returned body fields with
 the seeds of the omitted ones). `_finish` keeps concrete ranges on the Compose-owned
 `BuildResult` and stamps only the descriptor's opaque origin onto the runtime node. Registered
-into `KINDS`/`BINDING_FIELDS` at import so the shared dispatch routes here.
+into `KINDS`/`BINDING_FIELDS` at import so the shared dispatch routes here. It also holds the
+loop-entry helpers the load checks use: `while_non_null_paths` finds the carried paths a
+`while:` null check proves, `nullable_at` relaxes a type along such a path,
+`loop_entry_inputs` gives the body's inputs read that way, and `carried_field_types` gives the
+carried record's proven field types.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 
 from lark import Token, Tree
@@ -21,14 +25,15 @@ from yian.diagnostics import SourceRange
 from yian.expr import ExpressionError, expr_refs, parse_condition
 from yian.nodes.contracts import (
     OutputContract,
+    Parameter,
     PartialRecordContract,
     ValueContract,
     output_contract_field_error,
 )
 from yian.nodes.loop import LoopNode
 from yian.typesys.types import TypeRegistry
-from yian.typesys.values import Type
-from yian.compose.helpers.condition_guards import Guard
+from yian.typesys.values import Type, ValueKind
+from yian.compose.helpers.condition_guards import AllOf, Guard, Holds, NotNullCheck, proves
 from yian.compose.helpers.narrowing_facts import (
     BaseTypeOf,
     checked_refs,
@@ -518,3 +523,136 @@ def _predicate_field_error(
         if first is None:
             first = narrowed_read_error(ref, candidate, error, registry)
     return first
+
+
+def while_non_null_paths(
+    kind: str | None, predicate: str | None
+) -> frozenset[tuple[str, ...]]:
+    """Return the carried paths a loop's condition proves not null whenever the body starts.
+
+    Only `while:` is checked before each iteration, the first included; `until:` is
+    checked after the body and `times:` has no condition, so they prove nothing. A path
+    comes from a `<path> != null` check the condition proves when true: each part of an
+    `and` adds its paths, and an `or` keeps only the paths every part proves.
+
+    Args:
+        kind (`str | None`):
+            The loop's driver: `"while"`, `"until"` or `"times"`.
+        predicate (`str | None`):
+            The condition text, bare or whole-span.
+
+    Returns:
+        `frozenset[tuple[str, ...]]`:
+            Each proven path as field names from the carried record.
+
+    Example:
+        `while_non_null_paths("while", "n < 3 and page.next != null")` is
+        `frozenset({("page", "next")})`.
+    """
+    if kind != "while" or predicate is None:
+        return frozenset()
+    try:
+        tree = parse_condition(predicate)
+    except ExpressionError:
+        return frozenset()  # the build already reported the condition
+    return _non_null_paths(proves(tree, True))
+
+
+def _non_null_paths(guard: Guard) -> frozenset[tuple[str, ...]]:
+    """Return the paths `guard` proves not null (see `while_non_null_paths`)."""
+    if isinstance(guard, Holds):
+        if isinstance(guard.check, NotNullCheck) and guard.value:
+            return frozenset({tuple(guard.check.base.split("."))})
+        return frozenset()
+    parts = [_non_null_paths(part) for part in guard.parts]
+    if isinstance(guard, AllOf):
+        return frozenset().union(*parts)
+    return frozenset.intersection(*parts) if parts else frozenset()
+
+
+def nullable_at(typ: Type, path: tuple[str, ...]) -> Type:
+    """Return `typ` with the value at `path`, and each record above it, made nullable.
+
+    The path is followed through record fields. Where it names an absent field, or stops
+    at a union or a non-record before its end, the rest of it is left as is, but the value
+    it stopped at is still made nullable. Each field on the path stops being required in
+    its record, since a field read through a null or absent record is null.
+
+    Args:
+        typ (`Type`):
+            The type to change.
+        path (`tuple[str, ...]`):
+            Field names from `typ` to the value. `()` is `typ` itself.
+
+    Returns:
+        `Type`:
+            The changed copy; `typ` itself is not changed.
+
+    Example:
+        `nullable_at({next: str}, ("next",))` with `next` required is
+        `Optional({next: Optional(str)})` with `next` not required.
+    """
+    if path and typ.variants is None and typ.fields is not None and path[0] in typ.fields:
+        inner = nullable_at(typ.fields[path[0]], path[1:])
+        required = (typ.required or frozenset()) - {path[0]}
+        typ = replace(typ, fields={**typ.fields, path[0]: inner}, required=required)
+    if typ.kind is ValueKind.NONE:
+        return typ  # the null type is already nullable
+    return replace(typ, nullable=True)
+
+
+def loop_entry_inputs(node: LoopNode) -> list[Parameter]:
+    """Return a loop body's inputs as the values that enter the body may fill them.
+
+    A path the loop's `while:` proves not null is never null when the body starts, so
+    each input type is read as nullable at such a path and at each record above it. The
+    seed check and the returned-field check compare against these, while the node's
+    `child_inputs` stay as declared.
+
+    Args:
+        node (`LoopNode`):
+            The built loop node.
+
+    Returns:
+        `list[Parameter]`:
+            The body's inputs in order, each relaxed copy keeping its origins.
+    """
+    paths = while_non_null_paths(node.predicate_kind, node.predicate)
+    inputs: list[Parameter] = []
+    for parameter in node.child_inputs or ():
+        contract = parameter.contract
+        if contract is not None:
+            typ = contract.type
+            for path in sorted(paths):
+                if path[0] == parameter.name:
+                    typ = nullable_at(typ, path[1:])
+            if typ is not contract.type:
+                parameter = replace(parameter, contract=replace(contract, type=typ))
+        inputs.append(parameter)
+    return inputs
+
+
+def carried_field_types(contract: OutputContract | None) -> dict[str, Type]:
+    """Return the proven field types of a loop's carried-record contract.
+
+    An exact record gives its fields' types and a partially typed record its proven
+    field contracts' types; anything else proves no field.
+
+    Args:
+        contract (`OutputContract | None`):
+            The loop node's `output_contract`: the body's own contract for a total loop,
+            or the merged returned-plus-seeded contract for a partial one.
+
+    Returns:
+        `dict[str, Type]`:
+            Each proven carried field's type, keyed by field name.
+    """
+    if type(contract) is ValueContract and contract.type.fields is not None:
+        return dict(contract.type.fields)
+    if type(contract) is PartialRecordContract:
+        return {
+            field_name: field_contract.type
+            for field_name, field_contract in contract.fields
+            if field_contract is not None
+        }
+    return {}

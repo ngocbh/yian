@@ -353,15 +353,22 @@ this model whenever you design anything:
   contracts under the CASE branches that route it (an `on:` tag branch, or what a
   searched `when:` proves true; a true `isinstance` keeps the base members `T` shares if
   it shares some and no other member overlaps `T`, else is `Exact(T)`, and is none if the
-  base already fits `T`; `isinstance_members`); the reference, call-type, and
+  base already fits `T`; `isinstance_members`; a true `<ref> != null` gives the
+  non-null type, and makes each record above a nested path non-null and present; two
+  `Exact` facts meet to the narrower); the reference, call-type, and
   exhaustiveness checks read `Narrowing.for_node` (the reference check uses `for_param`
   for guarded searched-CASE params). Every condition (node and flow asserts, searched
   `when:`, LOOP `while:`/`until:`) narrows by short-circuit logic through two shared
-  helpers: `compose/helpers/condition_guards.py` (syntax only: `isinstance` and tag
-  checks, guards over them through `and`/`or`/`not`, `proves`, `guarded_refs`) and
+  helpers: `compose/helpers/condition_guards.py` (syntax only: `isinstance`, tag and
+  null checks, guards over them through `and`/`or`/`not`, `proves`, `guarded_refs`) and
   `compose/helpers/narrowing_facts.py` (the fact algebra, `guard_env`,
   `guarded_read_types`: a guarded read is fine when any narrowed candidate allows it;
-  `impossible_checks`: a check that can never be true is a located load error).
+  `impossible_checks`: a check that can never be true is a located load error, though a
+  null check on a never-null value is not). A LOOP's seed and returned-field checks
+  read a named body's inputs as `loop_entry_inputs` gives them: nullable at each path a
+  `while:` null check proves (`while_non_null_paths`, `and` parts only) and each record
+  above it; a seed only that admits must also fit the carried field type, since a
+  zero-iteration run outputs the seeds.
   Runtime routing does not change. A value-producing CASE
   (read as `${case.output}`, or routed to by one) must be exhaustive (an
   `else:`, every tag of a non-nullable enum `on:`, or `true` and `false` for a

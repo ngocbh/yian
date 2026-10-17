@@ -1023,7 +1023,13 @@ unlisted ones. A searched CASE gives each handle what its `when:` proves true
 and no other base member overlaps `T`, and `Exact(T)` otherwise; a base whose type already
 fits `T` gets none (`isinstance_members` in `compose/helpers/isinstance_types.py`). A
 false one keeps the members not in `T`, and a tag comparison the members with (or
-without) that tag, as an `on:` branch does.
+without) that tag, as an `on:` branch does. A true null check (`<ref> != null`) gives an
+`Optional` union's members, not nullable, and `Exact` of any other nullable type made
+non-null (`not_null_fact`); a false one gives none, since no fact says a value is null.
+Two `Exact` facts meet to the one whose type fits the other, with null removed when either
+side is non-null. A non-null fact on a nested path also makes each record above it
+non-null with that field required (`_narrow_type`), so `input.a.b != null` narrows
+`input.a`.
 Facts flow in Kahn's order over data, CASE, and `depends_on`
 edges: control edges join by union, each required data
 group joins its producers by union, and all contributions meet by intersection. Optional
@@ -1033,8 +1039,9 @@ groups and `runs_after` contribute nothing; nodes on a cycle get no facts and ar
 falls back to it; flow outputs are checked unnarrowed.
 Conditions narrow by short-circuit logic, through two kind-agnostic helpers that CASE,
 LOOP, and both kinds of assert share. `compose/helpers/condition_guards.py` is syntax only:
-it turns a parsed condition into guards (`Holds`/`AllOf`/`AnyOf` over `isinstance` and
-tag checks): `proves(tree, value)` is what holds when the condition evaluates to `value`,
+it turns a parsed condition into guards (`Holds`/`AllOf`/`AnyOf` over `isinstance`, tag
+and null checks): `proves(tree, value)` is what holds when the condition evaluates to
+`value`,
 `guarded_refs` what holds whenever each reference is read (the operands before it in an
 `and` true, in an `or` false), and `literals_in_context` what holds whenever each check is
 evaluated. `compose/helpers/narrowing_facts.py` turns guards into facts (`guard_env`) and
@@ -1043,7 +1050,8 @@ gives a field read under a guard the narrowed types it is checked against
 the first one's error, worded by `narrowed_read_message` when the narrowed type lacks the
 field. `impossible_checks` finds the checks that can never be true (an empty member set
 under the checks before them and, at a CASE, its routing; an `isinstance` with no overlap
-with the declared type; a tag comparison with a non-tag), a located load error at each
+with the declared type; a tag comparison with a non-tag; never a null check on its
+declared type alone, which is defensive code), a located load error at each
 site (`check_impossible_whens` for `when:`); a read that runs only when such a check has
 the value it never has isn't field-checked (`falsified` makes that check prove `NEVER`
 there), and one reached only past an unreported check the known type or the checks before
@@ -1086,7 +1094,15 @@ see unnarrowed types. The load check of a LOOP seed against its body's input, li
 argument's, uses the narrowed view. `compose/validate/loop_types.py` then checks each
 returned LOOP field against the parameter the next iteration binds it to: a named body's
 input or an inline body's generated parameter. Over a typed seed, a nullable returned field
-whose non-null type fits is left to the runtime input check. Runtime routing is unchanged.
+whose non-null type fits is left to the runtime input check. Both checks read the body's
+inputs as `loop_entry_inputs` (`compose/nodes/loop.py`) gives them: nullable at each path
+a `while:` null check proves (`while_non_null_paths`: the `and` parts and
+`not (x == null)`, not parts under `or`; `until:` and `times:` prove none) and at each
+record above it. The node's `child_inputs` stay as declared, so the body's start still
+checks each value, and errors name the declared input. A seed only that reading admits
+must also fit the loop's carried field type, since a zero-iteration run outputs the seeds
+(`_breaks_zero_iteration_output` in `compose/validate/call_types.py`); an inline body's
+generated inputs stay typed from the seeds. Runtime routing is unchanged.
 
 Physical Compose declarations derive exact `ValueContract`s. Output binding derivation,
 builders, child signatures, producer maps, and validators retain the complete

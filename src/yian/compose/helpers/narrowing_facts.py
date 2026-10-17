@@ -3,12 +3,13 @@
 A fact says which part of its type a value at a base path can be: `Members` of the base's
 union, or an `Exact` type it satisfies. Facts join by union (either holds) and meet by
 intersection (both hold); losing a fact is always sound. The facts a check proves come
-from `check_fact`: a true or false `isinstance`, or a true or false comparison of a union's
-tag field with a text. `guard_env` evaluates a guard from `condition_guards` into the facts
-that hold whenever it does, `checked_refs` gives the guard each read in a condition is
-checked under, and `guarded_read_types` the types a field read under a guard is checked
-against. `impossible_checks` finds the checks in a condition that are wrong
-whatever the values, and the message helpers word those errors and a narrowed read's error.
+from `check_fact`: a true or false `isinstance`, a true or false comparison of a union's
+tag field with a text, or a true null check. `guard_env` evaluates a guard from
+`condition_guards` into the facts that hold whenever it does, `checked_refs` gives the
+guard each read in a condition is checked under, and `guarded_read_types` the types a
+field read under a guard is checked against. `impossible_checks` finds the checks in a
+condition that are wrong whatever the values, and the message helpers word those errors
+and a narrowed read's error.
 
 Knows about: `typesys` types and unions, `compile.validation`, `isinstance` type
 resolution, condition guards, output-contract projection, and type labels.
@@ -34,6 +35,7 @@ from yian.compose.helpers.condition_guards import (
     Guard,
     Holds,
     IsinstanceCheck,
+    NotNullCheck,
     TagCheck,
     check_text,
     conjuncts,
@@ -89,6 +91,7 @@ __all__ = [
     "narrowed_read_message",
     "narrowed_type_label",
     "not_isinstance_fact",
+    "not_null_fact",
     "tag_fact",
     "union_envs",
     "union_facts",
@@ -185,13 +188,16 @@ def intersect_facts(a: Optional[Fact], b: Optional[Fact]) -> Optional[Fact]:
     Returns:
         `Fact | None`:
             The set intersection of two `Members`; `Members` of the one member an
-            `Exact` names, else that `Exact`; an `Exact` both sides share; the other
-            fact when one side is `None`; otherwise `None`.
+            `Exact` names, else that `Exact`; of two `Exact`s, which both hold, so
+            either is sound, the one whose type fits the other's (with null removed
+            when the other rules it out); the other fact when one side is `None`;
+            otherwise `None`.
 
     Example:
         `intersect_facts(Members((Buy, Sell)), Members((Sell, Hold)))` is
         `Members((Sell,))`; `intersect_facts(Exact(Buy), Members((Buy, Sell)))` is
-        `Members((Buy,))`.
+        `Members((Buy,))`; `intersect_facts(Exact(Any), Exact(Buy))` is `Exact(Buy)`,
+        and `intersect_facts(Exact(Any), Exact(Optional(Buy)))` is `Exact(Buy)`.
     """
     if a is None:
         return b
@@ -201,7 +207,15 @@ def intersect_facts(a: Optional[Fact], b: Optional[Fact]) -> Optional[Fact]:
         kept = tuple(member for member in a.members if _contains(b.members, member))
         return Members(kept, a.nullable and b.nullable)
     if isinstance(a, Exact) and isinstance(b, Exact):
-        return a if a.type == b.type else None
+        # A non-null side rules out null, so the other holds without it.
+        at, bt = a.type, b.type
+        if at.nullable and not bt.nullable:
+            at = replace(at, nullable=False)
+        elif bt.nullable and not at.nullable:
+            bt = replace(bt, nullable=False)
+        if types_compatible(at, bt):
+            return Exact(at)
+        return Exact(bt) if types_compatible(bt, at) else None
     exact, members = (a, b) if isinstance(a, Exact) else (b, a)
     if _contains(members.members, exact.type):
         return Members((exact.type,))
@@ -307,6 +321,30 @@ def tag_fact(base_type: Type, field: str, value: str, holds: bool) -> Optional[F
     return Members(kept, base_type.nullable)
 
 
+def not_null_fact(base_type: Type) -> Optional[Fact]:
+    """Return the fact that a value of `base_type` is not null, or `None` for no fact.
+
+    Args:
+        base_type (`Type`):
+            The type of the value being tested.
+
+    Returns:
+        `Fact | None`:
+            `Members` of every member, not nullable, for a nullable union; `Exact` of
+            the type made non-nullable for any other nullable type (so `Optional(Any)`
+            gives `Any`); `None` for a type that is not nullable, or is `None`'s own.
+
+    Example:
+        `not_null_fact(Optional(str))` is `Exact(str)`, and
+        `not_null_fact(Optional(Union[Buy, Sell]))` is `Members((Buy, Sell))`.
+    """
+    if not base_type.nullable or base_type.kind is ValueKind.NONE:
+        return None
+    if base_type.variants is not None:
+        return Members(base_type.variants, nullable=False)
+    return Exact(replace(base_type, nullable=False))
+
+
 def check_fact(
     check: Check,
     base_type: Optional[Type],
@@ -328,8 +366,9 @@ def check_fact(
     Returns:
         `Fact | None`:
             `isinstance_fact` or `not_isinstance_fact` for an `isinstance`, `tag_fact`
-            for a tag comparison. On an unproven base a true `isinstance` gives
-            `Exact` of its type and anything else gives `None`.
+            for a tag comparison, `not_null_fact` for a true null check and `None` for
+            a false one (no fact says a value is null). On an unproven base a true
+            `isinstance` gives `Exact` of its type and anything else gives `None`.
 
     Raises:
         `TypeCheckError`:
@@ -350,6 +389,10 @@ def check_fact(
         if base_type is None:
             return None
         return tag_fact(base_type, check.field, check.value, holds)
+    if isinstance(check, NotNullCheck):
+        if base_type is None or not holds:
+            return None
+        return not_null_fact(base_type)
     raise unknown_check(check)
 
 
@@ -603,7 +646,7 @@ def unresolved_type(guard: Guard, registry: TypeRegistry) -> bool:
             name.
     """
     for check in guard_checks(guard):
-        if isinstance(check, TagCheck):
+        if isinstance(check, (TagCheck, NotNullCheck)):
             continue
         if not isinstance(check, IsinstanceCheck):
             raise unknown_check(check)
@@ -754,7 +797,7 @@ def _never_value(literal: CheckLiteral, impossible: "ImpossibleCheck") -> bool:
     check = literal.check
     if isinstance(check, TagCheck):
         check_never = True if impossible.reason is ImpossibleReason.NOT_A_TAG else literal.value
-    elif isinstance(check, IsinstanceCheck):
+    elif isinstance(check, (IsinstanceCheck, NotNullCheck)):
         check_never = literal.value
     else:
         raise unknown_check(check)
@@ -956,6 +999,9 @@ def _declared_impossible(
 ) -> Optional[ImpossibleCheck]:
     """The report a literal gets against its base's type alone, else `None`."""
     check = literal.check
+    if isinstance(check, NotNullCheck):
+        # Testing a value that is never null for null is ordinary defensive code.
+        return None
     text = literal_text(literal)
     label = named_type_label(base_type, registry)
     if isinstance(check, TagCheck):
@@ -1024,7 +1070,8 @@ def impossible_checks(
       no value of it can be (not a nullable type: a missing value is checked as null), a
       negated `isinstance` naming a type every value of it is, and a tag comparison whose
       text is not a tag of the union's tag field, reported as a misspelling for `==` and
-      `!=` alike.
+      `!=` alike. A null check is never reported against its declared type alone, since
+      testing a value that is never null for null is ordinary defensive code.
     - Against the context, when the context can hold: the checks before the literal, met
       with what it proves, leave its base no member and no null. With `routing`, a
       literal the routing rules out together with the context is reported too, worded as

@@ -7,9 +7,9 @@ here so the layering is legible: `helpers` imports the engine core (`typesys` / 
 down into it.
 
 Modules:
-  - `condition_guards` what a condition proves at each read: `isinstance` and tag
-                  checks, guards over them through `and` / `or` / `not`, and the checks
-                  each read or literal is evaluated under. Syntax only.
+  - `condition_guards` what a condition proves at each read: `isinstance`, tag and
+                  null checks, guards over them through `and` / `or` / `not`, and the
+                  checks each read or literal is evaluated under. Syntax only.
   - `directives`  `CALL_HEAD` and `match_call_directive`: recognizes a whole-value
                   `call(...)` directive in binding text, rejecting malformed text that
                   starts with `call(`.

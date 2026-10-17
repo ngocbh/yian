@@ -12,13 +12,15 @@ exists. This pass carries a range anchor from
 `BuildResult.field_ranges[("field", "inputs")]` (the coarse `input:` mapping span).
 Each proven returned field must also fit the body parameter it is bound to on the next
 iteration (a named body's declared input, or the parameter an inline body generates from
-its seed); that error points at the seed binding.
+its seed), read as nullable where the loop's `while:` proves the field not null; that
+error points at the seed binding.
 A literal seed stays lenient here (its contract is not inferred); `check_call_map_types`
 checks every seed against the body's declared input.
 
-Imports flow down only: `compile.validation` (the type comparator) and
-`compose.helpers` (shared output-contract inference and load diagnostics). Only
-the loader (and the compose package facade) import this back.
+Imports flow down only: `compile.validation` (the type comparator),
+`compose.helpers` (shared output-contract inference and load diagnostics), and
+`compose.nodes.loop` (a body's inputs as the carried values enter them, and the
+carried field types). Only the loader (and the compose package facade) import this back.
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ from yian.compose.helpers.output_contracts import (
     resolve_output_binding_contract,
 )
 from yian.compose.nodes.base import BuildResult
+from yian.compose.nodes.loop import carried_field_types, loop_entry_inputs
 from yian.diagnostics import SourceRange
 from yian.nodes.contracts import (
     Binding,
@@ -83,9 +86,9 @@ def check_loop_type_contract(
 
     Each returned field is bound to the body's parameter again on the next iteration (a
     named body's declared input, or the parameter an inline body generates from its seed),
-    so every statically proven returned field must also fit that parameter. Over a typed
-    seed, a nullable returned field whose non-null type fits is left to the runtime input
-    check.
+    so every statically proven returned field must also fit that parameter, read as
+    nullable where the loop's `while:` proves the field not null. Over a typed seed, a
+    nullable returned field whose non-null type fits is left to the runtime input check.
 
     Args:
         build_results (`dict[str, BuildResult]`): The built nodes keyed by node id.
@@ -144,21 +147,7 @@ def check_loop_type_contract(
                 "PartialRecordContract, or None, "
                 f"got {type(loop_contract).__name__}"
             )
-        loop_out = (
-            loop_contract.type
-            if type(loop_contract) is ValueContract
-            else None
-        )
-        if loop_out is not None and loop_out.fields is not None:
-            carried_fields = loop_out.fields
-        elif type(loop_contract) is PartialRecordContract:
-            carried_fields = {
-                field_name: field_contract.type
-                for field_name, field_contract in loop_contract.fields
-                if field_contract is not None
-            }
-        else:
-            carried_fields = {}
+        carried_fields = carried_field_types(loop_contract)
         # A non-record / absent carried contract was already caught by the field-name half in
         # nodes.loop.build. With no independently proven fields, nothing remains to compare.
         if not carried_fields:
@@ -224,9 +213,11 @@ def _check_returned_fields(
     """Require each returned field of a loop body to fit the parameter it is bound to next.
 
     The parameter is the body's declared input for a named body, or the one generated
-    from the seed for an inline body. Over a typed seed, a nullable returned field whose
-    non-null type fits the parameter is accepted; a null it returns fails the next
-    iteration's input check.
+    from the seed for an inline body. A path the loop's `while:` proves not null is never
+    null when the body starts, so the parameter is read as nullable there and at each
+    record above it (see `loop_entry_inputs`); the error still names the declared type.
+    Otherwise, over a typed seed, a nullable returned field whose non-null type fits the
+    parameter is accepted; a null it returns fails the next iteration's input check.
 
     Args:
         result (`BuildResult`): The built loop node and its source ranges.
@@ -248,6 +239,13 @@ def _check_returned_fields(
         for parameter in node.child_inputs or ()
         if parameter.contract is not None
     }
+    # The comparison reads the inputs as values enter the body; messages name the
+    # declared input, which the body's start checks values against.
+    entry_types = {
+        parameter.name: parameter.contract.type
+        for parameter in loop_entry_inputs(node)
+        if parameter.contract is not None
+    }
     for field_name, seed in wiring.items():
         if returned is not None and field_name not in returned:
             continue  # omitted by the body: never bound to its parameter again
@@ -255,10 +253,11 @@ def _check_returned_fields(
         parameter = parameters.get(field_name)
         if body_field is None or parameter is None:
             continue  # opaque on either side, or not a body input: nothing to compare
-        if types_compatible(body_field, parameter.type):
+        entry_type = entry_types[field_name]
+        if types_compatible(body_field, entry_type):
             continue
         typed = isinstance(seed, Binding) and seed.contract is not None
-        non_null_fits = types_compatible(replace(body_field, nullable=False), parameter.type)
+        non_null_fits = types_compatible(replace(body_field, nullable=False), entry_type)
         # The next iteration's input check rejects a null.
         if typed and non_null_fits:
             continue

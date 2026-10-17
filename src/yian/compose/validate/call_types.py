@@ -4,18 +4,20 @@ A loader post-build pass (run after the flow's leaves + child signatures are ass
 Each binding's SOURCE contract is resolved from its reference over the PARENT producer +
 flow-input contracts (a MAP's `${item...}` from the element type of `over:`), then its
 `Type` is checked with `types_compatible` against the CHILD input's declared `Type` (a
-LOOP's body input for a seed). A literal, a constant operand of a `:-`/`|` escape, or
-each element of a literal `over:` list read through `${item...}`, is validated by value
-instead, as the child's start validates it: a CALL/MAP/LOOP edge is not a flow boundary,
-so text is never converted to a number or bool across it. Its range anchor comes from
-the call, map, or loop node's transient Compose
+LOOP's body input for a seed, read as nullable where the LOOP's `while:` proves the seed
+not null, since that seed never enters the body as null). A literal, a constant operand
+of a `:-`/`|` escape, or each element of a literal `over:` list read through
+`${item...}`, is validated by value instead, as the child's start validates it: a
+CALL/MAP/LOOP edge is not a flow boundary, so text is never converted to a number or bool
+across it. Its range anchor comes from the call, map, or loop node's transient Compose
 `BuildResult.field_ranges[("field", "inputs")]` (the coarse `input:` mapping span).
 
 Imports flow down only: `compile.validation` (the type comparator), `expr` (the binding-null
 analysis and escape parsing), `compose.helpers` (shared output-contract inference and load
-diagnostics), `compose.validate.typed_bindings` (literal and `${item}` helpers), and
-`nodes.binding` (the run boundary's string conversion, named in a hint only).
-Only the loader (and the compose package facade) import this back.
+diagnostics), `compose.nodes.loop` (a LOOP body's inputs as its seeds enter them, and
+its carried field types), `compose.validate.typed_bindings` (literal and `${item}`
+helpers), and `nodes.binding` (the run boundary's string conversion, named in a hint
+only). Only the loader (and the compose package facade) import this back.
 """
 
 from __future__ import annotations
@@ -39,6 +41,7 @@ from yian.compose.helpers.output_contracts import (
 from yian.compose.helpers.tags import any_source_hint, yaml_quoted
 from yian.compose.helpers.yaml_words import former_boolean_fix
 from yian.compose.nodes.base import BuildResult
+from yian.compose.nodes.loop import carried_field_types, loop_entry_inputs
 from yian.compose.validate.narrowing import Narrowing
 from yian.compose.validate.typed_bindings import (
     NOT_LITERAL,
@@ -91,9 +94,12 @@ def check_call_map_types(
     `input:` mapping range, else its authored node range. Iterates the WIRING (not the
     params) so a mis-named binding still surfaces here when its child decl is absent
     rather than being silently skipped. A LOOP's seeds are checked the same way against
-    its body's inputs. ``type_fn`` types a `T(...)` constructor source as `T`;
-    ``registry`` (the flow's typedefs) spells the tag suggested for an `Any` source by a
-    typedef name."""
+    its body's inputs, read as nullable at each path its `while:` proves not null (see
+    `loop_entry_inputs`); the error still names the declared input. ``type_fn`` types a
+    `T(...)` constructor source as `T`; ``registry`` (the flow's typedefs) spells the tag
+    suggested for an `Any` source by a typedef name. A seed only that relaxed reading
+    admits must also fit the loop's output, which the seeds are when the body never
+    runs (see `_breaks_zero_iteration_output`)."""
     diagnostics = diagnostics or LoadDiagnostics()
     for label, contracts in (
         ("output producer", producers),
@@ -118,13 +124,18 @@ def check_call_map_types(
     for nid, result in build_results.items():
         node = result.node
         # CALL/MAP/LOOP carry `child_inputs` to type-check against. A LOOP's seeds fill its
-        # body's START like CALL arguments, so they get the same checks;
-        # check_loop_type_contract also checks returned fields against the body output.
+        # body's START like CALL arguments, so they get the same checks, except that a
+        # seed path its `while:` proves not null never reaches the body when null, so the
+        # body input reads as nullable there; check_loop_type_contract also checks
+        # returned fields against the body output.
         # A leaf has no `child_inputs` attr, and a zero-input child gives [] (falsy), so skip.
         if not getattr(node, "child_inputs", None):
             continue
         kind = "loop" if node.is_loop else "call"
         child_decls = {d.name: d for d in node.child_inputs}
+        entry_decls = (
+            {d.name: d for d in loop_entry_inputs(node)} if node.is_loop else child_decls
+        )
         node_producers, node_inputs = (
             narrowing.for_node(nid) if narrowing is not None else (producers, flow_inputs)
         )
@@ -141,7 +152,21 @@ def check_call_map_types(
             decl = child_decls.get(param)
             if decl is None or decl.contract is None:
                 continue  # `over`/name-caught-in-build/opaque child input -> lenient
-            message = _binding_mismatch(src, decl, scope)
+            entry = entry_decls[param]
+            message = _binding_mismatch(src, entry, scope)
+            if message is not None and entry is not decl:
+                # Name the declared input, which the body's start checks values against.
+                message = _binding_mismatch(src, decl, scope) or message
+            elif message is None and entry is not decl:
+                # When the `while:` is false on the seeds the body never runs and the
+                # loop outputs the seeds as they are, so a seed only the `while:` admits
+                # must also fit the loop's output; otherwise it is rejected as if there
+                # were no `while:`.
+                strict = _binding_mismatch(src, decl, scope)
+                if strict is not None and _breaks_zero_iteration_output(
+                    node, src, decl, scope, producers, flow_inputs
+                ):
+                    message = strict
             if message is not None:
                 rng: Optional[SourceRange] = (
                     result.field_ranges.get(("field", "inputs"))
@@ -152,6 +177,53 @@ def check_call_map_types(
                     f"{kind} node {nid!r}: binding {param!r}"
                 )
                 raise diagnostics.error(f"{subject} — {message}", range=rng)
+
+
+def _breaks_zero_iteration_output(
+    node: Any,
+    src: Any,
+    decl: Parameter,
+    scope: _Scope,
+    producers: dict[str, OutputContract],
+    flow_inputs: dict[str, ValueContract],
+) -> bool:
+    """Return whether a loop seed must be rejected because the body may never run.
+
+    With no iteration the loop outputs its seeds, so a seed for a field the body returns
+    must fit that field's carried type, the body's own; a seed it can't be shown to fit
+    is rejected. A field the body never returns is output as its seed whatever the
+    iteration count, so its seed is never rejected here. A seed whose resolved source
+    type does not fit is left to `check_loop_type_contract`, which rejects the same pair
+    next and names the carried field.
+
+    Args:
+        node (`Any`): The built loop node.
+        src (`Any`): The seed binding, raw or a `Binding`.
+        decl (`Parameter`): The body input the seed fills, with a declared contract.
+        scope (`_Scope`): What the node's bindings read.
+        producers (`dict[str, OutputContract]`): Node output contracts by producer id,
+            as `check_loop_type_contract` reads them.
+        flow_inputs (`dict[str, ValueContract]`): Flow input contracts by name, as
+            `check_loop_type_contract` reads them.
+
+    Returns:
+        `bool`: Whether the seed must be rejected with its strict seed error.
+    """
+    returned = node.returned_fields
+    if returned is not None and decl.name not in returned:
+        return False
+    carried = carried_field_types(node.output_contract).get(decl.name)
+    if carried is None:
+        return True
+    source = resolve_output_binding_contract(
+        src, producers, flow_inputs, type_fn=scope.type_fn
+    )
+    if type(source) is ValueContract and not types_compatible(source.type, carried):
+        # Its error says the returned field must keep its carried type, which is why
+        # this seed fails; the seed error would blame the body input the `while:` guards.
+        return False
+    carried_decl = replace(decl, contract=replace(decl.contract, type=carried))
+    return _binding_mismatch(src, carried_decl, scope) is not None
 
 
 @dataclass(frozen=True)

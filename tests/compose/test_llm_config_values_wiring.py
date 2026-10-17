@@ -8,7 +8,9 @@ import pytest
 
 from yian.compile.expand import clone_child
 from yian.compile.manifest import flow_fingerprint, flow_manifest
+from yian.compose.helpers.errors import LoadError
 from yian.compose.loader import load_flow
+from yian.compose.validate.skips import SkipModel
 from yian.nodes.agent.llm_values import LLM_CONFIG_KEY
 from yian.nodes.contracts import Binding, ValueTemplate, iter_source_strings
 from yian.run import run_flow
@@ -202,3 +204,83 @@ def test_runs_with_different_inputs_record_the_same_fingerprint(tmp_path, monkey
         started = json.loads(log.read_text().splitlines()[0])
         fingerprints.append(started["payload"]["flow_fingerprint"])
     assert fingerprints[0] == fingerprints[1]
+
+
+_SELF = """\
+id: f
+name: f
+input: {m: !str , n: !Optional(str) }
+llm_config: {model: '${pick.output}'}
+nodes:
+  pick:
+    kind: agent
+    prompt: Pick a model.
+    llm_config: {model: PICK_MODEL}
+  chat:
+    kind: agent
+    prompt: Go.
+output: ${chat.output}
+"""
+
+
+@pytest.mark.parametrize("pick_model", ["m0", "'${input.m}'", "'x${input.n}'"])
+def test_a_flow_value_read_from_an_agent_that_always_sets_the_field_is_not_a_cycle(
+    pick_model,
+):
+    flow = _compiled(_SELF.replace("PICK_MODEL", pick_model))
+    assert _llm_edges(flow, "chat") == {"pick"}
+    assert "pick" not in _llm_edges(flow, "pick")
+
+
+def test_a_flow_value_read_from_an_agent_whose_own_value_may_be_null_is_a_cycle():
+    with pytest.raises(LoadError, match="cycle"):
+        _compiled(_SELF.replace("PICK_MODEL", "'${input.n}'"))
+
+
+_CASE = """\
+id: f
+name: f
+input: {go: !bool }
+LAYER
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: ${input.go}
+        then: pick
+    else: other
+  pick:
+    kind: code
+    output: str
+    code: |
+      return "gpt-x"
+  other:
+    kind: code
+    output: str
+    code: |
+      return "no"
+  chat:
+    kind: agent
+    prompt: Go.
+    CHAT
+output: ${chat.output}
+"""
+
+
+def _skip_model(flow) -> SkipModel:
+    return SkipModel(set(flow.nodes), flow.edges, set())
+
+
+def test_an_llm_config_value_reading_a_skippable_node_lets_the_agent_skip():
+    flow = _compiled(_CASE.replace("LAYER", "").replace(
+        "CHAT", "llm_config: {model: '${pick.output}'}"
+    ))
+    assert _skip_model(flow).may_all_skip({"chat"})
+
+
+def test_a_shielded_flow_value_reading_a_skippable_node_does_not():
+    flow = _compiled(_CASE.replace("LAYER", "llm_config: {model: '${pick.output}'}").replace(
+        "CHAT", "llm_config: {model: m1}"
+    ))
+    assert _llm_edges(flow, "chat") == set()
+    assert not _skip_model(flow).may_all_skip({"chat"})

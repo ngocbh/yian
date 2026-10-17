@@ -40,7 +40,7 @@ from yian.diagnostics import (
     SourceRange,
 )
 from yian.nodes.agent import AgentNode
-from yian.nodes.agent.llm_values import LLM_CONFIG_KEY, split_layers
+from yian.nodes.agent.llm_values import LLM_CONFIG_KEY, split_layers, value_leaves
 from yian.nodes.base import Node, NodeKind
 from yian.nodes.contracts import (
     Assertion,
@@ -94,7 +94,7 @@ from yian.compose.helpers.isinstance_types import (
     resolve_constructor_type,
     resolve_isinstance_type,
 )
-from yian.compose.helpers.output_contracts import resolve_output_binding_contract
+from yian.compose.helpers.output_contracts import TypeFn, resolve_output_binding_contract
 from yian.compose.helpers.source import nth, one_line_text
 from yian.compose.helpers.tags import (
     QUOTED_STYLES,
@@ -133,6 +133,7 @@ from yian.compose.validate.value_nesting import check_written_values
 from yian.compose.validate.typed_bindings import (
     check_typed_inputs,
     check_typed_outputs,
+    infer_binding_type,
     local_input_contracts,
 )
 from yian.compose.validate.wiring_parity import check_wiring_parity
@@ -972,23 +973,41 @@ def _attach_llm_config_wiring(
     nodes: dict[str, Node],
     flow_wiring: dict[str, dict],
     flow_llm_config: Any,
+    producers: dict[str, OutputContract],
+    flow_inputs: dict[str, ValueContract],
+    *,
+    type_fn: TypeFn | None = None,
 ) -> None:
     """Wire each AGENT's `llm_config` values as its reserved `__llm_config` input.
 
-    An agent gets the key when a value in its own layer, or one in the flow's layer
-    that its own layer doesn't always override, can reach its config. The key carries
-    both layers whole (`split_layers`), so edges, reference checks, skips and child
-    re-namespacing treat the values as any other binding.
+    Each value in an agent's own layer gets its static type, read over the flow's
+    contracts as written (no CASE narrowing applies to a config). An agent gets the key
+    when a value in its own layer, or one in the flow's layer that its own layer doesn't
+    always override, can reach its config. A higher value overrides only when its type
+    can't be null. The key carries both layers whole (`split_layers`), so edges,
+    reference checks, skips and child re-namespacing treat the values as any other
+    binding, and a dropped value adds no edge.
 
     Args:
         nodes (`dict[str, Node]`): Built nodes keyed by final descriptor id.
         flow_wiring (`dict[str, dict]`): Mutable binding maps keyed by node id.
         flow_llm_config (`Any`): The flow's authored `llm_config:` layer: a dict, a
             `ValueTemplate` or a `Binding`.
+        producers (`dict[str, OutputContract]`): Node output contracts by producer id.
+        flow_inputs (`dict[str, ValueContract]`): Flow input contracts by name.
+        type_fn (`TypeFn | None`, *optional*, defaults to `None`): Resolves a
+            constructor name to its type for inference.
     """
     for node_id, node in nodes.items():
         if not isinstance(node, AgentNode):
             continue
+        types: dict[ValuePath, Type | None] = {}
+        for path, leaf in value_leaves(node.own_llm_config).items():
+            try:
+                types[path] = infer_binding_type(leaf, producers, flow_inputs, type_fn=type_fn)
+            except ExpressionError:
+                types[path] = None  # the reference pass reports it, located
+        node.llm_value_types = types
         carried = split_layers(
             node.own_llm_config, flow_llm_config, node.llm_inherit, node.llm_nullable()
         )
@@ -2547,7 +2566,14 @@ def _assemble(
             )
         producers[nid] = contract
 
-    _attach_llm_config_wiring(nodes_built, flow_wiring, flow_llm_config or {})
+    _attach_llm_config_wiring(
+        nodes_built,
+        flow_wiring,
+        flow_llm_config or {},
+        producers,
+        flow_input_contracts,
+        type_fn=constructor_type,
+    )
 
     # Data edges — the projection of flow.wiring (leaf + WAIT + call/map); a case owns its own
     # data+control edges (`case_edges`, from each `CaseDescriptor.build`), appended below.

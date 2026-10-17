@@ -671,6 +671,33 @@ def known_call_time_providers(
     }
 
 
+def in_flight_llm_configs(
+    nodes: Mapping[str, Any], steps: Mapping[str, tuple[dict[str, Any], ...]],
+) -> dict[str, dict[str, Any]]:
+    """Return the config each started call-time agent recorded in its steps.
+
+    An agent that has not started records nothing; its config is checked when it
+    resolves.
+
+    Args:
+        nodes (`Mapping[str, Any]`): The run's live nodes, keyed by node id.
+        steps (`Mapping[str, tuple[dict[str, Any], ...]]`): The steps of each unsettled
+            node, keyed by node id.
+
+    Returns:
+        `dict[str, dict[str, Any]]`: Each recorded config, with no key or header value,
+            keyed by node id.
+    """
+    configs: dict[str, dict[str, Any]] = {}
+    for node_id, node_steps in steps.items():
+        node = nodes.get(node_id)
+        if isinstance(node, AgentNode) and node.call_time is not None:
+            recorded = node.recorded_llm_config(node_steps)
+            if recorded is not None:
+                configs[node_id] = recorded
+    return configs
+
+
 def call_time_selection(
     flow: Any,
     call_time: Mapping[str, dict[str, Any]],

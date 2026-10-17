@@ -46,6 +46,7 @@ from yian.compile.llm_cascade import (
     apply_effective_llm_map,
     bind_host_credentials,
     call_time_selection,
+    in_flight_llm_configs,
     known_call_time_providers,
     RunLLM,
     host_key_providers,
@@ -1069,8 +1070,9 @@ def _resume_flow_controlled(
 ) -> RunResult:
     """Recover and drive a durable run with a host-owned stop event.
 
-    ``check_llm_configs`` receives a copy of the recorded effective model map (old
-    OpenAI records adapted to their legacy connection) after the terminal check,
+    ``check_llm_configs`` receives a copy of the recorded effective model map, plus
+    the config each started call-time agent recorded keyed by its node id (old
+    OpenAI records adapted to their legacy connection), after the terminal check,
     before an unfinished run opens memory or appends ``RunResumed``. An exception
     it raises stops recovery and appends nothing. The CLI uses it to check
     provider credentials.
@@ -1108,9 +1110,15 @@ def _resume_flow_controlled(
         _check_templates(flow.compiled)
         _check_tool_types(flow.compiled, run_tools)
         skills = _check_skills(flow.compiled, skills)
-        _check_recorded_llm_fields(state.effective_llm_by_static_path, static_agent_labels(flow.compiled))
+        # A started call-time agent resumes with the config it recorded; one not yet
+        # started is checked when it resolves.
+        recorded_llm = {
+            **state.effective_llm_by_static_path,
+            **in_flight_llm_configs(state.flow.nodes, state.node_steps),
+        }
+        _check_recorded_llm_fields(recorded_llm, static_agent_labels(flow.compiled))
         if check_llm_configs is not None:
-            check_llm_configs(legacy_connection_map(state.effective_llm_by_static_path))
+            check_llm_configs(legacy_connection_map(recorded_llm))
 
         if state.memories is not None:
             if memory is None:

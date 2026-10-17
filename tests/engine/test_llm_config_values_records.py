@@ -1,10 +1,12 @@
 """The config a call-time `llm_config` agent resolves: its node step, and the resume check."""
 
 import json
+import threading
 
 from langchain_core.messages import AIMessage
 import pytest
 
+from yian.cli.run import _ResumeKeyError, _check_resume_credentials
 import yian.run as run_module
 from yian.compose import load_flow
 from yian.run import run_flow
@@ -140,3 +142,60 @@ def test_resume_refuses_a_recorded_config_that_differs(tmp_path, fake_model):
     kinds = [record["kind"] for record in _records(log)[before:]]
     assert "node_failed" not in kinds
     assert fake_model == []
+
+
+_TWO_CALL_TIME = """id: f
+name: f
+llm_config: {provider: openai}
+nodes:
+  pick: {kind: code, output: str, code: "return 'anthropic'"}
+  chat:
+    kind: agent
+    prompt: Go.
+    llm_config: {provider: '${pick.output}', model: claude-picked}
+  later:
+    kind: agent
+    prompt: Go.
+    llm_config: {model: !str '${chat.output}'}
+output: ${later.output}
+"""
+
+
+def _resume_checks(log, flow_text):
+    """Resume ``log`` and return the map its key check received, appending nothing."""
+    seen = []
+
+    class _Stop(Exception):
+        pass
+
+    def check(effective):
+        seen.append(effective)
+        raise _Stop()
+
+    with pytest.raises(_Stop):
+        run_module._resume_flow_controlled(
+            load_flow(flow_text), log=log, check_llm_configs=check,
+            stop_event=threading.Event(),
+        )
+    [effective] = seen
+    return effective
+
+
+def test_resume_checks_the_provider_an_in_flight_call_time_agent_recorded(
+    tmp_path, fake_model, monkeypatch,
+):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-run")
+    log = tmp_path / "run.jsonl"
+    fake_model.crash = True
+    with pytest.raises(_HostCrash):
+        run_flow(load_flow(_TWO_CALL_TIME), {}, log=log)
+    effective = _resume_checks(log, _TWO_CALL_TIME)
+    assert effective["chat"]["provider"] == "anthropic"
+    assert effective["chat"]["model"] == "claude-picked"
+    # `later` has not started, so its provider is checked when it resolves.
+    assert "later" not in effective
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
+    with pytest.raises(_ResumeKeyError, match="ANTHROPIC_API_KEY"):
+        _check_resume_credentials(
+            effective, ask_secret=lambda _question: None, prompt_available=False,
+        )

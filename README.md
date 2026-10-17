@@ -82,7 +82,9 @@ the default provider when none is saved yet. `yian auth` lists saved logins.
 `yian auth <provider> --default` switches the default; `--remove` deletes a login.
 A flow's `llm_config`, `--provider`/`--model`, and
 `YIAN_DEFAULT_PROVIDER`/`YIAN_DEFAULT_MODEL` all take precedence over the saved
-login. See
+login. A field of a flow's `llm_config` may come from a value, such as
+`model: ${input.model}`; one that resolves to null leaves the field to the next
+layer. See
 [choosing a provider and model](docs/installation.md#choosing-a-provider-and-model).
 
 ## Run a flow

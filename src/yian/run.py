@@ -397,12 +397,16 @@ def run_flow(
             Callback for transient stream chunks, which are never durable records.
             When set, AGENT chat replies stream their visible text.
         llm_config (`dict[str, Any] | None`, *optional*, defaults to `None`):
-            Per-run outer model configuration layer. The fully resolved static map
-            is captured in the initialization record. An ``api_key`` entry (a
+            Per-run outer model configuration layer, taken literally: ``${...}``
+            in it is text. The fully resolved static map is captured in the
+            initialization record. An agent whose flow-file ``llm_config`` reads
+            a value known only when it runs is recorded instead with the layers
+            below its own and the connection selection it resolves from, and
+            resolves just before its model call. An ``api_key`` entry (a
             `str` or `SecretStr`) is the provider key for this run and needs
-            ``provider``. Every static AGENT whose effective provider matches
-            uses it in place of the provider's saved login or key environment
-            variable; agents of other providers are unaffected.
+            ``provider``. Every AGENT whose effective provider matches, static or
+            resolved when it runs, uses it in place of the provider's saved login
+            or key environment variable; agents of other providers are unaffected.
             An ``inherit: false`` agent of that provider uses it too. The key is
             never recorded; the log marks which agents use it, so pass it again
             to `resume_flow` or `RunResult.backward`, where those agents
@@ -491,7 +495,10 @@ def run_flow(
             identity, worker count,
             model configuration, or prepared run state violates its contract,
             an AGENT has no provider or model (no layer, environment default,
-            or saved login sets one; there is no built-in default),
+            or saved login sets one; there is no built-in default), an input an
+            ``llm_config`` value resolved at run start reads is missing or fails
+            its declared type, or the config resolved from it is refused (the
+            message names the field, as ``node 'chat' llm_config.model: ...``),
             ``llm_config.api_key`` lacks ``llm_config.provider``,
             ``llm_config.base_url`` lacks
             ``llm_config.api_key`` or is not an allowed URL, an ``azure``
@@ -1015,7 +1022,9 @@ def resume_flow(
             never recorded, and stays with the result for `RunResult.backward`. A
             log that marks no agent ignores it. Without it, marked agents fail
             when they call their model instead of reading the provider's key
-            environment variable.
+            environment variable. An agent that resolves its ``llm_config`` when
+            it runs gets it when it resolves to the key's provider; without it,
+            such an agent raises `AuthError` before its model call.
         headers (`Mapping[str, str | SecretStr] | None`, *optional*, defaults to `None`):
             The header values a run started with ``llm_config.headers`` sent
             with its key. They go to the agents the log marks for the key, like
@@ -1054,7 +1063,14 @@ def resume_flow(
             has a name or value that can't be sent, or ``api_key`` or
             ``headers`` is given for a log that marks agents for a host key and
             the header names differ from the recorded ones (the message names
-            the header names, never a value).
+            the header names, never a value). Also when an agent that resolves
+            its ``llm_config`` when it runs, and had started before, resolves to
+            a config other than the one it recorded (the flow or yian version
+            changed); no model call happens.
+        `AuthError`:
+            (`yian.llm_clients.auth.AuthError`) An agent resolving its
+            ``llm_config`` when it runs resolves to the host key's provider, and
+            ``api_key`` (or the recorded header names) was not given.
         `DefaultsError`:
             A `YIAN_<NAME>` variable holds a value its entry does not accept.
         `DefaultsMismatchError`:

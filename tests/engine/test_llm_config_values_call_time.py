@@ -184,7 +184,7 @@ output: ${[a.output, b.output]}
 """
 
 
-def test_a_session_placement_whose_provider_comes_from_a_value_passes_run_start(tmp_path):
+def test_a_session_placement_whose_provider_comes_from_a_value_passes_run_start():
     # The session's own check compares the providers when the agents run.
     result = run_flow(load_flow(_SESSION_FROM_VALUE), {}, memory={"session": SessionMemory()})
     assert result.status == "failed"
@@ -669,3 +669,31 @@ def test_backward_checks_given_headers_against_the_call_time_selection(tmp_path)
     result = _learnable_failed(_HOST, tmp_path=tmp_path)
     with pytest.raises(ValueError, match="missing X-Tenant; not recorded X-Other"):
         result.backward("Be brief.", headers={"X-Other": "v"})
+
+
+def test_the_retained_backward_handle_opens_memory_with_the_call_time_agents(monkeypatch):
+    replies = ["ok", json.dumps(
+        {"input_feedback": {}, "self_feedback": ["Be brief."], "variable_feedback": {}}
+    )]
+
+    class Model:
+        def invoke(self, messages):
+            return AIMessage(content=replies.pop(0))
+
+    monkeypatch.setattr("yian.llm_clients.model_from_config", lambda config: Model())
+    applied = []
+    original = run_module.apply_effective_llm_map
+
+    def spy(flow, effective, call_time=None):
+        applied.append(call_time)
+        return original(flow, effective, call_time)
+
+    text = _PICKED.replace("    prompt: Go.\n", "    prompt: Go.\n    long_term_memory: session\n")
+    result = run_flow(load_flow(text), {}, learnable=True, memory={"session": SessionMemory()})
+    assert result.status == "succeeded"
+    monkeypatch.setattr(run_module, "apply_effective_llm_map", spy)
+    outcome = result.backward("Shorter.")
+    assert outcome.status == "succeeded" and outcome.learning is not None
+    # Replay applies the record, then `open_memory` applies it to the retained program.
+    assert len(applied) == 2
+    assert [call_time["agents"] for call_time in applied] == [{"chat": {}}, {"chat": {}}]

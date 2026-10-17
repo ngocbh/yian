@@ -439,8 +439,10 @@ def apply_effective_llm_map(
     if call_time is None:
         call_time = {}
     else:
-        if not isinstance(call_time, Mapping) or set(call_time) != {"selection", "agents"}:
+        if not isinstance(call_time, Mapping):
             raise TypeError("call-time LLM record must be a dict of selection and agents")
+        if set(call_time) != {"selection", "agents"}:
+            raise ValueError("call-time LLM record must hold exactly selection and agents")
         selection = restore_selection(call_time["selection"])
         call_time = call_time["agents"]
         if not isinstance(call_time, dict):
@@ -699,10 +701,9 @@ def in_flight_llm_configs(
 
 
 def call_time_selection(
-    flow: Any,
-    call_time: Mapping[str, dict[str, Any]],
     snapshot: ConnectionSnapshot,
     *,
+    known: Mapping[str, Optional[str]],
     host_key_provider: str | None = None,
     host_base_url: str | None = None,
     host_settings: HostConnection | None = None,
@@ -713,10 +714,9 @@ def call_time_selection(
     providers' connections are recorded; otherwise every connection is.
 
     Args:
-        flow (`CompiledFlow`): The run's flow.
-        call_time (`Mapping[str, dict[str, Any]]`): Each call-time agent's base, keyed by
-            static agent path.
         snapshot (`ConnectionSnapshot`): The run's selection snapshot.
+        known (`Mapping[str, str | None]`): Each call-time agent's
+            `known_call_time_providers` entry, keyed by static agent path.
         host_key_provider (`str | None`, *optional*, defaults to `None`): The host key's
             provider, if the host gave one.
         host_base_url (`str | None`, *optional*, defaults to `None`): Where the host key
@@ -727,7 +727,6 @@ def call_time_selection(
     Returns:
         `dict[str, Any]`: The `record_selection` record.
     """
-    known = known_call_time_providers(flow, call_time, snapshot.defaults)
     providers = None if None in known.values() else {p for p in known.values() if p}
     return record_selection(
         snapshot,
@@ -867,7 +866,10 @@ def _apply_flow(
         if isinstance(node, AgentNode):
             path_key = _path_key(node_path)
             if path_key in call_time:
-                assert selection is not None  # a call-time record always has one
+                if selection is None:
+                    raise ValueError(
+                        f"call-time agent {path_key!r} has no recorded connection selection"
+                    )
                 node.llm_config = None
                 node.call_time = CallTimeLLM(
                     path_key, copy.deepcopy(call_time[path_key]), copy.deepcopy(selection)

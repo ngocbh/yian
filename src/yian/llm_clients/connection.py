@@ -338,7 +338,8 @@ def record_selection(
     """Return the JSON record of a selection, limited to the given providers.
 
     Only the given providers' saved models and connections are recorded; the defaults
-    only when their provider is one of them; and the host key's provider, endpoint and
+    only when their provider is one of them; the OpenAI endpoint only when OpenAI is
+    one of them (else the built-in one); and the host key's provider, endpoint and
     settings only when it is one of them. The record never holds a key or header value.
 
     Args:
@@ -385,7 +386,8 @@ def record_selection(
             for name, connection in snapshot.connections.items()
             if reachable(name)
         },
-        "api_endpoint": snapshot.api_endpoint,
+        # The endpoint configures only OpenAI; another run's records keep the built-in one.
+        "api_endpoint": snapshot.api_endpoint if reachable("openai") else _API_ENDPOINT,
         "stray_model": snapshot.stray_model,
         "host": host,
     }
@@ -459,6 +461,9 @@ def _restore_selection(record: Any) -> ConnectionSelection:
     base_url = host.get("base_url")
     if base_url is not None:
         validate_base_url(base_url)
+    elif provider == "azure":
+        # An Azure key names no resource of its own; the host always gives its endpoint.
+        raise ValueError("an azure host key needs its base_url")
     settings: dict[str, Any] = {}
     for name in ("organization", "project"):
         if name in host:

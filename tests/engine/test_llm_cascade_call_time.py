@@ -323,11 +323,22 @@ def _tampered(edit):
         lambda r: r["host"].update(header_names=["X-Tenant", "X-Alpha"]),
         lambda r: r["host"].update(organization=""),
         lambda r: r["host"].update(api_key="sk-x"),
+        lambda r: r.update(host={"provider": "azure"}),
     ],
 )
 def test_a_tampered_selection_fails_to_restore(edit):
     with pytest.raises(ValueError, match="recorded connection selection"):
         restore_selection(_tampered(edit))
+
+
+def test_the_openai_endpoint_is_recorded_only_when_openai_is_reachable():
+    snapshot = _snapshot(api_endpoint="https://gateway.example.com/v1")
+    assert record_selection(snapshot, providers={"openai"})["api_endpoint"] == (
+        "https://gateway.example.com/v1"
+    )
+    limited = record_selection(snapshot, providers={"anthropic"})
+    assert limited["api_endpoint"] == "https://api.openai.com/v1"
+    assert "gateway.example.com" not in json.dumps(limited)
 
 
 def test_a_selection_limited_to_providers_names_only_their_connections():
@@ -371,7 +382,8 @@ def _call_time_record(text):
     snapshot = _snapshot()
     run_llm = resolve_run_llm(private, {}, defaults=snapshot.defaults)
     return call_time_selection(
-        private, run_llm.call_time, snapshot,
+        snapshot,
+        known=known_call_time_providers(private, run_llm.call_time, snapshot.defaults),
         host_key_provider="openai", host_base_url=_HOST.base_url, host_settings=_HOST,
     )
 
@@ -437,5 +449,7 @@ def test_a_call_time_record_needs_a_valid_selection():
     record["selection"]["connections"]["openai"]["source"] = "bogus"
     with pytest.raises(ValueError, match="recorded connection selection"):
         apply_effective_llm_map(copy.deepcopy(flow), run_llm.effective, record)
-    with pytest.raises(TypeError, match="selection and agents"):
+    with pytest.raises(ValueError, match="exactly selection and agents"):
         apply_effective_llm_map(copy.deepcopy(flow), run_llm.effective, run_llm.call_time)
+    with pytest.raises(TypeError, match="selection and agents"):
+        apply_effective_llm_map(copy.deepcopy(flow), run_llm.effective, [record])

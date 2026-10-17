@@ -828,11 +828,15 @@ def _run_flow_controlled(
         host_base_url=host.base_url,
         host_settings=host,
     )
+    # Each call-time agent's provider when run start already knows it: it limits the
+    # recorded selection and the session check.
+    known = known_call_time_providers(private_flow, run_llm.call_time, snapshot.defaults)
     call_time_llm = None
     if run_llm.call_time:
         call_time_llm = {
             "selection": call_time_selection(
-                private_flow, run_llm.call_time, snapshot,
+                snapshot,
+                known=known,
                 host_key_provider=host_key_provider,
                 host_base_url=host.base_url,
                 host_settings=host,
@@ -872,7 +876,7 @@ def _run_flow_controlled(
     if memory is not None:
         memory_table, memory_origins, memory_stack_set = _resolve_runtime_memory_layout(
             private_flow, effective_llm=effective_llm,
-            call_time_known=_call_time_known(private_flow, call_time_llm),
+            call_time_known=known,
         )
         _check_registry_types(memory, memory_table)
         memory_runtime = MemoryRuntime.open(
@@ -1695,26 +1699,6 @@ def _resolve_runtime_memory_layout(
         check_session_compatibility(resolved, effective_llm, call_time_known=call_time_known)
     apply_memory_layout(flow, resolved)
     return _memory_layout_parts(resolved)
-
-
-def _call_time_known(
-    flow: CompiledFlow, call_time_llm: Mapping[str, Any] | None
-) -> dict[str, str | None]:
-    """Return each recorded call-time agent's provider when run start knows it, else `None`.
-
-    Args:
-        flow (`CompiledFlow`): The run's flow.
-        call_time_llm (`Mapping[str, Any] | None`): The ``RunStarted.call_time_llm``
-            record, or `None` when there is none.
-
-    Returns:
-        `dict[str, str | None]`: Keyed by static agent path; empty without the record.
-    """
-    if call_time_llm is None:
-        return {}
-    return known_call_time_providers(
-        flow, call_time_llm["agents"], call_time_llm["selection"]["defaults"]
-    )
 
 
 def _memory_layout_parts(

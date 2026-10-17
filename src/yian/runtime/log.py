@@ -161,6 +161,12 @@ def _validated_call_time_llm(value: Any) -> dict[str, Any]:
     The shape is ``{"selection": {...}, "agents": {path: {...}, ...}}`` with at least
     one agent. The contents are checked when the run applies them.
 
+    Args:
+        value (`Any`): The decoded ``call_time_llm`` value.
+
+    Returns:
+        `dict[str, Any]`: A canonical JSON copy of ``value``.
+
     Raises:
         `TypeError`: The value or one of its parts is not a JSON object.
         `ValueError`: A field is missing or extra, ``agents`` is empty or has an empty

@@ -37,10 +37,10 @@ the origin and validation range together from one retained item cursor, keyed by
 node id and authored list index; only the origin crosses into the semantic assertion.
 
 Both halves check an assert's field reads narrowed by the assert's own checks: `and`,
-`or` and `not` short-circuit, so an `isinstance` or union tag comparison before a read
-decides which union members it sees (`isinstance(v, Buy) and v.qty > 0`), and a check
-that can never be true is a load error (`helpers.condition_guards`,
-`helpers.narrowing_facts`).
+`or` and `not` short-circuit, so an `isinstance`, union tag comparison or null check before
+a read decides which union members it sees and whether it may be null
+(`isinstance(v, Buy) and v.qty > 0`, `v != null and v.qty > 0`), and a check that can
+never be true is a load error (`helpers.condition_guards`, `helpers.narrowing_facts`).
 
 Imports flow DOWN only within the engine core (`compile.validation`, `expr`,
 `typesys`) and the `helpers` peers (`condition_guards`, `isinstance_types`,
@@ -280,16 +280,15 @@ def _condition_errors(
 
     `roots` maps each path whose field reads are checked (a node-local name, `output`,
     `input.X`, `<id>.output`) to the contracts its value may have; reads below a root in
-    `unwalked_roots` are left to the site, and a root in `nullable_roots` may also be
-    null whatever its contract says. `and`, `or` and `not` short-circuit, so the checks
-    before a read (`isinstance` and union tag comparisons) narrow the values it can see
-    (`guarded_read_types`): a read is fine when any narrowed type allows it, and
-    otherwise the first one's error is reported, naming the narrowed type when it lacks
-    the field. A read nothing narrows is walked on the root's contract. A read that runs
-    only when a reported impossible check is true (`checked_refs`), or guarded by an
-    `isinstance` whose type name doesn't resolve, is not checked. `authored` is the
-    condition as written when `tree` has its references rewritten; reports spell checks
-    as written.
+    `unwalked_roots` are left to the site, and a root in `nullable_roots` may also be null
+    whatever its contract says. `and`, `or` and `not` short-circuit, so the checks before a
+    read (`isinstance`, union tag comparisons and null checks) narrow the values it can see
+    (`guarded_read_types`): a read is fine when any narrowed type allows it, and otherwise
+    the first one's error is reported, naming the narrowed type when it lacks the field. A
+    read nothing narrows is walked on the root's contract. A read that runs only when a
+    reported impossible check is true (`checked_refs`), or guarded by an `isinstance` whose
+    type name doesn't resolve, is not checked. `authored` is the condition as written when
+    `tree` has its references rewritten; reports spell checks as written.
 
     A root with several distinct contracts (a node-local name's alternatives, which carry
     the branch that routes the node) is checked under each: a check is impossible only

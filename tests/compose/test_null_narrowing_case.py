@@ -89,6 +89,7 @@ _TYPEDEFS = (
     "  Item:\n    qty: int\n"
     "  Wide:\n    qty: int\n    note: Optional(str)\n"
     "  A:\n    b: Optional(str)\n"
+    "  MaybeItem: Optional(Item)\n"
 )
 
 
@@ -96,7 +97,7 @@ def _input_flow(when: str, x_type: str, sink: str = "Item", source: str = "${inp
     """A flow whose searched CASE passes `source` to a def's `!<sink>` input under `when`.
 
     `Item` is `{qty: int}`; `Wide` is `{qty: int, note: Optional(str)}`, which `Item` fits;
-    `A` is `{b: Optional(str)}`.
+    `A` is `{b: Optional(str)}`; `MaybeItem` is `Optional(Item)`.
     """
     return (
         f"id: p\nname: p\n{_TYPEDEFS}"
@@ -257,6 +258,19 @@ def test_a_null_check_keeps_an_isinstance_narrowing_of_the_branch(when, x_type):
     load_flow(_input_flow(when, x_type))
 
 
+@pytest.mark.parametrize("sink", ["Optional(Item)", "Item"])
+@pytest.mark.parametrize("x_type", ["Optional(Any)", "Optional(Wide)"])
+@pytest.mark.parametrize(
+    "when",
+    [
+        "input.x != null and isinstance(input.x, MaybeItem)",
+        "isinstance(input.x, MaybeItem) and input.x != null",
+    ],
+)
+def test_a_null_check_keeps_a_nullable_isinstance_narrowing_of_the_branch(when, x_type, sink):
+    load_flow(_input_flow(when, x_type, sink))
+
+
 @pytest.mark.parametrize("x_type", ["Optional(Any)", "Optional(Wide)"])
 def test_a_null_check_case_under_an_isinstance_branch_keeps_its_narrowing(x_type):
     load_flow(_cross_node_flow("isinstance(input.x, Item)", "input.x != null", x_type))
@@ -326,3 +340,48 @@ def test_an_assert_read_after_a_null_check_is_guarded_by_it():
     ((narrowed, fields, base),) = guarded_read_types(guarded, guard, base_type_of, registry)
     assert narrowed == read_type("Item", registry)
     assert (fields, base) == (("qty",), "output")
+
+
+def test_a_node_assert_read_after_a_null_check_names_the_non_null_type():
+    text = (
+        "id: p\nname: p\n"
+        "typedefs:\n  Item:\n    qty: int\n"
+        "input:\n  s: !Optional(str)\n"
+        "nodes:\n"
+        f"  x:\n    kind: code\n    code: {_ECHO}\n"
+        "    input:\n      topic: ${input.s}\n    output: Optional(Item)\n"
+        '    asserts:\n      - "output != null and output.nosuch > 0"\n'
+        "output: ${x.output}\n"
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert (
+        "node 'x' assert: reference ${output.nosuch} reads field 'nosuch', which Item doesn't "
+        "have; output is Item here, by the checks before this read"
+    ) in str(caught.value)
+
+
+def test_a_flow_assert_null_check_narrows_a_skippable_producer_of_a_non_null_type():
+    # `d` declares `Item`, but it may be skipped, so the assert can read it as null.
+    text = (
+        "id: p\nname: p\n"
+        "typedefs:\n  Item:\n    qty: int\n"
+        "input:\n  s: !str\n"
+        "nodes:\n"
+        "  route:\n    kind: case\n    cases:\n"
+        "      - when: \"input.s == 'go'\"\n        then: d\n"
+        "    else: e\n"
+        f"  d:\n    kind: code\n    code: {_ECHO}\n"
+        "    input:\n      topic: ${input.s}\n    output: Item\n"
+        f"  e:\n    kind: code\n    code: {_ECHO}\n"
+        "    input:\n      topic: ${input.s}\n    output: str\n"
+        "output: ${input.s}\n"
+        'asserts:\n  - "d.output != null and d.output.nosuch > 0"\n'
+    )
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert (
+        "assert 'd.output != null and d.output.nosuch > 0': reference ${d.output.nosuch} reads "
+        "field 'nosuch', which Item doesn't have; d.output is Item here, by the checks before "
+        "this read"
+    ) in str(caught.value)

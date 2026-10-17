@@ -4,8 +4,8 @@ A narrowing fact says which part of a union a value at a base path can be. A bas
 `<node>.output[.field...]` or `input.<name>[.field...]`. Facts come from CASE branches: an
 `on:` CASE over a tag field of a union gives each `when:` edge the member with that tag and the
 `else:` edge the unlisted members. A searched CASE gives each case's edge what its `when:`
-proves true (`isinstance` checks and tag comparisons through `and`, `or` and `not`); its
-`else:` edge carries none.
+proves true (`isinstance` checks, tag comparisons and null checks through `and`, `or` and
+`not`); its `else:` edge carries none.
 
 Facts flow along the graph in topological order. A node's control edges join by union (it ran
 because one of them fired), each required data group joins its producers by union, and every

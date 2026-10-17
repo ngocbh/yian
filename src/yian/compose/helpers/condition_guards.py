@@ -2,10 +2,10 @@
 
 A **check** is a test a condition makes on one value: `isinstance(<ref>, T)`, a tag
 comparison `<ref>.<field> == "<text>"` (`!=` is the same check, negated), or a null check
-`<ref> != null` (`==` is the same check, negated). A **guard** is a
-small boolean formula over checks in negation normal form: `Holds(check, value)` says the
-check evaluated to `value`; `AllOf` and `AnyOf` combine guards; `NOTHING` proves nothing,
-and `NEVER` never holds.
+`<ref> != null` (`==` is the same check, negated). A **guard** is a small boolean formula
+over checks in negation normal form: `Holds(check, value)` says the check evaluated to
+`value`; `AllOf` and `AnyOf` combine guards; `NOTHING` proves nothing, and `NEVER` never
+holds.
 
 `and` and `or` short-circuit, so in `A and B` the operand `B` only runs once `A` is true,
 and in `A or B` once `A` is false; `not` flips what a check proves. `proves` says what holds

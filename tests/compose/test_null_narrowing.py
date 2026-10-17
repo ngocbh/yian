@@ -40,6 +40,7 @@ _REGISTRY = read_typedefs(
         "Wide": {"name": "str"},
         "Other": {"flag": "bool"},
         "MaybeA": "Optional(A)",
+        "MaybeItem": "Optional(Item)",
         "Holder": {"b": "Optional(str)"},
         "Outer": {"h": "Optional(Holder)"},
     }
@@ -156,6 +157,15 @@ def test_a_null_check_keeps_an_isinstance_narrowing(base, condition):
     assert _env(condition, x=_t(base)) == {"x": Exact(ITEM)}
 
 
+@pytest.mark.parametrize("base", ["Optional(Any)", "Optional(Wide)"])
+@pytest.mark.parametrize(
+    "condition",
+    ["x != null and isinstance(x, MaybeItem)", "isinstance(x, MaybeItem) and x != null"],
+)
+def test_a_null_check_keeps_a_nullable_isinstance_narrowing(base, condition):
+    assert _env(condition, x=_t(base)) == {"x": Exact(ITEM)}
+
+
 # --------------------------------------------------------------------------- #
 # Meeting two exact facts
 # --------------------------------------------------------------------------- #
@@ -169,9 +179,25 @@ def test_two_exact_facts_meet_to_the_narrower():
     assert intersect_facts(Exact(ITEM), Exact(ITEM)) == Exact(ITEM)
 
 
+@pytest.mark.parametrize("other", [ANY, WIDE])
+def test_a_non_null_exact_fact_meets_a_nullable_one_with_null_removed(other):
+    maybe_item = _t("Optional(Item)")
+    assert intersect_facts(Exact(other), Exact(maybe_item)) == Exact(ITEM)
+    assert intersect_facts(Exact(maybe_item), Exact(other)) == Exact(ITEM)
+    assert intersect_facts(Exact(ITEM), Exact(maybe_item)) == Exact(ITEM)
+    assert intersect_facts(Exact(maybe_item), Exact(ITEM)) == Exact(ITEM)
+
+
+def test_two_nullable_exact_facts_meet_to_the_narrower_still_nullable():
+    maybe_item, maybe_wide = _t("Optional(Item)"), _t("Optional(Wide)")
+    assert intersect_facts(Exact(maybe_wide), Exact(maybe_item)) == Exact(maybe_item)
+    assert intersect_facts(Exact(maybe_item), Exact(maybe_wide)) == Exact(maybe_item)
+
+
 def test_two_unrelated_exact_facts_give_no_fact():
     assert intersect_facts(Exact(ITEM), Exact(OTHER)) is None
     assert intersect_facts(Exact(OTHER), Exact(ITEM)) is None
+    assert intersect_facts(Exact(OTHER), Exact(_t("Optional(Item)"))) is None
 
 
 def test_two_isinstance_checks_on_one_base_meet_to_the_narrower():
@@ -228,7 +254,6 @@ def test_an_isinstance_check_is_still_reported_after_a_null_check():
     ]
 
 
-
 def _impossible(condition: str, routing=None) -> list[str]:
     """The impossible-check messages of `condition`, with `x` an `Optional(AB)`."""
     found = impossible_checks(
@@ -256,6 +281,96 @@ def test_a_null_check_the_routing_proves_null_is_reported():
         "this node"
     ]
     assert _impossible("x == null", routing={"x": Members((), nullable=True)}) == []
+
+
+_AB_FLOW_HEAD = (
+    "id: p\nname: p\n"
+    "typedefs:\n"
+    "  A:\n    kind: Literal(a)\n    n: int\n"
+    "  B:\n    kind: Literal(b)\n    s: str\n"
+    "  AB: Union(A, B)\n"
+    "input:\n  x: !Optional(AB)\n"
+    "nodes:\n"
+)
+
+
+def _code_node(node_id: str, extra: str = "") -> str:
+    """A CODE node `node_id` returning `1`, with `extra` lines added to its body."""
+    return f"  {node_id}:\n    kind: code\n    code: return 1\n{extra}"
+
+
+def _searched(node_id: str, when: str, then: str, else_: str) -> str:
+    """A searched CASE `node_id` routing to `then` under `when`, else to `else_`."""
+    return (
+        f"  {node_id}:\n    kind: case\n    cases:\n"
+        f'      - when: "{when}"\n        then: {then}\n'
+        f"    else: {else_}\n"
+    )
+
+
+def _load_error(text: str) -> str:
+    """The message of the `LoadError` loading `text` raises."""
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    return str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("when", "message"),
+    [
+        (
+            "input.x != null and input.x.kind != 'a' and input.x.kind != 'b'",
+            '`input.x.kind != "b"` can never be true here: input.x is B, by the checks '
+            'before it, so `input.x.kind == "b"` is always true',
+        ),
+        (
+            "isinstance(input.x, A) or isinstance(input.x, B) or input.x != null",
+            "`input.x != null` can never be true here: input.x is None, by the checks before it",
+        ),
+        (
+            "input.x.kind == 'a' or input.x.kind == 'b' or input.x != null",
+            "`input.x != null` can never be true here: input.x is None, by the checks before it",
+        ),
+    ],
+    ids=["tags-after-null-check", "null-check-after-isinstance", "null-check-after-tags"],
+)
+def test_a_when_null_check_impossible_with_the_checks_around_it_is_reported(when, message):
+    text = (
+        _AB_FLOW_HEAD
+        + _searched("route", when, "t", "e")
+        + _code_node("t")
+        + _code_node("e")
+        + "output: ${input.x}\n"
+    )
+    assert f"case node 'route': `cases[0].when`: {message}" in _load_error(text)
+
+
+def test_a_node_assert_check_a_null_check_makes_impossible_is_reported():
+    assertion = "x != null and not isinstance(x, A) and not isinstance(x, B)"
+    body = f'    input:\n      x: ${{input.x}}\n    asserts:\n      - "{assertion}"\n'
+    text = _AB_FLOW_HEAD + _code_node("c", body) + "output: ${c.output}\n"
+    assert (
+        "node 'c' assert: `not isinstance(x, B)` can never be true here: x is B, by the checks "
+        "before it, so `isinstance(x, B)` is always true"
+    ) in _load_error(text)
+
+
+def test_a_null_check_case_under_a_branch_that_rules_out_every_member_is_reported():
+    text = (
+        _AB_FLOW_HEAD
+        + _searched(
+            "outer", "not isinstance(input.x, A) and not isinstance(input.x, B)", "inner", "e"
+        )
+        + _searched("inner", "input.x != null", "t", "e2")
+        + _code_node("t")
+        + _code_node("e")
+        + _code_node("e2")
+        + "output: ${input.x}\n"
+    )
+    assert (
+        "case node 'inner': `cases[0].when`: `input.x != null` can never be true here: "
+        "input.x is None, by the case branch that routes this node"
+    ) in _load_error(text)
 
 
 # --------------------------------------------------------------------------- #
@@ -352,8 +467,33 @@ def test_a_null_when_is_no_on_value_even_on_a_narrowed_field():
         load_flow(_inner_on_flow("null"))
 
 
-def test_a_when_is_typed_by_the_unnarrowed_field():
-    # An `on:` value is typed by the unnarrowed inputs first, so narrowing changes no
-    # `when:` check.
-    load_flow(_inner_on_flow("'null'"))
-    load_flow(_inner_on_flow("x"))
+def _exhaustive_on_flow(when: str) -> str:
+    """A flow whose read CASE routes, under `when`, to an `on:` CASE over the tag
+    `input.a.m` that lists every tag and has no `else:`; `input.a` is `Optional(A)`."""
+    return (
+        "id: p\nname: p\n"
+        "typedefs:\n  A:\n    b: Optional(str)\n    m: Literal(p, q)\n"
+        "input:\n  a: !Optional(A)\n"
+        "nodes:\n"
+        "  route:\n    kind: case\n    cases:\n"
+        f'      - when: "{when}"\n        then: inner\n'
+        "    else: e\n"
+        "  inner:\n    kind: case\n    on: ${input.a.m}\n    cases:\n"
+        "      - when: p\n        then: np\n"
+        "      - when: q\n        then: nq\n"
+        "  np:\n    kind: code\n    code: return 1\n"
+        "  nq:\n    kind: code\n    code: return 2\n"
+        "  e:\n    kind: code\n    code: return 3\n"
+        "output: ${route.output}\n"
+    )
+
+
+@pytest.mark.parametrize("when", ["input.a.b != null", "input.a != null"])
+def test_a_null_check_on_a_field_or_its_parent_makes_a_sibling_tag_exhaustive(when):
+    # A non-null `input.a.b` means `input.a` is not null, so its required tag `m` is not.
+    load_flow(_exhaustive_on_flow(when))
+
+
+def test_a_field_of_an_unchecked_optional_parent_may_still_be_null():
+    with pytest.raises(LoadError, match="\\$\\{input.a.m\\} may be null"):
+        load_flow(_exhaustive_on_flow("input.a == null"))

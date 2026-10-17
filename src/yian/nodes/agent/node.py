@@ -56,6 +56,7 @@ from yian.nodes.base import (
 from yian.nodes.binding import BindingError, ReservedBinder, apply_defaults
 from yian.nodes.contracts import (
     Binding,
+    NodeSteps,
     Parameter,
     ValueContract,
     ValueTemplate,
@@ -69,6 +70,10 @@ from yian.tools import ToolSet
 from yian.typesys import Type
 from yian.typesys.pool import VariablePool
 from yian.typesys.values import ValueKind, build_value_as, canonical_type_label
+
+
+_CONFIG_STEP = "effective_llm_config"
+"""The node-step key under which a call-time agent records its resolved config."""
 
 
 def is_text_output(contract: Any) -> bool:
@@ -238,6 +243,26 @@ class AgentNode(Node):
     def needs_steering(self) -> bool:
         """Receive the host's steering inbox only when authored ``steerable: true``."""
         return self.steerable
+
+    @property
+    def needs_steps(self) -> bool:
+        """Receive node steps only when this agent's config resolves when it runs."""
+        return self.call_time is not None
+
+    def recorded_llm_config(self, steps: tuple[dict[str, Any], ...]) -> dict[str, Any] | None:
+        """Return the config an earlier start of this agent recorded in its steps, if any.
+
+        Args:
+            steps (`tuple[dict[str, Any], ...]`): The node's recorded steps, in order.
+
+        Returns:
+            `dict[str, Any] | None`: The last recorded ``effective_llm_config``, with no
+                key or header value; `None` when no step records one.
+        """
+        for step in reversed(steps):
+            if isinstance(step, dict) and isinstance(step.get(_CONFIG_STEP), dict):
+                return deepcopy(step[_CONFIG_STEP])
+        return None
 
     def validate_execution_setup(self) -> None:
         """Reject a steerable agent whose output contract is not plain text.
@@ -448,6 +473,7 @@ class AgentNode(Node):
         emit_event: Callable[[Any], None] | None = None,
         skills: Mapping[str, Skill] | None = None,
         steering: Steering | None = None,
+        steps: NodeSteps | None = None,
     ) -> Output:
         """Render fresh locals once, publish established capture, and run the loop.
 
@@ -461,7 +487,9 @@ class AgentNode(Node):
 
         A call-time agent's model config is its bound ``__llm_config`` with the run's
         host key and header values joined when it is marked for the host key; any
-        other agent uses its run's ``llm_config``.
+        other agent uses its run's ``llm_config``. Before anything renders, a
+        call-time agent checks the bound config against the one an earlier start
+        recorded in its steps, then records it as a step.
 
         Args:
             inputs (`dict`): Delivered inputs, kept separate from local variables.
@@ -488,6 +516,10 @@ class AgentNode(Node):
             steering (`Steering | None`, *optional*, defaults to `None`):
                 The host inbox, supplied only when this node is steerable. The
                 tool loop drains steer messages and honors interrupts.
+            steps (`NodeSteps | None`, *optional*, defaults to `None`):
+                This start's recorded steps, supplied only to a call-time agent.
+                It records ``{"effective_llm_config": <config>}``, which holds no
+                key or header value.
 
         Returns:
             `Output`: The model's answer.
@@ -497,10 +529,13 @@ class AgentNode(Node):
             `ExpressionError`: The prompt or system prompt names a missing value or
                 renders a null.
             `SkillError`: The node grants skills the host did not supply.
-            `_CapabilityFault`: Capture or conversation access fails; the
+            `_CapabilityFault`: Capture or conversation access fails, or the bound
+                config differs from the one an earlier start recorded; the
                 evaluator re-raises its original host exception.
             `_HostStop`: The host has requested cooperative cancellation.
         """
+        if steps is not None and self.call_time is not None:
+            self._record_config(inputs[LLM_CONFIG_KEY], steps)
         captured = None if capture_render is None else {
             "prompt_template": self.prompt, "variables": None,
             "variable_domains": None, "rendered_prompt": None,
@@ -571,6 +606,28 @@ class AgentNode(Node):
             # Providers may echo any credential the call sent; the failure record must not carry it.
             scrub_call_credentials(exc, config)
             raise
+
+    def _record_config(self, config: dict[str, Any], steps: NodeSteps) -> None:
+        """Check ``config`` against the config an earlier start recorded, then record it.
+
+        Args:
+            config (`dict[str, Any]`): The bound config, with no secrets.
+            steps (`NodeSteps`): This start's steps.
+
+        Raises:
+            `_CapabilityFault`: An earlier start recorded another config. The code
+                that resolves it has changed since then, which is the host's to fix,
+                not a failure of this node.
+        """
+        recorded = self.recorded_llm_config(steps.prior)
+        if recorded is not None and recorded != config:
+            assert self.call_time is not None  # only call-time agents record a config
+            raise _CapabilityFault(ValueError(
+                f"node {self.call_time.path!r} llm_config: recorded config differs from the "
+                "recomputed one; resume the run with the flow and yian version that "
+                "started it"
+            ))
+        steps.record({_CONFIG_STEP: deepcopy(config)})
 
     def _call_config(self, inputs: Mapping[str, Any]) -> dict[str, Any] | None:
         """Return the config this invocation's model call uses; never stored.

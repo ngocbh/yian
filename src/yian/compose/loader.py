@@ -53,6 +53,11 @@ from yian.compile.memory_layout import (
     resolve_memory_layout,
     scope_memory_declarations,
 )
+from yian.compile.llm_cascade import (
+    field_label,
+    find_inherited_llm_value,
+    inherited_value_fix,
+)
 from yian.compile.model import CompiledFlow
 from yian.compile.origins import iter_flow_origins, rebase_flow_origins
 from yian.defaults import current
@@ -683,7 +688,57 @@ def load_flow(
         resolve_memory_layout(flow.compiled)
     except MemorySetupError as exc:
         raise _memory_setup_load_error(flow, exc) from exc
+    # Which flow is the run's root, and so which inputs are known at run start, is
+    # decided only here.
+    _refuse_inherited_llm_values(flow)
     return flow
+
+
+def _refuse_inherited_llm_values(flow: ComposedFlow) -> None:
+    """Reject an `llm_config` value a child flow's agent would inherit before it is known.
+
+    Only the root flow's values that read just its inputs are known when the run starts;
+    any other value in a flow's layer is read when that flow runs, so a child flow's
+    agent can't inherit it (`find_inherited_llm_value`). The error is located at the
+    value and names the agent and the fix; a value in an imported file names the
+    `uses:` alias and the node that calls it.
+
+    Args:
+        flow (`ComposedFlow`): The loaded root flow, imports included.
+
+    Raises:
+        `LoadError`: A child flow's agent would inherit such a value.
+    """
+    found = find_inherited_llm_value(flow.compiled)
+    if found is None:
+        return
+    resolver = flow.origin_resolver
+
+    def frame(origin: OriginRef | None) -> DiagnosticFrame | None:
+        return None if origin is None or resolver is None else resolver.resolve(origin)
+
+    value_frame = frame(found.origin)
+    field = field_label(found.field)
+    if found.callsite is None:
+        subject = f"flow {field}"
+    else:
+        name = getattr(found.callsite, "flow_id", None)
+        called = f"called by node {'/'.join(found.owner)!r}"
+        callsite_frame = frame(found.callsite.origin)
+        imported = (
+            value_frame is not None
+            and callsite_frame is not None
+            and value_frame.label != callsite_frame.label
+        )
+        if imported:
+            subject = f"{field} of the flow imported through uses: {name!r} ({called})"
+        else:
+            subject = f"defs entry {name!r} {field} ({called})"
+    raise _UNLOCATED_DIAGNOSTICS.error(
+        f"{subject}: agent {'/'.join(found.agent)!r} in a child flow would inherit this "
+        f"value, which is read only when the flow runs; {inherited_value_fix(found.field)}",
+        frames=() if value_frame is None else (value_frame,),
+    )
 
 
 def _read_authored_llm_config(

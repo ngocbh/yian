@@ -19,9 +19,12 @@ Defaults are injected by the host.
 from __future__ import annotations
 
 import copy
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Optional
 
 from pydantic import SecretStr
+
+from yian.diagnostics import OriginRef
 
 from yian.llm_clients.config import merge_llm_config
 from yian.llm_clients.connection import HOST_KEY_MARKER
@@ -31,6 +34,15 @@ from yian.llm_clients.layers import (
     validate_layer,
 )
 from yian.nodes.agent import AgentNode
+from yian.nodes.agent.llm_values import (
+    Nullable,
+    contract_nullable,
+    contributing,
+    reads_only_inputs,
+    value_leaves,
+)
+from yian.nodes.base import Node
+from yian.nodes.contracts import Binding, ValuePath, ValueTemplate
 
 
 def resolve_llm_cascade(
@@ -71,9 +83,21 @@ def resolve_llm_cascade(
 
     Raises:
         `ValueError`:
-            If a provider or model selection is invalid, or an agent has no
-            provider or model.
+            If a provider or model selection is invalid, an agent has no provider or
+            model, or a child flow's agent would inherit an `llm_config` value read
+            only when its flow runs (`find_inherited_llm_value`).
     """
+    inherited = find_inherited_llm_value(flow)
+    if inherited is not None:
+        where = (
+            "the run's flow" if not inherited.owner
+            else f"the flow node {_path_key(inherited.owner)!r} calls"
+        )
+        raise ValueError(
+            f"node {_path_key(inherited.agent)!r} would inherit "
+            f"{field_label(inherited.field)} from {where}, a value read only when that flow "
+            f"runs; {inherited_value_fix(inherited.field)}"
+        )
     validate_layer(parent_config)
     validate_layer(defaults)
     effective: dict[str, dict[str, Any]] = {}
@@ -87,6 +111,131 @@ def resolve_llm_cascade(
         effective=effective,
     )
     return effective
+
+
+@dataclass(frozen=True)
+class InheritedValue:
+    """An `llm_config` value in an enclosing flow's layer that a child flow's agent inherits.
+
+    Only the run's flow layer may pass a value down, and only one that reads just the
+    run's inputs, which are known at run start; any other value is read only when its
+    flow runs, after the child's agents have their config.
+
+    Attributes:
+        owner (`tuple[str, ...]`): The static path of the callsite whose flow holds the
+            layer; empty for the run's flow.
+        callsite (`Node | None`): The CALL, MAP or LOOP node at ``owner``; `None` for
+            the run's flow.
+        field (`ValuePath`): The value's field path in its layer; empty for a whole
+            record.
+        origin (`OriginRef | None`): The value's authored site, when known.
+        agent (`tuple[str, ...]`): The static path of the agent that inherits it.
+    """
+
+    owner: tuple[str, ...]
+    callsite: Optional[Node]
+    field: ValuePath
+    origin: Optional[OriginRef]
+    agent: tuple[str, ...]
+
+
+def find_inherited_llm_value(flow: Any) -> Optional[InheritedValue]:
+    """Return the first `llm_config` value a child flow's agent would inherit, if any.
+
+    The walk follows the cascade: a child's agent inherits every enclosing flow's layer
+    unless it has ``inherit: false``. A value reaches it unless a layer closer to the
+    agent (its own, its flow's, a nearer enclosing flow's) always sets that field; the
+    agent's own values answer from their static types, others from their tags.
+
+    Args:
+        flow (`CompiledFlow`): The run's flow; its static call tree is walked, unchanged.
+
+    Returns:
+        `InheritedValue | None`: The first such value in static tree order, or `None`.
+    """
+    return _find_inherited(flow, (), None, [])
+
+
+def field_label(field: ValuePath) -> str:
+    """Name an `llm_config` field path in a message, such as ``llm_config.model``."""
+    return "llm_config" + "".join(f".{part}" for part in field)
+
+
+def inherited_value_fix(field: ValuePath) -> str:
+    """Tell the author how to pass an inherited value to a child flow instead."""
+    name = field[-1] if field else "llm_config"
+    return (
+        f"pass it to the child as an input and write `${{input.{name}}}` in the child's "
+        "llm_config"
+    )
+
+
+@dataclass(frozen=True)
+class _Enclosing:
+    """One enclosing flow's layer on the way down to a child flow."""
+
+    layer: Any
+    owner: tuple[str, ...]
+    callsite: Optional[Node]
+
+
+def _find_inherited(
+    flow: Any,
+    path: tuple[str, ...],
+    callsite: Optional[Node],
+    enclosing: list[_Enclosing],
+) -> Optional[InheritedValue]:
+    """Search ``flow``, reached at callsite ``path`` under ``enclosing``, and its children."""
+    own = getattr(flow, "flow_llm_config", None) or {}
+    for node_id, node in flow.nodes.items():
+        node_path = (*path, node_id)
+        if isinstance(node, AgentNode) and node.llm_inherit and enclosing:
+            found = _inherited_by(node, own, enclosing, node_path)
+            if found is not None:
+                return found
+        child = getattr(node, "child", None)
+        if child is not None:
+            found = _find_inherited(
+                child, node_path, node, [*enclosing, _Enclosing(own, path, callsite)]
+            )
+            if found is not None:
+                return found
+    return None
+
+
+def _inherited_by(
+    node: AgentNode, own: Any, enclosing: list[_Enclosing], agent: tuple[str, ...]
+) -> Optional[InheritedValue]:
+    """Return the first enclosing value that can reach ``node``, innermost layer first."""
+    higher: list[tuple[Any, Nullable]] = [
+        (node.own_llm_config, node.llm_nullable()),
+        (own, contract_nullable),
+    ]
+    for outer in reversed(enclosing):
+        remaining = outer.layer
+        for layer, nullable in higher:
+            remaining = contributing(remaining, layer, nullable)
+        for field, leaf in value_leaves(remaining).items():
+            if not outer.owner and reads_only_inputs(leaf):
+                continue  # the run's inputs are known at run start
+            return InheritedValue(
+                owner=outer.owner,
+                callsite=outer.callsite,
+                field=field,
+                origin=_value_origin(outer.layer, field, leaf),
+                agent=agent,
+            )
+        higher.append((outer.layer, contract_nullable))
+    return None
+
+
+def _value_origin(layer: Any, field: ValuePath, leaf: Any) -> Optional[OriginRef]:
+    """Return the authored site of the value at ``field`` in ``layer``."""
+    if isinstance(layer, Binding):
+        return layer.origin
+    if isinstance(leaf, Binding) and leaf.origin is not None:
+        return leaf.origin
+    return layer.origin_at(field) if isinstance(layer, ValueTemplate) else None
 
 
 def apply_effective_llm_map(

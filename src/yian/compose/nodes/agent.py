@@ -40,6 +40,7 @@ from yian.llm_clients.config import host_only_field_error
 from yian.llm_clients.provider_blocks import PROVIDER_BLOCKS, partial_block_problems
 from yian.memory.contracts import DeclSite, MemoryDecl
 from yian.nodes.agent import AgentNode
+from yian.nodes.agent.llm_values import LLM_CONFIG_KEY
 from yian.nodes.agent.node import is_max_tool_iterations, is_text_output
 from yian.nodes.agent.structured import type_to_schema
 from yian.nodes.contracts import Binding, Parameter, ValueContract, ValueTemplate
@@ -744,8 +745,19 @@ class AgentDescriptor(NodeDescriptor):
                     message,
                     range=self.field_ranges.get(("field", "variables")) or self.range,
                 )
+        if LLM_CONFIG_KEY in input_names:
+            raise ctx.diagnostics.error(
+                f"node {self.id!r}: input {LLM_CONFIG_KEY!r} is reserved for the values "
+                "of `llm_config`; rename the input",
+                range=self.field_ranges.get(("input", LLM_CONFIG_KEY)) or self.range,
+            )
         wiring = self.sink_wiring()
-        return self._finish(node, wiring)
+        result = self._finish(node, wiring)
+        # Errors about `llm_config` values point at the authored `llm_config:`.
+        return replace(
+            result,
+            field_ranges={**result.field_ranges, ("field", LLM_CONFIG_KEY): llm_config_range},
+        )
 
     def _read_variables(self, ctx: BuildContext) -> list[Parameter]:
         """Compile this node's declarations at their authored or source-free site."""

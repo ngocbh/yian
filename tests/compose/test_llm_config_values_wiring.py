@@ -284,3 +284,82 @@ def test_a_shielded_flow_value_reading_a_skippable_node_does_not():
     ))
     assert _llm_edges(flow, "chat") == set()
     assert not _skip_model(flow).may_all_skip({"chat"})
+
+
+def _load_error(text: str) -> LoadError:
+    with pytest.raises(LoadError) as caught:
+        load_flow(text, source_label="f.yaml")
+    return caught.value
+
+
+def _line(error: LoadError) -> int:
+    return error.diagnostic.frames[-1].range.start_line
+
+
+def _line_of(text: str, needle: str) -> int:
+    return next(n for n, line in enumerate(text.splitlines(), 1) if needle in line)
+
+
+def test_an_unknown_node_in_a_value_is_named_at_the_llm_config_field():
+    text = _NODE_LEVEL.replace("'${pick.output}'", "'${nope.output}'")
+    error = _load_error(text)
+    assert "\n  node 'chat' llm_config: reference ${nope.output}" in error.diagnostic.message
+    assert _compiled(_NODE_LEVEL).nodes["chat"].binding_labels[LLM_CONFIG_KEY] == (
+        "node 'chat' llm_config"
+    )
+    assert _line(error) == _line_of(text, "${nope.output}")
+
+
+def test_an_unknown_input_in_a_flow_value_is_located_at_the_flow_field():
+    text = _FLOW_LEVEL.replace("'${pick.output}'}\nnodes", "'${input.nope}'}\nnodes")
+    error = _load_error(text)
+    assert "\n  node 'open' llm_config: reference ${input.nope}" in error.diagnostic.message
+    assert _line(error) == _line_of(text, "${input.nope}")
+
+
+_ASK = """\
+id: f
+name: f
+input: {proj: !str }
+nodes:
+  ask:
+    kind: human_input
+    input: {proj: '${input.proj}'}
+    adaptive_questions:
+      prompt: "Q ${proj}"
+      llm_config: {model: '${nope.output}'}
+output: ${ask.output}
+"""
+
+
+def test_a_composer_value_error_names_the_gate_field():
+    error = _load_error(_ASK)
+    assert (
+        "\n  node 'ask' adaptive_questions.llm_config: reference ${nope.output}"
+        in error.diagnostic.message
+    )
+    assert _line(error) == _line_of(_ASK, "${nope.output}")
+    composer = _compiled(_ASK.replace("${nope.output}", "${input.proj}"))
+    assert composer.nodes["ask__compose"].binding_labels[LLM_CONFIG_KEY] == (
+        "node 'ask' adaptive_questions.llm_config"
+    )
+
+
+def test_skipped_arithmetic_in_a_value_names_the_llm_config_field():
+    text = _CASE.replace("LAYER", "").replace(
+        "CHAT", """llm_config: {model: '${pick.output + "x"}'}"""
+    )
+    error = _load_error(text)
+    assert error.diagnostic.message.startswith(
+        "node 'chat' llm_config: ${pick.output + \"x\"} does arithmetic on pick.output"
+    ), error
+    assert _line(error) == _line_of(text, "pick.output + ")
+
+
+def test_an_authored_input_named_like_the_reserved_key_fails():
+    text = _NODE_LEVEL.replace(
+        "    prompt: Go.\n", "    input: {__llm_config: '${pick.output}'}\n    prompt: Go.\n"
+    )
+    error = _load_error(text)
+    assert "'__llm_config' is reserved" in error.diagnostic.message, error
+    assert error.diagnostic.message.startswith("node 'chat'")

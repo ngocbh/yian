@@ -970,7 +970,7 @@ def _split_typed_llm_config(
 
 
 def _attach_llm_config_wiring(
-    nodes: dict[str, Node],
+    build_results: dict[str, BuildResult],
     flow_wiring: dict[str, dict],
     flow_llm_config: Any,
     producers: dict[str, OutputContract],
@@ -988,8 +988,11 @@ def _attach_llm_config_wiring(
     reference checks, skips and child re-namespacing treat the values as any other
     binding, and a dropped value adds no edge.
 
+    The agent's runtime binding errors about the key name its `llm_config` field (an
+    adaptive composer's, the gate's `adaptive_questions.llm_config`).
+
     Args:
-        nodes (`dict[str, Node]`): Built nodes keyed by final descriptor id.
+        build_results (`dict[str, BuildResult]`): Built nodes keyed by final descriptor id.
         flow_wiring (`dict[str, dict]`): Mutable binding maps keyed by node id.
         flow_llm_config (`Any`): The flow's authored `llm_config:` layer: a dict, a
             `ValueTemplate` or a `Binding`.
@@ -998,7 +1001,8 @@ def _attach_llm_config_wiring(
         type_fn (`TypeFn | None`, *optional*, defaults to `None`): Resolves a
             constructor name to its type for inference.
     """
-    for node_id, node in nodes.items():
+    for node_id, result in build_results.items():
+        node = result.node
         if not isinstance(node, AgentNode):
             continue
         types: dict[ValuePath, Type | None] = {}
@@ -1014,6 +1018,9 @@ def _attach_llm_config_wiring(
         if carried is not None:
             flow_wiring[node_id][LLM_CONFIG_KEY] = carried
             node.wires_llm_config = True
+            node.binding_labels[LLM_CONFIG_KEY] = result.site_name(
+                node_id, node.reserved_key_label(LLM_CONFIG_KEY)
+            )
 
 
 def _binding_style(
@@ -2567,7 +2574,7 @@ def _assemble(
         producers[nid] = contract
 
     _attach_llm_config_wiring(
-        nodes_built,
+        build_results,
         flow_wiring,
         flow_llm_config or {},
         producers,

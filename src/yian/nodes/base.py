@@ -1360,6 +1360,20 @@ class Node(ABC):
         the empty set (an ordinary node reserves no keys)."""
         return set()
 
+    def reserved_key_label(self, key: str) -> str:
+        """The author-facing phrase naming a reserved wiring key in a message.
+
+        It follows the node in a message, as in `node 'w' wait until`. Default:
+        `<kind> <key>` (WAIT: `wait until`; MAP: `map over`).
+
+        Args:
+            key (`str`): One of `reserved_wiring_keys()`.
+
+        Returns:
+            `str`: The phrase, without the node.
+        """
+        return f"{self.kind.value} {key}"
+
     def wiring_ref_label(self, param: str) -> str:
         """The author-facing phrase for a wiring `param` in a reference error — e.g. `input 'x'`
         for an authored input, or a synthetic param's own site (`cases[1].when`, `on:`) when the

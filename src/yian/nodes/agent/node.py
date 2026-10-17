@@ -169,6 +169,10 @@ class AgentNode(Node):
         """Declare ``__llm_config`` when values in the layers can reach this agent's config."""
         return {LLM_CONFIG_KEY} if self.wires_llm_config else set()
 
+    def reserved_key_label(self, key: str) -> str:
+        """Name the reserved ``__llm_config`` key as the authored ``llm_config`` field."""
+        return "llm_config" if key == LLM_CONFIG_KEY else super().reserved_key_label(key)
+
     def llm_nullable(self) -> Nullable:
         """Return whether a value in ``own_llm_config``, or a part of it, may be null.
 

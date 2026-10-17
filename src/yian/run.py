@@ -1172,7 +1172,7 @@ def _check_templates(flow: Any, path: tuple[str, ...] = ()) -> None:
                 # reads as its authored site; a CASE param keeps its wiring site name.
                 subject = f"{owner}{node.binding_labels[key]}"
             elif key in reserved:
-                subject = f"node {node_path!r} {node.kind.value} {key}"
+                subject = f"node {node_path!r} {node.reserved_key_label(key)}"
             elif node.binds_per_item:
                 subject = f"node {node_path!r} map input {key!r}"
             else:

@@ -649,7 +649,7 @@ def test_each_file_is_parsed_once_though_its_load_is_repeated(
     assert dict(loads) == {"<flow>": 1, **{f"u{i}.yaml": 2 if i < 27 else 1 for i in range(30)}}
 
 
-def test_a_file_importing_many_files_is_loaded_once(
+def test_a_file_importing_many_shallow_files_is_loaded_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     aliases = {f"a{i}": f"leaf{i}" for i in range(150)}
@@ -673,6 +673,29 @@ def test_a_file_importing_many_files_is_loaded_once(
         **{f"{leaf}.yaml": 1 for leaf in aliases.values()},
     }
     assert dict(rebases) == {"first": 1, **{alias: 1 for alias in aliases}}
+
+
+def test_a_file_importing_chains_deeper_than_the_nesting_bound_is_loaded_once_per_chain(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Each chain nests past `_MAX_NESTED_FILE_LOADS` and aborts `hub`'s load, so `hub` is
+    # loaded again once per chain, then once more to finish.
+    k, depth = 5, 10
+    assert depth > loader._MAX_NESTED_FILE_LOADS
+    texts = {"hub": _importing("hub", {f"a{i}": f"c{i}_0" for i in range(k)})}
+    for i in range(k):
+        texts.update(_chain_texts(depth, prefix=f"c{i}_", calls=False))
+    _write_files(tmp_path, texts)
+    root = _USES_ROOT.format(first="hub")
+    with monkeypatch.context() as unbounded:
+        # A bound past the chains' depth loads every import nested, without the scheduler.
+        unbounded.setattr(loader, "_MAX_NESTED_FILE_LOADS", depth + 1)
+        expected = flow_fingerprint(load_flow(root, search_paths=[tmp_path]).compiled)
+    loads = _count_file_loads(monkeypatch)
+    flow = load_flow(root, search_paths=[tmp_path])
+
+    assert loads["hub.yaml"] == k + 1
+    assert flow_fingerprint(flow.compiled) == expected
 
 
 def test_a_file_loaded_before_a_deep_import_is_not_loaded_again(

@@ -278,9 +278,11 @@ def _reject_authored_private_callable_names(
 
 # How many file loads the default file resolver nests above the file `_load_callee_first`
 # is loading before it hands the next import to the scheduler's stack. Nesting lets a
-# file load its imports in one pass, so a file that imports many files is loaded once;
-# the bound keeps a long import chain from nesting more file loads than that on the
-# Python stack.
+# file load its imports in one pass, so a file that imports many files is loaded once
+# when their imports fit within the bound. It does not spare every reload: each import
+# whose own imports reach deeper than the bound aborts its importer's load, so a file is
+# loaded again once per such import. The bound keeps a long import chain from nesting
+# more file loads than that on the Python stack.
 _MAX_NESTED_FILE_LOADS = 8
 
 
@@ -627,6 +629,11 @@ def make_file_resolver(search_paths, ctx: "_LoadCtx") -> ChildResolver:
         `LoadError`:
             From the returned closure on a missing target, a cross-file reference cycle,
             or a pinned-version mismatch.
+        `Exception`:
+            From the returned closure, whatever loading an imported file raised, which
+            may be any `Exception` (an `OSError` reading the file, say), including a
+            failure recorded by `_load_callee_first` and raised again while the file's
+            importer loads again.
     """
 
     def resolve(path: str, version: Optional[str] = None) -> ComposedFlow:
@@ -680,8 +687,8 @@ def _load_callee_first(ctx: _LoadCtx, first: Path) -> ComposedFlow:
     """Load `uses:` file `first` and the files it imports, nesting at most a few file loads.
 
     While this runs, a default file resolver of `ctx` loads a file not loaded yet nested
-    inside its importer, as outside this, while fewer than `_MAX_NESTED_FILE_LOADS` file
-    loads are nested above the file on top of the stack. Past that it raises
+    inside its importer, as a load nested in its importer would, while fewer than
+    `_MAX_NESTED_FILE_LOADS` file loads are nested above the file on top of the stack. Past that it raises
     `_LoadFirst`, which aborts the load on top. The nested files and then the imported
     file are pushed on the stack, the imported file is loaded first, and each file below
     it is loaded again once the file above it is done. A pushed file loads with the
@@ -689,6 +696,14 @@ def _load_callee_first(ctx: _LoadCtx, first: Path) -> ComposedFlow:
     a load nested in its importers sees, so cross-file cycles and the call nesting limit
     are checked as before. Files the aborted load finished loading stay cached in
     `ctx.flows`, so loading again finds them loaded, as a nested load would.
+
+    Nesting does not spare every reload. Each import whose own imports reach deeper
+    than `_MAX_NESTED_FILE_LOADS` aborts its importer's load, so a file is loaded again
+    once per such import: a file importing k chains, each deeper than the bound, is
+    loaded k + 1 times. Each reload repeats the file's whole load, rebasing again every
+    alias it had already loaded, so the cost grows with the number of deep imports times
+    the size of the file, and a wide importer of deep chains loads much slower than
+    loading each import nested would.
 
     When a file on the stack fails, its exception is recorded for the file below it,
     keyed by the failed file and the files being loaded when it was imported. While the

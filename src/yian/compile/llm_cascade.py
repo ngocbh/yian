@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from pydantic import SecretStr
 
@@ -35,14 +35,21 @@ from yian.llm_clients.layers import (
 )
 from yian.nodes.agent import AgentNode
 from yian.nodes.agent.llm_values import (
+    LLM_CONFIG_KEY,
     Nullable,
     contract_nullable,
     contributing,
+    keep_values,
+    layer_refs,
     reads_only_inputs,
+    resolve_layer,
+    resolve_layers,
     value_leaves,
 )
 from yian.nodes.base import Node
-from yian.nodes.contracts import Binding, ValuePath, ValueTemplate
+from yian.nodes.binding import BindingError, bind_params
+from yian.nodes.contracts import Binding, Parameter, ValuePath, ValueTemplate
+from yian.typesys.pool import VariablePool
 
 
 def resolve_llm_cascade(
@@ -55,10 +62,74 @@ def resolve_llm_cascade(
 ) -> dict[str, dict[str, Any]]:
     """Bake and return every AGENT node's complete effective configuration.
 
+    This is `resolve_run_llm` for a run given no inputs; its ``effective`` map is
+    returned.
+
+    Args:
+        flow (`CompiledFlow`):
+            The flow whose complete static call tree is resolved in place.
+        parent_config (`dict[str, Any]`):
+            The outermost gap-fill layer (the CLI/host layer).
+        defaults (`dict[str, Any]`):
+            Lowest-precedence host defaults, possibly empty.
+        provider_models (`dict[str, str] | None`):
+            Saved models by provider.
+        stray_model (`bool`, *optional*, defaults to `False`):
+            Whether ``YIAN_DEFAULT_MODEL`` was set without a default provider.
+
+    Returns:
+        `dict[str, dict[str, Any]]`:
+            Complete effective configurations keyed by unambiguous static agent path.
+
+    Raises:
+        `ValueError`: As `resolve_run_llm` raises it.
+    """
+    return resolve_run_llm(
+        flow,
+        parent_config,
+        defaults=defaults,
+        provider_models=provider_models,
+        stray_model=stray_model,
+    ).effective
+
+
+@dataclass(frozen=True)
+class RunLLM:
+    """The configurations a run start resolves for its agents.
+
+    Attributes:
+        effective (`dict[str, dict[str, Any]]`): Each agent resolved at run start, its
+            complete effective configuration keyed by static agent path.
+        call_time (`dict[str, dict[str, Any]]`): Each agent whose configuration is
+            resolved only when it runs, keyed by static agent path.
+    """
+
+    effective: dict[str, dict[str, Any]]
+    call_time: dict[str, dict[str, Any]]
+
+
+def resolve_run_llm(
+    flow: Any,
+    parent_config: dict[str, Any],
+    *,
+    defaults: dict[str, Any],
+    provider_models: dict[str, str] | None = None,
+    stray_model: bool = False,
+    run_inputs: Mapping[str, Any] | None = None,
+) -> RunLLM:
+    """Bake every AGENT node's complete effective configuration at run start.
+
     The normal precedence is node, current flow, enclosing flows, caller layer, then
     ``defaults``. An AGENT node with ``llm_inherit=False`` skips the flow/enclosing/caller
     layers but still receives the defaults. An unset model comes from
     ``provider_models`` for the agent's provider.
+
+    Values (`${...}`) in the run's flow that read only its inputs are resolved here,
+    in that flow's layer and in the layers of its agents. Each input such a value reads
+    is checked first, as START checks it: present unless optional, its default when
+    omitted, and its contract. A value resolving to null leaves its field unset. A
+    flow layer passes down only its literal and resolved fields; Compose has refused
+    any other value an inheriting agent could read (`find_inherited_llm_value`).
     Every returned value and every node-owned value is an independent deep copy.
 
     Args:
@@ -76,16 +147,19 @@ def resolve_llm_cascade(
         stray_model (`bool`, *optional*, defaults to `False`):
             Whether ``YIAN_DEFAULT_MODEL`` was set without a default provider; an
             agent missing its provider or model then says so.
+        run_inputs (`Mapping[str, Any] | None`, *optional*, defaults to `None`):
+            The run's supplied inputs, coerced at the run boundary; `None` is none.
 
     Returns:
-        `dict[str, dict[str, Any]]`:
-            Complete effective configurations keyed by unambiguous static agent path.
+        `RunLLM`: The resolved configurations.
 
     Raises:
         `ValueError`:
             If a provider or model selection is invalid, an agent has no provider or
-            model, or a child flow's agent would inherit an `llm_config` value read
-            only when its flow runs (`find_inherited_llm_value`).
+            model, an input a value reads is missing or breaks its contract, a value
+            fails to resolve, a child flow's agent would inherit an `llm_config` value
+            read only when its flow runs (`find_inherited_llm_value`), or an agent's
+            config reads a value known only when it runs.
     """
     inherited = find_inherited_llm_value(flow)
     if inherited is not None:
@@ -109,8 +183,75 @@ def resolve_llm_cascade(
         stray_model=stray_model,
         path=(),
         effective=effective,
+        inputs=_RunInputs(flow, run_inputs or {}),
     )
-    return effective
+    # `_resolve_carried` refuses an agent whose config reads a value known only when it runs.
+    return RunLLM(effective, {})
+
+
+class _RunInputs:
+    """The run's inputs that run-start values read, each checked once as START checks it."""
+
+    def __init__(self, flow: Any, supplied: Mapping[str, Any]) -> None:
+        """Hold ``flow``'s declared inputs and the supplied values, none checked yet."""
+        self._start_id = flow.start_id
+        self._params: dict[str, Parameter] = {
+            parameter.name: parameter for parameter in flow.nodes[flow.start_id].params
+        }
+        self._supplied = dict(supplied)
+        self._checked: dict[str, Any] = {}
+
+    def pool_for(self, layer: Any, where: Callable[[ValuePath], str]) -> VariablePool:
+        """Check each input the values in ``layer`` read; return a pool holding them.
+
+        Args:
+            layer (`Any`): A layer whose values read only ``input.*``.
+            where (`Callable[[ValuePath], str]`): Names a value's field in a message.
+
+        Returns:
+            `VariablePool`: A pool whose START record holds every input checked so far;
+                an omitted optional input without a default is null.
+
+        Raises:
+            `ValueError`: An input is missing or breaks its contract; the message names
+                the field and the input.
+        """
+        for path, leaf in value_leaves(layer).items():
+            for name in self._read_names(leaf):
+                if name not in self._checked:
+                    self._checked[name] = self._check(name, where(path))
+        pool = VariablePool(start_id=self._start_id)
+        pool.set(self._start_id, copy.deepcopy(self._checked))
+        return pool
+
+    def empty_pool(self) -> VariablePool:
+        """Return a pool with no inputs, for a layer whose values are all dropped."""
+        return VariablePool(start_id=self._start_id)
+
+    def _read_names(self, leaf: Any) -> list[str]:
+        """Return the names of the inputs a value reads; ``${input}`` reads them all."""
+        names: list[str] = []
+        for ref in layer_refs(leaf):
+            parts = ref.split(".")
+            names.extend(self._params if len(parts) == 1 else parts[1:2])
+        return list(dict.fromkeys(names))
+
+    def _check(self, name: str, where: str) -> Any:
+        """Bind one input as START binds it, and return its value."""
+        parameter = self._params.get(name)
+        if parameter is None:
+            raise ValueError(f"{where}: input {name!r} is not declared")
+        present = name in self._supplied
+        if not present and parameter.required:
+            raise ValueError(f"{where}: input {name!r} is required and was not given")
+        pool = VariablePool(start_id=self._start_id)
+        pool.set(self._start_id, {name: self._supplied[name]} if present else {})
+        wiring = {name: f"${{input.{name}}}"} if present else {}
+        try:
+            record = bind_params([parameter], wiring, pool)
+        except BindingError as exc:
+            raise ValueError(f"{where}: {exc}") from None
+        return record.get(name)
 
 
 @dataclass(frozen=True)
@@ -295,29 +436,37 @@ def _resolve_flow(
     stray_model: bool,
     path: tuple[str, ...],
     effective: dict[str, dict[str, Any]],
+    inputs: _RunInputs,
 ) -> None:
     """Resolve one flow scope recursively into ``effective``."""
-    authored_flow = copy.deepcopy(getattr(flow, "flow_llm_config", {}))
-    validate_layer(authored_flow)
     flow_layer = merge_llm_config(
-        authored_flow,
+        _run_start_flow_layer(flow, root=not path, inputs=inputs),
         parent_config,
     )
 
     for node_id, node in flow.nodes.items():
         node_path = (*path, node_id)
         if isinstance(node, AgentNode):
-            validate_layer(node.own_llm_config)
-            base = {} if not node.llm_inherit else flow_layer
-            authored = merge_llm_config(copy.deepcopy(node.own_llm_config), base)
             path_key = _path_key(node_path)
+            label = _agent_label(node, path)
+            carried = flow.wiring.get(node_id, {}).get(LLM_CONFIG_KEY)
+            if carried is None:
+                own = _literal_layer(node.own_llm_config, inputs)
+                validate_layer(own)
+                base = {} if not node.llm_inherit else flow_layer
+                authored = merge_llm_config(own, base)
+            else:
+                authored = _resolve_carried(
+                    carried, node, parent_config,
+                    root=not path, path=path_key, label=label, inputs=inputs,
+                )
             config = resolve_agent_config(
                 authored,
                 defaults=defaults,
                 provider_models=provider_models,
                 stray_model=stray_model,
                 path=path_key,
-                label=_agent_label(node, path),
+                label=label,
             )
             node.llm_config = copy.deepcopy(config)
             effective[path_key] = copy.deepcopy(config)
@@ -335,7 +484,87 @@ def _resolve_flow(
                 stray_model=stray_model,
                 path=node_path,
                 effective=effective,
+                inputs=inputs,
             )
+
+
+_FLOW_SUBJECT = "flow llm_config"
+
+
+def _run_start_flow_layer(flow: Any, *, root: bool, inputs: _RunInputs) -> dict[str, Any]:
+    """Return a flow's layer as its agents inherit it at run start.
+
+    The run's flow keeps its values that read only its inputs, resolved; every other
+    value is dropped with its field, since no agent that inherits the layer statically
+    can read it.
+    """
+    authored = getattr(flow, "flow_llm_config", None) or {}
+    if isinstance(authored, dict):
+        layer = copy.deepcopy(authored)
+    else:
+        known = keep_values(authored, reads_only_inputs if root else lambda _leaf: False)
+        pool = (
+            inputs.pool_for(known, lambda field: _field_where(_FLOW_SUBJECT, field))
+            if root else inputs.empty_pool()
+        )
+        layer = _resolved(lambda: resolve_layer(known, pool), _FLOW_SUBJECT)
+    validate_layer(layer)
+    return layer
+
+
+def _literal_layer(layer: Any, inputs: _RunInputs) -> dict[str, Any]:
+    """Return an agent's own layer that holds no value as a plain dict."""
+    if isinstance(layer, dict):
+        return copy.deepcopy(layer)
+    return resolve_layer(layer, inputs.empty_pool())
+
+
+def _resolve_carried(
+    carried: Binding,
+    node: AgentNode,
+    parent_config: dict[str, Any],
+    *,
+    root: bool,
+    path: str,
+    label: Optional[str],
+    inputs: _RunInputs,
+) -> dict[str, Any]:
+    """Resolve an agent's reserved ``__llm_config`` layers and merge them over the caller's.
+
+    Only an agent of the run's flow whose values read just the run's inputs is
+    resolved here.
+    """
+    subject = label or f"node {path!r} llm_config"
+    if not root or not reads_only_inputs(carried):
+        raise ValueError(
+            f"{subject} reads a value known only when the agent runs; only values "
+            "that read the run's inputs are supported"
+        )
+
+    def where(field: ValuePath) -> str:
+        part, *rest = field
+        return _field_where(subject if part == "node" else _FLOW_SUBJECT, tuple(rest))
+
+    pool = inputs.pool_for(carried.source, where)
+    node_layer, flow_layer = _resolved(lambda: resolve_layers(carried, pool), subject)
+    validate_layer(node_layer)
+    validate_layer(flow_layer)
+    if not node.llm_inherit:
+        return node_layer
+    return merge_llm_config(node_layer, merge_llm_config(flow_layer, parent_config))
+
+
+def _resolved(resolve: Callable[[], Any], subject: str) -> Any:
+    """Run one resolution, reporting a binding failure as a `ValueError` naming ``subject``."""
+    try:
+        return resolve()
+    except BindingError as exc:
+        raise ValueError(f"{subject}: {exc}") from None
+
+
+def _field_where(subject: str, field: ValuePath) -> str:
+    """Name a field under an ``llm_config`` subject, as in ``node 'a' llm_config.model``."""
+    return subject + "".join(f".{part}" for part in field)
 
 
 def _static_agent_paths(

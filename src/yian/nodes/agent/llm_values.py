@@ -278,6 +278,67 @@ def resolve_layers(
     )
 
 
+def keep_values(layer: Any, keep: Callable[[Any], bool]) -> Any:
+    """Return ``layer`` without the merge fields that hold a value ``keep`` rejects.
+
+    A rejected value takes its whole merge field with it (a top-level key, or a
+    provider block's field), so no partial field is left; a rejected whole block takes
+    the block, and a rejected whole record leaves an empty layer. Literal fields stay.
+
+    Args:
+        layer (`Any`): A layer: ``dict``, ``ValueTemplate``, ``Binding`` or ``None``.
+        keep (`Callable[[Any], bool]`): Whether a value leaf stays.
+
+    Returns:
+        `Any`: ``layer`` itself when every value stays; otherwise a ``ValueTemplate``
+            without the dropped fields and their origins, or ``{}``.
+    """
+    dropped: set[ValuePath] = set()
+    for path, leaf in value_leaves(layer).items():
+        if not keep(leaf):
+            field = _merge_field(path)
+            dropped.add(path if field is None else field)
+    if not dropped:
+        return layer
+    if () in dropped:
+        return {}
+    assert isinstance(layer, ValueTemplate)  # only template layers have field values
+    return ValueTemplate(
+        _pruned(layer.value, dropped, ()),
+        tuple(
+            (path, origin)
+            for path, origin in layer.origins
+            if not any(path[: len(field)] == field for field in dropped)
+        ),
+    )
+
+
+def resolve_layer(layer: Any, pool: VariablePool, *, label: Optional[str] = None) -> dict:
+    """Resolve one layer against a pool into a plain configuration dict.
+
+    Literal text resolves to itself (``$$`` reads as ``$``), and typed values are
+    checked against their tags. A null whole record is an empty layer.
+
+    Args:
+        layer (`Any`): A layer: ``dict``, ``ValueTemplate``, ``Binding`` or ``None``.
+        pool (`VariablePool`): The pool the values read.
+        label (`str`, *optional*, defaults to `None`): Names the config in an error
+            message in place of ``binding '__llm_config'``.
+
+    Returns:
+        `dict`: The resolved layer.
+
+    Raises:
+        `BindingError`: As `resolve_layers` raises it.
+    """
+    part, origins = _carried(layer)
+    template = Binding(
+        ValueTemplate({"layer": part}, tuple((("layer", *path), o) for path, o in origins))
+    )
+    resolved = _resolve_source(template, pool, name=LLM_CONFIG_KEY, label=label)
+    return _resolved_layer(resolved.get("layer"), part, label)
+
+
 def _has_span(text: str) -> bool:
     """Whether ``text`` holds a `${...}` span; malformed text counts, for later checks."""
     try:

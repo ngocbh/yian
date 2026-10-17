@@ -187,7 +187,6 @@ output: ${chat.output}
 """
 
 
-@pytest.mark.xfail(strict=True, reason="input-only values are not resolved at run start yet")
 def test_runs_with_different_inputs_record_the_same_fingerprint(tmp_path, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
 
@@ -203,8 +202,9 @@ def test_runs_with_different_inputs_record_the_same_fingerprint(tmp_path, monkey
     for index, model in enumerate(("gpt-a", "gpt-b")):
         log = tmp_path / f"run{index}.jsonl"
         result = run_flow(load_flow(_RUN), {"m": model}, log=log)
-        assert result.status == "completed"
+        assert result.status == "succeeded"
         started = json.loads(log.read_text().splitlines()[0])
+        assert started["payload"]["effective_llm_by_static_path"]["chat"]["model"] == model
         fingerprints.append(started["payload"]["flow_fingerprint"])
     assert fingerprints[0] == fingerprints[1]
 

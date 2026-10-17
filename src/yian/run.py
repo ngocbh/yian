@@ -32,6 +32,7 @@ from yian.llm_clients.connection_settings import validate_headers
 from yian.llm_clients.connection import (
     HEADER_NAMES_KEY,
     HOST_KEY_MARKER,
+    ConnectionSnapshot,
     check_model_config,
     connection_snapshot,
     header_name_diff,
@@ -44,8 +45,9 @@ from yian.compile.expand import build_grow
 from yian.compile.llm_cascade import (
     apply_effective_llm_map,
     bind_host_credentials,
+    RunLLM,
     host_key_providers,
-    resolve_llm_cascade,
+    resolve_run_llm,
     static_agent_labels,
 )
 from yian.compile.manifest import flow_fingerprint
@@ -642,6 +644,43 @@ def _run_start_inputs(
     return run_inputs
 
 
+def _run_start_llm(
+    compiled: CompiledFlow,
+    coerced: Mapping[str, Any],
+    llm_config: dict[str, Any],
+    snapshot: ConnectionSnapshot,
+) -> RunLLM:
+    """Resolve a fresh run's llm cascade over ``compiled``, in place, with its inputs.
+
+    Values that read only the run's inputs resolve against the supplied inputs, with
+    omitted inputs' defaults filled.
+
+    Args:
+        compiled (`CompiledFlow`):
+            The run's private flow copy; its agents get their effective configs.
+        coerced (`Mapping[str, Any]`):
+            The supplied inputs, already coerced at the run boundary.
+        llm_config (`dict[str, Any]`):
+            The host layer, without the host key and its settings.
+        snapshot (`ConnectionSnapshot`):
+            The one selection snapshot that determines every agent's defaults.
+
+    Returns:
+        `RunLLM`: The resolved configurations, before any connection is bound.
+
+    Raises:
+        `ValueError`: As `resolve_run_llm` raises it.
+    """
+    return resolve_run_llm(
+        compiled,
+        llm_config,
+        defaults=snapshot.defaults,
+        provider_models=snapshot.provider_models,
+        stray_model=snapshot.stray_model,
+        run_inputs=_run_start_inputs(compiled.nodes[compiled.start_id].params, dict(coerced)),
+    )
+
+
 def _run_flow_controlled(
     flow: ComposedFlow,
     inputs: dict[str, Any],
@@ -691,7 +730,6 @@ def _run_flow_controlled(
         reject_deep_nesting(value, f"input {name!r}")
         reject_nonfinite(value, f"input {name!r}")
         reject_non_text_keys(value, f"input {name!r}")
-    run_inputs = _run_start_inputs(flow.input, coerced)
 
     # The key stays out of the cascade so RunStarted never records it. Its
     # base_url and connection settings stay out too, so no authored layer can pair
@@ -703,13 +741,7 @@ def _run_flow_controlled(
     # One selection snapshot determines every static agent before RunStarted.
     snapshot = connection_snapshot()
     effective_llm = snapshot.bind(
-        resolve_llm_cascade(
-            private_flow,
-            run_llm_config,
-            defaults=snapshot.defaults,
-            provider_models=snapshot.provider_models,
-            stray_model=snapshot.stray_model,
-        ),
+        _run_start_llm(private_flow, coerced, run_llm_config, snapshot).effective,
         host_key_provider=None if api_key is None else run_llm_config["provider"],
         host_base_url=host.base_url,
         host_settings=host,

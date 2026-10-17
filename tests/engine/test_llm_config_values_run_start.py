@@ -166,3 +166,216 @@ def test_run_start_inputs_fill_valid_defaults_and_leave_bad_ones_to_start():
     supplied = {"given": None}
     assert _run_start_inputs(params, supplied) == {"given": None, "window": 30}
     assert supplied == {"given": None}
+
+
+def _effective(log):
+    return _records(log)[0]["payload"]["effective_llm_by_static_path"]
+
+
+def _models(log):
+    return {path: (cfg["provider"], cfg["model"]) for path, cfg in _effective(log).items()}
+
+
+_VALUES = """id: f
+name: f
+input:
+INPUTS
+nodes:
+  chat:
+    kind: agent
+    prompt: Go.
+    llm_config: LLM
+output: ${chat.output}
+"""
+
+
+def _values(inputs: str, llm: str) -> str:
+    return _VALUES.replace("INPUTS", inputs).replace("LLM", llm)
+
+
+def test_provider_and_model_from_inputs_land_in_the_run_started_map(tmp_path, fake_model):
+    text = _values("  p: !str\n  m: !str", "{provider: '${input.p}', model: '${input.m}'}")
+    log = tmp_path / "run.jsonl"
+    result = run_flow(load_flow(text), {"p": "anthropic", "m": "claude-x"}, log=log)
+    assert result.status == "succeeded"
+    assert _models(log) == {"chat": ("anthropic", "claude-x")}
+    assert len(fake_model) == 1
+
+
+def test_an_omitted_input_with_a_default_gives_its_default(tmp_path):
+    text = _values("  m: !str gpt-from-default", "{model: '${input.m}'}")
+    log = tmp_path / "run.jsonl"
+    assert run_flow(load_flow(text), {}, log=log).status == "succeeded"
+    assert _models(log) == {"chat": ("openai", "gpt-from-default")}
+
+
+def test_an_omitted_optional_model_falls_through_to_the_saved_model(tmp_path):
+    from yian.llm_clients.auth import ApiKeyCredentials, AuthStore
+
+    AuthStore().save("anthropic", ApiKeyCredentials("saved-key"), "claude-saved")
+    text = _values("  m: !Optional(str)", "{provider: anthropic, model: '${input.m}'}")
+    log = tmp_path / "run.jsonl"
+    assert run_flow(load_flow(text), {}, log=log).status == "succeeded"
+    assert _models(log) == {"chat": ("anthropic", "claude-saved")}
+    given = tmp_path / "given.jsonl"
+    assert run_flow(load_flow(text), {"m": "claude-given"}, log=given).status == "succeeded"
+    assert _models(given) == {"chat": ("anthropic", "claude-given")}
+
+
+def test_a_missing_required_input_the_config_reads_fails_before_the_log(tmp_path, fake_model):
+    text = _values("  m: !str", "{model: '${input.m}'}")
+    log = tmp_path / "run.jsonl"
+    with pytest.raises(ValueError, match=r"node 'chat' llm_config\.model: .*input 'm'"):
+        run_flow(load_flow(text), {}, log=log)
+    assert not log.exists()
+    assert fake_model == []
+
+
+def test_an_input_the_config_reads_is_checked_against_its_contract(tmp_path):
+    text = _values("  t: !float", "{openai: {temperature: '${input.t}'}}")
+    log = tmp_path / "run.jsonl"
+    with pytest.raises(
+        ValueError, match=r"node 'chat' llm_config\.openai\.temperature: input 't'"
+    ):
+        run_flow(load_flow(text), {"t": "warm"}, log=log)
+    assert not log.exists()
+
+
+_WHOLE_RECORD = """id: f
+name: f
+typedefs:
+  Cfg:
+    provider: str
+    model: str
+input:
+  cfg: !Cfg
+llm_config: ${input.cfg}
+defs:
+  child:
+    nodes:
+      inner: {kind: agent, prompt: Inner.}
+    output: ${inner.output}
+nodes:
+  chat:
+    kind: agent
+    prompt: Go.
+  c:
+    kind: call
+    call: child
+    input: {}
+    depends_on: [chat]
+output: ${c.output}
+"""
+
+
+def test_a_flow_level_whole_record_from_an_input_reaches_every_agent(tmp_path):
+    log = tmp_path / "run.jsonl"
+    cfg = {"provider": "anthropic", "model": "claude-whole"}
+    assert run_flow(load_flow(_WHOLE_RECORD), {"cfg": cfg}, log=log).status == "succeeded"
+    assert _models(log) == {
+        "chat": ("anthropic", "claude-whole"), "c/inner": ("anthropic", "claude-whole"),
+    }
+
+
+_LIB = """id: lib
+name: lib
+input: {m: !str }
+llm_config: {model: '${input.m}'}
+defs:
+  inner:
+    nodes:
+      a: {kind: agent, prompt: Go.}
+    output: ${a.output}
+nodes:
+  c: {kind: call, call: inner, input: {}}
+output: ${c.output}
+"""
+
+
+def test_a_file_with_defs_loaded_as_the_root_resolves_its_input_value(tmp_path):
+    log = tmp_path / "run.jsonl"
+    flow = load_flow(_LIB, source_label="lib.yaml")
+    assert run_flow(flow, {"m": "gpt-lib"}, log=log).status == "succeeded"
+    assert _models(log) == {"c/a": ("openai", "gpt-lib")}
+
+
+_PASS_DOWN = """id: f
+name: f
+input: {m: !str }
+llm_config: {provider: anthropic, model: '${input.m}'}
+defs:
+  child:
+    nodes:
+      a: {kind: agent, prompt: Go.}
+      b: {kind: agent, prompt: Go., llm_config: {model: own-model}}
+    output: ${a.output}
+nodes:
+  top: {kind: agent, prompt: Top.}
+  c:
+    kind: call
+    call: child
+    input: {}
+    depends_on: [top]
+output: ${c.output}
+"""
+
+
+def test_a_root_flow_input_value_is_passed_down_to_child_agents(tmp_path):
+    log = tmp_path / "run.jsonl"
+    assert run_flow(load_flow(_PASS_DOWN), {"m": "claude-root"}, log=log).status == "succeeded"
+    assert _models(log) == {
+        "top": ("anthropic", "claude-root"),
+        "c/a": ("anthropic", "claude-root"),
+        "c/b": ("anthropic", "own-model"),
+    }
+
+
+def test_a_run_start_agent_binds_no_reserved_llm_config_input(tmp_path):
+    text = _values("  m: !str", "{model: '${input.m}'}")
+    flow = load_flow(text)
+    assert "__llm_config" in flow.compiled.wiring["chat"]
+    log = tmp_path / "run.jsonl"
+    assert run_flow(flow, {"m": "gpt-learn"}, log=log, learnable=True).status == "succeeded"
+    succeeded = [
+        r for r in _records(log)
+        if r["kind"] == "node_succeeded" and r["payload"]["node_id"] == "chat"
+    ]
+    capture = succeeded[0]["payload"]["forward_capture"]
+    assert capture is not None
+    assert "__llm_config" not in capture["bound_inputs"]
+    assert "__llm_config" not in capture["input_names"]
+    assert capture["node_data"]["effective_llm_config"]["model"] == "gpt-learn"
+
+
+_MIXED = """id: f
+name: f
+input: {p: !str }
+llm_config: {provider: '${input.p}', model: '${pick.output}', openai: {temperature: 0.5}}
+defs:
+  child:
+    nodes:
+      a: {kind: agent, prompt: Go., llm_config: {model: child-model}}
+    output: ${a.output}
+nodes:
+  pick:
+    kind: agent
+    prompt: Pick.
+    output: str
+    llm_config: {model: pick-model}
+  c:
+    kind: call
+    call: child
+    input: {}
+    depends_on: [pick]
+output: ${c.output}
+"""
+
+
+def test_a_mixed_flow_layer_passes_its_literal_and_input_fields_and_drops_the_rest(tmp_path):
+    # Every agent sets its own model, so the flow's run-time model reaches none of them.
+    log = tmp_path / "run.jsonl"
+    assert run_flow(load_flow(_MIXED), {"p": "openai"}, log=log).status == "succeeded"
+    effective = _effective(log)
+    assert _models(log) == {"pick": ("openai", "pick-model"), "c/a": ("openai", "child-model")}
+    assert effective["c/a"]["openai"] == {"temperature": 0.5}
+    assert effective["pick"]["openai"] == {"temperature": 0.5}

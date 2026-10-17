@@ -36,6 +36,7 @@ nodes:
   pick:
     kind: agent
     prompt: Pick a model.
+    output: str
   chat:
     kind: agent
     prompt: Go.
@@ -61,6 +62,7 @@ nodes:
   pick:
     kind: agent
     prompt: Pick a model.
+    output: str
     llm_config: {model: m0}
   open:
     kind: agent
@@ -215,6 +217,7 @@ nodes:
   pick:
     kind: agent
     prompt: Pick a model.
+    output: str
     llm_config: {model: PICK_MODEL}
   chat:
     kind: agent

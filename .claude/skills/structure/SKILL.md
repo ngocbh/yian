@@ -306,6 +306,10 @@ mirroring the runtime join rule over compiled edges (`case_exhaustive.exhaustive
 says which CASEs always take a branch). `compose/build` uses it to give a flow output
 whose producers may all be skipped the explicit null default and to reject arithmetic
 over a maybe-skipped value; runtime is unchanged.
+`compose/validate/llm_config_sources.py` checks the sources of `llm_config` values where
+they are written (AGENT, composer and flow layers): each needs a proven type or a tag, and
+only a type disjoint from its field (`provider`, `model`, a simple provider-block field,
+a whole record or block) is a load error.
 For authored node outputs, `compose/build` injects a Compose-owned optional reader through
 `BuildContext`; the base descriptor invokes it only when an output-authoring leaf reaches
 its established contract step. This preserves earlier kind-owned validation order while

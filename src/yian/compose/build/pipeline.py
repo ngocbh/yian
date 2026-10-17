@@ -116,6 +116,7 @@ from yian.compose.validate.case_exhaustive import (
 from yian.compose.validate.case_branches import check_case_branches
 from yian.compose.validate.cycles import reject_cycles
 from yian.compose.validate.human_questions import validate_human_questions
+from yian.compose.validate.llm_config_sources import check_llm_config_sources
 from yian.compose.validate.loop_types import check_loop_type_contract
 from yian.compose.validate.narrowing import compute_narrowing
 from yian.compose.edges.hosts import host_control_edges
@@ -2842,6 +2843,18 @@ def _assemble(
     flow_wiring.update(boundary_wiring)
     edges: list[Edge] = structural + boundary_edges
 
+    # Before the type tables, so a constructor in a config value gets the config's message.
+    check_llm_config_sources(
+        build_results,
+        flow_llm_config or {},
+        f"defs entry {owner[1]!r} llm_config" if owner[:1] == ("def",) else "flow llm_config",
+        producers,
+        flow_input_contracts,
+        type_fn=constructor_type,
+        registry=registry,
+        resolve_origin=catalog_builder.resolve_registered,
+        diagnostics=diagnostics,
+    )
     # Type tables for `isinstance`, once START/END carry the lowered flow asserts and outputs.
     _fill_type_tables(
         nodes,

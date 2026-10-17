@@ -61,9 +61,12 @@ def _resolve(text, host=None):
     return flow, private, run_llm
 
 
-def _record(agents):
+def _record(agents, host_key_provider=None):
     """Return a ``RunStarted.call_time_llm`` record holding ``agents``."""
-    return {"selection": record_selection(_snapshot(), providers=None), "agents": agents}
+    selection = record_selection(
+        _snapshot(), providers=None, host_key_provider=host_key_provider
+    )
+    return {"selection": selection, "agents": agents}
 
 
 def _node(flow, path):
@@ -156,7 +159,7 @@ def test_the_host_key_reaches_call_time_agents_on_the_private_flow_only():
     connection = pop_host_credentials(host)
     flow, private, run_llm = _resolve(_NESTED, host=host)
     assert "secret" not in repr(run_llm.call_time)
-    apply_effective_llm_map(private, run_llm.effective, _record(run_llm.call_time))
+    apply_effective_llm_map(private, run_llm.effective, _record(run_llm.call_time, "openai"))
     bind_host_credentials(private, connection.api_key, connection.headers)
 
     joined = _node(private, "c/a").host_credentials
@@ -174,9 +177,16 @@ def test_the_host_key_reaches_call_time_agents_on_the_private_flow_only():
 
 def test_bind_host_credentials_without_headers_gives_none():
     _, private, run_llm = _resolve(_ROOT)
-    apply_effective_llm_map(private, run_llm.effective, _record(run_llm.call_time))
+    apply_effective_llm_map(private, run_llm.effective, _record(run_llm.call_time, "openai"))
     bind_host_credentials(private, SecretStr("sk-x"))
     assert private.nodes["chat"].host_credentials.headers is None
+
+
+def test_bind_host_credentials_skips_a_selection_that_names_no_host_key():
+    _, private, run_llm = _resolve(_ROOT)
+    apply_effective_llm_map(private, run_llm.effective, _record(run_llm.call_time))
+    bind_host_credentials(private, SecretStr("sk-x"))
+    assert private.nodes["chat"].host_credentials is None
 
 
 def test_the_fingerprint_ignores_the_call_time_attributes():

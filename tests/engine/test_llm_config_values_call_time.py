@@ -570,3 +570,102 @@ output: ${ask.output}
         "node 'ask' adaptive_questions.llm_config.provider: not a known provider"
     )
     assert fake_model == []
+
+
+# A whole run, its replay, and the host key it keeps.
+
+
+def test_a_finished_run_records_its_call_time_agent(tmp_path, fake_model):
+    log = tmp_path / "run.jsonl"
+    result = run_flow(load_flow(_PICKED), {}, log=log)
+    assert result.status == "succeeded" and result.output == "ok"
+    started = _records(log)[0]["payload"]
+    assert started["effective_llm_by_static_path"] == {}
+    assert started["call_time_llm"]["agents"] == {"chat": {}}
+
+
+def test_a_finished_run_replays_without_ambient_settings(tmp_path, monkeypatch, fake_model):
+    log = tmp_path / "run.jsonl"
+    flow = load_flow(_PICKED)
+    first = run_flow(flow, {}, log=log, llm_config=_HOST)
+    assert first.status == "succeeded"
+    fake_model.clear()
+
+    def no_snapshot():
+        pytest.fail("read the connection snapshot")
+
+    monkeypatch.setattr(connection_module, "connection_snapshot", no_snapshot)
+    monkeypatch.setattr(run_module, "connection_snapshot", no_snapshot)
+    for name in ("YIAN_DEFAULT_PROVIDER", "YIAN_DEFAULT_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    replayed = run_module.resume_flow(flow, log=log)
+    assert (replayed.status, replayed.output) == (first.status, first.output)
+    assert fake_model == []
+
+
+def _learnable_failed(llm_config, text=_PICK_FAILS, tmp_path=None):
+    log = None if tmp_path is None else tmp_path / "run.jsonl"
+    result = run_flow(load_flow(text), {}, log=log, learnable=True, llm_config=llm_config)
+    assert result.status == "failed" and result.failure.node_id == "pick"
+    return result
+
+
+def test_the_result_keeps_the_host_key_a_call_time_agent_may_use(tmp_path):
+    result = _learnable_failed(_HOST, tmp_path=tmp_path)
+    handle = result._backward_handle
+    assert handle.api_key.get_secret_value() == "sk-host-secret"
+    assert handle.headers["X-Tenant"].get_secret_value() == "tenant-secret"
+    recovered = run_module.resume_flow(
+        load_flow(_PICK_FAILS), log=tmp_path / "run.jsonl",
+        api_key="sk-host-secret", headers={"X-Tenant": "tenant-secret"},
+    )
+    assert recovered._backward_handle.api_key.get_secret_value() == "sk-host-secret"
+
+
+def test_the_result_drops_a_host_key_no_call_time_agent_can_use(tmp_path):
+    text = _PICK_FAILS.replace("{provider: openai}", "{provider: anthropic}")
+    result = _learnable_failed(_HOST, text, tmp_path)
+    assert result._backward_handle.api_key is None
+    assert result._backward_handle.headers is None
+    recovered = run_module.resume_flow(
+        load_flow(text), log=tmp_path / "run.jsonl", api_key="sk-host-secret",
+    )
+    assert recovered._backward_handle.api_key is None
+
+
+def test_a_call_time_agent_without_a_host_key_selection_gets_no_credentials(tmp_path):
+    text = _PICK_FAILS.replace("{provider: openai}", "{provider: anthropic}")
+    log = tmp_path / "run.jsonl"
+    flow = load_flow(text)
+    assert run_flow(flow, {}, log=log, llm_config=_HOST).status == "failed"
+    authority = JsonlRunLog.resume(log)
+    try:
+        state = _replay_run_log(flow, authority, api_key=SecretStr("sk-host-secret"))
+    finally:
+        authority.close()
+    assert state.flow.nodes["chat"].call_time.selection.host_key_provider is None
+    assert state.flow.nodes["chat"].host_credentials is None
+
+
+def test_resume_sends_the_host_key_to_an_in_flight_call_time_agent(tmp_path, fake_model):
+    flow = load_flow(_PICKED)
+    log = tmp_path / "run.jsonl"
+    _interrupt_before_chat(flow, log, llm_config=_HOST)
+    with pytest.raises(ValueError, match="header names this run recorded for its host key"):
+        run_module.resume_flow(
+            flow, log=log, api_key="sk-host-secret", headers={"X-Other": "v"}
+        )
+    assert fake_model == []
+    resumed = run_module.resume_flow(
+        flow, log=log, api_key="sk-host-secret", headers={"X-Tenant": "tenant-secret"}
+    )
+    assert resumed.status == "succeeded"
+    seen = _seen(fake_model)
+    assert seen["api_key"] == "sk-host-secret"
+    assert seen["headers"] == {"X-Tenant": "tenant-secret"}
+
+
+def test_backward_checks_given_headers_against_the_call_time_selection(tmp_path):
+    result = _learnable_failed(_HOST, tmp_path=tmp_path)
+    with pytest.raises(ValueError, match="missing X-Tenant; not recorded X-Other"):
+        result.backward("Be brief.", headers={"X-Other": "v"})

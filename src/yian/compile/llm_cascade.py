@@ -862,11 +862,11 @@ def bind_host_credentials(
 
     `ConnectionSnapshot.bind` marks the agents of the key's provider in the
     effective map. The key and header values go on each marked node's run-local
-    ``llm_config`` only, never into the map that ``RunStarted`` records. Each
-    call-time agent gets them as its run-local ``host_credentials``, never merged
-    into a config; it uses them only if it resolves to the key's provider. Call it
-    after `apply_effective_llm_map`, which has already de-aliased every child
-    callsite.
+    ``llm_config`` only, never into the map that ``RunStarted`` records. A call-time
+    agent whose recorded selection names the key's provider gets them as its
+    run-local ``host_credentials``, never merged into a config; it uses them only if
+    it resolves to that provider. Call it after `apply_effective_llm_map`, which has
+    already de-aliased every child callsite.
 
     Args:
         flow (`CompiledFlow`):
@@ -878,9 +878,10 @@ def bind_host_credentials(
     """
     for node in flow.nodes.values():
         if isinstance(node, AgentNode) and node.call_time is not None:
-            node.host_credentials = HostConnection(
-                api_key=api_key, headers=dict(headers) if headers else None
-            )
+            if node.call_time.selection.host_key_provider is not None:
+                node.host_credentials = HostConnection(
+                    api_key=api_key, headers=dict(headers) if headers else None
+                )
         elif isinstance(node, AgentNode) and node.llm_config.get(HOST_KEY_MARKER) is True:
             node.llm_config["api_key"] = api_key
             if headers:

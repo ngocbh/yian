@@ -281,9 +281,13 @@ class _BackwardHandle:
             )
             if state.run_id != self.run_id:
                 raise ValueError("backward log identity differs from the retained run")
-            if headers is not None and host_key_providers(state.effective_llm_by_static_path):
+            if headers is not None and _uses_host_key(
+                state.effective_llm_by_static_path, state.call_time_llm
+            ):
                 # Before the attempt is appended; kept headers were checked when kept.
-                _check_host_header_names(state.effective_llm_by_static_path, headers)
+                _check_host_header_names(
+                    state.effective_llm_by_static_path, headers, state.call_time_llm
+                )
             replay_sequence = state.next_sequence
 
             def open_memory() -> MemoryRuntime:
@@ -551,8 +555,29 @@ def _secret_headers(raw: Any) -> dict[str, SecretStr]:
     return {name: SecretStr(value) for name, value in validate_headers(raw, None).items()}
 
 
+def _uses_host_key(
+    effective: Mapping[str, Mapping[str, Any]], call_time: Mapping[str, Any] | None,
+) -> bool:
+    """Return whether a run's recorded agents may use the host key.
+
+    Args:
+        effective (`Mapping[str, Mapping[str, Any]]`):
+            The recorded effective model map, keyed by static agent path.
+        call_time (`Mapping[str, Any] | None`):
+            The recorded ``RunStarted.call_time_llm``, or `None`.
+
+    Returns:
+        `bool`: Whether a static agent is marked for the host key, or the call-time
+            agents' selection names the host key's provider.
+    """
+    return bool(host_key_providers(dict(effective))) or (
+        call_time is not None and call_time["selection"]["host"] is not None
+    )
+
+
 def _check_host_header_names(
     effective: Mapping[str, Mapping[str, Any]], headers: Mapping[str, Any] | None,
+    call_time: Mapping[str, Any] | None = None,
 ) -> None:
     """Check that the host's headers have the names recorded for its key's agents.
 
@@ -563,6 +588,9 @@ def _check_host_header_names(
             The recorded effective model map, keyed by static agent path.
         headers (`Mapping[str, Any] | None`):
             The headers given for the host key; `None` gives none.
+        call_time (`Mapping[str, Any] | None`, *optional*, defaults to `None`):
+            The recorded ``RunStarted.call_time_llm``; the header names its selection
+            records for the host key are expected too.
 
     Raises:
         `ValueError`: The names differ; the message names the missing and unrecorded
@@ -574,6 +602,9 @@ def _check_host_header_names(
         if config.get(HOST_KEY_MARKER) is True
         for name in config.get(HEADER_NAMES_KEY, ())
     ]
+    host = None if call_time is None else call_time["selection"]["host"]
+    if host is not None:
+        expected.extend(host.get("header_names", ()))
     diff = header_name_diff(expected, headers or ())
     if diff is not None:
         raise ValueError(
@@ -779,11 +810,7 @@ def _run_flow_controlled(
     apply_effective_llm_map(private_flow, effective_llm, call_time_llm)
     # A key that neither marks an agent nor is in the call-time agents' selection has
     # nothing to authenticate, so the result keeps neither it nor its headers.
-    if (
-        api_key is not None
-        and not host_key_providers(effective_llm)
-        and (call_time_llm is None or call_time_llm["selection"]["host"] is None)
-    ):
+    if api_key is not None and not _uses_host_key(effective_llm, call_time_llm):
         api_key = headers = None
     if api_key is not None:
         bind_host_credentials(private_flow, api_key, headers)
@@ -1061,11 +1088,13 @@ def _resume_flow_controlled(
     primary_error: BaseException | None = None
     try:
         state = _replay_run_log(flow, authority, api_key=api_key, headers=host_headers)
-        if not host_key_providers(state.effective_llm_by_static_path):
+        if not _uses_host_key(state.effective_llm_by_static_path, state.call_time_llm):
             api_key = host_headers = None
         elif api_key is not None or host_headers is not None:
             # Checked before the terminal return too, since the backward handle sends them.
-            _check_host_header_names(state.effective_llm_by_static_path, host_headers)
+            _check_host_header_names(
+                state.effective_llm_by_static_path, host_headers, state.call_time_llm
+            )
         retained_program = copy.deepcopy(flow.compiled) if state.learnable else None
         if state.result is not None:
             return _result_from_state(state, log_path, [],
@@ -1580,7 +1609,8 @@ def _replay_compiled_run_log(
     )
     if api_key is not None:
         # A run that marked no agent ignores the key and headers: no static agent is
-        # marked, and a call-time agent uses them only when its resolved config is.
+        # marked, and a call-time agent gets them only when its selection names the
+        # key's provider, and uses them only when its resolved config is marked.
         bind_host_credentials(private_flow, api_key, headers)
     if first.record.learnable:
         apply_execution_layout(private_flow, resolve_execution_layout(private_flow))

@@ -504,7 +504,7 @@ def refused_block(config: Mapping[str, Any]) -> str:
     """
     try:
         validated, _ = split_model_config(dict(config))
-    except ValueError:
+    except (ValueError, AuthError):
         return ""
     if validated.provider is None or (
         validated.provider == "azure" and validated.base_url is None

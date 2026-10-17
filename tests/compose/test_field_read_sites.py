@@ -33,6 +33,12 @@ _QTY_HINT = (
 )
 
 
+_ASSERT_QTY_HINT = (
+    "reads field 'qty', which only union members with action buy have; "
+    "check the member first with `isinstance(v, <Type>) and ...`"
+)
+
+
 def _flow(
     nodes: str,
     output: str,
@@ -453,32 +459,7 @@ def test_node_assert_reads_the_narrowed_member_inside_a_branch():
     )
     outside = _producer("d", "Order") + _code({"v": "${d.output}"}, ["v.qty > 0"])
     message = _load_error(_flow(outside, "${c.output}"))
-    assert f"node 'c' assert: reference ${{v.qty}} {_QTY_HINT}" in message
-
-
-def test_node_assert_isinstance_guard_does_not_narrow_an_input():
-    guarded = _code({"v": "${d.output}"}, ["not isinstance(v, Buy) or v.qty > 0"])
-    message = _load_error(_flow(_producer("d", "Order") + guarded, "${c.output}"))
-    assert f"node 'c' assert: reference ${{v.qty}} {_QTY_HINT}" in message
-    routed = _code(
-        {"v": "${d.output}"}, ["not isinstance(v, Buy) or v.qty > 0"], node_id="ag"
-    )
-    load_flow(_flow(_routed(routed), "${ag.output | other.output}"))
-
-
-def test_flow_assert_isinstance_guard_does_not_narrow_an_input():
-    message = _load_error(
-        _flow(
-            "",
-            "${step.output}",
-            inputs="  o: !Order\n",
-            tail=_asserts("isinstance(input.o, Buy) and input.o.qty > 0"),
-        )
-    )
-    assert (
-        "reference ${input.o.qty} reads field 'qty', which only union members with "
-        "action buy have" in message
-    )
+    assert f"node 'c' assert: reference ${{v.qty}} {_ASSERT_QTY_HINT}" in message
 
 
 _UNION_TYPES = (
@@ -535,6 +516,522 @@ def test_isinstance_branch_reads_the_narrowed_member(produced, member, node):
         typedefs=_UNION_TYPES,
     )
     load_flow(flow)
+
+
+_ORDER_INPUT = "  o: !Order\n"
+
+
+def _local_assert(assertion: str, *, kind: str = "code") -> str:
+    """A flow whose node `c` asserts `assertion` on its local `v`, bound from `${d.output}`
+    with `d` typed `Order`; `c` is an AGENT node when `kind` is `agent`."""
+    if kind == "agent":
+        node = _agent(
+            {"v": "${d.output}"},
+            "hi",
+            node_id="c",
+            extra=f'    asserts:\n      - "{assertion}"\n',
+        )
+    else:
+        node = _code({"v": "${d.output}"}, [assertion])
+    return _flow(_producer("d", "Order") + node, "${c.output}")
+
+
+def _line_of(text: str, needle: str) -> int:
+    """The 1-based line of `text` holding `needle`."""
+    return next(i for i, line in enumerate(text.splitlines(), 1) if needle in line)
+
+
+@pytest.mark.parametrize(
+    "assertion",
+    [
+        "isinstance(v, Buy) and v.qty > 0",
+        "not isinstance(v, Buy) or v.qty > 0",
+        "isinstance(v, Sell) or v.qty > 0",
+        "v.action == 'buy' and v.qty > 0",
+        "v.action != 'buy' or v.qty > 0",
+        "'sell' == v.action or v.qty > 0",
+        "not (isinstance(v, Buy) and v.qty < 0)",
+        "(isinstance(v, Buy) and v.qty > 0) or v.action == 'sell'",
+        "isinstance(v, Buy) and (v.qty > 0 or v.qty < -10)",
+    ],
+)
+def test_node_assert_reads_are_narrowed_by_the_checks_before_them(assertion):
+    load_flow(_local_assert(assertion))
+
+
+@pytest.mark.parametrize(
+    ("assertion", "expected"),
+    [
+        ("v.qty > 0 and isinstance(v, Buy)", f"reference ${{v.qty}} {_ASSERT_QTY_HINT}"),
+        ("v.qty > 0", f"reference ${{v.qty}} {_ASSERT_QTY_HINT}"),
+        (
+            "isinstance(v, Buy) or v.qty > 0",
+            "reference ${v.qty} reads field 'qty', which Sell doesn't have; "
+            "v is Sell here, by the checks before this read",
+        ),
+    ],
+    ids=["check-after-read", "unguarded", "or-sees-the-other-member"],
+)
+def test_node_assert_reads_the_checks_do_not_cover_are_rejected(assertion, expected):
+    message = _load_error(_local_assert(assertion))
+    assert f"node 'c' assert: {expected}" in message
+
+
+def test_node_assert_read_under_two_guards_is_checked_under_each():
+    message = _load_error(_local_assert("v.qty > 0 or (isinstance(v, Buy) and v.qty > 1)"))
+    assert message.count(f"reference ${{v.qty}} {_ASSERT_QTY_HINT}") == 1
+
+
+@pytest.mark.parametrize(
+    ("order", "status"),
+    [
+        ({"action": "sell"}, "succeeded"),
+        ({"action": "buy", "qty": 2}, "succeeded"),
+        ({"action": "buy", "qty": 0}, "failed"),
+    ],
+    ids=["sell", "buy-positive", "buy-zero"],
+)
+def test_guarded_node_assert_runs(order, status):
+    node = _code({"v": "${input.o}"}, ["not isinstance(v, Buy) or v.qty > 0"])
+    flow = load_flow(_flow(node, "${c.output}", inputs=_ORDER_INPUT))
+    result = run_flow(flow, {"s": "x", "r": {"a": "x"}, "o": order})
+    assert result.status == status, result.failure
+    if status == "failed":
+        assert result.failure.code == "assertion.failed"
+
+
+def test_agent_node_assert_reads_are_narrowed():
+    load_flow(_local_assert("isinstance(v, Sell) or v.qty > 0", kind="agent"))
+
+
+def _output_assert(assertion: str) -> str:
+    """A flow whose CODE node `c` returns an `Order` and asserts `assertion`."""
+    node = (
+        "  c:\n    kind: code\n    input:\n      s: ${input.s}\n"
+        "    output: Order\n    code: return dict(action='sell')\n"
+        f'    asserts:\n      - "{assertion}"\n'
+    )
+    return _flow(node, "${c.output}")
+
+
+def test_node_assert_output_reads_are_narrowed():
+    load_flow(_output_assert("isinstance(output, Buy) and output.qty > 0"))
+    message = _load_error(_output_assert("output.qty > 0"))
+    assert (
+        "node 'c' assert: reference ${output.qty} reads field 'qty', which only union "
+        "members with action buy have; check the member first with "
+        "`isinstance(output, <Type>) and ...`" in message
+    )
+
+
+def _flow_assert(assertion: str, nodes: str = "", output: str = "${step.output}") -> str:
+    """A flow with inputs `o: !Order` and `ab: !AB` asserting `assertion`."""
+    return _flow(
+        nodes,
+        output,
+        typedefs=_UNION_TYPES,
+        inputs=_ORDER_INPUT + "  ab: !AB\n",
+        tail=_asserts(assertion),
+    )
+
+
+@pytest.mark.parametrize(
+    "assertion",
+    [
+        "isinstance(input.o, Buy) and input.o.qty > 0",
+        "not isinstance(input.o, Buy) or input.o.qty > 0",
+        "input.o.action == 'sell' or input.o.qty > 0",
+        "not isinstance(input.ab, A) or input.ab.x > 0",
+        "isinstance(o, Buy) and input.o.qty > 0",
+    ],
+    ids=["and", "not-or", "tag-or", "untagged", "shorthand-check"],
+)
+def test_flow_assert_reads_are_narrowed_by_the_checks_before_them(assertion):
+    load_flow(_flow_assert(assertion))
+
+
+def test_flow_post_assert_producer_reads_are_narrowed():
+    load_flow(
+        _flow_assert(
+            "isinstance(d.output, Buy) and d.output.qty > 0",
+            _producer("d", "Order"),
+            "${d.output}",
+        )
+    )
+
+
+def test_flow_assert_read_before_its_check_is_rejected():
+    message = _load_error(_flow_assert("input.o.qty > 0 and isinstance(input.o, Buy)"))
+    assert (
+        "reference ${input.o.qty} reads field 'qty', which only union members with "
+        "action buy have; check the member first with "
+        "`isinstance(input.o, <Type>) and ...`" in message
+    )
+
+
+@pytest.mark.parametrize(
+    ("order", "status"),
+    [({"action": "sell"}, "succeeded"), ({"action": "buy", "qty": 0}, "failed")],
+    ids=["sell", "buy-zero"],
+)
+def test_guarded_flow_assert_runs(order, status):
+    flow = load_flow(_flow_assert("not isinstance(input.o, Buy) or input.o.qty > 0"))
+    result = run_flow(flow, {"s": "x", "r": {"a": "x"}, "o": order, "ab": {"x": 1}})
+    assert result.status == status, result.failure
+
+
+def test_partial_union_node_assert_reads_the_narrowed_member():
+    """On a cycle a member-only field is readable, below a narrowed member too; the
+    cycle is what the load reports."""
+    typedefs = (
+        "  Limit: {type: 'Literal(limit)', price: int}\n"
+        "  Market: {type: 'Literal(market)'}\n"
+        "  LBuy: {action: 'Literal(buy)', leg: 'Union(Limit, Market)'}\n"
+        "  LOrder: Union(LBuy, Sell)\n"
+    )
+    nodes = (
+        _producer("d", "LOrder")
+        + "  b:\n    kind: code\n    input:\n      y: ${c.output}\n"
+        "    output: str\n    code: return 'x'\n"
+        + _code(
+            {"v": "${d.output}", "y": "${b.output}"},
+            ["isinstance(v, LBuy) and v.leg.price > 0"],
+        )
+    )
+    message = _load_error(_flow(nodes, "${c.output}", typedefs=typedefs))
+    assert "flow has a cycle involving ['b', 'c']" in message
+    assert "reads field" not in message
+
+
+def test_impossible_node_assert_check_is_located_at_the_assert():
+    """The read after the impossible check is reached by no value, so it is not checked."""
+    text = _local_assert("isinstance(v, Buy) and v.action == 'sell' and v.zz > 0")
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert (
+        "node 'c' assert: `v.action == \"sell\"` can never be true here: v is Buy, "
+        "by the checks before it" in str(caught.value)
+    )
+    assert "${v.zz}" not in str(caught.value)
+    assert caught.value.diagnostic.frames[-1].range.start_line == _line_of(
+        text, "v.action == 'sell'"
+    )
+
+
+def test_impossible_flow_assert_check_is_located_at_the_assert():
+    text = _flow_assert("input.o.action == 'hold'")
+    with pytest.raises(LoadError) as caught:
+        load_flow(text)
+    assert (
+        "assert \"input.o.action == 'hold'\": `input.o.action == \"hold\"` compares "
+        "input.o.action with 'hold', which is not one of its tags (buy, sell)"
+        in str(caught.value)
+    )
+    assert caught.value.diagnostic.frames[-1].range.start_line == _line_of(
+        text, "input.o.action == 'hold'"
+    )
+
+
+_ORDER_CHILD = (
+    "defs:\n"
+    "  child:\n"
+    "    input:\n      v: !Order\n"
+    "    nodes:\n"
+    "      inner:\n"
+    "        kind: code\n"
+    "        input:\n          v: ${input.v}\n"
+    "        output: str\n"
+    "        code: return 'x'\n"
+    "    output: ${inner.output}\n"
+)
+
+
+def test_call_node_assert_tag_checks_narrow_its_local():
+    nodes = _producer("d", "Order") + (
+        "  c:\n    kind: call\n    call: child\n"
+        "    input:\n      v: ${d.output}\n"
+        "    asserts:\n      - \"v.action == 'buy' and v.qty > 0\"\n"
+    )
+    load_flow(_flow(nodes, "${c.output}", defs=_ORDER_CHILD))
+
+
+def test_assert_reading_many_typed_inputs_loads():
+    """Equal alternatives of a typed binding count once, so the checks stay linear."""
+    names = [f"a{i}" for i in range(14)]
+    assertion = " and ".join(f"{name}.a == 'x'" for name in names)
+    node = _code({name: "!Rec ${step.output}" for name in names}, [assertion])
+    load_flow(_flow(node, "${c.output}"))
+
+
+def _locals_assert(assertion: str, producers: dict[str, str], inputs: dict[str, str]) -> str:
+    """A flow with CODE producers typed by `producers` and node `c` asserting `assertion`
+    on its `inputs`."""
+    nodes = "".join(_producer(node_id, typ) for node_id, typ in producers.items())
+    return _flow(nodes + _code(inputs, [assertion]), "${c.output}")
+
+
+@pytest.mark.parametrize(
+    ("assertion", "expected"),
+    [
+        (
+            "isinstance(v, Rec) and v.zz > 0",
+            "`isinstance(v, Rec)` can never be true: v is declared Order, and no Order value "
+            "fits Rec",
+        ),
+        (
+            "v.action == 'byu' and v.zz > 0",
+            "`v.action == \"byu\"` compares v.action with 'byu', which is not one of its tags "
+            "(buy, sell); did you mean 'buy'?",
+        ),
+    ],
+    ids=["no-overlap", "not-a-tag"],
+)
+def test_node_assert_read_after_a_reported_check_is_not_checked(assertion, expected):
+    message = _load_error(_local_assert(assertion))
+    assert f"node 'c' assert: {expected}" in message
+    assert "${v.zz}" not in message
+
+
+def test_node_assert_read_after_an_always_true_negation_is_not_checked():
+    text = _locals_assert("not isinstance(v, Buy) and v.zz > 0", {"d": "Buy"}, {"v": "${d.output}"})
+    message = _load_error(text)
+    assert (
+        "node 'c' assert: `not isinstance(v, Buy)` can never be true: v is declared Buy, so "
+        "`isinstance(v, Buy)` is always true" in message
+    )
+    assert "${v.zz}" not in message
+
+
+def test_node_assert_read_of_one_local_after_a_reported_check_on_another_is_not_checked():
+    text = _locals_assert(
+        "isinstance(v, Buy) and v.action == 'sell' and w.zz > 0",
+        {"d": "Order"},
+        {"v": "${d.output}", "w": "${step.output}"},
+    )
+    message = _load_error(text)
+    assert "`v.action == \"sell\"` can never be true here" in message
+    assert "${w.zz}" not in message
+
+
+# `v` is declared Order but bound from a Buy, so it has two alternatives: Order and Buy.
+_TWO_ALTERNATIVES = {"v": "!Order ${d.output}", "w": "!Order ${e.output}"}
+
+
+def test_node_assert_check_impossible_under_every_alternative_is_reported_once():
+    text = _locals_assert(
+        "isinstance(v, Rec) or v.zz > 0", {"d": "Buy", "e": "Order"}, _TWO_ALTERNATIVES
+    )
+    message = _load_error(text)
+    assert message.count("`isinstance(v, Rec)` can never be true") == 1
+    assert message.count("reference ${v.zz} reads unknown field 'zz'") == 1
+
+
+def test_node_assert_read_dead_under_only_some_alternatives_is_checked():
+    """Under Order the tag check rules `v` out, but under Buy it is no check at all, so
+    neither the check is reported nor the read after it skipped."""
+    text = _locals_assert(
+        "isinstance(v, Buy) and v.action == 'sell' and w.zz > 0",
+        {"d": "Buy", "e": "Order"},
+        _TWO_ALTERNATIVES,
+    )
+    message = _load_error(text)
+    assert "node 'c' assert: reference ${w.zz} reads unknown field 'zz' on record" in message
+    assert "can never be true" not in message
+
+
+@pytest.mark.parametrize(
+    ("assertion", "expected"),
+    [
+        (
+            "isinstance(output, Rec)",
+            "`isinstance(output, Rec)` can never be true: output is declared Order, and no "
+            "Order value fits Rec",
+        ),
+        (
+            "not isinstance(output, Order)",
+            "`not isinstance(output, Order)` can never be true: output is declared Order, so "
+            "`isinstance(output, Order)` is always true",
+        ),
+        (
+            "isinstance(output, Buy) and isinstance(output, Sell)",
+            "`isinstance(output, Sell)` can never be true here: output is Buy, by the checks "
+            "before it",
+        ),
+    ],
+    ids=["no-overlap", "always", "context"],
+)
+def test_node_assert_impossible_output_check_is_reported(assertion, expected):
+    message = _load_error(_output_assert(assertion))
+    assert f"node 'c' assert: {expected}" in message
+
+
+def test_node_assert_output_read_after_a_reported_check_is_not_checked():
+    message = _load_error(_output_assert("isinstance(output, Rec) and output.action == 'buy'"))
+    assert "`isinstance(output, Rec)` can never be true" in message
+    assert "${output.action}" not in message
+
+
+def test_node_assert_over_many_locals_with_two_alternatives_loads():
+    """Each local is checked against its own alternatives, not every combination."""
+    names = [f"v{i}" for i in range(12)]
+    assertion = " and ".join(f"(isinstance({x}, Buy) or {x}.action == 'sell')" for x in names)
+    text = _locals_assert(assertion, {"d": "Buy"}, {x: "!Order ${d.output}" for x in names})
+    load_flow(text)
+
+
+def _skippable_assert(assertion: str) -> str:
+    """A flow whose `case` runs `d` (typed `Order`) only for `s: go`, asserting `assertion`."""
+    nodes = (
+        "  route:\n    kind: case\n    cases:\n"
+        "      - when: \"input.s == 'go'\"\n        then: d\n"
+        "    else: e\n"
+        + _producer("d", "Order")
+        + "  e:\n    kind: code\n    input:\n      s: ${input.s}\n    code: return 1\n"
+    )
+    return _flow(nodes, "${step.output}", tail=_asserts(assertion))
+
+
+@pytest.mark.parametrize(
+    "assertion",
+    [
+        "not isinstance(d.output, Order) or d.output.action == 'sell'",
+        "not isinstance(d.output, Buy) and not isinstance(d.output, Sell)",
+    ],
+    ids=["always-on-the-declared-type", "every-member-ruled-out"],
+)
+def test_flow_assert_on_a_skippable_producer_reads_null(assertion):
+    """END binds a producer it reads with `:- null`, so a skipped one reads null."""
+    flow = load_flow(_skippable_assert(assertion))
+    result = run_flow(flow, {"s": "stop", "r": {"a": "x"}})
+    assert result.status == "succeeded", result.failure
+
+
+@pytest.mark.parametrize(
+    ("assertion", "expected"),
+    [
+        (
+            "isinstance(d.output, Rec)",
+            "`isinstance(d.output, Rec)` can never be true: d.output is declared Order, and "
+            "no Order value fits Rec",
+        ),
+        (
+            "isinstance(d.output, Buy) and isinstance(d.output, Sell)",
+            "`isinstance(d.output, Sell)` can never be true here: d.output is Buy, by the "
+            "checks before it",
+        ),
+    ],
+    ids=["no-overlap", "context"],
+)
+def test_flow_assert_check_impossible_even_on_null_is_reported(assertion, expected):
+    message = _load_error(_skippable_assert(assertion))
+    assert expected in message
+
+
+@pytest.mark.parametrize("skippable", [True, False], ids=["skippable", "always-run"])
+@pytest.mark.parametrize(
+    ("assertion", "expected"),
+    [
+        (
+            "isinstance(d.output, Sell) or d.output.qtty > 0",
+            "reference ${d.output.qtty} reads field 'qtty', which Buy doesn't have; "
+            "d.output is Buy here, by the checks before this read; did you mean 'qty'?",
+        ),
+        (
+            "d.output != null and not isinstance(d.output, Buy) and d.output.qty > 0",
+            "reference ${d.output.qty} reads field 'qty', which Sell doesn't have; "
+            "d.output is Sell here, by the checks before this read",
+        ),
+        (
+            "d.output.action == 'buy' or d.output.action == 'sell' or d.output.zz > 0",
+            "reference ${d.output.zz} reads unknown field 'zz' on record",
+        ),
+    ],
+    ids=["narrowed-typo", "null-ruled-out", "only-null-left"],
+)
+def test_flow_assert_read_error_names_the_declared_type(assertion, expected, skippable):
+    """A producer read may be null, but its read errors name the declared type."""
+    if skippable:
+        text = _skippable_assert(assertion)
+    else:
+        text = _flow(_producer("d", "Order"), "${step.output}", tail=_asserts(assertion))
+    message = _load_error(text)
+    assert expected in message
+    assert "Optional(" not in message
+    assert "type None" not in message
+
+
+def test_flow_assert_shorthand_check_is_reported_as_written():
+    message = _load_error(_flow_assert("isinstance(o, Rec)"))
+    assert (
+        "`isinstance(o, Rec)` can never be true: o is declared Order, and no Order value "
+        "fits Rec" in message
+    )
+    assert "input.o" not in message
+
+
+def _child_of(typ: str) -> str:
+    """A `defs:` child flow taking `v: !<typ>`."""
+    return _ORDER_CHILD.replace("v: !Order", f"v: !{typ}")
+
+
+def test_call_node_assert_member_only_hint_compares_the_tag():
+    """`isinstance` is not allowed in a CALL node's asserts, so the hint compares the tag."""
+    nodes = _producer("d", "Order") + (
+        "  c:\n    kind: call\n    call: child\n"
+        "    input:\n      v: ${d.output}\n"
+        "    asserts:\n      - \"v.qty > 0\"\n"
+    )
+    message = _load_error(_flow(nodes, "${c.output}", defs=_ORDER_CHILD))
+    assert (
+        "node 'c' assert: reference ${v.qty} reads field 'qty', which only union members "
+        "with action buy have; check the member first with `v.action == \"buy\" and ...`"
+    ) in message
+    assert "isinstance" not in message
+
+
+def test_call_node_assert_member_only_hint_on_an_untagged_union_names_a_case():
+    nodes = _producer("d", "AB") + (
+        "  c:\n    kind: call\n    call: child\n"
+        "    input:\n      v: ${d.output}\n"
+        "    asserts:\n      - \"v.x > 0\"\n"
+    )
+    message = _load_error(_flow(nodes, "${c.output}", typedefs=_UNION_TYPES, defs=_child_of("AB")))
+    assert (
+        "node 'c' assert: reference ${v.x} reads field 'x', which only 1 of 2 union members "
+        "have; check the member with isinstance(d.output, <Type>) in a case first"
+    ) in message
+
+
+def _order_loop(assertion: str) -> str:
+    """A one-turn inline LOOP carrying `o: Order`, seeded from the flow input `o`."""
+    nodes = (
+        "  drive:\n    kind: loop\n    times: 1\n"
+        "    input:\n      o: ${input.o}\n"
+        f'    asserts:\n      - "{assertion}"\n'
+        "    nodes:\n"
+        "      bump:\n"
+        "        kind: code\n"
+        "        input:\n          o: ${input.o}\n"
+        "        output:\n          o: Order\n"
+        "        code: return dict(o=inputs['o'])\n"
+        "    output: ${bump.output}\n"
+    )
+    return _flow(nodes, "${drive.output}", inputs=_ORDER_INPUT)
+
+
+def test_loop_node_assert_tag_checks_narrow_its_local():
+    flow = load_flow(_order_loop("o.action != 'buy' or o.qty > 0"))
+    order = {"action": "buy", "qty": 2}
+    result = run_flow(flow, {"s": "x", "r": {"a": "x"}, "o": order})
+    assert result.status == "succeeded", result.failure
+    message = _load_error(_order_loop("o.qty > 0"))
+    assert (
+        "node 'drive' assert: reference ${o.qty} reads field 'qty', which only union members "
+        "with action buy have; check the member first with `o.action == \"buy\" and ...`"
+    ) in message
+    message = _load_error(_order_loop("o.action == 'sell' and o.action == 'buy' and o.zz > 0"))
+    assert "`o.action == \"buy\"` can never be true here: o is Sell" in message
+    assert "${o.zz}" not in message
 
 
 _PARTIAL_CHILD = (

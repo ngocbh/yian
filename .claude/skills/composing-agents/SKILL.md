@@ -188,11 +188,29 @@ is a load error outside a narrowing `case` branch (see `case` below): `reference
 ${d.output.qty} reads field 'qty', which only union members with action buy, sell have;
 read it inside a case on ${d.output.action}`. Flow outputs are never narrowed; a node's
 prompt and assert reads of its inputs are checked too, and narrowed when the node sits in
-a `case` branch. A LOOP
-`while:`/`until:` predicate narrows with a top-level `and` part before the read, as a
-searched `case` `when:` does: `until: isinstance(r, Done) and r.answer == "ok"` (a check
-under `or`/`not` doesn't narrow); unnarrowed, the error says to check the member first
-with `isinstance(r, <Type>) and ...`.
+a `case` branch.
+
+**Narrowing inside a condition.** In node and flow asserts, a searched `case` `when:`,
+and a LOOP `while:`/`until:`, a check narrows the reads after it by short-circuit logic:
+in `A and B`, `B` knows `A` is true; in `A or B`, that `A` is false; `not` flips it. The
+checks are `isinstance(<ref>, T)` and a tag comparison `<ref>.<tag> == "<text>"` (`!=`
+proves the opposite), and the narrowed type replaces the declared one. So
+`isinstance(v, Buy) and v.qty > 0`, `not isinstance(v, Buy) or v.qty > 0`, and
+`v.action != "buy" or v.qty > 0` all load; a check after the read doesn't narrow, and an
+unguarded member-only read in an assert or predicate says to check the member first with
+`isinstance(v, <Type>) and ...` (in a `call` or `loop` node's asserts, which can't use
+`isinstance`, with `v.<tag> == "<value>" and ...` for a tagged union). A read the narrowed type lacks is a load error
+(`reference ${r.answr} reads field 'answr', which Done doesn't have; r is Done here, by the
+checks before this read; did you mean 'answer'?`), and so is a check that can never be
+true: ruled out by the checks before it or the routing (`` `v.action == "sell"` can never
+be true here: v is Buy, by the checks before it ``), an `isinstance` no value of the
+declared type fits, or a tag comparison (`==` or `!=`) with text that is no tag
+(`` `v.action != "biy"` compares v.action with 'biy', which is not one of its tags (buy,
+sell); did you mean 'buy'? ``). A `while:` first runs on the seeds, so a check is impossible
+there only when it is on the seed's type too (a seed of another or unproven type leaves it
+unknown), and a flow assert reads every producer it names as possibly null (END binds
+each with `:- null`), for its checks and reads alike, so `not isinstance(d.output, Order)`
+is not reported even on an always-run `d`; read errors still name the declared type.
 
 **Operators inside `${...}`** — one expression grammar, everywhere:
 
@@ -911,10 +929,11 @@ value is a load error asking for `:-`.
 ref to the tag (not a coalesce); a `when:` that isn't a tag is a load error (``case node
 'route': `when: buyy` is not a tag of `on: ${d.output.action}` (`Literal(buy, sell)`);
 use one of: buy, sell``). A searched `case`
-narrows with a top-level `and` part `isinstance(<ref>, T)`:
-`when: isinstance(d.output, Buy) and d.output.qty > 5`. A union `T` sharing some
-members narrows to just those members, unless another member could also pass the check.
-Its `else:` doesn't narrow.
+narrows each branch by what its `when:` proves true (`isinstance` and tag checks through
+`and`/`or`/`not`; see "Narrowing inside a condition" above):
+`when: isinstance(d.output, Buy) and d.output.qty > 5`, `when: d.output.action == "buy"`.
+A union `T` in `isinstance(<ref>, T)` sharing some members narrows to just those members,
+unless another member could also pass the check. Its `else:` doesn't narrow.
 A searched `case` whose `when:` reads a node only under such a default doesn't pass
 that node's narrowing to its branches. Inline
 child bodies are typed before narrowing; read member fields in a branch node.

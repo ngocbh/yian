@@ -297,10 +297,14 @@ a second runtime authority.
 resolves them against the owning flow's `typedefs:`; `compose/build` stores the result on
 `Node.types` after the START/END boundary is synthesized, so the evaluator never sees a
 registry. `isinstance_types.py` also decides which union members an `isinstance` check
-narrows to. `compose/validate/narrowing.py` computes union narrowing from built CASE
-descriptors and edges and hands each node a view of the producer and flow-input contracts;
-the reference, call-type, and exhaustiveness validators read that view, while the
-field-read rule itself stays in `nodes/contracts.py`. Narrowing is load-time only and adds
+narrows to. `compose/helpers/condition_guards.py` (syntax only) says what a condition
+proves at each read and check through `and`/`or`/`not`, and
+`compose/helpers/narrowing_facts.py` turns that into narrowing facts, narrowed read types,
+and impossible-check errors; CASE, LOOP, and node and flow asserts share both, which is why
+they sit in `helpers` rather than `validate`. `compose/validate/narrowing.py` computes union
+narrowing from built CASE descriptors and edges and hands each node a view of the producer
+and flow-input contracts; the reference, call-type, and exhaustiveness validators read that
+view, while the field-read rule itself stays in `nodes/contracts.py`. Narrowing is load-time only and adds
 nothing to runtime.
 `compose/validate/skips.py` models which nodes of one flow level CASE routing may skip,
 mirroring the runtime join rule over compiled edges (`case_exhaustive.exhaustive_cases`

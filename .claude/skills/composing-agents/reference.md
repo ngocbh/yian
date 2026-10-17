@@ -407,7 +407,10 @@ comparisons keep their null behavior; arithmetic needs a `:-` default.
 lifted out of it (which carry its route and wait for its inputs), read its member's
 fields (`${d.output.qty}` under `when: buy`); `else:` sees the unlisted members. Outside a
 branch only fields every member has can be read. For an untagged union, use a searched
-`case` with `when: isinstance(d.output, Text)`. Return a member field from the flow by
+`case` with `when: isinstance(d.output, Text)`; a tagged one may also use a tag comparison
+there (`when: d.output.action == "buy"`). A searched branch sees what its `when:` proves
+(through `and`/`or`/`not`), and a check in any condition (asserts, `when:`, LOOP
+`while:`/`until:`) narrows the reads after it. Return a member field from the flow by
 joining branch nodes (`${b.output | s.output}`); flow outputs are never narrowed. A
 searched `case` whose `when:` reads a node only under such a default doesn't pass that
 node's narrowing to its branches.
@@ -535,7 +538,8 @@ only the fields that change; a field it omits keeps its value. This is the shape
   `while:`/`until:` but REDUNDANT+REJECTED with `times:`.
   Every `while:`/`until:` ref must name a carried field, and a field read below it must
   exist on that field's type (a typo is rejected at load, not read as falsy; a field only
-  some union members have needs an `isinstance(r, T) and ...` part before the read), and
+  some union members have needs a check before the read that narrows it, such as
+  `isinstance(r, T) and ...` or `r.kind != "more" or ...`), and
   `max:` (when given) and `times:` must be a plain integer `>= 1`.
 - **Node-local `asserts:` reading `${output}` are POST checks** — they fire once the
   node's value is committed, and fail the run loudly on a false/raising expr. This

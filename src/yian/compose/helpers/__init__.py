@@ -7,6 +7,9 @@ here so the layering is legible: `helpers` imports the engine core (`typesys` / 
 down into it.
 
 Modules:
+  - `condition_guards` what a condition proves at each read: `isinstance` and tag
+                  checks, guards over them through `and` / `or` / `not`, and the checks
+                  each read or literal is evaluated under. Syntax only.
   - `directives`  `CALL_HEAD` and `match_call_directive`: recognizes a whole-value
                   `call(...)` directive in binding text, rejecting malformed text that
                   starts with `call(`.
@@ -16,6 +19,11 @@ Modules:
                   condition, their resolution against a flow's `typedefs:`, and which
                   union members an `isinstance` check narrows to.
   - `memory`      strict named-policy parsing plus opaque occurrence attachment.
+  - `narrowing_facts` the facts narrowing proves about a union value (`Members`,
+                  `Exact`, their union and intersection), the facts a condition guard
+                  proves, the narrowed types a guarded read is checked against, the
+                  checks in a condition that are wrong whatever the values, and their
+                  messages.
   - `output_contracts` the template-aware output-binding contract resolver: exact or
                   partial direct-reference projection, source-free proven expression
                   results, closed-record assembly, and closed-path validation.

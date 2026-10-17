@@ -336,13 +336,7 @@ reference ${upper(...).f} reads field 'f' on type str, which has no fields
 
 Changed: a field read a local name's type can't have, in a prompt, question text, or
 node assert, or on `${input.X...}` in a flow assert, used to load and read `null` or
-fail at run; it is now a load error. So is a field read on a builtin's result. A read
-of a field only some union members have, in a node assert or on `${input.X...}` in a
-flow assert, used to load even when the assert guarded it with `isinstance`
-(`not isinstance(v, Buy) or v.qty > 0`); it is now a load error, since a check inside
-an assert doesn't narrow. Route the node with a `case` that narrows the value its input
-is bound from instead; for a flow assert on an input, check it in a node under such a
-`case`.
+fail at run; it is now a load error. So is a field read on a builtin's result.
 
 A `file` value has three fields: `uri`, `mime`, and `name`. They read the same way in
 bindings, templates and prompts, `case` `on:` and `when:`, and node and flow asserts,
@@ -377,17 +371,21 @@ sell have; read it inside a case on ${d.output.action}
 An untagged union says `which only 1 of 2 union members have; check the member with
 isinstance(d.output, <Type>) in a case first`. A field no member has is an unknown field.
 The rule also covers a node's `${output...}` asserts, flow asserts, MAP `${item...}`,
-and flow outputs, which are never narrowed. A node's prompt and assert reads of its
-inputs are checked too, and narrowed only by the `case` branch the node sits in, not by
-an `isinstance` or tag check inside the assert; for an input bound from one reference,
-the hint names that source (`read it inside a case on ${d.output.action}`). To return a
-member field, read it in a branch and return the `case` result with `${case.output}`; to
-use one per item, pass `${item}` to the child and narrow there.
+and flow outputs; MAP items and flow outputs are never narrowed. A node's prompt and
+assert reads of its inputs are checked too, narrowed by the `case` branch the node sits
+in; for a prompt read of an input bound from one reference, the hint names that source
+(`read it inside a case on ${d.output.action}`). An assert also narrows by the checks
+inside it (see [Narrowing inside a condition](#narrowing-inside-a-condition)), so its hint
+names the check to add: `` check the member first with `isinstance(v, <Type>) and ...` ``.
+A `call` or `loop` node's asserts can't use `isinstance`, so there a tagged union's hint
+compares the tag instead (`` check the member first with `v.action == "buy" and ...` ``) and
+an untagged one keeps the case hint.
+To return a member field, read it in a branch and return the `case` result with
+`${case.output}`; to use one per item, pass `${item}` to the child and narrow there.
 
-A LOOP `while:`/`until:` predicate can't sit in a `case` branch, so it narrows with a
-top-level `and` part instead: an `isinstance(r, T)` part narrows `r` for the parts after it
-as in a searched `case` `when:`, so they may read `T`'s fields. A check under `or` or
-`not`, or after the read, doesn't narrow. Unnarrowed, the error points at that form:
+A LOOP `while:`/`until:` predicate can't sit in a `case` branch; it narrows by the checks
+inside it (see [Narrowing inside a condition](#narrowing-inside-a-condition)).
+Unnarrowed, the error points at that form:
 
 ```yaml
 until: isinstance(r, Done) and r.answer == "ok"
@@ -415,6 +413,92 @@ adaptive brief), load silently (AGENT `0`, `false`, `[]`, `{}`; `human_input` li
 mappings), or load and fail when the gate ran (other `human_input` values). A non-text
 question field was a raw validation dump at `questions:`. Now each is a load error at
 the value; quote it.
+
+### Narrowing inside a condition
+
+A condition narrows a [union](#unions-of-records-union) value as it goes, because `and` and
+`or` short-circuit: in `A and B`, `B` runs only once `A` is true, and in `A or B` only once
+`A` is false; `not` flips what a check proves. Two checks narrow a plain reference
+`<ref>`:
+
+- `isinstance(<ref>, T)`, which keeps the members `T` allows, by the rule a searched `case`
+  uses (see [Narrowing a union in a branch](#narrowing-a-union-in-a-branch));
+- a comparison of a union's tag field with text, `<ref>.<tag> == "<text>"` (either side),
+  which keeps the members with that tag; `!=` proves the opposite.
+
+The narrowed type replaces the declared one for the reads after the check, the same way for
+`and`, `or` and `not`. With `Order: Union(Buy, Sell)`, where only `Buy` has `qty`, each of
+these may read `v.qty`:
+
+```yaml
+asserts:
+  - isinstance(v, Buy) and v.qty > 0
+  - not isinstance(v, Buy) or v.qty > 0
+  - v.action != "buy" or v.qty > 0
+```
+
+A check after the read doesn't narrow it: `v.qty > 0 and isinstance(v, Buy)` is a load
+error. Conditions narrow this way in node and flow asserts, in a searched `case` `when:`
+(its own reads, and the branch it routes; see
+[Narrowing a union in a branch](#narrowing-a-union-in-a-branch)), and in a LOOP `while:` or
+`until:`. A check the value's type always decides, such as `isinstance(v, Order)`, narrows
+nothing: a read only reachable past it is checked against that type. So does a check the
+checks before it always decide: in `isinstance(v, Buy) and (isinstance(v, Buy) or v.qty >
+0)`, `v.qty` is read on `Buy`.
+
+A read the narrowed type can't have is a load error that names it:
+
+```yaml
+until: not isinstance(r, Done) or r.answr == "ok"
+```
+
+```
+reference ${r.answr} reads field 'answr', which Done doesn't have; r is Done here, by the
+checks before this read; did you mean 'answer'?
+```
+
+In a `when:`, the error says `by the case branch that routes this node` instead when every
+read of that value in the `case`'s `when:`s follows a check that proves something, on any
+value, and only the routing narrows the value read: `d.output.nosuch` in
+`isinstance(input.o, Text) and d.output.nosuch > 0`, in a `case` the `buy` branch routes. A
+read with no check before it, such as `d.output.limt > 0` alone, gets the plain
+unknown-field error.
+
+So is a check that can never be true: one the checks before it rule out (in a `when:`, also
+the `case` branch that routes the `case`), an `isinstance` whose type no value of the
+declared type fits (or, under `not`, one every value fits), and a tag comparison, `==` or
+`!=`, with text that is no tag. For `isinstance(v, Buy) and v.action == "sell"`,
+`isinstance(v, Text)`, and `v.action != "biy"`:
+
+```
+`v.action == "sell"` can never be true here: v is Buy, by the checks before it
+`isinstance(v, Text)` can never be true: v is declared Order, and no Order value fits Text
+`v.action != "biy"` compares v.action with 'biy', which is not one of its tags (buy,
+sell); did you mean 'buy'?
+```
+
+A read that runs only when such a check is true isn't field-checked, since no value reaches
+it (the read in `v.action != "biy" and v.qty > 0` still is: a `!=` with text that is no tag
+is always true). A node assert's local name that may have several types (a typed binding's
+declared and inferred ones) reports a check only when it is impossible under each, and
+skips a read only when no value reaches it under each. A flow assert names a flow input as
+written: `isinstance(o, Text)` is reported as `isinstance(o, Text)`. It reads every
+producer it names as possibly null, since END binds each one with `:- null` and a skipped
+producer reads null: `not isinstance(d.output, Order)` is not reported even with `d` typed
+`Order` and always run. Its read errors still name the declared type (`d.output is Buy
+here`, not `Optional(Buy)`). A LOOP `while:` first runs on the seed, so a check is reported
+only when it can't be true on the seed either: with a body returning `r: Done` and the seed
+`r: null`, `while: not isinstance(r, Done)` loads, and a seed whose type neither fits the
+body's nor holds it (a literal record of another shape, an untyped producer) leaves `r`'s
+type unknown there. `until:` runs after the body, so it is checked against the body's type
+alone.
+
+Changed: an `isinstance` or tag check inside a condition now narrows reads after it through
+`and`, `or` and `not`. Asserts guarded this way load again (they briefly failed to load),
+and a check under `or` or `not` now narrows in a `when:` and a LOOP predicate too. A read
+under such a check of a field the checked type can't have, which could only miss at run,
+is now a load error, and so is a check the checks before it make impossible (or that the
+value's type makes impossible, such as a tag value no member has).
 
 ### Operators inside `${...}`
 
@@ -2590,16 +2674,20 @@ place_buy:
   call in a branch node's `input:`) carries that node's route and waits for its inputs,
   so it is narrowed like it.
 
-A searched `case` narrows with [`isinstance`](expressions.md#isinstance-the-type-test): each
-top-level `and` part `isinstance(<ref>, T)` of a `when:` narrows that reference
-in that branch and its chain. `T` may be a member, a union of members, or any other type.
-A union `T` that shares members with the reference's union narrows it to those shared
-members, so the branch lines up with an `on:` branch or `else:` over them, as long as no
-other member could pass the check (because some of its values also fit one of `T`'s
-members); otherwise the reference narrows to `T`. A `T` the reference's type already
-fits, such as
-`object`, doesn't narrow. First true `when:` still wins, and checks may overlap. The
-searched form's `else:` narrows nothing. A later `and` part of the same `when:` may
+A searched `case` narrows each branch, and the branch's chain, by what its `when:` proves
+true (see [Narrowing inside a condition](#narrowing-inside-a-condition)): its
+[`isinstance`](expressions.md#isinstance-the-type-test) checks and tag comparisons, through
+`and`, `or` and `not`. So `when: decide.output.action == "buy"`,
+`when: not isinstance(decide.output, Hold)`, and
+`when: isinstance(decide.output, Buy) or isinstance(decide.output, Sell)` each narrow
+their branch. In `isinstance(<ref>, T)`, `T` may be a member, a union of members, or any
+other type. A union `T` that shares members with the reference's union narrows it to those
+shared members, so the branch lines up with an `on:` branch or `else:` over them, as long
+as no other member could pass the check (because some of its values also fit one of `T`'s
+members); otherwise the reference narrows to `T`. A `T` the reference's type already fits,
+such as `object`, doesn't narrow. First true `when:` still wins, and checks may overlap,
+so an earlier `when:` being false narrows nothing, and the searched form's `else:` narrows
+nothing. A read later in the same `when:` sees what the checks before it prove, so it may
 already read `T`'s fields:
 
 ```yaml
@@ -3282,8 +3370,8 @@ nodes:
 record-scoped boolean over bare refs — every ref must name a **carried record
 field**, and a field read below it (`state.count`) must be one the carried field's
 type has (a typo'd name or field is rejected at load, not silently read as falsy; a
-field only some union members have needs an `isinstance` part before it, see
-[References](#references-naming-a-value)) — written in the canonical bare form:
+field only some union members have needs a check before it that narrows it, see
+[Narrowing inside a condition](#narrowing-inside-a-condition)) — written in the canonical bare form:
 `while: not exited`. `max:` is optional. The predicate is an expression string: a
 YAML `true`, `false`, number, or list is a load error, and so is an empty string.
 
@@ -3484,6 +3572,8 @@ inside the child flow.
 
 A node assert's field read on an input (`name.f`) and a flow assert's `input.X.f` are
 field-checked at load, like any other read (see [References](#references-naming-a-value)).
+An `isinstance` or tag check in an assert narrows the reads after it (see
+[Narrowing inside a condition](#narrowing-inside-a-condition)).
 
 ## Next
 

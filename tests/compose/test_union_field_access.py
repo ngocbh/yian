@@ -167,7 +167,11 @@ def test_member_only_field_of_an_untagged_union_is_a_load_error():
 
 def test_member_only_field_in_a_flow_assert_is_a_load_error():
     text = _flow("asserts:\n  - d.output.qty > 0\noutput: ${d.output}\n")
-    assert f"assert 'd.output.qty > 0': {_TAGGED_QTY}" in _load_error(text)
+    assert (
+        "assert 'd.output.qty > 0': reference ${d.output.qty} reads field 'qty', which "
+        "only union members with action buy, sell have; check the member first with "
+        "`isinstance(d.output, <Type>) and ...`"
+    ) in _load_error(text)
 
 
 def test_member_only_field_in_a_searched_case_when_is_a_load_error():
@@ -261,7 +265,8 @@ def test_member_only_field_in_a_node_assert_is_a_load_error():
     )
     assert (
         "node 'd' assert: reference ${output.qty} reads field 'qty', which only union "
-        "members with action buy, sell have; read it inside a case on ${output.action}"
+        "members with action buy, sell have; check the member first with "
+        "`isinstance(output, <Type>) and ...`"
     ) in _load_error(text)
 
 

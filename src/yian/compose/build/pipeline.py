@@ -112,7 +112,7 @@ from yian.compose.validate.case_branches import check_case_branches
 from yian.compose.validate.cycles import reject_cycles
 from yian.compose.validate.human_questions import validate_human_questions
 from yian.compose.validate.loop_types import check_loop_type_contract
-from yian.compose.validate.narrowing import compute_narrowing
+from yian.compose.validate.narrowing import check_impossible_whens, compute_narrowing
 from yian.compose.edges.hosts import host_control_edges
 from yian.compose.edges.ordering import infer_ordering_edges
 from yian.compose.validate.call_types import check_call_map_types
@@ -2442,6 +2442,16 @@ def _assemble(
         narrowing=narrowing,
         diagnostics=diagnostics,
     )
+    # A searched `when:` check that can never be true, before the reads it makes dead are
+    # left unchecked by the reference pass.
+    check_impossible_whens(
+        descriptors,
+        producers,
+        flow_input_contracts,
+        narrowing,
+        registry=registry,
+        diagnostics=diagnostics,
+    )
 
     # Typed node inputs that can never fit their declared type. The CALL, MAP, and LOOP
     # checks below take a typed binding's declared type as its source, so a value that
@@ -2562,6 +2572,7 @@ def _assemble(
         type_names=frozenset(registry),
         local_contracts=local_contracts,
         partial_union_nodes=narrowing.unordered,
+        registry=registry,
         diagnostics=diagnostics,
     )
     # Lower the flow-level `asserts:` into node-local asserts stamped on the synthesized
@@ -2574,6 +2585,7 @@ def _assemble(
         asserts_section, flow_inputs, set(descriptors), producers,
         assert_ranges=flow_assertion_ranges,
         input_contracts=flow_input_contracts,
+        registry=registry,
         diagnostics=diagnostics,
     )
 

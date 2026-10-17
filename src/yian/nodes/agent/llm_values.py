@@ -429,19 +429,23 @@ class LayerFieldError(ValueError):
         self.field = field
 
 
-def check_resolved_layer(layer: dict[str, Any], subject: str, *, written: Any) -> None:
+def check_resolved_layer(
+    layer: dict[str, Any], subject: str, *, written: Any, callsite: str = ""
+) -> None:
     """Check a layer resolved from values as an authored layer is checked, naming the field.
 
-    Messages read ``<subject>.<field>: ...`` for the first field at fault (a provider
-    block's problems name their key path), or ``<subject>: ...`` for a problem of the
-    layer as a whole, and never echo a value. A host-only field or ``_connection``
-    is refused first (`refused_resolved_field`).
+    Messages read ``<subject>.<field><callsite>: ...`` for the first field at fault (a
+    provider block's problems name their key path), or ``<subject><callsite>: ...`` for
+    a problem of the layer as a whole, and never echo a value. A host-only field or
+    ``_connection`` is refused first (`refused_resolved_field`).
 
     Args:
         layer (`dict[str, Any]`): The resolved layer.
         subject (`str`): Names the layer, such as ``node 'chat' llm_config``.
         written (`Any`): The layer as written, which tells a literal field from one a
             value set.
+        callsite (`str`, *optional*, defaults to `""`): Follows the field, such as
+            `` in 'sub'`` for a synthesized agent's layer inside a call.
 
     Raises:
         `LayerFieldError`: The layer sets a field a flow file may not set, an unknown or
@@ -450,18 +454,18 @@ def check_resolved_layer(layer: dict[str, Any], subject: str, *, written: Any) -
     refusal = _refusal(written, layer)
     if refusal is not None:
         field, text = refusal
-        raise LayerFieldError(f"{field_where(subject, field)}: {text}", field)
+        raise LayerFieldError(f"{field_where(subject, field)}{callsite}: {text}", field)
     try:
         validate_layer(layer)
     except ValueError as exc:
-        raise LayerFieldError(f"{subject}: {exc}", ()) from None
+        raise LayerFieldError(f"{subject}{callsite}: {exc}", ()) from None
     for block in PROVIDER_BLOCKS:
         if layer.get(block) is None:
             continue
         problems = located_block_problems(block, layer[block], lambda _leaf: False)
         if problems:
             raise LayerFieldError(
-                f"{field_where(subject, (block,))}: {problems[0].message}",
+                f"{field_where(subject, (block,))}{callsite}: {problems[0].message}",
                 (block, *problems[0].keys),
             )
     try:
@@ -477,7 +481,9 @@ def check_resolved_layer(layer: dict[str, Any], subject: str, *, written: Any) -
             text = f"`{'.'.join(str(part) for part in loc)}`: {error['msg']}"
         else:
             text = error["msg"]
-        raise LayerFieldError(f"{field_where(subject, loc[:1])}: {text}", loc[:1]) from None
+        raise LayerFieldError(
+            f"{field_where(subject, loc[:1])}{callsite}: {text}", loc[:1]
+        ) from None
 
 
 def agent_label(label: Optional[str], parent: str) -> Optional[str]:
@@ -567,15 +573,18 @@ def call_time_config(
     """
     path = call_time.path
     parent = path.rpartition("/")[0]
-    subject = agent_label(label, parent) or f"node {path!r} llm_config"
+    site = label or f"node {path!r} llm_config"
+    subject = agent_label(label, parent) or site
+    # A nested label names its callsite after the field: `<label>.model in 'sub'`.
+    callsite = subject[len(site):]
     flow_subject = f"flow {parent!r} llm_config" if parent else "flow llm_config"
     tree = template.source.value
     node_layer, flow_layer = resolve_layers(template, pool, label=subject)
-    for part, layer, where in (
-        ("node", node_layer, subject), ("flow", flow_layer, flow_subject),
+    for part, layer, where, after in (
+        ("node", node_layer, site, callsite), ("flow", flow_layer, flow_subject, ""),
     ):
         try:
-            check_resolved_layer(layer, where, written=tree.get(part))
+            check_resolved_layer(layer, where, written=tree.get(part), callsite=after)
         except LayerFieldError as exc:
             raise _refused(str(exc), _field_origin(template, (part, *exc.field))) from None
     selection = call_time.selection
@@ -605,7 +614,7 @@ def call_time_config(
             origin = _field_origin(template, ("node", block[1:])) or _field_origin(
                 template, ("flow", block[1:])
             )
-        raise _refused(f"{subject}{block}: {exc}", origin) from None
+        raise _refused(f"{site}{block}{callsite}: {exc}", origin) from None
     return canonical
 
 

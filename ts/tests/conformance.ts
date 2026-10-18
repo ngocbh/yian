@@ -26,7 +26,7 @@ import { parseArgs } from "node:util";
 import { Document, isCollection, isMap, isNode, isSeq, parseDocument, visit } from "yaml";
 import type { YAMLMap } from "yaml";
 
-import { ENTRIES, nonDefaults, read } from "../src/defaults.ts";
+import { ENTRIES, forget, nonDefaults, read, reload } from "../src/defaults.ts";
 import { canonicalJson, logJson, parseJson } from "../src/typesys/json.ts";
 import type { JsonMode } from "../src/typesys/json.ts";
 import { readTypedefs, typeFor } from "../src/typesys/types.ts";
@@ -886,14 +886,24 @@ export async function main(
 
 // ---- value ----
 
-/** Run a `value` case: build `value` as `type` and compare the stored value and its kind. */
-async function runValue(case_: Case): Promise<void> {
+/**
+ * Run a `value` case: build `value` as `type` under the defaults `env` sets and compare the
+ * stored value and its kind.
+ */
+async function runValue(case_: Case, ctx: CaseContext): Promise<void> {
   await results(case_["expect"] as Case, () => {
-    const typedefs = (case_["typedefs"] ?? {}) as Record<string, unknown>;
-    const typ = typeFor(case_["type"] as string, readTypedefs(typedefs));
-    const typed = buildValueAs(typ, case_["value"]);
-    // A file in the value is compared in data form.
-    return { value: typed.toWire().value, kind: typed.kind };
+    // Read inside the result, so a bad variable is raised as the case's error; forgotten
+    // after, so a later case reads its own.
+    try {
+      reload((name) => (Object.hasOwn(ctx.env, name) ? ctx.env[name] : undefined));
+      const typedefs = (case_["typedefs"] ?? {}) as Record<string, unknown>;
+      const typ = typeFor(case_["type"] as string, readTypedefs(typedefs));
+      const typed = buildValueAs(typ, case_["value"]);
+      // A file in the value is compared in data form.
+      return { value: typed.toWire().value, kind: typed.kind };
+    } finally {
+      forget();
+    }
   });
 }
 

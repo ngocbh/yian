@@ -16,6 +16,7 @@
  * canonical labels, union member order and overlap check.
  */
 
+import { current } from "../defaults.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { parseDate, parseDatetime } from "./temporal.ts";
 
@@ -40,16 +41,7 @@ export class TypeCheckError extends RangeError {
 type ValuePath = readonly (string | number)[];
 
 /**
- * The most characters a value or key shown in a message keeps.
- *
- * Becomes `current().maxShownValueChars` once the defaults module exists.
- */
-function shownValueChars(): number {
-  return 200;
-}
-
-/**
- * Cut text to the shown-value cap (200) for a message, counting code points.
+ * Cut text to `YIAN_MAX_SHOWN_VALUE_CHARS` (200 by default) for a message, counting code points.
  *
  * Returns `text` when it fits; else its first cap - 1 code points and `…`. A surrogate pair
  * is never split.
@@ -57,7 +49,7 @@ function shownValueChars(): number {
  * Example: `shownText("x".repeat(500))` gives 199 x's then `…`.
  */
 export function shownText(text: string): string {
-  const cap = shownValueChars();
+  const cap = current().maxShownValueChars;
   // A string has at least as many code units as code points.
   if (text.length <= cap) return text;
   let index = 0;
@@ -78,14 +70,18 @@ export function shownText(text: string): string {
  * `{"uri":…,"mime":…,"name":…}`, records in JS property order. A part that isn't a yian
  * value (a `Date`, a `Map`, a class instance, a symbol, a function, `undefined`) shows as
  * `<Name object>`, and an int the runtime can't stringify as `<int too large to display>`.
- * It never throws: when a getter or proxy trap throws, the whole value shows as
+ * The value never makes it throw: when a getter or proxy trap throws, the whole value shows as
  * `<Name object>`. The writer stops once it has more than the cap can show, so a long list,
  * a deep value or a cyclic one costs time bounded by the cap.
+ *
+ * @throws DefaultsError when a `YIAN_*` variable holds a value its entry does not accept.
  */
 export function valueRepr(value: unknown): string {
+  // Read before the `try`, so a bad `YIAN_*` value is thrown, not turned into a placeholder.
+  const cap = current().maxShownValueChars;
   let text: string;
   try {
-    text = textForm(value, 2 * shownValueChars() + 2);
+    text = textForm(value, 2 * cap + 2);
   } catch {
     // A getter or proxy trap is user code; a broken one must not crash the message.
     try {
@@ -207,7 +203,7 @@ export function renderValuePath(path: readonly (string | number)[]): string {
     }
   }
   const text = parts.join("");
-  const limit = 4 * shownValueChars();
+  const limit = 4 * current().maxShownValueChars;
   if (text.length <= limit) return text;
   const points = Array.from(text);
   if (points.length <= limit) return text;

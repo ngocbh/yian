@@ -12,17 +12,17 @@
  * record key is always a string, so the int and broken-repr keys have no TS counterpart).
  *
  * Later: the unknown-input message row (with bindings) and the rows that run a flow (with the
- * runner); the configured-cap rows
- * (`test_value_repr_follows_the_configured_cap`, `test_value_repr_raises_a_bad_defaults_variable`)
- * once `defaults.ts` lands.
+ * runner).
  *
  * Not ported: the long-int placeholders (`<int with N digits>`; an int is a `bigint` with no
  * digit limit), the set rendering (no sets in TS) and `_sort_repr` (Python-only: it orders
  * names whose cut renderings are equal, which TS sorts uncut).
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import process from "node:process";
 
+import { BUILTIN, DefaultsError, forget, install, reload } from "../../src/defaults.ts";
 import {
   buildValueAs,
   FileRef,
@@ -37,6 +37,10 @@ import {
 const CAP = 200;
 const MESSAGE_BOUND = 1200;
 
+// Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
+beforeEach(() => install(BUILTIN));
+afterEach(forget);
+
 class Foo {}
 
 describe("valueRepr", () => {
@@ -49,6 +53,24 @@ describe("valueRepr", () => {
     const value = "x".repeat(CAP - 2);
     expect(valueRepr(value)).toBe(`"${value}"`);
     expect(valueRepr(value)).toHaveLength(CAP);
+  });
+
+  test("follows the configured cap", () => {
+    reload((name) => (name === "YIAN_MAX_SHOWN_VALUE_CHARS" ? "10" : undefined));
+    expect(valueRepr("abcdefghijklmnop")).toBe('"abcdefgh…');
+  });
+
+  test("throws a bad defaults variable rather than showing a placeholder", () => {
+    const variable = "YIAN_MAX_SHOWN_VALUE_CHARS";
+    const saved = process.env[variable];
+    process.env[variable] = "1";
+    forget();
+    try {
+      expect(() => valueRepr("abc")).toThrow(DefaultsError);
+    } finally {
+      if (saved === undefined) delete process.env[variable];
+      else process.env[variable] = saved;
+    }
   });
 
   test("shows a small int as its digits", () => {

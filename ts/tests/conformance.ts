@@ -26,7 +26,7 @@ import { parseArgs } from "node:util";
 import { Document, isCollection, isMap, isNode, isSeq, parseDocument, visit } from "yaml";
 import type { YAMLMap } from "yaml";
 
-import { ENTRIES, read } from "../src/defaults.ts";
+import { ENTRIES, nonDefaults, read } from "../src/defaults.ts";
 import { canonicalJson, logJson, parseJson } from "../src/typesys/json.ts";
 import type { JsonMode } from "../src/typesys/json.ts";
 
@@ -890,21 +890,16 @@ export async function main(
 async function runDefaults(case_: Case, ctx: CaseContext): Promise<void> {
   const expect = case_["expect"] as Case;
   await results(expect, () => {
-    // `read` gives the values in `ENTRIES` order.
-    const values = Object.values(
-      read((name) => (Object.hasOwn(ctx.env, name) ? ctx.env[name] : undefined)),
-    );
-    const byName = new Map<string, number>(
-      ENTRIES.map((entry, index) => [entry.name, values[index]!]),
-    );
+    const byName: Record<string, bigint> = {
+      ...Object.fromEntries(ENTRIES.map((entry) => [entry.name, BigInt(entry.default)])),
+      ...nonDefaults(read((name) => (Object.hasOwn(ctx.env, name) ? ctx.env[name] : undefined))),
+    };
     const names = Object.keys(get(expect, "defaults", {}) as Case);
-    const unknown = names
-      .filter((name) => !byName.has(name))
-      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const unknown = names.filter((name) => !Object.hasOwn(byName, name)).sort();
     if (unknown.length > 0) {
       throw new CaseFailure(`\`expect.defaults\` names unknown entries: ${unknown.join(", ")}`);
     }
-    return { defaults: Object.fromEntries(names.map((name) => [name, BigInt(byName.get(name)!)])) };
+    return { defaults: Object.fromEntries(names.map((name) => [name, byName[name]])) };
   });
 }
 

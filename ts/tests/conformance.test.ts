@@ -836,7 +836,7 @@ describe("main", () => {
         'kind: defaults\nenv: {YIAN_MAX_TOTAL_NODES: "20000"}\n' +
         "expect: {defaults: {MAX_TOTAL_NODES: 20000}}\n",
       "d/unknown.yaml":
-        "kind: defaults\nenv: {}\nexpect: {defaults: {NOT_AN_ENTRY: 1, MAX_TOTAL_NODES: 1}}\n",
+        "kind: defaults\nenv: {}\nexpect: {defaults: {ZZ: 1, AA: 1, MAX_TOTAL_NODES: 1}}\n",
       "d/raises.yaml":
         "kind: defaults\nenv: {YIAN_MAX_TOTAL_NODES: lots}\n" +
         "expect: {raises: {class: DefaultsError, message: 'YIAN_MAX_TOTAL_NODES=\"lots\" is not " +
@@ -845,7 +845,7 @@ describe("main", () => {
     expect(await run([], files, {}, RUNNERS)).toEqual({
       code: 1,
       out: [
-        "FAIL d/unknown: `expect.defaults` names unknown entries: NOT_AN_ENTRY",
+        "FAIL d/unknown: `expect.defaults` names unknown entries: AA, ZZ",
         "3 cases: 2 passed, 1 failed, 0 pending",
       ],
       err: [],

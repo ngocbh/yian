@@ -1,0 +1,82 @@
+kind: run
+flow: |
+  id: model-structured-reply
+  name: model_structured_reply
+  input:
+    name: !str
+  nodes:
+    score:
+      kind: agent
+      input:
+        name: ${input.name}
+      output: {name: str, score: int}
+      llm_config: {provider: openai, model: gpt-5.5}
+      prompt: "Score ${name}."
+  output: ${score.output}
+env: {OPENAI_API_KEY: "<key:1>"}
+inputs: {name: Ada}
+run: {run_id: r1, num_workers: 0}
+host:
+  models:
+    score:
+      agent:
+        # A record output is its own carrier: the reply's text is the record as JSON.
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: '{"name": "Ada", "score": 3}'}]
+          usage: {input_tokens: 20, output_tokens: 8, total_tokens: 28}
+          # The default system prompt and the rendered prompt; the record's schema, both fields
+          # required.
+          request:
+            messages:
+              - format: yian.message.v1
+                role: system
+                parts:
+                  - type: text
+                    text: >-
+                      You are an analysis agent inside a larger workflow. Follow the
+                      instructions precisely, use the available tools to gather any facts you
+                      need, and return a clear, self-contained answer. Ask the user only
+                      through an explicitly granted tool.
+              - format: yian.message.v1
+                role: user
+                parts: [{type: text, text: Score Ada.}]
+            schema:
+              type: object
+              properties:
+                name: {type: string}
+                score: {type: integer}
+              required: [name, score]
+expect:
+  output: {status: succeeded, output: {name: Ada, score: 3}}
+  # A structured call isn't streamed; its usage is reported all the same.
+  events:
+    - [RunStarted]
+    - [NodeStarted, {node_id: __start__}]
+    - [NodeSucceeded, {node_id: __start__, output: {name: Ada}}]
+    - [NodeStarted, {node_id: score}]
+    - - ModelCallStarted
+      - node_id: score
+        exchange_id: "<id:1>"
+        purpose: structured_native
+        provider: openai
+        model: gpt-5.5
+    - - ModelCallFinished
+      - node_id: score
+        exchange_id: "<id:1>"
+        purpose: structured_native
+        provider: openai
+        model: gpt-5.5
+        usage:
+          input_tokens: 20
+          output_tokens: 8
+          total_tokens: 28
+          cache_read_tokens: null
+          cache_creation_tokens: null
+          reasoning_tokens: null
+    - [NodeSucceeded, {node_id: score, output: {name: Ada, score: 3}}]
+    - [NodeStarted, {node_id: __end__}]
+    - [NodeSucceeded, {node_id: __end__, output: {name: Ada, score: 3}}]
+    - [RunSucceeded, {output: {name: Ada, score: 3}}]
+  stream: []

@@ -1,15 +1,20 @@
 """Run the language-neutral conformance cases in `conformance/cases/` against Python yian.
 
 Each case file is one test, named by its id `<group>/<name>`. `conformance/README.md` defines
-the case format and what each kind checks.
+the case format and what each kind checks. Set `CONFORMANCE_CASES` to run the cases under
+another root instead.
 """
 
 from __future__ import annotations
 
+import builtins
 import contextlib
 from dataclasses import fields, is_dataclass
+from functools import reduce
+import hashlib
 import json
 import math
+from operator import add
 import os
 from pathlib import Path
 import re
@@ -19,16 +24,29 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from typing import NoReturn
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import best_match
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+    message_chunk_to_message,
+)
+from langchain_core.outputs import ChatGeneration, LLMResult
+from langchain_core.runnables import Runnable
+from langchain_core.utils.function_calling import convert_to_openai_tool
 import pytest
 import yaml
 from yaml.composer import ComposerError
 from yaml.constructor import ConstructorError
 
-from yian import defaults
+from yian import defaults, llm_clients
 from yian.compile.manifest import flow_fingerprint
 from yian.compose import LoadError, load_flow
 from yian.compose.helpers.isinstance_types import (
@@ -47,6 +65,15 @@ from yian.expr import (
     render_template_record,
 )
 from yian.expr.expressions import ResolveMode, _resolve_in_record, evaluate_when_record
+from yian.llm.messages import (
+    Message,
+    MessageFormatError,
+    TextPart,
+    ToolCallPart,
+    ToolResultPart,
+)
+from yian.llm_clients.connection import check_model_config, resolve_model_config
+from yian.nodes.agent import loop as agent_loop, node as agent_node
 from yian.nodes.tool import node as tool_node
 from yian.run import RunResult, resume_flow, run_flow
 from yian.runtime.log import JsonlRunLog
@@ -62,7 +89,7 @@ from yian.typesys.types import read_typedefs, type_for
 from yian.typesys.values import FileRef, TypeCheckError, build_value_as
 
 _ROOT = Path(__file__).resolve().parent.parent / "conformance"
-_CASES = _ROOT / "cases"
+_CASES = Path(os.environ.get("CONFORMANCE_CASES") or _ROOT / "cases")
 _FIXTURES = _ROOT / "fixtures"
 _CLI_SCHEMA = json.loads((_ROOT / "schema" / "cli.schema.json").read_text(encoding="utf-8"))
 Draft202012Validator.check_schema(_CLI_SCHEMA)
@@ -164,8 +191,17 @@ _ALL_EXPECT_KEYS = set().union(*_EXPECT_KEYS.values())
 _RUN_KEYS = {"run_id", "num_workers", "learnable", "llm_config", "context"}
 _RESUME_KEYS = {"num_workers", "api_key", "headers", "context"}
 # Host keys the format reserves and this runner doesn't support yet.
-_RESERVED_HOST_KEYS = ("models", "steering", "stop", "memory", "skills")
-_HOST_KEYS = {"tools", "human", "jitter", *_RESERVED_HOST_KEYS}
+_RESERVED_HOST_KEYS = ("steering", "stop", "memory", "skills")
+_HOST_KEYS = {"tools", "human", "jitter", "models", *_RESERVED_HOST_KEYS}
+# `host.models` consumers; `summary` and `memory:<key>` are reserved.
+_CONSUMERS = ("agent", "structured_retry", "compose", "backward")
+_USAGE_COUNTS = ("input_tokens", "output_tokens", "total_tokens")
+# Each optional usage count, by where LangChain's `usage_metadata` holds it.
+_USAGE_DETAILS = {
+    "cache_read_tokens": ("input_token_details", "cache_read"),
+    "cache_creation_tokens": ("input_token_details", "cache_creation"),
+    "reasoning_tokens": ("output_token_details", "reasoning"),
+}
 _RESUME_HOST_KEYS = _HOST_KEYS | {"crash_after_record"}
 _RULES = {
     "numbers", "arithmetic", "compare", "text-form", "canonical", "columns", "messages",
@@ -225,8 +261,134 @@ def _keys(where: str, mapping: object, allowed: set, known: frozenset | set = fr
             raise ValueError(f"`{name(key)}` is required")
 
 
+def _check_usage(where: str, usage: object) -> None:
+    """Raise unless `usage` is a usage: the three counts and any optional ones, as ints."""
+    _keys(where, usage, {*_USAGE_COUNTS, *_USAGE_DETAILS}, required=_USAGE_COUNTS)
+    if any(type(count) is not int or count < 0 for count in usage.values()):
+        raise ValueError(f"`{where}` counts must be non-negative ints")
+
+
+def _read_message(where: str, data: object) -> Message:
+    """Return `data` read as a yian.message.v1 message, raising unless it is one."""
+    try:
+        return Message.from_dict(data)
+    except MessageFormatError as error:
+        raise ValueError(f"`{where}` is not a yian.message.v1 message: {error}") from None
+
+
+def _check_reply(where: str, reply: object) -> None:
+    """Raise unless `reply` is a yian.message.v1 assistant message this runner can serve.
+
+    This runner serves only text and tool call parts.
+    """
+    message = _read_message(where, reply)
+    if message.role != "assistant":
+        raise ValueError(f"`{where}.role` must be `assistant`")
+    for index, part in enumerate(message.parts):
+        if not isinstance(part, (TextPart, ToolCallPart)):
+            raise ValueError(f"`{where}.parts[{index}]`: this runner doesn't script "
+                             f"`{reply['parts'][index]['type']}` parts yet")
+
+
+def _check_chunk(where: str, chunk: object, last: bool) -> None:
+    """Raise unless `chunk` is one text, tool call, usage or finish chunk; a finish comes last."""
+    _keys(where, chunk, {"text", "tool_call", "usage", "finish"})
+    if len(chunk) != 1:
+        raise ValueError(f"`{where}` takes one of `text`, `tool_call`, `usage` and `finish`")
+    (kind, value), = chunk.items()
+    if kind == "text" and not isinstance(value, str):
+        raise ValueError(f"`{where}.text` must be text")
+    if kind == "tool_call":
+        _keys(f"{where}.tool_call", value, {"index", "id", "name", "arguments"},
+              required=("index", "arguments"))
+        if type(value["index"]) is not int:
+            raise ValueError(f"`{where}.tool_call.index` must be an int")
+        if any(not isinstance(value.get(key, ""), str) for key in ("id", "name", "arguments")):
+            raise ValueError(f"`{where}.tool_call` `id`, `name` and `arguments` must be text")
+    if kind == "usage":
+        _check_usage(f"{where}.usage", value)
+    if kind == "finish" and not (value is None or isinstance(value, str)):
+        raise ValueError(f"`{where}.finish` must be text or null")
+    if kind == "finish" and not last:
+        raise ValueError(f"`{where}`: `finish` must be the last chunk")
+
+
+def _check_request(where: str, request: object) -> None:
+    """Raise unless `request` is `{messages, tools, schema}` with `messages` required.
+
+    `messages` are yian.message.v1 messages, `tools` a non-empty list of tool specs and
+    `schema` a mapping.
+    """
+    _keys(where, request, {"messages", "tools", "schema"}, required=("messages",))
+    for key in ("messages", "tools"):
+        if not isinstance(request.get(key, []), list):
+            raise ValueError(f"`{where}.{key}` must be a list")
+    if request.get("tools") == []:
+        raise ValueError(f"`{where}.tools` is empty; omit `tools` when none are bound")
+    for index, message in enumerate(request["messages"]):
+        _read_message(f"{where}.messages[{index}]", message)
+    spec = ("name", "description", "parameters")
+    for index, tool in enumerate(request.get("tools", [])):
+        _keys(f"{where}.tools[{index}]", tool, set(spec), required=spec)
+    _mapping(f"{where}.schema", request.get("schema", {}))
+
+
+def _check_model_entry(where: str, entry: object) -> None:
+    """Raise unless `entry` is a `reply` or `chunks` model entry.
+
+    A `reply` may add a `usage`; `chunks` may add a `raise`, and without one end in a `finish`.
+    Either may add a `request`.
+    """
+    _keys(where, entry, {"reply", "usage", "chunks", "raise", "request"})
+    if ("reply" in entry) == ("chunks" in entry):
+        raise ValueError(f"`{where}` takes `reply` or `chunks`")
+    if "request" in entry:
+        _check_request(f"{where}.request", entry["request"])
+    if "reply" in entry:
+        if "raise" in entry:
+            raise ValueError(f"`{where}.raise` must come with `chunks`, not a `reply`")
+        _check_reply(f"{where}.reply", entry["reply"])
+        if "usage" in entry:
+            _check_usage(f"{where}.usage", entry["usage"])
+        return
+    if "usage" in entry:
+        raise ValueError(f"`{where}.usage` must come with a `reply`; `chunks` carry a usage chunk")
+    chunks = entry["chunks"]
+    if not isinstance(chunks, list):
+        raise ValueError(f"`{where}.chunks` must be a list")
+    for index, chunk in enumerate(chunks):
+        _check_chunk(f"{where}.chunks[{index}]", chunk, index == len(chunks) - 1)
+    if "raise" in entry:
+        error = entry["raise"]
+        _keys(f"{where}.raise", error, {"class", "message", "status"},
+              required=("class", "message"))
+        # The replay builds the error from these.
+        if not isinstance(error["class"], str) or not isinstance(error["message"], str):
+            raise ValueError(f"`{where}.raise.class` and `.message` must be text")
+        if type(error.get("status", 0)) is not int:
+            raise ValueError(f"`{where}.raise.status` must be an int")
+    elif not chunks or "finish" not in chunks[-1]:
+        raise ValueError(f"`{where}.chunks` must end in a `finish` chunk, unless a `raise` "
+                         "follows them")
+
+
+def _check_models(models: object) -> None:
+    """Raise unless `host.models` maps node ids to consumers to lists of entries."""
+    for node, consumers in _mapping("host.models", models).items():
+        for consumer, script in _mapping(f"host.models.{node}", consumers).items():
+            label = f"host.models.{node}.{consumer}"
+            if consumer == "summary" or consumer.startswith("memory:"):
+                raise ValueError(f"`{label}`: this runner doesn't script `{consumer}` calls yet")
+            if consumer not in _CONSUMERS:
+                raise ValueError(f"`{label}`: the consumer must be one of {', '.join(_CONSUMERS)}")
+            if not isinstance(script, list):
+                raise ValueError(f"`{label}` must be a list")
+            for index, entry in enumerate(script):
+                _check_model_entry(f"{label}[{index}]", entry)
+
+
 def _check_host(host: object, kind: str) -> None:
-    """Raise unless `host`, its tools and their scripts use only the format's keys."""
+    """Raise unless `host`, its tools, models and their scripts use only the format's keys."""
     allowed = _RESUME_HOST_KEYS if kind == "resume" else _HOST_KEYS
     _keys("host", host, allowed, _RESUME_HOST_KEYS, kind)
     tools = _mapping("host.tools", host.get("tools", {}))
@@ -251,6 +413,7 @@ def _check_host(host: object, kind: str) -> None:
                           required=("class", "message"))
                     if "retry_after" in error and error["class"] != "TransientToolError":
                         raise ValueError(f"`{at}.raise.retry_after` is for TransientToolError")
+    _check_models(host.get("models", {}))
     human = _mapping("host.human", host.get("human", {}))
     if any(not isinstance(answers, list) for answers in human.values()):
         raise ValueError("`host.human` maps node ids to lists of answers")
@@ -263,14 +426,19 @@ def _check_host(host: object, kind: str) -> None:
         raise ValueError("`host.jitter` must be a list of numbers in [0, 1)")
 
 
-def _check(case: dict) -> dict:
-    """Return `case` after checking it against the closed format; raise naming the problem."""
+def _check(case: dict, candidate: bool = False) -> dict:
+    """Return `case` after checking it against the closed format; raise naming the problem.
+
+    A `candidate` is a case without its expectations yet: `expect` and `python_expect` aren't
+    required or checked.
+    """
     kind = case.get("kind")
     if kind not in _KIND_KEYS:
         raise ValueError(f"`kind` must be one of {', '.join(_KIND_KEYS)}, not {kind!r}")
+    expects = () if candidate else ("expect", "python_expect")
     _keys("", case, _COMMON | _KIND_KEYS[kind], _ALL_KEYS, kind,
-          required=("kind", "expect", *_REQUIRED.get(kind, ())))
-    for key in ("expect", "python_expect"):
+          required=("kind", *expects[:1], *_REQUIRED.get(kind, ())))
+    for key in expects:
         if key not in case:
             continue
         _keys(key, case[key], _EXPECT_KEYS[kind], _ALL_EXPECT_KEYS, kind)
@@ -400,6 +568,9 @@ def _marks(path: Path) -> list:
 
 def _params() -> list:
     """Return one pytest param per case file, in sorted order."""
+    # A mistyped root would otherwise collect nothing and pass.
+    if not _CASES.is_dir():
+        raise ValueError(f"no case root at {_CASES}")
     return [
         pytest.param(path, id=f"{path.parent.name}/{path.stem}", marks=_marks(path))
         for path in sorted(_CASES.glob("*/*.yaml"))
@@ -457,12 +628,20 @@ def _same(actual: object, expected: object, by_value: bool = False,
     return type(actual) is type(expected) and actual == expected
 
 
+def _difference(what: str, actual: object, expected: object, **flags: bool) -> str:
+    """Return both sides as YAML, or "" when `actual` is the same as `expected`."""
+    if _same(actual, expected, **flags):
+        return ""
+    dump = [yaml.safe_dump(side, sort_keys=False, allow_unicode=True, width=1000)
+            for side in (actual, expected)]
+    return f"{what} differs\n--- actual\n{dump[0]}--- expected\n{dump[1]}"
+
+
 def _compare(what: str, actual: object, expected: object, **flags: bool) -> None:
     """Fail the case, showing both sides as YAML, unless `actual` is the same as `expected`."""
-    if not _same(actual, expected, **flags):
-        dump = [yaml.safe_dump(side, sort_keys=False, allow_unicode=True, width=1000)
-                for side in (actual, expected)]
-        _fail(f"{what} differs\n--- actual\n{dump[0]}--- expected\n{dump[1]}")
+    difference = _difference(what, actual, expected, **flags)
+    if difference:
+        _fail(difference)
 
 
 def _raised(exc: Exception) -> dict:
@@ -473,27 +652,15 @@ def _raised(exc: Exception) -> dict:
     return raised
 
 
-def _expect_raises(expected: dict, call) -> dict:
-    """Return the error `call()` raises in `raises` form; fail unless it is the one expected."""
-    try:
-        call()
-    except Exception as exc:
-        raised = _raised(exc)
-        _compare("raises", raised, expected)
-        return raised
-    _fail(f"expected {expected.get('class')} to be raised, but nothing was")
+def _catching(compute) -> dict:
+    """Return the results `compute()` returns by name, or its error as `raises` and `error`.
 
-
-def _results(expect: dict, compute) -> None:
-    """Compare the results `compute()` returns, by name, with `expect`.
-
-    When `expect` has `raises`, compare the error `compute()` raises instead.
+    `raises` is the error's `raises` form and `error` the error itself, never compared.
     """
-    if "raises" in expect:
-        _expect_raises(expect["raises"], compute)
-        return
-    for name, actual in compute().items():
-        _compare(name, actual, expect[name])
+    try:
+        return compute()
+    except Exception as exc:
+        return {"raises": _raised(exc), "error": exc}
 
 
 def _load(text: str, case_dir: Path):
@@ -513,33 +680,27 @@ def _diagnostic(diag: Diagnostic) -> dict:
     return {key: value for key, value in form.items() if value or key in ("code", "message")}
 
 
-def _run_load(case: dict, case_dir: Path) -> None:
-    """Load `flow` and compare `ok` or its diagnostics."""
+def _actual_load(case: dict, case_dir: Path) -> dict:
+    """Load `flow` and return `load`, `ok` or its diagnostics."""
     try:
         _load(case["flow"], case_dir)
     except LoadError as exc:
-        actual = {"diagnostics": [_diagnostic(exc.diagnostic)]}
-    else:
-        actual = "ok"
-    _compare("load", actual, case["expect"]["load"], optional_message=True)
+        return {"load": {"diagnostics": [_diagnostic(exc.diagnostic)]}}
+    return {"load": "ok"}
 
 
-def _run_defaults(case: dict, case_dir: Path) -> None:
-    """Read yian's defaults and compare the listed entries, or the error."""
-    names = case["expect"].get("defaults", {})
-
+def _actual_defaults(case: dict, case_dir: Path) -> dict:
+    """Read yian's defaults and return every entry as `defaults`, or the error."""
     def compute() -> dict:
-        unknown = set(names) - {entry.name for entry in defaults.ENTRIES}
-        if unknown:
-            _fail(f"`expect.defaults` names unknown entries: {', '.join(sorted(unknown))}")
         values = defaults.current()
-        return {"defaults": {name: getattr(values, name.lower()) for name in names}}
+        return {"defaults": {entry.name: getattr(values, entry.name.lower())
+                             for entry in defaults.ENTRIES}}
 
-    _results(case["expect"], compute)
+    return _catching(compute)
 
 
-def _run_fingerprint(case: dict, case_dir: Path) -> None:
-    """Check that `flow` fingerprints the same twice, then compare it with `other`'s."""
+def _actual_fingerprint(case: dict, case_dir: Path) -> dict:
+    """Check that `flow` fingerprints the same twice; return whether `other`'s is the same."""
     def fingerprint(text: str) -> str:
         return flow_fingerprint(_load(text, case_dir).compiled)
 
@@ -547,11 +708,11 @@ def _run_fingerprint(case: dict, case_dir: Path) -> None:
     if fingerprint(case["flow"]) != first:
         _fail("two loads of `flow` have different fingerprints")
     same = fingerprint(case["other"]) == first
-    _compare("fingerprint", "same" if same else "different", case["expect"]["fingerprint"])
+    return {"fingerprint": "same" if same else "different"}
 
 
-def _run_expr(case: dict, case_dir: Path) -> None:
-    """Evaluate `expr` or `template` in `mode` over `values` and `item`; compare the result."""
+def _actual_expr(case: dict, case_dir: Path) -> dict:
+    """Evaluate `expr` or `template` in `mode` over `values` and `item`; return the result."""
     mode, template = case.get("mode", "binding"), case.get("template")
     values, item = case.get("values", {}), case.get("item")
 
@@ -583,17 +744,284 @@ def _run_expr(case: dict, case_dir: Path) -> None:
         resolve_mode = ResolveMode.STRICT_RAISE if mode == "strict" else ResolveMode.BINDING_NONE
         return eval_expr(trees[0], resolve, item, resolve_mode, types=types)
 
-    _results(case["expect"], lambda: {"value": evaluate()})
+    return _catching(lambda: {"value": evaluate()})
 
 
-def _run_value(case: dict, case_dir: Path) -> None:
-    """Build `value` as `type` and compare the stored value and its kind, or the error."""
+def _actual_value(case: dict, case_dir: Path) -> dict:
+    """Build `value` as `type` and return the stored value and its kind, or the error."""
     def compute() -> dict:
         typ = type_for(case["type"], read_typedefs(case.get("typedefs") or {}))
         typed = build_value_as(typ, case["value"])
         return {"value": typed.to_object(), "kind": typed.kind.value}
 
-    _results(case["expect"], compute)
+    return _catching(compute)
+
+
+_SEAT = threading.local()
+
+
+def _seated(patch: pytest.MonkeyPatch) -> None:
+    """Wrap the functions that make model calls, so `_take_model_key()` names each call's seat.
+
+    `run_agent` seats its node's `agent` calls (`compose` for a `<gate>__compose` node),
+    `backward_agent` its node's `backward` calls and `prepare_history` `summary` calls;
+    `generate_structured` keeps its caller's seat and starts counting the calls made under it.
+    """
+    def wrap(module: object, name: str, make_seat) -> None:
+        inner = getattr(module, name)
+
+        def seated(*args: object, **kwargs: object) -> object:
+            outer = getattr(_SEAT, "seat", None)
+            _SEAT.seat = make_seat(outer, *args)
+            try:
+                return inner(*args, **kwargs)
+            finally:
+                _SEAT.seat = outer
+
+        patch.setattr(module, name, seated)
+
+    wrap(agent_node, "run_agent", lambda outer, ctx: {
+        "node": ctx.node_id,
+        "consumer": "compose" if ctx.node_id.endswith("__compose") else "agent",
+    })
+    wrap(agent_node, "backward_agent",
+         lambda outer, context, *rest: {"node": context.node_id, "consumer": "backward"})
+    wrap(agent_loop, "generate_structured",
+         lambda outer, *rest: None if outer is None else {**outer, "calls": 0})
+    wrap(agent_loop, "prepare_history",
+         lambda outer, *rest: None if outer is None else {**outer, "consumer": "summary"})
+
+
+def _take_model_key() -> tuple[str, str] | None:
+    """Take the model call being made: return its `(node, consumer)`, or None outside any seat.
+
+    Call it once per model call: under `generate_structured` each call is counted, and the
+    first keeps its caller's consumer while each later one is a `structured_retry`.
+    """
+    seat = getattr(_SEAT, "seat", None)
+    if seat is None:
+        return None
+    consumer = seat["consumer"]
+    if "calls" in seat:
+        if seat["calls"]:
+            consumer = "structured_retry"
+        seat["calls"] += 1
+    return seat["node"], consumer
+
+
+def _usage_metadata(usage: dict) -> dict:
+    """Return a case usage as LangChain's `usage_metadata`."""
+    metadata = {name: usage[name] for name in _USAGE_COUNTS}
+    for name, (details, key) in _USAGE_DETAILS.items():
+        if name in usage:
+            metadata.setdefault(details, {})[key] = usage[name]
+    return metadata
+
+
+def _langchain_reply(entry: dict) -> AIMessage:
+    """Return a `reply` entry as the `AIMessage` a provider client returns."""
+    message = Message.from_dict(entry["reply"])
+    calls, invalid = [], []
+    for part in message.tool_calls():
+        if part.arguments is not None:
+            calls.append({"name": part.name, "args": part.arguments, "id": part.id,
+                          "type": "tool_call"})
+        else:
+            # Arguments that didn't parse, as a client reports them.
+            invalid.append({"name": part.name, "args": part.raw_arguments, "id": part.id,
+                            "error": None, "type": "invalid_tool_call"})
+    usage = _usage_metadata(entry["usage"]) if "usage" in entry else None
+    return AIMessage(content=message.text(), tool_calls=calls, invalid_tool_calls=invalid,
+                     usage_metadata=usage)
+
+
+def _langchain_chunk(chunk: dict) -> AIMessageChunk:
+    """Return a case chunk as the `AIMessageChunk` a provider client streams."""
+    if "text" in chunk:
+        return AIMessageChunk(content=chunk["text"])
+    if "tool_call" in chunk:
+        delta = chunk["tool_call"]
+        return AIMessageChunk(content="", tool_call_chunks=[{
+            "index": delta["index"], "id": delta.get("id"), "name": delta.get("name"),
+            "args": delta["arguments"],
+        }])
+    if "usage" in chunk:
+        return AIMessageChunk(content="", usage_metadata=_usage_metadata(chunk["usage"]))
+    reason = chunk["finish"]
+    return AIMessageChunk(content="",
+                          response_metadata={} if reason is None else {"finish_reason": reason})
+
+
+class _NotData(Exception):
+    """A LangChain message the case format can't hold; its text says which and why."""
+
+
+_ROLES = {SystemMessage: "system", HumanMessage: "user", AIMessage: "assistant",
+          ToolMessage: "tool"}
+
+
+def _v1_parts(message: BaseMessage, role: str, calls: dict) -> list:
+    """Return the yian.message.v1 parts of a LangChain message with text content.
+
+    An `AIMessage`'s tool calls are added to `calls`, which maps call ids to tool names, and a
+    `ToolMessage` takes its result's name from there.
+    """
+    if role == "tool":
+        if message.tool_call_id not in calls:
+            raise _NotData(f"ToolMessage for tool call {message.tool_call_id!r}, which no "
+                           "earlier AIMessage made")
+        return [ToolResultPart(message.tool_call_id, calls[message.tool_call_id],
+                               message.content, is_error=message.status == "error")]
+    parts = [TextPart(message.content)] if message.content else []
+    if role == "assistant":
+        for call in message.tool_calls:
+            parts.append(ToolCallPart(call["id"], call["name"], call["args"]))
+            calls[call["id"]] = call["name"]
+        for call in message.invalid_tool_calls:
+            parts.append(ToolCallPart(call["id"], call["name"], None, call["args"]))
+            calls[call["id"]] = call["name"]
+    return parts
+
+
+def _v1_message(message: BaseMessage, calls: dict) -> dict:
+    """Return a LangChain message as a yian.message.v1 message.
+
+    `calls` maps the tool call ids of earlier messages to their tool names; this message's
+    calls are added. Raises `_NotData` for a message the format can't hold: one that isn't a
+    system, human, AI or tool message, that has list content or `additional_kwargs` (where
+    reasoning travels), whose parts yian.message.v1 refuses, or a tool message answering a
+    call no earlier message made.
+    """
+    name = type(message).__name__
+    role = _ROLES.get(type(message))
+    if role is None:
+        raise _NotData(f"{name}, which has no yian.message.v1 role")
+    if not isinstance(message.content, str):
+        raise _NotData(f"{name} with list content")
+    if message.additional_kwargs:
+        raise _NotData(f"{name} with additional_kwargs "
+                       f"({', '.join(sorted(message.additional_kwargs))})")
+    try:
+        return Message(role, _v1_parts(message, role, calls)).to_dict()
+    except MessageFormatError as error:
+        raise _NotData(f"{name} that yian.message.v1 refuses ({error})") from None
+
+
+def _v1_request(messages: list, tools: list, schema: type | None) -> dict:
+    """Return a model call's request in the case's form.
+
+    Its `messages` as yian.message.v1 messages; the bound `tools` as
+    `convert_to_openai_tool` gives them, unless none are bound; and a structured call's
+    pydantic `schema` as the JSON Schema LangChain sends for it, unless it is None. Raises
+    `_NotData` as `_v1_message` does.
+    """
+    calls: dict = {}
+    request: dict = {"messages": [_v1_message(message, calls) for message in messages]}
+    if tools:
+        request["tools"] = [convert_to_openai_tool(tool)["function"] for tool in tools]
+    if schema is not None:
+        request["schema"] = convert_to_openai_tool(schema)["function"]["parameters"]
+    return request
+
+
+def _request_difference(what: str, expected: dict, messages: list, tools: list,
+                        schema: type | None) -> str:
+    """Return how a model call's request differs from `expected`, or "" when it doesn't."""
+    try:
+        actual = _v1_request(messages, tools, schema)
+    except _NotData as reason:
+        return f"{what} can't be compared: {reason}"
+    return _difference(what, actual, expected)
+
+
+def _raise(error: dict) -> NoReturn:
+    """Raise a model call's recorded error.
+
+    Its class is the builtin of that name when that is an `Exception`, else a new class of that
+    name; a `status` becomes the error's `status_code`.
+    """
+    cls = getattr(builtins, error["class"], None)
+    if not (isinstance(cls, type) and issubclass(cls, Exception)):
+        cls = type(error["class"], (Exception,), {})
+    exc = cls(error["message"])
+    if "status" in error:
+        exc.status_code = error["status"]
+    raise exc
+
+
+def _scripted_model(take, problems: list) -> object:
+    """Return a chat model that serves each call the next `host.models` entry of its seat.
+
+    Each `invoke` or `stream` call takes the entry for `_take_model_key()` through `take`. `invoke`
+    returns the reply, or the chunks summed; `stream` yields the reply as one chunk, or the
+    chunks. An entry with `raise` raises after its chunks. `bind_tools` returns a model that
+    sends its tools, and `with_structured_output` a `Runnable` that returns the reply's text
+    read as its schema. A call's request that differs from its entry's `request` is added to
+    `problems`.
+    """
+    taken: dict = {}
+
+    def served(messages: list, tools: list, schema: type | None) -> dict:
+        key = _take_model_key()
+        if key is None:
+            return take(None, "a model call was made outside any AGENT (no seat)")
+        node, consumer = key
+        label = f"host.models.{node}.{consumer}"
+        entry = take(label, f"a model call for `{consumer}` from node {node!r}")
+        index = taken[label] = taken.get(label, -1) + 1
+        if "request" in entry:
+            difference = _request_difference(f"`{label}[{index}].request`", entry["request"],
+                                             messages, tools, schema)
+            if difference:
+                problems.append(difference)
+        return entry
+
+    def replay(entry: dict):
+        if "reply" in entry:
+            reply = _langchain_reply(entry)
+            yield AIMessageChunk(content=reply.content, tool_calls=reply.tool_calls,
+                                 invalid_tool_calls=reply.invalid_tool_calls,
+                                 usage_metadata=reply.usage_metadata)
+            return
+        yield from map(_langchain_chunk, entry["chunks"])
+        if "raise" in entry:
+            _raise(entry["raise"])
+
+    def summed(entry: dict) -> AIMessage:
+        return message_chunk_to_message(reduce(add, replay(entry)))
+
+    class ScriptedModel:
+        def __init__(self, tools: list) -> None:
+            self.tools = tools
+
+        # No other options: one the runner doesn't script fails as a TypeError naming it.
+        def bind_tools(self, tools: list) -> ScriptedModel:
+            return ScriptedModel(list(tools))
+
+        def with_structured_output(self, schema: type) -> Runnable:
+            return StructuredModel(schema)
+
+        def invoke(self, messages: list, **kwargs: object) -> AIMessage:
+            return summed(served(messages, self.tools, None))
+
+        def stream(self, messages: list, **kwargs: object):
+            # The entry is taken when the call is made, not when its first chunk is read.
+            return replay(served(messages, self.tools, None))
+
+    # A Runnable, since yian hands its usage callback only to one.
+    class StructuredModel(Runnable):
+        def __init__(self, schema: type) -> None:
+            self.schema = schema
+
+        def invoke(self, messages: list, config: dict | None = None, **kwargs: object) -> object:
+            reply = summed(served(messages, [], self.schema))
+            # What a chat model reports to the callbacks, which is where yian reads the usage.
+            result = LLMResult(generations=[[ChatGeneration(message=reply)]])
+            for handler in (config or {}).get("callbacks", []):
+                handler.on_llm_end(result)
+            return self.schema.model_validate(json.loads(reply.content))
+
+    return ScriptedModel([])
 
 
 def _host(case: dict, patch: pytest.MonkeyPatch) -> tuple:
@@ -601,8 +1029,10 @@ def _host(case: dict, patch: pytest.MonkeyPatch) -> tuple:
 
     `tools` holds a stub per `host.tools` entry and `ask_user` for `host.human`; each call is
     recorded in `calls`, by tool, and takes its script's next entry, as each TOOL backoff takes
-    the next `host.jitter` draw. `check()` fails the case when a script ran out, and
-    `check(left=True)` also when one has entries left.
+    the next `host.jitter` draw and each model call the next `host.models` entry of its node and
+    consumer. Every model yian builds is the scripted one, after yian resolves and checks its
+    config. `check()` fails the case when a script ran out or was missing or a model call's
+    request differed from its entry's, and returns a message per script with entries left.
     """
     host = case.get("host", {})
     calls: dict = {}
@@ -610,16 +1040,19 @@ def _host(case: dict, patch: pytest.MonkeyPatch) -> tuple:
     scripts = {f"host.human.{node}": list(answers)
                for node, answers in host.get("human", {}).items()}
 
-    def take(label: str, what: str) -> object:
-        if label not in scripts:
-            tool, node = label.rsplit(".", 1)
-            problems.append(f"`{tool}` has no list for node {node!r}")
+    def take(label: str | None, what: str) -> object:
+        if label is None:
+            # The call has no script to take from; `what` says why.
+            problems.append(what)
+        elif label not in scripts:
+            problems.append(f"{what} found no `{label}` list")
         elif not scripts[label]:
             problems.append(f"{what} found `{label}` used up")
         else:
             return scripts[label].pop(0)
-        # Permanent, so a TOOL node doesn't retry the overrun.
-        raise PermanentToolError(f"`{label}` is used up")
+        # Permanent, so a TOOL node doesn't retry the overrun; a model call's overrun fails its
+        # AGENT. `check()` reports it either way.
+        raise PermanentToolError(what if label is None else f"`{label}` is used up")
 
     def call(name: str, label: str, ctx: ToolContext, args: dict) -> object:
         calls.setdefault(name, []).append(
@@ -659,14 +1092,28 @@ def _host(case: dict, patch: pytest.MonkeyPatch) -> tuple:
     if "jitter" in host:
         scripts["host.jitter"] = list(host["jitter"])
         patch.setattr(tool_node, "_jitter", lambda: take("host.jitter", "a backoff draw"))
+    scripts.update({f"host.models.{node}.{consumer}": list(script)
+                    for node, consumers in host.get("models", {}).items()
+                    for consumer, script in consumers.items()})
+    model = _scripted_model(take, problems)
 
-    def check(left: bool = False) -> None:
-        leftovers = [
+    def model_from_config(config: object) -> object:
+        # The script replaces only the provider: the config is resolved and checked as yian's
+        # own factory does, so its errors stay yian's.
+        check_model_config(resolve_model_config(config))
+        return model
+
+    # Installed even without `host.models`, so an unscripted model call never reaches a provider.
+    patch.setattr(llm_clients, "model_from_config", model_from_config)
+    _seated(patch)
+
+    def check() -> list:
+        if problems:
+            _fail("\n".join(problems))
+        return [
             f"`{label}` has {len(script)} {'entry' if len(script) == 1 else 'entries'} left"
-            for label, script in scripts.items() if left and script
+            for label, script in scripts.items() if script
         ]
-        if problems or leftovers:
-            _fail("\n".join(problems + leftovers))
 
     return tools, calls, check
 
@@ -929,14 +1376,16 @@ class _Cut(BaseException):
     """The refused append that cuts a `resume` case's first run."""
 
 
-def _run_run(case: dict, case_dir: Path) -> None:
-    """Run the flow on the case's host and compare the results the case expects.
+def _actual_run(case: dict, case_dir: Path) -> dict:
+    """Run the flow on the case's host and return its results.
 
     A `resume` case's first run is cut after record `host.crash_after_record` and resumed; a
-    `backward` case then calls backward once per `backward` entry.
+    `backward` case then calls backward once per `backward` entry. The results are `trace`,
+    `events`, `stream`, `tool_calls`, `backward` for a `backward` case, `output` or the host
+    error as `raises` and `error` (as `_catching` gives them), and `left`, a message per script
+    with entries left.
     """
     flow = _load(case["flow"], case_dir)
-    expect = case["expect"]
     log = case_dir / "run.jsonl"
     events, chunks = [], []
     with pytest.MonkeyPatch.context() as patch:
@@ -974,11 +1423,11 @@ def _run_run(case: dict, case_dir: Path) -> None:
             def start() -> RunResult:
                 return resume_flow(flow, **hooks, **resume)
 
-        result, raised = None, {}
-        if "raises" in expect:
-            raised = _expect_raises(expect["raises"], start)
-        else:
+        result, caught = None, {}
+        try:
             result = start()
+        except Exception as exc:
+            caught = {"raises": _raised(exc), "error": exc}
 
         def finished() -> list:
             trace = _trace(log.read_text(encoding="utf-8").splitlines(), flow)
@@ -999,33 +1448,26 @@ def _run_run(case: dict, case_dir: Path) -> None:
                       "`backward_finished` records, not one")
             outcomes.append(after[-1][2]["outcome"])
         # A call past a script's end is the case's own error, whatever it made differ.
-        check()
+        left = check()
         text = log.read_text(encoding="utf-8") if log.exists() else ""
         lines = text.splitlines()
+        # In placeholder order: ids are numbered walking the results in this order.
         actual = {
             "trace": _trace(lines, flow),
             "events": [_event(event, flow) for event in events],
             "stream": [_fields(chunk, flow) for chunk in chunks],
             "tool_calls": calls,
-            "output": _output(result, flow) if result is not None else None,
-            "backward": outcomes,
+            **({"output": _output(result, flow)} if result is not None else {}),
+            **({"backward": outcomes} if case["kind"] == "backward" else {}),
         }
         _check_secrets(case, {**{name: repr(value) for name, value in actual.items()},
-                              "the run log": text, "the raised error": raised.get("message", "")})
+                              "the run log": text,
+                              "the raised error": str(caught.get("error", ""))})
         if {**run, **resume}.get("num_workers", 8) != 0:
             actual = _pooled(actual)
         run_id = None if "run_id" in run or not lines else json.loads(lines[0])["run_id"]
-        actual = _placeholders(actual, run_id)
-        if "output" in expect:
-            _compare("output", actual["output"], expect["output"],
-                     by_value=actual["output"]["status"] == "succeeded")
-        for name in ("trace", "events", "stream", "tool_calls", "backward"):
-            if name in expect:
-                # Backward outcomes are projected like the trace, so they keep the kinds.
-                _compare(name, actual[name], expect[name],
-                         by_value=name not in ("trace", "backward"))
-        # Last: a leftover entry usually follows from a divergence the comparisons show.
-        check(left=True)
+        # A raised error is compared as is, without placeholders.
+        return {**_placeholders(actual, run_id), **caught, "left": left}
 
 
 def _interrupted(argv: list, case_dir: Path, env: dict, stdin: str, after: str) -> tuple:
@@ -1091,8 +1533,8 @@ def _interrupted(argv: list, case_dir: Path, env: dict, stdin: str, after: str) 
     return process.returncode, "".join(out), "".join(err)
 
 
-def _run_cli(case: dict, case_dir: Path) -> None:
-    """Run `yian` with `args` in the case directory; compare its exit code and output.
+def _actual_cli(case: dict, case_dir: Path) -> dict:
+    """Run `yian` with `args` in the case directory; return `exit`, `stdout` and `stderr`.
 
     With `signal`, the command is sent the signal once `signal.after` appears in its output.
     """
@@ -1117,6 +1559,25 @@ def _run_cli(case: dict, case_dir: Path) -> None:
             text = text.replace(path, "<tmp>")
         return re.sub(r" +$", "", text, flags=re.MULTILINE)
 
+    stdout, stderr = normal(out), normal(err)
+    _check_secrets(case, {"stdout": stdout, "stderr": stderr, **{
+        str(path.relative_to(case_dir)): path.read_text(encoding="utf-8")
+        for path in case_dir.rglob("*.jsonl")
+    }})
+    return {"exit": returncode, "stdout": stdout, "stderr": stderr}
+
+
+_KINDS = {
+    "load": _actual_load, "run": _actual_run, "resume": _actual_run, "backward": _actual_run,
+    "defaults": _actual_defaults, "fingerprint": _actual_fingerprint, "expr": _actual_expr,
+    "value": _actual_value, "cli": _actual_cli,
+}
+
+
+def _check_cli(expect: dict, actual: dict) -> None:
+    """Compare a `cli` case's exit code, stdout and stderr, and stdout read as JSON."""
+    stdout, stderr = actual["stdout"], actual["stderr"]
+
     def refuse(token: str) -> None:
         raise ValueError(f"{token} is not JSON")
 
@@ -1136,16 +1597,10 @@ def _run_cli(case: dict, case_dir: Path) -> None:
                   f"--- stdout\n{stdout}")
         return _decode(parsed)
 
-    stdout, stderr = normal(out), normal(err)
-    _check_secrets(case, {"stdout": stdout, "stderr": stderr, **{
-        str(path.relative_to(case_dir)): path.read_text(encoding="utf-8")
-        for path in case_dir.rglob("*.jsonl")
-    }})
-    expect = case["expect"]
-    if returncode < 0:
-        _fail(f"died from signal {-returncode}\n--- stdout\n{stdout}--- stderr\n{stderr}")
-    if not _same(returncode, expect["exit"]):
-        _fail(f"exit {returncode}, expected {expect['exit']}\n--- stdout\n{stdout}"
+    if actual["exit"] < 0:
+        _fail(f"died from signal {-actual['exit']}\n--- stdout\n{stdout}--- stderr\n{stderr}")
+    if not _same(actual["exit"], expect["exit"]):
+        _fail(f"exit {actual['exit']}, expected {expect['exit']}\n--- stdout\n{stdout}"
               f"--- stderr\n{stderr}")
     for name, text in (("stdout", stdout), ("stderr", stderr)):
         if name in expect and text != expect[name]:
@@ -1157,19 +1612,263 @@ def _run_cli(case: dict, case_dir: Path) -> None:
                  expect["json_lines"], optional_message=True)
 
 
-_KINDS = {
-    "load": _run_load, "run": _run_run, "resume": _run_run, "backward": _run_run,
-    "defaults": _run_defaults, "fingerprint": _run_fingerprint, "expr": _run_expr,
-    "value": _run_value, "cli": _run_cli,
-}
+def _check_results(case: dict, actual: dict) -> None:
+    """Fail unless the results in `actual` are the ones the case file contents `case` expect."""
+    expect = _prepare(case)["expect"]
+    if "raises" in expect and "raises" not in actual:
+        _fail(f"expected {expect['raises'].get('class')} to be raised, but nothing was")
+    if "raises" in actual and "raises" not in expect:
+        _fail("unexpected error\n" + "".join(traceback.format_exception(actual["error"])))
+    if "raises" in expect:
+        _compare("raises", actual["raises"], expect["raises"])
+    if case["kind"] == "cli":
+        _check_cli(expect, actual)
+        return
+    if "defaults" in expect:
+        unknown = set(expect["defaults"]) - set(actual["defaults"])
+        if unknown:
+            _fail(f"`expect.defaults` names unknown entries: {', '.join(sorted(unknown))}")
+        actual = {**actual, "defaults": {name: actual["defaults"][name]
+                                         for name in expect["defaults"]}}
+    if "output" in expect:
+        _compare("output", actual["output"], expect["output"],
+                 by_value=actual["output"]["status"] == "succeeded")
+    for name in ("load", "value", "kind", "defaults", "fingerprint", "trace", "events", "stream",
+                 "tool_calls", "backward"):
+        if name in expect:
+            # Only a run's events, stream and tool calls compare numbers by value; backward
+            # outcomes are projected like the trace, so they keep the kinds.
+            _compare(name, actual[name], expect[name],
+                     by_value=name in ("events", "stream", "tool_calls"),
+                     optional_message=name == "load")
+    # Last: a leftover entry usually follows from a divergence the comparisons show.
+    if actual.get("left"):
+        _fail("\n".join(actual["left"]))
 
 
-@pytest.mark.parametrize("path", _params())
-def test_case(path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Run one conformance case and compare its results with its expectations."""
-    case = _prepare(_check(_read(path)))
+def results(case: dict, case_dir: Path, candidate: bool = False) -> dict:
+    """Return the results of running the case file contents `case` in `case_dir`, by name.
+
+    The case is checked (as a `candidate`, without its expectations) and prepared, and fails
+    when it uses a key this runner doesn't support yet; its directory and environment are set
+    up, and the environment is restored afterwards.
+    """
+    case = _prepare(_check(case, candidate))
     for section, key in _RESERVED:
         if key in case.get(section, {}):
             _fail(f"`{section}.{key}` is not supported by the Python runner yet")
-    _set_up(case, tmp_path, monkeypatch)
-    _KINDS[case["kind"]](case, tmp_path)
+    try:
+        with pytest.MonkeyPatch.context() as patch:
+            _set_up(case, case_dir, patch)
+            return _KINDS[case["kind"]](case, case_dir)
+    finally:
+        # Defaults read from the case's environment must not outlive it.
+        defaults._forget()
+
+
+@pytest.mark.parametrize("path", _params())
+def test_case(path: Path, tmp_path: Path) -> None:
+    """Run one conformance case and compare its results with its expectations."""
+    case = _read(path)
+    _check_results(case, results(case, tmp_path))
+
+
+def test_harvest_writes_cases_that_read_back(tmp_path: Path) -> None:
+    """The writer quotes text the reader would take for another kind and writes codec form."""
+    from tests import conformance_harvest as harvest
+
+    shared = ["a", "b"]
+    case = {
+        "inputs": {"0o17": "0o17", "yes": "yes", "exp": "1e3", "null": "Null",
+                   "text": "one\ntwo\n", "inf": float("inf"), "ninf": float("-inf"),
+                   "record": {"$record": 1}, "big": 10**39 + 7, "x": shared, "y": shared,
+                   "breaks": ["a\u2028b", "a\u2029b\n", "a\x85b"],
+                   "a\u2028b": 1, "a\x85b": 2},
+        "flow": "id: f\nnodes: []\n",
+        "kind": "run",
+    }
+    text = harvest._dump(case)
+    path = tmp_path / "case.yaml"
+    path.write_text(text, encoding="utf-8")
+    read = _read(path)
+    assert list(read) == ["kind", "flow", "inputs"]
+    assert read["inputs"]["inf"] == {"$float": "inf"}
+    assert read["inputs"]["record"] == {"$record": {"$record": 1}}
+    decoded = {key: value if key in _TEXT_KEYS else _decode(value) for key, value in read.items()}
+    assert _same(decoded, case)
+    for written in ("'0o17': '0o17'", "yes: yes", "exp: '1e3'", "'null': 'Null'",
+                    "flow: |\n  id: f\n", "text: |\n"):
+        assert written in text
+    # YAML 1.1 and 1.2 readers disagree on these unless they are escaped.
+    assert '- "a\\Lb"' in text and '? "a\\Nb"\n  : 2' in text
+    assert not {"\x85", "\u2028", "\u2029"} & set(text)
+    assert "&" not in text and "*" not in text
+    for value in ((1, 2), float("nan")):
+        with pytest.raises(ValueError):
+            harvest._dump({"kind": "expr", "expr": "x", "values": {"x": value}})
+
+
+def test_harvest_names_and_dedupes(tmp_path: Path) -> None:
+    """Case names follow the test; a held text, or a second text for one name, isn't written."""
+    from tests import conformance_harvest as harvest
+
+    name = harvest._case_name("tests/engine/test_expr_eval.py", "TestA::test_x[a-b]")
+    assert name == "engine_expr_eval__TestA__x_a-b_"
+    assert harvest._case_name("tests/test_a.py", "test_x[a b]", 2) == "a__x_a_b___2"
+    salt = hashlib.sha256(b"test_x[a b]").hexdigest()[:8]
+    assert harvest._case_name("tests/test_a.py", "test_x[a b]", salted=True) == f"a__x_a_b__{salt}"
+    for index in (1, 2):
+        full = "a__" + "x" * 300 + ("__2" if index > 1 else "")
+        cut = full[:141] + "_" + hashlib.sha256(full.encode()).hexdigest()[:8]
+        assert harvest._case_name("tests/test_a.py", "test_" + "x" * 300, index) == cut
+
+    cases = tmp_path / "cases"
+    index = harvest._Index(cases)
+    assert index.write("expr", "one", "kind: expr\n") == "written"
+    assert index.write("expr", "one", "kind: expr\n") == "rewrite"
+    assert index.write("values", "two", "kind: expr\n") == "duplicate"
+    # Two tests that give one name in one session: the second text isn't written.
+    assert index.write("expr", "one", "kind: value\n") == "collision"
+    assert sorted(path.relative_to(cases).as_posix() for path in cases.rglob("*")) == [
+        "expr", "expr/one.yaml"]
+    assert (cases / "expr/one.yaml").read_text(encoding="utf-8") == "kind: expr\n"
+
+    again = harvest._Index(cases)
+    assert again.write("expr", "three", "kind: expr\n") == "duplicate"
+    # A name from disk harvested again with a new text is overwritten and gives up its old text.
+    assert again.write("expr", "one", "kind: value\n") == "written"
+    assert again.write("values", "two", "kind: expr\n") == "written"
+    assert again.write("expr", "one", "kind: other\n") == "collision"
+    assert (cases / "expr/one.yaml").read_text(encoding="utf-8") == "kind: value\n"
+
+    last = harvest._Index(cases)
+    assert last.write("expr", "one", "kind: value\n") == "rewrite"
+    # A rewrite claims its name for the session too.
+    assert last.write("expr", "one", "kind: other\n") == "collision"
+    assert last.write("values", "two", "kind: expr\n") == "rewrite"
+    assert sorted(path.name for path in cases.rglob("*.yaml*")) == ["one.yaml", "two.yaml"]
+
+
+_HARVESTED_TESTS = '''
+import pytest
+
+from yian import defaults
+from yian.expr import eval_binding, eval_expr, parse_expr, render_template_record
+from yian.expr.expressions import evaluate_when_record
+from yian.typesys.types import type_for
+from yian.typesys.values import TypeCheckError, build_value_as
+
+
+def _from(mapping):
+    def resolve(path):
+        value = mapping
+        for step in path.split("."):
+            value = value.get(step) if isinstance(value, dict) else None
+        return value
+    return resolve
+
+
+def test_arithmetic():
+    assert eval_expr(parse_expr("order.qty * 2 + 0.5"), _from({"order": {"qty": 3}})) == 6.5
+
+
+def test_template():
+    assert render_template_record("Hi ${name}!", {"name": "Ada"}) == "Hi Ada!"
+
+
+def test_binding():
+    assert eval_binding("${a :- 30}", _from({})) == 30
+
+
+def test_fails():
+    eval_expr(parse_expr("1 + 1"), _from({}))
+    assert False
+
+
+def test_or_binding():
+    assert eval_expr(parse_expr("x or y"), _from({"x": 0, "y": 2})) is True
+
+
+def test_or_condition():
+    assert evaluate_when_record("(x or y) == 1", {"x": 1, "y": 0}) is True
+
+
+def test_defaults(monkeypatch):
+    monkeypatch.setenv("YIAN_MAX_TOTAL_NODES", "20000")
+    defaults._forget()
+    try:
+        assert defaults.current().max_total_nodes == 20000
+    finally:
+        defaults._forget()
+
+
+def test_value():
+    with pytest.raises(TypeCheckError):
+        build_value_as(type_for("list(int)", {}), [1, 2.5])
+'''
+
+
+def _harvest(tmp_path: Path, text: str) -> tuple[subprocess.CompletedProcess, Path]:
+    """Run the test file `text` under the harvest plugin; return the run and the output root.
+
+    The run gets no `YIAN_*` variables but the model defaults and auth file the suite sets.
+    """
+    root = Path(__file__).resolve().parent.parent
+    (tmp_path / "test_sample.py").write_text(text, encoding="utf-8")
+    out = tmp_path / "out"
+    env = {name: value for name, value in os.environ.items() if not name.startswith("YIAN_")}
+    env |= {"PYTHONPATH": f"{root / 'src'}{os.pathsep}{root}", "YIAN_DEFAULT_PROVIDER": "openai",
+            "YIAN_DEFAULT_MODEL": "gpt-5.5", "YIAN_AUTH_FILE": str(tmp_path / "auth.json")}
+    done = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+         "-p", "tests.conformance_harvest", "--harvest-out", str(out), "test_sample.py"],
+        cwd=tmp_path, env=env, capture_output=True, encoding="utf-8", timeout=300,
+    )
+    return done, out
+
+
+def test_harvest_records_expr_value_defaults(tmp_path: Path) -> None:
+    """Passing tests' expr, template, value and defaults calls become cases that pass."""
+    done, out = _harvest(tmp_path, _HARVESTED_TESTS)
+    assert "1 failed, 7 passed" in done.stdout, done.stdout + done.stderr
+    cases = {path.relative_to(out / "cases").as_posix(): _read(path)
+             for path in sorted((out / "cases").glob("*/*.yaml"))}
+    assert sorted(cases) == [
+        "defaults/sample__defaults.yaml", "expr/sample__arithmetic.yaml",
+        "templates/sample__binding.yaml", "templates/sample__template.yaml",
+        "values/sample__value.yaml",
+    ]
+    assert cases["expr/sample__arithmetic.yaml"] == {
+        "kind": "expr", "expr": "order.qty * 2 + 0.5", "values": {"order": {"qty": 3}},
+        "expect": {"value": 6.5}}
+    assert cases["templates/sample__template.yaml"] == {
+        "kind": "expr", "template": "Hi ${name}!", "values": {"name": "Ada"}, "mode": "strict",
+        "expect": {"value": "Hi Ada!"}}
+    assert cases["templates/sample__binding.yaml"] == {
+        "kind": "expr", "template": "${a :- 30}", "expect": {"value": 30}}
+    # Only the variables the test set; the entries they set.
+    assert cases["defaults/sample__defaults.yaml"] == {
+        "kind": "defaults", "env": {"YIAN_MAX_TOTAL_NODES": "20000"},
+        "expect": {"defaults": {"MAX_TOTAL_NODES": 20000}}}
+    value = cases["values/sample__value.yaml"]
+    assert {key: value[key] for key in ("kind", "type", "value")} == {
+        "kind": "value", "type": "list(int)", "value": [1, 2.5]}
+    assert value["expect"]["raises"]["class"] == "TypeCheckError"
+    assert value["expect"]["raises"]["path"] == [1]
+    for name, case in cases.items():
+        case_dir = tmp_path / "replay" / name
+        case_dir.mkdir(parents=True)
+        _check_results(case, results(case, case_dir))
+
+    report = json.loads((out / "report" / "test_sample.py.json").read_text(encoding="utf-8"))
+    assert report == {
+        "file": "test_sample.py",
+        "tests": {"passed": 7, "failed": 1, "skipped": 0},
+        "records": {"eval_expr": 2, "render_template_record": 1, "eval_binding": 1,
+                    "evaluate_when_record": 1, "defaults.current": 1, "build_value_as": 1},
+        "written": {"expr": 1, "templates": 2, "defaults": 1, "values": 1},
+        "duplicates": 0,
+        "skips": {"held: and/or result (owner deciding)": ["test_or_binding",
+                                                           "test_or_condition"]},
+        "flags": {},
+    }

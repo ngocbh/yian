@@ -249,6 +249,36 @@ A case can't hold code, so its host is declared under `host`.
 - **`jitter`**: the random draws in `[0, 1)` TOOL retry backoffs take, in order: one per retry
   that waits a backoff, even a zero one, and none for a `retry_after` wait. The same rules apply.
   Without `jitter`, draws are the implementation's own, and the case doesn't depend on them.
+- **`models`**: scripted model calls, `{<node id>: {<consumer>: [<entry>, ...]}}`; each call
+  takes the next entry of its node and consumer. The consumers are `agent` (an AGENT's calls),
+  `structured_retry` (a structured call's attempts after its first, which keeps the outer
+  consumer), `compose` (the calls of the synthetic composer AGENT `<gate>__compose`, under that
+  node id) and `backward`; `summary` and `memory:<key>` are reserved. An entry is
+  `{reply: <message>}`, a yian.message.v1 assistant message, with an optional `usage`; or
+  `{chunks: [<chunk>, ...]}` whose last chunk is `{finish: <reason or null>}`; or
+  `{chunks: [...], raise: {class, message, status}}` for a failure after the chunks
+  (`chunks: []`: before any output; `status` optional, the provider's HTTP status). The call
+  fails with an error of class `class` (read through the error-class table) and message
+  `message`.
+  Any entry may add `request: {messages: [<message>, ...], tools: [<tool spec>, ...], schema:
+  <JSON Schema>}` (Python's schema:
+  `convert_to_openai_tool(schema)["function"]["parameters"]`), which the runner compares
+  exactly with the call's, failing the case when they differ (`tools` absent: none bound;
+  `schema` present: the call asked for output matching it, Python's native structured call).
+  A tool spec is `{name, description, parameters}` (Python:
+  `convert_to_openai_tool(tool)["function"]`), in the bound order. A reply to a `schema` call is
+  one text part holding the JSON value in the schema's carrier form (a wrapped scalar is
+  `{"value": ...}`, a list `{"items": ...}`).
+  A chunk is `{text: <delta>}`, `{tool_call: {index, id, name, arguments}}` (`id`
+  and `name` when the delta carries them; `arguments` is text), `{usage: <usage>}` or
+  `{finish: <reason or null>}`. A usage is `{input_tokens, output_tokens, total_tokens}` plus
+  optional `cache_read_tokens`, `cache_creation_tokens` and `reasoning_tokens`. A `reply`
+  served to a streamed call streams as one chunk; a `chunks` entry served to an unstreamed call
+  is summed. The script replaces the provider below config resolution: the runner still
+  resolves and checks each call's config, so a `models` case needs no provider key unless it
+  tests credentials. In `run`, `resume` and `backward` cases every model call is scripted, so a
+  call with no script fails the case at once instead of reaching a provider; calls that run out
+  and leftovers fail as above.
 - **`crash_after_record`**: `resume` cases only (above).
 
 `expect.tool_calls` lists, per tool that was called, each call in order as `{args, call_id,
@@ -260,13 +290,6 @@ HUMAN_INPUT never sends `options`; a model's `ask_user` call can.
 The format reserves these host keys; a runner that doesn't support one yet fails the case that
 uses it:
 
-- **`models`**: scripted model replies by node id, then by consumer: `agent` (the AGENT's own
-  calls), `structured_retry`, `summary`, `memory:<key>`, `compose` or `backward`. Each consumer
-  has a list of entries in call order: `{reply: <yian.message.v1 message>}`, or `{chunks: [...]}`
-  ending in a finish or followed by `raise: {class, message}` for a failure after the last chunk
-  (`raise` may add `status`, the provider's HTTP status); either may add `request:` with the
-  expected request (messages, tools, structured strategy).
-  Calls that run out and leftovers fail as above.
 - **`steering`** and **`stop`**: a steer, interrupt or stop at a point: before model call `n` of
   a node, after chunk `k` of model call `n`, or before tool call `i`.
 - **`memory`**: memory backends, their initial contents, and `expect.memory` for the contents
@@ -477,6 +500,7 @@ A case's group is its directory under `cases/`.
 ```bash
 PYTHONPATH=src python -m pytest -q tests/test_conformance.py              # every case
 PYTHONPATH=src python -m pytest -q tests/test_conformance.py -k run-core  # one group
+CONFORMANCE_CASES=/tmp/cases PYTHONPATH=src python -m pytest -q tests/test_conformance.py  # cases under /tmp/cases
 ```
 
 Each case is one test named by its id. A skipped case says why.

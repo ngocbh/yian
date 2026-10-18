@@ -30,6 +30,9 @@ are enforced at the engine boundary; an invalid one fails the run.
 
 `--provider`/`--model` feed the outermost layer of the `llm_config` cascade (fill-the-gap,
 not a hard override): they fill only the fields an agent and its enclosing flow leave unset.
+
+`yian check FLOW...` loads each flow as `yian run` would, runs nothing, and reports each
+as text or, with `--json`, as one `yian.cli.v1` document.
 """
 
 from __future__ import annotations
@@ -61,6 +64,7 @@ from yian.compile.model import END_ID, START_ID
 from yian.cli.mcp_config import McpConfigError, load_mcp_config, user_mcp_config
 from yian.cli.memory import MemoryOptionError, build_cli_memories
 from yian.cli.terminal import PromptRequest, TerminalBroker
+from yian.cli.utils import print_json
 from yian.compose.helpers.errors import LoadError
 from yian.compose.loader import load_flow
 from yian.compose.skills import default_skill_roots, load_skills
@@ -241,6 +245,36 @@ def render_diagnostic(diag: Diagnostic) -> None:
     err_console.print(Text(diag.message, style="red"))
     for note in diag.notes:
         err_console.print(Text(f"  ↳ {note}", style="yellow"))
+
+
+def diagnostic_json(diag: Diagnostic) -> Dict[str, Any]:
+    """Return `diag` in the `yian.cli.v1` diagnostic form.
+
+    A frame's range is `[start_line, start_col, end_line, end_col]`, 1-based with an
+    exclusive end column. `frames`, `notes` and a frame's `note` are left out when empty.
+
+    Args:
+        diag (`Diagnostic`): The diagnostic to convert.
+
+    Returns:
+        `Dict[str, Any]`: `{code, message, frames, notes}`.
+    """
+    frames = []
+    for frame in diag.frames:
+        span = frame.range
+        form: Dict[str, Any] = {
+            "label": frame.label,
+            "range": [span.start_line, span.start_col, span.end_line, span.end_col],
+        }
+        if frame.note:
+            form["note"] = frame.note
+        frames.append(form)
+    document: Dict[str, Any] = {"code": diag.code, "message": diag.message}
+    if frames:
+        document["frames"] = frames
+    if diag.notes:
+        document["notes"] = list(diag.notes)
+    return document
 
 
 def _render_traceback(tb: str) -> None:
@@ -2164,4 +2198,65 @@ def run(
         # The loaded front end projects authored origins to source frames; failures
         # without presentable origins retain their semantic message.
         _render_run_error(result, loaded, engine_trace=engine_trace)
+        raise typer.Exit(code=1)
+
+
+def _check_flow(arg: str) -> tuple[Dict[str, Any], Optional[Diagnostic]]:
+    """Load the flow file `arg` as `yian run` loads it, running nothing.
+
+    Args:
+        arg (`str`): The flow path exactly as given on the command line.
+
+    Returns:
+        `tuple[Dict[str, Any], Optional[Diagnostic]]`: The flow's `check` result,
+            `{path, ok: True, id, name, description, inputs}` or
+            `{path, ok: False, diagnostics}`, and the diagnostic when it didn't load.
+    """
+    path = Path(arg)
+    try:
+        loaded = load_flow(path.read_text(), search_paths=[path.parent], source_label=path.name)
+    except LoadError as err:
+        diagnostic = err.diagnostic
+    except (OSError, UnicodeDecodeError) as err:
+        diagnostic = Diagnostic(code="compose.load", message=f"can't read {arg}: {err}")
+    else:
+        inputs = [
+            {
+                "name": decl.name,
+                "type": canonical_type_label(decl.contract.type),
+                "required": decl.required,
+                "has_default": decl.has_default,
+            }
+            for decl in loaded.input
+        ]
+        result = {
+            "path": arg,
+            "ok": True,
+            "id": loaded.compiled.flow_id,
+            "name": loaded.name,
+            "description": loaded.description,
+            "inputs": inputs,
+        }
+        return result, None
+    return {"path": arg, "ok": False, "diagnostics": [diagnostic_json(diagnostic)]}, diagnostic
+
+
+def check(
+    flows: List[str] = typer.Argument(..., help="Paths to flow .yaml files."),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print one yian.cli.v1 JSON document on stdout."
+    ),
+) -> None:
+    """Load each flow without running it and report whether it loads."""
+    results = [_check_flow(arg) for arg in flows]
+    if json_output:
+        print_json({"flows": [result for result, _ in results]})
+    else:
+        for result, diagnostic in results:
+            if diagnostic is None:
+                console.print(Text(f"{result['path']}: ok"), soft_wrap=True)
+            else:
+                err_console.print(Text(f"{result['path']}:", style="red"), soft_wrap=True)
+                render_diagnostic(diagnostic)
+    if any(diagnostic is not None for _, diagnostic in results):
         raise typer.Exit(code=1)

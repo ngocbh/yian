@@ -1,0 +1,12 @@
+kind: cli
+flow: |
+  id: good
+  name: good
+  input:
+    n: !int
+  nodes: {}
+  output: ${input.n}
+args: [check, flow.yaml]
+expect:
+  exit: 0
+  stdout: "flow.yaml: ok\n"

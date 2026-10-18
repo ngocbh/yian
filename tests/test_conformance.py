@@ -20,6 +20,8 @@ import threading
 import time
 from typing import NoReturn
 
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import best_match
 import pytest
 import yaml
 from yaml.composer import ComposerError
@@ -61,6 +63,9 @@ from yian.typesys.values import FileRef, TypeCheckError, build_value_as
 _ROOT = Path(__file__).resolve().parent.parent / "conformance"
 _CASES = _ROOT / "cases"
 _FIXTURES = _ROOT / "fixtures"
+_CLI_SCHEMA = json.loads((_ROOT / "schema" / "cli.schema.json").read_text(encoding="utf-8"))
+Draft202012Validator.check_schema(_CLI_SCHEMA)
+_CLI_VALIDATOR = Draft202012Validator(_CLI_SCHEMA)
 
 
 class _CaseLoader(yaml.SafeLoader):
@@ -1100,7 +1105,17 @@ def _run_cli(case: dict, case_dir: Path) -> None:
 
     def document(text: str) -> object:
         try:
-            return _decode(json.loads(text, parse_constant=refuse))
+            parsed = json.loads(text, parse_constant=refuse)
+            # Checked as parsed: the schema describes the JSON, not the codec's values.
+            invalid = best_match(_CLI_VALIDATOR.iter_errors(parsed))
+            if invalid is not None:
+                # Under `anyOf` or `oneOf` the best match only says no branch matched; the
+                # branches' own errors say why.
+                reasons = "".join(f"  {error.json_path}: {error.message}\n"
+                                  for error in invalid.context or [invalid])
+                _fail(f"stdout doesn't match conformance/schema/cli.schema.json\n{reasons}"
+                      f"--- stdout\n{stdout}")
+            return _decode(parsed)
         except ValueError as error:  # JSONDecodeError is a ValueError
             _fail(f"stdout is not a JSON document ({error})\n--- stdout\n{stdout}")
 

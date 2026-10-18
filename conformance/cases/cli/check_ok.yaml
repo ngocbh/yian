@@ -1,0 +1,30 @@
+kind: cli
+flow: |
+  id: profile
+  name: profile
+  description: Greets a person.
+  typedefs:
+    Person: {name: str, age: int}
+  input:
+    who: !Person
+    n: !int
+    tag: !Optional(str)
+    w: !int 3
+  nodes: {}
+  output: ${input.n}
+args: [check, --json, flow.yaml]
+expect:
+  exit: 0
+  json:
+    format: yian.cli.v1
+    flows:
+      - path: flow.yaml
+        ok: true
+        id: profile
+        name: profile
+        description: Greets a person.
+        inputs:
+          - {name: who, type: '{"age":int,"name":str}', required: true, has_default: false}
+          - {name: n, type: int, required: true, has_default: false}
+          - {name: tag, type: Optional(str), required: false, has_default: false}
+          - {name: w, type: int, required: false, has_default: true}

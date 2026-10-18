@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "yian.cli.v1",
+  "description": "The documents yian's --json commands write. A command writes exactly one JSON object and a newline on stdout, and nothing else there. Every document has \"format\": \"yian.cli.v1\". Keys are snake_case. Every key a document lists is always present (null where it allows null). Consumers ignore unknown keys; keys are only added within v1. Message and note text is not part of the contract, nor are the number and order of `config check` errors; codes and fields are. Numbers use yian's lossless JSON form: a float always has a fraction or an exponent (2.0), an int never does. Exit codes: 0 success; 1 a reported problem, with its document on stdout; 2 a usage error (text on stderr, no document); 130 stopped by SIGINT (no document). Any other exit, a crash included (exit 1 with a traceback), has no document; a consumer treats stdout that doesn't parse as an internal error. stderr is free-form.",
+  "anyOf": [
+    {"$ref": "#/$defs/error_document"},
+    {"$ref": "#/$defs/check_document"}
+  ],
+  "$defs": {
+    "format": {
+      "const": "yian.cli.v1"
+    },
+    "frame": {
+      "description": "A source location: range is [start_line, start_col, end_line, end_col], 1-based with an exclusive end column. note is left out when empty.",
+      "type": "object",
+      "required": ["label", "range"],
+      "properties": {
+        "label": {"type": "string"},
+        "range": {
+          "type": "array",
+          "items": {"type": "integer", "minimum": 1},
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "note": {"type": "string"}
+      }
+    },
+    "diagnostic": {
+      "description": "A problem with a code, a message and its source frames, outermost first. frames and notes are left out when empty.",
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {"type": "string"},
+        "message": {"type": "string"},
+        "frames": {"type": "array", "items": {"$ref": "#/$defs/frame"}},
+        "notes": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "error_document": {
+      "description": "Written by a --json command that exits 1 without its own result document.",
+      "type": "object",
+      "required": ["format", "error"],
+      "properties": {
+        "format": {"$ref": "#/$defs/format"},
+        "error": {
+          "allOf": [
+            {"$ref": "#/$defs/diagnostic"},
+            {
+              "properties": {
+                "code": {
+                  "enum": ["compose.load", "defaults.invalid", "run.setup", "run.cancelled"]
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "input": {
+      "description": "One declared flow input. type is the canonical type label (int, Optional(str), a typedef expanded as {\"age\":int,\"name\":str}).",
+      "type": "object",
+      "required": ["name", "type", "required", "has_default"],
+      "properties": {
+        "name": {"type": "string"},
+        "type": {"type": "string"},
+        "required": {"type": "boolean"},
+        "has_default": {"type": "boolean"}
+      }
+    },
+    "flow_result": {
+      "description": "One flow `yian check` loaded; path is the argument exactly as given.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["path", "ok", "id", "name", "description", "inputs"],
+          "properties": {
+            "path": {"type": "string"},
+            "ok": {"const": true},
+            "id": {"type": "string"},
+            "name": {"type": "string"},
+            "description": {"type": ["string", "null"]},
+            "inputs": {"type": "array", "items": {"$ref": "#/$defs/input"}}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["path", "ok", "diagnostics"],
+          "properties": {
+            "path": {"type": "string"},
+            "ok": {"const": false},
+            "diagnostics": {
+              "type": "array",
+              "items": {
+                "allOf": [
+                  {"$ref": "#/$defs/diagnostic"},
+                  {
+                    "properties": {
+                      "code": {"enum": ["compose.load", "compose.outside_root"]}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "check_document": {
+      "description": "`yian check --json`: one result per flow argument, in argument order.",
+      "type": "object",
+      "required": ["format", "flows"],
+      "properties": {
+        "format": {"$ref": "#/$defs/format"},
+        "flows": {"type": "array", "items": {"$ref": "#/$defs/flow_result"}}
+      }
+    }
+  }
+}

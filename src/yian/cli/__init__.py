@@ -6,6 +6,9 @@ checks the model, and saves the credential and model together; `--default` and
 `--remove` choose the default provider or delete a login. It owns prompts; provider
 services own the protocol and credential storage.
 
+`yian check FLOW...` loads flows without running them and reports each as text or, with
+`--json`, as one `yian.cli.v1` document.
+
 `yian run FLOW.yaml` loads a Compose flow, gathers fresh inputs from flags and an
 available interactive prompt, selects and reports a durable run-log path, and drives
 it to a terminal. Without an interactive stdin, optional/defaulted declarations stay
@@ -36,13 +39,17 @@ graph mutation.
 
 from __future__ import annotations
 
+import sys
+
 from rich.text import Text
 import typer
 
 from yian.cli.chat.command import chat as _chat
 from yian.cli.auth import auth as _auth
+from yian.cli.run import check as _check
 from yian.cli.run import err_console
 from yian.cli.run import run as _run
+from yian.cli.utils import print_json
 from yian.defaults import DefaultsError, current
 
 app = typer.Typer(
@@ -61,6 +68,9 @@ def _root() -> None:
     otherwise collapses it, so `yian run flow.yaml` would read `run` as the flow
     path).
 
+    A bad variable is reported on stderr and, when the arguments hold `--json`, also as a
+    `defaults.invalid` error document on stdout.
+
     Raises:
         `typer.Exit`: With code 1 when a `YIAN_<NAME>` variable holds a value its
             default does not accept.
@@ -69,12 +79,18 @@ def _root() -> None:
         current()
     except DefaultsError as err:
         err_console.print(Text(str(err), style="red"))
+        # Typer runs this callback before it parses the subcommand's options, so `--json`
+        # is looked for in the raw arguments. Two limits: `CliRunner` arguments aren't in
+        # `sys.argv`, and a `--json` after `--` also matches.
+        if "--json" in sys.argv[1:]:
+            print_json({"error": {"code": "defaults.invalid", "message": str(err)}})
         raise typer.Exit(code=1) from None
 
 
 app.command("run")(_run)
 app.command("chat")(_chat)
 app.command("auth")(_auth)
+app.command("check")(_check)
 
 
 def main() -> None:

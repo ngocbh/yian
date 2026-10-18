@@ -11,6 +11,7 @@ __pycache__/
 /build/
 !src/yian/compose/build/
 dist/
+node_modules/
 *.egg-info/
 *.egg
 wheels/

@@ -1,0 +1,15 @@
+{
+  "name": "@ngocbh/yian",
+  "version": "0.0.0",
+  "description": "yian in TypeScript: readable YAML agent flows that people and LLMs compose, inspect and refine.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": { "node": ">=22.18", "bun": ">=1.4" },
+  "scripts": {
+    "build": "rm -rf dist && tsc && find dist -name '*.test.*' -delete",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test ./tests"
+  },
+  "dependencies": { "yaml": "2.9.1" },
+  "devDependencies": { "@types/bun": "1.4.3", "@types/node": "22.20.5", "typescript": "7.0.2" }
+}

@@ -9,14 +9,27 @@
  * since neither is a yian value. A date or timestamp stays text, checked with yian's
  * `date`/`datetime` grammar, so a date-shaped plain scalar that is not a real date or
  * time, such as `2026-13-45` or an offset of `+05:99`, is an error that says to quote it.
+ * `composeFlowDocument` composes the text and resolves its aliases; a document nested deeper
+ * than `current().maxYamlNesting` levels is a located `FlowLoaderError`.
  *
  * Knows about:   yaml, defaults, diagnostics, typesys.
  * Never imports: compose helpers or phases, nodes, compile, runtime, the run boundary,
  *                CLI modules.
  */
 
-import type { Node } from "yaml";
+import {
+  type Alias,
+  type Document,
+  isAlias,
+  isMap,
+  isSeq,
+  type Node,
+  type ParsedNode,
+  parseDocument,
+  type ParseOptions,
+} from "yaml";
 
+import { current } from "../../defaults.ts";
 import { reprText } from "../../diagnostics.ts";
 import { parseDate, parseDatetime } from "../../typesys/temporal.ts";
 
@@ -108,6 +121,88 @@ export class ScalarValueError extends FlowLoaderError {
     super(`${reason}; quote it to keep it as text`, node);
     this.reason = reason;
   }
+}
+
+/** One composed flow document and where each of its aliases points. */
+export interface FlowDocument {
+  readonly document: Document.Parsed;
+  readonly aliasTargets: ReadonlyMap<Alias, Node>;
+}
+
+/**
+ * Options a caller adds to `FLOW_OPTIONS`: a `LineCounter` for ranges, source tokens for
+ * properties.
+ */
+export type FlowParseOptions = Pick<ParseOptions, "lineCounter" | "keepSourceTokens">;
+
+/**
+ * Compose `text` as one YAML document under `FLOW_OPTIONS` plus `options`, and map each alias
+ * to the latest node anchored with its name before it.
+ *
+ * Example: in `[&a 1, &a 2, *a]`, `aliasTargets` maps the alias to the `2`.
+ *
+ * @throws YAMLError when the text is not valid YAML and its first error comes before any
+ *   problem below.
+ * @throws FlowLoaderError at an alias with no anchor before it, or at the first mapping or
+ *   list nested deeper than `current().maxYamlNesting` levels.
+ */
+export function composeFlowDocument(text: string, options: FlowParseOptions = {}): FlowDocument {
+  const document = parseDocument(text, { ...FLOW_OPTIONS, ...options });
+  const limits = current();
+  const anchors = new Map<string, ParsedNode>();
+  const aliasTargets = new Map<Alias, Node>();
+  // The check runs on the composed tree: eemeli catches its own stack overflow
+  // (RESOURCE_EXHAUSTION) far deeper than the limit and keeps the levels above it, and the
+  // order check below puts the nesting error first when it comes first in the text.
+  let refused: { error: FlowLoaderError; at: number } | null = null;
+  // Each entry: a node and its parent collection's level. Children are pushed in reverse,
+  // so they pop in source order and an anchor is seen before the aliases after it.
+  const stack: [ParsedNode, number][] = document.contents ? [[document.contents, 0]] : [];
+  while (stack.length > 0) {
+    const [node, parentLevel] = stack.pop()!;
+    if (isAlias(node)) {
+      const target = anchors.get(node.source);
+      if (target === undefined) {
+        const error = new FlowLoaderError("found undefined alias " + reprText(node.source), node);
+        refused = { error, at: node.range[0] };
+        break;
+      }
+      aliasTargets.set(node, target);
+      continue;
+    }
+    // Registered before the children, so `&a [*a]` names its own list.
+    if (node.anchor !== undefined) anchors.set(node.anchor, node);
+    if (!isMap(node) && !isSeq(node)) continue;
+    const level = parentLevel + 1;
+    if (level > limits.maxYamlNesting) {
+      const kind = isSeq(node) ? "list" : "mapping";
+      const error = new FlowLoaderError(
+        `this ${kind} nests deeper than ${limits.maxYamlNesting} levels, the limit for a ` +
+          "YAML document (each mapping and list is a level; a yian value nests at most " +
+          `${limits.maxValueNesting}); flatten it`,
+        node,
+      );
+      refused = { error, at: node.range[0] };
+      break;
+    }
+    const children = isSeq(node)
+      ? node.items
+      : node.items.flatMap((pair) => [pair.key, pair.value]);
+    for (let i = children.length - 1; i >= 0; i--) {
+      const child = children[i];
+      if (child !== null && child !== undefined) stack.push([child as ParsedNode, level]);
+    }
+  }
+  // The library's errors are not in source order.
+  let first = document.errors[0];
+  for (const error of document.errors) {
+    if (error.pos[0] < first!.pos[0]) first = error;
+  }
+  if (refused !== null && (first === undefined || refused.at < first.pos[0])) {
+    throw refused.error;
+  }
+  if (first !== undefined) throw first;
+  return { document, aliasTargets };
 }
 
 /**

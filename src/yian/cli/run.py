@@ -2252,7 +2252,8 @@ def _load_confined(root: Path, path: Path, loading: frozenset[Path]) -> Composed
     # along several paths loads once per path; that is fine for a check.
     def resolve(ref: str, version: Optional[str] = None) -> ComposedFlow:
         child_path = path.parent / f"{ref}.yaml"
-        if not child_path.is_file():
+        # A missing child outside the root is reported as outside, by `_load_confined`.
+        if child_path.resolve().is_relative_to(root) and not child_path.is_file():
             raise ValueError(f"flow {ref!r} not found: {os.path.relpath(child_path, root)}")
         child = _load_confined(root, child_path, loading | {path})
         if version is not None and child.version != version:

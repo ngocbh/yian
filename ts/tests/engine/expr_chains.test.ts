@@ -1,13 +1,19 @@
 /**
- * Operator chains are flat nodes: a port of the "Parse shapes" part of
- * `tests/engine/test_expr_chains.py`. The evaluation and lineage halves land with the
- * evaluator; `test_the_grammar_has_no_lalr_conflict` has no counterpart, since the TS parser
- * has no grammar table.
+ * Operator chains are flat nodes that evaluate like the old binary trees, at any length: a port
+ * of the parse-shape and evaluation parts of `tests/engine/test_expr_chains.py`.
+ *
+ * Left for later: the traced half lands with `lineage.ts`. `test_the_grammar_has_no_lalr_conflict`
+ * has no counterpart, since the TS parser has no grammar table. The generated chains come from a
+ * small seeded PRNG here instead of Python's `random`, and values compare kind-strictly (`1n` is
+ * not `1`).
  */
 
 import { expect, test } from "bun:test";
 
+import { ExpressionError, evalExpr, ResolveMode } from "../../src/expr/expressions.ts";
 import { type ExprNode, parseExpr, Token, Tree } from "../../src/expr/grammar.ts";
+import type { Value, ValueRecord } from "../../src/typesys/index.ts";
+import { fieldOf } from "../../src/typesys/values.ts";
 
 /** A position-blind form of `node`, as Lark's `Tree`/`Token` equality ignores positions. */
 type Plain = { type: string; value: string } | { data: string; children: Plain[] };
@@ -50,3 +56,279 @@ for (const [text, expected] of cases) {
     expect(plain(parseExpr(text))).toEqual(plain(expected));
   });
 }
+
+// --------------------------------------------------------------------------------------- //
+// Flat chains against their fully parenthesized (old binary) forms
+// --------------------------------------------------------------------------------------- //
+
+/** Parse `text` then evaluate it, defaulting to an empty resolver (every reference misses). */
+function evaluate(
+  text: string,
+  resolve: (path: string) => Value = () => null,
+  mode: ResolveMode = ResolveMode.BINDING_NONE,
+): Value {
+  return evalExpr(parseExpr(text), resolve, { mode });
+}
+
+/** Return a `resolve` backed by a record, reading a field per dotted step; a miss is `null`. */
+function fromRecord(mapping: ValueRecord): (path: string) => Value {
+  return (path) => {
+    const [head, ...steps] = path.split(".");
+    let value = fieldOf(mapping, head!)[1];
+    for (const step of steps) value = fieldOf(value, step)[1];
+    return value;
+  };
+}
+
+/** Return the message of the `ExpressionError` `evaluate(text, ...)` throws, failing if it returns. */
+function messageOf(text: string, mode?: ResolveMode): string {
+  try {
+    evaluate(text, undefined, mode);
+  } catch (error) {
+    expect(error).toBeInstanceOf(ExpressionError);
+    return (error as Error).message;
+  }
+  throw new Error(`${text} evaluated without an error`);
+}
+
+// A generated expression is a small tree: a leaf with its text and size, a negation, or a chain
+// at one level. `size` bounds a value's magnitude or length, so no generated power grows
+// without limit.
+type Level = "sum" | "product" | "power";
+type Node =
+  | { kind: "leaf"; text: string; size: number }
+  | { kind: "neg"; child: Node }
+  | { kind: "chain"; level: Level; operands: Node[]; operators: string[]; grouped: boolean };
+
+const LEVELS: Record<Level, string[]> = { sum: ["+", "-"], product: ["*", "/", "%"], power: ["**"] };
+const PRECEDENCE = { sum: 1, product: 2, neg: 3, power: 4, leaf: 5 };
+const SIZE_LIMIT = 10_000;
+
+const POOL: ValueRecord = { x: 3n, s: "ab", xs: [1n, 2n] };
+const LEAVES: [string, number][] = [
+  ["0", 0], ["1", 1], ["2", 2], ["3", 3], ["0.5", 1], ["1.5", 2], ["2.0", 2],
+  ["'a'", 1], ['"b"', 1], ["[]", 0], ["[1]", 1], ["['a', 2]", 2],
+  ["x", 3], ["s", 2], ["xs", 2], ["m", 0],
+];
+
+const leaf = (text: string, size = 1): Node => ({ kind: "leaf", text, size });
+const neg = (child: Node): Node => ({ kind: "neg", child });
+const chain = (level: Level, operands: Node[], operators: string[], grouped = false): Node => ({
+  kind: "chain",
+  level,
+  operands,
+  operators,
+  grouped,
+});
+
+function precedence(node: Node): number {
+  if (node.kind === "chain") return node.grouped ? PRECEDENCE.leaf : PRECEDENCE[node.level];
+  return PRECEDENCE[node.kind];
+}
+
+/** The expression as an author writes it: one chain per precedence level. */
+function flat(node: Node): string {
+  if (node.kind === "leaf") return node.text;
+  if (node.kind === "neg") {
+    const text = flat(node.child);
+    return precedence(node.child) < PRECEDENCE.neg ? `-(${text})` : `-${text}`;
+  }
+  const parts = node.operands.map((operand, index) => {
+    const text = flat(operand);
+    let needs: boolean;
+    if (node.level === "power") {
+      const lastNeg = index === node.operands.length - 1 && operand.kind === "neg";
+      needs = precedence(operand) < PRECEDENCE.leaf && !lastNeg;
+    } else {
+      needs = precedence(operand) <= PRECEDENCE[node.level];
+    }
+    return needs ? `(${text})` : text;
+  });
+  const text = parts[0] + node.operators.map((op, i) => ` ${op} ${parts[i + 1]}`).join("");
+  return node.grouped ? `(${text})` : text;
+}
+
+/** The same expression with every operator step in its own parentheses. */
+function binary(node: Node): string {
+  if (node.kind === "leaf") return node.text;
+  if (node.kind === "neg") return `(-${binary(node.child)})`;
+  const { level, operands, operators } = node;
+  if (level === "power") {
+    let text = binary(operands.at(-1)!);
+    for (const operand of operands.slice(0, -1).reverse()) text = `(${binary(operand)} ** ${text})`;
+    return text;
+  }
+  let text = binary(operands[0]!);
+  operators.forEach((op, i) => {
+    text = `(${text} ${op} ${binary(operands[i + 1]!)})`;
+  });
+  return text;
+}
+
+/** An upper bound on the magnitude or length of the node's value. */
+function size(node: Node): number {
+  if (node.kind === "leaf") return node.size;
+  if (node.kind === "neg") return size(node.child);
+  const sizes = node.operands.map(size);
+  if (node.level === "sum") return sizes.reduce((a, b) => a + b, 0);
+  if (node.level === "product") return sizes.reduce((bound, s) => bound * Math.max(s, 2), 1);
+  let bound = Math.max(sizes.at(-1)!, 1);
+  for (const s of sizes.slice(0, -1).reverse()) {
+    if (bound > 32) return Infinity;
+    bound = Math.max(s, 2) ** bound;
+  }
+  return bound;
+}
+
+/** A small seeded PRNG with the parts of Python's `random.Random` the generator uses. */
+class Rng {
+  #state: number;
+
+  constructor(seed: number) {
+    this.#state = seed >>> 0;
+  }
+
+  /** A float in [0, 1) (mulberry32). */
+  random(): number {
+    this.#state = (this.#state + 0x6d2b79f5) >>> 0;
+    let t = this.#state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 2 ** 32;
+  }
+
+  /** An int in [low, high], both included. */
+  randint(low: number, high: number): number {
+    return low + Math.floor(this.random() * (high - low + 1));
+  }
+
+  choice<T>(items: readonly T[]): T {
+    return items[Math.floor(this.random() * items.length)]!;
+  }
+}
+
+function randomLeaf(rng: Rng, leaves: [string, number][] = LEAVES): Node {
+  // Mostly numbers, so most chains evaluate; text, lists and the missing `m` make the errors.
+  const [text, s] = rng.choice(rng.random() < 0.93 ? [...LEAVES.slice(0, 7), ["x", 3] as [string, number]] : leaves);
+  return leaf(text, s);
+}
+
+function randomNode(rng: Rng, depth = 0): Node {
+  if (depth >= 2 || rng.random() < 0.3) {
+    const node = randomLeaf(rng);
+    return rng.random() < 0.1 ? neg(node) : node;
+  }
+  const level = rng.choice(Object.keys(LEVELS) as Level[]);
+  let count: number;
+  let operands: Node[];
+  if (level === "power") {
+    count = rng.randint(2, 3);
+    operands = Array.from({ length: count }, () => randomLeaf(rng, [...LEAVES.slice(0, 7), ...LEAVES.slice(12)]));
+    if (rng.random() < 0.3) operands[count - 1] = neg(operands[count - 1]!);
+  } else {
+    count = rng.randint(2, 8);
+    operands = Array.from({ length: count }, () => randomNode(rng, depth + 1));
+  }
+  const operators = Array.from({ length: count - 1 }, () => rng.choice(LEVELS[level]));
+  const node = chain(level, operands, operators, rng.random() < 0.15);
+  return rng.random() < 0.05 ? neg(node) : node;
+}
+
+function randomExpressions(count: number): Node[] {
+  const rng = new Rng(610);
+  const nodes: Node[] = [];
+  while (nodes.length < count) {
+    const node = randomNode(rng);
+    if (node.kind === "chain" && size(node) <= SIZE_LIMIT) nodes.push(node);
+  }
+  return nodes;
+}
+
+const ZERO = chain("sum", [leaf("3"), leaf("3")], ["-"]); // `3 - 3`
+const DIVISION_BY_ZERO = [
+  chain("product", [leaf("1"), ZERO], ["/"]),
+  chain("product", [leaf("x"), leaf("2"), ZERO], ["*", "%"]),
+  chain("sum", [leaf("1"), leaf("2"), chain("product", [leaf("x"), ZERO], ["/"])], ["+", "-"]),
+];
+
+type Outcome = ["value", Value] | ["error", string];
+
+function outcome(text: string, mode: ResolveMode): Outcome {
+  try {
+    return ["value", evaluate(text, fromRecord(POOL), mode)];
+  } catch (error) {
+    if (!(error instanceof ExpressionError)) throw error;
+    return ["error", error.message];
+  }
+}
+
+/** Kind-strict deep equality: `1n` is not `1`, and `-0` is not `0`. */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((v, i) => sameValue(v, b[i]));
+  return Object.is(a, b);
+}
+
+test("chains match the old binary steps", () => {
+  const kinds = new Set<string>();
+  const mismatches: string[] = [];
+  for (const node of [...randomExpressions(400), ...DIVISION_BY_ZERO]) {
+    const [flatText, binaryText] = [flat(node), binary(node)];
+    for (const mode of [ResolveMode.BINDING_NONE, ResolveMode.STRICT_RAISE]) {
+      const [got, old] = [outcome(flatText, mode), outcome(binaryText, mode)];
+      if (got[0] !== old[0] || !sameValue(got[1], old[1])) mismatches.push(`${flatText} | ${binaryText} | ${mode}`);
+      kinds.add(got[0]);
+    }
+  }
+  expect(mismatches).toEqual([]);
+  expect([...kinds].sort()).toEqual(["error", "value"]);
+  expect(outcome(flat(DIVISION_BY_ZERO[0]!), ResolveMode.STRICT_RAISE)).toEqual([
+    "error",
+    "division by zero: 1 / 0",
+  ]);
+});
+
+// --------------------------------------------------------------------------------------- //
+// Long chains, step errors and error precedence
+// --------------------------------------------------------------------------------------- //
+
+test.each([
+  ["1", "+", 3000n],
+  ["1", "*", 1n],
+  ["2", "*", 2n ** 3000n],
+  ["-1", "*", 1n],
+  ["1", "-", 2n - 3000n],
+  ["1", "**", 1n],
+  ["'a'", "+", "a".repeat(3000)],
+  ["[1]", "+", Array(3000).fill(1n)],
+  ["x", "+", 6000n],
+] as [string, string, Value][])("a long chain of %s %s evaluates", (term, op, expected) => {
+  const text = Array(3000).fill(term).join(` ${op} `);
+  expect(evaluate(text, fromRecord({ x: 2n }))).toEqual(expected);
+});
+
+test("a long power chain folds from the right", () => {
+  // 2 ** (3 ** (1 ** ... ** 1)) is 8; a left fold or a dropped operand would differ.
+  const text = "2 ** 3 ** " + Array(2998).fill("1").join(" ** ");
+  expect(evaluate(text)).toBe(8n);
+});
+
+test.each([
+  ["1 + 2 / 0", "division by zero: 2 / 0"],
+  ["6 / 3 / 0", "division by zero: 2 / 0"],
+  ["1 + 'a' + 2", 'type error evaluating 1 + "a": unsupported operand kinds for `+`: `int` and `str`'],
+  ["'a' + 'b' + 1", 'type error evaluating "ab" + 1: unsupported operand kinds for `+`: `str` and `int`'],
+])("a step error names the running value: %s", (text, message) => {
+  expect(messageOf(text)).toBe(message);
+});
+
+test("a float power past the range is Infinity, not an error", () => {
+  expect(evaluate("2 ** 3 ** 1000.0")).toBe(Infinity);
+});
+
+test.each([
+  ["1 / 0 + c", "division by zero: 1 / 0"],
+  ["c + 1 / 0", "unresolved reference ${c} in expression"],
+  ["c ** (1 / 0)", "unresolved reference ${c} in expression"],
+])("error precedence keeps left-to-right order: %s", (text, message) => {
+  expect(messageOf(text, ResolveMode.STRICT_RAISE)).toBe(message);
+});

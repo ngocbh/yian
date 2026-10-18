@@ -5,11 +5,11 @@
  *
  * TS-only: the codec form of literal snapshots, a file as an unavailable leaf, own-key record
  * fields, the depth bound inside a partial snapshot, the focused `validateFeedback` and
- * `hasFeedback` checks, a scalar route lifting a projected selection, and a traced resolver that
- * doesn't return `ResolvedValue`.
+ * `hasFeedback` checks, a scalar route lifting a projected selection, a traced resolver that
+ * doesn't return `ResolvedValue`, and interpolation spans counting code points.
  *
- * Left for later: the tests and halves that trace through `template.ts` (`eval_binding` /
- * `eval_template` with `trace=True`) land with its trace option.
+ * Left for later: the tests that run a registered builtin's temporary through a traced
+ * `evalBinding`.
  *
  * Not ported:
  * - The MAP and WAIT capture tests (`test_reserved_map_over_uses_the_same_capture_path`,
@@ -31,7 +31,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
-import { evalExpr } from "../../src/expr/expressions.ts";
+import { evalExpr, ExpressionError, ResolveMode } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
 import {
   type FeedbackValue,
@@ -47,6 +47,7 @@ import {
   validateFeedback,
   ValueRoute,
 } from "../../src/expr/lineage.ts";
+import { evalBinding, evalTemplate, scanTemplate } from "../../src/expr/template.ts";
 import { FileRef, isRecord, type Value, type ValueRecord } from "../../src/typesys/index.ts";
 import { logJson } from "../../src/typesys/json.ts";
 
@@ -591,6 +592,26 @@ test("direct projection lifts feedback into source shape", () => {
   expect(messages(routed)).toEqual([[root, { tags: [null, "Bad."] }]]);
 });
 
+test("accepted null has a source but absence does not", () => {
+  const sources = new Sources({ accepted: null });
+  const accepted = sources.identities.accepted!;
+  const present = evalBinding("${accepted}", sources.resolve, { trace: true });
+  const absent = evalTemplate(scanTemplate("${absent}"), sources.resolve, { trace: true });
+  expect(present.value).toBeNull();
+  expect(absent.value).toBeNull();
+  expect(messages(sources.feedback(present, "Supply a value."))).toEqual([[accepted, "Supply a value."]]);
+  expect(messages(sources.feedback(absent, "Supply a value."))).toEqual([]);
+  expect(messages(sources.feedback(present, null))).toEqual([]);
+  expect(messages(sources.feedback(present, ""))).toEqual([[accepted, ""]]);
+  for (const name of ["accepted", "absent"]) {
+    const error = thrown(() =>
+      evalExpr(parseExpr(name), sources.resolve, { mode: ResolveMode.STRICT_RAISE, trace: true }),
+    );
+    expect(error).toBeInstanceOf(ExpressionError);
+    expect((error as Error).message).toMatch(/unresolved/);
+  }
+});
+
 test.each([0n, false, "", ["item"]] as Value[])("coalesce and default drop losing arm routes (%p)", (winning) => {
   const sources = new Sources({ empty: null, winner: winning, losing: "unused" });
   for (const [expression, reads] of [
@@ -685,18 +706,50 @@ test.each([
   ["x or absent", true, ["x"]],
   ["x and y", true, ["x", "y"]],
   ["zero and absent", false, ["zero"]],
-] as [string, Value, string[]][])("scalar text stays unchanged: %s", (expression, expected, names) => {
-  const sources = new Sources({ x: 3n, y: 4n, items: [3n, 4n], zero: 0n });
-  const result = sources.evaluate(expression);
-  expect(result.value).toEqual(expected);
-  expect(sources.reads).toEqual(names);
-  const routed = sources.feedback(result, "Original text.");
-  expect(messages(routed)).toEqual(names.map((name) => [sources.identities[name]!, "Original text."]));
-  for (const contribution of routed.contributions) {
-    expect(contribution.context[0]!.result).toEqual(expected);
-    expect(contribution.context[0]!.expression).toBeTruthy();
-    expect(contribution.context[0]!.sources).toEqual(names.map((name) => sources.identities[name]!));
-  }
+] as [string, Value, string[]][])(
+  "scalar and interpolation text stays unchanged: %s",
+  (expression, expected, names) => {
+    const sources = new Sources({ x: 3n, y: 4n, items: [3n, 4n], zero: 0n });
+    const result = sources.evaluate(expression);
+    expect(result.value).toEqual(expected);
+    expect(sources.reads).toEqual(names);
+    const routed = sources.feedback(result, "Original text.");
+    expect(messages(routed)).toEqual(names.map((name) => [sources.identities[name]!, "Original text."]));
+    for (const contribution of routed.contributions) {
+      expect(contribution.context[0]!.result).toEqual(expected);
+      expect(contribution.context[0]!.expression).toBeTruthy();
+      expect(contribution.context[0]!.sources).toEqual(names.map((name) => sources.identities[name]!));
+    }
+    const rendered = evalBinding("x=${x}; items=${items}", sources.resolve, { trace: true });
+    expect(rendered.value).toBe("x=3; items=[3,4]");
+    const renderedRouted = sources.feedback(rendered, "Be concise.");
+    expect(messages(renderedRouted)).toEqual([
+      [sources.identities.x!, "Be concise."],
+      [sources.identities.items!, "Be concise."],
+    ]);
+    expect(renderedRouted.contributions.map((c) => c.context[0]!.span)).toEqual([
+      [2, 3],
+      [11, 16],
+    ]);
+    for (const c of renderedRouted.contributions) expect(c.context[0]!.result).toBe(rendered.value);
+  },
+);
+
+test("spans count code points", () => {
+  const sources = new Sources({ x: 3n, y: 4n });
+  const rendered = evalBinding("😀${x}é${y}", sources.resolve, { trace: true });
+  expect(rendered.value).toBe("😀3é4");
+  expect(rendered.route.kind).toBe("interpolation");
+  expect(rendered.route.expression).toBe("😀${x}é${y}");
+  expect(rendered.route.spans).toEqual([
+    [1, 2],
+    [3, 4],
+  ]);
+  const routed = sources.feedback(rendered, "Note.");
+  expect(routed.contributions.map((c) => c.context[0]!.span)).toEqual([
+    [1, 2],
+    [3, 4],
+  ]);
 });
 
 test.each([
@@ -741,6 +794,34 @@ test.each([
     expect(sources.feedback(result, null).stopped).toEqual([]);
   },
 );
+
+test("composed item route projects fields and preserves null presence", () => {
+  const sources = new Sources({ left: [{ answer: "old" }], right: [{ answer: null }] });
+  const over = sources.evaluate("left + right");
+  const item = new ResolvedValue((over.value as Value[])[1]!, true, over.route.project([1]));
+  sources.reads.length = 0;
+  const result = evalBinding("${item.answer}", sources.resolve, { item, trace: true });
+  expect(result.value).toBeNull();
+  expect(sources.reads).toEqual([]);
+  expect(messages(sources.feedback(result, "Fill this."))).toEqual([
+    [sources.identities.right!, [{ answer: "Fill this." }]],
+  ]);
+  const missing = evalBinding("${item.absent}", sources.resolve, { item, trace: true });
+  expect(messages(sources.feedback(missing, "Fill this."))).toEqual([]);
+  const fallback = evalBinding('${item.answer :- "default"}', sources.resolve, { item, trace: true });
+  expect(fallback.value).toBe("default");
+  expect(messages(sources.feedback(fallback, "Feedback."))).toEqual([]);
+  const localReads: string[] = [];
+  const local = (path: string) => {
+    localReads.push(path);
+    return new ResolvedValue(null, true, over.route.project([1, "answer"]));
+  };
+  const localResult = evalBinding("${local}", local, { trace: true });
+  expect(localReads).toEqual(["local"]);
+  expect(messages(sources.feedback(localResult, "Fill this."))).toEqual(
+    messages(sources.feedback(result, "Fill this.")),
+  );
+});
 
 test("structural routes retain selection and position context", () => {
   const sources = new Sources({ left: ["a"], right: ["b", "c"], record: { tags: ["x", "y"] } });
@@ -792,6 +873,23 @@ test("structural routes retain selection and position context", () => {
   const direct = sources.feedback(sources.evaluate("record.tags"), [null, "Bad."]).contributions[0]!;
   expect(direct.context.at(-1)!.role).toBe("projection");
   expect(direct.context.at(-1)!.sources[0]!.path).toEqual(["tags"]);
+});
+
+test("a plain item has no route to follow", () => {
+  const item = { answer: "ok" };
+  expect(evalBinding("${item.answer}", () => null, { item })).toBe("ok");
+  const traced = evalBinding("${item.answer}", () => new ResolvedValue(null, false), { item, trace: true });
+  expect(traced.value).toBe("ok");
+  const routed = routeFeedback(traced.route, "Note.", () => null);
+  expect(routed.contributions).toEqual([]);
+  expect(routed.stopped).toEqual([]);
+});
+
+test("a sourced item read projects its source", () => {
+  const item = new ResolvedValue({ answer: "ok" }, true, new SourceRef("run", 7, ["items", 0]));
+  const traced = evalBinding("${item.answer}", () => new ResolvedValue(null, false), { item, trace: true });
+  expect(traced.value).toBe("ok");
+  expect(traced.route.source).toEqual(new SourceRef("run", 7, ["items", 0, "answer"]));
 });
 
 test("a traced resolver must return ResolvedValue", () => {

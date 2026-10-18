@@ -1,0 +1,6 @@
+kind: json
+rules: [canonical, infinity]
+write: {a: {$float: inf}, b: {$float: -inf}}
+form: canonical
+expect:
+  text: '{"a":{"$float":"inf"},"b":{"$float":"-inf"}}'

@@ -1,0 +1,8 @@
+kind: json
+rules: [canonical]
+write: "\ud800"
+form: log
+expect:
+  raises:
+    class: TypeError
+    message: Unicode surrogate is not valid canonical JSON

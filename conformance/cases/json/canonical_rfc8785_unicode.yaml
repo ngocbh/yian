@@ -1,0 +1,7 @@
+kind: json
+# A followed by a combining ring: JCS doesn't normalize to the precomposed U+00C5.
+rules: [canonical]
+write: {Unnormalized Unicode: "A\u030a"}
+form: canonical
+expect:
+  text: "{\"Unnormalized Unicode\":\"A\u030a\"}"

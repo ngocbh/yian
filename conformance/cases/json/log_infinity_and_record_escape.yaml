@@ -1,0 +1,7 @@
+kind: json
+# Infinity is written as the tag; records shaped like the tag or the escape are escaped.
+rules: [canonical, infinity]
+write: [{$float: inf}, {$record: {$float: -inf}}, {$record: {$record: 1}}, {$record: {$record: {$float: inf}}}]
+form: log
+expect:
+  text: '[{"$float":"inf"},{"$record":{"$float":"-inf"}},{"$record":{"$record":1}},{"$record":{"$record":{"$float":"inf"}}}]'

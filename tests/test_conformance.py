@@ -133,6 +133,7 @@ _KIND_KEYS = {
     # Both runners load `flow` and `other` as written: no `python_flow` or `python_files`.
     "fingerprint": _FLOW - {"python_flow", "python_files"} | {"other"},
     "cli": _FLOW | {"args", "stdin", "signal"},
+    "json": {"read", "mode", "write", "form"},
 }
 _REQUIRED = {
     "load": ("flow",), "run": ("flow",), "resume": ("flow",), "backward": ("flow", "backward"),
@@ -149,6 +150,7 @@ _RESULTS = {
     "defaults": (("defaults",), ("raises",)),
     "fingerprint": (("fingerprint",),),
     "cli": (("exit",),),
+    "json": (("value",), ("text",), ("raises",)),
 }
 _RUN_OPTIONAL = {"trace", "events", "stream", "tool_calls", "memory"}
 _OPTIONAL = {
@@ -171,7 +173,7 @@ _RULES = {
 }
 _RESERVED = [*(("host", key) for key in _RESERVED_HOST_KEYS), ("expect", "memory")]
 # Keys holding text that is not a case value: no codec form, no number checks.
-_TEXT_KEYS = {"flow", "python_flow", "other", "files", "python_files", "stdin"}
+_TEXT_KEYS = {"flow", "python_flow", "other", "files", "python_files", "stdin", "read"}
 _SECRET_KEYS = {"run", "resume", "backward", "env", "host", "stdin"}
 _SECRET = re.compile(r"<key:([0-9]+)>")
 _FILLED = re.compile(r"sk-conformance-[0-9]+")
@@ -386,6 +388,8 @@ def _marks(path: Path) -> list:
     except Exception:
         # The test reads the file again and fails with the error.
         return []
+    if case["kind"] == "json":
+        return [pytest.mark.skip(reason="json cases check TS yian's own JSON reader and encoders")]
     if "python_skip" in case:
         return [pytest.mark.skip(reason=str(case["python_skip"]))]
     if case.get("rules") and "python_expect" not in case:

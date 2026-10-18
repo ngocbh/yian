@@ -26,6 +26,9 @@ import { parseArgs } from "node:util";
 import { Document, isCollection, isMap, isNode, isSeq, parseDocument, visit } from "yaml";
 import type { YAMLMap } from "yaml";
 
+import { canonicalJson, logJson, parseJson } from "../src/typesys/json.ts";
+import type { JsonMode } from "../src/typesys/json.ts";
+
 /** A case value: an int is a `bigint`, a float a `number`. */
 export type Value = null | boolean | bigint | number | string | Value[] | Case;
 
@@ -42,7 +45,8 @@ export type Kind =
   | "value"
   | "defaults"
   | "fingerprint"
-  | "cli";
+  | "cli"
+  | "json";
 
 // The closed format, as conformance/README.md defines it. Sets, and tables keyed by a checked
 // `Kind`, so a case value such as `kind: toString` never finds an `Object.prototype` member.
@@ -62,6 +66,7 @@ const KIND_KEYS = {
   // Both runners load `flow` and `other` as written: no `python_flow` or `python_files`.
   fingerprint: new Set(["flow", "files", "env", "other"]),
   cli: new Set([...FLOW, "args", "stdin", "signal"]),
+  json: new Set(["read", "mode", "write", "form"]),
 } satisfies Record<Kind, ReadonlySet<string>>;
 const REQUIRED: Partial<Record<Kind, readonly string[]>> = {
   load: ["flow"], run: ["flow"], resume: ["flow"], backward: ["flow", "backward"],
@@ -78,6 +83,7 @@ const RESULTS = {
   defaults: [["defaults"], ["raises"]],
   fingerprint: [["fingerprint"]],
   cli: [["exit"]],
+  json: [["value"], ["text"], ["raises"]],
 } satisfies Record<Kind, readonly (readonly string[])[]>;
 const RUN_OPTIONAL: ReadonlySet<string> = new Set([
   "trace", "events", "stream", "tool_calls", "memory",
@@ -120,7 +126,7 @@ const RULES: ReadonlySet<string> = new Set([
 ]);
 // Keys holding text that is not a case value: no codec form, no number checks.
 const TEXT_KEYS: ReadonlySet<string> = new Set([
-  "flow", "python_flow", "other", "files", "python_files", "stdin",
+  "flow", "python_flow", "other", "files", "python_files", "stdin", "read",
 ]);
 const SECRET_KEYS: ReadonlySet<string> = new Set([
   "run", "resume", "backward", "env", "host", "stdin",
@@ -434,6 +440,20 @@ export function checkCase(case_: Case): Case {
       throw new Error("a strict `template` takes no `item` or `typedefs`");
     }
   }
+  if (kind === "json") {
+    const read = Object.hasOwn(case_, "read");
+    if (read === Object.hasOwn(case_, "write")) {
+      throw new Error("a `json` case takes one of `read` and `write`");
+    }
+    const mode = get(case_, "mode");
+    const form = get(case_, "form");
+    if (read && ((mode !== "codec" && mode !== "plain") || form !== undefined)) {
+      throw new Error("`read` takes `mode` (codec or plain), and no `form`");
+    }
+    if (!read && ((form !== "canonical" && form !== "log") || mode !== undefined)) {
+      throw new Error("`write` takes `form` (canonical or log), and no `mode`");
+    }
+  }
   return case_;
 }
 
@@ -646,6 +666,7 @@ export const KINDS: Partial<Record<Kind, KindRunner>> = {
   // defaults: not run yet
   // fingerprint: not run yet
   // cli: not run yet
+  json: runJson,
 };
 
 /**
@@ -867,6 +888,26 @@ export async function main(
 // ---- fingerprint ----
 
 // ---- cli ----
+
+// ---- json ----
+
+/** Run a `json` case: read `read` in its `mode`, or write `write` in its `form`. */
+async function runJson(case_: Case): Promise<void> {
+  const expect = case_["expect"] as Case;
+  if (Object.hasOwn(case_, "read")) {
+    const text = case_["read"] as string;
+    await results(expect, () => ({ value: parseJson(text, case_["mode"] as JsonMode) }));
+    return;
+  }
+  const value = case_["write"] as Value;
+  await results(expect, () => {
+    if (case_["form"] !== "log") return { text: canonicalJson(value) };
+    const text = logJson(value);
+    // The log form is lossless: reading the line back gives the value, kind for kind.
+    compare("read back", parseJson(text, "codec"), value);
+    return { text };
+  });
+}
 
 /** Return whether this file is the process's entry script. */
 function isEntry(): boolean {

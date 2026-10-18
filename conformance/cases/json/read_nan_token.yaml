@@ -1,0 +1,8 @@
+kind: json
+rules: [numbers]
+read: '[NaN]'
+mode: plain
+expect:
+  raises:
+    class: JSONDecodeError
+    message: 'NaN is not JSON: line 1 column 2 (char 1)'

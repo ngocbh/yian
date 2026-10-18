@@ -25,6 +25,7 @@ import {
   compare,
   decode,
   expectRaises,
+  KINDS as RUNNERS,
   main,
   prepare,
   raised,
@@ -118,7 +119,11 @@ const CLI = "kind: cli\nexpect: {exit: 0}\n";
 const TOOL = (results: string) =>
   `${RUN}host: {tools: {t: {parameters: {}, results: ${results}}}}\n`;
 const STRICT = "a strict `template` takes no `item` or `typedefs`";
-const KINDS = "load, run, resume, backward, expr, value, defaults, fingerprint, cli";
+const JSON_CASE = "kind: json\nexpect: {value: 1}\n";
+const ONE_OF = "a `json` case takes one of `read` and `write`";
+const READ = "`read` takes `mode` (codec or plain), and no `form`";
+const WRITE = "`write` takes `form` (canonical or log), and no `mode`";
+const KINDS = "load, run, resume, backward, expr, value, defaults, fingerprint, cli, json";
 
 describe("checkCase", () => {
   test.each([
@@ -253,6 +258,18 @@ describe("checkCase", () => {
     [`${EXPR}expr: a\nitem: 1\nmode: condition`, "`mode: condition` takes an `expr` and no `item`"],
     [`${EXPR}template: a\nitem: 1\nmode: strict`, STRICT],
     [`${EXPR}template: a\ntypedefs: {}\nmode: strict`, STRICT],
+    [JSON_CASE, ONE_OF],
+    [`${JSON_CASE}read: "1"\nmode: codec\nwrite: 1\nform: log`, ONE_OF],
+    [`${JSON_CASE}read: "1"`, READ],
+    [`${JSON_CASE}read: "1"\nmode: log`, READ],
+    [`${JSON_CASE}read: "1"\nmode: codec\nform: log`, READ],
+    [`${JSON_CASE}write: 1`, WRITE],
+    [`${JSON_CASE}write: 1\nform: log\nmode: codec`, WRITE],
+    [`${JSON_CASE}read: 1\nmode: codec`, "`read` must be text"],
+    [
+      'kind: json\nread: "1"\nmode: codec\nexpect: {value: 1, text: "1"}',
+      "`expect` needs `value`, or `text`, or `raises`",
+    ],
   ])("refuses %p", (text, message) => {
     expect(() => checkCase(readCase(text))).toThrow(message);
   });
@@ -272,6 +289,10 @@ describe("checkCase", () => {
     "kind: value\ntype: int\nvalue: 1\nexpect: {value: 1, kind: int}",
     "kind: defaults\nexpect: {defaults: {}}",
     "kind: cli\nargs: [run]\nstdin: x\nexpect: {exit: 0, stdout: x}",
+    `${JSON_CASE}read: "1"\nmode: codec`,
+    `${JSON_CASE}read: "1"\nmode: plain`,
+    'kind: json\nwrite: 1\nform: canonical\nexpect: {text: "1"}',
+    'kind: json\nwrite: 1\nform: log\nexpect: {text: "1"}',
   ])("accepts %p", (text) => {
     const read = readCase(text);
     expect(checkCase(read)).toBe(read);
@@ -623,7 +644,7 @@ describe("main", () => {
   };
   const BAD =
     "FAIL b/bad: `kind` must be one of load, run, resume, backward, expr, value, defaults, " +
-    'fingerprint, cli, not "nope"';
+    'fingerprint, cli, json, not "nope"';
   const X = ["FAIL a/x: x differs", "  --- actual", "  1", "  --- expected", "  2"];
   const PASSES = "FAIL b/pending_passes: passes, but is marked pending (#391); remove the marker";
   const NO_LOAD = "the TS runner doesn't run `load` cases yet";
@@ -786,6 +807,27 @@ describe("main", () => {
       err: [],
     });
     expect(await run(["--group", "c"])).toEqual({ code: 1, out: ["no case matches"], err: [] });
+  });
+
+  test("runs `json` cases with the runner's own kind table", async () => {
+    const files = {
+      "j/read.yaml": 'kind: json\nread: "[1, 1.0]"\nmode: codec\nexpect: {value: [1, 1.0]}\n',
+      "j/log.yaml":
+        "kind: json\nwrite: {b: 1.0, a: 1}\nform: log\nexpect: {text: '{\"a\":1,\"b\":1.0}'}\n",
+      "j/wrong.yaml": "kind: json\nwrite: 1.0\nform: log\nexpect: {text: '1'}\n",
+    };
+    expect(await run([], files, {}, RUNNERS)).toEqual({
+      code: 1,
+      out: [
+        "FAIL j/wrong: text differs",
+        "  --- actual",
+        "  \"1.0\"",
+        "  --- expected",
+        "  \"1\"",
+        "3 cases: 2 passed, 1 failed, 0 pending",
+      ],
+      err: [],
+    });
   });
 
   test.each([[["--bogus"]], [["--group"]], [["a/ok"]]])("exits 2 on %p", async (argv) => {

@@ -24,9 +24,9 @@ A case file is YAML 1.2 core schema: `true`/`false`, `null`/`~`, integers (decim
 keys or `yes`/`no` booleans. A tag (`!!str`, `!!timestamp`, `!x` or a bare `!`) is an error. A
 duplicate key or a mapping key that isn't text is an error. `1` is an int and `1.0` a float.
 
-Values in a case (everything except flow text, `files`, `python_files` and `stdin`) are read in
-yian's JSON codec form: `{$float: inf}` and `{$float: -inf}` are the floats infinity and minus
-infinity, and `{$record: X}` is the record `X`. A record that is exactly `{$float: inf}` or
+Values in a case (everything except flow text, `files`, `python_files`, `stdin` and `read`) are
+read in yian's JSON codec form: `{$float: inf}` and `{$float: -inf}` are the floats infinity and
+minus infinity, and `{$record: X}` is the record `X`. A record that is exactly `{$float: inf}` or
 `{$float: -inf}`, or whose only key is `$record`, is written inside `$record`. A bare `.inf` or
 `.nan` in a value is an error.
 
@@ -36,7 +36,7 @@ additions to this file.
 ## The case file
 
 ```yaml
-kind: run                  # load | run | resume | backward | expr | value | defaults | fingerprint | cli
+kind: run                  # load | run | resume | backward | expr | value | defaults | fingerprint | cli | json
 rules: [text-form]         # TS-era rules the expectation depends on; absent or empty means shared
 pending: "#391"            # the TS runner expects this case to fail until that issue lands
 python_skip: why           # the Python runner can't run this case at all
@@ -66,6 +66,7 @@ keys and results each kind requires (Kinds, below); `python_expect` needs `rules
 - `pending` is for the TS runner: it reports the case as an expected failure, and fails if the
   case passes, so the marker is removed in the change that makes it pass. The Python runner
   ignores `pending`; a case Python can't pass uses `python_skip`.
+- The Python runner skips `json` cases: they check TS yian's own JSON reader and encoders.
 
 ## The case directory and environment
 
@@ -96,9 +97,9 @@ Every case runs in a new temporary directory, the *case directory*:
 
 ## Kinds
 
-Keys marked required must be present. In a `load`, `expr`, `value`, `defaults` or `fingerprint`
-case, `expect` and `python_expect` hold the results under Checks: exactly one group where it
-says "or". A `run`, `resume` or `backward` case's `expect` has exactly one of `raises` and
+Keys marked required must be present. In a `load`, `expr`, `value`, `defaults`, `fingerprint` or
+`json` case, `expect` and `python_expect` hold the results under Checks: exactly one group where
+it says "or". A `run`, `resume` or `backward` case's `expect` has exactly one of `raises` and
 `output`.
 
 | Kind | Keys | Checks |
@@ -112,6 +113,7 @@ says "or". A `run`, `resume` or `backward` case's `expect` has exactly one of `r
 | `defaults` | `env` | `expect.defaults` or `expect.raises` |
 | `fingerprint` | `flow` and `other` (required), `files`, `env` | `expect.fingerprint` |
 | `cli` | `flow`, `files`, `env`, `args`, `stdin`, `signal` | `expect.exit`, then `stdout`, `stderr`, `json`, `json_lines` when present |
+| `json` | exactly one of `read` (with `mode`) and `write` (with `form`) | `expect.value` (a read), `expect.text` (a write), or `expect.raises` |
 
 ### `load`
 
@@ -216,6 +218,17 @@ or if the command dies from the signal instead of exiting (yian handles SIGINT a
 The command starts with SIGINT's default disposition: a shell can start background jobs with it
 ignored, so a runner resets it in the child (libuv resets dispositions; a runner on another
 spawn checks its own). SIGINT is the only signal so far.
+
+### `json`
+
+Reads JSON text with yian's lossless reader, or writes a value with one of yian's canonical
+encoders (design #736, sections 3.2.1, 3.2.5, 3.2.12). `read` is the JSON text and `mode` is
+`codec` (yian's codec form is decoded: data yian wrote) or `plain` (nothing is decoded: model
+replies, tool arguments, `--inputs`); `expect.value` is the value read. `write` is a value
+(in codec form, like every case value) and `form` is `canonical` (RFC 8785, for
+fingerprints) or `log` (a run-log line); `expect.text` is the text written. A `log` text is
+also read back in `codec` mode and must give `write` again. `expect.raises` is the error
+instead. `json` cases are TS-only.
 
 ## The host, as data
 
@@ -436,7 +449,7 @@ A case's group is its directory under `cases/`.
 | Group | Kind(s) | Covers |
 |---|---|---|
 | `defaults` | defaults | the defaults table, parse rules, messages |
-| `json` | value (TS-only) | lossless reader, canonical encoders, RFC 8785 vectors, log number form |
+| `json` | json (TS-only) | lossless reader, canonical encoders, RFC 8785 vectors, log number form |
 | `values` | value | building values, kinds, files, infinity and NaN, nesting, surrogates, `-0`, host intake |
 | `types` | value, load | type text, ranges, typedefs, type nesting |
 | `yaml` | load | YAML 1.2 scalars, dates, merge keys, non-text keys, limits, syntax errors, line breaks |

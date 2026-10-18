@@ -1,0 +1,9 @@
+kind: json
+# Reported at the second key's opening quote.
+rules: [numbers]
+read: '{"a": 1, "a": 2}'
+mode: plain
+expect:
+  raises:
+    class: JSONDecodeError
+    message: 'duplicate JSON object key: "a": line 1 column 10 (char 9)'

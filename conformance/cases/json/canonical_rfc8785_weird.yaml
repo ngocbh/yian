@@ -1,0 +1,15 @@
+kind: json
+rules: [canonical]
+write:
+  "\u20ac": Euro Sign
+  "\r": Carriage Return
+  "\n": Newline
+  "1": One
+  "\x80": "Control\x7f"
+  "\U0001F602": Smiley
+  "\u00f6": Latin Small Letter O With Diaeresis
+  "\ufb33": Hebrew Letter Dalet With Dagesh
+  "</script>": Browser Challenge
+form: canonical
+expect:
+  text: "{\"\\n\":\"Newline\",\"\\r\":\"Carriage Return\",\"1\":\"One\",\"</script>\":\"Browser Challenge\",\"\x80\":\"Control\x7f\",\"\u00f6\":\"Latin Small Letter O With Diaeresis\",\"\u20ac\":\"Euro Sign\",\"\U0001F602\":\"Smiley\",\"\ufb33\":\"Hebrew Letter Dalet With Dagesh\"}"

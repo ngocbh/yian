@@ -1,7 +1,7 @@
 /**
  * Files inside typed containers, a port of the value checks (`buildValueAs`), file
- * normalization (`normalizeFiles`), the overlap tests and the `field_of` table of
- * `tests/engine/test_files_in_containers.py`, with `FileRef` constructor refusals
+ * normalization (`normalizeFiles`), the overlap tests, the `field_of` table and the two traced
+ * item reads of `tests/engine/test_files_in_containers.py`, with `FileRef` constructor refusals
  * (`RangeError`, as pydantic's `ValidationError` is a `ValueError`). Where Python checks that
  * a value is kept with `is`, these tests use `toBe`.
  *
@@ -20,6 +20,9 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { evalExpr } from "../../src/expr/expressions.ts";
+import { parseExpr } from "../../src/expr/grammar.ts";
+import { ResolvedValue, SourceRef } from "../../src/expr/lineage.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import {
   buildValueAs,
@@ -343,6 +346,24 @@ describe("fieldOf", () => {
   ])("reads a record key or a file field: %s", (_id, value, name, expected) => {
     expect(fieldOf(value, name)).toEqual(expected);
   });
+});
+
+test("a traced item read of a file field routes to its source", () => {
+  const item = new ResolvedValue(REF, true, new SourceRef("run", 1, ["xs", 0]));
+
+  const traced = evalExpr(parseExpr("item.uri"), () => new ResolvedValue(null, false), { item, trace: true });
+
+  expect(traced.value).toBe("f");
+  expect(traced.route.source).toEqual(new SourceRef("run", 1, ["xs", 0, "uri"]));
+});
+
+test("a traced item read of another file field has no source route", () => {
+  const item = new ResolvedValue(REF, true, new SourceRef("run", 1, ["xs", 0]));
+
+  const traced = evalExpr(parseExpr("item.other"), () => new ResolvedValue(null, false), { item, trace: true });
+
+  expect(traced.value).toBeNull();
+  expect(traced.route.source).toBeNull();
 });
 
 describe("FileRef", () => {

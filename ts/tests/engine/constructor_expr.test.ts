@@ -5,8 +5,7 @@
  * its walker tests (`expr_refs`, `rewrite_expr_refs`, `constructor_names`), the co-skip,
  * flow-callee and prompt tests, and its static inference tests.
  *
- * Left for later: the route and feedback tests land with `lineage.ts`; the binder tests with
- * `nodes/binding.ts`.
+ * Left for later: the binder tests land with `nodes/binding.ts`.
  */
 
 import { expect, test } from "bun:test";
@@ -23,6 +22,7 @@ import {
   rewriteExprRefs,
 } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
+import { ResolvedValue, routeFeedback, SourceRef } from "../../src/expr/lineage.ts";
 import { bindingCoSkips, evalBinding, flowCallCalleesInSpans, promptRefs } from "../../src/expr/template.ts";
 import { Type, typeFor, type Value, type ValueRecord, ValueKind } from "../../src/typesys/index.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
@@ -293,6 +293,51 @@ test("a prompt call with several arguments is an unknown prompt function", () =>
   expect(error.message.startsWith("unknown prompt function 'foo';")).toBe(true);
 });
 
+// --- lineage --- //
+
+/** Return a traced `resolve` over `values`: present unless `null`, sourced at the whole path of run 1. */
+function tracedResolver(values: ValueRecord): (path: string) => ResolvedValue {
+  const resolve = resolver(values);
+  return (path) => {
+    const value = resolve(path);
+    return new ResolvedValue(value, value !== null, new SourceRef("run", 1, path.split(".")));
+  };
+}
+
+test("a positional constructor routes to its argument", () => {
+  const traced = evalBinding("${Buy(d.output)}", tracedResolver({ d: { output: A_BUY } }), {
+    trace: true,
+    types: TYPES,
+  });
+  expect(traced.value).toEqual(A_BUY);
+  const route = traced.route;
+  expect(route.kind).toBe("selected");
+  expect(route.expression).toBe("Buy(d.output)");
+  expect(route.children[0]!.source).toEqual(new SourceRef("run", 1, ["d", "output"]));
+});
+
+test("a keyword constructor routes each field", () => {
+  const traced = evalBinding('${Buy(action="buy", conviction=s.output)}', tracedResolver({ s: { output: 0.7 } }), {
+    trace: true,
+    types: TYPES,
+  });
+  const route = traced.route;
+  expect(route.kind).toBe("record");
+  expect(route.names).toEqual(["action", "conviction"]);
+  expect(route.expression).toBe('Buy(action="buy", conviction=s.output)');
+  expect(route.children[1]!.source).toEqual(new SourceRef("run", 1, ["s", "output"]));
+});
+
+test("a field read on a constructor projects its route", () => {
+  const traced = evalBinding("${Buy(d.output).conviction}", tracedResolver({ d: { output: A_BUY } }), {
+    trace: true,
+    types: TYPES,
+  });
+  expect(traced.value).toBe(0.5);
+  expect(traced.route.kind).toBe("project");
+  expect(traced.route.path).toEqual(["conviction"]);
+});
+
 // --- static inference --- //
 
 /** Return the type a constructor name names, else `null`. */
@@ -356,4 +401,26 @@ test("inference reads optional record fields, file fields and nullable aliases",
 test("inference without types leaves a call unknown", () => {
   expect(inferExprType(parseExpr("Buy(d.output)"), noRefs)).toBeNull();
   expect(inferExprType(parseExpr("upper(x)"), noRefs, typeFn)).toBeNull();
+});
+
+test("feedback on a built field reaches its argument", () => {
+  const sources: Record<number, ValueRecord> = { 1: { output: 0.7 }, 2: { output: A_BUY } };
+  const resolve = (path: string) => {
+    const [head, ...parts] = path.split(".");
+    const seq = head === "s" ? 1 : 2;
+    let value: Value = sources[seq]!;
+    for (const part of parts) value = (value as ValueRecord)[part]!;
+    return new ResolvedValue(value, true, new SourceRef("run", seq, parts));
+  };
+  const lookup = (source: SourceRef) => sources[source.executionSeq];
+  const built = evalBinding('${Buy(action="buy", conviction=s.output)}', resolve, { trace: true, types: TYPES });
+  let routed = routeFeedback(built.route, { conviction: "too high" }, lookup);
+  expect(routed.contributions.map((c) => [c.source, c.feedback])).toEqual([
+    [new SourceRef("run", 1), { output: "too high" }],
+  ]);
+  const checked = evalBinding("${Buy(d.output)}", resolve, { trace: true, types: TYPES });
+  routed = routeFeedback(checked.route, { conviction: "too high" }, lookup);
+  expect(routed.contributions.map((c) => [c.source, c.feedback])).toEqual([
+    [new SourceRef("run", 2), { output: { conviction: "too high" } }],
+  ]);
 });

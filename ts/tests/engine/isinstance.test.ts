@@ -10,8 +10,8 @@
  * `isinstance` is a special form: the first argument is an expression, the second a bare type
  * name looked up in the type table (`types`, a `Map`), never a reference.
  *
- * Left for later: the tracing test lands with `lineage.ts`; the node, case and loop tests (from
- * `test_a_node_starts_with_an_empty_type_table` on) with compose and `run.ts`.
+ * Left for later: the node, case and loop tests (from `test_a_node_starts_with_an_empty_type_table`
+ * on) land with compose and `run.ts`.
  */
 
 import { expect, test } from "bun:test";
@@ -31,6 +31,7 @@ import {
   rewriteExprRefs,
 } from "../../src/expr/expressions.ts";
 import { type ExprNode, parseExpr, Token } from "../../src/expr/grammar.ts";
+import { ResolvedValue, SourceRef } from "../../src/expr/lineage.ts";
 import {
   bindingCoSkips,
   evalBinding,
@@ -314,4 +315,20 @@ test("isinstance is not a prompt function", () => {
   const message = "isinstance is not a prompt function; compute it in an input binding";
   expectError(() => promptRefs("${isinstance(x, Buy)}"), message);
   expectError(() => promptRefs("Order: ${render_as_json(x)} ${upper(isinstance(x, Buy))}"), message);
+});
+
+// --- tracing --- //
+
+test("traced isinstance records one route over the first argument", () => {
+  const resolve = (path: string) => new ResolvedValue(A_BUY, true, new SourceRef("run", 0, path.split(".").slice(1)));
+  const traced = evalBinding("${isinstance(d.output, Buy)}", resolve, { trace: true, types: TYPES });
+  expect(traced.value).toBe(true);
+  const route = traced.route;
+  expect(route.kind).toBe("opaque");
+  expect(route.expression).toBe("isinstance(d.output, Buy)");
+  expect(route.children).toHaveLength(1);
+  expect(route.names).toEqual([""]);
+  const child = route.children[0]!;
+  expect(child.kind).toBe("source");
+  expect(child.source).toEqual(new SourceRef("run", 0, ["output"]));
 });

@@ -34,25 +34,29 @@
  * already bound to its node and mints no edge), but it is a `${...}` template and reuses this
  * scanner, so it lives here rather than in `expressions.ts`.
  *
- * Value tracing lands here later, with `lineage.ts`; the call-parsing helpers land with compose's
- * `call(...)` directive.
+ * With `trace`, `evalTemplate` and `evalBinding` also record the value's `ValueRoute`: a whole
+ * single span's route, or an `interpolation` route over each embedded span's route with its
+ * half-open span of code points in the rendered text, so feedback on the text can go back to its
+ * sources. The call-parsing helpers land with compose's `call(...)` directive.
  *
  * Knows about: `expressions` (the evaluator, `ResolveMode`, `exprRefs`, `rewriteExprRefs`,
  * `checkCalls`, `valueArgs`, `conversionHint`, `ISINSTANCE`, `resolveInRecord`,
- * `ExpressionError`), `builtins` (`TEMPLATE_FNS`), `grammar` (`parseExpr`, `findSpanEnd`,
+ * `ExpressionError`, `EvalOptions`, `TraceOptions`), `lineage` (`ValueRoute`, `ResolvedValue`,
+ * `TracedValue`), `builtins` (`TEMPLATE_FNS`), `grammar` (`parseExpr`, `findSpanEnd`,
  * `rejectNestedSpans`, `iterSubtrees`, `callSuffixOf`, `wholeSpanInterior`, `ExprNode`, `Token`,
- * `Tree`), `typesys` (`writeAsText`) and `diagnostics` (`reprText`, `compareCodeUnits`).
- * Never imports: `nodes`, `compile`, `compose`, `runtime`, or the pool (pool-agnostic via
- * `resolve`).
+ * `Tree`), `typesys` (`writeAsText`) and `diagnostics` (`reprText`,
+ * `compareCodeUnits`). Never imports: `nodes`, `compile`, `compose`, `runtime`, or the pool
+ * (pool-agnostic via `resolve`).
  */
 
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
-import type { Type, Value, ValueRecord } from "../typesys/index.ts";
+import type { Value, ValueRecord } from "../typesys/index.ts";
 import { writeAsText } from "../typesys/values.ts";
 import { TEMPLATE_FNS } from "./builtins.ts";
 import {
   checkCalls,
   conversionHint,
+  type EvalOptions,
   evalExpr,
   ExpressionError,
   exprRefs,
@@ -60,6 +64,7 @@ import {
   ResolveMode,
   resolveInRecord,
   rewriteExprRefs,
+  type TraceOptions,
   valueArgs,
 } from "./expressions.ts";
 import {
@@ -73,6 +78,7 @@ import {
   Tree,
   wholeSpanInterior,
 } from "./grammar.ts";
+import { type ResolvedValue, type TracedValue, ValueRoute } from "./lineage.ts";
 
 /** A literal run of a template: raw text with `$$` already collapsed to `$`, never parsed. */
 export class Literal {
@@ -145,46 +151,93 @@ export function scanTemplate(text: string): TemplateSegment[] {
  * embedded. A template with no segments gives `""`.
  *
  * @param segments The scan from `scanTemplate`.
- * @param resolve Resolves a reference path to its value; `null` is a miss.
+ * @param resolve Resolves a reference path to its value; `null` is a miss. With `trace`, it
+ *   returns a `ResolvedValue` (see `evalExpr`).
  * @param options.item The MAP-body-local scope for `item` / `item.path`; `null` (the default)
- *   means no item scope.
+ *   means no item scope. With `trace`, it may be a `ResolvedValue`.
  * @param options.mode How a missing reference is treated inside a span (default
  *   `BINDING_NONE`; see `evalExpr`).
  * @param options.types The type table `isinstance(x, T)` and a `T(...)` constructor look `T` up
  *   in; `null` (the default) means no types.
- * @returns The typed value of a whole single span; otherwise the rendered text.
+ * @param options.trace Record the value's route, with each embedded span's half-open range of
+ *   code points in the rendered text, and return both as a `TracedValue` (default `false`).
+ * @returns The typed value of a whole single span; otherwise the rendered text. With `trace`, the
+ *   same value with its route.
  * @throws {RequiredError} When a span's `head :? message` head misses or is `null`.
  * @throws {ExpressionError} On any error `evalExpr` raises for a span, a final `null` in
  *   `STRICT_RAISE` mode, or an embedded value the runtime can't write as text.
+ * @throws {TypeError} When a traced resolver doesn't return a `ResolvedValue`.
  */
 export function evalTemplate(
   segments: readonly TemplateSegment[],
+  resolve: (path: string) => ResolvedValue,
+  options: TraceOptions & { trace: true },
+): TracedValue;
+export function evalTemplate(
+  segments: readonly TemplateSegment[],
   resolve: (path: string) => Value,
-  {
-    item = null,
-    mode = ResolveMode.BINDING_NONE,
-    types = null,
-  }: { item?: Value; mode?: ResolveMode; types?: ReadonlyMap<string, Type> | null } = {},
-): Value {
-  const evalSpan = (span: Span): Value => {
-    const value = evalExpr(span.tree, resolve, { item, mode, types });
+  options?: EvalOptions & { trace?: false },
+): Value;
+export function evalTemplate(
+  segments: readonly TemplateSegment[],
+  resolve: (path: string) => Value | ResolvedValue,
+  options?: TraceOptions,
+): Value | TracedValue;
+export function evalTemplate(
+  segments: readonly TemplateSegment[],
+  resolve: (path: string) => Value | ResolvedValue,
+  { item = null, mode = ResolveMode.BINDING_NONE, types = null, trace = false }: TraceOptions = {},
+): Value | TracedValue {
+  const evalSpan = (span: Span): Value | TracedValue => {
+    const result = evalExpr(span.tree, resolve, { item, mode, types, trace });
+    const value = trace ? (result as TracedValue).value : (result as Value);
     if (value === null && mode === ResolveMode.STRICT_RAISE) {
       throw new ExpressionError("null value in strict template");
     }
-    return value;
+    return result;
   };
 
   if (segments.length === 1 && segments[0] instanceof Span) return evalSpan(segments[0]);
   let text = "";
+  const routes: ValueRoute[] = [];
+  const spans: [number, number][] = [];
+  let expression = "";
+  let offset = 0;
   for (const segment of segments) {
     if (segment instanceof Literal) {
       text += segment.text;
+      if (trace) {
+        expression += segment.text;
+        offset += codePoints(segment.text);
+      }
     } else {
-      const value = evalSpan(segment);
-      text += value === null ? "" : asText(value);
+      const evaluated = evalSpan(segment);
+      const value = trace ? (evaluated as TracedValue).value : (evaluated as Value);
+      const part = value === null ? "" : asText(value);
+      text += part;
+      if (trace) {
+        const route = (evaluated as TracedValue).route;
+        const end = offset + codePoints(part);
+        routes.push(route);
+        spans.push([offset, end]);
+        expression += "${" + route.expression + "}";
+        offset = end;
+      }
     }
   }
-  return text;
+  if (!trace) return text;
+  if (routes.length === 0) return { value: text, route: ValueRoute.literal(text) };
+  // `JSON.stringify`, as Python's `json.dumps`: literal text holding a lone surrogate then fails at
+  // the slot's write check, traced or not, rather than here.
+  const valueJson = JSON.stringify(text);
+  return { value: text, route: new ValueRoute("interpolation", { valueJson, children: routes, expression, spans }) };
+}
+
+/** Count the code points of `text`: interpolation spans are in code points, not UTF-16 units. */
+function codePoints(text: string): number {
+  let n = 0;
+  for (const _ of text) n++;
+  return n;
 }
 
 /** Write `value` in the text form, turning the writer's runtime-limit error into an `ExpressionError`. */
@@ -205,22 +258,43 @@ function asText(value: Value): string {
  *
  * @param source The binding-value template. (A value that isn't text is a literal and never
  *   reaches here.)
- * @param resolve Resolves a reference path to its value; `null` is a miss.
+ * @param resolve Resolves a reference path to its value; `null` is a miss. With `trace`, it
+ *   returns a `ResolvedValue` (see `evalExpr`).
  * @param options.item The MAP-body-local scope for `item` / `item.path`; `null` (the default)
- *   means no item scope (a `null` element and no scope coincide).
+ *   means no item scope (a `null` element and no scope coincide). With `trace`, it may be a
+ *   `ResolvedValue`.
  * @param options.types The type table `isinstance(x, T)` and a `T(...)` constructor look `T` up
  *   in; `null` (the default) means no types.
- * @returns The typed value of a whole single span; otherwise the rendered text.
+ * @param options.trace Record the value's route and return both as a `TracedValue` (default
+ *   `false`; see `evalTemplate`).
+ * @returns The typed value of a whole single span; otherwise the rendered text. With `trace`, the
+ *   same value with its route.
  * @throws {RequiredError} When a `${ref :? message}` head is unbound.
  * @throws {ExpressionError} On a malformed span (unbalanced, nested, or not parsing) or any
  *   error a span's evaluation raises.
+ * @throws {TypeError} When a traced resolver doesn't return a `ResolvedValue`.
  */
 export function evalBinding(
   source: string,
+  resolve: (path: string) => ResolvedValue,
+  options: Omit<TraceOptions, "mode"> & { trace: true },
+): TracedValue;
+export function evalBinding(
+  source: string,
   resolve: (path: string) => Value,
-  { item = null, types = null }: { item?: Value; types?: ReadonlyMap<string, Type> | null } = {},
-): Value {
-  return evalTemplate(scanTemplate(source), resolve, { item, mode: ResolveMode.BINDING_NONE, types });
+  options?: Omit<EvalOptions, "mode"> & { trace?: false },
+): Value;
+export function evalBinding(
+  source: string,
+  resolve: (path: string) => Value | ResolvedValue,
+  options?: Omit<TraceOptions, "mode">,
+): Value | TracedValue;
+export function evalBinding(
+  source: string,
+  resolve: (path: string) => Value | ResolvedValue,
+  { item = null, types = null, trace = false }: Omit<TraceOptions, "mode"> = {},
+): Value | TracedValue {
+  return evalTemplate(scanTemplate(source), resolve, { item, mode: ResolveMode.BINDING_NONE, types, trace });
 }
 
 /**

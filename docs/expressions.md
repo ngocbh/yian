@@ -309,7 +309,7 @@ create no graph node.
 | Builtin | Does |
 |---------|------|
 | `render_as_json(value, indent=2)` | pretty-print a value as JSON |
-| `join(value, sep="\n")` | join a list's elements, each stringified (in the text form) |
+| `join(value, sep="\n")` | join a list's elements, each stringified |
 | `upper(s)` / `lower(s)` | case-fold text |
 
 Changed (TS yian): `join` writes each element in the text form, and `sep` must be text.

@@ -349,6 +349,13 @@ describe("the shipped builtins' TS-era rules", () => {
     expect(evaluate("render_as_json(s)", fromRecord({ s: 'a"b' }))).toBe('"a\\"b"');
   });
 
+  test("render_as_json with indent 4 escapes as Python's json.dumps does", () => {
+    // json.dumps({"s": "a\nb\\c\x01"}, indent=4, ensure_ascii=False)
+    expect(evaluate("render_as_json(d, 4)", fromRecord({ d: { s: "a\nb\\c\u0001" } }))).toBe(
+      '{\n    "s": "a\\nb\\\\c\\u0001"\n}',
+    );
+  });
+
   test.each([
     ["-1", "-1"],
     ['"  "', '"  "'],

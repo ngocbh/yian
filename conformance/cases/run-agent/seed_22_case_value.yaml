@@ -1,0 +1,105 @@
+# From tests/seeds/22-case-value.yaml.
+# A score of 0.6 takes the `positive` branch; `${gate.output}` returns its reply, and `cautious`
+# is skipped.
+kind: run
+flow: |
+  # 22 — A `case` as a VALUE: ${<case>.output} = the taken branch's value.
+  #
+  # Same shape as seed 02, but the flow output is `${gate.output}` — the value of
+  # whichever branch ran. It is SUGAR: at load it desugars to the branch coalesce
+  # `${positive.output | cautious.output}` (seed 02's hand-written join). Only the taken
+  # branch produces a value (the other is skip-flooded → null), so the coalesce yields it.
+  # Shows: the value-case `${<case>.output}` shorthand for "the taken branch's value".
+  # Inline `then: call(...)` branches use the same case-route hard-gate veto and are
+  # covered separately by the case-call tests.
+
+  id: case-value
+  name: case_value
+  description: Route a topic to a positive or cautious take; return the taken branch's value.
+
+  input:
+    topic: !str
+
+  nodes:
+    score:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output: float
+      prompt: "Rate ${topic}'s near-term relevance as a single number in [-1, 1]. Output only the number."
+
+    gate:
+      kind: case
+      cases:
+        - when: "score.output >= 0.5"
+          then: positive
+      else: cautious
+
+    positive:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output: str
+      prompt: "Write a neutral pro case for ${topic} in 3 sentences. No advice."
+
+    cautious:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output: str
+      prompt: "Write a neutral cautionary note for ${topic} in 3 sentences. No advice."
+
+  # ${gate.output} = the taken branch's value — desugars to ${positive.output | cautious.output}.
+  output: ${gate.output}
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
+env: {OPENAI_API_KEY: "<key:1>"}
+inputs: {topic: rates}
+run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
+host:
+  models:
+    score:
+      agent:
+        # A wrapped scalar's carrier: 0.6 takes the `positive` branch.
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: '{"value": 0.6}'}]
+    positive:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: Rates may ease. Demand holds. Credit is steady.}]
+expect:
+  output: {status: succeeded, output: Rates may ease. Demand holds. Credit is steady.}
+  # Run start resolves every AGENT, the skipped ones included; a skipped node writes no record.
+  trace:
+    - - run_started
+      - null
+      - inputs: {topic: rates}
+        learnable: false
+        num_workers: 0
+        effective_llm_by_static_path:
+          score:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          positive:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          cautious:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {topic: rates}}]
+    - [node_started, score]
+    - [node_succeeded, score, {value: 0.6}]
+    - [node_started, gate]
+    - [node_routed, gate, {handle: positive}]
+    - [node_started, positive]
+    - [node_succeeded, positive, {value: Rates may ease. Demand holds. Credit is steady.}]
+    - [node_started, __end__]
+    - [node_succeeded, __end__, {value: Rates may ease. Demand holds. Credit is steady.}]

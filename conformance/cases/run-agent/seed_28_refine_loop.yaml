@@ -1,0 +1,121 @@
+# From tests/seeds/28-refine-loop.yaml.
+# The `until:` loop runs the body twice: a score of 0.6 continues and prunes the first
+# iteration, 0.9 stops it, and the loop commits the carried record under `polish`.
+# The header's "need a provider to RUN" is met by scripted replies.
+kind: run
+flow: |
+  # 28 — loop + the new expression grammar.
+  #
+  # `loop` re-runs a body flow, threading one carried record from each iteration into
+  # the next ('a -> 'a). Here a `refine_turn` body improves a draft and re-rates it;
+  # the loop keeps going UNTIL the score clears the bar (post-check predicate), capped
+  # by `max:`. The body's bindings reuse the new expression forms: arithmetic
+  # (`1.0 - input.score`) and a builtin (`upper(...)`).
+  #
+  # Contract ('a -> 'a): the body's `output:` returns a SUBSET of the carried record
+  # (the loop `input:`); an omitted field keeps its value. The names the body reads are
+  # a SUBSET of the carried names. Field NAMES are checked at build, field TYPES at load.
+  #
+  # Loads resolver-free: the body is an in-file `defs:` callable. Agent nodes need a
+  # provider to RUN; this only guarantees it LOADS.
+
+  id: refine-loop
+  name: refine_loop
+  description: A loop that re-refines a draft until its score clears a bar (until + max drivers).
+
+  input:
+    seed: !str                        # the initial draft
+
+  defs:
+    refine_turn:                     # the body flow ('a -> 'a over {draft, score})
+      input:
+        draft: !str                   # reads a SUBSET of the carried names
+        score: !float
+      nodes:
+        critic:
+          kind: agent
+          input:
+            draft:    ${input.draft}
+            headroom: ${1.0 - input.score}       # arithmetic in a binding (expr tie-in)
+            label:    ${upper("draft")}          # a pure builtin in a binding
+          output:                                # structured record == carried shape
+            draft: str
+            score: float
+          prompt: |-
+            Improve the ${label} (headroom ${headroom}) and rate the result 0..1.
+            Draft:
+            ${draft}
+      output: ${critic.output}                   # {draft, score} == the carried record
+
+  nodes:
+    polish:
+      kind: loop
+      call: refine_turn                          # the body (a def here; may also be a `uses:` file)
+      input:                                     # the SEED carried record — defines 'a
+        draft: ${input.seed}
+        score: 0.0
+      until: score >= 0.8                        # bare form (canonical); a whole `${score >= 0.8}` also works
+      max: 5                                     # optional runaway guard (loop.max_exceeded)
+
+  output: ${polish.output.draft}                 # the final carried draft
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
+env: {OPENAI_API_KEY: "<key:1>"}
+inputs: {seed: a rough draft}
+run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
+host:
+  models:
+    # A record output is its own carrier: the reply's text is the record as JSON.
+    "polish#0/critic":
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: '{"draft": "a better draft", "score": 0.6}'}]
+    "polish#1/critic":
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: '{"draft": "a polished draft", "score": 0.9}'}]
+expect:
+  output: {status: succeeded, output: a polished draft}
+  trace:
+    - - run_started
+      - null
+      - inputs: {seed: a rough draft}
+        learnable: false
+        num_workers: 0
+        effective_llm_by_static_path:
+          polish/critic:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {seed: a rough draft}}]
+    - [node_started, polish]
+    - [node_expanded, polish, {seed: [{draft: a rough draft, score: 0.0}, 0], prune_ids: []}]
+    - [node_started, "polish#0/__start__"]
+    - [node_succeeded, "polish#0/__start__", {value: {draft: a rough draft, score: 0.0}}]
+    - [node_started, "polish#0/critic"]
+    - [node_succeeded, "polish#0/critic", {value: {draft: a better draft, score: 0.6}}]
+    - [node_started, "polish#0/__end__"]
+    - [node_succeeded, "polish#0/__end__", {value: {draft: a better draft, score: 0.6}}]
+    # `docs/` doesn't give the LOOP driver ids (`<loop>~k`), the seed `[carried, k]` or
+    # `prune_ids`; see src/yian/nodes/loop/node.py.
+    - [node_started, polish~1]
+    - - node_expanded
+      - polish~1
+      - seed: [{draft: a better draft, score: 0.6}, 1]
+        prune_ids: ["polish#0/__end__", "polish#0/__start__", "polish#0/critic", polish~1]
+    - [node_started, "polish#1/__start__"]
+    - [node_succeeded, "polish#1/__start__", {value: {draft: a better draft, score: 0.6}}]
+    - [node_started, "polish#1/critic"]
+    - [node_succeeded, "polish#1/critic", {value: {draft: a polished draft, score: 0.9}}]
+    - [node_started, "polish#1/__end__"]
+    - [node_succeeded, "polish#1/__end__", {value: {draft: a polished draft, score: 0.9}}]
+    - [node_started, polish~2]
+    # The stopping driver commits the carried record under the loop's own id.
+    - [node_succeeded, polish~2, {value: {draft: a polished draft, score: 0.9}, commit_target: polish}]
+    - [node_started, __end__]
+    - [node_succeeded, __end__, {value: a polished draft}]

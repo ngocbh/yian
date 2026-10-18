@@ -1,0 +1,151 @@
+# From tests/seeds/21-inline-call.yaml.
+# The inline `call(enrich, ...)` runs as the generated CALL node `__call_0`, which grows the
+# child's CODE node; `summary` reads the child's headlines.
+kind: run
+# `fetch_facts` returns the integral float 100.0 into a `list(float)`; TS's stored value (int 100
+# or float 100.0) isn't settled, so `expect` leaves out the trace and `python_expect` pins it.
+rules: [numbers]
+flow: |
+  # 21 — inline call(f, ...) directive: a flow call written as a binding's whole value.
+  #
+  # An inline call is SUGAR: `call(enrich, topic=${input.topic})` written as a node
+  # input's whole value desugars AT LOAD into an anonymous `call` node (kind: call), and the host
+  # binding becomes `${<synth>.output}` — pure surface sugar, no new runtime kind. It
+  # is the applicative form of seed 20's named `call` node: write `f x` inline instead
+  # of declaring a separate node for it. Shows: an inline call in a node input, keyword
+  # args whose values are full bindings (a `${ref}` here), and resolution DEFS-FIRST
+  # (the callee is the in-file `enrich` def, so the flow loads resolver-free).
+
+  id: inline-call
+  name: inline_call
+  description: Enrich one topic via an INLINE call expression (sugar over a call node).
+
+  input:
+    topic: !str
+
+  defs:
+    enrich:                      # an in-file callable — a sub-flow (as in seed 20)
+      input:
+        topic: !str
+      nodes:
+        fetch:
+          kind: code
+          code: ./fixtures/seeds.ts:fetch_facts
+          input:
+            topic: ${input.topic}
+          output:
+            values: list(float)
+            news: list(str)
+      output: ${fetch.output.news}     # the callee's codomain (the headlines)
+
+  nodes:
+    summary:
+      kind: agent
+      input:
+        # INLINE call directive: desugars to a synth `call` node (call: enrich) whose value
+        # (list(str) of headlines) this input then binds — equivalent to declaring a
+        # separate `kind: call` node and referencing ${<that node>.output}.
+        news: call(enrich, topic=${input.topic})
+      output: str
+      prompt: |-
+        Summarize these headlines in one neutral sentence (no recommendations):
+        ${news}
+
+  output: ${summary.output}
+# The CODE reference differs by language: `flow` names the TS function, this the Python one.
+python_flow: |
+  # 21 — inline call(f, ...) directive: a flow call written as a binding's whole value.
+  #
+  # An inline call is SUGAR: `call(enrich, topic=${input.topic})` written as a node
+  # input's whole value desugars AT LOAD into an anonymous `call` node (kind: call), and the host
+  # binding becomes `${<synth>.output}` — pure surface sugar, no new runtime kind. It
+  # is the applicative form of seed 20's named `call` node: write `f x` inline instead
+  # of declaring a separate node for it. Shows: an inline call in a node input, keyword
+  # args whose values are full bindings (a `${ref}` here), and resolution DEFS-FIRST
+  # (the callee is the in-file `enrich` def, so the flow loads resolver-free).
+
+  id: inline-call
+  name: inline_call
+  description: Enrich one topic via an INLINE call expression (sugar over a call node).
+
+  input:
+    topic: !str
+
+  defs:
+    enrich:                      # an in-file callable — a sub-flow (as in seed 20)
+      input:
+        topic: !str
+      nodes:
+        fetch:
+          kind: code
+          code: tests.seeds.fns:fetch_facts
+          input:
+            topic: ${input.topic}
+          output:
+            values: list(float)
+            news: list(str)
+      output: ${fetch.output.news}     # the callee's codomain (the headlines)
+
+  nodes:
+    summary:
+      kind: agent
+      input:
+        # INLINE call directive: desugars to a synth `call` node (call: enrich) whose value
+        # (list(str) of headlines) this input then binds — equivalent to declaring a
+        # separate `kind: call` node and referencing ${<that node>.output}.
+        news: call(enrich, topic=${input.topic})
+      output: str
+      prompt: |-
+        Summarize these headlines in one neutral sentence (no recommendations):
+        ${news}
+
+  output: ${summary.output}
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
+env: {OPENAI_API_KEY: "<key:1>"}
+inputs: {topic: rates}
+run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
+host:
+  models:
+    summary:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: Rates had a quarterly update and a reviewer note.}]
+expect:
+  output: {status: succeeded, output: Rates had a quarterly update and a reviewer note.}
+python_expect:
+  output: {status: succeeded, output: Rates had a quarterly update and a reviewer note.}
+  trace:
+    - - run_started
+      - null
+      - inputs: {topic: rates}
+        learnable: false
+        num_workers: 0
+        effective_llm_by_static_path:
+          summary:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {topic: rates}}]
+    - [node_started, __call_0]
+    - [node_expanded, __call_0, {seed: {topic: rates}, prune_ids: []}]
+    - [node_started, __call_0/__start__]
+    - [node_succeeded, __call_0/__start__, {value: {topic: rates}}]
+    - [node_started, __call_0/fetch]
+    - - node_succeeded
+      - __call_0/fetch
+      - value:
+          values: [100.0, 101.5, 99.75, 102.25]
+          news: ["RATES: quarterly update", "RATES: reviewer note"]
+    - [node_started, __call_0/__end__]
+    - - node_succeeded
+      - __call_0/__end__
+      - value: ["RATES: quarterly update", "RATES: reviewer note"]
+        commit_target: __call_0
+    - [node_started, summary]
+    - [node_succeeded, summary, {value: Rates had a quarterly update and a reviewer note.}]
+    - [node_started, __end__]
+    - [node_succeeded, __end__, {value: Rates had a quarterly update and a reviewer note.}]

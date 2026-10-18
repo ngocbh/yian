@@ -1,0 +1,63 @@
+# From tests/seeds/00-hello-agent.yaml.
+# One AGENT turns a text input into its text output, which the flow returns.
+kind: run
+flow: |
+  # 00 — Hello agent.
+  #
+  # The smallest useful flow: one AGENT turns a topic into a one-paragraph note.
+  # Shows: the top-level input:/output: interface (Compose-style), a single AGENT,
+  # a scalar (str) value in and out, a bare flow return, and the INFERRED graph.
+
+  id: hello-agent
+  name: hello_agent
+  description: One AGENT turns a topic into a neutral one-paragraph note.
+
+  input:                       # the flow's parameters (top-level section)
+    topic: !str                 # a str leaf = a scalar type (a required parameter)
+
+  nodes:                        # a MAP keyed by node id (no `id:` field, no `edges:`)
+    note:
+      kind: agent
+      input:                   # sink binding -> infers the edge inputs -> note
+        topic: ${input.topic}
+      output: str              # source: a type — this node returns ONE string
+      prompt: |-                # `prompt` is a flat kind-field on the node
+        Write a single neutral paragraph on ${topic}.   # bare ${topic} = this node's input
+        Describe what the company does and one recent fact. No recommendations.
+
+  output: ${note.output}      # the flow's return — a binding; flow returns that string
+
+  # No edges: — the graph is inferred from the ${...} bindings (data) and, where
+  # present, a case node's then/else targets (control).
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
+env: {OPENAI_API_KEY: "<key:1>"}
+inputs: {topic: ACME}
+run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
+host:
+  models:
+    note:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: ACME makes anvils and opened a plant this year.}]
+expect:
+  output: {status: succeeded, output: ACME makes anvils and opened a plant this year.}
+  trace:
+    - - run_started
+      - null
+      - inputs: {topic: ACME}
+        learnable: false
+        num_workers: 0
+        effective_llm_by_static_path:
+          note:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {topic: ACME}}]
+    - [node_started, note]
+    - [node_succeeded, note, {value: ACME makes anvils and opened a plant this year.}]
+    - [node_started, __end__]
+    - [node_succeeded, __end__, {value: ACME makes anvils and opened a plant this year.}]

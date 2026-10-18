@@ -1,0 +1,265 @@
+# From tests/seeds/05-call-map.yaml.
+# A MAP of a `uses:` alias grows one child per topic under `research_each#<i>/`, each AGENT
+# keyed by its expanded id; the list of child records fans in to one AGENT.
+kind: run
+# The child's `fetch_facts` returns the integral float 100.0 into a `list(float)`; TS's stored
+# value (int 100 or float 100.0) isn't settled, so `expect` leaves out the trace and
+# `python_expect` pins it.
+rules: [numbers]
+flow: |
+  # 05 — MAP + over: typed iteration over a list (List.map), then fan-in.
+  #
+  # Research EACH topic in a bundle (a mapped call of research_one per element, in
+  # parallel), collect the reports as a list, then an AGENT compares them. Shows: a mapped
+  # call (kind: map with `over:` + `${item}`), parallel element runs, the map node's value
+  # IS the collected list, fan-in by consuming ${<call>.output}, a defaulted list param +
+  # an Optional(date) param, the `:-` default operator, a top-level `asserts:` check, an
+  # optional `node_name:`, and a multi-output return.
+
+  id: call-map
+  name: call_map
+  description: Research a bundle of topics (mapped call) and compose a neutral comparison.
+
+  input:
+    topics: !list(str) ["ACME", "BETA"]   # the bundle, defaulted (dataclass-style)
+    as_of: !Optional(date)                    # optional param (omitted -> null)
+
+  uses:
+    research-one: 03-research-one   # external sibling flow, resolved by filename on the search path
+
+  nodes:
+    research_each:
+      kind: map
+      node_name: Research each topic     # optional human label
+      over: ${input.topics}     # a list(T); each ${item} is one element (a str)
+      call: research-one          # resolves via the uses: alias above, applied once per topic
+      input:                     # sink: per-element call args; ${item} in scope here
+        topic: ${item}
+        as_of:  ${input.as_of:-"2026-01-01"}  # default operator: the optional param, else a literal date
+      parallel: true
+      # research_each's value IS the list of callee returns -> list of {report, asof} records.
+      # Reference the whole list as ${research_each.output}.
+
+    compare:
+      kind: agent
+      input:
+        briefs: ${research_each.output}        # the list of {report, asof} records — fan-in
+      output: str
+      prompt: |-
+        You are a neutral editor given a list of research briefs (one per company):
+        ${briefs}
+        Compose ONE Markdown report comparing them across fundamentals, growth, and
+        recent news. Preserve inline citations [n]. No recommendations. Be even-handed.
+
+  output:                       # multi-output: the flow returns one object
+    report: ${compare.output}
+    briefs: ${research_each.output}
+
+  asserts:                       # boolean checks over inputs/node outputs; a false fails the run
+    - input.topics != []                 # the bundle must be non-empty
+files:
+  03-research-one.yaml: |
+    # 03 — Single-topic research (a reusable child flow).
+    #
+    # A small CODE -> AGENT pipeline that researches ONE topic and returns {report, asof}.
+    # This is the atomic unit; 04 (single call) and 05 (map) compose it. Shows: a CODE data-fetch
+    # leaf (flat `code:`), ${input.X} + a typed parameter default (as_of), an
+    # object output, and a node binding from another node's object field.
+
+    id: research-one
+    name: research_one
+    description: Research a single topic into {report, asof} as of a date.
+
+    input:
+      topic: !str
+      as_of: !date "2026-01-01"   # typed defaults must already satisfy their declared type
+
+    nodes:
+      fetch:
+        kind: code
+        input:
+          topic: ${input.topic}
+          as_of:  ${input.as_of}
+        output:                    # an object: values + recent headlines
+          values: list(float)
+          news:   list(str)
+        code: ./fixtures/seeds.ts:fetch_facts   # deterministic data pull
+
+      synth:
+        kind: agent
+        input:
+          topic: ${input.topic}
+          asof:   ${input.as_of}
+          values: ${fetch.output.values}          # dot into fetch's object output
+          news:   ${fetch.output.news}
+        output: str
+        prompt: |-
+          Write a neutral research brief for ${topic} as of ${asof}.
+          Recent closes: ${values}. Headlines: ${news}.
+          Cite the headlines as [n]. No recommendations.
+
+    output:
+      report: ${synth.output}
+      asof:   ${input.as_of}
+# The child's CODE reference differs by language: `files` names the TS function,
+# this the Python one.
+python_files:
+  03-research-one.yaml: |
+    # 03 — Single-topic research (a reusable child flow).
+    #
+    # A small CODE -> AGENT pipeline that researches ONE topic and returns {report, asof}.
+    # This is the atomic unit; 04 (single call) and 05 (map) compose it. Shows: a CODE data-fetch
+    # leaf (flat `code:`), ${input.X} + a typed parameter default (as_of), an
+    # object output, and a node binding from another node's object field.
+
+    id: research-one
+    name: research_one
+    description: Research a single topic into {report, asof} as of a date.
+
+    input:
+      topic: !str
+      as_of: !date "2026-01-01"   # typed defaults must already satisfy their declared type
+
+    nodes:
+      fetch:
+        kind: code
+        input:
+          topic: ${input.topic}
+          as_of:  ${input.as_of}
+        output:                    # an object: values + recent headlines
+          values: list(float)
+          news:   list(str)
+        code: tests.seeds.fns:fetch_facts   # deterministic data pull
+
+      synth:
+        kind: agent
+        input:
+          topic: ${input.topic}
+          asof:   ${input.as_of}
+          values: ${fetch.output.values}          # dot into fetch's object output
+          news:   ${fetch.output.news}
+        output: str
+        prompt: |-
+          Write a neutral research brief for ${topic} as of ${asof}.
+          Recent closes: ${values}. Headlines: ${news}.
+          Cite the headlines as [n]. No recommendations.
+
+    output:
+      report: ${synth.output}
+      asof:   ${input.as_of}
+# The flows name no provider or model, so `run.llm_config` gives both to every AGENT, the
+# child's included; run start resolves them, and the key makes the recorded connection source
+# `environment`, which the trace pins.
+env: {OPENAI_API_KEY: "<key:1>"}
+inputs: {topics: [ACME, BETA], as_of: "2026-01-15"}
+run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
+host:
+  models:
+    "research_each#0/synth":
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: "ACME closed near 102 [1]."}]
+    "research_each#1/synth":
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: "BETA closed near 102 [2]."}]
+    compare:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: "Both closed near 102 [1][2]."}]
+expect:
+  output:
+    status: succeeded
+    output:
+      report: "Both closed near 102 [1][2]."
+      briefs:
+        - {report: "ACME closed near 102 [1].", asof: "2026-01-15"}
+        - {report: "BETA closed near 102 [2].", asof: "2026-01-15"}
+python_expect:
+  output:
+    status: succeeded
+    output:
+      report: "Both closed near 102 [1][2]."
+      briefs:
+        - {report: "ACME closed near 102 [1].", asof: "2026-01-15"}
+        - {report: "BETA closed near 102 [2].", asof: "2026-01-15"}
+  trace:
+    - - run_started
+      - null
+      - inputs: {topics: [ACME, BETA], as_of: "2026-01-15"}
+        learnable: false
+        num_workers: 0
+        effective_llm_by_static_path:
+          research_each/synth:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          compare:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {topics: [ACME, BETA], as_of: "2026-01-15"}}]
+    - [node_started, research_each]
+    - - node_expanded
+      - research_each
+      - seed:
+          - {topic: ACME, as_of: "2026-01-15"}
+          - {topic: BETA, as_of: "2026-01-15"}
+        prune_ids: []
+    # The MAP's generated fan-out START (value `{}`) and fan-in END, which commits the list
+    # to the MAP, wrap the per-item children; `docs/` mentions the fan-out/fan-in boundaries but
+    # gives neither their ids nor their values.
+    - [node_started, research_each/__start__]
+    - [node_succeeded, research_each/__start__, {value: {}}]
+    - [node_started, "research_each#0/__start__"]
+    - [node_succeeded, "research_each#0/__start__", {value: {topic: ACME, as_of: "2026-01-15"}}]
+    - [node_started, "research_each#1/__start__"]
+    - [node_succeeded, "research_each#1/__start__", {value: {topic: BETA, as_of: "2026-01-15"}}]
+    - [node_started, "research_each#0/fetch"]
+    - - node_succeeded
+      - "research_each#0/fetch"
+      - value:
+          values: [100.0, 101.5, 99.75, 102.25]
+          news: ["ACME: quarterly update", "ACME: reviewer note"]
+    - [node_started, "research_each#1/fetch"]
+    - - node_succeeded
+      - "research_each#1/fetch"
+      - value:
+          values: [100.0, 101.5, 99.75, 102.25]
+          news: ["BETA: quarterly update", "BETA: reviewer note"]
+    - [node_started, "research_each#0/synth"]
+    - [node_succeeded, "research_each#0/synth", {value: "ACME closed near 102 [1]."}]
+    - [node_started, "research_each#1/synth"]
+    - [node_succeeded, "research_each#1/synth", {value: "BETA closed near 102 [2]."}]
+    - [node_started, "research_each#0/__end__"]
+    - - node_succeeded
+      - "research_each#0/__end__"
+      - value: {report: "ACME closed near 102 [1].", asof: "2026-01-15"}
+    - [node_started, "research_each#1/__end__"]
+    - - node_succeeded
+      - "research_each#1/__end__"
+      - value: {report: "BETA closed near 102 [2].", asof: "2026-01-15"}
+    - [node_started, research_each/__end__]
+    - - node_succeeded
+      - research_each/__end__
+      - value:
+          - {report: "ACME closed near 102 [1].", asof: "2026-01-15"}
+          - {report: "BETA closed near 102 [2].", asof: "2026-01-15"}
+        commit_target: research_each
+    - [node_started, compare]
+    - [node_succeeded, compare, {value: "Both closed near 102 [1][2]."}]
+    - [node_started, __end__]
+    - - node_succeeded
+      - __end__
+      - value:
+          report: "Both closed near 102 [1][2]."
+          briefs:
+            - {report: "ACME closed near 102 [1].", asof: "2026-01-15"}
+            - {report: "BETA closed near 102 [2].", asof: "2026-01-15"}

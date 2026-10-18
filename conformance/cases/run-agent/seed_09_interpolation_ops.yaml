@@ -1,0 +1,94 @@
+# From tests/seeds/09-interpolation-ops.yaml.
+# The prompt the AGENT sends: `:?` and a `|` chain resolve from given inputs, `$$` renders `$`,
+# and `system.run_id` is the run's id.
+kind: run
+flow: |
+  # 09 — Interpolation operator forms.
+  #
+  # One AGENT brief that exercises the ${...} operator forms: required (:?), a coalesce
+  # chain (|), the $$ escape, and the ${system.X} host-ambient namespace.
+  # Optional(date) params feed the coalesce chain.
+
+  id: interpolation-ops
+  name: interpolation_ops
+  description: Showcase ${...} operator forms — required, default-chain, $$ escape, system.
+
+  input:
+    topic: !str
+    as_of: !Optional(date)         # optional (omitted -> null)
+    fallback_date: !Optional(date)
+
+  nodes:
+    brief:
+      kind: agent
+      input:
+        # required AT THE USE SITE — fail with this message if absent (vs param-level required)
+        topic: ${input.topic:?"a topic is required"}
+        # coalesce chain: as_of, else fallback_date, else the host clock (first-present)
+        as_of:  ${input.as_of | input.fallback_date | system.today}
+        run_id: ${system.run_id}     # host-ambient namespace (run id / clock / tenant)
+      output: str
+      prompt: |-
+        Write a neutral one-paragraph brief on ${topic} as of ${as_of}.
+        All figures are in US dollars ($$).   # $$ -> a literal $ (not interpolated)
+        (run ${run_id})
+
+  output: ${brief.output}
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
+env: {OPENAI_API_KEY: "<key:1>"}
+# `as_of` is omitted and `fallback_date` given, so the `|` chain falls through to it and the
+# prompt doesn't read the clock.
+inputs: {topic: ACME, fallback_date: "2026-01-15"}
+run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
+host:
+  models:
+    brief:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: ACME held steady into mid-January.}]
+          # The request pins the rendered prompt. Every `$$` in the `|-` prompt renders `$`,
+          # including the one in the `# $$ -> ...` text after it, which is prompt text. The
+          # system message is yian's default instruction (`DEFAULT_SYSTEM` in
+          # src/yian/nodes/agent/context.py), which `docs/` doesn't give.
+          request:
+            messages:
+              - format: yian.message.v1
+                role: system
+                parts:
+                  - type: text
+                    text: >-
+                      You are an analysis agent inside a larger workflow. Follow the
+                      instructions precisely, use the available tools to gather any facts you
+                      need, and return a clear, self-contained answer. Ask the user only
+                      through an explicitly granted tool.
+              - format: yian.message.v1
+                role: user
+                parts:
+                  - type: text
+                    text: |-
+                      Write a neutral one-paragraph brief on ACME as of 2026-01-15.
+                      All figures are in US dollars ($).   # $ -> a literal $ (not interpolated)
+                      (run r1)
+expect:
+  output: {status: succeeded, output: ACME held steady into mid-January.}
+  trace:
+    - - run_started
+      - null
+      - inputs: {topic: ACME, fallback_date: "2026-01-15"}
+        learnable: false
+        num_workers: 0
+        effective_llm_by_static_path:
+          brief:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [node_started, __start__]
+    # The omitted Optional `as_of` has no default, so it is absent here.
+    - [node_succeeded, __start__, {value: {topic: ACME, fallback_date: "2026-01-15"}}]
+    - [node_started, brief]
+    - [node_succeeded, brief, {value: ACME held steady into mid-January.}]
+    - [node_started, __end__]
+    - [node_succeeded, __end__, {value: ACME held steady into mid-January.}]

@@ -1,0 +1,64 @@
+# From examples/classify.yaml.
+# A `Literal(...)` AGENT output takes one tag from its wrapped carrier; the flow returns it in a
+# one-field object.
+kind: run
+flow: |
+  # classify — one AGENT that labels text with a constrained (Literal) output.
+  #
+  # The output type is an enum, so the model must answer with exactly one tag.
+  # Run it with:  yian run examples/classify.yaml --input text="I love this!"
+
+  id: classify
+  name: classify
+  description: Classify the sentiment of a piece of text.
+
+  input:
+    text: !str
+
+  nodes:
+    label:
+      kind: agent
+      input:
+        text: ${input.text}
+      output: Literal(positive, neutral, negative)
+      prompt: |-
+        Classify the sentiment of the following text as exactly one of:
+        positive, neutral, or negative.
+
+        Text: ${text}
+
+  output:
+    sentiment: ${label.output}
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
+env: {OPENAI_API_KEY: "<key:1>"}
+inputs: {text: I love this!}
+run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
+host:
+  models:
+    label:
+      agent:
+        # A Literal output's carrier wraps the tag: `{"value": ...}`.
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: '{"value": "positive"}'}]
+expect:
+  output: {status: succeeded, output: {sentiment: positive}}
+  trace:
+    - - run_started
+      - null
+      - inputs: {text: I love this!}
+        learnable: false
+        num_workers: 0
+        effective_llm_by_static_path:
+          label:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {text: I love this!}}]
+    - [node_started, label]
+    - [node_succeeded, label, {value: positive}]
+    - [node_started, __end__]
+    - [node_succeeded, __end__, {value: {sentiment: positive}}]

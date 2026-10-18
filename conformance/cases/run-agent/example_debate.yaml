@@ -1,0 +1,136 @@
+# From examples/debate.yaml.
+# A four-AGENT diamond: `frame` feeds both sides, and `verdict` reads both; the flow returns it.
+kind: run
+flow: |
+  # debate — frame a question, argue both sides IN PARALLEL, then decide.
+  #
+  # The graph is a diamond, and the shape is the point:
+  #   frame ──┬─> for_case ──┐
+  #           └─> against_case ─┴─> verdict
+  # `for_case` and `against_case` have no edge between them, so they run in parallel;
+  # `verdict` reads both, so it waits for both (a fan-in). You can SEE that both sides
+  # are always argued before a verdict — an improvising agent might skip one; this
+  # structure can't. There is no `edges:` block: the graph is inferred from `${...}`.
+  #
+  # All four AGENT nodes use the default provider and model: the one saved by
+  # `yian auth <provider>`, or YIAN_DEFAULT_PROVIDER/YIAN_DEFAULT_MODEL.
+  #
+  # Run it with:
+  #   yian auth openai          # or any provider, e.g. yian auth anthropic --model ...
+  #   yian run examples/debate.yaml \
+  #     --input question="Should a small team adopt a monorepo?"
+
+  id: debate
+  name: debate
+  description: Frame a question, argue for and against in parallel, then recommend.
+
+  input:
+    question: !str
+
+  nodes:
+    frame:
+      kind: agent
+      input:
+        question: ${input.question}
+      output: str
+      prompt: "Restate the decision in '${question}' and list the 2-3 criteria that should drive it."
+
+    for_case:
+      kind: agent
+      input:
+        brief: ${frame.output}            # edge: frame -> for_case
+      output: str
+      prompt: "Make the strongest good-faith case FOR, judged against these criteria: ${brief}"
+
+    against_case:
+      kind: agent
+      input:
+        brief: ${frame.output}            # edge: frame -> against_case (parallel with for_case)
+      output: str
+      prompt: "Make the strongest good-faith case AGAINST, judged against these criteria: ${brief}"
+
+    verdict:
+      kind: agent
+      input:
+        for_case: ${for_case.output}      # fan-in: verdict waits for BOTH sides
+        against_case: ${against_case.output}
+      output: str
+      prompt: |-
+        Weigh both sides and give a clear recommendation in 2-3 sentences, with the
+        single most important reason.
+        For: ${for_case}
+        Against: ${against_case}
+
+  output: ${verdict.output}
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
+env: {OPENAI_API_KEY: "<key:1>"}
+inputs: {question: "Should a small team adopt a monorepo?"}
+run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
+host:
+  models:
+    frame:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: "Monorepo or many repos; criteria: tooling cost, coupling."}]
+    for_case:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: One repo shares tooling and keeps changes atomic.}]
+    against_case:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: Separate repos keep teams decoupled.}]
+    verdict:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: "Adopt a monorepo: shared tooling saves a small team the most time."}]
+expect:
+  output: {status: succeeded, output: "Adopt a monorepo: shared tooling saves a small team the most time."}
+  trace:
+    - - run_started
+      - null
+      - inputs: {question: "Should a small team adopt a monorepo?"}
+        learnable: false
+        num_workers: 0
+        effective_llm_by_static_path:
+          frame:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          for_case:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          against_case:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          verdict:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {question: "Should a small team adopt a monorepo?"}}]
+    - [node_started, frame]
+    - [node_succeeded, frame, {value: "Monorepo or many repos; criteria: tooling cost, coupling."}]
+    - [node_started, for_case]
+    - [node_succeeded, for_case, {value: One repo shares tooling and keeps changes atomic.}]
+    - [node_started, against_case]
+    - [node_succeeded, against_case, {value: Separate repos keep teams decoupled.}]
+    - [node_started, verdict]
+    - - node_succeeded
+      - verdict
+      - value: "Adopt a monorepo: shared tooling saves a small team the most time."
+    - [node_started, __end__]
+    - - node_succeeded
+      - __end__
+      - value: "Adopt a monorepo: shared tooling saves a small team the most time."

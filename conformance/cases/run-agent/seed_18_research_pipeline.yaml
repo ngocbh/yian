@@ -1,0 +1,202 @@
+# From tests/seeds/18-research-pipeline.yaml.
+# Three reviewers fan in to a typed View; the `case ... on` its stance takes `pro_note`, the other
+# notes are skipped, and the join and the flow assert pass.
+kind: run
+flow: |
+  # 18 — A realistic end-to-end research → decision → note pipeline.
+  #
+  # The shape a user actually ships (not a feature in isolation): three reviewer AGENTs fan OUT
+  # over the same topic, a synth AGENT fans them IN to a typed View {stance, claim,
+  # confidence}, a `case … on` routes the stance to one of three notes, and the flow returns a
+  # multi-field object. Pressure-tests fan-out + fan-in + typed records/enums + case-on +
+  # coalesce join + asserts, TOGETHER.
+  #
+  # A realistic end-to-end research pipeline (fan-out reviewers -> synth -> case -> multi-output).
+
+  id: research-pipeline
+  name: research_pipeline
+  description: Fan out reviewers, synthesize a typed stance, route to a stance-specific note.
+
+  typedefs:
+    Stance: Literal(positive, negative, neutral)
+    View:
+      stance: Stance
+      claim: str
+      confidence: float            # in [0, 1] (checked in asserts:)
+
+  input:
+    topic: !str
+    as_of: !Optional(date)          # omitted -> null; the reviewers default it to today
+
+  nodes:
+    # --- fan-out: three independent reviewers (no edges between them) ---
+    fundamentals:
+      kind: agent
+      input:
+        topic: ${input.topic}
+        as_of: ${input.as_of:-"today"}     # :- default — the optional param, else literal "today"
+      output: str
+      prompt: "Summarize ${topic} fundamentals as of ${as_of} in 3 neutral sentences."
+    news:
+      kind: agent
+      input:
+        topic: ${input.topic}
+        as_of: ${input.as_of:-"today"}
+      output: str
+      prompt: "Summarize recent ${topic} news as of ${as_of} in 3 neutral sentences. Keep [n] citations."
+    social:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output: str
+      prompt: "Summarize current social sentiment on ${topic} in 3 neutral sentences."
+
+    # --- fan-in: synthesize a typed View ---
+    synth:
+      kind: agent
+      input:
+        fundamentals: ${fundamentals.output}
+        news: ${news.output}
+        social: ${social.output}
+      output: View                       # one object {stance, claim, confidence}
+      prompt: |-
+        Given three neutral briefs —
+        fundamentals: ${fundamentals}
+        news: ${news}
+        social: ${social}
+        Produce a View: stance (positive|negative|neutral), claim (one paragraph), confidence in
+        [0,1]. Even-handed; no recommendations advice.
+
+    # --- decision: route on the stance enum ---
+    route:
+      kind: case
+      on: ${synth.output.stance}         # a Stance enum -> simple-form routing
+      cases:
+        - when: positive
+          then: pro_note
+        - when: negative
+          then: con_note
+      else: neutral_note
+
+    pro_note:
+      kind: agent
+      input:
+        claim: ${synth.output.claim}
+      output: str
+      prompt: "Expand this into a neutral 5-sentence pro note: ${claim}"
+    con_note:
+      kind: agent
+      input:
+        claim: ${synth.output.claim}
+      output: str
+      prompt: "Expand this into a neutral 5-sentence con note: ${claim}"
+    neutral_note:
+      kind: agent
+      input:
+        claim: ${synth.output.claim}
+      output: str
+      prompt: "Expand this into a balanced 5-sentence note: ${claim}"
+
+  output:                                # multi-output: the flow returns one object
+    stance: ${synth.output.stance}
+    confidence: ${synth.output.confidence}
+    note: ${pro_note.output | con_note.output | neutral_note.output}
+
+  asserts:
+    - synth.output.confidence >= 0 and synth.output.confidence <= 1
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
+env: {OPENAI_API_KEY: "<key:1>"}
+inputs: {topic: rates, as_of: "2026-01-01"}
+run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
+host:
+  models:
+    fundamentals:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: Rate fundamentals are stable.}]
+    news:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: "The central bank held rates [1]."}]
+    social:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: Sentiment on rates is mixed.}]
+    synth:
+      agent:
+        # A record output is its own carrier: the reply's text is the record as JSON.
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: '{"stance": "positive", "claim": "Rates look stable.", "confidence": 0.7}'}]
+    pro_note:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: Rates look stable for now.}]
+expect:
+  output:
+    status: succeeded
+    output: {stance: positive, confidence: 0.7, note: Rates look stable for now.}
+  # Run start resolves every AGENT, the skipped ones included; a skipped node writes no record.
+  trace:
+    - - run_started
+      - null
+      - inputs: {topic: rates, as_of: "2026-01-01"}
+        learnable: false
+        num_workers: 0
+        effective_llm_by_static_path:
+          fundamentals:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          news:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          social:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          synth:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          pro_note:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          con_note:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          neutral_note:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {topic: rates, as_of: "2026-01-01"}}]
+    - [node_started, fundamentals]
+    - [node_succeeded, fundamentals, {value: Rate fundamentals are stable.}]
+    - [node_started, news]
+    - [node_succeeded, news, {value: "The central bank held rates [1]."}]
+    - [node_started, social]
+    - [node_succeeded, social, {value: Sentiment on rates is mixed.}]
+    - [node_started, synth]
+    - [node_succeeded, synth, {value: {stance: positive, claim: Rates look stable., confidence: 0.7}}]
+    - [node_started, route]
+    - [node_routed, route, {handle: pro_note}]
+    - [node_started, pro_note]
+    - [node_succeeded, pro_note, {value: Rates look stable for now.}]
+    - [node_started, __end__]
+    - - node_succeeded
+      - __end__
+      - value: {stance: positive, confidence: 0.7, note: Rates look stable for now.}

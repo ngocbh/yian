@@ -1,0 +1,55 @@
+# From examples/hello.yaml.
+# The compact flow's one AGENT, named by the flow id, greets the input; the flow returns its text.
+kind: run
+flow: |
+  # hello — the smallest agent flow, written in COMPACT form: the flow IS one node,
+  # so there is no `nodes:` map and no `output: ${greet.output}` wiring step. The flow
+  # `id:` names the node; `input:` is auto-wired into it by name; `output:` is the
+  # node's output type, re-exported as the flow output. (See examples/summarize.yaml
+  # for the full `nodes:` form.)
+  #
+  # Run it with:  yian run examples/hello.yaml --input name=Ada
+
+  id: hello
+  name: hello
+  description: Greet someone with a short, friendly one-liner.
+
+  input:
+    name: !str
+  output: str
+  kind: agent
+  prompt: |-
+    Write a short, warm one-sentence greeting addressed to ${name}.
+    Just the greeting, no preamble.
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
+env: {OPENAI_API_KEY: "<key:1>"}
+inputs: {name: Ada}
+run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
+host:
+  models:
+    hello:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: "Hello, Ada, it's lovely to meet you!"}]
+expect:
+  output: {status: succeeded, output: "Hello, Ada, it's lovely to meet you!"}
+  trace:
+    - - run_started
+      - null
+      - inputs: {name: Ada}
+        learnable: false
+        num_workers: 0
+        effective_llm_by_static_path:
+          hello:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {name: Ada}}]
+    - [node_started, hello]
+    - [node_succeeded, hello, {value: "Hello, Ada, it's lovely to meet you!"}]
+    - [node_started, __end__]
+    - [node_succeeded, __end__, {value: "Hello, Ada, it's lovely to meet you!"}]

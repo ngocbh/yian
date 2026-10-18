@@ -1,0 +1,209 @@
+# From tests/seeds/04-call.yaml.
+# A CALL through a `uses:` alias grows the child's nodes under `research/`, the child's date
+# default filling the omitted `as_of`; an AGENT then reads fields of the CALL's record.
+kind: run
+# The child's `fetch_facts` returns the integral float 100.0 into a `list(float)`; TS's stored
+# value (int 100 or float 100.0) isn't settled, so `expect` leaves out the trace and
+# `python_expect` pins it.
+rules: [numbers]
+flow: |
+  # 04 — CALL: typed function application (call another flow).
+  #
+  # Calls the `research_one` callable on one topic, then an AGENT adds a one-line
+  # take. Shows: a `call` node (kind: call) with flat `call:` + sink-binding call args, the
+  # callee's value re-exported as the call node's value, and ${<call>.output.field}
+  # dotted access into the callee's object output downstream.
+
+  id: call-take
+  name: call_take
+  description: Research one topic (via call) and add a one-line neutral observation.
+
+  input:
+    topic: !str
+
+  uses:
+    research-one: 03-research-one   # external sibling flow, resolved by filename on the search path
+
+  nodes:
+    research:
+      kind: call
+      call: research-one          # resolves via the uses: alias above (external sibling flow)
+      input:                      # sink: bind the callee's parameters
+        topic: ${input.topic}
+        # as_of is omitted -> the CALLEE flow's own declared date default fills it
+      # research's value IS the callee's return object {report, asof}; reference fields
+      # downstream as ${research.output.report} / ${research.output.asof}.
+
+    take:
+      kind: agent
+      input:
+        brief: ${research.output.report}     # dot into the call node's object value
+        asof:  ${research.output.asof}
+      output: str
+      prompt: |-
+        Given this research brief (as of ${asof}), add ONE neutral one-line
+        observation (no recommendations, no value target):
+        ${brief}
+
+  output:
+    report:      ${research.output.report}
+    observation: ${take.output}
+files:
+  03-research-one.yaml: |
+    # 03 — Single-topic research (a reusable child flow).
+    #
+    # A small CODE -> AGENT pipeline that researches ONE topic and returns {report, asof}.
+    # This is the atomic unit; 04 (single call) and 05 (map) compose it. Shows: a CODE data-fetch
+    # leaf (flat `code:`), ${input.X} + a typed parameter default (as_of), an
+    # object output, and a node binding from another node's object field.
+
+    id: research-one
+    name: research_one
+    description: Research a single topic into {report, asof} as of a date.
+
+    input:
+      topic: !str
+      as_of: !date "2026-01-01"   # typed defaults must already satisfy their declared type
+
+    nodes:
+      fetch:
+        kind: code
+        input:
+          topic: ${input.topic}
+          as_of:  ${input.as_of}
+        output:                    # an object: values + recent headlines
+          values: list(float)
+          news:   list(str)
+        code: ./fixtures/seeds.ts:fetch_facts   # deterministic data pull
+
+      synth:
+        kind: agent
+        input:
+          topic: ${input.topic}
+          asof:   ${input.as_of}
+          values: ${fetch.output.values}          # dot into fetch's object output
+          news:   ${fetch.output.news}
+        output: str
+        prompt: |-
+          Write a neutral research brief for ${topic} as of ${asof}.
+          Recent closes: ${values}. Headlines: ${news}.
+          Cite the headlines as [n]. No recommendations.
+
+    output:
+      report: ${synth.output}
+      asof:   ${input.as_of}
+# The child's CODE reference differs by language: `files` names the TS function,
+# this the Python one.
+python_files:
+  03-research-one.yaml: |
+    # 03 — Single-topic research (a reusable child flow).
+    #
+    # A small CODE -> AGENT pipeline that researches ONE topic and returns {report, asof}.
+    # This is the atomic unit; 04 (single call) and 05 (map) compose it. Shows: a CODE data-fetch
+    # leaf (flat `code:`), ${input.X} + a typed parameter default (as_of), an
+    # object output, and a node binding from another node's object field.
+
+    id: research-one
+    name: research_one
+    description: Research a single topic into {report, asof} as of a date.
+
+    input:
+      topic: !str
+      as_of: !date "2026-01-01"   # typed defaults must already satisfy their declared type
+
+    nodes:
+      fetch:
+        kind: code
+        input:
+          topic: ${input.topic}
+          as_of:  ${input.as_of}
+        output:                    # an object: values + recent headlines
+          values: list(float)
+          news:   list(str)
+        code: tests.seeds.fns:fetch_facts   # deterministic data pull
+
+      synth:
+        kind: agent
+        input:
+          topic: ${input.topic}
+          asof:   ${input.as_of}
+          values: ${fetch.output.values}          # dot into fetch's object output
+          news:   ${fetch.output.news}
+        output: str
+        prompt: |-
+          Write a neutral research brief for ${topic} as of ${asof}.
+          Recent closes: ${values}. Headlines: ${news}.
+          Cite the headlines as [n]. No recommendations.
+
+    output:
+      report: ${synth.output}
+      asof:   ${input.as_of}
+# The flows name no provider or model, so `run.llm_config` gives both to every AGENT, the
+# child's included; run start resolves them, and the key makes the recorded connection source
+# `environment`, which the trace pins.
+env: {OPENAI_API_KEY: "<key:1>"}
+inputs: {topic: ACME}
+run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
+host:
+  models:
+    research/synth:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: "ACME closed near 102 [1][2]."}]
+    take:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: Closes stayed in a narrow band.}]
+expect:
+  output:
+    status: succeeded
+    output: {report: "ACME closed near 102 [1][2].", observation: Closes stayed in a narrow band.}
+python_expect:
+  output:
+    status: succeeded
+    output: {report: "ACME closed near 102 [1][2].", observation: Closes stayed in a narrow band.}
+  trace:
+    - - run_started
+      - null
+      - inputs: {topic: ACME}
+        learnable: false
+        num_workers: 0
+        effective_llm_by_static_path:
+          research/synth:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          take:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {topic: ACME}}]
+    - [node_started, research]
+    # The seed is the CALL's bound arguments; the child's START fills the `as_of` default.
+    - [node_expanded, research, {seed: {topic: ACME}, prune_ids: []}]
+    - [node_started, research/__start__]
+    - [node_succeeded, research/__start__, {value: {topic: ACME, as_of: "2026-01-01"}}]
+    - [node_started, research/fetch]
+    - - node_succeeded
+      - research/fetch
+      - value:
+          values: [100.0, 101.5, 99.75, 102.25]
+          news: ["ACME: quarterly update", "ACME: reviewer note"]
+    - [node_started, research/synth]
+    - [node_succeeded, research/synth, {value: "ACME closed near 102 [1][2]."}]
+    - [node_started, research/__end__]
+    - - node_succeeded
+      - research/__end__
+      - value: {report: "ACME closed near 102 [1][2].", asof: "2026-01-01"}
+        commit_target: research
+    - [node_started, take]
+    - [node_succeeded, take, {value: Closes stayed in a narrow band.}]
+    - [node_started, __end__]
+    - - node_succeeded
+      - __end__
+      - value: {report: "ACME closed near 102 [1][2].", observation: Closes stayed in a narrow band.}

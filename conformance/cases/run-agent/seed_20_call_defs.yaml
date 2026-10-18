@@ -1,0 +1,153 @@
+# From tests/seeds/20-call-defs.yaml.
+# A `call` to an in-file `defs:` callable grows its CODE and AGENT nodes under `brief/`; the
+# child's AGENT reply is the flow's output.
+kind: run
+# `fetch_facts` returns the integral float 100.0 into a `list(float)`; TS's stored value (int 100
+# or float 100.0) isn't settled, so `expect` leaves out the trace and `python_expect` pins it.
+rules: [numbers]
+flow: |
+  # 20 — CALL + defs: an in-file callable (a multi-node sub-flow).
+  #
+  # `defs:` holds in-file callables — a `call:` resolves DEFS-FIRST, else an external flow.
+  # Here `enrich` is a 2-node sub-flow (CODE fetch -> AGENT summarize) that lives in THIS
+  # file; the top-level flow calls it. A multi-node def lets a self-contained branch live
+  # inline instead of as a separate flow file (and the flow loads resolver-free — the
+  # callable is in-file). Shows: a `defs:` section, a multi-node callable (`input:`
+  # signature + `nodes:` body + `output:` codomain), and a `call:` resolving to it.
+
+  id: call-defs
+  name: call_defs
+  description: Call an in-file multi-node `defs:` callable to enrich one topic.
+
+  input:
+    topic: !str
+
+  defs:
+    enrich:                      # an in-file callable — a 2-node sub-flow
+      input:
+        topic: !str
+      nodes:
+        fetch:
+          kind: code
+          code: ./fixtures/seeds.ts:fetch_facts
+          input:
+            topic: ${input.topic}
+          output:               # the callee's intermediate record
+            values: list(float)
+            news: list(str)
+        summarize:
+          kind: agent
+          input:
+            news: ${fetch.output.news}    # dot into the fetch record
+          output: str
+          prompt: |-
+            Summarize these headlines in one neutral sentence (no recommendations):
+            ${news}
+      output: ${summarize.output}        # the callee's codomain (its single value)
+
+  nodes:
+    brief:
+      kind: call
+      call: enrich               # resolves to the in-file def above (defs-first)
+      input:
+        topic: ${input.topic}
+
+  output: ${brief.output}
+# The CODE reference differs by language: `flow` names the TS function, this the Python one.
+python_flow: |
+  # 20 — CALL + defs: an in-file callable (a multi-node sub-flow).
+  #
+  # `defs:` holds in-file callables — a `call:` resolves DEFS-FIRST, else an external flow.
+  # Here `enrich` is a 2-node sub-flow (CODE fetch -> AGENT summarize) that lives in THIS
+  # file; the top-level flow calls it. A multi-node def lets a self-contained branch live
+  # inline instead of as a separate flow file (and the flow loads resolver-free — the
+  # callable is in-file). Shows: a `defs:` section, a multi-node callable (`input:`
+  # signature + `nodes:` body + `output:` codomain), and a `call:` resolving to it.
+
+  id: call-defs
+  name: call_defs
+  description: Call an in-file multi-node `defs:` callable to enrich one topic.
+
+  input:
+    topic: !str
+
+  defs:
+    enrich:                      # an in-file callable — a 2-node sub-flow
+      input:
+        topic: !str
+      nodes:
+        fetch:
+          kind: code
+          code: tests.seeds.fns:fetch_facts
+          input:
+            topic: ${input.topic}
+          output:               # the callee's intermediate record
+            values: list(float)
+            news: list(str)
+        summarize:
+          kind: agent
+          input:
+            news: ${fetch.output.news}    # dot into the fetch record
+          output: str
+          prompt: |-
+            Summarize these headlines in one neutral sentence (no recommendations):
+            ${news}
+      output: ${summarize.output}        # the callee's codomain (its single value)
+
+  nodes:
+    brief:
+      kind: call
+      call: enrich               # resolves to the in-file def above (defs-first)
+      input:
+        topic: ${input.topic}
+
+  output: ${brief.output}
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
+env: {OPENAI_API_KEY: "<key:1>"}
+inputs: {topic: rates}
+run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
+host:
+  models:
+    brief/summarize:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: Rates had a quarterly update and a reviewer note.}]
+expect:
+  output: {status: succeeded, output: Rates had a quarterly update and a reviewer note.}
+python_expect:
+  output: {status: succeeded, output: Rates had a quarterly update and a reviewer note.}
+  trace:
+    - - run_started
+      - null
+      - inputs: {topic: rates}
+        learnable: false
+        num_workers: 0
+        effective_llm_by_static_path:
+          brief/summarize:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {topic: rates}}]
+    - [node_started, brief]
+    - [node_expanded, brief, {seed: {topic: rates}, prune_ids: []}]
+    - [node_started, brief/__start__]
+    - [node_succeeded, brief/__start__, {value: {topic: rates}}]
+    - [node_started, brief/fetch]
+    - - node_succeeded
+      - brief/fetch
+      - value:
+          values: [100.0, 101.5, 99.75, 102.25]
+          news: ["RATES: quarterly update", "RATES: reviewer note"]
+    - [node_started, brief/summarize]
+    - [node_succeeded, brief/summarize, {value: Rates had a quarterly update and a reviewer note.}]
+    - [node_started, brief/__end__]
+    - - node_succeeded
+      - brief/__end__
+      - value: Rates had a quarterly update and a reviewer note.
+        commit_target: brief
+    - [node_started, __end__]
+    - [node_succeeded, __end__, {value: Rates had a quarterly update and a reviewer note.}]

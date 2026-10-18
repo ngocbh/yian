@@ -1,0 +1,132 @@
+# From examples/human-approval.yaml.
+# The human approves the drafted plan, the `case ... on` the answer takes `kickoff`, and the `|`
+# join returns its text; `revise_plan` is skipped and gets no model call.
+# No `tool_calls`: docs/api.md's `ask_user` doesn't define the form of `answer_schema`.
+kind: run
+flow: |
+  # human-approval — a deterministic human gate with the HUMAN_INPUT node.
+  #
+  # A HUMAN_INPUT node ALWAYS blocks at a fixed point in the graph and waits for a typed
+  # answer from the human; the answer is validated against the node's declared
+  # `output:` type before the flow continues. (Contrast with the `ask_user` tool —
+  # see ask-user.yaml — which is model-CHOSEN, not guaranteed.)
+  #
+  # The flow: an agent drafts a short plan, a HUMAN_INPUT node asks the human to approve
+  # or revise it, `case ... on` routes on the typed answer, and whichever branch ran is
+  # combined by an n-ary `|` coalesce into the flow output.
+  #
+  # Exercises: a Literal typedef as the human answer, the blocking HUMAN_INPUT node,
+  # `case ... on` with `else`, and a coalesce join.
+  #
+  # Run it with (the CLI will prompt you for the approval):
+  #   yian run examples/human-approval.yaml --input task="Plan a team offsite"
+
+  id: human-approval
+  name: human_approval
+  description: Draft a plan, ask a human to approve or revise it, then finalize accordingly.
+
+  typedefs:
+    Approval: Literal(approve, revise)    # the typed human answer (a tag-only enum)
+
+  input:
+    task: !str
+
+  nodes:
+    draft:
+      kind: agent
+      input:
+        task: ${input.task}
+      output: str
+      prompt: "Draft a short, concrete plan (exactly 3 numbered steps) for: ${task}"
+
+    approve:
+      kind: human_input
+      input:
+        plan: ${draft.output}              # context the prompt may reference (bare ${plan})
+      prompt: |-
+        Here is the proposed plan:
+
+        ${plan}
+
+        Approve it as-is, or send it back to be revised? (approve / revise)
+      output: Approval                     # the human's answer, validated against Approval's tags
+
+    gate:
+      kind: case                           # route on the human's answer (simple form)
+      on: ${approve.output}
+      cases:
+        - when: approve
+          then: kickoff
+      else: revise_plan
+
+    kickoff:
+      kind: agent
+      input:
+        plan: ${draft.output}
+      output: str
+      prompt: "The plan was approved. Write a short, upbeat kickoff message for it:\n\n${plan}"
+
+    revise_plan:
+      kind: agent
+      input:
+        plan: ${draft.output}
+      output: str
+      prompt: "The plan needs work. Rewrite it tighter and clearer, keeping 3 steps:\n\n${plan}"
+
+  # kickoff runs on approve; revise_plan runs otherwise. Coalesce picks whichever ran.
+  output: ${kickoff.output | revise_plan.output}
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
+env: {OPENAI_API_KEY: "<key:1>"}
+inputs: {task: Plan a team offsite}
+run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
+host:
+  human:
+    approve: [approve]
+  models:
+    draft:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: "1. Pick a date. 2. Book a venue. 3. Send invites."}]
+    kickoff:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: "The offsite plan is approved: let's pick a date!"}]
+expect:
+  output: {status: succeeded, output: "The offsite plan is approved: let's pick a date!"}
+  # Run start resolves every AGENT, the skipped ones included; a skipped node writes no record.
+  trace:
+    - - run_started
+      - null
+      - inputs: {task: Plan a team offsite}
+        learnable: false
+        num_workers: 0
+        effective_llm_by_static_path:
+          draft:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          kickoff:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          revise_plan:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {task: Plan a team offsite}}]
+    - [node_started, draft]
+    - [node_succeeded, draft, {value: "1. Pick a date. 2. Book a venue. 3. Send invites."}]
+    - [node_started, approve]
+    - [node_succeeded, approve, {value: approve}]
+    - [node_started, gate]
+    - [node_routed, gate, {handle: kickoff}]
+    - [node_started, kickoff]
+    - [node_succeeded, kickoff, {value: "The offsite plan is approved: let's pick a date!"}]
+    - [node_started, __end__]
+    - [node_succeeded, __end__, {value: "The offsite plan is approved: let's pick a date!"}]

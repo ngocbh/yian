@@ -2101,7 +2101,10 @@ def _code_scalars(text: str) -> list[_CodeScalar]:
 
 
 # The Python modules whose CODE functions have TS ports, by their file in `conformance/fixtures/`.
-_FIXTURE_MODULES = {"tests.seeds.fns": "seeds.ts"}
+_FIXTURE_MODULES = {
+    "tests.seeds.fns": "seeds.ts",
+    "tests.engine._compose_codefns": "compose_codefns.ts",
+}
 
 
 @functools.cache

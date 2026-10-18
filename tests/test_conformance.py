@@ -3518,6 +3518,12 @@ def test_translate_code() -> None:
     assert (untranslated, unported) == ({}, set())
     assert harvest._ts_code({"kind": "load", "files": {"p.yaml": plain}}, {})[0] == {
         "kind": "load", "files": {"p.yaml": plain}}
+    # A reference into `tests/engine/_compose_codefns.py` names its fixture too.
+    echo = "nodes:\n  e: {kind: code, code: tests.engine._compose_codefns:echo}\n"
+    assert harvest._ts_code({"kind": "load", "flow": echo}, {}) == ({
+        "kind": "load", "python_flow": echo,
+        "flow": echo.replace("tests.engine._compose_codefns:", "./fixtures/compose_codefns.ts:")},
+        {}, set())
 
 
 def test_seeds_fixture_exports_every_seed_function() -> None:
@@ -3529,6 +3535,19 @@ def test_seeds_fixture_exports_every_seed_function() -> None:
     tree = ast.parse((Path(__file__).parent / "seeds" / "fns.py").read_text(encoding="utf-8"))
     names = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
     assert names and names <= harvest._exported(harvest._FIXTURE_MODULES["tests.seeds.fns"])
+
+
+def test_compose_codefns_fixture_ports_python_functions() -> None:
+    """Every function the `_compose_codefns` TS fixture exports is one of the Python module's."""
+    import ast
+
+    from tests import conformance_harvest as harvest
+
+    source = Path(__file__).parent / "engine" / "_compose_codefns.py"
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    names = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
+    exported = harvest._exported(harvest._FIXTURE_MODULES["tests.engine._compose_codefns"])
+    assert exported and exported <= names
 
 
 _CODE_TESTS = '''

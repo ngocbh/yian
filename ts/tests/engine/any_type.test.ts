@@ -1,7 +1,8 @@
 /**
  * The `Any` type's shape, labels and overlap, a port of those tests of
- * `tests/engine/test_any_type.py`; value, parsing and compatibility tests come later, and the
- * records written as typedefs there are built by hand here.
+ * `tests/engine/test_any_type.py`; value, parsing and compatibility tests come later, as
+ * does the `readTypedefs` half of `test_any_overlaps_a_list_of_files_through_the_empty_list`.
+ * The records written as typedefs there are built by hand here.
  */
 
 import { describe, expect, test } from "bun:test";

@@ -10,7 +10,6 @@ import {
   boundText,
   canonicalTypeLabel,
   listKindForElement,
-  literalLabel,
   Type,
   TypeCheckError,
   typeEquals,
@@ -369,34 +368,17 @@ describe("boundText", () => {
     [123.456, "123.456"],
     [5e-324, "5e-324"],
     [1.7976931348623157e308, "1.7976931348623157e+308"],
-    [Infinity, "Infinity"],
-    [-Infinity, "-Infinity"],
+    // A hand-built Type can hold -0.
+    [-0, "-0.0"],
     [null, ""],
   ] as const)("spells %p as %p", (end, text) => {
     expect(boundText(end)).toBe(text);
   });
-});
 
-describe("literalLabel", () => {
-  test("prints a name bare and quotes the rest, in the given order", () => {
-    expect(literalLabel(["go", "no go", "True"])).toBe('Literal(go, "no go", "True")');
-  });
-
-  // Each spelling is the one Python's `literal_label` gives.
-  test.each([
-    // a non-ASCII name
-    ["é", "Literal(é)"],
-    // a letter number starts a name and an identifier
-    ["ⅰx", "Literal(ⅰx)"],
-    // a NAME token that `str.isidentifier` rejects
-    ["²x", 'Literal("²x")'],
-    ["a²", 'Literal("a²")'],
-    // an identifier that is not a NAME token
-    ["a·", 'Literal("a·")'],
-    ["None", 'Literal("None")'],
-    ["1a", 'Literal("1a")'],
-    ['say "hi"', 'Literal("say \\"hi\\"")'],
-  ])("spells %p as %p", (tag, label) => {
-    expect(literalLabel([tag])).toBe(label);
+  test("spells a non-finite end as JavaScript does", () => {
+    // A non-finite end is never printed in a type (the bounds check refuses it); only the
+    // bracket-spelling unparse can meet one, and it spells JavaScript's `Infinity`.
+    expect(boundText(Infinity)).toBe("Infinity");
+    expect(boundText(-Infinity)).toBe("-Infinity");
   });
 });

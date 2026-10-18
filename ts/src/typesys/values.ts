@@ -491,9 +491,10 @@ function canonicalNonnullableLabel(typ: Type): [string, string] {
   }
 
   if (typ.fields !== undefined) {
-    const pairs = [...typ.fields.keys()]
+    const fields = typ.fields;
+    const pairs = [...fields.keys()]
       .sort(compareCodeUnits)
-      .map((name) => [JSON.stringify(name), labels(typ.fields!.get(name)!)] as const);
+      .map((name) => [JSON.stringify(name), labels(fields.get(name)!)] as const);
     return [
       "{" + pairs.map(([name, [label]]) => `${name}:${label}`).join(",") + "}",
       "{" + pairs.map(([name, [, key]]) => `${name}:${key}`).join(",") + "}",
@@ -585,7 +586,7 @@ const NAME_TOKEN = new RegExp(`^(?:${NAME_PATTERN})$`, "u");
 const IDENTIFIER = /^[\p{XID_Start}_]\p{XID_Continue}*$/u;
 
 /** Names the type parser reads as constants, never as `Literal` members. */
-export const BUILTIN_CONSTANTS: readonly string[] = ["True", "False", "None"];
+export const BUILTIN_CONSTANTS: ReadonlySet<string> = new Set(["True", "False", "None"]);
 
 /**
  * Spell a `Literal` type from its members, in the given order.
@@ -603,7 +604,7 @@ export function literalLabel(tags: Iterable<string>): string {
 function literalMember(tag: string): string {
   // The tokenizer's NAME and `str.isidentifier` disagree on a few Unicode characters;
   // a bare member must pass both to read back as the same single name.
-  if (NAME_TOKEN.test(tag) && IDENTIFIER.test(tag) && !BUILTIN_CONSTANTS.includes(tag)) {
+  if (NAME_TOKEN.test(tag) && IDENTIFIER.test(tag) && !BUILTIN_CONSTANTS.has(tag)) {
     return tag;
   }
   return JSON.stringify(tag);
@@ -630,8 +631,11 @@ function membersTagFields(members: readonly Type[]): string[] {
     const values = new Set<string>();
     const isTag = members.every((member) => {
       const fieldType = member.fields!.get(name);
-      const tag = fieldType === undefined ? null : singleTag(fieldType);
-      if (tag === null || !member.required?.has(name) || fieldType!.nullable) return false;
+      if (fieldType === undefined || fieldType.nullable || !member.required?.has(name)) {
+        return false;
+      }
+      const tag = singleTag(fieldType);
+      if (tag === null) return false;
       values.add(tag);
       return true;
     });

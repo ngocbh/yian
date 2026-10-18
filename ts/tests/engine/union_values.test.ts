@@ -7,6 +7,7 @@ import { describe, expect, test } from "bun:test";
 
 import { compareCodeUnits } from "../../src/diagnostics.ts";
 import {
+  type Bounds,
   canonicalTypeLabel,
   canonicalUnionOrder,
   Type,
@@ -32,7 +33,7 @@ function optional(typ: Type): Type {
   return typ.replace({ nullable: true });
 }
 
-function range(kind: ValueKind, bounds: readonly [bigint | number, bigint | number]): Type {
+function range(kind: ValueKind, bounds: Bounds): Type {
   return new Type({ kind, bounds });
 }
 
@@ -158,7 +159,7 @@ describe("unionTagFields", () => {
 });
 
 describe("typesOverlap", () => {
-  const I = ValueKind.INTEGER;
+  const INT_KIND = ValueKind.INTEGER;
   test.each([
     // nullable on both sides, with NONE counting as nullable
     ["Optional(str), Optional(int)", optional(STR), optional(INT), true],
@@ -182,11 +183,16 @@ describe("typesOverlap", () => {
     ["Literal(a, b), Literal(b, c)", lit("a", "b"), lit("b", "c"), true],
     ["Literal(a), Literal(b)", lit("a"), lit("b"), false],
     // numeric bounds
-    ["int(0..5), int(3..9)", range(I, [0n, 5n]), range(I, [3n, 9n]), true],
-    ["int(0..2), int(3..9)", range(I, [0n, 2n]), range(I, [3n, 9n]), false],
+    ["int(0..5), int(3..9)", range(INT_KIND, [0n, 5n]), range(INT_KIND, [3n, 9n]), true],
+    ["int(0..2), int(3..9)", range(INT_KIND, [0n, 2n]), range(INT_KIND, [3n, 9n]), false],
     // bigint ends against number ends
-    ["int(0..2), float(2.5..3.0)", range(I, [0n, 2n]), range(ValueKind.NUMBER, [2.5, 3.0]), false],
-    ["int(0..2), float", range(I, [0n, 2n]), FLOAT, true],
+    [
+      "int(0..2), float(2.5..3.0)",
+      range(INT_KIND, [0n, 2n]),
+      range(ValueKind.NUMBER, [2.5, 3.0]),
+      false,
+    ],
+    ["int(0..2), float", range(INT_KIND, [0n, 2n]), FLOAT, true],
     // two lists
     [
       "list(str), list(int)",

@@ -6,8 +6,9 @@
  * `Failure` carries stable meaning plus opaque `OriginRef` instances; a front end
  * implements `OriginResolver` to turn those references into concrete presentation
  * frames. `ResolverTable` composes those namespaces through exact immutable routes.
- * `compareCodeUnits` is the one string order for sorting, and `reprText` quotes text
- * the way Python's `repr` does.
+ * `compareCodeUnits` is the one string order for sorting, `reprText` quotes text the
+ * way Python's `repr` does, and `getCloseMatches` finds "did you mean" suggestions the
+ * way Python's `difflib` does.
  */
 
 /**
@@ -129,6 +130,246 @@ export function reprText(text: string): string {
     else out += "\\U" + hex(cp, 8);
   }
   return out + quote;
+}
+
+// Ported from CPython 3.12 `Lib/difflib.py` (`get_close_matches`, `SequenceMatcher`)
+// under the Python Software Foundation License; see NOTICE. Modified: code points, ties
+// by UTF-16 code units, no junk function.
+
+/** A matching block `[i, j, size]`: `a[i:i+size]` equals `b[j:j+size]`. */
+type Match = [i: number, j: number, size: number];
+
+/** Return `2 * matches / length`, or 1 when both sequences are empty. */
+function calculateRatio(matches: number, length: number): number {
+  return length ? (2.0 * matches) / length : 1.0;
+}
+
+/**
+ * Compares sequences of code points by their longest matching blocks: the part of
+ * Python's `difflib.SequenceMatcher` that `getCloseMatches` needs.
+ */
+class SequenceMatcher {
+  /** The first sequence, set by `setSeq1`. */
+  a: string[] = [];
+  /** The second sequence, set by `setSeq2`. */
+  b: string[] = [];
+  /** Each element of `b` mapped to its increasing indices in `b`; popular elements are absent. */
+  b2j = new Map<string, number[]>();
+  /** The elements of `b` the autojunk rule dropped from `b2j`. */
+  bpopular = new Set<string>();
+  /** Each element of `b` mapped to its count, computed by `quickRatio`. */
+  fullbcount: Map<string, number> | null = null;
+  /** The cached result of `getMatchingBlocks`. */
+  matchingBlocks: Match[] | null = null;
+
+  /** Set the first sequence to compare; the second is unchanged. */
+  setSeq1(a: string): void {
+    // Python returns early when `a` is the same object; recomputing gives the same result.
+    this.a = Array.from(a);
+    this.matchingBlocks = null;
+  }
+
+  /** Set the second sequence to compare, and index it; the first is unchanged. */
+  setSeq2(b: string): void {
+    this.b = Array.from(b);
+    this.matchingBlocks = null;
+    this.fullbcount = null;
+    this.chainB();
+  }
+
+  /** Build `b2j` and `bpopular` from `b`. */
+  chainB(): void {
+    const b = this.b;
+    const b2j = new Map<string, number[]>();
+    this.b2j = b2j;
+    for (let i = 0; i < b.length; i++) {
+      const elt = b[i]!;
+      let indices = b2j.get(elt);
+      if (indices === undefined) {
+        indices = [];
+        b2j.set(elt, indices);
+      }
+      indices.push(i);
+    }
+
+    // There is no junk to purge: `get_close_matches` never passes `isjunk`.
+
+    // Purge popular elements; autojunk is always on.
+    const popular = new Set<string>();
+    this.bpopular = popular;
+    const n = b.length;
+    if (n >= 200) {
+      const ntest = Math.floor(n / 100) + 1;
+      for (const [elt, idxs] of b2j) {
+        if (idxs.length > ntest) popular.add(elt);
+      }
+      for (const elt of popular) b2j.delete(elt);
+    }
+  }
+
+  /**
+   * Find the longest matching block in `a[alo:ahi]` and `b[blo:bhi]`: of all maximal
+   * blocks, the one that starts earliest in `a`, then earliest in `b`;
+   * `[alo, blo, 0]` when none match.
+   */
+  findLongestMatch(alo: number, ahi: number, blo: number, bhi: number): Match {
+    const { a, b, b2j } = this;
+    let besti = alo;
+    let bestj = blo;
+    let bestsize = 0;
+    // During an iteration of the loop, j2len[j] = length of the longest match ending
+    // with a[i-1] and b[j].
+    let j2len = new Map<number, number>();
+    for (let i = alo; i < ahi; i++) {
+      const newj2len = new Map<number, number>();
+      for (const j of b2j.get(a[i]!) ?? []) {
+        // a[i] matches b[j]
+        if (j < blo) continue;
+        if (j >= bhi) break;
+        const k = (j2len.get(j - 1) ?? 0) + 1;
+        newj2len.set(j, k);
+        if (k > bestsize) {
+          besti = i - k + 1;
+          bestj = j - k + 1;
+          bestsize = k;
+        }
+      }
+      j2len = newj2len;
+    }
+
+    // Extend the best by equal elements on each end: popular elements aren't in
+    // `b2j`, so the loop above never includes them in a match.
+    while (besti > alo && bestj > blo && a[besti - 1] === b[bestj - 1]) {
+      besti -= 1;
+      bestj -= 1;
+      bestsize += 1;
+    }
+    while (
+      besti + bestsize < ahi &&
+      bestj + bestsize < bhi &&
+      a[besti + bestsize] === b[bestj + bestsize]
+    ) {
+      bestsize += 1;
+    }
+
+    // Python next extends the match over junk elements on each side; with no junk
+    // function there are none, so those two loops can't run and are left out.
+    return [besti, bestj, bestsize];
+  }
+
+  /**
+   * Return the matching blocks, increasing in `i` and `j`, adjacent blocks merged, and
+   * ending with the dummy `[a.length, b.length, 0]`.
+   */
+  getMatchingBlocks(): Match[] {
+    if (this.matchingBlocks !== null) return this.matchingBlocks;
+    const la = this.a.length;
+    const lb = this.b.length;
+
+    // A queue of regions still to search rather than recursion, as in Python.
+    const queue: [number, number, number, number][] = [[0, la, 0, lb]];
+    const matchingBlocks: Match[] = [];
+    while (queue.length > 0) {
+      const [alo, ahi, blo, bhi] = queue.pop()!;
+      const x = this.findLongestMatch(alo, ahi, blo, bhi);
+      const [i, j, k] = x;
+      // a[alo:i] vs b[blo:j] unknown
+      // a[i:i+k] same as b[j:j+k]
+      // a[i+k:ahi] vs b[j+k:bhi] unknown
+      if (k) {
+        matchingBlocks.push(x);
+        if (alo < i && blo < j) queue.push([alo, i, blo, j]);
+        if (i + k < ahi && j + k < bhi) queue.push([i + k, ahi, j + k, bhi]);
+      }
+    }
+    matchingBlocks.sort((x, y) => x[0] - y[0] || x[1] - y[1] || x[2] - y[2]);
+
+    // Collapse adjacent blocks.
+    let i1 = 0;
+    let j1 = 0;
+    let k1 = 0;
+    const nonAdjacent: Match[] = [];
+    for (const [i2, j2, k2] of matchingBlocks) {
+      if (i1 + k1 === i2 && j1 + k1 === j2) {
+        k1 += k2;
+      } else {
+        if (k1) nonAdjacent.push([i1, j1, k1]);
+        i1 = i2;
+        j1 = j2;
+        k1 = k2;
+      }
+    }
+    if (k1) nonAdjacent.push([i1, j1, k1]);
+    nonAdjacent.push([la, lb, 0]);
+    this.matchingBlocks = nonAdjacent;
+    return nonAdjacent;
+  }
+
+  /** Return the similarity `2 * M / T`, a number in [0, 1]. */
+  ratio(): number {
+    let matches = 0;
+    for (const [, , size] of this.getMatchingBlocks()) matches += size;
+    return calculateRatio(matches, this.a.length + this.b.length);
+  }
+
+  /** Return an upper bound on `ratio()`, from the multiset intersection of `a` and `b`. */
+  quickRatio(): number {
+    if (this.fullbcount === null) {
+      this.fullbcount = new Map();
+      for (const elt of this.b) {
+        this.fullbcount.set(elt, (this.fullbcount.get(elt) ?? 0) + 1);
+      }
+    }
+    const fullbcount = this.fullbcount;
+    // avail[x] is the number of times x appears in `b` less the number of times seen
+    // in `a` so far.
+    const avail = new Map<string, number>();
+    let matches = 0;
+    for (const elt of this.a) {
+      const numb = avail.get(elt) ?? fullbcount.get(elt) ?? 0;
+      avail.set(elt, numb - 1);
+      if (numb > 0) matches += 1;
+    }
+    return calculateRatio(matches, this.a.length + this.b.length);
+  }
+
+  /** Return an upper bound on `ratio()` from the lengths alone. */
+  realQuickRatio(): number {
+    const la = this.a.length;
+    const lb = this.b.length;
+    return calculateRatio(Math.min(la, lb), la + lb);
+  }
+}
+
+/**
+ * Return the best "good enough" matches for `word` among `possibilities`, best first:
+ * at most `n`, each scoring at least `cutoff`. An exact port of Python's
+ * `difflib.get_close_matches`, so "did you mean" suggestions match Python yian's; equal
+ * scores break by `compareCodeUnits`, descending. Throws `RangeError` when `n` is not
+ * positive or `cutoff` is outside [0, 1].
+ */
+export function getCloseMatches(
+  word: string,
+  possibilities: Iterable<string>,
+  n = 3,
+  cutoff = 0.6,
+): string[] {
+  if (!(n > 0)) throw new RangeError(`n must be > 0: ${n}`);
+  if (!(0.0 <= cutoff && cutoff <= 1.0)) {
+    throw new RangeError(`cutoff must be in [0.0, 1.0]: ${cutoff}`);
+  }
+  const result: [number, string][] = [];
+  const s = new SequenceMatcher();
+  s.setSeq2(word);
+  for (const x of possibilities) {
+    s.setSeq1(x);
+    if (s.realQuickRatio() >= cutoff && s.quickRatio() >= cutoff && s.ratio() >= cutoff) {
+      result.push([s.ratio(), x]);
+    }
+  }
+  // What `heapq.nlargest(n, result)` returns; equal pairs are indistinguishable.
+  result.sort(([scoreX, x], [scoreY, y]) => scoreY - scoreX || compareCodeUnits(y, x));
+  return result.slice(0, n).map(([, x]) => x);
 }
 
 const CODES = [

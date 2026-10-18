@@ -15,6 +15,7 @@ import {
   FAILURE_CODES,
   Failure,
   type FailureCode,
+  getCloseMatches,
   OriginRef,
   type OriginResolver,
   ResolverTable,
@@ -128,6 +129,55 @@ describe("reprText", () => {
     expect(createHash("sha256").update(bits.join("")).digest("hex")).toBe(
       "0326b64c15e91a0583a1d9f8bc53f4bb534adc91a5ae096b55adaf19525ed98d",
     );
+  });
+});
+
+describe("getCloseMatches", () => {
+  // `expected` is CPython 3.12.14's `difflib.get_close_matches(word, possibilities, n, cutoff)`.
+  const cases: [string, string[], number, number, string[]][] = [
+    ["appel", ["ape", "apple", "peach", "puppy"], 3, 0.6, ["apple", "ape"]],
+    ["wheel", ["while", "when", "whale", "wheat"], 3, 0.6, ["when", "while", "wheat"]],
+    ["place_ordr", ["place_order", "list_orders", "cancel"], 1, 0.6, ["place_order"]],
+    ["abc", ["abc", "acb", "bac", "cab", "bca", "cba"], 6, 0.0, ["abc", "cab", "bca", "bac", "acb", "cba"]],
+    ["ab", ["ba", "ab", "ba"], 3, 0.0, ["ab", "ba", "ba"]],
+    ["", ["", "a"], 3, 0.0, ["", "a"]],
+    ["x", [], 3, 0.6, []],
+    ["Strng", ["String", "string", "str", "Sting"], 2, 0.6, ["String", "Sting"]],
+    ["aaaa", ["aaab", "abaa", "baaa"], 3, 0.0, ["baaa", "aaab", "abaa"]],
+    ["a".repeat(120) + "b".repeat(120), ["a".repeat(120) + "c".repeat(120), "b".repeat(240), "ab".repeat(120)], 3, 0.0, ["a".repeat(120) + "c".repeat(120), "ab".repeat(120), "b".repeat(240)]],
+    ["xyz".repeat(70), ["xyz".repeat(69) + "q", "zyx".repeat(70)], 2, 0.0, ["xyz".repeat(69) + "q", "zyx".repeat(70)]],
+    ["lookup", ["look_up", "lookups", "Lookup", "kool"], 4, 0.6, ["lookups", "look_up", "Lookup"]],
+    ["int", ["Int", "integer", "in", "nit"], 4, 0.5, ["in", "nit", "Int", "integer"]],
+    ["\ud83d\ude00\ud83d\ude01", ["\ud83d\ude00", "\ud83d\ude01x", "\ud83d"], 3, 0.0, ["\ud83d\ude00", "\ud83d\ude01x", "\ud83d"]],
+    // Python gives `["a", "\ud83d\ude00b", "\ue000a"]`; TS breaks the 0.5 tie by UTF-16
+    // code units.
+    ["\ud83d\ude00a", ["\ud83d\ude00b", "\ue000a", "a"], 3, 0.0, ["a", "\ue000a", "\ud83d\ude00b"]],
+  ];
+
+  test.each(cases)(
+    "getCloseMatches(%j, %j, %d, %d) is %j",
+    (word, possibilities, n, cutoff, expected) => {
+      expect(getCloseMatches(word, possibilities, n, cutoff)).toEqual(expected);
+    },
+  );
+
+  test("defaults to n = 3 and cutoff = 0.6 and takes any iterable", () => {
+    expect(getCloseMatches("appel", ["ape", "apple", "peach", "puppy"])).toEqual(["apple", "ape"]);
+    expect(getCloseMatches("appel", new Set(["ape", "apple", "peach", "puppy"]))).toEqual([
+      "apple",
+      "ape",
+    ]);
+  });
+
+  test.each([
+    [0, 0.6, "n must be > 0: 0"],
+    [3, 1.5, "cutoff must be in [0.0, 1.0]: 1.5"],
+    [3, -0.1, "cutoff must be in [0.0, 1.0]: -0.1"],
+  ])("rejects n = %d, cutoff = %d", (n, cutoff, message) => {
+    const error = thrown(() => getCloseMatches("appel", ["apple"], n, cutoff));
+
+    expect(error).toBeInstanceOf(RangeError);
+    expect((error as Error).message).toBe(message);
   });
 });
 

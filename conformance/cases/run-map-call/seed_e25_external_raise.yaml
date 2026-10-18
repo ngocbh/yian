@@ -1,0 +1,143 @@
+# From tests/seeds/errors/e25-external-raise.yaml.
+# A CODE throw inside a `uses:` child fails `go/kaboom`: frames the CALL, then the child's `code:`.
+kind: run
+# A thrown error's text and the reference's length differ by language.
+rules: [code]
+flow: |
+  # e25 — a CODE callable that raises INSIDE an EXTERNAL `uses:` flow (a different .yaml).
+  #
+  # RUNTIME: the inner `kaboom` node fails with runtime id `go/kaboom`. The composed
+  # origin resolver presents the outer CALL site in this file followed by the failing
+  # `code:` scalar in lib_boom.yaml. CODE-only -> no model.
+  # No child source snapshot or CLI graph walk participates.
+  #
+  # Run it with the file resolver pointed at this dir:
+  #   load_flow(text, search_paths=[<errors dir>]); run_flow(loaded, {...})
+  id: err-external-raise
+  name: err_external_raise
+  input:
+    topic: !str
+
+  uses:
+    boom: lib_boom                # external flow on the search path (this dir)
+
+  nodes:
+    go:
+      kind: call
+      call: boom
+      input:
+        topic: ${input.topic}
+
+  output: ${go.output}
+files:
+  lib_boom.yaml: |
+    # lib_boom — a tiny EXTERNAL flow whose CODE node always raises.
+    #
+    # Imported by e25-external-raise.yaml via `uses:`. The inner `kaboom` node's
+    # `code:` origin resolves through this document's catalog, so the canonical frame
+    # uses this filename. CODE-only -> runs locally, no model.
+    # The parent composes this catalog through its external alias resolver.
+
+    id: lib_boom
+    name: lib_boom
+    description: An external flow whose only node raises (external-frame traceback fixture).
+
+    input:
+      topic: !str
+
+    nodes:
+      kaboom:
+        kind: code
+        code: ./fixtures/seeds.ts:fail_always
+        input:
+          topic: ${input.topic}
+        output: str
+
+    output: ${kaboom.output}
+# The child's CODE reference differs by language: `files` names the TS function,
+# this the Python one.
+python_files:
+  lib_boom.yaml: |
+    # lib_boom — a tiny EXTERNAL flow whose CODE node always raises.
+    #
+    # Imported by e25-external-raise.yaml via `uses:`. The inner `kaboom` node's
+    # `code:` origin resolves through this document's catalog, so the canonical frame
+    # uses this filename. CODE-only -> runs locally, no model.
+    # The parent composes this catalog through its external alias resolver.
+
+    id: lib_boom
+    name: lib_boom
+    description: An external flow whose only node raises (external-frame traceback fixture).
+
+    input:
+      topic: !str
+
+    nodes:
+      kaboom:
+        kind: code
+        code: tests.seeds.fns:fail_always
+        input:
+          topic: ${input.topic}
+        output: str
+
+    output: ${kaboom.output}
+inputs: {topic: X}
+run: {run_id: r1, num_workers: 0}
+expect:
+  output:
+    status: failed
+    failure:
+      code: node.execute
+      message: "Error: intentional CODE failure"
+      node: go/kaboom
+      # The CALL node `go` on line 19, then the `code:` value on line 18 of `lib_boom.yaml` (the
+      # throw is outside the flow).
+      frames:
+        - {label: flow.yaml, range: [19, 3, 19, 5]}
+        - {label: lib_boom.yaml, range: [18, 11, 18, 42]}
+  trace:
+    - [run_started, null, {inputs: {topic: X}, learnable: false, num_workers: 0}]
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {topic: X}}]
+    - [node_started, go]
+    - [node_expanded, go, {seed: {topic: X}, prune_ids: []}]
+    - [node_started, go/__start__]
+    - [node_succeeded, go/__start__, {value: {topic: X}}]
+    - [node_started, go/kaboom]
+    - - node_failed
+      - go/kaboom
+      - failure:
+          code: node.execute
+          message: "Error: intentional CODE failure"
+          node: go/kaboom
+          frames:
+            - {label: flow.yaml, range: [19, 3, 19, 5]}
+            - {label: lib_boom.yaml, range: [18, 11, 18, 42]}
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: node.execute
+      message: intentional CODE failure
+      node: go/kaboom
+      frames:
+        - {label: flow.yaml, range: [19, 3, 19, 5]}
+        - {label: lib_boom.yaml, range: [18, 11, 18, 38]}
+  trace:
+    - [run_started, null, {inputs: {topic: X}, learnable: false, num_workers: 0}]
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {topic: X}}]
+    - [node_started, go]
+    - [node_expanded, go, {seed: {topic: X}, prune_ids: []}]
+    - [node_started, go/__start__]
+    - [node_succeeded, go/__start__, {value: {topic: X}}]
+    - [node_started, go/kaboom]
+    - - node_failed
+      - go/kaboom
+      - failure:
+          code: node.execute
+          message: intentional CODE failure
+          node: go/kaboom
+          frames:
+            - {label: flow.yaml, range: [19, 3, 19, 5]}
+            - {label: lib_boom.yaml, range: [18, 11, 18, 38]}

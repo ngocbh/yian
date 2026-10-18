@@ -9,7 +9,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { isAlias, isMap, isSeq, type Alias, type Node, type YAMLSeq } from "yaml";
+import { isAlias, isMap, isNode, isSeq, type Node, type YAMLSeq } from "yaml";
 
 import { composeFlowDocument, FlowLoaderError } from "../../src/compose/source/scalars.ts";
 import { BUILTIN, install } from "../../src/defaults.ts";
@@ -37,6 +37,13 @@ function refusal(text: string): FlowLoaderError {
     return error as FlowLoaderError;
   }
   throw new Error("expected a FlowLoaderError");
+}
+
+/** Return the `FlowLoaderError` composing `text` throws and the seconds it took. */
+function timedRefusal(text: string): { error: FlowLoaderError; seconds: number } {
+  const started = performance.now();
+  const error = refusal(text);
+  return { error, seconds: (performance.now() - started) / 1000 };
 }
 
 /** Return the 1-based line of `text` that `node` starts on. */
@@ -147,11 +154,11 @@ describe("the YAML node limit", () => {
     const text = flow("*a29", doublingAnchors(30));
     expect(text.split("\n")[3 + 16]).toBe("  - &a16 [*a15, *a15]");
 
-    let error: FlowLoaderError | undefined;
-    expect(seconds(() => (error = refusal(text)))).toBeLessThan(5);
-    expect(error?.message).toContain(`this list ${message(MAX_YAML_NODES)}`);
-    expect(lineOf(text, error?.node ?? null)).toBe(4 + 16);
-    expect(error?.node?.anchor).toBe("a16");
+    const { error, seconds: took } = timedRefusal(text);
+    expect(took).toBeLessThan(5);
+    expect(error.message).toContain(`this list ${message(MAX_YAML_NODES)}`);
+    expect(lineOf(text, error.node)).toBe(4 + 16);
+    expect(error.node?.anchor).toBe("a16");
   });
 
   test("a listed 1000-link chain meets the node limit first", () => {
@@ -173,10 +180,10 @@ describe("the YAML node limit", () => {
     const text = flow("*t29", doublingAnchors(13) + lines.join("\n") + "\n");
     expect(text.split("\n")[3]).toBe("  - &a0 [1]");
 
-    let error: FlowLoaderError | undefined;
-    expect(seconds(() => (error = refusal(text)))).toBeLessThan(5);
-    expect(error?.message).toContain(`this list ${message(MAX_YAML_NODES)}`);
-    expect(lineOf(text, error?.node ?? null)).toBe(4);
+    const { error, seconds: took } = timedRefusal(text);
+    expect(took).toBeLessThan(5);
+    expect(error.message).toContain(`this list ${message(MAX_YAML_NODES)}`);
+    expect(lineOf(text, error.node)).toBe(4);
   });
 
   test("a node on its own cycle is counted again inside it", () => {
@@ -210,10 +217,10 @@ describe("the YAML node limit", () => {
     // path already over the limit, which here is often the document itself.
     const text = flow("*r", `x-anchors: [&r [${items.join(", ")}]]\n`);
 
-    let error: FlowLoaderError | undefined;
-    expect(seconds(() => (error = refusal(text)))).toBeLessThan(5);
-    expect(error?.message).toContain(`this ${kind} ${message(MAX_YAML_NODES)}`);
-    expect(lineOf(text, error?.node ?? null)).toBe(line);
+    const { error, seconds: took } = timedRefusal(text);
+    expect(took).toBeLessThan(5);
+    expect(error.message).toContain(`this ${kind} ${message(MAX_YAML_NODES)}`);
+    expect(lineOf(text, error.node)).toBe(line);
   });
 
   test.each(["&x [*x, *x, [*x]]", "&m {<<: *m}"])("a pure cycle ends: %p", (value) => {
@@ -284,14 +291,14 @@ function expandedCount(text: string): number {
 
   const count = (child: Node | null): number => {
     if (child === null) return 1;
-    const node = isAlias(child) ? (aliasTargets.get(child as Alias) as Node) : child;
+    const node = isAlias(child) ? aliasTargets.get(child)! : child;
     if (path.has(node)) return 1;
     path.add(node);
-    let children: (Node | null)[] = [];
-    if (isSeq(node)) children = node.items as Node[];
-    else if (isMap(node)) children = node.items.flatMap((pair) => [pair.key, pair.value] as Node[]);
+    let items: unknown[] = [];
+    if (isSeq(node)) items = node.items;
+    else if (isMap(node)) items = node.items.flatMap((pair) => [pair.key, pair.value]);
     let total = 1;
-    for (const each of children) total += count(each);
+    for (const each of items) total += count(isNode(each) ? each : null);
     path.delete(node);
     return total;
   };

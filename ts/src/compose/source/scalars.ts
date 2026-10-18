@@ -24,6 +24,7 @@ import {
   type Document,
   isAlias,
   isMap,
+  isNode,
   isSeq,
   type Node,
   type ParsedNode,
@@ -212,7 +213,7 @@ export function composeFlowDocument(text: string, options: FlowParseOptions = {}
 
   // Aliases let a short document name exponentially many nodes, and every later step
   // (construction, walking, the run log) costs per expanded node, so the composed
-  // tree is counted before anything else touches it.
+  // graph is counted before anything else touches it.
   //
   // A recursive alias is a back edge to a node still on the path. It counts 1 (the
   // alias itself), and the source layer reports it when something descends through
@@ -236,8 +237,14 @@ export function composeFlowDocument(text: string, options: FlowParseOptions = {}
     let over: Node | null = null;
     // Each frame: the node, its children, the next child's index, its count so far,
     // and its `low`, which starts one deeper than the node.
-    const stack: [Node, (Node | null)[], number, number, number][] = [
-      [root, children(root, aliasTargets), 0, 1, 1],
+    const stack: [
+      node: Node,
+      children: (Node | null)[],
+      index: number,
+      total: number,
+      low: number,
+    ][] = [
+      [root, countedChildren(root, aliasTargets), 0, 1, 1],
     ];
     while (stack.length > 0) {
       const frame = stack.at(-1)!;
@@ -270,7 +277,7 @@ export function composeFlowDocument(text: string, options: FlowParseOptions = {}
           break;
         } else {
           depths.set(child, stack.length);
-          stack.push([child, children(child, aliasTargets), 0, 1, stack.length + 1]);
+          stack.push([child, countedChildren(child, aliasTargets), 0, 1, stack.length + 1]);
           counted += 1;
         }
         continue;
@@ -307,14 +314,14 @@ export function composeFlowDocument(text: string, options: FlowParseOptions = {}
  * value, with each alias replaced by the node it names and `null` for a missing key or
  * value; none for a scalar.
  */
-function children(node: Node, aliasTargets: ReadonlyMap<Alias, Node>): (Node | null)[] {
+function countedChildren(node: Node, aliasTargets: ReadonlyMap<Alias, Node>): (Node | null)[] {
   const items: unknown[] = isSeq(node)
     ? node.items
     : isMap(node)
       ? node.items.flatMap((pair) => [pair.key, pair.value])
       : [];
   return items.map((item) => {
-    const child = (item ?? null) as Node | null;
+    const child = isNode(item) ? item : null;
     return isAlias(child) ? aliasTargets.get(child)! : child;
   });
 }

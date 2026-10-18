@@ -182,7 +182,12 @@ These entries exist only in TS yian; Python yian neither reads nor records them.
 | `YIAN_MAX_MCP_MESSAGE_BYTES` | input cap | 16,777,216 | 1 or more | Largest message read from an MCP server |
 
 A value of 300 or more for either model timeout takes effect only on Bun: Node's fetch
-has its own 300-second limits. TS yian has no restart limit (a host that resumes runs
+has its own 300-second limits, which run whether or not yian is reading. yian's two
+timers run only while it waits for the network, so time a host spends between reads
+never counts as silence; any bytes, keep-alive comments included, reset them, and
+there is no total deadline, so a long stream that keeps sending never times out.
+Ollama may need a higher `YIAN_MODEL_FIRST_RESPONSE_TIMEOUT_SECONDS` to load a large
+model before its first line (up to 300 on Node). TS yian has no restart limit (a host that resumes runs
 automatically sets its own) and no int digit limit.
 
 ## All defaults and limits

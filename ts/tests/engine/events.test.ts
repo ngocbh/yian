@@ -297,6 +297,12 @@ const SAMPLES: readonly { event: RunEvent; data: Record<string, unknown> }[] = [
   },
 ];
 
+/** The exported event class names, sorted. */
+const EVENT_CLASS_NAMES = Object.entries(events)
+  .filter(([, value]) => typeof value === "function" && value !== TokenUsage)
+  .map(([name]) => name)
+  .sort();
+
 /** Data-form keys whose values the flow produced; their insides are not yian's structures. */
 const FLOW_VALUE_KEYS = new Set(["output", "arguments", "seed"]);
 
@@ -390,13 +396,9 @@ describe("type discriminant", () => {
   });
 
   test("the samples cover every event class", () => {
-    const classes = Object.values(events)
-      .filter((value) => typeof value === "function" && value !== TokenUsage)
-      .map((value) => (value as { name: string }).name)
-      .sort();
     const sampled: string[] = [...new Set(SAMPLES.map(({ event }) => event.type))].sort();
-    expect(sampled).toEqual(classes);
-    expect(classes).toHaveLength(16);
+    expect(sampled).toEqual(EVENT_CLASS_NAMES);
+    expect(EVENT_CLASS_NAMES).toHaveLength(16);
   });
 
   test("TokenUsage is not an event and has no type", () => {
@@ -533,8 +535,7 @@ function validate(schema: Schema, value: unknown, path = "$"): string[] {
   }
   if ("enum" in schema) {
     const members = schema.enum as unknown[];
-    const sameType = members.some((member) => types.includes(jsonTypes(member)[0]!));
-    if (sameType && !members.some((member) => isDeepStrictEqual(value, member))) {
+    if (!members.some((member) => isDeepStrictEqual(value, member))) {
       problems.push(`${path}: ${JSON.stringify(value)} is not one of the enum`);
     }
   }
@@ -606,9 +607,9 @@ function def(name: string): Schema {
 }
 
 /** Return the event names the envelope's `oneOf` lists, in order. */
-function oneOfNames(): unknown[] {
+function oneOfNames(): string[] {
   return (SCHEMA.oneOf as Schema[]).map(
-    (branch) => ((branch.properties as Record<string, Schema>).name as Schema).const,
+    (branch) => ((branch.properties as Record<string, Schema>).name as Schema).const as string,
   );
 }
 
@@ -631,6 +632,7 @@ describe("events schema", () => {
 
   test("every sample event validates as {name, data}", () => {
     for (const { event } of SAMPLES) {
+      expect(validate(def(event.type), event.toJSON())).toEqual([]);
       expect(validate(SCHEMA, { name: event.type, data: event.toJSON() })).toEqual([]);
     }
   });
@@ -679,7 +681,7 @@ describe("events schema", () => {
     ]);
   });
 
-  test("minimum and enum skip null where the type allows it", () => {
+  test("minimum skips null where the type allows it", () => {
     const chunk = { node_id: "n", key: "k", chunk: "", final: false, exchange_id: null };
     expect(validate(def("StreamChunk"), { ...chunk, attempt: null })).toEqual([]);
     expect(validate(def("StreamChunk"), { ...chunk, attempt: 0 })).toEqual([
@@ -687,10 +689,6 @@ describe("events schema", () => {
     ]);
     expect(validate(def("StreamChunk"), { ...chunk, attempt: 1.5 })).toEqual([
       "$.attempt: number is not integer or null",
-    ]);
-    expect(validate({ type: ["string", "null"], enum: ["a"] }, null)).toEqual([]);
-    expect(validate({ type: ["string", "null"], enum: ["a"] }, "b")).toEqual([
-      '$: "b" is not one of the enum',
     ]);
   });
 
@@ -702,14 +700,10 @@ describe("events schema", () => {
   });
 
   test("event $defs, oneOf names and exported event classes are one set", () => {
-    const classes = Object.entries(events)
-      .filter(([, value]) => typeof value === "function" && value !== TokenUsage)
-      .map(([name]) => name)
-      .sort();
     const defs = Object.keys(SCHEMA.$defs as Schema);
     const names = oneOfNames();
-    expect(defs.filter((name) => /^[A-Z]/.test(name)).sort()).toEqual(classes);
-    expect([...names].sort()).toEqual(classes);
+    expect(defs.filter((name) => /^[A-Z]/.test(name)).sort()).toEqual(EVENT_CLASS_NAMES);
+    expect([...names].sort()).toEqual(EVENT_CLASS_NAMES);
     expect(new Set(names).size).toBe(names.length);
     expect(defs.filter((name) => !/^[A-Z]/.test(name)).sort()).toEqual([
       "failure",
@@ -723,9 +717,12 @@ describe("events schema", () => {
     }
   });
 
-  test("every event data form requires each key it lists", () => {
-    for (const name of oneOfNames()) {
-      const schema = def(name as string);
+  test("every object form requires each key it lists", () => {
+    const trace = (def("failure").properties as Record<string, Schema>).trace!;
+    const defs = Object.values(SCHEMA.$defs as Record<string, Schema>);
+    const objects = [...defs.filter((schema) => "properties" in schema), trace.items as Schema];
+    expect(objects).toHaveLength(EVENT_CLASS_NAMES.length + 4);
+    for (const schema of objects) {
       expect(schema.type).toBe("object");
       expect(schema.required).toEqual(Object.keys(schema.properties as Schema));
     }

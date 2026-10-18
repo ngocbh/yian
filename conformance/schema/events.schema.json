@@ -31,7 +31,7 @@
       "description": "A value the flow produced, in yian's JSON codec form: ints and floats as JSON numbers, and a value handed to a host doesn't keep the int/float kind, so 2 may be a float; infinity as {\"$float\": \"inf\"} and minus infinity as {\"$float\": \"-inf\"}; a record with that shape, or whose only key is $record, wrapped as {\"$record\": <record>}; a file as {uri, mime, name}."
     },
     "failure": {
-      "description": "One canonical semantic failure.",
+      "description": "A failure: its stable code, message, failing node and authored origins.",
       "type": "object",
       "required": ["code", "message", "node_id", "trace", "cause_type", "traceback"],
       "properties": {
@@ -113,14 +113,14 @@
       }
     },
     "StreamChunk": {
-      "description": "A streamed fragment of a node's output, such as model text. A completed AGENT stream ends with one empty final chunk.",
+      "description": "A streamed fragment of a node's output, such as model text. A completed or interrupted AGENT stream ends with one empty final chunk; a failed call ends without one (its ModelCallFinished.error is set), and a host discards that exchange's partial text.",
       "type": "object",
       "required": ["node_id", "key", "chunk", "final", "exchange_id", "attempt"],
       "properties": {
         "node_id": {"type": "string"},
         "key": {"type": "string", "description": "What the stream carries: \"text\" for AGENT reply text."},
         "chunk": {"type": "string"},
-        "final": {"type": "boolean", "description": "True on the empty chunk that ends a completed stream."},
+        "final": {"type": "boolean", "description": "True on the empty chunk that ends a completed or interrupted stream."},
         "exchange_id": {"type": ["string", "null"], "description": "The model exchange an AGENT text chunk belongs to; null for other streams."},
         "attempt": {"type": ["integer", "null"], "minimum": 1, "description": "The AGENT model attempt the text belongs to, 1-based; null for other streams."}
       }
@@ -175,7 +175,7 @@
       "required": ["node_id", "interrupted"],
       "properties": {
         "node_id": {"type": "string"},
-        "interrupted": {"type": "integer", "minimum": 0, "description": "How many times the node's attempts were interrupted so far; 0 for a node restarted after a deliberate stop, which has no interrupted attempt."}
+        "interrupted": {"type": "integer", "minimum": 0, "description": "How many of the node's attempts were interrupted, derived from the log; a deliberate stop doesn't count, so a node restarted only after stops has 0."}
       }
     },
     "ModelCallStarted": {
@@ -210,10 +210,10 @@
         "provider": {"type": ["string", "null"], "description": "The effective provider."},
         "model": {"type": ["string", "null"], "description": "The effective model."},
         "usage": {
-          "description": "The provider's own token count, or null when it reported none.",
+          "description": "The provider's own token count, or null when it reported none; a cut stream reports the usage received so far.",
           "oneOf": [{"$ref": "#/$defs/token_usage"}, {"type": "null"}]
         },
-        "error": {"type": ["string", "null"], "description": "The error's type name when the call raised, never provider text; null when it returned."},
+        "error": {"type": ["string", "null"], "description": "The error's type name when the call raised, never provider text; null when it returned or a steering interrupt cut its stream."},
         "attempt": {"type": "integer", "minimum": 1, "description": "The node's model attempt this call belongs to, 1-based."}
       }
     },

@@ -187,7 +187,7 @@ describe("rejected definitions", () => {
 });
 
 describe("typedef names", () => {
-  test("a name shadowing a builtin is rejected", () => {
+  test("a builtin name is rejected (PascalCase first, then shadowing)", () => {
     expectRejected(
       { str: "int" },
       "typedef name 'str' must be PascalCase (an uppercase identifier)",

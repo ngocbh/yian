@@ -36,6 +36,15 @@ function rec(fields: Record<string, Type>): Type {
 
 const FILE_RECORD = rec({ f: FILE });
 
+const REGISTRY = readTypedefs({
+  Buy: { action: "Literal(buy)", qty: "int" },
+  Sell: { action: "Literal(sell)", qty: "int" },
+  Rec: { a: "int" },
+});
+
+/** Resolve a type expression against the compatibility typedefs. */
+const t = (text: string): Type => typeFor(text, REGISTRY);
+
 describe("Any type shape", () => {
   test("is valid", () => {
     new Type({ kind: ValueKind.ANY }).validateShape();
@@ -75,15 +84,11 @@ describe("Any labels", () => {
 
 describe("Any overlap", () => {
   test.each([
-    ["str", Type.scalar(ValueKind.STRING), true],
-    ["Rec", rec({ a: Type.scalar(ValueKind.INTEGER) }), true],
-    [
-      "list(int)",
-      new Type({ kind: ValueKind.LIST_INTEGER, element: Type.scalar(ValueKind.INTEGER) }),
-      true,
-    ],
+    ["str", t("str"), true],
+    ["Rec", t("Rec"), true],
+    ["list(int)", t("list(int)"), true],
     ["Any", ANY, true],
-    ["None", Type.scalar(ValueKind.NONE), false],
+    ["None", t("None"), false],
     // A file slot reads a file's JSON form, which is an `Any` value.
     ["file", FILE, true],
     ["{f: file}", FILE_RECORD, true],

@@ -3,11 +3,12 @@
  * may nest once its typedef names are expanded, a port of `tests/engine/test_typedef_nesting.py`.
  * The flow-loading tests run their typedefs through `readTypedefs` and `typeFor` here.
  * Later: the lower-limit rows (`test_a_lower_limit_bounds_records_and_aliases`, the limit-125
- * rows of `test_types_at_the_limit_load`, `test_field_parse_follows_the_type_nesting_limit`,
- * `test_field_parse_follows_the_int_digit_limit`), which need the defaults module, and the
- * located load errors (`test_a_flow_with_a_long_chain_is_a_located_load_error`,
+ * rows of `test_types_at_the_limit_load`, `test_field_parse_follows_the_type_nesting_limit`),
+ * which need the defaults module, and the located load errors
+ * (`test_a_flow_with_a_long_chain_is_a_located_load_error`,
  * `test_a_flow_wrapping_a_deep_typedef_is_a_located_load_error`), which need the loader.
- * Not ported: `test_measuring_a_diamond_is_memoized` and the measure half of
+ * Not ported: `test_field_parse_follows_the_int_digit_limit` (D4a: no digit limits);
+ * `test_measuring_a_diamond_is_memoized` and the measure half of
  * `test_an_empty_record_and_an_enum_load` call private functions;
  * `test_measured_levels_match_the_resolved_type` checks the measured levels through
  * `readTypedefs` instead.
@@ -57,6 +58,7 @@ function nest(ctor: string, n: number, name: string): string {
   return `${ctor}(`.repeat(n) + name + ")".repeat(n);
 }
 
+/** The levels error for record `name`'s `field` of type `text`, which adds `adds` levels. */
 function levelsMessage(name: string, field: string, text: string, adds: number): string {
   return (
     `typedef '${name}' field '${field}': type nests deeper than 100 levels, the limit for a ` +
@@ -64,9 +66,11 @@ function levelsMessage(name: string, field: string, text: string, adds: number):
   );
 }
 
-function chainMessage(name: string, chain: number): string {
+/** The chain error for typedef `name` (at `field`, if given) ending a chain of `chain`. */
+function chainMessage(name: string, chain: number, field?: string): string {
+  const where = field === undefined ? `'${name}'` : `'${name}' field '${field}'`;
   return (
-    `typedef '${name}': it ends a chain of ${chain} typedefs, each naming the next, more than ` +
+    `typedef ${where}: it ends a chain of ${chain} typedefs, each naming the next, more than ` +
     "100, the limit for a type; write its type with fewer typedefs in between"
   );
 }
@@ -249,8 +253,7 @@ describe("levels and chains", () => {
   test("a record field holding a long alias chain fails on the chain", () => {
     expectRejected(
       { ...aliases(100), R: { x: "int", a: "A99" } },
-      "typedef 'R' field 'a': it ends a chain of 101 typedefs, each naming the next, more " +
-        "than 100, the limit for a type; write its type with fewer typedefs in between",
+      chainMessage("R", 101, "a"),
       ["R", "a"],
     );
   });

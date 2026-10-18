@@ -1124,11 +1124,11 @@ export function typeFor(text: string, registry: TypeRegistry): Type {
 }
 
 // --------------------------------------------------------------------------------------- //
-// typedefs: registry builder
+// Typedef registry builder
 // --------------------------------------------------------------------------------------- //
 
 /** A typedef's parsed `[field, type]` parts: each record field, or the alias target. */
-type TypedefParts = readonly (readonly [field: string | null, type: TypeExpr])[];
+type ParsedParts = readonly (readonly [field: string | null, type: TypeExpr])[];
 
 /** The registry names a parsed type references (for the eager alias-cycle check). */
 function refsInType(t: TypeExpr): Set<string> {
@@ -1155,17 +1155,22 @@ function typedefParts(defn: TypeDef): [string | null, string | TypeExpr][] {
 
 /**
  * Prefix error `exc` with the typedef `name` (and `field`) it belongs to, and locate it
- * there; `exc` is the new error's cause.
+ * there; `options` (such as a `cause`) pass through to the new error.
  */
-function typedefError(name: string, field: string | null, exc: TypeCheckError): TypeCheckError {
+function typedefError(
+  name: string,
+  field: string | null,
+  exc: TypeCheckError,
+  options: ErrorOptions = {},
+): TypeCheckError {
   if (field === null) {
     return new TypeCheckError(`typedef ${reprText(name)}: ${exc.message}`, {
+      ...options,
       path: [name],
-      cause: exc,
     });
   }
   const where = `typedef ${reprText(name)} field ${reprText(field)}`;
-  return new TypeCheckError(`${where}: ${exc.message}`, { path: [name, field], cause: exc });
+  return new TypeCheckError(`${where}: ${exc.message}`, { ...options, path: [name, field] });
 }
 
 /** Check what a type expression says on its own: names it uses exist, bounds are valid. */
@@ -1186,6 +1191,8 @@ function checkLocal(t: TypeExpr, registry: TypeRegistry): void {
     case "union":
       for (const member of t.members) checkLocal(member, registry);
       break;
+    default:
+      break; // enums and dict(...) have nothing to check locally
   }
 }
 
@@ -1217,6 +1224,12 @@ function exprLevels(t: TypeExpr, levels: ReadonlyMap<string, number>): number {
   return deepest;
 }
 
+/** The largest of `counts`, or 0 when there are none. */
+function most(counts: readonly number[]): number {
+  // A reduce, not `Math.max(...counts)`: a spread's argument count is capped.
+  return counts.reduce((a, b) => Math.max(a, b), 0);
+}
+
 /**
  * Measure typedef `name` (definition `defn`, parsed `parts`) from the typedefs it names, and
  * store its levels and chain under `name` in `levels` and `chain`, where a name not yet
@@ -1230,13 +1243,10 @@ function exprLevels(t: TypeExpr, levels: ReadonlyMap<string, number>): number {
 function measureTypedef(
   name: string,
   defn: TypeDef,
-  parts: TypedefParts,
+  parts: ParsedParts,
   levels: Map<string, number>,
   chain: Map<string, number>,
 ): [depth: number, length: number, levelsField: string | null, chainField: string | null] {
-  // Maxima by reduce, not spread: a spread's argument count is capped.
-  const most = (counts: Iterable<number>): number =>
-    Array.from(counts).reduce((a, b) => Math.max(a, b), 0);
   const fieldLevels = parts.map(([field, t]) => [field, exprLevels(t, levels)] as const);
   const fieldChain = parts.map(
     ([field, t]) => [field, most(Array.from(refsInType(t), (ref) => chain.get(ref) ?? 0))] as const,
@@ -1265,7 +1275,7 @@ function measureTypedef(
 function checkMeasure(
   name: string,
   defn: TypeDef,
-  parts: TypedefParts,
+  parts: ParsedParts,
   levels: Map<string, number>,
   chain: Map<string, number>,
 ): void {
@@ -1309,7 +1319,7 @@ function checkMeasure(
  * `B: {y: A}` the error is `typedef 'B' field 'y': recursive type reference: 'B'`.
  */
 function checkTypedefs(registry: TypeRegistry): void {
-  const parsed = new Map<string, TypedefParts>();
+  const parsed = new Map<string, ParsedParts>();
   // First each typedef's own text, so an error names the typedef that holds the mistake
   // rather than the first typedef that happens to use it.
   for (const [name, defn] of registry) {
@@ -1321,7 +1331,7 @@ function checkTypedefs(registry: TypeRegistry): void {
         checkLocal(t, registry);
       } catch (error) {
         if (!(error instanceof TypeCheckError)) throw error;
-        throw typedefError(name, field, error);
+        throw typedefError(name, field, error, { cause: error });
       }
       parts.push([field, t]);
     }
@@ -1384,7 +1394,7 @@ function checkTypedefs(registry: TypeRegistry): void {
         resolveType(t, registry, new Set([name]));
       } catch (error) {
         if (!(error instanceof TypeCheckError)) throw error;
-        throw typedefError(name, field, error);
+        throw typedefError(name, field, error, { cause: error });
       }
     }
   }
@@ -1436,7 +1446,7 @@ function checkAliasCycles(registry: TypeRegistry): void {
 const PASCAL_CASE = new RegExp(`^(?=\\p{Uppercase})${IDENTIFIER_PATTERN}$`, "u");
 
 /** Whether `value` is a plain object: its prototype is `Object.prototype` or `null`. */
-function isPlainObject(value: unknown): value is Readonly<Record<string, unknown>> {
+function isPlainMapping(value: unknown): value is Readonly<Record<string, unknown>> {
   if (typeof value !== "object" || value === null) return false;
   const proto: unknown = Object.getPrototypeOf(value);
   return proto === Object.prototype || proto === null;
@@ -1448,7 +1458,7 @@ function isPlainObject(value: unknown): value is Readonly<Record<string, unknown
  * other number, `bool`, `NoneType` for `null`, else its constructor's name (or `typeof`).
  */
 function pythonTypeName(value: unknown): string {
-  if (isPlainObject(value)) return "dict";
+  if (isPlainMapping(value)) return "dict";
   if (Array.isArray(value)) return "list";
   switch (typeof value) {
     case "string":
@@ -1507,7 +1517,7 @@ export function readTypedefs(
         { path: [name] },
       );
     }
-    if (isPlainObject(value)) {
+    if (isPlainMapping(value)) {
       const fields = new Map<string, string>();
       for (const [fname, ftype] of Object.entries(value)) {
         if (!fname) {
@@ -1538,7 +1548,7 @@ export function readTypedefs(
         parsed = parseType(value);
       } catch (error) {
         if (!(error instanceof TypeCheckError)) throw error;
-        throw typedefError(name, null, error);
+        throw typedefError(name, null, error, { cause: error });
       }
       registry.set(
         name,

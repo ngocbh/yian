@@ -2803,3 +2803,128 @@ def test_harvest_replay_installs_shims(tmp_path: Path, monkeypatch: pytest.Monke
         harvest._replay(state, run | {"unknown": 1}, ("text",))
     assert template._as_text is as_text and not state.disabled
     assert harvest.runner._request_difference is request_difference
+
+
+def _install_shims(patch: pytest.MonkeyPatch, *names: str) -> None:
+    """Install the harvest's shims named in `names` through `patch`, in `_SHIMS` order."""
+    from tests import conformance_harvest as harvest
+
+    for name, shim in harvest._SHIMS.items():
+        if name in names:
+            shim.install(patch, {})
+
+
+def test_shim_js_number() -> None:
+    """`_js_number` writes a float as JavaScript's `Number.prototype.toString` does."""
+    from tests import conformance_harvest as harvest
+
+    rows = [(1.0, "1"), (1.5, "1.5"), (0.1, "0.1"), (1e21, "1e+21"), (1e-7, "1e-7"),
+            (123e-9, "1.23e-7"), (1e20, "100000000000000000000"), (0.000001, "0.000001"),
+            (-2.5, "-2.5"), (5e-324, "5e-324"),
+            (1.7976931348623157e308, "1.7976931348623157e+308"), (math.inf, "Infinity"),
+            (-math.inf, "-Infinity"), (-0.0, "0"), (100.0, "100")]
+    assert [harvest._js_number(x) for x, _ in rows] == [text for _, text in rows]
+
+
+def test_shim_ts_text() -> None:
+    """`_ts_text` gives a value's text form."""
+    from tests import conformance_harvest as harvest
+
+    rows = [("a b", "a b"), (True, "true"), (False, "false"), (1, "1"),
+            (12345678901234567890123, "12345678901234567890123"), (1.5, "1.5"),
+            (1e21, "1e+21"), (math.inf, "Infinity"), ([1, "a"], '[1,"a"]'),
+            ({"k": "v"}, '{"k":"v"}'), (FileRef(uri="s3://b/k"),
+                                        '{"uri":"s3://b/k","mime":null,"name":null}'),
+            (None, "null"), (ValueError("boom"), "boom"),
+            ({"a": [1.0, None, {"é": []}], "b": {}}, '{"a":[1,null,{"é":[]}],"b":{}}')]
+    assert [harvest._ts_text(value) for value, _ in rows] == [text for _, text in rows]
+
+
+def test_shim_render_as_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Under `text-form`, `render_as_json` lays a value out as Python does, numbers as JS."""
+    import inspect
+
+    from yian.expr import builtins
+
+    original = builtins.TEMPLATE_FNS["render_as_json"]
+    _install_shims(monkeypatch, "text-form")
+    render = builtins.TEMPLATE_FNS["render_as_json"]
+    assert inspect.signature(render) == inspect.signature(original)
+    for value in ({"a": [1, {"b": None, "c": [True, "x"]}], "d": {}, "e": []}, [[], {}, [[1]]],
+                  "é", {"name": "Zoë", "tags": ["ü"]}, FileRef(uri="s3://b/k")):
+        for indent in (0, 2, 4):
+            expected = json.dumps(value.model_dump() if isinstance(value, FileRef) else value,
+                                  indent=indent, ensure_ascii=False)
+            assert render(value, indent) == expected
+    assert render({"x": 1.0, "y": [math.inf, -math.inf, 0.5]}) == (
+        '{\n  "x": 1,\n  "y": [\n    Infinity,\n    -Infinity,\n    0.5\n  ]\n}')
+    assert render([1.0], 0) == "[\n1\n]"
+    # The design defines only `indent >= 0`; any other indent is Python's own layout.
+    assert render({"x": 1.0}, "\t") == '{\n\t"x": 1.0\n}'
+    with pytest.raises(TypeError, match=r"render_as_json\(\) got null"):
+        render(None)
+
+
+def test_shim_js_key_order() -> None:
+    """`_js_ordered` lists a record's array-index keys first, ascending, at every depth."""
+    from tests import conformance_harvest as harvest
+
+    assert list(harvest._js_ordered({"b": 1, "10": 2, "a": 3, "2": 4})) == ["2", "10", "b", "a"]
+    assert list(harvest._js_ordered({"01": 1, "4294967295": 2, "4294967294": 3, "0": 4})) == [
+        "0", "4294967294", "01", "4294967295"]
+    nested = harvest._js_ordered({"x": [{"1": "a", "0": {"9": 1, "3": 2}}]})
+    assert list(nested["x"][0]) == ["0", "1"] and list(nested["x"][0]["0"]) == ["3", "9"]
+    assert harvest._js_ordered([1, "a", None]) == [1, "a", None]
+    assert harvest._js_ordered(1.5) == 1.5
+
+
+def test_shim_text_form_through_yian(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Python yian writes values in the text form under the shims, and as `str` without them."""
+    from tests import conformance_harvest as harvest
+    from yian.expr import builtins
+    from yian.expr.expressions import ExpressionError
+    from yian.nodes.agent import memory
+
+    values = {"flag": True, "n": 1.0, "xs": [1, 1.5, True, "a", [1, "b"]],
+              "r": {"a": 1.0, "b": [True, None]}, "rec": {"b": 1, "1": 2}}
+    # Without the shims, Python's spellings.
+    assert eval_binding("x=${flag}", values.get) == "x=True"
+    assert render_template_record("${n}", values) == "1.0"
+    assert memory._tool_text("t", None) == "None"
+    with pytest.MonkeyPatch.context() as patch:
+        _install_shims(patch, "key-order")
+        for name in ("join", "render_as_json", "upper", "lower"):
+            assert builtins.builtin_result_type(name) == builtins.builtin_result_type("upper")
+        assert builtins.builtin_result_type("join") is not None
+        assert render_template_record("${join(xs, \",\")}", values) == "1,1.5,True,a,[1, 'b']"
+    with pytest.MonkeyPatch.context() as patch:
+        _install_shims(patch, "text-form")
+        assert eval_binding("x=${flag}", values.get) == "x=true"
+        assert render_template_record("${n}", values) == "1"
+        assert render_template_record("${render_as_json(r)}", values) == (
+            '{\n  "a": 1,\n  "b": [\n    true,\n    null\n  ]\n}')
+        assert render_template_record("${join(xs, \",\")}", values) == '1,1.5,true,a,[1,"b"]'
+        assert render_template_record("r=${rec}", values) == 'r={"b":1,"1":2}'
+        assert builtins.builtin_result_type("join") is not None
+        assert memory._tool_text("t", None) == "null"
+        assert memory._tool_text("t", {"k": [1.0]}) == '{"k":[1]}'
+        assert memory._reported_text("t", ReportedToolError("no such row")) == "no such row"
+        assert memory._reported_text("t", ReportedToolError("")) == "ReportedToolError"
+    with pytest.MonkeyPatch.context() as patch:
+        _install_shims(patch, "text-form", "key-order")
+        assert render_template_record("r=${rec}", values) == 'r={"1":2,"b":1}'
+        assert render_template_record("${render_as_json(rec, 0)}", values) == (
+            '{\n"1": 2,\n"b": 1\n}')
+        assert render_template_record("${join([rec], \",\")}", values) == '{"1":2,"b":1}'
+        assert memory._tool_text("t", {"b": 1, "0": 2}) == '{"0":2,"b":1}'
+        with pytest.raises(ExpressionError, match="takes a list, got str"):
+            render_template_record("${join(n2, \",\")}", {"n2": "ab"})
+        with pytest.raises(ExpressionError, match=r"render_as_json"):
+            render_template_record("${render_as_json(r, 1, 2)}", values)
+    assert eval_binding("x=${flag}", values.get) == "x=True"
+    assert memory._tool_text("t", None) == "None"
+    assert list(harvest._SHIMS)[:2] == ["text-form", "key-order"]
+    assert {shim.rule for shim in harvest._SHIMS.values()} == {"text-form"}
+    case = {"kind": "expr", "template": "x=${v}", "values": {"v": True}}
+    assert harvest._replay(harvest._Harvest(None, tmp_path), case, ("text-form",)) == (
+        {"value": "x=true"}, frozenset())

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable, Collection
+from decimal import Decimal
 import functools
 import hashlib
 import inspect
@@ -43,13 +44,22 @@ import yaml
 import yian
 from yian import defaults, llm_clients
 from yian.compose import LoadError, load_flow
-from yian.expr.expressions import ResolveMode, eval_expr, evaluate_when_record
+from yian.expr import builtins as expr_builtins, template
+from yian.expr.expressions import ExpressionError, ResolveMode, eval_expr, evaluate_when_record
 from yian.expr.grammar import parse_expr
 from yian.expr.template import eval_binding, render_template_record
+from yian.nodes.agent import memory
 from yian.nodes.tool import node as tool_node
 from yian.run import RunResult, resume_flow, run_flow
 from yian.typesys.types import read_typedefs, type_for
-from yian.typesys.values import ValueKind, build_value_as
+from yian.typesys.values import (
+    FileRef,
+    ValueKind,
+    build_value_as,
+    long_int_digits,
+    long_int_message,
+    write_as_text,
+)
 
 from tests import test_conformance as runner
 
@@ -1302,8 +1312,199 @@ class _Shim(NamedTuple):
     install: Callable[[pytest.MonkeyPatch, dict], None]
 
 
+def _js_number(x: float) -> str:
+    """Return `x` as JavaScript's `Number.prototype.toString` writes it."""
+    if math.isinf(x):
+        return "Infinity" if x > 0 else "-Infinity"
+    if math.isnan(x):
+        return "NaN"
+    if x == 0:
+        return "0"
+    if x < 0:
+        return "-" + _js_number(-x)
+    # `repr` is the shortest round-tripping form, as in ECMAScript's Number::toString.
+    _, digits, exponent = Decimal(repr(x)).normalize().as_tuple()
+    s = "".join(map(str, digits))
+    k, n = len(s), exponent + len(s)
+    if k <= n <= 21:
+        return s + "0" * (n - k)
+    if 0 < n <= 21:
+        return s[:n] + "." + s[n:]
+    if -6 < n <= 0:
+        return "0." + "0" * -n + s
+    mantissa = s[0] + ("." + s[1:] if k > 1 else "")
+    return f"{mantissa}e{'+' if n > 0 else '-'}{abs(n - 1)}"
+
+
+def _ts_json(value: object, indent: int | None = None) -> str:
+    """Return `value` as yian's JSON writer writes it.
+
+    Numbers are as in the text form (so `inf` is a bare `Infinity`), text keeps non-ASCII, a
+    file is its `{uri, mime, name}` mapping and any other non-JSON value its text form, quoted.
+    With `indent=None` the JSON is compact; with an int `indent` it has `json.dumps`'s layout.
+    """
+    colon = ":" if indent is None else ": "
+
+    def write(value: object, level: int) -> str:
+        if value is None:
+            return "null"
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, int):
+            return str(value)
+        if isinstance(value, float):
+            return _js_number(value)
+        if isinstance(value, str):
+            return json.dumps(value, ensure_ascii=False)
+        if isinstance(value, FileRef):
+            value = value.model_dump()
+        if isinstance(value, list):
+            items, brackets = [write(item, level + 1) for item in value], "[]"
+        elif isinstance(value, dict):
+            items = [json.dumps(_ts_text(key), ensure_ascii=False) + colon + write(item, level + 1)
+                     for key, item in value.items()]
+            brackets = "{}"
+        else:
+            return json.dumps(_ts_text(value), ensure_ascii=False)
+        if not items:
+            return brackets
+        if indent is None:
+            return brackets[0] + ",".join(items) + brackets[1]
+        inner = "\n" + " " * (indent * (level + 1))
+        outer = "\n" + " " * (indent * level)
+        return brackets[0] + inner + ("," + inner).join(items) + outer + brackets[1]
+
+    return write(value, 0)
+
+
+def _ts_text(value: object) -> str:
+    """Return `value`'s text form: text as itself, other JSON values and files as JSON.
+
+    `None` reads `null`; anything else (an exception a tool reported, a host object) its `str`.
+    """
+    if isinstance(value, str):
+        return value
+    if value is None or isinstance(value, (bool, int, float, list, dict, FileRef)):
+        return _ts_json(value)
+    return str(value)
+
+
+# A JS array index: a canonical decimal below 2^32 - 1 (ten digits at most).
+_ARRAY_INDEX = re.compile(r"0|[1-9][0-9]{0,9}")
+
+
+def _is_array_index(key: object) -> bool:
+    """Return whether the record key `key` is a JavaScript array index."""
+    return (isinstance(key, str) and _ARRAY_INDEX.fullmatch(key) is not None
+            and int(key) < 2**32 - 1)
+
+
+def _js_ordered(value: object) -> object:
+    """Return a copy of `value` whose records, at every depth, hold their keys in JS order.
+
+    That is the array-index keys first, ascending, then the other keys in their order.
+    """
+    if isinstance(value, list):
+        return [_js_ordered(item) for item in value]
+    if isinstance(value, dict):
+        keys = sorted(filter(_is_array_index, value), key=int)
+        keys += [key for key in value if not _is_array_index(key)]
+        return {key: _js_ordered(value[key]) for key in keys}
+    return value
+
+
+def _ts_as_text(value: object) -> str:
+    """Return `value`'s text form, as `template._as_text` does `str(value)`."""
+    try:
+        return write_as_text(_ts_text, value)
+    except ValueError as exc:
+        raise ExpressionError(str(exc)) from exc
+
+
+def _ts_join(value: object, sep: str = "\n") -> str:
+    """Join a list's elements in their text form with `sep`, with `_join`'s checks."""
+    expr_builtins._reject_null("join", value, "[]")
+    if not isinstance(value, list):
+        raise TypeError(f"join() takes a list, got {expr_builtins._kind(value)}")
+    if any(x is None for x in value):
+        raise TypeError("join() got a null element; drop or default it before joining")
+    return write_as_text(lambda v: sep.join(_ts_text(x) for x in v), value)
+
+
+def _ts_render_as_json(original):
+    """Return `render_as_json` writing through `_ts_json` for an int `indent >= 0`.
+
+    Any other indent goes to `original`: the design defines only `indent >= 0`.
+    """
+    @functools.wraps(original)
+    def render_as_json(value: object, indent: int = 2) -> str:
+        expr_builtins._reject_null("render_as_json", value)
+        if type(indent) is int and indent >= 0:
+            return write_as_text(lambda v: _ts_json(v, indent), value)
+        return original(value, indent)
+
+    return render_as_json
+
+
+def _ts_tool_text(name: str, result: object) -> str:
+    """Return a tool result's text form, as `memory._tool_text` does `str(result)`."""
+    try:
+        return write_as_text(_ts_text, result)
+    except ValueError as exc:
+        digits = long_int_digits(result)
+        if digits is None:
+            raise
+        raise ValueError(f"tool {name!r} result: {long_int_message(digits)}") from exc
+
+
+def _keep_text_builtins(patch: pytest.MonkeyPatch) -> None:
+    """Make the installed text builtins `builtins._TEXT_BUILTINS`, so they still type as `str`."""
+    fns = expr_builtins.TEMPLATE_FNS
+    patch.setattr(expr_builtins, "_TEXT_BUILTINS",
+                  frozenset(fns[name] for name in ("join", "render_as_json", "upper", "lower")))
+
+
+def _install_text_form(patch: pytest.MonkeyPatch, case: dict) -> None:
+    """Write `${...}` spans, `join` elements, `render_as_json` and tool results in the text form."""
+    fns = expr_builtins.TEMPLATE_FNS
+    patch.setattr(template, "_as_text", _ts_as_text)
+    patch.setitem(fns, "join", _ts_join)
+    patch.setitem(fns, "render_as_json", _ts_render_as_json(fns["render_as_json"]))
+    patch.setattr(memory, "_tool_text", _ts_tool_text)
+    _keep_text_builtins(patch)
+
+
+def _ordering(original):
+    """Return `original` wrapped to take its first argument through `_js_ordered`."""
+    @functools.wraps(original)
+    def wrapper(value: object, *args: object, **kwargs: object) -> object:
+        return original(_js_ordered(value), *args, **kwargs)
+
+    return wrapper
+
+
+def _install_key_order(patch: pytest.MonkeyPatch, case: dict) -> None:
+    """Hand the text points each record with its keys in JS order."""
+    fns = expr_builtins.TEMPLATE_FNS
+    for name in ("join", "render_as_json"):
+        patch.setitem(fns, name, _ordering(fns[name]))
+    patch.setattr(template, "_as_text", _ordering(template._as_text))
+    tool_text = memory._tool_text
+
+    @functools.wraps(tool_text)
+    def ordered_tool_text(name: str, result: object) -> str:
+        return tool_text(name, _js_ordered(result))
+
+    patch.setattr(memory, "_tool_text", ordered_tool_text)
+    _keep_text_builtins(patch)
+
+
 # The shims by name, in install order: a later shim may wrap what an earlier one patched.
-_SHIMS: dict[str, _Shim] = {}
+_SHIMS: dict[str, _Shim] = {
+    "text-form": _Shim("text-form", _install_text_form),
+    # Record key order is in the text-form rule's section of the design.
+    "key-order": _Shim("text-form", _install_key_order),
+}
 # What the shims noted during the latest replay.
 _NOTES: set[str] = set()
 

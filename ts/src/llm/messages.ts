@@ -61,7 +61,7 @@ function segment(key: string): string {
 }
 
 /** Return whether `value` is a plain object: not an array, with prototype `Object.prototype` or `null`. */
-function isPlainObject(value: unknown): value is Record<string, unknown> {
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const proto: unknown = Object.getPrototypeOf(value);
   return proto === Object.prototype || proto === null;
@@ -82,7 +82,7 @@ export function typeName(value: unknown): string {
 }
 
 /** Set `target[key]`, defining a `"__proto__"` key so it stays data rather than setting the prototype. */
-function put(target: JsonValue[] | JsonObject, key: string | number, value: JsonValue): void {
+export function put(target: JsonValue[] | JsonObject, key: string | number, value: JsonValue): void {
   if (key === "__proto__") {
     Object.defineProperty(target, key, { value, writable: true, enumerable: true, configurable: true });
   } else {
@@ -178,8 +178,8 @@ export function checkJsonValue(value: unknown, path: string): JsonValue {
   return root[0]!;
 }
 
-/** Return a deep copy of a value `checkJsonValue` accepted; its nesting limit bounds the recursion. */
-function copyJson<T extends JsonValue>(value: T): T {
+/** Return a deep copy of a JSON value; it recurses once per nesting level, so callers bound the depth (as `checkJsonValue` does). */
+export function copyJson<T extends JsonValue>(value: T): T {
   if (Array.isArray(value)) return value.map(copyJson) as T;
   if (typeof value !== "object" || value === null) return value;
   const copy: JsonObject = {};

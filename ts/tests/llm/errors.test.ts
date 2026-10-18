@@ -9,7 +9,6 @@ import {
   kindForStatus,
   parseRetryAfter,
   ProviderError,
-  redirectDetail,
   type ErrorKind,
 } from "../../src/llm/errors.ts";
 
@@ -368,22 +367,5 @@ describe("message", () => {
     expect(reply(302, { Location: "/steal?token=abc" }).message.endsWith(": redirect to a relative Location")).toBe(
       true,
     );
-  });
-
-  test("redirectDetail", () => {
-    expect(redirectDetail(null)).toBe("redirect without a Location header");
-    expect(redirectDetail("")).toBe("redirect without a Location header");
-    expect(redirectDetail("http://[::1")).toBe("redirect to an unparsable Location");
-    expect(redirectDetail("//[::1")).toBe("redirect to an unparsable Location");
-    expect(redirectDetail("https://[::1]:8443/x?t=1")).toBe("redirect to https://[::1]:8443");
-    expect(redirectDetail("https://h.example:443/x")).toBe("redirect to https://h.example");
-    expect(redirectDetail(" HTTP://H.Example/x ")).toBe("redirect to http://h.example");
-    expect(redirectDetail("mailto:x")).toBe("redirect to a relative Location");
-    expect(redirectDetail("///x")).toBe("redirect to a relative Location");
-    expect(redirectDetail("https:///x")).toBe("redirect to a relative Location");
-    expect(redirectDetail("//h.example/x")).toBe("redirect to a Location without a scheme");
-    expect(redirectDetail("x/y")).toBe("redirect to a relative Location");
-    // urlsplit("http:host") has no netloc.
-    expect(redirectDetail("http:host")).toBe("redirect to a relative Location");
   });
 });

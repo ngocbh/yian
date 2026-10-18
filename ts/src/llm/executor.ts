@@ -1,0 +1,277 @@
+/**
+ * Send a model request over a route and read its reply as events: `RouteModel` joins a
+ * route (where the body goes and how it authenticates), a wire protocol (how a `Request`
+ * becomes a body and the reply's frames become events) and the transport, making one
+ * attempt per call. `callWithRetries` is the one retry loop above it.
+ *
+ * A status error is scrubbed of the credentials the route sent, in its message and its
+ * `stack`; the transport scrubs its own errors, and the AGENT scrubs every error a call
+ * raises.
+ */
+
+import { current } from "../defaults.ts";
+import { realScheduler, type Scheduler, type Send } from "../platform.ts";
+import type { JsonObject, JsonValue } from "../typesys/json.ts";
+import { scrub } from "./auth.ts";
+import { encodeBody } from "./body.ts";
+import { errorFromResponse, MAX_RETRY_AFTER_SECONDS, ProviderError } from "./errors.ts";
+import { type ChatModel, type Event, EventStream, ReplyAssembler } from "./events.ts";
+import { iterNdjson, iterSse, type SSEEvent } from "./framing.ts";
+import type { Message, Request, Response } from "./messages.ts";
+import type { Route } from "./route.ts";
+import { type Exchange, openExchange } from "./transport.ts";
+
+// The openai and anthropic SDKs send this Accept on every request, streamed ones too.
+const DEFAULT_HEADERS = { "content-type": "application/json", accept: "application/json" };
+const MAX_ERROR_BODY = 64 * 1024;
+
+/** What every wire protocol has. */
+interface ProtocolBase {
+  /** The protocol id, e.g. `openai_responses`; adapters put it in `Finish.protocol`. */
+  readonly name: string;
+  /** The model name the bodies ask for. */
+  readonly model: string;
+  /** Build the JSON request body for `request`. */
+  buildBody(request: Request): JsonObject;
+}
+
+/** A wire protocol whose replies are server-sent events. */
+export interface SseProtocol extends ProtocolBase {
+  readonly framing: "sse";
+  /** Turn the reply's events into stream events. */
+  parse(frames: AsyncIterable<SSEEvent>): AsyncIterable<Event>;
+}
+
+/** A wire protocol whose replies are newline-delimited JSON. */
+export interface NdjsonProtocol extends ProtocolBase {
+  readonly framing: "ndjson";
+  /** Turn the reply's JSON values into stream events. */
+  parse(frames: AsyncIterable<JsonValue>): AsyncIterable<Event>;
+}
+
+/** A provider wire format: how a `Request` is sent and how its reply is read. */
+export type WireProtocol = SseProtocol | NdjsonProtocol;
+
+/** A `ChatModel` that sends a protocol's bodies over one route. */
+export class RouteModel implements ChatModel {
+  /** The route's provider name. */
+  readonly provider: string;
+  /** The protocol's model name. */
+  readonly model: string;
+  /** Where requests go and how they authenticate. */
+  readonly route: Route;
+  /** Builds the bodies and parses the replies. */
+  readonly protocol: WireProtocol;
+  readonly #send: Send | undefined;
+  readonly #scheduler: Scheduler | undefined;
+
+  /**
+   * @param options `send` and `scheduler` go to the transport; they default to the
+   *   runtime's fetch and the real clock.
+   */
+  constructor(options: { route: Route; protocol: WireProtocol; send?: Send; scheduler?: Scheduler }) {
+    this.route = options.route;
+    this.protocol = options.protocol;
+    this.provider = options.route.provider;
+    this.model = options.protocol.model;
+    this.#send = options.send;
+    this.#scheduler = options.scheduler;
+  }
+
+  /**
+   * Start one call and return its events at once; nothing runs until the first `next()`.
+   *
+   * The first `next()` builds and encodes the body, resolves the auth headers and POSTs the
+   * body with `content-type` and `accept` of `application/json`, overridden by the route's
+   * headers, then by the auth headers, case-insensitively. A non-2xx reply throws a
+   * `ProviderError` built from at most 64 KiB of its body; a 2xx reply's frames go to the
+   * protocol, and a `ProviderError` from parsing that names no provider gets the route's.
+   * Closing the stream aborts the request.
+   *
+   * Errors: a `TypeError` for a body that isn't JSON or an invalid header value, before
+   * sending; whatever the auth source throws, unchanged; the transport's errors; and the
+   * protocol's.
+   */
+  stream(request: Request, options: { signal?: AbortSignal } = {}): EventStream {
+    const stop = new AbortController();
+    const signal = options.signal ? AbortSignal.any([options.signal, stop.signal]) : stop.signal;
+    return new EventStream(this.#call(request, signal), () => stop.abort());
+  }
+
+  /** Make the call's one attempt, releasing its exchange however the parse ends. */
+  async *#call(request: Request, signal: AbortSignal): AsyncGenerator<Event> {
+    const { route, protocol } = this;
+    signal.throwIfAborted();
+    const body = encodeBody(protocol.buildBody(request));
+    const headers = new Headers(DEFAULT_HEADERS);
+    for (const [name, value] of Object.entries(route.headers)) headers.set(name, value);
+    for (const [name, value] of Object.entries(await route.auth.headers())) headers.set(name, value);
+    const exchange = await openExchange(
+      route.url(),
+      { method: "POST", headers, body },
+      {
+        provider: route.provider,
+        credentials: () => route.auth.credentials(),
+        signal,
+        send: this.#send,
+        scheduler: this.#scheduler,
+      },
+    );
+    if (exchange.status < 200 || exchange.status >= 300) {
+      const credentials = route.auth.credentials();
+      const text = scrub(await readErrorBody(exchange), credentials);
+      const error = errorFromResponse(exchange.status, exchange.headers, text, { provider: route.provider });
+      throw scrubbed(error, credentials);
+    }
+    try {
+      if (protocol.framing === "sse") yield* protocol.parse(iterSse(exchange.body));
+      else yield* protocol.parse(iterNdjson(exchange.body));
+    } catch (error) {
+      // Protocol parsers don't know the route.
+      if (error instanceof ProviderError && error.provider === null) error.provider = route.provider;
+      throw error;
+    } finally {
+      // `body.return()` releases nothing before the body's first read.
+      exchange.abort();
+    }
+  }
+}
+
+/**
+ * Read at most 64 KiB of an error reply's body, decoded as UTF-8 with replacement. The body
+ * aborts the request however the read ends: stopping at the cap returns it early, which
+ * runs its own release. A `ProviderError` from a read keeps what arrived; any other error,
+ * such as a caller abort, propagates.
+ */
+async function readErrorBody(exchange: Exchange): Promise<string> {
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for await (const chunk of exchange.body) {
+      chunks.push(chunk);
+      size += chunk.byteLength;
+      if (size >= MAX_ERROR_BODY) break;
+    }
+  } catch (error) {
+    // The status already names the failure.
+    if (!(error instanceof ProviderError)) throw error;
+  }
+  const bytes = new Uint8Array(Math.min(size, MAX_ERROR_BODY));
+  let at = 0;
+  for (const chunk of chunks) {
+    const part = chunk.subarray(0, bytes.length - at);
+    bytes.set(part, at);
+    at += part.length;
+  }
+  return new TextDecoder().decode(bytes);
+}
+
+/**
+ * Return `error`, or a copy with every field kept and the credentials replaced in its
+ * message when it still holds one.
+ *
+ * The body is scrubbed before parsing, but an echo with mixed escapes only matches a
+ * credential once the parse has undone them. The error is rebuilt, not edited: a `stack` read
+ * before the scrub would keep the old message.
+ */
+function scrubbed(error: ProviderError, credentials: readonly string[]): ProviderError {
+  const message = scrub(error.message, credentials);
+  if (message === error.message) return error;
+  const { kind, status, retryAfter, retryable, provider, causeName } = error;
+  return new ProviderError(kind, message, { status, retryAfter, retryable, provider, causeName });
+}
+
+/** A failed attempt about to be retried. */
+export interface RetryInfo {
+  /** The failed attempt's number, from 1. */
+  readonly attempt: number;
+  /** Why it failed. */
+  readonly error: ProviderError;
+  /** What arrived before the failure, or `null` before the first event. */
+  readonly partial: Message | null;
+  /** Seconds until the next attempt. */
+  readonly retryIn: number;
+}
+
+/** Options for `callWithRetries`. */
+export interface CallOptions {
+  /** Stops the call: an attempt or a wait rejects with `signal.reason`. */
+  signal?: AbortSignal;
+  /** Retries allowed after the first attempt; defaults to `current().modelRetries`. */
+  budget?: number;
+  /** The clock waits run on; defaults to `realScheduler`. */
+  scheduler?: Scheduler;
+  /** A value in [0, 1) for backoff jitter; defaults to `Math.random`. */
+  random?: () => number;
+  /** Runs, and is awaited, right before each attempt's `model.stream`, after any wait. */
+  onAttempt?(attempt: number): void | Promise<void>;
+  /** Runs, and is awaited, for each event an attempt streams, with the attempt's number. */
+  onEvent?(event: Event, attempt: number): void | Promise<void>;
+  /** Runs, and is awaited, before each wait. */
+  onRetry?(retry: RetryInfo): void | Promise<void>;
+}
+
+/**
+ * Return the seconds to wait before the next attempt, as the openai SDK computes it.
+ *
+ * The error's `retryAfter` when finite and in (0, 120]; otherwise a backoff of
+ * `min(0.5 * 2 ** retries, 8)` scaled by `1 - 0.25 * random()`.
+ *
+ * @param error The failure being retried.
+ * @param retries The retries made so far.
+ * @param random A value in [0, 1).
+ */
+export function retryDelay(error: ProviderError, retries: number, random: () => number): number {
+  const after = error.retryAfter;
+  // A non-finite or out-of-range retry-after (an adapter-built error, `inf`) gets the backoff instead.
+  if (after !== null && Number.isFinite(after) && after > 0 && after <= MAX_RETRY_AFTER_SECONDS) return after;
+  // The exponent is capped as openai does, so a huge retry count can't overflow.
+  return Math.min(0.5 * 2 ** Math.min(retries, 1000), 8) * (1 - 0.25 * random());
+}
+
+/**
+ * Call `model` until one attempt's events assemble into a reply, retrying a retryable
+ * `ProviderError` while the budget lasts, before or after partial output.
+ *
+ * Per failed attempt the order is `onAttempt(k)`, its events through `onEvent`, `onRetry`,
+ * the wait of `retryDelay` seconds through the scheduler, then `onAttempt(k + 1)`. A
+ * `ProviderError` naming no provider (the assembler's `incomplete`) gets `model.provider`
+ * before `onRetry` sees it or it is thrown.
+ *
+ * Errors: a non-retryable `ProviderError`, or the last one when the budget runs out; any
+ * other error from the model, such as a defect or an auth source's failure, unchanged; a
+ * hook's error, never retried; and `signal.reason` on a stop.
+ *
+ * @returns The successful attempt's reply.
+ */
+export async function callWithRetries(model: ChatModel, request: Request, options: CallOptions = {}): Promise<Response> {
+  const { signal, scheduler = realScheduler, random = Math.random, onAttempt, onEvent, onRetry } = options;
+  const budget = options.budget ?? current().modelRetries;
+  for (let attempt = 1; ; attempt++) {
+    // Before `onAttempt`, so a stopped call never announces an attempt that won't be sent.
+    signal?.throwIfAborted();
+    await onAttempt?.(attempt);
+    const assembler = new ReplyAssembler();
+    // Set while `onEvent` runs, so a hook's error is never taken for the model's.
+    let inHook = false;
+    try {
+      for await (const event of model.stream(request, { signal })) {
+        assembler.add(event);
+        inHook = true;
+        await onEvent?.(event, attempt);
+        inHook = false;
+      }
+      return assembler.response();
+    } catch (error) {
+      // A stopped call ends with its reason, never an `onRetry` for an attempt it won't make.
+      if (signal?.aborted) throw signal.reason;
+      if (inHook || !(error instanceof ProviderError)) throw error;
+      error.provider ??= model.provider;
+      const retries = attempt - 1;
+      if (!error.retryable || retries >= budget) throw error;
+      const retry = { attempt, error, partial: assembler.partial(), retryIn: retryDelay(error, retries, random) };
+      await onRetry?.(retry);
+      await scheduler.sleep(retry.retryIn * 1000, signal);
+    }
+  }
+}

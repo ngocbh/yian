@@ -29,8 +29,10 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   variables, so run them with none set; the test files that set limits reset them with
   `install(BUILTIN)` or `forget()`.
 - `src/platform.ts` holds the runtime-specific APIs: `runtime`, SQLite (`openSqlite`,
-  `sqliteErrorCode`), the exclusive file lock (`lockFile`, `waitForLock`, `isLocked`) and time
-  (`Scheduler`, `realScheduler`, `virtualScheduler`, `SLEEP_CHUNK_MS`). Never open a lock file
+  `sqliteErrorCode`), the exclusive file lock (`lockFile`, `waitForLock`, `isLocked`), time
+  (`Scheduler`, `realScheduler`, `virtualScheduler`, `SLEEP_CHUNK_MS`) and HTTP (`safeFetch`
+  over an injectable `Send`, which never follows a redirect, throws `RedirectError` for a 3xx
+  and sends `USER_AGENT`; every request goes through it). Never open a lock file
   any other way: on Node, closing any descriptor of a locked file drops the process's lock. Code
   that waits takes an injected `Scheduler`, so tests and conformance run on `virtualScheduler`.
   `stripTypes` strips a CODE body's types with amaro on both runtimes, keeping every line
@@ -64,7 +66,18 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   `ProviderError`, whose `kind` is a stable error kind (failure codes are assigned above
   `llm/`) and whose `retryable` is set when it is built. Any other error is a defect and is
   never retried.
-- `ScriptedModel` in `src/llm/testing.ts` scripts model replies for tests.
+- Every request goes through `safeFetch` in `src/platform.ts` (no redirects, `User-Agent`); code
+  that needs a fake or a cassette injects a `Send`, never a global `fetch`.
+- An adapter is a `WireProtocol` (`src/llm/executor.ts`): it builds the body from a `Request` and
+  turns SSE or NDJSON frames into events. `RouteModel` sends it over a `Route` (`src/llm/route.ts`,
+  with an auth object from `src/llm/auth.ts`), one attempt per call, under yian's first-response
+  and idle timers (`src/llm/transport.ts`). `shortRequest` is for model listing and sign-in.
+- Retries happen above the call: `callWithRetries` retries a retryable `ProviderError`, before or
+  after partial output, up to `MODEL_RETRIES` times, calling `onRetry` before each wait.
+- `ScriptedModel` in `src/llm/testing.ts` scripts model replies for tests. Cassettes
+  (`yian.cassette.v1`) replay HTTP exchanges as a `Send` (`CassetteReplay`); `CassetteRecorder`
+  records them with every credential redacted by value, and refuses to save one that still holds
+  a credential. Record only when `recordMode(processEnv)` says so (`RECORD=1`, never under `CI`).
 
 ## Commands
 

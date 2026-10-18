@@ -2,8 +2,9 @@
  * The one module holding runtime-specific APIs, so the rest of yian runs unchanged
  * on Node and Bun: runtime detection, a SQLite wrapper over `bun:sqlite` or
  * `node:sqlite`, loaded lazily for the runtime in use, an exclusive file lock
- * built on it, the scheduler that clocks and timed waits go through, and the
- * TypeScript stripper for CODE bodies, loaded lazily too.
+ * built on it, the scheduler that clocks and timed waits go through, the
+ * TypeScript stripper for CODE bodies, loaded lazily too, and `safeFetch`, the one way out
+ * to the network: no redirects, yian's User-Agent.
  */
 
 import type { Database } from "bun:sqlite";
@@ -624,4 +625,99 @@ export async function stripTypes(body: string): Promise<string> {
     if (!isAmaroError(error)) throw error;
     throw toTypeStripError(error, body, transformSync);
   }
+}
+
+/** The raw sender `safeFetch` calls: the runtime's fetch, a cassette, or a test fake. */
+export type Send = (input: string | URL, init: RequestInit) => Promise<Response>;
+
+/** yian's version; a test keeps it equal to `package.json`'s. */
+export const VERSION = "0.0.0";
+
+/** The `User-Agent` every request carries unless its caller sets one. */
+export const USER_AGENT = `yian/${VERSION}`;
+
+/** A request got a 3xx; its message names the target only by scheme, host and port. */
+export class RedirectError extends Error {
+  override name = "RedirectError";
+  /** The HTTP status. */
+  readonly status: number;
+  /** The `redirectDetail` of the reply's `Location`. */
+  readonly detail: string;
+
+  constructor(status: number, detail: string) {
+    super(`HTTP ${status} ${detail}`);
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+/**
+ * Name a redirect's target by scheme, host and port only; the path, query and user info
+ * can carry tokens, so they never reach the message.
+ */
+export function redirectDetail(location: string | null): string {
+  if (!location) return "redirect without a Location header";
+  const text = location.trim();
+  const scheme = /^[A-Za-z][A-Za-z0-9+.-]*:/.exec(text)?.[0] ?? "";
+  const rest = text.slice(scheme.length);
+  // Follows only urlsplit's "is there an authority" rule (`//` then a non-empty authority);
+  // the URL parser alone would read `http:///x` or `http:x` as host `x`. `//user@/x` and
+  // `//:80/x` give "unparsable" here where Python says relative.
+  if (!/^\/\/[^/?#]/.test(rest)) return "redirect to a relative Location";
+  let url: URL;
+  try {
+    url = new URL((scheme || "http:") + rest);
+  } catch {
+    return "redirect to an unparsable Location";
+  }
+  if (!url.hostname) return "redirect to a relative Location";
+  if (!scheme) return "redirect to a Location without a scheme";
+  return `redirect to ${url.protocol}//${url.hostname}` + (url.port ? `:${url.port}` : "");
+}
+
+/**
+ * Send one HTTP request through `send` (default the runtime's fetch) without following
+ * redirects: every outbound request goes through here.
+ *
+ * Refuses, before sending and without echoing the URL or headers, a URL that doesn't parse
+ * or isn't `http:`/`https:`, one with user info, and headers that aren't valid HTTP header
+ * text, each with a `TypeError`. Sends the caller's `init` with `redirect: "manual"` over
+ * whatever it says, `timeout: false` (Bun's own request timeout off; Node ignores the key)
+ * and `User-Agent: USER_AGENT` unless the caller set one. Returns any non-3xx response as
+ * is; for a 3xx it cancels the body and throws `RedirectError`, so credential headers never
+ * reach a second origin.
+ */
+export async function safeFetch(
+  input: string | URL,
+  init: RequestInit = {},
+  send: Send = globalThis.fetch,
+): Promise<Response> {
+  // Both runtimes echo the URL in their own errors, so refuse here, unchained.
+  let url: URL;
+  try {
+    url = new URL(input);
+  } catch {
+    throw new TypeError("request URL is not a valid http(s) URL");
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new TypeError("request URL is not a valid http(s) URL");
+  }
+  if (url.username || url.password) throw new TypeError("request URL must not contain user info");
+  // Both runtimes echo an invalid header value, which may be a credential.
+  let headers: Headers;
+  try {
+    headers = new Headers(init.headers);
+  } catch {
+    throw new TypeError("request headers are not valid HTTP header text");
+  }
+  if (!headers.has("user-agent")) headers.set("user-agent", USER_AGENT);
+  const sent: RequestInit & { timeout: false } = { ...init, headers, redirect: "manual", timeout: false };
+  const response = await send(input, sent);
+  // Only the status: the response type for a manual redirect differs between runtimes.
+  if (response.status >= 300 && response.status < 400) {
+    // Never awaited: an awaited cancel can hang, and a rejected one would go unhandled on Node.
+    void response.body?.cancel().catch(() => {});
+    throw new RedirectError(response.status, redirectDetail(response.headers.get("location")));
+  }
+  return response;
 }

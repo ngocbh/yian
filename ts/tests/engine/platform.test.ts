@@ -6,7 +6,8 @@
  * the scheduler that ports TOOL's chunked `_sleep` in `nodes/tool/node.py`, with a
  * virtual one for tests; the waiting lock that ports the auth store's `_locked`; and
  * the type stripper for CODE bodies, whose errors keep `nodes/code/node.py`'s authored
- * line positions.
+ * line positions; and `safeFetch`, which ports `llm/transport.py`'s no-redirect client and
+ * User-Agent, against real local servers.
  * Child processes check the lock across processes, as `log.py`'s `_lock_exclusive`
  * and the storage and auth stores' multiprocess tests do, and, with
  * `YIAN_TEST_NODE` set to a Node binary, the built output on Node.
@@ -15,6 +16,8 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { type ChildProcess, execFileSync, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -27,13 +30,19 @@ import {
   lockFile,
   openSqlite,
   realScheduler,
+  RedirectError,
+  redirectDetail,
   runtime,
+  safeFetch,
   type Scheduler,
+  type Send,
   SLEEP_CHUNK_MS,
   type Sqlite,
   sqliteErrorCode,
   stripTypes,
   TypeStripError,
+  USER_AGENT,
+  VERSION,
   virtualScheduler,
   waitForLock,
 } from "../../src/platform.ts";
@@ -783,6 +792,223 @@ describe("stripTypes", () => {
     const header = (await thrownLine('throw new Error("h");')) - 1;
     const body = '// a comment\n\nconst n: number = 1;\nthrow new Error("x" + n);';
     expect((await thrownLine(body)) - header).toBe(4);
+  });
+});
+
+/** One request a test server received. */
+interface Received {
+  method: string;
+  headers: http.IncomingHttpHeaders;
+  body: string;
+}
+
+/** A local test server: its base URL, its port and every request it received. */
+interface TestServer {
+  url: string;
+  port: number;
+  received: Received[];
+}
+
+/** The credential headers a redirect must never carry to a second origin. */
+const CREDENTIALS = {
+  authorization: "Bearer sk-secret",
+  "x-api-key": "key-secret",
+  "api-key": "azure-secret",
+  "x-goog-api-key": "goog-secret",
+};
+
+/** A fake `Send` that records each call and answers `reply`. */
+function fakeSend(reply: () => Response = () => new Response("ok")) {
+  const calls: { input: string | URL; init: RequestInit }[] = [];
+  const send: Send = async (input, init) => {
+    calls.push({ input, init });
+    return reply();
+  };
+  return { send, calls };
+}
+
+describe("redirectDetail", () => {
+  test("redirectDetail", () => {
+    expect(redirectDetail(null)).toBe("redirect without a Location header");
+    expect(redirectDetail("")).toBe("redirect without a Location header");
+    expect(redirectDetail("http://[::1")).toBe("redirect to an unparsable Location");
+    expect(redirectDetail("//[::1")).toBe("redirect to an unparsable Location");
+    expect(redirectDetail("https://[::1]:8443/x?t=1")).toBe("redirect to https://[::1]:8443");
+    expect(redirectDetail("https://h.example:443/x")).toBe("redirect to https://h.example");
+    expect(redirectDetail(" HTTP://H.Example/x ")).toBe("redirect to http://h.example");
+    expect(redirectDetail("mailto:x")).toBe("redirect to a relative Location");
+    expect(redirectDetail("///x")).toBe("redirect to a relative Location");
+    expect(redirectDetail("https:///x")).toBe("redirect to a relative Location");
+    expect(redirectDetail("//h.example/x")).toBe("redirect to a Location without a scheme");
+    expect(redirectDetail("x/y")).toBe("redirect to a relative Location");
+    // urlsplit("http:host") has no netloc.
+    expect(redirectDetail("http:host")).toBe("redirect to a relative Location");
+  });
+});
+
+describe("safeFetch", () => {
+  let servers: http.Server[] = [];
+
+  afterEach(async () => {
+    for (const server of servers) {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+    servers = [];
+  });
+
+  /** Start a server on 127.0.0.1 that records each request, then lets `handle` answer it. */
+  async function serve(handle: (res: http.ServerResponse) => void): Promise<TestServer> {
+    const received: Received[] = [];
+    const server = http.createServer((req, res) => {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (chunk: string) => (body += chunk));
+      req.on("end", () => {
+        received.push({ method: req.method!, headers: req.headers, body });
+        handle(res);
+      });
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+    return { url: `http://127.0.0.1:${port}/`, port, received };
+  }
+
+  /** Start server B answering 200 and server A redirecting with `status` to a path on B. */
+  async function redirectPair(status: number): Promise<{ a: TestServer; b: TestServer }> {
+    const b = await serve((res) => res.end("reached"));
+    const a = await serve((res) => {
+      res.writeHead(status, { location: `${b.url}steal/path?token=abc` });
+      res.end("moved");
+    });
+    return { a, b };
+  }
+
+  for (const status of [301, 302, 303, 307, 308]) {
+    test(`a ${status} throws RedirectError and the target gets nothing`, async () => {
+      const { a, b } = await redirectPair(status);
+      const error = await rejection(safeFetch(a.url, { method: "POST", body: "payload", headers: CREDENTIALS }));
+      expect(error).toBeInstanceOf(RedirectError);
+      const redirect = error as RedirectError;
+      expect(redirect.name).toBe("RedirectError");
+      expect(redirect.status).toBe(status);
+      expect(redirect.detail).toBe(`redirect to http://127.0.0.1:${b.port}`);
+      expect(redirect.message).toBe(`HTTP ${status} redirect to http://127.0.0.1:${b.port}`);
+      for (const leak of ["steal", "token", "abc"]) expect(redirect.message).not.toContain(leak);
+      expect(a.received).toHaveLength(1);
+      for (const [name, value] of Object.entries(CREDENTIALS)) expect(a.received[0]!.headers[name]).toBe(value);
+      expect(b.received).toEqual([]);
+    });
+  }
+
+  test('a caller\'s redirect: "follow" is overridden', async () => {
+    const { a, b } = await redirectPair(302);
+    const error = await rejection(safeFetch(a.url, { redirect: "follow", headers: CREDENTIALS }));
+    expect(error).toBeInstanceOf(RedirectError);
+    expect((error as RedirectError).status).toBe(302);
+    expect(b.received).toEqual([]);
+  });
+
+  test("a 2xx and a 4xx are returned as is", async () => {
+    const ok = await serve((res) => res.end("hello"));
+    const missing = await serve((res) => {
+      res.writeHead(404, { "content-type": "text/plain" });
+      res.end("missing");
+    });
+    const first = await safeFetch(ok.url);
+    expect(first.status).toBe(200);
+    expect(await first.text()).toBe("hello");
+    const second = await safeFetch(missing.url);
+    expect(second.status).toBe(404);
+    expect(second.headers.get("content-type")).toBe("text/plain");
+    expect(await second.text()).toBe("missing");
+  });
+
+  test("User-Agent defaults to USER_AGENT and a caller's wins", async () => {
+    const server = await serve((res) => res.end());
+    await (await safeFetch(server.url)).text();
+    await (await safeFetch(server.url, { headers: { "User-Agent": "host/1.2" } })).text();
+    expect(server.received.map((r) => r.headers["user-agent"])).toEqual([USER_AGENT, "host/1.2"]);
+    expect(USER_AGENT).toBe(`yian/${VERSION}`);
+  });
+
+  test("a URL with user info is refused without echoing it, and nothing is sent", async () => {
+    const { send, calls } = fakeSend();
+    for (const url of ["http://u:p@127.0.0.1/", "http://u@127.0.0.1/", new URL("http://u:p@127.0.0.1/")]) {
+      const error = await rejection(safeFetch(url, {}, send));
+      expect(error).toBeInstanceOf(TypeError);
+      const message = (error as TypeError).message;
+      expect(message).toBe("request URL must not contain user info");
+      expect(message).not.toContain("u:");
+      expect(message).not.toContain("p@");
+      expect((error as TypeError).cause).toBeUndefined();
+    }
+    expect(calls).toEqual([]);
+  });
+
+  test("a URL that doesn't parse or isn't http(s) is refused without echoing it, and nothing is sent", async () => {
+    const { send, calls } = fakeSend();
+    for (const url of ["nope", "http://exa mple/", "ftp://127.0.0.1/"]) {
+      const error = await rejection(safeFetch(url, {}, send));
+      expect(error).toBeInstanceOf(TypeError);
+      const message = (error as TypeError).message;
+      expect(message).toBe("request URL is not a valid http(s) URL");
+      for (const leak of ["nope", "exa", "ftp", "127.0.0.1"]) expect(message).not.toContain(leak);
+      expect((error as TypeError).cause).toBeUndefined();
+    }
+    expect(calls).toEqual([]);
+  });
+
+  test("an invalid header value is refused without echoing it, and nothing is sent", async () => {
+    const { send, calls } = fakeSend();
+    const error = await rejection(safeFetch("https://api.example/v1", { headers: { "x-k": "sec\nret" } }, send));
+    expect(error).toBeInstanceOf(TypeError);
+    const message = (error as TypeError).message;
+    expect(message).toBe("request headers are not valid HTTP header text");
+    for (const leak of ["sec", "ret", "x-k"]) expect(message).not.toContain(leak);
+    expect((error as TypeError).cause).toBeUndefined();
+    expect(calls).toEqual([]);
+  });
+
+  test("send gets manual redirects, no runtime timeout and the caller's signal, method, body and headers", async () => {
+    const { send, calls } = fakeSend();
+    const signal = new AbortController().signal;
+    const response = await safeFetch(
+      "https://api.example/v1",
+      { method: "POST", body: "payload", headers: { "x-api-key": "k" }, redirect: "follow", signal },
+      send,
+    );
+    expect(await response.text()).toBe("ok");
+    expect(calls).toHaveLength(1);
+    const { input, init } = calls[0]!;
+    expect(input).toBe("https://api.example/v1");
+    expect(init.redirect).toBe("manual");
+    expect((init as { timeout?: unknown }).timeout).toBe(false);
+    expect(init.signal).toBe(signal);
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe("payload");
+    const headers = new Headers(init.headers);
+    expect(headers.get("x-api-key")).toBe("k");
+    expect(headers.get("user-agent")).toBe(USER_AGENT);
+  });
+
+  test("a 3xx from send throws RedirectError and cancels the body", async () => {
+    let cancelled = false;
+    const body = new ReadableStream({
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const { send } = fakeSend(() => new Response(body, { status: 307, headers: { location: "/elsewhere" } }));
+    const error = await rejection(safeFetch("http://127.0.0.1/", {}, send));
+    expect(error).toBeInstanceOf(RedirectError);
+    expect((error as RedirectError).message).toBe("HTTP 307 redirect to a relative Location");
+    expect(cancelled).toBe(true);
+  });
+
+  test("VERSION equals package.json's version", () => {
+    expect(VERSION).toBe(JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).version);
   });
 });
 

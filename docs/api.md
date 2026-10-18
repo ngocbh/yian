@@ -298,7 +298,9 @@ run before appending any record.
   provider's endpoint variable nor `OPENAI_BASE_URL` changes it. `ProfileMemory`
   takes one beside its own key; `ReflectiveMemory` rejects one except an Azure
   endpoint beside `provider: azure`. Both memories take an Azure endpoint without a
-  key.
+  key. Changed (TS yian): no request follows a redirect, whatever the provider; a
+  3xx reply fails the call with a `redirect` provider error that names only the
+  target's scheme and host.
 
   The connection settings go wherever the key goes, so each is accepted only beside
   `api_key` and `provider` in this run layer, and flow files cannot set them at any

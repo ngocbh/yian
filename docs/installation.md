@@ -377,6 +377,23 @@ kind: agent
 prompt: Write a warm one-sentence greeting to ${name}.
 ```
 
+### Proxies and certificates (TS yian) {#proxies-and-certificates}
+
+Changed (TS yian): proxies, CA files and TLS checks are the runtime's settings, and
+yian reads none of them, so they apply the same way to model calls, sign-in, model
+listing and MCP over HTTP.
+
+- On Node, set `NODE_USE_ENV_PROXY=1` so `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`
+  apply (Node 22.21 or later; Node 22 prints an experimental warning). Bun reads
+  those variables by itself, upper or lower case. `localhost` is not exempt unless
+  `NO_PROXY` names it.
+- Add a CA file with `NODE_EXTRA_CA_CERTS=/path/to/ca.pem`, on Node and Bun.
+  `SSL_CERT_FILE` and `SSL_CERT_DIR` are not portable: official Node builds ignore
+  them.
+- `NODE_TLS_REJECT_UNAUTHORIZED=0` turns certificate checks off on both runtimes.
+- No request follows a redirect, and a URL holding a user name or password is
+  refused without being echoed, so credentials can't travel in a base URL.
+
 ## Development install
 
 The documentation describes the `main` branch, which can be ahead of the latest

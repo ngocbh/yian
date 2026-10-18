@@ -934,7 +934,6 @@ async function runExpr(case_: Case, ctx: CaseContext): Promise<void> {
     try {
       reload(caseEnv(ctx));
       const tree = mode === "condition" ? parseCondition(text) : parseExpr(text);
-      // The type table the loader gives a node: its isinstance and constructor names.
       const registry = readTypedefs((case_["typedefs"] ?? {}) as Record<string, unknown>);
       const types = new Map<string, Type>();
       for (const name of isinstanceTypeNames(tree)) {

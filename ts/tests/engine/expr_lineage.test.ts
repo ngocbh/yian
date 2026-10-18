@@ -78,7 +78,7 @@ function thrown(run: () => unknown): unknown {
   throw new Error("expected a throw");
 }
 
-test("None feedback does not read source snapshots", () => {
+test("null feedback does not read source snapshots", () => {
   const reads: SourceRef[] = [];
   const route = new ValueRoute("source", { source: new SourceRef("run", 1) });
   const routed = routeFeedback(route, null, (source) => {
@@ -114,12 +114,13 @@ test("accepted shape keeps full validation and exact source failures", () => {
   };
   expect(thrown(() => routeFeedback(route, ["Source.", null], broken, { recordedValue: valid }))).toBe(failure);
   const absent = new ValueRoute("source", { source: new SourceRef("run", 1, ["absent"]) });
-  expect(() => routeFeedback(absent, "Review.", () => ({}), { recordedValue: "present" })).toThrow(RangeError);
+  const missing = thrown(() => routeFeedback(absent, "Review.", () => ({}), { recordedValue: "present" }));
+  expect(missing).toBeInstanceOf(RangeError);
+  expect((missing as Error).message).toBe("record has no field 'absent'");
   const malformed = new ValueRoute("malformed" as RouteKind);
-  expect(() => routeFeedback(malformed, "Review.", lookup, { recordedValue: "present" })).toThrow(
-    /unknown route kind/,
-  );
-  expect(() => routeFeedback(malformed, "Review.", lookup, { recordedValue: "present" })).toThrow(RangeError);
+  const unknown = thrown(() => routeFeedback(malformed, "Review.", lookup, { recordedValue: "present" }));
+  expect(unknown).toBeInstanceOf(RangeError);
+  expect((unknown as Error).message).toBe("unknown route kind 'malformed'");
 });
 
 test.each([Error, TypeError, RangeError])("unavailable concat child does not hide real source faults (%p)", (Fault) => {
@@ -130,7 +131,9 @@ test.each([Error, TypeError, RangeError])("unavailable concat child does not hid
     throw failure;
   };
   expect(thrown(() => routeFeedback(route, "Review.", broken, { recordedValue: [1n, 2n] }))).toBe(failure);
-  expect(() => routeFeedback(route, "Review.", () => 1n, { recordedValue: [1n, 2n] })).toThrow(TypeError);
+  const error = thrown(() => routeFeedback(route, "Review.", () => 1n, { recordedValue: [1n, 2n] }));
+  expect(error).toBeInstanceOf(TypeError);
+  expect((error as Error).message).toBe("concat operand is not a list");
 });
 
 test("projection over unavailable composition uses recorded bounds", () => {
@@ -143,7 +146,7 @@ test("projection over unavailable composition uses recorded bounds", () => {
   expect(routed.contributions).toEqual([]);
   expect(routed.stopped.map((stop) => stop.feedback)).toEqual([feedback]);
   expect(() => routeFeedback(route.project([1]), feedback, () => null, { recordedValue: value })).toThrow(
-    RangeError,
+    "concat projection index is outside its recorded sizes",
   );
 });
 
@@ -324,8 +327,9 @@ test("record fields are own keys", () => {
     [a.source!, "A"],
     [b.source!, "B"],
   ]);
-  expect(() => routeFeedback(route, { toString: "x" }, lookup)).toThrow("selects unknown field 'toString'");
-  expect(() => routeFeedback(route, { toString: "x" }, lookup)).toThrow(RangeError);
+  const error = thrown(() => routeFeedback(route, { toString: "x" }, lookup));
+  expect(error).toBeInstanceOf(RangeError);
+  expect((error as Error).message).toBe("feedback selects unknown field 'toString'");
 });
 
 test("scalar and interpolation lift a projected selection", () => {
@@ -390,7 +394,7 @@ describe("accepted result shape validates unavailable temporary routes", () => {
       expect(context.resultType).toBe(opaque.resultType);
       expect(context.snapshot).toEqual(opaque.snapshot);
     }
-    expect(() => routeFeedback(route, feedback, () => null)).toThrow(RangeError);
+    expect(() => routeFeedback(route, feedback, () => null)).toThrow(/requires a recorded object$/);
   });
 });
 
@@ -446,7 +450,7 @@ test("projected partial container uses recorded operation positions", () => {
   expect(context.some((d) => d.positions.some((p) => Bun.deepEquals(p, [1])))).toBe(true);
   expect(() =>
     routeFeedback(route.project([2]), feedback, () => null, { recordedValue: { uri: "file:///tmp/x" } }),
-  ).toThrow(RangeError);
+  ).toThrow("list index 2 is out of range");
 });
 
 describe("bounded projected lists compose before opaque stopping", () => {

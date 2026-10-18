@@ -2,8 +2,7 @@
  * Recorded expression composition and source-relative feedback transfer.
  *
  * Feedback addresses recorded values without depending on nodes, memory, or the runtime. A list
- * is one positional selection; callers use arrays of routed results to group independent
- * messages. Routes are immutable records from the same expression evaluation, with source values
+ * is one positional selection; callers route each independent message separately. Routes are immutable records from the same expression evaluation, with source values
  * supplied by identity when feedback is transferred. Registered function boundaries retain
  * stopped feedback for inspection.
  *
@@ -11,8 +10,8 @@
  * any size, floats marked `.0`, infinity as `{"$float":"inf"}`, and a record shaped like a tag
  * escaped with `$record`.
  *
- * Knows about: `typesys` (`logJson`, `parseJson`, `buildValue`, `TypeCheckError`, `isRecord`,
- * `FileRef`), `diagnostics` (`reprText`), `builtins` (`kindName`). Never imports: `expressions`,
+ * Knows about: `typesys` (`logJson`, `parseJson`, `buildValue`, `TypeCheckError`, `isRecord`),
+ * `diagnostics` (`reprText`), `builtins` (`kindName`). Never imports: `expressions`,
  * `template`, `nodes`, `runtime`.
  */
 
@@ -246,9 +245,10 @@ export class RouteContext {
   readonly resultType: string | null;
   readonly snapshot: ValueRoute | null;
 
-  /** Build a context from `fields`: role `operand`, no operand, positions, span or snapshot by default. */
+  /** Build a context from `fields`; role defaults to `operand`, the rest to null or empty. */
   constructor(fields: RouteContextFields) {
-    const { operand = null, span = null } = fields;
+    const operand = fields.operand ?? null;
+    const span = fields.span ?? null;
     this.expression = fields.expression;
     this.resultJson = fields.resultJson;
     this.sources = Object.freeze([...fields.sources]);
@@ -317,9 +317,11 @@ function atPath(value: unknown, path: RoutePath): unknown {
 
 function liftFeedback(feedback: FeedbackValue, value: unknown, path: RoutePath): FeedbackValue {
   if (path.length === 0) return feedback;
-  const [head, ...rest] = path as [string | number, ...(string | number)[]];
+  const head = path[0]!;
+  const rest = path.slice(1);
   const lifted = liftFeedback(feedback, stepInto(value, head), rest);
   if (typeof head === "string") return { [head]: lifted };
+  // `stepInto` accepted a numeric step, so `value` is a list.
   const result: FeedbackValue[] = Array.from({ length: (value as unknown[]).length }, () => null);
   result[head] = lifted;
   return result;
@@ -363,9 +365,7 @@ function captureLiteral(value: unknown, depth: number): ValueRoute {
     ? new ValueRoute("list", { children: value.map((item) => captureLiteral(item, depth + 1)) })
     : ValueRoute.record(Object.keys(value).map((name) => [name, captureLiteral(value[name], depth + 1)] as const));
   const encoded = snapshot.children.every((child) => child.valueJson !== null) ? snapshotJson(value) : null;
-  if (encoded === null) {
-    return new ValueRoute("literal", { resultType, expression: `<${resultType}>`, snapshot });
-  }
+  if (encoded === null) return unavailable.with({ snapshot });
   return new ValueRoute("literal", { valueJson: encoded, expression: encoded });
 }
 
@@ -488,12 +488,12 @@ export function routeFeedback(
       const sourceContext = Object.freeze([...context, detail]);
       contributions.push(Object.freeze({ source: root, feedback: lifted, context: sourceContext }));
       return;
-    } else if (current.kind === "selected") {
+    }
+    if (current.kind === "selected") {
       visit(current.children[0]!, message, context, knownValue, selection);
       return;
-    } else if (current.kind === "literal") {
-      return;
     }
+    if (current.kind === "literal") return;
 
     const snapshot =
       current.kind === "scalar" || current.kind === "interpolation" || current.kind === "opaque"
@@ -552,14 +552,14 @@ export function routeFeedback(
     } else if (current.kind === "concat") {
       const total = current.sizes.reduce((sum, size) => sum + size, 0);
       const first = selection[0];
-      if (selection.length > 0 && !(Number.isInteger(first) && 0 <= (first as number) && (first as number) < total)) {
+      if (first !== undefined && !(typeof first === "number" && Number.isInteger(first) && 0 <= first && first < total)) {
         throw new RangeError("concat projection index is outside its recorded sizes");
       }
       let offset = 0;
       current.children.forEach((child, index) => {
         const size = current.sizes[index];
         if (size === undefined) return;
-        if (selection.length > 0 && !(offset <= (first as number) && (first as number) < offset + size)) {
+        if (first !== undefined && !(offset <= first && first < offset + size)) {
           offset += size;
           return;
         }
@@ -579,7 +579,7 @@ export function routeFeedback(
             [offset, offset + size],
           ),
           childValue,
-          selection.length > 0 ? [(first as number) - offset, ...selection.slice(1)] : [],
+          first !== undefined ? [first - offset, ...selection.slice(1)] : [],
         );
         offset += size;
       });

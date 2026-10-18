@@ -398,3 +398,111 @@ export class Diagnostic {
     this.traceback = traceback;
   }
 }
+
+/** The seam from opaque origins to source frames, independent of authoring format. */
+export interface OriginResolver {
+  /** Resolve `origin`, or return `null` when no frame is available. */
+  resolve(origin: OriginRef): DiagnosticFrame | null;
+}
+
+/**
+ * An immutable, collision-safe composition of opaque origin namespaces.
+ *
+ * Each public `OriginRef.key` routes to exactly one resolver and one origin in that
+ * resolver's local namespace. Keys stay opaque: the table does no prefix parsing and
+ * never falls through to another resolver. Delegate exceptions propagate; delegate
+ * results must honor the `OriginResolver` return contract.
+ *
+ * Construct an empty table directly, or use `fromEntries` for exact routes. Raw target
+ * maps are deliberately not part of the public constructor.
+ */
+export class ResolverTable {
+  // Not `readonly`: `fromEntries` assigns it once on the new table; nothing mutates it.
+  #targets: ReadonlyMap<string, { resolver: OriginResolver; origin: OriginRef }>;
+
+  /** Create an empty table. */
+  constructor() {
+    this.#targets = new Map();
+  }
+
+  /**
+   * Build a table from exact routes: each entry is a public origin, the delegate
+   * resolver, and the exact origin that delegate understands. The routes are copied.
+   * Throws `TypeError` for a malformed entry, origin or delegate, and `RangeError` when
+   * the same public key occurs more than once.
+   */
+  static fromEntries(
+    entries: Iterable<readonly [OriginRef, OriginResolver, OriginRef]>,
+  ): ResolverTable {
+    const targets = new Map<string, { resolver: OriginResolver; origin: OriginRef }>();
+    for (const entry of entries) {
+      if (!Array.isArray(entry) || entry.length !== 3) {
+        throw new TypeError("resolver table entry must be a three-item tuple");
+      }
+      const [newOrigin, delegate, oldOrigin] = entry;
+      if (!(newOrigin instanceof OriginRef)) {
+        throw new TypeError("resolver table new origin must be an OriginRef");
+      }
+      if (typeof (delegate as Partial<OriginResolver> | null)?.resolve !== "function") {
+        throw new TypeError("resolver table delegate must implement resolve");
+      }
+      if (!(oldOrigin instanceof OriginRef)) {
+        throw new TypeError("resolver table old origin must be an OriginRef");
+      }
+      if (targets.has(newOrigin.key)) {
+        throw new RangeError(`duplicate resolver table origin ${reprText(newOrigin.key)}`);
+      }
+      targets.set(newOrigin.key, { resolver: delegate, origin: oldOrigin });
+    }
+    const table = new ResolverTable();
+    table.#targets = targets;
+    return table;
+  }
+
+  /**
+   * Combine tables whose public origins are disjoint, without adding resolver
+   * precedence. Throws `TypeError` when an argument is not a `ResolverTable`, and
+   * `RangeError` when two tables route the same public key.
+   */
+  static merge(...tables: ResolverTable[]): ResolverTable {
+    const entries: [OriginRef, OriginResolver, OriginRef][] = [];
+    for (const table of tables) {
+      if (!(table instanceof ResolverTable)) {
+        throw new TypeError("resolver table merge requires ResolverTable values");
+      }
+      for (const [key, target] of table.#targets) {
+        entries.push([new OriginRef(key), target.resolver, target.origin]);
+      }
+    }
+    return ResolverTable.fromEntries(entries);
+  }
+
+  /** The number of public-origin routes. */
+  get size(): number {
+    return this.#targets.size;
+  }
+
+  /** Return whether `origin`'s opaque key has a route; a non-`OriginRef` has none. */
+  has(origin: OriginRef): boolean {
+    return origin instanceof OriginRef && this.#targets.has(origin.key);
+  }
+
+  /**
+   * Resolve a public origin through its exact delegate route: the delegate's result,
+   * or `null` when no route exists or the delegate cannot resolve its local origin.
+   * Throws `TypeError` when `origin` is not an `OriginRef` or the delegate returns
+   * neither a `DiagnosticFrame` nor `null`.
+   */
+  resolve(origin: OriginRef): DiagnosticFrame | null {
+    if (!(origin instanceof OriginRef)) {
+      throw new TypeError("resolver table resolve requires an OriginRef");
+    }
+    const target = this.#targets.get(origin.key);
+    if (target === undefined) return null;
+    const frame = target.resolver.resolve(target.origin);
+    if (frame !== null && !(frame instanceof DiagnosticFrame)) {
+      throw new TypeError("resolver table delegate must return a DiagnosticFrame or null");
+    }
+    return frame;
+  }
+}

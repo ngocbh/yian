@@ -16,6 +16,8 @@ import {
   Failure,
   type FailureCode,
   OriginRef,
+  type OriginResolver,
+  ResolverTable,
   reprText,
   SourceRange,
 } from "../../src/diagnostics.ts";
@@ -389,6 +391,224 @@ describe("OriginRef", () => {
       const error = thrown(() => new OriginRef(invalid as unknown as string));
       expect(error).toBeInstanceOf(RangeError);
       expect((error as Error).message).toBe("origin key must be a non-empty string");
+    }
+  });
+});
+
+describe("OriginResolver", () => {
+  test("is structural and may return null", () => {
+    // Any source front end can implement resolution without a compose type.
+    const resolver: OriginResolver = {
+      resolve(origin) {
+        if (origin.key !== "known") return null;
+        return new DiagnosticFrame({
+          label: "memory",
+          text: "value\n",
+          range: new SourceRange(1, 1, 1, 6),
+        });
+      },
+    };
+
+    expect(resolver.resolve(new OriginRef("known"))).not.toBeNull();
+    expect(resolver.resolve(new OriginRef("missing"))).toBeNull();
+  });
+});
+
+describe("ResolverTable", () => {
+  test("routes each new origin to one exact delegate origin", () => {
+    // One table can route colliding delegate-local keys without precedence.
+    const firstFrame = new DiagnosticFrame({
+      label: "first",
+      text: "first\n",
+      range: new SourceRange(1, 1, 1, 6),
+    });
+    const secondFrame = new DiagnosticFrame({
+      label: "second",
+      text: "second\n",
+      range: new SourceRange(1, 1, 1, 7),
+    });
+    const calls: [string, OriginRef][] = [];
+
+    class Resolver implements OriginResolver {
+      readonly name: string;
+      readonly frame: DiagnosticFrame;
+
+      constructor(name: string, frame: DiagnosticFrame) {
+        this.name = name;
+        this.frame = frame;
+      }
+
+      resolve(origin: OriginRef): DiagnosticFrame | null {
+        calls.push([this.name, origin]);
+        return origin.key === "local" ? this.frame : null;
+      }
+    }
+
+    const firstNew = new OriginRef("call/a");
+    const secondNew = new OriginRef("call/b");
+    const table = ResolverTable.fromEntries([
+      [firstNew, new Resolver("first", firstFrame), new OriginRef("local")],
+      [secondNew, new Resolver("second", secondFrame), new OriginRef("local")],
+    ]);
+
+    expect(table.size).toBe(2);
+    expect(table.has(firstNew)).toBe(true);
+    expect(table.has(secondNew)).toBe(true);
+    expect(table.has(new OriginRef("missing"))).toBe(false);
+    expect(table.resolve(firstNew)).toBe(firstFrame);
+    expect(table.resolve(secondNew)).toBe(secondFrame);
+    expect(table.resolve(new OriginRef("missing"))).toBeNull();
+    expect(calls).toEqual([
+      ["first", new OriginRef("local")],
+      ["second", new OriginRef("local")],
+    ]);
+  });
+
+  test("merge is strict and preserves delegate behavior", () => {
+    // Merging uses exact disjoint routes and never adds fallback semantics.
+    class Resolver implements OriginResolver {
+      readonly label: string;
+
+      constructor(label: string) {
+        this.label = label;
+      }
+
+      resolve(origin: OriginRef): DiagnosticFrame | null {
+        if (origin.key !== "old") return null;
+        return new DiagnosticFrame({
+          label: this.label,
+          text: "value\n",
+          range: new SourceRange(1, 1, 1, 6),
+        });
+      }
+    }
+
+    const first = ResolverTable.fromEntries([
+      [new OriginRef("first"), new Resolver("first"), new OriginRef("old")],
+    ]);
+    const second = ResolverTable.fromEntries([
+      [new OriginRef("second"), new Resolver("second"), new OriginRef("old")],
+    ]);
+
+    const merged = ResolverTable.merge(first, second);
+
+    expect(merged.size).toBe(2);
+    expect(merged.resolve(new OriginRef("first"))?.label).toBe("first");
+    expect(merged.resolve(new OriginRef("second"))?.label).toBe("second");
+    expect(ResolverTable.merge().size).toBe(0);
+    expect(new ResolverTable().size).toBe(0);
+  });
+
+  test("rejects duplicate routes before information is lost", () => {
+    // Duplicate public keys fail even when their resolution targets are identical.
+    const resolver: OriginResolver = { resolve: () => null };
+    const same = new OriginRef("same");
+    const old = new OriginRef("old");
+
+    /** A distinct class that still names the same opaque identity. */
+    class DerivedOrigin extends OriginRef {}
+
+    const duplicate = thrown(() =>
+      ResolverTable.fromEntries([
+        [same, resolver, old],
+        [new DerivedOrigin("same"), resolver, old],
+      ]),
+    );
+    expect(duplicate).toBeInstanceOf(RangeError);
+    expect((duplicate as Error).message).toBe("duplicate resolver table origin 'same'");
+
+    const first = ResolverTable.fromEntries([[same, resolver, old]]);
+    const second = ResolverTable.fromEntries([[same, resolver, old]]);
+    const merged = thrown(() => ResolverTable.merge(first, second));
+    expect(merged).toBeInstanceOf(RangeError);
+    expect((merged as Error).message).toBe("duplicate resolver table origin 'same'");
+  });
+
+  test("snapshots its entries and propagates delegate failures", () => {
+    // Delegates retain authority, so their errors reach the caller unchanged.
+    const resolver: OriginResolver = {
+      resolve(origin) {
+        throw new Error(`cannot resolve ${origin.key}`);
+      },
+    };
+    const entries: [OriginRef, OriginResolver, OriginRef][] = [
+      [new OriginRef("new"), resolver, new OriginRef("old")],
+    ];
+    const table = ResolverTable.fromEntries(entries);
+    entries.length = 0;
+
+    expect(table.size).toBe(1);
+    expect(() => table.resolve(new OriginRef("new"))).toThrow(new Error("cannot resolve old"));
+  });
+
+  test("rejects delegate results outside the OriginResolver contract", () => {
+    const resolver = { resolve: () => "not-a-frame" } as unknown as OriginResolver;
+    const table = ResolverTable.fromEntries([
+      [new OriginRef("new"), resolver, new OriginRef("old")],
+    ]);
+
+    const error = thrown(() => table.resolve(new OriginRef("new")));
+    expect(error).toBeInstanceOf(TypeError);
+    expect((error as Error).message).toBe(
+      "resolver table delegate must return a DiagnosticFrame or null",
+    );
+  });
+
+  type Entries = Parameters<typeof ResolverTable.fromEntries>[0];
+
+  test.each([
+    [
+      "a new origin that isn't an OriginRef",
+      () => ResolverTable.fromEntries([["new", {}, new OriginRef("old")]] as unknown as Entries),
+      "resolver table new origin must be an OriginRef",
+    ],
+    [
+      "a delegate without resolve",
+      () =>
+        ResolverTable.fromEntries([
+          [new OriginRef("new"), {}, new OriginRef("old")],
+        ] as unknown as Entries),
+      "resolver table delegate must implement resolve",
+    ],
+    [
+      "an old origin that isn't an OriginRef",
+      () =>
+        ResolverTable.fromEntries([
+          [new OriginRef("new"), new ResolverTable(), "old"],
+        ] as unknown as Entries),
+      "resolver table old origin must be an OriginRef",
+    ],
+    [
+      "a two-item entry",
+      () =>
+        ResolverTable.fromEntries([
+          [new OriginRef("new"), new ResolverTable()],
+        ] as unknown as Entries),
+      "resolver table entry must be a three-item tuple",
+    ],
+    [
+      "merging a non-table",
+      () => ResolverTable.merge(new ResolverTable(), {} as unknown as ResolverTable),
+      "resolver table merge requires ResolverTable values",
+    ],
+    [
+      "resolving a string",
+      () => new ResolverTable().resolve("new" as unknown as OriginRef),
+      "resolver table resolve requires an OriginRef",
+    ],
+  ] as const)("rejects malformed routes: %s", (_, operation, message) => {
+    // Malformed routing values fail at the public boundary with stable errors.
+    const error = thrown(operation);
+
+    expect(error).toBeInstanceOf(TypeError);
+    expect((error as Error).message).toBe(message);
+  });
+
+  test("takes no routes in its constructor", () => {
+    // Raw target maps are deliberately not part of the public constructor.
+    if (false) {
+      // @ts-expect-error the constructor takes no arguments
+      new ResolverTable(new Map());
     }
   });
 });

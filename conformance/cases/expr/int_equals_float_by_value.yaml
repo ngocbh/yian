@@ -1,0 +1,4 @@
+kind: expr
+# An int and a float compare by exact value.
+expr: "2 ** 60 == 2.0 ** 60"
+expect: {value: true}

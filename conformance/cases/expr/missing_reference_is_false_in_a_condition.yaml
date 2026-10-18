@@ -1,0 +1,5 @@
+kind: expr
+# A missing reference is null, and an ordered comparison with null is false.
+expr: "x > 1"
+mode: condition
+expect: {value: false}

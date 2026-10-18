@@ -1,0 +1,6 @@
+kind: expr
+expr: "isinstance(x, Buy)"
+values: {x: {action: buy, qty: 3}}
+typedefs:
+  Buy: {action: str, qty: int}
+expect: {value: true}

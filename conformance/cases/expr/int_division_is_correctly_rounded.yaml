@@ -1,0 +1,4 @@
+kind: expr
+# Ints too large for a float still divide to the nearest float.
+expr: "10 ** 400 / 10 ** 399"
+expect: {value: 10.0}

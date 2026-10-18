@@ -1,0 +1,8 @@
+kind: expr
+# NaN never exists: an operation with no numeric result fails.
+expr: "inf - inf"
+rules: [infinity, messages]
+expect:
+  raises:
+    class: ExpressionError
+    message: "- on Infinity and Infinity has no numeric result"

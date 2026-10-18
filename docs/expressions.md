@@ -96,6 +96,15 @@ evaluator serves the pool, a prompt's local record, and the map-body `item` scop
 2. **arithmetic over that `None` raises** — a missing operand never silently becomes `0`,
 3. an **ordered comparison with `None` is `False`** — so an absent value routes to `else:`.
 
+Changed (TS yian): comparisons. `==` and `!=` compare deeply across kinds: numbers by exact
+value (a bool as 0 or 1, so `${2 ** 60 == 2.0 ** 60}` is `true`), text by code units, lists
+item by item, records by keys and values, files by `uri`, `mime` and `name`; any other pair is
+unequal. Ordering takes only two numbers (by exact value) or two texts (by UTF-16 code units);
+any other pair, lists included (`${[1] < [2]}`), is an error naming the operator and the
+operand kinds, and a null operand still gives `false`. `in` finds text in text, an equal item
+in a list, or a text key in a record; any other right side, or a non-text left side with text
+on the right, is an error.
+
 When the `None` would come from a node a `case` may skip, Compose rejects the arithmetic at
 load and asks for a `:-` default (see `syntax.md`, "Skipped branches and flow outputs").
 
@@ -142,6 +151,25 @@ Operators run on the resolved *values* with Python semantics:
 
 Equality in a CASE's `on:` form is stricter: a bool never equals a number there.
 
+Changed (TS yian): the operators follow this table instead:
+
+| Operands | Result |
+|---|---|
+| int `+`, `-`, `*`, `%` int; int `**` int ≥ 0 | an exact int of any size |
+| `/` | always a float, the one nearest the exact quotient: `${10 ** 400 / 10 ** 399}` is `10.0` |
+| `%` | the remainder takes the left operand's sign: `${-7 % 2}` is `-1` |
+| text `%` anything | an error: ``text formatting with `%` was removed; use a template`` |
+| text or list `*` int | an error: repetition is gone |
+| an int with a float, int `**` negative int | the int becomes the nearest float, then float arithmetic |
+| `/` or `%` by zero, `0 ** negative` | an error: `division by zero: 1 / 0` |
+
+`**` with a finite non-zero float base and an integer exponent (up to 1100 in size) is
+correctly rounded: `${10 ** -4}` is `0.0001` and `${1.1 ** 10}` is `2.5937424601000023`. Any
+other float `**` is JavaScript's `**`, whose last bit may differ between Bun and Node. Operand
+kinds an operator doesn't take fail naming the operator and the kinds, with the operands in the
+text form: ``type error evaluating "ab" * 2: unsupported operand kinds for `*`: `str` and
+`int` ``.
+
 There are no cost limits. A huge `**` or repetition takes whatever time and memory
 Python needs.
 
@@ -162,6 +190,12 @@ An int longer than 4300 digits is not a value, so a whole-string `${10 ** 5000}`
 fails its binding (see [Types → Integer size limit](typing.md#integer-size-limit)).
 A temporary inside an expression may be that long: `${10 ** 5000 > 0}` is `true`. An
 int literal longer than 4300 digits is a load error.
+
+Changed (TS yian): none of the failures in this list exist. `**` overflow and an int past the
+float range in float arithmetic give `inf` (see [Non-finite results](#non-finite-results));
+repetition and `%` formatting are gone; and there is no digit limit, so an int of any size is
+a value and becomes text in full. An int result too large for the runtime's `bigint` fails
+instead: `integer result is too large for this runtime` (`${10 ** 10 ** 10}`).
 
 Changed (TS yian): int literals have no length limit. A float literal too large for a
 float is a load error: `float literal with 400 digits before the decimal point is out of
@@ -193,6 +227,12 @@ a `code` node), or return null explicitly: a `case` that routes to a value entry
 A list literal adds a level of nesting (`${[x]}` is one level deeper than `x`), and
 a binding whose final value nests deeper than 100 levels fails its node
 with `binding.evaluate` (see [Types → Nesting limit](typing.md#nesting-limit)).
+
+Changed (TS yian): infinity is a float value, not an error. A float result past the float
+range, `**` and an int converted to a float included, is `inf` (`${2.0 ** 5000}`). `**`
+follows IEEE `pow`: `${1 ** inf}` is `1.0`. An operation with no numeric result fails, naming
+the operator and the operands: `- on Infinity and Infinity has no numeric result` (also
+`${inf * 0}` and `${(0 - 8) ** 0.5}`), so NaN never exists, and there are no complex numbers.
 
 **Compile-time companions** (never evaluate): `infer_expr_type(tree, ref_type_fn)` returns
 a type only for statically fixed results: scalar literals, exact references,
@@ -282,6 +322,13 @@ roughly doubles per level. Render a value once.
 
 New builtins register with `@register_template_fn()`, before loading a flow that
 calls one.
+
+Changed (TS yian): a host registers a builtin with `registerTemplateFn(name, {params, call})`,
+where `params` lists `{name, default}` in order and a param with a `default` is optional. A
+call's arguments are checked against the declared `params`, as Python checks a function's
+signature. A builtin gets yian values, ints as `bigint`, and its result is read as a host value
+(see [Types → host intake](typing.md#two-constructors-infer-vs-check)), so an integral `number`
+comes back as an int.
 
 Every call is checked before it runs, wherever it is written (bindings, flow outputs,
 conditions, prompts): an unknown function, or arguments the builtin doesn't take, is a

@@ -1,0 +1,4 @@
+kind: expr
+# Correctly rounded; Bun's `**` gives 2.593742460100002.
+expr: "1.1 ** 10"
+expect: {value: 2.5937424601000023}

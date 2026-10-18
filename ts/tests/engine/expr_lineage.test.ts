@@ -12,7 +12,10 @@
  * has none; `a deep temporary keeps a complete snapshot` (10,000 levels) replaces
  * `test_unrepresentable_temporary_does_not_prevent_the_outer_call`, since a snapshot here has no
  * recursion limit; builtin results are copied by host intake, so Python's `is` checks are
- * `toEqual`; the two hand-built accepted-shape tests gain one row each through `evalBinding`.
+ * `toEqual`; `opaque stops preserve concat and interpolation context` evaluates
+ * `reorder(items) + items` for Python's `reorder(items) * count`, so it has one stop instead of
+ * two; `unavailable snapshot projects available fields and composed items` composes with `+ []`
+ * and projects item 0, for Python's `* 2` and item 1.
  *
  * Not ported:
  * - The MAP and WAIT capture tests (`test_reserved_map_over_uses_the_same_capture_path`,
@@ -27,8 +30,8 @@
  *   `test_repetition_capture_does_not_call_integer_conversion` and the dict-subclass hooks of
  *   the two item-tracing tests.
  * - Repetition is a type error in TS, so `test_repetition_preserves_copy_messages_and_shape_context`,
- *   `test_empty_repetition_does_not_infer_its_original_content_from_the_result` and every
- *   `repeat` / `* 2` row are gone.
+ *   `test_empty_repetition_does_not_infer_its_original_content_from_the_result` and the other
+ *   `repeat` / `* 2` rows are gone.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -367,8 +370,11 @@ describe("accepted result shape validates unavailable temporary routes", () => {
   ] as const;
   test.each(forms)("%s", (form) => {
     const raw = form === "project_record" ? { file: FILE, other: 1n } : form === "project_list" ? [FILE, 1n] : FILE;
-    const opaque = ValueRoute.literal(raw).with({ kind: "opaque", expression: "accepted_temporary()" });
-    let route = form === "selected" ? new ValueRoute("selected", { children: [opaque] }) : opaque;
+    const calls = countedStandIn("accepted_temporary", raw);
+    const expression = form === "selected" ? "${accepted_temporary() | null}" : "${accepted_temporary()}";
+    const traced = evalBinding(expression, nothing, { trace: true });
+    const opaque = form === "selected" ? traced.route.children[0]! : traced.route;
+    let route = traced.route;
     let value: unknown = { uri: "file:///tmp/example.txt" };
     let feedback: FeedbackValue = { uri: "Check the URI." };
     let expectedStop: FeedbackValue = feedback;
@@ -407,28 +413,8 @@ describe("accepted result shape validates unavailable temporary routes", () => {
       expect(context.resultType).toBe(opaque.resultType);
       expect(context.snapshot).toEqual(opaque.snapshot);
     }
+    expect(calls).toHaveLength(1);
     expect(() => routeFeedback(route, feedback, () => null)).toThrow(/requires a recorded object$/);
-  });
-
-  test("through evalBinding", () => {
-    const calls: null[] = [];
-    standIn(
-      "accepted_temporary",
-      () => {
-        calls.push(null);
-        return FILE;
-      },
-      [],
-    );
-    const traced = evalBinding("${accepted_temporary()}", nothing, { trace: true });
-    const handBuilt = ValueRoute.literal(FILE).with({ kind: "opaque", expression: "accepted_temporary()" });
-    const value = { uri: "file:///tmp/example.txt" };
-    const feedback = { uri: "Check the URI." };
-    const routed = routeFeedback(traced.route, feedback, () => null, { recordedValue: value });
-    expect(routed.contributions).toEqual([]);
-    expect(routed.stopped.map((stop) => stop.feedback)).toEqual([feedback]);
-    expect(routed.stopped).toEqual(routeFeedback(handBuilt, feedback, () => null, { recordedValue: value }).stopped);
-    expect(calls).toEqual([null]);
   });
 });
 
@@ -498,7 +484,8 @@ describe("bounded projected lists compose before opaque stopping", () => {
     let raw: unknown = { files: [FILE] };
     const path = [...Array.from({ length: 40 }, () => "nested"), "files"];
     for (let i = 0; i < 40; i++) raw = { nested: raw };
-    const opaque = ValueRoute.literal(raw).with({ kind: "opaque", expression: "bounded_files()" });
+    const calls = countedStandIn("bounded_files", raw);
+    const opaque = evalBinding("${bounded_files()}", nothing, { trace: true }).route;
     const selected = opaque.project(path);
     const route =
       operation === "concat"
@@ -513,36 +500,11 @@ describe("bounded projected lists compose before opaque stopping", () => {
       routed.stopped[0]!.context.some((d) => d.role === "projection" && Bun.deepEquals(d.operand, path)),
     ).toBe(true);
     expect(routed.stopped[0]!.context.at(-1)!.snapshot).toEqual(opaque.snapshot);
+    expect(calls).toHaveLength(1);
     expect(() => routeFeedback(route, [null, null], () => null, { recordedValue: value })).toThrow(RangeError);
     expect(() => routeFeedback(route, [{ unknown: null }], () => null, { recordedValue: value })).toThrow(
       RangeError,
     );
-  });
-
-  test("through evalBinding", () => {
-    let raw: unknown = { files: [FILE] };
-    const path = [...Array.from({ length: 40 }, () => "nested"), "files"];
-    for (let i = 0; i < 40; i++) raw = { nested: raw };
-    const calls: null[] = [];
-    standIn(
-      "bounded_files",
-      () => {
-        calls.push(null);
-        return raw;
-      },
-      [],
-    );
-    const opaque = evalBinding("${bounded_files()}", nothing, { trace: true }).route;
-    const handBuilt = ValueRoute.literal(raw).with({ kind: "opaque", expression: "bounded_files()" });
-    const value = [{ uri: "file:///tmp/x" }];
-    const feedback = [{ uri: "Review." }];
-    const routed = routeFeedback(opaque.project(path), feedback, () => null, { recordedValue: value });
-    expect(routed.contributions).toEqual([]);
-    expect(routed.stopped.map((stop) => stop.feedback)).toEqual([feedback]);
-    expect(routed.stopped).toEqual(
-      routeFeedback(handBuilt.project(path), feedback, () => null, { recordedValue: value }).stopped,
-    );
-    expect(calls).toEqual([null]);
   });
 });
 
@@ -615,6 +577,20 @@ function standIn(name: string, call: (...args: Value[]) => unknown, params: Temp
   registerTemplateFn(name, { params, call });
 }
 
+/** Register a no-argument builtin `name` returning `result`; return its call log. */
+function countedStandIn(name: string, result: unknown): string[] {
+  const calls: string[] = [];
+  standIn(
+    name,
+    () => {
+      calls.push(name);
+      return result;
+    },
+    [],
+  );
+  return calls;
+}
+
 afterEach(() => {
   for (const [name, fn] of saved.reverse()) {
     if (fn === undefined) TEMPLATE_FNS.delete(name);
@@ -624,15 +600,7 @@ afterEach(() => {
 });
 
 test("an infinite temporary keeps a valid final interpolation", () => {
-  const calls: null[] = [];
-  standIn(
-    "score",
-    () => {
-      calls.push(null);
-      return Infinity;
-    },
-    [],
-  );
+  const calls = countedStandIn("score", Infinity);
   const traced = evalBinding("score: ${score()}", nothing, { trace: true });
   expect(traced.value).toBe("score: Infinity");
   expect(traced.route.valueJson).toBe('"score: Infinity"');
@@ -640,7 +608,7 @@ test("an infinite temporary keeps a valid final interpolation", () => {
   expect(opaque.kind).toBe("opaque");
   expect(opaque.valueJson).toBe('{"$float":"inf"}');
   expect(opaque.resultType).toBeNull();
-  expect(calls).toEqual([null]);
+  expect(calls).toEqual(["score"]);
   const stopped = routeFeedback(traced.route, "Check the score.", () => null).stopped;
   expect(stopped[0]!.context.at(-1)!.result).toBe(Infinity);
 });
@@ -899,15 +867,7 @@ test("composed item route projects fields and preserves null presence", () => {
 });
 
 test("a file temporary preserves interpolation and projection", () => {
-  const calls: string[] = [];
-  standIn(
-    "temporary",
-    () => {
-      calls.push("temporary");
-      return FILE;
-    },
-    [],
-  );
+  const calls = countedStandIn("temporary", FILE);
   const untraced = evalBinding("value=${temporary()}", () => null);
   expect(untraced).toBe('value={"uri":"file:///tmp/x","mime":null,"name":null}');
   expect(calls).toEqual(["temporary"]);
@@ -1001,15 +961,7 @@ test("a deep temporary keeps a complete snapshot", () => {
 });
 
 test("unavailable snapshots keep container structure", () => {
-  const calls: string[] = [];
-  standIn(
-    "temporary_list",
-    () => {
-      calls.push("call");
-      return [FILE];
-    },
-    [],
-  );
+  const calls = countedStandIn("temporary_list", [FILE]);
   const expected = 'items=[{"uri":"file:///tmp/x","mime":null,"name":null}]';
   const result = evalBinding("items=${temporary_list() + []}", nothing, { trace: true });
   expect(result.value).toBe(expected);
@@ -1017,7 +969,7 @@ test("unavailable snapshots keep container structure", () => {
   expect(routed.contributions).toEqual([]);
   expect(routed.stopped.map((stop) => stop.feedback)).toEqual(["Shorten."]);
   expect(routed.stopped[0]!.context[0]!.result).toBe(expected);
-  expect(calls).toEqual(["call"]);
+  expect(calls).toEqual(["temporary_list"]);
 });
 
 test("unavailable snapshot projects available fields and composed items", () => {
@@ -1026,22 +978,14 @@ test("unavailable snapshot projects available fields and composed items", () => 
   expect(plain.value).toBe("ok");
   expect(routeFeedback(plain.route, "Shorten.", () => null).contributions).toEqual([]);
 
-  const calls: string[] = [];
-  standIn(
-    "temporary_list",
-    () => {
-      calls.push("call");
-      return [itemValue];
-    },
-    [],
-  );
+  const calls = countedStandIn("temporary_list", [itemValue]);
   const over = evalBinding("${temporary_list() + []}", nothing, { trace: true });
   const item = new ResolvedValue((over.value as Value[])[0]!, true, over.route.project([0]));
   const projected = evalBinding("${item.answer}", nothing, { item, trace: true });
   expect(projected.value).toBe("ok");
   const stopped = routeFeedback(projected.route, "Shorten.", () => null).stopped;
   expect(stopped.map((stop) => stop.feedback)).toEqual([[{ answer: "Shorten." }]]);
-  expect(calls).toEqual(["call"]);
+  expect(calls).toEqual(["temporary_list"]);
 });
 
 test("structural routes retain selection and position context", () => {
@@ -1099,15 +1043,7 @@ test("structural routes retain selection and position context", () => {
 test.each(["Note.", null] as FeedbackValue[])(
   "a deep temporary composes with text or absent feedback (%p)",
   (feedback) => {
-    const calls: string[] = [];
-    standIn(
-      "deep",
-      () => {
-        calls.push("call");
-        return nested(1n, 10_000);
-      },
-      [],
-    );
+    const calls = countedStandIn("deep", nested(1n, 10_000));
     expect(Array.isArray(evalBinding("${deep() + []}", () => null))).toBe(true);
     const traced = evalBinding("${deep() + []}", nothing, { trace: true });
     expect(Array.isArray(traced.value)).toBe(true);
@@ -1115,7 +1051,7 @@ test.each(["Note.", null] as FeedbackValue[])(
     expect(routed.contributions).toEqual([]);
     expect(routed.stopped.map((stop) => stop.feedback)).toEqual(feedback === null ? [] : [feedback]);
     expect(JSON.stringify(traced.route)).toBeTruthy();
-    expect(calls).toEqual(["call", "call"]);
+    expect(calls).toEqual(["deep", "deep"]);
   },
 );
 
@@ -1148,15 +1084,7 @@ test.each([
       value = container === "list" ? [value] : { child: value };
       feedback = container === "list" ? [feedback] : { child: feedback };
     }
-    const calls: string[] = [];
-    standIn(
-      "nested",
-      () => {
-        calls.push("call");
-        return value;
-      },
-      [],
-    );
+    const calls = countedStandIn("nested", value);
     const traced = evalBinding("${nested()}", nothing, { trace: true });
     expect(traced.value).toEqual(value as Value);
     validateFeedback(feedback, traced.value);
@@ -1165,7 +1093,7 @@ test.each([
     expect(stopped[0]!.feedback).toEqual(feedback);
     expect(stopped[0]!.context.at(-1)!.result).toEqual(value);
     expect(stopped[0]!.context.at(-1)!.resultType).toBeNull();
-    expect(calls).toEqual(["call"]);
+    expect(calls).toEqual(["nested"]);
   },
 );
 

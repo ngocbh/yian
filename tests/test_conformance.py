@@ -2878,7 +2878,7 @@ def test_harvest_replay_installs_shims(tmp_path: Path, monkeypatch: pytest.Monke
         harvest._replay(state, case, ("text", "missing"))
 
     # Under a shim, an int a `float` slot widens is noted; it is widened all the same.
-    coerce = harvest.typesys_values._coerce_scalar
+    widen = harvest.typesys_values._widen_int
     noted = frozenset({"int-in-float"})
     for typ, value, kept, notes in (
             ("float", 2, {"value": 2.0, "kind": "float"}, noted),
@@ -2888,7 +2888,14 @@ def test_harvest_replay_installs_shims(tmp_path: Path, monkeypatch: pytest.Monke
         assert harvest._replay(state, case, ("idle",)) == (kept, notes), typ
     assert harvest._replay(state, {"kind": "value", "type": "float", "value": 2}) == (
         {"value": 2.0, "kind": "float"}, frozenset())
-    assert harvest.typesys_values._coerce_scalar is coerce
+    assert harvest.typesys_values._widen_int is widen
+    # So is one an untyped list holding a float widens: a CODE node's return here.
+    flow = "id: f\nname: f\nnodes:\n  c:\n    kind: code\n    code: return [1, 2.5]\n"
+    case = {"kind": "run", "flow": flow + "output: ${c.output}\n",
+            "run": {"run_id": "r1", "num_workers": 0}}
+    results, notes = harvest._replay(state, case, ("idle",))
+    assert results["output"] == {"status": "succeeded", "output": [1.0, 2.5]}
+    assert notes == noted
 
     run = _read(_ROOT / "cases/run-agent/model_reply.yaml")
     del run["expect"]
@@ -3165,7 +3172,7 @@ def test_harvest_tags_unshimmable_rules(tmp_path: Path) -> None:
 
 def test_harvest_flags_arithmetic_at_load(tmp_path: Path,
                                           monkeypatch: pytest.MonkeyPatch) -> None:
-    """A load or run whose arithmetic TS rejects at load is flagged, with no tag of its own."""
+    """A load or run whose arithmetic TS rejects at load is flagged and tagged `arithmetic`."""
     from tests import conformance_harvest as harvest
 
     state = harvest._Harvest(None, tmp_path)
@@ -3180,7 +3187,56 @@ def test_harvest_flags_arithmetic_at_load(tmp_path: Path,
         call.case, call.result, call.skip = {"kind": kind, "flow": "id: f\n"}, {"load": "ok"}, None
         _, text, written, _, _ = harvest._expected(state, call)
         assert written == flags
-        assert "rules" not in yaml.load(text, Loader=_CaseLoader)
+        case = yaml.load(text, Loader=_CaseLoader)
+        if flags:
+            assert case["rules"] == ["arithmetic"] and case["python_expect"] == {"load": "ok"}
+        else:
+            assert "rules" not in case and "python_expect" not in case
+
+
+def test_harvest_skips_lark_token_lists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A case whose outcome holds Lark's `Expected one of` list is skipped as unstable."""
+    from tests import conformance_harvest as harvest
+
+    state = harvest._Harvest(None, tmp_path)
+    monkeypatch.setattr(harvest, "_STATE", state)
+    raises = {"raises": {"class": "ExpressionError",
+                         "message": "unexpected token ')'\nExpected one of:\n\t* NAME\n"}}
+    monkeypatch.setattr(harvest, "_replay", lambda state, case, shims=(): (raises, frozenset()))
+    call = harvest._Call("eval_expr")
+    call.case, call.result, call.skip = {"kind": "expr", "expr": "(1 +)"}, raises, None
+    with pytest.raises(harvest._Skip, match=r"^unstable parser message \(Lark token order\)$"):
+        harvest._expected(state, call)
+
+
+def test_harvest_shims_tool_result_events(tmp_path: Path,
+                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    """A tool result's `ToolCallFinished` text is in the text form, tagged `text-form`."""
+    from tests import conformance_harvest as harvest
+
+    state = harvest._Harvest(None, tmp_path)
+    monkeypatch.setattr(harvest, "_STATE", state)
+    case = _read(_ROOT / "cases/run-agent/model_tool_loop.yaml")
+    del case["expect"]
+    case["host"]["tools"]["lookup"]["results"] = [{"return": {"a": 1.0, "ok": True}}]
+    # The model reads the tool result's text too, which the shims change.
+    del case["host"]["models"]["research"]["agent"][1]["request"]
+    call = harvest._Call("run_flow")
+    output = {"status": "succeeded", "output": "found X1"}
+    call.case, call.result, call.skip = case, {"output": output}, None
+    group, text, flags, _, _ = harvest._expected(state, call)
+    written = yaml.load(text, Loader=_CaseLoader)
+    assert (group, flags, written["rules"]) == ("run-agent", [], ["text-form"])
+
+    def finished(expect: dict) -> list:
+        return [data["result"] for name, *rest in expect["events"]
+                if name == "ToolCallFinished" for data in rest]
+
+    assert finished(written["expect"]) == ['{"a":1,"ok":true}']
+    assert finished(written["python_expect"]) == ["{'a': 1.0, 'ok': True}"]
+    case_dir = tmp_path / "replay"
+    case_dir.mkdir()
+    _check_results(written, results(written, case_dir))
 
 
 def test_harvest_unshimmable_llm() -> None:
@@ -3206,7 +3262,10 @@ def test_harvest_unshimmable_llm() -> None:
 
 
 def test_harvest_unshimmable_texts() -> None:
-    """A flow's leading BOM is the `yaml` rule's, any other U+FEFF the `text` rule's."""
+    """The `yaml` and `text` rules' signals in a case's texts and in its outcome.
+
+    A flow's leading BOM is the `yaml` rule's, any other U+FEFF the `text` rule's.
+    """
     from tests import conformance_harvest as harvest
 
     def rules(case: dict, py: dict, notes: frozenset = frozenset()) -> set:
@@ -3216,6 +3275,16 @@ def test_harvest_unshimmable_texts() -> None:
     assert rules({"kind": "load", "flow": "\ufeffid: f\n"}, loaded) == {"yaml"}
     assert rules({"kind": "load", "flow": "id: f # \ufeff\n"}, loaded) == {"text"}
     assert rules({"kind": "expr", "expr": "\ufeff1"}, {"value": 1}) == {"text"}
+    # Text data a case hands in, keys included, is scanned too.
+    for key, data in (("values", {"v": "\u0661"}), ("inputs", {"q": ["a\x1c"]}),
+                      ("value", {"\ufeffk": 1})):
+        assert rules({"kind": "expr", "expr": "v", key: data}, {"value": 1}) == {"text"}, key
+    # PyYAML's mark text, in any message, is the `yaml` rule's.
+    mark = ('call(...) keyword value: while parsing a flow node\nexpected the node content, but'
+            ' found \'<stream end>\'\n  in "<unicode string>", line 1, column 2:')
+    failed = {"output": {"status": "failed",
+                         "failure": {"code": "node.execute", "message": mark, "node": "n"}}}
+    assert rules({"kind": "run", "flow": "id: f\n"}, failed) == {"yaml"}
 
     value = {"kind": "value", "type": "float", "value": 2}
     finite = {"raises": {"class": "TypeCheckError", "message": "Input should be a finite number"}}
@@ -3643,7 +3712,11 @@ def test_shim_text_form_through_yian() -> None:
     """Python yian writes values in the text form under the shims, and as `str` without them."""
     from yian.expr import builtins
     from yian.expr.expressions import ExpressionError
-    from yian.nodes.agent import memory
+    from yian.nodes.agent import live, memory
+
+    class Unwritable:
+        def __str__(self) -> str:
+            raise RuntimeError("no text")
 
     values = {"flag": True, "n": 1.0, "xs": [1, 1.5, True, "a", [1, "b"]],
               "r": {"a": 1.0, "b": [True, None]}, "rec": {"b": 1, "1": 2}}
@@ -3651,8 +3724,13 @@ def test_shim_text_form_through_yian() -> None:
     assert eval_binding("x=${flag}", values.get) == "x=True"
     assert render_template_record("${n}", values) == "1.0"
     assert memory._tool_text("t", None) == "None"
+    assert live._text({"a": 1.0, "ok": True}) == "{'a': 1.0, 'ok': True}"
     with pytest.MonkeyPatch.context() as patch:
         _install_shims(patch, "key-order")
+        assert live._text({"b": 1, "0": 2}) == "{'0': 2, 'b': 1}"
+        cyclic: list = []
+        cyclic.append(cyclic)
+        assert live._text(cyclic) == "[[...]]"
         for name in ("join", "render_as_json", "upper", "lower"):
             assert builtins.builtin_result_type(name) == builtins.builtin_result_type("upper")
         assert builtins.builtin_result_type("join") is not None
@@ -3669,6 +3747,10 @@ def test_shim_text_form_through_yian() -> None:
         assert memory._tool_text("t", {"k": [1.0]}) == '{"k":[1]}'
         assert memory._reported_text("t", ReportedToolError("no such row")) == "no such row"
         assert memory._reported_text("t", ReportedToolError("")) == "ReportedToolError"
+        assert live._text({"a": 1.0, "ok": True}) == '{"a":1,"ok":true}'
+        assert live._text("x") == "x"
+        # As `live._text`, a result whose writing raises has no text.
+        assert live._text(Unwritable()) is None
     with pytest.MonkeyPatch.context() as patch:
         _install_shims(patch, "text-form", "key-order")
         assert render_template_record("r=${rec}", values) == 'r={"1":2,"b":1}'
@@ -3676,12 +3758,14 @@ def test_shim_text_form_through_yian() -> None:
             '{\n"1": 2,\n"b": 1\n}')
         assert render_template_record("${join([rec], \",\")}", values) == '{"1":2,"b":1}'
         assert memory._tool_text("t", {"b": 1, "0": 2}) == '{"0":2,"b":1}'
+        assert live._text({"b": 1, "0": 2}) == '{"0":2,"b":1}'
         with pytest.raises(ExpressionError, match="takes a list, got str"):
             render_template_record("${join(n2, \",\")}", {"n2": "ab"})
         with pytest.raises(ExpressionError, match=r"render_as_json"):
             render_template_record("${render_as_json(r, 1, 2)}", values)
     assert eval_binding("x=${flag}", values.get) == "x=True"
     assert memory._tool_text("t", None) == "None"
+    assert live._text(True) == "True"
 
 
 def test_shim_text_form_replay(tmp_path: Path) -> None:

@@ -60,7 +60,7 @@ from yian.expr import builtins as expr_builtins, expressions, template
 from yian.expr.expressions import ResolveMode, eval_expr, evaluate_when_record
 from yian.expr.grammar import parse_expr
 from yian.expr.template import eval_binding, render_template_record
-from yian.nodes.agent import memory
+from yian.nodes.agent import live, memory
 from yian.nodes.code.node import _REFERENCE_RE, CodeNode
 from yian.nodes.tool import node as tool_node
 from yian.run import RunResult, resume_flow, run_flow
@@ -1430,13 +1430,29 @@ def _keep_text_builtins(patch: pytest.MonkeyPatch) -> None:
                   frozenset(fns[name] for name in ("join", "render_as_json", "upper", "lower")))
 
 
+def _ts_event_text(result: object) -> str | None:
+    """Return a tool result's text for its `ToolCallFinished` event, in the text form.
+
+    `None` when writing it raises, as `live._text` gives.
+    """
+    try:
+        return _ts_text(result)
+    except Exception:
+        return None
+
+
 def _install_text_form(patch: pytest.MonkeyPatch, case: dict) -> None:
-    """Write `${...}` spans, `join` elements, `render_as_json` and tool results in the text form."""
+    """Write `${...}` spans, `join` elements, `render_as_json` and tool results in the text form.
+
+    That covers a tool result's text both where the model reads it and in its event.
+    """
     fns = expr_builtins.TEMPLATE_FNS
     # `_as_text` and `_tool_text` each write their value with `write_as_text(str, ...)`.
     for module in (template, memory):
         patch.setattr(module, "write_as_text",
                       lambda convert, value: write_as_text(_ts_text, value))
+    # Only `observe_tool_call` calls it, through its module global.
+    patch.setattr(live, "_text", _ts_event_text)
     patch.setitem(fns, "join", _ts_join)
     patch.setitem(fns, "render_as_json", _ts_render_as_json(fns["render_as_json"]))
     _keep_text_builtins(patch)
@@ -1516,8 +1532,24 @@ def _ordering(original):
     return wrapper
 
 
+def _ordering_unraised(original):
+    """Return `original`, which must not raise, wrapped to take its argument through `_js_ordered`.
+
+    A cyclic or too deep value, which `_js_ordered` can't copy, goes to `original` unordered.
+    """
+    @functools.wraps(original)
+    def wrapper(value: object) -> object:
+        try:
+            ordered = _js_ordered(value)
+        except RecursionError:
+            return original(value)
+        return original(ordered)
+
+    return wrapper
+
+
 def _install_key_order(patch: pytest.MonkeyPatch, case: dict) -> None:
-    """Hand the text points and `value_repr` each record with its keys in JS order."""
+    """Hand the text points, tool-result events and `value_repr` each record in JS key order."""
     fns = expr_builtins.TEMPLATE_FNS
     for name in ("join", "render_as_json"):
         patch.setitem(fns, name, _ordering(fns[name]))
@@ -1529,19 +1561,9 @@ def _install_key_order(patch: pytest.MonkeyPatch, case: dict) -> None:
         return tool_text(name, _js_ordered(result))
 
     patch.setattr(memory, "_tool_text", ordered_tool_text)
+    patch.setattr(live, "_text", _ordering_unraised(live._text))
     _keep_text_builtins(patch)
-    shown = typesys_values.value_repr
-
-    @functools.wraps(shown)
-    def ordered_value_repr(value: object) -> str:
-        try:
-            ordered = _js_ordered(value)
-        except RecursionError:
-            # `value_repr` must not raise, so a cyclic or too deep value is shown unordered.
-            return shown(value)
-        return shown(ordered)
-
-    _patch_held(patch, shown, ordered_value_repr)
+    _patch_held(patch, typesys_values.value_repr, _ordering_unraised(typesys_values.value_repr))
 
 
 def _ts_kind(value: object) -> str:
@@ -1834,18 +1856,18 @@ def _noting_requests(original):
 
 
 def _noting_int_in_float(original):
-    """Return `_coerce_scalar` wrapped to note `int-in-float` when it widens an int to a float.
+    """Return `_widen_int` wrapped to note `int-in-float` each time it widens an int to a float.
 
-    The value is still widened: TS keeps it an int, which no shim can follow, since pydantic
-    widens it again inside `NumberValue` and `list[float]`.
+    It widens an int in a `float` slot and one in an untyped list holding floats. The value is
+    still widened: TS keeps it an int, which no shim can follow, since pydantic widens it again
+    inside `NumberValue` and `list[float]`.
     """
     @functools.wraps(original)
-    def _coerce_scalar(declared: ValueKind, value: object, path: tuple) -> object:
-        if declared == ValueKind.NUMBER and isinstance(value, int) and not isinstance(value, bool):
-            _NOTES.add("int-in-float")
-        return original(declared, value, path)
+    def _widen_int(value: int, path: tuple) -> float:
+        _NOTES.add("int-in-float")
+        return original(value, path)
 
-    return _coerce_scalar
+    return _widen_int
 
 
 def _replay(state: _Harvest, case: dict, shims: Collection[str] = ()) -> tuple[dict, frozenset]:
@@ -1853,9 +1875,9 @@ def _replay(state: _Harvest, case: dict, shims: Collection[str] = ()) -> tuple[d
 
     The shims named in `shims` are on during the replay, and the notes are what they noted.
     Under any shim, a model call's request that differs from its entry's is noted instead of
-    failing the replay: a shim may change a prompt or a tool result's text; and an int a `float`
-    slot widens is noted `int-in-float`. Raises KeyError for a name with no shim, and `_Skip`
-    when the replay raises anything.
+    failing the replay: a shim may change a prompt or a tool result's text; and an int widened to
+    a float (in a `float` slot or an untyped list holding floats) is noted `int-in-float`.
+    Raises KeyError for a name with no shim, and `_Skip` when the replay raises anything.
     """
     unknown = set(shims) - _SHIMS.keys()
     if unknown:
@@ -1876,9 +1898,10 @@ def _replay(state: _Harvest, case: dict, shims: Collection[str] = ()) -> tuple[d
                 if installed:
                     patch.setattr(runner, "_request_difference",
                                   _noting_requests(runner._request_difference))
-                    # Only `values` calls it, through its module global.
-                    patch.setattr(typesys_values, "_coerce_scalar",
-                                  _noting_int_in_float(typesys_values._coerce_scalar))
+                    # Only `values` calls it, through its module global, and only for a
+                    # non-bool int.
+                    patch.setattr(typesys_values, "_widen_int",
+                                  _noting_int_in_float(typesys_values._widen_int))
                 results = runner.results(runner._read(path), case_dir, candidate=True)
             return results, frozenset(_NOTES)
         except (KeyboardInterrupt, SystemExit):
@@ -2202,6 +2225,9 @@ _STRUCTURED_PROMPTS = ("Respond with ONLY a JSON object matching this JSON schem
 # `\d` is Unicode category Nd: Python's expression lexer reads any decimal digit as a number;
 # U+001C-U+001F and U+0085 are whitespace to Python, and U+FEFF is whitespace to JS.
 _TEXT_CHARS = re.compile(r"(?![0-9])\d|[\x1c-\x1f\x85\ufeff]")
+# Where PyYAML's error text marks its place; it can reach any message, such as a `call(...)`
+# keyword value's or a skill frontmatter's error.
+_YAML_MARK = 'in "<unicode string>", line'
 # The arithmetic shim's notes for what TS rejects at load, where both operand types are known.
 _LOAD_ARITHMETIC = frozenset({"repetition", "printf", "operand-kinds"})
 # The failure codes whose text a CODE node's own behavior gives: its body raised (TS writes
@@ -2275,6 +2301,7 @@ def _unshimmable(case: dict, py: dict, notes: frozenset) -> set[str]:
 
     diagnostics = _diagnostics(py)
     if (any(diagnostic["message"].startswith("invalid YAML:") for diagnostic in diagnostics)
+            or any(_YAML_MARK in text for text in outcome)
             or any(text.startswith("\ufeff") for text in flows)):
         rules.add("yaml")
 
@@ -2302,8 +2329,9 @@ def _unshimmable(case: dict, py: dict, notes: frozenset) -> set[str]:
         rules.add("code")
 
     # A flow's leading U+FEFF is a BOM, the yaml rule's; one anywhere else is the text rule's.
+    data = [text for key in ("inputs", "values", "value") for text in _texts(case.get(key))]
     if any(_TEXT_CHARS.search(text) for text in [*(flow.removeprefix("\ufeff") for flow in flows),
-                                                  *exprs]):
+                                                  *exprs, *data]):
         rules.add("text")
     return rules
 
@@ -2326,8 +2354,9 @@ def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list, dict, set]:
     equal, each one dropped giving a `pooled: <result> dropped` flag. A model entry whose
     request the shims change loses its `request` (flag `shims: request dropped`). Each rule
     `_unshimmable` finds joins `rules` and is flagged `needs TS expect: <rule>`; a load, run or
-    backward pass whose arithmetic TS rejects at load (repetition, `%` on text, operand kinds) is
-    flagged `needs TS expect: arithmetic`.
+    backward pass whose arithmetic TS rejects at load (repetition, `%` on text, operand kinds)
+    gets the `arithmetic` rule and is flagged `needs TS expect: arithmetic`. A case whose plain
+    outcome holds Lark's `Expected one of` token list is a skip.
     """
     if call.skip:
         raise _Skip(call.skip)
@@ -2349,12 +2378,17 @@ def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list, dict, set]:
         # A run's output is a host value, whose numbers the runner compares by value.
         if not runner._same(_agreed(case, actual), _agreed(case, result), by_value=is_run):
             raise _Skip("replay differs")
+    py = _expect(case, replays[0])
+    # Lark lists the expected tokens in an order PYTHONHASHSEED sets, so the text differs
+    # across processes.
+    if any("Expected one of" in text for text in _texts(py)):
+        raise _Skip("unstable parser message (Lark token order)")
     shimmed, noted = zip(*(_shimmed(state, case, _SHIMS) for _ in range(times)))
     notes = frozenset().union(*noted)
     for actual in shimmed[1:]:
         if not runner._same(_agreed(case, actual), _agreed(case, shimmed[0]), by_value=is_run):
             raise _Skip("shims: replays differ")
-    py, ts = _expect(case, replays[0]), _expect(case, shimmed[0])
+    ts = _expect(case, shimmed[0])
     # Before a pooled result or a request is dropped: either may hold a rule's signal.
     unshimmable = _unshimmable(case, py, notes)
     flags = []
@@ -2393,6 +2427,7 @@ def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list, dict, set]:
     rules |= unshimmable
     flags += [f"needs TS expect: {rule}" for rule in sorted(unshimmable)]
     if case["kind"] in ("load", "run", "backward") and notes & _LOAD_ARITHMETIC:
+        rules.add("arithmetic")
         flags.append("needs TS expect: arithmetic")
     written = {**case, "expect": ts}
     if rules:

@@ -23,7 +23,7 @@ flow: |
 # The retry waits delay/2 + draw * delay/2 = 0.5 s.
 env: {YIAN_TOOL_RETRY_DELAY_SECONDS: "1"}
 inputs: {q: x}
-run: {run_id: r1, num_workers: 0}
+run: {num_workers: 0}
 host:
   tools:
     lookup:
@@ -43,14 +43,14 @@ expect:
     output: {found: F1, answer: "yes"}
   tool_calls:
     lookup:
-      - {args: {q: x}, call_id: r1/fetch, attempt: 1, node: fetch}
-      - {args: {q: x}, call_id: r1/fetch, attempt: 2, node: fetch}
+      - {args: {q: x}, call_id: <id:1>/fetch, attempt: 1, node: fetch}
+      - {args: {q: x}, call_id: <id:1>/fetch, attempt: 2, node: fetch}
     ask_user:
       - args:
           question: Use F1?
           answer_schema: [{name: answer, type: str, required: true}]
           node_id: ok
-        call_id: r1/ok
+        call_id: <id:1>/ok
         attempt: 1
         node: ok
   trace:

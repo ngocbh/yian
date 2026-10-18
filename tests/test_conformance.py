@@ -753,15 +753,14 @@ def _capture(capture: dict) -> dict:
                       for item in capture["items"]]}
 
 
-def _trace(log_path: Path, flow) -> list:
-    """Return the run log at `log_path` projected to the README's trace."""
+def _trace(lines: list, flow) -> list:
+    """Return the run log's `lines` projected to the README's trace."""
     def failure(payload: dict) -> dict:
         return _failure(Failure(payload["code"], payload["message"], payload["node_id"],
                                 tuple(OriginRef(origin["key"]) for origin in payload["trace"])),
                         flow)
 
     entries = []
-    lines = log_path.read_text(encoding="utf-8").splitlines() if log_path.exists() else []
     for line in lines:
         record = json.loads(line)
         kind, payload = record["kind"], dict(record["payload"])
@@ -815,47 +814,153 @@ def _trace(log_path: Path, flow) -> list:
     return entries
 
 
-def _compare_output(result: RunResult, flow, expected: dict) -> None:
-    """Fail the case unless `result` is `expect.output`: the output by value, or the failure."""
+def _output(result: RunResult, flow) -> dict:
+    """Return `result` in the form of `expect.output`."""
     if result.status == "succeeded":
-        actual = {"status": "succeeded", "output": result.output}
-    else:
-        actual = {"status": result.status, "failure": _failure(result.failure, flow)}
-    _compare("output", actual, expected, by_value=result.status == "succeeded")
+        return {"status": "succeeded", "output": result.output}
+    return {"status": result.status, "failure": _failure(result.failure, flow)}
+
+
+def _check_secrets(case: dict, texts: dict) -> None:
+    """Fail the case when a secret it filled in appears in one of `texts`, keyed by where."""
+    filled = repr([case.get(key) for key in sorted(_SECRET_KEYS)])
+    secrets = sorted(set(re.findall(r"sk-conformance-[0-9]+", filled)))
+    leaks = [f"secret {secret} appears in {where}"
+             for where, text in texts.items() for secret in secrets if secret in text]
+    if leaks:
+        pytest.fail("\n".join(leaks), pytrace=False)
+
+
+def _event_node(event: list) -> str | None:
+    """Return an event's node: its `node_id`, a `NodeFailed`'s failure node, else None."""
+    data = event[1] if len(event) > 1 else {}
+    return data["failure"]["node"] if event[0] == "NodeFailed" else data.get("node_id")
+
+
+_NODE_OF = {
+    "trace": lambda entry: entry[1],
+    "events": _event_node,
+    "stream": lambda chunk: chunk.get("node_id"),
+}
+
+
+def _group(entries: list, node_of) -> list:
+    """Return `entries` with run-level ones (node None) first, then each node's, nodes sorted.
+
+    Each group keeps its order; nodes sort by UTF-16 code units.
+    """
+    def key(entry: object) -> tuple:
+        node = node_of(entry)
+        return (node is not None, b"" if node is None else node.encode("utf-16-be"))
+
+    return sorted(entries, key=key)
+
+
+def _pooled(results: dict) -> dict:
+    """Return `results` with the trace, events, stream and each tool's calls grouped by node."""
+    grouped = {name: _group(value, _NODE_OF[name]) if name in _NODE_OF else value
+               for name, value in results.items()}
+    if "tool_calls" in results:
+        grouped["tool_calls"] = {tool: _group(calls, lambda call: call.get("node"))
+                                 for tool, calls in results["tool_calls"].items()}
+    return grouped
+
+
+_ID_FIELDS = ("exchange_id", "commit_id", "mutation_id", "note_id")
+
+
+def _placeholders(projections: list, run_id: str | None) -> list:
+    """Return `projections` with each made-up id in their text replaced by `<id:N>`.
+
+    The ids are `run_id` (unless None) and every text value of an `_ID_FIELDS` key. They
+    are numbered in order of first appearance, walking `projections` in order, lists in
+    order and mapping keys sorted by UTF-16 code units.
+    """
+    ids = set() if run_id is None else {run_id}
+
+    def collect(value: object) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in _ID_FIELDS and isinstance(item, str) and item:
+                    ids.add(item)
+                collect(item)
+        elif isinstance(value, list):
+            for item in value:
+                collect(item)
+
+    collect(projections)
+    if not ids:
+        return projections
+    # Longest first, so an id that holds another is replaced whole.
+    pattern = re.compile("|".join(map(re.escape, sorted(ids, key=len, reverse=True))))
+    numbers: dict = {}
+
+    def replace(value: object) -> object:
+        if isinstance(value, str):
+            return pattern.sub(
+                lambda match: f"<id:{numbers.setdefault(match[0], len(numbers) + 1)}>", value
+            )
+        if isinstance(value, list):
+            return [replace(item) for item in value]
+        if isinstance(value, dict):
+            return {key: replace(value[key])
+                    for key in sorted(value, key=lambda key: key.encode("utf-16-be"))}
+        return value
+
+    return replace(projections)
 
 
 def _run_run(case: dict, case_dir: Path) -> None:
     """Run the flow on the case's host; compare `raises` or `output`, then the rest.
 
     The rest is the trace, events, stream and `tool_calls`, each when the case expects it.
+    Secrets are checked first; a pooled run is grouped, and placeholders put in, before
+    anything is compared.
     """
     flow = _load(case["flow"], case_dir)
     expect = case["expect"]
-    events, chunks = [], []
+    log = case_dir / "run.jsonl"
+    events, chunks, results = [], [], []
     with pytest.MonkeyPatch.context() as patch:
         tools, calls, check = _host(case, patch)
         run = dict(case.get("run", {}))
         if "context" in run:
             run["context"] = object()
 
-        def start() -> RunResult:
-            return run_flow(flow, case.get("inputs", {}), log=case_dir / "run.jsonl",
-                            tools=tools, on_event=events.append, on_stream=chunks.append, **run)
+        def start() -> None:
+            results.append(run_flow(flow, case.get("inputs", {}), log=log, tools=tools,
+                                    on_event=events.append, on_stream=chunks.append, **run))
 
         if "raises" in expect:
             _expect_raises(expect["raises"], start)
         else:
-            _compare_output(start(), flow, expect["output"])
-        if "trace" in expect:
-            _compare("trace", _trace(case_dir / "run.jsonl", flow), expect["trace"])
-        if "events" in expect:
-            _compare("events", [_event(event, flow) for event in events], expect["events"],
-                     by_value=True)
-        if "stream" in expect:
-            _compare("stream", [_fields(chunk, flow) for chunk in chunks], expect["stream"],
-                     by_value=True)
-        if "tool_calls" in expect:
-            _compare("tool_calls", calls, expect["tool_calls"], by_value=True)
+            start()
+        text = log.read_text(encoding="utf-8") if log.exists() else ""
+        lines = text.splitlines()
+        actual = {
+            "trace": _trace(lines, flow),
+            "events": [_event(event, flow) for event in events],
+            "stream": [_fields(chunk, flow) for chunk in chunks],
+            "tool_calls": calls,
+            "output": _output(results[0], flow) if results else None,
+        }
+        _check_secrets(case, {**{name: repr(value) for name, value in actual.items()},
+                              "the run log": text})
+        if run.get("num_workers", 8) != 0:
+            actual, expect = _pooled(actual), _pooled(expect)
+        if "run_id" in run:
+            run_id = None
+        elif results:
+            run_id = results[0].run_id
+        else:
+            run_id = json.loads(lines[0])["run_id"] if lines else None
+        actual = dict(zip(actual, _placeholders(list(actual.values()), run_id)))
+        if "output" in expect:
+            _compare("output", actual["output"], expect["output"],
+                     by_value=actual["output"]["status"] == "succeeded")
+        for name in ("trace", "events", "stream", "tool_calls"):
+            if name in expect:
+                _compare(name, actual[name], expect[name], by_value=name != "trace")
         # Last: a leftover entry usually follows from a divergence the comparisons show.
         check()
 

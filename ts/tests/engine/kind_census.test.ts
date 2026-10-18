@@ -24,8 +24,13 @@
  * break the kind-agnostic contract too): indirect access (`NodeKind[name]`,
  * `node["kind"]`), membership tests (`["call", "map"].includes(node.kind)`),
  * kind-keyed tables built in another file, and type-name compares
- * (`desc.constructor.name === "CallExpansion"`). The `*Expansion` check relies on
- * every expansion type's name ending in `Expansion`.
+ * (`desc.constructor.name === "CallExpansion"`), and comparisons through
+ * indexing, parentheses or casts (`"map" === nodes[0].kind`,
+ * `(node.kind as string) === "agent"`). The `*Expansion` check relies on every
+ * expansion type's name ending in `Expansion`.
+ *
+ * Known over-count: the `case` clauses of a `switch` nested inside a kind
+ * `switch` are counted too, whatever the nested switch's head.
  *
  * Outside the core the literal check would misread `ExecutionPosition.kind ===
  * "call"`, a position kind rather than a node kind; the census doesn't scan there.
@@ -41,7 +46,8 @@ const SRC = new URL("../../src/", import.meta.url);
 /** The two modules, below `src`, that make up the engine core the census guards. */
 const CORE_MODULES = ["runtime/engine.ts", "runtime/eval_node.ts"];
 
-/** The engine core dispatches only on node traits and hooks and the closed `Outcome` sum. */
+/** The most kind-dispatch lines the engine core may hold. */
+// The engine core dispatches only on node traits and hooks and the closed `Outcome` sum.
 const KIND_DISPATCH_CEILING = 0;
 
 /** The values of `NodeKind`. */
@@ -77,9 +83,9 @@ const KIND_REFERENCES = [
 ];
 
 // Over blanked text a literal is its quotes around spaces; group 2 spans its contents.
-const KIND_IS_LITERAL = /\bkind\s*[!=]==?\s*(["'`])( *)\1/g;
-const LITERAL_IS_KIND = /(["'`])( *)\1\s*[!=]==?\s*(?:[\w$]+[?!]?\.)*kind(?![\w$])/g;
-const CASE_LITERAL = /\bcase\s*(["'`])( *)\1\s*:/g;
+const KIND_IS_LITERAL = /\bkind\s*[!=]==?\s*(["'`])( *)\1/dg;
+const LITERAL_IS_KIND = /(["'`])( *)\1\s*[!=]==?\s*(?:[\w$]+[?!]?\.)*kind(?![\w$])/dg;
+const CASE_LITERAL = /\bcase\s*(["'`])( *)\1\s*:/dg;
 
 /** Return the index of the bracket closing the `(` or `{` at `open` in `code`. */
 function closing(code: string, open: number): number {
@@ -103,28 +109,25 @@ function dispatchLines(text: string): Set<number> {
   }
   const lines = new Set<number>();
   const hit = (offset: number) => lines.add(code.slice(0, offset).split("\n").length);
-  // The blanked literal keeps its offsets, so its text is read from the source.
-  const isKind = (quote: number, length: number) => NODE_KINDS.has(text.slice(quote + 1, quote + 1 + length));
+  // The blanked literal keeps its offsets, so its text is read from the source;
+  // `shift` is where the matched text starts in `code`.
+  const isKind = (m: RegExpMatchArray, shift = 0) => {
+    const [start, end] = m.indices![2]!;
+    return NODE_KINDS.has(text.slice(shift + start, shift + end));
+  };
 
   for (const pattern of KIND_REFERENCES) {
     for (const m of code.matchAll(pattern)) hit(m.index);
   }
-  for (const m of code.matchAll(KIND_IS_LITERAL)) {
-    const length = m[2]!.length;
-    if (isKind(m.index + m[0].length - length - 2, length)) hit(m.index);
-  }
-  for (const m of code.matchAll(LITERAL_IS_KIND)) {
-    if (isKind(m.index, m[2]!.length)) hit(m.index);
+  for (const pattern of [KIND_IS_LITERAL, LITERAL_IS_KIND]) {
+    for (const m of code.matchAll(pattern)) if (isKind(m)) hit(m.index);
   }
   for (const m of code.matchAll(/\bswitch\s*\(/g)) {
     const headEnd = closing(code, m.index + m[0].length - 1);
     const open = code.indexOf("{", headEnd);
     if (!/\bkind\b/.test(code.slice(m.index, headEnd)) || open < 0) continue;
     const body = code.slice(open, closing(code, open));
-    for (const c of body.matchAll(CASE_LITERAL)) {
-      const quote = open + c.index + c[0].indexOf(c[1]!);
-      if (isKind(quote, c[2]!.length)) hit(open + c.index);
-    }
+    for (const c of body.matchAll(CASE_LITERAL)) if (isKind(c, open)) hit(open + c.index);
   }
   return lines;
 }

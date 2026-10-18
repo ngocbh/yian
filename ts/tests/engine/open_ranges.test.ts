@@ -1,14 +1,27 @@
 /**
  * One-sided numeric ranges' shape, a port of the shape tests of
  * `tests/engine/test_open_ranges.py`; labels, value checks, overlap and parsing come later.
+ * `test_numeric_interval_maps_open_ends_to_infinity` is not ported (design 3.2.12: open ends
+ * stay `null`).
  */
 
 import { describe, expect, test } from "bun:test";
 
-import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
+import { Type, ValueKind } from "../../src/typesys/values.ts";
 
 const INT = ValueKind.INTEGER;
 const NUM = ValueKind.NUMBER;
+
+/** Return the error `typ.validateShape()` throws, failing unless it is exactly `cls`. */
+function shapeError(typ: Type, cls: typeof TypeError | typeof RangeError): Error {
+  try {
+    typ.validateShape();
+  } catch (error) {
+    expect((error as Error).constructor).toBe(cls);
+    return error as Error;
+  }
+  throw new Error("validateShape() did not throw");
+}
 
 describe("open range shape", () => {
   test.each([
@@ -28,15 +41,6 @@ describe("open range shape", () => {
     ["float [null, Infinity]", NUM, [null, Infinity], RangeError],
     ["float [10n ** 400n, null]", NUM, [10n ** 400n, null], RangeError],
   ] as const)("an open end still rejects bad metadata: %s", (_label, kind, bounds, cls) => {
-    const typ = new Type({ kind, bounds } as never);
-    let caught: unknown;
-    try {
-      typ.validateShape();
-    } catch (error) {
-      caught = error;
-    }
-    expect(caught).toBeInstanceOf(cls);
-    expect(caught).not.toBeInstanceOf(TypeCheckError);
-    expect((caught as Error).constructor).toBe(cls);
+    shapeError(new Type({ kind, bounds }), cls);
   });
 });

@@ -46,23 +46,36 @@ describe("union shape", () => {
   });
 
   test.each([
-    ["kind", new Type({ kind: ValueKind.STRING, variants: [buy, sell] }), RangeError],
+    [
+      "kind",
+      new Type({ kind: ValueKind.STRING, variants: [buy, sell] }),
+      RangeError,
+      /only object types may declare union variants/,
+    ],
     [
       "other-refinement",
       new Type({ kind: ValueKind.OBJECT, fields: new Map([["a", INT]]), variants: [buy, sell] }),
       RangeError,
+      /a type may declare only one structural refinement/,
     ],
-    ["one-member", union([buy]), RangeError],
-    ["scalar-member", union([buy, STR]), RangeError],
-    ["object-member", union([buy, OBJECT]), RangeError],
-    ["nullable-member", union([buy, sell.replace({ nullable: true })]), RangeError],
+    ["one-member", union([buy]), RangeError, /a union needs at least two members/],
+    ["scalar-member", union([buy, STR]), RangeError, /every union member must be a record type/],
+    ["object-member", union([buy, OBJECT]), RangeError, /every union member must be a record type/],
+    [
+      "nullable-member",
+      union([buy, sell.replace({ nullable: true })]),
+      RangeError,
+      /union members must not be nullable/,
+    ],
     [
       "not-an-array",
       new Type({ kind: ValueKind.OBJECT, variants: new Set([buy, sell]) } as never),
       TypeError,
+      /type variants must be an array/,
     ],
-  ] as const)("rejects %s", (_id, typ, cls) => {
+  ] as const)("rejects %s", (_id, typ, cls, message) => {
     expect(() => typ.validateShape()).toThrow(cls);
+    expect(() => typ.validateShape()).toThrow(message);
   });
 
   test("a list of a union stores as list[object]", () => {

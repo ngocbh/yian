@@ -152,7 +152,7 @@ export class Type {
     this.required = init.required;
     this.tags = init.tags;
     this.element = init.element;
-    this.nullable = init.nullable ?? false;
+    this.nullable = init.nullable === undefined ? false : init.nullable;
     this.bounds = init.bounds;
     this.variants = init.variants;
   }
@@ -235,7 +235,7 @@ function validateTypeShape(typ: unknown, active: Set<Type>, validated: Set<Type>
         throw new RangeError("only object types may declare record fields");
       }
       for (const [name, fieldType] of fields) {
-        if (typeof name !== "string" || !name) {
+        if (!isNonEmptyString(name)) {
           throw new TypeError("type field names must be non-empty strings");
         }
         validateTypeMetadataString(name);
@@ -316,7 +316,7 @@ function validateTypeShape(typ: unknown, active: Set<Type>, validated: Set<Type>
   validated.add(typ);
 }
 
-function isNonEmptyString(value: unknown): boolean {
+function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value !== "";
 }
 
@@ -398,12 +398,16 @@ export function typeEquals(a: Type, b: Type): boolean {
   return (
     a.kind === b.kind &&
     a.nullable === b.nullable &&
-    bothOr(a.fields, b.fields, mapEquals) &&
-    bothOr(a.required, b.required, setEquals) &&
-    bothOr(a.tags, b.tags, setEquals) &&
-    bothOr(a.element, b.element, typeEquals) &&
-    bothOr(a.bounds, b.bounds, (x, y) => boundEquals(x[0], y[0]) && boundEquals(x[1], y[1])) &&
-    bothOr(
+    optionalEquals(a.fields, b.fields, mapEquals) &&
+    optionalEquals(a.required, b.required, setEquals) &&
+    optionalEquals(a.tags, b.tags, setEquals) &&
+    optionalEquals(a.element, b.element, typeEquals) &&
+    optionalEquals(
+      a.bounds,
+      b.bounds,
+      (x, y) => boundEquals(x[0], y[0]) && boundEquals(x[1], y[1]),
+    ) &&
+    optionalEquals(
       a.variants,
       b.variants,
       (x, y) => x.length === y.length && x.every((member, i) => typeEquals(member, y[i]!)),
@@ -412,7 +416,11 @@ export function typeEquals(a: Type, b: Type): boolean {
 }
 
 /** Return whether `a` and `b` are both absent, or both present and `equals`. */
-function bothOr<T>(a: T | undefined, b: T | undefined, equals: (a: T, b: T) => boolean): boolean {
+function optionalEquals<T>(
+  a: T | undefined,
+  b: T | undefined,
+  equals: (a: T, b: T) => boolean,
+): boolean {
   return a === undefined || b === undefined ? a === b : equals(a, b);
 }
 

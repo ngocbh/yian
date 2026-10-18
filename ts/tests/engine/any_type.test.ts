@@ -13,13 +13,17 @@ describe("Any type shape", () => {
   });
 
   test.each([
-    ["fields", { fields: new Map<string, Type>() }],
-    ["tags", { tags: new Set(["a"]) }],
-    ["bounds", { bounds: [0n, 1n] as const }],
-    ["element", { element: Type.scalar(ValueKind.STRING) }],
-  ] as const)("rejects %s", (_name, refinement) => {
-    expect(() => new Type({ kind: ValueKind.ANY, ...refinement }).validateShape()).toThrow(
-      RangeError,
-    );
+    ["fields", { fields: new Map<string, Type>() }, /only object types may declare record fields/],
+    ["tags", { tags: new Set(["a"]) }, /only string types may declare variant tags/],
+    ["bounds", { bounds: [0n, 1n] }, /only int and float types may declare bounds/],
+    [
+      "element",
+      { element: Type.scalar(ValueKind.STRING) },
+      /only list types may declare an element type/,
+    ],
+  ] as const)("rejects %s", (_name, refinement, message) => {
+    const typ = new Type({ kind: ValueKind.ANY, ...refinement });
+    expect(() => typ.validateShape()).toThrow(RangeError);
+    expect(() => typ.validateShape()).toThrow(message);
   });
 });

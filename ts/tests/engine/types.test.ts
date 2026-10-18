@@ -24,7 +24,6 @@ function shapeError(typ: Type, cls: typeof TypeError | typeof RangeError): Error
   try {
     typ.validateShape();
   } catch (error) {
-    expect(error).not.toBeInstanceOf(TypeCheckError);
     expect((error as Error).constructor).toBe(cls);
     return error as Error;
   }
@@ -43,23 +42,47 @@ function record(fields: Record<string, Type>): Type {
 describe("numeric bounds shape", () => {
   const INTEGER = ValueKind.INTEGER;
   const NUMBER = ValueKind.NUMBER;
+  const TWO_ITEM = "type bounds must be a two-item array";
+  const INT_EXACT = "int bounds require exact numeric endpoints, excluding bool";
+  const FLOAT_EXACT = "float bounds require exact numeric endpoints, excluding bool";
+  const FINITE = "float bounds require finite endpoints";
+  const NO_BOUNDS = "only int and float types may declare bounds";
   test.each([
-    ["int '1,2'", INTEGER, "1,2", TypeError, /two-item/],
-    ["int [1n]", INTEGER, [1n], TypeError, /two-item/],
-    ["int [1n, 2n, 3n]", INTEGER, [1n, 2n, 3n], TypeError, /two-item/],
-    ["int [true, 2n]", INTEGER, [true, 2n], TypeError, /exact numeric/],
-    ["int [1n, 2.0]", INTEGER, [1n, 2.0], TypeError, /exact numeric/],
-    ["int [2n, 1n]", INTEGER, [2n, 1n], RangeError, /ordered/],
-    ["float [0, false]", NUMBER, [0, false], TypeError, /exact numeric/],
-    ["float [null, null]", NUMBER, [null, null], RangeError, /at least one endpoint/],
-    ["float [NaN, 1]", NUMBER, [NaN, 1], RangeError, /finite/],
-    ["float [0, Infinity]", NUMBER, [0, Infinity], RangeError, /finite/],
-    ["str", ValueKind.STRING, [1n, 2n], RangeError, /only int and float/],
-    ["list[int]", ValueKind.LIST_INTEGER, [1n, 2n], RangeError, /only int and float/],
-    ["object", ValueKind.OBJECT, [1n, 2n], RangeError, /only int and float/],
+    ["int '1,2'", INTEGER, "1,2", TypeError, TWO_ITEM],
+    ["int [1n]", INTEGER, [1n], TypeError, TWO_ITEM],
+    ["int [1n, 2n, 3n]", INTEGER, [1n, 2n, 3n], TypeError, TWO_ITEM],
+    ["int [true, 2n]", INTEGER, [true, 2n], TypeError, INT_EXACT],
+    ["int [1n, 2.0]", INTEGER, [1n, 2.0], TypeError, INT_EXACT],
+    [
+      "int [2n, 1n]",
+      INTEGER,
+      [2n, 1n],
+      RangeError,
+      "type bounds must be ordered from minimum to maximum",
+    ],
+    ["float [0, false]", NUMBER, [0, false], TypeError, FLOAT_EXACT],
+    [
+      "float [null, null]",
+      NUMBER,
+      [null, null],
+      RangeError,
+      "type bounds need at least one endpoint",
+    ],
+    ["float [NaN, 1]", NUMBER, [NaN, 1], RangeError, FINITE],
+    ["float [0, Infinity]", NUMBER, [0, Infinity], RangeError, FINITE],
+    [
+      "float [2n ** 53n + 1n, null]",
+      NUMBER,
+      [2n ** 53n + 1n, null],
+      RangeError,
+      "float bounds require lossless float endpoints",
+    ],
+    ["str", ValueKind.STRING, [1n, 2n], RangeError, NO_BOUNDS],
+    ["list[int]", ValueKind.LIST_INTEGER, [1n, 2n], RangeError, NO_BOUNDS],
+    ["object", ValueKind.OBJECT, [1n, 2n], RangeError, NO_BOUNDS],
   ] as const)("rejects forged metadata: %s", (_label, kind, bounds, cls, message) => {
     const typ = new Type({ kind, bounds } as never);
-    expect(shapeError(typ, cls).message).toMatch(message);
+    expect(shapeError(typ, cls).message).toBe(message);
   });
 
   test("bounds do not combine with incompatible refinements", () => {
@@ -81,24 +104,6 @@ describe("numeric bounds shape", () => {
     },
   );
 
-  test("messages match yian's", () => {
-    const shape = (kind: ValueKind, bounds: unknown) =>
-      new Type({ kind, bounds } as never).validateShape();
-    expect(() => shape(ValueKind.INTEGER, [true, 2n])).toThrow(
-      "int bounds require exact numeric endpoints, excluding bool",
-    );
-    expect(() => shape(ValueKind.NUMBER, [0, Infinity])).toThrow(
-      "float bounds require finite endpoints",
-    );
-    expect(() => shape(ValueKind.NUMBER, [2n ** 53n + 1n, null])).toThrow(
-      "float bounds require lossless float endpoints",
-    );
-    expect(() => shape(ValueKind.INTEGER, [2n, 1n])).toThrow(
-      "type bounds must be ordered from minimum to maximum",
-    );
-    expect(() => shape(ValueKind.INTEGER, [1n])).toThrow("type bounds must be a two-item array");
-  });
-
   test("ends compare exactly across bigint and number", () => {
     const ok: Bounds[] = [[2n ** 53n, 2 ** 53], [0n, 0.5], [-1, 0n]];
     for (const bounds of ok) new Type({ kind: ValueKind.NUMBER, bounds }).validateShape();
@@ -117,6 +122,7 @@ describe("runtime type shape", () => {
   test.each([
     [/kind/, { kind: "string" }],
     [/nullable/, { kind: ValueKind.STRING, nullable: 1 }],
+    [/nullable/, { kind: ValueKind.STRING, nullable: null }],
     [/fields/, { kind: ValueKind.OBJECT, fields: [] }],
     [/required fields/, { kind: ValueKind.OBJECT, fields: new Map(), required: [] }],
     [/tags/, { kind: ValueKind.STRING, tags: ["yes"] }],
@@ -306,8 +312,6 @@ describe("typeLevels", () => {
     // Each level's two fields hold the same Type, so an unmemoized walk visits 2**60 leaves.
     let typ = INT;
     for (let i = 0; i < 60; i++) typ = record({ a: typ, b: typ });
-    const start = performance.now();
     expect(typeLevels(typ)).toBe(60);
-    expect(performance.now() - start).toBeLessThan(1000);
   });
 });

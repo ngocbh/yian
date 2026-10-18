@@ -174,7 +174,7 @@ function bigintText(value: bigint): string {
  * (`Date`, `Map`, `Foo`; not `value.constructor`, which the value can fake), else its
  * `typeof` (`symbol`, `function`, `undefined`), else `object`.
  */
-function jsTypeName(value: unknown): string {
+export function jsTypeName(value: unknown): string {
   if (typeof value !== "object" || value === null) return typeof value;
   const proto: unknown = Object.getPrototypeOf(value);
   if (proto === null) return "object";
@@ -707,7 +707,7 @@ export function isRecord(value: unknown): value is ValueRecord {
 }
 
 /** Whether `value` is a list: a plain array (prototype `Array.prototype`). */
-function isList(value: unknown): value is unknown[] {
+export function isList(value: unknown): value is unknown[] {
   return Array.isArray(value) && Object.getPrototypeOf(value) === Array.prototype;
 }
 

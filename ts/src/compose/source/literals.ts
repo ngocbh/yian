@@ -16,7 +16,7 @@ import {
 
 import { reprText } from "../../diagnostics.ts";
 import type { Value, ValueRecord } from "../../typesys/index.ts";
-import { SourceSyntaxError } from "./common.ts";
+import { setRecordKey, SourceSyntaxError } from "./common.ts";
 import {
   type AnchoredNode,
   BOOL_TAG,
@@ -37,7 +37,7 @@ import {
 } from "./scalars.ts";
 
 /** A composed mapping's pair. */
-type MapPair = Pair<ParsedNode, ParsedNode | null>;
+export type MapPair = Pair<ParsedNode, ParsedNode | null>;
 
 /** The core scalar tags; on a list or mapping they say `expected a scalar node`. */
 const SCALAR_TAGS: ReadonlySet<string> = new Set([
@@ -129,7 +129,10 @@ function construct(root: ParsedNode | null, aliasTargets: ReadonlyMap<Alias, Anc
       values.set(node, value);
       return value;
     }
-    if (!isScalar(node)) checkCollectionTag(node);
+    if (!isScalar(node)) {
+      const message = collectionTagError(node.tag, node);
+      if (message !== null) throw new FlowLoaderError(message, node);
+    }
     // SafeLoader's `construct_yaml_seq` and `construct_yaml_map` yield an empty container and
     // check the node's kind only when filling it, so a mismatch comes after sibling scalars.
     if (node.tag === SEQ_TAG || (node.tag !== MAP_TAG && isSeq(node))) {
@@ -154,17 +157,8 @@ function construct(root: ParsedNode | null, aliasTargets: ReadonlyMap<Alias, Anc
         if (typeof key !== "string") throw nonTextKey(key, target(pair.key));
         const value = valueOf(pair.value);
         // A repeated key keeps its first position and takes the last value, as in
-        // SafeLoader; defining `__proto__` keeps it data instead of setting the prototype.
-        if (key === "__proto__") {
-          Object.defineProperty(record, key, {
-            value,
-            writable: true,
-            enumerable: true,
-            configurable: true,
-          });
-        } else {
-          record[key] = value;
-        }
+        // SafeLoader.
+        setRecordKey(record, key, value);
       }
     });
     return record;
@@ -232,14 +226,18 @@ function scalarValue(node: Scalar.Parsed): ScalarValue {
   }
 }
 
-/** Refuse a list's or mapping's tag unless it is absent, the bare `!`, `!!seq`, or `!!map`. */
-function checkCollectionTag(node: YAMLSeq.Parsed | YAMLMap.Parsed): void {
-  const tag = node.tag;
-  if (tag === undefined || tag === "!" || tag === SEQ_TAG || tag === MAP_TAG) return;
-  if (SCALAR_TAGS.has(tag)) {
-    throw new FlowLoaderError(`expected a scalar node, but found ${nodeId(node)}`, node);
-  }
-  throw new FlowLoaderError("could not determine a constructor for the tag " + reprText(tag), node);
+/**
+ * Return the error for the tag `tag` on a list or mapping, or null when the tag is absent, the
+ * bare `!`, `!!seq`, or `!!map`.
+ */
+export function collectionTagError(
+  tag: string | undefined,
+  node: YAMLSeq.Parsed | YAMLMap.Parsed,
+): string | null {
+  if (tag === undefined || tag === "!" || tag === SEQ_TAG || tag === MAP_TAG) return null;
+  return SCALAR_TAGS.has(tag)
+    ? `expected a scalar node, but found ${nodeId(node)}`
+    : "could not determine a constructor for the tag " + reprText(tag);
 }
 
 /**
@@ -247,17 +245,27 @@ function checkCollectionTag(node: YAMLSeq.Parsed | YAMLMap.Parsed): void {
  * written order, and return them in merge order, each list's items reversed so its first
  * mapping comes last and wins.
  *
+ * At each merge pair, `checkSite` first sees the value as written (null when missing) and,
+ * when it is a list written there, each of its items, with the pair's key, before any kind
+ * check or yield for that pair.
+ *
  * @throws FlowLoaderError at the first merge value that is not a mapping or a list of
  *   mappings.
  */
-function* mergeSources(
+export function* mergeSources(
   node: YAMLMap.Parsed,
   target: (written: ParsedNode | null) => AnchoredNode | null,
+  checkSite?: (written: ParsedNode | null, key: ParsedNode) => void,
 ): Generator<YAMLMap.Parsed, YAMLMap.Parsed[]> {
   const merged: YAMLMap.Parsed[] = [];
   for (const pair of node.items) {
     if (!isMergeKey(target(pair.key))) continue;
-    // The value's tag is ignored, as in Python, which looks only at the node's kind.
+    if (checkSite !== undefined) {
+      checkSite(pair.value, pair.key);
+      if (isSeq(pair.value)) for (const item of pair.value.items) checkSite(item, pair.key);
+    }
+    // Past `checkSite`, the value's tag is ignored, as in Python, which looks only at the
+    // node's kind.
     const value = target(pair.value);
     if (isMap(value)) {
       yield value;
@@ -280,17 +288,19 @@ function* mergeSources(
       for (const item of items.reverse()) merged.push(item);
     } else {
       // A missing value has no node, so the mapping stands in.
-      throw new FlowLoaderError(
-        `expected a mapping or list of mappings for merging, but found ${nodeId(value)}`,
-        value ?? node,
-      );
+      throw new FlowLoaderError(mergeValueError(value), value ?? node);
     }
   }
   return merged;
 }
 
+/** Return the error for a merge value, `null` when missing, that is not a mapping or list. */
+export function mergeValueError(value: AnchoredNode | null): string {
+  return `expected a mapping or list of mappings for merging, but found ${nodeId(value)}`;
+}
+
 /** Return a mapping's pairs other than its merge pairs. */
-function ownPairs(
+export function ownPairs(
   node: YAMLMap.Parsed,
   target: (written: ParsedNode | null) => AnchoredNode | null,
 ): MapPair[] {
@@ -301,7 +311,7 @@ function ownPairs(
  * Say whether a key is a merge key: a scalar tagged `!!merge`, or an untagged plain one
  * the table resolves to it. The bare `!` keeps `<<` text.
  */
-function isMergeKey(key: AnchoredNode | null): boolean {
+export function isMergeKey(key: AnchoredNode | null): boolean {
   if (!isScalar(key)) return false;
   if (key.tag === undefined) {
     return key.type === Scalar.PLAIN && resolvePlain(key.source) === MERGE_TAG;
@@ -310,7 +320,7 @@ function isMergeKey(key: AnchoredNode | null): boolean {
 }
 
 /** Name a node's kind as PyYAML's node id does; a missing node is an empty scalar. */
-function nodeId(node: AnchoredNode | null): string {
+export function nodeId(node: AnchoredNode | null): string {
   return isSeq(node) ? "sequence" : isMap(node) ? "mapping" : "scalar";
 }
 

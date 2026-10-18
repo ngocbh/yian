@@ -2,8 +2,8 @@
  * YAML nested past the loader's limit is a located error: a port of
  * `tests/compose/test_yaml_nesting_limit.py`.
  *
- * The flow and `SourceDocument` cases come with `document.ts`. TS-era additions: the first
- * problem in the text wins over a later one, and aliases resolve in the composed tree.
+ * The `load_flow` cases come with the loader. TS-era additions: the first problem in the
+ * text wins over a later one, and aliases resolve in the composed tree.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -19,9 +19,12 @@ import {
 } from "yaml";
 
 import { SourceSyntaxError } from "../../src/compose/source/common.ts";
+import { SourceDocument } from "../../src/compose/source/document.ts";
 import { parseYamlLiteral } from "../../src/compose/source/literals.ts";
 import { composeFlowDocument, FlowLoaderError } from "../../src/compose/source/scalars.ts";
 import { BUILTIN, install } from "../../src/defaults.ts";
+import { SourceRange } from "../../src/diagnostics.ts";
+import type { Value } from "../../src/typesys/index.ts";
 
 const MAX_YAML_NESTING = BUILTIN.maxYamlNesting;
 const MAX_VALUE_NESTING = BUILTIN.maxValueNesting;
@@ -130,6 +133,72 @@ describe("the YAML nesting limit", () => {
 
     const error = refusal("[".repeat(deep) + "}" + "]".repeat(deep));
     expect(error.message).toContain(`this list ${MESSAGE}`);
+  });
+});
+
+/** Return the `SourceSyntaxError` parsing `text` throws, failing if it throws none. */
+function documentRefusal(text: string): SourceSyntaxError {
+  try {
+    SourceDocument.parse(text);
+  } catch (error) {
+    expect(error).toBeInstanceOf(SourceSyntaxError);
+    return error as SourceSyntaxError;
+  }
+  throw new Error("expected a SourceSyntaxError");
+}
+
+describe("a source document", () => {
+  test("refuses a document past the limit with the message naming both limits", () => {
+    const depth = MAX_YAML_NESTING + 1;
+    const error = documentRefusal("[".repeat(depth) + "]".repeat(depth));
+
+    expect(error.message).toContain(`this list nests deeper than ${MAX_YAML_NESTING} levels`);
+    expect(error.message).toContain(`a yian value nests at most ${MAX_VALUE_NESTING})`);
+  });
+
+  test.each([
+    ["[", "]", "list"],
+    ["{a: ", "}", "mapping"],
+  ])("locates a flow collection past the limit: %p", (opener, closer, kind) => {
+    const depth = MAX_YAML_NESTING + 1;
+    const error = documentRefusal(opener.repeat(depth) + "1" + closer.repeat(depth));
+
+    expect(error.message).toContain(`this ${kind} ${MESSAGE}`);
+    const column = 1 + opener.length * MAX_YAML_NESTING;
+    expect(error.range).toEqual(new SourceRange(1, column, 1, column + 1));
+  });
+
+  test.each([
+    ["a:", "b: 1", "mapping"],
+    ["-", "- 1", "list"],
+  ])("locates a block collection past the limit: %p", (line, last, kind) => {
+    const depth = MAX_YAML_NESTING;
+    let text = "";
+    for (let i = 0; i < depth; i++) text += "  ".repeat(i) + line + "\n";
+    text += "  ".repeat(depth) + last + "\n";
+
+    const error = documentRefusal(text);
+
+    expect(error.message).toContain(`this ${kind} ${MESSAGE}`);
+    expect(error.range).toEqual(
+      new SourceRange(depth + 1, 2 * depth + 1, depth + 1, 2 * depth + 2),
+    );
+  });
+
+  test("parses a document at the limit", () => {
+    const depth = MAX_YAML_NESTING;
+    let value: Value = SourceDocument.parse("[".repeat(depth) + "]".repeat(depth))._value;
+    for (let i = 0; i < depth - 1; i++) {
+      expect(Array.isArray(value) && value.length === 1).toBe(true);
+      value = (value as Value[])[0]!;
+    }
+    expect(value).toEqual([]);
+  });
+
+  test("doesn't add up sibling collections", () => {
+    const deep = "[".repeat(MAX_YAML_NESTING - 1) + "]".repeat(MAX_YAML_NESTING - 1);
+    SourceDocument.parse("[" + Array(3).fill(deep).join(", ") + "]");
+    SourceDocument.parse("[" + Array(5000).fill("[1]").join(", ") + "]");
   });
 });
 

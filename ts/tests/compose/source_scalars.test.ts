@@ -5,8 +5,10 @@
  * TS-era differences: dates stay text, checked with yian's date grammar; `.nan` and an
  * overflowing float are refused; ints are `bigint`, so 'an int of any length reads exactly'
  * replaces Python's digit-limit tests. A literal's mapping keys must be text, local and
- * unknown tags are refused, and `! 5` is the text `"5"`. The `SourceDocument` rows come with
- * `document.ts`; here the literal entry point reads each row.
+ * unknown tags are refused, and `! 5` is the text `"5"`. A document keeps such a key as written
+ * and reports it as `nonTextKey`. Lone CRs are line breaks for both entry points. Both entry
+ * points, `SourceDocument.parse` and `parseYamlLiteral`, read the shared rows, explicit core
+ * tags included. The literal's merge rows quote Python's `017:` key; the document's keep it.
  * `test_pyyaml_globals_are_untouched` has no counterpart, since eemeli/yaml has no global
  * tables.
  */
@@ -14,6 +16,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { SourceSyntaxError } from "../../src/compose/source/common.ts";
+import { SourceDocument } from "../../src/compose/source/document.ts";
 import { parseYamlLiteral, readPlainScalar } from "../../src/compose/source/literals.ts";
 import {
   BOOL_TAG,
@@ -31,8 +34,8 @@ import {
   STR_TAG,
   TIMESTAMP_TAG,
 } from "../../src/compose/source/scalars.ts";
-import { reprText } from "../../src/diagnostics.ts";
-import { isRecord } from "../../src/typesys/index.ts";
+import { reprText, SourceRange } from "../../src/diagnostics.ts";
+import { isRecord, type Value } from "../../src/typesys/index.ts";
 import { parseDatetime } from "../../src/typesys/temporal.ts";
 
 const DATETIME_MSG = "datetime must look like 2026-05-21T14:30[:00][Z|+07:00]";
@@ -230,11 +233,159 @@ function literalError(text: string): string {
   return thrown(SourceSyntaxError, () => parseYamlLiteral(text)).message;
 }
 
-describe("parseYamlLiteral", () => {
+/** The two YAML entry points, which share one scalar table. */
+const READERS: [string, (text: string) => Value][] = [
+  ["document", (text) => SourceDocument.parse(text)._value],
+  ["literal", parseYamlLiteral],
+];
+
+describe.each(READERS)("both entry points: %s", (name, read) => {
   test.each(ROWS)("a plain scalar reads the same as a value: %p", (text, expected) => {
-    expect(parseYamlLiteral("value: " + text + "\n")).toEqual({ value: expected });
+    expect(read("value: " + text + "\n")).toEqual({ value: expected });
   });
 
+  test("an empty plain scalar is null", () => {
+    expect(read("value:\n")).toEqual({ value: null });
+    expect(read("")).toBeNull();
+  });
+
+  test.each([
+    ["'yes'", "yes"],
+    ['"017"', "017"],
+    ["|\n  yes\n", "yes\n"],
+    [">\n  017\n", "017\n"],
+  ])("quoted and block scalars stay text: %p", (text, expected) => {
+    expect(read("value: " + text)).toEqual({ value: expected });
+  });
+
+  test("nested collections read the same", () => {
+    // Python's `true: 1:30` key is refused by a literal, whose keys must be text.
+    const text = "outer:\n  inner: [yes, 017, on]\n  map: {no: 0x1F, on: 1:30}\n";
+
+    expect(read(text)).toEqual({
+      outer: { inner: ["yes", 17n, "on"], map: { no: 31n, on: "1:30" } },
+    });
+  });
+
+  test("lone CRs are line breaks", () => {
+    expect(read("a: x\r  y\r")).toEqual({ a: "x y" });
+  });
+
+  test.each<[string, ScalarValue]>([
+    ["!!int 017", 17n],
+    ["!!float 1", 1],
+    ["!!str 1", "1"],
+    ["!!bool true", true],
+  ])("an explicit core tag reads a core form: %p", (text, expected) => {
+    expect(read("value: " + text + "\n")).toEqual({ value: expected });
+  });
+
+  test.each([
+    ["!!int 1_000", "1_000"],
+    ["!!int 1.0", "1.0"],
+    ["!!bool yes", "yes"],
+    ["!!bool |\n  true\n", "true\n"],
+    ['!!float ".inf\\n"', ".inf\n"],
+  ])("an explicit core tag rejects a non-core form: %p", (text, found) => {
+    const error = thrown(SourceSyntaxError, () => read("value: " + text + "\n"));
+
+    expect(error.message).toContain(reprText(found));
+  });
+
+  test("!!timestamp on non-date text names the text", () => {
+    const error = thrown(SourceSyntaxError, () => read("value: !!timestamp hello\n"));
+
+    expect(error.message).toBe("expected a date or timestamp, but found 'hello'");
+  });
+
+  test.each([
+    ['"2026-13-45"', "not a valid date: month must be in 1..12"],
+    ['"2026-01-01T10:00:00+05:99"', "not a valid datetime: UTC offset minutes must be under 60"],
+  ])("a quoted unbuildable date under an explicit tag gets no quoting fix: %p", (text, reason) => {
+    const error = thrown(SourceSyntaxError, () => read("value: !!timestamp " + text + "\n"));
+
+    expect(error.message).toBe(reason);
+  });
+
+  test.each([
+    ["2026-13-45", "not a valid date: month must be in 1..12"],
+    ["2026-02-30", "not a valid date: day is out of range for month"],
+    ["0000-01-01", "not a valid date: year 0 is out of range"],
+    ["2026-01-01T25:00:00", "not a valid datetime: hour must be in 0..23"],
+    // Python's spaced offsets and one-digit offset hour are not in yian's datetime grammar.
+    ["2026-01-01 10:00:00 +99:00", DATETIME_MSG],
+    ["2026-01-01 10:00:00 +05:99", DATETIME_MSG],
+    ["2026-01-01T10:00:00+05:60", "not a valid datetime: UTC offset minutes must be under 60"],
+    ["2026-01-01t10:00:00-5:99", DATETIME_MSG],
+    ["2026-01-01T10:00:00+23:60", "not a valid datetime: UTC offset minutes must be under 60"],
+  ])("an unbuildable date is an error with the fix: %p", (text, reason) => {
+    const error = thrown(SourceSyntaxError, () => read("value: " + text + "\n"));
+
+    expect(error.message).toBe(reason + QUOTE_FIX);
+    if (name === "document") {
+      expect([error.range?.startLine, error.range?.startCol]).toEqual([1, 8]);
+    }
+  });
+});
+
+describe("SourceDocument", () => {
+  test.each(ROWS)("keeps a key as written and reports a non-text one: %p", (text, expected) => {
+    const document = SourceDocument.parse(text + ": value\n");
+    const written = typeof expected === "string" ? expected : text;
+
+    expect(Object.keys(document._value ?? {})).toEqual([written]);
+    expect(document.nonTextKey).toEqual(
+      typeof expected === "string"
+        ? null
+        : { key: expected, text, range: new SourceRange(1, 1, 1, 1 + text.length) },
+    );
+  });
+
+  test("keeps a true key in a nested mapping", () => {
+    const document = SourceDocument.parse("map: {no: 0x1F, true: 1:30}\n");
+
+    expect(document._value).toEqual({ map: { no: 31n, true: "1:30" } });
+    expect(document.nonTextKey?.key).toBe(true);
+  });
+
+  test.each(["~", "null", "NULL", ""])("keeps a null form as a key: %p", (text) => {
+    const document = SourceDocument.parse(`? ${text}\n: value\n`);
+
+    expect(document._value).toEqual({ [text]: "value" });
+    expect(document.nonTextKey?.key).toBeNull();
+    expect(document.nonTextKey?.text).toBe(text);
+  });
+
+  test("merge keys still merge and override", () => {
+    const text = "base: &base\n  on: x\n  yes: 1\n  017: a\ntarget:\n  <<: *base\n  yes: 2\n";
+    const document = SourceDocument.parse(text);
+
+    expect(document._value).toEqual({
+      base: { on: "x", yes: 1n, "017": "a" },
+      target: { on: "x", yes: 2n, "017": "a" },
+    });
+    expect(document.nonTextKey).toEqual({
+      key: 17n,
+      text: "017",
+      range: new SourceRange(4, 3, 4, 6),
+    });
+  });
+
+  test.each([
+    ["in a list", "[1, 2026-13-45]\n", 1, 5],
+    ["as a key", "a:\n  2026-13-45: 1\n", 2, 3],
+    ["offset in a list", "[1, 2026-01-01T10:00:00+05:99]\n", 1, 5],
+    ["offset as a key", "a:\n  2026-01-01T10:00:00+05:99: 1\n", 2, 3],
+  ])("locates an unbuildable date %s", (_, text, line, column) => {
+    const error = thrown(SourceSyntaxError, () => SourceDocument.parse(text));
+
+    // Also matches "not a valid datetime".
+    expect(error.message).toContain("not a valid date");
+    expect([error.range?.startLine, error.range?.startCol]).toEqual([line, column]);
+  });
+});
+
+describe("parseYamlLiteral", () => {
   test.each(ROWS)("a text key reads as text; a non-text key is refused: %p", (text, expected) => {
     if (typeof expected === "string") {
       expect(Object.keys(parseYamlLiteral(text + ": value\n") ?? {})).toEqual([expected]);
@@ -256,51 +407,10 @@ describe("parseYamlLiteral", () => {
     );
   });
 
-  test("an empty plain scalar is null", () => {
-    expect(parseYamlLiteral("value:\n")).toEqual({ value: null });
-    expect(parseYamlLiteral("")).toBeNull();
-  });
-
   test("NaN and overflowing floats are refused", () => {
     expect(literalError("value: .nan\n")).toBe("NaN is not a yian value" + QUOTE_FIX);
     expect(literalError("value: 1e400\n")).toBe("number is too large for a float" + QUOTE_FIX);
     expect(literalError('value: !!float ".nan"\n')).toBe("NaN is not a yian value");
-  });
-
-  test.each([
-    ["'yes'", "yes"],
-    ['"017"', "017"],
-    ["|\n  yes\n", "yes\n"],
-    [">\n  017\n", "017\n"],
-  ])("quoted and block scalars stay text: %p", (text, expected) => {
-    expect(parseYamlLiteral("value: " + text)).toEqual({ value: expected });
-  });
-
-  test("nested collections read the same", () => {
-    // Python's `true: 1:30` key is refused here: a literal's keys must be text.
-    const text = "outer:\n  inner: [yes, 017, on]\n  map: {no: 0x1F, on: 1:30}\n";
-
-    expect(parseYamlLiteral(text)).toEqual({
-      outer: { inner: ["yes", 17n, "on"], map: { no: 31n, on: "1:30" } },
-    });
-  });
-
-  test.each<[string, ScalarValue]>([
-    ["!!int 017", 17n],
-    ["!!float 1", 1],
-    ["!!str 1", "1"],
-  ])("an explicit core tag reads a core form: %p", (text, expected) => {
-    expect(parseYamlLiteral("value: " + text + "\n")).toEqual({ value: expected });
-  });
-
-  test.each([
-    ["!!int 1_000", "1_000"],
-    ["!!int 1.0", "1.0"],
-    ["!!bool yes", "yes"],
-    ["!!bool |\n  true\n", "true\n"],
-    ['!!float ".inf\\n"', ".inf\n"],
-  ])("an explicit core tag rejects a non-core form: %p", (text, found) => {
-    expect(literalError("value: " + text + "\n")).toContain(reprText(found));
   });
 
   test("an int of any length reads exactly", () => {
@@ -312,40 +422,12 @@ describe("parseYamlLiteral", () => {
     expect(parseYamlLiteral("value: !!int " + digits + "\n")).toEqual({ value: BigInt(digits) });
   });
 
-  test.each([
-    ["2026-13-45", "not a valid date: month must be in 1..12"],
-    ["2026-02-30", "not a valid date: day is out of range for month"],
-    ["0000-01-01", "not a valid date: year 0 is out of range"],
-    ["2026-01-01T25:00:00", "not a valid datetime: hour must be in 0..23"],
-    // Python's spaced offsets and one-digit offset hour are not in yian's datetime grammar.
-    ["2026-01-01 10:00:00 +99:00", DATETIME_MSG],
-    ["2026-01-01 10:00:00 +05:99", DATETIME_MSG],
-    ["2026-01-01T10:00:00+05:60", "not a valid datetime: UTC offset minutes must be under 60"],
-    ["2026-01-01t10:00:00-5:99", DATETIME_MSG],
-    ["2026-01-01T10:00:00+23:60", "not a valid datetime: UTC offset minutes must be under 60"],
-  ])("an unbuildable date is an error with the fix: %p", (text, reason) => {
-    expect(literalError("value: " + text + "\n")).toBe(reason + QUOTE_FIX);
-  });
-
   test.each(["[1, 2026-13-45]\n", "a:\n  2026-13-45: 1\n"])(
     "an unbuildable date in a list or as a key is refused: %p",
     (text) => {
       expect(literalError(text)).toBe("not a valid date: month must be in 1..12" + QUOTE_FIX);
     },
   );
-
-  test("!!timestamp on non-date text names the text", () => {
-    const message = literalError("value: !!timestamp hello\n");
-
-    expect(message).toBe("expected a date or timestamp, but found 'hello'");
-  });
-
-  test.each([
-    ['"2026-13-45"', "not a valid date: month must be in 1..12"],
-    ['"2026-01-01T10:00:00+05:99"', "not a valid datetime: UTC offset minutes must be under 60"],
-  ])("a quoted unbuildable date under an explicit tag gets no quoting fix: %p", (text, reason) => {
-    expect(literalError("value: !!timestamp " + text + "\n")).toBe(reason);
-  });
 
   test("an in-range offset builds; a one-digit offset is refused", () => {
     for (const text of ["2026-01-01T10:00:00+05:59", "2026-01-01T10:00:00-23:59"]) {

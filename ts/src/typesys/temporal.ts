@@ -11,8 +11,11 @@ export const DATETIME_FORMAT = "2026-05-21T14:30[:00][Z|+07:00]";
 // `[0-9]` rather than `\d` to say ASCII digits outright; no `m` flag, so `$` is the end
 // of the text and a trailing newline fails.
 const DATE_RE = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/;
-const DATETIME_RE =
-  /^([0-9]{4})-([0-9]{2})-([0-9]{2})[T ]([0-9]{2}):([0-9]{2})(?::([0-9]{2})(?:\.([0-9]{1,6}))?)?(Z|[+-][0-9]{2}:[0-9]{2})?$/;
+const DATETIME_RE = new RegExp(
+  "^([0-9]{4})-([0-9]{2})-([0-9]{2})[T ]([0-9]{2}):([0-9]{2})" +
+    "(?::([0-9]{2})(?:\\.([0-9]{1,6}))?)?" +
+    "(Z|[+-][0-9]{2}:[0-9]{2})?$",
+);
 
 /** A parsed `date`. */
 export interface ParsedDate {
@@ -86,12 +89,16 @@ export function parseDateOrDatetime(text: string): ParsedDate | ParsedDatetime {
 }
 
 function dateFrom(match: RegExpExecArray): ParsedDate {
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const reason = dateProblem(year, month, day);
+  const [, year, month, day] = match;
+  const parsed: ParsedDate = {
+    kind: "date",
+    year: Number(year),
+    month: Number(month),
+    day: Number(day),
+  };
+  const reason = dateProblem(parsed.year, parsed.month, parsed.day);
   if (reason !== null) throw new RangeError(`not a valid date: ${reason}`);
-  return { kind: "date", year, month, day };
+  return parsed;
 }
 
 function datetimeFrom(match: RegExpExecArray): ParsedDatetime {
@@ -102,7 +109,9 @@ function datetimeFrom(match: RegExpExecArray): ParsedDatetime {
   } else if (offset !== undefined) {
     const offHours = Number(offset.slice(1, 3));
     const offMinutes = Number(offset.slice(4, 6));
-    if (offHours >= 24) throw new RangeError("not a valid datetime: UTC offset must be under 24:00");
+    if (offHours >= 24) {
+      throw new RangeError("not a valid datetime: UTC offset must be under 24:00");
+    }
     if (offMinutes >= 60) {
       throw new RangeError("not a valid datetime: UTC offset minutes must be under 60");
     }
@@ -123,22 +132,26 @@ function datetimeFrom(match: RegExpExecArray): ParsedDatetime {
   };
   const reason =
     dateProblem(parsed.year, parsed.month, parsed.day) ??
-    (parsed.hour > 23
-      ? "hour must be in 0..23"
-      : parsed.minute > 59
-        ? "minute must be in 0..59"
-        : parsed.second > 59
-          ? "second must be in 0..59"
-          : null);
+    timeProblem(parsed.hour, parsed.minute, parsed.second);
   if (reason !== null) throw new RangeError(`not a valid datetime: ${reason}`);
   return parsed;
 }
 
-/** Return Python's reason why year, month and day name no date, or `null` if they do. */
+// The reasons below are the messages of Python's `date()` and `datetime()` errors.
+
+/** Return why year, month and day name no date, or `null` if they do. */
 function dateProblem(year: number, month: number, day: number): string | null {
   if (year < 1 || year > 9999) return `year ${year} is out of range`;
   if (month < 1 || month > 12) return "month must be in 1..12";
   if (day < 1 || day > daysInMonth(year, month)) return "day is out of range for month";
+  return null;
+}
+
+/** Return why hour, minute and second name no time of day, or `null` if they do. */
+function timeProblem(hour: number, minute: number, second: number): string | null {
+  if (hour > 23) return "hour must be in 0..23";
+  if (minute > 59) return "minute must be in 0..59";
+  if (second > 59) return "second must be in 0..59";
   return null;
 }
 

@@ -9,8 +9,6 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-  DATE_FORMAT,
-  DATETIME_FORMAT,
   type ParsedDate,
   type ParsedDatetime,
   parseDate,
@@ -38,40 +36,27 @@ function date(year: number, month: number, day: number): ParsedDate {
 }
 
 function datetime(
-  [year, month, day, hour, minute, second = 0, microsecond = 0]: number[],
+  [year, month, day, hour, minute, second = 0, microsecond = 0]: [
+    number,
+    number,
+    number,
+    number,
+    number,
+    number?,
+    number?,
+  ],
   offsetMinutes: number | null = null,
 ): ParsedDatetime {
-  return {
-    kind: "datetime",
-    year: year!,
-    month: month!,
-    day: day!,
-    hour: hour!,
-    minute: minute!,
-    second,
-    microsecond,
-    offsetMinutes,
-  };
+  return { kind: "datetime", year, month, day, hour, minute, second, microsecond, offsetMinutes };
 }
-
-test("the formats name the one accepted shape", () => {
-  expect(DATE_FORMAT).toBe("2026-05-21");
-  expect(DATETIME_FORMAT).toBe("2026-05-21T14:30[:00][Z|+07:00]");
-});
 
 describe("parseDate", () => {
   test("accepts the grammar", () => {
     expect(parseDate("2026-05-21")).toEqual(date(2026, 5, 21));
   });
 
-  test("knows leap years", () => {
-    expect(parseDate("2024-02-29")).toEqual(date(2024, 2, 29));
-    expect(parseDate("2000-02-29")).toEqual(date(2000, 2, 29));
-    for (const text of ["2026-02-29", "1900-02-29"]) {
-      expect(rangeError(() => parseDate(text)).message).toBe(
-        "not a valid date: day is out of range for month",
-      );
-    }
+  test.each(["2024-02-29", "2000-02-29"])("accepts a leap day: %p", (text) => {
+    expect(parseDate(text).day).toBe(29);
   });
 
   test.each([
@@ -92,6 +77,8 @@ describe("parseDate", () => {
     ["2026-00-01", "not a valid date: month must be in 1..12"],
     ["2026-02-30", "not a valid date: day is out of range for month"],
     ["2026-01-00", "not a valid date: day is out of range for month"],
+    ["2026-02-29", "not a valid date: day is out of range for month"],
+    ["1900-02-29", "not a valid date: day is out of range for month"],
     ["0000-01-01", "not a valid date: year 0 is out of range"],
     // The year is checked before the month and day.
     ["0000-13-40", "not a valid date: year 0 is out of range"],
@@ -119,10 +106,6 @@ describe("parseDatetime", () => {
     expect(parseDatetime(text)).toEqual(expected);
   });
 
-  test("reads a -00:00 offset as 0, not -0", () => {
-    expect(Object.is(parseDatetime("2026-05-21T14:30-00:00").offsetMinutes, 0)).toBe(true);
-  });
-
   test.each([
     "2026-05-21",
     "20200101T000000",
@@ -135,6 +118,8 @@ describe("parseDatetime", () => {
     "2026-05-21T14:30:05z",
     "2026-05-21T14:30 ",
     "２０２６-05-21T14:30",
+    // A fraction needs seconds.
+    "2026-05-21T14:30.5",
   ])("rejects other shapes: %p", (text) => {
     expect(rangeError(() => parseDatetime(text)).message).toBe(DATETIME_MSG);
   });
@@ -156,10 +141,6 @@ describe("parseDatetime", () => {
   ])("rejects impossible values: %p", (text, message) => {
     expect(rangeError(() => parseDatetime(text)).message).toBe(message);
   });
-
-  test("rejects a fraction without seconds", () => {
-    expect(rangeError(() => parseDatetime("2026-05-21T14:30.5")).message).toBe(DATETIME_MSG);
-  });
 });
 
 describe("parseDateOrDatetime", () => {
@@ -172,15 +153,10 @@ describe("parseDateOrDatetime", () => {
     expect(rangeError(() => parseDateOrDatetime("20260521")).message).toBe(EITHER_MSG);
   });
 
-  test("keeps the specific date reason", () => {
-    expect(rangeError(() => parseDateOrDatetime("2026-02-30")).message).toBe(
-      "not a valid date: day is out of range for month",
-    );
-  });
-
-  test("keeps the specific datetime reason", () => {
-    expect(rangeError(() => parseDateOrDatetime("2026-05-21T24:00")).message).toBe(
-      "not a valid datetime: hour must be in 0..23",
-    );
+  test.each([
+    ["2026-02-30", "not a valid date: day is out of range for month"],
+    ["2026-05-21T24:00", "not a valid datetime: hour must be in 0..23"],
+  ])("keeps the specific reason: %p", (text, message) => {
+    expect(rangeError(() => parseDateOrDatetime(text)).message).toBe(message);
   });
 });

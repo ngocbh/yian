@@ -19,6 +19,7 @@ import {
   type ParsedNode,
   Scalar,
   YAMLError,
+  type YAMLMap,
 } from "yaml";
 
 import { reprText, SourceRange } from "../../diagnostics.ts";
@@ -34,7 +35,14 @@ import {
   setRecordKey,
   SourceSyntaxError,
 } from "./common.ts";
-import { nodeId, SCALAR_TAGS } from "./literals.ts";
+import {
+  collectionTagError,
+  isMergeKey,
+  type MapPair,
+  mergeSources,
+  nodeId,
+  ownPairs,
+} from "./literals.ts";
 import {
   type AnchoredNode,
   composeFlowDocument,
@@ -89,8 +97,8 @@ const NO_PARTS: readonly never[] = Object.freeze([]);
 
 const CORE_TAG_PREFIX = "tag:yaml.org,2002:";
 
-// A tag running up to the end of the text before a YAML error.
-const TAG_BEFORE = /(?:^|[\s\[{,])![^\s,\[\]{}]*$/;
+// A tag glued to the flow indicator that ends a line's text.
+const GLUED_TAG = /(?:^|[\s[{,])![^\s,[\]{}]*[,[\]{}]$/;
 
 const ONLY_SPACES = /^ *$/;
 
@@ -106,6 +114,30 @@ interface Span {
 
 /** Return a composed node's span: its range, from its anchor or tag when it has one. */
 type SpanOf = (node: Node) => Span;
+
+/**
+ * A rope of a mapping's raw pairs, as `ArcSequence` is of arcs: a leaf (pairs, no parts) or a
+ * concatenation (parts at partOffsets, each part's first ordinal, no pairs).
+ */
+interface PairSequence {
+  readonly pairs: readonly MapPair[];
+  readonly parts: readonly PairSequence[];
+  readonly partOffsets: readonly number[];
+  readonly flatPairCount: number;
+}
+
+/** A mapping rope's keys by first occurrence, and each key's last occurrence. */
+interface Summary {
+  readonly order: readonly string[];
+  readonly last: ReadonlyMap<string, MapOccurrence>;
+}
+
+const EMPTY_PAIRS: PairSequence = Object.freeze({
+  pairs: NO_PARTS,
+  parts: NO_PARTS,
+  partOffsets: NO_PARTS,
+  flatPairCount: 0,
+});
 
 /**
  * One safely constructed YAML document with its source graph kept private.
@@ -173,8 +205,11 @@ export class SourceDocument {
     }
     const spanOf = propertySpans(source);
     let flow: FlowDocument;
+    let built: Built;
     try {
       flow = composeFlowDocument(source);
+      // A merge error comes from `mergeSources`, a `FlowLoaderError`.
+      built = build(flow, source, starts, spanOf);
     } catch (error) {
       if (error instanceof YAMLError) {
         let message =
@@ -191,7 +226,7 @@ export class SourceDocument {
       }
       throw error;
     }
-    const { definitions, ids, nonTextKey } = build(flow, source, starts, spanOf);
+    const { definitions, ids, nonTextKey } = built;
     return new SourceDocument(
       text,
       label,
@@ -271,6 +306,159 @@ function build(
     values.push(null);
     return id;
   };
+  const targetOf = (written: ParsedNode | null): AnchoredNode | null =>
+    written === null ? null : target(aliasTargets, written);
+  /**
+   * Refuse a tag written at a `<<:` merge site, as Python's `_reject_merge_source_tag`: YAML
+   * never builds a merge source, so a local tag there checks nothing. An alias is skipped: its
+   * target's tag sits at the anchor and checks the value there.
+   */
+  const checkSite = (written: ParsedNode | null): void => {
+    if (written === null || isAlias(written)) return;
+    const span = spanOf(written);
+    const range = toRange(starts, span.start, span.end);
+    if (localTag(written, span, range) !== null) {
+      throw new SourceSyntaxError(
+        "a tag on a `<<:` merge source checks nothing; tag the mapping that merges it",
+        range,
+      );
+    }
+  };
+  const ownLeaves = new Map<YAMLMap.Parsed, PairSequence>();
+  /** Return a mapping's non-merge pairs as a leaf, one object per mapping. */
+  const ownLeaf = (map: YAMLMap.Parsed): PairSequence => {
+    let leaf = ownLeaves.get(map);
+    if (leaf === undefined) {
+      leaf = pairLeaf(ownPairs(map, targetOf));
+      ownLeaves.set(map, leaf);
+    }
+    return leaf;
+  };
+  const flattened = new Map<YAMLMap.Parsed, PairSequence>();
+  /**
+   * Return the pairs SafeLoader's `flatten_mapping` leaves in `root` as a rope that shares each
+   * merge source's: the sources' ropes in merge order, then the mapping's own leaf.
+   *
+   * The walk is post-order over merge sources on an explicit stack, as `literals.ts`'s
+   * `flatten`, since a raised node limit admits merge chains too deep for a recursive one. A
+   * source still being flattened (a merge cycle) contributes its own leaf.
+   *
+   * @throws SourceSyntaxError at a tag written at a merge site, and FlowLoaderError at a merge
+   *   value that is not a mapping or a list of mappings.
+   */
+  const flatten = (root: YAMLMap.Parsed): PairSequence => {
+    const done = flattened.get(root);
+    if (done !== undefined) return done;
+    const stack: [YAMLMap.Parsed, Generator<YAMLMap.Parsed, YAMLMap.Parsed[]>][] = [];
+    const merging = new Set<YAMLMap.Parsed>();
+    const enter = (node: YAMLMap.Parsed): void => {
+      merging.add(node);
+      stack.push([node, mergeSources(node, targetOf, checkSite)]);
+    };
+    enter(root);
+    for (let frame = stack.at(-1); frame !== undefined; frame = stack.at(-1)) {
+      const [node, sources] = frame;
+      const next = sources.next();
+      if (!next.done) {
+        if (!flattened.has(next.value) && !merging.has(next.value)) enter(next.value);
+        continue;
+      }
+      stack.pop();
+      merging.delete(node);
+      const parts = next.value.map((source) => flattened.get(source) ?? ownLeaf(source));
+      parts.push(ownLeaf(node));
+      flattened.set(node, concat(parts));
+    }
+    return flattened.get(root)!;
+  };
+  /**
+   * Intern a leaf's pairs, each key before its value, as an arc leaf.
+   *
+   * @throws SourceSyntaxError at a list or mapping key, or at a node that can't be built.
+   */
+  const leafArcs = (pairs: readonly MapPair[]): ArcSequence => {
+    const arcs: MapArc[] = [];
+    for (const pair of pairs) {
+      const keyNode = target(aliasTargets, pair.key);
+      if (!isScalar(keyNode)) {
+        throw new SourceSyntaxError(
+          "a list or mapping can't be a mapping key; mapping keys must be text",
+          pointRange(starts, spanOf(keyNode).start),
+        );
+      }
+      const keyDefinition = intern(keyNode);
+      // A missing value sits where the key ends.
+      const valueDefinition =
+        pair.value === null ? internMissing(pair.key.range[1]) : intern(pair.value);
+      const keyScalar = definitions[keyDefinition] as ScalarDef;
+      const key = keyText(keyScalar);
+      // Fills don't run in document order, so the key that starts first wins; an alias key
+      // is its anchored node.
+      const keyAt = spanOf(keyNode).start;
+      if (typeof keyScalar.value !== "string" && (nonTextKey === null || keyAt < nonTextKeyAt)) {
+        const keyValue = keyScalar.value as NonTextKey["key"];
+        nonTextKey = { key: keyValue, text: key, range: keyScalar.range! };
+        nonTextKeyAt = keyAt;
+      }
+      arcs.push(Object.freeze({ key, keyDefinition, valueDefinition }));
+    }
+    return Object.freeze({
+      arcs: Object.freeze(arcs),
+      parts: NO_PARTS,
+      partOffsets: NO_PARTS,
+      flatPairCount: arcs.length,
+    });
+  };
+  const converted = new Map<PairSequence, ArcSequence>();
+  /**
+   * Return a pair rope as an arc rope of the same shape, on an explicit stack: each distinct
+   * leaf is interned once, leaves in first-occurrence order.
+   */
+  const convert = (sequence: PairSequence): ArcSequence => {
+    const stack: [PairSequence, boolean][] = [[sequence, false]];
+    while (stack.length > 0) {
+      const [current, ready] = stack.pop()!;
+      if (converted.has(current)) continue;
+      if (current.parts.length === 0) {
+        converted.set(current, leafArcs(current.pairs));
+      } else if (!ready) {
+        stack.push([current, true]);
+        for (let i = current.parts.length - 1; i >= 0; i--) stack.push([current.parts[i]!, false]);
+      } else {
+        converted.set(
+          current,
+          Object.freeze({
+            arcs: NO_PARTS,
+            parts: Object.freeze(current.parts.map((part) => converted.get(part)!)),
+            partOffsets: current.partOffsets,
+            flatPairCount: current.flatPairCount,
+          }),
+        );
+      }
+    }
+    return converted.get(sequence)!;
+  };
+  const summaries = new Map<ArcSequence, Summary>();
+  /**
+   * Return an arc rope's summary (Python's `effective_sequence` and its first-key order),
+   * post-order on an explicit stack and cached per rope, so a shared rope is summarized once.
+   */
+  const summarize = (sequence: ArcSequence): Summary => {
+    const stack: [ArcSequence, boolean][] = [[sequence, false]];
+    while (stack.length > 0) {
+      const [current, ready] = stack.pop()!;
+      if (summaries.has(current)) continue;
+      if (current.parts.length === 0) {
+        summaries.set(current, leafSummary(current.arcs));
+      } else if (!ready) {
+        stack.push([current, true]);
+        for (const part of current.parts) stack.push([part, false]);
+      } else {
+        summaries.set(current, concatSummary(current, summaries));
+      }
+    }
+    return summaries.get(sequence)!;
+  };
   const intern = (written: ParsedNode): number => {
     const node = target(aliasTargets, written);
     const known = ids.get(node);
@@ -283,7 +471,8 @@ function build(
     const core = tag === null ? node.tag : undefined;
     // The tag picks the constructor, as in PyYAML: `!!seq` builds a list and `!!map` a record
     // whatever the node's kind.
-    if (isScalar(node) && core !== SEQ_TAG && core !== MAP_TAG) {
+    const picksCollection = core === SEQ_TAG || core === MAP_TAG;
+    if (isScalar(node) && !picksCollection) {
       const text = node.source;
       const plain = node.type === Scalar.PLAIN;
       let value: ScalarValue;
@@ -305,15 +494,13 @@ function build(
       });
       return id;
     }
-    if (!isScalar(node) && core !== undefined && core !== SEQ_TAG && core !== MAP_TAG) {
-      const message = SCALAR_TAGS.has(core)
-        ? `expected a scalar node, but found ${nodeId(node)}`
-        : "could not determine a constructor for the tag " + reprText(core);
-      throw new SourceSyntaxError(message, at);
+    if (!isScalar(node)) {
+      const message = collectionTagError(core, node);
+      if (message !== null) throw new SourceSyntaxError(message, at);
     }
     // SafeLoader's `construct_yaml_seq` and `construct_yaml_map` yield an empty container and
     // check the node's kind only when filling it, so a mismatch comes after sibling scalars.
-    if (core === SEQ_TAG || (core !== MAP_TAG && isSeq(node))) {
+    if (picksCollection ? core === SEQ_TAG : isSeq(node)) {
       const list: Value[] = [];
       const id = reserve(node, list);
       fills.push(() => {
@@ -342,48 +529,18 @@ function build(
       if (!isMap(node)) {
         throw new SourceSyntaxError(`expected a mapping node, but found ${nodeId(node)}`, at);
       }
-      const arcs: MapArc[] = [];
-      const effectiveIndex = new Map<string, MapOccurrence>();
-      for (const pair of node.items) {
-        const keyNode = target(aliasTargets, pair.key);
-        if (!isScalar(keyNode)) {
-          throw new SourceSyntaxError(
-            "a list or mapping can't be a mapping key; mapping keys must be text",
-            pointRange(starts, spanOf(keyNode).start),
-          );
-        }
-        const keyDefinition = intern(keyNode);
-        // A missing value sits where the key ends.
-        const valueDefinition =
-          pair.value === null ? internMissing(pair.key.range[1]) : intern(pair.value);
-        const keyScalar = definitions[keyDefinition] as ScalarDef;
-        const key = keyText(keyScalar);
-        // Fills don't run in document order, so the key that starts first wins; an alias
-        // key is its anchored node.
-        const keyAt = spanOf(keyNode).start;
-        if (typeof keyScalar.value !== "string" && (nonTextKey === null || keyAt < nonTextKeyAt)) {
-          const keyValue = keyScalar.value as NonTextKey["key"];
-          nonTextKey = { key: keyValue, text: key, range: keyScalar.range! };
-          nonTextKeyAt = keyAt;
-        }
-        const arc: MapArc = Object.freeze({ key, keyDefinition, valueDefinition });
-        // A repeated key keeps its first position and takes the last value, as in SafeLoader.
-        effectiveIndex.set(key, Object.freeze({ arc, pairOrdinal: arcs.length }));
-        arcs.push(arc);
-        setRecordKey(record, key, values[valueDefinition]!);
+      const pairSequence = convert(flatten(node));
+      const { order, last } = summarize(pairSequence);
+      // A repeated key keeps its first position and takes the last value, as in SafeLoader.
+      for (const key of order) {
+        setRecordKey(record, key, values[last.get(key)!.arc.valueDefinition]!);
       }
-      const pairSequence: ArcSequence = Object.freeze({
-        arcs: Object.freeze(arcs),
-        parts: NO_PARTS,
-        partOffsets: NO_PARTS,
-        flatPairCount: arcs.length,
-      });
       definitions[id] = Object.freeze({
         kind: "mapping",
         value: record,
         range,
         pairSequence,
-        effectiveIndex,
+        effectiveIndex: last,
         tag,
       });
     });
@@ -403,6 +560,78 @@ function build(
     }
   }
   return { definitions: built, ids, nonTextKey };
+}
+
+/** Return `pairs` as a leaf rope; no pairs is the empty rope. */
+function pairLeaf(pairs: readonly MapPair[]): PairSequence {
+  if (pairs.length === 0) return EMPTY_PAIRS;
+  return { pairs, parts: NO_PARTS, partOffsets: NO_PARTS, flatPairCount: pairs.length };
+}
+
+/** Return the concatenation of `parts` without the empty ones: the only one, when one is left. */
+function concat(parts: readonly PairSequence[]): PairSequence {
+  const kept = parts.filter((part) => part.flatPairCount > 0);
+  if (kept.length === 0) return EMPTY_PAIRS;
+  if (kept.length === 1) return kept[0]!;
+  const partOffsets: number[] = [];
+  let count = 0;
+  for (const part of kept) {
+    partOffsets.push(count);
+    count += part.flatPairCount;
+  }
+  return {
+    pairs: NO_PARTS,
+    parts: kept,
+    partOffsets: Object.freeze(partOffsets),
+    flatPairCount: count,
+  };
+}
+
+/** Return an arc leaf's summary: its keys by first occurrence, and each key's last arc. */
+function leafSummary(arcs: readonly MapArc[]): Summary {
+  const order: string[] = [];
+  const last = new Map<string, MapOccurrence>();
+  for (const [index, arc] of arcs.entries()) {
+    if (!last.has(arc.key)) order.push(arc.key);
+    last.set(arc.key, Object.freeze({ arc, pairOrdinal: index }));
+  }
+  return { order, last };
+}
+
+/**
+ * Return a concatenation's summary from its parts' summaries, each distinct part read once: a
+ * key's first occurrence is in the leftmost part that holds it, its last in the rightmost.
+ */
+function concatSummary(
+  sequence: ArcSequence,
+  summaries: ReadonlyMap<ArcSequence, Summary>,
+): Summary {
+  const order: string[] = [];
+  const known = new Set<string>();
+  const firstParts = new Set<ArcSequence>();
+  for (const part of sequence.parts) {
+    if (firstParts.has(part)) continue;
+    firstParts.add(part);
+    for (const key of summaries.get(part)!.order) {
+      if (known.has(key)) continue;
+      known.add(key);
+      order.push(key);
+    }
+  }
+  const last = new Map<string, MapOccurrence>();
+  const lastParts = new Set<ArcSequence>();
+  for (let i = sequence.parts.length - 1; i >= 0; i--) {
+    const part = sequence.parts[i]!;
+    if (lastParts.has(part)) continue;
+    lastParts.add(part);
+    const offset = sequence.partOffsets[i]!;
+    for (const [key, occurrence] of summaries.get(part)!.last) {
+      if (last.has(key)) continue;
+      const pairOrdinal = occurrence.pairOrdinal + offset;
+      last.set(key, Object.freeze({ arc: occurrence.arc, pairOrdinal }));
+    }
+  }
+  return { order, last };
 }
 
 /**
@@ -430,6 +659,8 @@ function firstRepeatedKey(
     const firstKeys = new Map<string, Node>();
     for (const pair of node.items) {
       const keyNode = target(aliasTargets, pair.key);
+      // Keys a merge brings in override; only a mapping's own pairs count.
+      if (isMergeKey(keyNode)) continue;
       const keyScalar = definitions[ids.get(keyNode)!] as ScalarDef;
       const key = keyText(keyScalar);
       const first = firstKeys.get(key);
@@ -503,7 +734,8 @@ function propertySpans(source: string): SpanOf {
         const key = tokenKey(token.offset, true);
         const known = byToken.get(key);
         if (known === undefined || known.start > keySpan.start) {
-          // The key's own tag stays the key's.
+          // A bare `!` on the first key (`! a: 1`) belongs to the key, so the mapping keeps
+          // only its own `bare` flag.
           byToken.set(key, { ...keySpan, bare: known?.bare ?? false });
         }
       }
@@ -652,13 +884,13 @@ function literalLineRanges(
 
 /** Say whether a YAML error is at a `,`, `[`, `]`, `{` or `}` glued to the tag before it. */
 function gluedToTag(error: YAMLError, source: string): boolean {
+  // eemeli ends a tag at a flow indicator even in block context and reports MISSING_CHAR, a
+  // code it also uses for an anchor glued to the next token and an unclosed flow collection,
+  // so the error must sit on a flow indicator right after a `!` tag.
+  if (error.code !== "MISSING_CHAR") return false;
   const at = error.pos[0];
   const lineStart = source.lastIndexOf("\n", at - 1) + 1;
-  return (
-    error.code === "MISSING_CHAR" &&
-    /^[,[\]{}]$/.test(source.charAt(at)) &&
-    TAG_BEFORE.test(source.slice(lineStart, at))
-  );
+  return GLUED_TAG.test(source.slice(lineStart, at + 1));
 }
 
 /** Return the node `written` names: an alias's target, else `written` itself. */

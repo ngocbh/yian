@@ -4,9 +4,8 @@
  *
  * Every mapping, list, and scalar node (mapping keys included) counts once per place it
  * appears, so an alias, and a `<<:` merge source, counts every node it names again. The
- * `load_flow` cases, with their frames, come with the loader, and the `SourceDocument` merge
- * case with merges; here each text is composed directly, and the error node's line stands in
- * for the frame's line.
+ * `load_flow` cases, with their frames, come with the loader; here each text is composed
+ * directly, and the error node's line stands in for the frame's line.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -334,6 +333,28 @@ describe("a source document", () => {
     SourceDocument.parse(aliased(0));
     SourceDocument.parse(aliased(5));
     expect(documentRefusal(aliased(6)).message).toContain(message(70));
+  });
+
+  test("a merge source counts in full", () => {
+    limitNodes(1000);
+    const lines = ["m0: &m0 {k0: 1}"];
+    for (let i = 1; i < 8; i++) {
+      lines.push(`m${i}: &m${i} {<<: [*m${i - 1}, *m${i - 1}], k${i}: 1}`);
+    }
+
+    // m<i> holds 2 * m<i-1> + 5 nodes, so m6 holds 507 and m7's merge list
+    // [*m6, *m6] holds 1015, although merged m7 has only 8 keys.
+    const error = documentRefusal(lines.join("\n") + "\n");
+    expect(error.message).toContain(`this list ${message(1000)}`);
+    expect(error.range?.startLine).toBe(8);
+    const merged = SourceDocument.parse(lines.slice(0, 5).join("\n") + "\n")._value;
+    expect(isRecord(merged) ? merged["m4"] : null).toEqual({
+      k0: 1n,
+      k1: 1n,
+      k2: 1n,
+      k3: 1n,
+      k4: 1n,
+    });
   });
 
   test("a node on its own cycle is counted again inside it", () => {

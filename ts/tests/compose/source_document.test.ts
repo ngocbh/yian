@@ -5,9 +5,11 @@
  * `test_document_uses_one_loader_instance` and the SafeLoader comparisons have no
  * counterpart: there is one compose pass and no SafeLoader to compare with. Python's three
  * `!!value` tests become refusal tests in TS, since YAML 1.2 has no `!!value`; `!!binary`,
- * `!!set`, `!!omap` and `!!pairs` are refused too. Merges and the cursor-based checks come with
- * the code that reads them; the tag and literal-line rows of `test_source_tags.py` and
- * `test_source_cursor.py` read definitions here. TS-era rows: a mapping key YAML reads as
+ * `!!set`, `!!omap` and `!!pairs` are refused too; the merge texts compare with hand-written
+ * values. The cursor-based checks come with the cursor. The tag rows planned for the document
+ * (merge-source tags included) and the merge-rope size and literal-line rows of
+ * `test_source_cursor.py` read definitions here; `test_source_tags.py` itself is ported in
+ * `source_tags.test.ts`, with the cursor. TS-era rows: a mapping key YAML reads as
  * non-text is kept in the value as written, lone CRs are line breaks while NEL, U+2028 and
  * U+2029 are not, an undefined alias follows YAML 1.2, a local tag never changes how its
  * scalar reads, and the tag hint names a tag glued to `,`, `[`, `]`, `{` or `}`.
@@ -15,7 +17,11 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { type Definition, SourceSyntaxError } from "../../src/compose/source/common.ts";
+import {
+  type ArcSequence,
+  type Definition,
+  SourceSyntaxError,
+} from "../../src/compose/source/common.ts";
 import {
   type NonTextKey,
   SourceDocument,
@@ -439,7 +445,8 @@ describe("the tag hint", () => {
     },
   );
 
-  test.each(["m: {a: 1, b: c: d}\n", "{a: !int, b: c: d}\n"])(
+  // An anchor glued to `,` and a tag glued to `"` get eemeli's MISSING_CHAR too.
+  test.each(["m: {a: 1, b: c: d}\n", "{a: !int, b: c: d}\n", "a: &x, b\n", 'a: !x"q"\n'])(
     "is not added to another YAML error: %p",
     (text) => {
       expect(refusal(text).message).not.toContain(TAG_HINT);
@@ -597,5 +604,261 @@ describe("literal line ranges", () => {
     ["plain", "code: first\n  second\n", "first second"],
   ])("are null for another style: %s", (_, text, value) => {
     expect(linesOf(text, value)).toBeNull();
+  });
+});
+
+describe("merges", () => {
+  afterEach(() => install(BUILTIN));
+
+  const unboundedNodes = () => install({ ...BUILTIN, maxYamlNodes: Infinity });
+
+  /** Return the value at `key` of the root mapping of `text`'s document. */
+  function valueAt(text: string, key: string): Value {
+    const value = SourceDocument.parse(text)._value as Record<string, Value>;
+    return value[key]!;
+  }
+
+  const MERGE_SOURCE_TAG =
+    "a tag on a `<<:` merge source checks nothing; tag the mapping that merges it";
+
+  test("a merge list's first mapping wins and own keys win", () => {
+    const text =
+      "first: &first {shared: first, first_only: 1}\n" +
+      "second: &second {shared: second, second_only: 2}\n" +
+      "target:\n" +
+      "  <<: [*first, *second]\n" +
+      "  local: 3\n";
+
+    expect(valueAt(text, "target")).toEqual({
+      shared: "first",
+      first_only: 1n,
+      second_only: 2n,
+      local: 3n,
+    });
+  });
+
+  test("of two merge keys the later wins, and own keys win", () => {
+    const text =
+      "first: &first {shared: first, first_only: 1}\n" +
+      "second: &second {shared: second, second_only: 2}\n" +
+      "target:\n" +
+      "  <<: *first\n" +
+      "  <<: *second\n" +
+      "  shared: local\n";
+
+    expect(valueAt(text, "target")).toEqual({
+      shared: "local",
+      first_only: 1n,
+      second_only: 2n,
+    });
+  });
+
+  test("merged keys keep their text and an own key wins", () => {
+    // Python's `!!binary` and `!!value` lines are refused in TS.
+    const text =
+      "base: &base\n" +
+      "  true: boolean\n" +
+      "  when: 2001-12-15T02:59:43.1Z\n" +
+      "target:\n" +
+      "  <<: *base\n" +
+      "  1: integer-wins\n";
+    const document = SourceDocument.parse(text);
+
+    expect((document._value as Record<string, Value>)["target"]).toEqual({
+      true: "boolean",
+      when: "2001-12-15T02:59:43.1Z",
+      1: "integer-wins",
+    });
+    expect(document.nonTextKey).toEqual({
+      key: true,
+      text: "true",
+      range: new SourceRange(2, 3, 2, 7),
+    });
+  });
+
+  test("an inline anchored merge source with a core tag YAML 1.2 lacks is refused", () => {
+    const text =
+      "target:\n" +
+      "  <<: &inline\n" +
+      "    values: !!set {one: null, two: null}\n" +
+      "    ordered: !!omap [{first: 1}, {second: 2}]\n";
+
+    expect(refusal(text).message).toBe(
+      "could not determine a constructor for the tag 'tag:yaml.org,2002:set'",
+    );
+  });
+
+  test("an inline merge source keeps a recursive alias's identity", () => {
+    const target = valueAt("target:\n  <<: &base\n    self: *base\n", "target") as Record<
+      string,
+      Record<string, Value>
+    >;
+
+    expect(target["self"]!["self"]).toBe(target["self"]!);
+    expect(target["self"]).not.toBe(target);
+  });
+
+  test("a mapping that merges itself keeps its own pairs", () => {
+    expect(SourceDocument.parse("root: &root\n  <<: *root\n  value: local\n")._value).toEqual({
+      root: { value: "local" },
+    });
+  });
+
+  test("a local tag on a merge source is an error over the source", () => {
+    const error = refusal("target: {<<: !mystery {value: inherited}}\n");
+
+    expect(error.message).toBe(MERGE_SOURCE_TAG);
+    expect(error.range).toEqual(new SourceRange(1, 14, 1, 41));
+  });
+
+  test.each([
+    ["inline", "use: {<<: !Foo {x: 1}}\n", new SourceRange(1, 11, 1, 22)],
+    ["in list", "a: &a {x: 1}\nuse:\n  <<: [!A {y: 1}, *a]\n", new SourceRange(3, 8, 3, 17)],
+    ["on list", "a: &a {x: 1}\nuse:\n  <<: !L [*a]\n", new SourceRange(3, 7, 3, 14)],
+    ["anchor then alias", "m:\n  <<: &b !Foo {x: 1}\nn: *b\n", new SourceRange(2, 7, 2, 21)],
+    ["anchor in list", "m:\n  <<: [&a !A {x: 1}]\nn: *a\n", new SourceRange(2, 8, 2, 20)],
+  ])("a tag written at a merge site is an error: %s", (_, text, range) => {
+    const error = refusal(text);
+
+    expect(error.message).toBe(MERGE_SOURCE_TAG);
+    expect(error.range).toEqual(range);
+  });
+
+  test("an unknown global tag on a merge source is an error", () => {
+    const error = refusal("use: {<<: !<tag:example.com:x> {x: 1}}\n");
+
+    expect(error.message).toBe(
+      "unknown YAML tag 'tag:example.com:x'; a type tag is local, e.g. `!int`",
+    );
+    expect(error.range).toEqual(new SourceRange(1, 11, 1, 38));
+  });
+
+  test("a core tag on a merge source keeps its YAML meaning", () => {
+    expect(valueAt("use: {<<: !!map {x: 1}}\n", "use")).toEqual({ x: 1n });
+  });
+
+  test.each([
+    ["merge into tagged", "buy1: &b !Buy {conviction: 1}\nbuy2: !Buy {<<: *b, qty: 2}\n"],
+    ["alias", "n: &b !Foo {x: 1}\nm:\n  <<: *b\n"],
+    ["alias in list", "a: &a !A {x: 1}\nuse: {<<: [*a]}\n"],
+    ["x-key anchor", "x-base: &b !Buy {c: 1}\nn: {<<: *b}\n"],
+    ["aliased list", "a: &a {x: 1}\nl: &l !L [*a]\nuse: {<<: *l}\n"],
+  ])("a tagged anchor merged through an alias parses: %s", (_, text) => {
+    expect(() => SourceDocument.parse(text)).not.toThrow();
+  });
+
+  test.each([
+    [
+      "nested first",
+      "root:\n  <<:\n    - {<<: 7}\n    - 8\n",
+      "expected a mapping or list of mappings for merging, but found scalar",
+      new SourceRange(3, 12, 3, 13),
+    ],
+    [
+      "outer first",
+      "root:\n  <<:\n    - 8\n    - {<<: 7}\n",
+      "expected a mapping for merging, but found scalar",
+      new SourceRange(3, 7, 3, 8),
+    ],
+    [
+      "a list item before a source's scalar",
+      "m: {<<: [{x: 2026-13-45}, 5]}\n",
+      "expected a mapping for merging, but found scalar",
+      new SourceRange(1, 27, 1, 28),
+    ],
+    [
+      "a later merge key before a source's scalar",
+      "m: {<<: {x: 2026-13-45}, <<: 5}\n",
+      "expected a mapping or list of mappings for merging, but found scalar",
+      new SourceRange(1, 30, 1, 31),
+    ],
+    [
+      "a source's tag before a source's scalar",
+      "m: {<<: [{x: 2026-13-45}, !T {y: 1}]}\n",
+      MERGE_SOURCE_TAG,
+      new SourceRange(1, 27, 1, 36),
+    ],
+    [
+      "a later item's tag before an item's kind",
+      "m: {<<: [5, !T {y: 1}]}\n",
+      MERGE_SOURCE_TAG,
+      new SourceRange(1, 13, 1, 22),
+    ],
+    [
+      "a tag before the value's kind",
+      "m: {<<: !T 5}\n",
+      MERGE_SOURCE_TAG,
+      new SourceRange(1, 9, 1, 13),
+    ],
+  ])("merge errors come first, in written order: %s", (_, text, message, range) => {
+    const error = refusal(text);
+
+    expect(error.message).toBe(message);
+    expect(error.range).toEqual(range);
+  });
+
+  test("a merge key is not a non-text key", () => {
+    const document = SourceDocument.parse("base: &b {a: x}\nc:\n  <<: *b\n  d: y\n");
+
+    expect(document.nonTextKey).toBeNull();
+  });
+
+  test("a merged-in non-text key is reported where it is written", () => {
+    expect(SourceDocument.parse("base: &b {1: x}\nc:\n  <<: *b\n").nonTextKey).toEqual({
+      key: 1n,
+      text: "1",
+      range: new SourceRange(1, 11, 1, 12),
+    });
+  });
+
+  test("a merged key is not a repeated key", () => {
+    const document = SourceDocument.parse("base: &b {a: x}\nc:\n  <<: *b\n  a: y\n");
+
+    expect(document.repeatedKey).toBeNull();
+  });
+
+  /** Return a short document with exponentially many merged pairs (Python's builder). */
+  function binaryMergeDocument(levels: number): SourceDocument {
+    const lines = ["level_0: &level_0", "  value: leaf"];
+    for (let level = 1; level <= levels; level++) {
+      const source = `*level_${level - 1}`;
+      lines.push(`level_${level}: &level_${level}`, `  <<: [${source}, ${source}]`);
+    }
+    lines.push(`root: *level_${levels}`);
+    return SourceDocument.parse(lines.join("\n") + "\n");
+  }
+
+  test("a binary merge chain keeps only distinct pairs and ropes", () => {
+    unboundedNodes();
+    const levels = 16;
+    const document = binaryMergeDocument(levels);
+    const mappings = document._definitions.filter((definition) => definition.kind === "mapping");
+    const ropes = new Set<ArcSequence>();
+    const pending = mappings.map((definition) => definition.pairSequence);
+    while (pending.length > 0) {
+      const rope = pending.pop()!;
+      if (ropes.has(rope)) continue;
+      ropes.add(rope);
+      pending.push(...rope.parts);
+    }
+    const arcs = [...ropes].reduce((sum, rope) => sum + rope.arcs.length, 0);
+    const effective = mappings.reduce((sum, definition) => sum + definition.effectiveIndex.size, 0);
+
+    expect((document._value as Record<string, Record<string, Value>>)["root"]!["value"]).toBe(
+      "leaf",
+    );
+    expect(arcs).toBeLessThan(levels * 8);
+    expect(effective).toBeLessThan(levels * 8);
+    expect(ropes.size).toBeLessThan(levels * 8);
+    expect(Math.max(...[...ropes].map((rope) => rope.flatPairCount))).toBeGreaterThanOrEqual(
+      2 ** levels,
+    );
+  });
+
+  test("a binary merge chain of 120 levels parses", () => {
+    unboundedNodes();
+    const value = binaryMergeDocument(120)._value as Record<string, Record<string, Value>>;
+
+    expect(value["root"]!["value"]).toBe("leaf");
   });
 });

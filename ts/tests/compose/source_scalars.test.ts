@@ -8,7 +8,7 @@
  * unknown tags are refused, and `! 5` is the text `"5"`. A document keeps such a key as written
  * and reports it as `nonTextKey`. Lone CRs are line breaks for both entry points. Both entry
  * points, `SourceDocument.parse` and `parseYamlLiteral`, read the shared rows, explicit core
- * tags included; the document's merge rows come with the code that checks them.
+ * tags included. The literal's merge rows quote Python's `017:` key; the document's keep it.
  * `test_pyyaml_globals_are_untouched` has no counterpart, since eemeli/yaml has no global
  * tables.
  */
@@ -354,6 +354,21 @@ describe("SourceDocument", () => {
     expect(document._value).toEqual({ [text]: "value" });
     expect(document.nonTextKey?.key).toBeNull();
     expect(document.nonTextKey?.text).toBe(text);
+  });
+
+  test("merge keys still merge and override", () => {
+    const text = "base: &base\n  on: x\n  yes: 1\n  017: a\ntarget:\n  <<: *base\n  yes: 2\n";
+    const document = SourceDocument.parse(text);
+
+    expect(document._value).toEqual({
+      base: { on: "x", yes: 1n, "017": "a" },
+      target: { on: "x", yes: 2n, "017": "a" },
+    });
+    expect(document.nonTextKey).toEqual({
+      key: 17n,
+      text: "017",
+      range: new SourceRange(4, 3, 4, 6),
+    });
   });
 
   test.each([

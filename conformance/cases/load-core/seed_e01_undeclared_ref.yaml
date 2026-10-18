@@ -1,0 +1,29 @@
+# From tests/seeds/errors/e01-undeclared-ref.yaml.
+# A flow output that reads an undeclared node fails at the `output:` value.
+kind: load
+flow: |
+  # e01 — Undeclared reference.
+  # EXPECT: compile error — `${scor.output}` references no node (the node is `score`).
+  # The diagnostic must identify the reference and point at the `output:` line below.
+
+  id: err-undeclared-ref
+  name: err_undeclared_ref
+
+  input:
+    topic: !str
+
+  nodes:
+    score:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output: float
+      prompt: "Rate ${topic} in [-1, 1]; output only the number."
+
+  output: ${scor.output}     # <-- typo: no node named `scor` (it's `score`)
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "flow has unresolved references:\n  flow output from: reference ${scor.output} uses unknown namespace 'scor'"
+        frames: [{label: flow.yaml, range: [19, 9, 19, 23]}]

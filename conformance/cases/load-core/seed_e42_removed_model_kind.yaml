@@ -1,0 +1,23 @@
+# From tests/seeds/errors/e42-removed-model-kind.yaml.
+# The removed `kind: model` fails at the `kind:` value, naming what to write instead.
+kind: load
+flow: |
+  # e42 — removed node kind. COMPILE: "kind 'model' was removed" (use kind: tool).
+  id: err-removed-model-kind
+  name: err_removed_model_kind
+  input:
+    topic: !str
+  nodes:
+    rank:
+      kind: model        # ERROR: removed; ML inference goes through a host tool
+      model_id: topic-ranker-v1
+      input:
+        topic: ${input.topic}
+      output: float
+  output: ${rank.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "node 'rank': kind 'model' was removed; serve the model behind a host tool and call it with kind: tool (set tool_id: and input:)"
+        frames: [{label: flow.yaml, range: [8, 11, 8, 16]}]

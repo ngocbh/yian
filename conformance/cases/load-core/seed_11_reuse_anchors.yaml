@@ -1,0 +1,53 @@
+# From tests/seeds/11-reuse-anchors.yaml.
+# Anchors, aliases, `<<:` merges and `x-*` keys load (the header's PyYAML note describes the Python loader).
+kind: load
+flow: |
+  # 11 — DRY reuse with YAML anchors + x- extension keys.
+  #
+  # Three near-identical AGENT nodes share one config block via a YAML anchor parked
+  # under an x- key. Shows: x-* extension keys (ignored by the strict schema — custom
+  # metadata + a holder for the anchor), &anchor / *alias / <<: merge, and llm_config.
+  # The merge is pure YAML — PyYAML expands it before the engine sees the nodes.
+
+  id: reuse-anchors
+  name: reuse_anchors
+  description: Pro/con/synthesis sharing one node config via a YAML anchor under x-.
+
+  x-owner: ngocbh                  # custom metadata — opaque to the engine
+  x-agent-defaults: &agent_defaults    # parked under x- so the strict schema ignores it
+    kind: agent
+    output: str
+    llm_config:
+      provider: anthropic
+      anthropic:
+        temperature: 0.2
+
+  input:
+    topic: !str
+
+  nodes:
+    pro:
+      <<: *agent_defaults          # merge the shared block in (kind + outputs + llm_config)
+      input:
+        topic: ${input.topic}
+      prompt: "Write a neutral two-sentence pro case for ${topic}. No advice."
+
+    con:
+      <<: *agent_defaults
+      input:
+        topic: ${input.topic}
+      prompt: "Write a neutral two-sentence con case for ${topic}. No advice."
+
+    judge:
+      <<: *agent_defaults
+      input:
+        topic: ${input.topic}
+        pro:   ${pro.output}
+        con:   ${con.output}
+      prompt: |-
+        Given a pro case (${pro}) and a con case (${con}) for ${topic},
+        write a neutral one-paragraph synthesis. No advice.
+
+  output: ${judge.output}
+expect:
+  load: ok

@@ -17,18 +17,6 @@ files:
     nodes:
       use:
         kind: code
-        code: ./fixtures/compose_codefns.ts:echo
-        input:
-          topic: 2026-13-45
-        output: str
-    output: ${use.output}
-python_files:
-  child.yaml: |
-    id: child
-    name: f
-    nodes:
-      use:
-        kind: code
         code: return 1
         input:
           topic: 2026-13-45

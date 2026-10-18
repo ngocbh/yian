@@ -25,6 +25,7 @@ export {
   canonicalTypeLabel,
   canonicalUnionOrder,
   FileRef,
+  isRecord,
   listKindForElement,
   normalizeFiles,
   restrictUnion,

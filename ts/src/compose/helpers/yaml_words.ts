@@ -3,8 +3,7 @@
  * for what YAML read a non-text value as.
  */
 
-import { buildValueAs, type Type, TypeCheckError } from "../../typesys/index.ts";
-import { isRecord } from "../../typesys/values.ts";
+import { buildValueAs, isRecord, type Type, TypeCheckError } from "../../typesys/index.ts";
 
 const BOOLEAN_WORDS: ReadonlyMap<string, boolean> = new Map([
   ["yes", true],
@@ -23,9 +22,8 @@ type Path = readonly (string | number)[];
  *
  * Matching ignores case and surrounding whitespace; the fix shows the stripped text as
  * written. With a declared type, a list or record is searched too: the word is the value the
- * type check rejects, and the fix is offered when its boolean clears that rejection. Without
- * `declared`, only a bare word gets a fix; with it, the fix is offered only if the boolean
- * fits it.
+ * type check rejects, and the fix is offered when its boolean clears that rejection. A bare
+ * word's fix is offered only if its boolean fits `declared`.
  *
  * Example: `formerBooleanFix("yes")` is ``[true, "`yes` is text; write `true`"]``;
  * `formerBooleanFix("true")` is `null`.
@@ -64,7 +62,7 @@ export function yamlReadAs(value: unknown): string {
   if (value === null) return "null";
   if (Array.isArray(value)) return "a list";
   if (isRecord(value)) return "a mapping";
-  if (typeof value === "object") return `a \`${value.constructor.name}\``;
+  if (typeof value === "object") return `a \`${value.constructor?.name ?? "object"}\``;
   return `a \`${typeof value}\``;
 }
 

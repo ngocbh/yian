@@ -86,7 +86,7 @@ from yian.tools.errors import (
 )
 from yian.tools.function_tools import FunctionTool
 from yian.typesys.types import read_typedefs, type_for
-from yian.typesys.values import FileRef, TypeCheckError, build_value_as
+from yian.typesys.values import FileRef, TypeCheckError, TypedValue, build_value_as
 
 _ROOT = Path(__file__).resolve().parent.parent / "conformance"
 _CASES = Path(os.environ.get("CONFORMANCE_CASES") or _ROOT / "cases")
@@ -689,14 +689,15 @@ def _actual_load(case: dict, case_dir: Path) -> dict:
     return {"load": "ok"}
 
 
+def _defaults_form(values: defaults.Defaults) -> dict:
+    """Return yian's defaults `values` as the results' `defaults`: every entry by name."""
+    return {"defaults": {entry.name: getattr(values, entry.name.lower())
+                         for entry in defaults.ENTRIES}}
+
+
 def _actual_defaults(case: dict, case_dir: Path) -> dict:
     """Read yian's defaults and return every entry as `defaults`, or the error."""
-    def compute() -> dict:
-        values = defaults.current()
-        return {"defaults": {entry.name: getattr(values, entry.name.lower())
-                             for entry in defaults.ENTRIES}}
-
-    return _catching(compute)
+    return _catching(lambda: _defaults_form(defaults.current()))
 
 
 def _actual_fingerprint(case: dict, case_dir: Path) -> dict:
@@ -747,12 +748,16 @@ def _actual_expr(case: dict, case_dir: Path) -> dict:
     return _catching(lambda: {"value": evaluate()})
 
 
+def _value_form(typed: TypedValue) -> dict:
+    """Return a built value as the results' stored `value` and its `kind`."""
+    return {"value": typed.to_object(), "kind": typed.kind.value}
+
+
 def _actual_value(case: dict, case_dir: Path) -> dict:
     """Build `value` as `type` and return the stored value and its kind, or the error."""
     def compute() -> dict:
         typ = type_for(case["type"], read_typedefs(case.get("typedefs") or {}))
-        typed = build_value_as(typ, case["value"])
-        return {"value": typed.to_object(), "kind": typed.kind.value}
+        return _value_form(build_value_as(typ, case["value"]))
 
     return _catching(compute)
 
@@ -1754,7 +1759,7 @@ import pytest
 
 from yian import defaults
 from yian.expr import eval_binding, eval_expr, parse_expr, render_template_record
-from yian.expr.expressions import evaluate_when_record
+from yian.expr.expressions import ExpressionError, ResolveMode, evaluate_when_record
 from yian.typesys.types import type_for
 from yian.typesys.values import TypeCheckError, build_value_as
 
@@ -1791,6 +1796,19 @@ def test_or_binding():
 
 def test_or_condition():
     assert evaluate_when_record("(x or y) == 1", {"x": 1, "y": 0}) is True
+
+
+def test_condition():
+    assert evaluate_when_record("n > 1", {"n": 2}) is True
+
+
+def test_strict_miss():
+    with pytest.raises(ExpressionError):
+        eval_expr(parse_expr("a.b"), _from({}), mode=ResolveMode.STRICT_RAISE)
+
+
+def test_item():
+    assert eval_expr(parse_expr("item.t"), _from({}), item={"t": 1}) == 1
 
 
 def test_defaults(monkeypatch):
@@ -1830,17 +1848,27 @@ def _harvest(tmp_path: Path, text: str) -> tuple[subprocess.CompletedProcess, Pa
 def test_harvest_records_expr_value_defaults(tmp_path: Path) -> None:
     """Passing tests' expr, template, value and defaults calls become cases that pass."""
     done, out = _harvest(tmp_path, _HARVESTED_TESTS)
-    assert "1 failed, 7 passed" in done.stdout, done.stdout + done.stderr
+    assert "1 failed, 10 passed" in done.stdout, done.stdout + done.stderr
     cases = {path.relative_to(out / "cases").as_posix(): _read(path)
              for path in sorted((out / "cases").glob("*/*.yaml"))}
     assert sorted(cases) == [
         "defaults/sample__defaults.yaml", "expr/sample__arithmetic.yaml",
+        "expr/sample__condition.yaml", "expr/sample__item.yaml", "expr/sample__strict_miss.yaml",
         "templates/sample__binding.yaml", "templates/sample__template.yaml",
         "values/sample__value.yaml",
     ]
     assert cases["expr/sample__arithmetic.yaml"] == {
         "kind": "expr", "expr": "order.qty * 2 + 0.5", "values": {"order": {"qty": 3}},
         "expect": {"value": 6.5}}
+    assert cases["expr/sample__condition.yaml"] == {
+        "kind": "expr", "expr": "n > 1", "values": {"n": 2}, "mode": "condition",
+        "expect": {"value": True}}
+    assert cases["expr/sample__item.yaml"] == {
+        "kind": "expr", "expr": "item.t", "item": {"t": 1}, "expect": {"value": 1}}
+    strict = cases["expr/sample__strict_miss.yaml"]
+    assert {key: strict[key] for key in ("kind", "expr", "mode")} == {
+        "kind": "expr", "expr": "a.b", "mode": "strict"}
+    assert "values" not in strict and strict["expect"]["raises"]["class"] == "ExpressionError"
     assert cases["templates/sample__template.yaml"] == {
         "kind": "expr", "template": "Hi ${name}!", "values": {"name": "Ada"}, "mode": "strict",
         "expect": {"value": "Hi Ada!"}}
@@ -1863,10 +1891,10 @@ def test_harvest_records_expr_value_defaults(tmp_path: Path) -> None:
     report = json.loads((out / "report" / "test_sample.py.json").read_text(encoding="utf-8"))
     assert report == {
         "file": "test_sample.py",
-        "tests": {"passed": 7, "failed": 1, "skipped": 0},
-        "records": {"eval_expr": 2, "render_template_record": 1, "eval_binding": 1,
-                    "evaluate_when_record": 1, "defaults.current": 1, "build_value_as": 1},
-        "written": {"expr": 1, "templates": 2, "defaults": 1, "values": 1},
+        "tests": {"passed": 10, "failed": 1, "skipped": 0},
+        "records": {"eval_expr": 4, "render_template_record": 1, "eval_binding": 1,
+                    "evaluate_when_record": 2, "defaults.current": 1, "build_value_as": 1},
+        "written": {"expr": 4, "templates": 2, "defaults": 1, "values": 1},
         "duplicates": 0,
         "skips": {"held: and/or result (owner deciding)": ["test_or_binding",
                                                            "test_or_condition"]},

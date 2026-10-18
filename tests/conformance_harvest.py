@@ -122,9 +122,10 @@ def _case_name(path: str, test_id: str, index: int = 1, salted: bool = False) ->
     """Return the case name for the test `test_id` (its node id after the file) in `path`.
 
     `tests/engine/test_expr_eval.py` and `TestA::test_x[a-b]` give
-    `engine_expr_eval__TestA__x_a-b_`. A test's second and later cases end in `__<index>`; a
-    `salted` name ends in 8 hex characters of the test id's hash, for two tests whose names
-    are the same.
+    `engine_expr_eval__TestA__x_a-b_`. `index` is the record's position among the test's
+    records, skipped ones included, so a name stays the same when a skipped record is written
+    later; from 2 on, the name ends in `__<index>`. A `salted` name ends in 8 hex characters
+    of the test id's hash, for two tests whose names are the same.
     """
     segments = path.removeprefix("tests/").removesuffix(".py").split("/")
     parts = test_id.split("::")
@@ -201,6 +202,11 @@ _STATE: _Harvest | None = None
 
 class _Skip(Exception):
     """A call or candidate that isn't written; its text is the report's reason."""
+
+
+def _harvest_error(exc: Exception) -> str:
+    """Return the skip reason for an error in the harvest's own code."""
+    return f"harvest error: {type(exc).__name__}: {exc}"
 
 
 def _plain(value: object, what: str) -> object:
@@ -336,32 +342,40 @@ def _answering(arguments: dict) -> list:
     return answers
 
 
-def _merge(old: object, new: object) -> object:
-    """Return `old` and `new` merged mapping by mapping; raise `_Skip` where they differ."""
-    if isinstance(old, dict) and isinstance(new, dict):
-        return {**old, **{key: _merge(old[key], value) if key in old else value
-                          for key, value in new.items()}}
-    if runner._same(old, new):
-        return old
-    raise _Skip("resolver: conflicting answers")
+def _walk(value: object, steps: tuple) -> object:
+    """Return what the dotted `steps` read in `value`, as the runner's resolver walks it."""
+    for step in steps:
+        value = value.get(step) if isinstance(value, dict) else None
+    return value
 
 
 def _values(answers: list) -> dict:
     """Return a resolver's answers nested as `{"values": ...}`; `a.b` gives `{a: {b: v}}`.
 
-    A None answer is a miss and adds nothing. No answers: `{}`.
+    Each answer is authoritative: one under a path already answered must equal walking that
+    answer, else the call skips. A None answer is a miss and adds nothing. No answers: `{}`.
     """
     values: dict = {}
-    for path, value in answers:
-        if value is None:
-            continue
+    answered: dict = {}
+    # Shallowest first, so a whole answer is known before the answers inside it.
+    for path, value in sorted(answers, key=lambda answer: answer[0].count(".")):
+        parts = tuple(step.strip() for step in path.strip().split("."))
         try:
             value = _plain(value, "resolver")
         except _Skip:
             raise _Skip("resolver: value is not data") from None
-        for step in reversed(path.strip().split(".")):
-            value = {step.strip(): value}
-        values = _merge(values, value)
+        for size in range(len(parts), 0, -1):
+            if parts[:size] in answered:
+                if not runner._same(_walk(answered[parts[:size]], parts[size:]), value):
+                    raise _Skip("resolver: conflicting answers")
+                break
+        else:
+            answered[parts] = value
+            if value is not None:
+                node = values
+                for step in parts[:-1]:
+                    node = node.setdefault(step, {})
+                node[parts[-1]] = value
     return {"values": values} if values else {}
 
 
@@ -437,8 +451,7 @@ def _record_build_value_as(arguments: dict):
             **({"typedefs": raw} if raw else {}), **_env()}
 
     def finish(outcome: tuple) -> tuple:
-        return case, _result(outcome, lambda typed: {
-            "value": _plain(typed.to_object(), "result"), "kind": typed.kind.value})
+        return case, _result(outcome, lambda typed: _plain(runner._value_form(typed), "result"))
 
     return finish
 
@@ -450,8 +463,7 @@ def _record_defaults(arguments: dict):
         raise _Skip("no defaults variable set")
 
     def finish(outcome: tuple) -> tuple:
-        return case, _result(outcome, lambda values: {"defaults": {
-            entry.name: getattr(values, entry.name.lower()) for entry in defaults.ENTRIES}})
+        return case, _result(outcome, runner._defaults_form)
 
     return finish
 
@@ -494,20 +506,22 @@ def _maps(frame) -> bool:
             and _from_test(frame))
 
 
-def _begin_record(frame) -> bool:
-    """Start recording a call from `frame` and return True, when it counts.
+def _begin_record(frame) -> _Test | None:
+    """Start recording a call from `frame` and return the running test, when the call counts.
 
     It counts when a test's code made it while a test runs, the harvest isn't replaying, and
-    no recorded call is active anywhere in the process.
+    no recorded call is active anywhere in the process. Otherwise None.
     """
     state = _STATE
     if not _maps(frame):
-        return False
+        return None
     with state.lock:
-        if state.depth:
-            return False
+        # Read once: a thread a test left behind may record while the test ends.
+        test = state.test
+        if state.depth or test is None:
+            return None
         state.depth += 1
-        return True
+        return test
 
 
 def _end_record() -> None:
@@ -526,22 +540,30 @@ class _Call:
         self.result: dict | None = None
         self.skip: str | None = "the call didn't finish"
 
-    def finish(self, finish, outcome: tuple) -> None:
-        """Take the case and result from `finish(outcome)`, or the reason it skips."""
-        if finish is None:
-            return
-        try:
-            self.case, self.result = finish(outcome)
-            self.skip = None
-        except _Skip as skip:
-            self.skip = str(skip)
+
+def _finish_call(call: _Call, finish, outcome: tuple) -> None:
+    """Take the call's case and result from `finish(outcome)`, or the reason it skips.
+
+    Never raises: an error in the harvest's code is a skip, not the test's error.
+    """
+    if finish is None:
+        return
+    try:
+        call.case, call.result = finish(outcome)
+        call.skip = None
+    except _Skip as skip:
+        call.skip = str(skip)
+    except Exception as exc:
+        call.skip = _harvest_error(exc)
 
 
-def _recorded(entry: str, original, recorder, signature, args: tuple, kwargs: dict) -> object:
-    """Call `original` with `args` and `kwargs`, recording the call through `recorder`.
+def _recorded(test: _Test, entry: str, original, recorder, signature, args: tuple,
+              kwargs: dict) -> object:
+    """Call `original` with `args` and `kwargs`, recording the call in `test` via `recorder`.
 
     `recorder(arguments)` reads the bound arguments (it may replace some, such as a resolver)
-    and returns the step that turns the call's outcome into a case and result.
+    and returns the step that turns the call's outcome into a case and result. The call's own
+    result or error is returned or raised unchanged.
     """
     try:
         bound = signature.bind(*args, **kwargs)
@@ -550,18 +572,20 @@ def _recorded(entry: str, original, recorder, signature, args: tuple, kwargs: di
         return original(*args, **kwargs)
     bound.apply_defaults()
     call = _Call(entry)
-    _STATE.test.calls.append(call)
+    test.calls.append(call)
     finish = None
     try:
         finish = recorder(bound.arguments)
     except _Skip as skip:
         call.skip = str(skip)
+    except Exception as exc:
+        call.skip = _harvest_error(exc)
     try:
         value = original(*bound.args, **bound.kwargs)
     except Exception as exc:
-        call.finish(finish, ("raises", exc))
+        _finish_call(call, finish, ("raises", exc))
         raise
-    call.finish(finish, ("value", value))
+    _finish_call(call, finish, ("value", value))
     return value
 
 
@@ -571,10 +595,11 @@ def _entry(entry: str, original, recorder):
 
     @functools.wraps(original)
     def wrapper(*args: object, **kwargs: object) -> object:
-        if not _begin_record(sys._getframe(1)):
+        test = _begin_record(sys._getframe(1))
+        if test is None:
             return original(*args, **kwargs)
         try:
-            return _recorded(entry, original, recorder, signature, args, kwargs)
+            return _recorded(test, entry, original, recorder, signature, args, kwargs)
         finally:
             _end_record()
 
@@ -589,7 +614,11 @@ def _mapper(original, remember):
     def wrapper(*args: object, **kwargs: object) -> object:
         result = original(*args, **kwargs)
         if _maps(sys._getframe(1)):
-            remember(signature.bind(*args, **kwargs).arguments, result)
+            try:
+                remember(signature.bind(*args, **kwargs).arguments, result)
+            except Exception:
+                # A text not noted only makes a later record skip; it never fails the test.
+                pass
         return result
 
     return wrapper
@@ -625,14 +654,8 @@ class _Test:
         return "skipped" if self.skipped else "passed"
 
 
-def _new_report(path: str) -> dict:
-    """Return an empty report for the test file `path`."""
-    return {"file": path, "tests": {"passed": 0, "failed": 0, "skipped": 0}, "records": {},
-            "written": {}, "duplicates": 0, "skips": {}, "flags": {}}
-
-
 class _Harvest:
-    """A harvest session: what it wrote, the test running now and its noted texts."""
+    """A harvest session's state: what it wrote, the test running now and its noted texts."""
 
     def __init__(self, config: pytest.Config, out: Path) -> None:
         """Start a harvest writing under `out`."""
@@ -652,110 +675,130 @@ class _Harvest:
         self.remaining: dict[str, int] = {}
         self.reports: dict[str, dict] = {}
         self.replaced: list = []
-        self._paths: set | None = None
+        self.paths: set | None = None
 
-    def machine_paths(self) -> set:
-        """Return the paths a case must not hold: temp dirs, the worktree and home."""
-        if self._paths is None:
-            given = [tempfile.gettempdir(), self.config._tmp_path_factory.getbasetemp(),
-                     _WORKTREE, Path.home()]
-            self._paths = {str(form) for path in given
-                           for form in (Path(path), Path(path).resolve())} - {os.sep}
-        return self._paths
 
-    def replay(self, case: dict) -> dict:
-        """Return the runner's results for the candidate `case`, read back from its file.
+def _new_report(path: str) -> dict:
+    """Return an empty report for the test file `path`."""
+    return {"file": path, "tests": {"passed": 0, "failed": 0, "skipped": 0}, "records": {},
+            "written": {}, "duplicates": 0, "skips": {}, "flags": {}}
 
-        Raises `_Skip` when the replay raises anything.
-        """
-        text = _written(case)
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "candidate.yaml"
-            path.write_text(text, encoding="utf-8")
-            case_dir = Path(directory) / "case"
-            case_dir.mkdir()
-            self.disabled = True
+
+def _machine_paths(state: _Harvest) -> set:
+    """Return the paths a case must not hold: temp dirs, the worktree and home."""
+    if state.paths is None:
+        given = [tempfile.gettempdir(), _WORKTREE, Path.home()]
+        # Absent under `-p no:tmpdir`; the default base temp lies under gettempdir() anyway.
+        factory = getattr(state.config, "_tmp_path_factory", None)
+        if factory is not None:
+            given.append(factory.getbasetemp())
+        state.paths = {str(form) for path in given
+                       for form in (Path(path), Path(path).resolve())} - {os.sep}
+    return state.paths
+
+
+def _replay(state: _Harvest, case: dict) -> dict:
+    """Return the runner's results for the candidate `case`, read back from its file.
+
+    Raises `_Skip` when the replay raises anything.
+    """
+    text = _written(case)
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "candidate.yaml"
+        path.write_text(text, encoding="utf-8")
+        case_dir = Path(directory) / "case"
+        case_dir.mkdir()
+        state.disabled = True
+        try:
+            return runner.results(runner._read(path), case_dir, candidate=True)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except BaseException as exc:
+            # pytest's `Failed`, which the runner raises, is a BaseException.
+            raise _Skip(f"replay failed: {type(exc).__name__}") from None
+        finally:
+            state.disabled = False
+            defaults._forget()
+
+
+def _expected(state: _Harvest, call: _Call) -> tuple[str, str]:
+    """Return a recorded call's group and case file text, its `expect` from the runner."""
+    if call.skip:
+        raise _Skip(call.skip)
+    case = call.case
+    # Python's `and`/`or` give an operand, not a bool, and that decides conditions too.
+    if case["kind"] == "expr" and _and_or(case):
+        raise _Skip(_HELD)
+    actual = _replay(state, case)
+    if actual.get("left"):
+        raise _Skip("replay left script entries")
+    expect = _expect(case, actual)
+    if not runner._same(expect, _expect(case, call.result)):
+        raise _Skip("replay differs")
+    text = _written({**case, "expect": expect})
+    if any(path in text for path in _machine_paths(state)):
+        raise _Skip("machine path")
+    group = _GROUPS.get(case["kind"]) or ("templates" if "template" in case else "expr")
+    return group, text
+
+
+def _write(state: _Harvest, report: dict, call: _Call, path: str, test_id: str,
+           number: int) -> None:
+    """Write a recorded call's case as the test's `number`th record, counting it in `report`."""
+    group, text = _expected(state, call)
+    done = state.index.write(group, _case_name(path, test_id, number), text)
+    if done == "collision":
+        done = state.index.write(group, _case_name(path, test_id, number, salted=True), text)
+    if done == "collision":
+        raise _Skip("name collision")
+    if done == "duplicate":
+        report["duplicates"] += 1
+    else:
+        report["written"][group] = report["written"].get(group, 0) + 1
+
+
+def _end_test(state: _Harvest) -> _Test:
+    """Return the running test, leaving no test running and no texts noted."""
+    test, state.test = state.test, None
+    for table in (state.trees, state.types, state.registries):
+        table.clear()
+    return test
+
+
+def _write_report(state: _Harvest, report: dict) -> None:
+    """Write a test file's report, through a temporary file: a report marks the file done."""
+    target = state.out / "report" / f"{report['file'].replace('/', '__')}.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f"{target.name}.tmp")
+    temporary.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, target)
+
+
+def _finish(state: _Harvest, item: pytest.Item) -> None:
+    """End the running test: harvest its calls if it passed, and report its file if last.
+
+    A test's path is the file's in its node id, relative to the rootdir.
+    """
+    test = _end_test(state)
+    path, _, test_id = item.nodeid.partition("::")
+    report = state.reports.setdefault(path, _new_report(path))
+    report["tests"][test.outcome] += 1
+    if test.outcome == "passed":
+        for number, call in enumerate(test.calls, 1):
+            report["records"][call.entry] = report["records"].get(call.entry, 0) + 1
             try:
-                return runner.results(runner._read(path), case_dir, candidate=True)
-            except (KeyboardInterrupt, SystemExit):
-                raise
-            except BaseException as exc:
-                # pytest's `Failed`, which the runner raises, is a BaseException.
-                raise _Skip(f"replay failed: {type(exc).__name__}") from None
-            finally:
-                self.disabled = False
-                defaults._forget()
-
-    def expected(self, call: _Call) -> tuple[str, str]:
-        """Return a recorded call's group and case file text, its `expect` from the runner."""
-        if call.skip:
-            raise _Skip(call.skip)
-        case = call.case
-        # Python's `and`/`or` give an operand, not a bool, and that decides conditions too.
-        if case["kind"] == "expr" and _and_or(case):
-            raise _Skip(_HELD)
-        actual = self.replay(case)
-        if actual.get("left"):
-            raise _Skip("replay left script entries")
-        expect = _expect(case, actual)
-        if not runner._same(expect, _expect(case, call.result)):
-            raise _Skip("replay differs")
-        text = _written({**case, "expect": expect})
-        if any(path in text for path in self.machine_paths()):
-            raise _Skip("machine path")
-        group = _GROUPS.get(case["kind"]) or ("templates" if "template" in case else "expr")
-        return group, text
-
-    def write(self, report: dict, call: _Call, path: str, test_id: str, number: int) -> None:
-        """Write a recorded call's case as the test's `number`th, counting it in `report`."""
-        group, text = self.expected(call)
-        done = self.index.write(group, _case_name(path, test_id, number), text)
-        if done == "collision":
-            done = self.index.write(group, _case_name(path, test_id, number, salted=True), text)
-        if done == "collision":
-            raise _Skip("name collision")
-        if done == "duplicate":
-            report["duplicates"] += 1
-        else:
-            report["written"][group] = report["written"].get(group, 0) + 1
-
-    def outcome(self, report: pytest.TestReport) -> None:
-        """Note the outcome of one of the running test's phases."""
-        test = self.test
-        if test is None:
-            return
-        if report.failed:
-            test.failed = True
-        elif report.skipped:
-            test.skipped = True
-        elif report.when == "call":
-            test.passed = True
-
-    def finish(self, item: pytest.Item) -> None:
-        """End the running test: harvest its calls if it passed, and report its file if last.
-
-        A test's path is the file's in its node id, relative to the rootdir.
-        """
-        test, self.test = self.test, None
-        for table in (self.trees, self.types, self.registries):
-            table.clear()
-        path, _, test_id = item.nodeid.partition("::")
-        report = self.reports.setdefault(path, _new_report(path))
-        report["tests"][test.outcome] += 1
-        if test.outcome == "passed":
-            for number, call in enumerate(test.calls, 1):
-                report["records"][call.entry] = report["records"].get(call.entry, 0) + 1
-                try:
-                    self.write(report, call, path, test_id, number)
-                except _Skip as skip:
-                    ids = report["skips"].setdefault(str(skip), [])
-                    if test_id not in ids:
-                        ids.append(test_id)
-        self.remaining[path] = self.remaining.get(path, 1) - 1
-        if self.remaining[path] <= 0:
-            target = self.out / "report" / f"{path.replace('/', '__')}.json"
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+                _write(state, report, call, path, test_id, number)
+                continue
+            except _Skip as skip:
+                reason = str(skip)
+            except Exception as exc:
+                reason = _harvest_error(exc)
+            ids = report["skips"].setdefault(reason, [])
+            if test_id not in ids:
+                ids.append(test_id)
+    state.remaining[path] = state.remaining.get(path, 1) - 1
+    if state.remaining[path] <= 0:
+        _write_report(state, report)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -813,12 +856,24 @@ def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None):
         return (yield)
     _STATE.test = _Test()
     try:
-        return (yield)
-    finally:
-        _STATE.finish(item)
+        result = yield
+    except BaseException:
+        # An interrupted test (Ctrl-C, `pytest.exit`) is neither harvested nor counted, so
+        # its file's report isn't written as if the file were done.
+        _end_test(_STATE)
+        raise
+    _finish(_STATE, item)
+    return result
 
 
 def pytest_runtest_logreport(report: pytest.TestReport) -> None:
     """Note each phase's outcome for the running test."""
-    if _STATE is not None:
-        _STATE.outcome(report)
+    test = _STATE.test if _STATE is not None else None
+    if test is None:
+        return
+    if report.failed:
+        test.failed = True
+    elif report.skipped:
+        test.skipped = True
+    elif report.when == "call":
+        test.passed = True

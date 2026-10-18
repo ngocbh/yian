@@ -797,7 +797,6 @@ describe("navigation", () => {
     const [first, second] = projected._projectedEntries!;
 
     expect(first).not.toBe(second);
-    expect(new Set([first, second]).size).toBe(2);
   });
 
   test("a recursive alias path stops at its ancestor", () => {

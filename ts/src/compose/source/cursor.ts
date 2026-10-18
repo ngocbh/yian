@@ -552,9 +552,9 @@ export class SourceCursor {
       });
     } else if (isList(snapshot)) {
       const current = this._value;
+      const aligned = this._document !== null && !this._cycleCut && isList(current);
       sequenceSources = snapshot.map((_, index) => {
-        if (this._document === null || this._cycleCut || !isList(current)) return null;
-        if (index >= current.length) return null;
+        if (!aligned || index >= current.length) return null;
         try {
           return this.child(index);
         } catch (error) {
@@ -568,8 +568,9 @@ export class SourceCursor {
 
   /**
    * Return a mapping projection that keeps this cursor's document, path and ranges: each
-   * displayed key, in `entries` order, shows a frozen snapshot of its value and keeps its
-   * source cursor's document, path and ranges, or none when the source is null.
+   * displayed key shows a frozen snapshot of its value and keeps its source cursor's document,
+   * path and ranges, or none when the source is null. Keys follow record key order, so
+   * integer-like keys come first.
    *
    * @throws TypeError for a source that isn't a SourceCursor or null, or a value that isn't a
    *   YAML value.
@@ -588,7 +589,7 @@ export class SourceCursor {
     }
     const snapshot = freezeValue(snapshotValue(displayed)) as ValueRecord;
     const projectedEntries = Object.keys(snapshot).map((key) =>
-      Object.freeze({ key, source: sources.get(key)! }),
+      Object.freeze({ key, source: sources.get(key) ?? null }),
     );
     return this.projection(snapshot, projectedEntries, null);
   }

@@ -84,11 +84,7 @@ host:
         - reply:
             format: yian.message.v1
             role: assistant
-            parts:
-              - type: text
-                text: >-
-                  {"category": "billing", "priority": "high", "summary": "The customer was
-                  charged twice.", "sentiment": "negative"}
+            parts: [{type: text, text: '{"category": "billing", "priority": "high", "summary": "The customer was charged twice.", "sentiment": "negative"}'}]
     reply:
       agent:
         - reply:

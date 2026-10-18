@@ -62,7 +62,7 @@ host:
   models:
     score:
       agent:
-        # A wrapped scalar's carrier: 0.6 meets the `>= 0.5` branch.
+        # A wrapped scalar's carrier: 0.6 takes the `positive` branch.
         - reply:
             format: yian.message.v1
             role: assistant
@@ -75,7 +75,7 @@ host:
             parts: [{type: text, text: ACME's demand is steady.}]
 expect:
   output: {status: succeeded, output: ACME's demand is steady.}
-  # A skipped node writes no record.
+  # Run start resolves every AGENT, the skipped ones included; a skipped node writes no record.
   trace:
     - - run_started
       - null

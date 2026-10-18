@@ -58,14 +58,14 @@ flow: |
       max: 5                                     # optional runaway guard (loop.max_exceeded)
 
   output: ${polish.output.draft}                 # the final carried draft
-# The AGENT has no `llm_config:`, so `run.llm_config` gives its provider and model; the key makes
-# the recorded connection source `environment`, which the trace pins.
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
 env: {OPENAI_API_KEY: "<key:1>"}
 inputs: {seed: a rough draft}
 run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
 host:
   models:
-    # A record is its own carrier.
+    # A record output is its own carrier: the reply's text is the record as JSON.
     "polish#0/critic":
       agent:
         - reply:
@@ -101,6 +101,8 @@ expect:
     - [node_succeeded, "polish#0/critic", {value: {draft: a better draft, score: 0.6}}]
     - [node_started, "polish#0/__end__"]
     - [node_succeeded, "polish#0/__end__", {value: {draft: a better draft, score: 0.6}}]
+    # `docs/` doesn't give the LOOP driver ids (`<loop>~k`), the seed `[carried, k]` or
+    # `prune_ids`; see src/yian/nodes/loop/node.py.
     - [node_started, polish~1]
     - - node_expanded
       - polish~1
@@ -114,8 +116,6 @@ expect:
     - [node_succeeded, "polish#1/__end__", {value: {draft: a polished draft, score: 0.9}}]
     - [node_started, polish~2]
     # The stopping driver commits the carried record under the loop's own id.
-    - - node_succeeded
-      - polish~2
-      - {value: {draft: a polished draft, score: 0.9}, commit_target: polish}
+    - [node_succeeded, polish~2, {value: {draft: a polished draft, score: 0.9}, commit_target: polish}]
     - [node_started, __end__]
     - [node_succeeded, __end__, {value: a polished draft}]

@@ -81,6 +81,8 @@ env: {OPENAI_API_KEY: "<key:1>"}
 inputs: {task: Plan a team offsite}
 run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
 host:
+  human:
+    approve: [approve]
   models:
     draft:
       agent:
@@ -94,12 +96,9 @@ host:
             format: yian.message.v1
             role: assistant
             parts: [{type: text, text: "The offsite plan is approved: let's pick a date!"}]
-  human:
-    approve: [approve]
 expect:
   output: {status: succeeded, output: "The offsite plan is approved: let's pick a date!"}
-  # Run start resolves every AGENT, the untaken `revise_plan` included; a skipped node writes no
-  # record.
+  # Run start resolves every AGENT, the skipped ones included; a skipped node writes no record.
   trace:
     - - run_started
       - null

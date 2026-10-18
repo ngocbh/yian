@@ -87,7 +87,8 @@ host:
             parts: [{type: text, text: ACME scores above zero. The weight is small.}]
 expect:
   output: {status: succeeded, output: {decision: ACME scores above zero. The weight is small.}}
-  # Asserts that pass write no record; a skipped node writes none either.
+  # Run start resolves every AGENT, the skipped ones included; asserts that pass write no
+  # record, and a skipped node writes none either.
   trace:
     - - run_started
       - null

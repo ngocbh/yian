@@ -38,8 +38,9 @@ flow: |
   output:
     claim:     ${reviewer.output.claim}
     confidence: ${reviewer.output.confidence}
-# The flow's `llm_config:` gives provider and model, so the run has no `llm_config`; the key makes
-# the recorded connection source `environment`.
+# The flow's `llm_config:` gives provider and model, so the run has no `llm_config`. With no saved
+# login, Python records a non-OpenAI provider's connection as from the environment with no endpoint,
+# key or no key; the key is set so a real run could authenticate.
 env: {ANTHROPIC_API_KEY: "<key:1>"}
 inputs: {topic: rates}
 run: {run_id: r1, num_workers: 0}
@@ -70,7 +71,8 @@ host:
             format: yian.message.v1
             role: assistant
             parts: [{type: text, text: Rates held steady this quarter.}]
-        # The structured call after the loop: a record is its own carrier.
+        # The structured call after the loop. A record output is its own carrier: the reply's
+        # text is the record as JSON.
         - reply:
             format: yian.message.v1
             role: assistant
@@ -88,8 +90,9 @@ expect:
             provider: anthropic
             model: claude-opus-4-8
             anthropic: {temperature: 0.3}
-            # No endpoint is recorded: the anthropic client uses its default URL, which docs/
-            # doesn't give.
+            # For a provider other than OpenAI, Python records `source: environment` and
+            # `endpoint: null` (src/yian/llm_clients/connection.py); `docs/` doesn't give these
+            # fields, and TS has to record the same.
             _connection: {method: api_key, source: environment, endpoint: null}
     - [node_started, __start__]
     - [node_succeeded, __start__, {value: {topic: rates}}]

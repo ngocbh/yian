@@ -67,8 +67,8 @@ inputs: {text: "Ada Lovelace, aged 36, loved mathematics."}
 run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
 host:
   models:
-    # A record is its own carrier; an int and a Literal wrap as {"value": ...}, a list as
-    # {"items": ...}.
+    # A record is its own carrier; an int and a Literal wrap as `{"value": ...}`, a list as
+    # `{"items": ...}`.
     person:
       agent:
         - reply:

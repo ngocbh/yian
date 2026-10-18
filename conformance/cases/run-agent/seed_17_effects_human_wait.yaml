@@ -146,8 +146,8 @@ python_flow: |
 
   # settle/confirm run only on approve; abort runs otherwise. Coalesce picks whichever ran.
   output: ${confirm.output | abort.output}
-# The AGENTs have no `llm_config:`, so `run.llm_config` gives their provider and model; the key
-# makes the recorded connection source `environment`, which the trace pins.
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
 env: {OPENAI_API_KEY: "<key:1>"}
 # A past `settle_at`, so the WAIT doesn't block.
 inputs: {topic: rates, settle_at: "2026-01-01"}
@@ -164,6 +164,7 @@ host:
             parts: [{type: text, text: Review the rate outlook on Friday.}]
 expect:
   output: {status: succeeded, output: cancel}
+  # Run start resolves every AGENT, the skipped ones included; a skipped node writes no record.
   trace:
     - - run_started
       - null
@@ -188,7 +189,7 @@ expect:
     - [node_started, gate]
     - [node_routed, gate, {handle: settle}]
     - [node_started, settle]
-    # WAIT returns None: the null value is left out, and so is the empty payload.
+    # A WAIT's value is null: the null value is left out, and so is the empty payload.
     - [node_succeeded, settle]
     - [node_started, confirm]
     - [node_succeeded, confirm, {value: cancel}]

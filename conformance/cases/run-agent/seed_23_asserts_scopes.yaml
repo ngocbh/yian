@@ -223,8 +223,8 @@ python_flow: |
     - "score.output >= -1 and score.output <= 1"
     # FLOW post — reads a named call node's .output (the hoisted inline-call form).
     - "score_one_call.output >= -1"
-# The AGENTs have no `llm_config:`, so `run.llm_config` gives their provider and model; the key
-# makes the recorded connection source `environment`, which the trace pins.
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
 env: {OPENAI_API_KEY: "<key:1>"}
 # A four-letter topic makes the score (4 % 21 - 10) / 10 = -0.6, a non-integral float.
 inputs: {topic: bond, window: 30, weight: 0.02}
@@ -239,6 +239,7 @@ host:
             parts: [{type: text, text: Bonds score below zero. They are passed for now.}]
 expect:
   output: {status: succeeded, output: {decision: Bonds score below zero. They are passed for now.}}
+  # Run start resolves every AGENT, the skipped ones included; a skipped node writes no record.
   trace:
     - - run_started
       - null
@@ -277,6 +278,4 @@ expect:
     - [node_started, skip]
     - [node_succeeded, skip, {value: Bonds score below zero. They are passed for now.}]
     - [node_started, __end__]
-    - - node_succeeded
-      - __end__
-      - {value: {decision: Bonds score below zero. They are passed for now.}}
+    - [node_succeeded, __end__, {value: {decision: Bonds score below zero. They are passed for now.}}]

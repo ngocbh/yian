@@ -80,13 +80,13 @@ host:
         - reply:
             format: yian.message.v1
             role: assistant
-            parts: [{type: text, text: "One repo shares tooling and keeps changes atomic."}]
+            parts: [{type: text, text: One repo shares tooling and keeps changes atomic.}]
     against_case:
       agent:
         - reply:
             format: yian.message.v1
             role: assistant
-            parts: [{type: text, text: "Separate repos keep teams decoupled."}]
+            parts: [{type: text, text: Separate repos keep teams decoupled.}]
     verdict:
       agent:
         - reply:
@@ -129,8 +129,8 @@ expect:
     - [node_started, verdict]
     - - node_succeeded
       - verdict
-      - {value: "Adopt a monorepo: shared tooling saves a small team the most time."}
+      - value: "Adopt a monorepo: shared tooling saves a small team the most time."
     - [node_started, __end__]
     - - node_succeeded
       - __end__
-      - {value: "Adopt a monorepo: shared tooling saves a small team the most time."}
+      - value: "Adopt a monorepo: shared tooling saves a small team the most time."

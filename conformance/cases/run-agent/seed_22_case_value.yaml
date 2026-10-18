@@ -51,8 +51,8 @@ flow: |
 
   # ${gate.output} = the taken branch's value — desugars to ${positive.output | cautious.output}.
   output: ${gate.output}
-# The AGENTs have no `llm_config:`, so `run.llm_config` gives their provider and model; the key
-# makes the recorded connection source `environment`, which the trace pins.
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
 env: {OPENAI_API_KEY: "<key:1>"}
 inputs: {topic: rates}
 run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
@@ -60,7 +60,7 @@ host:
   models:
     score:
       agent:
-        # A scalar's carrier wraps it: `{"value": ...}`.
+        # A wrapped scalar's carrier: 0.6 takes the `positive` branch.
         - reply:
             format: yian.message.v1
             role: assistant
@@ -73,6 +73,7 @@ host:
             parts: [{type: text, text: Rates may ease. Demand holds. Credit is steady.}]
 expect:
   output: {status: succeeded, output: Rates may ease. Demand holds. Credit is steady.}
+  # Run start resolves every AGENT, the skipped ones included; a skipped node writes no record.
   trace:
     - - run_started
       - null

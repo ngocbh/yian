@@ -2,8 +2,9 @@
 # A MAP of a `uses:` alias grows one child per topic under `research_each#<i>/`, each AGENT
 # keyed by its expanded id; the list of child records fans in to one AGENT.
 kind: run
-# `numbers`: the child's `fetch_facts` returns the integral float 100.0 into a `list(float)`,
-# and the trace keeps kinds; which kind TS stores (int 100 or float 100.0) is open.
+# The child's `fetch_facts` returns the integral float 100.0 into a `list(float)`; TS's stored
+# value (int 100 or float 100.0) isn't settled, so `expect` leaves out the trace and
+# `python_expect` pins it.
 rules: [numbers]
 flow: |
   # 05 — MAP + over: typed iteration over a list (List.map), then fan-in.
@@ -154,13 +155,13 @@ inputs: {topics: [ACME, BETA], as_of: "2026-01-15"}
 run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
 host:
   models:
-    research_each#0/synth:
+    "research_each#0/synth":
       agent:
         - reply:
             format: yian.message.v1
             role: assistant
             parts: [{type: text, text: "ACME closed near 102 [1]."}]
-    research_each#1/synth:
+    "research_each#1/synth":
       agent:
         - reply:
             format: yian.message.v1
@@ -172,8 +173,6 @@ host:
             format: yian.message.v1
             role: assistant
             parts: [{type: text, text: "Both closed near 102 [1][2]."}]
-# The output holds no float, so it is shared; the trace, which keeps kinds, is only in
-# `python_expect`.
 expect:
   output:
     status: succeeded

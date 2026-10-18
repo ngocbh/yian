@@ -248,6 +248,8 @@ expect:
       - value:
           transcript: "\n\nUser: Hi\n\nAssistant: Hello! How can I help?"
           exited: false
+    # `docs/` doesn't give the LOOP driver ids (`<loop>~k`), the seed `[carried, k]` or
+    # `prune_ids`; see src/yian/nodes/loop/node.py.
     - [node_started, chat~1]
     - - node_expanded
       - chat~1
@@ -285,8 +287,8 @@ expect:
       - value:
           transcript: "\n\nUser: Hi\n\nAssistant: Hello! How can I help?"
           exited: true
-    # The stopping driver commits the carried record under the loop's own id.
     - [node_started, chat~2]
+    # The stopping driver commits the carried record under the loop's own id.
     - - node_succeeded
       - chat~2
       - value:

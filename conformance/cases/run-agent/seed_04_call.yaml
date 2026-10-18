@@ -2,8 +2,9 @@
 # A CALL through a `uses:` alias grows the child's nodes under `research/`, the child's date
 # default filling the omitted `as_of`; an AGENT then reads fields of the CALL's record.
 kind: run
-# `numbers`: the child's `fetch_facts` returns the integral float 100.0 into a `list(float)`,
-# and the trace keeps kinds; which kind TS stores (int 100 or float 100.0) is open.
+# The child's `fetch_facts` returns the integral float 100.0 into a `list(float)`; TS's stored
+# value (int 100 or float 100.0) isn't settled, so `expect` leaves out the trace and
+# `python_expect` pins it.
 rules: [numbers]
 flow: |
   # 04 — CALL: typed function application (call another flow).
@@ -157,8 +158,6 @@ host:
             format: yian.message.v1
             role: assistant
             parts: [{type: text, text: Closes stayed in a narrow band.}]
-# The output holds no float, so it is shared; the trace, which keeps kinds, is only in
-# `python_expect`.
 expect:
   output:
     status: succeeded

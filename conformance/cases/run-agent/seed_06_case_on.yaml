@@ -88,7 +88,7 @@ expect:
   output:
     status: succeeded
     output: {category: con, note: ACME trades lower. Volumes are thin.}
-  # A skipped node writes no record.
+  # Run start resolves every AGENT, the skipped ones included; a skipped node writes no record.
   trace:
     - - run_started
       - null

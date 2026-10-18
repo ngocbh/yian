@@ -1,8 +1,8 @@
 # From tests/seeds/03-research-one.yaml.
 # A CODE leaf's record feeds an AGENT; the flow returns the AGENT's text and the given date.
 kind: run
-# `numbers`: `fetch_facts` returns the integral float 100.0 into a `list(float)`, and the
-# trace keeps kinds; which kind TS stores (int 100 or float 100.0) is open.
+# `fetch_facts` returns the integral float 100.0 into a `list(float)`; TS's stored value (int 100
+# or float 100.0) isn't settled, so `expect` leaves out the trace and `python_expect` pins it.
 rules: [numbers]
 flow: |
   # 03 — Single-topic research (a reusable child flow).
@@ -104,8 +104,6 @@ host:
             format: yian.message.v1
             role: assistant
             parts: [{type: text, text: "ACME closed near 102 [1][2]."}]
-# The output holds no float, so it is shared; the trace, which keeps kinds, is only in
-# `python_expect`.
 expect:
   output:
     status: succeeded

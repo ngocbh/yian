@@ -76,8 +76,8 @@ flow: |
     # whole `${...}` span; bare is the canonical form shown throughout.
     - input.base_weight * 100 <= 10 and not (input.base_weight < 0)   # arithmetic + not + parens
     - input.extra_bps in [0, 25, 50, 100] or input.extra_bps >= 0     # membership + or
-# The AGENT has no `llm_config:`, so `run.llm_config` gives its provider and model; the key makes
-# the recorded connection source `environment`, which the trace pins.
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
 env: {OPENAI_API_KEY: "<key:1>"}
 # `as_of` is given, so the binding doesn't read the host clock.
 inputs:

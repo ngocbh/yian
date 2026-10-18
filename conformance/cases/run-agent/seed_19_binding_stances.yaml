@@ -96,8 +96,8 @@ flow: |
         Compose one neutral paragraph from the above. No recommendations advice.
 
   output: ${assemble.output}
-# The AGENTs have no `llm_config:`, so `run.llm_config` gives their provider and model; the key
-# makes the recorded connection source `environment`, which the trace pins.
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
 env: {OPENAI_API_KEY: "<key:1>"}
 # `as_of` is given, so `assemble` doesn't read the host clock.
 inputs: {topic: rates, as_of: "2026-01-01"}
@@ -106,7 +106,7 @@ host:
   models:
     score:
       agent:
-        # A scalar's carrier wraps it: `{"value": ...}`.
+        # A wrapped scalar's carrier: 0.6 takes the `pro` branch.
         - reply:
             format: yian.message.v1
             role: assistant
@@ -137,6 +137,7 @@ host:
             parts: [{type: text, text: Rates may ease as inflation cools.}]
 expect:
   output: {status: succeeded, output: Rates may ease as inflation cools.}
+  # Run start resolves every AGENT, the skipped ones included; a skipped node writes no record.
   trace:
     - - run_started
       - null

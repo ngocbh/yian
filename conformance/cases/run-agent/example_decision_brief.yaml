@@ -142,22 +142,22 @@ host:
         - reply:
             format: yian.message.v1
             role: assistant
-            parts: [{type: text, text: "Shared tooling saves time."}]
+            parts: [{type: text, text: Shared tooling saves time.}]
     the_case_against:
       agent:
         - reply:
             format: yian.message.v1
             role: assistant
-            parts: [{type: text, text: "Builds slow down as the repo grows."}]
+            parts: [{type: text, text: Builds slow down as the repo grows.}]
     the_risks:
       agent:
         - reply:
             format: yian.message.v1
             role: assistant
-            parts: [{type: text, text: "CI cost may rise."}]
+            parts: [{type: text, text: CI cost may rise.}]
     synth:
       agent:
-        # A Literal typedef's carrier wraps the tag: {"value": ...}.
+        # A Literal typedef's carrier wraps the tag: `{"value": ...}`.
         - reply:
             format: yian.message.v1
             role: assistant
@@ -167,7 +167,7 @@ host:
         - reply:
             format: yian.message.v1
             role: assistant
-            parts: [{type: text, text: "Move the three services into one repo this sprint."}]
+            parts: [{type: text, text: Move the three services into one repo this sprint.}]
     finalize:
       agent:
         - reply:
@@ -178,7 +178,7 @@ expect:
   output:
     status: succeeded
     output: {decision: go, summary: "Go: merge the repos this sprint."}
-  # Run start resolves every AGENT, the untaken briefs included; a skipped node writes no record.
+  # Run start resolves every AGENT, the skipped ones included; a skipped node writes no record.
   trace:
     - - run_started
       - null
@@ -221,7 +221,7 @@ expect:
     - [node_started, __start__]
     - - node_succeeded
       - __start__
-      - {value: {question: "Should a small team adopt a monorepo?", audience: the CTO}}
+      - value: {question: "Should a small team adopt a monorepo?", audience: the CTO}
     - [node_started, the_case_for]
     - [node_succeeded, the_case_for, {value: Shared tooling saves time.}]
     - [node_started, the_case_against]

@@ -38,7 +38,7 @@ host:
   models:
     label:
       agent:
-        # A Literal output's carrier wraps the tag: {"value": ...}.
+        # A Literal output's carrier wraps the tag: `{"value": ...}`.
         - reply:
             format: yian.message.v1
             role: assistant

@@ -1,5 +1,5 @@
 # From tests/seeds/21-inline-call.yaml.
-# The inline `call(enrich, ...)` runs as the generated call node `__call_0`, which grows the
+# The inline `call(enrich, ...)` runs as the generated CALL node `__call_0`, which grows the
 # child's CODE node; `summary` reads the child's headlines.
 kind: run
 # `fetch_facts` returns the integral float 100.0 into a `list(float)`; TS's stored value (int 100
@@ -100,8 +100,8 @@ python_flow: |
         ${news}
 
   output: ${summary.output}
-# The AGENT has no `llm_config:`, so `run.llm_config` gives its provider and model; the key makes
-# the recorded connection source `environment`, which the trace pins.
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
 env: {OPENAI_API_KEY: "<key:1>"}
 inputs: {topic: rates}
 run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
@@ -143,7 +143,8 @@ python_expect:
     - [node_started, __call_0/__end__]
     - - node_succeeded
       - __call_0/__end__
-      - {value: ["RATES: quarterly update", "RATES: reviewer note"], commit_target: __call_0}
+      - value: ["RATES: quarterly update", "RATES: reviewer note"]
+        commit_target: __call_0
     - [node_started, summary]
     - [node_succeeded, summary, {value: Rates had a quarterly update and a reviewer note.}]
     - [node_started, __end__]

@@ -104,8 +104,8 @@ flow: |
 
   asserts:
     - synth.output.confidence >= 0 and synth.output.confidence <= 1
-# The AGENTs have no `llm_config:`, so `run.llm_config` gives their provider and model; the key
-# makes the recorded connection source `environment`, which the trace pins.
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
 env: {OPENAI_API_KEY: "<key:1>"}
 inputs: {topic: rates, as_of: "2026-01-01"}
 run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
@@ -131,13 +131,11 @@ host:
             parts: [{type: text, text: Sentiment on rates is mixed.}]
     synth:
       agent:
-        # A record is its own carrier.
+        # A record output is its own carrier: the reply's text is the record as JSON.
         - reply:
             format: yian.message.v1
             role: assistant
-            parts:
-              - type: text
-                text: '{"stance": "positive", "claim": "Rates look stable.", "confidence": 0.7}'
+            parts: [{type: text, text: '{"stance": "positive", "claim": "Rates look stable.", "confidence": 0.7}'}]
     pro_note:
       agent:
         - reply:
@@ -148,6 +146,7 @@ expect:
   output:
     status: succeeded
     output: {stance: positive, confidence: 0.7, note: Rates look stable for now.}
+  # Run start resolves every AGENT, the skipped ones included; a skipped node writes no record.
   trace:
     - - run_started
       - null
@@ -192,9 +191,7 @@ expect:
     - [node_started, social]
     - [node_succeeded, social, {value: Sentiment on rates is mixed.}]
     - [node_started, synth]
-    - - node_succeeded
-      - synth
-      - {value: {stance: positive, claim: Rates look stable., confidence: 0.7}}
+    - [node_succeeded, synth, {value: {stance: positive, claim: Rates look stable., confidence: 0.7}}]
     - [node_started, route]
     - [node_routed, route, {handle: pro_note}]
     - [node_started, pro_note]
@@ -202,4 +199,4 @@ expect:
     - [node_started, __end__]
     - - node_succeeded
       - __end__
-      - {value: {stance: positive, confidence: 0.7, note: Rates look stable for now.}}
+      - value: {stance: positive, confidence: 0.7, note: Rates look stable for now.}

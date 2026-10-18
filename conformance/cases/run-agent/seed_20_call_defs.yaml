@@ -102,8 +102,8 @@ python_flow: |
         topic: ${input.topic}
 
   output: ${brief.output}
-# The AGENT has no `llm_config:`, so `run.llm_config` gives its provider and model; the key makes
-# the recorded connection source `environment`, which the trace pins.
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
 env: {OPENAI_API_KEY: "<key:1>"}
 inputs: {topic: rates}
 run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
@@ -147,6 +147,7 @@ python_expect:
     - [node_started, brief/__end__]
     - - node_succeeded
       - brief/__end__
-      - {value: Rates had a quarterly update and a reviewer note., commit_target: brief}
+      - value: Rates had a quarterly update and a reviewer note.
+        commit_target: brief
     - [node_started, __end__]
     - [node_succeeded, __end__, {value: Rates had a quarterly update and a reviewer note.}]

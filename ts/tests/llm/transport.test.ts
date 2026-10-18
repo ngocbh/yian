@@ -1,11 +1,17 @@
-/** Tests for `openExchange` in `src/llm/transport.ts`: its timers, stops and error mapping. */
+/** Tests for `openExchange` and `shortRequest` in `src/llm/transport.ts`: timers, stops and error mapping. */
 
 import { describe, expect, test } from "bun:test";
 
 import { RedirectError, type Scheduler, type Send, virtualScheduler } from "../../src/platform.ts";
 import { REDACTED } from "../../src/llm/auth.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
-import { type Exchange, type ExchangeOptions, openExchange } from "../../src/llm/transport.ts";
+import {
+  type Exchange,
+  type ExchangeOptions,
+  openExchange,
+  shortRequest,
+  type ShortRequestOptions,
+} from "../../src/llm/transport.ts";
 
 const ENDPOINT = "https://api.example.test/v1/chat";
 const S = 1000;
@@ -115,7 +121,9 @@ function harness(reply: Reply) {
       { method: "POST", body: "{}" },
       { provider: "openai", credentials: () => [], scheduler, send, ...options },
     );
-  return { clock, stats, calls, cancels, send, open };
+  const short = (options: Partial<ShortRequestOptions> = {}, url = ENDPOINT) =>
+    shortRequest(url, { method: "GET" }, { name: "models", scheduler, send, ...options });
+  return { clock, stats, calls, cancels, send, open, short };
 }
 
 /** Read the whole body as text. */
@@ -622,5 +630,154 @@ describe("error mapping", () => {
     expect(error).not.toBeInstanceOf(ProviderError);
     expect((error as Error).message).toBe("request URL must not contain user info");
     expect(h.calls.length).toBe(0);
+  });
+});
+
+describe("shortRequest", () => {
+  test("reads a whole body within the time", async () => {
+    const h = harness({ steps: [{ at: 0, chunk: "ab" }, { at: 10 * S, chunk: "" }, { at: 20 * S, chunk: "cd" }] });
+    const reply = await h.short();
+    expect(reply.status).toBe(200);
+    expect(reply.text).toBe("abcd");
+    expect(h.clock.now()).toBe(20 * S);
+    await settle();
+    expect(h.stats.armed).toBe(1);
+    expect(h.stats.pending).toBe(0);
+    expect(h.calls[0]!.signal!.aborted).toBe(true);
+  });
+
+  test("a trickle fails at 30 s although bytes keep coming: one total timer", async () => {
+    const steps = Array.from({ length: 5 }, (_, i) => ({ at: i * 10 * S, chunk: "x" }));
+    const h = harness({ steps });
+    const error = (await failure(h.short())) as ProviderError;
+    expect(error).toBeInstanceOf(ProviderError);
+    expect(error.kind).toBe("timeout");
+    expect(error.retryable).toBe(true);
+    expect(error.provider).toBe("models");
+    expect(error.message).toBe("models request failed (timeout): no complete response within 30 s");
+    expect(h.clock.now()).toBe(30 * S);
+    expect(h.calls[0]!.signal!.aborted).toBe(true);
+    await settle();
+    expect(h.stats.pending).toBe(0);
+    expect(h.clock.now()).toBe(30 * S);
+  });
+
+  test("the timer covers the wait for headers, and timeoutMs overrides the default", async () => {
+    const h = harness({ after: 600, steps: [{ at: 600, chunk: "x" }] });
+    const error = (await failure(h.short({ timeoutMs: 500 }))) as ProviderError;
+    expect(error.message).toBe("models request failed (timeout): no complete response within 0.5 s");
+    expect(h.clock.now()).toBe(500);
+  });
+
+  test("a reply from a sender ignoring the signal after the timeout is released", async () => {
+    const h = harness({ after: 40 * S, ignoreSignal: true, steps: [{ at: 40 * S, chunk: "x" }] });
+    expect(((await failure(h.short())) as ProviderError).kind).toBe("timeout");
+    await settle();
+    expect(h.clock.now()).toBe(40 * S);
+    expect(h.cancels.count).toBe(1);
+  });
+
+  test("a body past maxBytes is refused and the request aborted", async () => {
+    const h = harness({ steps: [{ at: 0, chunk: "abc" }, { at: S, chunk: "def" }, { at: 100 * S, chunk: "g" }] });
+    const error = (await failure(h.short({ maxBytes: 5 }))) as ProviderError;
+    expect(error).toBeInstanceOf(ProviderError);
+    expect(error.kind).toBe("protocol");
+    expect(error.retryable).toBe(false);
+    expect(error.provider).toBe("models");
+    expect(error.message).toBe("models response is larger than 5 bytes");
+    expect(h.clock.now()).toBe(S);
+    expect(h.calls[0]!.signal!.aborted).toBe(true);
+    expect(h.cancels.count).toBe(1);
+    await settle();
+    expect(h.stats.pending).toBe(0);
+    expect(h.clock.now()).toBe(S);
+  });
+
+  test("a body of exactly maxBytes is read", async () => {
+    const h = harness({ steps: [{ at: 0, chunk: "abc" }, { at: S, chunk: "de" }] });
+    expect((await h.short({ maxBytes: 5 })).text).toBe("abcde");
+  });
+
+  test("the text is UTF-8 with replacement, decoded after joining the chunks", async () => {
+    const steps = [
+      { at: 0, chunk: new Uint8Array([0xc3]) },
+      { at: S, chunk: new Uint8Array([0xa9, 0xff]) },
+    ];
+    expect((await harness({ steps }).short()).text).toBe("é\uFFFD");
+  });
+
+  test("json() decodes in plain mode", async () => {
+    const h = harness({ steps: [{ at: 0, chunk: '{"$float": "inf", "n": 1, "x": 1.5}' }] });
+    const reply = await h.short();
+    expect(reply.json()).toEqual({ $float: "inf", n: 1n, x: 1.5 });
+  });
+
+  test("json() refuses an invalid body with a protocol error and no cause", async () => {
+    const reply = await harness({ steps: [{ at: 0, chunk: "<html>oops</html>" }] }).short();
+    let error: unknown;
+    try {
+      reply.json();
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(ProviderError);
+    const e = error as ProviderError;
+    expect(e.kind).toBe("protocol");
+    expect(e.retryable).toBe(false);
+    expect(e.provider).toBe("models");
+    expect(e.message).toBe("models returned an invalid JSON body");
+    expect(e.cause).toBeUndefined();
+  });
+
+  test("a 3xx is a redirect error", async () => {
+    const h = harness({ status: 302, headers: { location: "https://elsewhere.test/x?t=1" }, steps: [] });
+    const error = (await failure(h.short())) as ProviderError;
+    expect(error.kind).toBe("redirect");
+    expect(error.retryable).toBe(false);
+    expect(error.message).toBe("models returned HTTP 302 (redirect): redirect to https://elsewhere.test");
+  });
+
+  test("a non-2xx reply is returned for the caller to judge", async () => {
+    const h = harness({ status: 404, headers: { "x-a": "1" }, steps: [{ at: 0, chunk: "not here" }] });
+    const reply = await h.short();
+    expect(reply.status).toBe(404);
+    expect(reply.headers.get("x-a")).toBe("1");
+    expect(reply.text).toBe("not here");
+  });
+
+  test("a transport failure maps as for a model call, credentials scrubbed", async () => {
+    const error = new TypeError("fetch failed", { cause: withCode(new Error("connect sk-key"), "ECONNREFUSED") });
+    const mapped = (await failure(harness({ error }).short())) as ProviderError;
+    expect(mapped.kind).toBe("connection");
+    expect(mapped.message).toBe("models request failed (connection): TypeError: fetch failed (ECONNREFUSED)");
+    const leaky = withCode(new TypeError("refused sk-key"), "ECONNREFUSED");
+    const credentials = () => ["sk-key"];
+    const scrubbed = (await failure(harness({ error: leaky }).short({ credentials }))) as ProviderError;
+    expect(scrubbed.message).not.toContain("sk-key");
+  });
+
+  test("a caller abort before or during the request throws its reason", async () => {
+    const before = harness({ steps: [{ at: 0, chunk: "x" }] });
+    const stopped = new AbortController();
+    stopped.abort(new Error("early"));
+    expect(await failure(before.short({ signal: stopped.signal }))).toBe(stopped.signal.reason);
+    expect(before.calls.length).toBe(0);
+
+    const h = harness({ steps: [{ at: 0, chunk: "x" }, { at: 20 * S, chunk: "y" }] });
+    const caller = new AbortController();
+    const reason = new Error("user stop");
+    void h.clock.sleep(5 * S).then(() => caller.abort(reason));
+    expect(await failure(h.short({ signal: caller.signal }))).toBe(reason);
+    expect(h.clock.now()).toBe(5 * S);
+    await settle();
+    expect(h.stats.pending).toBe(0);
+    expect(h.clock.now()).toBe(5 * S);
+  });
+
+  test("a read that never settles ends at the total timeout", async () => {
+    const h = harness({ body: hangingBody("a") });
+    const error = (await failure(h.short())) as ProviderError;
+    expect(error.message).toBe("models request failed (timeout): no complete response within 30 s");
+    expect(h.clock.now()).toBe(30 * S);
   });
 });

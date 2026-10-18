@@ -609,7 +609,7 @@ describe("main", () => {
   const PASSES = "FAIL b/pending_passes: passes, but is marked pending (#391); remove the marker";
   const NO_LOAD = "the TS runner doesn't run `load` cases yet";
 
-  let casesDir = "";
+  const casesDirs: string[] = [];
   let ran: { id: string; ctx: CaseContext; present: boolean }[] = [];
   const expr: KindRunner = (case_: Case, ctx: CaseContext) => {
     ran.push({ id: String(case_["expr"]), ctx, present: existsSync(ctx.dir) });
@@ -618,13 +618,14 @@ describe("main", () => {
   };
 
   afterEach(() => {
-    rmSync(casesDir, { recursive: true, force: true });
+    for (const dir of casesDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
     ran = [];
   });
 
   /** Run `main` over `files` with the `expr` kind injected; return its exit code and output. */
   async function run(argv: string[], files: Record<string, string> = FILES) {
-    casesDir = mkdtempSync(join(tmpdir(), "conformance-cases-"));
+    const casesDir = mkdtempSync(join(tmpdir(), "conformance-cases-"));
+    casesDirs.push(casesDir);
     for (const [name, text] of Object.entries(files)) {
       mkdirSync(dirname(join(casesDir, name)), { recursive: true });
       writeFileSync(join(casesDir, name), text);

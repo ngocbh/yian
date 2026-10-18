@@ -2985,6 +2985,9 @@ def test_shim_value_repr_through_yian() -> None:
         _install_shims(patch, "key-order")
         assert values.value_repr({"b": 1, "0": 2}) == "{'0': 2, 'b': 1}"
         assert expressions.value_repr is values.value_repr
+        cyclic: dict = {}
+        cyclic["x"] = cyclic
+        assert values.value_repr(cyclic) == "{'x': {...}}"
     with pytest.MonkeyPatch.context() as patch:
         _install_shims(patch, *harvest._SHIMS)
         assert inspect.signature(values.value_repr) == inspect.signature(original)

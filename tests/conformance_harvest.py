@@ -1212,18 +1212,21 @@ def _mapper(original, remember):
     return wrapper
 
 
+def _holders(original: object) -> list[tuple[ModuleType, str]]:
+    """Return each `(module, name)` where a loaded yian module holds `original`."""
+    return [(module, name) for module_name, module in list(sys.modules.items())
+            if module is not None and (module_name == "yian" or module_name.startswith("yian."))
+            for name, value in list(vars(module).items()) if value is original]
+
+
 def _replace(original, wrapper, replaced: list) -> None:
     """Put `wrapper` in place of `original` in every loaded yian module that holds it.
 
     Each `(module, name, original)` replaced is added to `replaced`.
     """
-    for module_name, module in list(sys.modules.items()):
-        if module is None or not (module_name == "yian" or module_name.startswith("yian.")):
-            continue
-        for name, value in list(vars(module).items()):
-            if value is original:
-                setattr(module, name, wrapper)
-                replaced.append((module, name, original))
+    for module, name in _holders(original):
+        setattr(module, name, wrapper)
+        replaced.append((module, name, original))
 
 
 class _Test:
@@ -1461,19 +1464,16 @@ def _install_text_form(patch: pytest.MonkeyPatch, case: dict) -> None:
 
 def _patch_held(patch: pytest.MonkeyPatch, original: object, wrapper: object) -> None:
     """Put `wrapper` in place of `original`, through `patch`, in every loaded yian module."""
-    for module_name, module in list(sys.modules.items()):
-        if module is None or not (module_name == "yian" or module_name.startswith("yian.")):
-            continue
-        for name, value in list(vars(module).items()):
-            if value is original:
-                patch.setattr(module, name, wrapper)
+    for module, name in _holders(original):
+        patch.setattr(module, name, wrapper)
 
 
 def _ts_value_repr(value: object) -> str:
     """Return `value` as `value_repr` shows it, but written by `_ts_json`, so text is JSON-quoted.
 
-    The long-int placeholders are `value_repr`'s; a value `_ts_json` can't write is
-    `<{type} object>`, or `<{type} too large to display>` for an int past Python's digit limit.
+    An int longer than `YIAN_MAX_INT_DIGITS`, or a value holding one, gets `value_repr`'s
+    placeholder. When writing it raises, the value is `<{type} object>`, or
+    `<{type} too large to display>` for an int past Python's digit limit.
     """
     # Read before the `try`, so a bad `YIAN_*` value is raised, as `value_repr` raises it.
     defaults.current()
@@ -1491,6 +1491,8 @@ def _ts_value_repr(value: object) -> str:
 
 # The `value_repr` callers that pass it a name or a key, as `(path under src/yian, co_qualname)`.
 # Design 3.2.8 keeps Python's repr for a name, so a message quoting one reads as in Python.
+# The `_json_value_error` entry also covers its two value sites, which show only non-JSON values
+# (no TS counterpart).
 _NAME_CALLERS = frozenset({
     ("nodes/binding.py", "check_input_names.<locals>.<genexpr>"),
     ("nodes/contracts.py", "validate_output_contract.<locals>.<genexpr>"),
@@ -1549,7 +1551,17 @@ def _install_key_order(patch: pytest.MonkeyPatch, case: dict) -> None:
     patch.setattr(memory, "_tool_text", ordered_tool_text)
     _keep_text_builtins(patch)
     shown = typesys_values.value_repr
-    _patch_held(patch, shown, _ordering(shown))
+
+    @functools.wraps(shown)
+    def ordered_value_repr(value: object) -> str:
+        try:
+            ordered = _js_ordered(value)
+        except RecursionError:
+            # `value_repr` must not raise, so a cyclic or too deep value is shown unordered.
+            return shown(value)
+        return shown(ordered)
+
+    _patch_held(patch, shown, ordered_value_repr)
 
 
 # The shims by name, in install order: a later shim may wrap what an earlier one patched.

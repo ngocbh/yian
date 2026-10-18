@@ -7,12 +7,13 @@
  */
 
 import { ProviderError } from "./errors.ts";
-import { parseJson, type JsonValue } from "../typesys/json.ts";
+import { JSONDecodeError, parseJson, type JsonValue } from "../typesys/json.ts";
 
 const LINE_END = /\r\n|\r|\n/g;
 const LF = 0x0a;
 // The bytes Python's `bytes.strip()` removes: space, tab, LF, CR, VT, FF.
 const ASCII_SPACE = new Set([0x20, 0x09, 0x0a, 0x0d, 0x0b, 0x0c]);
+const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true });
 
 /** One dispatched server-sent event. */
 export class SSEEvent {
@@ -129,11 +130,22 @@ function isBlank(line: Uint8Array): boolean {
 
 /** Parse one NDJSON line, throwing a `ProviderError` that does not echo it. */
 function jsonLine(line: Uint8Array, number: number): JsonValue {
+  let text: string;
   try {
-    return parseJson(new TextDecoder("utf-8", { fatal: true }).decode(line), "plain");
-  } catch {
-    // Thrown below, outside the catch, so the decode error, which can quote the line, is
-    // not kept as a cause.
+    text = STRICT_UTF8.decode(line);
+  } catch (err) {
+    if (!(err instanceof TypeError)) throw err;
+    throw invalidLine(number);
   }
-  throw new ProviderError("protocol", `invalid JSON line ${number} in NDJSON stream`);
+  try {
+    return parseJson(text, "plain");
+  } catch (err) {
+    if (!(err instanceof JSONDecodeError)) throw err;
+    throw invalidLine(number);
+  }
+}
+
+/** Return the error for NDJSON line `number`, which is not valid UTF-8 JSON. */
+function invalidLine(number: number): ProviderError {
+  return new ProviderError("protocol", `invalid JSON line ${number} in NDJSON stream`);
 }

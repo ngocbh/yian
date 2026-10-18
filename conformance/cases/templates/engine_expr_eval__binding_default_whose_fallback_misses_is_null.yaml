@@ -1,0 +1,4 @@
+kind: expr
+template: ${x :- y}
+expect:
+  value: null

@@ -1,0 +1,6 @@
+kind: expr
+expr: join(xs, "-")
+expect:
+  raises:
+    class: ExpressionError
+    message: 'expression function ''join'' failed: join() got null; give a default, e.g. `join(x :- [])`'

@@ -1,0 +1,5 @@
+kind: expr
+template: cost is $$5
+mode: strict
+expect:
+  value: cost is $5

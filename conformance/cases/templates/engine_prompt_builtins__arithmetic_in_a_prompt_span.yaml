@@ -1,0 +1,7 @@
+kind: expr
+template: total ${a + 1}
+values:
+  a: 4
+mode: strict
+expect:
+  value: total 5

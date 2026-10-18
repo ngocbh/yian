@@ -1,0 +1,6 @@
+kind: expr
+template: ${a :? "need a topic"}
+expect:
+  raises:
+    class: RequiredError
+    message: need a topic

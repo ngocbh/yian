@@ -1,0 +1,8 @@
+kind: expr
+expr: join(xs, "-")
+values:
+  xs: [a, null]
+expect:
+  raises:
+    class: ExpressionError
+    message: 'expression function ''join'' failed: join() got a null element; drop or default it before joining'

@@ -1,0 +1,9 @@
+kind: expr
+template: '${count}/${count}: ${instruction}/${empty}'
+values:
+  count: 4
+  instruction: ${input.topic}
+  empty: ''
+mode: strict
+expect:
+  value: '4/4: ${input.topic}/'

@@ -1,0 +1,7 @@
+kind: expr
+template: ${xs + [item]}
+values:
+  xs: [1, 2]
+item: 3
+expect:
+  value: [1, 2, 3]

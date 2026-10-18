@@ -1,0 +1,8 @@
+kind: expr
+expr: upper(n)
+values:
+  n: 3
+expect:
+  raises:
+    class: ExpressionError
+    message: 'expression function ''upper'' failed: upper() takes str, got int'

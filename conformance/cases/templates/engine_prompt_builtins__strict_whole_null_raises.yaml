@@ -1,0 +1,7 @@
+kind: expr
+template: ${null}
+mode: strict
+expect:
+  raises:
+    class: ExpressionError
+    message: null value in strict template

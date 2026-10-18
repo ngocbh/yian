@@ -1,0 +1,6 @@
+kind: expr
+expr: upper(name) == "NONE"
+expect:
+  raises:
+    class: ExpressionError
+    message: 'expression function ''upper'' failed: upper() got null; give a default, e.g. `upper(x :- "")`'

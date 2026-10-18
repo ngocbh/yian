@@ -1,0 +1,7 @@
+kind: expr
+expr: ${upper(s) == "AB"}
+values:
+  s: ab
+mode: condition
+expect:
+  value: true

@@ -1,0 +1,5 @@
+kind: expr
+template: plain
+mode: strict
+expect:
+  value: plain

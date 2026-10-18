@@ -1,0 +1,9 @@
+kind: expr
+template: Hi ${x :? "need x"}
+values:
+  x: null
+mode: strict
+expect:
+  raises:
+    class: RequiredError
+    message: need x

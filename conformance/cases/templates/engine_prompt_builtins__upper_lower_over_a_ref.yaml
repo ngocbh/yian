@@ -1,0 +1,10 @@
+kind: expr
+template: ${upper(name)}/${lower('HI')}
+values:
+  briefs: [ab, adf]
+  name: zeta
+  sig:
+    value: 0.8
+mode: strict
+expect:
+  value: ZETA/hi

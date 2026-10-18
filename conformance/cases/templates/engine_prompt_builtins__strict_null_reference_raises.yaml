@@ -1,0 +1,9 @@
+kind: expr
+template: ${t}
+values:
+  t: null
+mode: strict
+expect:
+  raises:
+    class: ExpressionError
+    message: unresolved reference ${t} in expression

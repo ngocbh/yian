@@ -1,13 +1,20 @@
 /**
- * The `Any` type's shape, labels and overlap, a port of those tests of
- * `tests/engine/test_any_type.py`; value, parsing and compatibility tests come later, as
+ * The `Any` type's shape, labels, overlap and parsing, a port of those tests of
+ * `tests/engine/test_any_type.py`; value, resolution and compatibility tests come later, as
  * does the `readTypedefs` half of `test_any_overlaps_a_list_of_files_through_the_empty_list`.
  * The records written as typedefs there are built by hand here.
  */
 
 import { describe, expect, test } from "bun:test";
 
-import { canonicalTypeLabel, Type, typesOverlap, ValueKind } from "../../src/typesys/values.ts";
+import { parseType } from "../../src/typesys/types.ts";
+import {
+  canonicalTypeLabel,
+  Type,
+  TypeCheckError,
+  typesOverlap,
+  ValueKind,
+} from "../../src/typesys/values.ts";
 
 const ANY = Type.scalar(ValueKind.ANY);
 const OPTIONAL_ANY = new Type({ kind: ValueKind.ANY, nullable: true });
@@ -89,5 +96,16 @@ describe("Any overlap", () => {
   test("Any overlaps a list of files through the empty list", () => {
     const listOfFiles = new Type({ kind: ValueKind.LIST_ANY, element: FILE });
     expect(typesOverlap(ANY, listOfFiles)).toBe(true);
+  });
+});
+
+describe("Any parsing", () => {
+  test("parses as its own scalar", () => {
+    expect(parseType("Any")).toEqual({ kind: "scalar", name: "Any" });
+  });
+
+  test("lowercase any is not a type", () => {
+    expect(() => parseType("any")).toThrow(TypeCheckError);
+    expect(() => parseType("any")).toThrow(/^unknown type 'any'; write Any$/);
   });
 });

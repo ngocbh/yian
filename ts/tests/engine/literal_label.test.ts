@@ -1,13 +1,14 @@
 /**
  * The one spelling every message uses to print a `Literal` type, a port of the hand-built
- * half of `tests/engine/test_literal_label.py`. Later: the read-back and `format_type_expr`
- * asserts (with the parser), `test_nested_literal_labels` (with `typeFor`), the two hint
- * tests (with `readTypedefs`) and `test_case_message_prints_the_parenthesized_literal` (with
- * flow loading).
+ * half of `tests/engine/test_literal_label.py` and its `formatTypeExpr` asserts. Later: the
+ * read-back asserts and `test_nested_literal_labels` (with `typeFor`), the two hint tests
+ * (with `readTypedefs`) and `test_case_message_prints_the_parenthesized_literal` (with flow
+ * loading).
  */
 
 import { describe, expect, test } from "bun:test";
 
+import { formatTypeExpr, parseType } from "../../src/typesys/types.ts";
 import { canonicalTypeLabel, literalLabel, Type, ValueKind } from "../../src/typesys/values.ts";
 
 function lit(...tags: string[]): Type {
@@ -36,8 +37,11 @@ describe("literal labels", () => {
   });
 
   test("both renderers share one spelling", () => {
+    expect(formatTypeExpr({ kind: "enum", tags: ["go", "no_go"] })).toBe("Literal(go, no_go)");
     expect(literalLabel(["go", "no_go"])).toBe("Literal(go, no_go)");
     expect(canonicalTypeLabel(lit("go", "no_go"))).toBe("Literal(go, no_go)");
+    // authored order kept
+    expect(formatTypeExpr(parseType("Literal(b, a)"))).toBe("Literal(b, a)");
   });
 
   test("prints a name bare and quotes the rest, in the given order", () => {

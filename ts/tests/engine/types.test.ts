@@ -1,10 +1,17 @@
 /**
- * The `Type` vocabulary's shape checks, levels and labels, a port of the hand-built half of
- * `tests/engine/test_types.py`; the parser and resolver tests come with `types.ts`.
+ * The `Type` vocabulary's shape checks, levels and labels, and the type-text parser and
+ * `formatTypeExpr`, a port of those tests of `tests/engine/test_types.py`; the bracket
+ * spelling and the resolver tests come later.
  */
 
 import { describe, expect, test } from "bun:test";
 
+import {
+  formatTypeExpr,
+  parseType,
+  type ScalarName,
+  type TypeExpr,
+} from "../../src/typesys/types.ts";
 import {
   type Bounds,
   boundText,
@@ -380,5 +387,416 @@ describe("boundText", () => {
     // bracket-spelling unparse can meet one, and it spells JavaScript's `Infinity`.
     expect(boundText(Infinity)).toBe("Infinity");
     expect(boundText(-Infinity)).toBe("-Infinity");
+  });
+});
+
+// --------------------------------------------------------------------------------------- //
+// The type-text parser
+// --------------------------------------------------------------------------------------- //
+
+const scalar = (name: ScalarName, bounds?: Bounds): TypeExpr =>
+  bounds === undefined ? { kind: "scalar", name } : { kind: "scalar", name, bounds };
+const ref = (name: string): TypeExpr => ({ kind: "ref", name });
+const list = (element: TypeExpr): TypeExpr => ({ kind: "list", element });
+const optional = (inner: TypeExpr): TypeExpr => ({ kind: "optional", inner });
+const literal = (...tags: string[]): TypeExpr => ({ kind: "enum", tags });
+const union = (...members: TypeExpr[]): TypeExpr => ({ kind: "union", members });
+const DICT: TypeExpr = { kind: "dict" };
+
+const UNBALANCED =
+  "unbalanced parentheses — if this type sits inside a `{...}` mapping, its comma split it; " +
+  "quote it or use block style";
+
+/** Return the error `parseType(text)` throws, failing unless it is a `TypeCheckError`. */
+function parseError(text: string): TypeCheckError {
+  try {
+    parseType(text);
+  } catch (error) {
+    expect(error).toBeInstanceOf(TypeCheckError);
+    return error as TypeCheckError;
+  }
+  throw new Error(`parseType(${JSON.stringify(text)}) did not throw`);
+}
+
+/** Return Python's `malformed type expression` message for `src` (no `'` or `\` in it). */
+function malformed(src: string, detail?: string): string {
+  return `malformed type expression '${src}'${detail === undefined ? "" : `: ${detail}`}`;
+}
+
+/** Return the bounds of a parsed range. */
+function boundsOf(expr: TypeExpr): Bounds {
+  if (expr.kind !== "scalar" || expr.bounds === undefined) throw new Error("not a range");
+  return expr.bounds;
+}
+
+describe("parseType", () => {
+  test("scalars", () => {
+    for (const name of ["str", "int", "float", "date", "datetime", "bool", "object"] as const) {
+      expect(parseType(name)).toEqual(scalar(name));
+    }
+    expect(parseType("Any")).toEqual(scalar("Any"));
+  });
+
+  test("lists and topics", () => {
+    expect(parseType("List(float)")).toEqual(list(scalar("float")));
+    expect(parseType("list(str)")).toEqual(list(scalar("str")));
+    expect(parseType("topics")).toEqual(list(scalar("str")));
+    expect(parseType("List(Rating)")).toEqual(list(ref("Rating")));
+    expect(parseType("List(int)")).toEqual(list(scalar("int")));
+    expect(parseType("list(Rating)")).toEqual(list(ref("Rating")));
+  });
+
+  test("references", () => {
+    expect(parseType("Rating")).toEqual(ref("Rating"));
+    expect(parseType("Action")).toEqual(ref("Action"));
+  });
+
+  test("Optional", () => {
+    expect(parseType("Optional(str)")).toEqual(optional(scalar("str")));
+    expect(parseType("Optional(Rating)")).toEqual(optional(ref("Rating")));
+    expect(parseType("Optional(date)")).toEqual(optional(scalar("date")));
+  });
+
+  test("Literal, quoted and unquoted", () => {
+    expect(parseType("Literal(pro, con, mixed)")).toEqual(literal("pro", "con", "mixed"));
+    expect(parseType('Literal("pro", "con")')).toEqual(literal("pro", "con"));
+    expect(parseType("Literal(defer)")).toEqual(literal("defer"));
+  });
+
+  test("the old engine names are registry references", () => {
+    for (const legacy of ["string", "integer", "number", "boolean"]) {
+      expect(parseType(legacy)).toEqual(ref(legacy));
+    }
+  });
+
+  test.each([
+    ["Optional(str)", optional(scalar("str"))],
+    ["list(Buy)", list(ref("Buy"))],
+    ["List(str)", list(scalar("str"))],
+    ["Optional(list(Buy))", optional(list(ref("Buy")))],
+    ["Union(Buy, Sell)", union(ref("Buy"), ref("Sell"))],
+    ["Union(Buy)", union(ref("Buy"))],
+    ["Literal(approve, reject)", literal("approve", "reject")],
+    ['Literal("a b")', literal("a b")],
+    ["Literal('x', y)", literal("x", "y")],
+    ["int(1..12)", scalar("int", [1n, 12n])],
+    ["int(0..1)", scalar("int", [0n, 1n])],
+    ["int(-5..5)", scalar("int", [-5n, 5n])],
+    ["int( 1 .. 12 )", scalar("int", [1n, 12n])],
+    ["float(0.0..1.0)", scalar("float", [0, 1])],
+    ["float(1e-3..2)", scalar("float", [0.001, 2n])],
+    ["int(0..)", scalar("int", [0n, null])],
+    ["int(..100)", scalar("int", [null, 100n])],
+    ["int(-5..)", scalar("int", [-5n, null])],
+    ["float(0.0..)", scalar("float", [0, null])],
+    ["float(..-1.5)", scalar("float", [null, -1.5])],
+    ["int( 0 .. )", scalar("int", [0n, null])],
+    ["int(+4..4)", scalar("int", [4n, 4n])],
+    ["dict(str, int)", DICT],
+    ["Dict(str, Buy)", DICT],
+    ["Any", scalar("Any")],
+    ["None", scalar("None")],
+    ["none", scalar("None")],
+    ["Optional(None)", optional(scalar("None"))],
+    ["topics", list(scalar("str"))],
+    ["Literal('a'\n)", literal("a")],
+  ] as const)("parenthesized syntax %p", (text, expr) => {
+    expect(parseType(text)).toEqual(expr);
+  });
+
+  test("an int end keeps every digit", () => {
+    const large = 10n ** 400n;
+    expect(parseType(`int(${large}..)`)).toEqual(scalar("int", [large, null]));
+    expect(parseType(`int(${-large}..${large})`)).toEqual(scalar("int", [-large, large]));
+  });
+
+  test("a -0 float end is stored as 0", () => {
+    // Python keeps -0.0; a -0 end never reaches a manifest or fingerprint here.
+    expect(Object.is(boundsOf(parseType("float(-0.0..1)"))[0], 0)).toBe(true);
+    expect(formatTypeExpr(parseType("float(-0.0..1)"))).toBe("float(0.0..1)");
+  });
+
+  test.each([
+    ["int(..)", malformed("int(..)", "a range needs at least one end; write int for any int")],
+    [
+      "float(..)",
+      malformed("float(..)", "a range needs at least one end; write float for any float"),
+    ],
+    [
+      "int()",
+      malformed("int()", "a numeric range needs `..`, e.g. int(1..12), int(0..), or int(..100)"),
+    ],
+    [
+      "int(1)",
+      malformed("int(1)", "a numeric range needs `..`, e.g. int(1..12), int(0..), or int(..100)"),
+    ],
+    [
+      "float(0)",
+      malformed(
+        "float(0)",
+        "a numeric range needs `..`, e.g. float(0.0..1.0), float(0.0..), or float(..1.0)",
+      ),
+    ],
+    ["int(1..2..)", malformed("int(1..2..)", "a range takes one lo..hi, e.g. int(1..12)")],
+    ["float(..1e999)", "invalid bounds in 'float(..1e999)': float bounds require finite endpoints"],
+    [
+      "float(1e999..2)",
+      "invalid bounds in 'float(1e999..2)': float bounds require finite endpoints",
+    ],
+    [
+      "int(1.5..)",
+      "invalid bounds in 'int(1.5..)': int bounds require exact numeric endpoints, excluding bool",
+    ],
+    [
+      "int(..1.0)",
+      "invalid bounds in 'int(..1.0)': int bounds require exact numeric endpoints, excluding bool",
+    ],
+    [
+      "int(1.5..2)",
+      "invalid bounds in 'int(1.5..2)': int bounds require exact numeric endpoints, excluding bool",
+    ],
+    ["int(1, 12)", malformed("int(1, 12)", "write a range: int(1..12)")],
+    [
+      "int(3..1)",
+      "invalid bounds in 'int(3..1)': type bounds must be ordered from minimum to maximum",
+    ],
+    ["Buy | Sell", malformed("Buy | Sell", "use Union(Buy, Sell) (| is not a type operator)")],
+    [
+      "Union(Buy, None)",
+      "None is not a union member in 'Union(Buy, None)'; use Optional(Union(...))",
+    ],
+    ["Optional(str", malformed("Optional(str", UNBALANCED)],
+    ["Optional(str))", malformed("Optional(str))", UNBALANCED)],
+    [
+      "Literal(True)",
+      "invalid Literal member in 'Literal(True)' (use names or quoted strings)",
+    ],
+    [
+      "Literal(None)",
+      "invalid Literal member in 'Literal(None)' (use names or quoted strings)",
+    ],
+    ["Literal(1)", "invalid Literal member in 'Literal(1)' (use names or quoted strings)"],
+    [
+      "Literal(a(b))",
+      "invalid Literal member in 'Literal(a(b))' (use names or quoted strings)",
+    ],
+    ["Literal(a b)", malformed("Literal(a b)")],
+    [
+      'Literal("")',
+      "empty Literal member in 'Literal(\"\")' (tags must be non-empty names or quoted strings)",
+    ],
+    ["Literal()", malformed("Literal()", "Literal(...) needs a member")],
+    ["Union()", malformed("Union()", "Union(...) needs a type")],
+    ["list()", malformed("list()", "list(...) needs a type")],
+    ["dict()", malformed("dict()", "dict(...) needs a type")],
+    ["Optional(str, int)", malformed("Optional(str, int)", "Optional(...) takes one type")],
+    ["dict(str)", malformed("dict(str)", "dict(...) takes 2 types")],
+    ["Foo(int)", "unknown type constructor 'Foo' in 'Foo(int)'"],
+    ["bool(0..1)", "unknown type constructor 'bool' in 'bool(0..1)'"],
+    ["", malformed("")],
+    ["   ", malformed("")],
+    ["True", malformed("True")],
+    ["int(1..2) str", malformed("int(1..2) str")],
+    ["float(0..None)", "numeric bounds require literal endpoints in 'float(0..None)'"],
+    ["int(lo..hi)", "numeric bounds require literal endpoints in 'int(lo..hi)'"],
+    ["int(1 + 1..3)", malformed("int(1 + 1..3)")],
+    // `[` is no token; the bracket spelling's own message is not ported yet.
+    ["list[str]", malformed("list[str]")],
+  ] as const)("error for %p", (text, message) => {
+    expect(parseError(text).message).toBe(message);
+  });
+
+  test("rejects a raw Unicode surrogate", () => {
+    expect(parseError('Literal("\ud800")').message).toBe(
+      String.raw`type expression 'Literal("\ud800")' contains a Unicode surrogate ` +
+        "(types must be valid UTF-8 text)",
+    );
+  });
+
+  test("malformed text", () => {
+    expect(parseError("list(").message).toBe(malformed("list(", UNBALANCED));
+    // a number literal is not a type
+    expect(parseError("123").message).toBe(malformed("123"));
+  });
+
+  test.each([
+    "int()", "int(1)", "int(1..2..3)", "float(0)", "float(0..1..2)",
+    "int(2..1)", "float(2.0..1.0)", "int(True..2)", "int(0..False)",
+    "float(False..1)", "float(0..True)", "int(1.0..2)", "int(1..2.0)",
+    "float(0..1e999)", "float(-1e999..0)", "float(nan..1)", "float(0..inf)",
+    "int('1'..2)", "float(0..None)", "int(1 + 1..3)", "int(-(1 + 1)..3)",
+    "float(0..float('inf'))", "int(lo..hi)", "int(1:2)", "int((1..2))",
+    "int(--1..2)", "float(0j..1)", "bool(0..1)", "str(1..2)",
+  ])("numeric bounds reject a nonliteral or malformed end: %p", (text) => {
+    parseError(text);
+  });
+
+  test("a bracket inside a quoted Literal member is text", () => {
+    expect(parseType('Literal("a[0]")')).toEqual(literal("a[0]"));
+  });
+
+  test.each([
+    ['Literal("a[b")', ["a[b"]],
+    ['Literal("x", "[")', ["x", "["]],
+    ["Literal('a]b', c)", ["a]b", "c"]],
+  ] as const)("brackets inside quoted members stay parenthesized: %p", (text, tags) => {
+    expect(parseType(text)).toEqual(literal(...tags));
+  });
+
+  test("deep nesting is a TypeCheckError", () => {
+    expect(parseError("Optional(".repeat(300) + "str" + ")".repeat(300)).message).toBe(
+      "type nested too deeply in 'Optional(Optional(Optional(Optional(Opti'... " +
+        "(at most 100 levels)",
+    );
+  });
+
+  test("moderate nesting parses", () => {
+    const text = "Optional(".repeat(30) + "str" + ")".repeat(30);
+    expect(formatTypeExpr(parseType(text))).toBe(text);
+  });
+
+  test.each([
+    ["Optional(", "'Optional('"],
+    ["list(", "'list('"],
+    // the text is trimmed first
+    ["Union(A, ", "'Union(A,'"],
+    ["int(1", "'int(1'"],
+    ["int(1..", "'int(1..'"],
+    ["int(1..2", "'int(1..2'"],
+    ["Literal(", "'Literal('"],
+    ['Literal("a', `'Literal("a'`],
+    ['Union(A, Literal("x', `'Union(A, Literal("x'`],
+    ["Optional(Literal('x", `"Optional(Literal('x"`],
+    // the closing `)` is quoted, so `_expect` finds the end
+    ['Literal("a)"', `'Literal("a)"'`],
+  ])("input ending inside parentheses hints unbalanced: %p", (text, quoted) => {
+    expect(parseError(text).message).toBe(`malformed type expression ${quoted}: ${UNBALANCED}`);
+  });
+
+  test.each([
+    // ASCII digits only
+    ["int(١..٣)", malformed("int(١..٣)")],
+    ["int(1..12, 3)", malformed("int(1..12, 3)", "a range takes one lo..hi, e.g. int(1..12)")],
+    ["int(1..2..3)", malformed("int(1..2..3)", "a range takes one lo..hi, e.g. int(1..12)")],
+    ["Literal(a,)", malformed("Literal(a,)", "remove the trailing comma in Literal(...)")],
+    ["Union(A,)", malformed("Union(A,)", "remove the trailing comma in Union(...)")],
+    ["list(str,)", malformed("list(str,)", "remove the trailing comma in list(...)")],
+    ['"abc', malformed('"abc')],
+  ])("more syntax errors: %p", (text, message) => {
+    expect(parseError(text).message).toBe(message);
+  });
+
+  test("error precedence", () => {
+    // The tokenizer fails at `$` before the `|` is read.
+    expect(parseError("Union(A | B, $)").message).toBe(malformed("Union(A | B, $)"));
+    // A quoted `)` still counts, so the parentheses balance and the error is bare.
+    expect(parseError('Literal("a)",').message).toBe(malformed('Literal("a)",'));
+    // The None member is checked before the trailing token.
+    expect(parseError("Union(A, None) x").message).toBe(
+      "None is not a union member in 'Union(A, None) x'; use Optional(Union(...))",
+    );
+  });
+
+  test.each([
+    ["int(1.0, 2)", "int(1..12)"],
+    ["float(0.5, 2)", "float(0.5..2)"],
+    ["int(0,)", "int(0..)"],
+    ["int(,100)", "int(..100)"],
+    ["int(,)", "int(1..12)"],
+    // float ends in Python's spelling
+    ["float(1.0, 2)", "float(1.0..2)"],
+    ["float(1e-5, 0.5)", "float(1e-05..0.5)"],
+  ])("the two-argument range hint suggests only a valid range: %p", (text, range) => {
+    expect(parseError(text).message).toBe(malformed(text, `write a range: ${range}`));
+  });
+});
+
+describe("parseType: quoted Literal members", () => {
+  test.each([
+    [String.raw`Literal("a\tb", 'it\'s', "é")`, ["a\tb", "it's", "é"]],
+    [String.raw`Literal("\"q\"", "\\")`, ['"q"', "\\"]],
+    [String.raw`Literal("\b\f\n\r\té")`, ["\b\f\n\r\té"]],
+    // Python keeps the backslash: `a\/b`.
+    [String.raw`Literal("a\/b")`, ["a/b"]],
+    // A JSON high-low pair is one character; Python refuses it as two surrogates.
+    [String.raw`Literal("\ud83d\ude00")`, ["😀"]],
+    ['Literal("😀")', ["😀"]],
+    // A raw TAB is part of the tag.
+    ['Literal("a\tb")', ["a\tb"]],
+  ] as const)("decodes %p", (text, tags) => {
+    expect(parseType(text)).toEqual(literal(...tags));
+  });
+
+  test.each([
+    [String.raw`Literal("\ud800")`, String.raw`'\ud800' in 'Literal("\\ud800")'`],
+    [String.raw`Literal("\ude00")`, String.raw`'\ude00' in 'Literal("\\ude00")'`],
+    [String.raw`Literal("\ud83dx")`, String.raw`'\ud83dx' in 'Literal("\\ud83dx")'`],
+  ])("an escaped lone surrogate is refused: %p", (text, quoted) => {
+    expect(parseError(text).message).toBe(
+      `Literal member ${quoted} contains a Unicode surrogate (tags must be valid UTF-8 text)`,
+    );
+  });
+
+  const invalid = (c: string) =>
+    `invalid escape '\\${c}' in a quoted Literal member (use JSON escapes)`;
+
+  test.each([
+    // Python decodes these three: `A`, `•`, and `\d` kept as written.
+    [String.raw`Literal("\x41")`, String.raw`'Literal("\\x41")'`, invalid("x")],
+    [String.raw`Literal("\N{BULLET}")`, String.raw`'Literal("\\N{BULLET}")'`, invalid("N")],
+    [String.raw`Literal("\d")`, String.raw`'Literal("\\d")'`, invalid("d")],
+    // A backslash before U+2028 is an escape (Python keeps it as text).
+    ['Literal("a\\\u2028b")', String.raw`'Literal("a\\\u2028b")'`, invalid("\u2028")],
+    [
+      String.raw`Literal("\u12")`,
+      String.raw`'Literal("\\u12")'`,
+      String.raw`'\u' needs four hex digits in a quoted Literal member`,
+    ],
+    [
+      'Literal("a\nb")',
+      String.raw`'Literal("a\nb")'`,
+      "a quoted Literal member can't hold a line break",
+    ],
+    [
+      'Literal("a\rb")',
+      String.raw`'Literal("a\rb")'`,
+      "a quoted Literal member can't hold a line break",
+    ],
+  ])("rejects %p", (text, quoted, detail) => {
+    expect(parseError(text).message).toBe(`malformed type expression ${quoted}: ${detail}`);
+  });
+
+  test("every printed member reads back", () => {
+    const tags = ["a\tb", 'say "hi"', "\\", "it's", "\u2028", "😀", "True", "a b"];
+    expect(parseType(formatTypeExpr(literal(...tags)))).toEqual(literal(...tags));
+  });
+});
+
+describe("formatTypeExpr", () => {
+  test.each([
+    "Optional(list(Buy))",
+    "Union(Buy, Sell)",
+    "Literal(a, b)",
+    "int(1..12)",
+    "float(0.0..1.0)",
+    "int(-5..5)",
+  ])("round-trips %p", (text) => {
+    expect(formatTypeExpr(parseType(text))).toBe(text);
+  });
+
+  test("spells float ends as Python does and keeps an int end an int", () => {
+    expect(formatTypeExpr(parseType("float(1e-3..2)"))).toBe("float(0.001..2)");
+    expect(formatTypeExpr(parseType("float(1e-5..1e16)"))).toBe("float(1e-05..1e+16)");
+  });
+
+  test("normalizes spacing and signs", () => {
+    expect(formatTypeExpr(parseType("Optional(Union(Buy,Sell))"))).toBe(
+      "Optional(Union(Buy, Sell))",
+    );
+    expect(formatTypeExpr(parseType("int( -2 .. +4 )"))).toBe("int(-2..4)");
+  });
+
+  test("prints a dict as dict", () => {
+    expect(formatTypeExpr(parseType("dict(str, int)"))).toBe("dict");
   });
 });

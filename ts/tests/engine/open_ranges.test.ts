@@ -1,16 +1,18 @@
 /**
- * One-sided numeric ranges' shape, labels and overlap, a port of those tests of
- * `tests/engine/test_open_ranges.py`; value checks and parsing come later.
+ * One-sided numeric ranges' shape, labels, overlap and parsing, a port of those tests of
+ * `tests/engine/test_open_ranges.py`; value checks and resolution come later.
  * `test_numeric_interval_maps_open_ends_to_infinity` is not ported (design 3.2.12: open ends
  * stay `null`).
  */
 
 import { describe, expect, test } from "bun:test";
 
+import { formatTypeExpr, parseType } from "../../src/typesys/types.ts";
 import {
   type Bounds,
   canonicalTypeLabel,
   Type,
+  TypeCheckError,
   typesOverlap,
   ValueKind,
 } from "../../src/typesys/values.ts";
@@ -69,5 +71,25 @@ describe("open range labels and overlap", () => {
     expect(typesOverlap(range([0n, null]), range([null, 0n]))).toBe(true);
     expect(typesOverlap(range([1n, null]), range([null, 0n]))).toBe(false);
     expect(typesOverlap(range([5n, null]), Type.scalar(INT))).toBe(true);
+  });
+});
+
+describe("open range parsing", () => {
+  test.each([
+    "int(0..)",
+    "int(..100)",
+    "float(0.0..)",
+    "float(..-1.5)",
+    "Optional(int(0..))",
+    "list(float(..1.0))",
+  ])("round-trips %p", (text) => {
+    expect(formatTypeExpr(parseType(text))).toBe(text);
+  });
+
+  test("neither end says write the plain type", () => {
+    expect(() => parseType("int(..)")).toThrow(TypeCheckError);
+    expect(() => parseType("int(..)")).toThrow(
+      "malformed type expression 'int(..)': a range needs at least one end; write int for any int",
+    );
   });
 });

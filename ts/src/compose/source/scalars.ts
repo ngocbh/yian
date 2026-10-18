@@ -10,7 +10,9 @@
  * `date`/`datetime` grammar, so a date-shaped plain scalar that is not a real date or
  * time, such as `2026-13-45` or an offset of `+05:99`, is an error that says to quote it.
  * `composeFlowDocument` composes the text and resolves its aliases; a document nested deeper
- * than `current().maxYamlNesting` levels is a located `FlowLoaderError`.
+ * than `current().maxYamlNesting` levels, or one that expands to more than
+ * `current().maxYamlNodes` nodes when each alias counts as a copy of what it names, is a
+ * located `FlowLoaderError`.
  *
  * Knows about:   yaml, defaults, diagnostics, typesys.
  * Never imports: compose helpers or phases, nodes, compile, runtime, the run boundary,
@@ -145,7 +147,11 @@ export type FlowParseOptions = Pick<ParseOptions, "lineCounter" | "keepSourceTok
  * @throws YAMLError when the text is not valid YAML and its first error comes before any
  *   problem below.
  * @throws FlowLoaderError at an alias with no anchor before it, or at the first mapping or
- *   list nested deeper than `current().maxYamlNesting` levels.
+ *   list nested deeper than `current().maxYamlNesting` levels. Otherwise at the first mapping
+ *   or list, in post-order, that holds more than `current().maxYamlNodes` nodes, counting
+ *   each alias as a copy of what it names (each mapping, list, and scalar, mapping keys
+ *   included, counts once per place it appears); under a recursive alias, at the deepest
+ *   node on the path already over the limit once the count would need repeating.
  */
 export function composeFlowDocument(text: string, options: FlowParseOptions = {}): FlowDocument {
   const document = parseDocument(text, { ...FLOW_OPTIONS, ...options });
@@ -203,7 +209,114 @@ export function composeFlowDocument(text: string, options: FlowParseOptions = {}
     throw refused.error;
   }
   if (first !== undefined) throw first;
+
+  // Aliases let a short document name exponentially many nodes, and every later step
+  // (construction, walking, the run log) costs per expanded node, so the composed
+  // tree is counted before anything else touches it.
+  //
+  // A recursive alias is a back edge to a node still on the path. It counts 1 (the
+  // alias itself), and the source layer reports it when something descends through
+  // it. Its count makes every node on the cycle, from its target down to it,
+  // path-dependent: reached from outside the cycle, the loader's walkers expand that
+  // target in full, and reached from inside it, the target is the back edge. So a node
+  // is memoized only when no back edge below it reaches it or above it (its `low`, the
+  // shallowest path depth such an edge reaches, is deeper than its own depth), and a
+  // path-dependent node is counted again at each visit. Every step adds at least 1 to
+  // `counted`, the nodes counted so far, so once that passes the limit the document
+  // is over it; a recount then would only repeat work, so the walk stops there and
+  // reports the deepest node on the path already holding more than the limit.
+  const root = document.contents;
+  if (root !== null) {
+    const limit = limits.maxYamlNodes;
+    const counts = new Map<Node, number>();
+    const pathDependent = new Set<Node>();
+    // The depth of each node on the path.
+    const depths = new Map<Node, number>([[root, 0]]);
+    let counted = 1;
+    let over: Node | null = null;
+    // Each frame: the node, its children, the next child's index, its count so far,
+    // and its `low`, which starts one deeper than the node.
+    const stack: [Node, (Node | null)[], number, number, number][] = [
+      [root, children(root, aliasTargets), 0, 1, 1],
+    ];
+    while (stack.length > 0) {
+      const frame = stack.at(-1)!;
+      const [node, nodeChildren, index, total, low] = frame;
+      if (index < nodeChildren.length) {
+        frame[2] = index + 1;
+        const child = nodeChildren[index] ?? null;
+        // A missing key or value is an empty scalar: one node, with no children.
+        if (child === null) {
+          frame[3] = total + 1;
+          counted += 1;
+        } else if (counts.has(child)) {
+          const count = counts.get(child)!;
+          frame[3] = total + count;
+          counted += count;
+        } else if (depths.has(child)) {
+          frame[3] = total + 1;
+          frame[4] = Math.min(low, depths.get(child)!);
+          counted += 1;
+        } else if (counted > limit && pathDependent.has(child)) {
+          let partial = 0;
+          for (let i = stack.length - 1; i >= 0; i--) {
+            const held = stack[i]!;
+            partial += held[3];
+            if (partial > limit) {
+              over = held[0];
+              break;
+            }
+          }
+          break;
+        } else {
+          depths.set(child, stack.length);
+          stack.push([child, children(child, aliasTargets), 0, 1, stack.length + 1]);
+          counted += 1;
+        }
+        continue;
+      }
+      stack.pop();
+      depths.delete(node);
+      if (low > stack.length) counts.set(node, total);
+      else pathDependent.add(node);
+      if (total > limit) {
+        over = node;
+        break;
+      }
+      const parent = stack.at(-1);
+      if (parent !== undefined) {
+        parent[3] += total;
+        parent[4] = Math.min(parent[4], low);
+      }
+    }
+    if (over !== null) {
+      const kind = isSeq(over) ? "list" : "mapping";
+      throw new FlowLoaderError(
+        `this ${kind} holds more than ${limit} YAML nodes, counting each alias as a copy ` +
+          `of what it names; the limit for a YAML document is ${limit} ` +
+          "(YIAN_MAX_YAML_NODES; each mapping, list, and scalar is a node)",
+        over,
+      );
+    }
+  }
   return { document, aliasTargets };
+}
+
+/**
+ * Return a node's children for the node count: a list's items, or each pair's key and
+ * value, with each alias replaced by the node it names and `null` for a missing key or
+ * value; none for a scalar.
+ */
+function children(node: Node, aliasTargets: ReadonlyMap<Alias, Node>): (Node | null)[] {
+  const items: unknown[] = isSeq(node)
+    ? node.items
+    : isMap(node)
+      ? node.items.flatMap((pair) => [pair.key, pair.value])
+      : [];
+  return items.map((item) => {
+    const child = (item ?? null) as Node | null;
+    return isAlias(child) ? aliasTargets.get(child)! : child;
+  });
 }
 
 /**

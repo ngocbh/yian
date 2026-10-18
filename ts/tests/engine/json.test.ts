@@ -194,4 +194,50 @@ describe("parseJson", () => {
     for (let i = 0; i < n; i++) leaf = (leaf as Record<string, JsonValue>).a!;
     expect(leaf).toBe(1n);
   });
+
+  test("decodes the codec form in codec mode only", () => {
+    const text = '[{"$float":"inf"},{"$float":"-inf"},{"$float":"nan"},{"$float":"inf","b":1}]';
+    expect(parseJson(text, "codec")).toEqual([Infinity, -Infinity, { $float: "nan" }, { $float: "inf", b: 1n }]);
+    expect(parseJson(text, "plain")).toEqual([
+      { $float: "inf" },
+      { $float: "-inf" },
+      { $float: "nan" },
+      { $float: "inf", b: 1n },
+    ]);
+  });
+
+  test("unwraps $record escapes in codec mode only", () => {
+    const cases: [string, JsonValue, JsonValue][] = [
+      ['{"$record":{"$float":"inf"}}', { $float: "inf" }, { $record: { $float: "inf" } }],
+      ['{"$record":{"$record":{"$float":"inf"}}}', { $record: Infinity }, { $record: { $record: { $float: "inf" } } }],
+      ['{"$record":{"$record":5}}', { $record: 5n }, { $record: { $record: 5n } }],
+      ['{"$record":5}', { $record: 5n }, { $record: 5n }],
+      ['{"$record":null}', { $record: null }, { $record: null }],
+      ['{"$record":[1]}', { $record: [1n] }, { $record: [1n] }],
+      ['{"$record":{"$record":{"a":1}}}', { $record: { a: 1n } }, { $record: { $record: { a: 1n } } }],
+      ['{"$record":{}}', {}, { $record: {} }],
+      [
+        '{"$record":{"a":1},"b":{"$float":"inf"}}',
+        { $record: { a: 1n }, b: Infinity },
+        { $record: { a: 1n }, b: { $float: "inf" } },
+      ],
+    ];
+    for (const [text, codec, plain] of cases) {
+      expect(parseJson(text, "codec")).toEqual(codec);
+      expect(parseJson(text, "plain")).toEqual(plain);
+    }
+  });
+
+  test("decodes at any depth", () => {
+    const n = 100_000;
+    let node = parseJson('{"$record":'.repeat(n) + '{"a":1}' + "}".repeat(n), "codec");
+    // Each escape pair is one record level; walk them rather than compare a deep value.
+    let levels = 0;
+    while (typeof node === "object" && node !== null && Object.keys(node).join() === "$record") {
+      levels++;
+      node = (node as Record<string, JsonValue>).$record!;
+    }
+    expect(levels).toBe(n / 2);
+    expect(node).toEqual({ a: 1n });
+  });
 });

@@ -50,14 +50,14 @@ export class JSONDecodeError extends Error {
 /** An open array or object while reading. */
 interface Frame {
   container: JsonValue[] | JsonObject;
-  /** The index of the opening bracket. */
-  start: number;
   /** In an object, the key whose value is being read. */
   key?: string;
   /** The index of `key`'s opening quote. */
   keyStart?: number;
   /** The first key seen twice and the index of its second quote, reported as the object closes. */
   duplicate?: { key: string; position: number };
+  /** In an object, the raw form of the value under `$record`, for the escape check as it closes. */
+  recordRaw?: JsonValue;
 }
 
 // Python's `NUMBER_RE`; the fraction and exponent are optional, so `1.` matches `1`.
@@ -191,8 +191,31 @@ function scanKey(text: string, pos: number, frame: Frame): number {
 }
 
 /**
+ * Return what `object`, just closed in codec mode, decodes to: `±Infinity` for exactly
+ * `{"$float": "inf"}` or `{"$float": "-inf"}`, the record for a `{"$record": <object>}` escape
+ * (`recordRaw` is that object as built), else `object` itself.
+ */
+function decodeCodec(object: JsonObject, recordRaw: JsonValue | undefined): JsonValue {
+  const keys = Object.keys(object);
+  if (keys.length !== 1) return object;
+  if (keys[0] === "$record") {
+    // The escape takes the inner object as built, not its decoded form: yian escapes a record
+    // that is itself shaped like the tag or an escape. A non-object under `$record` is a plain record.
+    const isObject = typeof recordRaw === "object" && recordRaw !== null && !Array.isArray(recordRaw);
+    return isObject ? recordRaw : object;
+  }
+  if (keys[0] === "$float") {
+    if (object["$float"] === "inf") return Infinity;
+    if (object["$float"] === "-inf") return -Infinity;
+  }
+  return object;
+}
+
+/**
  * Return the value `text` holds; throw `JSONDecodeError` when it isn't JSON yian reads.
- * `codec` reads as `plain` until codec decoding is added.
+ * In `codec` mode each object is decoded as it closes: exactly `{"$float": "inf"}` or
+ * `{"$float": "-inf"}` reads as `±Infinity`, and `{"$record": X}` with `X` an object reads as the
+ * record `X` (its members decoded, `X` itself not).
  */
 export function parseJson(text: string, mode: JsonMode): JsonValue {
   if (text.charCodeAt(0) === 0xfeff) {
@@ -201,14 +224,17 @@ export function parseJson(text: string, mode: JsonMode): JsonValue {
   const stack: Frame[] = [];
   let pos = skipSpace(text, 0);
   for (;;) {
-    // Read the value at `pos`, or open a container and go on to its first value.
+    // Read the value at `pos`, or open a container and go on to its first value. `value` is
+    // the decoded form a parent's slot holds; `raw` is the value as built.
     let value: JsonValue;
+    let raw: JsonValue;
     const c = text.charAt(pos);
     if (c === "[" || c === "{") {
-      const frame: Frame = { container: c === "[" ? [] : {}, start: pos };
+      const frame: Frame = { container: c === "[" ? [] : {} };
       pos = skipSpace(text, pos + 1);
       if (text.charAt(pos) === (c === "[" ? "]" : "}")) {
-        value = frame.container;
+        // An empty container decodes to itself.
+        value = raw = frame.container;
         pos++;
       } else {
         stack.push(frame);
@@ -217,6 +243,7 @@ export function parseJson(text: string, mode: JsonMode): JsonValue {
       }
     } else {
       [value, pos] = scanScalar(text, pos);
+      raw = value;
     }
     // Add the value to its container, closing each container it completes.
     for (;;) {
@@ -240,6 +267,7 @@ export function parseJson(text: string, mode: JsonMode): JsonValue {
         } else {
           container[key] = value;
         }
+        if (key === "$record") frame.recordRaw = raw;
       }
       pos = skipSpace(text, pos);
       const next = text.charAt(pos);
@@ -257,7 +285,8 @@ export function parseJson(text: string, mode: JsonMode): JsonValue {
         throw new JSONDecodeError(`duplicate JSON object key: ${JSON.stringify(key)}`, text, position);
       }
       stack.pop();
-      value = container;
+      raw = container;
+      value = mode === "codec" && !isArray ? decodeCodec(container, frame.recordRaw) : container;
       pos++;
     }
   }

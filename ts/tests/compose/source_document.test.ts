@@ -71,6 +71,8 @@ describe("a character the reader refuses", () => {
     const error = refusal(`first: ok${lineBreak}bad:\x00 value\n`);
 
     expect(error.message).toBe(MESSAGE);
+    // Python gives (2, 5, 2, 6): PyYAML also breaks lines at NEL, U+2028 and U+2029
+    // (`rule: columns`).
     expect(error.range).toEqual(new SourceRange(1, 15, 1, 16));
   });
 
@@ -183,6 +185,8 @@ describe("nonTextKey", () => {
     expect(found?.range).toEqual(range);
   });
 
+  // Python gives one column earlier: eemeli puts an empty node after the space, PyYAML
+  // before it (`rule: yaml`).
   test.each([
     ["explicit", "? \n: x\n", new SourceRange(1, 3, 1, 3)],
     ["flow", "{? : x}\n", new SourceRange(1, 4, 1, 4)],
@@ -215,6 +219,13 @@ describe("repeatedKey", () => {
   test("is not two pairs keyed by one alias target", () => {
     expect(SourceDocument.parse("x: &k a\ny: {*k : 1, *k : 2}").repeatedKey).toBeNull();
   });
+});
+
+test("a list or mapping key is refused", () => {
+  const error = refusal("[a]: 1\n");
+
+  expect(error.message).toBe("a list or mapping can't be a mapping key; mapping keys must be text");
+  expect(error.range).toEqual(new SourceRange(1, 1, 1, 2));
 });
 
 test("a missing value is null", () => {

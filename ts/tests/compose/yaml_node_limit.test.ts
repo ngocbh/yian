@@ -5,7 +5,7 @@
  * Every mapping, list, and scalar node (mapping keys included) counts once per place it
  * appears, so an alias, and a `<<:` merge source, counts every node it names again. The
  * `load_flow` cases, with their frames, come with the loader, and the `SourceDocument` merge
- * case with merges: there each text is composed directly, and the error node's line stands in
+ * case with merges; here each text is composed directly, and the error node's line stands in
  * for the frame's line.
  */
 

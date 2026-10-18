@@ -8,6 +8,7 @@
  */
 
 import {
+  type Alias,
   isAlias,
   isMap,
   isScalar,
@@ -32,6 +33,7 @@ import {
   SourceSyntaxError,
 } from "./common.ts";
 import {
+  type AnchoredNode,
   composeFlowDocument,
   constructScalar,
   type FlowDocument,
@@ -198,34 +200,36 @@ function build(flow: FlowDocument, starts: readonly number[]): Built {
   let nonTextKey: NonTextKey | null = null;
   let nonTextKeyAt = 0;
 
-  const reserve = (node: Node | null, value: Value): number => {
+  const reserve = (node: AnchoredNode, value: Value): number => {
     const id = definitions.length;
-    if (node !== null) ids.set(node, id);
+    ids.set(node, id);
     definitions.push(null);
     values.push(value);
     return id;
   };
-  const intern = (written: ParsedNode | null, missingAt = 0): number => {
-    if (written === null) {
-      // A missing value, as in `{a}`: an empty plain scalar where the key ends.
-      const id = reserve(null, null);
-      definitions[id] = Object.freeze({
+  /** Intern a missing value, as in `{a}`: an empty plain scalar at offset `at`. */
+  const internMissing = (at: number): number => {
+    const id = definitions.length;
+    definitions.push(
+      Object.freeze({
         kind: "scalar",
         value: null,
-        range: toRange(starts, missingAt, missingAt),
+        range: toRange(starts, at, at),
         raw: "",
         constructedLineRanges: null,
         style: "plain",
         tag: null,
-      });
-      return id;
-    }
-    const node = isAlias(written) ? aliasTargets.get(written)! : written;
+      }),
+    );
+    values.push(null);
+    return id;
+  };
+  const intern = (written: ParsedNode): number => {
+    const node = target(aliasTargets, written);
     const known = ids.get(node);
     if (known !== undefined) return known;
     const range = toRange(starts, node.range[0], node.range[1]);
     if (isScalar(node)) {
-      const id = reserve(node, null);
       const text = node.source;
       const plain = node.type === Scalar.PLAIN;
       let value: ScalarValue;
@@ -237,7 +241,7 @@ function build(flow: FlowDocument, starts: readonly number[]): Built {
         }
         throw error;
       }
-      values[id] = value;
+      const id = reserve(node, value);
       definitions[id] = Object.freeze({
         kind: "scalar",
         value,
@@ -275,24 +279,27 @@ function build(flow: FlowDocument, starts: readonly number[]): Built {
       const arcs: MapArc[] = [];
       const effectiveIndex = new Map<string, MapOccurrence>();
       for (const pair of node.items) {
-        const keyNode = isAlias(pair.key) ? aliasTargets.get(pair.key)! : pair.key;
+        const keyNode = target(aliasTargets, pair.key);
         if (!isScalar(keyNode)) {
           throw new SourceSyntaxError(
             "a list or mapping can't be a mapping key; mapping keys must be text",
             pointRange(starts, keyNode.range[0]),
           );
         }
-        const keyDefinition = intern(pair.key);
-        const valueDefinition = intern(pair.value, pair.key.range[1]);
-        const keyDef = definitions[keyDefinition] as ScalarDef;
-        const key = keyText(keyDef);
+        const keyDefinition = intern(keyNode);
+        // A missing value sits where the key ends.
+        const valueDefinition =
+          pair.value === null ? internMissing(pair.key.range[1]) : intern(pair.value);
+        const keyScalar = definitions[keyDefinition] as ScalarDef;
+        const key = keyText(keyScalar);
         // Fills don't run in document order, so the key that starts first wins; an alias
         // key is its anchored node.
         if (
-          typeof keyDef.value !== "string" &&
+          typeof keyScalar.value !== "string" &&
           (nonTextKey === null || keyNode.range[0] < nonTextKeyAt)
         ) {
-          nonTextKey = { key: keyDef.value as NonTextKey["key"], text: key, range: keyDef.range! };
+          const keyValue = keyScalar.value as NonTextKey["key"];
+          nonTextKey = { key: keyValue, text: key, range: keyScalar.range! };
           nonTextKeyAt = keyNode.range[0];
         }
         const arc: MapArc = Object.freeze({ key, keyDefinition, valueDefinition });
@@ -324,8 +331,8 @@ function build(flow: FlowDocument, starts: readonly number[]): Built {
   // length at each step.
   for (const fill of fills) fill();
   const built = definitions as Definition[];
-  // A value only a repeated key's earlier pair holds is not reachable from the root.
-  freezeValue(built[0]!.value);
+  // A value only a repeated key's earlier pair holds is not reachable from the root, so
+  // every definition's value is frozen, the root's first.
   for (const definition of built) {
     if (typeof definition.value === "object" && !Object.isFrozen(definition.value)) {
       freezeValue(definition.value);
@@ -348,7 +355,7 @@ function firstRepeatedKey(
   const seen = new Set<Node>();
   while (stack.length > 0) {
     const written = stack.pop()!;
-    const node = isAlias(written) ? aliasTargets.get(written)! : written;
+    const node = target(aliasTargets, written);
     if (seen.has(node)) continue;
     seen.add(node);
     if (isSeq(node)) {
@@ -358,15 +365,15 @@ function firstRepeatedKey(
     if (!isMap(node)) continue;
     const firstKeys = new Map<string, Node>();
     for (const pair of node.items) {
-      const keyNode = isAlias(pair.key) ? aliasTargets.get(pair.key)! : pair.key;
-      const keyDef = definitions[ids.get(keyNode)!] as ScalarDef;
-      const key = keyText(keyDef);
+      const keyNode = target(aliasTargets, pair.key);
+      const keyScalar = definitions[ids.get(keyNode)!] as ScalarDef;
+      const key = keyText(keyScalar);
       const first = firstKeys.get(key);
       if (first === undefined) {
         firstKeys.set(key, keyNode);
       } else if (first !== keyNode) {
-        const firstDef = definitions[ids.get(first)!]!;
-        return { key, first: firstDef.range!, second: keyDef.range! };
+        const firstScalar = definitions[ids.get(first)!]!;
+        return { key, first: firstScalar.range!, second: keyScalar.range! };
       }
     }
     for (let i = node.items.length - 1; i >= 0; i--) {
@@ -376,6 +383,14 @@ function firstRepeatedKey(
     }
   }
   return null;
+}
+
+/** Return the node `written` names: an alias's target, else `written` itself. */
+function target(
+  aliasTargets: ReadonlyMap<Alias, AnchoredNode>,
+  written: ParsedNode,
+): AnchoredNode {
+  return isAlias(written) ? aliasTargets.get(written)! : written;
 }
 
 /** Return a mapping key's text: the value YAML built when text, else the key as written. */

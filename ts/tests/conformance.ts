@@ -936,12 +936,10 @@ async function runExpr(case_: Case, ctx: CaseContext): Promise<void> {
     try {
       reload(caseEnv(ctx));
       if (template !== null && mode === "strict") return { value: renderTemplateRecord(template, values) };
-      let trees: ExprNode[];
-      if (template !== null) {
-        trees = scanTemplate(template).flatMap((segment) => (segment instanceof Span ? [segment.tree] : []));
-      } else {
-        trees = [mode === "condition" ? parseCondition(text) : parseExpr(text)];
-      }
+      const trees: ExprNode[] =
+        template !== null
+          ? scanTemplate(template).flatMap((segment) => (segment instanceof Span ? [segment.tree] : []))
+          : [mode === "condition" ? parseCondition(text) : parseExpr(text)];
       const registry = readTypedefs((case_["typedefs"] ?? {}) as Record<string, unknown>);
       const types = new Map<string, Type>();
       for (const tree of trees) {

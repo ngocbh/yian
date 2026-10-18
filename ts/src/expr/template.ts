@@ -21,17 +21,17 @@
  * this stays a leaf that both the runtime binder and compose's compile-time reference walks may
  * import.
  *
- * This module also owns the strict AGENT/HUMAN_INPUT prompt renderer (`renderTemplateRecord`)
- * and the compile-time walks over template spans. A prompt is not a binding (it reads inputs
+ * This module also owns the strict AGENT/HUMAN_INPUT prompt renderer (`renderTemplateRecord`).
+ * A prompt is not a binding (it reads inputs
  * already bound to its node and mints no edge), but it is a `${...}` template and reuses this
  * scanner, so it lives here rather than in `expressions.ts`.
  *
  * Value tracing lands here later, with `lineage.ts`; the call-parsing helpers land with compose's
  * `call(...)` directive.
  *
- * Knows about: `expressions` (the evaluator, `checkCalls`, `resolveInRecord`, `ExpressionError`),
- * `grammar` (`parseExpr`, `findSpanEnd`, `rejectNestedSpans`), `builtins` (the `TEMPLATE_FNS`
- * registry), `typesys` (`writeAsText`) and `diagnostics` (`reprText`).
+ * Knows about: `expressions` (the evaluator, `exprRefs`, `resolveInRecord`, `ExpressionError`),
+ * `grammar` (`parseExpr`, `findSpanEnd`, `rejectNestedSpans`), `typesys` (`writeAsText`) and
+ * `diagnostics` (`reprText`).
  * Never imports: `nodes`, `compile`, `compose`, `runtime`, or the pool (pool-agnostic via
  * `resolve`).
  */
@@ -160,7 +160,7 @@ function asText(value: Value): string {
   try {
     return writeAsText(value);
   } catch (error) {
-    throw new ExpressionError((error as Error).message, { cause: error });
+    throw new ExpressionError(error instanceof Error ? error.message : String(error), { cause: error });
   }
 }
 

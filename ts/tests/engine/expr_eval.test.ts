@@ -246,6 +246,7 @@ test("a binding's default reference", () => {
 
 test("a nested default span is rejected", () => {
   // A `${...}` can't appear inside an expression, at any depth; group with parentheses.
+  expect(() => scanTemplate("${x:-${y:-${z}}}")).toThrow(ExpressionError);
   expect(() => scanTemplate("${x:-${y:-${z}}}")).toThrow("write `${x:-(y:-z)}`");
 });
 

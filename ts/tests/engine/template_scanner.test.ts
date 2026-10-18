@@ -62,9 +62,9 @@ function expectError(run: () => unknown, message: string): void {
 function evaluate(
   text: string,
   resolve: (path: string) => Value = () => null,
-  { item = null, mode = ResolveMode.BINDING_NONE }: { item?: Value; mode?: ResolveMode } = {},
+  options: { item?: Value; mode?: ResolveMode } = {},
 ): Value {
-  return evalTemplate(scanTemplate(text), resolve, { item, mode });
+  return evalTemplate(scanTemplate(text), resolve, options);
 }
 
 // --- a whole single span keeps its type --- //
@@ -122,10 +122,7 @@ test("a span interior is parsed", () => {
 // --- segment shapes --- //
 
 test("a pure literal is one Literal", () => {
-  const segments = scanTemplate("just text");
-  expect(segments).toHaveLength(1);
-  expect(segments[0]).toBeInstanceOf(Literal);
-  expect((segments[0] as Literal).text).toBe("just text");
+  expect(scanTemplate("just text")).toEqual([new Literal("just text")]);
 });
 
 test("$$ collapses inside a literal", () => {

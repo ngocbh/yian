@@ -16,6 +16,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -135,9 +136,11 @@ function spell(value: Value | undefined): string {
   return JSON.stringify(value);
 }
 
-/** Return whether `value` is a mapping. */
-function isMapping(value: Value | undefined): value is Case {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+/** Return whether `value` is a mapping: a plain object, as a case file's mappings are. */
+function isMapping(value: unknown): value is Case {
+  if (typeof value !== "object" || value === null) return false;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 /** Return `mapping[key]` when it is an own key, else `fallback`. */
@@ -472,9 +475,7 @@ function findRoot(): string {
   return dir;
 }
 
-const ROOT = findRoot();
-const CASES = join(ROOT, "conformance", "cases");
-const FIXTURES = join(ROOT, "conformance", "fixtures");
+const CASES = join(findRoot(), "conformance", "cases");
 
 /** The runner's own "this case failed" error, carrying only a message. */
 export class CaseFailure extends Error {
@@ -494,15 +495,10 @@ export interface SameFlags {
   optionalMessage?: boolean;
 }
 
-/** Return whether `value` is a mapping: an object that isn't an array. */
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 /** Return whether `actual` equals `expected`, kinds included: a `bigint` int, a `number` float. */
 export function same(actual: unknown, expected: unknown, flags: SameFlags = {}): boolean {
-  if (isObject(expected)) {
-    if (!isObject(actual)) return false;
+  if (isMapping(expected)) {
+    if (!isMapping(actual)) return false;
     const dropMessage = flags.optionalMessage === true && !Object.hasOwn(expected, "message");
     const names = Object.keys(actual).filter((key) => !(dropMessage && key === "message"));
     const wanted = Object.keys(expected);
@@ -568,7 +564,9 @@ export function raised(error: unknown, classes: ReadonlyMap<string, string> = ER
   const form: Case = { class: classes.get(error.name) ?? error.name, message: error.message };
   const path: unknown = (error as { path?: unknown }).path;
   if (error.name === "TypeCheckError" && Array.isArray(path)) {
-    form["path"] = path.map((step: Value) => (typeof step === "number" ? BigInt(step) : step));
+    form["path"] = (path as unknown[]).map((step) =>
+      typeof step === "number" ? BigInt(step) : (step as Value),
+    );
   }
   return form;
 }
@@ -602,7 +600,8 @@ export async function results(
     return;
   }
   for (const [name, actual] of Object.entries(await compute())) {
-    compare(name, actual, get(expect, name));
+    if (!Object.hasOwn(expect, name)) throw new CaseFailure(`unexpected result ${name}`);
+    compare(name, actual, expect[name]);
   }
 }
 
@@ -613,8 +612,11 @@ export interface CaseContext {
 }
 
 /** Run one prepared case of a kind; throw (a `CaseFailure`, normally) when it fails. */
-export type KindRunner = (c: Case, ctx: CaseContext) => void | Promise<void>;
+export type KindRunner = (case_: Case, ctx: CaseContext) => void | Promise<void>;
 
+// The first kind that reads `host` or `expect.memory` (run, resume, backward) must also fail
+// cases using host or expect keys it doesn't support yet, as Python's `_RESERVED` check in
+// `test_case` does.
 /**
  * The kind runners. A case whose kind has none fails. A kind is added by replacing its comment
  * line with `<kind>: run<Kind>,` and writing `run<Kind>` under the kind's section header below.
@@ -633,11 +635,11 @@ export const KINDS: Partial<Record<Kind, KindRunner>> = {
 
 /**
  * Make the case directory under the OS temp directory: `flow.yaml`, the `files`, and a copy of
- * `fixturesDir` as `fixtures/` when it exists. Except for `cli`, the environment is the
+ * `fixturesDir` as `fixtures/` when it is a directory. Except for `cli`, the environment is the
  * process's without yian's own variables, plus `YIAN_AUTH_FILE` naming a missing file in the
  * directory, plus the case's `env`; for `cli` it is the case's `env` alone.
  */
-export function setUp(case_: Case, fixturesDir: string = FIXTURES): CaseContext {
+export function setUp(case_: Case, fixturesDir: string): CaseContext {
   const dir = mkdtempSync(join(tmpdir(), "yian-conformance-"));
   try {
     const flow = get(case_, "flow");
@@ -647,7 +649,9 @@ export function setUp(case_: Case, fixturesDir: string = FIXTURES): CaseContext 
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, text);
     }
-    if (existsSync(fixturesDir)) cpSync(fixturesDir, join(dir, "fixtures"), { recursive: true });
+    if (statSync(fixturesDir, { throwIfNoEntry: false })?.isDirectory()) {
+      cpSync(fixturesDir, join(dir, "fixtures"), { recursive: true });
+    }
   } catch (error) {
     rmSync(dir, { recursive: true, force: true });
     throw error;
@@ -690,13 +694,14 @@ function failureText(error: unknown): string {
 async function runCase(
   case_: Case,
   kinds: Partial<Record<Kind, KindRunner>>,
+  fixturesDir: string,
 ): Promise<string | undefined> {
   const kind = case_["kind"] as Kind;
   const run = Object.hasOwn(kinds, kind) ? kinds[kind] : undefined;
   if (run === undefined) return `the TS runner doesn't run \`${kind}\` cases yet`;
   let ctx: CaseContext | undefined;
   try {
-    ctx = setUp(case_);
+    ctx = setUp(case_, fixturesDir);
     await run(case_, ctx);
     return undefined;
   } catch (error) {
@@ -712,6 +717,7 @@ const USAGE =
 
 /** What `main` reads cases from, runs them with and writes lines to. */
 export interface MainOptions {
+  /** The cases, one directory per group; the fixtures are its sibling `fixtures/`. */
   casesDir?: string;
   kinds?: Partial<Record<Kind, KindRunner>>;
   /** Write one line of the report. */
@@ -752,8 +758,8 @@ export async function main(
     writeError(USAGE);
     return 2;
   }
-  const allows = (values: string[] | undefined, value: (wanted: string) => boolean) =>
-    values === undefined || values.some(value);
+  const allows = (values: string[] | undefined, matches: (wanted: string) => boolean) =>
+    values === undefined || values.some(matches);
   // The default sort compares UTF-16 code units.
   const ids = readdirSync(casesDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
@@ -763,7 +769,7 @@ export async function main(
         .map((name) => `${group.name}/${name.slice(0, -".yaml".length)}`),
     )
     .sort();
-  const selected: { id: string; case_?: Case; unreadable?: string }[] = [];
+  const selected: ({ id: string; case_: Case } | { id: string; unreadable: string })[] = [];
   for (const id of ids) {
     const group = id.slice(0, id.indexOf("/"));
     if (!allows(flags.group, (wanted) => wanted === group)) continue;
@@ -772,7 +778,8 @@ export async function main(
     try {
       case_ = prepare(checkCase(readCase(readFileSync(join(casesDir, `${id}.yaml`), "utf8"))));
     } catch (error) {
-      // A broken file stays selected, so no filter can hide it.
+      // `--kind`, `--rules` and `--diagnostic-code` never hide a broken file; `--group` and
+      // `--case`, read from its path, still select or skip it.
       selected.push({ id, unreadable: error instanceof Error ? error.message : String(error) });
       continue;
     }
@@ -793,14 +800,21 @@ export async function main(
   let passed = 0;
   let failed = 0;
   let pending = 0;
-  for (const { id, case_, unreadable } of selected) {
-    let failure = case_ === undefined ? unreadable : await runCase(case_, kinds);
-    if (case_ !== undefined && Object.hasOwn(case_, "pending")) {
-      if (failure !== undefined) {
-        pending += 1;
-        continue;
+  const fixturesDir = join(dirname(casesDir), "fixtures");
+  for (const entry of selected) {
+    let failure: string | undefined;
+    if ("unreadable" in entry) {
+      failure = entry.unreadable;
+    } else {
+      failure = await runCase(entry.case_, kinds, fixturesDir);
+      if (Object.hasOwn(entry.case_, "pending")) {
+        if (failure !== undefined) {
+          pending += 1;
+          continue;
+        }
+        const marker = str(entry.case_["pending"]);
+        failure = `passes, but is marked pending (${marker}); remove the marker`;
       }
-      failure = `passes, but is marked pending (${str(case_["pending"])}); remove the marker`;
     }
     if (failure === undefined) {
       passed += 1;
@@ -808,7 +822,7 @@ export async function main(
     }
     failed += 1;
     const [first, ...rest] = failure.replace(/\n$/, "").split("\n");
-    write(`FAIL ${id}: ${first}`);
+    write(`FAIL ${entry.id}: ${first}`);
     for (const line of rest) write(line === "" ? "" : `  ${line}`);
   }
   write(`${selected.length} cases: ${passed} passed, ${failed} failed, ${pending} pending`);
@@ -833,9 +847,20 @@ export async function main(
 
 // ---- cli ----
 
-// Node 22 has no `import.meta.main`; under `bun test`, `argv[1]` is the test file.
-const entry = process.argv[1];
-if (entry !== undefined && realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url))) {
+/** Return whether this file is the process's entry script. */
+function isEntry(): boolean {
+  // Node 22 has no `import.meta.main`; under `bun test`, `argv[1]` is the test file.
+  const entry = process.argv[1];
+  if (entry === undefined) return false;
+  try {
+    return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    // `argv[1]` names no file.
+    return false;
+  }
+}
+
+if (isEntry()) {
   // Not `process.exit()`, which can cut off piped stdout on Node.
   process.exitCode = await main(process.argv.slice(2));
 }

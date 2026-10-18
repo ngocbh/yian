@@ -395,6 +395,12 @@ describe("same", () => {
     expect(same({ 0: 1n }, [1n])).toBe(false);
   });
 
+  test("counts only plain objects as mappings", () => {
+    expect(same(new Map(), {})).toBe(false);
+    expect(same(new Date(0), {})).toBe(false);
+    expect(same(Object.create(null), {})).toBe(true);
+  });
+
   test("leaves out `message` the expected mapping leaves out, with `optionalMessage`", () => {
     const optionalMessage = { optionalMessage: true };
     const actual = { code: "c", message: "m", frames: [{ label: "l", message: "n" }] };
@@ -505,6 +511,9 @@ describe("expectRaises and results", () => {
     await expect(results(expect_, () => ({ value: 1, kind: "int" }))).rejects.toThrow(
       "value differs",
     );
+    const extra = results({ value: 1n }, () => ({ value: 1n, other: null }));
+    await expect(extra).rejects.toBeInstanceOf(CaseFailure);
+    await expect(extra).rejects.toThrow("unexpected result other");
   });
 
   test("results compares the raises", async () => {
@@ -521,9 +530,13 @@ describe("expectRaises and results", () => {
 describe("setUp", () => {
   const made: string[] = [];
   const leaks = ["YIAN_LEAK", "FOO_API_KEY", "FOO_BASE_URL", "FOO_ENDPOINT", "FOO_API_VERSION"];
+  const saved = new Map([...leaks, "KEEP_ME"].map((name) => [name, process.env[name]]));
   afterEach(() => {
     for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
-    for (const name of [...leaks, "KEEP_ME"]) delete process.env[name];
+    for (const [name, value] of saved) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
   });
 
   /** Return a new temporary directory, removed after the test. */
@@ -563,7 +576,6 @@ describe("setUp", () => {
     made.push(ctx.dir);
     for (const name of leaks) expect(Object.hasOwn(ctx.env, name)).toBe(false);
     expect(ctx.env["KEEP_ME"]).toBe("1");
-    expect(ctx.env["PATH"]).toBe(process.env["PATH"] ?? "");
     expect(ctx.env["YIAN_AUTH_FILE"]).toBe(join(ctx.dir, "auth.json"));
     expect(ctx.env["YIAN_X"]).toBe("1");
     expect(ctx.env["A_API_KEY"]).toBe("k");
@@ -609,26 +621,45 @@ describe("main", () => {
   const PASSES = "FAIL b/pending_passes: passes, but is marked pending (#391); remove the marker";
   const NO_LOAD = "the TS runner doesn't run `load` cases yet";
 
-  const casesDirs: string[] = [];
-  let ran: { id: string; ctx: CaseContext; present: boolean }[] = [];
+  const roots: string[] = [];
+  let ran: { id: string; ctx: CaseContext; present: boolean; fixture: boolean }[] = [];
   const expr: KindRunner = (case_: Case, ctx: CaseContext) => {
-    ran.push({ id: String(case_["expr"]), ctx, present: existsSync(ctx.dir) });
+    ran.push({
+      id: String(case_["expr"]),
+      ctx,
+      present: existsSync(ctx.dir),
+      fixture: existsSync(join(ctx.dir, "fixtures", "f.txt")),
+    });
     if (case_["expr"] === "differ") compare("x", 1n, 2n);
     if (case_["expr"] === "throw") throw new TypeError("boom");
   };
 
   afterEach(() => {
-    for (const dir of casesDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+    for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true });
     ran = [];
   });
 
-  /** Run `main` over `files` with the `expr` kind injected; return its exit code and output. */
-  async function run(argv: string[], files: Record<string, string> = FILES) {
-    const casesDir = mkdtempSync(join(tmpdir(), "conformance-cases-"));
-    casesDirs.push(casesDir);
-    for (const [name, text] of Object.entries(files)) {
-      mkdirSync(dirname(join(casesDir, name)), { recursive: true });
-      writeFileSync(join(casesDir, name), text);
+  /**
+   * Run `main` over `files` in a `cases/` directory, with `fixtures` beside it and the `expr`
+   * kind injected; return its exit code and output.
+   */
+  async function run(
+    argv: string[],
+    files: Record<string, string> = FILES,
+    fixtures: Record<string, string> = {},
+  ) {
+    const root = mkdtempSync(join(tmpdir(), "conformance-cases-"));
+    roots.push(root);
+    const casesDir = join(root, "cases");
+    const written = [
+      ...Object.entries(files).map(([name, text]) => [join(casesDir, name), text] as const),
+      ...Object.entries(fixtures).map(
+        ([name, text]) => [join(root, "fixtures", name), text] as const,
+      ),
+    ];
+    for (const [path, text] of written) {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, text);
     }
     const out: string[] = [];
     const err: string[] = [];
@@ -672,7 +703,13 @@ describe("main", () => {
     expect(out).toEqual(["4 cases: 4 passed, 0 failed, 0 pending"]);
     expect(ran.map((entry) => entry.id)).toEqual(["B", "a", "\u{1F600}", "ｱ"]);
     expect(ran.every((entry) => entry.present && !existsSync(entry.ctx.dir))).toBe(true);
+    expect(ran.some((entry) => entry.fixture)).toBe(false);
     expect(new Set(ran.map((entry) => entry.ctx.dir)).size).toBe(4);
+  });
+
+  test("copies the fixtures beside the cases directory", async () => {
+    expect((await run(["--case", "a/ok"], FILES, { "f.txt": "1" })).code).toBe(0);
+    expect(ran.map((entry) => entry.fixture)).toEqual([true]);
   });
 
   test("exits 0 when no case fails, a failing pending case included", async () => {

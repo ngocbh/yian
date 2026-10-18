@@ -42,5 +42,6 @@ bun run build && node dist/tests/conformance.js           # every case, on Node
 
 Flags, each repeatable (values of one flag are alternatives; different flags all apply):
 `--group G`, `--kind K`, `--case <group>/<name>`, `--rules R` (cases whose `rules` hold R),
-`--diagnostic-code C` (`load` cases expecting a diagnostic with code C). A case file that can't
-be read is always reported.
+`--diagnostic-code C` (`load` cases expecting a diagnostic with code C). `--kind`, `--rules` and
+`--diagnostic-code` never hide a case file that can't be read; `--group` and `--case`, read from
+its path, still select or skip it.

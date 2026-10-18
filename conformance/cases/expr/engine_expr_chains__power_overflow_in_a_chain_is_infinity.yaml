@@ -1,0 +1,10 @@
+kind: expr
+rules: [arithmetic, infinity, messages]
+expr: 2 ** 3 ** 1000.0
+expect:
+  value:
+    $float: inf
+python_expect:
+  raises:
+    class: ExpressionError
+    message: 'cannot compute 3 ** 1000.0: Result too large'

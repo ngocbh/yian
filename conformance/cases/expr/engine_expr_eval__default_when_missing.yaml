@@ -1,0 +1,4 @@
+kind: expr
+expr: a :- "d"
+expect:
+  value: d

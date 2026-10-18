@@ -1,0 +1,7 @@
+kind: expr
+expr: x.k
+values:
+  x:
+    k: 42
+expect:
+  value: 42

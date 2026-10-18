@@ -1,0 +1,4 @@
+kind: expr
+expr: not []
+expect:
+  value: true

@@ -1,0 +1,7 @@
+kind: expr
+expr: '"k" in r'
+values:
+  r:
+    k: 1
+expect:
+  value: true

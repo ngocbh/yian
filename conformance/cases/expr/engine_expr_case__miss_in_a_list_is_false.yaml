@@ -1,0 +1,5 @@
+kind: expr
+expr: x in ["a"]
+mode: condition
+expect:
+  value: false

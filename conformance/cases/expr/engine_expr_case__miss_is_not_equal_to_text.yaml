@@ -1,0 +1,5 @@
+kind: expr
+expr: x != "done"
+mode: condition
+expect:
+  value: true

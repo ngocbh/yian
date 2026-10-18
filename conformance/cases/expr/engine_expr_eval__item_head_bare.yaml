@@ -1,0 +1,7 @@
+kind: expr
+expr: item
+item:
+  a: 1
+expect:
+  value:
+    a: 1

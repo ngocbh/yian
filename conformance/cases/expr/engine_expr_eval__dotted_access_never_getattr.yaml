@@ -1,0 +1,4 @@
+kind: expr
+expr: obj.__class__
+expect:
+  value: null

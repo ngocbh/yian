@@ -1,0 +1,8 @@
+kind: expr
+expr: x * 2 % (3 - 3)
+values:
+  x: 3
+expect:
+  raises:
+    class: ExpressionError
+    message: 'division by zero: 6 % 0'

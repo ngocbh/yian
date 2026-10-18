@@ -1,0 +1,13 @@
+kind: expr
+rules: [arithmetic, messages]
+expr: '"a" * n'
+values:
+  n: 100000000000000000000
+expect:
+  raises:
+    class: ExpressionError
+    message: 'type error evaluating "a" * 100000000000000000000: unsupported operand kinds for `*`: `str` and `int`'
+python_expect:
+  raises:
+    class: ExpressionError
+    message: 'cannot compute ''a'' * 100000000000000000000: cannot fit ''int'' into an index-sized integer'

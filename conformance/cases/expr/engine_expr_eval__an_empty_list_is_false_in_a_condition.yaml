@@ -1,0 +1,7 @@
+kind: expr
+expr: xs
+values:
+  xs: []
+mode: condition
+expect:
+  value: false

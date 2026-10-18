@@ -1,0 +1,9 @@
+kind: expr
+expr: rating.value > 0.7
+values:
+  label: POSITIVE
+  rating:
+    value: 0.8
+mode: condition
+expect:
+  value: true

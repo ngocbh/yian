@@ -1,0 +1,7 @@
+kind: expr
+expr: ${a > 5}
+values:
+  a: 8
+mode: condition
+expect:
+  value: true

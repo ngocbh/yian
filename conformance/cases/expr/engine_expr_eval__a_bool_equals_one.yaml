@@ -1,0 +1,4 @@
+kind: expr
+expr: true == 1
+expect:
+  value: true

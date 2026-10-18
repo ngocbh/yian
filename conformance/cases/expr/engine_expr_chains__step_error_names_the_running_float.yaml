@@ -1,0 +1,11 @@
+kind: expr
+rules: [messages]
+expr: 6 / 3 / 0
+expect:
+  raises:
+    class: ExpressionError
+    message: 'division by zero: 2 / 0'
+python_expect:
+  raises:
+    class: ExpressionError
+    message: 'division by zero: 2.0 / 0'

@@ -1,0 +1,6 @@
+kind: expr
+expr: a | 1 / 0
+values:
+  a: present
+expect:
+  value: present

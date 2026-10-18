@@ -1,0 +1,7 @@
+kind: expr
+expr: __on == 100000000000000000000.0 and not isinstance(__on, bool)
+values:
+  __on: 1.0e+20
+mode: condition
+expect:
+  value: true

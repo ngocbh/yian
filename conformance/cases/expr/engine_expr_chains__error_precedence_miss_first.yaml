@@ -1,0 +1,7 @@
+kind: expr
+expr: c + 1 / 0
+mode: strict
+expect:
+  raises:
+    class: ExpressionError
+    message: unresolved reference ${c} in expression

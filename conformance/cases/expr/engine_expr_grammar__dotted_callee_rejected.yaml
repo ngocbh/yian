@@ -1,0 +1,7 @@
+kind: expr
+expr: a.b(x)
+mode: condition
+expect:
+  raises:
+    class: ExpressionError
+    message: 'builtin call must have a bare callee (no dotted access before ''(''): a form like ''a.b(x)'' is not allowed'

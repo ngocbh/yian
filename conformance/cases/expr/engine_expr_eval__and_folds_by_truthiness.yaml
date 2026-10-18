@@ -1,0 +1,6 @@
+kind: expr
+expr: x and y
+values:
+  x: ''
+expect:
+  value: false

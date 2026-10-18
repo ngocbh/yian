@@ -1,0 +1,6 @@
+kind: expr
+expr: a :? "m"
+expect:
+  raises:
+    class: RequiredError
+    message: m

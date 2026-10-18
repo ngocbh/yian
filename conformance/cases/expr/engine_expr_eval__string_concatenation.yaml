@@ -1,0 +1,4 @@
+kind: expr
+expr: '"a" + "b"'
+expect:
+  value: ab

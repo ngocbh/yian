@@ -1,0 +1,4 @@
+kind: expr
+expr: '"b" in "abc"'
+expect:
+  value: true

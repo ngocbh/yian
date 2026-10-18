@@ -1,0 +1,6 @@
+kind: expr
+expr: not r
+values:
+  r: {}
+expect:
+  value: true

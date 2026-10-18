@@ -1,0 +1,7 @@
+kind: expr
+expr: __on == "pro"
+values:
+  __on: pro
+mode: condition
+expect:
+  value: true

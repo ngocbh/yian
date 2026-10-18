@@ -1,0 +1,9 @@
+kind: expr
+rules: [arithmetic]
+expr: 1 % (0.5 - 1 - x - x - 1.5 + 0.5)
+values:
+  x: 3
+expect:
+  value: 1.0
+python_expect:
+  value: -6.5

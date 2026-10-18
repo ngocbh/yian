@@ -69,6 +69,8 @@ interface Rule {
   /** If set, the only modules (and modules below them) the files may import besides `node:` builtins. */
   allow?: string[];
   why: string;
+  /** For the snippet tests: a file the rule covers, and module ids it must reject and accept. */
+  samples: { file: string; bad: string[]; good: string[] };
 }
 
 const below = (dir: string) => (path: string) => path.startsWith(`${dir}/`);
@@ -80,72 +82,138 @@ const RULES: Rule[] = [
     files: below("nodes"),
     forbid: ["compile"],
     why: "nodes must not import compile; return a canonical Grow seed and let the injected compile-layer builder interpret it",
+    samples: {
+      file: "nodes/call/node.ts",
+      bad: ["compile", "compile/expand", "compile/index"],
+      good: ["nodes/contracts", "diagnostics", "skills", "compiled"],
+    },
   },
   {
     name: "nodes never import runtime",
     files: below("nodes"),
     forbid: ["runtime"],
     why: "nodes must not import runtime; direct-driver fallbacks belong on a lower seam",
+    samples: {
+      file: "nodes/call/node.ts",
+      bad: ["runtime", "runtime/log"],
+      good: ["run", "nodes/contracts", "skills"],
+    },
   },
   {
     name: "nodes/contracts.ts imports only diagnostics and typesys",
     files: only("nodes/contracts.ts"),
     allow: ["diagnostics", "typesys"],
     why: "nodes/contracts.ts may import only node: builtins plus diagnostics and typesys",
+    samples: {
+      file: "nodes/contracts.ts",
+      bad: ["nodes/call/node", "nodes/index", "index", "compile", "runtime", "skills", "defaults"],
+      good: ["diagnostics", "typesys", "typesys/json"],
+    },
   },
   {
     name: "compile never imports compose or runtime",
     files: below("compile"),
     forbid: ["compose", "runtime"],
     why: "compile must stay representation-neutral and execution-free",
+    samples: {
+      file: "compile/expand.ts",
+      bad: ["compose", "compose/load", "runtime", "runtime/log"],
+      good: ["nodes/contracts", "diagnostics", "run"],
+    },
   },
   {
     name: "runtime never imports compile/expand",
     files: below("runtime"),
     forbid: ["compile/expand"],
     why: "runtime must not import compile/expand; the run boundary injects the growth builder",
+    samples: {
+      file: "runtime/log.ts",
+      bad: ["compile/expand"],
+      good: ["compile/graph", "compile/expander", "nodes/contracts"],
+    },
   },
   {
     name: "runtime never imports memory_host or cli",
     files: below("runtime"),
     forbid: ["memory_host", "cli"],
     why: "runtime must not import memory_host or cli",
+    samples: {
+      file: "runtime/log.ts",
+      bad: ["memory_host", "cli", "cli/main"],
+      good: ["memory/contracts", "nodes/contracts"],
+    },
   },
   {
     name: "memory/contracts.ts imports only diagnostics and defaults",
     files: only("memory/contracts.ts"),
     allow: ["diagnostics", "defaults"],
     why: "lower memory imports undeclared dependencies",
+    samples: {
+      file: "memory/contracts.ts",
+      bad: [
+        ...["nodes", "compile", "compose", "runtime", "run", "llm_clients", "index"],
+        ...["memory/episodic", "memory/session", "memory/conversation", "memory/index"],
+      ],
+      good: ["diagnostics", "defaults"],
+    },
   },
   {
     name: "memory/conversation.ts imports only memory/contracts",
     files: only("memory/conversation.ts"),
     allow: ["memory/contracts"],
     why: "lower memory imports undeclared dependencies",
+    samples: {
+      file: "memory/conversation.ts",
+      bad: [
+        ...["nodes", "compile", "compose", "runtime", "run", "llm_clients", "index", "diagnostics"],
+        ...["memory/episodic", "memory/session", "memory/index"],
+      ],
+      good: ["memory/contracts"],
+    },
   },
   {
     name: "skills imports no engine or front-end layer",
     files: below("skills"),
     forbid: ["nodes", "compile", "compose", "runtime", "run", "cli"],
     why: "skills must stay a leaf",
+    samples: {
+      file: "skills/load.ts",
+      bad: ["nodes", "nodes/call/node", "compile", "compose", "runtime", "run", "cli"],
+      good: ["diagnostics", "defaults"],
+    },
   },
   {
     name: "memory never imports engine, host or cli layers",
     files: below("memory"),
     forbid: ["runtime", "compose", "compile", "run", "memory_host", "cli", "index"],
     why: "memory must not import runtime, compose, compile, run, memory_host, cli, or the package root",
+    samples: {
+      file: "memory/session.ts",
+      bad: ["runtime", "compose", "compile", "run", "memory_host", "cli", "index"],
+      good: ["memory/contracts", "memory/index", "diagnostics"],
+    },
   },
   {
     name: "defaults.ts imports only node builtins",
     files: only("defaults.ts"),
     allow: [],
     why: "defaults must stay a node: builtin leaf",
+    samples: {
+      file: "defaults.ts",
+      bad: ["diagnostics", "typesys", "index"],
+      good: [],
+    },
   },
   {
     name: "llm imports only defaults, platform, typesys/json and llm",
     files: below("llm"),
     allow: ["defaults", "platform", "typesys/json", "llm"],
     why: "llm may import only node: builtins, defaults, platform, typesys/json and llm",
+    samples: {
+      file: "llm/client.ts",
+      bad: ["llm_clients", "nodes", "runtime", "index", "typesys", "typesys/other", "diagnostics"],
+      good: ["defaults", "platform", "typesys/json", "llm/errors", "llm/index"],
+    },
   },
 ];
 
@@ -187,22 +255,33 @@ const inCode =
 
 const outsidePlatform = (path: string) => path !== "platform.ts";
 
+const BARE_SORT: Lint = {
+  name: "src sorts with a comparator",
+  files: () => true,
+  find: inCode(/\.(?:sort|toSorted)\s*\(\s*\)/g),
+  fix:
+    "a bare sort compares values converted to text by UTF-16 code units, so numbers sort as text " +
+    "and text doesn't sort in Python's code-point order; pass a comparator (compareCodeUnits for text)",
+};
+
 const ENGINE_DEPENDENT: Lint = {
   name: "src uses no engine-dependent API",
   files: () => true,
+  // `nextTick` also counts bare, for `const { nextTick } = process` and its import.
   find: inCode(
-    /\.(?:sort|toSorted)\(\s*\)|(?<![\w$])(?:localeCompare|Intl|toLocale[\w$]*|Date\.parse|process\.nextTick|setImmediate)(?![\w$])/g,
+    /(?<![\w$])(?:localeCompare|Intl|toLocale[\w$]*|Date\.parse|process\.nextTick|setImmediate)(?![\w$])|(?<![\w$.])nextTick(?![\w$])/g,
   ),
   fix:
-    "results differ between engines; give sort a comparator (compareCodeUnits for strings) " +
-    "and use no localeCompare, Intl, toLocale*, Date.parse, process.nextTick or setImmediate",
+    "results differ between engines; use no localeCompare, Intl, toLocale*, Date.parse, " +
+    "nextTick or setImmediate",
 };
 
 const BARE_FETCH: Lint = {
-  name: "only platform.ts calls fetch",
+  name: "only platform.ts references fetch",
   files: outsidePlatform,
-  find: inCode(/(?<![\w$.])fetch\s*\(|(?<![\w$])globalThis\.fetch(?![\w$])/g),
-  fix: "call safeFetch from platform.ts instead of fetch",
+  // Any bare `fetch` counts, a method named fetch too, so a call can't slip past as one.
+  find: inCode(/(?<![\w$.])fetch(?![\w$])|(?<![\w$])globalThis\.fetch(?![\w$])/g),
+  fix: "use safeFetch from platform.ts; don't name a method fetch",
 };
 
 const BUN_GLOBAL: Lint = {
@@ -222,7 +301,7 @@ const BUN_IMPORT: Lint = {
   fix: "reach bun modules through a platform.ts adapter",
 };
 
-const LINTS = [ENGINE_DEPENDENT, BARE_FETCH, BUN_GLOBAL, BUN_IMPORT];
+const LINTS = [BARE_SORT, ENGINE_DEPENDENT, BARE_FETCH, BUN_GLOBAL, BUN_IMPORT];
 
 /** Return each violation in `files` as `path:line: text`. */
 function lintViolations(lint: Lint, files: Source[]): string[] {
@@ -440,82 +519,10 @@ function spell(file: string, id: string, extension: string): string {
   return `${path.startsWith(".") ? "" : "./"}${path}${extension}`;
 }
 
-/** Per rule: a file it covers, and module ids it must report and must pass. */
-const SAMPLES: Record<string, { file: string; bad: string[]; good: string[] }> = {
-  "nodes never import compile": {
-    file: "nodes/call/node.ts",
-    bad: ["compile", "compile/expand", "compile/index"],
-    good: ["nodes/contracts", "diagnostics", "skills", "compiled"],
-  },
-  "nodes never import runtime": {
-    file: "nodes/call/node.ts",
-    bad: ["runtime", "runtime/log"],
-    good: ["run", "nodes/contracts", "skills"],
-  },
-  "nodes/contracts.ts imports only diagnostics and typesys": {
-    file: "nodes/contracts.ts",
-    bad: ["nodes/call/node", "nodes/index", "index", "compile", "runtime", "skills", "defaults"],
-    good: ["diagnostics", "typesys", "typesys/json"],
-  },
-  "compile never imports compose or runtime": {
-    file: "compile/expand.ts",
-    bad: ["compose", "compose/load", "runtime", "runtime/log"],
-    good: ["nodes/contracts", "diagnostics", "run"],
-  },
-  "runtime never imports compile/expand": {
-    file: "runtime/log.ts",
-    bad: ["compile/expand"],
-    good: ["compile/graph", "compile/expander", "nodes/contracts"],
-  },
-  "runtime never imports memory_host or cli": {
-    file: "runtime/log.ts",
-    bad: ["memory_host", "cli", "cli/main"],
-    good: ["memory/contracts", "nodes/contracts"],
-  },
-  "memory/contracts.ts imports only diagnostics and defaults": {
-    file: "memory/contracts.ts",
-    bad: [
-      ...["nodes", "compile", "compose", "runtime", "run", "llm_clients", "index"],
-      ...["memory/episodic", "memory/session", "memory/conversation", "memory/index"],
-    ],
-    good: ["diagnostics", "defaults"],
-  },
-  "memory/conversation.ts imports only memory/contracts": {
-    file: "memory/conversation.ts",
-    bad: [
-      ...["nodes", "compile", "compose", "runtime", "run", "llm_clients", "index", "diagnostics"],
-      ...["memory/episodic", "memory/session", "memory/index"],
-    ],
-    good: ["memory/contracts"],
-  },
-  "skills imports no engine or front-end layer": {
-    file: "skills/load.ts",
-    bad: ["nodes", "nodes/call/node", "compile", "compose", "runtime", "run", "cli"],
-    good: ["diagnostics", "defaults"],
-  },
-  "memory never imports engine, host or cli layers": {
-    file: "memory/session.ts",
-    bad: ["runtime", "compose", "compile", "run", "memory_host", "cli", "index"],
-    good: ["memory/contracts", "memory/index", "diagnostics"],
-  },
-  "defaults.ts imports only node builtins": {
-    file: "defaults.ts",
-    bad: ["diagnostics", "typesys", "index"],
-    good: [],
-  },
-  "llm imports only defaults, platform, typesys/json and llm": {
-    file: "llm/client.ts",
-    bad: ["llm_clients", "nodes", "runtime", "index", "typesys", "typesys/other", "diagnostics"],
-    good: ["defaults", "platform", "typesys/json", "llm/errors", "llm/index"],
-  },
-};
-
 describe("layer rule snippets", () => {
   for (const rule of RULES) {
     test(rule.name, () => {
-      const sample = SAMPLES[rule.name];
-      expect(sample).toBeDefined();
-      const { file, bad, good } = sample!;
+      const { file, bad, good } = rule.samples;
       const reported = (text: string) => ruleViolations(rule, [{ path: file, text }]).length > 0;
       const texts = (specifiers: string[]) => specifiers.flatMap((s) => FORMS.map((form) => form(s)));
       const local = (ids: string[]) => ids.flatMap((id) => [spell(file, id, ".ts"), spell(file, id, ".js")]);
@@ -551,7 +558,13 @@ describe("layer rule snippets", () => {
   });
 
   test("entries match whole path segments of relative imports only", () => {
-    const rule = (entries: Partial<Rule>): Rule => ({ name: "t", files: () => true, why: "", ...entries });
+    const rule = (entries: Pick<Rule, "forbid" | "allow">): Rule => ({
+      name: "t",
+      files: () => true,
+      why: "",
+      samples: { file: "x.ts", bad: [], good: [] },
+      ...entries,
+    });
     const reported = (r: Rule, text: string) => ruleViolations(r, [{ path: "x.ts", text }]).length > 0;
     expect(reported(rule({ forbid: ["run"] }), 'import "./runtime.ts";')).toBe(false);
     expect(reported(rule({ forbid: ["runtime"] }), 'import "./run.ts";')).toBe(false);
@@ -575,10 +588,22 @@ describe("lints", () => {
 describe("lint snippets", () => {
   const hits = (lint: Lint, text: string, path = "runtime/log.ts") => lintViolations(lint, [{ path, text }]);
 
+  test("a bare sort is reported with its line, also in platform.ts", () => {
+    const forms = ["xs.sort()", "xs.toSorted( )", "xs.sort ()", "xs\n  .sort()"];
+    expect(hits(BARE_SORT, forms.join(";\n"))).toEqual([
+      "runtime/log.ts:1: .sort()",
+      "runtime/log.ts:2: .toSorted( )",
+      "runtime/log.ts:3: .sort ()",
+      "runtime/log.ts:5: .sort()",
+    ]);
+    expect(hits(BARE_SORT, "xs.sort()", "platform.ts")).toEqual(["platform.ts:1: .sort()"]);
+    for (const text of ["xs.sort(compareCodeUnits);", "xs.sort((a, b) => a - b);", "xs.toSorted(compareCodeUnits);"]) {
+      expect(hits(BARE_SORT, text)).toEqual([]);
+    }
+  });
+
   test("each engine-dependent form is reported with its line", () => {
     const forms = [
-      "xs.sort()",
-      "xs.toSorted( )",
       "a.localeCompare(b)",
       "new Intl.Collator()",
       "n.toLocaleString()",
@@ -586,31 +611,32 @@ describe("lint snippets", () => {
       "Date.parse(s)",
       "process.nextTick(f)",
       "setImmediate(f)",
+      "const { nextTick } = process",
+      'import { nextTick } from "node:process"',
     ];
     expect(hits(ENGINE_DEPENDENT, forms.join(";\n"))).toEqual([
-      "runtime/log.ts:1: .sort()",
-      "runtime/log.ts:2: .toSorted( )",
-      "runtime/log.ts:3: localeCompare",
-      "runtime/log.ts:4: Intl",
-      "runtime/log.ts:5: toLocaleString",
-      "runtime/log.ts:6: toLocaleDateString",
-      "runtime/log.ts:7: Date.parse",
-      "runtime/log.ts:8: process.nextTick",
-      "runtime/log.ts:9: setImmediate",
+      "runtime/log.ts:1: localeCompare",
+      "runtime/log.ts:2: Intl",
+      "runtime/log.ts:3: toLocaleString",
+      "runtime/log.ts:4: toLocaleDateString",
+      "runtime/log.ts:5: Date.parse",
+      "runtime/log.ts:6: process.nextTick",
+      "runtime/log.ts:7: setImmediate",
+      "runtime/log.ts:8: nextTick",
+      "runtime/log.ts:9: nextTick",
     ]);
-    expect(hits(ENGINE_DEPENDENT, "xs.sort()", "platform.ts")).toEqual(["platform.ts:1: .sort()"]);
+    expect(hits(ENGINE_DEPENDENT, "Date.parse(s)", "platform.ts")).toEqual(["platform.ts:1: Date.parse"]);
   });
 
-  test("comparators, strings and comments pass; template code doesn't", () => {
+  test("strings, comments and other names pass; template code doesn't", () => {
     for (const text of [
-      "xs.sort(compareCodeUnits);",
-      "xs.sort((a, b) => a - b);",
-      "xs.toSorted(compareCodeUnits);",
       'const s = "use localeCompare";',
       "// Intl",
       "/* Date.parse(s) */",
       "const t = `toLocaleString`;",
       "const parse = myDate.parse(s);",
+      "queue.nextTick(f);",
+      "const nextTicks = 1;",
     ]) {
       expect(hits(ENGINE_DEPENDENT, text)).toEqual([]);
     }
@@ -619,15 +645,28 @@ describe("lint snippets", () => {
     ]);
   });
 
-  test("a bare fetch is reported; safeFetch and methods named fetch pass", () => {
-    const text = ["await fetch(url);", "await fetch (url);", "globalThis.fetch(url);", "const f = globalThis.fetch;"];
+  test("a bare fetch reference is reported; safeFetch and x.fetch pass", () => {
+    const text = [
+      "await fetch(url);",
+      "await fetch (url);",
+      "globalThis.fetch(url);",
+      "const f = globalThis.fetch;",
+      "const g = fetch;",
+      "class C { fetch(u) {} }",
+      "interface I { fetch(u: string): void }",
+      "function fetch(u) {}",
+    ];
     expect(hits(BARE_FETCH, text.join("\n"))).toEqual([
-      "runtime/log.ts:1: fetch(",
-      "runtime/log.ts:2: fetch (",
+      "runtime/log.ts:1: fetch",
+      "runtime/log.ts:2: fetch",
       "runtime/log.ts:3: globalThis.fetch",
       "runtime/log.ts:4: globalThis.fetch",
+      "runtime/log.ts:5: fetch",
+      "runtime/log.ts:6: fetch",
+      "runtime/log.ts:7: fetch",
+      "runtime/log.ts:8: fetch",
     ]);
-    for (const ok of ["safeFetch(url);", "client.fetch(x);", "client?.fetch(x);", 'const s = "fetch(url)";']) {
+    for (const ok of ["safeFetch(url);", "client.fetch(x);", "client?.fetch(x);", 'const s = "fetch(url)";', "prefetch(x);"]) {
       expect(hits(BARE_FETCH, ok)).toEqual([]);
     }
   });

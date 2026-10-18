@@ -2,16 +2,243 @@
  * Import-direction ratchets and source lints for `ts/src`, a port of
  * `tests/engine/test_layer_direction.py`.
  *
- * These tests pin the source scanner the rules read imports through.
+ * Lower layers never import the layers that drive them, a few leaves import only
+ * declared modules, and engine-dependent or platform-specific APIs stay out of
+ * `src` (the platform ones outside `platform.ts`). Each check is a function of
+ * `{path, text}` sources, so snippets prove the rules the real tree is held to.
  */
 
 import { describe, expect, test } from "bun:test";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join, posix, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { blank, importStatements } from "./source_scan.ts";
 
-/** Return the indexes of every newline in `text`. */
-function newlines(text: string): number[] {
-  return [...text.matchAll(/\n/g)].map((m) => m.index);
+const SRC = fileURLToPath(new URL("../../src/", import.meta.url));
+
+/** One source file: its path below `src` in `/` form, and its text. */
+interface Source {
+  path: string;
+  text: string;
+}
+
+/** Return every `.ts` file below `src`, or `[]` while `src` doesn't exist. */
+function sources(): Source[] {
+  if (!existsSync(SRC)) return [];
+  return readdirSync(SRC, { recursive: true, encoding: "utf8" })
+    .filter((name) => name.endsWith(".ts"))
+    .sort()
+    .map((name) => ({ path: name.split(sep).join("/"), text: readFileSync(join(SRC, name), "utf8") }));
+}
+
+/** One import of a source file. */
+interface ImportTarget {
+  line: number;
+  target: string;
+  /** The trimmed source line of the specifier. */
+  statement: string;
+  /** Whether the specifier is relative, so `target` is a yian module id. */
+  local: boolean;
+}
+
+/**
+ * Return each import of `file`. A relative specifier becomes a module id: its path
+ * below `src` without `.ts`/`.js`, keeping a trailing `/index` (`memory/index` is the
+ * memory package's facade, `index` the package root's). Others stay as written.
+ */
+function importTargets({ path, text }: Source): ImportTarget[] {
+  const lines = text.split("\n");
+  return importStatements(text).map(({ line, specifier }) => {
+    const local = specifier.startsWith(".");
+    return {
+      line,
+      target: local ? posix.join(posix.dirname(path), specifier).replace(/\.[jt]s$/, "") : specifier,
+      statement: lines[line - 1]!.trim(),
+      local,
+    };
+  });
+}
+
+/** One import-direction rule for the files `files` selects. */
+interface Rule {
+  name: string;
+  files: (path: string) => boolean;
+  /** Modules the files must not import, nor any module below them. */
+  forbid?: string[];
+  /** If set, the only modules (and modules below them) the files may import besides `node:` builtins. */
+  allow?: string[];
+  why: string;
+}
+
+const below = (dir: string) => (path: string) => path.startsWith(`${dir}/`);
+const only = (file: string) => (path: string) => path === file;
+
+const RULES: Rule[] = [
+  {
+    name: "nodes never import compile",
+    files: below("nodes"),
+    forbid: ["compile"],
+    why: "nodes must not import compile; return a canonical Grow seed and let the injected compile-layer builder interpret it",
+  },
+  {
+    name: "nodes never import runtime",
+    files: below("nodes"),
+    forbid: ["runtime"],
+    why: "nodes must not import runtime; direct-driver fallbacks belong on a lower seam",
+  },
+  {
+    name: "nodes/contracts.ts imports only diagnostics and typesys",
+    files: only("nodes/contracts.ts"),
+    allow: ["diagnostics", "typesys"],
+    why: "nodes/contracts.ts may import only node: builtins plus diagnostics and typesys",
+  },
+  {
+    name: "compile never imports compose or runtime",
+    files: below("compile"),
+    forbid: ["compose", "runtime"],
+    why: "compile must stay representation-neutral and execution-free",
+  },
+  {
+    name: "runtime never imports compile/expand",
+    files: below("runtime"),
+    forbid: ["compile/expand"],
+    why: "runtime must not import compile/expand; the run boundary injects the growth builder",
+  },
+  {
+    name: "runtime never imports memory_host or cli",
+    files: below("runtime"),
+    forbid: ["memory_host", "cli"],
+    why: "runtime must not import memory_host or cli",
+  },
+  {
+    name: "memory/contracts.ts imports only diagnostics and defaults",
+    files: only("memory/contracts.ts"),
+    allow: ["diagnostics", "defaults"],
+    why: "lower memory imports undeclared dependencies",
+  },
+  {
+    name: "memory/conversation.ts imports only memory/contracts",
+    files: only("memory/conversation.ts"),
+    allow: ["memory/contracts"],
+    why: "lower memory imports undeclared dependencies",
+  },
+  {
+    name: "skills imports no engine or front-end layer",
+    files: below("skills"),
+    forbid: ["nodes", "compile", "compose", "runtime", "run", "cli"],
+    why: "skills must stay a leaf",
+  },
+  {
+    name: "memory never imports engine, host or cli layers",
+    files: below("memory"),
+    forbid: ["runtime", "compose", "compile", "run", "memory_host", "cli", "index"],
+    why: "memory must not import runtime, compose, compile, run, memory_host, cli, or the package root",
+  },
+  {
+    name: "defaults.ts imports only node builtins",
+    files: only("defaults.ts"),
+    allow: [],
+    why: "defaults must stay a node: builtin leaf",
+  },
+  {
+    name: "llm imports only defaults, platform, typesys/json and llm",
+    files: below("llm"),
+    allow: ["defaults", "platform", "typesys/json", "llm"],
+    why: "llm may import only node: builtins, defaults, platform, typesys/json and llm",
+  },
+];
+
+/** Whether module id `target` is `entry` or a module below it. */
+const within = (target: string, entry: string) => target === entry || target.startsWith(`${entry}/`);
+
+/** Whether `rule` rejects importing `target`. */
+function breaks(rule: Rule, { target, local }: ImportTarget): boolean {
+  if (!local) return rule.allow !== undefined && !target.startsWith("node:");
+  if (rule.forbid?.some((entry) => within(target, entry))) return true;
+  return rule.allow !== undefined && !rule.allow.some((entry) => within(target, entry));
+}
+
+/** Return `path:line: statement -> target` for each import in `files` that `rule` rejects. */
+function ruleViolations(rule: Rule, files: Source[]): string[] {
+  return files
+    .filter((file) => rule.files(file.path))
+    .flatMap((file) =>
+      importTargets(file)
+        .filter((t) => breaks(rule, t))
+        .map((t) => `${file.path}:${t.line}: ${t.statement} -> ${t.target}`),
+    );
+}
+
+/** One banned source form in the files `files` selects. */
+interface Lint {
+  name: string;
+  files: (path: string) => boolean;
+  /** Return the line and text of each banned form in `file`. */
+  find: (file: Source) => { line: number; text: string }[];
+  fix: string;
+}
+
+/** Return a `find` that matches the global `pattern` in code, not in comments or string contents. */
+const inCode =
+  (pattern: RegExp) =>
+  ({ text }: Source) =>
+    [...blank(text).matchAll(pattern)].map((m) => ({ line: text.slice(0, m.index).split("\n").length, text: m[0] }));
+
+const outsidePlatform = (path: string) => path !== "platform.ts";
+
+const ENGINE_DEPENDENT: Lint = {
+  name: "src uses no engine-dependent API",
+  files: () => true,
+  find: inCode(
+    /\.(?:sort|toSorted)\(\s*\)|(?<![\w$])(?:localeCompare|Intl|toLocale[\w$]*|Date\.parse|process\.nextTick|setImmediate)(?![\w$])/g,
+  ),
+  fix:
+    "results differ between engines; give sort a comparator (compareCodeUnits for strings) " +
+    "and use no localeCompare, Intl, toLocale*, Date.parse, process.nextTick or setImmediate",
+};
+
+const BARE_FETCH: Lint = {
+  name: "only platform.ts calls fetch",
+  files: outsidePlatform,
+  find: inCode(/(?<![\w$.])fetch\s*\(|(?<![\w$])globalThis\.fetch(?![\w$])/g),
+  fix: "call safeFetch from platform.ts instead of fetch",
+};
+
+const BUN_GLOBAL: Lint = {
+  name: "only platform.ts references Bun",
+  files: outsidePlatform,
+  find: inCode(/(?<![\w$])Bun(?![\w$])/g),
+  fix: "reach Bun through a platform.ts adapter",
+};
+
+const BUN_IMPORT: Lint = {
+  name: "only platform.ts imports bun modules",
+  files: outsidePlatform,
+  find: (file) =>
+    importTargets(file)
+      .filter(({ target }) => target === "bun" || target.startsWith("bun:"))
+      .map(({ line, statement }) => ({ line, text: statement })),
+  fix: "reach bun modules through a platform.ts adapter",
+};
+
+const LINTS = [ENGINE_DEPENDENT, BARE_FETCH, BUN_GLOBAL, BUN_IMPORT];
+
+/** Return each violation in `files` as `path:line: text`. */
+function lintViolations(lint: Lint, files: Source[]): string[] {
+  return files
+    .filter((file) => lint.files(file.path))
+    .flatMap((file) => lint.find(file).map((hit) => `${file.path}:${hit.line}: ${hit.text}`));
+}
+
+/** Return `""` when there are no violations, else `why` followed by one violation per line. */
+function report(why: string, violations: string[]): string {
+  return violations.length === 0 ? "" : `${why}:\n${violations.join("\n")}`;
+}
+
+/** Return the indexes of every match of the global `pattern` in `text`. */
+function indexes(text: string, pattern: RegExp): number[] {
+  return [...text.matchAll(pattern)].map((m) => m.index);
 }
 
 describe("blank", () => {
@@ -25,8 +252,8 @@ describe("blank", () => {
     for (const sample of [text, text.replaceAll("\n", "\r\n")]) {
       const blanked = blank(sample);
       expect(blanked.length).toBe(sample.length);
-      expect(newlines(blanked)).toEqual(newlines(sample));
-      expect([...blanked.matchAll(/\r/g)].map((m) => m.index)).toEqual([...sample.matchAll(/\r/g)].map((m) => m.index));
+      expect(indexes(blanked, /\n/g)).toEqual(indexes(sample, /\n/g));
+      expect(indexes(blanked, /\r/g)).toEqual(indexes(sample, /\r/g));
     }
   });
 
@@ -156,5 +383,270 @@ describe("importStatements", () => {
       'const t = `import { c } from "./c.ts"`;',
     ].join("\n");
     expect(importStatements(text)).toEqual([]);
+  });
+});
+
+describe("importTargets", () => {
+  const targets = (path: string, text: string) => importTargets({ path, text }).map((t) => t.target);
+
+  test("normalizes relative spellings to module ids", () => {
+    const fromNode = [
+      'import { expand } from "../../compile/expand.ts";',
+      'export { expand } from "../../compile/expand.js";',
+      'import "../../index.ts";',
+    ].join("\n");
+    expect(targets("nodes/call/node.ts", fromNode)).toEqual(["compile/expand", "compile/expand", "index"]);
+    const fromMemory = 'import "./index.ts";\nimport type { C } from "./contracts.ts";';
+    expect(targets("memory/conversation.ts", fromMemory)).toEqual(["memory/index", "memory/contracts"]);
+    expect(targets("defaults.ts", 'import "./typesys/json.ts";')).toEqual(["typesys/json"]);
+  });
+
+  test("keeps other specifiers as written", () => {
+    const text = 'import { readFileSync } from "node:fs";\nimport YAML from "yaml";\nimport { Database } from "bun:sqlite";';
+    expect(targets("runtime/log.ts", text)).toEqual(["node:fs", "yaml", "bun:sqlite"]);
+  });
+
+  test("gives each import's line and trimmed source line", () => {
+    const text = 'const a = 1;\n  import { b } from "./b.ts";\n';
+    expect(importTargets({ path: "runtime/log.ts", text })).toEqual([
+      { line: 2, target: "runtime/b", statement: 'import { b } from "./b.ts";', local: true },
+    ]);
+  });
+});
+
+describe("layer rules", () => {
+  const files = sources();
+  for (const rule of RULES) {
+    test(rule.name, () => {
+      expect(report(rule.why, ruleViolations(rule, files))).toBe("");
+    });
+  }
+});
+
+/** The import spellings every rule must see. */
+const FORMS: ((specifier: string) => string)[] = [
+  (s) => `import { x } from "${s}";`,
+  (s) => `import type { X } from "${s}";`,
+  (s) => `export { x } from "${s}";`,
+  (s) => `export * from "${s}";`,
+  (s) => `import "${s}";`,
+  (s) => `const m = await import("${s}");`,
+  (s) => `type T = import("${s}").X;`,
+];
+
+/** Return the relative specifier, ending in `extension`, from `file` to module `id`. */
+function spell(file: string, id: string, extension: string): string {
+  const path = posix.relative(posix.dirname(file), id);
+  return `${path.startsWith(".") ? "" : "./"}${path}${extension}`;
+}
+
+/** Per rule: a file it covers, and module ids it must report and must pass. */
+const SAMPLES: Record<string, { file: string; bad: string[]; good: string[] }> = {
+  "nodes never import compile": {
+    file: "nodes/call/node.ts",
+    bad: ["compile", "compile/expand", "compile/index"],
+    good: ["nodes/contracts", "diagnostics", "skills", "compiled"],
+  },
+  "nodes never import runtime": {
+    file: "nodes/call/node.ts",
+    bad: ["runtime", "runtime/log"],
+    good: ["run", "nodes/contracts", "skills"],
+  },
+  "nodes/contracts.ts imports only diagnostics and typesys": {
+    file: "nodes/contracts.ts",
+    bad: ["nodes/call/node", "nodes/index", "index", "compile", "runtime", "skills", "defaults"],
+    good: ["diagnostics", "typesys", "typesys/json"],
+  },
+  "compile never imports compose or runtime": {
+    file: "compile/expand.ts",
+    bad: ["compose", "compose/load", "runtime", "runtime/log"],
+    good: ["nodes/contracts", "diagnostics", "run"],
+  },
+  "runtime never imports compile/expand": {
+    file: "runtime/log.ts",
+    bad: ["compile/expand"],
+    good: ["compile/graph", "compile/expander", "nodes/contracts"],
+  },
+  "runtime never imports memory_host or cli": {
+    file: "runtime/log.ts",
+    bad: ["memory_host", "cli", "cli/main"],
+    good: ["memory/contracts", "nodes/contracts"],
+  },
+  "memory/contracts.ts imports only diagnostics and defaults": {
+    file: "memory/contracts.ts",
+    bad: [
+      ...["nodes", "compile", "compose", "runtime", "run", "llm_clients", "index"],
+      ...["memory/episodic", "memory/session", "memory/conversation", "memory/index"],
+    ],
+    good: ["diagnostics", "defaults"],
+  },
+  "memory/conversation.ts imports only memory/contracts": {
+    file: "memory/conversation.ts",
+    bad: [
+      ...["nodes", "compile", "compose", "runtime", "run", "llm_clients", "index", "diagnostics"],
+      ...["memory/episodic", "memory/session", "memory/index"],
+    ],
+    good: ["memory/contracts"],
+  },
+  "skills imports no engine or front-end layer": {
+    file: "skills/load.ts",
+    bad: ["nodes", "nodes/call/node", "compile", "compose", "runtime", "run", "cli"],
+    good: ["diagnostics", "defaults"],
+  },
+  "memory never imports engine, host or cli layers": {
+    file: "memory/session.ts",
+    bad: ["runtime", "compose", "compile", "run", "memory_host", "cli", "index"],
+    good: ["memory/contracts", "memory/index", "diagnostics"],
+  },
+  "defaults.ts imports only node builtins": {
+    file: "defaults.ts",
+    bad: ["diagnostics", "typesys", "index"],
+    good: [],
+  },
+  "llm imports only defaults, platform, typesys/json and llm": {
+    file: "llm/client.ts",
+    bad: ["llm_clients", "nodes", "runtime", "index", "typesys", "typesys/other", "diagnostics"],
+    good: ["defaults", "platform", "typesys/json", "llm/errors", "llm/index"],
+  },
+};
+
+describe("layer rule snippets", () => {
+  for (const rule of RULES) {
+    test(rule.name, () => {
+      const sample = SAMPLES[rule.name];
+      expect(sample).toBeDefined();
+      const { file, bad, good } = sample!;
+      const reported = (text: string) => ruleViolations(rule, [{ path: file, text }]).length > 0;
+      const texts = (specifiers: string[]) => specifiers.flatMap((s) => FORMS.map((form) => form(s)));
+      const local = (ids: string[]) => ids.flatMap((id) => [spell(file, id, ".ts"), spell(file, id, ".js")]);
+      // An allow-list admits only `node:` builtins outside src; a forbid list ignores packages.
+      const packages = ["openai", "yaml", "bun:sqlite", "fs"];
+      const rejected = [...local(bad), ...(rule.allow ? packages : [])];
+      const accepted = [...local(good), "node:fs", ...(rule.allow ? [] : packages)];
+      expect(texts(rejected).filter((text) => !reported(text))).toEqual([]);
+      expect(texts(accepted).filter(reported)).toEqual([]);
+    });
+  }
+
+  test("a violation names the file, line, statement and target", () => {
+    const rule = RULES.find((r) => r.name === "nodes never import compile")!;
+    const text = 'const a = 1;\nimport { expand } from "../../compile/expand.ts";';
+    expect(ruleViolations(rule, [{ path: "nodes/call/node.ts", text }])).toEqual([
+      'nodes/call/node.ts:2: import { expand } from "../../compile/expand.ts"; -> compile/expand',
+    ]);
+    expect(ruleViolations(rule, [{ path: "compile/graph.ts", text }])).toEqual([]);
+  });
+
+  test("an allowed import never exempts another on the same line", () => {
+    const conversation = RULES.find((r) => r.name === "memory/conversation.ts imports only memory/contracts")!;
+    const contracts = RULES.find((r) => r.name === "memory/contracts.ts imports only diagnostics and defaults")!;
+    const check = (rule: Rule, path: string, text: string) =>
+      ruleViolations(rule, [{ path, text }]).map((v) => v.slice(v.lastIndexOf(" -> ") + 4));
+    const shared = 'import { a } from "./contracts.ts"; import { b } from "./session.ts";';
+    expect(check(conversation, "memory/conversation.ts", shared)).toEqual(["memory/session"]);
+    const facade = 'import "./index.ts"; export * from "./contracts.ts";';
+    expect(check(conversation, "memory/conversation.ts", facade)).toEqual(["memory/index"]);
+    const root = 'import "../index.ts"; import { f } from "../diagnostics.ts";';
+    expect(check(contracts, "memory/contracts.ts", root)).toEqual(["index"]);
+  });
+
+  test("entries match whole path segments of relative imports only", () => {
+    const rule = (entries: Partial<Rule>): Rule => ({ name: "t", files: () => true, why: "", ...entries });
+    const reported = (r: Rule, text: string) => ruleViolations(r, [{ path: "x.ts", text }]).length > 0;
+    expect(reported(rule({ forbid: ["run"] }), 'import "./runtime.ts";')).toBe(false);
+    expect(reported(rule({ forbid: ["runtime"] }), 'import "./run.ts";')).toBe(false);
+    expect(reported(rule({ forbid: ["run"] }), 'import "./run/flow.ts";')).toBe(true);
+    // An npm package named like a yian module is no yian module.
+    expect(reported(rule({ forbid: ["run"] }), 'import "run";')).toBe(false);
+    expect(reported(rule({ allow: ["defaults"] }), 'import "defaults";')).toBe(true);
+    expect(reported(rule({ allow: ["llm"] }), 'import "./llm_clients.ts";')).toBe(true);
+  });
+});
+
+describe("lints", () => {
+  const files = sources();
+  for (const lint of LINTS) {
+    test(lint.name, () => {
+      expect(report(lint.fix, lintViolations(lint, files))).toBe("");
+    });
+  }
+});
+
+describe("lint snippets", () => {
+  const hits = (lint: Lint, text: string, path = "runtime/log.ts") => lintViolations(lint, [{ path, text }]);
+
+  test("each engine-dependent form is reported with its line", () => {
+    const forms = [
+      "xs.sort()",
+      "xs.toSorted( )",
+      "a.localeCompare(b)",
+      "new Intl.Collator()",
+      "n.toLocaleString()",
+      "d.toLocaleDateString()",
+      "Date.parse(s)",
+      "process.nextTick(f)",
+      "setImmediate(f)",
+    ];
+    expect(hits(ENGINE_DEPENDENT, forms.join(";\n"))).toEqual([
+      "runtime/log.ts:1: .sort()",
+      "runtime/log.ts:2: .toSorted( )",
+      "runtime/log.ts:3: localeCompare",
+      "runtime/log.ts:4: Intl",
+      "runtime/log.ts:5: toLocaleString",
+      "runtime/log.ts:6: toLocaleDateString",
+      "runtime/log.ts:7: Date.parse",
+      "runtime/log.ts:8: process.nextTick",
+      "runtime/log.ts:9: setImmediate",
+    ]);
+    expect(hits(ENGINE_DEPENDENT, "xs.sort()", "platform.ts")).toEqual(["platform.ts:1: .sort()"]);
+  });
+
+  test("comparators, strings and comments pass; template code doesn't", () => {
+    for (const text of [
+      "xs.sort(compareCodeUnits);",
+      "xs.sort((a, b) => a - b);",
+      "xs.toSorted(compareCodeUnits);",
+      'const s = "use localeCompare";',
+      "// Intl",
+      "/* Date.parse(s) */",
+      "const t = `toLocaleString`;",
+      "const parse = myDate.parse(s);",
+    ]) {
+      expect(hits(ENGINE_DEPENDENT, text)).toEqual([]);
+    }
+    expect(hits(ENGINE_DEPENDENT, "const s = `n: ${x.toLocaleString()}`;")).toEqual([
+      "runtime/log.ts:1: toLocaleString",
+    ]);
+  });
+
+  test("a bare fetch is reported; safeFetch and methods named fetch pass", () => {
+    const text = ["await fetch(url);", "await fetch (url);", "globalThis.fetch(url);", "const f = globalThis.fetch;"];
+    expect(hits(BARE_FETCH, text.join("\n"))).toEqual([
+      "runtime/log.ts:1: fetch(",
+      "runtime/log.ts:2: fetch (",
+      "runtime/log.ts:3: globalThis.fetch",
+      "runtime/log.ts:4: globalThis.fetch",
+    ]);
+    for (const ok of ["safeFetch(url);", "client.fetch(x);", "client?.fetch(x);", 'const s = "fetch(url)";']) {
+      expect(hits(BARE_FETCH, ok)).toEqual([]);
+    }
+  });
+
+  test("fetch, Bun and bun modules pass in platform.ts and fail elsewhere", () => {
+    for (const [lint, text] of [
+      [BARE_FETCH, "await fetch(url);"],
+      [BUN_GLOBAL, "const f = Bun.file(path);"],
+      [BUN_IMPORT, 'import { Database } from "bun:sqlite";'],
+      [BUN_IMPORT, 'import { file } from "bun";'],
+    ] as const) {
+      expect(hits(lint, text, "platform.ts")).toEqual([]);
+      expect(hits(lint, text)).toHaveLength(1);
+    }
+    expect(hits(BUN_IMPORT, 'const a = 1;\nimport { Database } from "bun:sqlite";')).toEqual([
+      'runtime/log.ts:2: import { Database } from "bun:sqlite";',
+    ]);
+    for (const ok of ['type F = BunFile;', 'const s = "Bun.file";', 'import { x } from "./bun.ts";']) {
+      expect([...hits(BUN_GLOBAL, ok), ...hits(BUN_IMPORT, ok)]).toEqual([]);
+    }
   });
 });

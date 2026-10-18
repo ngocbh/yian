@@ -1,0 +1,8 @@
+kind: value
+type: list(int)
+value: [1, 2.5]
+expect:
+  raises:
+    class: TypeCheckError
+    message: 2.5 does not match declared type int
+    path: [1]

@@ -1,0 +1,15 @@
+kind: load
+flow: |
+  id: minimal
+  name: minimal
+  input:
+    q: !str
+  nodes:
+    score:
+      kind: tool
+      tool_id: score
+      input:
+        q: ${input.q}
+  output: ${score.output}
+expect:
+  load: ok

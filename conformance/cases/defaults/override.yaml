@@ -1,0 +1,4 @@
+kind: defaults
+env: {YIAN_MAX_TOTAL_NODES: "20000"}
+expect:
+  defaults: {MAX_TOTAL_NODES: 20000, TOOL_RETRY_DELAY_SECONDS: 1}

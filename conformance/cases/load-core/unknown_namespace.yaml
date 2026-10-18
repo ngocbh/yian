@@ -1,0 +1,20 @@
+kind: load
+flow: |
+  id: typo
+  name: typo
+  input:
+    q: !str
+  nodes:
+    score:
+      kind: tool
+      tool_id: score
+      input:
+        q: ${input.q}
+  output: ${scor.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "flow has unresolved references:\n  flow output from: reference ${scor.output} uses unknown namespace 'scor'"
+        # The `output:` value on line 11.
+        frames: [{label: flow.yaml, range: [11, 9, 11, 23]}]

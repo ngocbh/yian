@@ -1,0 +1,61 @@
+kind: run
+flow: |
+  id: pooled-siblings
+  name: pooled_siblings
+  input:
+    q: !str
+  nodes:
+    a:
+      kind: tool
+      tool_id: lookup
+      input:
+        q: ${input.q}
+    b:
+      kind: tool
+      tool_id: lookup
+      input:
+        q: ${input.q}
+  output:
+    a: ${a.output}
+    b: ${b.output}
+inputs: {q: x}
+run: {run_id: r1}
+host:
+  tools:
+    lookup:
+      parameters:
+        type: object
+        properties: {q: {type: string}}
+        required: [q]
+      results:
+        a: [{return: A}]
+        b: [{return: B}]
+expect:
+  output:
+    status: succeeded
+    output: {a: A, b: B}
+  trace:
+    - [run_started, null, {inputs: {q: x}, learnable: false, num_workers: 8}]
+    - [node_started, __end__]
+    - [node_succeeded, __end__, {value: {a: A, b: B}}]
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {q: x}}]
+    - [node_started, a]
+    - [node_succeeded, a, {value: A}]
+    - [node_started, b]
+    - [node_succeeded, b, {value: B}]
+  events:
+    - [RunStarted]
+    - [RunSucceeded, {output: {a: A, b: B}}]
+    - [NodeStarted, {node_id: __end__}]
+    - [NodeSucceeded, {node_id: __end__, output: {a: A, b: B}}]
+    - [NodeStarted, {node_id: __start__}]
+    - [NodeSucceeded, {node_id: __start__, output: {q: x}}]
+    - [NodeStarted, {node_id: a}]
+    - [NodeSucceeded, {node_id: a, output: A}]
+    - [NodeStarted, {node_id: b}]
+    - [NodeSucceeded, {node_id: b, output: B}]
+  tool_calls:
+    lookup:
+      - {args: {q: x}, call_id: r1/a, attempt: 1, node: a}
+      - {args: {q: x}, call_id: r1/b, attempt: 1, node: b}

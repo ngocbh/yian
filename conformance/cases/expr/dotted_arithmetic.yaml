@@ -1,0 +1,5 @@
+kind: expr
+# `3 * 2` is the int 6, and adding a float gives a float.
+expr: "order.qty * 2 + 0.5"
+values: {order: {qty: 3}}
+expect: {value: 6.5}

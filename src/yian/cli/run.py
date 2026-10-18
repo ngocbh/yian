@@ -65,8 +65,10 @@ from yian.cli.mcp_config import McpConfigError, load_mcp_config, user_mcp_config
 from yian.cli.memory import MemoryOptionError, build_cli_memories
 from yian.cli.terminal import PromptRequest, TerminalBroker
 from yian.cli.utils import print_json
+from yian.compose.build.pipeline import ComposedFlow
 from yian.compose.helpers.errors import LoadError
 from yian.compose.loader import load_flow
+from yian.compose.parse.file import parse_source_document
 from yian.compose.skills import default_skill_roots, load_skills
 from yian.defaults import current
 from yian.diagnostics import Diagnostic
@@ -2201,11 +2203,66 @@ def run(
         raise typer.Exit(code=1)
 
 
-def _check_flow(arg: str) -> Tuple[Dict[str, Any], Optional[Diagnostic]]:
-    """Load the flow file `arg` as `yian run` loads it, running nothing.
+def _load_confined(root: Path, path: Path, loading: frozenset[Path]) -> ComposedFlow:
+    """Load the flow at `path`; it and its `uses:` children load only from inside `root`.
+
+    A `uses:` ref loads only from `<importing file's dir>/<ref>.yaml`, and source labels
+    are paths relative to `root`. `load_flow` puts the `uses:` alias frame on a child's
+    `LoadError` and turns anything else a child raises into a `compose.load` error there.
+
+    Args:
+        root (`Path`): The resolved root directory.
+        path (`Path`): The flow file.
+        loading (`frozenset[Path]`): The resolved paths of the flows importing this one.
+
+    Returns:
+        `ComposedFlow`: The loaded flow.
+
+    Raises:
+        `LoadError`: `compose.outside_root` for a flow outside `root`; `compose.load` for
+            a flow that sets `system.paths` or doesn't load.
+        `ValueError`: A reference cycle or a pinned-version mismatch.
+        `OSError`: The flow can't be read.
+    """
+    # Compare resolved paths so a symlinked root (/var -> /private/var on macOS) works.
+    path = path.resolve()
+    shown = os.path.relpath(path, root)
+    if not path.is_relative_to(root):
+        raise LoadError(
+            Diagnostic(code="compose.outside_root", message=f"{shown} is outside the root {root}")
+        )
+    if path in loading:
+        raise ValueError(f"flow-reference cycle at {shown}")
+    text = path.read_text(encoding="utf-8")
+    doc = parse_source_document(text, shown).root.value
+    # `load_flow` doesn't search `system.paths` when given a child resolver, so such a
+    # flow would load differently from `yian run`.
+    if isinstance(doc, dict) and isinstance(doc.get("system"), dict) and "paths" in doc["system"]:
+        raise LoadError(
+            Diagnostic(
+                code="compose.load",
+                message="system.paths is not supported with --root; use a relative uses: path",
+            )
+        )
+
+    def resolve(ref: str, version: Optional[str] = None) -> ComposedFlow:
+        child = _load_confined(root, path.parent / f"{ref}.yaml", loading | {path})
+        if version is not None and child.version != version:
+            raise ValueError(f"{ref} is version {child.version!r}, not {version!r}")
+        return child
+
+    return load_flow(text, child_resolver=resolve, source_label=shown)
+
+
+def _check_flow(
+    arg: str, root: Optional[Path] = None
+) -> Tuple[Dict[str, Any], Optional[Diagnostic]]:
+    """Load the flow file `arg` as `yian run` loads it, or confined to `root`, running nothing.
 
     Args:
         arg (`str`): The flow path exactly as given on the command line.
+        root (`Path`, *optional*, defaults to `None`): The resolved root directory the flow
+            and its `uses:` children must load from (see `_load_confined`).
 
     Returns:
         `Tuple[Dict[str, Any], Optional[Diagnostic]]`: The flow's `check` result,
@@ -2214,8 +2271,11 @@ def _check_flow(arg: str) -> Tuple[Dict[str, Any], Optional[Diagnostic]]:
     """
     path = Path(arg)
     try:
-        text = path.read_text(encoding="utf-8")
-        loaded = load_flow(text, search_paths=[path.parent], source_label=path.name)
+        if root is None:
+            text = path.read_text(encoding="utf-8")
+            loaded = load_flow(text, search_paths=[path.parent], source_label=path.name)
+        else:
+            loaded = _load_confined(root, path, frozenset())
     except LoadError as err:
         diagnostic = err.diagnostic
     except UnicodeDecodeError:
@@ -2251,9 +2311,22 @@ def check(
     json_output: bool = typer.Option(
         False, "--json", help="Print one yian.cli.v1 JSON document on stdout."
     ),
+    root: Optional[Path] = typer.Option(
+        None,
+        "--root",
+        exists=True,
+        file_okay=False,
+        help="Load each flow and its uses: children only from inside this directory.",
+    ),
 ) -> None:
-    """Load each flow without running it and report whether it loads."""
-    results = [_check_flow(arg) for arg in flows]
+    """Load each flow without running it and report whether it loads.
+
+    With `--root`, each flow and its `uses:` children must be inside that directory, a
+    `uses:` ref loads only from the importing file's directory, and a flow may not set
+    `system.paths`.
+    """
+    resolved_root = root.resolve() if root is not None else None
+    results = [_check_flow(arg, resolved_root) for arg in flows]
     if json_output:
         print_json({"flows": [result for result, _ in results]})
     else:

@@ -1,0 +1,43 @@
+kind: cli
+files:
+  company/a.yaml: |
+    id: a
+    name: a
+    input:
+      n: !int
+    nodes:
+      next:
+        kind: call
+        call: b
+        input:
+          n: ${input.n}
+    output: ${next.output}
+    uses:
+      b: b
+  company/b.yaml: |
+    id: b
+    name: b
+    input:
+      n: !int
+    nodes:
+      next:
+        kind: call
+        call: a
+        input:
+          n: ${input.n}
+    output: ${next.output}
+    uses:
+      a: a
+args: [check, --root, company, --json, company/a.yaml]
+expect:
+  exit: 1
+  json:
+    format: yian.cli.v1
+    flows:
+      - path: company/a.yaml
+        ok: false
+        diagnostics:
+          - code: compose.load
+            frames:
+              - {label: a.yaml, range: [13, 6, 13, 7], note: "uses alias 'b'"}
+              - {label: b.yaml, range: [13, 6, 13, 7], note: "uses alias 'a'"}

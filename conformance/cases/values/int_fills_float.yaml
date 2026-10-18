@@ -1,6 +1,8 @@
 kind: value
 # An int filling a float slot stays an int; Python yian widens it to the float 2.0.
 rules: [int-in-float]
+# TS yian still widens until #776 lands.
+pending: "#776"
 type: float
 value: 2
 expect: {value: 2, kind: int}

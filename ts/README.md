@@ -74,10 +74,11 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   never retried.
 - Every request goes through `safeFetch` in `src/platform.ts` (no redirects, `User-Agent`); code
   that needs a fake or a cassette injects a `Send`, never a global `fetch`.
-- An adapter is a `WireProtocol` (`src/llm/executor.ts`): it builds the body from a `Request` and
-  turns SSE or NDJSON frames into events. `RouteModel` sends it over a `Route` (`src/llm/route.ts`,
-  with an auth object from `src/llm/auth.ts`), one attempt per call, under yian's first-response
-  and idle timers (`src/llm/transport.ts`). `shortRequest` is for model listing and sign-in.
+- An adapter is a `WireProtocol` (`src/llm/executor.ts`), one file per wire format in
+  `src/llm/protocols/`: it builds the body from a `Request` and turns SSE or NDJSON frames into
+  events. `RouteModel` sends it over a `Route` (`src/llm/route.ts`, with an auth object from
+  `src/llm/auth.ts`), one attempt per call, under yian's first-response and idle timers
+  (`src/llm/transport.ts`). `shortRequest` is for model listing and sign-in.
 - Retries happen above the call: `callWithRetries` retries a retryable `ProviderError`, before or
   after partial output, up to `MODEL_RETRIES` times, calling `onRetry` before each wait.
 - `ScriptedModel` in `src/llm/testing.ts` scripts model replies for tests. Cassettes

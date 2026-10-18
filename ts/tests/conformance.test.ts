@@ -43,6 +43,12 @@ describe("readCase", () => {
     expect(readCase("k: &x a\n*x : 1")).toEqual({ k: "a", a: 1n });
   });
 
+  test("has no alias limit", () => {
+    const list = Array.from({ length: 10 }, (_, index) => index + 1);
+    const read = readCase(`a: &x [${list.join(", ")}]\nb: [${Array(200).fill("*x").join(", ")}]`);
+    expect(read["b"]).toEqual(Array(200).fill(list.map(BigInt)));
+  });
+
   test.each([
     ["a: !!str 12", '"tag:yaml.org,2002:str"'],
     ["a: ! 12", '"!"'],
@@ -60,6 +66,9 @@ describe("readCase", () => {
     [": x", "mapping key null is not text"],
     ["{1: a, b: 1, b: 2}", "mapping key 1 is not text"],
     ["{b: 1, b: 2, 1: a}", 'duplicate key "b"'],
+    ["{a: 1, a: 2}: x", 'duplicate key "a"'],
+    ["{1: x}: y", "mapping key 1 is not text"],
+    ["[{1: a}]: y", "mapping key 1 is not text"],
     ["- a", "a case file holds one mapping"],
     ["", "a case file holds one mapping"],
   ])("refuses %p", (text, message) => {
@@ -111,6 +120,7 @@ describe("checkCase", () => {
     [`${LOAD}rules: [text]\npython_expect: {}`, "`python_expect` needs `load`"],
     [`${LOAD}rules: text`, "`rules` must be a list of rule ids"],
     [`${LOAD}rules: [1]`, "`rules` must be a list of rule ids"],
+    [`${LOAD}rules: .nan\npython_expect: {load: ok}`, "`rules` must be a list of rule ids"],
     [`${CLI}args: [1]`, "`args` must be a list of text"],
     [`${LOAD}rules: [nope, text, bad]`, "unknown rule ids: nope, bad"],
     [`${LOAD}env: 1`, "`env` must be a mapping"],
@@ -120,6 +130,10 @@ describe("checkCase", () => {
     [`${LOAD}python_flow: [a]`, "`python_flow` must be text"],
     ["kind: fingerprint\nflow: x\nother: 1\nexpect: {fingerprint: same}", "`other` must be text"],
     [`${CLI}stdin: 1`, "`stdin` must be text"],
+    [
+      "kind: fingerprint\nflow: x\nother: y\npython_flow: z\nexpect: {fingerprint: same}",
+      "`python_flow` is not a key of a `fingerprint` case",
+    ],
     [`${RUN}run: 1`, "`run` must be a mapping"],
     [`${RUN}run: {x: 1}`, "unknown key `run.x`"],
     [`${RUN}run: {context: yes}`, "`run.context` must be `present`"],
@@ -220,6 +234,8 @@ describe("checkCase", () => {
     `${RUN}host: {jitter: [0, 0.5], human: {n: [a]}}`,
     TOOL("{n: [{return: 1}, {raise: {class: TransientToolError, message: m, retry_after: 1}}]}"),
     RESUME,
+    `${BARE_RESUME}run: {num_workers: 0.0}\nhost: {crash_after_record: 1}`,
+    `${BARE_RESUME}run: {num_workers: false}\nhost: {crash_after_record: 1}`,
     BACKWARD,
     `${EXPR}expr: a\nitem: 1`,
     `${EXPR}expr: a\nmode: condition`,

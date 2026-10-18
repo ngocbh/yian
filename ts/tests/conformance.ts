@@ -7,12 +7,13 @@
  * Runs under Bun from source and under Node from `dist/`; only `node:` APIs and `yaml`.
  */
 
-import { isMap, isNode, isSeq, parseDocument, visit } from "yaml";
+import { isCollection, isMap, isNode, isSeq, parseDocument, visit } from "yaml";
+import type { Document, YAMLMap } from "yaml";
 
 /** A case value: an int is a `bigint`, a float a `number`. */
-export type Value = null | boolean | bigint | number | string | Value[] | { [key: string]: Value };
+export type Value = null | boolean | bigint | number | string | Value[] | Case;
 
-/** A case file, as read. */
+/** A case file, as read, and any mapping in it. */
 export type Case = { [key: string]: Value };
 
 /** The kinds of case. */
@@ -27,67 +28,62 @@ export type Kind =
   | "fingerprint"
   | "cli";
 
-/** A mapping in a case. */
-type Mapping = { [key: string]: Value };
-
-// The closed format, as conformance/README.md defines it. Sets and maps, never object lookups,
-// so a case value such as `kind: toString` never finds an `Object.prototype` member.
+// The closed format, as conformance/README.md defines it. Sets, and tables keyed by a checked
+// `Kind`, so a case value such as `kind: toString` never finds an `Object.prototype` member.
 const COMMON: ReadonlySet<string> = new Set([
   "kind", "rules", "pending", "python_skip", "expect", "python_expect",
 ]);
 const FLOW: ReadonlySet<string> = new Set(["flow", "python_flow", "files", "env"]);
 const RUN: ReadonlySet<string> = new Set([...FLOW, "inputs", "run", "host"]);
-const KIND_KEYS: ReadonlyMap<Kind, ReadonlySet<string>> = new Map<Kind, ReadonlySet<string>>([
-  ["load", FLOW],
-  ["run", RUN],
-  ["resume", new Set([...RUN, "resume"])],
-  ["backward", new Set([...RUN, "backward"])],
-  ["expr", new Set(["expr", "template", "values", "item", "mode", "typedefs", "env"])],
-  ["value", new Set(["type", "typedefs", "value", "env"])],
-  ["defaults", new Set(["env"])],
+const KIND_KEYS = {
+  load: FLOW,
+  run: RUN,
+  resume: new Set([...RUN, "resume"]),
+  backward: new Set([...RUN, "backward"]),
+  expr: new Set(["expr", "template", "values", "item", "mode", "typedefs", "env"]),
+  value: new Set(["type", "typedefs", "value", "env"]),
+  defaults: new Set(["env"]),
   // Both runners load `flow` and `other` as written, so there is no `python_flow`.
-  ["fingerprint", new Set([...[...FLOW].filter((key) => key !== "python_flow"), "other"])],
-  ["cli", new Set([...FLOW, "args", "stdin"])],
-]);
-const REQUIRED: ReadonlyMap<Kind, readonly string[]> = new Map<Kind, readonly string[]>([
-  ["load", ["flow"]], ["run", ["flow"]], ["resume", ["flow"]], ["backward", ["flow", "backward"]],
-  ["value", ["type", "value"]], ["fingerprint", ["flow", "other"]],
-]);
+  fingerprint: new Set(["flow", "files", "env", "other"]),
+  cli: new Set([...FLOW, "args", "stdin"]),
+} satisfies Record<Kind, ReadonlySet<string>>;
+const REQUIRED: Partial<Record<Kind, readonly string[]>> = {
+  load: ["flow"], run: ["flow"], resume: ["flow"], backward: ["flow", "backward"],
+  value: ["type", "value"], fingerprint: ["flow", "other"],
+};
 // Each kind's `expect` holds exactly one of its result groups, and any of its optional keys.
-const RESULTS: ReadonlyMap<Kind, readonly (readonly string[])[]> = new Map<
-  Kind,
-  readonly (readonly string[])[]
->([
-  ["load", [["load"]]],
-  ["run", [["raises"], ["output"]]],
-  ["resume", [["raises"], ["output"]]],
-  ["backward", [["raises"], ["output"]]],
-  ["expr", [["value"], ["raises"]]],
-  ["value", [["value", "kind"], ["raises"]]],
-  ["defaults", [["defaults"], ["raises"]]],
-  ["fingerprint", [["fingerprint"]]],
-  ["cli", [["exit"]]],
-]);
+const RESULTS = {
+  load: [["load"]],
+  run: [["raises"], ["output"]],
+  resume: [["raises"], ["output"]],
+  backward: [["raises"], ["output"]],
+  expr: [["value"], ["raises"]],
+  value: [["value", "kind"], ["raises"]],
+  defaults: [["defaults"], ["raises"]],
+  fingerprint: [["fingerprint"]],
+  cli: [["exit"]],
+} satisfies Record<Kind, readonly (readonly string[])[]>;
 const RUN_OPTIONAL: ReadonlySet<string> = new Set([
   "trace", "events", "stream", "tool_calls", "memory",
 ]);
-const OPTIONAL: ReadonlyMap<Kind, ReadonlySet<string>> = new Map<Kind, ReadonlySet<string>>([
-  ["run", RUN_OPTIONAL],
-  ["resume", RUN_OPTIONAL],
-  ["backward", new Set([...RUN_OPTIONAL, "backward"])],
-  ["cli", new Set(["stdout", "stderr", "json", "json_lines"])],
-]);
-const EXPECT_KEYS: ReadonlyMap<Kind, ReadonlySet<string>> = new Map(
-  [...RESULTS].map(([kind, groups]) => [
-    kind,
-    new Set([...(OPTIONAL.get(kind) ?? []), ...groups.flat()]),
-  ]),
-);
+const OPTIONAL: Partial<Record<Kind, ReadonlySet<string>>> = {
+  run: RUN_OPTIONAL,
+  resume: RUN_OPTIONAL,
+  backward: new Set([...RUN_OPTIONAL, "backward"]),
+  cli: new Set(["stdout", "stderr", "json", "json_lines"]),
+};
+const KIND_NAMES = Object.keys(KIND_KEYS) as Kind[];
+
+/** Return the keys a `kind` case's `expect` may hold: its result groups' and optional keys. */
+function expectKeys(kind: Kind): ReadonlySet<string> {
+  return new Set([...(OPTIONAL[kind] ?? []), ...RESULTS[kind].flat()]);
+}
+
 const ALL_KEYS: ReadonlySet<string> = new Set([
-  ...COMMON, ...[...KIND_KEYS.values()].flatMap((keys) => [...keys]),
+  ...COMMON, ...KIND_NAMES.flatMap((kind) => [...KIND_KEYS[kind]]),
 ]);
 const ALL_EXPECT_KEYS: ReadonlySet<string> = new Set(
-  [...EXPECT_KEYS.values()].flatMap((keys) => [...keys]),
+  KIND_NAMES.flatMap((kind) => [...expectKeys(kind)]),
 );
 const RUN_KEYS: ReadonlySet<string> = new Set([
   "run_id", "num_workers", "learnable", "llm_config", "context",
@@ -109,7 +105,7 @@ const SECRET_KEYS: ReadonlySet<string> = new Set([
 const SECRET = /<key:([0-9]+)>/g;
 
 /** Return `value` spelled for a message: JSON, a `bigint` as its digits, `null` when absent. */
-export function spell(value: Value | undefined): string {
+function spell(value: Value | undefined): string {
   if (value === undefined) return "null";
   if (typeof value === "bigint") return value.toString();
   if (typeof value === "number" && !Number.isFinite(value)) return String(value);
@@ -124,12 +120,12 @@ export function spell(value: Value | undefined): string {
 }
 
 /** Return whether `value` is a mapping. */
-function isMapping(value: Value | undefined): value is Mapping {
+function isMapping(value: Value | undefined): value is Case {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** Return `mapping[key]` when it is an own key, else `fallback`. */
-function get(mapping: Mapping, key: string, fallback?: Value): Value | undefined {
+function get(mapping: Case, key: string, fallback?: Value): Value | undefined {
   return Object.hasOwn(mapping, key) ? mapping[key] : fallback;
 }
 
@@ -137,6 +133,8 @@ function get(mapping: Mapping, key: string, fallback?: Value): Value | undefined
 function truthy(value: Value | undefined): boolean {
   if (Array.isArray(value)) return value.length > 0;
   if (isMapping(value)) return Object.keys(value).length > 0;
+  // NaN is true to Python.
+  if (typeof value === "number") return value !== 0;
   return Boolean(value);
 }
 
@@ -164,26 +162,37 @@ export function readCase(text: string): Case {
   // Keys are checked level by level, mappings in document order, as Python's constructor does.
   const nodes: unknown[] = [doc.contents];
   for (const node of nodes) {
-    if (isSeq(node)) {
-      nodes.push(...node.items);
-    } else if (isMap(node)) {
-      const seen = new Set<string>();
-      for (const pair of node.items) {
-        const key = (isNode(pair.key) ? pair.key.toJS(doc) : pair.key) as Value;
-        if (typeof key !== "string") throw new Error(`mapping key ${spell(key)} is not text`);
-        if (seen.has(key)) throw new Error(`duplicate key ${spell(key)}`);
-        seen.add(key);
-        nodes.push(pair.value);
-      }
-    }
+    if (isSeq(node)) nodes.push(...node.items);
+    else if (isMap(node)) checkKeys(doc, node, (value) => nodes.push(value));
   }
-  const value = doc.toJS() as Value;
+  // Case files are trusted, and Python has no alias limit.
+  const value = doc.toJS({ maxAliasCount: -1 }) as Value;
   if (!isMapping(value)) throw new Error("a case file holds one mapping");
   return value;
 }
 
+/** Throw unless every key of `map` is text and appears once; hand each value to `next`. */
+function checkKeys(doc: Document, map: YAMLMap, next: (value: unknown) => void): void {
+  const seen = new Set<string>();
+  for (const pair of map.items) {
+    // Python builds a collection key in full first, so a bad key inside it is reported first.
+    if (isCollection(pair.key)) checkDeep(doc, pair.key);
+    const key = (isNode(pair.key) ? pair.key.toJS(doc, { maxAliasCount: -1 }) : pair.key) as Value;
+    if (typeof key !== "string") throw new Error(`mapping key ${spell(key)} is not text`);
+    if (seen.has(key)) throw new Error(`duplicate key ${spell(key)}`);
+    seen.add(key);
+    next(pair.value);
+  }
+}
+
+/** Throw unless every mapping in `node` has only text keys, each once, depth first. */
+function checkDeep(doc: Document, node: unknown): void {
+  if (isSeq(node)) node.items.forEach((item) => checkDeep(doc, item));
+  else if (isMap(node)) checkKeys(doc, node, (value) => checkDeep(doc, value));
+}
+
 /** Return `value`, throwing unless it is a mapping. */
-function mapping(where: string, value: Value | undefined): Mapping {
+function mapping(where: string, value: Value | undefined): Case {
   if (!isMapping(value)) throw new Error(`\`${where || "the case"}\` must be a mapping`);
   return value;
 }
@@ -201,7 +210,7 @@ function keys(
     kind?: string;
     required?: readonly string[];
   } = {},
-): Mapping {
+): Case {
   const name = (key: string) => (where ? `${where}.${key}` : key);
   const map = mapping(where, value);
   for (const key of Object.keys(map)) {
@@ -242,8 +251,8 @@ function checkHost(value: Value | undefined, kind: Kind): void {
           throw new Error(`\`${at}\` takes \`return\` or \`raise\``);
         }
         if (Object.hasOwn(step, "raise")) {
-          const allowed = new Set(["class", "message", "retry_after"]);
-          const error = keys(`${at}.raise`, step["raise"], allowed, {
+          const raiseKeys = new Set(["class", "message", "retry_after"]);
+          const error = keys(`${at}.raise`, step["raise"], raiseKeys, {
             required: ["class", "message"],
           });
           if (Object.hasOwn(error, "retry_after") && error["class"] !== "TransientToolError") {
@@ -273,29 +282,29 @@ function checkHost(value: Value | undefined, kind: Kind): void {
 
 /** Return whether `value` names a kind of case. */
 function isKind(value: Value | undefined): value is Kind {
-  return typeof value === "string" && KIND_KEYS.has(value as Kind);
+  return typeof value === "string" && Object.hasOwn(KIND_KEYS, value);
 }
 
 /** Return `case_` after checking it against the closed format; throw naming the problem. */
 export function checkCase(case_: Case): Case {
   const kind = get(case_, "kind");
   if (!isKind(kind)) {
-    const kinds = [...KIND_KEYS.keys()].join(", ");
+    const kinds = KIND_NAMES.join(", ");
     throw new Error(`\`kind\` must be one of ${kinds}, not ${spell(kind)}`);
   }
-  keys("", case_, new Set([...COMMON, ...(KIND_KEYS.get(kind) ?? [])]), {
+  keys("", case_, new Set([...COMMON, ...KIND_KEYS[kind]]), {
     known: ALL_KEYS,
     kind,
-    required: ["kind", "expect", ...(REQUIRED.get(kind) ?? [])],
+    required: ["kind", "expect", ...(REQUIRED[kind] ?? [])],
   });
-  const optional = OPTIONAL.get(kind) ?? new Set<string>();
+  const optional = OPTIONAL[kind] ?? new Set<string>();
   for (const key of ["expect", "python_expect"]) {
     if (!Object.hasOwn(case_, key)) continue;
-    const expect = keys(key, case_[key], EXPECT_KEYS.get(kind) ?? new Set<string>(), {
+    const expect = keys(key, case_[key], expectKeys(kind), {
       known: ALL_EXPECT_KEYS,
       kind,
     });
-    const groups = RESULTS.get(kind) ?? [];
+    const groups: readonly (readonly string[])[] = RESULTS[kind];
     const results = Object.keys(expect).filter((name) => !optional.has(name));
     const matches = (group: readonly string[]) =>
       group.length === results.length && group.every((name) => results.includes(name));
@@ -349,9 +358,9 @@ export function checkCase(case_: Case): Case {
   }
   if (Object.hasOwn(case_, "host")) checkHost(case_["host"], kind);
   // Both were checked as mappings above when present.
-  const run = get(case_, "run", {}) as Mapping;
+  const run = get(case_, "run", {}) as Case;
   if (kind === "resume") {
-    const cut = get(get(case_, "host", {}) as Mapping, "crash_after_record");
+    const cut = get(get(case_, "host", {}) as Case, "crash_after_record");
     if (typeof cut !== "bigint" || cut < 0n) {
       throw new Error("a `resume` case needs `host.crash_after_record`, a record number");
     }
@@ -416,7 +425,7 @@ export function decode(value: Value): Value {
 }
 
 /** Return `value` with each `<key:N>` in its text replaced by `sk-conformance-N`. */
-export function fillSecrets(value: Value): Value {
+function fillSecrets(value: Value): Value {
   if (typeof value === "string") return value.replace(SECRET, "sk-conformance-$1");
   if (Array.isArray(value)) return value.map(fillSecrets);
   if (isMapping(value)) {

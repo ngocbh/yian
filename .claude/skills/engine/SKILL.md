@@ -205,10 +205,10 @@ this model whenever you design anything:
   class names and traceback text must never decide behavior. The evaluator assigns
   `binding.evaluate`, `binding.type`, `contract.input`, `assertion.failed`,
   `node.execute`, and `contract.node_result` by operation stage; a node-body failure
-  takes the node's `exception_code` hook (default `node.execute`; LOOP and AGENT name
-  their own codes). The dispatcher assigns
-  `contract.output`, `contract.route`, and `contract.growth` from the closed
-  `Output`, `Route`, and `Grow` arms, never from an exception class. A
+  takes its code from the node's `exception_code` hook (default `node.execute`; LOOP
+  and AGENT name their own codes). The dispatcher assigns `contract.output`,
+  `contract.route`, and `contract.growth` from the closed `Output`, `Route`, and
+  `Grow` arms, never from an exception class. A
   `TypeCheckError.path` is a contract-relative tuple of record names and actual
   list indices. Supplied-input and output type rejection resolve it through
   `ContractOrigins` (exact, nearest ancestor, then default); output uses the

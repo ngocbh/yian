@@ -147,14 +147,13 @@ execution identity. The closed plain-string codes are `binding.evaluate`,
 `binding.type`, `contract.input`, `assertion.failed`, `node.execute`,
 `contract.node_result`, `contract.output`, `contract.route`, `contract.growth`,
 `graph.terminal_unreachable`, `loop.max_exceeded`, `agent.max_tool_iterations`, and
-`provider.auth`. Exception names and traceback text are debug data,
-not semantic categories. The contract reserves these codes for expected
-flow-owned rejection. The evaluator structurally assigns `binding.evaluate`,
-`binding.type`, `contract.input`, `assertion.failed`, `node.execute`, and
-`contract.node_result`; it never classifies by exception type. A body failure's
-code comes from the node's `exception_code` hook (default `node.execute`). `EvaluationFailure`
-owns exactly that single `Failure`. Dispatcher
-classification is structural too:
+`provider.auth`. Exception names and traceback text are debug data, not semantic
+categories. The contract reserves these codes for expected flow-owned rejection.
+The evaluator structurally assigns `binding.evaluate`, `binding.type`,
+`contract.input`, `assertion.failed`, `node.execute`, and `contract.node_result`; it
+never classifies by exception type. A body failure's code comes from the node's
+`exception_code` hook (default `node.execute`). `EvaluationFailure` owns exactly
+that single `Failure`. Dispatcher classification is structural too:
 
 | Result rejected during preparation | Code | Best current origin |
 |---|---|---|

@@ -1396,7 +1396,7 @@ Keys in use today:
 
 | Key | Node kind | Meaning |
 |-----|-----------|---------|
-| `max_tool_iterations` | `agent` | Model turns the tool-calling loop runs before it fails with `failure.code` `agent.max_tool_iterations`. If the reply on the last allowed turn asks for tools, the node fails without running them, since no later model call could read their results. Default `-1` (**no cap** — run until a final answer; `YIAN_AGENT_MAX_TOOL_ITERATIONS` changes it, see [Defaults and limits](defaults.md)). Set a positive int to bound it; any other value (`0`, other negatives, a non-int) fails at load, on the flow `env:` or the AGENT node's `env:`. |
+| `max_tool_iterations` | `agent` | Model turns the tool-calling loop runs before it fails with the failure code `agent.max_tool_iterations`. If the reply on the last allowed turn asks for tools, the node fails without running them, since no later model call could read their results. Default `-1` (**no cap** — run until a final answer; `YIAN_AGENT_MAX_TOOL_ITERATIONS` changes it, see [Defaults and limits](defaults.md)). Set a positive int to bound it; any other value (`0`, other negatives, a non-int) fails at load, on the flow `env:` or the AGENT node's `env:`. |
 
 ## Secrets stay out of flow files
 

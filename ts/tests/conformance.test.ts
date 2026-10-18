@@ -150,6 +150,7 @@ describe("checkCase", () => {
     [`${LOAD}env: 1`, "`env` must be a mapping"],
     [`${LOAD}env: {A: 1}`, "`env` values must be text"],
     [`${LOAD}files: {a: 1}`, "`files` values must be text"],
+    [`${LOAD}python_files: {a: 1}`, "`python_files` values must be text"],
     ["kind: load\nflow: 1\nexpect: {load: ok}", "`flow` must be text"],
     [`${LOAD}python_flow: [a]`, "`python_flow` must be text"],
     ["kind: fingerprint\nflow: x\nother: 1\nexpect: {fingerprint: same}", "`other` must be text"],
@@ -157,6 +158,10 @@ describe("checkCase", () => {
     [
       "kind: fingerprint\nflow: x\nother: y\npython_flow: z\nexpect: {fingerprint: same}",
       "`python_flow` is not a key of a `fingerprint` case",
+    ],
+    [
+      "kind: fingerprint\nflow: x\nother: y\npython_files: {}\nexpect: {fingerprint: same}",
+      "`python_files` is not a key of a `fingerprint` case",
     ],
     [`${RUN}run: 1`, "`run` must be a mapping"],
     [`${RUN}run: {x: 1}`, "unknown key `run.x`"],
@@ -323,7 +328,8 @@ describe("prepare", () => {
     const inf = "{$float: inf}";
     const prepared = prepare(
       readCase(
-        `flow: "${inf}"\npython_flow: x\nother: y\nfiles: {a: b}\nstdin: z\n` +
+        `flow: "${inf}"\npython_flow: x\nother: y\nfiles: {a: b}\npython_files: {a: "${inf}"}\n` +
+          `stdin: z\n` +
           `inputs: {a: ${inf}}\nexpect: {output: ${inf}}\npython_expect: {output: ${inf}}`,
       ),
     );
@@ -332,6 +338,7 @@ describe("prepare", () => {
       python_flow: "x",
       other: "y",
       files: { a: "b" },
+      python_files: { a: inf },
       stdin: "z",
       inputs: { a: Infinity },
       expect: { output: Infinity },

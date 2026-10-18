@@ -49,7 +49,7 @@ export type Kind =
 const COMMON: ReadonlySet<string> = new Set([
   "kind", "rules", "pending", "python_skip", "expect", "python_expect",
 ]);
-const FLOW: ReadonlySet<string> = new Set(["flow", "python_flow", "files", "env"]);
+const FLOW: ReadonlySet<string> = new Set(["flow", "python_flow", "files", "python_files", "env"]);
 const RUN: ReadonlySet<string> = new Set([...FLOW, "inputs", "run", "host"]);
 const KIND_KEYS = {
   load: FLOW,
@@ -59,7 +59,7 @@ const KIND_KEYS = {
   expr: new Set(["expr", "template", "values", "item", "mode", "typedefs", "env"]),
   value: new Set(["type", "typedefs", "value", "env"]),
   defaults: new Set(["env"]),
-  // Both runners load `flow` and `other` as written, so there is no `python_flow`.
+  // Both runners load `flow` and `other` as written: no `python_flow` or `python_files`.
   fingerprint: new Set(["flow", "files", "env", "other"]),
   cli: new Set([...FLOW, "args", "stdin"]),
 } satisfies Record<Kind, ReadonlySet<string>>;
@@ -119,7 +119,9 @@ const RULES: ReadonlySet<string> = new Set([
   "text", "yaml", "dates", "infinity", "llm", "code",
 ]);
 // Keys holding text that is not a case value: no codec form, no number checks.
-const TEXT_KEYS: ReadonlySet<string> = new Set(["flow", "python_flow", "other", "files", "stdin"]);
+const TEXT_KEYS: ReadonlySet<string> = new Set([
+  "flow", "python_flow", "other", "files", "python_files", "stdin",
+]);
 const SECRET_KEYS: ReadonlySet<string> = new Set([
   "run", "resume", "backward", "env", "host", "stdin",
 ]);
@@ -351,13 +353,13 @@ export function checkCase(case_: Case): Case {
   const rules = get(case_, "rules", []) as string[];
   const unknown = rules.filter((rule) => !RULES.has(rule));
   if (unknown.length > 0) throw new Error(`unknown rule ids: ${unknown.join(", ")}`);
-  for (const key of ["env", "files"]) {
+  for (const key of ["env", "files", "python_files"]) {
     if (Object.values(mapping(key, get(case_, key, {}))).some((text) => typeof text !== "string")) {
       throw new Error(`\`${key}\` values must be text`);
     }
   }
   for (const key of TEXT_KEYS) {
-    if (key !== "files" && typeof get(case_, key, "") !== "string") {
+    if (key !== "files" && key !== "python_files" && typeof get(case_, key, "") !== "string") {
       throw new Error(`\`${key}\` must be text`);
     }
   }

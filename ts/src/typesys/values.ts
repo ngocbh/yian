@@ -212,6 +212,256 @@ export function renderValuePath(path: readonly (string | number)[]): string {
   return points.slice(0, head).join("") + "…" + tail.join("");
 }
 
+/**
+ * Throw if a value nests deeper than `YIAN_MAX_VALUE_NESTING` levels (100 by default).
+ *
+ * Each array, record and `FileRef` is one level; a `TypedValue` is unwrapped and adds none.
+ * The walk is depth first and in order. A container already on the current path is skipped;
+ * the codecs refuse cycles.
+ *
+ * @param value The value to check.
+ * @param where Names the boundary for the message, e.g. `"output"`.
+ * @param options.enclosingLevels Levels counted around the value (default 0); -1 lets the
+ *   value itself go one level over, as for a START's input record.
+ * @throws TypeCheckError at the first container past the limit, reading `<where>[ at <path>]:
+ *   value nests deeper than <limit> levels, the limit for a yian value (each record and list
+ *   is a level)`.
+ */
+export function rejectDeepNesting(
+  value: unknown,
+  where: string,
+  { enclosingLevels = 0 }: { enclosingLevels?: number } = {},
+): void {
+  const limit = current().maxValueNesting;
+  if (1 + enclosingLevels > limit && isNestingLevel(unwrapTyped(value))) {
+    throw tooDeep(where, [], limit);
+  }
+  for (const [stack, key, , descends] of walkNesting(value)) {
+    if (descends && stack.length + 1 + enclosingLevels > limit) {
+      throw tooDeep(where, [...framePath(stack), key], limit);
+    }
+  }
+}
+
+/**
+ * Return the path of the first entry that refers back to a container enclosing it.
+ *
+ * Walks the containers `rejectDeepNesting` walks, depth first and in order, and unwraps a
+ * `TypedValue`. A container repeated outside its own path does not count.
+ *
+ * Returns the entry's path from `value`, or `null` if no entry holds a container enclosing it.
+ */
+export function recursiveEntryPath(value: unknown): ValuePath | null {
+  for (const [stack, key, child, descends] of walkNesting(value)) {
+    if (!descends && isNestingLevel(child)) return [...framePath(stack), key];
+  }
+  return null;
+}
+
+/** An open container in the nesting walk. */
+interface NestingFrame {
+  readonly container: object;
+  /** The keys of a record or `FileRef`, or `null` for an array, read up to its length. */
+  readonly keys: readonly string[] | null;
+  /** The container's key or index in its parent (`null` for the root). */
+  readonly key: string | number | null;
+  index: number;
+}
+
+/**
+ * One entry of the nesting walk: the frames of the containers on the current path, root
+ * first, with the entry's container last; the entry's key in that container; its value,
+ * unwrapped; and whether the walk goes into the entry next.
+ */
+type NestingEntry = [
+  stack: readonly NestingFrame[],
+  key: string | number,
+  child: unknown,
+  descends: boolean,
+];
+
+/**
+ * Yield each entry of a value's containers, depth first and in order.
+ *
+ * Unwraps a `TypedValue` wherever it sits. The walk goes into an entry that is an array,
+ * record or `FileRef` not already on the path. A caller reads the stack before resuming the
+ * walk, which changes it. A leaf yields nothing.
+ */
+function* walkNesting(value: unknown): Generator<NestingEntry> {
+  const root = unwrapTyped(value);
+  if (!isNestingLevel(root)) return;
+  // An explicit stack, not recursion, so any depth works.
+  const stack: NestingFrame[] = [nestingFrame(root, null)];
+  const active = new Set<object>([root]);
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1]!;
+    const container = frame.container as Record<string | number, unknown>;
+    const size = frame.keys === null ? (frame.container as unknown[]).length : frame.keys.length;
+    if (frame.index >= size) {
+      stack.pop();
+      active.delete(frame.container);
+      continue;
+    }
+    const index = frame.index++;
+    const key = frame.keys === null ? index : frame.keys[index]!;
+    const child = unwrapTyped(container[key]);
+    const descends = isNestingLevel(child) && !active.has(child);
+    yield [stack, key, child, descends];
+    if (descends) {
+      stack.push(nestingFrame(child, key));
+      active.add(child);
+    }
+  }
+}
+
+/** Return the open frame of `container`, an array, record or `FileRef`, at `key`. */
+function nestingFrame(container: object, key: string | number | null): NestingFrame {
+  let keys: readonly string[] | null = null;
+  if (container instanceof FileRef) keys = FILE_FIELDS;
+  else if (!isList(container)) keys = Object.keys(container);
+  return { container, keys, key, index: 0 };
+}
+
+/** Return the path from the root to the last frame's container. */
+function framePath(stack: readonly NestingFrame[]): (string | number)[] {
+  return stack.slice(1).map((frame) => frame.key!);
+}
+
+/** Whether `value` is a nesting level: an array, a record or a `FileRef`. */
+function isNestingLevel(value: unknown): value is object {
+  return isList(value) || isRecord(value) || value instanceof FileRef;
+}
+
+/** Return `value` with any `TypedValue` wrapping it removed. */
+function unwrapTyped(value: unknown): unknown {
+  while (value instanceof TypedValue) value = value.value;
+  return value;
+}
+
+/** Build the error for a container past the nesting limit at `path`. */
+function tooDeep(where: string, path: ValuePath, limit: number): TypeCheckError {
+  return locatedError(
+    where,
+    path,
+    `value nests deeper than ${limit} levels, ` +
+      "the limit for a yian value (each record and list is a level)",
+  );
+}
+
+/** Build the `TypeCheckError` reading `<where>[ at <path>]: <reason>`, with `path`. */
+function locatedError(where: string, path: ValuePath, reason: string): TypeCheckError {
+  const location = path.length > 0 ? `${where} at ${renderValuePath(path)}` : where;
+  return new TypeCheckError(`${location}: ${reason}`, { path });
+}
+
+/** An open array or record in host intake, with the fresh copy being filled. */
+interface HostFrame {
+  readonly source: Record<string | number, unknown>;
+  /** The record's keys, or `null` for an array. */
+  readonly keys: readonly string[] | null;
+  /** The number of entries: the array's length or the record's key count, read once. */
+  readonly size: number;
+  /** The container's key or index in its parent (`null` for the root). */
+  readonly key: string | number | null;
+  readonly copy: Value[] | ValueRecord;
+  index: number;
+}
+
+/**
+ * Return a host value (a tool's result, a CODE body's return value) as a fresh yian value.
+ *
+ * `null`, a boolean, well-formed text, a `bigint` and a `FileRef` are taken as they are. A
+ * `number` that is an integer within ±(2^53−1) becomes an int (`-0` becomes `0n`); any other
+ * number but NaN (`±Infinity`, `1e20`, `2.5`, `9007199254740992`) is a float. A plain array
+ * (prototype `Array.prototype`) and a plain record (prototype `Object.prototype` or `null`)
+ * become a fresh array and record, their entries taken the same way; like `JSON.stringify`,
+ * symbol keys, non-enumerable keys and extra array properties are skipped. A record key is
+ * set as an own data property, so a `__proto__` key stays data.
+ *
+ * Each property is read once, and a value shared by two parents is copied once, so sharing
+ * is kept and a diamond costs linear time. The walk uses an explicit stack, so any depth works;
+ * depth is left to `rejectDeepNesting`.
+ *
+ * Example: `fromHost({a: [1, 2.5]}, "output")` gives `{a: [1n, 2.5]}`.
+ *
+ * @throws TypeCheckError at the first bad part, depth first and in order, reading `<where>[ at
+ *   <path>]: <reason>`: `undefined` or an array hole is `undefined is not a yian value; use
+ *   null`; NaN is `NaN is not a yian value`; text or a record key holding a lone surrogate
+ *   (a key: at its record's path) is `text holding a lone surrogate is not a yian value`; a
+ *   container inside itself is `value contains itself` at the entry holding it; anything else
+ *   (a `Date`, a `Map`, a class instance, a `TypedValue`, a symbol, a function) is
+ *   `<Name> is not a yian value`.
+ * @throws whatever a getter or proxy trap throws, unchanged.
+ */
+export function fromHost(value: unknown, where: string): Value {
+  const stack: HostFrame[] = [];
+  const active = new Set<object>();
+  const copies = new Map<object, Value[] | ValueRecord>();
+  /** Throw `reason` at the top frame's entry `keys` (none: the top frame itself). */
+  const fail = (reason: string, ...keys: (string | number)[]): never => {
+    // The path is built only on a throw.
+    throw locatedError(where, [...stack.slice(1).map((frame) => frame.key!), ...keys], reason);
+  };
+
+  /** Return what `item`, the top frame's entry `key`, stores as; push a new container's frame. */
+  const enter = (item: unknown, key: string | number | null): Value => {
+    const at = key === null ? [] : [key];
+    switch (typeof item) {
+      case "boolean":
+      case "bigint":
+        return item;
+      case "string":
+        return item.isWellFormed() ? item : fail(SURROGATE_TEXT, ...at);
+      case "number":
+        if (Number.isNaN(item)) fail("NaN is not a yian value", ...at);
+        return Number.isSafeInteger(item) ? BigInt(item) : item;
+      case "undefined":
+        return fail("undefined is not a yian value; use null", ...at);
+    }
+    if (item === null || item instanceof FileRef) return item;
+    if (typeof item === "object") {
+      const proto: unknown = Object.getPrototypeOf(item);
+      const list = Array.isArray(item);
+      if (list ? proto === Array.prototype : proto === Object.prototype || proto === null) {
+        if (active.has(item)) fail("value contains itself", ...at);
+        const shared = copies.get(item);
+        if (shared !== undefined) return shared;
+        const source = item as Record<string | number, unknown>;
+        const keys = list ? null : Object.keys(item);
+        const size = keys === null ? (item as unknown[]).length : keys.length;
+        const copy: Value[] | ValueRecord = list ? [] : {};
+        copies.set(item, copy);
+        active.add(item);
+        stack.push({ source, keys, size, key, copy, index: 0 });
+        return copy;
+      }
+    }
+    return fail(`${jsTypeName(item)} is not a yian value`, ...at);
+  };
+
+  const root = enter(value, null);
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1]!;
+    if (frame.index === frame.size) {
+      stack.pop();
+      active.delete(frame.source);
+      continue;
+    }
+    const index = frame.index++;
+    if (frame.keys === null) {
+      (frame.copy as Value[]).push(enter(frame.source[index], index));
+    } else {
+      const key = frame.keys[index]!;
+      if (!key.isWellFormed()) fail(SURROGATE_TEXT);
+      setField(frame.copy as ValueRecord, key, enter(frame.source[key], key));
+    }
+  }
+  return root;
+}
+
+/** Why text holding a lone surrogate is refused. */
+const SURROGATE_TEXT = "text holding a lone surrogate is not a yian value";
+
 // --------------------------------------------------------------------------------------- //
 // Type vocabulary
 // --------------------------------------------------------------------------------------- //
@@ -1597,7 +1847,7 @@ function isFileForm(value: unknown): value is ValueRecord & FileRefInit {
 function nonValueReason(value: unknown): string | null {
   if (typeof value === "number" && Number.isNaN(value)) return "NaN is not a yian value";
   if (typeof value === "string" && !value.isWellFormed()) {
-    return "text holding a lone surrogate is not a yian value";
+    return SURROGATE_TEXT;
   }
   return null;
 }
@@ -1706,9 +1956,7 @@ function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value {
       const index = frame.index++;
       const key = frame.keys === null ? index : frame.keys[index]!;
       if (typeof key === "string" && !key.isWellFormed()) {
-        throw new TypeCheckError("text holding a lone surrogate is not a yian value", {
-          path: pathTo(),
-        });
+        throw new TypeCheckError(SURROGATE_TEXT, { path: pathTo() });
       }
       const child = (frame.container as Record<string | number, unknown>)[key];
       const stored = enter(child, key);

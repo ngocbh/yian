@@ -647,7 +647,8 @@ describe("shortRequest", () => {
   });
 
   test("a trickle fails at 30 s although bytes keep coming: one total timer", async () => {
-    const steps = Array.from({ length: 5 }, (_, i) => ({ at: i * 10 * S, chunk: "x" }));
+    // Off the 10 s grid so no chunk lands on the 30 s deadline.
+    const steps = Array.from({ length: 5 }, (_, i) => ({ at: (5 + i * 10) * S, chunk: "x" }));
     const h = harness({ steps });
     const error = (await failure(h.short())) as ProviderError;
     expect(error).toBeInstanceOf(ProviderError);
@@ -685,6 +686,7 @@ describe("shortRequest", () => {
     expect(error.retryable).toBe(false);
     expect(error.provider).toBe("models");
     expect(error.message).toBe("models response is larger than 5 bytes");
+    expect(error.status).toBe(200);
     expect(h.clock.now()).toBe(S);
     expect(h.calls[0]!.signal!.aborted).toBe(true);
     expect(h.cancels.count).toBe(1);

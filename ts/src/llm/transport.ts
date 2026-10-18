@@ -13,7 +13,7 @@ import { current } from "../defaults.ts";
 import { RedirectError, realScheduler, safeFetch, type Scheduler, type Send } from "../platform.ts";
 import { scrub } from "./auth.ts";
 import { ProviderError } from "./errors.ts";
-import { type JsonValue, parseJson } from "../typesys/json.ts";
+import { JSONDecodeError, type JsonValue, parseJson } from "../typesys/json.ts";
 
 /** Options for `openExchange`. */
 export interface ExchangeOptions {
@@ -168,61 +168,58 @@ async function nextChunk(reader: BodyReader): Promise<Uint8Array | undefined> {
   }
 }
 
-/**
- * Start one request through `safeFetch`: the abort wiring and error mapping that
- * `openExchange` and `shortRequest` share.
- */
-function startRequest(
-  url: string,
-  init: RequestInit,
-  provider: string,
-  credentials: () => Iterable<string>,
-  signal: AbortSignal | undefined,
-  send: Send | undefined,
-) {
+/** Options for `requestControl`. */
+interface RequestOptions {
+  provider: string;
+  credentials: () => Iterable<string>;
+  signal: AbortSignal | undefined;
+  send: Send | undefined;
+}
+
+/** Return the abort wiring and error mapping for one request; `send()` sends it. */
+function requestControl(url: string, init: RequestInit, options: RequestOptions) {
+  const { provider, credentials, signal } = options;
   const internal = new AbortController();
   const requestSignal = signal ? AbortSignal.any([signal, internal.signal]) : internal.signal;
   let timedOut: ProviderError | undefined;
   let reader: BodyReader | undefined;
 
-  const release = () => {
+  /** Abort the request and release its body. */
+  function release(): void {
     // Abort first: a cancel would end a pending read as a normal end of the body.
     internal.abort();
     void reader?.cancel().catch(() => {});
-  };
-  return {
-    /** The request's signal: the caller's stop, our timeout and `release`. */
-    signal: requestSignal,
-    /** Abort the request and release its body. */
-    release,
-    /** Return a callback that ends the request with the timeout error `detail`. */
-    onTimeout: (detail: string) => () => {
+  }
+  /** Return a callback that ends the request with the timeout error `detail`. */
+  function onTimeout(detail: string): () => ProviderError {
+    return () => {
       timedOut = new ProviderError("timeout", `${provider} request failed (timeout): ${detail}`, { provider });
       internal.abort(timedOut);
       return timedOut;
-    },
-    /** Return the error to throw for a failed wait. */
-    failure(error: unknown): unknown {
-      if (signal?.aborted) return signal.reason;
-      if (timedOut) return timedOut;
-      if (error instanceof RedirectError) {
-        return new ProviderError("redirect", `${provider} returned HTTP ${error.status} (redirect): ${error.detail}`, {
-          status: error.status,
-          retryable: false,
-          provider,
-        });
-      }
-      return transportError(error, provider, credentials()) ?? error;
-    },
-    /** Send the request; return the reply and its body's reader, if it has a body. */
-    async respond(): Promise<[Response, BodyReader | undefined]> {
-      const reply = await safeFetch(url, { ...init, signal: requestSignal }, send);
-      reader = reply.body?.getReader();
-      // A sender that ignores the signal can reply after a timeout or a stop already released.
-      if (internal.signal.aborted) release();
-      return [reply, reader];
-    },
-  };
+    };
+  }
+  /** Return the error to throw for a failed wait. */
+  function failure(error: unknown): unknown {
+    if (signal?.aborted) return signal.reason;
+    if (timedOut) return timedOut;
+    if (error instanceof RedirectError) {
+      return new ProviderError("redirect", `${provider} returned HTTP ${error.status} (redirect): ${error.detail}`, {
+        status: error.status,
+        retryable: false,
+        provider,
+      });
+    }
+    return transportError(error, provider, credentials()) ?? error;
+  }
+  /** Send the request; return the reply and its body's reader, if it has a body. */
+  async function send(): Promise<[Response, BodyReader | undefined]> {
+    const reply = await safeFetch(url, { ...init, signal: requestSignal }, options.send);
+    reader = reply.body?.getReader();
+    // A sender that ignores the signal can reply after a timeout or a stop already released.
+    if (internal.signal.aborted) release();
+    return [reply, reader];
+  }
+  return { signal: requestSignal, release, onTimeout, failure, send };
 }
 
 /**
@@ -239,14 +236,14 @@ export async function openExchange(url: string, init: RequestInit, options: Exch
   const firstResponseMs = options.firstResponseMs ?? current().modelFirstResponseTimeoutSeconds * 1000;
   const idleMs = options.idleMs ?? current().modelIdleTimeoutSeconds * 1000;
   signal?.throwIfAborted();
-  const request = startRequest(url, init, provider, credentials, signal, send);
+  const request = requestControl(url, init, { provider, credentials, signal, send });
   let response: Response;
   let reader: BodyReader | undefined;
   let first: Uint8Array | undefined;
   try {
     [response, reader, first] = await timed(
       (async () => {
-        const [reply, replyReader] = await request.respond();
+        const [reply, replyReader] = await request.send();
         return [reply, replyReader, replyReader && (await nextChunk(replyReader))] as const;
       })(),
       firstResponseMs,
@@ -294,23 +291,27 @@ export async function shortRequest(url: string, init: RequestInit, options: Shor
   const { name, credentials = () => [], maxBytes = Infinity, signal, scheduler = realScheduler, send } = options;
   const timeoutMs = options.timeoutMs ?? current().requestTimeoutSeconds * 1000;
   signal?.throwIfAborted();
-  const request = startRequest(url, init, name, credentials, signal, send);
+  const request = requestControl(url, init, { provider: name, credentials, signal, send });
   let response: Response;
   let chunks: Uint8Array[];
-  let size = 0;
+  let size: number;
   try {
-    [response, chunks] = await timed(
+    [response, chunks, size] = await timed(
       (async () => {
-        const [reply, reader] = await request.respond();
+        const [reply, reader] = await request.send();
         const read: Uint8Array[] = [];
-        for (let chunk; reader && (chunk = await nextChunk(reader)); read.push(chunk)) {
-          size += chunk.byteLength;
-          if (size > maxBytes) {
+        let total = 0;
+        while (reader) {
+          const chunk = await nextChunk(reader);
+          if (chunk === undefined) break;
+          total += chunk.byteLength;
+          if (total > maxBytes) {
             const message = `${name} response is larger than ${maxBytes} bytes`;
-            throw new ProviderError("protocol", message, { provider: name });
+            throw new ProviderError("protocol", message, { status: reply.status, provider: name });
           }
+          read.push(chunk);
         }
-        return [reply, read] as const;
+        return [reply, read, total] as const;
       })(),
       timeoutMs,
       scheduler,
@@ -336,8 +337,9 @@ export async function shortRequest(url: string, init: RequestInit, options: Shor
     json() {
       try {
         return parseJson(text, "plain");
-      } catch {
-        // A JavaScript throw in a catch block chains nothing, so the body never rides along.
+      } catch (error) {
+        if (!(error instanceof JSONDecodeError)) throw error;
+        // No `cause`: the decode error's text holds the body.
         throw new ProviderError("protocol", `${name} returned an invalid JSON body`, { provider: name });
       }
     },

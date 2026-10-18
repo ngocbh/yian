@@ -2018,14 +2018,15 @@ def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list]:
     """Return a recorded call's group, case file text (its `expect` from the runner) and flags.
 
     A pooled run is replayed three times, and its output or error, and its backward statuses,
-    must agree in each. The call is then replayed as many times with every shim on, and that
-    outcome is the `expect`. When it differs from the plain one, the call is replayed once with
-    each shim alone: the case's `rules` are those of the shims that change the outcome, and the
-    plain outcome is its `python_expect`. A pooled run's trace, events, stream, tool calls and
-    backward outcomes are kept only when the plain and shimmed runs succeeded and the replays of
-    each are equal, each one dropped giving a `pooled: <result> dropped` flag. A model entry
-    whose request the shims change loses its `request` (flag `shims: request dropped`). A load
-    or run that evaluated `and` or `or` is flagged `uses and/or`.
+    must agree in each. The call is then replayed as many times with every shim on, where they
+    must agree too, and that outcome is the `expect`. When it differs from the plain one, the
+    call is replayed once with each shim alone: the case's `rules` are those of the shims that
+    change the outcome, and the plain outcome is its `python_expect`. A pooled run's trace,
+    events, stream, tool calls and backward outcomes are kept only when the plain and shimmed
+    runs succeeded and the replays of each are equal, each one dropped giving a
+    `pooled: <result> dropped` flag. A model entry whose request the shims change loses its
+    `request` (flag `shims: request dropped`). A load or run that evaluated `and` or `or` is
+    flagged `uses and/or`.
     """
     if call.skip:
         raise _Skip(call.skip)
@@ -2049,9 +2050,11 @@ def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list]:
         # A run's output is a host value, whose numbers the runner compares by value.
         if not runner._same(_agreed(case, actual), _agreed(case, result), by_value=is_run):
             raise _Skip("replay differs")
-    shimmed = [_shimmed(state, case, _SHIMS) for _ in range(times)]
-    notes = frozenset().union(*(noted for _, noted in shimmed))
-    shimmed = [actual for actual, _ in shimmed]
+    shimmed, noted = zip(*(_shimmed(state, case, _SHIMS) for _ in range(times)))
+    notes = frozenset().union(*noted)
+    for actual in shimmed[1:]:
+        if not runner._same(_agreed(case, actual), _agreed(case, shimmed[0]), by_value=is_run):
+            raise _Skip("shims: replays differ")
     py, ts = _expect(case, replays[0]), _expect(case, shimmed[0])
     flags = ["uses and/or"] if call.and_or else []
     if pooled:
@@ -2066,15 +2069,18 @@ def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list]:
                 py.pop(key, None)
                 ts.pop(key, None)
                 flags.append(f"pooled: {key} dropped")
-    trimmed = _without_requests(case, notes)
-    if trimmed != case:
-        case = trimmed
+    if any(note.startswith("request: ") for note in notes):
+        case = _without_requests(case, notes)
         flags.append("shims: request dropped")
     rules = set()
     if not runner._same(ts, py):
+        # One replay can't tell a pooled run's timing-dependent results from a shim's change.
+        cut = _POOLED_RESULTS if pooled else ()
+        kept = {key: value for key, value in py.items() if key not in cut}
         for name, shim in _SHIMS.items():
             alone = _expect(case, _shimmed(state, case, (name,))[0])
-            if not runner._same({key: alone[key] for key in alone.keys() & py.keys()}, py):
+            if not runner._same({key: value for key, value in alone.items() if key not in cut},
+                                kept):
                 rules.add(shim.rule)
         if not rules:
             raise _Skip("shims: no single shim changes the outcome")

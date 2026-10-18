@@ -2757,6 +2757,9 @@ def test_harvest_checks_pooled_replays(tmp_path: Path, monkeypatch: pytest.Monke
     with pytest.raises(harvest._Skip, match="replay differs"):
         expected({"output": output}, [replay(output=output), replay(output=differing),
                                       replay(output=output)])
+    with pytest.raises(harvest._Skip, match="shims: replays differ"):
+        expected({"output": output}, [*succeeded, replay(output=output)],
+                 [*succeeded, replay(output=differing)])
 
     calls = {"tool": [{"args": {}, "call_id": "c1", "attempt": 1, "node": "n"}]}
     raised = replay(raises=raises, stream=[{"text": "x"}], tool_calls=calls)
@@ -2764,6 +2767,48 @@ def test_harvest_checks_pooled_replays(tmp_path: Path, monkeypatch: pytest.Monke
     assert expect == {"raises": raises}
     assert flags == [f"pooled: {key} dropped"
                      for key in ("trace", "events", "stream", "tool_calls")]
+
+
+def test_harvest_shim_skips_and_requests(tmp_path: Path,
+                                        monkeypatch: pytest.MonkeyPatch) -> None:
+    """A shimmed outcome no single shim gives, or a failing shimmed replay, skips the candidate."""
+    from tests import conformance_harvest as harvest
+
+    state = harvest._Harvest(None, tmp_path)
+    monkeypatch.setattr(harvest, "_STATE", state)
+    call = harvest._Call("eval_expr")
+    call.case, call.result, call.skip = {"kind": "expr", "expr": "1"}, {"value": 1}, None
+
+    def all_shims(state: object, case: dict, shims: tuple = ()) -> tuple:
+        # Only every shim together changes the outcome.
+        return {"value": 2 if len(shims) == len(harvest._SHIMS) else 1}, frozenset()
+
+    monkeypatch.setattr(harvest, "_replay", all_shims)
+    with pytest.raises(harvest._Skip, match="^shims: no single shim changes the outcome$"):
+        harvest._expected(state, call)
+
+    def failing(state: object, case: dict, shims: tuple = ()) -> tuple:
+        if shims:
+            raise harvest._Skip("replay failed: Failed")
+        return {"value": 1}, frozenset()
+
+    monkeypatch.setattr(harvest, "_replay", failing)
+    with pytest.raises(harvest._Skip, match="^shims: replay failed: Failed$"):
+        harvest._expected(state, call)
+
+    def entry(text: str) -> dict:
+        return {"reply": text, "request": {"messages": [text]}}
+
+    case = {"kind": "run", "host": {"models": {"n": {"agent": [entry("a"), entry("b")],
+                                                     "memory:a.b": [entry("c")]}},
+                                    "jitter": [0.5]}}
+    copy = json.loads(json.dumps(case))
+    # A consumer holding a `.` is found by its own key.
+    trimmed = harvest._without_requests(case, frozenset({"request: host.models.n.memory:a.b[0]"}))
+    assert trimmed == {"kind": "run", "host": {
+        "models": {"n": {"agent": [entry("a"), entry("b")], "memory:a.b": [{"reply": "c"}]}},
+        "jitter": [0.5]}}
+    assert case == copy
 
 
 def test_harvest_replay_installs_shims(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2853,6 +2898,8 @@ def test_harvest_tags_shimmed_rules(tmp_path: Path) -> None:
     assert _summary(done) == "6 passed", done.stdout + done.stderr
     cases = {path.relative_to(out / "cases").as_posix(): _read(path)
              for path in sorted((out / "cases").glob("*/*.yaml"))}
+    message = cases["expr/sample__list_order.yaml"]["expect"]["raises"].pop("message")
+    assert "unsupported operand kinds" in message
     assert cases == {
         "templates/sample__bool_text.yaml": {
             "kind": "expr", "rules": ["text-form"], "template": "${f}", "values": {"f": True},
@@ -2862,10 +2909,7 @@ def test_harvest_tags_shimmed_rules(tmp_path: Path) -> None:
             "expect": {"value": 1}, "python_expect": {"value": -1}},
         "expr/sample__list_order.yaml": {
             "kind": "expr", "rules": ["compare"], "expr": "[1] < [2]",
-            "expect": {"raises": {
-                "class": "ExpressionError",
-                "message": cases["expr/sample__list_order.yaml"]["expect"]["raises"]["message"]}},
-            "python_expect": {"value": True}},
+            "expect": {"raises": {"class": "ExpressionError"}}, "python_expect": {"value": True}},
         "values/sample__message.yaml": {
             "kind": "value", "rules": ["messages"], "type": "int", "value": "x",
             "expect": {"raises": {"class": "TypeCheckError",
@@ -2882,14 +2926,13 @@ def test_harvest_tags_shimmed_rules(tmp_path: Path) -> None:
             "python_expect": {"value": "{'b': 1, '1': 2}"}},
         "expr/sample__plain.yaml": {"kind": "expr", "expr": "1 + 2", "expect": {"value": 3}},
     }
-    assert "unsupported operand kinds" in (
-        cases["expr/sample__list_order.yaml"]["expect"]["raises"]["message"])
     # The rules come first, `python_expect` after `expect`.
     text = (out / "cases/expr/sample__remainder.yaml").read_text(encoding="utf-8")
     assert text == ("kind: expr\nrules: [arithmetic]\nexpr: 7 % -2\nexpect:\n  value: 1\n"
                     "python_expect:\n  value: -1\n")
-    for name, case in cases.items():
-        case_dir = tmp_path / "replay" / name
+    for name in cases:
+        # Read again: the message was popped above.
+        case, case_dir = _read(out / "cases" / name), tmp_path / "replay" / name
         case_dir.mkdir(parents=True)
         _check_results(case, results(case, case_dir))
 

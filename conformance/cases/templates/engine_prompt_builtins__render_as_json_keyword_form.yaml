@@ -2,9 +2,6 @@ kind: expr
 template: J=${render_as_json(value=briefs, indent=4)}
 values:
   briefs: [ab, adf]
-  name: zeta
-  sig:
-    value: 0.8
 mode: strict
 expect:
   value: |-

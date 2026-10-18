@@ -1,10 +1,7 @@
 kind: expr
 template: ${frobnicate(name)}
 values:
-  briefs: [ab, adf]
   name: zeta
-  sig:
-    value: 0.8
 mode: strict
 expect:
   raises:

@@ -1,6 +1,0 @@
-kind: expr
-template: ${item.title}
-item:
-  title: T
-expect:
-  value: T

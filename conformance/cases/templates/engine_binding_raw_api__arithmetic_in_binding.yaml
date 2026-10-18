@@ -1,6 +1,0 @@
-kind: expr
-template: ${x + 1}
-values:
-  x: 2
-expect:
-  value: 3

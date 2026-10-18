@@ -2,9 +2,6 @@ kind: expr
 template: ${join(briefs, sep=', ')}
 values:
   briefs: [ab, adf]
-  name: zeta
-  sig:
-    value: 0.8
 mode: strict
 expect:
   value: ab, adf

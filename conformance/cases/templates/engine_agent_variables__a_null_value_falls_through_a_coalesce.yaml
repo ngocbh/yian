@@ -1,7 +1,0 @@
-kind: expr
-template: ${note | 'fallback'}
-values:
-  note: null
-mode: strict
-expect:
-  value: fallback

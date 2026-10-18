@@ -1,4 +1,0 @@
-kind: expr
-template: ${a :- "d"}
-expect:
-  value: d

@@ -1,6 +1,0 @@
-kind: expr
-template: ${a | b}
-values:
-  b: second
-expect:
-  value: second

@@ -1,8 +1,6 @@
 kind: expr
 template: x ${sig.nope} y
 values:
-  briefs: [ab, adf]
-  name: zeta
   sig:
     value: 0.8
 mode: strict

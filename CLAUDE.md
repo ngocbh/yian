@@ -153,6 +153,9 @@ PYTHONPATH=src python -m pytest tests/engine
 PYTHONPATH=src python -m pytest
 ```
 
+The TypeScript tree's commands are in `ts/README.md`: from `ts/`, run
+`bun run typecheck`, `bun run test`, and `bun tests/conformance.ts`.
+
 ## Code style
 
 Keep code direct and scoped. Docstrings explain what a symbol does; comments

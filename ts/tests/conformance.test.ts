@@ -33,7 +33,7 @@ import {
   same,
   setUp,
 } from "./conformance.ts";
-import type { Case, CaseContext, KindRunner } from "./conformance.ts";
+import type { Case, CaseContext, Kind, KindRunner } from "./conformance.ts";
 
 const CASES = fileURLToPath(new URL("../../conformance/cases/", import.meta.url));
 
@@ -640,13 +640,14 @@ describe("main", () => {
   });
 
   /**
-   * Run `main` over `files` in a `cases/` directory, with `fixtures` beside it and the `expr`
-   * kind injected; return its exit code and output.
+   * Run `main` over `files` in a `cases/` directory, with `fixtures` beside it and `kinds`
+   * injected; return its exit code and output.
    */
   async function run(
     argv: string[],
     files: Record<string, string> = FILES,
     fixtures: Record<string, string> = {},
+    kinds: Partial<Record<Kind, KindRunner>> = { expr },
   ) {
     const root = mkdtempSync(join(tmpdir(), "conformance-cases-"));
     roots.push(root);
@@ -665,7 +666,7 @@ describe("main", () => {
     const err: string[] = [];
     const code = await main(argv, {
       casesDir,
-      kinds: { expr },
+      kinds,
       write: (line) => out.push(line),
       writeError: (line) => err.push(line),
     });
@@ -715,14 +716,36 @@ describe("main", () => {
   test("exits 0 when no case fails, a failing pending case included", async () => {
     expect(await run(["--case", "a/ok"])).toEqual({
       code: 0,
-      out: ["1 cases: 1 passed, 0 failed, 0 pending"],
+      out: ["1 case: 1 passed, 0 failed, 0 pending"],
       err: [],
     });
     expect(await run(["--case", "b/pending_fails"])).toEqual({
       code: 0,
-      out: ["1 cases: 0 passed, 0 failed, 1 pending"],
+      out: ["1 case: 0 passed, 0 failed, 1 pending"],
       err: [],
     });
+  });
+
+  test("fails a case using a reserved key before setting it up", async () => {
+    const files = {
+      "r/host.yaml": "kind: run\nflow: x\nhost: {tools: {}, models: {}}\nexpect: {output: {}}\n",
+      "r/memory.yaml": "kind: run\nflow: x\nexpect: {output: {}, memory: {}}\n",
+      "r/ok.yaml": "kind: run\nflow: x\nhost: {tools: {}}\nexpect: {output: {}}\n",
+    };
+    const ids: string[] = [];
+    const passing: KindRunner = (case_) => {
+      ids.push(String(case_["flow"]));
+    };
+    expect(await run([], files, {}, { run: passing })).toEqual({
+      code: 1,
+      out: [
+        "FAIL r/host: `host.models` is not supported by the TS runner yet",
+        "FAIL r/memory: `expect.memory` is not supported by the TS runner yet",
+        "3 cases: 1 passed, 2 failed, 0 pending",
+      ],
+      err: [],
+    });
+    expect(ids).toEqual(["x"]);
   });
 
   const ALL = [
@@ -744,7 +767,7 @@ describe("main", () => {
     [["--kind", "nope"], ["b/bad"]],
   ])("selects with %p", async (argv, ids) => {
     const { out } = await run(argv);
-    expect(out.at(-1)).toStartWith(`${ids.length} cases: `);
+    expect(out.at(-1)).toStartWith(`${ids.length} ${ids.length === 1 ? "case" : "cases"}: `);
     const failed = out.filter((line) => line.startsWith("FAIL ")).map((line) => line.split(":")[0]);
     expect(failed).toEqual(ids.filter((id) => FAILING.has(id)).map((id) => `FAIL ${id}`));
   });

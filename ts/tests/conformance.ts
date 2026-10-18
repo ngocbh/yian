@@ -109,6 +109,11 @@ const RESUME_KEYS: ReadonlySet<string> = new Set(["num_workers", "api_key", "hea
 const RESERVED_HOST_KEYS: readonly string[] = ["models", "steering", "stop", "memory", "skills"];
 const HOST_KEYS: ReadonlySet<string> = new Set(["tools", "human", "jitter", ...RESERVED_HOST_KEYS]);
 const RESUME_HOST_KEYS: ReadonlySet<string> = new Set([...HOST_KEYS, "crash_after_record"]);
+/** The `[section, key]` pairs a case may not use yet: it fails before it is set up. */
+const RESERVED: readonly (readonly [string, string])[] = [
+  ...RESERVED_HOST_KEYS.map((key) => ["host", key] as const),
+  ["expect", "memory"],
+];
 const RULES: ReadonlySet<string> = new Set([
   "numbers", "arithmetic", "compare", "text-form", "canonical", "columns", "messages",
   "text", "yaml", "dates", "infinity", "llm", "code",
@@ -614,9 +619,7 @@ export interface CaseContext {
 /** Run one prepared case of a kind; throw (a `CaseFailure`, normally) when it fails. */
 export type KindRunner = (case_: Case, ctx: CaseContext) => void | Promise<void>;
 
-// The first kind that reads `host` or `expect.memory` (run, resume, backward) must also fail
-// cases using host or expect keys it doesn't support yet, as Python's `_RESERVED` check in
-// `test_case` does.
+// `RESERVED` shrinks as the kinds that read `host` and `expect.memory` support its keys.
 /**
  * The kind runners. A case whose kind has none fails. A kind is added by replacing its comment
  * line with `<kind>: run<Kind>,` and writing `run<Kind>` under the kind's section header below.
@@ -696,6 +699,11 @@ async function runCase(
   kinds: Partial<Record<Kind, KindRunner>>,
   fixturesDir: string,
 ): Promise<string | undefined> {
+  for (const [section, key] of RESERVED) {
+    if (Object.hasOwn(get(case_, section, {}) as Case, key)) {
+      return `\`${section}.${key}\` is not supported by the TS runner yet`;
+    }
+  }
   const kind = case_["kind"] as Kind;
   const run = Object.hasOwn(kinds, kind) ? kinds[kind] : undefined;
   if (run === undefined) return `the TS runner doesn't run \`${kind}\` cases yet`;
@@ -825,7 +833,8 @@ export async function main(
     write(`FAIL ${entry.id}: ${first}`);
     for (const line of rest) write(line === "" ? "" : `  ${line}`);
   }
-  write(`${selected.length} cases: ${passed} passed, ${failed} failed, ${pending} pending`);
+  const cases = selected.length === 1 ? "case" : "cases";
+  write(`${selected.length} ${cases}: ${passed} passed, ${failed} failed, ${pending} pending`);
   return failed > 0 ? 1 : 0;
 }
 

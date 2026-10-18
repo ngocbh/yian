@@ -45,15 +45,18 @@ interface ImportTarget {
 /**
  * Return each import of `file`. A relative specifier becomes a module id: its path
  * below `src` without `.ts`/`.js`, keeping a trailing `/index` (`memory/index` is the
- * memory package's facade, `index` the package root's). Others stay as written.
+ * memory package's facade, `index` the package root's). The package's own name,
+ * `@ngocbh/yian`, is `index` too. Others stay as written.
  */
 function importTargets({ path, text }: Source): ImportTarget[] {
   const lines = text.split("\n");
   return importStatements(text).map(({ line, specifier }) => {
-    const local = specifier.startsWith(".");
+    const own = specifier === "@ngocbh/yian";
+    const local = own || specifier.startsWith(".");
+    const relative = () => posix.join(posix.dirname(path), specifier).replace(/\.[jt]s$/, "");
     return {
       line,
-      target: local ? posix.join(posix.dirname(path), specifier).replace(/\.[jt]s$/, "") : specifier,
+      target: own ? "index" : local ? relative() : specifier,
       statement: lines[line - 1]!.trim(),
       local,
     };
@@ -68,6 +71,8 @@ interface Rule {
   forbid?: string[];
   /** If set, the only modules (and modules below them) the files may import besides `node:` builtins. */
   allow?: string[];
+  /** With `allow`, `false` bans `node:` builtins too. */
+  builtins?: false;
   why: string;
   /** For the snippet tests: a file the rule covers, and module ids it must reject and accept. */
   samples: { file: string; bad: string[]; good: string[] };
@@ -103,7 +108,8 @@ const RULES: Rule[] = [
     name: "nodes/contracts.ts imports only diagnostics and typesys",
     files: only("nodes/contracts.ts"),
     allow: ["diagnostics", "typesys"],
-    why: "nodes/contracts.ts may import only node: builtins plus diagnostics and typesys",
+    builtins: false,
+    why: "nodes/contracts.ts may import only diagnostics and typesys",
     samples: {
       file: "nodes/contracts.ts",
       bad: ["nodes/call/node", "nodes/index", "index", "compile", "runtime", "skills", "defaults"],
@@ -222,7 +228,7 @@ const within = (target: string, entry: string) => target === entry || target.sta
 
 /** Whether `rule` rejects importing `target`. */
 function breaks(rule: Rule, { target, local }: ImportTarget): boolean {
-  if (!local) return rule.allow !== undefined && !target.startsWith("node:");
+  if (!local) return rule.allow !== undefined && (rule.builtins === false || !target.startsWith("node:"));
   if (rule.forbid?.some((entry) => within(target, entry))) return true;
   return rule.allow !== undefined && !rule.allow.some((entry) => within(target, entry));
 }
@@ -279,8 +285,9 @@ const ENGINE_DEPENDENT: Lint = {
 const BARE_FETCH: Lint = {
   name: "only platform.ts references fetch",
   files: outsidePlatform,
-  // Any bare `fetch` counts, a method named fetch too, so a call can't slip past as one.
-  find: inCode(/(?<![\w$.])fetch(?![\w$])|(?<![\w$])globalThis\.fetch(?![\w$])/g),
+  // Any bare `fetch` counts, a method named fetch too, so a call can't slip past as one; a
+  // key (`{ fetch: safeFetch }`, `fetch?: F`) names no global.
+  find: inCode(/(?<![\w$.])fetch(?![\w$]|\s*\??\s*:)|(?<![\w$])globalThis\.fetch(?![\w$])/g),
   fix: "use safeFetch from platform.ts; don't name a method fetch",
 };
 
@@ -526,10 +533,12 @@ describe("layer rule snippets", () => {
       const reported = (text: string) => ruleViolations(rule, [{ path: file, text }]).length > 0;
       const texts = (specifiers: string[]) => specifiers.flatMap((s) => FORMS.map((form) => form(s)));
       const local = (ids: string[]) => ids.flatMap((id) => [spell(file, id, ".ts"), spell(file, id, ".js")]);
-      // An allow-list admits only `node:` builtins outside src; a forbid list ignores packages.
+      // An allow-list admits only `node:` builtins outside src (none with `builtins: false`); a
+      // forbid list ignores packages.
       const packages = ["openai", "yaml", "bun:sqlite", "fs"];
-      const rejected = [...local(bad), ...(rule.allow ? packages : [])];
-      const accepted = [...local(good), "node:fs", ...(rule.allow ? [] : packages)];
+      const banned = rule.allow ? (rule.builtins === false ? [...packages, "node:fs"] : packages) : [];
+      const rejected = [...local(bad), ...banned];
+      const accepted = [...local(good), ...["node:fs", ...packages].filter((s) => !banned.includes(s))];
       expect(texts(rejected).filter((text) => !reported(text))).toEqual([]);
       expect(texts(accepted).filter(reported)).toEqual([]);
     });
@@ -557,6 +566,22 @@ describe("layer rule snippets", () => {
     expect(check(contracts, "memory/contracts.ts", root)).toEqual(["index"]);
   });
 
+  test("nodes/contracts.ts imports no node: builtin", () => {
+    const rule = RULES.find((r) => r.name === "nodes/contracts.ts imports only diagnostics and typesys")!;
+    const text = 'import { readFileSync } from "node:fs";';
+    expect(ruleViolations(rule, [{ path: "nodes/contracts.ts", text }])).toEqual([
+      'nodes/contracts.ts:1: import { readFileSync } from "node:fs"; -> node:fs',
+    ]);
+  });
+
+  test("the package's own name is the root facade", () => {
+    const rule = RULES.find((r) => r.name === "memory never imports engine, host or cli layers")!;
+    const text = 'import { run } from "@ngocbh/yian";';
+    expect(ruleViolations(rule, [{ path: "memory/session.ts", text }])).toEqual([
+      'memory/session.ts:1: import { run } from "@ngocbh/yian"; -> index',
+    ]);
+  });
+
   test("entries match whole path segments of relative imports only", () => {
     const rule = (entries: Pick<Rule, "forbid" | "allow">): Rule => ({
       name: "t",
@@ -581,6 +606,17 @@ describe("lints", () => {
   for (const lint of LINTS) {
     test(lint.name, () => {
       expect(report(lint.fix, lintViolations(lint, files))).toBe("");
+    });
+  }
+});
+
+describe("runner lints", () => {
+  // The conformance runner also runs on Node, so it holds to src's Bun rules.
+  const path = fileURLToPath(new URL("../conformance.ts", import.meta.url));
+  const runner = { path: "../tests/conformance.ts", text: readFileSync(path, "utf8") };
+  for (const lint of [BUN_GLOBAL, BUN_IMPORT]) {
+    test(lint.name, () => {
+      expect(report(lint.fix, lintViolations(lint, [runner]))).toBe("");
     });
   }
 });
@@ -645,7 +681,7 @@ describe("lint snippets", () => {
     ]);
   });
 
-  test("a bare fetch reference is reported; safeFetch and x.fetch pass", () => {
+  test("a bare fetch reference is reported; safeFetch, x.fetch and a fetch key pass", () => {
     const text = [
       "await fetch(url);",
       "await fetch (url);",
@@ -666,7 +702,10 @@ describe("lint snippets", () => {
       "runtime/log.ts:7: fetch",
       "runtime/log.ts:8: fetch",
     ]);
-    for (const ok of ["safeFetch(url);", "client.fetch(x);", "client?.fetch(x);", 'const s = "fetch(url)";', "prefetch(x);"]) {
+    // Only the key: in `fetch?: typeof fetch` the `typeof fetch` is still reported.
+    const keys = ["new Transport(url, { fetch: safeFetch });", "interface O { fetch?: F }", "const o = { fetch : f };"];
+    const others = ["safeFetch(url);", "client.fetch(x);", "client?.fetch(x);", 'const s = "fetch(url)";', "prefetch(x);"];
+    for (const ok of [...keys, ...others]) {
       expect(hits(BARE_FETCH, ok)).toEqual([]);
     }
   });

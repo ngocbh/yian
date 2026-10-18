@@ -11,7 +11,8 @@
  * A kind-dispatch line holds any of, outside imports, comments and strings:
  *   - a `NodeKind` member (`NodeKind.AGENT`);
  *   - `SPAWNER_KINDS` or `_SPAWNER_KINDS`, the spawner-kind set;
- *   - `instanceof <Name>Expansion`, a branch on a concrete expansion type;
+ *   - `instanceof <Name>Expansion`, also qualified (`instanceof x.CallExpansion`),
+ *     a branch on a concrete expansion type;
  *   - `kind` compared with a node-kind string literal, on either side
  *     (`node.kind === "agent"`, `"map" !== n.kind`);
  *   - a `case "<node kind>":` clause of a `switch` whose head mentions `kind`.
@@ -79,7 +80,7 @@ function missingCore(exists: (path: string) => boolean): string[] {
 const KIND_REFERENCES = [
   /\bNodeKind\.[A-Za-z_]/g,
   /\b_?SPAWNER_KINDS\b/g,
-  /\binstanceof\s+[A-Za-z_$][\w$]*Expansion\b/g,
+  /\binstanceof\s+(?:[\w$]+\.)*[A-Za-z_$][\w$]*Expansion\b/g,
 ];
 
 // Over blanked text a literal is its quotes around spaces; group 2 spans its contents.
@@ -192,6 +193,7 @@ describe("kind census", () => {
     expect(count("if (SPAWNER_KINDS.has(k)) {}")).toBe(1);
     expect(count("if (_SPAWNER_KINDS.has(k)) {}")).toBe(1);
     expect(count("if (x instanceof CallExpansion) {}")).toBe(1);
+    expect(count("if (x instanceof expansions.CallExpansion) {}")).toBe(1);
     expect(count('if (node.kind === "agent") {}')).toBe(1);
     expect(count('if ("map" !== n.kind) {}')).toBe(1);
     expect(count('const { kind } = node;\nif (kind === "agent") {}')).toBe(1);

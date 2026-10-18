@@ -16,7 +16,7 @@ import {
 
 import { reprText } from "../../diagnostics.ts";
 import type { Value, ValueRecord } from "../../typesys/index.ts";
-import { SourceSyntaxError } from "./common.ts";
+import { setRecordKey, SourceSyntaxError } from "./common.ts";
 import {
   type AnchoredNode,
   BOOL_TAG,
@@ -40,7 +40,7 @@ import {
 type MapPair = Pair<ParsedNode, ParsedNode | null>;
 
 /** The core scalar tags; on a list or mapping they say `expected a scalar node`. */
-const SCALAR_TAGS: ReadonlySet<string> = new Set([
+export const SCALAR_TAGS: ReadonlySet<string> = new Set([
   STR_TAG,
   NULL_TAG,
   BOOL_TAG,
@@ -154,17 +154,8 @@ function construct(root: ParsedNode | null, aliasTargets: ReadonlyMap<Alias, Anc
         if (typeof key !== "string") throw nonTextKey(key, target(pair.key));
         const value = valueOf(pair.value);
         // A repeated key keeps its first position and takes the last value, as in
-        // SafeLoader; defining `__proto__` keeps it data instead of setting the prototype.
-        if (key === "__proto__") {
-          Object.defineProperty(record, key, {
-            value,
-            writable: true,
-            enumerable: true,
-            configurable: true,
-          });
-        } else {
-          record[key] = value;
-        }
+        // SafeLoader.
+        setRecordKey(record, key, value);
       }
     });
     return record;
@@ -301,7 +292,7 @@ function ownPairs(
  * Say whether a key is a merge key: a scalar tagged `!!merge`, or an untagged plain one
  * the table resolves to it. The bare `!` keeps `<<` text.
  */
-function isMergeKey(key: AnchoredNode | null): boolean {
+export function isMergeKey(key: AnchoredNode | null): boolean {
   if (!isScalar(key)) return false;
   if (key.tag === undefined) {
     return key.type === Scalar.PLAIN && resolvePlain(key.source) === MERGE_TAG;
@@ -310,7 +301,7 @@ function isMergeKey(key: AnchoredNode | null): boolean {
 }
 
 /** Name a node's kind as PyYAML's node id does; a missing node is an empty scalar. */
-function nodeId(node: AnchoredNode | null): string {
+export function nodeId(node: AnchoredNode | null): string {
   return isSeq(node) ? "sequence" : isMap(node) ? "mapping" : "scalar";
 }
 

@@ -2,7 +2,8 @@
  * The one module holding runtime-specific APIs, so the rest of yian runs unchanged
  * on Node and Bun: runtime detection, a SQLite wrapper over `bun:sqlite` or
  * `node:sqlite`, loaded lazily for the runtime in use, an exclusive file lock
- * built on it, and the scheduler that clocks and timed waits go through.
+ * built on it, the scheduler that clocks and timed waits go through, and the
+ * TypeScript stripper for CODE bodies, loaded lazily too.
  */
 
 import type { Database } from "bun:sqlite";
@@ -501,5 +502,126 @@ export async function waitForLock(
       await scheduler.sleep(step, signal);
       remaining -= step;
     }
+  }
+}
+
+/** Opens the function wrapping a CODE body, on the body's first line so line numbers hold. */
+const STRIP_PREFIX = "async function __yian(inputs) {";
+const STRIP_SUFFIX = "\n}";
+
+type TransformSync = typeof import("amaro").transformSync;
+
+/**
+ * A CODE body amaro can't strip: a syntax error, or TypeScript that strip-only mode
+ * doesn't support, such as `enum`. `message` is amaro's; `line` and `column` are
+ * 1-based in the body, and `column` counts UTF-16 code units. A position past the
+ * end of the body (an unclosed construct) is reported at the end of the last
+ * non-blank line.
+ */
+export class TypeStripError extends SyntaxError {
+  override name = "TypeStripError";
+  readonly line: number;
+  readonly column: number;
+
+  constructor(message: string, line: number, column: number) {
+    super(message);
+    this.line = line;
+    this.column = column;
+  }
+}
+
+/** The error amaro throws for a body it can't parse or strip. */
+interface AmaroError {
+  code: "InvalidSyntax" | "UnsupportedSyntax";
+  message: string;
+  startLine: number;
+  startColumn: number;
+}
+
+/** Return whether `error` has the shape of amaro's syntax error. */
+function isAmaroError(error: unknown): error is AmaroError {
+  const e = error as Partial<AmaroError> | null | undefined;
+  return (
+    (e?.code === "InvalidSyntax" || e?.code === "UnsupportedSyntax") &&
+    typeof e.startLine === "number" &&
+    typeof e.startColumn === "number"
+  );
+}
+
+/** Return how many display columns amaro gives the code point `ch`. */
+function displayWidth(ch: string, transformSync: TransformSync): number {
+  if (ch >= " " && ch <= "~") return 1;
+  // The `)` always fails, at the column the comment before it ends on; the 4 is the
+  // columns of `/*` and `*/`.
+  try {
+    transformSync(`/*${ch}*/)`, { mode: "strip-only" });
+  } catch (error) {
+    if (!isAmaroError(error)) throw error;
+    return error.startColumn - 4;
+  }
+  throw new Error("unreachable: ')' always fails");
+}
+
+/** Return the UTF-16 index in `line` of amaro's 0-based display column `column`. */
+function utf16Index(line: string, column: number, transformSync: TransformSync): number {
+  let width = 0;
+  let index = 0;
+  for (const ch of line) {
+    const next = width + displayWidth(ch, transformSync);
+    if (next > column) break;
+    width = next;
+    index += ch.length;
+  }
+  return index;
+}
+
+/** Return `error`, from stripping the wrapped `body`, as a `TypeStripError` in body coordinates. */
+function toTypeStripError(error: AmaroError, body: string, transformSync: TransformSync): TypeStripError {
+  const lines = body.split(/\r\n|\r|\n/);
+  if (error.startLine > lines.length) {
+    // An unclosed construct is reported at the wrapper's closing `}`; Python reports it
+    // on the last line with text, which such an error always has.
+    let last = lines.length - 1;
+    while (last > 0 && lines[last]!.trim() === "") last--;
+    return new TypeStripError(error.message, last + 1, lines[last]!.length + 1);
+  }
+  const column = error.startLine === 1 ? Math.max(0, error.startColumn - STRIP_PREFIX.length) : error.startColumn;
+  return new TypeStripError(
+    error.message,
+    error.startLine,
+    utf16Index(lines[error.startLine - 1]!, column, transformSync) + 1,
+  );
+}
+
+/**
+ * Strip the TypeScript types from a CODE body (a function body reading `inputs`,
+ * which may use top-level `return` and `await`) and return the JavaScript body.
+ *
+ * Types become whitespace, so the result has the body's UTF-16 length and newline
+ * offsets, and every line keeps its number. A body amaro can't parse or strip throws
+ * `TypeStripError`; anything else amaro throws propagates unchanged, such as the
+ * WASM `RuntimeError` amaro raises for a syntax error past display column 65535 of
+ * its line, so callers report a non-`TypeStripError` at the whole body.
+ *
+ * Only text comes back. The caller builds the function, such as
+ * `new AsyncFunction("inputs", js + "\n//# sourceURL=yian-code:<id>")`, and that
+ * constructor is what stops a body that closes the wrapper from escaping it. Some
+ * errors appear only then, with no position: `let inputs = 1`, `delete inputs`,
+ * `import.meta`, and `arguments = 1` (strict mode).
+ *
+ * Async because amaro is large and slow to import, so it loads on first use through
+ * a literal `import()`, which `bun build --compile` still bundles.
+ */
+export async function stripTypes(body: string): Promise<string> {
+  // The module cache makes every call after the first cheap.
+  const { transformSync } = await import("amaro");
+  // A bare body with a top-level `return` or `await` doesn't parse, hence the wrapper.
+  const text = STRIP_PREFIX + body + STRIP_SUFFIX;
+  try {
+    const { code } = transformSync(text, { mode: "strip-only" });
+    return code.slice(STRIP_PREFIX.length, code.length - STRIP_SUFFIX.length);
+  } catch (error) {
+    if (!isAmaroError(error)) throw error;
+    throw toTypeStripError(error, body, transformSync);
   }
 }

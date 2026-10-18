@@ -4,7 +4,9 @@
  * codes Python reads from `sqlite_errorcode`; and the exclusive file lock that
  * replaces the `flock` calls in `runtime/log.py` and `llm_clients/auth/store.py`;
  * the scheduler that ports TOOL's chunked `_sleep` in `nodes/tool/node.py`, with a
- * virtual one for tests; and the waiting lock that ports the auth store's `_locked`.
+ * virtual one for tests; the waiting lock that ports the auth store's `_locked`; and
+ * the type stripper for CODE bodies, whose errors keep `nodes/code/node.py`'s authored
+ * line positions.
  * Child processes check the lock across processes, as `log.py`'s `_lock_exclusive`
  * and the storage and auth stores' multiprocess tests do, and, with
  * `YIAN_TEST_NODE` set to a Node binary, the built output on Node.
@@ -30,6 +32,8 @@ import {
   SLEEP_CHUNK_MS,
   type Sqlite,
   sqliteErrorCode,
+  stripTypes,
+  TypeStripError,
   virtualScheduler,
   waitForLock,
 } from "../../src/platform.ts";
@@ -698,6 +702,90 @@ describe("waitForLock", () => {
   });
 });
 
+describe("stripTypes", () => {
+  const AsyncFunction = (async () => {}).constructor as new (...args: string[]) => (inputs: unknown) => Promise<unknown>;
+
+  /** Return the offsets of every `\n` in `text`. */
+  function newlines(text: string): number[] {
+    return [...text.matchAll(/\n/g)].map((match) => match.index);
+  }
+
+  /** Return the `TypeStripError` that `stripTypes(body)` rejects with. */
+  async function stripError(body: string): Promise<TypeStripError> {
+    const error = await rejection(stripTypes(body));
+    expect(error).toBeInstanceOf(TypeStripError);
+    return error as TypeStripError;
+  }
+
+  test("blanks the types, keeping the length and newline offsets", async () => {
+    const body = "const n: number = inputs.n;\nreturn (n as number) * 2;";
+    const js = await stripTypes(body);
+    expect(js.length).toBe(body.length);
+    expect(newlines(js)).toEqual(newlines(body));
+    expect(js).not.toMatch(/number/);
+    expect(await new AsyncFunction("inputs", js)({ n: 1 })).toBe(2);
+  });
+
+  test("returns plain JavaScript unchanged", async () => {
+    const body = "const a = [inputs.x, 2];\nreturn a.map((v) => v * 2);";
+    expect(await stripTypes(body)).toBe(body);
+  });
+
+  test("keeps the length of a body with non-ASCII text", async () => {
+    const body = "const s: string = '😀é';\nreturn s;";
+    const js = await stripTypes(body);
+    expect(js.length).toBe(body.length);
+    expect(await new AsyncFunction("inputs", js)({})).toBe("😀é");
+  });
+
+  test("accepts top-level await and return", async () => {
+    const js = await stripTypes("const v: number = await Promise.resolve(inputs.v);\nreturn v;");
+    expect(await new AsyncFunction("inputs", js)({ v: 7 })).toBe(7);
+  });
+
+  test.each([
+    ["let a = 1;\n\nconst x: = 1;", 3, 10],
+    ["const x: = 1;", 1, 10],
+    ["const s = '😀é'; const x: = 1;", 1, 27],
+    ["\tconst x: = 1;", 1, 11],
+    ["const s = '中'; const x: = 1;", 1, 25],
+    ["let a = 1;\rconst x: = 1;", 2, 10],
+    ["let a = 1;\r\nconst x: = 1;", 2, 10],
+    ["enum E { A }", 1, 1],
+    ["return (\n", 1, 9],
+    ["let a = 1;\nreturn (\n\n", 2, 9],
+    ["let a = 1;\r\nreturn (\r\n", 2, 9],
+    ["/* open", 1, 8],
+  ])("%j fails at line %d, column %d", async (body, line, column) => {
+    const error = await stripError(body);
+    expect(error).toBeInstanceOf(SyntaxError);
+    expect(error.name).toBe("TypeStripError");
+    expect([error.line, error.column]).toEqual([line, column]);
+  });
+
+  test("a body closing the wrapper comes back unchanged and fails to construct", async () => {
+    const body = "return 1; } globalThis.escaped = true; function g() {";
+    const js = await stripTypes(body);
+    expect(js).toBe(body);
+    expect(() => new AsyncFunction("inputs", js)).toThrow(SyntaxError);
+    expect((globalThis as { escaped?: unknown }).escaped).toBeUndefined();
+  });
+
+  test("keeps authored line numbers in the built function's stack", async () => {
+    /** Return the line of the `yian-code:t` frame in what running `body` throws. */
+    async function thrownLine(body: string): Promise<number> {
+      const js = await stripTypes(body);
+      const error = await rejection(new AsyncFunction("inputs", js + "\n//# sourceURL=yian-code:t")({}));
+      const frame = /yian-code:t:(\d+):\d+/.exec((error as Error).stack ?? "");
+      expect(frame).not.toBeNull();
+      return Number(frame![1]);
+    }
+    const header = (await thrownLine('throw new Error("h");')) - 1;
+    const body = '// a comment\n\nconst n: number = 1;\nthrow new Error("x" + n);';
+    expect((await thrownLine(body)) - header).toBe(4);
+  });
+});
+
 /** The `ts/` directory: Bun children run from it, so Bun never looks for packages to install. */
 const ROOT = path.resolve(import.meta.dir, "../..");
 const SOURCE_URL = pathToFileURL(path.join(ROOT, "src/platform.ts")).href;
@@ -934,8 +1022,9 @@ console.log(JSON.stringify({ isLocked: locked, lock }));
 
 describe("the built output on Node", () => {
   test.skipIf(!NODE)(
-    "runs the SQLite wrapper, the lock and the schedulers without an experimental warning",
-    () => {
+    "runs the SQLite wrapper, the lock, the schedulers and stripTypes without an experimental warning",
+    async () => {
+      const sample = "const n: number = inputs.n;\nreturn (n as number) * 2;";
       // One process for every check, so Node starts once; it reports a JSON object.
       const script = `
 import fs from "node:fs";
@@ -1055,6 +1144,32 @@ try {
 } finally {
   holder.release();
 }
+
+out.stripped = await p.stripTypes(${JSON.stringify(sample)});
+const stripError = async (body) => {
+  try {
+    await p.stripTypes(body);
+    return "no throw";
+  } catch (error) {
+    return [error instanceof p.TypeStripError, error.name, error.line, error.column];
+  }
+};
+out.nonAsciiError = await stripError(${JSON.stringify("const s = '😀é'; const x: = 1;")});
+out.openReturn = await stripError(${JSON.stringify("return (\n")});
+const AsyncFunction = (async () => {}).constructor;
+const thrownLine = async (body) => {
+  const js = await p.stripTypes(body);
+  try {
+    await new AsyncFunction("inputs", js + "\\n//# sourceURL=yian-code:t")({});
+    return "no throw";
+  } catch (error) {
+    const frame = /yian-code:t:(\\d+):\\d+/.exec(error.stack ?? "");
+    return frame ? Number(frame[1]) : error.stack;
+  }
+};
+out.stackHeader = (await thrownLine('throw new Error("h");')) - 1;
+out.stackLine =
+  (await thrownLine(${JSON.stringify('// a comment\n\nconst n: number = 1;\nthrow new Error("x" + n);')})) - out.stackHeader;
 console.log(JSON.stringify(out));
 `;
       const result = spawnSync(NODE!, ["--input-type=module", "-e", script], { encoding: "utf8" });
@@ -1090,6 +1205,10 @@ console.log(JSON.stringify(out));
       expect(out.sleptMs).toBeGreaterThanOrEqual(29);
       expect(out.preAborted).toBe(true);
       expect(out.waitTimeout).toEqual(["busy", true, 1500]);
+      expect(out.stripped).toBe(await stripTypes(sample));
+      expect(out.nonAsciiError).toEqual([true, "TypeStripError", 1, 27]);
+      expect(out.openReturn).toEqual([true, "TypeStripError", 1, 9]);
+      expect(out.stackLine).toBe(4);
     },
     SPAWNED_MS,
   );

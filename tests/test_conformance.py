@@ -2782,6 +2782,8 @@ def test_harvest_replay_installs_shims(tmp_path: Path, monkeypatch: pytest.Monke
     # The shim is undone and its note forgotten by the next replay.
     assert template._as_text is as_text and not state.disabled
     assert harvest._replay(state, case) == ({"value": "x=True"}, frozenset())
+    with pytest.raises(KeyError, match="no such shims"):
+        harvest._replay(state, case, ("text", "missing"))
 
     run = _read(_ROOT / "cases/run-agent/model_reply.yaml")
     del run["expect"]
@@ -2795,4 +2797,9 @@ def test_harvest_replay_installs_shims(tmp_path: Path, monkeypatch: pytest.Monke
     results, notes = harvest._replay(state, run, ("idle",))
     assert results["output"] == {"status": "succeeded", "output": "Hello Ada"}
     assert notes == frozenset({"request: host.models.write.agent[0]"})
+    assert harvest.runner._request_difference is request_difference
+    # A replay failing under a shim (here, a key the runner refuses) undoes it all the same.
+    with pytest.raises(harvest._Skip, match="replay failed"):
+        harvest._replay(state, run | {"unknown": 1}, ("text",))
+    assert template._as_text is as_text and not state.disabled
     assert harvest.runner._request_difference is request_difference

@@ -1311,11 +1311,13 @@ _NOTES: set[str] = set()
 def _noting_requests(original):
     """Return `runner._request_difference` wrapped to note a difference rather than report it.
 
-    A request that differs from its entry's adds `request: <label>` to `_NOTES`, where
-    `<label>` is the entry's, `host.models.<node>.<consumer>[<i>]`; the wrapper returns "".
+    A request that differs from its entry's, or can't be compared with it, adds
+    `request: <label>` to `_NOTES`, where `<label>` is the entry's,
+    `host.models.<node>.<consumer>[<i>]`; the wrapper returns "".
     """
     def _request_difference(what: str, *args: object) -> str:
         if original(what, *args):
+            # The runner's `served` passes `what` as `` `{label}[{index}].request` ``.
             _NOTES.add(f"request: {what.strip('`').removesuffix('.request')}")
         return ""
 
@@ -1327,9 +1329,12 @@ def _replay(state: _Harvest, case: dict, shims: Collection[str] = ()) -> tuple[d
 
     The shims named in `shims` are on during the replay, and the notes are what they noted.
     Under any shim, a model call's request that differs from its entry's is noted instead of
-    failing the replay: a shim may change a prompt or a tool result's text. Raises `_Skip` when
-    the replay raises anything.
+    failing the replay: a shim may change a prompt or a tool result's text. Raises KeyError for
+    a name with no shim, and `_Skip` when the replay raises anything.
     """
+    unknown = set(shims) - _SHIMS.keys()
+    if unknown:
+        raise KeyError(f"no such shims: {sorted(unknown)}")
     text = _written(case)
     _NOTES.clear()
     with tempfile.TemporaryDirectory() as directory:

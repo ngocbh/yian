@@ -1,0 +1,240 @@
+# From examples/decision-brief.yaml.
+# Three angles fan in to a `go` Decision, the `case ... on` it takes `go_brief`, and `finalize`
+# reads it through the `|` join; the other briefs are skipped and get no model call.
+kind: run
+flow: |
+  # decision-brief — a realistic multi-stage flow (fan-out → synth → route → finalize).
+  #
+  # Give it a yes/no-ish decision question; the flow:
+  #   1. fans OUT to three independent angle agents (the case for, the case against, the risks),
+  #   2. fans them IN to a synth agent that picks a typed Decision (an enum),
+  #   3. routes on that decision with `case ... on` to a decision-specific brief,
+  #   4. finalizes by combining the decision with whichever brief ran (a coalesce join),
+  #   5. returns a multi-field object, with a runtime assert on the decision.
+  #
+  # Exercises: a Literal typedef, an Optional input with a default, fan-out + fan-in, a
+  # typed enum output, `case ... on` with `else`, an n-ary `|` coalesce consumed by a
+  # downstream node, multi-output, and asserts — all with AGENT nodes, so it runs against
+  # any provider/model with no extra Python.
+  #
+  # Note on typed outputs: an AGENT can declare any `output:` shape. A bare `str` is free
+  # text; a `Literal(...)` enum, record, number, or list uses structured generation (see
+  # triage-ticket.yaml). The verdict here is an enum on purpose: `case ... on` routes on a
+  # single tag, so a one-tag answer is exactly what this flow needs.
+  #
+  # Run it with:
+  #   yian run examples/decision-brief.yaml --input question="Should a small team adopt a monorepo?"
+
+  id: decision-brief
+  name: decision_brief
+  description: Weigh a decision from three angles, pick a verdict, and write a tailored brief.
+
+  typedefs:
+    Decision: Literal(go, no_go, needs_more_info)
+
+  input:
+    question: !str
+    audience: !Optional(str)        # omitted -> defaults to "a general audience" in the prompts
+
+  nodes:
+    # --- fan-out: three independent angles (no edges between them; they run in parallel) ---
+    the_case_for:
+      kind: agent
+      input:
+        question: ${input.question}
+      output: str
+      prompt: "Make the strongest good-faith case FOR: ${question}. Three concise sentences, no hedging."
+
+    the_case_against:
+      kind: agent
+      input:
+        question: ${input.question}
+      output: str
+      prompt: "Make the strongest good-faith case AGAINST: ${question}. Three concise sentences, no hedging."
+
+    the_risks:
+      kind: agent
+      input:
+        question: ${input.question}
+      output: str
+      prompt: "List the three biggest risks or unknowns relevant to: ${question}. One sentence each."
+
+    # --- fan-in: weigh all three angles into ONE typed enum decision ---
+    synth:
+      kind: agent
+      input:
+        question: ${input.question}
+        for_case: ${the_case_for.output}
+        against_case: ${the_case_against.output}
+        risks: ${the_risks.output}
+      output: Decision               # the model must answer with exactly one enum tag
+      prompt: |-
+        Weigh this decision and answer with EXACTLY ONE of: go | no_go | needs_more_info.
+
+        Question: ${question}
+        The case for: ${for_case}
+        The case against: ${against_case}
+        Key risks: ${risks}
+
+        Choose needs_more_info when the evidence is genuinely thin. Answer with the tag only.
+
+    # --- route on the decision enum (simple-form case: match the VALUE) ---
+    route:
+      kind: case
+      on: ${synth.output}
+      cases:
+        - when: go
+          then: go_brief
+        - when: no_go
+          then: no_go_brief
+      else: more_info_brief
+
+    go_brief:
+      kind: agent
+      input:
+        question: ${input.question}
+      output: str
+      prompt: "Write a 4-sentence action brief for proceeding with: ${question}"
+
+    no_go_brief:
+      kind: agent
+      input:
+        question: ${input.question}
+      output: str
+      prompt: "Write a 4-sentence brief explaining why to hold off on: ${question}"
+
+    more_info_brief:
+      kind: agent
+      input:
+        question: ${input.question}
+      output: str
+      prompt: "Write a 4-sentence brief naming exactly what to investigate before deciding on: ${question}"
+
+    # --- finalize: combine the decision with whichever brief ran (the `|` coalesces the
+    #     one branch that executed; the other two skip-flood to null) ---
+    finalize:
+      kind: agent
+      input:
+        audience: ${input.audience:-"a general audience"}
+        decision: ${synth.output}
+        brief: ${go_brief.output | no_go_brief.output | more_info_brief.output}
+      output: str
+      prompt: |-
+        Write a tight executive summary (<= 5 sentences) for ${audience}.
+        Decision: ${decision}.
+        Brief: ${brief}
+
+  output:                            # multi-output: the flow returns one object
+    decision: ${synth.output}
+    summary: ${finalize.output}
+
+  asserts:
+    - synth.output in ["go", "no_go", "needs_more_info"]
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
+env: {OPENAI_API_KEY: "<key:1>"}
+inputs: {question: "Should a small team adopt a monorepo?", audience: the CTO}
+run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
+host:
+  models:
+    the_case_for:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: "Shared tooling saves time."}]
+    the_case_against:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: "Builds slow down as the repo grows."}]
+    the_risks:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: "CI cost may rise."}]
+    synth:
+      agent:
+        # A Literal typedef's carrier wraps the tag: {"value": ...}.
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: '{"value": "go"}'}]
+    go_brief:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: "Move the three services into one repo this sprint."}]
+    finalize:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: "Go: merge the repos this sprint."}]
+expect:
+  output:
+    status: succeeded
+    output: {decision: go, summary: "Go: merge the repos this sprint."}
+  # Run start resolves every AGENT, the untaken briefs included; a skipped node writes no record.
+  trace:
+    - - run_started
+      - null
+      - inputs: {question: "Should a small team adopt a monorepo?", audience: the CTO}
+        learnable: false
+        num_workers: 0
+        effective_llm_by_static_path:
+          the_case_for:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          the_case_against:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          the_risks:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          synth:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          go_brief:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          no_go_brief:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          more_info_brief:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          finalize:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [node_started, __start__]
+    - - node_succeeded
+      - __start__
+      - {value: {question: "Should a small team adopt a monorepo?", audience: the CTO}}
+    - [node_started, the_case_for]
+    - [node_succeeded, the_case_for, {value: Shared tooling saves time.}]
+    - [node_started, the_case_against]
+    - [node_succeeded, the_case_against, {value: Builds slow down as the repo grows.}]
+    - [node_started, the_risks]
+    - [node_succeeded, the_risks, {value: CI cost may rise.}]
+    - [node_started, synth]
+    - [node_succeeded, synth, {value: go}]
+    - [node_started, route]
+    - [node_routed, route, {handle: go_brief}]
+    - [node_started, go_brief]
+    - [node_succeeded, go_brief, {value: Move the three services into one repo this sprint.}]
+    - [node_started, finalize]
+    - [node_succeeded, finalize, {value: "Go: merge the repos this sprint."}]
+    - [node_started, __end__]
+    - [node_succeeded, __end__, {value: {decision: go, summary: "Go: merge the repos this sprint."}}]

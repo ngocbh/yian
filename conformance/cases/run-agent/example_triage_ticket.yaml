@@ -1,0 +1,146 @@
+# From examples/triage-ticket.yaml.
+# A record AGENT output with Literal fields, three of them read field by field by a second AGENT;
+# the flow returns the record and the reply.
+kind: run
+flow: |
+  # triage-ticket — turn a raw support message into a structured record, then draft a reply.
+  #
+  # A real-world information-extraction flow:
+  #   1. `triage` reads an unstructured customer message and emits a STRUCTURED RECORD
+  #      (category + priority + one-line summary + sentiment) — not free text. With a
+  #      declared record `output:`, the engine constrains the model to that shape
+  #      (native structured output where the provider supports it, JSON otherwise) and
+  #      enforces it at the write boundary.
+  #   2. `reply` reads individual FIELDS of that record (`${triage.output.priority}`, …)
+  #      and drafts a short, tone-aware response.
+  #
+  # Exercises (the structured-output contract): a record `output:` with a nested
+  # `Literal(...)` enum field, and downstream field-access references into the record.
+  # Both agents are tool-free AGENT nodes, so it runs against any provider/model — including a
+  # local Ollama model — with no extra Python.
+  #
+  # Run it with:
+  #   yian run examples/triage-ticket.yaml --input \
+  #     message="Hi, I was charged twice for my subscription this month and I'm really frustrated. Please refund the extra charge."
+
+  id: triage-ticket
+  name: triage_ticket
+  description: Extract a structured triage record from a support message and draft a tailored reply.
+
+  input:
+    message: !str
+
+  nodes:
+    # --- extract: unstructured message -> a typed record (the structured-output feature) ---
+    triage:
+      kind: agent
+      input:
+        message: ${input.message}
+      output:                                  # a record: the model must fill every field
+        category: Literal(billing, bug, feature_request, account, other)
+        priority: Literal(low, medium, high, urgent)
+        summary: str                           # one sentence capturing the core issue
+        sentiment: Literal(positive, neutral, negative)
+      prompt: |-
+        You are a support triage assistant. Read the customer message and extract:
+        - category: the kind of issue
+        - priority: how urgently it needs attention
+        - summary: a single sentence capturing the core problem
+        - sentiment: the customer's tone
+
+        Customer message:
+        ${message}
+
+    # --- draft: read the record's FIELDS and write a tone-aware reply ---
+    reply:
+      kind: agent
+      input:
+        summary: ${triage.output.summary}
+        priority: ${triage.output.priority}
+        sentiment: ${triage.output.sentiment}
+      output: str
+      prompt: |-
+        Draft a short, empathetic support reply (3-4 sentences).
+        Issue: ${summary}
+        Priority: ${priority}
+        Customer sentiment: ${sentiment}
+
+        Acknowledge their tone, confirm you understand the issue, and state the next step.
+        Do not invent specifics you weren't given.
+
+  output:                                      # the flow returns the record AND the draft
+    triage: ${triage.output}
+    draft_reply: ${reply.output}
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
+env: {OPENAI_API_KEY: "<key:1>"}
+inputs: {message: I was charged twice this month. Please refund the extra charge.}
+run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
+host:
+  models:
+    triage:
+      agent:
+        # A record output is its own carrier: the reply's text is the record as JSON.
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts:
+              - type: text
+                text: >-
+                  {"category": "billing", "priority": "high", "summary": "The customer was
+                  charged twice.", "sentiment": "negative"}
+    reply:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: Sorry about the double charge; we are refunding it now.}]
+expect:
+  output:
+    status: succeeded
+    output:
+      triage:
+        category: billing
+        priority: high
+        summary: The customer was charged twice.
+        sentiment: negative
+      draft_reply: Sorry about the double charge; we are refunding it now.
+  trace:
+    - - run_started
+      - null
+      - inputs: {message: I was charged twice this month. Please refund the extra charge.}
+        learnable: false
+        num_workers: 0
+        effective_llm_by_static_path:
+          triage:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          reply:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [node_started, __start__]
+    - - node_succeeded
+      - __start__
+      - value: {message: I was charged twice this month. Please refund the extra charge.}
+    - [node_started, triage]
+    - - node_succeeded
+      - triage
+      - value:
+          category: billing
+          priority: high
+          summary: The customer was charged twice.
+          sentiment: negative
+    - [node_started, reply]
+    - [node_succeeded, reply, {value: Sorry about the double charge; we are refunding it now.}]
+    - [node_started, __end__]
+    - - node_succeeded
+      - __end__
+      - value:
+          triage:
+            category: billing
+            priority: high
+            summary: The customer was charged twice.
+            sentiment: negative
+          draft_reply: Sorry about the double charge; we are refunding it now.

@@ -1,0 +1,144 @@
+# From examples/structured-test.yaml.
+# Record, int, Literal and list AGENT outputs each read their JSON carrier; the flow bundles all
+# four.
+kind: run
+flow: |
+  # structured-test — exercise structured AGENT output across shapes on a local Ollama model.
+  # Four agents without tools, one per output shape; the flow output bundles all four so a single
+  # run shows whether structured generation + the write boundary accept each shape.
+  #   yian run examples/structured-test.yaml --input text="..."
+
+  id: structured-test
+  name: structured_test
+  description: Exercise structured AGENT output (record / int / list / enum) on Ollama.
+
+  input:
+    text: !str
+
+  nodes:
+    person:                                    # record (object) output
+      kind: agent
+      input:
+        text: ${input.text}
+      output:
+        name: str
+        age: int
+      prompt: |-
+        Extract a single person from the text as a name (string) and an age (integer).
+        If the age is not stated, make a reasonable guess.
+        Text: ${text}
+
+    wordcount:                                 # scalar int output
+      kind: agent
+      input:
+        text: ${input.text}
+      output: int
+      prompt: |-
+        Return ONLY the number of words in the text as an integer.
+        Text: ${text}
+
+    sentiment:                                 # enum (Literal) output
+      kind: agent
+      input:
+        text: ${input.text}
+      output: Literal(positive, neutral, negative)
+      prompt: |-
+        Classify the sentiment of the text as exactly one of: positive, neutral, negative.
+        Text: ${text}
+
+    keywords:                                  # list output
+      kind: agent
+      input:
+        text: ${input.text}
+      output: list(str)
+      prompt: |-
+        Extract up to 3 short keywords from the text as a list of strings.
+        Text: ${text}
+
+  output:
+    person: ${person.output}
+    wordcount: ${wordcount.output}
+    sentiment: ${sentiment.output}
+    keywords: ${keywords.output}
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
+env: {OPENAI_API_KEY: "<key:1>"}
+inputs: {text: "Ada Lovelace, aged 36, loved mathematics."}
+run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
+host:
+  models:
+    # A record is its own carrier; an int and a Literal wrap as {"value": ...}, a list as
+    # {"items": ...}.
+    person:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: '{"name": "Ada Lovelace", "age": 36}'}]
+    wordcount:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: '{"value": 6}'}]
+    sentiment:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: '{"value": "positive"}'}]
+    keywords:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: '{"items": ["Ada Lovelace", "mathematics"]}'}]
+expect:
+  output:
+    status: succeeded
+    output:
+      person: {name: Ada Lovelace, age: 36}
+      wordcount: 6
+      sentiment: positive
+      keywords: [Ada Lovelace, mathematics]
+  trace:
+    - - run_started
+      - null
+      - inputs: {text: "Ada Lovelace, aged 36, loved mathematics."}
+        learnable: false
+        num_workers: 0
+        effective_llm_by_static_path:
+          person:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          wordcount:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          sentiment:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          keywords:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {text: "Ada Lovelace, aged 36, loved mathematics."}}]
+    - [node_started, person]
+    - [node_succeeded, person, {value: {name: Ada Lovelace, age: 36}}]
+    - [node_started, wordcount]
+    - [node_succeeded, wordcount, {value: 6}]
+    - [node_started, sentiment]
+    - [node_succeeded, sentiment, {value: positive}]
+    - [node_started, keywords]
+    - [node_succeeded, keywords, {value: [Ada Lovelace, mathematics]}]
+    - [node_started, __end__]
+    - - node_succeeded
+      - __end__
+      - value:
+          person: {name: Ada Lovelace, age: 36}
+          wordcount: 6
+          sentiment: positive
+          keywords: [Ada Lovelace, mathematics]

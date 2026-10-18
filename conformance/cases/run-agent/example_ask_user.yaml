@@ -1,0 +1,99 @@
+# From examples/ask-user.yaml.
+# The model calls `ask_user` once, the human's answer returns as the tool result, and the model's
+# next reply ends the loop; the flow returns that text.
+kind: run
+flow: |
+  # ask-user — a model-chosen clarifying question via the blocking ask_user tool.
+  #
+  # `ask_user` is an ordinary tool granted to an agent. Granting it only
+  # ENABLES the capability: the live agent loop blocks to ask the human ONLY when the model
+  # decides it needs a fact it can't supply itself, then receives the answer as the tool
+  # result. (Contrast with the HUMAN_INPUT node — see human-approval.yaml —
+  # which ALWAYS blocks at a fixed point. For a guaranteed gate, use HUMAN_INPUT; for an
+  # agent that asks "only if needed", use this.)
+  #
+  # Because it is model-chosen, whether the call happens depends on the prompt AND the
+  # model: a tool-capable model that judges the request ambiguous will call ask_user; a
+  # request that is already clear (or a weak model) may just answer outright.
+  #
+  # Exercises: an AGENT with an authored `tools:` grant, which runs the tool loop — the
+  # loop binds ask_user and blocks on the call until the answer arrives.
+  #
+  # Run it with a deliberately ambiguous request (the CLI will prompt if the agent asks):
+  #   yian run examples/ask-user.yaml --input request="Book me a table for dinner"
+
+  id: ask-user
+  name: ask_user_clarify
+  description: An agent that asks the user a clarifying question only when the request is ambiguous.
+
+  input:
+    request: !str
+
+  nodes:
+    assistant:
+      kind: agent
+      tools: [ask_user]                    # explicitly grant the blocking ask_user tool
+      input:
+        request: ${input.request}
+      output: str
+      prompt: |-
+        The user asks: ${request}
+
+        If a detail essential to a good answer is missing or ambiguous, call ask_user
+        ONCE to get exactly that detail. Otherwise, answer directly. When you have what
+        you need, give a single clear, self-contained answer — do not ask twice.
+
+  output: ${assistant.output}
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
+env: {OPENAI_API_KEY: "<key:1>"}
+inputs: {request: Book me a table for dinner}
+run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
+host:
+  # Answers the AGENT's `ask_user` call.
+  human:
+    assistant: [2 people at 7 pm]
+  models:
+    assistant:
+      agent:
+        # The model asks, with two short labels as options.
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts:
+              - type: tool_call
+                id: c1
+                name: ask_user
+                arguments: {question: "How many people, and at what time?", options: [2 at 7 pm, 4 at 8 pm]}
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: Book a table for 2 at 7 pm through the restaurant's site.}]
+expect:
+  output: {status: succeeded, output: Book a table for 2 at 7 pm through the restaurant's site.}
+  # A model-requested call sets only `question` and `options` (docs/api.md, Blocking human
+  # interaction); the other request fields are null and left out. <id:1> is the first model
+  # call's exchange id.
+  tool_calls:
+    ask_user:
+      - args: {question: "How many people, and at what time?", options: [2 at 7 pm, 4 at 8 pm]}
+        call_id: r1/assistant/<id:1>/0
+        attempt: 1
+        node: assistant
+  trace:
+    - - run_started
+      - null
+      - inputs: {request: Book me a table for dinner}
+        learnable: false
+        num_workers: 0
+        effective_llm_by_static_path:
+          assistant:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {request: Book me a table for dinner}}]
+    - [node_started, assistant]
+    - [node_succeeded, assistant, {value: Book a table for 2 at 7 pm through the restaurant's site.}]
+    - [node_started, __end__]
+    - [node_succeeded, __end__, {value: Book a table for 2 at 7 pm through the restaurant's site.}]

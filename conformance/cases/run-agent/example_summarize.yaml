@@ -1,0 +1,61 @@
+# From examples/summarize.yaml.
+# One AGENT in the full `nodes:` form condenses the input text; the flow returns its text.
+kind: run
+flow: |
+  # summarize — one AGENT that condenses a block of text into a single sentence.
+  #
+  # Run it with:  yian run examples/summarize.yaml --input text="...long text..."
+
+  id: summarize
+  name: summarize
+  description: Summarize a block of text into one clear sentence.
+
+  input:
+    text: !str
+
+  nodes:
+    summary:
+      kind: agent
+      input:
+        text: ${input.text}
+      output: str
+      prompt: |-
+        Summarize the following text in one clear, neutral sentence:
+
+        ${text}
+
+  output: ${summary.output}
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
+env: {OPENAI_API_KEY: "<key:1>"}
+inputs: {text: The team moved the launch to Friday because the venue was booked on Thursday.}
+run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
+host:
+  models:
+    summary:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: The launch moved to Friday since the venue was taken Thursday.}]
+expect:
+  output: {status: succeeded, output: The launch moved to Friday since the venue was taken Thursday.}
+  trace:
+    - - run_started
+      - null
+      - inputs: {text: The team moved the launch to Friday because the venue was booked on Thursday.}
+        learnable: false
+        num_workers: 0
+        effective_llm_by_static_path:
+          summary:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [node_started, __start__]
+    - - node_succeeded
+      - __start__
+      - value: {text: The team moved the launch to Friday because the venue was booked on Thursday.}
+    - [node_started, summary]
+    - [node_succeeded, summary, {value: The launch moved to Friday since the venue was taken Thursday.}]
+    - [node_started, __end__]
+    - [node_succeeded, __end__, {value: The launch moved to Friday since the venue was taken Thursday.}]

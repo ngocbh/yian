@@ -1,0 +1,21 @@
+kind: cli
+files:
+  company/main.yaml: |
+    id: main
+    name: main
+    system:
+      paths: [lib]
+    input:
+      n: !int
+    nodes: {}
+    output: ${input.n}
+args: [check, --root, company, --json, company/main.yaml]
+expect:
+  exit: 1
+  json:
+    format: yian.cli.v1
+    flows:
+      - path: company/main.yaml
+        ok: false
+        diagnostics:
+          - code: compose.load

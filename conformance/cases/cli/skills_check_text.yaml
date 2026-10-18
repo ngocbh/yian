@@ -1,0 +1,12 @@
+kind: cli
+files:
+  skills/good/SKILL.md: |
+    ---
+    name: good
+    description: Does good things.
+    ---
+    Do good things.
+args: [skills, check, skills/good]
+expect:
+  exit: 0
+  stdout: "skills/good: ok (good)\n"

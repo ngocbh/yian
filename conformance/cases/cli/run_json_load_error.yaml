@@ -1,0 +1,16 @@
+kind: cli
+flow: |
+  id: scored
+  name: scored
+  input:
+    n: !int
+  nodes: {}
+  output: ${scor.output}
+args: [run, flow.yaml, -w, "0", --log, run.jsonl, --json]
+expect:
+  exit: 1
+  json:
+    format: yian.cli.v1
+    error:
+      code: compose.load
+      frames: [{label: flow.yaml, range: [6, 9, 6, 23]}]

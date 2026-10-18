@@ -1,0 +1,21 @@
+kind: cli
+flow: |
+  id: echo
+  name: echo
+  input:
+    name: !str
+    n: !int
+    x: !float
+  nodes: {}
+  output:
+    greeting: ${input.name}
+    n: ${input.n}
+    x: ${input.x}
+args: [run, flow.yaml, -w, "0", --log, run.jsonl, --json,
+       --input, name=Ada, --input, n=2, --input, x=2]
+expect:
+  exit: 0
+  json:
+    format: yian.cli.v1
+    status: succeeded
+    output: {greeting: Ada, n: 2, x: 2.0}

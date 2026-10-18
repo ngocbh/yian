@@ -5,9 +5,18 @@ recovers them from a durable log, drives the flow to a terminal state, and
 prints the output.
 
 ```console
-yian run FLOW.yaml [--inputs inputs.json] [--input k=v]... [--log PATH] [--memory-root DIR] [--memory-storage KEY=PATH]... [--mcp-config FILE]... [-w N] [--provider NAME] [--model NAME] [--quiet] [--verbose] [--engine-trace]
-yian run FLOW.yaml --resume PATH [--memory-root DIR] [--memory-storage KEY=PATH]... [--mcp-config FILE]... [-w N] [--quiet] [--verbose] [--engine-trace]
+yian run FLOW.yaml [--inputs inputs.json] [--input k=v]... [--log PATH] [--memory-root DIR] [--memory-storage KEY=PATH]... [--mcp-config FILE]... [-w N] [--provider NAME] [--model NAME] [--quiet] [--verbose] [--engine-trace] [--json]
+yian run FLOW.yaml --resume PATH [--memory-root DIR] [--memory-storage KEY=PATH]... [--mcp-config FILE]... [-w N] [--quiet] [--verbose] [--engine-trace] [--json]
+yian check [--root DIR] FLOW.yaml... [--json]
+yian skills check DIR... [--json]
+yian config check [--json] < llm_config.json
+yian providers [--json]
 ```
+
+`yian check` loads flows without running them, `yian skills check` checks skill
+directories, `yian config check` checks an `llm_config` layer, and `yian providers`
+lists the providers. With `--json`, these commands and `yian run` write one JSON
+document on stdout; see [Machine-readable output](#machine-readable-output).
 
 Commands below that use `examples/...` assume a repository clone and run from
 its root; those files are not installed with the Python package.
@@ -535,6 +544,183 @@ yian run examples/debate.yaml \
 The dispatcher appends every node start and outcome to the selected authoritative
 log before publishing the progress event that the CLI renders.
 
+## Machine-readable output
+
+With `--json`, five commands write one JSON document for a program to read. The
+documents are defined by the JSON Schema `conformance/schema/cli.schema.json` in the
+repository.
+
+| Command | Document | Exits 1 when |
+|---------|----------|--------------|
+| `yian check [--root DIR] FLOW... --json` | `{"format", "flows"}` | a flow doesn't load |
+| `yian skills check DIR... --json` | `{"format", "skills"}` | a skill directory isn't valid |
+| `yian config check --json` (layer on stdin) | `{"format", "ok", "errors"}` | the layer has errors |
+| `yian providers --json` | `{"format", "providers"}` | only for a `defaults.invalid` error |
+| `yian run FLOW ... --json` (fresh or `--resume`) | `{"format", "status", ...}` | the run failed |
+
+Every document follows these rules:
+
+- The command writes exactly one JSON object and a newline on stdout, and nothing
+  else there. stderr is free-form: the banner, progress, warnings, and the
+  `Run log:` line still go there.
+- Every document has `"format": "yian.cli.v1"`. Keys are snake_case. Every key
+  listed below is always present, as `null` where stated.
+- Consumers ignore keys they don't know; keys are only added within v1.
+- Codes and enum values are only added within v1. A consumer treats an unknown error
+  code as a generic error and ignores an unknown login method.
+- Message and note text is not part of the contract, nor are the number and order of
+  `config check` errors. Codes and fields are. Conformance cases still pin the number
+  and order, so the implementations agree.
+- Numbers use yian's lossless JSON form: a float always has a fraction or an
+  exponent (`2.0`), an int never does.
+
+Exit codes:
+
+- `0`: success.
+- `1`: a reported problem, with its document on stdout.
+- `2`: a usage error. The text is on stderr, and there is no document.
+- `130`: stopped by Ctrl-C (SIGINT). There is no document.
+
+Any other exit, a crash included, has no document. Treat stdout that doesn't parse as
+an internal error.
+
+### Diagnostics and the error document
+
+A diagnostic is `{code, message, frames, notes}`. A frame is
+`{label, range, note}`, where `range` is `[start_line, start_col, end_line, end_col]`,
+1-based with an exclusive end column. `frames`, `notes`, and a frame's `note` are left
+out when empty. A failure is a diagnostic plus `node`: the failing node id, or `null`
+for a run-level failure. Its `code` is one of the
+[failure codes](api.md#failure-codes).
+
+A `--json` command that exits 1 without its own result document writes an error
+document, `{"format", "error": <diagnostic>}`. `error.code` is one of:
+
+- `compose.load`: the flow doesn't load (`yian run`); the frames, when present, locate the
+  problem.
+- `defaults.invalid`: a `YIAN_<NAME>` variable holds a value it doesn't accept (any
+  command).
+- `run.setup`: the run could not start or recover. This covers memory, MCP, and
+  skills setup; a missing or changed provider key; the run log, including an empty or
+  damaged log given to `--resume`; an input or `llm_config` value that fails its
+  check before the log exists; and a missing MCP SDK.
+- `run.cancelled`: input the run waited for was closed, such as stdin ending at a
+  prompt.
+
+```json
+{"format": "yian.cli.v1", "error": {"code": "defaults.invalid", "message": "..."}}
+```
+
+### Checking flows
+
+`yian check FLOW...` loads each flow and runs none of its code. `flows` holds one
+result per argument, in argument order. `path` is the argument exactly as given. A
+flow that loads gives `id`, `name`, `description` (a string or `null`), and `inputs`;
+each input's `type` is its canonical type label (`int`, `Optional(str)`, or a typedef
+expanded as `{"age":int,"name":str}`). A flow that doesn't load gives `diagnostics`,
+with code `compose.load` or `compose.outside_root`. A missing or unreadable file is a
+`compose.load` diagnostic without frames. The command exits 0 when every flow loads,
+and 1 otherwise. The document is shown wrapped here:
+
+```json
+{"format": "yian.cli.v1", "flows": [
+  {"path": "flow.yaml", "ok": true, "id": "brief", "name": "brief",
+   "description": "Write a short brief.",
+   "inputs": [{"name": "topic", "type": "str", "required": true, "has_default": false},
+              {"name": "words", "type": "int", "required": false, "has_default": true}]},
+  {"path": "bad.yaml", "ok": false, "diagnostics": [
+    {"code": "compose.load", "message": "flow has unresolved references: ...",
+     "frames": [{"label": "bad.yaml", "range": [6, 9, 6, 23]}]}]}]}
+```
+
+Without `--root`, a flow loads exactly as `yian run` loads it. `--root DIR` confines
+each flow to `DIR`:
+
+- Paths are resolved, symlinks followed. Each flow and each `uses:` child must be
+  inside `DIR`; one outside it gets `compose.outside_root`.
+- A `uses:` ref loads only from `<importing file's dir>/<ref>.yaml`.
+- A flow that sets `system.paths` is refused with `compose.load`.
+- Source labels are paths relative to `DIR`.
+
+Without `--json`, `check` prints `PATH: ok` for each flow that loads, and `PATH:`
+followed by the located error on stderr for one that doesn't.
+
+### Checking skills
+
+`yian skills check DIR...` loads the `SKILL.md` in each directory. `skills` holds one
+result per argument, in argument order: `{"path", "ok": true, "name", "description"}`,
+or `{"path", "ok": false, "error": {"code": "skill.invalid", "message"}}`. It exits 0
+when every skill is valid, and 1 otherwise. Two directories with the same skill name
+are not reported.
+
+```json
+{"format": "yian.cli.v1", "skills": [
+  {"path": "skills/brief", "ok": true, "name": "brief", "description": "Write a short brief."},
+  {"path": "skills/empty", "ok": false,
+   "error": {"code": "skill.invalid", "message": "skills/empty: missing SKILL.md"}}]}
+```
+
+Without `--json`, it prints `PATH: ok (NAME)`, or the error message, which names the
+path, on stderr.
+
+### Checking an `llm_config` layer
+
+`yian config check` reads a JSON object on stdin: an `llm_config` layer as a host
+passes it to `run_flow(llm_config=...)`, key included. It checks the layer as
+`run_flow` does, so a `base_url` without a key fails, as it would in a run. `ok` is
+true exactly when `errors` is empty. It exits 0 when the layer is valid, 1 when it has
+errors, and 2 when stdin is not JSON or not a JSON object.
+
+Each error is `{"field", "message"}`. `field` is the error's location joined with `.`,
+such as `base_url` or `openai.temperature`. It is `null` for an unknown top-level key,
+which is reported without its name since a pasted key could be the name, and for an
+error about the whole layer. Problems a provider block checks itself, such as an
+unknown key in it, are reported at the block's name (`openai`). Values never appear
+in messages.
+
+```console
+$ echo '{"provider": "openai", "model": "gpt-5.5", "openai": {"temperature": "hot"}, "oops": 1}' | yian config check --json
+{"format": "yian.cli.v1", "ok": false, "errors": [{"field": "openai.temperature", "message": "Input should be a valid number"}, {"field": null, "message": "llm_config has an extra field; ..."}]}
+```
+
+Without `--json`, it prints `ok`, or one `FIELD: MESSAGE` line per error on stderr
+(just `MESSAGE` when there is no field).
+
+### Listing providers
+
+`yian providers` lists every supported provider. `methods` are the login kinds
+`yian auth` can save (`api-key`, `subscription`, `none`); `api_key_env` is the
+provider's key variable, or `null`. Without `--json`, each line is
+`NAME: METHOD, METHOD (API_KEY_ENV)`.
+
+```json
+{"format": "yian.cli.v1", "providers": [
+  {"name": "openai", "methods": ["api-key", "subscription"], "api_key_env": "OPENAI_API_KEY"},
+  {"name": "ollama", "methods": ["none"], "api_key_env": null}, ...]}
+```
+
+### Running a flow
+
+`yian run FLOW ... --json`, fresh or with `--resume`, writes
+`{"format", "status": "succeeded", "output"}`, or
+`{"format", "status": "failed", "failure": <failure>}` and exits 1, or an error
+document.
+
+```json
+{"format": "yian.cli.v1", "status": "succeeded", "output": {"name": "Ada", "rank": 1, "score": 2.0}}
+{"format": "yian.cli.v1", "status": "failed", "failure": {"code": "node.execute", "message": "no greeting for Ada", "frames": [{"label": "fail.yaml", "range": [13, 7, 13, 64]}], "node": "greet"}}
+```
+
+`output` is in yian's JSON codec form. Plain values are plain JSON, and a file is
+`{"uri", "mime", "name"}`. An implementation that has float infinity writes it as
+`{"$float": "inf"}` or `{"$float": "-inf"}`. A mapping that is exactly one of those
+two, or whose only key is `$record`, is wrapped as `{"$record": ...}`, so
+`{"$record": 1}` is written `{"$record": {"$record": 1}}`.
+
+During a `--json` run, anything else written to stdout, such as a CODE node's
+`print` or the output of a command it starts, goes to stderr. `--json` changes nothing
+else: prompts, key checks, and exit codes are the same as without it.
+
 ## Exit codes
 
 | Status | Exit code |
@@ -550,6 +736,11 @@ log before publishing the progress event that the CLI renders.
 | Resume key check failed (a missing, changed, or unavailable provider key) | `1` (error printed to stderr) |
 | Invalid CLI input (including a forbidden resume combination, a bad `--memory-root` or `--memory-storage` flag, an `--inputs` file that is not UTF-8 text, not valid JSON, or not a JSON object, an input the flow does not declare, or required inputs missing without a TTY) | `2` |
 | Run interrupted with Ctrl-C during execution or at a resume key prompt | `130` |
+
+`yian check`, `yian skills check`, and `yian config check` exit `1` when they find a
+problem, and `yian config check` exits `2` when stdin is not a JSON object. With
+`--json`, a failed check exits `1` with its document on stdout, as does every other
+reported problem; see [Machine-readable output](#machine-readable-output).
 
 ## Compile errors
 

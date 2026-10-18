@@ -1,0 +1,17 @@
+kind: cli
+flow: |
+  id: ask
+  name: ask
+  nodes:
+    ok:
+      kind: human_input
+      prompt: "Proceed?"
+      output: str
+  output: ${ok.output}
+args: [run, flow.yaml, -w, "0", --log, run.jsonl, --json]
+expect:
+  exit: 1
+  json:
+    format: yian.cli.v1
+    error:
+      code: run.cancelled

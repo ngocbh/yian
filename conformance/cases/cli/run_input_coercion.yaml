@@ -1,0 +1,21 @@
+kind: cli
+flow: |
+  id: coerce
+  name: coerce
+  input:
+    n: !int
+    flag: !bool
+    label: !str
+  nodes: {}
+  output:
+    n: ${input.n}
+    flag: ${input.flag}
+    label: ${input.label}
+args: [run, flow.yaml, -w, "0", --log, run.jsonl, --json,
+       --input, n=3, --input, flag=true, --input, label=7]
+expect:
+  exit: 0
+  json:
+    format: yian.cli.v1
+    status: succeeded
+    output: {n: 3, flag: true, label: "7"}

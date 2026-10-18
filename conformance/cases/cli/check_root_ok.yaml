@@ -1,0 +1,36 @@
+kind: cli
+files:
+  company/main.yaml: |
+    id: main
+    name: main
+    input:
+      n: !int
+    nodes:
+      work:
+        kind: call
+        call: child
+        input:
+          n: ${input.n}
+    output: ${work.output}
+    uses:
+      child: lib/child
+  company/lib/child.yaml: |
+    id: child
+    name: child
+    input:
+      n: !int
+    nodes: {}
+    output: ${input.n}
+args: [check, --root, company, --json, company/main.yaml]
+expect:
+  exit: 0
+  json:
+    format: yian.cli.v1
+    flows:
+      - path: company/main.yaml
+        ok: true
+        id: main
+        name: main
+        description: null
+        inputs:
+          - {name: n, type: int, required: true, has_default: false}

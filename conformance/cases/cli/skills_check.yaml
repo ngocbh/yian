@@ -1,0 +1,24 @@
+kind: cli
+files:
+  skills/good/SKILL.md: |
+    ---
+    name: good
+    description: Does good things.
+    ---
+    Do good things.
+  skills/bad/SKILL.md: |
+    ---
+    name: bad
+    ---
+    No description.
+  skills/empty/x.txt: |
+    Not a skill.
+args: [skills, check, --json, skills/good, skills/bad, skills/empty]
+expect:
+  exit: 1
+  json:
+    format: yian.cli.v1
+    skills:
+      - {path: skills/good, ok: true, name: good, description: Does good things.}
+      - {path: skills/bad, ok: false, error: {code: skill.invalid}}
+      - {path: skills/empty, ok: false, error: {code: skill.invalid}}

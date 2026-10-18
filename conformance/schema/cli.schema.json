@@ -1,0 +1,243 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "yian.cli.v1",
+  "description": "The documents yian's --json commands write. A command writes exactly one JSON object and a newline on stdout, and nothing else there. Every document has \"format\": \"yian.cli.v1\". Keys are snake_case. Every key a document lists is always present (null where it allows null). Consumers ignore unknown keys; keys are only added within v1. Codes and enum values are only added within v1; a consumer treats an unknown error code as a generic error and ignores an unknown login method. Message and note text is not part of the contract, nor are the number and order of `config check` errors; codes and fields are. Conformance cases still pin the number and order, so the implementations agree. Numbers use yian's lossless JSON form: a float always has a fraction or an exponent (2.0), an int never does. Exit codes: 0 success; 1 a reported problem, with its document on stdout; 2 a usage error (text on stderr, no document); 130 stopped by SIGINT (no document). Any other exit, a crash included (exit 1 with a traceback), has no document; a consumer treats stdout that doesn't parse as an internal error. stderr is free-form.",
+  "anyOf": [
+    {"$ref": "#/$defs/error_document"},
+    {"$ref": "#/$defs/check_document"},
+    {"$ref": "#/$defs/run_document"},
+    {"$ref": "#/$defs/config_document"},
+    {"$ref": "#/$defs/providers_document"},
+    {"$ref": "#/$defs/skills_document"}
+  ],
+  "$defs": {
+    "format": {
+      "const": "yian.cli.v1"
+    },
+    "frame": {
+      "description": "A source location: range is [start_line, start_col, end_line, end_col], 1-based with an exclusive end column. note is left out when empty.",
+      "type": "object",
+      "required": ["label", "range"],
+      "properties": {
+        "label": {"type": "string"},
+        "range": {
+          "type": "array",
+          "items": {"type": "integer", "minimum": 1},
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "note": {"type": "string"}
+      }
+    },
+    "diagnostic": {
+      "description": "A problem with a code, a message and its source frames, outermost first. frames and notes are left out when empty.",
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": {"type": "string"},
+        "message": {"type": "string"},
+        "frames": {"type": "array", "items": {"$ref": "#/$defs/frame"}},
+        "notes": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "failure": {
+      "description": "A diagnostic plus `node`: the id of the node that failed, or null when no single node did.",
+      "allOf": [
+        {"$ref": "#/$defs/diagnostic"},
+        {
+          "type": "object",
+          "required": ["node"],
+          "properties": {
+            "node": {"type": ["string", "null"]}
+          }
+        }
+      ]
+    },
+    "run_document": {
+      "description": "`yian run --json` (fresh or --resume): the run's terminal result. A run that fails exits 1 with status failed.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["format", "status", "output"],
+          "properties": {
+            "format": {"$ref": "#/$defs/format"},
+            "status": {"const": "succeeded"},
+            "output": {
+              "description": "The flow's output in yian's JSON codec form (conformance/README.md): plain JSON, a file as {uri, mime, name}, a float infinity as {\"$float\": \"inf\"} or {\"$float\": \"-inf\"}, and a mapping that would read as one of those or whose only key is $record wrapped in {\"$record\": ...}."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["format", "status", "failure"],
+          "properties": {
+            "format": {"$ref": "#/$defs/format"},
+            "status": {"const": "failed"},
+            "failure": {"$ref": "#/$defs/failure"}
+          }
+        }
+      ]
+    },
+    "error_document": {
+      "description": "Written by a --json command that exits 1 without its own result document.",
+      "type": "object",
+      "required": ["format", "error"],
+      "properties": {
+        "format": {"$ref": "#/$defs/format"},
+        "error": {
+          "allOf": [
+            {"$ref": "#/$defs/diagnostic"},
+            {
+              "properties": {
+                "code": {
+                  "enum": ["compose.load", "defaults.invalid", "run.setup", "run.cancelled"]
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "input": {
+      "description": "One declared flow input. type is the canonical type label (int, Optional(str), a typedef expanded as {\"age\":int,\"name\":str}).",
+      "type": "object",
+      "required": ["name", "type", "required", "has_default"],
+      "properties": {
+        "name": {"type": "string"},
+        "type": {"type": "string"},
+        "required": {"type": "boolean"},
+        "has_default": {"type": "boolean"}
+      }
+    },
+    "flow_result": {
+      "description": "One flow `yian check` loaded; path is the argument exactly as given.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["path", "ok", "id", "name", "description", "inputs"],
+          "properties": {
+            "path": {"type": "string"},
+            "ok": {"const": true},
+            "id": {"type": "string"},
+            "name": {"type": "string"},
+            "description": {"type": ["string", "null"]},
+            "inputs": {"type": "array", "items": {"$ref": "#/$defs/input"}}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["path", "ok", "diagnostics"],
+          "properties": {
+            "path": {"type": "string"},
+            "ok": {"const": false},
+            "diagnostics": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "allOf": [
+                  {"$ref": "#/$defs/diagnostic"},
+                  {
+                    "properties": {
+                      "code": {"enum": ["compose.load", "compose.outside_root"]}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "check_document": {
+      "description": "`yian check --json`: one result per flow argument, in argument order.",
+      "type": "object",
+      "required": ["format", "flows"],
+      "properties": {
+        "format": {"$ref": "#/$defs/format"},
+        "flows": {"type": "array", "items": {"$ref": "#/$defs/flow_result"}}
+      }
+    },
+    "config_error": {
+      "description": "One problem with an llm_config layer. field is the location joined with `.` (base_url, openai.temperature), or null for an unknown top-level key, which is never named, or a problem with no single field. A provider block reports its own field problems, an unknown key in it included, at field: <block> (openai).",
+      "type": "object",
+      "required": ["field", "message"],
+      "properties": {
+        "field": {"type": ["string", "null"]},
+        "message": {"type": "string"}
+      }
+    },
+    "config_document": {
+      "description": "`yian config check --json`: the llm_config layer on stdin, checked as a run checks it. ok is true exactly when errors is empty. Values never appear in messages; an unknown top-level key is never named, but a provider block's messages name its own keys.",
+      "type": "object",
+      "required": ["format", "ok", "errors"],
+      "properties": {
+        "format": {"$ref": "#/$defs/format"},
+        "ok": {"type": "boolean"},
+        "errors": {"type": "array", "items": {"$ref": "#/$defs/config_error"}}
+      }
+    },
+    "provider": {
+      "description": "One supported provider: the login kinds `yian auth` can save for it, and the environment variable its API key is read from (null when it takes no key).",
+      "type": "object",
+      "required": ["name", "methods", "api_key_env"],
+      "properties": {
+        "name": {"type": "string"},
+        "methods": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"enum": ["api-key", "subscription", "none"]}
+        },
+        "api_key_env": {"type": ["string", "null"]}
+      }
+    },
+    "providers_document": {
+      "description": "`yian providers --json`: every supported provider, in yian's order.",
+      "type": "object",
+      "required": ["format", "providers"],
+      "properties": {
+        "format": {"$ref": "#/$defs/format"},
+        "providers": {"type": "array", "items": {"$ref": "#/$defs/provider"}}
+      }
+    },
+    "skill_result": {
+      "description": "One skill directory `yian skills check` loaded; path is the argument exactly as given.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["path", "ok", "name", "description"],
+          "properties": {
+            "path": {"type": "string"},
+            "ok": {"const": true},
+            "name": {"type": "string"},
+            "description": {"type": "string"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["path", "ok", "error"],
+          "properties": {
+            "path": {"type": "string"},
+            "ok": {"const": false},
+            "error": {
+              "type": "object",
+              "required": ["code", "message"],
+              "properties": {
+                "code": {"const": "skill.invalid"},
+                "message": {"type": "string"}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "skills_document": {
+      "description": "`yian skills check --json`: one result per skill directory argument, in argument order. Two directories with one skill name are not reported.",
+      "type": "object",
+      "required": ["format", "skills"],
+      "properties": {
+        "format": {"$ref": "#/$defs/format"},
+        "skills": {"type": "array", "items": {"$ref": "#/$defs/skill_result"}}
+      }
+    }
+  }
+}

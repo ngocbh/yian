@@ -1,0 +1,33 @@
+kind: cli
+flow: |
+  id: noisy
+  name: noisy
+  nodes:
+    talk:
+      kind: code
+      output: str
+      code: |
+        console.log("noise");
+        (await import("node:fs")).writeSync(1, "raw\n");
+        return "x";
+  output: ${talk.output}
+python_flow: |
+  id: noisy
+  name: noisy
+  nodes:
+    talk:
+      kind: code
+      output: str
+      code: |
+        import os
+        print("noise")
+        os.write(1, b"raw\n")
+        return "x"
+  output: ${talk.output}
+args: [run, flow.yaml, -w, "0", --log, run.jsonl, --json]
+expect:
+  exit: 0
+  json:
+    format: yian.cli.v1
+    status: succeeded
+    output: x

@@ -6,6 +6,14 @@ checks the model, and saves the credential and model together; `--default` and
 `--remove` choose the default provider or delete a login. It owns prompts; provider
 services own the protocol and credential storage.
 
+`yian config check` checks a host `llm_config` layer read from stdin, and `yian
+providers` lists the providers and their login kinds; each prints text or, with
+`--json`, one `yian.cli.v1` document.
+
+`yian check FLOW...` loads flows without running them and reports each as text or, with
+`--json`, as one `yian.cli.v1` document. `yian skills check DIR...` does the same for
+skill directories.
+
 `yian run FLOW.yaml` loads a Compose flow, gathers fresh inputs from flags and an
 available interactive prompt, selects and reports a durable run-log path, and drives
 it to a terminal. Without an interactive stdin, optional/defaulted declarations stay
@@ -36,13 +44,20 @@ graph mutation.
 
 from __future__ import annotations
 
+import sys
+
 from rich.text import Text
 import typer
 
 from yian.cli.chat.command import chat as _chat
 from yian.cli.auth import auth as _auth
+from yian.cli.auth import config_check as _config_check
+from yian.cli.auth import providers as _providers
+from yian.cli.run import check as _check
 from yian.cli.run import err_console
 from yian.cli.run import run as _run
+from yian.cli.run import skills_check as _skills_check
+from yian.cli.utils import print_json
 from yian.defaults import DefaultsError, current
 
 app = typer.Typer(
@@ -61,6 +76,9 @@ def _root() -> None:
     otherwise collapses it, so `yian run flow.yaml` would read `run` as the flow
     path).
 
+    A bad variable is reported on stderr and, when the arguments hold `--json`, also as a
+    `defaults.invalid` error document on stdout.
+
     Raises:
         `typer.Exit`: With code 1 when a `YIAN_<NAME>` variable holds a value its
             default does not accept.
@@ -69,12 +87,27 @@ def _root() -> None:
         current()
     except DefaultsError as err:
         err_console.print(Text(str(err), style="red"))
+        # Typer runs this callback before it parses the subcommand's options, so `--json`
+        # is looked for in the raw arguments. Two limits: `CliRunner` arguments aren't in
+        # `sys.argv`, and a `--json` after `--` also matches.
+        if "--json" in sys.argv[1:]:
+            print_json({"error": {"code": "defaults.invalid", "message": str(err)}})
         raise typer.Exit(code=1) from None
 
 
 app.command("run")(_run)
 app.command("chat")(_chat)
 app.command("auth")(_auth)
+app.command("check")(_check)
+app.command("providers")(_providers)
+
+config_app = typer.Typer(name="config", no_args_is_help=True, help="Check an llm_config layer.")
+config_app.command("check")(_config_check)
+app.add_typer(config_app, name="config")
+
+skills_app = typer.Typer(name="skills", no_args_is_help=True, help="Check skill directories.")
+skills_app.command("check")(_skills_check)
+app.add_typer(skills_app, name="skills")
 
 
 def main() -> None:

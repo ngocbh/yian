@@ -1,4 +1,4 @@
-"""Interactive CLI helpers for provider credentials and endpoints.
+"""CLI helpers: provider credentials and endpoints, and the `--json` writer.
 
 These are the integration points the `llm_clients` modules point at by name:
 
@@ -17,13 +17,16 @@ These are the integration points the `llm_clients` modules point at by name:
 when attached to an interactive terminal and otherwise fall back (return the
 ambient value, or raise for a hard-missing required key) so non-interactive
 runs stay scriptable.
+
+`print_json` writes the one `yian.cli.v1` document a `--json` command prints.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import sys
-from typing import Optional
+from typing import Any, Optional, TextIO
 
 from yian.defaults import current
 from yian.llm_clients.api_key_env import OPTIONAL_API_KEY_PROVIDERS, get_api_key_env
@@ -32,6 +35,26 @@ from yian.llm_clients.api_key_env import OPTIONAL_API_KEY_PROVIDERS, get_api_key
 # module stays import-light — importing the ollama client pulls `langchain_ollama`
 # at module top, which we don't want on the CLI's hot path.
 _OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434"
+
+JSON_FORMAT = "yian.cli.v1"
+
+
+def print_json(document: dict[str, Any], file: Optional[TextIO] = None) -> None:
+    """Write `document` as one `yian.cli.v1` JSON object and a newline, then flush.
+
+    Args:
+        document (`dict[str, Any]`):
+            The document's keys; `format` is added first.
+        file (`TextIO`, *optional*, defaults to `None`):
+            Where to write; `None` means `sys.stdout`.
+
+    Raises:
+        `ValueError`:
+            `document` holds a NaN or infinite float, which JSON can't represent.
+    """
+    out = sys.stdout if file is None else file
+    out.write(json.dumps({"format": JSON_FORMAT, **document}, allow_nan=False) + "\n")
+    out.flush()
 
 
 def ensure_api_key(provider: str, *, interactive: bool = True) -> Optional[str]:

@@ -1,0 +1,38 @@
+kind: cli
+files:
+  good.yaml: |
+    id: good
+    name: good
+    input:
+      n: !int
+    nodes: {}
+    output: ${input.n}
+  bad.yaml: |
+    id: bad
+    name: bad
+    input:
+      n: !int
+    nodes: {}
+    output: ${scor.output}
+args: [check, --json, ./good.yaml, bad.yaml, missing.yaml]
+expect:
+  exit: 1
+  json:
+    format: yian.cli.v1
+    flows:
+      - path: ./good.yaml
+        ok: true
+        id: good
+        name: good
+        description: null
+        inputs:
+          - {name: n, type: int, required: true, has_default: false}
+      - path: bad.yaml
+        ok: false
+        diagnostics:
+          - code: compose.load
+            frames: [{label: bad.yaml, range: [6, 9, 6, 23]}]
+      - path: missing.yaml
+        ok: false
+        diagnostics:
+          - code: compose.load

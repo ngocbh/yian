@@ -1,0 +1,9 @@
+kind: cli
+stdin: '{"api_key": "<key:1>"}'
+args: [config, check, --json]
+expect:
+  exit: 1
+  json:
+    format: yian.cli.v1
+    ok: false
+    errors: [{field: null}]

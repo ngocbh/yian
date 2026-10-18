@@ -1,0 +1,26 @@
+kind: cli
+files:
+  company/main.yaml: |
+    id: main
+    name: main
+    input:
+      n: !int
+    nodes: {}
+    output: ${input.n}
+  other/flow.yaml: |
+    id: flow
+    name: flow
+    input:
+      n: !int
+    nodes: {}
+    output: ${input.n}
+args: [check, --root, company, --json, other/flow.yaml]
+expect:
+  exit: 1
+  json:
+    format: yian.cli.v1
+    flows:
+      - path: other/flow.yaml
+        ok: false
+        diagnostics:
+          - code: compose.outside_root

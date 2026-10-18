@@ -1,0 +1,14 @@
+kind: cli
+flow: |
+  id: echo
+  name: echo
+  input:
+    n: !int
+  nodes: {}
+  output:
+    n: ${input.n}
+files: {old.jsonl: ""}
+args: [run, flow.yaml, --resume, old.jsonl, --input, n=1]
+expect:
+  exit: 2
+  stdout: ""

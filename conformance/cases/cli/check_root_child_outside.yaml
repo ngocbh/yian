@@ -1,0 +1,34 @@
+kind: cli
+files:
+  company/main.yaml: |
+    id: main
+    name: main
+    input:
+      n: !int
+    nodes:
+      help:
+        kind: call
+        call: helper
+        input:
+          n: ${input.n}
+    output: ${help.output}
+    uses:
+      helper: ../lib/helper
+  lib/helper.yaml: |
+    id: helper
+    name: helper
+    input:
+      n: !int
+    nodes: {}
+    output: ${input.n}
+args: [check, --root, company, --json, company/main.yaml]
+expect:
+  exit: 1
+  json:
+    format: yian.cli.v1
+    flows:
+      - path: company/main.yaml
+        ok: false
+        diagnostics:
+          - code: compose.outside_root
+            frames: [{label: main.yaml, range: [13, 11, 13, 24], note: "uses alias 'helper'"}]

@@ -30,13 +30,22 @@ are enforced at the engine boundary; an invalid one fails the run.
 
 `--provider`/`--model` feed the outermost layer of the `llm_config` cascade (fill-the-gap,
 not a hard override): they fill only the fields an agent and its enclosing flow leave unset.
+
+`--json` makes `yian run` print its result, or the error that stopped it, as one
+`yian.cli.v1` document on stdout, which carries nothing else.
+
+`yian check FLOW...` loads each flow as `yian run` would, runs nothing, and reports each
+as text or, with `--json`, as one `yian.cli.v1` document.
+
+`yian skills check DIR...` loads each skill directory and reports each the same way.
 """
 
 from __future__ import annotations
 
 import asyncio
 from concurrent.futures import CancelledError
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
+import errno
 from functools import partial
 import itertools
 import json
@@ -46,7 +55,7 @@ import sys
 import threading
 import warnings
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional
+from typing import Any, Callable, Dict, Iterator, List, Mapping, NoReturn, Optional, Tuple
 
 import typer
 from rich.console import Console, Group
@@ -61,12 +70,16 @@ from yian.compile.model import END_ID, START_ID
 from yian.cli.mcp_config import McpConfigError, load_mcp_config, user_mcp_config
 from yian.cli.memory import MemoryOptionError, build_cli_memories
 from yian.cli.terminal import PromptRequest, TerminalBroker
+from yian.cli.utils import print_json
+from yian.compose.build.pipeline import ComposedFlow
 from yian.compose.helpers.errors import LoadError
 from yian.compose.loader import load_flow
-from yian.compose.skills import default_skill_roots, load_skills
+from yian.compose.parse.file import parse_source_document
+from yian.compose.skills import default_skill_roots, load_skill_dir, load_skills
 from yian.defaults import current
 from yian.diagnostics import Diagnostic
 from yian.memory.contracts import MemoryOperationError
+from yian.skills.catalog import SkillError
 from yian.run import (
     RunResult,
     _resume_flow_controlled,
@@ -82,6 +95,7 @@ from yian.nodes.contracts import Parameter
 from yian.tools import McpServer, registered_tools
 from yian.tools.mcp import McpConnectError
 from yian.typesys import (
+    FileRef,
     Type,
     TypeCheckError,
     build_value_as,
@@ -243,6 +257,36 @@ def render_diagnostic(diag: Diagnostic) -> None:
         err_console.print(Text(f"  ↳ {note}", style="yellow"))
 
 
+def diagnostic_json(diag: Diagnostic) -> Dict[str, Any]:
+    """Return `diag` in the `yian.cli.v1` diagnostic form.
+
+    A frame's range is `[start_line, start_col, end_line, end_col]`, 1-based with an
+    exclusive end column. `frames`, `notes` and a frame's `note` are left out when empty.
+
+    Args:
+        diag (`Diagnostic`): The diagnostic to convert.
+
+    Returns:
+        `Dict[str, Any]`: `{code, message, frames, notes}`.
+    """
+    frames = []
+    for frame in diag.frames:
+        span = frame.range
+        form: Dict[str, Any] = {
+            "label": frame.label,
+            "range": [span.start_line, span.start_col, span.end_line, span.end_col],
+        }
+        if frame.note:
+            form["note"] = frame.note
+        frames.append(form)
+    document: Dict[str, Any] = {"code": diag.code, "message": diag.message}
+    if frames:
+        document["frames"] = frames
+    if diag.notes:
+        document["notes"] = list(diag.notes)
+    return document
+
+
 def _render_traceback(tb: str) -> None:
     """Box the captured Python traceback below the error frame (only under `--engine-trace`).
 
@@ -258,7 +302,7 @@ def _render_traceback(tb: str) -> None:
     )
 
 
-def _render_run_error(result: RunResult, loaded, engine_trace: bool = False) -> None:
+def _render_run_error(result: RunResult, loaded, engine_trace: bool = False) -> Diagnostic:
     """Resolve and render one runtime failure through its authoring front end.
 
     ``Failure`` is the only semantic input. The loaded flow owns all source
@@ -272,6 +316,9 @@ def _render_run_error(result: RunResult, loaded, engine_trace: bool = False) -> 
         loaded (`ComposedFlow`): Front-end authority that resolves the failure trace.
         engine_trace (`bool`, *optional*, defaults to `False`): Whether to append
             the captured Python traceback when one exists.
+
+    Returns:
+        `Diagnostic`: The diagnostic rendered.
     """
     failure = result.failure
     if failure is None:
@@ -284,6 +331,32 @@ def _render_run_error(result: RunResult, loaded, engine_trace: bool = False) -> 
     render_diagnostic(diagnostic)
     if engine_trace and diagnostic.traceback:
         _render_traceback(diagnostic.traceback)
+    return diagnostic
+
+
+def _json_value(value: Any) -> Any:
+    """Return a run output in yian's JSON codec form.
+
+    A file becomes `{uri, mime, name}`. A mapping that is exactly `{"$float": "inf"}` or
+    `{"$float": "-inf"}`, or whose only key is `$record`, is wrapped as `{"$record": it}`,
+    so a host decodes it back to the record rather than to a float or its contents.
+
+    Args:
+        value (`Any`): A run output value.
+
+    Returns:
+        `Any`: The value as plain JSON data.
+    """
+    if isinstance(value, FileRef):
+        return value.model_dump(mode="json")
+    if isinstance(value, (list, tuple)):
+        return [_json_value(item) for item in value]
+    if isinstance(value, Mapping):
+        mapping = {key: _json_value(item) for key, item in value.items()}
+        if mapping in ({"$float": "inf"}, {"$float": "-inf"}) or list(mapping) == ["$record"]:
+            return {"$record": mapping}
+        return mapping
+    return value
 
 
 class _ProgressReporter:
@@ -1851,6 +1924,7 @@ def _open_mcp_servers(
 
 
 def run(
+    ctx: typer.Context,
     flow: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True, help="Path to a flow .yaml"),
     input: List[str] = typer.Option(  # noqa: A002 - matches the user-facing flag name
         None, "--input", "-i", help="An input as k=v (repeatable)."
@@ -1925,8 +1999,40 @@ def run(
         help="Read MCP servers from FILE (mcpServers JSON; repeatable). "
         "~/.yian/mcp.json is read first when it exists.",
     ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Print one yian.cli.v1 JSON document on stdout: the run's result, or the "
+        "error that stopped it.",
+    ),
 ) -> None:
     """Start or recover a durable flow run and print its terminal output."""
+    json_out = None
+    if json_output:
+        # stdout carries only the document. Descriptor 1 points at stderr for the run, so
+        # os.write(1, ...), child processes and native code can't write there either; the
+        # document goes to a duplicate of the real stdout.
+        stdout = sys.stdout
+        stdout.flush()
+        saved = os.dup(1)
+        json_out = os.fdopen(saved, "w", encoding="utf-8")
+        os.dup2(2, 1)
+        ctx.with_resource(redirect_stdout(sys.stderr))
+
+        def restore_stdout() -> None:
+            # Flush buffered writes to stderr first; closing `json_out` closes `saved`.
+            stdout.flush()
+            os.dup2(saved, 1)
+            json_out.close()
+
+        ctx.call_on_close(restore_stdout)
+
+    def fail(diagnostic: Diagnostic) -> NoReturn:
+        """Exit 1, first printing `diagnostic` as the error document under `--json`."""
+        if json_out is not None:
+            print_json({"error": diagnostic_json(diagnostic)}, file=json_out)
+        raise typer.Exit(code=1)
+
     _validate_run_log_options(
         input_values=input or [],
         inputs=inputs,
@@ -1936,7 +2042,12 @@ def run(
         resume=resume,
     )
     _ensure_cwd_importable()  # so `code: pkg.mod:fn` refs to repo-local packages resolve
-    text = flow.read_text()
+    try:
+        text = flow.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        message = f"can't read {flow}: not UTF-8 text"
+        err_console.print(Text(message, style="red"), soft_wrap=True)
+        fail(Diagnostic(code="compose.load", message=message))
     try:
         loaded = load_flow(
             text,
@@ -1949,7 +2060,7 @@ def run(
         _render_load_error(err)
         if engine_trace:
             err_console.print_exception()
-        raise typer.Exit(code=1)
+        fail(err.diagnostic)
 
     # Construction opens nothing (built-in storage opens on the first run), so
     # the early exits below need not close the registry; each controller does.
@@ -1962,7 +2073,7 @@ def run(
     except (TypeError, ValueError) as exc:
         action = "resume" if resume is not None else "run"
         _render_host_run_error(action, exc, engine_trace=engine_trace)
-        raise typer.Exit(code=1)
+        fail(Diagnostic(code="run.setup", message=str(exc)))
     memory_options = {"memory": registry} if registry else {}
     # Claude Code and Codex skill folders (user, then project up to the git root),
     # read only when an AGENT grants skills. An invalid skill is warned about and
@@ -1994,7 +2105,7 @@ def run(
             err_console.print(Text(f"warning: {warning.message}", style="yellow"), soft_wrap=True)
         if config_error is not None:
             err_console.print(Text(str(config_error), style="red"), soft_wrap=True)
-            raise typer.Exit(code=1)
+            fail(Diagnostic(code="run.setup", message=str(config_error)))
 
     def mcp_selection(
         stop_event: threading.Event, render: Callable[[Callable[[], None]], None]
@@ -2070,7 +2181,7 @@ def run(
         )
         if prompted is None:
             err_console.print("[yellow]run cancelled[/yellow]")
-            raise typer.Exit(code=1)
+            fail(Diagnostic(code="run.cancelled", message="run cancelled"))
         supplied.update(prompted)
 
         # The CLI flags supply the OUTERMOST cascade layer (fill-the-gap), not a hard
@@ -2085,17 +2196,17 @@ def run(
             _ensure_provider_keys(loaded, cli_cfg, supplied)
         except RuntimeError as exc:
             err_console.print(f"[red]{exc}[/red]")
-            raise typer.Exit(code=1)
+            fail(Diagnostic(code="run.setup", message=str(exc)))
         except (OSError, TypeError, ValueError) as exc:
             _render_host_run_error("run", exc, engine_trace=engine_trace)
-            raise typer.Exit(code=1)
+            fail(Diagnostic(code="run.setup", message=str(exc)))
 
         run_id = default_run_id()
         try:
             selected_log = log if log is not None else _default_run_log_path(run_id)
         except (OSError, TypeError, ValueError) as exc:
             _render_host_run_error("run", exc, engine_trace=engine_trace)
-            raise typer.Exit(code=1)
+            fail(Diagnostic(code="run.setup", message=str(exc)))
         selected_workers = 8 if num_workers is None else num_workers
         _report_run_log(selected_log)
 
@@ -2137,14 +2248,16 @@ def run(
         # controller boundary has already joined its workers; report the same
         # ordinary cancellation outcome used by pre-run prompts.
         err_console.print("[yellow]run cancelled[/yellow]")
-        raise typer.Exit(code=1)
+        fail(Diagnostic(code="run.cancelled", message="run cancelled"))
     except _ResumeKeyError as exc:
         err_console.print(Text(str(exc), style="red"))
-        raise typer.Exit(code=1)
+        fail(Diagnostic(code="run.setup", message=str(exc)))
     except (OSError, TypeError, ValueError, MemoryOperationError, McpConnectError) as exc:
         action = "resume" if resume is not None else "run"
         _render_host_run_error(action, exc, engine_trace=engine_trace)
-        raise typer.Exit(code=1)
+        # An McpConnectError's notes name the missing tools and the other failed servers.
+        notes = getattr(exc, "__notes__", ()) if isinstance(exc, McpConnectError) else ()
+        fail(Diagnostic(code="run.setup", message=str(exc), notes=tuple(notes)))
     except ImportError as exc:
         # Only the missing MCP SDK is a setup problem to report in one line; any other
         # ImportError is a bug and keeps its traceback.
@@ -2152,16 +2265,204 @@ def run(
             raise
         action = "resume" if resume is not None else "run"
         _render_host_run_error(action, exc, engine_trace=engine_trace)
-        raise typer.Exit(code=1)
+        fail(Diagnostic(code="run.setup", message=str(exc)))
 
     if result.status == "succeeded":
         out = result.output
-        if isinstance(out, str) and out.strip():
+        if json_out is not None:
+            print_json({"status": "succeeded", "output": _json_value(out)}, file=json_out)
+        elif isinstance(out, str) and out.strip():
             console.print(Markdown(out))
         else:
             console.print(out)
     else:
         # The loaded front end projects authored origins to source frames; failures
         # without presentable origins retain their semantic message.
-        _render_run_error(result, loaded, engine_trace=engine_trace)
+        diagnostic = _render_run_error(result, loaded, engine_trace=engine_trace)
+        if json_out is not None:
+            node = result.failure.node_id if result.failure is not None else None
+            failure = {**diagnostic_json(diagnostic), "node": node}
+            print_json({"status": "failed", "failure": failure}, file=json_out)
+        raise typer.Exit(code=1)
+
+
+def _load_confined(root: Path, path: Path, loading: frozenset[Path]) -> ComposedFlow:
+    """Load the flow at `path`; it and its `uses:` children load only from inside `root`.
+
+    A `uses:` ref loads only from `<importing file's dir>/<ref>.yaml`, and source labels
+    are paths relative to `root`. `load_flow` puts the `uses:` alias frame on a child's
+    `LoadError` and turns anything else a child raises into a `compose.load` error there.
+
+    Args:
+        root (`Path`): The resolved root directory.
+        path (`Path`): The flow file.
+        loading (`frozenset[Path]`): The resolved paths of the flows importing this one.
+
+    Returns:
+        `ComposedFlow`: The loaded flow.
+
+    Raises:
+        `LoadError`: `compose.outside_root` for a flow outside `root`; `compose.load` for
+            a flow that sets `system.paths` or doesn't load.
+        `ValueError`: A reference cycle or a pinned-version mismatch.
+        `OSError`: The flow can't be read.
+    """
+    # Compare resolved paths so a symlinked root (/var -> /private/var on macOS) works.
+    try:
+        path = path.resolve()
+    except RuntimeError:
+        # Python 3.11 and 3.12 raise RuntimeError for a symlink loop; 3.13 raises OSError.
+        raise OSError(errno.ELOOP, os.strerror(errno.ELOOP)) from None
+    shown = os.path.relpath(path, root)
+    if not path.is_relative_to(root):
+        raise LoadError(
+            Diagnostic(code="compose.outside_root", message=f"{shown} is outside the root")
+        )
+    if path in loading:
+        raise ValueError(f"flow-reference cycle at {shown}")
+    text = path.read_text(encoding="utf-8")
+    doc = parse_source_document(text, shown).root.value
+    # `load_flow` doesn't search `system.paths` when given a child resolver, so such a
+    # flow would load differently from `yian run`.
+    if isinstance(doc, dict) and isinstance(doc.get("system"), dict) and "paths" in doc["system"]:
+        raise LoadError(
+            Diagnostic(
+                code="compose.load",
+                message="system.paths is not supported with --root; use a relative uses: path",
+            )
+        )
+
+    # Unlike the default file resolver, this keeps no reuse cache, so a child imported
+    # along several paths loads once per path; that is fine for a check.
+    def resolve(ref: str, version: Optional[str] = None) -> ComposedFlow:
+        child_path = path.parent / f"{ref}.yaml"
+        # A missing child outside the root is reported as outside, by `_load_confined`.
+        if child_path.resolve().is_relative_to(root) and not child_path.is_file():
+            raise ValueError(f"flow {ref!r} not found: {os.path.relpath(child_path, root)}")
+        child = _load_confined(root, child_path, loading | {path})
+        if version is not None and child.version != version:
+            raise ValueError(f"{ref} is version {child.version!r}, not {version!r}")
+        return child
+
+    return load_flow(text, child_resolver=resolve, source_label=shown)
+
+
+def _check_flow(
+    arg: str, root: Optional[Path] = None
+) -> Tuple[Dict[str, Any], Optional[Diagnostic]]:
+    """Load the flow file `arg` as `yian run` loads it, or confined to `root`, running nothing.
+
+    Args:
+        arg (`str`): The flow path exactly as given on the command line.
+        root (`Path`, *optional*, defaults to `None`): The resolved root directory the flow
+            and its `uses:` children must load from (see `_load_confined`).
+
+    Returns:
+        `Tuple[Dict[str, Any], Optional[Diagnostic]]`: The flow's `check` result,
+            `{path, ok: True, id, name, description, inputs}` or
+            `{path, ok: False, diagnostics}`, and the diagnostic when it didn't load.
+    """
+    path = Path(arg)
+    try:
+        if root is None:
+            text = path.read_text(encoding="utf-8")
+            loaded = load_flow(text, search_paths=[path.parent], source_label=path.name)
+        else:
+            loaded = _load_confined(root, path, frozenset())
+    except LoadError as err:
+        diagnostic = err.diagnostic
+    except UnicodeDecodeError:
+        diagnostic = Diagnostic(code="compose.load", message=f"can't read {arg}: not UTF-8 text")
+    except OSError as err:
+        # `str(err)` repeats the path the message already starts with.
+        reason = err.strerror or str(err)
+        diagnostic = Diagnostic(code="compose.load", message=f"can't read {arg}: {reason}")
+    else:
+        inputs = [
+            {
+                "name": decl.name,
+                "type": canonical_type_label(decl.contract.type),
+                "required": decl.required,
+                "has_default": decl.has_default,
+            }
+            for decl in loaded.input
+        ]
+        result = {
+            "path": arg,
+            "ok": True,
+            "id": loaded.compiled.flow_id,
+            "name": loaded.name,
+            "description": loaded.description,
+            "inputs": inputs,
+        }
+        return result, None
+    return {"path": arg, "ok": False, "diagnostics": [diagnostic_json(diagnostic)]}, diagnostic
+
+
+def check(
+    flows: List[str] = typer.Argument(..., help="Paths to flow .yaml files."),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print one yian.cli.v1 JSON document on stdout."
+    ),
+    root: Optional[Path] = typer.Option(
+        None,
+        "--root",
+        exists=True,
+        file_okay=False,
+        help="Load each flow and its uses: children only from inside this directory.",
+    ),
+) -> None:
+    """Load each flow without running it and report whether it loads.
+
+    With `--root`, each flow and its `uses:` children must be inside that directory, a
+    `uses:` ref loads only from the importing file's directory, and a flow may not set
+    `system.paths`.
+    """
+    resolved_root = root.resolve() if root is not None else None
+    results = [_check_flow(arg, resolved_root) for arg in flows]
+    if json_output:
+        print_json({"flows": [result for result, _ in results]})
+    else:
+        for result, diagnostic in results:
+            if diagnostic is None:
+                console.print(Text(f"{result['path']}: ok"), soft_wrap=True)
+            else:
+                err_console.print(Text(f"{result['path']}:", style="red"), soft_wrap=True)
+                render_diagnostic(diagnostic)
+    if any(diagnostic is not None for _, diagnostic in results):
+        raise typer.Exit(code=1)
+
+
+def skills_check(
+    directories: List[str] = typer.Argument(..., help="Paths to skill directories."),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print one yian.cli.v1 JSON document on stdout."
+    ),
+) -> None:
+    """Load each skill directory and report whether it holds a valid SKILL.md.
+
+    Two directories with one skill name are not reported; that is the caller's concern.
+    """
+    results = []
+    for arg in directories:
+        try:
+            skill = load_skill_dir(arg)
+        # RuntimeError: Python 3.11 and 3.12 raise it when resolving a symlink loop.
+        except (SkillError, OSError, RuntimeError) as err:
+            error = {"code": "skill.invalid", "message": str(err)}
+            results.append({"path": arg, "ok": False, "error": error})
+        else:
+            results.append(
+                {"path": arg, "ok": True, "name": skill.name, "description": skill.description}
+            )
+    if json_output:
+        print_json({"skills": results})
+    else:
+        for result in results:
+            if result["ok"]:
+                console.print(Text(f"{result['path']}: ok ({result['name']})"), soft_wrap=True)
+            else:
+                # The message already names the path.
+                err_console.print(Text(result["error"]["message"]), soft_wrap=True)
+    if not all(result["ok"] for result in results):
         raise typer.Exit(code=1)

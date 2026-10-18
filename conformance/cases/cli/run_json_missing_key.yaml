@@ -1,0 +1,18 @@
+kind: cli
+flow: |
+  id: write
+  name: write
+  nodes:
+    write:
+      kind: agent
+      output: str
+      llm_config: {provider: openai, model: gpt-5.5}
+      prompt: "Write a line."
+  output: ${write.output}
+args: [run, flow.yaml, -w, "0", --log, run.jsonl, --json]
+expect:
+  exit: 1
+  json:
+    format: yian.cli.v1
+    error:
+      code: run.setup

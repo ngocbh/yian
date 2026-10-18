@@ -1,14 +1,24 @@
-/** Tests for routes in `src/llm/route.ts` and `RouteModel` in `src/llm/executor.ts`. */
+/** Tests for routes in `src/llm/route.ts`, and `RouteModel` and `callWithRetries` in `src/llm/executor.ts`. */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 
-import { type Send, USER_AGENT, virtualScheduler } from "../../src/platform.ts";
+import { BUILTIN, install } from "../../src/defaults.ts";
+import { type Scheduler, type Send, USER_AGENT, virtualScheduler } from "../../src/platform.ts";
 import { type Auth, BearerAuth, HeaderKeyAuth, NoAuth } from "../../src/llm/auth.ts";
-import { ProviderError } from "../../src/llm/errors.ts";
-import { type Event, EventStream, Finish, TextDelta } from "../../src/llm/events.ts";
-import { type NdjsonProtocol, RouteModel, type SseProtocol, type WireProtocol } from "../../src/llm/executor.ts";
+import { type ErrorKind, errorFromResponse, ProviderError } from "../../src/llm/errors.ts";
+import { type ChatModel, type Event, EventStream, Finish, TextDelta, ToolCallDelta } from "../../src/llm/events.ts";
+import {
+  callWithRetries,
+  type NdjsonProtocol,
+  type RetryInfo,
+  retryDelay,
+  RouteModel,
+  type SseProtocol,
+  type WireProtocol,
+} from "../../src/llm/executor.ts";
 import { SSEEvent } from "../../src/llm/framing.ts";
-import { Request } from "../../src/llm/messages.ts";
+import { Message, Request, Response as ModelResponse, TextPart } from "../../src/llm/messages.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
 import { Route } from "../../src/llm/route.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 
@@ -113,6 +123,8 @@ interface Reply {
   body?: Item[];
   /** Whether `send` waits until the request signal aborts, then rejects with its reason. */
   hang?: boolean;
+  /** An error `send` throws instead of replying. */
+  error?: Error;
 }
 
 /** One request the fake `send` received, and what happened to its body. */
@@ -159,6 +171,7 @@ function fake(...replies: Reply[]): { send: Send; sent: Sent[] } {
     if (reply.hang) {
       await new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
     }
+    if (reply.error) throw reply.error;
     const body = reply.body === undefined ? null : playBody(reply.body, stats);
     return new Response(body, { status: reply.status ?? 200, headers: reply.headers });
   };
@@ -644,5 +657,392 @@ describe("RouteModel stream lifetime", () => {
     expect(await pending).toBe(reason);
     expect(sent[0]!.signal.aborted).toBe(true);
     expect(await stream.next()).toEqual({ done: true, value: undefined });
+  });
+});
+
+// callWithRetries
+
+afterEach(() => install(BUILTIN));
+
+const OK = new ModelResponse({
+  message: new Message({ role: "assistant", parts: [new TextPart("ok")] }),
+  finishReason: "stop",
+});
+const PARTIAL = new TextDelta(0, "par");
+const RESET = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+
+/** The error `errorFromResponse` builds for an openai reply with `status`, `headers` and `body`. */
+function statusError(status: number, headers: Record<string, string> = {}, body = ""): ProviderError {
+  return errorFromResponse(status, new Headers(headers), body, { provider: "openai" });
+}
+
+/** A scripted model whose first reply throws `error`, after partial output when `after`, then answers `OK`. */
+function failingOnce(error: Error, after: boolean): ScriptedModel {
+  return new ScriptedModel([after ? [PARTIAL, error] : [error], OK], { provider: "openai" });
+}
+
+/** A route model on `clock` whose first reply is `first`, then an SSE `ok`. */
+function routedOnce(clock: Scheduler, first: Reply, protocol: WireProtocol = sse()): RouteModel {
+  const second = protocol.framing === "sse" ? sseReply("ok") : { body: ['{"text": "ok"}\n'] };
+  return new RouteModel({ route: route(), protocol, send: fake(first, second).send, scheduler: clock });
+}
+
+/** One retry-table row: its name, whether the failure comes after partial output, and the model. */
+type Row = [name: string, after: boolean, make: (clock: Scheduler) => ChatModel];
+
+/** Return a row for `error` built by `build`, before the first event and after partial output. */
+function both(name: string, build: () => Error): Row[] {
+  return [
+    [`${name} before the first event`, false, () => failingOnce(build(), false)],
+    [`${name} after partial output`, true, () => failingOnce(build(), true)],
+  ];
+}
+
+/** A runtime's connection-refused failure, as fetch reports it. */
+function refused(): Error {
+  return new TypeError("fetch failed", { cause: Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" }) });
+}
+
+/** A row with the error kind its first attempt fails with. */
+type KindRow = [...Row, kind: ErrorKind];
+
+/** Return the rows for `error` built by `build`, before the first event and after partial output. */
+function rows(name: string, kind: ErrorKind, build: () => Error): KindRow[] {
+  return both(name, build).map(([rowName, after, make]): KindRow => [rowName, after, make, kind]);
+}
+
+/** A row for a route model on the test's clock whose first reply is `first`. */
+function routed(name: string, after: boolean, kind: ErrorKind, first: Reply, protocol?: WireProtocol): KindRow {
+  return [name, after, (clock) => routedOnce(clock, first, protocol), kind];
+}
+
+const RETRIED: KindRow[] = [
+  ...rows("429", "rate_limit", () => statusError(429)),
+  ...rows("529 overloaded", "overloaded", () => statusError(529)),
+  ...rows("500", "server", () => statusError(500)),
+  ...rows("502", "server", () => statusError(502)),
+  ...rows("503", "server", () => statusError(503)),
+  ...rows("408", "timeout", () => statusError(408)),
+  ...rows("409", "bad_request", () => statusError(409)),
+  ...rows("x-should-retry: true on a 400", "bad_request", () => statusError(400, { "x-should-retry": "true" })),
+  ...rows("x-should-retry: true on a 402 quota", "quota", () => statusError(402, { "x-should-retry": "true" })),
+  routed("a first-response timeout before the first event", false, "timeout", { hang: true }),
+  routed("an idle timeout before the first event", false, "timeout", { body: [": ping\n\n", HANG] }),
+  routed("an idle timeout after partial output", true, "timeout", { body: ["data: a\n\n", HANG] }),
+  routed("a connection failure before the first event", false, "connection", { error: refused() }),
+  routed("a connection failure after partial output", true, "connection", { body: ["data: a\n\n", RESET] }),
+  ["a stream with no Finish after partial output", true, () => new ScriptedModel([[PARTIAL], OK]), "incomplete"],
+];
+
+const STOPPED: KindRow[] = [
+  ...rows("400", "bad_request", () => statusError(400)),
+  ...rows("400 context length", "context_length", () =>
+    statusError(400, {}, '{"error": {"code": "context_length_exceeded"}}'),
+  ),
+  ...rows("401", "auth", () => statusError(401)),
+  ...rows("403", "permission", () => statusError(403)),
+  ...rows("404", "not_found", () => statusError(404)),
+  ...rows("402 quota", "quota", () => statusError(402)),
+  ...rows("429 insufficient_quota", "quota", () => statusError(429, {}, "insufficient_quota")),
+  ...rows("x-should-retry: false on a 500", "server", () => statusError(500, { "x-should-retry": "false" })),
+  ...rows("retry-after: 121", "rate_limit", () => statusError(429, { "retry-after": "121" })),
+  routed("a redirect before the first event", false, "redirect", {
+    status: 307,
+    headers: { location: "https://other.example/" },
+  }),
+  routed("an invalid NDJSON line before the first event", false, "protocol", { body: ["{\n"] }, ndjson()),
+  routed("an invalid NDJSON line after partial output", true, "protocol", { body: ['{"text": "a"}\n', "{\n"] }, ndjson()),
+  ...rows("incomplete for pause_turn", "incomplete", () =>
+    new ProviderError("incomplete", "stopped with pause_turn", { retryable: false }),
+  ),
+  ...rows("incomplete for response.failed", "incomplete", () =>
+    new ProviderError("incomplete", "response.failed", { retryable: false }),
+  ),
+  ...rows("refused", "refused", () => new ProviderError("refused", "the model refused")),
+];
+
+/** Run `model` with a one-retry budget on `clock`, recording each retry. */
+async function runOnce(model: ChatModel, clock: Scheduler): Promise<{ result: unknown; retries: RetryInfo[] }> {
+  const retries: RetryInfo[] = [];
+  const options = { budget: 1, scheduler: clock, random: () => 0, onRetry: (retry: RetryInfo) => void retries.push(retry) };
+  try {
+    return { result: await callWithRetries(model, REQUEST, options), retries };
+  } catch (error) {
+    return { result: error, retries };
+  }
+}
+
+describe("callWithRetries retry table", () => {
+  test.each(RETRIED)("retried: %s", async (_name, after, make, kind) => {
+    const clock = virtualScheduler(0);
+    const { result, retries } = await runOnce(make(clock), clock);
+    expect(result).toBeInstanceOf(ModelResponse);
+    expect((result as ModelResponse).message.text()).toBe("ok");
+    expect(retries).toHaveLength(1);
+    expect(retries[0]!.attempt).toBe(1);
+    expect(retries[0]!.error.kind).toBe(kind);
+    expect(retries[0]!.partial === null).toBe(!after);
+  });
+
+  test.each(STOPPED)("stopped: %s", async (_name, _after, make, kind) => {
+    const clock = virtualScheduler(0);
+    const { result, retries } = await runOnce(make(clock), clock);
+    expect(result).toBeInstanceOf(ProviderError);
+    expect((result as ProviderError).kind).toBe(kind);
+    expect(retries).toHaveLength(0);
+  });
+
+  test("a defect thrown mid-stream propagates at once, with no retry", async () => {
+    const defect = new TypeError("adapter bug");
+    const model = new ScriptedModel([[PARTIAL, defect], OK]);
+    const { result, retries } = await runOnce(model, virtualScheduler(0));
+    expect(result).toBe(defect);
+    expect(retries).toHaveLength(0);
+    expect(model.requests).toHaveLength(1);
+  });
+
+  test("an auth source's error propagates unchanged and unretried", async () => {
+    const failed = new Error("refresh failed");
+    const auth = new BearerAuth(() => {
+      throw failed;
+    });
+    const { send, sent } = fake();
+    const model = new RouteModel({ route: route({ auth }), protocol: sse(), send });
+    const { result, retries } = await runOnce(model, virtualScheduler(0));
+    expect(result).toBe(failed);
+    expect(retries).toHaveLength(0);
+    expect(sent).toHaveLength(0);
+  });
+
+  test("retry-after: inf is retried with backoff", async () => {
+    const clock = virtualScheduler(0);
+    const error = statusError(429, { "retry-after": "inf" });
+    expect(error.retryAfter).toBe(Infinity);
+    const { result, retries } = await runOnce(failingOnce(error, false), clock);
+    expect(result).toBeInstanceOf(ModelResponse);
+    expect(retries[0]!.retryIn).toBe(0.5);
+    expect(clock.now()).toBe(500);
+  });
+});
+
+describe("callWithRetries order and hooks", () => {
+  test("onAttempt, events, onRetry, wait, then the next attempt", async () => {
+    const clock = virtualScheduler(0);
+    const call = new ToolCallDelta({ index: 1, id: "c1", name: "f", arguments: '{"x"' });
+    const model = new ScriptedModel([[new TextDelta(0, "a"), call, statusError(500)], OK]);
+    const log: string[] = [];
+    let retry: RetryInfo | undefined;
+    const response = await callWithRetries(model, REQUEST, {
+      scheduler: clock,
+      random: () => 0,
+      onAttempt: (attempt) => void log.push(`attempt ${attempt} at ${clock.now()}`),
+      onEvent: (event, attempt) => void log.push(`${event.type} ${attempt}`),
+      onRetry: (info) => {
+        retry = info;
+        log.push(`retry ${info.attempt} at ${clock.now()}`);
+      },
+    });
+    expect(response).toEqual(OK);
+    expect(log).toEqual([
+      "attempt 1 at 0",
+      "TextDelta 1",
+      "ToolCallDelta 1",
+      "retry 1 at 0",
+      "attempt 2 at 500",
+      "TextDelta 2",
+      "PartDone 2",
+      "Finish 2",
+    ]);
+    expect(retry!.error.kind).toBe("server");
+    expect(retry!.retryIn).toBe(0.5);
+    expect(retry!.partial!.parts.map((part) => part.type)).toEqual(["text", "tool_call"]);
+    expect(retry!.partial!.text()).toBe("a");
+  });
+
+  test("onRetry gets partial: null before the first event", async () => {
+    const { retries } = await runOnce(failingOnce(statusError(500), false), virtualScheduler(0));
+    expect(retries[0]!.partial).toBeNull();
+  });
+
+  test("an async onRetry is awaited before the wait", async () => {
+    const clock = virtualScheduler(0);
+    const log: string[] = [];
+    await callWithRetries(failingOnce(statusError(500), false), REQUEST, {
+      scheduler: clock,
+      random: () => 0,
+      onAttempt: (attempt) => void log.push(`attempt ${attempt}`),
+      onRetry: async () => {
+        await Promise.resolve();
+        log.push(`retry recorded at ${clock.now()}`);
+      },
+    });
+    expect(log).toEqual(["attempt 1", "retry recorded at 0", "attempt 2"]);
+  });
+
+  test("a throwing onRetry ends the call with that error", async () => {
+    const model = failingOnce(statusError(500), false);
+    const failed = new Error("record failed");
+    const error = await rejection(
+      callWithRetries(model, REQUEST, {
+        scheduler: virtualScheduler(0),
+        onRetry: () => {
+          throw failed;
+        },
+      }),
+    );
+    expect(error).toBe(failed);
+    expect(model.requests).toHaveLength(1);
+  });
+
+  test("a throw from onEvent ends the call, closes the stream and is never retried", async () => {
+    const { send, sent } = fake({ body: ["data: a\n\n", "data: b\n\n", HANG] }, sseReply("ok"));
+    const model = new RouteModel({ route: route(), protocol: sse(), send });
+    // Retryable, to show a hook's error is never retried.
+    const failed = statusError(500);
+    let retried = false;
+    const error = await rejection(
+      callWithRetries(model, REQUEST, {
+        scheduler: virtualScheduler(0),
+        onEvent: () => {
+          throw failed;
+        },
+        onRetry: () => {
+          retried = true;
+        },
+      }),
+    );
+    expect(error).toBe(failed);
+    expect(retried).toBe(false);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.signal.aborted).toBe(true);
+  });
+
+  test("a throw from onAttempt ends the call and is never retried", async () => {
+    const model = failingOnce(statusError(500), false);
+    const failed = new Error("publish failed");
+    const error = await rejection(
+      callWithRetries(model, REQUEST, {
+        scheduler: virtualScheduler(0),
+        onAttempt: (attempt) => {
+          if (attempt === 2) throw failed;
+        },
+      }),
+    );
+    expect(error).toBe(failed);
+    expect(model.requests).toHaveLength(1);
+  });
+
+  test("the assembler's provider-less incomplete gets the model's provider", async () => {
+    const model = new ScriptedModel([[PARTIAL], [PARTIAL]], { provider: "example" });
+    const { result, retries } = await runOnce(model, virtualScheduler(0));
+    expect(retries[0]!.error.kind).toBe("incomplete");
+    expect(retries[0]!.error.provider).toBe("example");
+    expect((result as ProviderError).kind).toBe("incomplete");
+    expect((result as ProviderError).provider).toBe("example");
+  });
+});
+
+describe("callWithRetries budget", () => {
+  test("budget: 0 makes one attempt", async () => {
+    const model = failingOnce(statusError(500), false);
+    const error = await rejection(callWithRetries(model, REQUEST, { budget: 0, scheduler: virtualScheduler(0) }));
+    expect((error as ProviderError).kind).toBe("server");
+    expect(model.requests).toHaveLength(1);
+  });
+
+  test("the default budget reads MODEL_RETRIES and exhaustion throws the last error", async () => {
+    install({ ...BUILTIN, modelRetries: 2 });
+    const last = statusError(503, {}, "third");
+    const model = new ScriptedModel([[statusError(500, {}, "first")], [statusError(502)], [last], OK]);
+    const error = await rejection(callWithRetries(model, REQUEST, { scheduler: virtualScheduler(0) }));
+    expect(error).toBe(last);
+    expect(model.requests).toHaveLength(3);
+  });
+
+  test("success after retries returns the successful attempt's reply", async () => {
+    const model = new ScriptedModel([[statusError(500)], [PARTIAL, statusError(502)], OK]);
+    expect(await callWithRetries(model, REQUEST, { scheduler: virtualScheduler(0) })).toEqual(OK);
+    expect(model.requests).toHaveLength(3);
+  });
+});
+
+describe("callWithRetries delays", () => {
+  test("retry-after-ms: 1500 waits 1.5 s", () => {
+    expect(retryDelay(statusError(429, { "retry-after-ms": "1500" }), 0, () => 0)).toBe(1.5);
+  });
+
+  test("retry-after: 2 waits 2 s", () => {
+    expect(retryDelay(statusError(429, { "retry-after": "2" }), 3, () => 0)).toBe(2);
+  });
+
+  test("retry-after: 0 falls back to backoff", () => {
+    expect(retryDelay(statusError(429, { "retry-after": "0" }), 1, () => 0)).toBe(1);
+  });
+
+  test("a past HTTP date falls back to backoff", () => {
+    const error = statusError(429, { "retry-after": "Wed, 21 Oct 2015 07:28:00 GMT" });
+    expect(error.retryAfter!).toBeLessThan(0);
+    expect(retryDelay(error, 2, () => 0)).toBe(2);
+  });
+
+  test("backoff doubles from 0.5 s to a cap of 8 s, with jitter down to 0.75x", () => {
+    const error = statusError(500);
+    const retries = [0, 1, 2, 3, 4, 5];
+    expect(retries.map((n) => retryDelay(error, n, () => 0))).toEqual([0.5, 1, 2, 4, 8, 8]);
+    const low = retries.map((n) => retryDelay(error, n, () => 1 - 2 ** -53));
+    expect(low).toEqual([0.375, 0.75, 1.5, 3, 6, 6]);
+  });
+
+  test("a huge retry count stays finite", () => {
+    expect(retryDelay(statusError(500), 5000, () => 0)).toBe(8);
+  });
+
+  test("the virtual clock advances exactly by the delays", async () => {
+    const clock = virtualScheduler(0);
+    const model = new ScriptedModel([[statusError(500)], [statusError(500)], [statusError(429, { "retry-after": "2" })], OK]);
+    const starts: number[] = [];
+    await callWithRetries(model, REQUEST, {
+      scheduler: clock,
+      random: () => 0,
+      onAttempt: () => void starts.push(clock.now()),
+    });
+    expect(starts).toEqual([0, 500, 1500, 3500]);
+    expect(clock.now()).toBe(3500);
+  });
+});
+
+describe("callWithRetries stops", () => {
+  test("a stop during the wait rejects with the signal's reason and makes no further attempt", async () => {
+    const clock = virtualScheduler(0);
+    const controller = new AbortController();
+    const reason = new Error("stop");
+    const stopping: Scheduler = {
+      now: () => clock.now(),
+      sleep(ms, signal) {
+        const waiting = clock.sleep(ms, signal);
+        controller.abort(reason);
+        return waiting;
+      },
+    };
+    const model = failingOnce(statusError(500), false);
+    const error = await rejection(
+      callWithRetries(model, REQUEST, { signal: controller.signal, scheduler: stopping, random: () => 0 }),
+    );
+    expect(error).toBe(reason);
+    expect(model.requests).toHaveLength(1);
+    expect(clock.now()).toBe(0);
+  });
+
+  test("the signal reaches model.stream", async () => {
+    const signals: (AbortSignal | undefined)[] = [];
+    class Recording extends ScriptedModel {
+      override stream(request: Request, options: { signal?: AbortSignal } = {}): EventStream {
+        signals.push(options.signal);
+        return super.stream(request, options);
+      }
+    }
+    const controller = new AbortController();
+    await callWithRetries(new Recording([OK]), REQUEST, { signal: controller.signal });
+    expect(signals).toEqual([controller.signal]);
   });
 });

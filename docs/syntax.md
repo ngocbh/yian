@@ -83,6 +83,9 @@ either. In compact mode the flow `id:`, and for a single-node `defs:` entry the 
 name, also names the node and must be an identifier; a full-form flow id or a
 multi-node def name may keep hyphens.
 
+Changed (TS yian): `inf` is an expression keyword too, so a node named `inf` must be
+renamed.
+
 Changed: a node id that isn't an identifier, or is an expression keyword, used to load,
 and failed only when a `${...}` referenced it, with an error that didn't name the node
 (for `fetch-data`, split references `${fetch}` and `${data.output}`). It is now a load

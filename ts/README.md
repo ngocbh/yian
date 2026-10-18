@@ -41,12 +41,13 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 
 ## YAML
 
-- `src/compose/source/` is the only code that imports `yaml`.
+- In `src/`, only `src/compose/source/` imports `yaml` (tests may import it).
 - It parses with `FLOW_OPTIONS` (YAML 1.2, failsafe schema), so the library resolves no
   scalar; `scalars.ts` applies yian's table.
 - `composeFlowDocument` resolves aliases and applies the nesting and node limits.
 - Ints are `bigint`, dates stay text, `.inf` is a float, and `.nan` is refused.
-- A local type tag (`!float 3`) never changes how its scalar reads.
+- In a flow document, a local type tag never changes how its scalar reads (`!float 3` is `3n`);
+  `parseYamlLiteral` refuses local tags.
 
 ## LLM layer
 

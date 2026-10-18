@@ -477,9 +477,9 @@ def _generate_native(
         except Exception as err:  # provider deviated from the schema; correct and retry
             if memory_context.transcript is not None and isinstance(err, FutureCancelledError):
                 raise
+            check_stopped()
             if is_provider_auth(err):
                 raise  # refused credentials fail every retry the same way
-            check_stopped()
             last_err = err
             # Provider/binding errors can include credentials. An error raised once the
             # reply surfaced is a local diagnostic of that reply (yian's check or the
@@ -696,9 +696,9 @@ def _generate_fallback(
         except Exception as err:  # unparseable / non-conforming/provider-shape deviation
             if memory_context.transcript is not None and isinstance(err, FutureCancelledError):
                 raise
+            check_stopped()
             if is_provider_auth(err):
                 raise  # refused credentials fail every retry the same way
-            check_stopped()
             last_err = err
             # As on the native path, an error raised once the reply surfaced is sent in full.
             detail = (f"provider error ({type(err).__name__})"

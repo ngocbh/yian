@@ -9,6 +9,8 @@ model that yields canned `AIMessage`s; tool execution goes through `TOOL_REGISTR
 run lands; AGENT compile-time validation moved with the v0 compiler.)
 """
 
+from threading import Event
+
 import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.tools import StructuredTool
@@ -20,6 +22,7 @@ from yian.compose.loader import load_flow
 from yian.diagnostics import OriginRef
 from yian.llm_clients.auth import AuthError
 from yian.nodes.agent import AgentNode
+from yian.nodes.base import _HostStop
 from yian.nodes.contracts import ContractOrigins, Parameter, ValueContract
 from yian.run import run_flow
 from yian.runtime.eval_node import EvaluationFailure, eval_node
@@ -662,6 +665,23 @@ def test_fallback_structured_auth_failure_is_not_retried(monkeypatch):
     assert isinstance(ev, EvaluationFailure)
     assert ev.failure.code == "provider.auth"
     assert chat.calls == 1
+
+
+@pytest.mark.parametrize("provider,model", [
+    ("openai", "gpt-4o"), ("vllm", "no-structured-sentinel"),
+])
+def test_a_stop_during_a_refused_structured_call_stops_the_node(monkeypatch, provider, model):
+    # A pending stop wins over refused credentials, as it does over any provider error.
+    stop = Event()
+
+    class _StopThenRefuse(_RaisingChat):
+        def invoke(self, messages):
+            stop.set()
+            return super().invoke(messages)
+
+    _patch_model(monkeypatch, _StopThenRefuse(AuthenticationError("unauthorized")))
+    with pytest.raises(_HostStop):
+        eval_node(_structured_node(provider, model), None, VariablePool(), stop_event=stop)
 
 
 _KEYED = """id: keyed

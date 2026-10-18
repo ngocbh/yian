@@ -25,6 +25,7 @@ from yian.run import run_flow
 from yian.runtime.eval_node import EvaluationFailure, eval_node
 from yian.typesys.pool import VariablePool
 from tests.engine._stream_fakes import Cut, ScriptedStreamChat, reply, usage
+from tests.engine.test_agent import AuthenticationError, _RaisingChat
 from tests.engine.test_agent_live_events import CONFIG, _agent, _evaluate, _Tool
 from tests.engine.test_agent_session import _FLOW, _view
 
@@ -170,6 +171,27 @@ def test_mid_stream_failure_sends_no_final_chunk_and_fails_the_node(monkeypatch)
         "writer", exchange, "chat", "anthropic", "claude-test", error="ConnectionError"
     )
     assert "sk-hidden" not in repr(observed)
+
+
+@pytest.mark.parametrize("chat", [
+    lambda: ScriptedStreamChat(script=[AuthenticationError("unauthorized")], mode=[]),
+    lambda: ScriptedStreamChat(
+        script=[Cut("partial", AuthenticationError("unauthorized"))], mode=[]
+    ),
+    lambda: _RaisingChat(AuthenticationError("unauthorized")),
+], ids=["before-any-text", "mid-stream", "client-without-stream"])
+def test_refused_credentials_with_both_sinks_fail_provider_auth(monkeypatch, chat):
+    monkeypatch.setattr(llm_clients_mod, "model_from_config", lambda _config: chat())
+    chunks, events = [], []
+    result = run_flow(
+        load_flow(_FLOW), {"question": "q1"}, memory={"session": SessionMemory()},
+        on_stream=chunks.append, on_event=events.append,
+    )
+    assert result.status == "failed" and result.failure.code == "provider.auth"
+    assert not any(c.final for c in chunks)
+    assert [e.error for e in events if isinstance(e, ModelCallFinished)] == [
+        "AuthenticationError"
+    ]
 
 
 def test_reply_that_fails_normalization_sends_no_final_chunk(monkeypatch):

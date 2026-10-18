@@ -26,6 +26,7 @@ from yian.runtime.eval_node import EvaluationFailure, eval_node
 from yian.typesys.pool import VariablePool
 from yian.typesys.values import Type, ValueKind
 from tests.engine._stream_fakes import ScriptedStreamChat, reply, usage
+from tests.engine.test_agent import AuthenticationError
 
 CONFIG = {"provider": "anthropic", "model": "claude-test"}
 
@@ -112,6 +113,15 @@ def test_model_error_is_reported_by_type_then_fails_the_node(monkeypatch):
     assert chunks == []
     assert observed[-1].error == "RuntimeError" and observed[-1].usage is None
     assert "sk-hidden" not in repr(observed)
+
+
+def test_refused_credentials_with_an_event_sink_fail_provider_auth(monkeypatch):
+    node, chat = _agent(monkeypatch, [AuthenticationError("unauthorized")])
+    outcome, chunks, observed = _evaluate(node, stream=False)
+    assert isinstance(outcome, EvaluationFailure)
+    assert outcome.failure.code == "provider.auth"
+    assert chat.mode == ["invoke"] and chunks == []
+    assert observed[-1].error == "AuthenticationError"
 
 
 def test_event_sink_failure_escapes_as_a_host_fault(monkeypatch):

@@ -1261,7 +1261,8 @@ class Node(ABC):
         are passed only to nodes whose traits request them (``bind_item``,
         ``stop_event``, ``open_memory_context``, ``evaluation_trace``, ``tools``,
         and ``skills``).
-        A body exception is classified as ``node.execute`` by the evaluator."""
+        The evaluator gives a body exception the code the node's ``exception_code``
+        hook names (default ``node.execute``)."""
         raise NotImplementedError(
             f"node {self.id!r} ({type(self).__name__}) defines no forward"
         )

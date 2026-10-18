@@ -18,15 +18,19 @@ from langchain_core.messages import (
 )
 
 import yian.llm_clients as llm_clients
+from yian.compose import load_flow
+from yian.events import ModelCallFinished
 from yian.memory.session import SessionMemory
 from yian.memory import MemorySection
 from yian.nodes.agent import memory as conversation
 from yian.nodes.agent.context import AgentRunContext
 from yian.nodes.agent.loop import run_agent
 from yian.nodes.base import _CapabilityFault, _HostStop
+from yian.run import run_flow
 from yian.typesys.values import Type, ValueKind
 from tests.engine._session_fakes import harness, request, snapshot
-from tests.engine.test_agent_session import _Model
+from tests.engine.test_agent import AuthenticationError
+from tests.engine.test_agent_session import _FLOW, _Model
 from tests.engine.test_agent_session_structured import _Native, _config
 from tests.engine.test_agent_session_tools import _Chat, _Tool, _call
 
@@ -118,6 +122,24 @@ def test_summary_provider_exception_preserves_identity_outside_capability_bounda
                     turn, _Model([error]), check_stopped=lambda: None
                 )
             assert caught.value is error
+
+
+@pytest.mark.parametrize("observed", [False, True])
+def test_refused_summary_call_fails_provider_auth(monkeypatch, observed):
+    model = _Model([AIMessage(content="first"), AuthenticationError("unauthorized")])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda _: model)
+    memory = SessionMemory(history_budget_chars=1, recent_turns=0)
+    flow = load_flow(_FLOW)
+    assert run_flow(flow, {"question": "q1"}, memory={"session": memory}).output == "first"
+    events = []
+    result = run_flow(flow, {"question": "q2"}, memory={"session": memory},
+                      on_event=events.append if observed else None)
+    assert result.status == "failed" and result.failure.code == "provider.auth"
+    assert len(model.calls) == 2
+    if observed:
+        assert [(e.purpose, e.error) for e in events if isinstance(e, ModelCallFinished)] == [
+            ("history_summary", "AuthenticationError")
+        ]
 
 
 @pytest.mark.parametrize(

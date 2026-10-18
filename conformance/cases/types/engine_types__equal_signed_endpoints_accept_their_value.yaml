@@ -1,0 +1,6 @@
+kind: value
+type: int(+4..4)
+value: 4
+expect:
+  value: 4
+  kind: int

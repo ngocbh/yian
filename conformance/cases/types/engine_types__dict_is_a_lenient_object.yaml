@@ -1,0 +1,8 @@
+kind: value
+type: dict(str, int)
+value:
+  a: x
+expect:
+  value:
+    a: x
+  kind: object

@@ -1,0 +1,25 @@
+kind: load
+flow: |2
+
+  id: tagged_literal
+  name: tagged_literal
+  nodes:
+    use:
+      kind: code
+      input:
+        x: !int(..) 1
+      code: |
+        return inputs["x"]
+      output: int
+  output: ${use.output}
+env:
+  YIAN_DEFAULT_MODEL: gpt-5.5
+  YIAN_DEFAULT_PROVIDER: openai
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '''x'': `!int(..)` is not a type (malformed type expression ''int(..)'': a range needs at least one end; write int for any int)'
+      frames:
+      - label: flow.yaml
+        range: [8, 10, 8, 20]

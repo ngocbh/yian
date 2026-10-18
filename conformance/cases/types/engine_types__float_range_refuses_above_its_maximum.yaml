@@ -1,0 +1,8 @@
+kind: value
+type: float(-0.5..1.0)
+value: 1.1
+expect:
+  raises:
+    class: TypeCheckError
+    message: 1.1 is outside inclusive float bounds (-0.5, 1.0)
+    path: []

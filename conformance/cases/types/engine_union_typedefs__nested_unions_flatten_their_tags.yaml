@@ -1,0 +1,27 @@
+kind: value
+rules: [messages]
+typedefs:
+  Buy:
+    action: Literal(buy)
+    qty: int
+  Sell:
+    action: Literal(sell)
+    price: float
+  Hold:
+    action: Literal(hold)
+  Purchase: Buy
+  Trade: Union(Buy, Sell)
+  Decision: Union(Trade, Purchase, Hold, Union(Sell, Hold))
+type: Decision
+value:
+  action: wait
+expect:
+  raises:
+    class: TypeCheckError
+    message: '"wait" is not a tag of the union (expected one of [''buy'', ''hold'', ''sell''])'
+    path: [action]
+python_expect:
+  raises:
+    class: TypeCheckError
+    message: '''wait'' is not a tag of the union (expected one of [''buy'', ''hold'', ''sell''])'
+    path: [action]

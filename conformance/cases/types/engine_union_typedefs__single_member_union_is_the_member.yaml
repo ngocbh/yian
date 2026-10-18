@@ -1,0 +1,25 @@
+kind: value
+rules: [messages]
+typedefs:
+  Buy:
+    action: Literal(buy)
+    qty: int
+  Sell:
+    action: Literal(sell)
+    price: float
+  Hold:
+    action: Literal(hold)
+type: Union(Buy, Buy)
+value:
+  action: sell
+  qty: 1
+expect:
+  raises:
+    class: TypeCheckError
+    message: '"sell" is not a member of variant [''buy'']'
+    path: [action]
+python_expect:
+  raises:
+    class: TypeCheckError
+    message: '''sell'' is not a member of variant [''buy'']'
+    path: [action]

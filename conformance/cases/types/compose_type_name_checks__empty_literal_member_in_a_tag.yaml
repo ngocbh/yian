@@ -1,0 +1,21 @@
+kind: load
+flow: |
+  id: e
+  name: e
+  input:
+    m: !Literal('')
+  output: str
+  kind: code
+  code: |
+    return 1
+env:
+  YIAN_DEFAULT_MODEL: gpt-5.5
+  YIAN_DEFAULT_PROVIDER: openai
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '''m'': `!Literal('''')` is not a type (empty Literal member in "Literal('''')" (tags must be non-empty names or quoted strings))'
+      frames:
+      - label: flow.yaml
+        range: [4, 6, 4, 18]

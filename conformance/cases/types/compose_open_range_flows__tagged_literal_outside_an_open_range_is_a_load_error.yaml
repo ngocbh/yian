@@ -1,0 +1,25 @@
+kind: load
+flow: |2
+
+  id: tagged_literal
+  name: tagged_literal
+  nodes:
+    use:
+      kind: code
+      input:
+        x: !int(0..) -1
+      code: |
+        return inputs["x"]
+      output: int
+  output: ${use.output}
+env:
+  YIAN_DEFAULT_MODEL: gpt-5.5
+  YIAN_DEFAULT_PROVIDER: openai
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '''x'': `-1` is not a valid int(0..)'
+      frames:
+      - label: flow.yaml
+        range: [8, 10, 8, 22]

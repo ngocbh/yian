@@ -1,0 +1,29 @@
+kind: load
+flow: |
+  id: t
+  name: t
+  typedefs:
+    A0: int
+    A1: A0
+    A2: A1
+    A3: A2
+    A4: A3
+    A5: A4
+  input:
+    n: !int
+  output: 'int'
+  kind: code
+  code: |
+    return 1
+env:
+  YIAN_DEFAULT_MODEL: gpt-5.5
+  YIAN_DEFAULT_PROVIDER: openai
+  YIAN_MAX_TYPE_NESTING: '5'
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'bad typedefs: typedef ''A5'': it ends a chain of 6 typedefs, each naming the next, more than 5, the limit for a type; write its type with fewer typedefs in between'
+      frames:
+      - label: flow.yaml
+        range: [9, 3, 9, 5]

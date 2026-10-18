@@ -1,0 +1,20 @@
+kind: value
+typedefs:
+  Buy:
+    action: Literal(buy)
+    qty: int
+  Sell:
+    action: Literal(sell)
+    price: float
+  Hold:
+    action: Literal(hold)
+type: Union(Buy, Sell)
+value:
+  action: sell
+  price: 1.0
+  qty: 2
+expect:
+  raises:
+    class: TypeCheckError
+    message: 'record has unknown fields: [''qty'']'
+    path: [qty]

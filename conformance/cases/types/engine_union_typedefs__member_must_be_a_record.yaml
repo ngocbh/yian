@@ -1,0 +1,25 @@
+kind: load
+flow: |
+  id: t
+  name: t
+  typedefs:
+    Buy: {action: 'Literal(buy)', qty: int}
+    Sell: {action: 'Literal(sell)', price: float}
+    Ticker: str
+  input:
+    n: !int
+  output: 'Union(Buy, Ticker)'
+  kind: code
+  code: |
+    return 1
+env:
+  YIAN_DEFAULT_MODEL: gpt-5.5
+  YIAN_DEFAULT_PROVIDER: openai
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'bad type expression ''Union(Buy, Ticker)'': Union(Buy, Ticker): member ''Ticker'' is not a record'
+      frames:
+      - label: flow.yaml
+        range: [9, 9, 9, 29]

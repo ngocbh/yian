@@ -1,0 +1,12 @@
+kind: value
+typedefs:
+  Rating:
+    value: float
+    confidence: float
+type: Rating
+value: {}
+expect:
+  raises:
+    class: TypeCheckError
+    message: 'record missing required fields: [''confidence'', ''value'']'
+    path: [confidence]

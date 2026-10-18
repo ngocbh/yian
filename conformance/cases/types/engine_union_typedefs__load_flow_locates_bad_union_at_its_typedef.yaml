@@ -1,0 +1,36 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    x: !str
+  typedefs:
+    Bull: {conviction: float}
+    Bear: {conviction: float}
+    Mood: Union(Bull, Bear)
+  nodes:
+    a: {kind: code, code: ./fixtures/seeds.ts:one_line_summary, input: {x: "${input.x}"}}
+  output: {y: "${a.output}"}
+python_flow: |
+  id: f
+  name: f
+  input:
+    x: !str
+  typedefs:
+    Bull: {conviction: float}
+    Bear: {conviction: float}
+    Mood: Union(Bull, Bear)
+  nodes:
+    a: {kind: code, code: tests.seeds.fns:one_line_summary, input: {x: "${input.x}"}}
+  output: {y: "${a.output}"}
+env:
+  YIAN_DEFAULT_MODEL: gpt-5.5
+  YIAN_DEFAULT_PROVIDER: openai
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'bad typedefs: typedef ''Mood'': Union(Bull, Bear): members ''Bull'' and ''Bear'' can match the same value; add a tag field every member declares as a single-value Literal, with a different value in each member, e.g. kind: Literal(bull)'
+      frames:
+      - label: flow.yaml
+        range: [8, 3, 8, 7]

@@ -1,0 +1,21 @@
+kind: value
+rules: [messages]
+typedefs:
+  Count: int(0..)
+  Order:
+    qty: int(1..)
+    price: float(..100.0)
+type: Order
+value:
+  qty: 1
+  price: 100.5
+expect:
+  raises:
+    class: TypeCheckError
+    message: 100.5 is above the inclusive float maximum 100
+    path: [price]
+python_expect:
+  raises:
+    class: TypeCheckError
+    message: 100.5 is above the inclusive float maximum 100.0
+    path: [price]

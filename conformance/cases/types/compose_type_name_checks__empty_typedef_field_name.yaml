@@ -1,0 +1,24 @@
+kind: load
+flow: |
+  id: e
+  name: e
+  typedefs:
+    R:
+      "": int
+  input:
+    r: !R
+  output: str
+  kind: code
+  code: |
+    return 1
+env:
+  YIAN_DEFAULT_MODEL: gpt-5.5
+  YIAN_DEFAULT_PROVIDER: openai
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'bad typedefs: typedef ''R'' field '''': field names must be non-empty strings'
+      frames:
+      - label: flow.yaml
+        range: [3, 1, 3, 9]

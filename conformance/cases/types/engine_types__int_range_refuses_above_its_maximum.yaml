@@ -1,0 +1,8 @@
+kind: value
+type: int(1..12)
+value: 13
+expect:
+  raises:
+    class: TypeCheckError
+    message: 13 is outside inclusive int bounds (1, 12)
+    path: []

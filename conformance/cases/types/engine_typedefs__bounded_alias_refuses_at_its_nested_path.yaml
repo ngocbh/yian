@@ -1,0 +1,17 @@
+kind: value
+typedefs:
+  Score: float(0..1)
+  MaybeScore: Optional(Score)
+  Rating:
+    scores: list(MaybeScore)
+    count: int(1..12)
+  Ratings: list(Rating)
+type: Ratings
+value:
+- scores: [null, 1.1]
+  count: 4
+expect:
+  raises:
+    class: TypeCheckError
+    message: 1.1 is outside inclusive float bounds (0, 1)
+    path: [0, scores, 1]

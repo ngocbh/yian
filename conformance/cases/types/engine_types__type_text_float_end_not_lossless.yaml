@@ -1,0 +1,21 @@
+kind: load
+flow: |
+  id: t
+  name: t
+  input:
+    n: !int
+  output: 'float(9007199254740993..9007199254740993)'
+  kind: code
+  code: |
+    return 1
+env:
+  YIAN_DEFAULT_MODEL: gpt-5.5
+  YIAN_DEFAULT_PROVIDER: openai
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'bad type expression ''float(9007199254740993..9007199254740993)'': invalid bounds in ''float(9007199254740993..9007199254740993)'': float bounds require lossless float endpoints'
+      frames:
+      - label: flow.yaml
+        range: [5, 9, 5, 52]

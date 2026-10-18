@@ -1,0 +1,16 @@
+kind: value
+typedefs:
+  Text:
+    text: str
+  Call:
+    name: str
+    input: object
+type: Union(Call, Text)
+value:
+  name: f
+  input: {}
+expect:
+  value:
+    name: f
+    input: {}
+  kind: object

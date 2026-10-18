@@ -1,0 +1,8 @@
+kind: value
+type: int(..100)
+value: 101
+expect:
+  raises:
+    class: TypeCheckError
+    message: 101 is above the inclusive int maximum 100
+    path: []

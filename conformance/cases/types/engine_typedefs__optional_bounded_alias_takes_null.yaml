@@ -1,0 +1,13 @@
+kind: value
+typedefs:
+  Score: float(0..1)
+  MaybeScore: Optional(Score)
+  Rating:
+    scores: list(MaybeScore)
+    count: int(1..12)
+  Ratings: list(Rating)
+type: MaybeScore
+value: null
+expect:
+  value: null
+  kind: None

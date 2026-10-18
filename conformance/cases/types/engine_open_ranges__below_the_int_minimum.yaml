@@ -1,0 +1,8 @@
+kind: value
+type: int(0..)
+value: -1
+expect:
+  raises:
+    class: TypeCheckError
+    message: -1 is below the inclusive int minimum 0
+    path: []

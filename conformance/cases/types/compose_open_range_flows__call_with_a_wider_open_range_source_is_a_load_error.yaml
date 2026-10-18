@@ -1,0 +1,45 @@
+kind: load
+flow: |2
+
+  id: open_call
+  name: open_call
+  input:
+    v: !int
+  defs:
+    child:
+      input:
+        t: !int(0..100)
+      nodes:
+        echo:
+          kind: code
+          input:
+            t: ${input.t}
+          code: |
+            return inputs["t"]
+          output: int
+      output: ${echo.output}
+  nodes:
+    a:
+      kind: code
+      input:
+        v: ${input.v}
+      code: |
+        return inputs["v"]
+      output: int(0..)
+    c:
+      kind: call
+      call: child
+      input:
+        t: ${a.output}
+  output: ${c.output}
+env:
+  YIAN_DEFAULT_MODEL: gpt-5.5
+  YIAN_DEFAULT_PROVIDER: openai
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'call node ''c'': binding ''t'' — child expects ''int(0..100)'', source is ''int(0..)'''
+      frames:
+      - label: flow.yaml
+        range: [31, 7, 32, 1]

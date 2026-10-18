@@ -1,0 +1,37 @@
+kind: load
+flow: |2
+
+  id: open_case
+  name: open_case
+  input:
+    n: !int(0..)
+  nodes:
+    route:
+      kind: case
+      on: ${input.n}
+      cases:
+        - when: -1
+          then: hit
+      else: miss
+    hit:
+      kind: code
+      code: |
+        return "hit"
+      output: str
+    miss:
+      kind: code
+      code: |
+        return "miss"
+      output: str
+  output: ${route.output}
+env:
+  YIAN_DEFAULT_MODEL: gpt-5.5
+  YIAN_DEFAULT_PROVIDER: openai
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''route'': `when: -1` is not a value of `on: ${input.n}` (`int(0..)`): -1 is below the inclusive int minimum 0'
+      frames:
+      - label: flow.yaml
+        range: [11, 15, 11, 17]

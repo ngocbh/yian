@@ -1,0 +1,34 @@
+kind: load
+flow: |2
+
+  id: tagged_binding
+  name: tagged_binding
+  input:
+    v: !int
+  nodes:
+    a:
+      kind: code
+      input:
+        v: ${input.v}
+      code: |
+        return inputs["v"]
+      output: int(..-1)
+    use:
+      kind: code
+      input:
+        x: !int(0..) ${a.output}
+      code: |
+        return inputs["x"]
+      output: int
+  output: ${use.output}
+env:
+  YIAN_DEFAULT_MODEL: gpt-5.5
+  YIAN_DEFAULT_PROVIDER: openai
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''use'' input ''x'': declared int(0..), but the value is int(..-1)'
+      frames:
+      - label: flow.yaml
+        range: [17, 10, 17, 31]

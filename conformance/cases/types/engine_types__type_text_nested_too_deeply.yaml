@@ -1,0 +1,22 @@
+kind: load
+flow: |
+  id: t
+  name: t
+  input:
+    n: !int
+  output: 'Optional(Optional(Optional(Optional(Optional(Optional(str))))))'
+  kind: code
+  code: |
+    return 1
+env:
+  YIAN_DEFAULT_MODEL: gpt-5.5
+  YIAN_DEFAULT_PROVIDER: openai
+  YIAN_MAX_TYPE_NESTING: '5'
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'bad type expression ''Optional(Optional(Optional(Optional(Optional(Optional(str))))))'': type nested too deeply in ''Optional(Optional(Optional(Optional(Opti''... (at most 5 levels)'
+      frames:
+      - label: flow.yaml
+        range: [5, 9, 5, 74]

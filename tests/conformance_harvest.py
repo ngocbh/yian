@@ -4,9 +4,11 @@ A pytest plugin: while each test runs, it records the engine calls whose inputs 
 data (flow loads, runs, resumes, backward passes, expressions, templates, values and defaults).
 The model calls a run makes through `llm_clients.model_from_config`, whatever a test patched it
 with, become the run's `host.models`. Each passing test's calls become candidates; a candidate is
-replayed through the conformance runner (`tests/test_conformance.py`) to get its `expect` (three
-times for a pooled run), and written as a case file under `<out>/cases/<group>/<name>.yaml`,
-deduplicated by content. Run it with:
+replayed through the conformance runner (`tests/test_conformance.py`), plain and with every TS-rule
+shim on (three times each for a pooled run). The shimmed outcome is its `expect`; when that
+differs, the plain one is its `python_expect` and the rules whose shims change it are its `rules`.
+It is written as a case file under `<out>/cases/<group>/<name>.yaml`, deduplicated by content.
+Run it with:
 
     PYTHONPATH=src python -m pytest -p tests.conformance_harvest --harvest-out DIR tests
 
@@ -70,9 +72,11 @@ from tests import test_conformance as runner
 
 # The order a case file's keys are written in. Other keys (the harvest writes none) follow in
 # their given order.
-_ORDER = ("kind", "flow", "files", "env", "inputs", "run", "host", "backward", "expr",
-          "template", "values", "item", "mode", "typedefs", "type", "value", "expect")
-# The order of an `expect`'s keys, and of a run's `output`: the result before what led to it.
+_ORDER = ("kind", "rules", "flow", "python_flow", "files", "python_files", "env", "inputs",
+          "run", "host", "backward", "expr", "template", "values", "item", "mode", "typedefs",
+          "type", "value", "expect", "python_expect")
+# The order of an `expect`'s (and `python_expect`'s) keys, and of a run's `output`: the result
+# before what led to it.
 _EXPECT_ORDER = ("raises", "output", "load", "value", "kind", "defaults", "trace", "events",
                  "stream", "tool_calls", "backward")
 _OUTPUT_ORDER = ("status", "output", "failure")
@@ -143,10 +147,11 @@ def _dump(case: dict) -> str:
     `_decode`, to the same data.
     """
     ordered = _ordered(case, _ORDER)
-    if isinstance(ordered.get("expect"), dict):
-        expect = ordered["expect"] = _ordered(ordered["expect"], _EXPECT_ORDER)
-        if isinstance(expect.get("output"), dict):
-            expect["output"] = _ordered(expect["output"], _OUTPUT_ORDER)
+    for key in ("expect", "python_expect"):
+        if isinstance(ordered.get(key), dict):
+            expect = ordered[key] = _ordered(ordered[key], _EXPECT_ORDER)
+            if isinstance(expect.get("output"), dict):
+                expect["output"] = _ordered(expect["output"], _OUTPUT_ORDER)
     limit = sys.get_int_max_str_digits()
     # As the runner's `_read`: case files have no digit limit.
     sys.set_int_max_str_digits(0)
@@ -1977,14 +1982,50 @@ def _completed(call: _Call) -> tuple[dict, dict]:
     return case, result
 
 
+def _shimmed(state: _Harvest, case: dict, shims: Collection[str]) -> tuple[dict, frozenset]:
+    """Return `_replay(state, case, shims)`.
+
+    Raises `_Skip("shims: <reason>")` when the replay fails or leaves script entries.
+    """
+    try:
+        results, notes = _replay(state, case, shims)
+    except _Skip as skip:
+        raise _Skip(f"shims: {skip}") from None
+    if results.get("left"):
+        raise _Skip("shims: replay left script entries")
+    return results, notes
+
+
+def _without_requests(case: dict, notes: frozenset) -> dict:
+    """Return `case` without the `request` of each model entry a `request: <label>` note names."""
+    host = case.get("host", {})
+    if "models" not in host:
+        return case
+    # The labels are built from the case's own keys: a consumer such as `memory:<key>` may hold
+    # a `.`, so a label can't be split.
+    models = {}
+    for node, consumers in host["models"].items():
+        models[node] = {}
+        for consumer, script in consumers.items():
+            models[node][consumer] = [
+                {key: value for key, value in entry.items() if key != "request"}
+                if f"request: host.models.{node}.{consumer}[{index}]" in notes else entry
+                for index, entry in enumerate(script)]
+    return case | {"host": host | {"models": models}}
+
+
 def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list]:
     """Return a recorded call's group, case file text (its `expect` from the runner) and flags.
 
     A pooled run is replayed three times, and its output or error, and its backward statuses,
-    must agree in each; its trace, events, stream, tool calls and backward outcomes are kept
-    only when the three are equal and the run succeeded, each one dropped giving a
-    `pooled: <result> dropped` flag. A load or run that evaluated `and` or `or` is flagged
-    `uses and/or`.
+    must agree in each. The call is then replayed as many times with every shim on, and that
+    outcome is the `expect`. When it differs from the plain one, the call is replayed once with
+    each shim alone: the case's `rules` are those of the shims that change the outcome, and the
+    plain outcome is its `python_expect`. A pooled run's trace, events, stream, tool calls and
+    backward outcomes are kept only when the plain and shimmed runs succeeded and the replays of
+    each are equal, each one dropped giving a `pooled: <result> dropped` flag. A model entry
+    whose request the shims change loses its `request` (flag `shims: request dropped`). A load
+    or run that evaluated `and` or `or` is flagged `uses and/or`.
     """
     if call.skip:
         raise _Skip(call.skip)
@@ -2000,25 +2041,47 @@ def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list]:
         raise _Skip(_HELD)
     is_run = case["kind"] in ("run", "backward")
     pooled = is_run and case.get("run", {}).get("num_workers", _RUN_DEFAULTS["num_workers"]) != 0
-    replays = [_replay(state, case)[0] for _ in range(3 if pooled else 1)]
+    times = 3 if pooled else 1
+    replays = [_replay(state, case)[0] for _ in range(times)]
     for actual in replays:
         if actual.get("left"):
             raise _Skip("replay left script entries")
         # A run's output is a host value, whose numbers the runner compares by value.
         if not runner._same(_agreed(case, actual), _agreed(case, result), by_value=is_run):
             raise _Skip("replay differs")
-    expect = _expect(case, replays[0])
+    shimmed = [_shimmed(state, case, _SHIMS) for _ in range(times)]
+    notes = frozenset().union(*(noted for _, noted in shimmed))
+    shimmed = [actual for actual, _ in shimmed]
+    py, ts = _expect(case, replays[0]), _expect(case, shimmed[0])
     flags = ["uses and/or"] if call.and_or else []
     if pooled:
         # When a pooled run fails, siblings racing the failure make its trace depend on timing
         # across processes, even when three replays in one process agree.
-        succeeded = expect.get("output", {}).get("status") == "succeeded"
+        succeeded = all(expect.get("output", {}).get("status") == "succeeded"
+                        for expect in (py, ts))
         for key in _POOLED_RESULTS:
-            if key in expect and not (succeeded and all(
-                    runner._same(actual[key], expect[key]) for actual in replays[1:])):
-                del expect[key]
+            stable = all(runner._same(actual.get(key), runs[0].get(key))
+                         for runs in (replays, shimmed) for actual in runs[1:])
+            if (key in py or key in ts) and not (succeeded and stable):
+                py.pop(key, None)
+                ts.pop(key, None)
                 flags.append(f"pooled: {key} dropped")
-    text = _written({**case, "expect": expect})
+    trimmed = _without_requests(case, notes)
+    if trimmed != case:
+        case = trimmed
+        flags.append("shims: request dropped")
+    rules = set()
+    if not runner._same(ts, py):
+        for name, shim in _SHIMS.items():
+            alone = _expect(case, _shimmed(state, case, (name,))[0])
+            if not runner._same({key: alone[key] for key in alone.keys() & py.keys()}, py):
+                rules.add(shim.rule)
+        if not rules:
+            raise _Skip("shims: no single shim changes the outcome")
+    written = {**case, "expect": ts}
+    if rules:
+        written |= {"rules": sorted(rules), "python_expect": py}
+    text = _written(written)
     if any(path in text for path in _machine_paths(state)):
         raise _Skip("machine path")
     return _group(case), text, flags

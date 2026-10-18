@@ -2720,7 +2720,7 @@ def test_harvest_records_jitter_draws(tmp_path: Path, monkeypatch: pytest.Monkey
 
 
 def test_harvest_checks_pooled_replays(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A pooled run replays thrice; a result differing in one, or a raised run's, is dropped."""
+    """Pooled runs replay thrice, plain and shimmed; a result differing in one is dropped."""
     from tests import conformance_harvest as harvest
 
     monkeypatch.setattr(harvest, "_STATE", harvest._Harvest(None, tmp_path))
@@ -2731,30 +2731,36 @@ def test_harvest_checks_pooled_replays(tmp_path: Path, monkeypatch: pytest.Monke
         return {"trace": [["run_started", None]], "events": [["RunStarted"]], "stream": [],
                 "tool_calls": {}, "left": [], **results}
 
-    def expected(result: dict, *replays: dict) -> tuple:
+    def expected(result: dict, plain: list, shimmed: list | None = None) -> tuple:
         call = harvest._Call("run_flow")
         call.case, call.result, call.skip = {"kind": "run", "flow": "id: f\n"}, result, None
-        served = list(replays)
-        monkeypatch.setattr(harvest, "_replay",
-                            lambda state, case: (served.pop(0), frozenset()))
+        # The shimmed replays are the plain ones unless given.
+        served = {False: list(plain), True: list(plain if shimmed is None else shimmed)}
+        monkeypatch.setattr(harvest, "_replay", lambda state, case, shims=(): (
+            served[bool(shims)].pop(0), frozenset()))
         _, text, flags = harvest._expected(harvest._STATE, call)
-        assert served == []
+        assert served == {False: [], True: []}
         return yaml.load(text, Loader=_CaseLoader)["expect"], flags
 
     events = [["RunStarted"], ["RunSucceeded", {"output": "hi"}]]
-    expect, flags = expected({"output": output}, replay(output=output), replay(output=output),
-                             replay(output=output, events=events))
+    succeeded = [replay(output=output), replay(output=output)]
+    expect, flags = expected({"output": output}, [*succeeded, replay(output=output, events=events)])
+    assert expect == {"output": output, "trace": [["run_started", None]]}
+    assert flags == ["pooled: events dropped"]
+    # Equal plain replays, but shimmed ones that differ.
+    expect, flags = expected({"output": output}, [*succeeded, replay(output=output)],
+                             [*succeeded, replay(output=output, events=events)])
     assert expect == {"output": output, "trace": [["run_started", None]]}
     assert flags == ["pooled: events dropped"]
 
     differing = {"status": "succeeded", "output": "ho"}
     with pytest.raises(harvest._Skip, match="replay differs"):
-        expected({"output": output}, replay(output=output), replay(output=differing),
-                 replay(output=output))
+        expected({"output": output}, [replay(output=output), replay(output=differing),
+                                      replay(output=output)])
 
     calls = {"tool": [{"args": {}, "call_id": "c1", "attempt": 1, "node": "n"}]}
     raised = replay(raises=raises, stream=[{"text": "x"}], tool_calls=calls)
-    expect, flags = expected({"raises": raises}, raised, raised, raised)
+    expect, flags = expected({"raises": raises}, [raised, raised, raised])
     assert expect == {"raises": raises}
     assert flags == [f"pooled: {key} dropped"
                      for key in ("trace", "events", "stream", "tool_calls")]
@@ -2805,6 +2811,159 @@ def test_harvest_replay_installs_shims(tmp_path: Path, monkeypatch: pytest.Monke
         harvest._replay(state, run | {"unknown": 1}, ("text",))
     assert template._as_text is as_text and not state.disabled
     assert harvest.runner._request_difference is request_difference
+
+
+_SHIMMED_TESTS = '''
+from yian.expr import eval_expr, parse_expr, render_template_record
+from yian.typesys.types import type_for
+from yian.typesys.values import TypeCheckError, build_value_as
+
+
+def test_bool_text():
+    assert render_template_record("${f}", {"f": True}) == "True"
+
+
+def test_remainder():
+    assert eval_expr(parse_expr("7 % -2"), lambda path: None) == -1
+
+
+def test_list_order():
+    assert eval_expr(parse_expr("[1] < [2]"), lambda path: None) is True
+
+
+def test_message():
+    try:
+        build_value_as(type_for("int", {}), "x")
+    except TypeCheckError as exc:
+        assert str(exc) == "'x' does not match declared type int"
+
+
+def test_key_order():
+    assert render_template_record("${r}", {"r": {"b": 1, "1": 2}}) == "{'b': 1, '1': 2}"
+
+
+def test_plain():
+    assert eval_expr(parse_expr("1 + 2"), lambda path: None) == 3
+'''
+
+
+def test_harvest_tags_shimmed_rules(tmp_path: Path) -> None:
+    """A case a shim changes holds the TS outcome, its rules and Python's outcome."""
+    done, out = _harvest(tmp_path, _SHIMMED_TESTS)
+    assert _summary(done) == "6 passed", done.stdout + done.stderr
+    cases = {path.relative_to(out / "cases").as_posix(): _read(path)
+             for path in sorted((out / "cases").glob("*/*.yaml"))}
+    assert cases == {
+        "templates/sample__bool_text.yaml": {
+            "kind": "expr", "rules": ["text-form"], "template": "${f}", "values": {"f": True},
+            "mode": "strict", "expect": {"value": "true"}, "python_expect": {"value": "True"}},
+        "expr/sample__remainder.yaml": {
+            "kind": "expr", "rules": ["arithmetic"], "expr": "7 % -2",
+            "expect": {"value": 1}, "python_expect": {"value": -1}},
+        "expr/sample__list_order.yaml": {
+            "kind": "expr", "rules": ["compare"], "expr": "[1] < [2]",
+            "expect": {"raises": {
+                "class": "ExpressionError",
+                "message": cases["expr/sample__list_order.yaml"]["expect"]["raises"]["message"]}},
+            "python_expect": {"value": True}},
+        "values/sample__message.yaml": {
+            "kind": "value", "rules": ["messages"], "type": "int", "value": "x",
+            "expect": {"raises": {"class": "TypeCheckError",
+                                  "message": '"x" does not match declared type int',
+                                  "path": []}},
+            "python_expect": {"raises": {"class": "TypeCheckError",
+                                         "message": "'x' does not match declared type int",
+                                         "path": []}}},
+        # Both the text form and the key order change it; both are the text-form rule.
+        "templates/sample__key_order.yaml": {
+            "kind": "expr", "rules": ["text-form"], "template": "${r}",
+            "values": {"r": {"b": 1, "1": 2}}, "mode": "strict",
+            "expect": {"value": '{"1":2,"b":1}'},
+            "python_expect": {"value": "{'b': 1, '1': 2}"}},
+        "expr/sample__plain.yaml": {"kind": "expr", "expr": "1 + 2", "expect": {"value": 3}},
+    }
+    assert "unsupported operand kinds" in (
+        cases["expr/sample__list_order.yaml"]["expect"]["raises"]["message"])
+    # The rules come first, `python_expect` after `expect`.
+    text = (out / "cases/expr/sample__remainder.yaml").read_text(encoding="utf-8")
+    assert text == ("kind: expr\nrules: [arithmetic]\nexpr: 7 % -2\nexpect:\n  value: 1\n"
+                    "python_expect:\n  value: -1\n")
+    for name, case in cases.items():
+        case_dir = tmp_path / "replay" / name
+        case_dir.mkdir(parents=True)
+        _check_results(case, results(case, case_dir))
+
+    report = json.loads((out / "report" / "test_sample.py.json").read_text(encoding="utf-8"))
+    assert report["written"] == {"templates": 2, "expr": 3, "values": 1}
+    assert report["skips"] == {} and report["flags"] == {}
+
+
+_REQUEST_TESTS = '''
+from langchain_core.messages import AIMessage
+
+import yian.llm_clients as llm_clients
+from yian import load_flow
+from yian.run import run_flow
+
+FLAG = """\\
+id: flag
+name: flag
+input:
+  f: !bool
+nodes:
+  plain:
+    kind: agent
+    output: str
+    llm_config: {provider: openai, model: gpt-5.5}
+    prompt: Write.
+  flagged:
+    kind: agent
+    input:
+      f: ${input.f}
+    output: str
+    llm_config: {provider: openai, model: gpt-5.5}
+    prompt: Flag ${f}.
+output:
+  plain: ${plain.output}
+  flagged: ${flagged.output}
+"""
+
+
+class Shout:
+    """A chat model replying with its last message in capitals."""
+
+    def invoke(self, messages):
+        return AIMessage(messages[-1].content.upper())
+
+
+def test_flag(monkeypatch):
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: Shout())
+    result = run_flow(load_flow(FLAG), {"f": True}, run_id="r1", num_workers=0)
+    assert result.output == {"plain": "WRITE.", "flagged": "FLAG TRUE."}
+'''
+
+
+def test_harvest_drops_changed_requests(tmp_path: Path) -> None:
+    """A request a shim changes leaves its entry without `request`; the others keep theirs."""
+    done, out = _harvest(tmp_path, _REQUEST_TESTS)
+    assert _summary(done) == "1 passed", done.stdout + done.stderr
+    case = _read(out / "cases/run-agent/sample__flag__2.yaml")
+    models = case["host"]["models"]
+    assert models["plain"]["agent"][0]["request"]["messages"][1]["parts"] == [
+        {"type": "text", "text": "Write."}]
+    (flagged,) = models["flagged"]["agent"]
+    assert "request" not in flagged
+    assert flagged["reply"]["parts"] == [{"type": "text", "text": "FLAG TRUE."}]
+    # The replies are scripted, so the outcome is the same under the shims.
+    assert "rules" not in case and "python_expect" not in case
+    assert case["expect"]["output"] == {
+        "status": "succeeded", "output": {"plain": "WRITE.", "flagged": "FLAG TRUE."}}
+    (tmp_path / "replay").mkdir()
+    _check_results(case, results(case, tmp_path / "replay"))
+
+    report = json.loads((out / "report" / "test_sample.py.json").read_text(encoding="utf-8"))
+    assert report["written"] == {"run-agent": 1}
+    assert report["flags"] == {"shims: request dropped": ["run-agent/sample__flag__2"]}
 
 
 def _install_shims(patch: pytest.MonkeyPatch, *names: str) -> None:

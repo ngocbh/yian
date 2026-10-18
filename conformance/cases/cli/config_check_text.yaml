@@ -1,0 +1,6 @@
+kind: cli
+stdin: '{"provider": "openai", "model": "gpt-5.5", "api_key": "<key:1>"}'
+args: [config, check]
+expect:
+  exit: 0
+  stdout: "ok\n"

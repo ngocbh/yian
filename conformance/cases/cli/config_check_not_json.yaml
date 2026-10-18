@@ -1,0 +1,6 @@
+kind: cli
+stdin: 'provider: openai'
+args: [config, check, --json]
+expect:
+  exit: 2
+  stdout: ""

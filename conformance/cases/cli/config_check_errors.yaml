@@ -1,0 +1,9 @@
+kind: cli
+stdin: '{"provider": "openai", "api_key": "<key:1>", "base_url": "http://example.com/v1"}'
+args: [config, check, --json]
+expect:
+  exit: 1
+  json:
+    format: yian.cli.v1
+    ok: false
+    errors: [{field: base_url}]

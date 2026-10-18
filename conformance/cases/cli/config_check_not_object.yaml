@@ -1,0 +1,6 @@
+kind: cli
+stdin: '[1]'
+args: [config, check, --json]
+expect:
+  exit: 2
+  stdout: ""

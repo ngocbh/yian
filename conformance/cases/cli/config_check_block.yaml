@@ -1,0 +1,9 @@
+kind: cli
+stdin: '{"provider": "openai", "openai": {"temperature": "hot"}}'
+args: [config, check, --json]
+expect:
+  exit: 1
+  json:
+    format: yian.cli.v1
+    ok: false
+    errors: [{field: openai.temperature}]

@@ -1,0 +1,22 @@
+kind: cli
+args: [providers, --json]
+expect:
+  exit: 0
+  json:
+    format: yian.cli.v1
+    providers:
+      - {name: openai, methods: [api-key, subscription], api_key_env: OPENAI_API_KEY}
+      - {name: xai, methods: [api-key], api_key_env: XAI_API_KEY}
+      - {name: deepseek, methods: [api-key], api_key_env: DEEPSEEK_API_KEY}
+      - {name: qwen, methods: [api-key], api_key_env: DASHSCOPE_API_KEY}
+      - {name: qwen-cn, methods: [api-key], api_key_env: DASHSCOPE_CN_API_KEY}
+      - {name: glm, methods: [api-key], api_key_env: ZHIPU_API_KEY}
+      - {name: glm-cn, methods: [api-key], api_key_env: ZHIPU_CN_API_KEY}
+      - {name: minimax, methods: [api-key], api_key_env: MINIMAX_API_KEY}
+      - {name: minimax-cn, methods: [api-key], api_key_env: MINIMAX_CN_API_KEY}
+      - {name: openrouter, methods: [api-key], api_key_env: OPENROUTER_API_KEY}
+      - {name: vllm, methods: [api-key, none], api_key_env: VLLM_API_KEY}
+      - {name: ollama, methods: [none], api_key_env: null}
+      - {name: anthropic, methods: [api-key], api_key_env: ANTHROPIC_API_KEY}
+      - {name: google, methods: [api-key], api_key_env: GOOGLE_API_KEY}
+      - {name: azure, methods: [api-key], api_key_env: AZURE_OPENAI_API_KEY}

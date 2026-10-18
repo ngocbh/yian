@@ -1,16 +1,23 @@
-"""Interactive provider setup over staged authentication and an atomic store."""
+"""Interactive provider setup over staged authentication and an atomic store.
+
+`config_check` checks a host `llm_config` layer read from stdin, and `providers` lists
+the providers and the login kinds `auth` can save for each.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
+import json
 import os
 import sys
 from typing import Optional
 import warnings
 import webbrowser
 
+from pydantic import ValidationError
 import typer
 
+from yian.cli.utils import print_json
 from yian.llm_clients.auth import (
     ApiKeyCredentials,
     AuthError,
@@ -21,7 +28,12 @@ from yian.llm_clients.api_key_env import (
     OPTIONAL_API_KEY_PROVIDERS,
     PROVIDER_API_KEY_ENV,
 )
-from yian.llm_clients.config import SUPPORTED_LLM_PROVIDERS, validate_base_url
+from yian.llm_clients.config import (
+    SUPPORTED_LLM_PROVIDERS,
+    LLMConfig,
+    pop_host_credentials,
+    validate_base_url,
+)
 from yian.llm_clients.connection import call_credentials
 from yian.llm_clients.connection_settings import (
     validate_header_name,
@@ -47,6 +59,9 @@ _ELSEWHERE_ENV = {
     "google": ("GOOGLE_GEMINI_BASE_URL",),
 }
 _SETTINGS_NEED_API_KEY = "--organization, --project and --header apply to API-key authentication"
+# The top-level `llm_config` keys as written, in declaration order.
+_LLM_FIELDS = tuple(field.alias or name for name, field in LLMConfig.model_fields.items())
+_EXTRA_FIELD = f"llm_config has an extra field; the fields are {', '.join(_LLM_FIELDS)}"
 
 
 def _require_terminal(option: str) -> None:
@@ -752,3 +767,116 @@ def auth(
     except (KeyboardInterrupt, EOFError):
         typer.echo(_CANCELLED, err=True)
         raise typer.Exit(1) from None
+
+
+def _config_errors(layer: dict) -> list[dict]:
+    """Check a host `llm_config` layer as `run_flow` does and return its errors.
+
+    The credentials are popped from a copy, then the rest is validated; the first
+    failing step's errors are returned. An unknown key is reported without its name,
+    since a pasted key could be the name.
+
+    Args:
+        layer (`dict`): The layer, key included.
+
+    Returns:
+        `list[dict]`: Each distinct error as `{"field", "message"}`, where `field` is
+        the error's location joined with `.`, or `None` for an unknown key, a plain
+        `ValueError` or a model-level error; empty when the layer is valid.
+    """
+    try:
+        rest = dict(layer)
+        pop_host_credentials(rest)
+        LLMConfig.model_validate(rest)
+    except ValidationError as error:
+        errors = []
+        for item in error.errors(include_url=False, include_input=False):
+            loc = [str(part) for part in item["loc"]]
+            if item["type"] == "extra_forbidden" or (loc and loc[0] not in _LLM_FIELDS):
+                entry = {"field": None, "message": _EXTRA_FIELD}
+            else:
+                message = item["msg"].removeprefix("Value error, ")
+                entry = {"field": ".".join(loc) or None, "message": message}
+            if entry not in errors:
+                errors.append(entry)
+        return errors
+    except ValueError as error:
+        return [{"field": None, "message": str(error)}]
+    return []
+
+
+def config_check(
+    json_output: bool = typer.Option(
+        False, "--json", help="Print one yian.cli.v1 JSON document on stdout."
+    ),
+) -> None:
+    """Check the host llm_config layer given as a JSON object on stdin, key included.
+
+    The layer is checked as a run checks the llm_config it is given; values never
+    appear in the errors.
+
+    \f
+    Args:
+        json_output (`bool`): Print a `yian.cli.v1` document instead of text.
+
+    Raises:
+        typer.BadParameter: stdin is not a JSON object.
+        typer.Exit: With code 1 when the layer has errors.
+    """
+
+    def refuse(token: str) -> None:
+        raise ValueError(f"{token} is not JSON")
+
+    try:
+        layer = json.loads(sys.stdin.read(), parse_constant=refuse)
+    except ValueError:  # JSONDecodeError is a ValueError
+        layer = None
+    if not isinstance(layer, dict):
+        raise typer.BadParameter("stdin must be a JSON object (an llm_config layer)")
+    errors = _config_errors(layer)
+    if json_output:
+        print_json({"ok": not errors, "errors": errors})
+    elif not errors:
+        typer.echo("ok")
+    else:
+        for error in errors:
+            field = error["field"]
+            typer.echo(f"{field}: {error['message']}" if field else error["message"], err=True)
+    if errors:
+        raise typer.Exit(1)
+
+
+def providers(
+    json_output: bool = typer.Option(
+        False, "--json", help="Print one yian.cli.v1 JSON document on stdout."
+    ),
+) -> None:
+    """List the supported providers, the login kinds each takes, and its API-key variable.
+
+    The login kinds are those `yian auth` can save: openai also takes a
+    subscription, ollama takes no key, and vllm's key is optional.
+
+    \f
+    Args:
+        json_output (`bool`): Print a `yian.cli.v1` document instead of text.
+    """
+    listed = []
+    for name in SUPPORTED_LLM_PROVIDERS:
+        if name == "openai":
+            methods = ["api-key", "subscription"]
+        elif name == "ollama":
+            methods = ["none"]
+        elif name in OPTIONAL_API_KEY_PROVIDERS:
+            methods = ["api-key", "none"]
+        else:
+            methods = ["api-key"]
+        listed.append(
+            {"name": name, "methods": methods, "api_key_env": PROVIDER_API_KEY_ENV[name]}
+        )
+    if json_output:
+        print_json({"providers": listed})
+        return
+    for provider in listed:
+        variable = provider["api_key_env"]
+        suffix = f" ({variable})" if variable else ""
+        typer.echo(f"{provider['name']}: {', '.join(provider['methods'])}{suffix}")

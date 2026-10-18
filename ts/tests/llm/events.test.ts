@@ -1,5 +1,6 @@
 /**
- * Stream events: argument parsing and collecting a reply, a port of `tests/llm/test_events.py`,
+ * Stream events: argument parsing, collecting a reply and the owning stream, a port of
+ * `tests/llm/test_events.py`,
  * plus JavaScript's own cases: ints of any size, raw control characters inside strings, async
  * sources, and the rule that a stream ends with exactly one `Finish`.
  */
@@ -11,6 +12,7 @@ import { ProviderError } from "../../src/llm/errors.ts";
 import {
   collect,
   type Event,
+  EventStream,
   Finish,
   parseArguments,
   PartDone,
@@ -45,6 +47,13 @@ function usage(inputTokens: number, outputTokens: number, totalTokens: number): 
 }
 
 const STOP = new Finish({ reason: "stop" });
+
+/** Return every event `stream` still yields. */
+async function drain(stream: EventStream): Promise<Event[]> {
+  const out: Event[] = [];
+  for await (const event of stream) out.push(event);
+  return out;
+}
 
 describe("parseArguments", () => {
   test("empty text is an empty object", () => {
@@ -297,5 +306,133 @@ describe("ReplyAssembler.partial", () => {
     assembler.add(new TextDelta(0, "ok"));
     assembler.add(new TextDelta(1, "\ud800"));
     expect(assembler.partial()).toEqual(new Message({ role: "assistant", parts: [new TextPart("ok")] }));
+  });
+});
+
+describe("EventStream", () => {
+  test("close is idempotent and later iteration is empty", async () => {
+    const closes: number[] = [];
+    const stream = new EventStream([new TextDelta(0, "a")].values(), () => void closes.push(1));
+    const first = stream.close();
+    expect(stream.close()).toBe(first);
+    await first;
+    await stream.close();
+    expect(closes).toEqual([1]);
+    expect(await drain(stream)).toEqual([]);
+  });
+
+  test("closes when exhausted, once", async () => {
+    const closes: number[] = [];
+    const stream = new EventStream([new TextDelta(0, "a"), new TextDelta(0, "b")].values(), () => void closes.push(1));
+    expect(await drain(stream)).toEqual([new TextDelta(0, "a"), new TextDelta(0, "b")]);
+    expect(closes).toEqual([1]);
+    await stream.close();
+    expect(closes).toEqual([1]);
+  });
+
+  test("closes on await using exit", async () => {
+    const closes: number[] = [];
+    {
+      await using stream = new EventStream([new TextDelta(0, "a"), new TextDelta(0, "b")].values(), () => {
+        closes.push(1);
+      });
+      expect((await stream.next()).value).toEqual(new TextDelta(0, "a"));
+    }
+    expect(closes).toEqual([1]);
+  });
+
+  test("closes the inner async generator", async () => {
+    const state: string[] = [];
+    async function* events(): AsyncGenerator<Event> {
+      try {
+        yield new TextDelta(0, "a");
+        yield new TextDelta(0, "b");
+      } finally {
+        state.push("closed");
+      }
+    }
+    const stream = new EventStream(events());
+    await stream.next();
+    await stream.close();
+    expect(state).toEqual(["closed"]);
+  });
+
+  test("closes when the inner iterator throws", async () => {
+    const closes: number[] = [];
+    async function* events(): AsyncGenerator<Event> {
+      yield new TextDelta(0, "a");
+      throw new ProviderError("connection", "dropped");
+    }
+    const stream = new EventStream(events(), () => void closes.push(1));
+    expect((await stream.next()).value).toEqual(new TextDelta(0, "a"));
+    const error = await rejection(stream.next());
+    expect(error).toBeInstanceOf(ProviderError);
+    expect(error.message).toBe("dropped");
+    expect(closes).toEqual([1]);
+    expect(await drain(stream)).toEqual([]);
+    expect(closes).toEqual([1]);
+  });
+
+  test("collect reads an EventStream", async () => {
+    const stream = new EventStream([new TextDelta(0, "a"), STOP].values());
+    expect((await collect(stream)).message.text()).toBe("a");
+  });
+
+  test("break from for await closes it", async () => {
+    const closes: number[] = [];
+    const state: string[] = [];
+    async function* events(): AsyncGenerator<Event> {
+      try {
+        yield new TextDelta(0, "a");
+        yield new TextDelta(0, "b");
+      } finally {
+        state.push("closed");
+      }
+    }
+    const stream = new EventStream(events(), () => void closes.push(1));
+    for await (const event of stream) {
+      expect(event).toEqual(new TextDelta(0, "a"));
+      break;
+    }
+    expect(closes).toEqual([1]);
+    expect(state).toEqual(["closed"]);
+  });
+
+  test("the callback runs once when the inner return() throws", async () => {
+    const closes: number[] = [];
+    const events: Iterator<Event> = {
+      next: () => ({ done: false, value: new TextDelta(0, "a") }),
+      return: () => {
+        throw new Error("boom");
+      },
+    };
+    const stream = new EventStream(events, () => void closes.push(1));
+    expect((await rejection(stream.close())).message).toBe("boom");
+    expect((await rejection(stream.close())).message).toBe("boom");
+    expect(closes).toEqual([1]);
+  });
+
+  test("close ends a read that waits until an abort", async () => {
+    const closes: number[] = [];
+    const state: string[] = [];
+    const controller = new AbortController();
+    const signal = controller.signal;
+    async function* events(): AsyncGenerator<Event> {
+      try {
+        await new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
+        yield new TextDelta(0, "never");
+      } finally {
+        state.push("closed");
+      }
+    }
+    const stream = new EventStream(events(), () => {
+      closes.push(1);
+      controller.abort();
+    });
+    const pending = rejection(stream.next());
+    await stream.close();
+    expect((await pending).name).toBe("AbortError");
+    expect(closes).toEqual([1]);
+    expect(state).toEqual(["closed"]);
   });
 });

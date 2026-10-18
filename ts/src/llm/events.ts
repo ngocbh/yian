@@ -4,7 +4,8 @@
  * An adapter turns a provider's stream into these events: deltas per part index, an
  * authoritative `PartDone` per part when the provider gives one, usage, and one `Finish`
  * last. Each event has a `type` discriminant equal to its class name. `ReplyAssembler` and
- * `collect` assemble them into a `Response`.
+ * `collect` assemble them into a `Response`; `EventStream` is the iterator a `ChatModel`
+ * returns, which owns and closes the underlying connection.
  */
 
 import { JSONDecodeError, parseJson, type JsonObject } from "../typesys/json.ts";
@@ -19,6 +20,7 @@ import {
   TextPart,
   ToolCallPart,
   type Part,
+  type Request,
   type Usage,
 } from "./messages.ts";
 
@@ -335,4 +337,110 @@ export async function collect(events: AsyncIterable<Event> | Iterable<Event>): P
   const assembler = new ReplyAssembler();
   for await (const event of events) assembler.add(event);
   return assembler.response();
+}
+
+/**
+ * Iterator over a model's events that owns the underlying connection.
+ *
+ * Closing is idempotent and also happens when the events run out or throw, when a
+ * `for await` loop exits early, and on `await using` exit, so a connection is released
+ * however iteration ends.
+ */
+export class EventStream implements AsyncIterableIterator<Event> {
+  #events: AsyncIterator<Event> | Iterator<Event>;
+  #close: (() => void | Promise<void>) | undefined;
+  #closing: Promise<void> | null = null;
+
+  /**
+   * @param events The events; their `return()`, when they have one, runs when the stream closes.
+   * @param close Releases the connection; called once, before the events' `return()`, so it
+   *   may abort a pending read.
+   */
+  constructor(events: AsyncIterator<Event> | Iterator<Event>, close?: () => void | Promise<void>) {
+    this.#events = events;
+    this.#close = close;
+  }
+
+  /** Return the next event, closing the stream when the events end or throw; done once closed. */
+  async next(): Promise<IteratorResult<Event>> {
+    if (this.#closing !== null) return { done: true, value: undefined };
+    let result: IteratorResult<Event>;
+    try {
+      result = await this.#events.next();
+    } catch (error) {
+      await this.close();
+      throw error;
+    }
+    if (result.done) {
+      await this.close();
+      return { done: true, value: undefined };
+    }
+    return result;
+  }
+
+  /** Close the stream; `for await` calls this when a loop exits early. */
+  async return(): Promise<IteratorResult<Event>> {
+    await this.close();
+    return { done: true, value: undefined };
+  }
+
+  /**
+   * Release the connection, then close the events; later calls return the first call's
+   * promise. The `close` callback runs once even if the events' `return()` throws.
+   */
+  close(): Promise<void> {
+    if (this.#closing === null) {
+      // Stored before the callback runs, so a callback that closes the stream again (an
+      // abort listener, say) gets this promise rather than a second run.
+      const { promise, resolve } = Promise.withResolvers<void>();
+      this.#closing = promise;
+      resolve(this.#release());
+    }
+    return this.#closing;
+  }
+
+  /** Run the `close` callback, then the events' `return()`. */
+  async #release(): Promise<void> {
+    try {
+      await this.#close?.();
+    } finally {
+      await this.#events.return?.();
+    }
+  }
+
+  /** Return the stream itself. */
+  [Symbol.asyncIterator](): EventStream {
+    return this;
+  }
+
+  /** Close the stream, for `await using`. */
+  [Symbol.asyncDispose](): Promise<void> {
+    return this.close();
+  }
+}
+
+/**
+ * A model that answers requests, provider-neutral.
+ *
+ * A failed call throws a `ProviderError`; any other error from a stream is a defect.
+ */
+export interface ChatModel {
+  /** The provider name, e.g. `openai`. */
+  readonly provider: string;
+  /** The model name. */
+  readonly model: string;
+
+  /**
+   * Start one call and return its events; each call opens its own stream.
+   *
+   * The stream ends with exactly one `Finish` or throws a `ProviderError`. `Finish` is the
+   * last event: an adapter holds it until the provider's end of stream, so usage and
+   * `PartDone`s come before it. Aborting `signal` ends the stream by throwing the signal's
+   * reason. Closing the stream releases the connection.
+   *
+   * @param request The call's input.
+   * @param options `signal` aborts the call.
+   * @returns The reply's events.
+   */
+  stream(request: Request, options?: { signal?: AbortSignal }): EventStream;
 }

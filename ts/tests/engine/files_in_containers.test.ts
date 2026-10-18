@@ -5,8 +5,9 @@
  * (`RangeError`, as pydantic's `ValidationError` is a `ValueError`). Where Python checks that
  * a value is kept with `is`, these tests use `toBe`.
  *
- * TS-only: the `normalizeTypedFiles` tests, and the `normalizeFiles` row keeping an `object`
- * value that holds NaN.
+ * TS-only: the `normalizeTypedFiles` tests, and the `normalizeFiles` rows keeping an `object`
+ * value that holds NaN, turning a `-0` at an `object` position into `0`, and keeping a file
+ * form whose text holds a lone surrogate.
  *
  * Later: flow runs (with the runner).
  *
@@ -233,6 +234,21 @@ describe("normalizeFiles", () => {
     ["object", { f: REF, bad: NaN }],
   ])("keeps a value that fails the type: %s", (declared, value) => {
     expect(normalizeFiles(t(declared), value)).toBe(value);
+  });
+
+  test("turns a -0 at an object position into 0", () => {
+    // Negative zero becomes 0 when a float becomes a value; Python keeps -0.0 and the value.
+    const value = { x: { a: -0 } };
+    const normalized = normalizeFiles(t("Box"), value) as ValueRecord;
+    expect(normalized).not.toBe(value);
+    expect(Object.is((normalized["x"] as ValueRecord)["a"], 0)).toBe(true);
+  });
+
+  test("keeps a file form whose text holds a lone surrogate", () => {
+    // Text holding a lone surrogate is not a yian value, and normalizeFiles never throws for
+    // a value that doesn't fit; Python builds the FileRef.
+    const value = { f: { uri: "\ud800", mime: null, name: null }, n: 1n };
+    expect(normalizeFiles(t("Rec"), value)).toBe(value);
   });
 
   test.each<[string, Value]>([

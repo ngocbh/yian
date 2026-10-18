@@ -2083,8 +2083,8 @@ export function normalizeFiles(typ: Type, value: Value): Value {
     return items.every((item, index) => Object.is(item, value[index])) ? value : items;
   }
   if (typ.kind === ValueKind.FILE) {
-    // A form whose text holds a lone surrogate isn't a yian value, so it is kept.
     if (!isFileForm(value)) return value;
+    // A form whose text holds a lone surrogate isn't a yian value, so it is kept.
     const fits = FILE_FIELDS.every((name) => nonValueReason(value[name]) === null);
     return fits ? new FileRef(value) : value;
   }

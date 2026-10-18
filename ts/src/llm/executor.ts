@@ -5,8 +5,9 @@
  * attempt per call. `callWithRetries` is the one retry loop above it.
  *
  * A status error or a `ProviderError` from parsing is scrubbed of the credentials the route
- * sent, in its message and its `stack`; the transport scrubs its own errors, and the AGENT
- * scrubs every error a call raises.
+ * sent, in its message and its `stack`; a parse error's message is then capped at 2,000 code
+ * points, so protocols leave provider text uncapped. The transport scrubs its own errors, and
+ * the AGENT scrubs every error a call raises.
  */
 
 import { current } from "../defaults.ts";
@@ -14,7 +15,7 @@ import { realScheduler, type Scheduler, type Send } from "../platform.ts";
 import type { JsonObject, JsonValue } from "../typesys/json.ts";
 import { scrub } from "./auth.ts";
 import { encodeBody } from "./body.ts";
-import { errorFromResponse, MAX_RETRY_AFTER_SECONDS, ProviderError } from "./errors.ts";
+import { capDetail, errorFromResponse, MAX_RETRY_AFTER_SECONDS, ProviderError } from "./errors.ts";
 import { type ChatModel, type Event, EventStream, ReplyAssembler } from "./events.ts";
 import { iterNdjson, iterSse, type SSEEvent } from "./framing.ts";
 import type { Message, Request, Response } from "./messages.ts";
@@ -86,7 +87,8 @@ export class RouteModel implements ChatModel {
    * headers, then by the auth headers, case-insensitively. A non-2xx reply throws a
    * `ProviderError` built from at most 64 KiB of its body; a 2xx reply's frames go to the
    * protocol, and a `ProviderError` from parsing that names no provider gets the route's;
-   * the status error and the parse error are both scrubbed of the route's credentials.
+   * the status error and the parse error are both scrubbed of the route's credentials, and the
+   * parse error's message is then capped at 2,000 code points.
    * Closing the stream aborts the request.
    *
    * Errors: a `TypeError` for a body that isn't JSON or an invalid header value, before
@@ -131,7 +133,8 @@ export class RouteModel implements ChatModel {
       // Protocol parsers don't know the route.
       if (error instanceof ProviderError && error.provider === null) error.provider = route.provider;
       // Provider text, SSE error events included, may echo a credential the protocol never holds.
-      throw error instanceof ProviderError ? scrubbed(error, route.auth.credentials()) : error;
+      // Capped only after the scrub, so a cut can't leave part of a credential unmatched.
+      throw error instanceof ProviderError ? scrubbed(error, route.auth.credentials(), true) : error;
     } finally {
       // `body.return()` releases nothing before the body's first read.
       exchange.abort();
@@ -170,14 +173,16 @@ async function readErrorBody(exchange: Exchange): Promise<string> {
 
 /**
  * Return `error`, or a copy with every field kept and the credentials replaced in its
- * message when it still holds one.
+ * message when it still holds one, or (with `cap`) when it is longer than 2,000 code points; a
+ * capped message keeps its first 2,000 code points and "…", cut after the scrub.
  *
  * The body is scrubbed before parsing, but an echo with mixed escapes only matches a
  * credential once the parse has undone them. The error is rebuilt, not edited: a `stack` read
  * before the scrub would keep the old message.
  */
-function scrubbed(error: ProviderError, credentials: readonly string[]): ProviderError {
-  const message = scrub(error.message, credentials);
+function scrubbed(error: ProviderError, credentials: readonly string[], cap = false): ProviderError {
+  const clean = scrub(error.message, credentials);
+  const message = cap ? capDetail(clean) : clean;
   if (message === error.message) return error;
   const { kind, status, retryAfter, retryable, provider, causeName } = error;
   return new ProviderError(kind, message, { status, retryAfter, retryable, provider, causeName });

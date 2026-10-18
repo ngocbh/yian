@@ -9,12 +9,13 @@
  *
  * Replies parse into parts whose payloads are replay records, so the next turn can replay them.
  * A reply that failed or stopped early raises `ProviderError`, except a stop at
- * `max_output_tokens`, which finishes with `length`.
+ * `max_output_tokens`, which finishes with `length`. An error message holds the provider's text
+ * uncapped; `RouteModel` scrubs it of the route's credentials and then caps it.
  */
 
 import { JSONDecodeError, type JsonObject, type JsonValue, parseJson } from "../../typesys/json.ts";
 import { encodeBody, mergeRequestBody } from "../body.ts";
-import { capDetail, type ErrorKind, ProviderError } from "../errors.ts";
+import { type ErrorKind, ProviderError } from "../errors.ts";
 import {
   type Event,
   Finish,
@@ -388,7 +389,7 @@ export class OpenAIResponses implements SseProtocol {
     const code = error["code"];
     const kind = (typeof code === "string" ? STREAM_ERROR_KINDS.get(code) : undefined) ?? "server";
     const rawMessage = error["message"];
-    const message = typeof rawMessage === "string" && rawMessage ? capDetail(rawMessage) : "no message";
+    const message = typeof rawMessage === "string" && rawMessage ? rawMessage : "no message";
     const text = this.subscription
       ? `OpenAI subscription stream ended before a complete response: ${message}`
       : `openai stream failed (${kind}): ${message}`;

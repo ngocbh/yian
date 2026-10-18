@@ -1035,15 +1035,10 @@ describe("stream failures", () => {
       expect(error.message).toBe("OpenAI subscription stream ended before a complete response: It broke.");
     });
 
-    test("the message is capped at 2,000 code points", async () => {
-      const cases: [string, string][] = [
-        [LONG, "x".repeat(2000) + "…"],
-        ["😀".repeat(2001), "😀".repeat(2000) + "…"],
-        ["x".repeat(2000), "x".repeat(2000)],
-      ];
-      for (const [message, shown] of cases) {
+    test("the message is the provider's text uncapped, for RouteModel to scrub and cap", async () => {
+      for (const message of [LONG, "😀".repeat(2001)]) {
         const error = await failure([source("server_error", message)]);
-        expect(error.message).toBe(`openai stream failed (server): ${shown}`);
+        expect(error.message).toBe(`openai stream failed (server): ${message}`);
       }
     });
 

@@ -27,6 +27,7 @@ import { Document, isCollection, isMap, isNode, isSeq, parseDocument, visit } fr
 import type { YAMLMap } from "yaml";
 
 import { ENTRIES, forget, nonDefaults, read, reload } from "../src/defaults.ts";
+import type { Env } from "../src/defaults.ts";
 import { canonicalJson, logJson, parseJson } from "../src/typesys/json.ts";
 import type { JsonMode } from "../src/typesys/json.ts";
 import { readTypedefs, typeFor } from "../src/typesys/types.ts";
@@ -651,6 +652,11 @@ export interface CaseContext {
   env: Record<string, string>;
 }
 
+/** Return the `Env` that reads the case's environment; a name that is not an own key is unset. */
+function caseEnv(ctx: CaseContext): Env {
+  return (name) => (Object.hasOwn(ctx.env, name) ? ctx.env[name] : undefined);
+}
+
 /** Run one prepared case of a kind; throw (a `CaseFailure`, normally) when it fails. */
 export type KindRunner = (case_: Case, ctx: CaseContext) => void | Promise<void>;
 
@@ -895,7 +901,7 @@ async function runValue(case_: Case, ctx: CaseContext): Promise<void> {
     // Read inside the result, so a bad variable is raised as the case's error; forgotten
     // after, so a later case reads its own.
     try {
-      reload((name) => (Object.hasOwn(ctx.env, name) ? ctx.env[name] : undefined));
+      reload(caseEnv(ctx));
       const typedefs = (case_["typedefs"] ?? {}) as Record<string, unknown>;
       const typ = typeFor(case_["type"] as string, readTypedefs(typedefs));
       const typed = buildValueAs(typ, case_["value"]);
@@ -915,7 +921,7 @@ async function runDefaults(case_: Case, ctx: CaseContext): Promise<void> {
   await results(expect, () => {
     const byName: Record<string, bigint> = {
       ...Object.fromEntries(ENTRIES.map((entry) => [entry.name, BigInt(entry.default)])),
-      ...nonDefaults(read((name) => (Object.hasOwn(ctx.env, name) ? ctx.env[name] : undefined))),
+      ...nonDefaults(read(caseEnv(ctx))),
     };
     const names = Object.keys(get(expect, "defaults", {}) as Case);
     const unknown = names.filter((name) => !Object.hasOwn(byName, name)).sort();

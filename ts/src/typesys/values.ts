@@ -322,8 +322,10 @@ function nestingFrame(container: object, key: string | number | null): NestingFr
   return { container, keys, key, index: 0 };
 }
 
-/** Return the path from the root to the last frame's container. */
-function framePath(stack: readonly NestingFrame[]): (string | number)[] {
+/** Return the path from the root to the last frame's container; each frame holds its key. */
+function framePath(
+  stack: readonly { readonly key: string | number | null }[],
+): (string | number)[] {
   return stack.slice(1).map((frame) => frame.key!);
 }
 
@@ -353,6 +355,9 @@ function locatedError(where: string, path: ValuePath, reason: string): TypeCheck
   const location = path.length > 0 ? `${where} at ${renderValuePath(path)}` : where;
   return new TypeCheckError(`${location}: ${reason}`, { path });
 }
+
+/** Why text or a record key holding a lone surrogate is not a yian value. */
+const LONE_SURROGATE_REASON = "text holding a lone surrogate is not a yian value";
 
 /** An open array or record in host intake, with the fresh copy being filled. */
 interface HostFrame {
@@ -400,7 +405,7 @@ export function fromHost(value: unknown, where: string): Value {
   /** Throw `reason` at the top frame's entry `keys` (none: the top frame itself). */
   const fail = (reason: string, ...keys: (string | number)[]): never => {
     // The path is built only on a throw.
-    throw locatedError(where, [...stack.slice(1).map((frame) => frame.key!), ...keys], reason);
+    throw locatedError(where, [...framePath(stack), ...keys], reason);
   };
 
   /** Return what `item`, the top frame's entry `key`, stores as; push a new container's frame. */
@@ -411,7 +416,7 @@ export function fromHost(value: unknown, where: string): Value {
       case "bigint":
         return item;
       case "string":
-        return item.isWellFormed() ? item : fail(SURROGATE_TEXT, ...at);
+        return item.isWellFormed() ? item : fail(LONE_SURROGATE_REASON, ...at);
       case "number":
         if (Number.isNaN(item)) fail("NaN is not a yian value", ...at);
         return Number.isSafeInteger(item) ? BigInt(item) : item;
@@ -419,22 +424,19 @@ export function fromHost(value: unknown, where: string): Value {
         return fail("undefined is not a yian value; use null", ...at);
     }
     if (item === null || item instanceof FileRef) return item;
-    if (typeof item === "object") {
-      const proto: unknown = Object.getPrototypeOf(item);
-      const list = Array.isArray(item);
-      if (list ? proto === Array.prototype : proto === Object.prototype || proto === null) {
-        if (active.has(item)) fail("value contains itself", ...at);
-        const shared = copies.get(item);
-        if (shared !== undefined) return shared;
-        const source = item as Record<string | number, unknown>;
-        const keys = list ? null : Object.keys(item);
-        const size = keys === null ? (item as unknown[]).length : keys.length;
-        const copy: Value[] | ValueRecord = list ? [] : {};
-        copies.set(item, copy);
-        active.add(item);
-        stack.push({ source, keys, size, key, copy, index: 0 });
-        return copy;
-      }
+    const list = isList(item);
+    if (list || isRecord(item)) {
+      if (active.has(item)) fail("value contains itself", ...at);
+      const shared = copies.get(item);
+      if (shared !== undefined) return shared;
+      const source = item as Record<string | number, unknown>;
+      const keys = list ? null : Object.keys(item);
+      const size = keys === null ? (item as unknown[]).length : keys.length;
+      const copy: Value[] | ValueRecord = list ? [] : {};
+      copies.set(item, copy);
+      active.add(item);
+      stack.push({ source, keys, size, key, copy, index: 0 });
+      return copy;
     }
     return fail(`${jsTypeName(item)} is not a yian value`, ...at);
   };
@@ -452,15 +454,12 @@ export function fromHost(value: unknown, where: string): Value {
       (frame.copy as Value[]).push(enter(frame.source[index], index));
     } else {
       const key = frame.keys[index]!;
-      if (!key.isWellFormed()) fail(SURROGATE_TEXT);
+      if (!key.isWellFormed()) fail(LONE_SURROGATE_REASON);
       setField(frame.copy as ValueRecord, key, enter(frame.source[key], key));
     }
   }
   return root;
 }
-
-/** Why text holding a lone surrogate is refused. */
-const SURROGATE_TEXT = "text holding a lone surrogate is not a yian value";
 
 // --------------------------------------------------------------------------------------- //
 // Type vocabulary
@@ -625,9 +624,12 @@ export function fileFieldType(name: string): Type | null {
   return FILE_FORM.fields!.get(name) ?? null;
 }
 
-/** Whether `value` is a record: a plain object with prototype `Object.prototype` or `null`. */
+/**
+ * Whether `value` is a record: a plain object with prototype `Object.prototype` or `null`. An
+ * array is never a record, whatever its prototype.
+ */
 function isRecord(value: unknown): value is ValueRecord {
-  if (typeof value !== "object" || value === null) return false;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const proto: unknown = Object.getPrototypeOf(value);
   return proto === Object.prototype || proto === null;
 }
@@ -1847,7 +1849,7 @@ function isFileForm(value: unknown): value is ValueRecord & FileRefInit {
 function nonValueReason(value: unknown): string | null {
   if (typeof value === "number" && Number.isNaN(value)) return "NaN is not a yian value";
   if (typeof value === "string" && !value.isWellFormed()) {
-    return SURROGATE_TEXT;
+    return LONE_SURROGATE_REASON;
   }
   return null;
 }
@@ -1894,7 +1896,7 @@ function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value {
   const done = new Map<object, Value>();
   const pathTo = (...keys: (string | number)[]): ValuePath => [
     ...path,
-    ...stack.slice(1).map((frame) => frame.key!),
+    ...framePath(stack),
     ...keys,
   ];
   /** Throw `message` at the entry `key` of the top frame (`null`: the root). */
@@ -1956,7 +1958,7 @@ function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value {
       const index = frame.index++;
       const key = frame.keys === null ? index : frame.keys[index]!;
       if (typeof key === "string" && !key.isWellFormed()) {
-        throw new TypeCheckError(SURROGATE_TEXT, { path: pathTo() });
+        throw new TypeCheckError(LONE_SURROGATE_REASON, { path: pathTo() });
       }
       const child = (frame.container as Record<string | number, unknown>)[key];
       const stored = enter(child, key);

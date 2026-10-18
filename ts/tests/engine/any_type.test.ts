@@ -4,7 +4,8 @@
  * the wire, a port of those tests of `tests/engine/test_any_type.py`. The non-JSON rows use JS
  * values (`Date`, `Map`, `Set`, `Uint8Array`, a class instance, `undefined`) for Python's.
  *
- * TS-only: `-0`, NaN and lone surrogates inside `object` and `Any` values.
+ * TS-only: `-0`, NaN and lone surrogates inside `object` and `Any` values, and an array whose
+ * prototype was swapped to `Object.prototype` refused at the write boundary.
  *
  * Later: the compatibility, proof and field-read tests (with the compile checks and node
  * contracts), and the flow loading tests.
@@ -21,6 +22,7 @@ import { describe, expect, test } from "bun:test";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
 import { parseType, readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import {
+  buildValue,
   buildValueAs,
   canonicalTypeLabel,
   canonicalUnionOrder,
@@ -493,5 +495,23 @@ describe("TS-only: -0, NaN and lone surrogates in object and Any values", () => 
     const error = typeCheckError(() => buildValueAs(kind, value));
     expect(error.message).toBe(message);
     expect(error.path).toEqual(path);
+  });
+});
+
+describe("TS-only: an array whose prototype was swapped", () => {
+  // An array is never a record, whatever its prototype, and it is a list only with
+  // `Array.prototype`, so its log line can always be read back.
+  const swapped = () => Object.setPrototypeOf([1n, 2n], Object.prototype) as unknown;
+
+  test("buildValue can't wrap it", () => {
+    const error = typeCheckError(() => buildValue(swapped()));
+    expect(error.message).toBe("cannot wrap value of type 'Object'");
+    expect(error.path).toEqual([]);
+  });
+
+  test("Any refuses it as not a JSON value", () => {
+    const error = typeCheckError(() => buildValueAs(ValueKind.ANY, swapped()));
+    expect(error.message).toBe("<Object object> is not a JSON value");
+    expect(error.path).toEqual([]);
   });
 });

@@ -7,9 +7,10 @@
  *
  * Ported: plain values and leaves (a `FileRef` kept; a class instance refused), shared values
  * copied once near the root and deep, the deep chain copied without recursion, an error from
- * the host's own code propagating, and a `TypedValue` (Python copies its payload; refused
- * here). TS-only: the host-intake table (scalars, numbers, `undefined`, lone surrogates,
- * non-plain objects), `__proto__` kept as an own data key, a getter read once, skipped
+ * the host's own code propagating (a getter's and a proxy trap's), and a `TypedValue` (Python
+ * copies its payload; refused here). TS-only: the host-intake table (scalars, numbers,
+ * `undefined`, lone surrogates, non-plain objects, an array whose prototype was swapped), a
+ * record inside itself refused, `__proto__` kept as an own data key, a getter read once, skipped
  * symbol and non-enumerable keys and extra array properties, and a depth-30 diamond copied in
  * linear time.
  *
@@ -19,8 +20,8 @@
  * Not ported: the list, tuple and dict subclass rows read through their own iteration
  * (`HiddenList`, `HiddenDict`, `YieldsOneNan`, the namedtuple, the tuple rows), which are
  * refused here as non-plain objects (one row checks an `Array` subclass); the cycle rows,
- * since intake refuses a container inside itself (one row checks it); and the unhashable-key
- * row (a record key is always a string).
+ * since intake refuses a container inside itself (an array row and a record row check it);
+ * and the unhashable-key row (a record key is always a string).
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -117,6 +118,13 @@ describe("fromHost", () => {
       ["my key"],
     ],
     ["an Array subclass", Sub.from([1]), "output: Sub is not a yian value", []],
+    // An array is never a record, whatever its prototype.
+    [
+      "an array whose prototype was swapped",
+      Object.setPrototypeOf([1], Object.prototype),
+      "output: Object is not a yian value",
+      [],
+    ],
     ["a function", [() => 1], "output at [0]: function is not a yian value", [0]],
     ["a symbol", { s: Symbol("s") }, "output at s: symbol is not a yian value", ["s"]],
     // Hosts don't build carriers: a TypedValue is refused like any class instance; Python
@@ -136,6 +144,16 @@ describe("fromHost", () => {
     const error = intakeError(value);
     expect(error.message).toBe("output at [0]: value contains itself");
     expect(error.path).toEqual([0]);
+  });
+
+  test("refuses a record inside itself at the entry holding it", () => {
+    // Intake refuses a cycle; Python's plain-container read keeps it.
+    const inner: Record<string, unknown> = {};
+    const value = { a: inner };
+    inner["b"] = value;
+    const error = intakeError(value);
+    expect(error.message).toBe("output at a.b: value contains itself");
+    expect(error.path).toEqual(["a", "b"]);
   });
 
   test("a __proto__ key stays an own data key and no prototype changes", () => {
@@ -229,6 +247,27 @@ describe("fromHost", () => {
           throw boom;
         },
       },
+    };
+    let thrown: unknown;
+    try {
+      fromHost(value, "output");
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBe(boom);
+  });
+
+  test("an error a proxy trap throws propagates unchanged", () => {
+    const boom = new RangeError("boom");
+    const value = {
+      s: new Proxy(
+        {},
+        {
+          ownKeys() {
+            throw boom;
+          },
+        },
+      ),
     };
     let thrown: unknown;
     try {

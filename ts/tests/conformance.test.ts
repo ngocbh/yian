@@ -865,6 +865,11 @@ describe("main", () => {
         'kind: value\nenv: {YIAN_MAX_SHOWN_VALUE_CHARS: "10"}\ntype: int\n' +
         "value: abcdefghijklmnop\nexpect:\n  raises: {class: TypeCheckError, " +
         "message: '\"abcdefgh… does not match declared type int', path: []}\n",
+      // Runs after `v/cap.yaml`; with no `env` it is cut at the default 200 again.
+      "v/later.yaml":
+        "kind: value\ntype: int\nvalue: abcdefghijklmnop\nexpect:\n  raises: " +
+        "{class: TypeCheckError, message: '\"abcdefghijklmnop\" does not match declared " +
+        "type int', path: []}\n",
     };
     expect(await run([], files, {}, RUNNERS)).toEqual({
       code: 1,
@@ -874,7 +879,7 @@ describe("main", () => {
         "  2.0",
         "  --- expected",
         "  2",
-        "4 cases: 3 passed, 1 failed, 0 pending",
+        "5 cases: 4 passed, 1 failed, 0 pending",
       ],
       err: [],
     });

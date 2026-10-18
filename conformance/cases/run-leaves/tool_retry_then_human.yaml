@@ -53,3 +53,15 @@ expect:
         call_id: r1/ok
         attempt: 1
         node: ok
+  trace:
+    - [run_started, null, {inputs: {q: x}, learnable: false, num_workers: 0}]
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {q: x}}]
+    - [node_started, fetch]
+    - [node_step, fetch, {step: {event: failed, attempt: 1, error: {type: TransientToolError, message: busy}, retry_in: 0.5}}]
+    - [node_step, fetch, {step: {event: started, attempt: 2}}]
+    - [node_succeeded, fetch, {value: F1}]
+    - [node_started, ok]
+    - [node_succeeded, ok, {value: "yes"}]
+    - [node_started, __end__]
+    - [node_succeeded, __end__, {value: {found: F1, answer: "yes"}}]

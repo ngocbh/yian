@@ -8,6 +8,8 @@ for the case's kind, and compares the results with the case's expectations.
 
 from __future__ import annotations
 
+from dataclasses import fields, is_dataclass
+import json
 import math
 import os
 from pathlib import Path
@@ -29,7 +31,7 @@ from yian.compose.helpers.isinstance_types import (
     resolve_isinstance_type,
 )
 from yian.compose.source.scalars import _BOOL, _FLOAT, _INT, _NULL
-from yian.diagnostics import Diagnostic
+from yian.diagnostics import Diagnostic, Failure, OriginRef
 from yian.expr import (
     constructor_names,
     eval_binding,
@@ -50,7 +52,7 @@ from yian.tools.errors import (
 )
 from yian.tools.function_tools import FunctionTool
 from yian.typesys.types import read_typedefs, type_for
-from yian.typesys.values import TypeCheckError, build_value_as
+from yian.typesys.values import FileRef, TypeCheckError, build_value_as
 
 _ROOT = Path(__file__).resolve().parent.parent / "conformance"
 _CASES = _ROOT / "cases"
@@ -161,8 +163,7 @@ _RULES = {
 }
 _RESERVED = [
     ("host", "models"), ("host", "steering"), ("host", "stop"), ("host", "memory"),
-    ("host", "skills"), ("expect", "memory"), ("expect", "trace"), ("expect", "events"),
-    ("expect", "stream"),
+    ("host", "skills"), ("expect", "memory"),
 ]
 # Keys holding text that is not a case value: no codec form, no number checks.
 _TEXT_KEYS = {"flow", "python_flow", "other", "files", "stdin"}
@@ -658,6 +659,135 @@ def _failure(failure, flow) -> dict:
     return {**_diagnostic(flow.diagnose(failure)), "node": failure.node_id}
 
 
+def _data(value: object, flow) -> object:
+    """Return `value` in data form.
+
+    Dataclasses become mappings of their fields, failures the failure form, files
+    `{uri, mime, name}`, tuples lists and sets sorted lists.
+    """
+    if isinstance(value, Failure):
+        return _failure(value, flow)
+    if is_dataclass(value):
+        return {field.name: _data(getattr(value, field.name), flow) for field in fields(value)}
+    if isinstance(value, FileRef):
+        return value.model_dump(mode="json")
+    if isinstance(value, (list, tuple)):
+        return [_data(item, flow) for item in value]
+    if isinstance(value, (set, frozenset)):
+        return sorted(_data(item, flow) for item in value)
+    if isinstance(value, dict):
+        return {key: _data(item, flow) for key, item in value.items()}
+    return value
+
+
+def _fields(value: object, flow) -> dict:
+    """Return the data form of an event or stream chunk, without its null fields."""
+    return {key: item for key, item in _data(value, flow).items() if item is not None}
+
+
+def _event(event: object, flow) -> list:
+    """Return `event` as `[<EventName>]` or `[<EventName>, <data form>]`."""
+    data = _fields(event, flow)
+    return [type(event).__name__, data] if data else [type(event).__name__]
+
+
+# The README's trace table: record kind -> (the payload field naming the node, the payload
+# fields kept); `None` keeps every field.
+_TRACE = {
+    "run_started": (None, ("inputs", "learnable", "num_workers", "defaults",
+                           "effective_llm_by_static_path", "call_time_llm")),
+    "run_resumed": (None, ("retry_node_ids", "num_workers")),
+    "node_started": ("node_id", ()),
+    "node_step": ("node_id", ("step",)),
+    "node_succeeded": ("node_id", ("value", "commit_target", "forward_capture")),
+    "node_routed": ("node_id", ("handle", "terminal_failure", "forward_capture")),
+    "node_expanded": ("spawner_id", ("seed", "prune_ids", "forward_capture")),
+    "node_failed": ("failure", ("failure", "forward_capture")),
+    **dict.fromkeys(
+        ("memory_commit_requested", "memory_commit_succeeded", "memory_commit_failed"),
+        (None, ("memory", "commit_id", "attempt_id", "mutations", "failure")),
+    ),
+    **dict.fromkeys(("backward_started", "backward_ready", "backward_finished"), (None, None)),
+}
+_LEFT_OUT_WHEN_EMPTY = {"defaults", "effective_llm_by_static_path", "call_time_llm"}
+
+
+def _scrub(value: object) -> object:
+    """Return `value` without `cause_type` and `traceback`, each `_connection` cut to three fields.
+
+    Both apply at every depth; a `_connection` keeps `method`, `source` and `endpoint`.
+    """
+    if isinstance(value, list):
+        return [_scrub(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    return {
+        key: ({name: item[name] for name in ("method", "source", "endpoint") if name in item}
+              if key == "_connection" else _scrub(item))
+        for key, item in value.items() if key not in ("cause_type", "traceback")
+    }
+
+
+def _capture(capture: dict) -> dict:
+    """Return a `forward_capture` with each route's `value_json` text read as JSON."""
+    def route(node: dict | None) -> dict | None:
+        if node is None:
+            return None
+        return {**node, "value_json": None if node["value_json"] is None
+                else json.loads(node["value_json"]),
+                "children": [route(child) for child in node["children"]],
+                "snapshot": route(node["snapshot"])}
+
+    return {**capture, "route": route(capture["route"]),
+            "items": [{**item, "capture": _capture(item["capture"])}
+                      for item in capture["items"]]}
+
+
+def _trace(log_path: Path, flow) -> list:
+    """Return the run log at `log_path` projected to the README's trace."""
+    def failure(payload: dict) -> dict:
+        return _failure(Failure(payload["code"], payload["message"], payload["node_id"],
+                                tuple(OriginRef(origin["key"]) for origin in payload["trace"])),
+                        flow)
+
+    entries = []
+    lines = log_path.read_text(encoding="utf-8").splitlines() if log_path.exists() else []
+    for line in lines:
+        record = json.loads(line)
+        kind, payload = record["kind"], dict(record["payload"])
+        node_field, kept = _TRACE[kind]
+        node = payload[node_field] if node_field else None
+        if kind == "node_failed":
+            node = node["node_id"]
+        if kind == "run_started":
+            pool = payload["initial_pool"]
+            payload["inputs"] = pool["store"][pool["start_id"]]["value"]
+        if kind == "node_succeeded":
+            payload["value"] = payload["value"]["value"]
+            if payload["commit_target"] == node:
+                del payload["commit_target"]
+        # A memory record's `failure` is a memory operation failure, kept as recorded.
+        for key in ("failure", "terminal_failure"):
+            if kind.startswith("node_") and payload.get(key) is not None:
+                payload[key] = failure(payload[key])
+        if payload.get("forward_capture") is not None:
+            payload["forward_capture"] = _capture(payload["forward_capture"])
+        if kind == "node_step" and "retry_in" in payload["step"]:
+            payload["step"] = {**payload["step"], "retry_in": float(payload["step"]["retry_in"])}
+        # A backward failure's `cause` is a node failure when it has a `trace`.
+        backward = (payload.get("outcome") or {}).get("failure") or {}
+        if isinstance(backward.get("cause"), dict) and "trace" in backward["cause"]:
+            payload["outcome"] = {**payload["outcome"],
+                                  "failure": {**backward, "cause": failure(backward["cause"])}}
+        payload = _scrub({
+            key: value for key, value in payload.items()
+            if (kept is None or key in kept) and value is not None
+            and not (key in _LEFT_OUT_WHEN_EMPTY and not value)
+        })
+        entries.append([kind, node, payload] if payload else [kind, node])
+    return entries
+
+
 def _compare_output(result: RunResult, flow, expected: dict) -> None:
     """Fail the case unless `result` is `expect.output`: the output by value, or the failure."""
     if result.status == "succeeded":
@@ -668,7 +798,10 @@ def _compare_output(result: RunResult, flow, expected: dict) -> None:
 
 
 def _run_run(case: dict, case_dir: Path) -> None:
-    """Run the flow on the case's host; compare `raises` or `output`, then `tool_calls`."""
+    """Run the flow on the case's host; compare `raises` or `output`, then the rest.
+
+    The rest is the trace, events, stream and `tool_calls`, each when the case expects it.
+    """
     flow = _load(case["flow"], case_dir)
     expect = case["expect"]
     events, chunks = [], []
@@ -689,6 +822,14 @@ def _run_run(case: dict, case_dir: Path) -> None:
             result = start()
             check()
             _compare_output(result, flow, expect["output"])
+    if "trace" in expect:
+        _compare("trace", _trace(case_dir / "run.jsonl", flow), expect["trace"])
+    if "events" in expect:
+        _compare("events", [_event(event, flow) for event in events], expect["events"],
+                 by_value=True)
+    if "stream" in expect:
+        _compare("stream", [_fields(chunk, flow) for chunk in chunks], expect["stream"],
+                 by_value=True)
     if "tool_calls" in expect:
         _compare("tool_calls", calls, expect["tool_calls"], by_value=True)
 

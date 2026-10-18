@@ -1,0 +1,60 @@
+kind: run
+flow: |
+  id: tool-failure-before-agent
+  name: tool_failure_before_agent
+  input:
+    x: !str
+  nodes:
+    check:
+      kind: tool
+      tool_id: probe
+      input:
+        x: ${input.x}
+    write:
+      kind: agent
+      input:
+        found: ${check.output}
+      output: str
+      llm_config: {provider: openai, model: gpt-5.5}
+      prompt: "Write about ${found}."
+  output: ${write.output}
+inputs: {x: a}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    probe:
+      parameters:
+        type: object
+        properties: {x: {type: string}}
+        required: [x]
+      results:
+        - raise: {class: PermanentToolError, message: bad x}
+expect:
+  output:
+    status: failed
+    failure:
+      code: node.execute
+      message: bad x
+      node: check
+      frames: [{label: flow.yaml, range: [6, 3, 6, 8]}]
+  trace:
+    - - run_started
+      - null
+      - inputs: {x: a}
+        learnable: false
+        num_workers: 0
+        effective_llm_by_static_path:
+          write:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: missing, endpoint: "https://api.openai.com/v1"}
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {x: a}}]
+    - [node_started, check]
+    - - node_failed
+      - check
+      - failure:
+          code: node.execute
+          message: bad x
+          node: check
+          frames: [{label: flow.yaml, range: [6, 3, 6, 8]}]

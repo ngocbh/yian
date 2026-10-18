@@ -31,3 +31,20 @@ inputs: {name: Ada}
 run: {run_id: r1, num_workers: 0}
 expect:
   output: {status: succeeded, output: hi Ada}
+  trace:
+    - [run_started, null, {inputs: {name: Ada}, learnable: false, num_workers: 0}]
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {name: Ada}}]
+    - [node_started, greet]
+    - [node_succeeded, greet, {value: hi Ada}]
+    - [node_started, __end__]
+    - [node_succeeded, __end__, {value: hi Ada}]
+  events:
+    - [RunStarted]
+    - [NodeStarted, {node_id: __start__}]
+    - [NodeSucceeded, {node_id: __start__, output: {name: Ada}}]
+    - [NodeStarted, {node_id: greet}]
+    - [NodeSucceeded, {node_id: greet, output: hi Ada}]
+    - [NodeStarted, {node_id: __end__}]
+    - [NodeSucceeded, {node_id: __end__, output: hi Ada}]
+    - [RunSucceeded, {output: hi Ada}]

@@ -195,10 +195,11 @@ export class OpenAIResponses implements SseProtocol {
    * Deltas stream as they arrive; each `output_item.done` gives one `PartDone` per part of the
    * done item. An item that never got its done event takes its parts from the terminal event's
    * `output` at its output index; when it is absent there, its deltas build its parts. Items of
-   * that `output` the stream never mentioned give their parts after all the others. Part
-   * indexes are dense, in the order each (output index, content index) is first seen. An added
-   * item's own text or arguments are ignored, since the deltas that follow carry them. Unknown
-   * events are ignored, and a `[DONE]` sentinel ends the stream.
+   * that `output` the stream never mentioned, by output index, item id or call id, give their
+   * parts after all the others. Part indexes are dense, in the order each (output index,
+   * content index) is first seen. An added item's own text or arguments are ignored, since the
+   * deltas that follow carry them. Unknown events are ignored, and a `[DONE]` sentinel ends the
+   * stream.
    *
    * @param frames The reply's server-sent events, in order.
    * @returns The deltas and parts, then `UsageReport` (when the reply has usage) and `Finish` on
@@ -221,6 +222,8 @@ export class OpenAIResponses implements SseProtocol {
     };
     const opened = new Map<number, JsonObject>();
     const finished = new Set<number>();
+    // The item ids and call ids of the items the stream opened or finished.
+    const seenIds = new Set<string>();
     const lastSummary = new Map<number, JsonValue | undefined>();
     // Refusal text by output index, then content index.
     const refusals = new Map<number, Map<number, string>>();
@@ -261,6 +264,7 @@ export class OpenAIResponses implements SseProtocol {
         const item = data["item"];
         if (!isPlainObject(item)) continue;
         opened.set(outputIndex, item);
+        for (const id of itemIds(item)) seenIds.add(id);
         if (item["type"] === "function_call") {
           sawCalls = true;
           yield new ToolCallDelta({
@@ -302,6 +306,7 @@ export class OpenAIResponses implements SseProtocol {
         const item = data["item"];
         if (!isPlainObject(item)) continue;
         finished.add(outputIndex);
+        for (const id of itemIds(item)) seenIds.add(id);
         if (item["type"] === "function_call") sawCalls = true;
         for (const [itemContentIndex, part] of itemParts(item, this.#key)) {
           yield new PartDone(index(outputIndex, itemContentIndex), part);
@@ -313,8 +318,13 @@ export class OpenAIResponses implements SseProtocol {
         const output = Array.isArray(rawOutput) ? rawOutput : [];
         const started = new Set([...opened.keys(), ...indexes.keys()]);
         const unfinished = [...started].filter((each) => !finished.has(each)).sort((a, b) => a - b);
-        // Output items the stream never mentioned still belong to the reply, after the others.
-        const unseen = [...output.keys()].filter((each) => !finished.has(each) && !started.has(each));
+        // Output items the stream never mentioned still belong to the reply, after the others. A
+        // gateway's output indexes may not be positions in `output`, so an item is matched by
+        // its ids too.
+        const unseen = [...output.keys()].filter(
+          (each) =>
+            !finished.has(each) && !started.has(each) && !itemIds(output[each]!).some((id) => seenIds.has(id)),
+        );
         for (const each of [...unfinished, ...unseen]) {
           if (0 <= each && each < output.length) {
             for (const [itemContentIndex, part] of itemParts(output[each]!, this.#key)) {
@@ -469,7 +479,8 @@ export class OpenAIResponses implements SseProtocol {
    * Read an assistant message's replay records, calling `onReplayDegraded` when one can't be used.
    *
    * The whole message falls back to its neutral fields because the API refuses a replayed call
-   * or message item whose paired reasoning item is missing.
+   * or message item whose paired reasoning item is missing; so does a message holding reasoning
+   * without a payload, or (on the subscription) without encrypted content.
    *
    * @returns Each part's record fields, `null` for a part without a payload; all `null` when the
    *   message renders neutrally.
@@ -478,11 +489,14 @@ export class OpenAIResponses implements SseProtocol {
   #records(message: Message): (JsonObject | null)[] {
     const records: (JsonObject | null)[] = [];
     let reason: ReplayDegradedReason | null = null;
-    let unencrypted = false;
+    // Set by reasoning that can't be replayed with no record at fault: no payload, or (on the
+    // subscription) no encrypted content.
+    let unpaired = false;
     for (const part of message.parts) {
       if (part instanceof MediaPart) throw new TypeError(NO_MEDIA);
       if (part instanceof ToolResultPart) throw new TypeError(wrongPart(part, message.role));
       if (part.providerPayload === null) {
+        if (part instanceof ReasoningPart) unpaired = true;
         records.push(null);
         continue;
       }
@@ -494,7 +508,7 @@ export class OpenAIResponses implements SseProtocol {
       }
       records.push(read.fields);
       if (this.subscription && part instanceof ReasoningPart && !encrypted(read.fields["item"] as JsonObject)) {
-        unencrypted = true;
+        unpaired = true;
       }
     }
     const neutral = message.parts.map(() => null);
@@ -502,9 +516,9 @@ export class OpenAIResponses implements SseProtocol {
       this.#onReplayDegraded?.(reason);
       return neutral;
     }
-    // Without stored state only encrypted reasoning can be replayed; that is no record mismatch,
-    // so nothing is signalled.
-    return unencrypted ? neutral : records;
+    // Reasoning without a payload can't be replayed, nor (without stored state) can unencrypted
+    // reasoning; that is no record mismatch, so nothing is signalled.
+    return unpaired ? neutral : records;
   }
 
   /**
@@ -576,6 +590,13 @@ function eventData(data: string): JsonValue {
     if (error instanceof JSONDecodeError) throw new ProviderError("protocol", "invalid JSON in openai stream event");
     throw error;
   }
+}
+
+/** Return an output item's string `id`, and its string `call_id` when it is a function call. */
+function itemIds(item: JsonValue): string[] {
+  if (!isPlainObject(item)) return [];
+  const ids = [item["id"], item["type"] === "function_call" ? item["call_id"] : undefined];
+  return ids.filter((id) => typeof id === "string");
 }
 
 /** Return `value` when it is a string, else `null`. */

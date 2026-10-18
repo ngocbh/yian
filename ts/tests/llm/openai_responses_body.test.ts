@@ -511,6 +511,18 @@ describe("assistant messages: replay records", () => {
     expect(degraded([bare])).toEqual([NEUTRAL, []]);
   });
 
+  for (const subscription of [false, true]) {
+    test(`reasoning without a payload beside usable records renders the message neutrally without a signal (subscription: ${subscription})`, () => {
+      const message = assistant(
+        new ReasoningPart("r"),
+        new TextPart("Hello.", record(TEXT_FIELDS)),
+        new RefusalPart("No.", record({ id: "msg_1" })),
+        new ToolCallPart({ id: "call_1", name: "double", arguments: { value: 3n }, providerPayload: record({ item: CALL_ITEM }) }),
+      );
+      expect(degraded([message], { subscription })).toEqual([NEUTRAL, []]);
+    });
+  }
+
   test("without a callback an unusable record still renders neutrally", () => {
     expect(replayed([mixed({ text: record(TEXT_FIELDS, { ...KEY, model: "gpt-5" }) })])).toEqual(NEUTRAL);
   });

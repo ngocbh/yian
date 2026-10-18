@@ -383,6 +383,27 @@ describe("deltas and parts", () => {
     expect(events.at(-1)).toEqual(finish("tool_calls"));
   });
 
+  test("a terminal output item the stream finished under another output index is not repeated", async () => {
+    const events = await parse([done(1, CALL), completed([CALL])]);
+    expect(partsDone(events)).toEqual([new PartDone(0, CALL_PART)]);
+    expect((await collect(events)).message.toolCalls()).toEqual([CALL_PART]);
+    expect(events.at(-1)).toEqual(finish("tool_calls"));
+  });
+
+  test("a terminal output item matching a streamed item's id or call id is not repeated", async () => {
+    const { id: _, ...withoutId } = CALL;
+    const cases: [JsonObject[], JsonObject][] = [
+      // Matched by call id: the streamed item had no id.
+      [[done(1, withoutId)], CALL],
+      // Matched by item id: the item was opened but never finished, so its deltas build it.
+      [[added(1, { ...CALL, arguments: "" }), argumentsDelta(1, '{"value": 3}')], CALL],
+    ];
+    for (const [streamed, item] of cases) {
+      const events = await parse([...streamed, completed([item])]);
+      expect((await collect(events)).message.toolCalls()).toHaveLength(1);
+    }
+  });
+
   test("an added reasoning item takes its slot before any delta", async () => {
     const events = await parse([
       added(0, { ...REASONING, summary: [] }),

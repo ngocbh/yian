@@ -124,7 +124,10 @@ The same rules apply to keys, to input and output defaults, to a tagged value
 (`!bool yes`), and to a bare `call(...)` argument. A `yes`/`no`/`on`/`off` where a
 `bool` is expected fails with the fix, such as "`yes` is text; write `true`": in a
 tagged binding or default, a call input, a value entry, `steerable:`, or `llm_config`
-`inherit:`, including inside a list or record.
+`inherit:`, when the word is the whole value.
+
+Changed: a `yes`/`no`/`on`/`off` inside a list or record (`!list(bool) [true, no]`) used
+to get the fix too. It still fails, now without the fix; write `true`/`false` there.
 
 Changed (TS yian): only a bare word gets the fix; a word inside a list or record, such as
 `[yes, no]` for a `list(bool)`, gets the plain type error.

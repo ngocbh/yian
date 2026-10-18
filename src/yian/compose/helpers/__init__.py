@@ -60,8 +60,8 @@ Modules:
                   of an `env:` mapping, located at its key, which also rejects a value
                   that holds itself through a recursive alias.
   - `yaml_words`  `former_boolean_fix`: the boolean a YAML 1.1 boolean spelling (`yes`,
-                  `off`) meant, and the fix a load error shows when one reaches a `bool`
-                  that the boolean fits, at any depth of a list or record. `yaml_read_as`:
+                  `off`) meant, and the fix a load error shows when one is written bare
+                  where a `bool` that the boolean fits is expected. `yaml_read_as`:
                   what YAML read a non-text value as, for the non-text key and text-field
                   errors.
 

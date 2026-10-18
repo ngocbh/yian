@@ -51,21 +51,18 @@ def test_fix_is_offered_only_when_the_boolean_fits_the_declared_type(type_text, 
 
 
 @pytest.mark.parametrize(
-    ("type_text", "value", "expected"),
+    ("type_text", "value"),
     [
-        ("list(bool)", ["yes", "no"], (True, "`yes` is text; write `true`")),
-        ("list(bool)", [True, "Off"], (False, "`Off` is text; write `false`")),
-        ("Rec", {"ok": "on", "name": "yes"}, (True, "`on` is text; write `true`")),
-        ("list(str)", ["yes"], None),
-        ("list(bool)", ["maybe"], None),
-        ("list(bool)", [1], None),
-        ("Rec", {"ok": True, "name": 3}, None),
+        ("list(bool)", ["yes", "no"]),
+        ("list(bool)", [True, "Off"]),
+        ("Rec", {"ok": "on", "name": "yes"}),
     ],
 )
-def test_fix_finds_the_rejected_word_inside_a_list_or_record(type_text, value, expected):
+def test_a_list_or_record_gets_no_fix(type_text, value):
     registry = {"Rec": RecordDef(fields={"ok": "bool", "name": "str"})}
     declared = type_for(type_text, registry)
-    assert former_boolean_fix(value, declared) == expected
+    assert former_boolean_fix(value, declared) is None
+    assert former_boolean_fix(value) is None
 
 
 @pytest.mark.parametrize(

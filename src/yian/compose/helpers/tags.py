@@ -877,9 +877,9 @@ class _TaggedValueReader:
     ) -> str:
         """Explain why a tagged literal does not fit, suggesting a rewrite when one helps.
 
-        A former YAML boolean word such as `yes`, now text, gets the `true`/`false` to
-        write when that boolean fits, at any depth of a list or record; a non-string
-        scalar whose text would fit gets the quoted form.
+        A former YAML boolean word such as `yes`, now text, written bare gets the
+        `true`/`false` to write when that boolean fits; a non-string scalar whose text
+        would fit gets the quoted form.
         """
         label = path_label(self.label, path)
         tag = cursor.tag

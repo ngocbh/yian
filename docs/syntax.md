@@ -155,10 +155,10 @@ Changed (TS yian): `.inf`, `+.inf`, and `-.inf` (also `.Inf`, `.INF`) read as fl
 them, wherever they are written: `.nan` gives `NaN is not a yian value; quote it to keep it
 as text`, and `1e400` gives `number is too large for a float; quote it to keep it as text`.
 YAML syntax follows YAML 1.2 as the `yaml` package reads it, so an anchor may be defined
-again, an alias name may contain `:` (`{*k: 1}` is the alias `k:`; write `{*k : 1}`), and a
-lone CR is a line break. In a YAML text yian reads on its own, such as a skill's frontmatter,
-`! 5` (the bare tag) is the text `"5"`, and every key must be text, as in a flow file (see
-below).
+again, an alias name may contain `:` (`{*k: 1}` is the alias `k:`; write `{*k : 1}`), and, as
+in YAML 1.2, a lone CR is a line break. In a YAML text yian reads on its own, such as a skill's
+frontmatter, `! 5` (the bare tag) is the text `"5"`, and every key must be text, as in a flow
+file (see below).
 
 A flow file's YAML nests at most 200 levels (`YIAN_MAX_YAML_NESTING` can lower it; see
 [Defaults and limits](defaults.md)); each mapping and list is a level, counting the
@@ -1098,8 +1098,11 @@ An AGENT's `variables:` take the same form, and every variable needs a value:
   (`{action: 'Literal(buy, sell)'}`) or use block style.
 
 Changed (TS yian): a tag ends at `,`, `[`, `]`, `{`, or `}` (YAML 1.2), so no space is
-needed before them: `{qty: !int, note: !str}` tags two empty values. A tag written with one
-of them inside (`!Union(Buy, Sell)`, `!list[str]`) fails with:
+needed before them: `{qty: !int, note: !str}` tags two empty values. This replaces the
+bullet about putting a space before them and the `!Union(Buy,` message above. Inside `{...}`
+or `[...]`, a `,` in a tag ends it and starts the next entry (`{d: !Union(Buy, Sell) x}` reads
+the tag `!Union(Buy`). Elsewhere, a tag written with one of them inside (`!Union(Buy, Sell)`,
+`!list[str]`) fails with:
 
 ```text
 invalid YAML: Tags and anchors must be separated from the next token by white space

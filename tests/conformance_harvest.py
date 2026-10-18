@@ -10,10 +10,15 @@ differs, the plain one is its `python_expect` and the rules whose shims change i
 A rule no shim can follow (huge ints, an int in a float slot, infinity, dates, YAML, structured
 model calls, CODE, some text rules) is added to `rules` by what the case holds, with
 `python_expect` even when equal, and flagged `needs TS expect: <rule>`: its TS expectation is
-written by hand. It is written as a case file under `<out>/cases/<group>/<name>.yaml`,
-deduplicated by content. Run it with:
+written by hand. Before the replays, its CODE takes its TS form, keeping the Python form in
+`python_flow` and `python_files`: references to ported modules point at `conformance/fixtures/`,
+and inline bodies take the translations `--harvest-code FILE` gives. It is written as a case
+file under `<out>/cases/<group>/<name>.yaml`, deduplicated by content. Run it with:
 
     PYTHONPATH=src python -m pytest -p tests.conformance_harvest --harvest-out DIR tests
+
+`DIR/worklist.yaml` lists what is left for hand work: the CODE bodies to translate, the
+references to port, and the cases needing a TS expectation.
 
 Shards of the suite run one after another into one `DIR`: deduplication and reports are per
 process, so neither shards running at once nor `-n` (xdist) are supported.
@@ -56,7 +61,7 @@ from yian.expr.expressions import ResolveMode, eval_expr, evaluate_when_record
 from yian.expr.grammar import parse_expr
 from yian.expr.template import eval_binding, render_template_record
 from yian.nodes.agent import memory
-from yian.nodes.code.node import CodeNode
+from yian.nodes.code.node import _REFERENCE_RE, CodeNode
 from yian.nodes.tool import node as tool_node
 from yian.run import RunResult, resume_flow, run_flow
 from yian.typesys import values as typesys_values
@@ -1251,15 +1256,20 @@ class _Harvest:
         self.factory = llm_clients.model_from_config
         self.jitter = tool_node._jitter
         self.backward = RunResult.backward
+        # The `--harvest-code` table: TS bodies by the key of the Python body each replaces.
+        self.code: dict[str, str] = {}
 
 
 def _new_report(path: str) -> dict:
     """Return an empty report for the test file `path`.
 
-    Its `skips` list the tests by reason, its `flags` the cases written by flag.
+    Its `skips` list the tests by reason, its `flags` the cases written by flag, its `code` the
+    Python CODE bodies left untranslated by key, with their text and cases, and its `references`
+    the cases of each CODE reference left unported.
     """
     return {"file": path, "tests": {"passed": 0, "failed": 0, "skipped": 0}, "records": {},
-            "written": {}, "duplicates": 0, "skips": {}, "flags": {}}
+            "written": {}, "duplicates": 0, "skips": {}, "flags": {}, "code": {},
+            "references": {}}
 
 
 def _machine_paths(state: _Harvest) -> set:
@@ -2066,6 +2076,104 @@ def _code_scalars(text: str) -> list[_CodeScalar]:
     return found
 
 
+# The Python modules whose CODE functions have TS ports, by their file in `conformance/fixtures/`.
+_FIXTURE_MODULES = {"tests.seeds.fns": "seeds.ts"}
+
+
+@functools.cache
+def _exported(file: str) -> frozenset[str]:
+    """Return the names of the functions `conformance/fixtures/<file>` exports."""
+    text = (runner._FIXTURES / file).read_text(encoding="utf-8")
+    return frozenset(re.findall(r"\bexport (?:async )?function ([A-Za-z_]\w*)\b", text))
+
+
+def _code_key(body: str) -> str:
+    """Return the key of a Python CODE body in the translation table and the worklist."""
+    return _digest(body)[:16]
+
+
+def _fitted(span: str, body: str) -> str | None:
+    """Return the TS `body` as the text replacing a Python body's scalar text `span`, or None.
+
+    A `|` block keeps its header line and content indentation and is padded with empty lines to
+    the span's line count; a one-line scalar takes a one-line body, double-quoted. None when the
+    body doesn't fit: it has more lines, or the scalar is a one-line one and the body isn't, or
+    the scalar is another multi-line one.
+    """
+    lines = body.rstrip("\n").split("\n")
+    if "\n" not in span:
+        return json.dumps(lines[0], ensure_ascii=False) if len(lines) == 1 else None
+    header, _, content = span.partition("\n")
+    indents = [line[:len(line) - len(line.lstrip(" "))]
+               for line in content.split("\n") if line.strip()]
+    # The span of a block that isn't at the end of the text ends with its last line's break.
+    pad = span.count("\n") - len(lines)
+    if not header.startswith("|") or not indents or pad < span.endswith("\n"):
+        return None
+    return header + "".join(f"\n{indents[0]}{line}" if line else "\n" for line in lines) + (
+        "\n" * pad)
+
+
+def _translate(text: str, depth: int, table: dict[str, str]) -> tuple[str, dict, set]:
+    """Return a flow text with its CODE in TS form, and the bodies and references left.
+
+    `depth` is how many directories below the case directory the text's file sits. A reference
+    into `_FIXTURE_MODULES` to a function the fixture exports becomes `./fixtures/<file>:<name>`
+    (`../` once per level of `depth`), and an inline body whose key is in `table` takes the TS
+    body there, when it fits (`_fitted`); no line below either moves. The bodies left are by
+    key, the references left as written.
+    """
+    untranslated, unported, done = {}, set(), set()
+    # From the end, so each span's indexes still hold.
+    for scalar in reversed(_code_scalars(text)):
+        # An alias's node is found again at the same span.
+        if scalar.start in done:
+            continue
+        done.add(scalar.start)
+        span = text[scalar.start:scalar.end]
+        if _REFERENCE_RE.fullmatch(scalar.value):
+            module, _, name = scalar.value.partition(":")
+            file = _FIXTURE_MODULES.get(module)
+            if file is None or name not in _exported(file):
+                unported.add(scalar.value)
+                continue
+            # A reference written as a block keeps the block's lines.
+            new = f"{'../' * depth or './'}fixtures/{file}:{name}" + "\n" * span.count("\n")
+        else:
+            key = _code_key(scalar.value)
+            new = _fitted(span, table[key]) if key in table else None
+            if new is None:
+                untranslated[key] = scalar.value
+                continue
+        text = text[:scalar.start] + new + text[scalar.end:]
+    return text, untranslated, unported
+
+
+def _ts_code(case: dict, table: dict[str, str]) -> tuple[dict, dict, set]:
+    """Return `case` with the CODE of its flow and files translated (`_translate`), and what's left.
+
+    A `flow` or `files` the translation changes keeps its Python form in `python_flow` or
+    `python_files`. What's left is the bodies left untranslated, by key, and the references.
+    """
+    untranslated, unported = {}, set()
+
+    def translate(text: str, depth: int) -> str:
+        text, bodies, references = _translate(text, depth, table)
+        untranslated.update(bodies)
+        unported.update(references)
+        return text
+
+    if "flow" in case:
+        flow = translate(case["flow"], 0)
+        if flow != case["flow"]:
+            case = case | {"flow": flow, "python_flow": case["flow"]}
+    if "files" in case:
+        files = {path: translate(text, path.count("/")) for path, text in case["files"].items()}
+        if files != case["files"]:
+            case = case | {"files": files, "python_files": case["files"]}
+    return case, untranslated, unported
+
+
 _INFINITY_TEXTS = ("non-finite number", "numbers must be finite", "int is too large for float",
                    "Result too large", "Numerical result out of range",
                    "Input should be a finite number")
@@ -2180,8 +2288,13 @@ def _unshimmable(case: dict, py: dict, notes: frozenset) -> set[str]:
     return rules
 
 
-def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list]:
-    """Return a recorded call's group, case file text (its `expect` from the runner) and flags.
+def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list, dict, set]:
+    """Return a recorded call's group, case file text, flags, and CODE bodies and references left.
+
+    The case's `expect` is from the runner. First its flow and files take their TS CODE
+    (`_ts_code`), and the replays run the Python form. A body with no translation is flagged
+    `code: untranslated`, one whose translation doesn't fit `code: translation doesn't fit`, and
+    a reference left `code: unported reference`; the bodies left are returned by key.
 
     A pooled run is replayed three times, and its output or error, and its backward statuses,
     must agree in each. The call is then replayed as many times with every shim on, where they
@@ -2205,6 +2318,7 @@ def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list]:
         raise _Skip("model: a call didn't end during its run")
     case, result = _completed(call)
     _scan_secrets(case, call.secrets)
+    case, untranslated, unported = _ts_code(case, state.code)
     is_run = case["kind"] in ("run", "backward")
     pooled = is_run and case.get("run", {}).get("num_workers", _RUN_DEFAULTS["num_workers"]) != 0
     times = 3 if pooled else 1
@@ -2224,6 +2338,12 @@ def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list]:
     # Before a pooled result or a request is dropped: either may hold a rule's signal.
     unshimmable = _unshimmable(case, py, notes)
     flags = []
+    if untranslated.keys() - state.code.keys():
+        flags.append("code: untranslated")
+    if untranslated.keys() & state.code.keys():
+        flags.append("code: translation doesn't fit")
+    if unported:
+        flags.append("code: unported reference")
     if pooled:
         # When a pooled run fails, siblings racing the failure make its trace depend on timing
         # across processes, even when three replays in one process agree.
@@ -2260,16 +2380,17 @@ def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list]:
     text = _written(written)
     if any(path in text for path in _machine_paths(state)):
         raise _Skip("machine path")
-    return _group(case), text, flags
+    return _group(case), text, flags, untranslated, unported
 
 
 def _write(state: _Harvest, report: dict, call: _Call, path: str, test_id: str,
            number: int) -> None:
     """Write a recorded call's case as the test's `number`th record, counting it in `report`.
 
-    A case written is listed under each of its flags; a duplicate's are its holder's.
+    A case written is listed under each of its flags, CODE bodies left untranslated and
+    references left unported; a duplicate's are its holder's.
     """
-    group, text, flags = _expected(state, call)
+    group, text, flags, untranslated, unported = _expected(state, call)
     name = _case_name(path, test_id, number)
     done = state.index.write(group, name, text)
     if done == "collision":
@@ -2283,6 +2404,11 @@ def _write(state: _Harvest, report: dict, call: _Call, path: str, test_id: str,
     report["written"][group] = report["written"].get(group, 0) + 1
     for flag in flags:
         report["flags"].setdefault(flag, []).append(f"{group}/{name}")
+    for key, body in untranslated.items():
+        report["code"].setdefault(key, {"python": body, "cases": []})["cases"].append(
+            f"{group}/{name}")
+    for reference in sorted(unported):
+        report["references"].setdefault(reference, []).append(f"{group}/{name}")
 
 
 def _end_test(state: _Harvest) -> _Test:
@@ -2342,9 +2468,26 @@ def _finish(state: _Harvest, item: pytest.Item) -> None:
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    """Add `--harvest-out DIR`, which turns the harvest on."""
+    """Add `--harvest-out DIR`, which turns the harvest on, and `--harvest-code FILE`."""
     parser.addoption("--harvest-out", metavar="DIR",
                      help="record conformance case candidates under DIR")
+    parser.addoption("--harvest-code", metavar="FILE",
+                     help="translate the CODE bodies keyed in FILE (YAML: key to TS body)")
+
+
+def _code_table(path: str) -> dict[str, str]:
+    """Return the `--harvest-code` table at `path`: a YAML mapping of body key to TS body.
+
+    Raises `pytest.UsageError` for a file that can't be read or holds anything else.
+    """
+    try:
+        table = yaml.load(Path(path).read_text(encoding="utf-8"), Loader=runner._CaseLoader)
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise pytest.UsageError(f"--harvest-code {path}: {exc}") from None
+    if not isinstance(table, dict) or not all(
+            isinstance(key, str) and isinstance(body, str) for key, body in table.items()):
+        raise pytest.UsageError(f"--harvest-code {path}: not a mapping of key to TS body")
+    return table
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -2352,8 +2495,8 @@ def pytest_configure(config: pytest.Config) -> None:
 
     `RunResult.backward` is wrapped. The model factory and the TOOL backoff draw are wrapped,
     and so is each one a test assigns; the runner's seats name each model call's node and
-    consumer. `-n` is refused, and the temporary files a killed harvest left under `<out>` are
-    removed.
+    consumer. `--harvest-code` is read. `-n` is refused, and the temporary files a killed harvest
+    left under `<out>` are removed.
     """
     global _STATE
     out = config.getoption("harvest_out")
@@ -2361,10 +2504,13 @@ def pytest_configure(config: pytest.Config) -> None:
         return
     if config.pluginmanager.hasplugin("xdist") and config.getoption("numprocesses", None):
         raise pytest.UsageError("--harvest-out doesn't support -n: run shards one after another")
+    code = config.getoption("harvest_code")
+    table = _code_table(code) if code else {}
     # A harvest killed between a write and its rename leaves the temporary file.
     for leftover in [*Path(out).glob("cases/*/*.yaml.tmp"), *Path(out).glob("report/*.json.tmp")]:
         leftover.unlink()
     _STATE = _Harvest(config, Path(out))
+    _STATE.code = table
     entries = {
         "eval_expr": (eval_expr, _record_eval_expr),
         "eval_binding": (eval_binding, _record_eval_binding),
@@ -2444,13 +2590,25 @@ def pytest_terminal_summary(terminalreporter) -> None:
     """Add up every report under `<out>/report`: tests, cases written, duplicates, flags, skips.
 
     A line counts the files this run harvested but didn't report, as its selection narrowed them.
+    `<out>/worklist.yaml` is rewritten from the reports: the CODE bodies left untranslated by
+    key (`code`), the references left unported (`references`), and the cases flagged
+    `needs TS expect: <reason>` by reason (`expect`); a line counts each.
     """
     if _STATE is None:
         return
     reports = [json.loads(path.read_text(encoding="utf-8"))
                for path in sorted((_STATE.out / "report").glob("*.json"))]
     tests, written, flags, skips, duplicates = Counter(), Counter(), Counter(), Counter(), 0
+    code, references, expect = {}, {}, {}
     for report in reports:
+        for key, entry in report["code"].items():
+            code.setdefault(key, {"python": entry["python"], "cases": []})["cases"] += (
+                entry["cases"])
+        for reference, names in report["references"].items():
+            references.setdefault(reference, []).extend(names)
+        for flag, names in report["flags"].items():
+            if flag.startswith("needs TS expect: "):
+                expect.setdefault(flag.removeprefix("needs TS expect: "), []).extend(names)
         tests.update(report["tests"])
         written.update(report["written"])
         duplicates += report["duplicates"]
@@ -2470,6 +2628,15 @@ def pytest_terminal_summary(terminalreporter) -> None:
         write("top skip reasons (tests):")
     for reason, n in skips.most_common(10):
         write(f"  {n:5}  {reason}")
+    worklist = {"code": dict(sorted(code.items())),
+                "references": dict(sorted(references.items())),
+                "expect": dict(sorted(expect.items()))}
+    _STATE.out.mkdir(parents=True, exist_ok=True)
+    (_STATE.out / "worklist.yaml").write_text(
+        yaml.dump(worklist, Dumper=_CaseDumper, sort_keys=False, allow_unicode=True,
+                  width=math.inf), encoding="utf-8")
+    write(f"worklist: code {len(code)}, references {len(references)}, "
+          f"expect {sum(len(names) for names in expect.values())}")
 
 
 @pytest.hookimpl(wrapper=True)

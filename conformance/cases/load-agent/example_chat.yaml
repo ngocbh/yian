@@ -1,5 +1,6 @@
 # From examples/chat.yaml.
-# A `loop` over a `defs:` body holding HUMAN_INPUT, a typed value entry, and a `case ... on` whose `else:` is an inline `call(...)` loads.
+# A `loop` over a `defs:` body holding HUMAN_INPUT, a typed value entry, and a `case ... on`
+# whose `else:` is an inline `call(...)` loads.
 kind: load
 flow: |
   # chat — a turn-by-turn conversational REPL (agent without tools; deterministic transcript).
@@ -88,7 +89,8 @@ flow: |
         exited: false                 # the `exited` entry sets true for exact /exit or /quit
       while: not exited               # a carried-field predicate
   output: ${chat.output.transcript}
-# The inline CODE body differs by language: `flow` has the TS body (`false`), this the Python one (`False`).
+# The inline CODE body differs by language: `flow` has the TS body (`false`),
+# this the Python one (`False`).
 python_flow: |
   # chat — a turn-by-turn conversational REPL (agent without tools; deterministic transcript).
   #

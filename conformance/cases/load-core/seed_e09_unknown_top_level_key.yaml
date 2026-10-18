@@ -1,6 +1,6 @@
 # From tests/seeds/errors/e09-unknown-top-level-key.yaml.
-# An unknown top-level key fails at the key, listing the allowed keys as authored (`input`, `output`).
-# The seed's line-14 comment lists `inputs`/`outputs`; it predates #747 and is kept verbatim.
+# An unknown top-level key fails at the key, listing allowed keys as authored (`input`, `output`).
+# The seed's line-14 comment names the retired `inputs`/`outputs`; flow text stays verbatim.
 kind: load
 flow: |
   # e09 — unknown top-level section key (strict schema, extra='forbid').

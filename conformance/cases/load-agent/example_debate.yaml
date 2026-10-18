@@ -1,5 +1,5 @@
 # From examples/debate.yaml.
-# A diamond of four AGENTs (fan-out to two parallel nodes, then fan-in) inferred from bindings loads.
+# A four-AGENT diamond (fan-out to two parallel nodes, then fan-in) inferred from bindings loads.
 kind: load
 flow: |
   # debate — frame a question, argue both sides IN PARALLEL, then decide.

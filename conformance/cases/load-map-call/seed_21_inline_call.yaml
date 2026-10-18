@@ -48,7 +48,7 @@ flow: |
         ${news}
 
   output: ${summary.output}
-# The CODE reference names a Python function; `flow` names its TS port.
+# The CODE reference differs by language: `flow` names the TS function, this the Python one.
 python_flow: |
   # 21 — inline call(f, ...) directive: a flow call written as a binding's whole value.
   #

@@ -49,7 +49,7 @@ flow: |
         topic: ${input.topic}
 
   output: ${brief.output}
-# The CODE reference names a Python function; `flow` names its TS port.
+# The CODE reference differs by language: `flow` names the TS function, this the Python one.
 python_flow: |
   # 20 — CALL + defs: an in-file callable (a multi-node sub-flow).
   #

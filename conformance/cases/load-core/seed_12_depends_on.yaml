@@ -47,7 +47,7 @@ flow: |
       prompt: "Write a neutral one-line note on ${topic} given recent closes ${values}. No advice."
 
   output: ${note.output}
-# The CODE references differ by language: `flow` names the TS functions, this the Python ones.
+# The CODE references differ by language: `flow` names the TS functions, these the Python ones.
 python_flow: |
   # 12 — Explicit run-ordering with depends_on / runs_after.
   #

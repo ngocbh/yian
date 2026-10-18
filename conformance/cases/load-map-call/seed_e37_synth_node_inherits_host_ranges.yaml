@@ -1,5 +1,6 @@
 # From tests/seeds/errors/e37-synth-node-inherits-host-ranges.yaml.
-# A dangling reference in an inline `call(...)` argument is named by the directive and located at the binding it is written in.
+# A dangling reference in an inline `call(...)` argument is named by the directive and located
+# at the binding it is written in.
 kind: load
 flow: |
   # e37 — a SYNTHESIZED node's caret must resolve to its OWN source, not the host's. COMPILE:
@@ -49,7 +50,7 @@ flow: |
             news: list(str)
       output: ${fetch.output.news}
   output: ${summary.output}
-# The CODE reference names a Python function; `flow` names its TS port.
+# The CODE reference differs by language: `flow` names the TS function, this the Python one.
 python_flow: |
   # e37 — a SYNTHESIZED node's caret must resolve to its OWN source, not the host's. COMPILE:
   # "unresolved references". The synthesized call binding retains directive-owned provenance.

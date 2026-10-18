@@ -1,5 +1,5 @@
 # From tests/seeds/25-nested-suspension.yaml.
-# A `call` to a `defs:` callable holding a HUMAN_INPUT loads (the header's `review/approve` is stale: Python names the leaf `gate/approve`).
+# A `call` to a `defs:` callable holding a HUMAN_INPUT loads.
 kind: load
 flow: |
   # 25 — Nested interaction: a HUMAN_INPUT inside a called child.
@@ -49,7 +49,7 @@ flow: |
         action: ${input.action}
 
   output: ${gate.output}
-# The CODE reference names a Python function; `flow` names its TS port.
+# The CODE reference differs by language: `flow` names the TS function, this the Python one.
 python_flow: |
   # 25 — Nested interaction: a HUMAN_INPUT inside a called child.
   #

@@ -38,6 +38,8 @@ flow: |
         topic: ${score.output}      # ERROR: float bound to a str-typed callee input
 
   output: ${call.output}
+# `files` stores seed 03 as `research-one.yaml`, the name the flow's `uses:` gives; it stands in
+# for the child resolver Python's test uses.
 files:
   research-one.yaml: |
     # 03 — Single-topic research (a reusable child flow).
@@ -82,7 +84,8 @@ files:
     output:
       report: ${synth.output}
       asof:   ${input.as_of}
-# The child (seed 03) has a CODE reference that differs by language: `files` names the TS function, this the Python one.
+# The child's CODE reference differs by language: `files` names the TS function,
+# this the Python one.
 python_files:
   research-one.yaml: |
     # 03 — Single-topic research (a reusable child flow).

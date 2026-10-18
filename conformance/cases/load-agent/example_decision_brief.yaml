@@ -1,5 +1,6 @@
 # From examples/decision-brief.yaml.
-# Fan-out, fan-in to a Literal typedef, a `case ... on` with `else:`, a `|` join, a `:-` default and a flow assert load.
+# Fan-out, fan-in to a Literal typedef, a `case ... on` with `else:`, a `|` join, a `:-` default
+# and a flow assert load.
 kind: load
 flow: |
   # decision-brief — a realistic multi-stage flow (fan-out → synth → route → finalize).

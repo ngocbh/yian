@@ -96,7 +96,8 @@ files:
     output:
       report: ${synth.output}
       asof:   ${input.as_of}
-# The child's CODE reference differs by language: `files` names the TS function, this the Python one.
+# The child's CODE reference differs by language: `files` names the TS function,
+# this the Python one.
 python_files:
   03-research-one.yaml: |
     # 03 — Single-topic research (a reusable child flow).

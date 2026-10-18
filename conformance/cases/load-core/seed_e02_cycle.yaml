@@ -1,7 +1,7 @@
 # From tests/seeds/errors/e02-cycle.yaml.
 # Two nodes that read each other fail as a cycle: one frame per node header, one note per edge.
-# The message shows the node list as a value: JSON text in TS, a repr in Python.
 kind: load
+# The message shows the node list as a value: JSON text in TS, a repr in Python.
 rules: [messages]
 flow: |
   # e02 — Cyclic data graph.

@@ -1,5 +1,6 @@
 # From tests/seeds/errors/e38-case-when-ref-locates-node-header.yaml.
-# A dangling reference in `cases[1].when` is named by that site and located at its value (the header's `compose/nodes/case.py` is the Python loader).
+# A dangling reference in `cases[1].when` is named by that site and located at its value.
+# The header's `compose/nodes/case.py` is the Python loader.
 kind: load
 flow: |
   # e38 — a dangling `${...}` inside a `case` node's `when:` locates at the offending `when:` line,
@@ -45,7 +46,7 @@ flow: |
       code: ./fixtures/seeds.ts:const_one
       output: int
   output: ${positive.output}
-# The CODE references name Python functions; `flow` names their TS ports.
+# The CODE references differ by language: `flow` names the TS functions, these the Python ones.
 python_flow: |
   # e38 — a dangling `${...}` inside a `case` node's `when:` locates at the offending `when:` line,
   # not the node header. COMPILE: "unresolved references". Fails at load; no inputs needed.

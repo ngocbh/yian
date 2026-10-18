@@ -35,7 +35,7 @@ expect:
   load:
     diagnostics:
       - code: compose.load
-        # A reserved key's site has no `from`, unlike an input's; the docs don't show this form.
+        # `over:` is a reserved key, not an input, so its site has no `from`.
         message: "flow has unresolved references:\n  node 'each' map over: reference ${nope.output} uses unknown namespace 'nope'"
         # The `over:` value on line 26.
         frames: [{label: flow.yaml, range: [26, 11, 26, 25]}]

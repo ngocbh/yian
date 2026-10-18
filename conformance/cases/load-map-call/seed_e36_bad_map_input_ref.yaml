@@ -1,5 +1,6 @@
 # From tests/seeds/errors/e36-bad-map-input-ref.yaml.
-# A dangling reference in one MAP per-element input is named `map input 'extra'` and located at that entry's value.
+# A dangling reference in one of a MAP's per-element inputs is named `map input 'extra'`
+# and located at that entry's value.
 kind: load
 flow: |
   # e36 — a dangling `${...}` ref in ONE of a MAP's per-element `input:` entries. COMPILE:

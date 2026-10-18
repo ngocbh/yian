@@ -60,7 +60,8 @@ files:
           rationale: ${input.rationale}
 
     output: ${v.output}                    # the verdict string itself, not a record
-# The child's CODE reference differs by language: `files` names the TS function, this the Python one.
+# The child's CODE reference differs by language: `files` names the TS function,
+# this the Python one.
 python_files:
   lib_verdict.yaml: |
     # lib_verdict — a small reusable CODE flow, called as an EXTERNAL flow by seed 24.

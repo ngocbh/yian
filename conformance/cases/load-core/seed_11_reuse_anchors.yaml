@@ -1,5 +1,6 @@
 # From tests/seeds/11-reuse-anchors.yaml.
-# Anchors, aliases, `<<:` merges and `x-*` keys load (the header's PyYAML note describes the Python loader).
+# Anchors, aliases, `<<:` merges and `x-*` keys load.
+# The header's PyYAML note describes the Python loader.
 kind: load
 flow: |
   # 11 — DRY reuse with YAML anchors + x- extension keys.

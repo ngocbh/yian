@@ -1,5 +1,5 @@
 # From tests/seeds/errors/e17-case-nonexhaustive.yaml.
-# A routing `case ... on` over a Literal producer with a tag uncovered and no `else:` fails at the node.
+# A routing `case ... on` a Literal output, with a tag uncovered and no `else:`, fails at the node.
 kind: load
 # The message shows the uncovered tags as a list value: JSON text in TS, a repr in Python.
 rules: [messages]

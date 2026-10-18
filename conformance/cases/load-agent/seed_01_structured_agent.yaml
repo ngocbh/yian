@@ -41,7 +41,8 @@ flow: |
   output:
     rating: ${score.output.rating}      # several bindings -> the flow returns ONE object
     verdict: ${verdict.output}
-# The CODE reference differs by language: `flow` names the TS function (its comment reworded for that form), this the Python one.
+# The CODE reference differs by language: `flow` names the TS function, this the Python one.
+# Its code-line comment is reworded for the TS form (`file:function`).
 python_flow: |
   # 01 — Structured (object) AGENT output.
   #

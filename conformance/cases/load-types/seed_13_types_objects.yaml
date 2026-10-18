@@ -1,5 +1,6 @@
 # From tests/seeds/13-types-objects.yaml.
-# Every scalar, `list(X)`, inline, block and nested records and typedefs load, with deep dotted reads.
+# Every scalar, `list(X)`, inline, block and nested records and typedefs load,
+# with deep dotted reads.
 kind: load
 flow: |
   # 13 — The type grammar (Python typing): scalars, lists, objects, nesting.

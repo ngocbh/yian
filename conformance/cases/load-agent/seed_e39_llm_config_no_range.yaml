@@ -1,5 +1,5 @@
 # From tests/seeds/errors/e39-llm-config-no-range.yaml.
-# An unknown provider in a node's `llm_config:` fails at that whole `llm_config:` value, not the node header.
+# An unknown `llm_config:` provider fails at the whole `llm_config:` value, not the node header.
 kind: load
 flow: |
   # e39 — a bad `llm_config:` entry rejected during descriptor construction.

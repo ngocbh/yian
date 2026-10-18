@@ -4,14 +4,16 @@
  *
  * Every mapping, list, and scalar node (mapping keys included) counts once per place it
  * appears, so an alias, and a `<<:` merge source, counts every node it names again. The
- * `load_flow` and `SourceDocument` cases, with their frames, come with the loader: here each
- * text is composed directly, and the error node's line stands in for the frame's line.
+ * `load_flow` cases, with their frames, come with the loader, and the `SourceDocument` merge
+ * case with merges: there each text is composed directly, and the error node's line stands in
+ * for the frame's line.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { isAlias, isMap, isNode, isSeq, type Node, type YAMLSeq } from "yaml";
 
 import { SourceSyntaxError } from "../../src/compose/source/common.ts";
+import { SourceDocument } from "../../src/compose/source/document.ts";
 import { parseYamlLiteral, readPlainScalar } from "../../src/compose/source/literals.ts";
 import { composeFlowDocument, FlowLoaderError } from "../../src/compose/source/scalars.ts";
 import { BUILTIN, install } from "../../src/defaults.ts";
@@ -276,6 +278,74 @@ describe("the YAML node limit", () => {
     const { document } = composeFlowDocument("[" + repeated("1", 20_000) + "]");
 
     expect((document.contents as YAMLSeq).items).toHaveLength(20_000);
+  });
+});
+
+/** Return the `SourceSyntaxError` parsing `text` throws, failing if it throws none. */
+function documentRefusal(text: string): SourceSyntaxError {
+  try {
+    SourceDocument.parse(text);
+  } catch (error) {
+    expect(error).toBeInstanceOf(SourceSyntaxError);
+    return error as SourceSyntaxError;
+  }
+  throw new Error("expected a SourceSyntaxError");
+}
+
+describe("a source document", () => {
+  test("the message names the variable and what a node is", () => {
+    limitNodes(50);
+
+    expect(documentRefusal("{a: [" + repeated("1", 50) + "]}").message).toBe(
+      "this list holds more than 50 YAML nodes, counting each alias as a copy of what " +
+        "it names; the limit for a YAML document is 50 (YIAN_MAX_YAML_NODES; each " +
+        "mapping, list, and scalar is a node)",
+    );
+  });
+
+  test("exact boundary", () => {
+    limitNodes(50);
+
+    // One list and 49 scalars are 50 nodes.
+    expect(SourceDocument.parse("[" + repeated("1", 49) + "]")._value).toEqual(
+      Array(49).fill(1n),
+    );
+    expect(documentRefusal("[" + repeated("1", 50) + "]").message).toContain(message(50));
+  });
+
+  test("mapping keys count", () => {
+    limitNodes(50);
+    const pairs = (count: number) =>
+      Array.from({ length: count }, (_, i) => `k${i}: 1`).join(", ");
+
+    // One mapping, 24 keys, and 24 values are 49 nodes; 25 pairs are 51.
+    SourceDocument.parse("{" + pairs(24) + "}");
+    expect(documentRefusal("{" + pairs(25) + "}").message).toContain(
+      `this mapping ${message(50)}`,
+    );
+  });
+
+  test("each alias counts as a copy", () => {
+    limitNodes(70);
+    const ten = "[" + repeated("1", 10) + "]";
+    const aliased = (copies: number) => `x: &t ${ten}\ny: [` + repeated("*t", copies) + "]\n";
+
+    // The root, x, the 11-node list, y, and y's list are 15 nodes; each alias adds 11.
+    SourceDocument.parse(aliased(0));
+    SourceDocument.parse(aliased(5));
+    expect(documentRefusal(aliased(6)).message).toContain(message(70));
+  });
+
+  test("a node on its own cycle is counted again inside it", () => {
+    const anchors = "x-anchors:\n  - &M [&D [" + repeated("*M", 400) + "]]\n  - [*D]\n";
+
+    SourceDocument.parse(anchors);
+  });
+
+  test("a plain 20,000-element list loads", () => {
+    const value = SourceDocument.parse("[" + repeated("1", 20_000) + "]")._value;
+
+    expect(Array.isArray(value) && value.length).toBe(20_000);
   });
 });
 

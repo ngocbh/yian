@@ -145,9 +145,15 @@ export interface FlowDocument {
  */
 export type FlowParseOptions = Pick<ParseOptions, "lineCounter" | "keepSourceTokens">;
 
+/** Return `text` with each lone CR turned into LF: the same length, so offsets hold. */
+export function normalizeBreaks(text: string): string {
+  return text.replace(/\r(?!\n)/g, "\n");
+}
+
 /**
- * Compose `text` as one YAML document under `FLOW_OPTIONS` plus `options`, and map each alias
- * to the latest node anchored with its name before it.
+ * Compose `normalizeBreaks(text)` as one YAML document under `FLOW_OPTIONS` plus `options`,
+ * and map each alias to the latest node anchored with its name before it. eemeli/yaml breaks
+ * lines only at LF and CRLF, so a lone CR would otherwise stay inside a scalar.
  *
  * Example: in `[&a 1, &a 2, *a]`, `aliasTargets` maps the alias to the `2`.
  *
@@ -161,7 +167,7 @@ export type FlowParseOptions = Pick<ParseOptions, "lineCounter" | "keepSourceTok
  *   node on the path already over the limit once the count would need repeating.
  */
 export function composeFlowDocument(text: string, options: FlowParseOptions = {}): FlowDocument {
-  const document = parseDocument(text, { ...FLOW_OPTIONS, ...options });
+  const document = parseDocument(normalizeBreaks(text), { ...FLOW_OPTIONS, ...options });
   const limits = current();
   const anchors = new Map<string, AnchoredNode>();
   const aliasTargets = new Map<Alias, AnchoredNode>();

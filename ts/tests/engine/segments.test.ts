@@ -11,10 +11,10 @@
  *
  * TS-only: the `fromWire` refusal table and its messages (Python's strict decode is
  * `runtime/log.py::_decode_typed` with `ANY_VALUE_ADAPTER`'s strict check, tested there through
- * the log reader), "toWire writes a nested FileRef as its mapping", the frozen-carrier row,
- * "unwraps a TypedValue", "a record keeps the value's key order", "a record stores a
- * __proto__ field as data", and the rows for `-0`, NaN, lone surrogates and other non-JSON
- * parts at the build boundary.
+ * the log reader), "fromWire accepts a list[float] holding an int", "toWire writes a nested
+ * FileRef as its mapping", the frozen-carrier row, "unwraps a TypedValue", "a record keeps the
+ * value's key order", "a record stores a __proto__ field as data", and the rows for `-0`, NaN,
+ * lone surrogates and other non-JSON parts at the build boundary.
  *
  * Not ported: checks of Python's carrier subclasses (`type(back) is IntegerValue`); TS has one
  * `TypedValue` class, so a round trip checks the kind and the JS type of the value.
@@ -103,10 +103,13 @@ describe("inference", () => {
 
   test("infers lists", () => {
     expect(buildValue(["a", "b"]).kind).toBe(ValueKind.LIST_STRING);
-    // A list mixing ints and floats is a list of floats.
+    // A list mixing ints and floats is a list of floats; its ints stay ints.
     const mixed = buildValue([1n, 2.0]);
     expect(mixed.kind).toBe(ValueKind.LIST_NUMBER);
-    expect(mixed.value).toEqual([1, 2]);
+    expect(mixed.value).toEqual([1n, 2]);
+    const halves = buildValue([1n, 2.5]);
+    expect(halves.kind).toBe(ValueKind.LIST_NUMBER);
+    expect(halves.value).toEqual([1n, 2.5]);
     expect(buildValue([]).kind).toBe(ValueKind.LIST_ANY);
     expect(buildValue([1n, "a"]).kind).toBe(ValueKind.LIST_ANY);
   });
@@ -213,10 +216,13 @@ describe("inference", () => {
 });
 
 describe("declared-type write boundary", () => {
-  test("widens an int to a float", () => {
+  test("an int in a float slot stays an int", () => {
     const typed = buildValueAs(ValueKind.NUMBER, 7n);
-    expect(typed.kind).toBe(ValueKind.NUMBER);
-    expect(typed.value).toBe(7);
+    expect(typed.kind).toBe(ValueKind.INTEGER);
+    expect(typed.value).toBe(7n);
+    const list = buildValueAs(ValueKind.LIST_NUMBER, [1n, 2.5]);
+    expect(list.kind).toBe(ValueKind.LIST_NUMBER);
+    expect(list.value).toEqual([1n, 2.5]);
   });
 
   test("rejects a mismatch", () => {
@@ -271,11 +277,15 @@ describe("declared-type write boundary", () => {
 
   test("takes a Type or a bare kind", () => {
     expect(buildValueAs(Type.scalar(ValueKind.STRING), "x").kind).toBe(ValueKind.STRING);
-    expect(buildValueAs(ValueKind.NUMBER, 3n).value).toBe(3);
+    const typed = buildValueAs(ValueKind.NUMBER, 3n);
+    expect(typed.kind).toBe(ValueKind.INTEGER);
+    expect(typed.value).toBe(3n);
   });
 
   test("unwraps a TypedValue", () => {
-    expect(buildValueAs(ValueKind.NUMBER, buildValue(3n)).value).toBe(3);
+    const typed = buildValueAs(ValueKind.NUMBER, buildValue(3n));
+    expect(typed.kind).toBe(ValueKind.INTEGER);
+    expect(typed.value).toBe(3n);
   });
 
   test("checks variant membership", () => {
@@ -544,6 +554,13 @@ describe("lossless serialization", () => {
     expect(back.toWire()).toEqual({ kind: "object", value });
   });
 
+  test("fromWire accepts a list[float] holding an int", () => {
+    // A `list(float)` slot keeps its int items, so the log writes such lists.
+    const back = TypedValue.fromWire({ kind: "list[float]", value: [1n, 2.5, null] });
+    expect(back.kind).toBe(ValueKind.LIST_NUMBER);
+    expect(back.value).toEqual([1n, 2.5, null]);
+  });
+
   test("a TypedValue is frozen and gives its value", () => {
     const typed = new TypedValue(ValueKind.INTEGER, 1n);
     expect(Object.isFrozen(typed)).toBe(true);
@@ -561,8 +578,8 @@ describe("TypedValue.fromWire refuses", () => {
     ["a non-text kind", { kind: 1n, value: 1n }],
     ["None holding a value", { kind: "None", value: 0n }],
     ["int holding a float", { kind: "int", value: 1 }],
-    // A deliberate difference: Python's strict adapter widens the int 1 for float; the log
-    // writer always writes a float with `.0`, so TS refuses it.
+    // A deliberate difference: Python's strict adapter accepts the int 1 for float; nothing
+    // writes a scalar `float` holding an int (such a slot stores kind `int`), so TS refuses it.
     ["float holding an int", { kind: "float", value: 1n }],
     ["float holding NaN", { kind: "float", value: NaN }],
     ["bool holding an int", { kind: "bool", value: 1n }],

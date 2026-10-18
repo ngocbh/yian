@@ -2,9 +2,10 @@
 # The inline `call(enrich, ...)` runs as the generated CALL node `__call_0`, which grows the
 # child's CODE node; `summary` reads the child's headlines.
 kind: run
-# `fetch_facts` returns the integral float 100.0 into a `list(float)`; TS's stored value (int 100
-# or float 100.0) isn't settled, so `expect` leaves out the trace and `python_expect` pins it.
-rules: [numbers]
+# `fetch_facts` returns the integral float 100.0 into a `list(float)`; TS stores the int 100 (an
+# integral host number reads as an int and a float slot keeps it); `expect` doesn't pin the trace
+# yet, and `python_expect` pins Python's.
+rules: [numbers, int-in-float]
 flow: |
   # 21 — inline call(f, ...) directive: a flow call written as a binding's whole value.
   #

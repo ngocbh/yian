@@ -277,6 +277,11 @@ member's field): an `int` filling a `float` slot widens; a file's JSON form fill
 `list(object)` item becomes its mapping, copying only the containers on its path. An
 `Any` value is stored as given: an int stays an int and `True` stays a bool.
 
+Changed (TS yian): an `int` filling a `float` slot stays an int at any depth. A `float`
+slot given an int stores kind `int`, a `list(float)` keeps its int items, and a record's
+`float` field keeps the int; slots only check. Likewise `buildValue` infers a list of ints
+and floats as `list(float)` with its ints kept (`[1, 2.5]`, where Python stores `[1.0, 2.5]`).
+
 Changed (TS yian): `buildValue` walks its whole value as a JSON value (files kept) and refuses
 a part that isn't one; Python's `build_value` doesn't walk, and its `canonical_typed` runs
 `reject_non_json` first.
@@ -302,6 +307,7 @@ depth; its message names the path (`output at d.x[1]: datetime.date(2026, 1, 1) 
 JSON value`). An already-built `TypedValue` (a replayed record) is not walked. Nothing
 types those files, so a reader sees each one as its mapping.
 An `int` too large for a float fails at its path (`int is too large for float`).
+Changed (TS yian): no int converts to a float, so this error doesn't exist.
 `TypeCheckError.path` is an immutable tuple relative to the declared type: string
 segments name record fields and integer segments are actual list indices. A
 mismatch at the checked root uses `()`; a nested container mismatch keeps its
@@ -512,12 +518,20 @@ The runtime state primitive the engine owns. Narrow by design:
   | `${node.output[.path]}` | node `node`'s value, dotting into an object |
   | `${system.X}` | a host-injected ambient: `today` (`date`), `now` (`datetime`), or `run_id` (`str`); reserved, run-global. These are scalars, so `${system.today.year}` is a load error |
 
+  Changed (TS yian): `now` is the run's clock in Python's `isoformat()` spelling with
+  `+00:00` and `today` its date, from one reading of the clock, so they always agree; the
+  real clock has millisecond resolution, so a fraction ends in `000`.
+
   An unrecognized head resolves to `None` (the missing-ref-is-falsy contract — see
   [Expressions](expressions.md)). Because values are typed *objects*,
   `${x.output.ratio}` traverses **into** an object.
 - **Lossless serialization.** `dumps()`/`loads()` round-trip the whole pool through the
   `AnyValue` union. The run-record codec uses the same typed representation for the
   complete initial pool and for each committed node output.
+
+  Changed (TS yian): `store` and `system` are `Map`s; `toWire()`/`fromWire()` give and
+  strictly read the wire object `{store, system, start_id}` (each value as `{kind, value}`),
+  and `dumps()`/`loads()` write and read it with yian's JSON codec.
 - **Files keep their type in typed containers.** The run log stores a file nested in a
   container as its JSON form. The runtime reads each committed value back through its
   commit target's contract, so every position the contract types as `file` holds a

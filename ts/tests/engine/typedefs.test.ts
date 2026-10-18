@@ -70,9 +70,9 @@ describe("building", () => {
     });
     const typ = typeFor("Ratings", registry);
     typ.validateShape();
-    // The int 1 fills a float slot, so it is stored as the float 1.
+    // The int 1 fills a float slot and stays the int 1.
     const value = [{ scores: [null, 0.5, 1n], count: 4n }];
-    expect(buildValueAs(typ, value).toObject()).toEqual([{ scores: [null, 0.5, 1], count: 4n }]);
+    expect(buildValueAs(typ, value).toObject()).toEqual([{ scores: [null, 0.5, 1n], count: 4n }]);
     expect(buildValueAs(typeFor("MaybeScore", registry), null).toObject()).toBeNull();
     for (const [bad, path] of [
       [[{ scores: [null, 1.1], count: 4n }], [0, "scores", 1]],

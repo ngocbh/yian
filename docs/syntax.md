@@ -1166,6 +1166,8 @@ A flow's committed output is stored like any typed node output: an int in a
 value, a `list(float)` item, or a typed record field. An untyped field of a record
 output keeps its value as returned.
 
+Changed (TS yian): the int stays an int at any depth; slots only check.
+
 ### Downstream
 
 Consumers see the tag's type, not the inferred one. This is how an opaque value becomes

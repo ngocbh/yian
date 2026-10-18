@@ -635,7 +635,7 @@ export function fileFieldType(name: string): Type | null {
  * Whether `value` is a record: a plain object with prototype `Object.prototype` or `null`. An
  * array is never a record, whatever its prototype.
  */
-function isRecord(value: unknown): value is ValueRecord {
+export function isRecord(value: unknown): value is ValueRecord {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const proto: unknown = Object.getPrototypeOf(value);
   return proto === Object.prototype || proto === null;
@@ -650,34 +650,6 @@ function isList(value: unknown): value is unknown[] {
 // Typed values
 // --------------------------------------------------------------------------------------- //
 
-// ---- Open owner question: a whole number in a `float` slot ---------------------------- //
-
-/**
- * `intInFloatSlot(value, path)` returns the float an int filling a `float` slot is stored as
- * (a typed `float` slot at any depth, a flat `list(float)` item, an int in a list `buildValue`
- * infers as `list[float]`); `floatSlotHolds(value)` says whether a `float` carrier may hold
- * `value`: a `number` other than NaN.
- *
- * Open owner question. Design 3.2.1 says a whole number filling a `float` slot stays an
- * int; Python yian and the shared case `values/int_fills_float` widen it to a float, which
- * is what is implemented: a `float` value is always a `number`. Under widening, a `bigint`
- * whose `Number()` is infinite (`10n ** 400n`) fails with `int is too large for float` at
- * `path`, where design 3.2.2's mixing rule would give `±Infinity`. If the owner picks "stays
- * an int", these two functions change together, and a stored value takes either the `float`
- * kind holding a `bigint` or the `int` kind.
- */
-function intInFloatSlot(value: bigint, path: ValuePath): number {
-  const widened = Number(value);
-  if (!Number.isFinite(widened)) throw new TypeCheckError("int is too large for float", { path });
-  return widened;
-}
-
-function floatSlotHolds(value: unknown): value is number {
-  return typeof value === "number" && !Number.isNaN(value);
-}
-
-// ---- End of the open owner question --------------------------------------------------- //
-
 /** What a typed value of each storage kind holds, for the decoder's messages. */
 const KIND_HOLDS: ReadonlyMap<StorageKind, string> = new Map([
   [ValueKind.NONE, "null"],
@@ -691,7 +663,7 @@ const KIND_HOLDS: ReadonlyMap<StorageKind, string> = new Map([
   [ValueKind.LIST_ANY, "an array"],
   [ValueKind.LIST_STRING, "an array of strings or null"],
   [ValueKind.LIST_INTEGER, "an array of bigints or null"],
-  [ValueKind.LIST_NUMBER, "an array of numbers other than NaN, or null"],
+  [ValueKind.LIST_NUMBER, "an array of bigints, numbers other than NaN, or null"],
   [ValueKind.LIST_BOOLEAN, "an array of booleans or null"],
   [ValueKind.LIST_OBJECT, "an array of plain records or null"],
 ]);
@@ -709,7 +681,7 @@ function holdsScalar(kind: ValueKind, value: unknown): boolean {
     case ValueKind.INTEGER:
       return typeof value === "bigint";
     case ValueKind.NUMBER:
-      return floatSlotHolds(value);
+      return typeof value === "number" && !Number.isNaN(value);
     case ValueKind.BOOLEAN:
       return typeof value === "boolean";
     case ValueKind.OBJECT:
@@ -761,11 +733,12 @@ export class TypedValue {
    *
    * `data` must be a plain record with exactly `kind` and `value`; `kind` a storage kind (not
    * `Any`); and `value` of that kind: `None` null, `str` a string, `int` a `bigint`, `float` a
-   * `number` other than NaN (an int is refused: the log writes a float with `.0`), `date` and
-   * `datetime` text in their grammar, `bool` a boolean, `object` a plain record, `file` a
-   * file's mapping with exactly `uri`, `mime` and `name` (read as a `FileRef`), `list[Any]`
-   * an array, and `list[X]` an array of `X` or null. Contents aren't walked: the lossless
-   * reader made the data.
+   * `number` other than NaN (an int is refused: a `float` slot given an int stores kind
+   * `int`), `date` and `datetime` text in their grammar, `bool` a boolean, `object` a plain
+   * record, `file` a file's mapping with exactly `uri`, `mime` and `name` (read as a
+   * `FileRef`), `list[Any]` an array, and `list[X]` an array of `X` or null, where a
+   * `list[float]` item may also be a `bigint` (a `list(float)` slot keeps its int items).
+   * Contents aren't walked: the lossless reader made the data.
    *
    * @throws RangeError naming the kind when `data` isn't such a wire form.
    */
@@ -811,7 +784,10 @@ export class TypedValue {
       let holds = true;
       for (let index = 0; holds && element !== null && index < value.length; index++) {
         const item = value[index];
-        holds = item === null || holdsScalar(element, item);
+        holds =
+          item === null ||
+          holdsScalar(element, item) ||
+          (element === ValueKind.NUMBER && typeof item === "bigint");
       }
       if (holds) return new TypedValue(storage, value);
     }
@@ -827,7 +803,11 @@ export class TypedValue {
  *
  * @throws RangeError listing the missing and extra keys, each sorted.
  */
-function requireFields(record: ValueRecord, expected: readonly string[], label: string): void {
+export function requireFields(
+  record: ValueRecord,
+  expected: readonly string[],
+  label: string,
+): void {
   const actual = Object.keys(record);
   const missing = expected.filter((key) => !Object.hasOwn(record, key)).sort(compareCodeUnits);
   const extra = actual.filter((key) => !expected.includes(key)).sort(compareCodeUnits);
@@ -1791,8 +1771,8 @@ function temporalError(declared: ValueKind, value: string): string | null {
 }
 
 /**
- * Whether `value` fits the scalar kind `declared`. A `float` slot takes an int (it widens);
- * a `file` slot takes a `FileRef` or a file's JSON form.
+ * Whether `value` fits the scalar kind `declared`. A `float` slot takes an int (which stays
+ * an int); a `file` slot takes a `FileRef` or a file's JSON form.
  */
 function scalarMatches(declared: ValueKind, value: unknown): boolean {
   switch (declared) {
@@ -1819,18 +1799,14 @@ function scalarMatches(declared: ValueKind, value: unknown): boolean {
 }
 
 /**
- * Return `value` as a `declared` slot stores it: an int in a `float` slot widens and `-0`
- * becomes `0`; a file's JSON form in a `file` slot becomes a `FileRef`. Any other value is
- * returned unchanged.
+ * Return `value` as a `declared` slot stores it: `-0` in a `float` slot becomes `0`; a file's
+ * JSON form in a `file` slot becomes a `FileRef`. Any other value (an int in a `float` slot
+ * too) is returned unchanged.
  *
- * @throws TypeCheckError at `path` when an int is too large for a float, or a file form's
- *   text holds a lone surrogate.
+ * @throws TypeCheckError at `path` when a file form's text holds a lone surrogate.
  */
 function coerceScalar(declared: ValueKind, value: unknown, path: ValuePath): unknown {
-  if (declared === ValueKind.NUMBER) {
-    if (typeof value === "bigint") return intInFloatSlot(value, path);
-    if (Object.is(value, -0)) return 0;
-  }
+  if (declared === ValueKind.NUMBER && Object.is(value, -0)) return 0;
   if (declared === ValueKind.FILE && isFileForm(value)) {
     for (const field of FILE_FIELDS) rejectNonValue(value[field], [...path, field]);
     return new FileRef(value);
@@ -1997,10 +1973,10 @@ function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value {
  * as a JSON value with files kept (see `jsonPart`): `-0` becomes `0` at any depth, and a part
  * that isn't a yian JSON value is refused. `file` is never inferred from a record or text;
  * only a `FileRef` is a file. A list of text, bools, ints or records infers its list kind, a
- * list of ints and floats is `list[float]` (each int widens), and an empty or mixed list is
- * `list[Any]`.
+ * list of ints and floats is `list[float]` (each int stays an int), and an empty or mixed list
+ * is `list[Any]`.
  *
- * Example: `buildValue([1n, 2.5])` gives a `list[float]` holding `[1, 2.5]`.
+ * Example: `buildValue([1n, 2.5])` gives a `list[float]` holding `[1n, 2.5]`.
  *
  * @throws TypeCheckError when the value is not a scalar, `FileRef`, list or record (`cannot
  *   wrap value of type 'Date'`), or a part of it is not a JSON value.
@@ -2025,10 +2001,7 @@ function inferList(items: Value[]): TypedValue {
   if (only(ValueKind.BOOLEAN)) return new TypedValue(ValueKind.LIST_BOOLEAN, items);
   if (only(ValueKind.INTEGER)) return new TypedValue(ValueKind.LIST_INTEGER, items);
   if ([...kinds].every((kind) => kind === ValueKind.INTEGER || kind === ValueKind.NUMBER)) {
-    const floats = items.map((item, index) =>
-      typeof item === "bigint" ? intInFloatSlot(item, [index]) : item,
-    );
-    return new TypedValue(ValueKind.LIST_NUMBER, floats);
+    return new TypedValue(ValueKind.LIST_NUMBER, items);
   }
   if (only(ValueKind.OBJECT)) return new TypedValue(ValueKind.LIST_OBJECT, items);
   return new TypedValue(ValueKind.LIST_ANY, items);
@@ -2039,11 +2012,13 @@ function inferList(items: Value[]): TypedValue {
  *
  * This is the write-boundary check against each declared type, so a node returning the wrong
  * type fails at the write rather than downstream. NaN and text holding a lone surrogate are
- * refused at any depth. Conversions apply at any depth (a record field, a list item): an int
- * filling a `float` slot widens, and `-0` there becomes `0`; a file's JSON form `{uri, mime,
- * name}` (exactly those keys) filling a `file` slot becomes a `FileRef`; and a `FileRef`
- * nested in an `object` value or `list(object)` item becomes that mapping, copying only the
- * containers on its path.
+ * refused at any depth. An int filling a `float` slot stays an int at any depth: a `float`
+ * slot given an int stores kind `int`, a `list(float)` keeps its int items, and a record's
+ * `float` field keeps the int. Conversions apply at any depth (a record field, a list item):
+ * `-0` in a `float` slot becomes `0`; a file's JSON form `{uri, mime, name}` (exactly those
+ * keys) filling a `file` slot becomes a `FileRef`; and a `FileRef` nested in an `object`
+ * value or `list(object)` item becomes that mapping, copying only the containers on its
+ * path.
  *
  * `Any` accepts any non-null JSON value and stores it in its natural kind (a list as
  * `list[Any]`); its one conversion is `-0` to `0` at any depth, as in an `object` value. An
@@ -2054,7 +2029,7 @@ function inferList(items: Value[]): TypedValue {
  * `declared` is a `Type`, or a bare `ValueKind` for a scalar or flat list. A `TypedValue`
  * input is unwrapped to its value first.
  *
- * Example: `buildValueAs(ValueKind.NUMBER, 7n)` gives a `float` holding `7`.
+ * Example: `buildValueAs(ValueKind.NUMBER, 7n)` gives an `int` holding `7n`.
  *
  * @throws TypeCheckError at the failing value's path when the value does not satisfy
  *   `declared`: a wrong scalar, a non-member variant tag, an out-of-range number, a record
@@ -2130,7 +2105,7 @@ function buildForType(typ: Type, value: unknown, path: ValuePath): TypedValue {
         path: [...path, unknown[0]!],
       });
     }
-    // Each field stores its checked value, so a nested `float` slot widens as a top one does.
+    // Each field stores its checked value, so a nested slot converts as a top one does.
     const record: ValueRecord = {};
     for (const name of names) {
       setField(record, name, buildForType(fields.get(name)!, value[name], [...path, name]).value);
@@ -2287,6 +2262,10 @@ function buildScalarOrList(declared: ValueKind, value: unknown, path: ValuePath)
     const temporal = declared === ValueKind.DATE || declared === ValueKind.DATETIME;
     if (temporal && typeof value === "string") message += `: ${temporalError(declared, value)}`;
     throw new TypeCheckError(message, { path });
+  }
+  // The stored kind follows the value, so a `float` carrier never holds a bigint.
+  if (declared === ValueKind.NUMBER && typeof value === "bigint") {
+    return new TypedValue(ValueKind.INTEGER, value);
   }
   const stored = declared === ValueKind.OBJECT ? jsonPart(value, path, "mapping") : value;
   return new TypedValue(declared as StorageKind, coerceScalar(declared, stored, path) as Value);

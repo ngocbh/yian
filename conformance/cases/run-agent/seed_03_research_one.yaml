@@ -1,9 +1,10 @@
 # From tests/seeds/03-research-one.yaml.
 # A CODE leaf's record feeds an AGENT; the flow returns the AGENT's text and the given date.
 kind: run
-# `fetch_facts` returns the integral float 100.0 into a `list(float)`; TS's stored value (int 100
-# or float 100.0) isn't settled, so `expect` leaves out the trace and `python_expect` pins it.
-rules: [numbers]
+# `fetch_facts` returns the integral float 100.0 into a `list(float)`; TS stores the int 100 (an
+# integral host number reads as an int and a float slot keeps it); `expect` doesn't pin the trace
+# yet, and `python_expect` pins Python's.
+rules: [numbers, int-in-float]
 flow: |
   # 03 — Single-topic research (a reusable child flow).
   #

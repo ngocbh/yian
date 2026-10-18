@@ -2,14 +2,14 @@
  * The `Type` vocabulary's shape checks, levels and labels, the type-text parser,
  * `formatTypeExpr`, the bracket-spelling error, typedef names, and `resolveType`/`typeFor`, a
  * port of those tests of `tests/engine/test_types.py`, with its write-boundary value tests
- * (`buildValueAs`): bounded numbers, float widening at any depth and the end-to-end check.
+ * (`buildValueAs`): bounded numbers, an int in a float slot at any depth and the end-to-end check,
+ * the bounded pool write that keeps the previous value, and the package's public exports.
  *
  * Also here: the build half of
  * `test_type_to_schema.py::test_large_numeric_schema_bounds_match_resolved_type` (its schema
  * half comes with `typeToSchema`).
  *
- * Later: the pool write test, `test_public_exports`, and
- * `test_bounded_type_defaults_preserve_compatible_integer_payloads` (with the loader).
+ * Later: `test_bounded_type_defaults_preserve_compatible_integer_payloads` (with the loader).
  *
  * Not ported: `test_type_for_preserves_its_public_keyword_name` (TypeScript has no keyword
  * arguments) and `test_record_stores_a_tuple_field_as_a_list` (no tuples in TS);
@@ -19,7 +19,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
-import { reprText } from "../../src/diagnostics.ts";
+import { compareCodeUnits, reprText } from "../../src/diagnostics.ts";
+import * as typesys from "../../src/typesys/index.ts";
+import { VariablePool } from "../../src/typesys/pool.ts";
 import {
   formatTypeExpr,
   legacyRespelling,
@@ -44,6 +46,7 @@ import {
   typeEquals,
   typeLevels,
   ValueKind,
+  type ValueRecord,
 } from "../../src/typesys/values.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
@@ -1166,7 +1169,7 @@ describe("typeFor", () => {
     expect(canonicalTypeLabel(union)).toBe('Union({"a":int,"b":str},{"a":int(1..2)})');
   });
 
-  test("a union member value widens its float fields", () => {
+  test("a union member value keeps an int in its float fields", () => {
     const reg = readTypedefs({
       Buy: { action: "Literal(buy)", qty: "int" },
       Sell: { action: "Literal(sell)", price: "float" },
@@ -1176,9 +1179,9 @@ describe("typeFor", () => {
     expect(typeFor("Union(Buy, Sell)", reg).variants).toHaveLength(2);
     expect(typeFor("Union(Count, Score)", reg).variants).toHaveLength(2);
     const tagged = buildValueAs(typeFor("Union(Buy, Sell)", reg), { action: "sell", price: 3n });
-    expect((tagged.toObject() as Record<string, unknown>)["price"]).toBe(3);
+    expect((tagged.toObject() as Record<string, unknown>)["price"]).toBe(3n);
     const untagged = buildValueAs(typeFor("Union(Count, Score)", reg), { n: 3n, label: "x" });
-    expect((untagged.toObject() as Record<string, unknown>)["n"]).toBe(3);
+    expect((untagged.toObject() as Record<string, unknown>)["n"]).toBe(3n);
   });
 });
 
@@ -1239,11 +1242,6 @@ function typeCheckError(run: () => unknown): TypeCheckError {
   throw new Error("expected a TypeCheckError");
 }
 
-/** Return what a slot of `typ` stores for `value`: an int in a `float` slot widens. */
-function stored(typ: Type, value: bigint | number): bigint | number {
-  return typ.kind === ValueKind.NUMBER ? Number(value) : value;
-}
-
 describe("bounded numeric values", () => {
   test.each<[string, Bounds, unknown[], unknown[]]>([
     ["int(1..12)", [1n, 12n], [1n, 4n, 12n], [0n, 13n, true, 1.5, "4"]],
@@ -1253,7 +1251,7 @@ describe("bounded numeric values", () => {
     expect(typ.bounds).toEqual(bounds);
     typ.validateShape();
     for (const value of accepted as (bigint | number)[]) {
-      expect(buildValueAs(typ, value).toObject()).toBe(stored(typ, value));
+      expect(buildValueAs(typ, value).toObject()).toBe(value);
     }
     for (const value of rejected) typeCheckError(() => buildValueAs(typ, value));
   });
@@ -1266,7 +1264,7 @@ describe("bounded numeric values", () => {
   ])("%s takes signed and equal endpoints", (expression, accepted, rejected) => {
     const typ = typeFor(expression, EMPTY);
     for (const value of accepted) {
-      expect(buildValueAs(typ, value).toObject()).toBe(stored(typ, value));
+      expect(buildValueAs(typ, value).toObject()).toBe(value);
     }
     // A two-sided range admits neither infinity; NaN is never a value.
     for (const value of [...rejected, Infinity, -Infinity, NaN]) {
@@ -1293,25 +1291,46 @@ describe("bounded numeric values", () => {
     const typ = typeFor(`${kind}(${lower}..${upper})`, EMPTY);
     typ.validateShape();
     for (const value of [lower, upper]) {
-      expect(buildValueAs(typ, value).toObject()).toBe(stored(typ, value));
+      expect(buildValueAs(typ, value).toObject()).toBe(value);
     }
     typeCheckError(() => buildValueAs(typ, outside));
   });
+
+  test(
+    "a rejected nested write keeps the previous value " +
+      "(test_bounded_typed_write_preserves_the_previous_value_on_nested_rejection)",
+    () => {
+      const typ = typeFor("list(Score)", readTypedefs({ Score: { value: "float(0..1)" } }));
+      const pool = new VariablePool();
+      pool.set("scores", [{ value: 1n }], typ);
+      const rejected = [{ value: 0.5 }, { value: 1.1 }];
+      const error = typeCheckError(() => pool.set("scores", rejected, typ));
+      expect(error.path).toEqual([1, "value"]);
+      // Python widens the stored 1 to 1.0; TS keeps the int (`int-in-float`).
+      const scores = pool.get("scores") as ValueRecord[];
+      expect(scores).toEqual([{ value: 1n }]);
+      expect(typeof scores[0]!.value).toBe("bigint");
+    },
+  );
 });
 
-describe("float widening", () => {
-  test("a float slot widens an int at any depth", () => {
+describe("an int in a float slot", () => {
+  test("a float slot keeps an int at any depth", () => {
     const reg = readTypedefs({
       Point: { x: "float", xs: "list(float)" },
       Wrap: { inner: "Point" },
     });
-    expect(buildValueAs(typeFor("float", reg), 1n).toObject()).toBe(1);
+    const whole = buildValueAs(typeFor("float", reg), 1n);
+    expect(whole.toObject()).toBe(1n);
+    expect(whole.kind).toBe(ValueKind.INTEGER);
+    expect(buildValueAs(typeFor("float(0..1)", reg), 1n).kind).toBe(ValueKind.INTEGER);
+    expect(buildValueAs(typeFor("Optional(float)", reg), 1n).kind).toBe(ValueKind.INTEGER);
     const point = buildValueAs(typeFor("Point", reg), { x: 1n, xs: [1n, 2n] }).toObject();
-    expect(point).toEqual({ x: 1, xs: [1, 2] });
+    expect(point).toEqual({ x: 1n, xs: [1n, 2n] });
     const nested = buildValueAs(typeFor("Wrap", reg), { inner: { x: 1n, xs: [] } }).toObject();
-    expect(nested).toEqual({ inner: { x: 1, xs: [] } });
+    expect(nested).toEqual({ inner: { x: 1n, xs: [] } });
     const items = buildValueAs(typeFor("list(Point)", reg), [{ x: 1n, xs: [2n] }]).toObject();
-    expect(items).toEqual([{ x: 1, xs: [2] }]);
+    expect(items).toEqual([{ x: 1n, xs: [2n] }]);
   });
 });
 
@@ -1330,3 +1349,45 @@ describe("write boundary", () => {
     ).toBe(ValueKind.OBJECT);
   });
 });
+
+describe("public exports", () => {
+  test("typesys/index.ts exports the type system's public names (test_public_exports)", () => {
+    expect(Object.keys(typesys).sort(compareCodeUnits)).toEqual([
+      "BUILTIN_TYPE_NAMES",
+      "FileRef",
+      "Type",
+      "TypeCheckError",
+      "TypedValue",
+      "ValueKind",
+      "VariablePool",
+      "buildValue",
+      "buildValueAs",
+      "canonicalTypeLabel",
+      "canonicalUnionOrder",
+      "listKindForElement",
+      "normalizeFiles",
+      "parseType",
+      "resolveType",
+      "restrictUnion",
+      "typeFor",
+      "typesOverlap",
+      "unionField",
+      "unionMemberForTag",
+      "unionTagFields",
+    ]);
+  });
+});
+
+// The type-only exports exist only for the typechecker: `bun run typecheck` fails if one is gone.
+type _PublicTypes = [
+  typesys.FieldAbsent,
+  typesys.FieldPartial,
+  typesys.FieldRead,
+  typesys.RecordDef,
+  typesys.PoolWire,
+  typesys.StorageKind,
+  typesys.TypeRegistry,
+  typesys.Value,
+  typesys.ValueRecord,
+  typesys.VariantDef,
+];

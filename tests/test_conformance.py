@@ -203,8 +203,8 @@ _USAGE_DETAILS = {
 }
 _RESUME_HOST_KEYS = _HOST_KEYS | {"crash_after_record"}
 _RULES = {
-    "numbers", "arithmetic", "compare", "text-form", "canonical", "columns", "messages",
-    "text", "yaml", "dates", "infinity", "llm", "code",
+    "numbers", "int-in-float", "arithmetic", "compare", "text-form", "canonical", "columns",
+    "messages", "text", "yaml", "dates", "infinity", "llm", "code",
 }
 _RESERVED = [*(("host", key) for key in _RESERVED_HOST_KEYS), ("expect", "memory")]
 # Keys holding text that is not a case value: no codec form, no number checks.

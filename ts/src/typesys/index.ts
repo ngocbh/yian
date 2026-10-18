@@ -4,7 +4,9 @@
  *
  * Python's `AnyValue`, `DateValue` and `DateTimeValue` carriers are all `TypedValue` here.
  * `StorageKind`, `Value`, `ValueRecord` and `PoolWire` name shapes Python leaves untyped;
- * `TypedValue` and `VariablePool` use them in their public signatures.
+ * `TypedValue` and `VariablePool` use them in their public signatures. `isRecord` is the
+ * plain-object test `buildValueAs` uses, so callers read a record exactly as the type system
+ * does (Python checks `isinstance(value, dict)` inline).
  */
 
 export type { PoolWire } from "./pool.ts";

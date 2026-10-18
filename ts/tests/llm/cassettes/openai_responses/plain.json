@@ -1,0 +1,55 @@
+{
+  "format": "yian.cassette.v1",
+  "source": "synthetic",
+  "description": "plain: system + user, reasoning + text reply; from the #366 s2a wire inventory §1-§2 / probe p1 section 2, streamed per D31.",
+  "interactions": [
+    {
+      "request": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/responses",
+        "headers": {
+          "authorization": "<redacted>",
+          "accept": "application/json",
+          "content-type": "application/json"
+        },
+        "json": {
+          "input": [
+            {
+              "content": "You are terse.",
+              "role": "system",
+              "type": "message"
+            },
+            {
+              "content": "Say hello.",
+              "role": "user",
+              "type": "message"
+            }
+          ],
+          "model": "gpt-5.5",
+          "stream": true
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "content-type": "text/event-stream"
+        },
+        "chunks": [
+          "event: response.created\ndata: {\"type\": \"response.created\", \"sequence_number\": 0, \"response\": {\"id\": \"resp_1\", \"object\": \"response\", \"created_at\": 1700000000, \"status\": \"in_progress\", \"model\": \"gpt-5.5\", \"output\": [], \"error\": null, \"incomplete_details\": null, \"usage\": null, \"parallel_tool_calls\": true, \"tool_choice\": \"auto\", \"tools\": []}}\n\n",
+          "event: response.output_item.added\ndata: {\"type\": \"response.output_item.added\", \"output_index\": 0, \"sequence_number\": 1, \"item\": {\"id\": \"rs_1\", \"type\": \"reasoning\", \"summary\": [], \"encrypted_content\": null}}\n\n",
+          "event: response.reasoning_summary_part.added\ndata: {\"type\": \"response.reasoning_summary_part.added\", \"output_index\": 0, \"item_id\": \"rs_1\", \"summary_index\": 0, \"sequence_number\": 2, \"part\": {\"type\": \"summary_text\", \"text\": \"\"}}\n\n",
+          "event: response.reasoning_summary_text.delta\ndata: {\"type\": \"response.reasoning_summary_text.delta\", \"output_index\": 0, \"item_id\": \"rs_1\", \"summary_index\": 0, \"sequence_number\": 3, \"delta\": \"Thinking about it.\"}\n\n",
+          "event: response.output_item.done\ndata: {\"type\": \"response.output_item.done\", \"output_index\": 0, \"sequence_number\": 4, \"item\": {\"id\": \"rs_1\", \"type\": \"reasoning\", \"summary\": [{\"type\": \"summary_text\", \"text\": \"Thinking about it.\"}], \"encrypted_content\": \"ENC-CONTINUATION-1\"}}\n\n",
+          "event: response.output_item.added\ndata: {\"type\": \"response.output_item.added\", \"output_index\": 1, \"sequence_number\": 5, \"item\": {\"id\": \"msg_1\", \"type\": \"message\", \"role\": \"assistant\", \"status\": \"in_progress\", \"content\": []}}\n\n",
+          "event: response.content_part.added\ndata: {\"type\": \"response.content_part.added\", \"output_index\": 1, \"content_index\": 0, \"item_id\": \"msg_1\", \"sequence_number\": 6, \"part\": {\"type\": \"output_text\", \"text\": \"\", \"annotations\": []}}\n\n",
+          "event: response.output_text.delta\ndata: {\"type\": \"response.output_text.delta\", \"output_index\": 1, \"content_index\": 0, \"item_id\": \"msg_1\", \"sequence_number\": 7, \"delta\": \"Hello\", \"logprobs\": []}\n\n",
+          "event: response.output_text.delta\ndata: {\"type\": \"response.output_text.delta\", \"output_index\": 1, \"content_index\": 0, \"item_id\": \"msg_1\", \"sequence_number\": 8, \"delta\": \" there.\", \"logprobs\": []}\n\n",
+          "event: response.output_text.done\ndata: {\"type\": \"response.output_text.done\", \"output_index\": 1, \"content_index\": 0, \"item_id\": \"msg_1\", \"sequence_number\": 9, \"text\": \"Hello there.\", \"logprobs\": []}\n\n",
+          "event: response.content_part.done\ndata: {\"type\": \"response.content_part.done\", \"output_index\": 1, \"content_index\": 0, \"item_id\": \"msg_1\", \"sequence_number\": 10, \"part\": {\"type\": \"output_text\", \"text\": \"Hello there.\", \"annotations\": []}}\n\n",
+          "event: response.output_item.done\ndata: {\"type\": \"response.output_item.done\", \"output_index\": 1, \"sequence_number\": 11, \"item\": {\"id\": \"msg_1\", \"type\": \"message\", \"role\": \"assistant\", \"status\": \"completed\", \"content\": [{\"type\": \"output_text\", \"text\": \"Hello there.\", \"annotations\": []}]}}\n\n",
+          "event: response.completed\ndata: {\"type\": \"response.completed\", \"sequence_number\": 12, \"response\": {\"id\": \"resp_1\", \"object\": \"response\", \"created_at\": 1700000000, \"status\": \"completed\", \"model\": \"gpt-5.5\", \"output\": [{\"id\": \"rs_1\", \"type\": \"reasoning\", \"summary\": [{\"type\": \"summary_text\", \"text\": \"Thinking about it.\"}], \"encrypted_content\": \"ENC-CONTINUATION-1\"}, {\"id\": \"msg_1\", \"type\": \"message\", \"role\": \"assistant\", \"status\": \"completed\", \"content\": [{\"type\": \"output_text\", \"text\": \"Hello there.\", \"annotations\": []}]}], \"error\": null, \"incomplete_details\": null, \"usage\": {\"input_tokens\": 21, \"input_tokens_details\": {\"cached_tokens\": 5}, \"output_tokens\": 40, \"output_tokens_details\": {\"reasoning_tokens\": 30}, \"total_tokens\": 61}, \"parallel_tool_calls\": true, \"tool_choice\": \"auto\", \"tools\": []}}\n\n"
+        ]
+      }
+    }
+  ]
+}

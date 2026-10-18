@@ -575,6 +575,7 @@ describe("RouteModel reply", () => {
     const error = (await rejection(drain(model(send, protocol, { auth: new BearerAuth(KEY) }).stream(REQUEST)))) as ProviderError;
     expect(error).toBeInstanceOf(ProviderError);
     expectScrubbed(error, KEY);
+    expect(error.stack).toContain("[REDACTED]");
     expect(error.message).toBe("openai stream failed (server): bad key [REDACTED]");
     expect(error.kind).toBe("server");
     expect(error.retryable).toBe(false);

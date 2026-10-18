@@ -4,9 +4,9 @@
  * becomes a body and the reply's frames become events) and the transport, making one
  * attempt per call. `callWithRetries` is the one retry loop above it.
  *
- * A status error, and a `ProviderError` from parsing, is scrubbed of the credentials the
- * route sent, in its message and its `stack`; the transport scrubs its own errors, and the
- * AGENT scrubs every error a call raises.
+ * A status error or a `ProviderError` from parsing is scrubbed of the credentials the route
+ * sent, in its message and its `stack`; the transport scrubs its own errors, and the AGENT
+ * scrubs every error a call raises.
  */
 
 import { current } from "../defaults.ts";

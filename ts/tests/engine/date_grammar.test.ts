@@ -1,9 +1,14 @@
 /**
- * The `date`/`datetime` string grammar, a port of the parse tests of
- * `tests/engine/test_date_grammar.py`.
+ * The `date`/`datetime` string grammar, a port of the parse tests and the typed-value tests of
+ * `tests/engine/test_date_grammar.py`. Python builds a `DateValue` to check its text; TS has one
+ * `TypedValue` class with an unchecked constructor, so those rows decode with
+ * `TypedValue.fromWire`, the checked path.
  *
  * The grammar is explicit rather than delegated to `Date.parse`, so these tests pass
  * identically on any runtime.
+ *
+ * Later: `test_seeded_clock_values_fit_the_grammar` (with seeding), the `build_value_as` and
+ * `_scalar_matches` rows (with the write boundary) and the load rows (with the loader).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -15,6 +20,7 @@ import {
   parseDateOrDatetime,
   parseDatetime,
 } from "../../src/typesys/temporal.ts";
+import { TypedValue } from "../../src/typesys/values.ts";
 
 const DATE_MSG = "date must look like 2026-05-21";
 const DATETIME_MSG = "datetime must look like 2026-05-21T14:30[:00][Z|+07:00]";
@@ -159,4 +165,27 @@ describe("parseDateOrDatetime", () => {
   ])("keeps the specific reason: %p", (text, message) => {
     expect(rangeError(() => parseDateOrDatetime(text)).message).toBe(message);
   });
+});
+
+describe("date and datetime typed values", () => {
+  test("a date value keeps the text and rejects other shapes", () => {
+    expect(TypedValue.fromWire({ kind: "date", value: "2026-05-21" }).value).toBe("2026-05-21");
+    const error = rangeError(() => TypedValue.fromWire({ kind: "date", value: "20200101" }));
+    expect(error.message).toContain(DATE_MSG);
+  });
+
+  test.each(["2020-01-01T00:00:00Z", "2020-01-01T00:00:00.5"])(
+    "a datetime value keeps the text: %p",
+    (text) => {
+      expect(TypedValue.fromWire({ kind: "datetime", value: text }).value).toBe(text);
+    },
+  );
+
+  test.each(["2026-05-21", "20200101T000000"])(
+    "a datetime value rejects other shapes: %p",
+    (text) => {
+      const error = rangeError(() => TypedValue.fromWire({ kind: "datetime", value: text }));
+      expect(error.message).toContain(DATETIME_MSG);
+    },
+  );
 });

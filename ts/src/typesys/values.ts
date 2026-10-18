@@ -1,10 +1,19 @@
 /**
- * The typed value system's type half: the type vocabulary `types.ts` builds on.
+ * The typed value system: yian's values, their typed carriers and wire form, the write
+ * boundary that checks a value against a declared type, host value intake, and the type
+ * vocabulary those checks use.
+ *
+ * A value is plain JS data (`Value`): `null`, a `boolean`, a `bigint` int, a `number` float, a
+ * `string`, a `FileRef`, an array or a plain record. A `TypedValue` pairs a value with its
+ * storage kind; the kind tag keeps an int an int and a float a float through the run log's
+ * JSON, so the log can rebuild the same pool on replay. The write boundary wraps a value in
+ * its natural kind or checks it against a declared `Type`; host intake reads a value a host
+ * hands in (a tool or CODE result, an input) into a fresh yian value. Messages show a value
+ * with `valueRepr`, cut to the shown-value cap.
  *
  * `ValueKind` is the closed set of storage tags, and `Type` the resolved structure of a
- * declared type (records, `Literal` tags, typed lists, numeric ranges and unions) that
- * the write boundary checks values against, with its canonical labels, union member
- * order and overlap check.
+ * declared type (records, `Literal` tags, typed lists, numeric ranges and unions), with its
+ * canonical labels, union member order and overlap check.
  */
 
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
@@ -28,6 +37,183 @@ export class TypeCheckError extends RangeError {
     super(message, options);
     this.path = Object.freeze([...(options.path ?? [])]);
   }
+}
+
+/**
+ * The most characters a value or key shown in a message keeps.
+ *
+ * Becomes `current().maxShownValueChars` once the defaults module exists.
+ */
+function shownValueChars(): number {
+  return 200;
+}
+
+/**
+ * Cut text to the shown-value cap (200) for a message, counting code points.
+ *
+ * Returns `text` when it fits; else its first cap - 1 code points and `…`. A surrogate pair
+ * is never split.
+ *
+ * Example: `shownText("x".repeat(500))` gives 199 x's then `…`.
+ */
+export function shownText(text: string): string {
+  const cap = shownValueChars();
+  // A string has at least as many code units as code points.
+  if (text.length <= cap) return text;
+  let index = 0;
+  let cut = 0;
+  for (let count = 0; count < cap; count++) {
+    if (index >= text.length) return text;
+    if (count === cap - 1) cut = index;
+    index += text.codePointAt(index)! > 0xffff ? 2 : 1;
+  }
+  return index >= text.length ? text : text.slice(0, cut) + "…";
+}
+
+/**
+ * Return a value's text form for a message, cut to the shown-value cap (see `shownText`).
+ *
+ * The text form is compact JSON with JS number spelling: `true`, `null`, `2.5`, `2` for the
+ * float 2, `Infinity`, an int's digits, text JSON-quoted, a `FileRef` as its mapping
+ * `{"uri":…,"mime":…,"name":…}`, records in JS property order. A part that isn't a yian
+ * value (a `Date`, a `Map`, a class instance, a symbol, a function, `undefined`) shows as
+ * `<Name object>`, and an int the runtime can't stringify as `<int too large to display>`.
+ * It never throws: when a getter or proxy trap throws, the whole value shows as
+ * `<Name object>`. The writer stops once it has more than the cap can show, so a long list,
+ * a deep value or a cyclic one costs time bounded by the cap.
+ */
+export function valueRepr(value: unknown): string {
+  let text: string;
+  try {
+    text = textForm(value, 2 * shownValueChars() + 2);
+  } catch {
+    // A getter or proxy trap is user code; a broken one must not crash the message.
+    try {
+      return `<${jsTypeName(value)} object>`;
+    } catch {
+      return "<object object>";
+    }
+  }
+  return shownText(text);
+}
+
+/** An open container while writing: its keys (`null` for an array) and the next index. */
+interface TextCursor {
+  readonly container: { readonly [key: string]: unknown } | readonly unknown[];
+  readonly keys: readonly string[] | null;
+  index: number;
+}
+
+/**
+ * Return the text form of `root` (see `valueRepr`), stopping once it holds at least `budget`
+ * code units. The walk uses an explicit stack and reads an array's items as it writes them.
+ */
+function textForm(root: unknown, budget: number): string {
+  let out = "";
+  const stack: ({ value: unknown } | TextCursor)[] = [{ value: root }];
+  while (stack.length > 0 && out.length < budget) {
+    const step = stack[stack.length - 1]!;
+    if ("container" in step) {
+      const size = step.keys === null ? step.container.length : step.keys.length;
+      if (step.index === size) {
+        stack.pop();
+        out += step.keys === null ? "]" : "}";
+        continue;
+      }
+      const index = step.index++;
+      if (index > 0) out += ",";
+      if (step.keys === null) {
+        stack.push({ value: (step.container as readonly unknown[])[index] });
+      } else {
+        const key = step.keys[index]!;
+        out += quoteHead(key, budget) + ":";
+        stack.push({ value: (step.container as { readonly [key: string]: unknown })[key] });
+      }
+      continue;
+    }
+    stack.pop();
+    const value = step.value;
+    if (value === null || typeof value === "boolean" || typeof value === "number") {
+      out += String(value);
+    } else if (typeof value === "bigint") {
+      out += bigintText(value);
+    } else if (typeof value === "string") {
+      out += quoteHead(value, budget);
+    } else if (value instanceof FileRef) {
+      out += "{";
+      const container = value as unknown as { readonly [key: string]: unknown };
+      stack.push({ container, keys: FILE_FIELDS, index: 0 });
+    } else if (Array.isArray(value) && Object.getPrototypeOf(value) === Array.prototype) {
+      out += "[";
+      stack.push({ container: value, keys: null, index: 0 });
+    } else if (isRecord(value)) {
+      out += "{";
+      stack.push({ container: value, keys: Object.keys(value), index: 0 });
+    } else {
+      out += `<${jsTypeName(value)} object>`;
+    }
+  }
+  return out;
+}
+
+/** Return `text` JSON-quoted, quoting only its first `budget` code units when it is longer. */
+function quoteHead(text: string, budget: number): string {
+  // The rendering is cut far before `budget` code units, so the rest can't show.
+  return JSON.stringify(text.length > budget ? text.slice(0, budget) : text);
+}
+
+/** Return an int's digits, or a placeholder when the runtime can't stringify it. */
+function bigintText(value: bigint): string {
+  try {
+    return value.toString();
+  } catch (error) {
+    // JavaScriptCore reports a bigint too large to stringify as a RangeError.
+    if (error instanceof RangeError) return "<int too large to display>";
+    throw error;
+  }
+}
+
+/**
+ * Name a JS value's type for a message: the name of its prototype's own `constructor`
+ * (`Date`, `Map`, `Foo`; not `value.constructor`, which the value can fake), else its
+ * `typeof` (`symbol`, `function`, `undefined`), else `object`.
+ */
+function jsTypeName(value: unknown): string {
+  if (typeof value !== "object" || value === null) return typeof value;
+  const proto: unknown = Object.getPrototypeOf(value);
+  if (proto === null) return "object";
+  const constructor: unknown = Object.getOwnPropertyDescriptor(proto, "constructor")?.value;
+  if (typeof constructor !== "function") return "object";
+  const name: unknown = Object.getOwnPropertyDescriptor(constructor, "name")?.value;
+  return typeof name === "string" && name !== "" ? name : "object";
+}
+
+/**
+ * Render a value path as `a[1].b`, quoting a key that isn't an identifier as `['my key']`.
+ *
+ * Each key is cut with `shownText`, and a rendering longer than four times the shown-value
+ * cap keeps its start and end around `…` (counting code points).
+ */
+export function renderValuePath(path: readonly (string | number)[]): string {
+  const parts: string[] = [];
+  for (const segment of path) {
+    if (typeof segment === "number") {
+      parts.push(`[${segment}]`);
+    } else if (IDENTIFIER.test(segment)) {
+      const shown = shownText(segment);
+      parts.push(parts.length > 0 ? `.${shown}` : shown);
+    } else {
+      parts.push(`[${shownText(reprText(segment))}]`);
+    }
+  }
+  const text = parts.join("");
+  const limit = 4 * shownValueChars();
+  if (text.length <= limit) return text;
+  const points = Array.from(text);
+  if (points.length <= limit) return text;
+  const head = Math.floor(limit / 2);
+  const tail = points.slice(points.length - (limit - head - 1));
+  return points.slice(0, head).join("") + "…" + tail.join("");
 }
 
 // --------------------------------------------------------------------------------------- //
@@ -69,6 +255,28 @@ export type ValueKind = (typeof ValueKind)[keyof typeof ValueKind];
 
 const VALUE_KINDS: ReadonlySet<string> = new Set(Object.values(ValueKind));
 
+/** A kind a value is stored under: every `ValueKind` but the type-only `Any`. */
+export type StorageKind = Exclude<ValueKind, typeof ValueKind.ANY>;
+
+const STORAGE_KINDS: ReadonlySet<string> = new Set(
+  Object.values(ValueKind).filter((kind) => kind !== ValueKind.ANY),
+);
+
+/**
+ * A yian value as JS holds it: `null`, a `boolean`, an int as a `bigint`, a float as a
+ * `number` (never NaN), a `string` (well-formed), a `FileRef`, an array or a `ValueRecord`.
+ */
+export type Value = null | boolean | bigint | number | string | FileRef | Value[] | ValueRecord;
+
+/**
+ * A record: a plain object (prototype `Object.prototype` or `null`) whose own enumerable
+ * string keys are its fields. A record yian builds sets a `__proto__` key with
+ * `Object.defineProperty`, so it stays data.
+ */
+export interface ValueRecord {
+  [key: string]: Value;
+}
+
 /** Return whether `kind` is one of the six `list[...]` kinds. */
 export function isListKind(kind: ValueKind): boolean {
   return LIST_ELEMENT_KIND.has(kind);
@@ -77,6 +285,327 @@ export function isListKind(kind: ValueKind): boolean {
 /** Return the scalar element kind of a list kind (`null` for `LIST_ANY` and scalars). */
 export function listElementKind(kind: ValueKind): ValueKind | null {
   return LIST_ELEMENT_KIND.get(kind) ?? null;
+}
+
+// --------------------------------------------------------------------------------------- //
+// Reserved FILE placeholder
+// --------------------------------------------------------------------------------------- //
+
+/** The fields a `FileRef` is built from; `mime` and `name` default to `null`. */
+export interface FileRefInit {
+  readonly uri: string;
+  readonly mime?: string | null;
+  readonly name?: string | null;
+}
+
+/**
+ * A minimal, opaque file reference: a reserved placeholder.
+ *
+ * Carries only what is needed to round-trip through the typed-value wire form. Its JSON
+ * form is the mapping `{"uri": ..., "mime": ..., "name": ...}`: a `file` slot reads that
+ * mapping as a `FileRef`, and an `object` slot reads a nested `FileRef` as that mapping.
+ * Storage, transfer, size and markdown rendering are absent until file handling is built.
+ * A `FileRef` is frozen.
+ */
+export class FileRef {
+  readonly uri: string;
+  readonly mime: string | null;
+  readonly name: string | null;
+
+  /**
+   * Build a file reference from its fields.
+   *
+   * @throws RangeError when `uri` isn't text, or `mime` or `name` isn't text or null, or a
+   *   field holds a lone surrogate.
+   */
+  constructor({ uri, mime = null, name = null }: FileRefInit) {
+    checkFileField("uri", uri, false);
+    checkFileField("mime", mime, true);
+    checkFileField("name", name, true);
+    this.uri = uri;
+    this.mime = mime;
+    this.name = name;
+    Object.freeze(this);
+  }
+}
+
+/** Require file field `field` to be well-formed text, or null when `nullable`. */
+function checkFileField(field: string, value: unknown, nullable: boolean): void {
+  if (nullable && value === null) return;
+  if (typeof value !== "string") {
+    const expected = nullable ? "text or null" : "text";
+    throw new RangeError(`file ${field} must be ${expected}, got ${valueRepr(value)}`);
+  }
+  if (!value.isWellFormed()) {
+    throw new RangeError(`file ${field} holds a lone surrogate`);
+  }
+}
+
+/** A file's fields: the keys of its JSON form and the only names a dotted read gives. */
+const FILE_FIELDS: readonly ("uri" | "mime" | "name")[] = ["uri", "mime", "name"];
+
+/**
+ * Read field `name` of `value`, as a dotted `${x.name}` read sees it.
+ *
+ * A record gives its own key `name`; a `FileRef` gives its `uri`, `mime` or `name`. Nothing
+ * else is read, so a dotted read never reaches an inherited property such as `constructor`,
+ * `toString` or `__proto__` (unless the record holds it as an own key).
+ *
+ * Returns `[true, field value]` when `value` has the field, else `[false, null]`. A present
+ * field may hold `null`, as a file's unset `mime` does.
+ *
+ * Example: `fieldOf(new FileRef({uri: "a"}), "uri")` gives `[true, "a"]`;
+ * `fieldOf({a: 1n}, "constructor")` gives `[false, null]`.
+ */
+export function fieldOf(value: Value, name: string): [present: boolean, value: Value] {
+  if (isRecord(value)) return Object.hasOwn(value, name) ? [true, value[name]!] : [false, null];
+  if (value instanceof FileRef) {
+    const field = FILE_FIELDS.find((candidate) => candidate === name);
+    if (field !== undefined) return [true, value[field]];
+  }
+  return [false, null];
+}
+
+/**
+ * Return the type of reading field `name` on a `file`, as load checks it.
+ *
+ * `uri` is `str`; `mime` and `name` are `Optional(str)`, since a file may leave them unset. A
+ * file has no other field, so any other name gives `null`.
+ *
+ * Example: `fileFieldType("uri")` gives `Type.scalar(ValueKind.STRING)`;
+ * `fileFieldType("size")` gives `null`.
+ */
+export function fileFieldType(name: string): Type | null {
+  return FILE_FORM.fields!.get(name) ?? null;
+}
+
+/** Whether `value` is a record: a plain object with prototype `Object.prototype` or `null`. */
+function isRecord(value: unknown): value is ValueRecord {
+  if (typeof value !== "object" || value === null) return false;
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+// --------------------------------------------------------------------------------------- //
+// Typed values
+// --------------------------------------------------------------------------------------- //
+
+// ---- Open owner question: a whole number in a `float` slot ---------------------------- //
+
+/**
+ * Whether a `float` carrier may hold `value`: a `number` other than NaN.
+ *
+ * Open owner question. Design 3.2.1 says a whole number filling a `float` slot stays an
+ * int; Python yian and the shared case `values/int_fills_float` widen it to a float, which
+ * is what is implemented: a `float` value is always a `number`. Under widening, a `bigint`
+ * whose `Number()` is infinite (`10n ** 400n`) fails with `int is too large for float`, where
+ * design 3.2.2's mixing rule would give `±Infinity`. If the owner picks "stays an int", this
+ * function and `intInFloatSlot` change together, and a stored value takes either the
+ * `float` kind holding a `bigint` or the `int` kind.
+ */
+function floatSlotHolds(value: unknown): value is number {
+  return typeof value === "number" && !Number.isNaN(value);
+}
+
+// ---- End of the open owner question --------------------------------------------------- //
+
+/** What a typed value of each storage kind holds, for the decoder's messages. */
+const KIND_HOLDS: ReadonlyMap<StorageKind, string> = new Map([
+  [ValueKind.NONE, "null"],
+  [ValueKind.STRING, "a string"],
+  [ValueKind.INTEGER, "a bigint"],
+  [ValueKind.NUMBER, "a number other than NaN"],
+  [ValueKind.DATE, "a string"],
+  [ValueKind.DATETIME, "a string"],
+  [ValueKind.BOOLEAN, "a boolean"],
+  [ValueKind.OBJECT, "a plain record"],
+  [ValueKind.FILE, "a file reference"],
+  [ValueKind.LIST_ANY, "an array"],
+  [ValueKind.LIST_STRING, "an array of strings or null"],
+  [ValueKind.LIST_INTEGER, "an array of bigints or null"],
+  [ValueKind.LIST_NUMBER, "an array of numbers other than NaN, or null"],
+  [ValueKind.LIST_BOOLEAN, "an array of booleans or null"],
+  [ValueKind.LIST_OBJECT, "an array of plain records or null"],
+]);
+
+/** Whether `value` is a scalar of storage kind `kind` (`str`, `int`, `float`, `bool`, `object`). */
+function holdsScalar(kind: ValueKind, value: unknown): boolean {
+  switch (kind) {
+    case ValueKind.STRING:
+      return typeof value === "string";
+    case ValueKind.INTEGER:
+      return typeof value === "bigint";
+    case ValueKind.NUMBER:
+      return floatSlotHolds(value);
+    case ValueKind.BOOLEAN:
+      return typeof value === "boolean";
+    case ValueKind.OBJECT:
+      return isRecord(value);
+    default:
+      return false;
+  }
+}
+
+/**
+ * A value tagged with the storage kind it persists as; frozen.
+ *
+ * The tag is what makes the run log lossless: on a JSON round trip `fromWire` reads it back,
+ * so an int stays an int and a float a float whatever JSON's number spelling. The constructor
+ * doesn't check that `value` fits `kind`; the write boundary and `fromWire` are the checked
+ * ways to build one.
+ */
+export class TypedValue {
+  readonly kind: StorageKind;
+  readonly value: Value;
+
+  /** Pair `value` with `kind` as given, unchecked. */
+  constructor(kind: StorageKind, value: Value) {
+    this.kind = kind;
+    this.value = value;
+    Object.freeze(this);
+  }
+
+  /** Return the plain value (what expressions and node code see). */
+  toObject(): Value {
+    return this.value;
+  }
+
+  /**
+   * Return the wire form `{kind, value}`, with every `FileRef` in the value (the root or
+   * nested) written as its mapping, as the run log's encoder takes it.
+   */
+  toWire(): { kind: StorageKind; value: Value } {
+    return { kind: this.kind, value: filesAsMappings(this.value) };
+  }
+
+  /**
+   * Decode a typed value's wire form strictly.
+   *
+   * `data` must be a plain record with exactly `kind` and `value`; `kind` a storage kind (not
+   * `Any`); and `value` of that kind: `None` null, `str` a string, `int` a `bigint`, `float` a
+   * `number` other than NaN (an int is refused: the log writes a float with `.0`), `date` and
+   * `datetime` text in their grammar, `bool` a boolean, `object` a plain record, `file` a
+   * file's mapping with exactly `uri`, `mime` and `name` (read as a `FileRef`), `list[Any]`
+   * an array, and `list[X]` an array of `X` or null. Contents aren't walked: the lossless
+   * reader made the data.
+   *
+   * @throws RangeError naming the kind when `data` isn't such a wire form.
+   */
+  static fromWire(data: unknown): TypedValue {
+    if (!isRecord(data)) throw new RangeError("typed-value wire must be a JSON object");
+    requireFields(data, ["kind", "value"], "typed value");
+    const kind: unknown = data["kind"];
+    if (typeof kind !== "string" || !STORAGE_KINDS.has(kind)) {
+      throw new RangeError(`typed-value kind must be a storage kind, got ${valueRepr(kind)}`);
+    }
+    const storage = kind as StorageKind;
+    const value = data["value"]!;
+    if (storage === ValueKind.FILE) {
+      if (!isRecord(value)) throw new RangeError("file typed value must contain a JSON object");
+      requireFields(value, FILE_FIELDS, "file reference");
+      return new TypedValue(storage, new FileRef(value as unknown as FileRefInit));
+    }
+    if (storage === ValueKind.DATE || storage === ValueKind.DATETIME) {
+      if (typeof value === "string") {
+        try {
+          if (storage === ValueKind.DATE) parseDate(value);
+          else parseDatetime(value);
+        } catch (error) {
+          if (error instanceof RangeError) {
+            throw new RangeError(`invalid ${storage} typed value: ${error.message}`);
+          }
+          throw error;
+        }
+        return new TypedValue(storage, value);
+      }
+    } else if (storage === ValueKind.NONE ? value === null : holdsScalar(storage, value)) {
+      return new TypedValue(storage, value);
+    } else if (isListKind(storage) && Array.isArray(value)) {
+      const element = listElementKind(storage);
+      if (element === null || value.every((item) => item === null || holdsScalar(element, item))) {
+        return new TypedValue(storage, value);
+      }
+    }
+    const expected = KIND_HOLDS.get(storage)!;
+    throw new RangeError(
+      `invalid ${storage} typed value: expected ${expected}, got ${valueRepr(value)}`,
+    );
+  }
+}
+
+/**
+ * Require `record`'s own keys to be exactly `expected`.
+ *
+ * @throws RangeError listing the missing and extra keys, each sorted.
+ */
+function requireFields(record: ValueRecord, expected: readonly string[], label: string): void {
+  const actual = Object.keys(record);
+  const missing = expected.filter((key) => !Object.hasOwn(record, key)).sort(compareCodeUnits);
+  const extra = actual.filter((key) => !expected.includes(key)).sort(compareCodeUnits);
+  if (missing.length > 0 || extra.length > 0) {
+    throw new RangeError(
+      `invalid ${label} fields; missing=${pythonList(missing)}, extra=${pythonList(extra)}`,
+    );
+  }
+}
+
+/** Spell a list of names as Python prints it: `['a', 'b']`. */
+function pythonList(names: readonly string[]): string {
+  return "[" + names.map(reprText).join(", ") + "]";
+}
+
+/**
+ * Return `root` with every `FileRef` in it as its mapping, copying the containers.
+ *
+ * The walk uses an explicit stack, so any depth copies, and copies a shared container once.
+ * `root` must be acyclic, as every yian value is.
+ */
+function filesAsMappings(root: Value): Value {
+  const copies = new Map<Value[] | ValueRecord, Value>();
+  const copied = (value: Value): Value => {
+    if (value instanceof FileRef) return { uri: value.uri, mime: value.mime, name: value.name };
+    if (typeof value === "object" && value !== null) return copies.get(value)!;
+    return value;
+  };
+  const stack: [Value[] | ValueRecord, boolean][] = [];
+  const visit = (value: Value): void => {
+    if (typeof value === "object" && value !== null && !(value instanceof FileRef)) {
+      if (!copies.has(value)) stack.push([value, false]);
+    }
+  };
+  visit(root);
+  while (stack.length > 0) {
+    const [node, children] = stack.pop()!;
+    if (copies.has(node)) continue;
+    const items = Array.isArray(node) ? node : Object.values(node);
+    if (!children) {
+      stack.push([node, true]);
+      items.forEach(visit);
+      continue;
+    }
+    if (Array.isArray(node)) {
+      copies.set(node, node.map(copied));
+    } else {
+      const record: ValueRecord = {};
+      for (const [key, item] of Object.entries(node)) setField(record, key, copied(item));
+      copies.set(node, record);
+    }
+  }
+  return copied(root);
+}
+
+/** Set `record[key]` as an own data property, so a `__proto__` key stays data. */
+function setField(record: ValueRecord, key: string, value: Value): void {
+  if (key === "__proto__") {
+    Object.defineProperty(record, key, {
+      value,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+  } else {
+    record[key] = value;
+  }
 }
 
 // --------------------------------------------------------------------------------------- //

@@ -438,6 +438,18 @@ describe("the request's signal", () => {
     expect((error as Error).name).toBe("AbortError");
   });
 
+  test("abort() during a pending read of a body ignoring the signal rejects it with an AbortError", async () => {
+    const h = harness({ steps: [{ at: 0, chunk: "a" }, { at: 100 * S, chunk: "b" }] });
+    const exchange = await h.open();
+    const iterator = exchange.body;
+    await iterator.next();
+    const pending = iterator.next();
+    void h.clock.sleep(5 * S).then(() => exchange.abort());
+    const error = await failure(pending);
+    expect(error).not.toBeInstanceOf(ProviderError);
+    expect((error as Error).name).toBe("AbortError");
+  });
+
   test("a reply from a sender ignoring the signal after a timeout is released", async () => {
     const h = harness({ after: 300 * S, ignoreSignal: true, steps: [{ at: 300 * S, chunk: "a" }] });
     expectTimeout(await failure(h.open()), NO_RESPONSE);

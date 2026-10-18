@@ -960,6 +960,17 @@ describe("safeFetch", () => {
     expect(calls).toEqual([]);
   });
 
+  test("an invalid header value is refused without echoing it, and nothing is sent", async () => {
+    const { send, calls } = fakeSend();
+    const error = await rejection(safeFetch("https://api.example/v1", { headers: { "x-k": "sec\nret" } }, send));
+    expect(error).toBeInstanceOf(TypeError);
+    const message = (error as TypeError).message;
+    expect(message).toBe("request headers are not valid HTTP header text");
+    for (const leak of ["sec", "ret", "x-k"]) expect(message).not.toContain(leak);
+    expect((error as TypeError).cause).toBeUndefined();
+    expect(calls).toEqual([]);
+  });
+
   test("send gets manual redirects, no runtime timeout and the caller's signal, method, body and headers", async () => {
     const { send, calls } = fakeSend();
     const signal = new AbortController().signal;

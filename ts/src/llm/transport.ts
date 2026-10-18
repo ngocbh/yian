@@ -21,7 +21,10 @@ export interface ExchangeOptions {
   provider: string;
   /** The secrets to scrub from error text, read when an error is built. */
   credentials: () => Iterable<string>;
-  /** Stops the exchange; a stop rejects with `signal.reason` from wherever it is pending. */
+  /**
+   * Stops the exchange; a stop rejects with `signal.reason` from wherever it is pending, even
+   * when the sender's body ignores the signal.
+   */
   signal?: AbortSignal;
   /** The clock the timers run on; defaults to `realScheduler`. */
   scheduler?: Scheduler;
@@ -44,8 +47,8 @@ export interface Exchange {
    */
   readonly body: AsyncGenerator<Uint8Array>;
   /**
-   * Abort the request and release the body; a pending read rejects with the request
-   * signal's reason (an `AbortError`).
+   * Abort the request and release the body; a pending read rejects with an `AbortError`,
+   * even when the sender's body ignores the signal.
    */
   abort(): void;
 }
@@ -116,7 +119,11 @@ async function timed<T>(
     const timer = scheduler.sleep(ms, perWait.signal).then(() => {
       throw onTimeout();
     });
-    return await Promise.race([work, timer]);
+    const result = await Promise.race([work, timer]);
+    // A read that settles at once (a replayed chunk, the end a cancel gives) can win the race
+    // against a stop or `abort()`.
+    if (signal?.aborted) throw signal.reason;
+    return result;
   } finally {
     signal?.removeEventListener("abort", stop);
     // Ends the timer's sleep: a leftover would keep a real process alive or move a virtual clock.

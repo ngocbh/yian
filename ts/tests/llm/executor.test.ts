@@ -18,7 +18,7 @@ import {
 } from "../../src/llm/executor.ts";
 import { SSEEvent } from "../../src/llm/framing.ts";
 import { Message, Request, Response as ModelResponse, TextPart } from "../../src/llm/messages.ts";
-import { ScriptedModel } from "../../src/llm/testing.ts";
+import { type Cassette, CassetteReplay, ScriptedModel } from "../../src/llm/testing.ts";
 import { Route } from "../../src/llm/route.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 
@@ -660,6 +660,25 @@ describe("RouteModel stream lifetime", () => {
   });
 });
 
+/** A cassette answering the test route's request with four SSE chunks, one per read. */
+function replayedReply(): Cassette {
+  const request = { method: "POST", url: "https://api.example/v1/responses?api-version=2026-01-01", json: BODY };
+  const chunks = ["data: a\n\n", "data: b\n\n", "data: c\n\n", "data: [DONE]\n\n"];
+  return { format: "yian.cassette.v1", source: "synthetic", description: "test", interactions: [{ request, response: { status: 200, chunks } }] };
+}
+
+describe("RouteModel over a cassette", () => {
+  test("a stop after the first event ends the stream with the reason", async () => {
+    const replay = new CassetteReplay(replayedReply());
+    const controller = new AbortController();
+    const stream = model(replay.send).stream(REQUEST, { signal: controller.signal });
+    expect(await stream.next()).toEqual({ done: false, value: new TextDelta(0, "a") });
+    const reason = new Error("stop");
+    controller.abort(reason);
+    expect(await rejection(drain(stream))).toBe(reason);
+  });
+});
+
 // callWithRetries
 
 const OK = new ModelResponse({
@@ -911,6 +930,27 @@ describe("callWithRetries order and hooks", () => {
     expect(sent[0]!.signal.aborted).toBe(true);
   });
 
+  test("an async onEvent's rejection ends the call and is never retried", async () => {
+    const model = new ScriptedModel([[PARTIAL, statusError(500)], OK]);
+    const failed = new Error("publish failed");
+    let retried = false;
+    const error = await rejection(
+      callWithRetries(model, REQUEST, {
+        scheduler: virtualScheduler(0),
+        onEvent: async () => {
+          await Promise.resolve();
+          throw failed;
+        },
+        onRetry: () => {
+          retried = true;
+        },
+      }),
+    );
+    expect(error).toBe(failed);
+    expect(retried).toBe(false);
+    expect(model.requests).toHaveLength(1);
+  });
+
   test("a throw from onAttempt ends the call and is never retried", async () => {
     const model = failingOnce(statusError(500), false);
     const failed = new Error("publish failed");
@@ -1037,6 +1077,51 @@ describe("callWithRetries stops", () => {
     expect(error).toBe(reason);
     expect(attempts).toEqual([]);
     expect(model.requests).toHaveLength(0);
+  });
+
+  test("a stop after the first event of a replayed reply rejects with the reason and makes no retry", async () => {
+    const replay = new CassetteReplay(replayedReply());
+    const model = new RouteModel({ route: route({ query: { "api-version": "2026-01-01" } }), protocol: sse(), send: replay.send });
+    const controller = new AbortController();
+    const reason = new Error("stop");
+    const retries: RetryInfo[] = [];
+    const error = await rejection(
+      callWithRetries(model, REQUEST, {
+        signal: controller.signal,
+        scheduler: virtualScheduler(0),
+        onEvent: () => controller.abort(reason),
+        onRetry: (retry) => void retries.push(retry),
+      }),
+    );
+    expect(error).toBe(reason);
+    expect(retries).toEqual([]);
+    expect(replay.requests).toHaveLength(1);
+  });
+
+  test("a stop landing as a retryable error is thrown rejects with the reason and never calls onRetry", async () => {
+    const controller = new AbortController();
+    const reason = new Error("stop");
+    const model: ChatModel = {
+      provider: "openai",
+      model: "m",
+      stream: () =>
+        new EventStream(
+          (async function* (): AsyncGenerator<Event> {
+            controller.abort(reason);
+            throw statusError(500);
+          })(),
+        ),
+    };
+    const retries: RetryInfo[] = [];
+    const error = await rejection(
+      callWithRetries(model, REQUEST, {
+        signal: controller.signal,
+        scheduler: virtualScheduler(0),
+        onRetry: (retry) => void retries.push(retry),
+      }),
+    );
+    expect(error).toBe(reason);
+    expect(retries).toEqual([]);
   });
 
   test("the signal reaches model.stream", async () => {

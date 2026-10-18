@@ -366,8 +366,11 @@ async function receive(input: string | URL, init: RequestInit): Promise<Received
   return { method: (init.method ?? "GET").toUpperCase(), url: String(input), headers: new Headers(init.headers), body };
 }
 
-/** Build the response a recorded interaction describes, its body read one chunk per pull. */
-function replayResponse(recorded: CassetteResponse): globalThis.Response {
+/**
+ * Build the response a recorded interaction describes, its body read one chunk per pull and
+ * errored with `signal`'s reason once it aborts, as fetch's is.
+ */
+function replayResponse(recorded: CassetteResponse, signal: AbortSignal | null | undefined): globalThis.Response {
   let texts: string[];
   if (Object.hasOwn(recorded, "chunks")) texts = recorded.chunks!;
   else if (Object.hasOwn(recorded, "json")) texts = [encodeBody(recorded.json, "cassette json")];
@@ -376,6 +379,9 @@ function replayResponse(recorded: CassetteResponse): globalThis.Response {
   let next = 0;
   const body = new ReadableStream<Uint8Array>(
     {
+      start(controller) {
+        signal?.addEventListener("abort", () => controller.error(signal.reason));
+      },
       pull(controller) {
         if (next < texts.length) controller.enqueue(encoder.encode(texts[next++]!));
         else controller.close();
@@ -428,7 +434,7 @@ export class CassetteReplay {
       if (diffs.length > MAX_DIFFS) shown.push(`... and ${diffs.length - MAX_DIFFS} more`);
       throw new Error(`request ${number} does not match the cassette:\n  ${shown.join("\n  ")}`);
     }
-    return replayResponse(interaction.response);
+    return replayResponse(interaction.response, init.signal);
   };
 
   /**

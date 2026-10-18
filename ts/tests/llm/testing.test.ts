@@ -257,6 +257,18 @@ describe("CassetteReplay", () => {
     expect(reads).toEqual(chunks);
   });
 
+  test("replay's body errors with the signal's reason once it aborts, as fetch's does", async () => {
+    const chunks = ["data: one\n\n", "data: two\n\n"];
+    const replay = new CassetteReplay(oneInteraction({ method: "GET", url: "https://h.test/" }, { status: 200, chunks }));
+    const controller = new AbortController();
+    const reply = await safeFetch("https://h.test/", { signal: controller.signal }, replay.send);
+    const reader = reply.body!.getReader();
+    await reader.read();
+    const reason = new Error("stopped");
+    controller.abort(reason);
+    expect(await rejection(reader.read())).toBe(reason);
+  });
+
   test("replay serves a 204 with no body", async () => {
     const replay = new CassetteReplay(oneInteraction({ method: "GET", url: "https://h.test/" }, { status: 204, text: "" }));
     const reply = await send(replay, "https://h.test/");

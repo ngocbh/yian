@@ -679,12 +679,13 @@ export function redirectDetail(location: string | null): string {
  * Send one HTTP request through `send` (default the runtime's fetch) without following
  * redirects: every outbound request goes through here.
  *
- * Refuses, before sending and without echoing the URL, a URL that doesn't parse or isn't
- * `http:`/`https:` and one with user info, each with a `TypeError`. Sends the caller's
- * `init` with `redirect: "manual"` over whatever it says, `timeout: false` (Bun's own
- * request timeout off; Node ignores the key) and `User-Agent: USER_AGENT` unless the
- * caller set one. Returns any non-3xx response as is; for a 3xx it cancels the body and
- * throws `RedirectError`, so credential headers never reach a second origin.
+ * Refuses, before sending and without echoing the URL or headers, a URL that doesn't parse
+ * or isn't `http:`/`https:`, one with user info, and headers that aren't valid HTTP header
+ * text, each with a `TypeError`. Sends the caller's `init` with `redirect: "manual"` over
+ * whatever it says, `timeout: false` (Bun's own request timeout off; Node ignores the key)
+ * and `User-Agent: USER_AGENT` unless the caller set one. Returns any non-3xx response as
+ * is; for a 3xx it cancels the body and throws `RedirectError`, so credential headers never
+ * reach a second origin.
  */
 export async function safeFetch(
   input: string | URL,
@@ -702,7 +703,13 @@ export async function safeFetch(
     throw new TypeError("request URL is not a valid http(s) URL");
   }
   if (url.username || url.password) throw new TypeError("request URL must not contain user info");
-  const headers = new Headers(init.headers);
+  // Both runtimes echo an invalid header value, which may be a credential.
+  let headers: Headers;
+  try {
+    headers = new Headers(init.headers);
+  } catch {
+    throw new TypeError("request headers are not valid HTTP header text");
+  }
   if (!headers.has("user-agent")) headers.set("user-agent", USER_AGENT);
   const sent: RequestInit & { timeout: false } = { ...init, headers, redirect: "manual", timeout: false };
   const response = await send(input, sent);

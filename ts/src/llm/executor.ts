@@ -203,10 +203,10 @@ export interface CallOptions {
   scheduler?: Scheduler;
   /** A value in [0, 1) for backoff jitter; defaults to `Math.random`. */
   random?: () => number;
-  /** Runs right before each attempt's `model.stream`, after any wait. */
-  onAttempt?(attempt: number): void;
-  /** Runs for each event an attempt streams, with the attempt's number. */
-  onEvent?(event: Event, attempt: number): void;
+  /** Runs, and is awaited, right before each attempt's `model.stream`, after any wait. */
+  onAttempt?(attempt: number): void | Promise<void>;
+  /** Runs, and is awaited, for each event an attempt streams, with the attempt's number. */
+  onEvent?(event: Event, attempt: number): void | Promise<void>;
   /** Runs, and is awaited, before each wait. */
   onRetry?(retry: RetryInfo): void | Promise<void>;
 }
@@ -223,8 +223,7 @@ export interface CallOptions {
  */
 export function retryDelay(error: ProviderError, retries: number, random: () => number): number {
   const after = error.retryAfter;
-  // A longer retry-after is refused when the error is built, unless `x-should-retry: true`
-  // overrides the refusal; then the backoff applies instead of the long wait.
+  // A non-finite or out-of-range retry-after (an adapter-built error, `inf`) gets the backoff instead.
   if (after !== null && Number.isFinite(after) && after > 0 && after <= MAX_RETRY_AFTER_SECONDS) return after;
   // The exponent is capped as openai does, so a huge retry count can't overflow.
   return Math.min(0.5 * 2 ** Math.min(retries, 1000), 8) * (1 - 0.25 * random());
@@ -251,7 +250,7 @@ export async function callWithRetries(model: ChatModel, request: Request, option
   for (let attempt = 1; ; attempt++) {
     // Before `onAttempt`, so a stopped call never announces an attempt that won't be sent.
     signal?.throwIfAborted();
-    onAttempt?.(attempt);
+    await onAttempt?.(attempt);
     const assembler = new ReplyAssembler();
     // Set while `onEvent` runs, so a hook's error is never taken for the model's.
     let inHook = false;
@@ -259,11 +258,13 @@ export async function callWithRetries(model: ChatModel, request: Request, option
       for await (const event of model.stream(request, { signal })) {
         assembler.add(event);
         inHook = true;
-        onEvent?.(event, attempt);
+        await onEvent?.(event, attempt);
         inHook = false;
       }
       return assembler.response();
     } catch (error) {
+      // A stopped call ends with its reason, never an `onRetry` for an attempt it won't make.
+      if (signal?.aborted) throw signal.reason;
       if (inHook || !(error instanceof ProviderError)) throw error;
       error.provider ??= model.provider;
       const retries = attempt - 1;

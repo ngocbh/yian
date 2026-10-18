@@ -292,15 +292,15 @@ run before appending any record.
   carry the key on: the `anthropic` and `google` clients do not follow redirects
   from a `base_url`, the `azure` client drops its `api-key` header on a redirect to
   another origin, and the OpenAI-compatible clients drop their `Authorization`
-  header on one. Changed (TS yian): no request follows a redirect, whatever the
-  provider; a 3xx reply fails the call with a `redirect` provider error that names
-  only the target's scheme and host. It is not secret: the log records it on the agents marked for the
+  header on one. It is not secret: the log records it on the agents marked for the
   key, and an `openai` agent's host connection uses it as its endpoint. `resume_flow` and
   `result.backward` send the re-supplied key to that recorded URL; neither the
   provider's endpoint variable nor `OPENAI_BASE_URL` changes it. `ProfileMemory`
   takes one beside its own key; `ReflectiveMemory` rejects one except an Azure
   endpoint beside `provider: azure`. Both memories take an Azure endpoint without a
-  key.
+  key. Changed (TS yian): no request follows a redirect, whatever the provider; a
+  3xx reply fails the call with a `redirect` provider error that names only the
+  target's scheme and host.
 
   The connection settings go wherever the key goes, so each is accepted only beside
   `api_key` and `provider` in this run layer, and flow files cannot set them at any

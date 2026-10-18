@@ -8,6 +8,7 @@ flow: |
       output: str
       code: |
         console.log("noise");
+        (await import("node:fs")).writeSync(1, "raw\n");
         return "x";
   output: ${talk.output}
 python_flow: |

@@ -596,7 +596,8 @@ for a run-level failure. Its `code` is one of the
 A `--json` command that exits 1 without its own result document writes an error
 document, `{"format", "error": <diagnostic>}`. `error.code` is one of:
 
-- `compose.load`: the flow doesn't load (`yian run`); the frames locate the problem.
+- `compose.load`: the flow doesn't load (`yian run`); the frames, when present, locate the
+  problem.
 - `defaults.invalid`: a `YIAN_<NAME>` variable holds a value it doesn't accept (any
   command).
 - `run.setup`: the run could not start or recover. This covers memory, MCP, and
@@ -717,8 +718,8 @@ two, or whose only key is `$record`, is wrapped as `{"$record": ...}`, so
 `{"$record": 1}` is written `{"$record": {"$record": 1}}`.
 
 During a `--json` run, anything else written to stdout, such as a CODE node's
-`print` or the output of a command it starts, goes to stderr. `--json` changes nothing else: prompts, key checks, and exit
-codes are the same as without it.
+`print` or the output of a command it starts, goes to stderr. `--json` changes nothing
+else: prompts, key checks, and exit codes are the same as without it.
 
 ## Exit codes
 

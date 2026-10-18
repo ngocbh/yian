@@ -45,8 +45,8 @@ from __future__ import annotations
 import asyncio
 from concurrent.futures import CancelledError
 from contextlib import contextmanager, redirect_stdout
-from functools import partial
 import errno
+from functools import partial
 import itertools
 import json
 import os

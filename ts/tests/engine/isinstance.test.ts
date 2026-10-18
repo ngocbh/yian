@@ -1,18 +1,17 @@
 /**
  * `isinstance(x, T)` in the expression language: the evaluation and parse tests of
- * `tests/engine/test_isinstance.py`, the `expr_refs`/`condition_refs`/`rewrite_*` parts of
- * `test_reference_walks_skip_the_type_name` and `test_rewrites_leave_the_type_name_alone`,
- * `test_isinstance_subject_is_the_tested_expression`,
- * `test_infer_expr_type_gives_bool_without_looking_up_the_type_name`, and an
- * `isinstanceTypeNames` test.
+ * `tests/engine/test_isinstance.py`, `test_reference_walks_skip_the_type_name`,
+ * `test_rewrites_leave_the_type_name_alone`, `test_isinstance_subject_is_the_tested_expression`,
+ * `test_infer_expr_type_gives_bool_without_looking_up_the_type_name`,
+ * `test_eval_binding_and_eval_template_use_the_type_table` (an embedded `false` is written
+ * `false`), the co-skip, flow-callee and prompt-function tests, and an `isinstanceTypeNames`
+ * test.
  *
  * `isinstance` is a special form: the first argument is an expression, the second a bare type
  * name looked up in the type table (`types`, a `Map`), never a reference.
  *
- * Left for later: `test_eval_binding_and_eval_template_use_the_type_table`, the co-skip,
- * flow-callee and prompt-function tests and the template parts of the walk and rewrite tests
- * land with `template.ts`; the tracing test with `lineage.ts`; the node, case and loop tests
- * (from `test_a_node_starts_with_an_empty_type_table` on) with compose and `run.ts`.
+ * Left for later: the tracing test lands with `lineage.ts`; the node, case and loop tests (from
+ * `test_a_node_starts_with_an_empty_type_table` on) with compose and `run.ts`.
  */
 
 import { expect, test } from "bun:test";
@@ -32,6 +31,16 @@ import {
   rewriteExprRefs,
 } from "../../src/expr/expressions.ts";
 import { type ExprNode, parseExpr, Token } from "../../src/expr/grammar.ts";
+import {
+  bindingCoSkips,
+  evalBinding,
+  evalTemplate,
+  exprRefsOf,
+  flowCallCalleesInSpans,
+  promptRefs,
+  rewriteTemplateRefs,
+  scanTemplate,
+} from "../../src/expr/template.ts";
 import { Type, type Value, type ValueRecord, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import { fieldOf } from "../../src/typesys/values.ts";
 
@@ -113,6 +122,14 @@ test("evaluateWhen uses the type table", () => {
   pool.set("d", A_SELL);
   expect(evaluateWhen("isinstance(d.output, Sell)", pool, TYPES)).toBe(true);
   expect(evaluateWhen("isinstance(d.output, Buy)", pool, TYPES)).toBe(false);
+});
+
+test("evalBinding and evalTemplate use the type table", () => {
+  const resolve = resolver({ d: { output: A_BUY } });
+  expect(evalBinding("${isinstance(d.output, Buy)}", resolve, { types: TYPES })).toBe(true);
+  expect(evalBinding("buy? ${isinstance(d.output, Sell)}", resolve, { types: TYPES })).toBe("buy? false");
+  const segments = scanTemplate("${isinstance(d.output, Buy)}");
+  expect(evalTemplate(segments, resolve, { types: TYPES })).toBe(true);
 });
 
 test("scalar type names check scalars", () => {
@@ -233,12 +250,14 @@ test("reference walks skip the type name", () => {
   expect(exprRefs(parseExpr("isinstance(d.output, Buy)"))).toEqual(["d.output"]);
   expect(conditionRefs("isinstance(d.output, Buy) and d.output.qty > 1")).toEqual(["d.output", "d.output.qty"]);
   expect(conditionRefs("${isinstance(d.output, Buy)}")).toEqual(["d.output"]);
+  expect(exprRefsOf("ok: ${isinstance(d.output, Buy)}")).toEqual(["d.output"]);
 });
 
 test("rewrites leave the type name alone", () => {
   const rename = (path: string) => "x." + path;
   expect(rewriteExprRefs("isinstance(d.output, Buy)", rename)).toBe("isinstance(x.d.output, Buy)");
   expect(rewriteConditionRefs("${isinstance(d.output, Buy)}", rename)).toBe("${isinstance(x.d.output, Buy)}");
+  expect(rewriteTemplateRefs("ok ${isinstance(d.output, Buy)}", rename)).toBe("ok ${isinstance(x.d.output, Buy)}");
 });
 
 /** A position-blind form of `node`, as Lark's `Tree`/`Token` equality ignores positions. */
@@ -277,4 +296,22 @@ test("isinstanceTypeNames lists each type name once, in source order", () => {
   expect(isinstanceTypeNames(parseExpr("isinstance(x, Buy) or isinstance(y, int)"))).toEqual(["Buy", "int"]);
   expect(isinstanceTypeNames(parseExpr("isinstance(x, Buy) and not isinstance(y.z, Buy)"))).toEqual(["Buy"]);
   expect(isinstanceTypeNames(parseExpr("x"))).toEqual([]);
+});
+
+test("an isinstance binding does not co-skip", () => {
+  expect(bindingCoSkips("${isinstance(d.output, Buy)}")).toBe(false);
+  expect(bindingCoSkips("${upper(d.output)}")).toBe(false);
+});
+
+// --- callee and prompt handling --- //
+
+test("isinstance is not a flow callee", () => {
+  expect(flowCallCalleesInSpans("${isinstance(x, Buy)}")).toEqual([]);
+  expect(flowCallCalleesInSpans("${isinstance(x, Buy) and flow(a=1)}")).toEqual(["flow"]);
+});
+
+test("isinstance is not a prompt function", () => {
+  const message = "isinstance is not a prompt function; compute it in an input binding";
+  expectError(() => promptRefs("${isinstance(x, Buy)}"), message);
+  expectError(() => promptRefs("Order: ${render_as_json(x)} ${upper(isinstance(x, Buy))}"), message);
 });

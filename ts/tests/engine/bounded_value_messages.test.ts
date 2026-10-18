@@ -5,7 +5,9 @@
  * Also here: `test_long_ints.py::test_value_repr_of_a_small_int`, and the path renderings of
  * `test_nonfinite_values.py::test_reject_nonfinite_names_where_and_path`. The spelling,
  * placeholder and bounded-rendering rows are TS-only: a message shows a value in its text form
- * (JSON style, JS number spelling), not Python's `repr`.
+ * (JSON style, JS number spelling), not Python's `repr`. Also TS-only: a test pinning
+ * `valueRepr` to `writeAsText`, the text form builtins and templates write, for every value that
+ * isn't text.
  *
  * The unknown-field rows check `buildValueAs`;
  * `test_record_sorts_mixed_unknown_keys_by_type_without_crashing` keeps its two long names (a
@@ -30,8 +32,10 @@ import {
   shownText,
   Type,
   TypeCheckError,
+  type Value,
   ValueKind,
   valueRepr,
+  writeAsText,
 } from "../../src/typesys/values.ts";
 
 const CAP = 200;
@@ -125,6 +129,23 @@ describe("valueRepr", () => {
     const shown = valueRepr(huge);
     expect(shown).toHaveLength(CAP);
     expect(shown.startsWith("[<undefined object>,<undefined object>,")).toBe(true);
+  });
+
+  test("a message shows a value that isn't text in its text form", () => {
+    const values: Value[] = [
+      true,
+      12n,
+      10n ** 25n,
+      1.5,
+      1,
+      Infinity,
+      -Infinity,
+      null,
+      [1n, "a", null],
+      { b: 1n, "2": [true] },
+      new FileRef({ uri: "s3://b/k", mime: "text/plain" }),
+    ];
+    for (const value of values) expect(valueRepr(value)).toBe(writeAsText(value));
   });
 });
 

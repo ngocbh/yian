@@ -30,7 +30,7 @@ import {
   type VariablePool,
 } from "../typesys/index.ts";
 import { fieldOf, fileFieldType, fromHost, isRecord, valueRepr } from "../typesys/values.ts";
-import { bindArguments, TEMPLATE_FNS, type TemplateFn } from "./builtins.ts";
+import { bindArguments, kindName, TEMPLATE_FNS, type TemplateFn } from "./builtins.ts";
 // grammar.ts imports this module too, so its exports are used only inside functions here.
 import {
   callSuffixOf,
@@ -231,23 +231,6 @@ function numeric(value: Value): bigint | number | null {
   return typeof value === "bigint" || typeof value === "number" ? value : null;
 }
 
-/** Return a value's kind as messages name it: `null`, `bool`, `int`, `float`, `str`, `list`, `record` or `file`. */
-function kindName(value: Value): string {
-  if (value === null) return "null";
-  switch (typeof value) {
-    case "boolean":
-      return "bool";
-    case "bigint":
-      return "int";
-    case "number":
-      return "float";
-    case "string":
-      return "str";
-  }
-  if (Array.isArray(value)) return "list";
-  return FileRef.isFileRef(value) ? "file" : "record";
-}
-
 /** Return the error for `lhs op rhs` on a pair of operand kinds `op` doesn't take. */
 function operandKindsError(op: string, lhs: Value, rhs: Value): ExpressionError {
   return new ExpressionError(
@@ -296,12 +279,12 @@ export function parseCondition(expression: string, types: ReadonlyMap<string, un
  * builtin is a `T(...)` constructor, checked against `types` when given.
  *
  * @param tree A tree from `parseExpr`.
- * @param types The type table constructor names must be in, or `null` to leave them to the
- *   caller.
+ * @param types The type table constructor names must be in, or `null` (the default) to leave
+ *   them to the caller.
  * @throws {ExpressionError} If a builtin's parameters can't bind the call's positional count and
  *   keyword names, or, with `types`, a callee is neither a builtin nor in it.
  */
-function checkCalls(tree: ExprNode, types: ReadonlyMap<string, unknown> | null): void {
+export function checkCalls(tree: ExprNode, types: ReadonlyMap<string, unknown> | null = null): void {
   if (!(tree instanceof Tree)) return;
   for (const node of iterSubtreesTopdown(tree)) {
     if (node.data !== "refcall") continue;
@@ -1341,8 +1324,9 @@ export function exprRefs(tree: ExprNode): string[] {
 function collectExprRefs(node: ExprNode, refs: string[]): void {
   if (node instanceof Token) return; // a lone NUMBER / STRING / BOOL / NULL literal names no reference
   if (node.data === "refcall") {
-    // Keep in sync with the evaluator's refcall decomposition and `collectRefEdits`: each finds
-    // the call_suffix and joins the path (leading NAME + trailer segments) the same way.
+    // Keep in sync with the evaluator's refcall decomposition, `collectRefEdits` and
+    // `conditionReadLeaves` in `template.ts`: each finds the call_suffix and joins the path
+    // (leading NAME + trailer segments) the same way.
     const children = node.children;
     const callSuffix = callSuffixOf(node);
     if (callSuffix === undefined) {
@@ -1387,8 +1371,8 @@ export function rewriteExprRefs(text: string, rename: (path: string) => string |
 
 /**
  * Walk `node`, collecting a `[start, end, replacement]` splice for each renamed reference leaf.
- * Keep in sync with `collectExprRefs`: the same refcall / builtin-argument decomposition, but
- * capturing token source positions to edit in place.
+ * Keep in sync with `collectExprRefs` (and `rewriteConditionReads` in `template.ts`): the same
+ * refcall / builtin-argument decomposition, but capturing token source positions to edit in place.
  */
 function collectRefEdits(
   node: ExprNode,

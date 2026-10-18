@@ -1,18 +1,16 @@
 /**
  * `T(...)` constructors in the expression language: the parse and evaluation tests of
  * `tests/engine/test_constructor_expr.py` (call shape, the positional and keyword forms, larger
- * expressions, names that are not constructors), its walker tests (`expr_refs`,
- * `rewrite_expr_refs`, `constructor_names`) and its static inference tests.
- * `test_a_builtin_still_mixes_positional_and_keyword_arguments` calls a `join` stand-in.
+ * expressions, names that are not constructors, a constructor in an embedded template span),
+ * its walker tests (`expr_refs`, `rewrite_expr_refs`, `constructor_names`), the co-skip,
+ * flow-callee and prompt tests, and its static inference tests.
  *
- * Left for later: `test_a_constructor_in_an_embedded_template_span`, the co-skip, flow-callee
- * (`test_a_typedef_name_is_not_a_flow_callee`) and prompt tests land with `template.ts`; the
- * route and feedback tests with `lineage.ts`; the binder tests with `nodes/binding.ts`.
+ * Left for later: the route and feedback tests land with `lineage.ts`; the binder tests with
+ * `nodes/binding.ts`.
  */
 
-import { afterEach, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 
-import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
 import {
   ConstructorTypeError,
   constructorNames,
@@ -25,6 +23,7 @@ import {
   rewriteExprRefs,
 } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
+import { bindingCoSkips, evalBinding, flowCallCalleesInSpans, promptRefs } from "../../src/expr/template.ts";
 import { Type, typeFor, type Value, type ValueRecord, ValueKind } from "../../src/typesys/index.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
 import { fieldOf } from "../../src/typesys/values.ts";
@@ -72,24 +71,6 @@ function expectError(run: () => unknown, message: string, cls: typeof Expression
   expect(error.message).toBe(message);
 }
 
-// Each registration's previous entry (or its absence), put back after the test, as Python's
-// `monkeypatch.setitem` does.
-const saved: [string, TemplateFn | undefined][] = [];
-
-/** Register a stand-in builtin `name` taking `params` and running `call`, for this test only. */
-function standIn(name: string, params: TemplateParam[], call: (...args: Value[]) => unknown = () => null): void {
-  saved.push([name, TEMPLATE_FNS.get(name)]);
-  registerTemplateFn(name, { params, call });
-}
-
-afterEach(() => {
-  for (const [name, fn] of saved.reverse()) {
-    if (fn === undefined) TEMPLATE_FNS.delete(name);
-    else TEMPLATE_FNS.set(name, fn);
-  }
-  saved.length = 0;
-});
-
 // --- call shape --- //
 
 test("a constructor takes keywords or one value", () => {
@@ -124,9 +105,6 @@ test("a call repeating a keyword is rejected", () => {
 });
 
 test("a builtin still mixes positional and keyword arguments", () => {
-  standIn("join", [{ name: "value" }, { name: "sep", default: "\n" }], (value, sep) =>
-    (value as string[]).join(sep as string),
-  );
   expect(evaluate('join(xs, sep="-")', { xs: ["a", "b"] })).toBe("a-b");
 });
 
@@ -226,6 +204,13 @@ test("a constructor in a condition", () => {
   );
 });
 
+test("a constructor in an embedded template span", () => {
+  const text = evalBinding("conviction ${Buy(d.output).conviction}", resolver({ d: { output: A_BUY } }), {
+    types: TYPES,
+  });
+  expect(text).toBe("conviction 0.5");
+});
+
 // --- names that are not constructors --- //
 
 /** Expect `parseCondition(text, TYPES)` to fail with exactly `message`. */
@@ -267,11 +252,45 @@ test("rewrites leave the type and field names alone", () => {
   expect(renamed).toBe("Buy(action=x.a, conviction=x.s.output).action");
 });
 
+test("a positional constructor co-skips like its argument", () => {
+  expect(bindingCoSkips("${Buy(d.output)}")).toBe(true);
+  expect(bindingCoSkips("${Buy(d.output).conviction}")).toBe(true);
+  expect(bindingCoSkips('${Buy(action="buy", conviction=d.output)}')).toBe(false);
+  expect(bindingCoSkips("${upper(d.output)}")).toBe(false);
+});
+
 test("constructor names are the callees that are no builtin", () => {
-  standIn("upper", [{ name: "s" }]);
   const tree = parseExpr("[Buy(d.output), upper(x), isinstance(y, Sell), Sell(price=p), Buy(z)]");
   expect(constructorNames(tree)).toEqual(["Buy", "Sell"]);
   expect(constructorNames(parseExpr("x"))).toEqual([]);
+});
+
+test("a typedef name is not a flow callee", () => {
+  const text = "${Buy(d.output)} ${review(d.output)}";
+  expect(flowCallCalleesInSpans(text)).toEqual(["Buy", "review"]);
+  expect(flowCallCalleesInSpans(text, new Set(["Buy"]))).toEqual(["review"]);
+});
+
+test("a constructor is not a prompt function", () => {
+  expectError(
+    () => promptRefs("Order: ${Buy(order)}"),
+    "unknown prompt function 'Buy'; prompts call only formatting builtins " +
+      "(join, lower, render_as_json, upper); build or check a typed value with a " +
+      "`typedefs:` constructor `T(...)` in an input binding",
+  );
+});
+
+test("a builtin type name in a prompt is not a conversion", () => {
+  expectError(
+    () => promptRefs("Count: ${int(order)}"),
+    "unknown prompt function 'int'; types in expressions are typedef names; `int(...)` is not a conversion",
+  );
+});
+
+test("a prompt call with several arguments is an unknown prompt function", () => {
+  const error = errorOf(() => promptRefs("${foo(a, b)}"));
+  expect(error).toBeInstanceOf(ExpressionError);
+  expect(error.message.startsWith("unknown prompt function 'foo';")).toBe(true);
 });
 
 // --- static inference --- //
@@ -336,6 +355,5 @@ test("inference reads optional record fields, file fields and nullable aliases",
 
 test("inference without types leaves a call unknown", () => {
   expect(inferExprType(parseExpr("Buy(d.output)"), noRefs)).toBeNull();
-  standIn("upper", [{ name: "s" }]);
   expect(inferExprType(parseExpr("upper(x)"), noRefs, typeFn)).toBeNull();
 });

@@ -2,19 +2,17 @@
  * Condition evaluation against a variable pool and a node's input record: the expression tests
  * of `tests/engine/test_expr_case.py` (`resolve_reference`, `evaluate_when`,
  * `evaluate_when_record`, `first_failing_assert`, and conditions with arithmetic, strings, lists
- * and builtins).
+ * and builtins), the `eval_binding` half of `test_builtins_evaluate_in_conditions_and_bindings`,
+ * and the record-scoped strict prompt rendering (`renderTemplateRecord`).
  *
  * The values follow the TS number model: pool ints are `bigint`s, and a membership test against
- * `null` fails with the operand-kinds message. The builtin test calls an `upper` stand-in.
+ * `null` fails with the operand-kinds message. An embedded `false` is written `false`.
  *
- * Left for later: the `render_template_record` tests and the `eval_binding` half of
- * `test_builtins_evaluate_in_conditions_and_bindings` land with `template.ts`; the CASE node
- * tests with the CASE node and the runtime.
+ * Left for later: the CASE node tests land with the CASE node and the runtime.
  */
 
-import { afterEach, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 
-import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
 import {
   ExpressionError,
   evaluateWhen,
@@ -23,25 +21,8 @@ import {
   resolveInRecord,
   resolveReference,
 } from "../../src/expr/expressions.ts";
-import { type Value, VariablePool } from "../../src/typesys/index.ts";
-
-// Each registration's previous entry (or its absence), put back after the test, as Python's
-// `monkeypatch.setitem` does.
-const saved: [string, TemplateFn | undefined][] = [];
-
-/** Register a stand-in builtin `name` taking `params` and running `call`, for this test only. */
-function standIn(name: string, params: TemplateParam[], call: (...args: Value[]) => unknown): void {
-  saved.push([name, TEMPLATE_FNS.get(name)]);
-  registerTemplateFn(name, { params, call });
-}
-
-afterEach(() => {
-  for (const [name, fn] of saved.reverse()) {
-    if (fn === undefined) TEMPLATE_FNS.delete(name);
-    else TEMPLATE_FNS.set(name, fn);
-  }
-  saved.length = 0;
-});
+import { evalBinding, renderTemplateRecord } from "../../src/expr/template.ts";
+import { VariablePool } from "../../src/typesys/index.ts";
 
 /** Return a pool holding each node's value; `${<id>.output}` reads it. */
 function poolWith(outputs: Record<string, unknown>): VariablePool {
@@ -224,9 +205,32 @@ test("a record condition compares a miss as null", () => {
   );
 });
 
-test("builtins evaluate in conditions", () => {
-  standIn("upper", [{ name: "s" }], (s) => (s as string).toUpperCase());
+test("builtins evaluate in conditions and bindings", () => {
   expect(evaluateWhenRecord('${upper(s) == "AB"}', { s: "ab" })).toBe(true);
+  expect(evalBinding('${join(items, ",")}', (path) => resolveInRecord(path, { items: ["a", "b"] }))).toBe("a,b");
+});
+
+// --- record-scoped strict prompt rendering --- //
+
+test("renderTemplateRecord substitutes declared inputs", () => {
+  const record = { topic: "ZETA", rating: { value: 0.8 } };
+  expect(renderTemplateRecord("Assess ${topic} v=${rating.value}", record)).toBe("Assess ZETA v=0.8");
+});
+
+test("renderTemplateRecord raises on an unknown or null input", () => {
+  expect(() => renderTemplateRecord("hi ${ghost}", { topic: "X" })).toThrow(ExpressionError);
+  // A present null raises: the strict floor.
+  expect(() => renderTemplateRecord("hi ${t}", { t: null })).toThrow(ExpressionError);
+});
+
+test("renderTemplateRecord with no references is the identity", () => {
+  expect(renderTemplateRecord("plain", {})).toBe("plain");
+});
+
+test("renderTemplateRecord renders falsy present values", () => {
+  // 0, "" and false are present, not missing, so they render.
+  const record = { w: 0n, s: { on: false }, name: "" };
+  expect(renderTemplateRecord("w=${w} flag=${s.on} n='${name}'", record)).toBe("w=0 flag=false n=''");
 });
 
 // --- record-scoped CASE condition evaluation --- //

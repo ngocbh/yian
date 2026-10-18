@@ -1,18 +1,18 @@
 /**
- * The position-splicing reference rewriters, the write-side analog of the `exprRefs` walk: the
- * `rewrite_expr_refs` and `rewrite_condition_refs` tests of `tests/engine/test_rewrite_refs.py`.
+ * The position-splicing reference rewriters, the write-side analog of the `exprRefs` walk, a port
+ * of `tests/engine/test_rewrite_refs.py`.
  *
  * `rewriteExprRefs(text, rename)` reparses one unified `${...}` expression and splices each
  * reference-leaf path through `rename(path)` (a new path, or `null` to keep), leaving every
  * operator, literal, builtin callee and whitespace verbatim. `rewriteConditionRefs` wraps it for
- * the two condition spellings (bare and whole-span).
- *
- * Left for later: the `rewrite_template_refs` tests land with `template.ts`.
+ * the two condition spellings (bare and whole-span); `rewriteTemplateRefs` wraps it for a
+ * multi-span binding or template value.
  */
 
 import { expect, test } from "bun:test";
 
 import { ExpressionError, rewriteConditionRefs, rewriteExprRefs } from "../../src/expr/expressions.ts";
+import { rewriteTemplateRefs } from "../../src/expr/template.ts";
 
 /** Upper-case the head segment (`a.b` -> `A.b`); keep `keep.*`. */
 function bump(path: string): string | null {
@@ -68,4 +68,31 @@ test("condition, whole span keeps the outer braces", () => {
 
 test("condition, whole span with several refs", () => {
   expect(rewriteConditionRefs("${a > 5 and b < 3}", bump)).toBe("${A > 5 and B < 3}");
+});
+
+// --- rewriteTemplateRefs: spans rewritten, literal text and $$ kept --- //
+
+test("template, whole span", () => {
+  expect(rewriteTemplateRefs("${a.output}", bump)).toBe("${A.output}");
+});
+
+test("template, embedded text kept", () => {
+  expect(rewriteTemplateRefs("pre ${a} mid ${b.x} post", bump)).toBe("pre ${A} mid ${B.x} post");
+});
+
+test("template, the dollar escape kept", () => {
+  // `$$` is a literal `$`: it must survive verbatim (not be read as a span start).
+  expect(rewriteTemplateRefs("cost is $$${a}", bump)).toBe("cost is $$${A}");
+});
+
+test("template with no span comes back unchanged", () => {
+  expect(rewriteTemplateRefs("plain text", bump)).toBe("plain text");
+});
+
+test("a template value that isn't text passes through", () => {
+  expect(rewriteTemplateRefs(5, bump)).toBe(5);
+});
+
+test("template, default span", () => {
+  expect(rewriteTemplateRefs("${x :- y}", bump)).toBe("${X :- Y}");
 });

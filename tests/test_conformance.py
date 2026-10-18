@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import sys
 
 import pytest
@@ -137,7 +138,8 @@ _EXPECT_KEYS = {
     "fingerprint": {"fingerprint"},
     "cli": {"exit", "stdout", "stderr", "json", "json_lines"},
 }
-# The keys a kind requires, and the result keys its `expect` requires: one of the groups.
+# The keys a kind requires, and the result keys its `expect` requires: one of the groups, plus
+# any of the kind's result keys that are in no group.
 _REQUIRED = {
     "value": ("type", "value"), "fingerprint": ("flow", "other"), "load": ("flow",),
     "run": ("flow",), "resume": ("flow",), "backward": ("flow",),
@@ -148,6 +150,7 @@ _RESULTS = {
     "value": (("value", "kind"), ("raises",)),
     "expr": (("value",), ("raises",)),
     "fingerprint": (("fingerprint",),),
+    "cli": (("exit",),),
 }
 _ALL_KEYS = _COMMON.union(*_KIND_KEYS.values())
 _ALL_EXPECT_KEYS = set().union(*_EXPECT_KEYS.values())
@@ -266,7 +269,8 @@ def _check(case: dict) -> dict:
             continue
         _keys(key, case[key], _EXPECT_KEYS[kind], _ALL_EXPECT_KEYS, kind)
         groups = _RESULTS.get(kind, ())
-        if groups and not any(set(group) == case[key].keys() for group in groups):
+        optional = _EXPECT_KEYS[kind].difference(*groups)
+        if groups and not any(set(group) == case[key].keys() - optional for group in groups):
             needs = ", or ".join(" and ".join(f"`{name}`" for name in group) for group in groups)
             raise ValueError(f"`{key}` needs {needs}")
         if kind in ("run", "resume", "backward") and (
@@ -275,10 +279,11 @@ def _check(case: dict) -> dict:
             raise ValueError(f"`{key}` takes one of `raises` and `output`")
     if "python_expect" in case and not case.get("rules"):
         raise ValueError("`python_expect` needs `rules`")
-    rules = case.get("rules", [])
-    if not isinstance(rules, list) or any(not isinstance(rule, str) for rule in rules):
-        raise ValueError("`rules` must be a list of rule ids")
-    unknown = [rule for rule in rules if rule not in _RULES]
+    for key, what in (("rules", "rule ids"), ("args", "text")):
+        items = case.get(key, [])
+        if not isinstance(items, list) or any(not isinstance(item, str) for item in items):
+            raise ValueError(f"`{key}` must be a list of {what}")
+    unknown = [rule for rule in case.get("rules", []) if rule not in _RULES]
     if unknown:
         raise ValueError(f"unknown rule ids: {', '.join(unknown)}")
     for key in ("env", "files"):
@@ -1010,6 +1015,49 @@ def _run_run(case: dict, case_dir: Path) -> None:
         check()
 
 
+def _run_cli(case: dict, case_dir: Path) -> None:
+    """Run `yian` with `args` in the case directory; compare its exit code and output."""
+    (case_dir / "home").mkdir()
+    env = {"PATH": os.environ["PATH"], "HOME": str(case_dir / "home"), "COLUMNS": "1000",
+           "PYTHONPATH": os.pathsep.join(sys.path), **case.get("env", {})}
+    command = "import sys; sys.argv[0] = 'yian'; from yian.cli import main; main()"
+    done = subprocess.run(
+        [sys.executable, "-c", command, *case.get("args", [])],
+        cwd=case_dir, input=case.get("stdin", ""), capture_output=True, encoding="utf-8",
+        timeout=120, env=env,
+    )
+
+    def normal(text: str) -> str:
+        # Longest first: the resolved path can hold the given one (`/private/var` on macOS).
+        for path in sorted({str(case_dir), str(case_dir.resolve())}, key=len, reverse=True):
+            text = text.replace(path, "<tmp>")
+        return re.sub(r" +$", "", text, flags=re.MULTILINE)
+
+    def refuse(token: str) -> None:
+        raise ValueError(f"`{token}` in stdout is not JSON")
+
+    def document(text: str) -> object:
+        return _decode(json.loads(text, parse_constant=refuse))
+
+    stdout, stderr = normal(done.stdout), normal(done.stderr)
+    _check_secrets(case, {"stdout": stdout, "stderr": stderr, **{
+        str(path.relative_to(case_dir)): path.read_text(encoding="utf-8")
+        for path in case_dir.rglob("*.jsonl")
+    }})
+    expect = case["expect"]
+    if not _same(done.returncode, expect["exit"]):
+        pytest.fail(f"exit {done.returncode}, expected {expect['exit']}\n--- stderr\n{stderr}",
+                    pytrace=False)
+    for name, text in (("stdout", stdout), ("stderr", stderr)):
+        if name in expect:
+            _compare(name, text, expect[name])
+    if "json" in expect:
+        _compare("json", document(stdout), expect["json"], optional_message=True)
+    if "json_lines" in expect:
+        _compare("json_lines", [document(line) for line in stdout.splitlines() if line.strip()],
+                 expect["json_lines"], optional_message=True)
+
+
 _KINDS = {
     "load": _run_load,
     "run": _run_run,
@@ -1019,6 +1067,7 @@ _KINDS = {
     "fingerprint": _run_fingerprint,
     "expr": _run_expr,
     "value": _run_value,
+    "cli": _run_cli,
 }
 
 

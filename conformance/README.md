@@ -193,8 +193,8 @@ Runs the `yian` command with `args` (the arguments after `yian`) in the case dir
 applies), and `stdin` (absent: empty; never a terminal). `expect.exit` is the exit code. In
 stdout and stderr the case directory's path is replaced by `<tmp>` and spaces at line ends are
 removed; then `stdout` and `stderr` are compared exactly when present. `json` is stdout read as
-one JSON document, and `json_lines` stdout read as one JSON document per line, both in codec
-form. A command that names a generated path (`yian run` names its new run log on stderr) is
+one JSON document, and `json_lines` stdout read as one JSON document per non-empty line, both
+in codec form. A command that names a generated path (`yian run` names its new run log on stderr) is
 checked without `stderr`, or given the path (`--log`).
 
 ## The host, as data

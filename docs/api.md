@@ -1035,7 +1035,7 @@ is for debugging only; don't branch on it.
 | `graph.terminal_unreachable` | A route skipped every path to the flow's output. A flow from `load_flow` doesn't reach this through its outputs; a hand-built graph can. | Fix the graph. | No |
 | `loop.max_exceeded` | A `while:`/`until:` LOOP with `max: M` would start body run M+1 (see below). | Treat it as the loop ending without meeting its condition, or raise `max:`. | Only if the body's results vary between runs |
 | `agent.max_tool_iterations` | An AGENT's tool loop reached its `max_tool_iterations` and the last reply still asked for tools; those calls are not run. There is no cap by default. | Raise the cap, or simplify the task. | Sometimes: model replies vary |
-| `provider.auth` | An AGENT's model build or model call failed on its credentials (see below). | Ask the user to fix the connection (`yian auth <provider>`, or the right key). | After the credentials are fixed; or at once if a token refresh request failed |
+| `provider.auth` | An AGENT's model build or model call failed on its credentials (see below). | Ask the user to fix the connection (`yian auth <provider>`, or the right key). | After the credentials are fixed; or at once if the token refresh request itself failed (a network error or a 5xx) |
 
 `loop.max_exceeded` is on the LOOP node, with a message such as `loop 'refine'
 exceeded max (5)`. A failure inside the body keeps its own code, and a `times:` loop

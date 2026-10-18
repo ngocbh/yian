@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import fields, is_dataclass
+from datetime import date
 from functools import reduce
 import hashlib
+import inspect
 import json
 import math
 from operator import add
@@ -1870,7 +1872,8 @@ def test_harvest_records_expr_value_defaults(tmp_path: Path) -> None:
              for path in sorted((out / "cases").glob("*/*.yaml"))}
     assert sorted(cases) == [
         "defaults/sample__defaults.yaml", "expr/sample__arithmetic.yaml",
-        "expr/sample__condition.yaml", "expr/sample__item.yaml", "expr/sample__strict_miss.yaml",
+        "expr/sample__condition.yaml", "expr/sample__item.yaml", "expr/sample__or_binding.yaml",
+        "expr/sample__or_condition.yaml", "expr/sample__strict_miss.yaml",
         "templates/sample__binding.yaml", "templates/sample__template.yaml",
         "values/sample__value.yaml",
     ]
@@ -1882,6 +1885,12 @@ def test_harvest_records_expr_value_defaults(tmp_path: Path) -> None:
         "expect": {"value": True}}
     assert cases["expr/sample__item.yaml"] == {
         "kind": "expr", "expr": "item.t", "item": {"t": 1}, "expect": {"value": 1}}
+    # `and` and `or` give a bool, as in TS: shared cases.
+    assert cases["expr/sample__or_binding.yaml"] == {
+        "kind": "expr", "expr": "x or y", "values": {"x": 0, "y": 2}, "expect": {"value": True}}
+    assert cases["expr/sample__or_condition.yaml"] == {
+        "kind": "expr", "expr": "(x or y) == 1", "values": {"x": 1, "y": 0}, "mode": "condition",
+        "expect": {"value": True}}
     strict = cases["expr/sample__strict_miss.yaml"]
     assert {key: strict[key] for key in ("kind", "expr", "mode")} == {
         "kind": "expr", "expr": "a.b", "mode": "strict"}
@@ -1911,11 +1920,12 @@ def test_harvest_records_expr_value_defaults(tmp_path: Path) -> None:
         "tests": {"passed": 10, "failed": 1, "skipped": 0},
         "records": {"eval_expr": 4, "render_template_record": 1, "eval_binding": 1,
                     "evaluate_when_record": 2, "defaults.current": 1, "build_value_as": 1},
-        "written": {"expr": 4, "templates": 2, "defaults": 1, "values": 1},
+        "written": {"expr": 6, "templates": 2, "defaults": 1, "values": 1},
         "duplicates": 0,
-        "skips": {"held: and/or result (owner deciding)": ["test_or_binding",
-                                                           "test_or_condition"]},
+        "skips": {},
         "flags": {},
+        "code": {},
+        "references": {},
     }
 
 
@@ -2051,6 +2061,8 @@ def test_harvest_records_loads_and_resumes(tmp_path: Path) -> None:
         "skips": {"child_resolver": ["test_child_resolver"],
                   "load raised TypeError": ["test_label"]},
         "flags": {},
+        "code": {},
+        "references": {},
     }
     assert "conformance harvest" in done.stdout
     assert "written: load-agent 1, load-core 3; 0 duplicates" in done.stdout, done.stdout
@@ -2282,6 +2294,8 @@ def test_harvest_records_runs(tmp_path: Path) -> None:
                   "flow text unknown": ["test_unknown_flow"],
                   "resume (hand-converted)": ["test_resume"]},
         "flags": {},
+        "code": {},
+        "references": {},
     }
 
 
@@ -2645,7 +2659,7 @@ def test_or_load():
 
 
 def test_harvest_records_backward_and_pooled(tmp_path: Path) -> None:
-    """Pooled runs replay thrice; backward calls join their run; `and`/`or` runs are flagged."""
+    """Pooled runs replay thrice; backward calls join their run; `and`/`or` runs are shared."""
     done, out = _harvest(tmp_path, _POOLED_TESTS)
     assert _summary(done) == "6 passed", done.stdout + done.stderr
     cases = {path.relative_to(out / "cases").as_posix(): _read(path)
@@ -2691,7 +2705,7 @@ def test_harvest_records_backward_and_pooled(tmp_path: Path) -> None:
     assert report["flags"] == {
         "pooled: trace dropped": ["run-core/sample__pooled_failed__2"],
         "pooled: events dropped": ["run-core/sample__pooled_failed__2"],
-        "uses and/or": ["run-core/sample__or_case__2", "load-core/sample__or_load"],
+        "code: untranslated": ["run-core/sample__or_case__2"],
     }
 
 
@@ -2718,7 +2732,7 @@ def test_harvest_records_jitter_draws(tmp_path: Path, monkeypatch: pytest.Monkey
 
 
 def test_harvest_checks_pooled_replays(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A pooled run replays thrice; a result differing in one, or a raised run's, is dropped."""
+    """Pooled runs replay thrice, plain and shimmed; a result differing in one is dropped."""
     from tests import conformance_harvest as harvest
 
     monkeypatch.setattr(harvest, "_STATE", harvest._Harvest(None, tmp_path))
@@ -2729,29 +2743,1395 @@ def test_harvest_checks_pooled_replays(tmp_path: Path, monkeypatch: pytest.Monke
         return {"trace": [["run_started", None]], "events": [["RunStarted"]], "stream": [],
                 "tool_calls": {}, "left": [], **results}
 
-    def expected(result: dict, *replays: dict) -> tuple:
+    def expected(result: dict, plain: list, shimmed: list | None = None) -> tuple:
         call = harvest._Call("run_flow")
         call.case, call.result, call.skip = {"kind": "run", "flow": "id: f\n"}, result, None
-        served = list(replays)
-        monkeypatch.setattr(harvest, "_replay", lambda state, case: served.pop(0))
-        _, text, flags = harvest._expected(harvest._STATE, call)
-        assert served == []
+        # The shimmed replays are the plain ones unless given.
+        served = {False: list(plain), True: list(plain if shimmed is None else shimmed)}
+        monkeypatch.setattr(harvest, "_replay", lambda state, case, shims=(): (
+            served[bool(shims)].pop(0), frozenset()))
+        _, text, flags, _, _ = harvest._expected(harvest._STATE, call)
+        assert served == {False: [], True: []}
         return yaml.load(text, Loader=_CaseLoader)["expect"], flags
 
     events = [["RunStarted"], ["RunSucceeded", {"output": "hi"}]]
-    expect, flags = expected({"output": output}, replay(output=output), replay(output=output),
-                             replay(output=output, events=events))
+    succeeded = [replay(output=output), replay(output=output)]
+    expect, flags = expected({"output": output}, [*succeeded, replay(output=output, events=events)])
+    assert expect == {"output": output, "trace": [["run_started", None]]}
+    assert flags == ["pooled: events dropped"]
+    # Equal plain replays, but shimmed ones that differ.
+    expect, flags = expected({"output": output}, [*succeeded, replay(output=output)],
+                             [*succeeded, replay(output=output, events=events)])
     assert expect == {"output": output, "trace": [["run_started", None]]}
     assert flags == ["pooled: events dropped"]
 
     differing = {"status": "succeeded", "output": "ho"}
     with pytest.raises(harvest._Skip, match="replay differs"):
-        expected({"output": output}, replay(output=output), replay(output=differing),
-                 replay(output=output))
+        expected({"output": output}, [replay(output=output), replay(output=differing),
+                                      replay(output=output)])
+    with pytest.raises(harvest._Skip, match="shims: replays differ"):
+        expected({"output": output}, [*succeeded, replay(output=output)],
+                 [*succeeded, replay(output=differing)])
 
     calls = {"tool": [{"args": {}, "call_id": "c1", "attempt": 1, "node": "n"}]}
     raised = replay(raises=raises, stream=[{"text": "x"}], tool_calls=calls)
-    expect, flags = expected({"raises": raises}, raised, raised, raised)
+    expect, flags = expected({"raises": raises}, [raised, raised, raised])
     assert expect == {"raises": raises}
     assert flags == [f"pooled: {key} dropped"
                      for key in ("trace", "events", "stream", "tool_calls")]
+
+
+def test_harvest_shim_skips_and_requests(tmp_path: Path,
+                                        monkeypatch: pytest.MonkeyPatch) -> None:
+    """Shim skips and dropped requests; a pooled run's kept trace is compared under each shim."""
+    from tests import conformance_harvest as harvest
+
+    state = harvest._Harvest(None, tmp_path)
+    monkeypatch.setattr(harvest, "_STATE", state)
+    call = harvest._Call("eval_expr")
+    call.case, call.result, call.skip = {"kind": "expr", "expr": "1"}, {"value": 1}, None
+
+    def all_shims(state: object, case: dict, shims: tuple = ()) -> tuple:
+        # Only every shim together changes the outcome.
+        return {"value": 2 if len(shims) == len(harvest._SHIMS) else 1}, frozenset()
+
+    monkeypatch.setattr(harvest, "_replay", all_shims)
+    with pytest.raises(harvest._Skip, match="^shims: no single shim changes the outcome$"):
+        harvest._expected(state, call)
+    # One a rule no shim covers touches is written for review, with that rule.
+    call.case = {"kind": "expr", "expr": "\u0661"}
+    _, text, flags, _, _ = harvest._expected(state, call)
+    assert yaml.load(text, Loader=_CaseLoader) == {
+        "kind": "expr", "rules": ["text"], "expr": "\u0661", "expect": {"value": 2},
+        "python_expect": {"value": 1}}
+    assert flags == ["needs TS expect: text"]
+    call.case = {"kind": "expr", "expr": "1"}
+
+    def failing(state: object, case: dict, shims: tuple = ()) -> tuple:
+        if shims:
+            raise harvest._Skip("replay failed: Failed")
+        return {"value": 1}, frozenset()
+
+    monkeypatch.setattr(harvest, "_replay", failing)
+    with pytest.raises(harvest._Skip, match="^shims: replay failed: Failed$"):
+        harvest._expected(state, call)
+
+    output = {"status": "succeeded", "output": "hi"}
+
+    def traced(state: object, case: dict, shims: tuple = ()) -> tuple:
+        # A pooled run whose stable trace only the text-form shim changes.
+        trace = [["run_started", "text-form" in shims]]
+        return {"output": output, "trace": trace, "events": [], "stream": [], "tool_calls": {},
+                "left": []}, frozenset()
+
+    monkeypatch.setattr(harvest, "_replay", traced)
+    run = harvest._Call("run_flow")
+    run.case, run.result, run.skip = {"kind": "run", "flow": "id: f\n"}, {"output": output}, None
+    _, text, flags, _, _ = harvest._expected(state, run)
+    written = yaml.load(text, Loader=_CaseLoader)
+    assert written["rules"] == ["text-form"] and flags == []
+    assert written["expect"] == {"output": output, "trace": [["run_started", True]],
+                                 "events": []}
+    assert written["python_expect"] == {"output": output, "trace": [["run_started", False]],
+                                        "events": []}
+
+    def entry(text: str) -> dict:
+        return {"reply": text, "request": {"messages": [text]}}
+
+    case = {"kind": "run", "host": {"models": {"n": {"agent": [entry("a"), entry("b")],
+                                                     "memory:a.b": [entry("c")]}},
+                                    "jitter": [0.5]}}
+    copy = json.loads(json.dumps(case))
+    # A consumer holding a `.` is found by its own key.
+    trimmed = harvest._without_requests(case, frozenset({"request: host.models.n.memory:a.b[0]"}))
+    assert trimmed == {"kind": "run", "host": {
+        "models": {"n": {"agent": [entry("a"), entry("b")], "memory:a.b": [{"reply": "c"}]}},
+        "jitter": [0.5]}}
+    assert case == copy
+
+
+def test_harvest_replay_installs_shims(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A replay turns on the shims it names; under one, a differing request is noted, not failed."""
+    from tests import conformance_harvest as harvest
+    from yian.expr import template
+
+    state = harvest._Harvest(None, tmp_path)
+    as_text, request_difference = template._as_text, harvest.runner._request_difference
+
+    def text_shim(patch: pytest.MonkeyPatch, case: dict) -> None:
+        harvest._NOTES.add("printf")
+        patch.setattr(template, "_as_text", lambda value: "shimmed")
+
+    monkeypatch.setattr(harvest, "_SHIMS", {
+        "text": harvest._Shim("text-form", text_shim),
+        "idle": harvest._Shim("messages", lambda patch, case: None),
+    })
+    case = {"kind": "expr", "template": "x=${v}", "values": {"v": True}}
+    assert harvest._replay(state, case) == ({"value": "x=True"}, frozenset())
+    assert harvest._replay(state, case, ("idle",)) == ({"value": "x=True"}, frozenset())
+    assert harvest._replay(state, case, ("text",)) == ({"value": "x=shimmed"},
+                                                       frozenset({"printf"}))
+    # The shim is undone and its note forgotten by the next replay.
+    assert template._as_text is as_text and not state.disabled
+    assert harvest._replay(state, case) == ({"value": "x=True"}, frozenset())
+    with pytest.raises(KeyError, match="no such shims"):
+        harvest._replay(state, case, ("text", "missing"))
+
+    # Under a shim, an int a `float` slot widens is noted; it is widened all the same.
+    widen = harvest.typesys_values._widen_int
+    noted = frozenset({"int-in-float"})
+    for typ, value, kept, notes in (
+            ("float", 2, {"value": 2.0, "kind": "float"}, noted),
+            ("list(float)", [1, 2.5], {"value": [1.0, 2.5], "kind": "list[float]"}, noted),
+            ("float", 2.5, {"value": 2.5, "kind": "float"}, frozenset())):
+        case = {"kind": "value", "type": typ, "value": value}
+        assert harvest._replay(state, case, ("idle",)) == (kept, notes), typ
+    assert harvest._replay(state, {"kind": "value", "type": "float", "value": 2}) == (
+        {"value": 2.0, "kind": "float"}, frozenset())
+    assert harvest.typesys_values._widen_int is widen
+    # So is one an untyped list holding a float widens: a CODE node's return here.
+    flow = "id: f\nname: f\nnodes:\n  c:\n    kind: code\n    code: return [1, 2.5]\n"
+    case = {"kind": "run", "flow": flow + "output: ${c.output}\n",
+            "run": {"run_id": "r1", "num_workers": 0}}
+    results, notes = harvest._replay(state, case, ("idle",))
+    assert results["output"] == {"status": "succeeded", "output": [1.0, 2.5]}
+    assert notes == noted
+
+    run = _read(_ROOT / "cases/run-agent/model_reply.yaml")
+    del run["expect"]
+    results, notes = harvest._replay(state, run, ("idle",))
+    assert results["output"] == {"status": "succeeded", "output": "Hello Ada"}
+    assert notes == frozenset()
+    run["host"]["models"]["write"]["agent"][0]["request"]["messages"][1]["parts"] = [
+        {"type": "text", "text": "Greet Bob."}]
+    with pytest.raises(harvest._Skip, match="replay failed"):
+        harvest._replay(state, run)
+    results, notes = harvest._replay(state, run, ("idle",))
+    assert results["output"] == {"status": "succeeded", "output": "Hello Ada"}
+    assert notes == frozenset({"request: host.models.write.agent[0]"})
+    assert harvest.runner._request_difference is request_difference
+    # A replay failing under a shim (here, a key the runner refuses) undoes it all the same.
+    with pytest.raises(harvest._Skip, match="replay failed"):
+        harvest._replay(state, run | {"unknown": 1}, ("text",))
+    assert template._as_text is as_text and not state.disabled
+    assert harvest.runner._request_difference is request_difference
+
+
+_SHIMMED_TESTS = '''
+from yian.expr import eval_expr, parse_expr, render_template_record
+from yian.typesys.types import type_for
+from yian.typesys.values import TypeCheckError, build_value_as
+
+
+def test_bool_text():
+    assert render_template_record("${f}", {"f": True}) == "True"
+
+
+def test_remainder():
+    assert eval_expr(parse_expr("7 % -2"), lambda path: None) == -1
+
+
+def test_list_order():
+    assert eval_expr(parse_expr("[1] < [2]"), lambda path: None) is True
+
+
+def test_message():
+    try:
+        build_value_as(type_for("int", {}), "x")
+    except TypeCheckError as exc:
+        assert str(exc) == "'x' does not match declared type int"
+
+
+def test_key_order():
+    assert render_template_record("${r}", {"r": {"b": 1, "1": 2}}) == "{'b': 1, '1': 2}"
+
+
+def test_plain():
+    assert eval_expr(parse_expr("1 + 2"), lambda path: None) == 3
+'''
+
+
+def test_harvest_tags_shimmed_rules(tmp_path: Path) -> None:
+    """A case a shim changes holds the TS outcome, its rules and Python's outcome."""
+    done, out = _harvest(tmp_path, _SHIMMED_TESTS)
+    assert _summary(done) == "6 passed", done.stdout + done.stderr
+    cases = {path.relative_to(out / "cases").as_posix(): _read(path)
+             for path in sorted((out / "cases").glob("*/*.yaml"))}
+    message = cases["expr/sample__list_order.yaml"]["expect"]["raises"].pop("message")
+    assert "unsupported operand kinds" in message
+    assert cases == {
+        "templates/sample__bool_text.yaml": {
+            "kind": "expr", "rules": ["text-form"], "template": "${f}", "values": {"f": True},
+            "mode": "strict", "expect": {"value": "true"}, "python_expect": {"value": "True"}},
+        "expr/sample__remainder.yaml": {
+            "kind": "expr", "rules": ["arithmetic"], "expr": "7 % -2",
+            "expect": {"value": 1}, "python_expect": {"value": -1}},
+        "expr/sample__list_order.yaml": {
+            "kind": "expr", "rules": ["compare"], "expr": "[1] < [2]",
+            "expect": {"raises": {"class": "ExpressionError"}}, "python_expect": {"value": True}},
+        "values/sample__message.yaml": {
+            "kind": "value", "rules": ["messages"], "type": "int", "value": "x",
+            "expect": {"raises": {"class": "TypeCheckError",
+                                  "message": '"x" does not match declared type int',
+                                  "path": []}},
+            "python_expect": {"raises": {"class": "TypeCheckError",
+                                         "message": "'x' does not match declared type int",
+                                         "path": []}}},
+        # Both the text form and the key order change it; both are the text-form rule.
+        "templates/sample__key_order.yaml": {
+            "kind": "expr", "rules": ["text-form"], "template": "${r}",
+            "values": {"r": {"b": 1, "1": 2}}, "mode": "strict",
+            "expect": {"value": '{"1":2,"b":1}'},
+            "python_expect": {"value": "{'b': 1, '1': 2}"}},
+        "expr/sample__plain.yaml": {"kind": "expr", "expr": "1 + 2", "expect": {"value": 3}},
+    }
+    # The rules come first, `python_expect` after `expect`.
+    text = (out / "cases/expr/sample__remainder.yaml").read_text(encoding="utf-8")
+    assert text == ("kind: expr\nrules: [arithmetic]\nexpr: 7 % -2\nexpect:\n  value: 1\n"
+                    "python_expect:\n  value: -1\n")
+    for name in cases:
+        # Read again: the message was popped above.
+        case, case_dir = _read(out / "cases" / name), tmp_path / "replay" / name
+        case_dir.mkdir(parents=True)
+        _check_results(case, results(case, case_dir))
+
+    report = json.loads((out / "report" / "test_sample.py.json").read_text(encoding="utf-8"))
+    assert report["written"] == {"templates": 2, "expr": 3, "values": 1}
+    assert report["skips"] == {} and report["flags"] == {}
+
+
+_REQUEST_TESTS = '''
+from langchain_core.messages import AIMessage
+
+import yian.llm_clients as llm_clients
+from yian import load_flow
+from yian.run import run_flow
+
+FLAG = """\\
+id: flag
+name: flag
+input:
+  f: !bool
+nodes:
+  plain:
+    kind: agent
+    output: str
+    llm_config: {provider: openai, model: gpt-5.5}
+    prompt: Write.
+  flagged:
+    kind: agent
+    input:
+      f: ${input.f}
+    output: str
+    llm_config: {provider: openai, model: gpt-5.5}
+    prompt: Flag ${f}.
+output:
+  plain: ${plain.output}
+  flagged: ${flagged.output}
+"""
+
+
+class Shout:
+    """A chat model replying with its last message in capitals."""
+
+    def invoke(self, messages):
+        return AIMessage(messages[-1].content.upper())
+
+
+def test_flag(monkeypatch):
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: Shout())
+    result = run_flow(load_flow(FLAG), {"f": True}, run_id="r1", num_workers=0)
+    assert result.output == {"plain": "WRITE.", "flagged": "FLAG TRUE."}
+'''
+
+
+def test_harvest_drops_changed_requests(tmp_path: Path) -> None:
+    """A request a shim changes leaves its entry without `request`; the others keep theirs."""
+    done, out = _harvest(tmp_path, _REQUEST_TESTS)
+    assert _summary(done) == "1 passed", done.stdout + done.stderr
+    case = _read(out / "cases/run-agent/sample__flag__2.yaml")
+    models = case["host"]["models"]
+    assert models["plain"]["agent"][0]["request"]["messages"][1]["parts"] == [
+        {"type": "text", "text": "Write."}]
+    (flagged,) = models["flagged"]["agent"]
+    assert "request" not in flagged
+    assert flagged["reply"]["parts"] == [{"type": "text", "text": "FLAG TRUE."}]
+    # The replies are scripted, so the outcome is the same under the shims.
+    assert "rules" not in case and "python_expect" not in case
+    assert case["expect"]["output"] == {
+        "status": "succeeded", "output": {"plain": "WRITE.", "flagged": "FLAG TRUE."}}
+    (tmp_path / "replay").mkdir()
+    _check_results(case, results(case, tmp_path / "replay"))
+
+    report = json.loads((out / "report" / "test_sample.py.json").read_text(encoding="utf-8"))
+    assert report["written"] == {"run-agent": 1}
+    assert report["flags"] == {"shims: request dropped": ["run-agent/sample__flag__2"]}
+
+
+_UNSHIMMABLE_TESTS = '''
+import pytest
+
+from yian import load_flow
+from yian.compose import LoadError
+from yian.expr import eval_expr, parse_expr, render_template_record
+from yian.expr.expressions import ExpressionError
+from yian.run import run_flow
+from yian.typesys.types import type_for
+from yian.typesys.values import build_value_as
+
+TODAY = """\\
+id: today
+name: today
+nodes:
+  c:
+    kind: code
+    input:
+      d: ${system.today}
+    output: str
+    code: return inputs["d"]
+output: ${c.output}
+"""
+
+BOOM = """\\
+id: boom
+name: boom
+nodes:
+  c:
+    kind: code
+    output: int
+    code: |
+      raise ValueError("boom")
+      return 1
+output: ${c.output}
+"""
+
+
+def test_infinite():
+    assert build_value_as(type_for("float", {}), float("inf")).value == float("inf")
+
+
+def test_digits(monkeypatch):
+    monkeypatch.setenv("YIAN_MAX_INT_DIGITS", "10")
+    with pytest.raises(ExpressionError, match="larger than yian allows"):
+        render_template_record("${12345678901}", {})
+
+
+def test_today():
+    load_flow(TODAY)
+
+
+def test_yaml():
+    with pytest.raises(LoadError, match="invalid YAML"):
+        load_flow("id: [")
+
+
+def test_code():
+    assert run_flow(load_flow(BOOM), {}, run_id="r1", num_workers=0).status == "failed"
+
+
+def test_digit():
+    assert eval_expr(parse_expr("\\u0661 + 1"), lambda path: None) == 2
+
+
+def test_int_float():
+    assert build_value_as(type_for("float", {}), 2).value == 2.0
+'''
+
+
+def test_harvest_tags_unshimmable_rules(tmp_path: Path) -> None:
+    """A case touching a rule no shim covers carries it, `python_expect` and a review flag."""
+    done, out = _harvest(tmp_path, _UNSHIMMABLE_TESTS)
+    assert _summary(done) == "7 passed", done.stdout + done.stderr
+    cases = {path.relative_to(out / "cases").as_posix(): _read(path)
+             for path in sorted((out / "cases").glob("*/*.yaml"))}
+    tagged = {"values/sample__infinite": "infinity", "templates/sample__digits": "numbers",
+              "load-core/sample__today": "dates", "load-core/sample__yaml": "yaml",
+              "run-core/sample__code__2": "code", "expr/sample__digit": "text",
+              "values/sample__int_float": "int-in-float"}
+    assert sorted(cases) == sorted(f"{name}.yaml" for name in tagged)
+    for name, rule in tagged.items():
+        case = cases[f"{name}.yaml"]
+        assert case["rules"] == [rule], name
+        # No shim changes these: the TS expectation is written by hand.
+        assert case["python_expect"] == case["expect"], name
+        case_dir = tmp_path / "replay" / name
+        case_dir.mkdir(parents=True)
+        _check_results(case, results(case, case_dir))
+    assert cases["values/sample__infinite.yaml"]["value"] == {"$float": "inf"}
+    assert cases["templates/sample__digits.yaml"]["env"] == {"YIAN_MAX_INT_DIGITS": "10"}
+    assert cases["run-core/sample__code__2.yaml"]["expect"]["output"]["failure"]["node"] == "c"
+    assert cases["values/sample__int_float.yaml"]["python_expect"] == {"value": 2.0,
+                                                                       "kind": "float"}
+
+    report = json.loads((out / "report" / "test_sample.py.json").read_text(encoding="utf-8"))
+    assert report["skips"] == {}
+    assert report["flags"] == {f"needs TS expect: {rule}": [name]
+                               for name, rule in tagged.items()} | {
+        "code: untranslated": ["load-core/sample__today", "run-core/sample__code__2"]}
+
+
+def test_harvest_flags_arithmetic_at_load(tmp_path: Path,
+                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    """A load or run whose arithmetic TS rejects at load is flagged and tagged `arithmetic`."""
+    from tests import conformance_harvest as harvest
+
+    state = harvest._Harvest(None, tmp_path)
+    monkeypatch.setattr(harvest, "_STATE", state)
+
+    def noting(state: object, case: dict, shims: tuple = ()) -> tuple:
+        return {"load": "ok"}, frozenset({"printf"} if shims else ())
+
+    monkeypatch.setattr(harvest, "_replay", noting)
+    for kind, flags in (("load", ["needs TS expect: arithmetic"]), ("expr", [])):
+        call = harvest._Call("load_flow")
+        call.case, call.result, call.skip = {"kind": kind, "flow": "id: f\n"}, {"load": "ok"}, None
+        _, text, written, _, _ = harvest._expected(state, call)
+        assert written == flags
+        case = yaml.load(text, Loader=_CaseLoader)
+        if flags:
+            assert case["rules"] == ["arithmetic"] and case["python_expect"] == {"load": "ok"}
+        else:
+            assert "rules" not in case and "python_expect" not in case
+
+
+def test_harvest_skips_lark_token_lists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A case whose outcome holds Lark's `Expected one of` list is skipped as unstable."""
+    from tests import conformance_harvest as harvest
+
+    state = harvest._Harvest(None, tmp_path)
+    monkeypatch.setattr(harvest, "_STATE", state)
+    raises = {"raises": {"class": "ExpressionError",
+                         "message": "unexpected token ')'\nExpected one of:\n\t* NAME\n"}}
+    monkeypatch.setattr(harvest, "_replay", lambda state, case, shims=(): (raises, frozenset()))
+    call = harvest._Call("eval_expr")
+    call.case, call.result, call.skip = {"kind": "expr", "expr": "(1 +)"}, raises, None
+    with pytest.raises(harvest._Skip, match=r"^unstable parser message \(Lark token order\)$"):
+        harvest._expected(state, call)
+
+
+def test_harvest_shims_tool_result_events(tmp_path: Path,
+                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    """A tool result's `ToolCallFinished` text is in the text form, tagged `text-form`."""
+    from tests import conformance_harvest as harvest
+
+    state = harvest._Harvest(None, tmp_path)
+    monkeypatch.setattr(harvest, "_STATE", state)
+    case = _read(_ROOT / "cases/run-agent/model_tool_loop.yaml")
+    del case["expect"]
+    case["host"]["tools"]["lookup"]["results"] = [{"return": {"a": 1.0, "ok": True}}]
+    # The model reads the tool result's text too, which the shims change.
+    del case["host"]["models"]["research"]["agent"][1]["request"]
+    call = harvest._Call("run_flow")
+    output = {"status": "succeeded", "output": "found X1"}
+    call.case, call.result, call.skip = case, {"output": output}, None
+    group, text, flags, _, _ = harvest._expected(state, call)
+    written = yaml.load(text, Loader=_CaseLoader)
+    assert (group, flags, written["rules"]) == ("run-agent", [], ["text-form"])
+
+    def finished(expect: dict) -> list:
+        return [data["result"] for name, *rest in expect["events"]
+                if name == "ToolCallFinished" for data in rest]
+
+    assert finished(written["expect"]) == ['{"a":1,"ok":true}']
+    assert finished(written["python_expect"]) == ["{'a': 1.0, 'ok': True}"]
+    case_dir = tmp_path / "replay"
+    case_dir.mkdir()
+    _check_results(written, results(written, case_dir))
+
+
+def test_harvest_unshimmable_llm() -> None:
+    """Structured model calls are the `llm` rule's, by their request, consumer or events."""
+    from tests import conformance_harvest as harvest
+
+    def run(consumer: str = "agent", text: str = "Write.", **request: object) -> dict:
+        message = {"role": "user", "parts": [{"type": "text", "text": text}]}
+        entry = {"reply": {"role": "assistant", "parts": []},
+                 "request": {"messages": [message], **request}}
+        return {"kind": "run", "flow": "id: f\n", "host": {"models": {"n": {consumer: [entry]}}}}
+
+    plain = {"output": {"status": "succeeded", "output": "x"}}
+    assert harvest._unshimmable(run(), plain, frozenset()) == set()
+    for case in (run(schema={"type": "object"}), run("structured_retry"),
+                 run(text="Respond with ONLY a JSON object matching this JSON schema: {}"),
+                 run(text="Your previous output was invalid: no JSON.")):
+        assert harvest._unshimmable(case, plain, frozenset()) == {"llm"}
+    events = [["ModelCallStarted", {"node_id": "n", "purpose": "structured_native"}]]
+    assert harvest._unshimmable(run(), plain | {"events": events}, frozenset()) == {"llm"}
+    events = [["ModelCallStarted", {"node_id": "n", "purpose": "chat"}]]
+    assert harvest._unshimmable(run(), plain | {"events": events}, frozenset()) == set()
+
+
+def test_harvest_unshimmable_texts() -> None:
+    """The `yaml` and `text` rules' signals in a case's texts and in its outcome.
+
+    A flow's leading BOM is the `yaml` rule's, any other U+FEFF the `text` rule's.
+    """
+    from tests import conformance_harvest as harvest
+
+    def rules(case: dict, py: dict, notes: frozenset = frozenset()) -> set:
+        return harvest._unshimmable(case, py, notes)
+
+    loaded = {"load": "ok"}
+    assert rules({"kind": "load", "flow": "\ufeffid: f\n"}, loaded) == {"yaml"}
+    assert rules({"kind": "load", "flow": "id: f # \ufeff\n"}, loaded) == {"text"}
+    assert rules({"kind": "expr", "expr": "\ufeff1"}, {"value": 1}) == {"text"}
+    # Text data a case hands in, keys included, is scanned too.
+    for key, data in (("values", {"v": "\u0661"}), ("inputs", {"q": ["a\x1c"]}),
+                      ("value", {"\ufeffk": 1})):
+        assert rules({"kind": "expr", "expr": "v", key: data}, {"value": 1}) == {"text"}, key
+    # PyYAML's mark text, in any message, is the `yaml` rule's.
+    mark = ('call(...) keyword value: while parsing a flow node\nexpected the node content, but'
+            ' found \'<stream end>\'\n  in "<unicode string>", line 1, column 2:')
+    failed = {"output": {"status": "failed",
+                         "failure": {"code": "node.execute", "message": mark, "node": "n"}}}
+    assert rules({"kind": "run", "flow": "id: f\n"}, failed) == {"yaml"}
+
+    value = {"kind": "value", "type": "float", "value": 2}
+    finite = {"raises": {"class": "TypeCheckError", "message": "Input should be a finite number"}}
+    assert rules(value, finite) == {"infinity"}
+    other = {"raises": {"class": "ValueError", "message": "need a finite number of items"}}
+    assert rules(value, other) == set()
+    widened = {"value": 2.0, "kind": "float"}
+    assert rules(value, widened) == set()
+    assert rules(value, widened, frozenset({"int-in-float"})) == {"int-in-float"}
+
+
+_CODE_FLOW = '''\
+id: f
+name: f
+nodes:
+  pick:
+    kind: code
+    code: m:pick
+  body:
+    kind: code
+    code: |
+      x = 1
+      return x
+  other:
+    kind: tool
+output: ${body.output}
+'''
+
+
+def test_harvest_unshimmable_code() -> None:
+    """CODE nodes' body and output failures and frames on a `code:` line are the `code` rule's."""
+    from tests import conformance_harvest as harvest
+
+    def load_error(line: int, label: str = "flow.yaml", message: str = "bad") -> dict:
+        frame = {"label": label, "range": [line, 5, line, 9]}
+        return {"load": {"diagnostics": [{"code": "compose.load", "message": message,
+                                          "frames": [frame]}]}}
+
+    def failed(node: str, code: str = "node.execute", frames: list | None = None) -> dict:
+        failure = {"code": code, "message": "ValueError: no", "node": node}
+        if frames:
+            failure["frames"] = frames
+        return {"output": {"status": "failed", "failure": failure}}
+
+    load = {"kind": "load", "flow": _CODE_FLOW}
+    for line in (6, 9, 10, 11):
+        assert harvest._unshimmable(load, load_error(line), frozenset()) == {"code"}, line
+    for line in (5, 8, 12, 13):
+        assert harvest._unshimmable(load, load_error(line), frozenset()) == set(), line
+    assert harvest._unshimmable(load, load_error(3, message="node 'pick': bad `code:` value"),
+                                frozenset()) == {"code"}
+    # The Python form is what Python ran.
+    both = {"kind": "load", "flow": "id: f\n", "python_flow": _CODE_FLOW}
+    assert harvest._unshimmable(both, load_error(6), frozenset()) == {"code"}
+    # Another label reads the file of that name.
+    child = {"kind": "load", "flow": "id: f\nuses: [lib/child.yaml]\n",
+             "files": {"lib/child.yaml": _CODE_FLOW}}
+    assert harvest._unshimmable(child, load_error(6, "child.yaml"), frozenset()) == {"code"}
+    assert harvest._unshimmable(child, load_error(6, "other.yaml"), frozenset()) == set()
+
+    run = {"kind": "run", "flow": _CODE_FLOW}
+    for node in ("pick", "body", "loop/pick#2", "pick#1/x"):
+        assert harvest._unshimmable(run, failed(node), frozenset()) == {"code"}, node
+    for node in ("other", "loop/other#2", "picked"):
+        assert harvest._unshimmable(run, failed(node), frozenset()) == set(), node
+    assert harvest._unshimmable(run, failed("body", "contract.output"), frozenset()) == {"code"}
+    # An input binding's failure doesn't depend on the CODE body, unless a frame is on its line.
+    assert harvest._unshimmable(run, failed("body", "binding.evaluate"), frozenset()) == set()
+    for line, rules in ((10, {"code"}), (5, set())):
+        frames = [{"label": "flow.yaml", "range": [line, 5, line, 9]}]
+        assert harvest._unshimmable(run, failed("body", "binding.evaluate", frames),
+                                    frozenset()) == rules, line
+    failure = failed("body")["output"]["failure"]
+    for entry in (["node_failed", "body", {"failure": failure}],
+                  ["node_routed", "body", {"terminal_failure": failure}]):
+        assert harvest._unshimmable(run, {"trace": [entry]}, frozenset()) == {"code"}, entry[0]
+    routed = {"trace": [["node_routed", "body", {"terminal_failure": None}]]}
+    assert harvest._unshimmable(run, routed, frozenset()) == set()
+
+
+def test_harvest_code_scalars() -> None:
+    """`_code_scalars` finds the `code:` values of CODE mappings, with their ids and spans."""
+    from tests import conformance_harvest as harvest
+
+    def found(text: str) -> list:
+        return [(scalar.node, scalar.value, text[scalar.start:scalar.end], scalar.start_line,
+                 scalar.end_line) for scalar in harvest._code_scalars(text)]
+
+    assert found(_CODE_FLOW) == [
+        ("pick", "m:pick", "m:pick", 6, 6),
+        ("body", "x = 1\nreturn x\n", "|\n      x = 1\n      return x\n", 9, 11)]
+    flow = ("nodes:\n"
+            "  a: {kind: code, code: 'return 1'}\n"
+            "  outer:\n"
+            "    kind: loop\n"
+            "    nodes:\n"
+            "      inner:\n"
+            "        code: return 2\n"
+            "        kind: code\n"
+            "    steps: [{kind: code, code: return 3}]\n")
+    assert found(flow) == [("a", "return 1", "'return 1'", 2, 2),
+                           ("inner", "return 2", "return 2", 7, 7),
+                           (None, "return 3", "return 3", 9, 9)]
+    # A recursive alias is walked once.
+    assert found("a: &x\n  b: *x\n") == []
+    assert found("nodes:\n  c: &x {kind: code, code: r, again: *x}\n") == [("c", "r", "r", 2, 2)]
+    # A reused alias that isn't recursive is walked each time.
+    assert found("nodes:\n  a: &x {kind: code, code: r}\n  b: *x\n") == [
+        ("a", "r", "r", 2, 2), ("b", "r", "r", 2, 2)]
+    # Not CODE, or not text to compose.
+    assert found("nodes:\n  t: {kind: tool, code: x}\n") == []
+    assert found("nodes: [\n") == []
+    assert found("") == []
+
+
+_PYTHON_CODE_FLOW = '''\
+id: f
+name: f
+nodes:
+  echo:
+    kind: code
+    code: tests.seeds.fns:echo_value  # a reference
+  body:
+    kind: code
+    code: |-
+      x = inputs["a"]
+      y = x + 1
+      return y
+
+  line:
+    kind: code
+    code: return 1
+  long:
+    kind: code
+    code: return 2
+  other:
+    kind: code
+    code: other.mod:fn
+  missing:
+    kind: code
+    code: tests.seeds.fns:no_such
+  flowed: {kind: code, code: tests.seeds.fns:const_one}
+output: ${body.output}
+'''
+
+_TS_CODE_FLOW = '''\
+id: f
+name: f
+nodes:
+  echo:
+    kind: code
+    code: ./fixtures/seeds.ts:echo_value  # a reference
+  body:
+    kind: code
+    code: |-
+      return inputs.a + 1;
+
+
+
+  line:
+    kind: code
+    code: "return 1;"
+  long:
+    kind: code
+    code: return 2
+  other:
+    kind: code
+    code: other.mod:fn
+  missing:
+    kind: code
+    code: tests.seeds.fns:no_such
+  flowed: {kind: code, code: ./fixtures/seeds.ts:const_one}
+output: ${body.output}
+'''
+
+
+def _code_hash(body: str) -> str:
+    """Return the harvest's key for a Python CODE body."""
+    return hashlib.sha256(body.encode()).hexdigest()[:16]
+
+
+def test_translate_code() -> None:
+    """References to ported modules and bodies with a translation that fits take their TS form."""
+    from tests import conformance_harvest as harvest
+
+    block = 'x = inputs["a"]\ny = x + 1\nreturn y'
+    table = {_code_hash(block): "return inputs.a + 1;\n", _code_hash("return 1"): "return 1;",
+             _code_hash("return 2"): "const x = 2;\nreturn x;"}
+    text, untranslated, unported = harvest._translate(_PYTHON_CODE_FLOW, 0, table)
+    # Every line keeps its number.
+    assert text == _TS_CODE_FLOW
+    assert untranslated == {_code_hash("return 2"): "return 2"}
+    assert unported == {"other.mod:fn", "tests.seeds.fns:no_such"}
+    values = [scalar.value for scalar in harvest._code_scalars(text)]
+    assert values[:3] == ["./fixtures/seeds.ts:echo_value", "return inputs.a + 1;", "return 1;"]
+
+    # A file in a subdirectory names the fixture from there.
+    child = "id: c\nnodes:\n  e: {kind: code, code: tests.seeds.fns:echo_value}\n"
+    assert harvest._translate(child, 1, {}) == (
+        "id: c\nnodes:\n  e: {kind: code, code: ../fixtures/seeds.ts:echo_value}\n", {}, set())
+    # A block keeps its span when the body shrinks to one line at the end of the text; a one-line
+    # scalar refuses a multi-line body.
+    tail = "nodes:\n  b:\n    kind: code\n    code: |\n      a = 1\n      return a\n"
+    assert harvest._translate(tail, 0, {_code_hash("a = 1\nreturn a\n"): "return 1;"})[0] == (
+        "nodes:\n  b:\n    kind: code\n    code: |\n      return 1;\n\n")
+    one = "nodes:\n  b: {kind: code, code: return 1}\n"
+    assert harvest._translate(one, 0, {_code_hash("return 1"): "const a = 1;\nreturn a;"}) == (
+        one, {_code_hash("return 1"): "return 1"}, set())
+    # A block refuses a longer body, and a body that wouldn't read back as written is refused.
+    left = {_code_hash("a = 1\nreturn a\n"): "a = 1\nreturn a\n"}
+    for body in ("const a = 1;\nconst b = a;\nreturn b;", "  return 1;\nreturn 2;"):
+        assert harvest._translate(tail, 0, {_code_hash("a = 1\nreturn a\n"): body}) == (
+            tail, left, set()), body
+    # Python reads a raw U+0085 in a double-quoted scalar as a line break.
+    assert harvest._translate(one, 0, {_code_hash("return 1"): "return '\x85';"})[0] == one
+    # An alias names its anchor's scalar, which is replaced once, in text order.
+    aliased = ("nodes:\n  a: &b {kind: code, code: tests.seeds.fns:echo_value}\n"
+               "  c: {kind: code, code: tests.seeds.fns:const_one}\n  d: *b\n")
+    assert harvest._translate(aliased, 0, {}) == (
+        "nodes:\n  a: &b {kind: code, code: ./fixtures/seeds.ts:echo_value}\n"
+        "  c: {kind: code, code: ./fixtures/seeds.ts:const_one}\n  d: *b\n", {}, set())
+
+    # A case's files name the fixture from their own directory; only a changed text keeps its
+    # Python form.
+    plain = "id: p\nnodes:\n  t: {kind: tool, tool: x}\n"
+    case = {"kind": "load", "flow": plain, "files": {"lib/child.yaml": child, "p.yaml": plain}}
+    translated, untranslated, unported = harvest._ts_code(case, {})
+    assert translated == case | {"files": {
+        "lib/child.yaml": child.replace("tests.seeds.fns:", "../fixtures/seeds.ts:"),
+        "p.yaml": plain}, "python_files": case["files"]}
+    assert (untranslated, unported) == ({}, set())
+    assert harvest._ts_code({"kind": "load", "files": {"p.yaml": plain}}, {})[0] == {
+        "kind": "load", "files": {"p.yaml": plain}}
+
+
+def test_seeds_fixture_exports_every_seed_function() -> None:
+    """Every top-level function of `tests/seeds/fns.py` is exported by its TS fixture."""
+    import ast
+
+    from tests import conformance_harvest as harvest
+
+    tree = ast.parse((Path(__file__).parent / "seeds" / "fns.py").read_text(encoding="utf-8"))
+    names = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
+    assert names and names <= harvest._exported(harvest._FIXTURE_MODULES["tests.seeds.fns"])
+
+
+_CODE_TESTS = '''
+from yian import load_flow
+from yian.run import run_flow
+
+FLOW = """\\
+id: tr
+name: tr
+input:
+  a: !int
+nodes:
+  add:
+    kind: code
+    input:
+      a: ${input.a}
+    output: int
+    code: |
+      b = inputs["a"] + 1
+      return b
+  echo:
+    kind: code
+    input:
+      v: ${add.output}
+    output: int
+    code: tests.seeds.fns:echo_value
+  count:
+    kind: code
+    input:
+      v: ${echo.output}
+    output: int
+    code: builtins:len
+output: ${echo.output + count.output}
+"""
+
+TODAY = """\\
+id: today
+name: today
+nodes:
+  c:
+    kind: code
+    input:
+      d: ${system.today}
+    output: str
+    code: tests.seeds.fns:echo_value
+output: ${c.output}
+"""
+
+
+def test_code():
+    assert run_flow(load_flow(FLOW), {"a": 1}, run_id="r1", num_workers=0).output == 3
+
+
+def test_today():
+    load_flow(TODAY)
+'''
+
+_ADD_BODY = 'b = inputs["a"] + 1\nreturn b\n'
+
+
+def test_harvest_translates_code(tmp_path: Path) -> None:
+    """A run's CODE takes its TS form in `flow`; what's left goes to the worklist with its case."""
+    table = tmp_path / "code.yaml"
+    table.write_text(yaml.safe_dump({_code_hash(_ADD_BODY): "const b = inputs.a + 1;\n"
+                                                            "return b;\n"}), encoding="utf-8")
+    done, out = _harvest(tmp_path, _CODE_TESTS, "--harvest-code", str(table), "test_sample.py")
+    assert _summary(done) == "2 passed", done.stdout + done.stderr
+    name = "run-core/sample__code__2"
+    case = _read(out / "cases" / f"{name}.yaml")
+    assert case["python_flow"].startswith("id: tr\n")
+    assert "code: tests.seeds.fns:echo_value" in case["python_flow"]
+    assert 'b = inputs["a"] + 1' in case["python_flow"]
+    assert case["flow"] == case["python_flow"].replace(
+        "tests.seeds.fns:echo_value", "./fixtures/seeds.ts:echo_value").replace(
+        'b = inputs["a"] + 1\n      return b\n', "const b = inputs.a + 1;\n      return b;\n")
+    assert case["expect"]["output"] == {"status": "succeeded", "output": 3}
+    (tmp_path / "replay").mkdir()
+    _check_results(case, results(case, tmp_path / "replay"))
+
+    report = json.loads((out / "report" / "test_sample.py.json").read_text(encoding="utf-8"))
+    assert report["flags"] == {"code: unported reference": [name],
+                               "needs TS expect: dates": ["load-core/sample__today"]}
+    assert report["code"] == {}
+    assert report["references"] == {"builtins:len": [name]}
+
+    # Without the table the body stays Python and the worklist lists it with its case.
+    plain = tmp_path / "plain"
+    # yian refuses an auth file in a directory others can read.
+    plain.mkdir(mode=0o700)
+    done, out = _harvest(plain, _CODE_TESTS)
+    assert _summary(done) == "2 passed", done.stdout + done.stderr
+    case = _read(out / "cases" / f"{name}.yaml")
+    assert 'b = inputs["a"] + 1' in case["flow"] and "./fixtures/seeds.ts" in case["flow"]
+    worklist = yaml.safe_load((out / "worklist.yaml").read_text(encoding="utf-8"))
+    assert worklist == {
+        "code": {_code_hash(_ADD_BODY): {"python": _ADD_BODY, "cases": [name]}},
+        "references": {"builtins:len": [name]},
+        "expect": {"dates": ["load-core/sample__today"]}}
+    assert "worklist: code 1, references 1, expect 1" in done.stdout, done.stdout
+    report = json.loads((out / "report" / "test_sample.py.json").read_text(encoding="utf-8"))
+    assert report["flags"]["code: untranslated"] == [name]
+
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("- not a mapping\n", encoding="utf-8")
+    done, _ = _harvest(tmp_path / "plain", _CODE_TESTS, "--harvest-code", str(bad))
+    assert done.returncode == pytest.ExitCode.USAGE_ERROR, done.stdout + done.stderr
+    assert "--harvest-code" in done.stderr
+
+
+def _install_shims(patch: pytest.MonkeyPatch, *names: str) -> None:
+    """Install the harvest's shims named in `names`, given in install order, through `patch`."""
+    from tests import conformance_harvest as harvest
+
+    for name in names:
+        harvest._SHIMS[name].install(patch, {})
+
+
+def test_shim_js_number() -> None:
+    """`_js_number` writes a float as JavaScript's `Number.prototype.toString` does."""
+    from tests import conformance_harvest as harvest
+
+    rows = [(1.0, "1"), (1.5, "1.5"), (0.1, "0.1"), (1e21, "1e+21"), (1e-7, "1e-7"),
+            (123e-9, "1.23e-7"), (1e20, "100000000000000000000"), (0.000001, "0.000001"),
+            (-2.5, "-2.5"), (5e-324, "5e-324"),
+            (1.7976931348623157e308, "1.7976931348623157e+308"), (math.inf, "Infinity"),
+            (-math.inf, "-Infinity"), (-0.0, "0"), (100.0, "100")]
+    assert [harvest._js_number(x) for x, _ in rows] == [text for _, text in rows]
+
+
+def test_shim_ts_text() -> None:
+    """`_ts_text` gives a value's text form."""
+    from tests import conformance_harvest as harvest
+
+    rows = [("a b", "a b"), (True, "true"), (False, "false"), (1, "1"),
+            (12345678901234567890123, "12345678901234567890123"), (1.5, "1.5"),
+            (1e21, "1e+21"), (math.inf, "Infinity"), ([1, "a"], '[1,"a"]'),
+            ({"k": "v"}, '{"k":"v"}'), (FileRef(uri="s3://b/k"),
+                                        '{"uri":"s3://b/k","mime":null,"name":null}'),
+            (None, "null"), (ValueError("boom"), "boom"),
+            ({"a": [1.0, None, {"é": []}], "b": {}}, '{"a":[1,null,{"é":[]}],"b":{}}')]
+    assert [harvest._ts_text(value) for value, _ in rows] == [text for _, text in rows]
+
+
+def test_shim_render_as_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Under `text-form`, `render_as_json` lays a value out as Python does, numbers as JS."""
+    from yian.expr import builtins
+
+    original = builtins.TEMPLATE_FNS["render_as_json"]
+    _install_shims(monkeypatch, "text-form")
+    render = builtins.TEMPLATE_FNS["render_as_json"]
+    assert inspect.signature(render) == inspect.signature(original)
+    for value in ({"a": [1, {"b": None, "c": [True, "x"]}], "d": {}, "e": []}, [[], {}, [[1]]],
+                  "é", {"name": "Zoë", "tags": ["ü"]}, FileRef(uri="s3://b/k")):
+        for indent in (0, 2, 4):
+            expected = json.dumps(value.model_dump() if isinstance(value, FileRef) else value,
+                                  indent=indent, ensure_ascii=False)
+            assert render(value, indent) == expected
+    assert render({"x": 1.0, "y": [math.inf, -math.inf, 0.5]}) == (
+        '{\n  "x": 1,\n  "y": [\n    Infinity,\n    -Infinity,\n    0.5\n  ]\n}')
+    assert render([1.0], 0) == "[\n1\n]"
+    # The design defines only `indent >= 0`; any other indent is Python's own layout.
+    assert render({"x": 1.0}, "\t") == '{\n\t"x": 1.0\n}'
+    with pytest.raises(TypeError, match=r"render_as_json\(\) got null"):
+        render(None)
+
+
+def test_shim_js_key_order() -> None:
+    """`_js_ordered` lists a record's array-index keys first, ascending, at every depth."""
+    from tests import conformance_harvest as harvest
+
+    assert list(harvest._js_ordered({"b": 1, "10": 2, "a": 3, "2": 4})) == ["2", "10", "b", "a"]
+    assert list(harvest._js_ordered({"01": 1, "4294967295": 2, "4294967294": 3, "0": 4})) == [
+        "0", "4294967294", "01", "4294967295"]
+    nested = harvest._js_ordered({"x": [{"1": "a", "0": {"9": 1, "3": 2}}]})
+    assert list(nested["x"][0]) == ["0", "1"] and list(nested["x"][0]["0"]) == ["3", "9"]
+    assert harvest._js_ordered([1, "a", None]) == [1, "a", None]
+    assert harvest._js_ordered(1.5) == 1.5
+
+
+def test_shim_text_form_through_yian() -> None:
+    """Python yian writes values in the text form under the shims, and as `str` without them."""
+    from yian.expr import builtins
+    from yian.expr.expressions import ExpressionError
+    from yian.nodes.agent import live, memory
+
+    class Unwritable:
+        def __str__(self) -> str:
+            raise RuntimeError("no text")
+
+    values = {"flag": True, "n": 1.0, "xs": [1, 1.5, True, "a", [1, "b"]],
+              "r": {"a": 1.0, "b": [True, None]}, "rec": {"b": 1, "1": 2}}
+    # Without the shims, Python's spellings.
+    assert eval_binding("x=${flag}", values.get) == "x=True"
+    assert render_template_record("${n}", values) == "1.0"
+    assert memory._tool_text("t", None) == "None"
+    assert live._text({"a": 1.0, "ok": True}) == "{'a': 1.0, 'ok': True}"
+    with pytest.MonkeyPatch.context() as patch:
+        _install_shims(patch, "key-order")
+        assert live._text({"b": 1, "0": 2}) == "{'0': 2, 'b': 1}"
+        cyclic: list = []
+        cyclic.append(cyclic)
+        assert live._text(cyclic) == "[[...]]"
+        for name in ("join", "render_as_json", "upper", "lower"):
+            assert builtins.builtin_result_type(name) == builtins.builtin_result_type("upper")
+        assert builtins.builtin_result_type("join") is not None
+        assert render_template_record("${join(xs, \",\")}", values) == "1,1.5,True,a,[1, 'b']"
+    with pytest.MonkeyPatch.context() as patch:
+        _install_shims(patch, "text-form")
+        assert eval_binding("x=${flag}", values.get) == "x=true"
+        assert render_template_record("${n}", values) == "1"
+        assert render_template_record("${render_as_json(r)}", values) == (
+            '{\n  "a": 1,\n  "b": [\n    true,\n    null\n  ]\n}')
+        assert render_template_record("${join(xs, \",\")}", values) == '1,1.5,true,a,[1,"b"]'
+        assert render_template_record("r=${rec}", values) == 'r={"b":1,"1":2}'
+        assert memory._tool_text("t", None) == "null"
+        assert memory._tool_text("t", {"k": [1.0]}) == '{"k":[1]}'
+        assert memory._reported_text("t", ReportedToolError("no such row")) == "no such row"
+        assert memory._reported_text("t", ReportedToolError("")) == "ReportedToolError"
+        assert live._text({"a": 1.0, "ok": True}) == '{"a":1,"ok":true}'
+        assert live._text("x") == "x"
+        # As `live._text`, a result whose writing raises has no text.
+        assert live._text(Unwritable()) is None
+    with pytest.MonkeyPatch.context() as patch:
+        _install_shims(patch, "text-form", "key-order")
+        assert render_template_record("r=${rec}", values) == 'r={"1":2,"b":1}'
+        assert render_template_record("${render_as_json(rec, 0)}", values) == (
+            '{\n"1": 2,\n"b": 1\n}')
+        assert render_template_record("${join([rec], \",\")}", values) == '{"1":2,"b":1}'
+        assert memory._tool_text("t", {"b": 1, "0": 2}) == '{"0":2,"b":1}'
+        assert live._text({"b": 1, "0": 2}) == '{"0":2,"b":1}'
+        with pytest.raises(ExpressionError, match="takes a list, got str"):
+            render_template_record("${join(n2, \",\")}", {"n2": "ab"})
+        with pytest.raises(ExpressionError, match=r"render_as_json"):
+            render_template_record("${render_as_json(r, 1, 2)}", values)
+    assert eval_binding("x=${flag}", values.get) == "x=True"
+    assert memory._tool_text("t", None) == "None"
+    assert live._text(True) == "True"
+
+
+def test_shim_text_form_replay(tmp_path: Path) -> None:
+    """A replay under `text-form` writes the text form; key order tags the same rule."""
+    from tests import conformance_harvest as harvest
+
+    assert harvest._SHIMS["key-order"].rule == "text-form"
+    case = {"kind": "expr", "template": "x=${v}", "values": {"v": True}}
+    assert harvest._replay(harvest._Harvest(None, tmp_path), case, ("text-form",)) == (
+        {"value": "x=true"}, frozenset())
+
+
+def test_shim_value_repr() -> None:
+    """`_ts_value_repr` shows a value in the text form, text JSON-quoted, cut as `value_repr`."""
+    from tests import conformance_harvest as harvest
+    from yian.typesys.values import shown_text, value_repr
+
+    rows = [(True, "true"), (None, "null"), ("x", '"x"'), (["a"], '["a"]'), ({"k": 1.0}, '{"k":1}')]
+    assert [harvest._ts_value_repr(value) for value, _ in rows] == [text for _, text in rows]
+    assert harvest._ts_value_repr("x" * 300) == shown_text('"' + "x" * 300 + '"')
+    assert harvest._ts_value_repr("x" * 300).endswith("x…")
+    # Long-int placeholders are the numbers rule's, so they stay Python's.
+    assert harvest._ts_value_repr([10**5000]) == value_repr([10**5000])
+
+
+def test_shim_value_repr_through_yian() -> None:
+    """Under `messages`, yian's messages show values in the text form and names as Python does."""
+    from tests import conformance_harvest as harvest
+    from yian.expr import expressions
+    from yian.nodes.binding import check_input_names
+    from yian.nodes.contracts import Parameter, PartialRecordContract, validate_output_contract
+    from yian.typesys import values
+    from yian.typesys.values import Type, ValueKind, reject_non_text_keys
+
+    record = Type(kind=ValueKind.OBJECT, fields={"a": Type.scalar(ValueKind.INTEGER)},
+                  required=frozenset({"a"}))
+    names = [
+        (lambda: check_input_names([Parameter("a")], {"zz": 1}), "unknown input 'zz'"),
+        (lambda: validate_output_contract(PartialRecordContract((("a", None),)),
+                                          {"a": 1, "zz": 2}), "unknown fields: ['zz']"),
+        (lambda: build_value_as(record, {"a": 1, "zz": 2}), "unknown fields: ['zz']"),
+        (lambda: reject_non_text_keys({None: 1}, "input 'x'"), "must be text, got None"),
+    ]
+
+    def raised(call) -> str:
+        with pytest.raises((TypeCheckError, ValueError)) as caught:
+            call()
+        return str(caught.value)
+
+    def not_an_int() -> str:
+        return raised(lambda: build_value_as(type_for("int", {}), "not-an-int"))
+
+    original = values.value_repr
+    assert not_an_int() == "'not-an-int' does not match declared type int"
+    with pytest.MonkeyPatch.context() as patch:
+        _install_shims(patch, "messages")
+        assert expressions.value_repr is values.value_repr is not original
+        assert inspect.signature(values.value_repr) == inspect.signature(original)
+        assert not_an_int() == '"not-an-int" does not match declared type int'
+        assert expressions._operand_repr(True) == "true"
+        for call, message in names:
+            assert message in raised(call)
+    with pytest.MonkeyPatch.context() as patch:
+        _install_shims(patch, "key-order")
+        assert values.value_repr({"b": 1, "0": 2}) == "{'0': 2, 'b': 1}"
+        assert expressions.value_repr is values.value_repr
+        cyclic: dict = {}
+        cyclic["x"] = cyclic
+        assert values.value_repr(cyclic) == "{'x': {...}}"
+    with pytest.MonkeyPatch.context() as patch:
+        _install_shims(patch, *harvest._SHIMS)
+        assert inspect.signature(values.value_repr) == inspect.signature(original)
+        assert expressions.value_repr({"b": 1, "0": 2}) == '{"0":2,"b":1}'
+        assert not_an_int() == '"not-an-int" does not match declared type int'
+        for call, message in names:
+            assert message in raised(call)
+    assert values.value_repr is original and expressions.value_repr is original
+
+
+def test_shim_value_repr_name_sites() -> None:
+    """Each of the `messages` shim's name sites is one code object that calls `value_repr`."""
+    import types
+
+    from tests import conformance_harvest as harvest
+    import yian
+
+    root = Path(yian.__file__).parent
+    for path, qualname in harvest._NAME_CALLERS:
+        source = root / path
+        stack = [compile(source.read_text(encoding="utf-8"), str(source), "exec")]
+        found = 0
+        while stack:
+            code = stack.pop()
+            stack += [const for const in code.co_consts if isinstance(const, types.CodeType)]
+            found += code.co_qualname == qualname and "value_repr" in code.co_names
+        assert found == 1, (path, qualname)
+
+
+def _shim_outcome(expr: str, values: dict) -> tuple[str, set]:
+    """Evaluate `expr` over `values`: return its repr or `raises: <message>`, and the notes."""
+    from tests import conformance_harvest as harvest
+    from yian.expr.expressions import ExpressionError
+
+    harvest._NOTES.clear()
+    try:
+        shown = repr(eval_expr(parse_expr(expr), values.get))
+    except ExpressionError as exc:
+        shown = f"raises: {exc}"
+    return shown, set(harvest._NOTES)
+
+
+def _kinds_raise(l: object, op: str, r: object, k1: str, k2: str) -> str:
+    """Return `_shim_outcome`'s text for the unsupported-operand-kinds error of `l op r`."""
+    return (f"raises: type error evaluating {l} {op} {r}: unsupported operand kinds for `{op}`: "
+            f"`{k1}` and `{k2}`")
+
+
+def test_shim_arithmetic() -> None:
+    """Under `arithmetic`, the operators follow design 3.2.2 and note where Python differs."""
+    from tests import conformance_harvest as harvest
+    from yian.expr import expressions
+
+    values = {"inf": math.inf, "r": {}, "f": FileRef(uri="s3://b/k")}
+    rows = [
+        ("7 % -2", "1", set()),
+        ("-7 % 2", "-1", set()),
+        ("-7.5 % 2", "-1.5", set()),
+        ("5 % inf", "5.0", set()),
+        ("inf % 2", "raises: % on Infinity and 2 has no numeric result", set()),
+        ("10 / 4", "2.5", set()),
+        ("10 ** 400 / 10 ** 399", "10.0", set()),
+        ("1 + 0.5", "1.5", set()),
+        ("2 ** 100", repr(2**100), set()),
+        ("2 ** -1", "0.5", set()),
+        ("(10 ** 400) ** -1", "0.0", {"infinity"}),
+        ("true + 1", "2", set()),
+        ("-true", "-1", set()),
+        ("-(0.0)", "-0.0", set()),
+        ('"a" + "b"', "'ab'", set()),
+        ("[1] + [2]", "[1, 2]", set()),
+        ('"a" + 1', _kinds_raise('"a"', "+", 1, "str", "int"), {"operand-kinds"}),
+        ("r + r", _kinds_raise("{}", "+", "{}", "record", "record"), {"operand-kinds"}),
+        ("null + 1", _kinds_raise("null", "+", 1, "null", "int"), {"operand-kinds"}),
+        ("f + 1", _kinds_raise('{"uri":"s3://b/k","mime":null,"name":null}', "+", 1, "file",
+                               "int"), {"operand-kinds"}),
+        ('-"a"', 'raises: unary minus on non-number "a": unsupported operand kind for `-`: `str`',
+         {"operand-kinds"}),
+        ("-null", "raises: unary minus on non-number null: unsupported operand kind for `-`: "
+         "`null`", {"operand-kinds"}),
+        ('"ab" * 3', _kinds_raise('"ab"', "*", 3, "str", "int"),
+         {"operand-kinds", "repetition"}),
+        ("[0] * 3", _kinds_raise("[0]", "*", 3, "list", "int"),
+         {"operand-kinds", "repetition"}),
+        ('"%s" % 1', "raises: text formatting with `%` was removed; use a template", {"printf"}),
+        ("10 ** 400 / 1", "inf", {"infinity"}),
+        ('"a" - 1', _kinds_raise('"a"', "-", 1, "str", "int"), {"operand-kinds"}),
+        ("1 / 0", "raises: division by zero: 1 / 0", set()),
+        ("1.0 % 0.0", "raises: division by zero: 1 % 0", set()),
+        ("0 ** -1", "raises: division by zero: 0 ** -1", set()),
+        ("0.0 ** -1", "raises: division by zero: 0 ** -1", set()),
+        ("(0 - 8) ** 0.5", "raises: ** on -8 and 0.5 has no numeric result", set()),
+        ("inf - inf", "raises: - on Infinity and Infinity has no numeric result", set()),
+        ("0 * inf", "raises: * on 0 and Infinity has no numeric result", set()),
+        ("inf / inf", "raises: / on Infinity and Infinity has no numeric result", set()),
+        ("1 ** inf", "1.0", set()),
+        ("(0 - 1) ** inf", "1.0", set()),
+        ("2.0 ** 5000", "inf", {"infinity"}),
+        ("(0 - 2.0) ** 5001", "-inf", {"infinity"}),
+        ("10 ** 400 * 1.0", "inf", {"infinity"}),
+    ]
+    apply_step, neg = expressions._EvalExpr._apply_step, expressions._EvalExpr._do_neg
+    with pytest.MonkeyPatch.context() as patch:
+        # `messages` spells the operands as TS does, so the messages read as under every shim.
+        _install_shims(patch, "arithmetic", "messages")
+        outcomes = [_shim_outcome(expr, values) for expr, _, _ in rows]
+    assert outcomes == [(shown, notes) for _, shown, notes in rows]
+    assert harvest._SHIMS["arithmetic"].rule == "arithmetic"
+    assert expressions._EvalExpr._apply_step is apply_step and expressions._EvalExpr._do_neg is neg
+    assert _shim_outcome('"%s" % 1', values) == ("'1'", set())
+
+
+def test_shim_compare() -> None:
+    """Under `compare`, comparisons and `in` follow design 3.2.2, noting nothing."""
+    from tests import conformance_harvest as harvest
+
+    values = {"inf": math.inf, "r": {"k": 1}, "a": {"a": 1}, "hi": "\uffff",
+              "smile": "\U0001F600"}
+    rows = [
+        ("[1, 2] < [1, 3]", _kinds_raise("[1,2]", "<", "[1,3]", "list", "list")),
+        ('"a" < 1', _kinds_raise('"a"', "<", 1, "str", "int")),
+        ("hi < smile", "False"),
+        ("null < 1", "False"),
+        ("true < 2", "True"),
+        ("1 < inf", "True"),
+        ("1 == 1.0", "True"),
+        ("2 ** 60 == 2.0 ** 60", "True"),
+        ("1 in [1.0]", "True"),
+        ('"k" in r', "True"),
+        ("[1] in a", "False"),
+        ('1 in "abc"', _kinds_raise(1, "in", '"abc"', "int", "str")),
+        ('"b" in "abc"', "True"),
+        ("1 in null", _kinds_raise(1, "in", "null", "int", "null")),
+        ("1 not in null", _kinds_raise(1, "not in", "null", "int", "null")),
+    ]
+    with pytest.MonkeyPatch.context() as patch:
+        _install_shims(patch, "compare", "messages")
+        outcomes = [_shim_outcome(expr, values) for expr, _ in rows]
+    assert outcomes == [(shown, set()) for _, shown in rows]
+    assert harvest._SHIMS["compare"].rule == "compare"
+    # Python orders text by code point.
+    assert _shim_outcome("hi < smile", values) == ("True", set())
+
+
+def test_shim_ts_range() -> None:
+    """`_ts_range` maps a Python range to TS lines (LF, CRLF, CR) and UTF-16 columns."""
+    from tests import conformance_harvest as harvest
+
+    smile = "\U0001F600"
+    rows = [
+        (f"a{smile}b", [1, 3, 1, 4], [1, 4, 1, 5]),
+        (f"a{smile}b", [1, 1, 1, 2], [1, 1, 1, 2]),
+        # NEL and U+2028 break lines for PyYAML only, so later lines move up.
+        ("a\x85b\nc", [3, 1, 3, 2], [2, 1, 2, 2]),
+        ("a\x85b\nc", [2, 1, 2, 2], [1, 3, 1, 4]),
+        ("x\u2028y\nz", [3, 1, 3, 2], [2, 1, 2, 2]),
+        (f"{smile}\x85b", [2, 1, 2, 2], [1, 4, 1, 5]),
+        ("a\r\nb\rc", [3, 1, 3, 2], [3, 1, 3, 2]),
+        ("a\r\nb\rc", [2, 1, 2, 2], [2, 1, 2, 2]),
+        # A position past its line keeps its distance from the line end; a line past the text
+        # is kept.
+        (f"{smile}b", [1, 3, 1, 4], [1, 4, 1, 5]),
+        ("a\r\nb", [1, 3, 1, 4], [1, 3, 1, 4]),
+        ('id: f\nname: f\nk: "\U0001F600', [3, 6, 3, 7], [3, 7, 3, 8]),
+        ("ab", [5, 1, 5, 2], [5, 1, 5, 2]),
+        # A text starting with a BOM is the `yaml` rule's.
+        (f"\ufeffa{smile}b", [1, 4, 1, 5], [1, 4, 1, 5]),
+    ]
+    assert [harvest._ts_range(text, rng) for text, rng, _ in rows] == [ts for _, _, ts in rows]
+
+
+_ASTRAL_LOAD_FLOW = '''\
+id: f
+name: f
+uses:
+  child: child
+nodes:
+  go:
+    kind: call
+    call: child
+output: ${go.output}
+'''
+_ASTRAL_CHILD = '''\
+id: child
+name: child
+nodes:
+  a: {code: "return '\U0001F600'", kind: code, output: str, bogus: 1}
+output: ${a.output}
+'''
+
+
+def test_shim_columns(tmp_path: Path) -> None:
+    """Under `columns`, a diagnostic's frames give TS columns in the text their label names."""
+    from tests import conformance_harvest as harvest
+
+    state = harvest._Harvest(None, tmp_path)
+    flow = 'id: f\nname: f\nnodes:\n  a:\n    kind: code\n    title: "\U0001F600" ]\n'
+    load = {"kind": "load", "flow": "unused", "python_flow": flow}
+
+    def ranges(case: dict, shims: tuple = ()) -> list:
+        results, _ = harvest._replay(state, case, shims)
+        return [frame["range"] for frame in results["load"]["diagnostics"][0]["frames"]]
+
+    assert ranges(load) == [[6, 16, 6, 17]]
+    assert ranges(load, ("columns",)) == [[6, 17, 6, 18]]
+    child = {"kind": "load", "flow": _ASTRAL_LOAD_FLOW, "files": {"child.yaml": "unused"},
+             "python_files": {"child.yaml": _ASTRAL_CHILD}}
+    assert ranges(child) == [[4, 10, 4, 15], [4, 59, 4, 60]]
+    assert ranges(child, ("columns",)) == [[4, 10, 4, 15], [4, 60, 4, 61]]
+    assert harvest._SHIMS["columns"].rule == "columns"
+
+
+def test_shim_dollar() -> None:
+    """Under `dollar`, `!!timestamp` text with a trailing newline is no longer a date."""
+    from tests import conformance_harvest as harvest
+    from yian.compose.source.scalars import _FlowLoader
+
+    newline, plain = '!!timestamp "2026-01-01\\n"', '!!timestamp "2026-01-01"'
+    # Python's `$` also matches before a trailing newline.
+    assert yaml.load(newline, Loader=_FlowLoader) == date(2026, 1, 1)
+    pattern = _FlowLoader.timestamp_regexp
+    with pytest.MonkeyPatch.context() as patch:
+        _install_shims(patch, "dollar")
+        with pytest.raises(ConstructorError, match="expected a date or timestamp"):
+            yaml.load(newline, Loader=_FlowLoader)
+        assert yaml.load(plain, Loader=_FlowLoader) == date(2026, 1, 1)
+    assert _FlowLoader.timestamp_regexp is pattern
+    assert harvest._SHIMS["dollar"].rule == "text"
+
+
+def test_shim_ts_intake() -> None:
+    """`_ts_intake` reads an integral float within ±(2^53-1) as an int, at every depth."""
+    from tests import conformance_harvest as harvest
+
+    rows = [(2.0, 2), (-0.0, 0), (2.5, 2.5), (1e300, 1e300), (math.inf, math.inf),
+            (2.0**53, 2.0**53), (-(2.0**53 - 1), -(2**53 - 1)), ([1.0, {"a": 3.0}], [1, {"a": 3}]),
+            (True, True), ("2.0", "2.0")]
+    assert [repr(harvest._ts_intake(value)) for value, _ in rows] == [
+        repr(intake) for _, intake in rows]
+    assert math.isnan(harvest._ts_intake(math.nan))
+    # Unchanged values come back as themselves.
+    unchanged = [1, {"a": 2.5}]
+    assert harvest._ts_intake(unchanged) is unchanged
+
+
+_INTAKE_FLOW = '''\
+id: f
+name: f
+nodes:
+  a:
+    kind: code
+    output: object
+    code: |-
+      return {"n": 2.0}
+  v: !float 2.0
+output:
+  a: ${a.output}
+  v: ${v.output}
+'''
+
+
+def test_shim_code_intake(tmp_path: Path) -> None:
+    """`code-intake` stores a CODE body's integral float as an int, but not a value entry's."""
+    from tests import conformance_harvest as harvest
+    from yian.nodes.code.node import CodeNode
+
+    state = harvest._Harvest(None, tmp_path)
+    case = {"kind": "run", "flow": _INTAKE_FLOW, "run": {"run_id": "r1", "num_workers": 0}}
+    forward = CodeNode.forward
+
+    def stored(shims: tuple = ()) -> tuple[str, str, frozenset]:
+        results, notes = harvest._replay(state, case, shims)
+        [entry] = [entry for entry in results["trace"] if entry[:2] == ["node_succeeded", "a"]]
+        # By repr, so 2 and 2.0 differ.
+        return repr(results["output"]["output"]), repr(entry[2]["value"]), notes
+
+    assert stored() == ("{'a': {'n': 2.0}, 'v': 2.0}", "{'n': 2.0}", frozenset())
+    assert stored(("code-intake",)) == ("{'a': {'n': 2}, 'v': 2.0}", "{'n': 2}", frozenset())
+    assert CodeNode.forward is forward
+    assert harvest._SHIMS["code-intake"].rule == "numbers"
+
+
+def test_python_counts_code_points(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without a shim, yian's character caps count an astral character as one."""
+    from yian.skills import Skill
+    from yian.skills.tool import system_prompt_with_skills
+    from yian.typesys.values import shown_text
+
+    smile = "\U0001F600"
+    monkeypatch.setenv("YIAN_MAX_SHOWN_VALUE_CHARS", "3")
+    monkeypatch.setenv("YIAN_MAX_SKILL_DESCRIPTION_CHARS", "3")
+    defaults._forget()
+    try:
+        assert shown_text(smile * 3) == smile * 3
+        assert shown_text(smile * 4) == smile * 2 + "…"
+        listed = system_prompt_with_skills("base", [Skill("a", smile * 3, ""),
+                                                    Skill("b", smile * 4, "")])
+        assert listed.endswith(f"- a: {smile * 3}\n- b: {smile * 2}…")
+    finally:
+        defaults._forget()

@@ -228,7 +228,9 @@ replies, tool arguments, `--inputs`); `expect.value` is the value read. `write` 
 (in codec form, like every case value) and `form` is `canonical` (RFC 8785, for
 fingerprints) or `log` (a run-log line); `expect.text` is the text written. A `log` text is
 also read back in `codec` mode and must give `write` again. `expect.raises` is the error
-instead. `json` cases are TS-only.
+instead. In `codec` mode a bare `{"$record": X}` whose `X` isn't an object (e.g.
+`{"$record": 5}`) reads as a record holding that one key (the case
+`json/read_codec_record_of_scalar` pins it). `json` cases are TS-only.
 
 ## The host, as data
 

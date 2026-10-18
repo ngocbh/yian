@@ -4,11 +4,21 @@ A pytest plugin: while each test runs, it records the engine calls whose inputs 
 data (flow loads, runs, resumes, backward passes, expressions, templates, values and defaults).
 The model calls a run makes through `llm_clients.model_from_config`, whatever a test patched it
 with, become the run's `host.models`. Each passing test's calls become candidates; a candidate is
-replayed through the conformance runner (`tests/test_conformance.py`) to get its `expect` (three
-times for a pooled run), and written as a case file under `<out>/cases/<group>/<name>.yaml`,
-deduplicated by content. Run it with:
+replayed through the conformance runner (`tests/test_conformance.py`), plain and with every TS-rule
+shim on (three times each for a pooled run). The shimmed outcome is its `expect`; when that
+differs, the plain one is its `python_expect` and the rules whose shims change it are its `rules`.
+A rule no shim can follow (huge ints, an int in a float slot, infinity, dates, YAML, structured
+model calls, CODE, some text rules) is added to `rules` by what the case holds, with
+`python_expect` even when equal, and flagged `needs TS expect: <rule>`: its TS expectation is
+written by hand. Before the replays, its CODE takes its TS form, keeping the Python form in
+`python_flow` and `python_files`: references to ported modules point at `conformance/fixtures/`,
+and inline bodies take the translations `--harvest-code FILE` gives. It is written as a case
+file under `<out>/cases/<group>/<name>.yaml`, deduplicated by content. Run it with:
 
     PYTHONPATH=src python -m pytest -p tests.conformance_harvest --harvest-out DIR tests
+
+`DIR/worklist.yaml` lists what is left for hand work: the CODE bodies to translate, the
+references to port, and the cases needing a TS expectation.
 
 Shards of the suite run one after another into one `DIR`: deduplication and reports are per
 process, so neither shards running at once nor `-n` (xdist) are supported.
@@ -19,18 +29,22 @@ Design section 4.4 explains the harvest; `conformance/README.md` defines the cas
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Callable, Collection
+import dataclasses
+from decimal import Decimal
 import functools
 import hashlib
 import inspect
 import json
 import math
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import sys
 import tempfile
 import threading
 from types import ModuleType
+from typing import NamedTuple
 
 from langchain_core.messages import AIMessage, AIMessageChunk
 from lark import Tree
@@ -41,21 +55,36 @@ import yaml
 import yian
 from yian import defaults, llm_clients
 from yian.compose import LoadError, load_flow
+from yian.compose.source.scalars import _FlowLoader
+from yian.expr import builtins as expr_builtins, expressions, template
 from yian.expr.expressions import ResolveMode, eval_expr, evaluate_when_record
 from yian.expr.grammar import parse_expr
 from yian.expr.template import eval_binding, render_template_record
+from yian.nodes.agent import live, memory
+from yian.nodes.code.node import _REFERENCE_RE, CodeNode
 from yian.nodes.tool import node as tool_node
 from yian.run import RunResult, resume_flow, run_flow
+from yian.typesys import values as typesys_values
 from yian.typesys.types import read_typedefs, type_for
-from yian.typesys.values import ValueKind, build_value_as
+from yian.typesys.values import (
+    FileRef,
+    ValueKind,
+    build_value_as,
+    long_int_digits,
+    shown_text,
+    value_repr,
+    write_as_text,
+)
 
 from tests import test_conformance as runner
 
 # The order a case file's keys are written in. Other keys (the harvest writes none) follow in
 # their given order.
-_ORDER = ("kind", "flow", "files", "env", "inputs", "run", "host", "backward", "expr",
-          "template", "values", "item", "mode", "typedefs", "type", "value", "expect")
-# The order of an `expect`'s keys, and of a run's `output`: the result before what led to it.
+_ORDER = ("kind", "rules", "flow", "python_flow", "files", "python_files", "env", "inputs",
+          "run", "host", "backward", "expr", "template", "values", "item", "mode", "typedefs",
+          "type", "value", "expect", "python_expect")
+# The order of an `expect`'s (and `python_expect`'s) keys, and of a run's `output`: the result
+# before what led to it.
 _EXPECT_ORDER = ("raises", "output", "load", "value", "kind", "defaults", "trace", "events",
                  "stream", "tool_calls", "backward")
 _OUTPUT_ORDER = ("status", "output", "failure")
@@ -126,10 +155,11 @@ def _dump(case: dict) -> str:
     `_decode`, to the same data.
     """
     ordered = _ordered(case, _ORDER)
-    if isinstance(ordered.get("expect"), dict):
-        expect = ordered["expect"] = _ordered(ordered["expect"], _EXPECT_ORDER)
-        if isinstance(expect.get("output"), dict):
-            expect["output"] = _ordered(expect["output"], _OUTPUT_ORDER)
+    for key in ("expect", "python_expect"):
+        if isinstance(ordered.get(key), dict):
+            expect = ordered[key] = _ordered(ordered[key], _EXPECT_ORDER)
+            if isinstance(expect.get("output"), dict):
+                expect["output"] = _ordered(expect["output"], _OUTPUT_ORDER)
     limit = sys.get_int_max_str_digits()
     # As the runner's `_read`: case files have no digit limit.
     sys.set_int_max_str_digits(0)
@@ -229,7 +259,6 @@ class _Index:
         return "written"
 
 
-_HELD = "held: and/or result (owner deciding)"
 _WORKTREE = Path(__file__).parent.parent
 _YIAN_DIR = os.path.dirname(yian.__file__) + os.sep
 # Calls from these files are the engine's own or the harvest's, never a test's.
@@ -358,22 +387,6 @@ def _trees(case: dict) -> list:
     if case.get("mode") == "condition":
         return runner.expression_trees(case["expr"], condition=True)
     return [runner.parse_expr(case["expr"])]
-
-
-def _uses_and_or(tree: object) -> bool:
-    """Return whether the expression tree `tree` uses `and` or `or`."""
-    return isinstance(tree, Tree) and any(node.data in ("or_expr", "and_expr")
-                                          for node in tree.iter_subtrees())
-
-
-def _and_or(case: dict) -> bool:
-    """Return whether an `expr` case's expressions use `and` or `or`."""
-    try:
-        trees = _trees(case)
-    except Exception:
-        # Text that doesn't parse holds no `and`/`or` the replay would reach.
-        return False
-    return any(_uses_and_or(tree) for tree in trees)
 
 
 def _check_types(case: dict, types: dict | None) -> None:
@@ -616,8 +629,6 @@ def _record_run_flow(arguments: dict):
     _, load, load_call = held
     call = _STATE.active
     load_call.runs.append(call)
-    # The run's replay loads the flow too.
-    call.and_or = load_call.and_or
     case = {"kind": "run", **{key: load[key] for key in ("flow", "files") if key in load},
             **_env(models=True, keys=call.keys)}
     inputs = _plain(arguments["inputs"], "inputs")
@@ -1040,10 +1051,6 @@ class _Call:
         self.keys: dict = {}
         self.backward: list = []
         self.outcomes: list = []
-        # Whether a load or run evaluated an expression using `and` or `or`, and the trees it
-        # checked, by id (strong references: ids can be reused).
-        self.and_or = False
-        self.checked: dict = {}
         self.written = False
 
 
@@ -1108,25 +1115,6 @@ def _entry(entry: str, original, recorder):
             return _recorded(*begun, original, recorder, signature, args, kwargs)
         finally:
             _end_record()
-
-    return wrapper
-
-
-def _noting_and_or(original):
-    """Return `eval_expr` wrapped to note, on the active record, a tree using `and` or `or`."""
-    @functools.wraps(original)
-    def wrapper(*args: object, **kwargs: object) -> object:
-        state = _STATE
-        call = state.active if state is not None else None
-        tree = args[0] if args else kwargs.get("tree")
-        if call is not None and not call.and_or and id(tree) not in call.checked:
-            call.checked[id(tree)] = tree
-            try:
-                call.and_or = _uses_and_or(tree)
-            except Exception:
-                # The check never changes yian's result; an unchecked tree isn't flagged.
-                pass
-        return original(*args, **kwargs)
 
     return wrapper
 
@@ -1198,18 +1186,21 @@ def _mapper(original, remember):
     return wrapper
 
 
+def _holders(original: object) -> list[tuple[ModuleType, str]]:
+    """Return each `(module, name)` where a loaded yian module holds `original`."""
+    return [(module, name) for module_name, module in list(sys.modules.items())
+            if module is not None and (module_name == "yian" or module_name.startswith("yian."))
+            for name, value in list(vars(module).items()) if value is original]
+
+
 def _replace(original, wrapper, replaced: list) -> None:
     """Put `wrapper` in place of `original` in every loaded yian module that holds it.
 
     Each `(module, name, original)` replaced is added to `replaced`.
     """
-    for module_name, module in list(sys.modules.items()):
-        if module is None or not (module_name == "yian" or module_name.startswith("yian.")):
-            continue
-        for name, value in list(vars(module).items()):
-            if value is original:
-                setattr(module, name, wrapper)
-                replaced.append((module, name, original))
+    for module, name in _holders(original):
+        setattr(module, name, wrapper)
+        replaced.append((module, name, original))
 
 
 class _Test:
@@ -1231,8 +1222,9 @@ class _Test:
 class _Harvest:
     """A harvest session's state: what it wrote, the test running now and its noted texts."""
 
-    def __init__(self, config: pytest.Config, out: Path) -> None:
-        """Start a harvest writing under `out`."""
+    def __init__(self, config: pytest.Config, out: Path,
+                 code: dict[str, str] | None = None) -> None:
+        """Start a harvest writing under `out`, translating CODE bodies by the table `code`."""
         self.config, self.out = config, out
         self.index = _Index(out / "cases")
         self.start_env = dict(os.environ)
@@ -1265,15 +1257,20 @@ class _Harvest:
         self.factory = llm_clients.model_from_config
         self.jitter = tool_node._jitter
         self.backward = RunResult.backward
+        # The `--harvest-code` table: TS bodies by the key of the Python body each replaces.
+        self.code = code or {}
 
 
 def _new_report(path: str) -> dict:
     """Return an empty report for the test file `path`.
 
-    Its `skips` list the tests by reason, its `flags` the cases written by flag.
+    Its `skips` list the tests by reason, its `flags` the cases written by flag, its `code` the
+    Python CODE bodies left untranslated by key, with their text and cases, and its `references`
+    the cases of each CODE reference left unported.
     """
     return {"file": path, "tests": {"passed": 0, "failed": 0, "skipped": 0}, "records": {},
-            "written": {}, "duplicates": 0, "skips": {}, "flags": {}}
+            "written": {}, "duplicates": 0, "skips": {}, "flags": {}, "code": {},
+            "references": {}}
 
 
 def _machine_paths(state: _Harvest) -> set:
@@ -1289,12 +1286,604 @@ def _machine_paths(state: _Harvest) -> set:
     return state.paths
 
 
-def _replay(state: _Harvest, case: dict) -> dict:
-    """Return the runner's results for the candidate `case`, read back from its file.
+class _Shim(NamedTuple):
+    """A TS-era rule as a test-only patch of Python yian, on only during a harvest replay.
 
-    Raises `_Skip` when the replay raises anything.
+    `rule` is the rule's id in `conformance/README.md`; `install(patch, case)` makes Python
+    follow the rule through `patch`, given the candidate `case`.
     """
+
+    rule: str
+    install: Callable[[pytest.MonkeyPatch, dict], None]
+
+
+def _js_number(x: float) -> str:
+    """Return `x` as JavaScript's `Number.prototype.toString` writes it."""
+    if math.isinf(x):
+        return "Infinity" if x > 0 else "-Infinity"
+    if math.isnan(x):
+        return "NaN"
+    if x == 0:
+        return "0"
+    if x < 0:
+        return "-" + _js_number(-x)
+    # `repr` is the shortest round-tripping form, as in ECMAScript's Number::toString.
+    _, digits, exponent = Decimal(repr(x)).normalize().as_tuple()
+    s = "".join(map(str, digits))
+    k, n = len(s), exponent + len(s)
+    if k <= n <= 21:
+        return s + "0" * (n - k)
+    if 0 < n <= 21:
+        return s[:n] + "." + s[n:]
+    if -6 < n <= 0:
+        return "0." + "0" * -n + s
+    mantissa = s[0] + ("." + s[1:] if k > 1 else "")
+    return f"{mantissa}e{'+' if n > 0 else '-'}{abs(n - 1)}"
+
+
+def _ts_json(value: object, indent: int | None = None) -> str:
+    """Return `value` as yian's JSON writer writes it.
+
+    Numbers are as in the text form (so `inf` is a bare `Infinity`), text keeps non-ASCII, a
+    file is its `{uri, mime, name}` mapping and any other non-JSON value its text form, quoted.
+    With `indent=None` the JSON is compact; with an int `indent` it has `json.dumps`'s layout.
+    """
+    colon = ":" if indent is None else ": "
+
+    def write(value: object, level: int) -> str:
+        if value is None:
+            return "null"
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, int):
+            return str(value)
+        if isinstance(value, float):
+            return _js_number(value)
+        if isinstance(value, str):
+            return json.dumps(value, ensure_ascii=False)
+        if isinstance(value, FileRef):
+            value = value.model_dump()
+        if isinstance(value, list):
+            items, brackets = [write(item, level + 1) for item in value], "[]"
+        elif isinstance(value, dict):
+            items = [json.dumps(_ts_text(key), ensure_ascii=False) + colon + write(item, level + 1)
+                     for key, item in value.items()]
+            brackets = "{}"
+        else:
+            return json.dumps(_ts_text(value), ensure_ascii=False)
+        if not items:
+            return brackets
+        if indent is None:
+            return brackets[0] + ",".join(items) + brackets[1]
+        inner = "\n" + " " * (indent * (level + 1))
+        outer = "\n" + " " * (indent * level)
+        return brackets[0] + inner + ("," + inner).join(items) + outer + brackets[1]
+
+    return write(value, 0)
+
+
+def _ts_text(value: object) -> str:
+    """Return `value`'s text form: text as itself, other JSON values and files as JSON.
+
+    `None` reads `null`; anything else (an exception a tool reported, a host object) its `str`.
+    """
+    if isinstance(value, str):
+        return value
+    if value is None or isinstance(value, (bool, int, float, list, dict, FileRef)):
+        return _ts_json(value)
+    return str(value)
+
+
+# A JS array index: a canonical decimal below 2^32 - 1 (ten digits at most).
+_ARRAY_INDEX = re.compile(r"0|[1-9][0-9]{0,9}")
+
+
+def _is_array_index(key: object) -> bool:
+    """Return whether the record key `key` is a JavaScript array index."""
+    return (isinstance(key, str) and _ARRAY_INDEX.fullmatch(key) is not None
+            and int(key) < 2**32 - 1)
+
+
+def _js_ordered(value: object) -> object:
+    """Return a copy of `value` whose records, at every depth, hold their keys in JS order.
+
+    That is the array-index keys first, ascending, then the other keys in their order.
+    """
+    if isinstance(value, list):
+        return [_js_ordered(item) for item in value]
+    if isinstance(value, dict):
+        keys = sorted(filter(_is_array_index, value), key=int)
+        keys += [key for key in value if not _is_array_index(key)]
+        return {key: _js_ordered(value[key]) for key in keys}
+    return value
+
+
+def _ts_join(value: object, sep: str = "\n") -> str:
+    """Join a list's elements in their text form with `sep`, with `_join`'s checks."""
+    expr_builtins._reject_null("join", value, "[]")
+    if not isinstance(value, list):
+        raise TypeError(f"join() takes a list, got {expr_builtins._kind(value)}")
+    if any(x is None for x in value):
+        raise TypeError("join() got a null element; drop or default it before joining")
+    return write_as_text(lambda v: sep.join(_ts_text(x) for x in v), value)
+
+
+def _ts_render_as_json(original):
+    """Return `render_as_json` writing through `_ts_json` for an int `indent >= 0`.
+
+    Any other indent goes to `original`: the design defines only `indent >= 0`.
+    """
+    @functools.wraps(original)
+    def render_as_json(value: object, indent: int = 2) -> str:
+        expr_builtins._reject_null("render_as_json", value)
+        if type(indent) is int and indent >= 0:
+            return write_as_text(lambda v: _ts_json(v, indent), value)
+        return original(value, indent)
+
+    return render_as_json
+
+
+def _keep_text_builtins(patch: pytest.MonkeyPatch) -> None:
+    """Make the installed text builtins `builtins._TEXT_BUILTINS`, so they still type as `str`."""
+    fns = expr_builtins.TEMPLATE_FNS
+    patch.setattr(expr_builtins, "_TEXT_BUILTINS",
+                  frozenset(fns[name] for name in ("join", "render_as_json", "upper", "lower")))
+
+
+def _ts_event_text(result: object) -> str | None:
+    """Return a tool result's text for its `ToolCallFinished` event, in the text form.
+
+    `None` when writing it raises, as `live._text` gives.
+    """
+    try:
+        return _ts_text(result)
+    except Exception:
+        return None
+
+
+def _install_text_form(patch: pytest.MonkeyPatch, case: dict) -> None:
+    """Write `${...}` spans, `join` elements, `render_as_json` and tool results in the text form.
+
+    That covers a tool result's text both where the model reads it and in its event.
+    """
+    fns = expr_builtins.TEMPLATE_FNS
+    # `_as_text` and `_tool_text` each write their value with `write_as_text(str, ...)`.
+    for module in (template, memory):
+        patch.setattr(module, "write_as_text",
+                      lambda convert, value: write_as_text(_ts_text, value))
+    # Only `observe_tool_call` calls it, through its module global.
+    patch.setattr(live, "_text", _ts_event_text)
+    patch.setitem(fns, "join", _ts_join)
+    patch.setitem(fns, "render_as_json", _ts_render_as_json(fns["render_as_json"]))
+    _keep_text_builtins(patch)
+
+
+def _patch_held(patch: pytest.MonkeyPatch, original: object, wrapper: object) -> None:
+    """Put `wrapper` in place of `original`, through `patch`, in every loaded yian module."""
+    for module, name in _holders(original):
+        patch.setattr(module, name, wrapper)
+
+
+def _ts_value_repr(value: object) -> str:
+    """Return `value` as `value_repr` shows it, but written by `_ts_json`, so text is JSON-quoted.
+
+    An int longer than `YIAN_MAX_INT_DIGITS`, or a value holding one, gets `value_repr`'s
+    placeholder. When writing it raises, the value is `<{type} object>`, or
+    `<{type} too large to display>` for an int past Python's digit limit.
+    """
+    # Read before the `try`, so a bad `YIAN_*` value is raised, as `value_repr` raises it.
+    defaults.current()
+    try:
+        if long_int_digits(value) is not None:
+            # The long-int placeholders are the numbers rule's.
+            return value_repr(value)
+        text = _ts_json(value)
+    except ValueError:
+        return f"<{type(value).__name__} too large to display>"
+    except Exception:
+        return f"<{type(value).__name__} object>"
+    return shown_text(text)
+
+
+# The `value_repr` callers that pass it a name or a key, as `(path under src/yian, co_qualname)`.
+# Design 3.2.8 keeps Python's repr for a name, so a message quoting one reads as in Python.
+# The `_json_value_error` entry also covers its two value sites, which show only non-JSON values
+# (no TS counterpart).
+_NAME_CALLERS = frozenset({
+    ("nodes/binding.py", "check_input_names.<locals>.<genexpr>"),
+    ("nodes/contracts.py", "validate_output_contract.<locals>.<genexpr>"),
+    ("typesys/values.py", "_build_for_type.<locals>.<genexpr>"),
+    ("typesys/values.py", "reject_non_text_keys"),
+    ("typesys/values.py", "plain_containers"),
+    ("typesys/values.py", "_json_value_error"),
+    ("typesys/values.py", "_dict_children"),
+    ("typesys/values.py", "_nesting_segment"),
+})
+
+
+def _from_name_caller() -> bool:
+    """Return whether the first calling frame outside this file is one of `_NAME_CALLERS`."""
+    frame = sys._getframe(1)
+    # Skip this file's frames, so a key-order wrapper in between doesn't hide the caller.
+    while frame.f_code.co_filename == __file__:
+        frame = frame.f_back
+    code = frame.f_code
+    path = code.co_filename.removeprefix(_YIAN_DIR).replace(os.sep, "/")
+    return (path, code.co_qualname) in _NAME_CALLERS
+
+
+def _install_messages(patch: pytest.MonkeyPatch, case: dict) -> None:
+    """Show values in yian's messages in the text form, and names with Python's repr."""
+    original = typesys_values.value_repr
+
+    @functools.wraps(original)
+    def messages_value_repr(value: object) -> str:
+        return original(value) if _from_name_caller() else _ts_value_repr(value)
+
+    _patch_held(patch, original, messages_value_repr)
+
+
+def _ordering(original):
+    """Return `original` wrapped to take its first argument through `_js_ordered`."""
+    @functools.wraps(original)
+    def wrapper(value: object, *args: object, **kwargs: object) -> object:
+        return original(_js_ordered(value), *args, **kwargs)
+
+    return wrapper
+
+
+def _ordering_unraised(original):
+    """Return `original`, which must not raise, wrapped to take its argument through `_js_ordered`.
+
+    A cyclic or too deep value, which `_js_ordered` can't copy, goes to `original` unordered.
+    """
+    @functools.wraps(original)
+    def wrapper(value: object) -> object:
+        try:
+            ordered = _js_ordered(value)
+        except RecursionError:
+            return original(value)
+        return original(ordered)
+
+    return wrapper
+
+
+def _install_key_order(patch: pytest.MonkeyPatch, case: dict) -> None:
+    """Hand the text points, tool-result events and `value_repr` each record in JS key order."""
+    fns = expr_builtins.TEMPLATE_FNS
+    for name in ("join", "render_as_json"):
+        patch.setitem(fns, name, _ordering(fns[name]))
+    patch.setattr(template, "_as_text", _ordering(template._as_text))
+    tool_text = memory._tool_text
+
+    @functools.wraps(tool_text)
+    def ordered_tool_text(name: str, result: object) -> str:
+        return tool_text(name, _js_ordered(result))
+
+    patch.setattr(memory, "_tool_text", ordered_tool_text)
+    patch.setattr(live, "_text", _ordering_unraised(live._text))
+    _keep_text_builtins(patch)
+    _patch_held(patch, typesys_values.value_repr, _ordering_unraised(typesys_values.value_repr))
+
+
+def _ts_kind(value: object) -> str:
+    """Name `value`'s kind as design 3.2.2's messages do: `null`, `bool`, `int`, `record`, ..."""
+    if value is None:
+        return "null"
+    if isinstance(value, FileRef):
+        return "file"
+    return expr_builtins._kind(value)
+
+
+def _shown(lhs: object, rhs: object) -> tuple[str, str]:
+    """Return the operands as yian's operator messages show them."""
+    # `_operand_repr` is what yian's own operator messages use; the `messages` shim reaches it
+    # through `value_repr`.
+    return expressions._operand_repr(lhs), expressions._operand_repr(rhs)
+
+
+def _operand_kinds(op: str, lhs: object, rhs: object) -> expressions.ExpressionError:
+    """Return the error for `lhs op rhs` on a pair of operand kinds `op` doesn't take."""
+    l, r = _shown(lhs, rhs)
+    return expressions.ExpressionError(
+        f"type error evaluating {l} {op} {r}: unsupported operand kinds for `{op}`: "
+        f"`{_ts_kind(lhs)}` and `{_ts_kind(rhs)}`")
+
+
+def _division_by_zero(op: str, lhs: object, rhs: object) -> expressions.ExpressionError:
+    """Return the error for `lhs op rhs` dividing by zero, worded as Python yian's."""
+    l, r = _shown(lhs, rhs)
+    return expressions.ExpressionError(f"division by zero: {l} {op} {r}")
+
+
+def _is_number(value: object) -> bool:
+    """Return whether arithmetic takes `value` as a number: an int, a float, or a bool (0 or 1)."""
+    return isinstance(value, (int, float))
+
+
+def _to_float(value: int | float) -> float:
+    """Return the float nearest `value`, or a signed `inf` (noting `infinity`) past the range."""
+    try:
+        return float(value)
+    except OverflowError:
+        _NOTES.add("infinity")
+        return math.inf if value > 0 else -math.inf
+
+
+def _float_step(symbol: str, a: float, b: float) -> float:
+    """Return IEEE 754's `a symbol b`, NaN where the operation has no numeric result."""
+    try:
+        if symbol == "%":
+            return math.fmod(a, b)
+        if symbol == "**":
+            return math.pow(a, b)
+        return expressions._ARITH_STEPS[symbol](a, b)
+    except ValueError:
+        return math.nan
+    except OverflowError:
+        # Only `math.pow` overflows; IEEE pow is negative then for a negative base and an odd
+        # integral exponent.
+        return -math.inf if a < 0 and b.is_integer() and b % 2 == 1 else math.inf
+
+
+def _ts_apply_step(self, symbol: str, lhs: object, rhs: object) -> object:
+    """Apply one operator of an arithmetic chain to two resolved values, by design 3.2.2."""
+    if symbol == "%" and isinstance(lhs, str):
+        _NOTES.add("printf")
+        raise expressions.ExpressionError("text formatting with `%` was removed; use a template")
+    if symbol == "+" and (isinstance(lhs, str) and isinstance(rhs, str)
+                          or isinstance(lhs, list) and isinstance(rhs, list)):
+        return lhs + rhs
+    if not (_is_number(lhs) and _is_number(rhs)):
+        if symbol == "*" and any(isinstance(x, (str, list)) and _is_number(y)
+                                 for x, y in ((lhs, rhs), (rhs, lhs))):
+            _NOTES.add("repetition")
+        _NOTES.add("operand-kinds")
+        raise _operand_kinds(symbol, lhs, rhs)
+    if isinstance(lhs, int) and isinstance(rhs, int) and not (symbol == "**" and rhs < 0):
+        if symbol in ("/", "%") and rhs == 0:
+            raise _division_by_zero(symbol, lhs, rhs)
+        if symbol == "/":
+            try:
+                return lhs / rhs
+            except OverflowError:
+                # The quotient is past the float range, and so is its floor, of the same sign.
+                return _to_float(lhs // rhs)
+        if symbol == "%":
+            # Truncating, so the remainder has the sign of `lhs`.
+            remainder = abs(lhs) % abs(rhs)
+            return -remainder if lhs < 0 else remainder
+        return expressions._ARITH_STEPS[symbol](lhs, rhs)
+    a, b = _to_float(lhs), _to_float(rhs)
+    if (symbol in ("/", "%") and b == 0) or (symbol == "**" and a == 0 and b < 0):
+        raise _division_by_zero(symbol, lhs, rhs)
+    result = _float_step(symbol, a, b)
+    if math.isnan(result):
+        l, r = _shown(lhs, rhs)
+        raise expressions.ExpressionError(f"{symbol} on {l} and {r} has no numeric result")
+    if math.isinf(result) and math.isfinite(a) and math.isfinite(b):
+        _NOTES.add("infinity")
+    return result
+
+
+def _ts_neg(self, node: Tree) -> object:
+    """Evaluate a unary minus node by design 3.2.2: a number's negation, a bool's as an int."""
+    value = self._as_value(self._walk(node.children[0]))
+    if _is_number(value):
+        # `-True` is already the int -1.
+        return -value
+    _NOTES.add("operand-kinds")
+    raise expressions.ExpressionError(
+        f"unary minus on non-number {expressions._operand_repr(value)}: "
+        f"unsupported operand kind for `-`: `{_ts_kind(value)}`")
+
+
+def _install_arithmetic(patch: pytest.MonkeyPatch, case: dict) -> None:
+    """Make the arithmetic operators and unary minus follow design 3.2.2."""
+    patch.setattr(expressions._EvalExpr, "_apply_step", _ts_apply_step)
+    patch.setattr(expressions._EvalExpr, "_do_neg", _ts_neg)
+
+
+def _ts_comparison(original):
+    """Return `_eval_comparison` with `in` and the ordered comparisons of design 3.2.2."""
+    @functools.wraps(original)
+    def _eval_comparison(op: str, lhs: object, rhs: object) -> bool:
+        if op in ("in", "not in"):
+            if isinstance(lhs, str) and isinstance(rhs, str):
+                # By code points, which is JS's code-unit test for well-formed text (lone
+                # surrogates aren't yian values, design 3.2.1).
+                contained = lhs in rhs
+            elif isinstance(rhs, list):
+                contained = any(lhs == x for x in rhs)
+            elif isinstance(rhs, dict):
+                contained = isinstance(lhs, str) and lhs in rhs
+            else:
+                raise _operand_kinds(op, lhs, rhs)
+            return contained if op == "in" else not contained
+        if op not in ("<", "<=", ">", ">=") or lhs is None or rhs is None:
+            return original(op, lhs, rhs)
+        if isinstance(lhs, str) and isinstance(rhs, str):
+            # Big-endian UTF-16 orders as its code units.
+            return original(op, lhs.encode("utf-16-be"), rhs.encode("utf-16-be"))
+        if _is_number(lhs) and _is_number(rhs):
+            return original(op, lhs, rhs)
+        raise _operand_kinds(op, lhs, rhs)
+
+    return _eval_comparison
+
+
+def _install_compare(patch: pytest.MonkeyPatch, case: dict) -> None:
+    """Make `in` and the ordered comparisons follow design 3.2.2."""
+    original = expressions._eval_comparison
+    _patch_held(patch, original, _ts_comparison(original))
+
+
+# Line breaks as PyYAML (YAML 1.1) reads them, and as YAML 1.2 does.
+_PY_LINE_BREAK = re.compile("\r\n|[\r\n\x85\u2028\u2029]")
+_TS_LINE_BREAK = re.compile("\r\n|[\r\n]")
+
+
+def _ts_range(text: str, rng: list) -> list:
+    """Return the Python source range `rng` in `text` as TS gives it.
+
+    Python's `[start_line, start_col, end_line, end_col]` breaks lines at CRLF, CR, LF, NEL,
+    U+2028 and U+2029 and counts columns in code points; TS breaks lines at CRLF, CR and LF
+    and counts columns in UTF-16 code units. A position past its line keeps its distance from
+    the line end; a line past the text is kept, and so is a range in a text starting with U+FEFF
+    (such a case is the `yaml` rule's).
+    """
+    if text.startswith("\ufeff"):
+        return list(rng)
+    breaks = list(_PY_LINE_BREAK.finditer(text))
+    starts = [0] + [match.end() for match in breaks]
+    ends = [match.start() for match in breaks] + [len(text)]
+
+    def position(line: int, column: int) -> list:
+        if not (1 <= line <= len(starts) and column >= 1):
+            return [line, column]
+        width = ends[line - 1] - starts[line - 1]
+        # A problem range at a line's end runs one column past it (`column, column + 1`).
+        past = max(column - width - 1, 0)
+        offset = starts[line - 1] + column - 1 - past
+        before = [match.end() for match in _TS_LINE_BREAK.finditer(text, 0, offset)]
+        start = before[-1] if before else 0
+        return [len(before) + 1, len(text[start:offset].encode("utf-16-le")) // 2 + 1 + past]
+
+    return position(*rng[:2]) + position(*rng[2:])
+
+
+def _labelled(case: dict, label: str) -> str | None:
+    """Return the text Python ran under a frame's `label`: the flow, or the one file so named."""
+    if label == "flow.yaml":
+        return case.get("python_flow", case.get("flow"))
+    files = case.get("python_files", case.get("files", {}))
+    # A child flow's label is its file name.
+    named = [text for path, text in files.items() if Path(path).name == label]
+    return named[0] if len(named) == 1 else None
+
+
+def _install_columns(patch: pytest.MonkeyPatch, case: dict) -> None:
+    """Give every diagnostic frame's range in TS lines and columns, by its label's text."""
+    diagnostic = runner._diagnostic
+
+    @functools.wraps(diagnostic)
+    def ts_diagnostic(diag: object) -> dict:
+        form = diagnostic(diag)
+        for frame in form.get("frames", []):
+            text = _labelled(case, frame["label"])
+            if text is not None:
+                frame["range"] = _ts_range(text, frame["range"])
+        return form
+
+    # `_failure` calls `_diagnostic`, so run failures follow.
+    patch.setattr(runner, "_diagnostic", ts_diagnostic)
+
+
+def _install_dollar(patch: pytest.MonkeyPatch, case: dict) -> None:
+    """Make `!!timestamp` text match only to its end, not also before a trailing newline."""
+    pattern = _FlowLoader.timestamp_regexp
+    patch.setattr(_FlowLoader, "timestamp_regexp",
+                  re.compile(pattern.pattern.removesuffix("$") + r"\Z", pattern.flags))
+
+
+def _ts_intake(value: object) -> object:
+    """Return `value` as a TS host reads it back: an integral float within ±(2^53-1) as an int.
+
+    Lists and records are walked; `-0.0` reads as `0`, and `inf`, `nan` and anything else are
+    kept. `value` itself comes back when nothing in it changes.
+    """
+    if type(value) is float:
+        return int(value) if value.is_integer() and abs(value) <= 2**53 - 1 else value
+    if type(value) is list:
+        items = [_ts_intake(item) for item in value]
+        return items if any(new is not old for new, old in zip(items, value)) else value
+    if type(value) is dict:
+        record = {key: _ts_intake(item) for key, item in value.items()}
+        return record if any(record[key] is not value[key] for key in value) else value
+    return value
+
+
+def _install_code_intake(patch: pytest.MonkeyPatch, case: dict) -> None:
+    """Read a CODE body's result as a TS host does."""
+    forward = CodeNode.forward
+
+    @functools.wraps(forward)
+    def ts_forward(self: CodeNode, inputs: dict, **kwargs: object) -> object:
+        output = forward(self, inputs, **kwargs)
+        # The desugar names a value entry's one input after the node itself, so a CODE node
+        # returning another input isn't skipped; an expanded id carries `ns/` and `#n`.
+        own = self.id.rsplit("/", 1)[-1].split("#", 1)[0]
+        if list(inputs) == [own] and self.code == f"return inputs[{own!r}]":
+            # A value entry's value is authored, not a host's result.
+            return output
+        value = _ts_intake(output.value)
+        return output if value is output.value else dataclasses.replace(output, value=value)
+
+    patch.setattr(CodeNode, "forward", ts_forward)
+
+
+# The shims by name, in install order: a later shim may wrap what an earlier one patched.
+_SHIMS: dict[str, _Shim] = {
+    "arithmetic": _Shim("arithmetic", _install_arithmetic),
+    "compare": _Shim("compare", _install_compare),
+    "text-form": _Shim("text-form", _install_text_form),
+    "messages": _Shim("messages", _install_messages),
+    # Record key order is in the text-form rule's section of the design.
+    "key-order": _Shim("text-form", _install_key_order),
+    "columns": _Shim("columns", _install_columns),
+    # The timestamp pattern's `$` is the text rule's.
+    "dollar": _Shim("text", _install_dollar),
+    "code-intake": _Shim("numbers", _install_code_intake),
+}
+# What the shims noted during the latest replay.
+_NOTES: set[str] = set()
+
+
+def _noting_requests(original):
+    """Return `runner._request_difference` wrapped to note a difference rather than report it.
+
+    A request that differs from its entry's, or can't be compared with it, adds
+    `request: <label>` to `_NOTES`, where `<label>` is the entry's,
+    `host.models.<node>.<consumer>[<i>]`; the wrapper returns "".
+    """
+    def _request_difference(what: str, *args: object) -> str:
+        if original(what, *args):
+            # The runner's `served` passes `what` as `` `{label}[{index}].request` ``.
+            _NOTES.add(f"request: {what.strip('`').removesuffix('.request')}")
+        return ""
+
+    return _request_difference
+
+
+def _noting_int_in_float(original):
+    """Return `_widen_int` wrapped to note `int-in-float` each time it widens an int to a float.
+
+    It widens an int in a `float` slot and one in an untyped list holding floats. The value is
+    still widened: TS keeps it an int, which no shim can follow, since pydantic widens it again
+    inside `NumberValue` and `list[float]`.
+    """
+    @functools.wraps(original)
+    def _widen_int(value: int, path: tuple) -> float:
+        _NOTES.add("int-in-float")
+        return original(value, path)
+
+    return _widen_int
+
+
+def _replay(state: _Harvest, case: dict, shims: Collection[str] = ()) -> tuple[dict, frozenset]:
+    """Return the runner's results for the candidate `case`, read back from its file, and notes.
+
+    The shims named in `shims` are on during the replay, and the notes are what they noted.
+    Under any shim, a model call's request that differs from its entry's is noted instead of
+    failing the replay: a shim may change a prompt or a tool result's text; and an int widened to
+    a float (in a `float` slot or an untyped list holding floats) is noted `int-in-float`.
+    Raises KeyError for a name with no shim, and `_Skip` when the replay raises anything.
+    """
+    unknown = set(shims) - _SHIMS.keys()
+    if unknown:
+        raise KeyError(f"no such shims: {sorted(unknown)}")
     text = _written(case)
+    _NOTES.clear()
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "candidate.yaml"
         path.write_text(text, encoding="utf-8")
@@ -1302,7 +1891,19 @@ def _replay(state: _Harvest, case: dict) -> dict:
         case_dir.mkdir()
         state.disabled = True
         try:
-            return runner.results(runner._read(path), case_dir, candidate=True)
+            with pytest.MonkeyPatch.context() as patch:
+                installed = [_SHIMS[name] for name in _SHIMS if name in shims]
+                for shim in installed:
+                    shim.install(patch, case)
+                if installed:
+                    patch.setattr(runner, "_request_difference",
+                                  _noting_requests(runner._request_difference))
+                    # Only `values` calls it, through its module global, and only for a
+                    # non-bool int.
+                    patch.setattr(typesys_values, "_widen_int",
+                                  _noting_int_in_float(typesys_values._widen_int))
+                results = runner.results(runner._read(path), case_dir, candidate=True)
+            return results, frozenset(_NOTES)
         except (KeyboardInterrupt, SystemExit):
             raise
         except BaseException as exc:
@@ -1347,17 +1948,22 @@ def _cut_diagnostic(diagnostic: dict, keys: tuple) -> dict:
             "ranges": [frame["range"] for frame in diagnostic.get("frames", [])]}
 
 
-def _texts(value: object):
-    """Yield every text in the case value `value`, mapping keys included."""
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, list):
+def _leaves(value: object):
+    """Yield every scalar in the case value `value`, mapping keys included."""
+    if isinstance(value, list):
         for item in value:
-            yield from _texts(item)
+            yield from _leaves(item)
     elif isinstance(value, dict):
         for key, item in value.items():
             yield key
-            yield from _texts(item)
+            yield from _leaves(item)
+    else:
+        yield value
+
+
+def _texts(value: object):
+    """Yield every text in the case value `value`, mapping keys included."""
+    return (leaf for leaf in _leaves(value) if isinstance(leaf, str))
 
 
 def _scan_secrets(case: dict, secrets: set) -> None:
@@ -1393,14 +1999,364 @@ def _completed(call: _Call) -> tuple[dict, dict]:
     return case, result
 
 
-def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list]:
-    """Return a recorded call's group, case file text (its `expect` from the runner) and flags.
+def _shimmed(state: _Harvest, case: dict, shims: Collection[str]) -> tuple[dict, frozenset]:
+    """Return `_replay(state, case, shims)`.
+
+    Raises `_Skip("shims: <reason>")` when the replay fails or leaves script entries.
+    """
+    try:
+        results, notes = _replay(state, case, shims)
+    except _Skip as skip:
+        raise _Skip(f"shims: {skip}") from None
+    if results.get("left"):
+        raise _Skip("shims: replay left script entries")
+    return results, notes
+
+
+def _without_requests(case: dict, notes: frozenset) -> dict:
+    """Return `case` without the `request` of each model entry a `request: <label>` note names."""
+    host = case.get("host", {})
+    if "models" not in host:
+        return case
+    # The labels are built from the case's own keys: a consumer such as `memory:<key>` may hold
+    # a `.`, so a label can't be split.
+    models = {}
+    for node, consumers in host["models"].items():
+        models[node] = {}
+        for consumer, script in consumers.items():
+            models[node][consumer] = [
+                {key: value for key, value in entry.items() if key != "request"}
+                if f"request: host.models.{node}.{consumer}[{index}]" in notes else entry
+                for index, entry in enumerate(script)]
+    return case | {"host": host | {"models": models}}
+
+
+class _CodeScalar(NamedTuple):
+    """A CODE node's `code:` value in a flow text.
+
+    `node` is the node's id when its mapping sits under `nodes:`, else None; `value` the
+    scalar's text; `start` and `end` its half-open span as indexes into the flow text; and
+    `start_line` and `end_line` the 1-based lines, as frames count them, of its first and last
+    characters.
+    """
+
+    node: str | None
+    value: str
+    start: int
+    end: int
+    start_line: int
+    end_line: int
+
+
+def _code_scalars(text: str) -> list[_CodeScalar]:
+    """Return the `code:` scalars of the mappings with `kind: code` in a flow text, in order.
+
+    The text is composed with yian's loader; a text that doesn't compose has none.
+    """
+    try:
+        root = yaml.compose(text, Loader=_FlowLoader)
+    except yaml.YAMLError:
+        return []
+    found = []
+    # An alias shares its anchor's node, so a recursive one would walk forever; a node already
+    # on the path is skipped, while a reused one elsewhere is walked again.
+    path = set()
+
+    def walk(node: yaml.Node | None, node_id: str | None) -> None:
+        if id(node) in path:
+            return
+        path.add(id(node))
+        try:
+            visit(node, node_id)
+        finally:
+            path.discard(id(node))
+
+    def visit(node: yaml.Node | None, node_id: str | None) -> None:
+        if isinstance(node, yaml.SequenceNode):
+            for item in node.value:
+                walk(item, None)
+            return
+        if not isinstance(node, yaml.MappingNode):
+            return
+        fields = {key.value: value for key, value in node.value
+                  if isinstance(key, yaml.ScalarNode)}
+        kind, code = fields.get("kind"), fields.get("code")
+        if (isinstance(kind, yaml.ScalarNode) and kind.value == "code"
+                and isinstance(code, yaml.ScalarNode)):
+            start, end = code.start_mark, code.end_mark
+            # A block scalar's end mark is at the start of the line after its last one.
+            last = end.line if end.column or end.line == start.line else end.line - 1
+            found.append(_CodeScalar(node_id, code.value, start.index, end.index,
+                                     start.line + 1, last + 1))
+        for key, value in node.value:
+            if key.value == "nodes" and isinstance(value, yaml.MappingNode):
+                for child_key, child in value.value:
+                    walk(child, child_key.value if isinstance(child_key, yaml.ScalarNode)
+                         else None)
+            else:
+                walk(value, None)
+
+    walk(root, None)
+    return found
+
+
+# The Python modules whose CODE functions have TS ports, by their file in `conformance/fixtures/`.
+_FIXTURE_MODULES = {"tests.seeds.fns": "seeds.ts"}
+
+
+@functools.cache
+def _exported(file: str) -> frozenset[str]:
+    """Return the names of the functions `conformance/fixtures/<file>` exports."""
+    text = (runner._FIXTURES / file).read_text(encoding="utf-8")
+    return frozenset(re.findall(r"\bexport (?:async )?function ([A-Za-z_]\w*)\b", text))
+
+
+def _code_key(body: str) -> str:
+    """Return the key of a Python CODE body in the translation table and the worklist."""
+    return _digest(body)[:16]
+
+
+def _fitted(span: str, body: str) -> str | None:
+    """Return the TS `body` as the text replacing a Python body's scalar text `span`, or None.
+
+    A `|` block keeps its header line and content indentation and is padded with empty lines to
+    the span's line count; a one-line scalar takes a one-line body, double-quoted. None when the
+    body doesn't fit: it has more lines, or the scalar is a one-line one and the body isn't, or
+    the scalar is another multi-line one.
+    """
+    lines = body.rstrip("\n").split("\n")
+    if "\n" not in span:
+        return json.dumps(lines[0], ensure_ascii=False) if len(lines) == 1 else None
+    header, _, content = span.partition("\n")
+    indents = [line[:len(line) - len(line.lstrip(" "))]
+               for line in content.split("\n") if line.strip()]
+    # The span of a block that isn't at the end of the text ends with its last line's break.
+    pad = span.count("\n") - len(lines)
+    if not header.startswith("|") or not indents or pad < span.endswith("\n"):
+        return None
+    return header + "".join(f"\n{indents[0]}{line}" if line else "\n" for line in lines) + (
+        "\n" * pad)
+
+
+def _reads_as(text: str, start: int, end: int, value: str) -> bool:
+    """Return whether the `code:` scalar at `start` in `text` reads as `value` within `end`.
+
+    Trailing line breaks don't count, and the scalar may stop before blank text up to `end`.
+    """
+    found = [scalar for scalar in _code_scalars(text) if scalar.start == start]
+    return (bool(found) and found[0].value.rstrip("\n") == value.rstrip("\n")
+            and found[0].end <= end and not text[found[0].end:end].strip())
+
+
+def _translate(text: str, depth: int, table: dict[str, str]) -> tuple[str, dict, set]:
+    """Return a flow text with its CODE in TS form, and the bodies and references left.
+
+    `depth` is how many directories below the case directory the text's file sits. A reference
+    into `_FIXTURE_MODULES` to a function the fixture exports becomes `./fixtures/<file>:<name>`
+    (`../` once per level of `depth`), and an inline body whose key is in `table` takes the TS
+    body there, when it fits (`_fitted`); no line below either moves. Each replacement must read
+    back as its TS form, or it is left. The bodies left are by key, the references as written.
+    """
+    untranslated, unported = {}, set()
+    # From the end, so each span's indexes still hold; an alias's node is found again at its
+    # anchor's span, which is replaced once.
+    scalars = sorted({scalar.start: scalar for scalar in _code_scalars(text)}.values(),
+                     key=lambda scalar: scalar.start, reverse=True)
+    for scalar in scalars:
+        span = text[scalar.start:scalar.end]
+        reference = _REFERENCE_RE.fullmatch(scalar.value)
+        if reference:
+            module, _, name = scalar.value.partition(":")
+            file = _FIXTURE_MODULES.get(module)
+            value = (f"{'../' * depth or './'}fixtures/{file}:{name}"
+                     if file is not None and name in _exported(file) else None)
+            # A reference written as a block keeps the block's lines.
+            new = None if value is None else value + "\n" * span.count("\n")
+        else:
+            value = table.get(_code_key(scalar.value))
+            new = None if value is None else _fitted(span, value)
+        candidate = None if new is None else text[:scalar.start] + new + text[scalar.end:]
+        if candidate is not None and _reads_as(candidate, scalar.start, scalar.start + len(new),
+                                               value):
+            text = candidate
+        elif reference:
+            unported.add(scalar.value)
+        else:
+            untranslated[_code_key(scalar.value)] = scalar.value
+    return text, untranslated, unported
+
+
+def _ts_code(case: dict, table: dict[str, str]) -> tuple[dict, dict, set]:
+    """Return `case` with the CODE of its flow and files translated (`_translate`), and what's left.
+
+    A `flow` or `files` the translation changes keeps its Python form in `python_flow` or
+    `python_files`. What's left is the bodies left untranslated, by key, and the references.
+    """
+    untranslated, unported = {}, set()
+
+    def translate(text: str, depth: int) -> str:
+        text, bodies, references = _translate(text, depth, table)
+        untranslated.update(bodies)
+        unported.update(references)
+        return text
+
+    if "flow" in case:
+        flow = translate(case["flow"], 0)
+        if flow != case["flow"]:
+            case = case | {"flow": flow, "python_flow": case["flow"]}
+    if "files" in case:
+        files = {path: translate(text, len(PurePosixPath(path).parent.parts))
+                 for path, text in case["files"].items()}
+        if files != case["files"]:
+            case = case | {"files": files, "python_files": case["files"]}
+    return case, untranslated, unported
+
+
+_INFINITY_TEXTS = ("non-finite number", "numbers must be finite", "int is too large for float",
+                   "Result too large", "Numerical result out of range",
+                   "Input should be a finite number")
+_LONG_INT_TEXTS = ("IntTooLongError", "<int with", "larger than yian allows")
+_INF_SPELLING = re.compile(r"\.(?:inf|Inf|INF)\b")
+# Candidates only: `float()` decides which are numbers and which overflow.
+_FLOAT_LITERAL = re.compile(r"[0-9.]+[eE][-+]?[0-9]+|[0-9]+\.[0-9]*")
+_DATES = re.compile(r"\bsystem\.(?:now|today)\b")
+_STRUCTURED_PROMPTS = ("Respond with ONLY a JSON object matching this JSON schema",
+                       "Your previous output was invalid:")
+# `\d` is Unicode category Nd: Python's expression lexer reads any decimal digit as a number;
+# U+001C-U+001F and U+0085 are whitespace to Python, and U+FEFF is whitespace to JS.
+_TEXT_CHARS = re.compile(r"(?![0-9])\d|[\x1c-\x1f\x85\ufeff]")
+# Where PyYAML's error text marks its place; it can reach any message, such as a `call(...)`
+# keyword value's or a skill frontmatter's error.
+_YAML_MARK = 'in "<unicode string>", line'
+# The arithmetic shim's notes for what TS rejects at load, where both operand types are known.
+_LOAD_ARITHMETIC = frozenset({"repetition", "printf", "operand-kinds"})
+# The failure codes whose text a CODE node's own behavior gives: its body raised (TS writes
+# `<name>: <message>`) or its return failed the output check (TS names JS types). A CODE node's
+# other failures, such as an input binding's, read the same in both.
+_CODE_FAILURES = frozenset({"node.execute", "contract.output"})
+
+
+def _diagnostics(expect: dict) -> list:
+    """Return the diagnostics in an `expect`: a load's, a run's failure and its trace's failures."""
+    load = expect.get("load")
+    found = list(load["diagnostics"]) if isinstance(load, dict) else []
+    failure = expect.get("output", {}).get("failure")
+    if failure:
+        found.append(failure)
+    for entry in expect.get("trace", []):
+        field = runner._FAILURE_FIELDS.get(entry[0])
+        if field is not None and len(entry) > 2 and entry[2].get(field):
+            found.append(entry[2][field])
+    return found
+
+
+def _overflows(literal: str) -> bool:
+    """Return whether the number text `literal` reads as an infinite float."""
+    try:
+        return math.isinf(float(literal))
+    except ValueError:
+        return False
+
+
+def _on_code_line(case: dict, frame: dict) -> bool:
+    """Return whether a frame of Python's outcome is on a line holding a `code:` value."""
+    text = _labelled(case, frame["label"])
+    first, _, last, _ = frame["range"]
+    return text is not None and any(scalar.start_line <= last and first <= scalar.end_line
+                                    for scalar in _code_scalars(text))
+
+
+def _unshimmable(case: dict, py: dict, notes: frozenset) -> set[str]:
+    """Return the rules no shim covers that a case touches, by what it holds.
+
+    `py` is the case's plain outcome and `notes` what the shims noted in its replays. The
+    signals are loose: a rule found where it changes nothing only adds the case to the review
+    list.
+    """
+    flows = [case.get(key) for key in ("flow", "python_flow")]
+    flows += [text for key in ("files", "python_files") for text in case.get(key, {}).values()]
+    flows = [text for text in flows if isinstance(text, str)]
+    exprs = [case[key] for key in ("expr", "template") if isinstance(case.get(key), str)]
+    texts = flows + exprs
+    outcome = list(_texts(py))
+    rules = set()
+
+    if (any(type(x) is float and math.isinf(x) for part in (case, py) for x in _leaves(part))
+            or any(_INF_SPELLING.search(text) for text in texts)
+            or any(_overflows(literal) for text in texts
+                   for literal in _FLOAT_LITERAL.findall(text))
+            or any(part in text for text in outcome for part in _INFINITY_TEXTS)
+            or "infinity" in notes):
+        rules.add("infinity")
+
+    if (any(part in text for text in outcome for part in _LONG_INT_TEXTS)
+            or "YIAN_MAX_INT_DIGITS" in case.get("env", {})):
+        rules.add("numbers")
+
+    if "int-in-float" in notes:
+        rules.add("int-in-float")
+
+    if any(_DATES.search(text) for text in texts):
+        rules.add("dates")
+
+    diagnostics = _diagnostics(py)
+    if (any(diagnostic["message"].startswith("invalid YAML:") for diagnostic in diagnostics)
+            or any(_YAML_MARK in text for text in outcome)
+            or any(text.startswith("\ufeff") for text in flows)):
+        rules.add("yaml")
+
+    entries = [(consumer, entry)
+               for consumers in case.get("host", {}).get("models", {}).values()
+               for consumer, script in consumers.items() for entry in script]
+    prompts = [part.get("text", "") for _, entry in entries
+               for message in entry.get("request", {}).get("messages", [])
+               for part in message.get("parts", []) if part.get("type") == "text"]
+    if (any(consumer == "structured_retry" or "schema" in entry.get("request", {})
+            for consumer, entry in entries)
+            or any(prompt.startswith(_STRUCTURED_PROMPTS) for prompt in prompts)
+            or any(len(event) > 1 and str(event[1].get("purpose", "")).startswith("structured_")
+                   for event in py.get("events", []))):
+        rules.add("llm")
+
+    code_ids = {scalar.node for text in flows for scalar in _code_scalars(text) if scalar.node}
+    failed = [diagnostic["node"] for diagnostic in diagnostics
+              if diagnostic.get("node") and diagnostic["code"] in _CODE_FAILURES]
+    frames = [frame for diagnostic in diagnostics for frame in diagnostic.get("frames", [])]
+    if (any(segment.split("#", 1)[0] in code_ids
+            for node in failed for segment in node.split("/"))
+            or any(_on_code_line(case, frame) for frame in frames)
+            or any("`code:`" in diagnostic["message"] for diagnostic in diagnostics)):
+        rules.add("code")
+
+    # A flow's leading U+FEFF is a BOM, the yaml rule's; one anywhere else is the text rule's.
+    data = [text for key in ("inputs", "values", "value") for text in _texts(case.get(key))]
+    if any(_TEXT_CHARS.search(text) for text in [*(flow.removeprefix("\ufeff") for flow in flows),
+                                                  *exprs, *data]):
+        rules.add("text")
+    return rules
+
+
+def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list, dict, set]:
+    """Return a recorded call's group, case file text, flags, and CODE bodies and references left.
+
+    The case's `expect` is from the runner. First its flow and files take their TS CODE
+    (`_ts_code`), and the replays run the Python form. A body with no translation is flagged
+    `code: untranslated`, one whose translation doesn't fit `code: translation doesn't fit`, and
+    a reference left `code: unported reference`; the bodies left are returned by key.
 
     A pooled run is replayed three times, and its output or error, and its backward statuses,
-    must agree in each; its trace, events, stream, tool calls and backward outcomes are kept
-    only when the three are equal and the run succeeded, each one dropped giving a
-    `pooled: <result> dropped` flag. A load or run that evaluated `and` or `or` is flagged
-    `uses and/or`.
+    must agree in each. The call is then replayed as many times with every shim on, where they
+    must agree too, and that outcome is the `expect`. When it differs from the plain one, the
+    call is replayed once with each shim alone: the case's `rules` are those of the shims that
+    change the outcome (none, and no rule `_unshimmable` finds, is a skip), and the plain outcome
+    is its `python_expect`. A pooled run's trace, events, stream, tool calls and backward
+    outcomes are kept only when the plain and shimmed runs succeeded and the replays of each are
+    equal, each one dropped giving a `pooled: <result> dropped` flag. A model entry whose
+    request the shims change loses its `request` (flag `shims: request dropped`). Each rule
+    `_unshimmable` finds joins `rules` and is flagged `needs TS expect: <rule>`; a load, run or
+    backward pass whose arithmetic TS rejects at load (repetition, `%` on text, operand kinds)
+    gets the `arithmetic` rule and is flagged `needs TS expect: arithmetic`. A case whose plain
+    outcome holds Lark's `Expected one of` token list is a skip.
     """
     if call.skip:
         raise _Skip(call.skip)
@@ -1411,42 +2367,85 @@ def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list]:
         raise _Skip("model: a call didn't end during its run")
     case, result = _completed(call)
     _scan_secrets(case, call.secrets)
-    # Python's `and`/`or` give an operand, not a bool, and that decides conditions too.
-    if case["kind"] == "expr" and _and_or(case):
-        raise _Skip(_HELD)
+    case, untranslated, unported = _ts_code(case, state.code)
     is_run = case["kind"] in ("run", "backward")
     pooled = is_run and case.get("run", {}).get("num_workers", _RUN_DEFAULTS["num_workers"]) != 0
-    replays = [_replay(state, case) for _ in range(3 if pooled else 1)]
+    times = 3 if pooled else 1
+    replays = [_replay(state, case)[0] for _ in range(times)]
     for actual in replays:
         if actual.get("left"):
             raise _Skip("replay left script entries")
         # A run's output is a host value, whose numbers the runner compares by value.
         if not runner._same(_agreed(case, actual), _agreed(case, result), by_value=is_run):
             raise _Skip("replay differs")
-    expect = _expect(case, replays[0])
-    flags = ["uses and/or"] if call.and_or else []
+    py = _expect(case, replays[0])
+    # Lark lists the expected tokens in an order PYTHONHASHSEED sets, so the text differs
+    # across processes.
+    if any("Expected one of" in text for text in _texts(py)):
+        raise _Skip("unstable parser message (Lark token order)")
+    shimmed, noted = zip(*(_shimmed(state, case, _SHIMS) for _ in range(times)))
+    notes = frozenset().union(*noted)
+    for actual in shimmed[1:]:
+        if not runner._same(_agreed(case, actual), _agreed(case, shimmed[0]), by_value=is_run):
+            raise _Skip("shims: replays differ")
+    ts = _expect(case, shimmed[0])
+    # Before a pooled result or a request is dropped: either may hold a rule's signal.
+    unshimmable = _unshimmable(case, py, notes)
+    flags = []
+    if untranslated.keys() - state.code.keys():
+        flags.append("code: untranslated")
+    if untranslated.keys() & state.code.keys():
+        flags.append("code: translation doesn't fit")
+    if unported:
+        flags.append("code: unported reference")
     if pooled:
         # When a pooled run fails, siblings racing the failure make its trace depend on timing
         # across processes, even when three replays in one process agree.
-        succeeded = expect.get("output", {}).get("status") == "succeeded"
+        succeeded = all(expect.get("output", {}).get("status") == "succeeded"
+                        for expect in (py, ts))
         for key in _POOLED_RESULTS:
-            if key in expect and not (succeeded and all(
-                    runner._same(actual[key], expect[key]) for actual in replays[1:])):
-                del expect[key]
+            stable = all(runner._same(actual.get(key), runs[0].get(key))
+                         for runs in (replays, shimmed) for actual in runs[1:])
+            if (key in py or key in ts) and not (succeeded and stable):
+                py.pop(key, None)
+                ts.pop(key, None)
                 flags.append(f"pooled: {key} dropped")
-    text = _written({**case, "expect": expect})
+    if any(note.startswith("request: ") for note in notes):
+        case = _without_requests(case, notes)
+        flags.append("shims: request dropped")
+    rules = set()
+    if not runner._same(ts, py):
+        for name, shim in _SHIMS.items():
+            alone = _expect(case, _shimmed(state, case, (name,))[0])
+            # On the results `py` kept: a timing difference in this one replay of a pooled run
+            # can at worst add a rule (the case keeps `python_expect`), not lose a case.
+            if not runner._same({key: alone[key] for key in alone.keys() & py.keys()}, py):
+                rules.add(shim.rule)
+        # With the rules no shim covers, the case still goes to review by its flags.
+        if not rules and not unshimmable:
+            raise _Skip("shims: no single shim changes the outcome")
+    rules |= unshimmable
+    flags += [f"needs TS expect: {rule}" for rule in sorted(unshimmable)]
+    if case["kind"] in ("load", "run", "backward") and notes & _LOAD_ARITHMETIC:
+        rules.add("arithmetic")
+        flags.append("needs TS expect: arithmetic")
+    written = {**case, "expect": ts}
+    if rules:
+        written |= {"rules": sorted(rules), "python_expect": py}
+    text = _written(written)
     if any(path in text for path in _machine_paths(state)):
         raise _Skip("machine path")
-    return _group(case), text, flags
+    return _group(case), text, flags, untranslated, unported
 
 
 def _write(state: _Harvest, report: dict, call: _Call, path: str, test_id: str,
            number: int) -> None:
     """Write a recorded call's case as the test's `number`th record, counting it in `report`.
 
-    A case written is listed under each of its flags; a duplicate's are its holder's.
+    A case written is listed under each of its flags, CODE bodies left untranslated and
+    references left unported; a duplicate's are its holder's.
     """
-    group, text, flags = _expected(state, call)
+    group, text, flags, untranslated, unported = _expected(state, call)
     name = _case_name(path, test_id, number)
     done = state.index.write(group, name, text)
     if done == "collision":
@@ -1460,6 +2459,11 @@ def _write(state: _Harvest, report: dict, call: _Call, path: str, test_id: str,
     report["written"][group] = report["written"].get(group, 0) + 1
     for flag in flags:
         report["flags"].setdefault(flag, []).append(f"{group}/{name}")
+    for key, body in untranslated.items():
+        report["code"].setdefault(key, {"python": body, "cases": []})["cases"].append(
+            f"{group}/{name}")
+    for reference in sorted(unported):
+        report["references"].setdefault(reference, []).append(f"{group}/{name}")
 
 
 def _end_test(state: _Harvest) -> _Test:
@@ -1519,9 +2523,29 @@ def _finish(state: _Harvest, item: pytest.Item) -> None:
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    """Add `--harvest-out DIR`, which turns the harvest on."""
+    """Add `--harvest-out DIR`, which turns the harvest on, and `--harvest-code FILE`."""
     parser.addoption("--harvest-out", metavar="DIR",
                      help="record conformance case candidates under DIR")
+    parser.addoption("--harvest-code", metavar="FILE",
+                     help="translate the CODE bodies keyed in FILE (YAML: quoted key to TS body)")
+
+
+def _code_table(path: str) -> dict[str, str]:
+    """Return the `--harvest-code` table at `path`: a YAML mapping of body key to TS body.
+
+    A key is quoted: unquoted hex digits can read as a number.
+
+    Raises `pytest.UsageError` for a file that can't be read or holds anything else.
+    """
+    try:
+        table = yaml.load(Path(path).read_text(encoding="utf-8"), Loader=runner._CaseLoader)
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise pytest.UsageError(f"--harvest-code {path}: {exc}") from None
+    if not isinstance(table, dict) or not all(
+            isinstance(key, str) and isinstance(body, str) for key, body in table.items()):
+        raise pytest.UsageError(f"--harvest-code {path}: not a mapping of key to TS body "
+                                "(quote the keys)")
+    return table
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -1529,8 +2553,8 @@ def pytest_configure(config: pytest.Config) -> None:
 
     `RunResult.backward` is wrapped. The model factory and the TOOL backoff draw are wrapped,
     and so is each one a test assigns; the runner's seats name each model call's node and
-    consumer. `-n` is refused, and the temporary files a killed harvest left under `<out>` are
-    removed.
+    consumer. `--harvest-code` is read. `-n` is refused, and the temporary files a killed harvest
+    left under `<out>` are removed.
     """
     global _STATE
     out = config.getoption("harvest_out")
@@ -1538,10 +2562,12 @@ def pytest_configure(config: pytest.Config) -> None:
         return
     if config.pluginmanager.hasplugin("xdist") and config.getoption("numprocesses", None):
         raise pytest.UsageError("--harvest-out doesn't support -n: run shards one after another")
+    code = config.getoption("harvest_code")
+    table = _code_table(code) if code else {}
     # A harvest killed between a write and its rename leaves the temporary file.
     for leftover in [*Path(out).glob("cases/*/*.yaml.tmp"), *Path(out).glob("report/*.json.tmp")]:
         leftover.unlink()
-    _STATE = _Harvest(config, Path(out))
+    _STATE = _Harvest(config, Path(out), table)
     entries = {
         "eval_expr": (eval_expr, _record_eval_expr),
         "eval_binding": (eval_binding, _record_eval_binding),
@@ -1554,9 +2580,7 @@ def pytest_configure(config: pytest.Config) -> None:
         "resume_flow": (resume_flow, _record_resume_flow),
     }
     for entry, (original, recorder) in entries.items():
-        # yian's own `eval_expr` calls pass through the entry's wrapper too.
-        called = _noting_and_or(original) if entry == "eval_expr" else original
-        _replace(original, _entry(entry, called, recorder), _STATE.replaced)
+        _replace(original, _entry(entry, original, recorder), _STATE.replaced)
     for original, remember in ((parse_expr, _remember_tree), (type_for, _remember_type),
                                (read_typedefs, _remember_typedefs)):
         _replace(original, _mapper(original, remember), _STATE.replaced)
@@ -1623,13 +2647,25 @@ def pytest_terminal_summary(terminalreporter) -> None:
     """Add up every report under `<out>/report`: tests, cases written, duplicates, flags, skips.
 
     A line counts the files this run harvested but didn't report, as its selection narrowed them.
+    `<out>/worklist.yaml` is rewritten from the reports: the CODE bodies left untranslated by
+    key (`code`), the references left unported (`references`), and the cases flagged
+    `needs TS expect: <reason>` by reason (`expect`); a line counts each.
     """
     if _STATE is None:
         return
     reports = [json.loads(path.read_text(encoding="utf-8"))
                for path in sorted((_STATE.out / "report").glob("*.json"))]
     tests, written, flags, skips, duplicates = Counter(), Counter(), Counter(), Counter(), 0
+    code, references, expect = {}, {}, {}
     for report in reports:
+        for key, entry in report["code"].items():
+            code.setdefault(key, {"python": entry["python"], "cases": []})["cases"] += (
+                entry["cases"])
+        for reference, names in report["references"].items():
+            references.setdefault(reference, []).extend(names)
+        for flag, names in report["flags"].items():
+            if flag.startswith("needs TS expect: "):
+                expect.setdefault(flag.removeprefix("needs TS expect: "), []).extend(names)
         tests.update(report["tests"])
         written.update(report["written"])
         duplicates += report["duplicates"]
@@ -1649,6 +2685,15 @@ def pytest_terminal_summary(terminalreporter) -> None:
         write("top skip reasons (tests):")
     for reason, n in skips.most_common(10):
         write(f"  {n:5}  {reason}")
+    worklist = {"code": dict(sorted(code.items())),
+                "references": dict(sorted(references.items())),
+                "expect": dict(sorted(expect.items()))}
+    _STATE.out.mkdir(parents=True, exist_ok=True)
+    (_STATE.out / "worklist.yaml").write_text(
+        yaml.dump(worklist, Dumper=_CaseDumper, sort_keys=False, allow_unicode=True,
+                  width=math.inf), encoding="utf-8")
+    write(f"worklist: code {len(code)}, references {len(references)}, "
+          f"expect {sum(len(names) for names in expect.values())}")
 
 
 @pytest.hookimpl(wrapper=True)

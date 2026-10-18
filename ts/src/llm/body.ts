@@ -7,14 +7,16 @@
  */
 
 import type { JsonObject, JsonValue } from "../typesys/json.ts";
-import { typeName } from "./messages.ts";
+import { copyJson, isPlainObject, put, typeName } from "./messages.ts";
 
 /**
  * Deep-merge a provider block into a request body, in place.
  *
  * Objects merge key by key; arrays and scalars from `block` replace the body's value whole; a
  * `null` in `block` means unset and leaves the body alone. `block` is copied, never mutated or
- * shared. Keys are written as own data properties, so `"__proto__"` is an ordinary key.
+ * shared. Keys are written as own data properties, so `"__proto__"` is an ordinary key. Like
+ * Python's, it recurses once per nesting level: provider blocks are shallow config, checked at
+ * load.
  *
  * @param body The request body yian built. Updated in place.
  * @param block The provider block, as written.
@@ -24,41 +26,29 @@ export function mergeRequestBody(body: JsonObject, block: JsonObject): JsonObjec
   for (const key of Object.keys(block)) {
     const value = block[key]!;
     if (value === null) continue;
-    if (isObject(value)) {
+    if (isPlainObject(value)) {
       let current = Object.hasOwn(body, key) ? body[key] : undefined;
-      if (!isObject(current)) {
+      if (!isPlainObject(current)) {
         current = {};
         put(body, key, current);
       }
       mergeRequestBody(current, value);
     } else {
-      put(body, key, copy(value));
+      put(body, key, copyJson(value));
     }
   }
   return body;
 }
 
-/** Return whether a JSON value is an object (not an array or `null`). */
-function isObject(value: JsonValue | undefined): value is JsonObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** Set `target[key]` as an own data property, so a `"__proto__"` key never sets the prototype. */
-function put(target: JsonObject, key: string, value: JsonValue): void {
-  Object.defineProperty(target, key, { value, writable: true, enumerable: true, configurable: true });
-}
-
-/** Copy a block value so the body never shares a container with the block. */
-function copy(value: JsonValue): JsonValue {
-  if (Array.isArray(value)) return value.map(copy);
-  if (!isObject(value)) return value;
-  const out: JsonObject = {};
-  for (const key of Object.keys(value)) put(out, key, copy(value[key]!));
-  return out;
-}
-
 /** One step of encoding: a value with the comma and key before it, or a container closing. */
-type Task = { value: unknown; comma: boolean; key?: string } | { leave: object; close: string };
+type Task =
+  | {
+      value: unknown;
+      comma: boolean;
+      /** Quoted when the task runs, since an unpaired surrogate's position needs `out.length` then. */
+      key?: string;
+    }
+  | { leave: object; close: string };
 
 /**
  * Return `value` as compact JSON, keys in insertion order.
@@ -97,7 +87,7 @@ export function encodeBody(value: unknown, what = "request body"): string {
     } else if (typeof item === "string") {
       out += quote(item, out.length, what);
     } else if (typeof item === "bigint") {
-      out += item.toString();
+      out += digits(item, notJson);
     } else if (typeof item === "number") {
       if (!Number.isFinite(item)) throw notJson(`${String(item)} is not a JSON number`);
       out += String(item);
@@ -108,14 +98,13 @@ export function encodeBody(value: unknown, what = "request body"): string {
       // Pushed last to first so they pop in order; a hole reads as `undefined` and is refused.
       for (let i = item.length - 1; i >= 0; i--) stack.push({ value: item[i], comma: i > 0 });
       out += "[";
-    } else if (typeof item === "object" && typeName(item) === "object") {
+    } else if (isPlainObject(item)) {
       if (Object.getOwnPropertySymbols(item).length > 0) throw notJson("an object has a symbol key");
       if (active.has(item)) throw notJson("it contains a cycle");
       active.add(item);
-      const record = item as Record<string, unknown>;
       // Each value is read once, so a getter runs once.
-      const entries = Object.keys(record)
-        .map((key): [string, unknown] => [key, record[key]])
+      const entries = Object.keys(item)
+        .map((key): [string, unknown] => [key, item[key]])
         .filter(([, each]) => each !== undefined);
       stack.push({ leave: item, close: "}" });
       for (let i = entries.length - 1; i >= 0; i--) {
@@ -128,6 +117,18 @@ export function encodeBody(value: unknown, what = "request body"): string {
     }
   }
   return out;
+}
+
+/** Return a `bigint`'s digits, refusing one too large for the runtime to write. */
+function digits(n: bigint, notJson: (problem: string) => TypeError): string {
+  try {
+    return n.toString();
+  } catch (error) {
+    // A runtime may refuse to stringify a huge bigint (JavaScriptCore reports running out of
+    // memory as a RangeError).
+    if (error instanceof RangeError) throw notJson("integer is too large for this runtime");
+    throw error;
+  }
 }
 
 /** Return `text` as a JSON string written at `at` in the output, refusing an unpaired surrogate. */

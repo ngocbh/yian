@@ -29,13 +29,13 @@ function refuses(value: unknown, message: string): void {
 }
 
 describe("mergeRequestBody", () => {
-  test("mappings merge key by key", () => {
+  test("objects merge key by key", () => {
     const body = plain('{"text": {"format": {"type": "text"}}}');
     mergeRequestBody(body, plain('{"text": {"verbosity": "low"}}'));
     expect(body).toEqual(plain('{"text": {"format": {"type": "text"}, "verbosity": "low"}}'));
   });
 
-  test("lists and scalars replace whole, sibling keys stay, and it returns body", () => {
+  test("arrays and scalars replace whole, sibling keys stay, and it returns body", () => {
     const body = plain('{"model": "gpt-5", "text": {"format": {"type": "json_schema"}}, "stop": ["a", "b"], "t": 1.5}');
     const result = mergeRequestBody(body, plain('{"text": {"verbosity": "low"}, "stop": ["c"], "t": 0.2}'));
     expect(result).toBe(body);
@@ -73,10 +73,10 @@ describe("mergeRequestBody", () => {
     expect(body).toEqual(plain('{"a": {}}'));
   });
 
-  test("a null inside a copied array, or an object within it, is kept", () => {
+  test("a null or a __proto__ key inside a copied array, or an object within it, is kept", () => {
     const body: JsonObject = {};
-    mergeRequestBody(body, plain('{"a": [1, null, {"b": null}]}'));
-    expect(body).toEqual(plain('{"a": [1, null, {"b": null}]}'));
+    mergeRequestBody(body, plain('{"a": [1, null, {"b": null, "__proto__": 2}]}'));
+    expect(encodeBody(body)).toBe('{"a":[1,null,{"b":null,"__proto__":2}]}');
   });
 
   test("a block key __proto__ becomes an own key of the body, at the top level and nested", () => {
@@ -89,6 +89,12 @@ describe("mergeRequestBody", () => {
     expect(Object.getPrototypeOf(nested)).toBe(Object.prototype);
     expect(Object.keys(nested)).toEqual(["k", "__proto__"]);
     expect(encodeBody(body)).toBe('{"n":{"k":1,"__proto__":[2]},"__proto__":{"x":1}}');
+  });
+
+  test("keys Object.prototype holds, such as constructor and toString, are ordinary keys", () => {
+    const body: JsonObject = {};
+    mergeRequestBody(body, plain('{"constructor": {"a": 1}, "toString": {"b": 2}}'));
+    expect(encodeBody(body)).toBe('{"constructor":{"a":1},"toString":{"b":2}}');
   });
 
   test("a body key __proto__ is merged into", () => {
@@ -125,6 +131,7 @@ describe("encodeBody", () => {
 
   test("refuses an unpaired surrogate in a value or a key, with its position in the output", () => {
     refuses({ text: "a\ud800b" }, "request body has an unpaired surrogate at position 10");
+    refuses({ "a\ud800": 1 }, "request body has an unpaired surrogate at position 3");
     refuses({ text: "a\udc00b" }, "request body has an unpaired surrogate at position 10");
     // The escaped prefix counts: `\n` is two characters of output, and a paired surrogate two code units.
     refuses({ x: 1, "k\n😀\udc00": 2 }, "request body has an unpaired surrogate at position 13");

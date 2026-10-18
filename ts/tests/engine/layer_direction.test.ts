@@ -285,8 +285,10 @@ const ENGINE_DEPENDENT: Lint = {
 const BARE_FETCH: Lint = {
   name: "only platform.ts references fetch",
   files: outsidePlatform,
-  // Any bare `fetch` counts, a method named fetch too, so a call can't slip past as one; a
-  // key (`{ fetch: safeFetch }`, `fetch?: F`) names no global.
+  // Any bare `fetch` counts, a method named fetch too, so no fetch reference hides behind a
+  // method of that name; a key (`{ fetch: safeFetch }`, `fetch?: F`) names no global. Blind
+  // spots, all deliberate dodges: `const { fetch: f } = globalThis`, `globalThis["fetch"]`,
+  // `c ? fetch : g`.
   find: inCode(/(?<![\w$.])fetch(?![\w$]|\s*\??\s*:)|(?<![\w$])globalThis\.fetch(?![\w$])/g),
   fix: "use safeFetch from platform.ts; don't name a method fetch",
 };

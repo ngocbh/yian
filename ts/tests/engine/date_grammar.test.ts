@@ -10,8 +10,7 @@
  * `test_scalar_matches_uses_the_grammar` checks the private `_scalar_matches` through
  * `buildValueAs`.
  *
- * Later: `test_seeded_clock_values_fit_the_grammar` (with seeding) and the load rows (with the
- * loader).
+ * Later: the load rows (with the loader).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -23,6 +22,7 @@ import {
   parseDateOrDatetime,
   parseDatetime,
 } from "../../src/typesys/temporal.ts";
+import { nowUtc, todayUtc } from "../../src/typesys/seeding.ts";
 import { typeFor } from "../../src/typesys/types.ts";
 import { buildValueAs, TypeCheckError, TypedValue, ValueKind } from "../../src/typesys/values.ts";
 
@@ -192,6 +192,12 @@ describe("date and datetime typed values", () => {
       expect(error.message).toContain(DATETIME_MSG);
     },
   );
+
+  test("the seeded clock values fit the grammar (test_seeded_clock_values_fit_the_grammar)", () => {
+    const [now, today] = [nowUtc(), todayUtc()];
+    expect(TypedValue.fromWire({ kind: "datetime", value: now }).value).toBe(now);
+    expect(TypedValue.fromWire({ kind: "date", value: today }).value).toBe(today);
+  });
 });
 
 describe("date and datetime at the write boundary", () => {

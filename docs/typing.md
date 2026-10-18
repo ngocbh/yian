@@ -517,6 +517,10 @@ The runtime state primitive the engine owns. Narrow by design:
   | `${node.output[.path]}` | node `node`'s value, dotting into an object |
   | `${system.X}` | a host-injected ambient: `today` (`date`), `now` (`datetime`), or `run_id` (`str`); reserved, run-global. These are scalars, so `${system.today.year}` is a load error |
 
+  Changed (TS yian): `now` is the run's clock in Python's `isoformat()` spelling with
+  `+00:00` and `today` its date, from one reading of the clock, so they always agree; the
+  real clock has millisecond resolution, so a fraction ends in `000`.
+
   An unrecognized head resolves to `None` (the missing-ref-is-falsy contract — see
   [Expressions](expressions.md)). Because values are typed *objects*,
   `${x.output.ratio}` traverses **into** an object.

@@ -380,6 +380,16 @@ describe("buildValueAs", () => {
 });
 
 describe("union labels and order", () => {
+  test("a deep untagged union labels in linear work", () => {
+    // Python counts the nodes labelled; an exponential walk of depth 100 would not finish.
+    const depth = 100;
+    const typ = deepUntaggedUnion(depth);
+    const start = performance.now();
+    const label = canonicalTypeLabel(typ);
+    expect(performance.now() - start).toBeLessThan(1000);
+    expect(label.split("Union(").length - 1).toBe(depth + 1);
+  });
+
   test("a union label lists members in canonical order", () => {
     expect(canonicalTypeLabel(union([sell, buy]))).toBe(
       `Union(${canonicalTypeLabel(buy)},${canonicalTypeLabel(sell)})`,

@@ -1495,15 +1495,16 @@ function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value {
     ...stack.slice(1).map((frame) => frame.key!),
     ...keys,
   ];
+  /** Throw `message` at the entry `key` of the top frame (`null`: the root). */
+  const fail = (key: string | number | null, message: string): never => {
+    // The path is built only on a throw.
+    throw new TypeCheckError(message, { path: key === null ? path : pathTo(key) });
+  };
 
   /** Return what `value` stores as, or `undefined` once its container's frame is pushed. */
   const enter = (value: unknown, key: string | number | null): Value | undefined => {
-    // The path is built only on a throw.
-    const fail = (message: string): never => {
-      throw new TypeCheckError(message, { path: key === null ? path : pathTo(key) });
-    };
     const reason = nonValueReason(value);
-    if (reason !== null) fail(reason);
+    if (reason !== null) fail(key, reason);
     if (value === null || typeof value === "boolean" || typeof value === "bigint") return value;
     if (typeof value === "string") return value;
     if (typeof value === "number") return Object.is(value, -0) ? 0 : value;
@@ -1511,10 +1512,10 @@ function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value {
       if (files === "keep") return value;
       if (files === "mapping") return { uri: value.uri, mime: value.mime, name: value.name };
       // Under "refuse" a file is not a JSON value.
-      return fail(`${valueRepr(value)} is not a JSON value`);
+      return fail(key, `${valueRepr(value)} is not a JSON value`);
     }
     if (isList(value) || isRecord(value)) {
-      if (active.has(value)) fail("value contains itself");
+      if (active.has(value)) fail(key, "value contains itself");
       const finished = done.get(value);
       if (finished !== undefined) return finished;
       const keys = isList(value) ? null : Object.keys(value);
@@ -1522,8 +1523,8 @@ function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value {
       active.add(value);
       return undefined;
     }
-    if (value === undefined) fail("undefined is not a JSON value");
-    return fail(`${valueRepr(value)} is not a JSON value`);
+    if (value === undefined) fail(key, "undefined is not a JSON value");
+    return fail(key, `${valueRepr(value)} is not a JSON value`);
   };
 
   /** Record that `frame`'s last-read entry, holding `original`, stores `stored`. */
@@ -1768,14 +1769,15 @@ function buildForUnion(typ: Type, value: unknown, path: ValuePath): TypedValue {
   const tagged = taggedMember(members, value);
   if (tagged !== null) {
     const [field, member] = tagged;
-    const expected = pythonList(tagValues(members, field));
     if (!Object.hasOwn(value, field)) {
+      const expected = pythonList(tagValues(members, field));
       throw new TypeCheckError(
         `missing tag field ${reprText(field)} (expected one of ${expected})`,
         { path: [...path, field] },
       );
     }
     if (member === null) {
+      const expected = pythonList(tagValues(members, field));
       throw new TypeCheckError(
         `${valueRepr(value[field])} is not a tag of the union (expected one of ${expected})`,
         { path: [...path, field] },

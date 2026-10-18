@@ -1173,6 +1173,8 @@ describe("typeFor", () => {
       Count: { n: "int" },
       Score: { n: "float", label: "str" },
     });
+    expect(typeFor("Union(Buy, Sell)", reg).variants).toHaveLength(2);
+    expect(typeFor("Union(Count, Score)", reg).variants).toHaveLength(2);
     const tagged = buildValueAs(typeFor("Union(Buy, Sell)", reg), { action: "sell", price: 3n });
     expect((tagged.toObject() as Record<string, unknown>)["price"]).toBe(3);
     const untagged = buildValueAs(typeFor("Union(Count, Score)", reg), { n: 3n, label: "x" });

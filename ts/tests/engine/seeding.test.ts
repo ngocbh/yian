@@ -53,15 +53,23 @@ describe("seeding the system namespace", () => {
   test(
     "seedSystemClock seeds typed today and now (test_seed_system_clock_seeds_typed_today_and_now)",
     () => {
+      // An injected clock: Python compares with a second clock read, which races midnight.
       const pool = new VariablePool();
-      seedSystemClock(pool);
+      seedSystemClock(pool, AFTERNOON);
       expect(pool.system.get("today")!.kind).toBe(ValueKind.DATE);
       expect(pool.system.get("now")!.kind).toBe(ValueKind.DATETIME);
-      expect(pool.system.get("today")!.value).toBe(todayUtc());
-      expect(pool.resolve("system", ["today"])).toBe(todayUtc());
+      expect(pool.system.get("today")!.value).toBe(todayUtc(AFTERNOON));
+      expect(pool.resolve("system", ["today"])).toBe(todayUtc(AFTERNOON));
       expect(pool.resolve("system", ["now"])).toContain("T");
     },
   );
+
+  test("seedSystemClock reads the real clock by default", () => {
+    const pool = new VariablePool();
+    seedSystemClock(pool);
+    expect(pool.system.get("today")!.kind).toBe(ValueKind.DATE);
+    expect(pool.system.get("now")!.kind).toBe(ValueKind.DATETIME);
+  });
 
   test("seedSystemClock reads the clock once, so today is now's date", () => {
     const pool = new VariablePool();

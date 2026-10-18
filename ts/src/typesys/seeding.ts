@@ -16,7 +16,7 @@ import { buildValueAs, ValueKind } from "./values.ts";
 export function nowUtc(epochMs: number = Date.now()): string {
   const refusal = `clock time must be within years 1 to 9999, got ${epochMs}`;
   if (!Number.isFinite(epochMs)) throw new RangeError(refusal);
-  // Whole milliseconds and microseconds apart: `epochMs * 1000` passes 2^53 after year ~4253,
+  // Whole milliseconds and microseconds apart: `epochMs * 1000` passes 2^53 after mid-2255,
   // so a product would lose microseconds far from 1970.
   const whole = Math.floor(epochMs);
   const sub = Math.round((epochMs - whole) * 1000);

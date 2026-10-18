@@ -15,6 +15,7 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { nowUtc, todayUtc } from "../../src/typesys/seeding.ts";
 import {
   type ParsedDate,
   type ParsedDatetime,
@@ -22,7 +23,6 @@ import {
   parseDateOrDatetime,
   parseDatetime,
 } from "../../src/typesys/temporal.ts";
-import { nowUtc, todayUtc } from "../../src/typesys/seeding.ts";
 import { typeFor } from "../../src/typesys/types.ts";
 import { buildValueAs, TypeCheckError, TypedValue, ValueKind } from "../../src/typesys/values.ts";
 
@@ -193,7 +193,7 @@ describe("date and datetime typed values", () => {
     },
   );
 
-  test("the seeded clock values fit the grammar (test_seeded_clock_values_fit_the_grammar)", () => {
+  test("the seeded clock values fit the grammar", () => {
     const [now, today] = [nowUtc(), todayUtc()];
     expect(TypedValue.fromWire({ kind: "datetime", value: now }).value).toBe(now);
     expect(TypedValue.fromWire({ kind: "date", value: today }).value).toBe(today);

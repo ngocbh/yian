@@ -2,14 +2,14 @@
  * The `Type` vocabulary's shape checks, levels and labels, the type-text parser,
  * `formatTypeExpr`, the bracket-spelling error, typedef names, and `resolveType`/`typeFor`, a
  * port of those tests of `tests/engine/test_types.py`, with its write-boundary value tests
- * (`buildValueAs`): bounded numbers, an int in a float slot at any depth and the end-to-end check.
+ * (`buildValueAs`): bounded numbers, an int in a float slot at any depth and the end-to-end check,
+ * the bounded pool write that keeps the previous value, and the package's public exports.
  *
  * Also here: the build half of
  * `test_type_to_schema.py::test_large_numeric_schema_bounds_match_resolved_type` (its schema
  * half comes with `typeToSchema`).
  *
- * Later: the pool write test, `test_public_exports`, and
- * `test_bounded_type_defaults_preserve_compatible_integer_payloads` (with the loader).
+ * Later: `test_bounded_type_defaults_preserve_compatible_integer_payloads` (with the loader).
  *
  * Not ported: `test_type_for_preserves_its_public_keyword_name` (TypeScript has no keyword
  * arguments) and `test_record_stores_a_tuple_field_as_a_list` (no tuples in TS);
@@ -19,7 +19,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
-import { reprText } from "../../src/diagnostics.ts";
+import { compareCodeUnits, reprText } from "../../src/diagnostics.ts";
+import * as typesys from "../../src/typesys/index.ts";
+import { VariablePool } from "../../src/typesys/pool.ts";
 import {
   formatTypeExpr,
   legacyRespelling,
@@ -1292,6 +1294,18 @@ describe("bounded numeric values", () => {
     }
     typeCheckError(() => buildValueAs(typ, outside));
   });
+
+  test("a rejected nested write keeps the previous value (test_bounded_typed_write_preserves_the_previous_value_on_nested_rejection)", () => {
+    const typ = typeFor("list(Score)", readTypedefs({ Score: { value: "float(0..1)" } }));
+    const pool = new VariablePool();
+    pool.set("scores", [{ value: 1n }], typ);
+    const error = typeCheckError(() => pool.set("scores", [{ value: 0.5 }, { value: 1.1 }], typ));
+    expect(error.path).toEqual([1, "value"]);
+    // Python widens the stored 1 to 1.0; TS keeps the int in a float slot.
+    const scores = pool.get("scores") as typesys.ValueRecord[];
+    expect(scores).toEqual([{ value: 1n }]);
+    expect(typeof scores[0]!.value).toBe("bigint");
+  });
 });
 
 describe("an int in a float slot", () => {
@@ -1327,5 +1341,47 @@ describe("write boundary", () => {
     expect(
       buildValueAs(typeFor("Prices", REG), { closes: [1.0, 2.0], last: 2.0 }).kind,
     ).toBe(ValueKind.OBJECT);
+  });
+});
+
+describe("public exports", () => {
+  test("typesys/index.ts exports the type system's public names (test_public_exports)", () => {
+    expect(Object.keys(typesys).sort(compareCodeUnits)).toEqual([
+      "BUILTIN_TYPE_NAMES",
+      "FileRef",
+      "Type",
+      "TypeCheckError",
+      "TypedValue",
+      "ValueKind",
+      "VariablePool",
+      "buildValue",
+      "buildValueAs",
+      "canonicalTypeLabel",
+      "canonicalUnionOrder",
+      "listKindForElement",
+      "normalizeFiles",
+      "parseType",
+      "resolveType",
+      "restrictUnion",
+      "typeFor",
+      "typesOverlap",
+      "unionField",
+      "unionMemberForTag",
+      "unionTagFields",
+    ]);
+    // The type-only exports exist only for the typechecker, so this annotation checks them.
+    const types: [
+      typesys.FieldAbsent,
+      typesys.FieldPartial,
+      typesys.FieldRead,
+      typesys.RecordDef,
+      typesys.PoolWire,
+      typesys.StorageKind,
+      typesys.TypeRegistry,
+      typesys.Value,
+      typesys.ValueRecord,
+      typesys.VariantDef,
+    ] | null = null;
+    expect(types).toBeNull();
   });
 });

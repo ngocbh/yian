@@ -1,5 +1,5 @@
 /**
- * The `Type` vocabulary's shape checks and levels, a port of the hand-built half of
+ * The `Type` vocabulary's shape checks, levels and labels, a port of the hand-built half of
  * `tests/engine/test_types.py`; the parser and resolver tests come with `types.ts`.
  */
 
@@ -7,7 +7,10 @@ import { describe, expect, test } from "bun:test";
 
 import {
   type Bounds,
+  boundText,
+  canonicalTypeLabel,
   listKindForElement,
+  literalLabel,
   Type,
   TypeCheckError,
   typeEquals,
@@ -313,5 +316,87 @@ describe("typeLevels", () => {
     let typ = INT;
     for (let i = 0; i < 60; i++) typ = record({ a: typ, b: typ });
     expect(typeLevels(typ)).toBe(60);
+  });
+});
+
+describe("canonicalTypeLabel", () => {
+  test("label of a list without an element type", () => {
+    expect(canonicalTypeLabel(Type.scalar(ValueKind.LIST_STRING))).toBe("list(str)");
+    expect(canonicalTypeLabel(Type.scalar(ValueKind.LIST_ANY))).toBe("list(Optional(Any))");
+  });
+
+  // Each label is the one Python's `canonical_type_label` gives.
+  test.each([
+    [[0.0, 1.5], "float(0.0..1.5)"],
+    [[-0.5, 1n], "float(-0.5..1)"],
+    [[0.001, 2n], "float(0.001..2)"],
+    [[1e-5, 1e16], "float(1e-05..1e+16)"],
+    [[0.0001, 1234567890123456.0], "float(0.0001..1234567890123456.0)"],
+    [[1.5e-7, 1e21], "float(1.5e-07..1e+21)"],
+    [[0.1, 12.5], "float(0.1..12.5)"],
+  ] as const)("spells float ends %p as Python does", (bounds, label) => {
+    expect(canonicalTypeLabel(new Type({ kind: ValueKind.NUMBER, bounds }))).toBe(label);
+  });
+
+  // An untagged union orders its members by the order key, the bracket spelling of each
+  // member (`{"a":float[0.0,1]}`), so these orders are the ones Python gives.
+  test.each([
+    // `null` (the key's open end) sorts after `0.0`; the label's empty end would sort first.
+    [[0.0, 1n], [null, 1n], 'Union({"a":float(0.0..1)},{"a":float(..1)})'],
+    [[null, 1n], [0.0, 1n], 'Union({"a":float(0.0..1)},{"a":float(..1)})'],
+    // `1e-05` sorts after `1.5`, which `0.00001` would not.
+    [[1e-5, 2n], [1.5, 2n], 'Union({"a":float(1.5..2)},{"a":float(1e-05..2)})'],
+    // An int end stays an int: `0` sorts before `0.0`.
+    [[0.0, 1.5], [0n, 1.5], 'Union({"a":float(0..1.5)},{"a":float(0.0..1.5)})'],
+  ] as const)("orders members by the key's float ends: %p, %p", (first, second, label) => {
+    const member = (bounds: Bounds) => record({ a: new Type({ kind: ValueKind.NUMBER, bounds }) });
+    const union = new Type({ kind: ValueKind.OBJECT, variants: [member(first), member(second)] });
+    expect(canonicalTypeLabel(union)).toBe(label);
+  });
+});
+
+describe("boundText", () => {
+  // Each float spelling is Python's `repr` of the same float.
+  test.each([
+    [1n, "1"],
+    [-(10n ** 30n), "-1000000000000000000000000000000"],
+    [0, "0.0"],
+    [-1.5e-7, "-1.5e-07"],
+    [-0.0001, "-0.0001"],
+    [1e15, "1000000000000000.0"],
+    [123456789012345680, "1.2345678901234568e+17"],
+    [0.30000000000000004, "0.30000000000000004"],
+    [123.456, "123.456"],
+    [5e-324, "5e-324"],
+    [1.7976931348623157e308, "1.7976931348623157e+308"],
+    [Infinity, "Infinity"],
+    [-Infinity, "-Infinity"],
+    [null, ""],
+  ] as const)("spells %p as %p", (end, text) => {
+    expect(boundText(end)).toBe(text);
+  });
+});
+
+describe("literalLabel", () => {
+  test("prints a name bare and quotes the rest, in the given order", () => {
+    expect(literalLabel(["go", "no go", "True"])).toBe('Literal(go, "no go", "True")');
+  });
+
+  // Each spelling is the one Python's `literal_label` gives.
+  test.each([
+    // a non-ASCII name
+    ["é", "Literal(é)"],
+    // a letter number starts a name and an identifier
+    ["ⅰx", "Literal(ⅰx)"],
+    // a NAME token that `str.isidentifier` rejects
+    ["²x", 'Literal("²x")'],
+    ["a²", 'Literal("a²")'],
+    // an identifier that is not a NAME token
+    ["a·", 'Literal("a·")'],
+    ["None", 'Literal("None")'],
+    ["1a", 'Literal("1a")'],
+    ['say "hi"', 'Literal("say \\"hi\\"")'],
+  ])("spells %p as %p", (tag, label) => {
+    expect(literalLabel([tag])).toBe(label);
   });
 });

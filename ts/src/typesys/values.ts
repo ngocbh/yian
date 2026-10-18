@@ -3,10 +3,12 @@
  *
  * `ValueKind` is the closed set of storage tags, and `Type` the resolved structure of a
  * declared type (records, `Literal` tags, typed lists, numeric ranges and unions) that
- * the write boundary checks values against. The value half arrives later.
+ * the write boundary checks values against, with its canonical labels, union member
+ * order and overlap check. The value half arrives later.
  */
 
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
+import { parseDate, parseDatetime } from "./temporal.ts";
 
 /**
  * A value violates a declared type at one source-neutral structural path.
@@ -152,6 +154,7 @@ export class Type {
     this.required = init.required;
     this.tags = init.tags;
     this.element = init.element;
+    // Not `??`: a forged `null` must reach validateShape's bool check.
     this.nullable = init.nullable === undefined ? false : init.nullable;
     this.bounds = init.bounds;
     this.variants = init.variants;
@@ -440,4 +443,372 @@ function setEquals(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
 function boundEquals(a: Bound, b: Bound): boolean {
   // Loose `==` compares a bigint with a number by value; `null` equals only `null` here.
   return a === null || b === null ? a === b : a == b;
+}
+
+// --------------------------------------------------------------------------------------- //
+// Type labels
+// --------------------------------------------------------------------------------------- //
+
+/**
+ * Render one deterministic, unambiguous label for a structural type.
+ *
+ * Record keys use compact JSON quoting; variant tags print bare when they read back as
+ * names, else JSON-quoted (`Literal(go, "no go")`). Structurally refined lists render
+ * from their element; a valid flat-list type renders from its storage kind
+ * (`list(str)`), and a `LIST_ANY` with no element as `list(Optional(Any))`. A union
+ * lists its members in canonical order.
+ *
+ * Example: `Optional(int(1..12))`.
+ *
+ * @throws RangeError or TypeError when a numeric range's bounds are malformed.
+ */
+export function canonicalTypeLabel(typ: Type): string {
+  return labels(typ)[0];
+}
+
+/**
+ * Return `[label, order key]` for `typ`.
+ *
+ * The label is the parenthesized spelling; its variant tags print bare when they read
+ * back as names, else JSON-quoted. The order key is the same type in the older bracket
+ * spelling (`Optional[int[1,12]]`, `Literal["go","no_go"]`); union members sort by it,
+ * so member order, JSON Schema `anyOf` order and manifest fingerprints did not move
+ * when the spelling changed. Both come from one walk so nested unions stay linear.
+ */
+function labels(typ: Type): [string, string] {
+  const [label, key] = canonicalNonnullableLabel(typ);
+  return typ.nullable ? [`Optional(${label})`, `Optional[${key}]`] : [label, key];
+}
+
+/** Return `[label, order key]` for `typ` without its outer nullable wrapper. */
+function canonicalNonnullableLabel(typ: Type): [string, string] {
+  if (typ.variants !== undefined) {
+    const ordered = orderedMemberLabels(typ.variants);
+    return [
+      "Union(" + ordered.map(([, label]) => label).join(",") + ")",
+      "Union[" + ordered.map(([, , key]) => key).join(",") + "]",
+    ];
+  }
+
+  if (typ.fields !== undefined) {
+    const pairs = [...typ.fields.keys()]
+      .sort(compareCodeUnits)
+      .map((name) => [JSON.stringify(name), labels(typ.fields!.get(name)!)] as const);
+    return [
+      "{" + pairs.map(([name, [label]]) => `${name}:${label}`).join(",") + "}",
+      "{" + pairs.map(([name, [, key]]) => `${name}:${key}`).join(",") + "}",
+    ];
+  }
+
+  if (typ.tags !== undefined) {
+    const tags = [...typ.tags].sort(compareCodeUnits);
+    const key = "Literal[" + tags.map((tag) => JSON.stringify(tag)).join(",") + "]";
+    return [literalLabel(tags), key];
+  }
+
+  if (isListKind(typ.kind)) {
+    if (typ.element === undefined) {
+      if (typ.kind === ValueKind.LIST_ANY) {
+        // Items not proven may be any JSON value, null included.
+        return ["list(Optional(Any))", "list[Optional[Any]]"];
+      }
+      return [kindLabel(typ.kind), typ.kind];
+    }
+    const [label, key] = labels(typ.element);
+    return [`list(${label})`, `list[${key}]`];
+  }
+
+  if (typ.bounds !== undefined) {
+    validateNumericBounds(typ.kind, typ.bounds);
+    // An open end renders empty in the label (`int(0..)`) and as null in the key.
+    const [low, high] = typ.bounds;
+    const keyEnd = (end: Bound) => (end === null ? "null" : boundText(end));
+    return [
+      `${typ.kind}(${boundText(low)}..${boundText(high)})`,
+      `${typ.kind}[${keyEnd(low)},${keyEnd(high)}]`,
+    ];
+  }
+
+  return [typ.kind, typ.kind];
+}
+
+/**
+ * Spell a list storage kind as a type for messages, e.g. `list(str)` for `LIST_STRING`.
+ *
+ * `LIST_ANY` reads `list(Optional(Any))`, since its items may be any JSON value.
+ */
+function kindLabel(kind: ValueKind): string {
+  const element = listElementKind(kind);
+  return `list(${element === null ? "Optional(Any)" : element})`;
+}
+
+/**
+ * Spell one numeric range end as type text: a `bigint` as its digits, a `number` as
+ * Python's `repr` of the float (`1.0`, `1e-05`), and an open end as `""`.
+ *
+ * Example: `boundText(1n)` is `1`, `boundText(1e16)` is `1e+16`.
+ */
+export function boundText(end: Bound): string {
+  if (end === null) return "";
+  return typeof end === "bigint" ? end.toString() : pythonFloatRepr(end);
+}
+
+/**
+ * Return Python's `repr` of a float: the shortest round-trip digits, positional when
+ * the decimal exponent is in `-4..15`, else exponent form with at least two exponent
+ * digits (`1e-05`, `1.5e+16`). A non-finite value prints as JavaScript spells it.
+ */
+function pythonFloatRepr(x: number): string {
+  if (!Number.isFinite(x)) return String(x);
+  if (x === 0) return Object.is(x, -0) ? "-0.0" : "0.0";
+  // `toExponential()` with no argument gives the shortest digits that round-trip.
+  const [mantissa, exponentText] = Math.abs(x).toExponential().split("e") as [string, string];
+  const exponent = Number(exponentText);
+  const digits = mantissa.replace(".", "");
+  const sign = x < 0 ? "-" : "";
+  if (exponent < -4 || exponent > 15) {
+    const exponentDigits = String(Math.abs(exponent)).padStart(2, "0");
+    return `${sign}${mantissa}e${exponent < 0 ? "-" : "+"}${exponentDigits}`;
+  }
+  if (exponent < 0) return `${sign}0.${"0".repeat(-exponent - 1)}${digits}`;
+  const whole = digits.slice(0, exponent + 1).padEnd(exponent + 1, "0");
+  return `${sign}${whole}.${digits.slice(exponent + 1) || "0"}`;
+}
+
+/**
+ * The type tokenizer's NAME token, Python's `[^\W\d]\w*` in Unicode properties; a
+ * `Literal` member printed bare must match it. Use it with the `u` flag.
+ */
+export const NAME_PATTERN = "[\\p{L}\\p{Nl}\\p{No}_][\\p{L}\\p{N}_]*";
+const NAME_TOKEN = new RegExp(`^(?:${NAME_PATTERN})$`, "u");
+// Python's `str.isidentifier()`.
+const IDENTIFIER = /^[\p{XID_Start}_]\p{XID_Continue}*$/u;
+
+/** Names the type parser reads as constants, never as `Literal` members. */
+export const BUILTIN_CONSTANTS: readonly string[] = ["True", "False", "None"];
+
+/**
+ * Spell a `Literal` type from its members, in the given order.
+ *
+ * A member prints bare when it reads back as a name, else JSON-quoted; members are
+ * separated by `", "`. The type parser reads the result back.
+ *
+ * Example: `literalLabel(["go", "no go", "True"])` gives `Literal(go, "no go", "True")`.
+ */
+export function literalLabel(tags: Iterable<string>): string {
+  return "Literal(" + Array.from(tags, literalMember).join(", ") + ")";
+}
+
+/** Spell one `Literal` member bare when it reads back as a name, else quoted. */
+function literalMember(tag: string): string {
+  // The tokenizer's NAME and `str.isidentifier` disagree on a few Unicode characters;
+  // a bare member must pass both to read back as the same single name.
+  if (NAME_TOKEN.test(tag) && IDENTIFIER.test(tag) && !BUILTIN_CONSTANTS.includes(tag)) {
+    return tag;
+  }
+  return JSON.stringify(tag);
+}
+
+// --------------------------------------------------------------------------------------- //
+// Unions of records
+// --------------------------------------------------------------------------------------- //
+
+/** Return the one value of a single-value `Literal`, else `null`. */
+function singleTag(typ: Type): string | null {
+  if (typ.tags === undefined || typ.tags.size !== 1) return null;
+  return typ.tags.values().next().value!;
+}
+
+/** Return the tag fields shared by `members`, sorted by name. */
+function membersTagFields(members: readonly Type[]): string[] {
+  const first = members[0];
+  if (first?.fields === undefined || members.some((member) => member.fields === undefined)) {
+    return [];
+  }
+  const qualifying: string[] = [];
+  for (const name of [...first.fields.keys()].sort(compareCodeUnits)) {
+    const values = new Set<string>();
+    const isTag = members.every((member) => {
+      const fieldType = member.fields!.get(name);
+      const tag = fieldType === undefined ? null : singleTag(fieldType);
+      if (tag === null || !member.required?.has(name) || fieldType!.nullable) return false;
+      values.add(tag);
+      return true;
+    });
+    if (isTag && values.size === members.length) qualifying.push(name);
+  }
+  return qualifying;
+}
+
+/**
+ * Return the fields that tell a union's members apart, sorted by name.
+ *
+ * A field is a tag when every member declares it as required, not nullable, and a
+ * single-value `Literal`, and the values are pairwise distinct. Any tag field selects
+ * the same member. A type that is not a union has no tag fields.
+ *
+ * Example: a union of `{action: Literal(buy), qty: int}` and
+ * `{action: Literal(sell), price: float}` gives `["action"]`.
+ */
+export function unionTagFields(typ: Type): readonly string[] {
+  if (typ.variants === undefined) return [];
+  return membersTagFields(typ.variants);
+}
+
+/**
+ * Return union members in canonical order.
+ *
+ * Members with a tag field sort by the value of the first tag field by name; otherwise
+ * they sort by their canonical label in the bracket spelling (`Optional[int]`), which
+ * predates the parenthesized one.
+ */
+export function canonicalUnionOrder(members: Iterable<Type>): Type[] {
+  const all = [...members];
+  const tagFields = membersTagFields(all);
+  if (tagFields.length > 0) {
+    // Tag order reads best in labels and manifests, and needs no member labels.
+    const field = tagFields[0]!;
+    return all.sort((a, b) => compareCodeUnits(memberTag(a, field), memberTag(b, field)));
+  }
+  return orderedMemberLabels(all).map(([member]) => member);
+}
+
+/** Return the single tag a tagged union member holds in `field`. */
+function memberTag(member: Type, field: string): string {
+  return singleTag(member.fields!.get(field)!)!;
+}
+
+/**
+ * Return `[member, label, order key]` triples in canonical order, labelling each member
+ * once.
+ *
+ * Labelling once keeps nested untagged unions linear: their order depends on the labels,
+ * so ordering and rendering share them. Untagged members sort by their bracket-spelled
+ * order key (see `labels`).
+ */
+function orderedMemberLabels(members: readonly Type[]): [Type, string, string][] {
+  const labelled = members.map((member): [Type, string, string] => [member, ...labels(member)]);
+  const tagFields = membersTagFields(members);
+  if (tagFields.length > 0) {
+    const field = tagFields[0]!;
+    return labelled.sort(([a], [b]) => compareCodeUnits(memberTag(a, field), memberTag(b, field)));
+  }
+  return labelled.sort(([, , a], [, , b]) => compareCodeUnits(a, b));
+}
+
+/** Whether `null` satisfies `typ`. */
+function admitsNone(typ: Type): boolean {
+  return typ.nullable || typ.kind === ValueKind.NONE;
+}
+
+/** Whether `typ` is `object` with no record or union refinement. */
+function isPlainObject(typ: Type): boolean {
+  return typ.kind === ValueKind.OBJECT && typ.fields === undefined && typ.variants === undefined;
+}
+
+/** Whether two closed records can match the same value. */
+function recordsOverlap(a: Type, b: Type): boolean {
+  const aFields = a.fields!;
+  const bFields = b.fields!;
+  const aRequired = a.required ?? new Set<string>();
+  const bRequired = b.required ?? new Set<string>();
+  if (![...aRequired].every((name) => bFields.has(name))) return false;
+  if (![...bRequired].every((name) => aFields.has(name))) return false;
+  return [...new Set([...aRequired, ...bRequired])].every((name) =>
+    typesOverlap(aFields.get(name)!, bFields.get(name)!),
+  );
+}
+
+/** Whether two numeric types' inclusive intervals share a point; `null` is an open end. */
+function boundsIntersect(a: Type, b: Type): boolean {
+  const [aLow, aHigh] = a.bounds ?? [null, null];
+  const [bLow, bHigh] = b.bounds ?? [null, null];
+  // `<=` compares a bigint with a number exactly.
+  return (
+    (aLow === null || bHigh === null || aLow <= bHigh) &&
+    (bLow === null || aHigh === null || bLow <= aHigh)
+  );
+}
+
+/** Whether `tag` is a valid `date` or `datetime` string, as `kind` says. */
+function matchesTemporal(kind: ValueKind, tag: string): boolean {
+  try {
+    if (kind === ValueKind.DATE) parseDate(tag);
+    else parseDatetime(tag);
+  } catch (error) {
+    if (error instanceof RangeError) return false;
+    throw error;
+  }
+  return true;
+}
+
+const TEXT_KINDS: ReadonlySet<ValueKind> = new Set([
+  ValueKind.STRING,
+  ValueKind.DATE,
+  ValueKind.DATETIME,
+]);
+const NUMERIC_KINDS: ReadonlySet<ValueKind> = new Set([ValueKind.INTEGER, ValueKind.NUMBER]);
+const OPTIONAL_STR = new Type({ kind: ValueKind.STRING, nullable: true });
+
+/**
+ * The record a file's JSON form satisfies; a record overlapping it overlaps `file`. Its
+ * fields also type a file's dotted reads.
+ */
+export const FILE_FORM = new Type({
+  kind: ValueKind.OBJECT,
+  fields: new Map([
+    ["uri", Type.scalar(ValueKind.STRING)],
+    ["mime", OPTIONAL_STR],
+    ["name", OPTIONAL_STR],
+  ]),
+  required: new Set(["uri", "mime", "name"]),
+});
+
+/**
+ * Whether some value could satisfy both `a` and `b`.
+ *
+ * The check is conservative: it may say two types overlap when no value satisfies both,
+ * but never the reverse. It decides whether an untagged union's members can be told
+ * apart from the data alone. `Any` overlaps every type except `None`. Since a `file`
+ * slot reads a file's JSON form `{uri, mime, name}`, `file` overlaps plain `object`,
+ * `Any`, and every record that admits that mapping.
+ *
+ * Example: `{action: Literal(buy), qty: int}` and `{action: Literal(sell), price: float}`
+ * do not overlap; `{conviction: float}` overlaps itself.
+ */
+export function typesOverlap(a: Type, b: Type): boolean {
+  if (admitsNone(a) && admitsNone(b)) return true;
+  if (a.kind === ValueKind.ANY || b.kind === ValueKind.ANY) {
+    const other = a.kind === ValueKind.ANY ? b : a;
+    return other.kind !== ValueKind.NONE;
+  }
+  if (a.variants !== undefined) return a.variants.some((member) => typesOverlap(member, b));
+  if (b.variants !== undefined) return b.variants.some((member) => typesOverlap(a, member));
+  if (a.fields !== undefined && b.fields !== undefined) return recordsOverlap(a, b);
+  if (a.kind === ValueKind.OBJECT && b.kind === ValueKind.OBJECT) {
+    // Only plain `object` remains on at least one side, and it accepts any record.
+    return isPlainObject(a) || isPlainObject(b);
+  }
+  if (isListKind(a.kind) && isListKind(b.kind)) return true;
+  if (a.tags !== undefined && b.tags !== undefined) {
+    return [...a.tags].some((tag) => b.tags!.has(tag));
+  }
+  if (a.tags !== undefined || b.tags !== undefined) {
+    const [literal, other] = a.tags !== undefined ? [a, b] : [b, a];
+    if (other.kind === ValueKind.STRING) return true;
+    if (other.kind === ValueKind.DATE || other.kind === ValueKind.DATETIME) {
+      return [...literal.tags!].some((tag) => matchesTemporal(other.kind, tag));
+    }
+    return false;
+  }
+  if (NUMERIC_KINDS.has(a.kind) && NUMERIC_KINDS.has(b.kind)) return boundsIntersect(a, b);
+  if (TEXT_KINDS.has(a.kind) && TEXT_KINDS.has(b.kind)) {
+    return a.kind === b.kind || a.kind === ValueKind.STRING || b.kind === ValueKind.STRING;
+  }
+  if ((a.kind === ValueKind.FILE || b.kind === ValueKind.FILE) && a.kind !== b.kind) {
+    const other = a.kind === ValueKind.FILE ? b : a;
+    if (isPlainObject(other)) return true;
+    return other.fields !== undefined && recordsOverlap(other, FILE_FORM);
+  }
+  return a.kind === b.kind;
 }

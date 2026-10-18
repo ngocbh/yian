@@ -18,6 +18,8 @@ import {
   type YAMLSeq,
 } from "yaml";
 
+import { SourceSyntaxError } from "../../src/compose/source/common.ts";
+import { parseYamlLiteral } from "../../src/compose/source/literals.ts";
 import { composeFlowDocument, FlowLoaderError } from "../../src/compose/source/scalars.ts";
 import { BUILTIN, install } from "../../src/defaults.ts";
 
@@ -105,6 +107,13 @@ describe("the YAML nesting limit", () => {
     const error = refusal("[".repeat(depth) + "]".repeat(depth));
 
     expect(error.message).toContain(`this list ${MESSAGE}`);
+  });
+
+  test("an isolated literal past the limit is a syntax error", () => {
+    const text = "[".repeat(600) + "]".repeat(600);
+
+    expect(() => parseYamlLiteral(text)).toThrow(SourceSyntaxError);
+    expect(() => parseYamlLiteral(text)).toThrow(MESSAGE);
   });
 
   test("reports the first problem in the text", () => {

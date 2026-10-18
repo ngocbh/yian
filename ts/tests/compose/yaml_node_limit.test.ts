@@ -11,6 +11,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { isAlias, isMap, isNode, isSeq, type Node, type YAMLSeq } from "yaml";
 
+import { SourceSyntaxError } from "../../src/compose/source/common.ts";
+import { parseYamlLiteral, readPlainScalar } from "../../src/compose/source/literals.ts";
 import { composeFlowDocument, FlowLoaderError } from "../../src/compose/source/scalars.ts";
 import { BUILTIN, install } from "../../src/defaults.ts";
 
@@ -161,6 +163,16 @@ describe("the YAML node limit", () => {
     expect(error.node?.anchor).toBe("a16");
   });
 
+  test("an isolated literal past the limit is a syntax error", () => {
+    const items = ["&a0 [1]"];
+    for (let i = 1; i < 30; i++) items.push(`&a${i} [*a${i - 1}, *a${i - 1}]`);
+
+    const text = `[${items.join(", ")}]`;
+
+    expect(() => parseYamlLiteral(text)).toThrow(SourceSyntaxError);
+    expect(() => parseYamlLiteral(text)).toThrow(message(MAX_YAML_NODES));
+  });
+
   test("a listed 1000-link chain meets the node limit first", () => {
     // a<i> holds i + 2 nodes, so the listed chain holds about 500,000.
     const text = flow("[*a998]", linearAnchors(999));
@@ -242,6 +254,13 @@ describe("the YAML node limit", () => {
       limitNodes(expanded);
       expect([text, overNodeLimit(text)]).toEqual([text, false]);
     }
+  });
+
+  test("reading a plain scalar is unaffected", () => {
+    limitNodes(0);
+
+    expect(readPlainScalar("1e3")).toBe(1000);
+    expect(readPlainScalar("~")).toBeNull();
   });
 
   test("a plain 20,000-element list composes", () => {

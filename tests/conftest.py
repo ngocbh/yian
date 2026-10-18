@@ -8,7 +8,6 @@ import pytest
 from yian import defaults
 
 
-# First, so its snapshot comes before the other fixtures touch the environment.
 @pytest.fixture(autouse=True)
 def restored_environment():
     """Put `os.environ` back after each test.

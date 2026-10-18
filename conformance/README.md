@@ -24,11 +24,11 @@ A case file is YAML 1.2 core schema: `true`/`false`, `null`/`~`, integers (decim
 keys or `yes`/`no` booleans. A tag (`!!str`, `!!timestamp`, `!x` or a bare `!`) is an error. A
 duplicate key or a mapping key that isn't text is an error. `1` is an int and `1.0` a float.
 
-Values in a case (everything except flow text, `files` and `stdin`) are read in yian's JSON codec
-form: `{$float: inf}` and `{$float: -inf}` are the floats infinity and minus infinity, and
-`{$record: X}` is the record `X`. A record that is exactly `{$float: inf}` or `{$float: -inf}`,
-or whose only key is `$record`, is written inside `$record`. A bare `.inf` or `.nan` in a value is
-an error.
+Values in a case (everything except flow text, `files`, `python_files` and `stdin`) are read in
+yian's JSON codec form: `{$float: inf}` and `{$float: -inf}` are the floats infinity and minus
+infinity, and `{$record: X}` is the record `X`. A record that is exactly `{$float: inf}` or
+`{$float: -inf}`, or whose only key is `$record`, is written inside `$record`. A bare `.inf` or
+`.nan` in a value is an error.
 
 The format is closed: a key this file doesn't define is an error. The format changes only by
 additions to this file.
@@ -44,8 +44,8 @@ flow: |                    # the flow, in TS form (TS CODE bodies)
   id: greet
   ...
 python_flow: |             # the flow for the Python runner, when it differs
-python_files: {}           # the files for the Python runner, when they differ
 files: {}                  # more files in the case directory: relative path -> text
+python_files: {}           # the files for the Python runner, when they differ
 env: {}                    # environment variables: name -> text
 inputs: {name: Ada}        # run inputs
 run: {}                    # host arguments of the run
@@ -72,9 +72,9 @@ keys and results each kind requires (Kinds, below); `python_expect` needs `rules
 Every case runs in a new temporary directory, the *case directory*:
 
 - `flow` (or `python_flow`) is written to `flow.yaml`, and each `files` (or `python_files`)
-  entry to its relative path; `fixtures/` is a copy of `conformance/fixtures/`. A CODE
-  reference resolves relative to the file that holds it (the case directory for `flow.yaml`
-  and for `files` at its root), so a shared helper is `./fixtures/<file>.ts:<fn>`.
+  entry to its relative path; `fixtures/` is a copy of `conformance/fixtures/`. A TS CODE
+  reference resolves relative to the file that holds it, so `flow.yaml`, or a `files` entry at
+  the top of the case directory, names a shared helper `./fixtures/<file>.ts:<fn>`.
 - The flow is loaded from the text of `flow.yaml` with the source label `flow.yaml`, resolving
   `uses:` and `call:` paths in the case directory. Frame labels are what the loader gives:
   `flow.yaml` for the case's flow, and a `uses:` child's file name (`child.yaml` for

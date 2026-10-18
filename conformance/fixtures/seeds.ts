@@ -1,17 +1,25 @@
 /** CODE-node functions the seed cases reference: a TypeScript port of yian's `tests/seeds/fns.py`. */
 
+// Python's `rec.get(k, d)` is ported as `k in inputs ? inputs[k] : d`: a CODE node's `inputs`
+// object throws on an undeclared name (so `inputs[k] ?? d` would throw), while `in` doesn't.
+
+/** Format `x` with a sign and two decimals (Python's `f"{x:+.2f}"`). */
+function signed(x: number): string {
+  return (x >= 0 ? "+" : "") + x.toFixed(2);
+}
+
 // --- seed 01 (structured-agent) ---
 /** `{rating: float, rationale: str}` -> a one-line verdict string. */
 export function one_line_summary(inputs: Record<string, any>): string {
   const rating = "rating" in inputs ? inputs.rating : null;
   const rationale = "rationale" in inputs ? inputs.rationale : "";
   const lean = (rating || 0) >= 0 ? "positive" : "negative";
-  return `${lean} (${(rating >= 0 ? "+" : "") + rating.toFixed(2)}): ${rationale}`.trim();
+  return `${lean} (${signed(rating)}): ${rationale}`.trim();
 }
 
 // --- seed 03 (research-one) ---
 /** `{topic, as_of}` -> `{values: list[float], news: list[str]}`. */
-export function fetch_facts(inputs: Record<string, any>): Record<string, any> {
+export function fetch_facts(inputs: Record<string, any>): Record<string, unknown> {
   const topic = String("topic" in inputs ? inputs.topic : "").toUpperCase();
   return {
     values: [100.0, 101.5, 99.75, 102.25],
@@ -21,16 +29,15 @@ export function fetch_facts(inputs: Record<string, any>): Record<string, any> {
 
 // --- seed 13 (types-objects) ---
 /** Compose a nested plan matching seed 13's declared output. */
-export function build_outline(inputs: Record<string, any>): Record<string, any> {
+export function build_outline(inputs: Record<string, any>): Record<string, unknown> {
   const names: string[] = [...(("names" in inputs ? inputs.names : null) || [])];
   const quantity = ("quantity" in inputs ? inputs.quantity : null) || 0;
   const items = names.map((n) => `item ${n}`);
-  const total = quantity;
   return {
     items,
     summary: {
       count: items.length,
-      total,
+      total: quantity, // JS has one number type (Python's `float(quantity)`)
       meta: {
         as_of: "as_of" in inputs ? inputs.as_of : null,
         dry_run: Boolean("dry_run" in inputs ? inputs.dry_run : false),
@@ -68,13 +75,13 @@ export function wrong_type(inputs: Record<string, any>): string {
 }
 
 /** Return the single bound input value (a passthrough leaf). */
-export function echo_value(inputs: Record<string, any>): any {
+export function echo_value(inputs: Record<string, any>): unknown {
   return Object.values(inputs)[0] ?? null;
 }
 
 // --- human_input questions ref source ---
 /** `{seed}` -> a one-element `list[object]` of question records (a gate's `questions:` ref). */
-export function questions_seed(inputs: Record<string, any>): Record<string, any>[] {
+export function questions_seed(inputs: Record<string, any>): Record<string, unknown>[] {
   return [{ question: inputs.seed, header: "H", options: [{ label: "A" }, { label: "B" }] }];
 }
 
@@ -88,5 +95,5 @@ export function chosen_framework(inputs: Record<string, any>): string {
 /** `{rating: float, label: str}` -> a verdict string. */
 export function verdict_line(inputs: Record<string, any>): string {
   const lean = inputs.rating >= 0 ? "positive" : "negative";
-  return `${inputs.label}: ${lean} (${(inputs.rating >= 0 ? "+" : "") + inputs.rating.toFixed(2)})`;
+  return `${inputs.label}: ${lean} (${signed(inputs.rating)})`;
 }

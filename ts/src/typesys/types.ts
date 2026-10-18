@@ -13,10 +13,17 @@ import {
   type Bounds,
   BUILTIN_CONSTANTS,
   boundText,
+  canonicalUnionOrder,
   IDENTIFIER_PATTERN,
+  listKindForElement,
   literalLabel,
   NAME_PATTERN,
+  Type,
   TypeCheckError,
+  typeEquals,
+  typeLevels,
+  typesOverlap,
+  unionTagFields,
   ValueKind,
   validateNumericBounds,
 } from "./values.ts";
@@ -854,6 +861,210 @@ function literalTags(elts: readonly LegacyNode[], src: string): string[] {
   });
 }
 
+// --------------------------------------------------------------------------------------- //
+// Registry and resolution
+// --------------------------------------------------------------------------------------- //
+
+/** A record typedef: each field name's type text, in authored order. */
+export interface RecordDef {
+  readonly kind: "record";
+  readonly fields: ReadonlyMap<string, string>;
+}
+
+/** A `Literal(...)` typedef: its tags. */
+export interface VariantDef {
+  readonly kind: "variant";
+  readonly tags: readonly string[];
+}
+
+/** A transparent type abbreviation, resolved transitively (cycle-guarded). */
+export interface AliasDef {
+  readonly kind: "alias";
+  readonly target: TypeExpr;
+}
+
+/** One typedef of a flow. */
+export type TypeDef = RecordDef | VariantDef | AliasDef;
+
+/** A flow's typedefs by name, which a `RefExpr` resolves against. */
+export type TypeRegistry = ReadonlyMap<string, TypeDef>;
+
+/**
+ * Resolve a `TypeExpr` against the registry into a runtime `Type`.
+ *
+ * Expands records field by field and follows aliases transitively, guarding against
+ * reference cycles via `seen`. A `Union(...)` flattens nested unions and aliases, drops
+ * duplicate members, and requires every member to be a non-nullable record. Its members
+ * must be told apart by a tag field or by shapes that can't overlap. A union with one
+ * distinct member is that member. The result is a scalar, a typed list, a closed record,
+ * a tag-constrained variant, or a union of records with members in canonical order.
+ *
+ * `seen` holds the registry names already being resolved on the current path, the cycle
+ * guard; callers pass nothing.
+ *
+ * Example: with `Buy: {action: Literal(buy), qty: int}` and
+ * `Sell: {action: Literal(sell), price: float}` registered,
+ * `resolveType(parseType("Union(Sell, Buy)"), registry)` gives a union whose members are
+ * `Buy` then `Sell`.
+ *
+ * @throws TypeCheckError when a `RefExpr` names an unknown type, a record or alias
+ *   reference is recursive, a union member is not a record or is nullable, or two union
+ *   members can match the same value.
+ */
+export function resolveType(
+  t: TypeExpr,
+  registry: TypeRegistry,
+  seen: ReadonlySet<string> = new Set(),
+): Type {
+  switch (t.kind) {
+    case "scalar": {
+      const kind = SCALAR_KIND.get(t.name)!;
+      if (t.bounds !== undefined) validateNumericBounds(kind, t.bounds);
+      return new Type({ kind, bounds: t.bounds });
+    }
+    case "optional": {
+      // Peel the whole chain in a loop so nested Optionals cost one frame, not one each.
+      let inner: TypeExpr = t;
+      while (inner.kind === "optional") inner = inner.inner;
+      return resolveType(inner, registry, seen).replace({ nullable: true });
+    }
+    case "enum":
+      return new Type({ kind: ValueKind.STRING, tags: new Set(t.tags) });
+    case "dict":
+      return Type.scalar(ValueKind.OBJECT); // lenient (no key/value typing yet)
+    case "union":
+      return resolveUnion(t, registry, seen);
+    case "list": {
+      const element = resolveType(t.element, registry, seen);
+      return new Type({ kind: listKindForElement(element), element });
+    }
+    case "ref":
+      break;
+  }
+  const name = t.name;
+  if (seen.has(name)) throw new TypeCheckError(`recursive type reference: ${reprText(name)}`);
+  const defn = registry.get(name);
+  if (defn === undefined) throw new TypeCheckError(`unknown type ${reprText(name)}`);
+  if (defn.kind === "alias") return resolveType(defn.target, registry, new Set([...seen, name]));
+  if (defn.kind === "variant") {
+    return new Type({ kind: ValueKind.STRING, tags: new Set(defn.tags) });
+  }
+  const inner = new Set([...seen, name]);
+  const fields = new Map<string, Type>();
+  for (const [field, text] of defn.fields) {
+    fields.set(field, resolveType(parseType(text), registry, inner));
+  }
+  // An `Optional(X)` field (its resolved type is nullable) is not required.
+  const required = new Set([...fields].filter(([, typ]) => !typ.nullable).map(([f]) => f));
+  return new Type({ kind: ValueKind.OBJECT, fields, required });
+}
+
+/** One flattened union member: its display name, its origin and its resolved type. */
+type UnionPart = readonly [name: string, origin: string | null, member: Type];
+
+/** Resolve a `Union(...)` into a record, or a union of distinguishable records. */
+function resolveUnion(t: UnionExpr, registry: TypeRegistry, seen: ReadonlySet<string>): Type {
+  // The label is rendered only for an error: rendering recurses through the whole
+  // expression, which a deeply nested union would pay at every level of resolution.
+  const members: UnionPart[] = [];
+  for (const [name, origin, member] of unionParts(t, registry, seen)) {
+    if (member.nullable) {
+      throw new TypeCheckError(
+        `${formatTypeExpr(t)}: member ${reprText(name)} is nullable; use ` +
+          "Optional(Union(...)) instead",
+      );
+    }
+    if (member.fields === undefined) {
+      throw new TypeCheckError(`${formatTypeExpr(t)}: member ${reprText(name)} is not a record`);
+    }
+    const same = members.find(([, , m]) => typeEquals(m, member));
+    if (same === undefined) {
+      members.push([name, origin, member]);
+    } else if (same[1] !== origin) {
+      // Two differently named records with one shape can't be told apart.
+      throw overlapError(formatTypeExpr(t), same[0], name);
+    }
+  }
+  if (members.length === 1) return members[0]![2];
+  const union = new Type({
+    kind: ValueKind.OBJECT,
+    variants: canonicalUnionOrder(members.map(([, , member]) => member)),
+  });
+  if (unionTagFields(union).length === 0) {
+    for (const [i, [aName, , a]] of members.entries()) {
+      for (const [bName, , b] of members.slice(i + 1)) {
+        if (typesOverlap(a, b)) {
+          throw overlapError(formatTypeExpr(t), aName, bName, holdsFile(a) || holdsFile(b));
+        }
+      }
+    }
+  }
+  return union;
+}
+
+/**
+ * Whether `t` is `file`, or a record or union with a field typed `file` at any record
+ * depth. List elements are not walked, since any two lists already overlap.
+ */
+function holdsFile(t: Type): boolean {
+  if (t.kind === ValueKind.FILE) return true;
+  if (t.fields !== undefined) return [...t.fields.values()].some(holdsFile);
+  return t.variants !== undefined && t.variants.some(holdsFile);
+}
+
+/**
+ * Build the error for two union members, `aName` and `bName`, that can match the same
+ * value in the union `label` as written. `files` says whether either member holds a
+ * `file` field, which overlaps more than its name suggests, so the message says why.
+ */
+function overlapError(label: string, aName: string, bName: string, files = false): TypeCheckError {
+  const why = files
+    ? " (a `file` slot reads `{uri, mime, name}`, so `file` overlaps `object`, `Any` " +
+      "and a record of that shape)"
+    : "";
+  return new TypeCheckError(
+    `${label}: members ${reprText(aName)} and ${reprText(bName)} can match the same ` +
+      `value${why}; add a tag field every member declares as a single-value Literal, with ` +
+      `a different value in each member, e.g. kind: ${literalLabel([aName.toLowerCase()])}`,
+  );
+}
+
+/**
+ * Return a union's flattened `[display name, origin, resolved member]` triples.
+ *
+ * Nested unions and aliases are expanded so error messages can name each member the way
+ * it was written: a member reached through an alias chain is named by the chain's first
+ * alias, unless a union lies between. The origin is the registry name an alias chain ends
+ * at, or `null` when the member is not a reference; it tells a repeated member from a
+ * differently named record of the same shape.
+ */
+function unionParts(t: TypeExpr, registry: TypeRegistry, seen: ReadonlySet<string>): UnionPart[] {
+  // An explicit stack, so flattening deeply nested unions and long alias chains costs no
+  // frames. Each entry is [expression, names on its alias path, display name so far].
+  const parts: UnionPart[] = [];
+  const stack: [TypeExpr, ReadonlySet<string>, string | null][] = [[t, seen, null]];
+  for (let entry = stack.pop(); entry !== undefined; entry = stack.pop()) {
+    const [expr, path, name] = entry;
+    if (expr.kind === "union") {
+      for (const member of [...expr.members].reverse()) stack.push([member, path, null]);
+      continue;
+    }
+    if (expr.kind === "ref") {
+      if (path.has(expr.name)) {
+        throw new TypeCheckError(`recursive type reference: ${reprText(expr.name)}`);
+      }
+      const defn = registry.get(expr.name);
+      if (defn?.kind === "alias") {
+        stack.push([defn.target, new Set([...path, expr.name]), name ?? expr.name]);
+        continue;
+      }
+    }
+    const origin = expr.kind === "ref" ? expr.name : null;
+    parts.push([name ?? formatTypeExpr(expr), origin, resolveType(expr, registry, path)]);
+  }
+  return parts;
+}
+
 /**
  * Render a parsed type in the parenthesized spelling `parseType` reads back.
  *
@@ -882,4 +1093,23 @@ export function formatTypeExpr(t: TypeExpr): string {
     case "dict":
       return "dict";
   }
+}
+
+/**
+ * Parse type text and resolve it against the registry in one step.
+ *
+ * @throws TypeCheckError when `text` does not parse or resolve, or the resolved type nests
+ *   more record and list levels than the type nesting limit: text within the limit can
+ *   still name a typedef that brings it past.
+ */
+export function typeFor(text: string, registry: TypeRegistry): Type {
+  const typ = resolveType(parseType(text), registry);
+  const limit = typeNestingLimit();
+  if (typeLevels(typ) > limit) {
+    throw new TypeCheckError(
+      `type nests deeper than ${limit} levels once its typedef names are expanded, ` +
+        "the limit for a type (each record and list is a level)",
+    );
+  }
+  return typ;
 }

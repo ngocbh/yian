@@ -1,7 +1,12 @@
 /**
- * The `Type` vocabulary's shape checks, levels and labels, and the type-text parser and
- * `formatTypeExpr` and the bracket-spelling error, a port of those tests of
- * `tests/engine/test_types.py`; the resolver tests come later.
+ * The `Type` vocabulary's shape checks, levels and labels, the type-text parser,
+ * `formatTypeExpr`, the bracket-spelling error, and `resolveType`/`typeFor`, a port of those
+ * tests of `tests/engine/test_types.py`. Registries are built by hand. Later: the value
+ * halves and value tests (with `buildValueAs`), `test_is_shadow_guard` and
+ * `test_bounded_type_defaults_preserve_compatible_integer_payloads` (with `readTypedefs`),
+ * the pool write test and `test_public_exports`.
+ * `test_type_for_preserves_its_public_keyword_name` is not ported (TypeScript has no keyword
+ * arguments).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -11,8 +16,12 @@ import {
   formatTypeExpr,
   legacyRespelling,
   parseType,
+  resolveType,
   type ScalarName,
+  type TypeDef,
   type TypeExpr,
+  type TypeRegistry,
+  typeFor,
 } from "../../src/typesys/types.ts";
 import {
   type Bounds,
@@ -956,5 +965,176 @@ describe("bracket spelling", () => {
           "-A[1], None, True, Infinity) (| is not a type operator)",
       ),
     );
+  });
+});
+
+// --------------------------------------------------------------------------------------- //
+// Registry and resolution
+// --------------------------------------------------------------------------------------- //
+
+/**
+ * Build a registry by hand, without checks: a mapping is a record, `Literal(...)` text a
+ * variant and other text an alias.
+ */
+function registry(raw: Record<string, string | Record<string, string>>): TypeRegistry {
+  return new Map(
+    Object.entries(raw).map(([name, value]): [string, TypeDef] => {
+      if (typeof value !== "string") {
+        return [name, { kind: "record", fields: new Map(Object.entries(value)) }];
+      }
+      const target = parseType(value);
+      if (target.kind === "enum") return [name, { kind: "variant", tags: target.tags }];
+      return [name, { kind: "alias", target }];
+    }),
+  );
+}
+
+const EMPTY: TypeRegistry = new Map();
+
+const REG = registry({
+  Rating: { value: "float", confidence: "float" },
+  Action: "Literal(Approve, Reject, Defer)",
+  Prices: { closes: "List(float)", last: "float" },
+});
+
+/** Return the message of the `TypeCheckError` `typeFor(text, reg)` throws. */
+function typeForError(text: string, reg: TypeRegistry): string {
+  try {
+    typeFor(text, reg);
+  } catch (error) {
+    expect(error).toBeInstanceOf(TypeCheckError);
+    return (error as TypeCheckError).message;
+  }
+  throw new Error(`typeFor(${JSON.stringify(text)}) did not throw`);
+}
+
+describe("resolveType", () => {
+  test("Optional is nullable", () => {
+    const sh = resolveType(optional(scalar("str")), EMPTY);
+    expect(sh.kind).toBe(ValueKind.STRING);
+    expect(sh.nullable).toBe(true);
+  });
+
+  test("an inline Literal is an enum", () => {
+    const sh = resolveType(literal("pro", "con"), EMPTY);
+    expect(sh.kind).toBe(ValueKind.STRING);
+    expect(sh.tags).toEqual(new Set(["pro", "con"]));
+  });
+});
+
+describe("typeFor", () => {
+  test("an Optional record field is not required", () => {
+    const sh = typeFor("Sig", registry({ Sig: { score: "float", note: "Optional(str)" } }));
+    expect(sh.required).toEqual(new Set(["score"]));
+    expect(sh.fields!.get("note")!.nullable).toBe(true);
+    expect(sh.fields!.get("score")!.nullable).toBe(false);
+  });
+
+  test("the old engine names no longer resolve", () => {
+    for (const legacy of ["string", "integer", "number", "boolean"]) {
+      expect(typeForError(legacy, EMPTY)).toBe(`unknown type '${legacy}'`);
+    }
+    expect(typeForError("list(string)", EMPTY)).toBe("unknown type 'string'");
+  });
+
+  test("a union of scalars is rejected", () => {
+    expect(typeForError("Union(int, str)", EMPTY)).toBe(
+      "Union(int, str): member 'int' is not a record",
+    );
+  });
+
+  test("scalars and lists", () => {
+    expect(typeFor("str", REG).kind).toBe(ValueKind.STRING);
+    expect(typeFor("date", REG).kind).toBe(ValueKind.DATE);
+    expect(typeFor("datetime", REG).kind).toBe(ValueKind.DATETIME);
+    expect(typeFor("List(float)", REG).kind).toBe(ValueKind.LIST_NUMBER);
+  });
+
+  test.each([
+    ["int(1..12)", [1n, 12n]],
+    ["float(-0.5..1.0)", [-0.5, 1.0]],
+    ["int(-12..-1)", [-12n, -1n]],
+    ["int(+4..4)", [4n, 4n]],
+    ["float(-0.25..+0.25)", [-0.25, 0.25]],
+    ["float(2..2)", [2n, 2n]],
+  ] as const)("keeps inclusive bounds: %p", (text, bounds) => {
+    const typ = typeFor(text, EMPTY);
+    expect(typ.bounds).toEqual(bounds);
+    typ.validateShape();
+  });
+
+  test("large integer bounds stay exact", () => {
+    const large = 10n ** 400n;
+    const typ = typeFor(`int(${-large}..${large})`, EMPTY);
+    typ.validateShape();
+    expect(typ.bounds).toEqual([-large, large]);
+  });
+
+  test("bounded labels include nested domains", () => {
+    expect(canonicalTypeLabel(typeFor("int( -2 .. +4 )", EMPTY))).toBe("int(-2..4)");
+    expect(canonicalTypeLabel(typeFor("list(Optional(float(0.0..1.5)))", EMPTY))).toBe(
+      "list(Optional(float(0.0..1.5)))",
+    );
+  });
+
+  test.each([10n ** 400n, -(10n ** 400n), 2n ** 53n + 1n, -(2n ** 53n + 1n)])(
+    "a float range rejects %# without a lossless finite float",
+    (endpoint) => {
+      expect(typeForError(`float(${endpoint}..${endpoint})`, EMPTY)).toMatch(/finite|lossless/);
+    },
+  );
+
+  test("dict is a lenient object placeholder", () => {
+    expect(typeFor("dict(str, int)", REG).kind).toBe(ValueKind.OBJECT);
+  });
+
+  test("records and variants", () => {
+    const s = typeFor("Rating", REG);
+    expect(s.kind).toBe(ValueKind.OBJECT);
+    expect(s.required).toEqual(new Set(["value", "confidence"]));
+    const a = typeFor("Action", REG);
+    expect(a.kind).toBe(ValueKind.STRING);
+    expect(a.tags).toEqual(new Set(["Approve", "Reject", "Defer"]));
+  });
+
+  test("a list of records", () => {
+    const s = typeFor("List(Rating)", REG);
+    expect(s.kind).toBe(ValueKind.LIST_OBJECT);
+    expect(s.element!.fields).toBeDefined();
+  });
+
+  test("an unknown type throws", () => {
+    expect(typeForError("Nope", REG)).toBe("unknown type 'Nope'");
+  });
+
+  test("a recursive record is rejected", () => {
+    expect(typeForError("Node", registry({ Node: { child: "Node" } }))).toBe(
+      "recursive type reference: 'Node'",
+    );
+  });
+
+  test("resolved and shared graphs have a valid shape", () => {
+    const shared = typeFor("Rating", REG);
+    record({ first: shared, second: shared }).validateShape();
+    for (const text of [
+      "str",
+      "Optional(str)",
+      "Action",
+      "Rating",
+      "List(Action)",
+      "List(Rating)",
+      "List(date)",
+      "List(List(int))",
+    ]) {
+      typeFor(text, REG).validateShape();
+    }
+  });
+
+  test("labels use parentheses", () => {
+    const label = (text: string) => canonicalTypeLabel(typeFor(text, EMPTY));
+    expect(label("Optional(int(1..12))")).toBe("Optional(int(1..12))");
+    expect(label("list(str)")).toBe("list(str)");
+    expect(label("Literal(b, a)")).toBe("Literal(a, b)");
+    expect(label("float(0.5..1.5)")).toBe("float(0.5..1.5)");
   });
 });

@@ -1,13 +1,15 @@
 /**
- * One-sided numeric ranges' shape, labels, overlap and parsing, a port of those tests of
- * `tests/engine/test_open_ranges.py`; value checks and resolution come later.
+ * One-sided numeric ranges' shape, labels, overlap, parsing and resolved labels, a port of
+ * those tests of `tests/engine/test_open_ranges.py`. Later: the value checks (with
+ * `buildValueAs`) and `test_open_ranges_resolve_in_records_aliases_and_lists` (with
+ * `readTypedefs`).
  * `test_numeric_interval_maps_open_ends_to_infinity` is not ported (design 3.2.12: open ends
  * stay `null`).
  */
 
 import { describe, expect, test } from "bun:test";
 
-import { formatTypeExpr, parseType } from "../../src/typesys/types.ts";
+import { formatTypeExpr, parseType, typeFor } from "../../src/typesys/types.ts";
 import {
   type Bounds,
   canonicalTypeLabel,
@@ -84,6 +86,7 @@ describe("open range parsing", () => {
     "list(float(..1.0))",
   ])("round-trips %p", (text) => {
     expect(formatTypeExpr(parseType(text))).toBe(text);
+    expect(canonicalTypeLabel(typeFor(text, new Map()))).toBe(text);
   });
 
   test("neither end says write the plain type", () => {

@@ -1,17 +1,23 @@
 /**
- * The `Any` type's shape, labels, overlap and parsing, a port of those tests of
- * `tests/engine/test_any_type.py`; value, resolution and compatibility tests come later, as
- * does the `readTypedefs` half of `test_any_overlaps_a_list_of_files_through_the_empty_list`.
- * The records written as typedefs there are built by hand here.
+ * The `Any` type's shape, labels, overlap, parsing and resolution, a port of those tests of
+ * `tests/engine/test_any_type.py`; value, compatibility and `readTypedefs` tests come later,
+ * as does the `readTypedefs` half of `test_any_overlaps_a_list_of_files_through_the_empty_list`.
+ * The records and registries written as typedefs there are built by hand here.
  */
 
 import { describe, expect, test } from "bun:test";
 
-import { parseType } from "../../src/typesys/types.ts";
+import {
+  parseType,
+  type TypeDef,
+  type TypeRegistry,
+  typeFor,
+} from "../../src/typesys/types.ts";
 import {
   canonicalTypeLabel,
   Type,
   TypeCheckError,
+  typeEquals,
   typesOverlap,
   ValueKind,
 } from "../../src/typesys/values.ts";
@@ -61,8 +67,10 @@ describe("Any labels", () => {
     ["Optional(Any)", OPTIONAL_ANY],
     ["list(Any)", LIST_ANY],
     ["list(Optional(Any))", LIST_OPTIONAL_ANY],
-  ] as const)("labels %s", (label, typ) => {
-    expect(canonicalTypeLabel(typ)).toBe(label);
+  ] as const)("authored %s resolves and labels back", (text, typ) => {
+    expect(typeEquals(typeFor(text, new Map()), typ)).toBe(true);
+    expect(canonicalTypeLabel(typ)).toBe(text);
+    expect(typeEquals(typeFor(canonicalTypeLabel(typ), new Map()), typ)).toBe(true);
   });
 
   test("a list with unproven items is labelled list of Optional(Any)", () => {
@@ -107,5 +115,46 @@ describe("Any parsing", () => {
   test("lowercase any is not a type", () => {
     expect(() => parseType("any")).toThrow(TypeCheckError);
     expect(() => parseType("any")).toThrow(/^unknown type 'any'; write Any$/);
+  });
+});
+
+/**
+ * Build a registry by hand, without checks: a mapping is a record, `Literal(...)` text a
+ * variant and other text an alias.
+ */
+function registry(raw: Record<string, string | Record<string, string>>): TypeRegistry {
+  return new Map(
+    Object.entries(raw).map(([name, value]): [string, TypeDef] => {
+      if (typeof value !== "string") {
+        return [name, { kind: "record", fields: new Map(Object.entries(value)) }];
+      }
+      const target = parseType(value);
+      if (target.kind === "enum") return [name, { kind: "variant", tags: target.tags }];
+      return [name, { kind: "alias", target }];
+    }),
+  );
+}
+
+const MATCH_SAME = /can match the same value/;
+
+describe("Any in untagged unions", () => {
+  test("a union of Any and int fields does not resolve", () => {
+    const reg = registry({ A: { v: "Any" }, B: { v: "int" }, U: "Union(A, B)" });
+    expect(() => typeFor("U", reg)).toThrow(TypeCheckError);
+    expect(() => typeFor("U", reg)).toThrow(MATCH_SAME);
+  });
+
+  test("a union of Any and a union with a file member does not resolve", () => {
+    const reg = registry({
+      F: { f: "file" },
+      N: { n: "int" },
+      U: "Union(F, N)",
+      OF: { f: "Optional(file)", n: "int" },
+      A: { v: "Any" },
+      B: { v: "U" },
+      W: "Union(A, B)",
+    });
+    expect(() => typeFor("W", reg)).toThrow(TypeCheckError);
+    expect(() => typeFor("W", reg)).toThrow(MATCH_SAME);
   });
 });

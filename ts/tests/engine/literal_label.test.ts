@@ -1,15 +1,20 @@
 /**
  * The one spelling every message uses to print a `Literal` type, a port of the hand-built
- * half of `tests/engine/test_literal_label.py` and its `formatTypeExpr` asserts. Later: the
- * read-back asserts and `test_nested_literal_labels` (with `typeFor`), the two hint tests
- * (with `readTypedefs`) and `test_case_message_prints_the_parenthesized_literal` (with flow
- * loading).
+ * half of `tests/engine/test_literal_label.py`, its `formatTypeExpr` asserts and its
+ * `typeFor` read-backs. Later: the two hint tests (with `readTypedefs`) and
+ * `test_case_message_prints_the_parenthesized_literal` (with flow loading).
  */
 
 import { describe, expect, test } from "bun:test";
 
-import { formatTypeExpr, parseType } from "../../src/typesys/types.ts";
-import { canonicalTypeLabel, literalLabel, Type, ValueKind } from "../../src/typesys/values.ts";
+import { formatTypeExpr, parseType, typeFor } from "../../src/typesys/types.ts";
+import {
+  canonicalTypeLabel,
+  literalLabel,
+  Type,
+  typeEquals,
+  ValueKind,
+} from "../../src/typesys/values.ts";
 
 function lit(...tags: string[]): Type {
   return new Type({ kind: ValueKind.STRING, tags: new Set(tags) });
@@ -34,6 +39,8 @@ describe("literal labels", () => {
     [["a²"], 'Literal("a²")'],
   ])("canonical label spells %p in the parenthesized form", (tags, label) => {
     expect(canonicalTypeLabel(lit(...tags))).toBe(label);
+    // the label reads back
+    expect(typeEquals(typeFor(label, new Map()), lit(...tags))).toBe(true);
   });
 
   test("both renderers share one spelling", () => {
@@ -42,6 +49,12 @@ describe("literal labels", () => {
     expect(canonicalTypeLabel(lit("go", "no_go"))).toBe("Literal(go, no_go)");
     // authored order kept
     expect(formatTypeExpr(parseType("Literal(b, a)"))).toBe("Literal(b, a)");
+  });
+
+  test("nested literal labels", () => {
+    expect(canonicalTypeLabel(typeFor("Optional(list(Literal(go, no_go)))", new Map()))).toBe(
+      "Optional(list(Literal(go, no_go)))",
+    );
   });
 
   test("prints a name bare and quotes the rest, in the given order", () => {

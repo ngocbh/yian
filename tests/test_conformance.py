@@ -2733,7 +2733,8 @@ def test_harvest_checks_pooled_replays(tmp_path: Path, monkeypatch: pytest.Monke
         call = harvest._Call("run_flow")
         call.case, call.result, call.skip = {"kind": "run", "flow": "id: f\n"}, result, None
         served = list(replays)
-        monkeypatch.setattr(harvest, "_replay", lambda state, case: served.pop(0))
+        monkeypatch.setattr(harvest, "_replay",
+                            lambda state, case: (served.pop(0), frozenset()))
         _, text, flags = harvest._expected(harvest._STATE, call)
         assert served == []
         return yaml.load(text, Loader=_CaseLoader)["expect"], flags
@@ -2755,3 +2756,43 @@ def test_harvest_checks_pooled_replays(tmp_path: Path, monkeypatch: pytest.Monke
     assert expect == {"raises": raises}
     assert flags == [f"pooled: {key} dropped"
                      for key in ("trace", "events", "stream", "tool_calls")]
+
+
+def test_harvest_replay_installs_shims(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A replay turns on the shims it names; under one, a differing request is noted, not failed."""
+    from tests import conformance_harvest as harvest
+    from yian.expr import template
+
+    state = harvest._Harvest(None, tmp_path)
+    as_text, request_difference = template._as_text, harvest.runner._request_difference
+
+    def text_shim(patch: pytest.MonkeyPatch, case: dict) -> None:
+        harvest._NOTES.add("printf")
+        patch.setattr(template, "_as_text", lambda value: "shimmed")
+
+    monkeypatch.setattr(harvest, "_SHIMS", {
+        "text": harvest._Shim("text-form", text_shim),
+        "idle": harvest._Shim("messages", lambda patch, case: None),
+    })
+    case = {"kind": "expr", "template": "x=${v}", "values": {"v": True}}
+    assert harvest._replay(state, case) == ({"value": "x=True"}, frozenset())
+    assert harvest._replay(state, case, ("idle",)) == ({"value": "x=True"}, frozenset())
+    assert harvest._replay(state, case, ("text",)) == ({"value": "x=shimmed"},
+                                                       frozenset({"printf"}))
+    # The shim is undone and its note forgotten by the next replay.
+    assert template._as_text is as_text and not state.disabled
+    assert harvest._replay(state, case) == ({"value": "x=True"}, frozenset())
+
+    run = _read(_ROOT / "cases/run-agent/model_reply.yaml")
+    del run["expect"]
+    results, notes = harvest._replay(state, run, ("idle",))
+    assert results["output"] == {"status": "succeeded", "output": "Hello Ada"}
+    assert notes == frozenset()
+    run["host"]["models"]["write"]["agent"][0]["request"]["messages"][1]["parts"] = [
+        {"type": "text", "text": "Greet Bob."}]
+    with pytest.raises(harvest._Skip, match="replay failed"):
+        harvest._replay(state, run)
+    results, notes = harvest._replay(state, run, ("idle",))
+    assert results["output"] == {"status": "succeeded", "output": "Hello Ada"}
+    assert notes == frozenset({"request: host.models.write.agent[0]"})
+    assert harvest.runner._request_difference is request_difference

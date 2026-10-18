@@ -19,6 +19,7 @@ Design section 4.4 explains the harvest; `conformance/README.md` defines the cas
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Callable, Collection
 import functools
 import hashlib
 import inspect
@@ -31,6 +32,7 @@ import sys
 import tempfile
 import threading
 from types import ModuleType
+from typing import NamedTuple
 
 from langchain_core.messages import AIMessage, AIMessageChunk
 from lark import Tree
@@ -1289,12 +1291,47 @@ def _machine_paths(state: _Harvest) -> set:
     return state.paths
 
 
-def _replay(state: _Harvest, case: dict) -> dict:
-    """Return the runner's results for the candidate `case`, read back from its file.
+class _Shim(NamedTuple):
+    """A TS-era rule as a test-only patch of Python yian, on only during a harvest replay.
 
-    Raises `_Skip` when the replay raises anything.
+    `rule` is the rule's id in `conformance/README.md`; `install(patch, case)` makes Python
+    follow the rule through `patch`, given the candidate `case`.
+    """
+
+    rule: str
+    install: Callable[[pytest.MonkeyPatch, dict], None]
+
+
+# The shims by name, in install order: a later shim may wrap what an earlier one patched.
+_SHIMS: dict[str, _Shim] = {}
+# What the shims noted during the latest replay.
+_NOTES: set[str] = set()
+
+
+def _noting_requests(original):
+    """Return `runner._request_difference` wrapped to note a difference rather than report it.
+
+    A request that differs from its entry's adds `request: <label>` to `_NOTES`, where
+    `<label>` is the entry's, `host.models.<node>.<consumer>[<i>]`; the wrapper returns "".
+    """
+    def _request_difference(what: str, *args: object) -> str:
+        if original(what, *args):
+            _NOTES.add(f"request: {what.strip('`').removesuffix('.request')}")
+        return ""
+
+    return _request_difference
+
+
+def _replay(state: _Harvest, case: dict, shims: Collection[str] = ()) -> tuple[dict, frozenset]:
+    """Return the runner's results for the candidate `case`, read back from its file, and notes.
+
+    The shims named in `shims` are on during the replay, and the notes are what they noted.
+    Under any shim, a model call's request that differs from its entry's is noted instead of
+    failing the replay: a shim may change a prompt or a tool result's text. Raises `_Skip` when
+    the replay raises anything.
     """
     text = _written(case)
+    _NOTES.clear()
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "candidate.yaml"
         path.write_text(text, encoding="utf-8")
@@ -1302,7 +1339,15 @@ def _replay(state: _Harvest, case: dict) -> dict:
         case_dir.mkdir()
         state.disabled = True
         try:
-            return runner.results(runner._read(path), case_dir, candidate=True)
+            with pytest.MonkeyPatch.context() as patch:
+                installed = [_SHIMS[name] for name in _SHIMS if name in shims]
+                for shim in installed:
+                    shim.install(patch, case)
+                if installed:
+                    patch.setattr(runner, "_request_difference",
+                                  _noting_requests(runner._request_difference))
+                results = runner.results(runner._read(path), case_dir, candidate=True)
+            return results, frozenset(_NOTES)
         except (KeyboardInterrupt, SystemExit):
             raise
         except BaseException as exc:
@@ -1416,7 +1461,7 @@ def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list]:
         raise _Skip(_HELD)
     is_run = case["kind"] in ("run", "backward")
     pooled = is_run and case.get("run", {}).get("num_workers", _RUN_DEFAULTS["num_workers"]) != 0
-    replays = [_replay(state, case) for _ in range(3 if pooled else 1)]
+    replays = [_replay(state, case)[0] for _ in range(3 if pooled else 1)]
     for actual in replays:
         if actual.get("left"):
             raise _Skip("replay left script entries")

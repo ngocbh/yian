@@ -393,6 +393,17 @@ describe("lockFile", () => {
     expect(isLocked(file)).toBe(false);
     hold(file);
   });
+
+  test("a path removed while locking throws changed and closes the connection", () => {
+    fs.writeFileSync(file, "", { mode: 0o600 });
+    spyLstat(file, 3, () => {
+      throw Object.assign(new Error(`ENOENT: ${file}`), { code: "ENOENT" });
+    });
+    expect(lockError(() => lockFile(file), file).reason).toBe("changed");
+    mock.restore();
+    expect(isLocked(file)).toBe(false);
+    hold(file);
+  });
 });
 
 describe("isLocked", () => {
@@ -409,6 +420,25 @@ describe("isLocked", () => {
     reader.prepare("SELECT count(*) FROM sqlite_master").get();
     expect(isLocked(file)).toBe(false);
     reader.exec("COMMIT");
+  });
+
+  test("a path that vanishes before the open is free and stays missing", () => {
+    spyLstat(file, 1, () => ({ isFile: () => true }));
+    expect(isLocked(file)).toBe(false);
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  // Root ignores the mode, so the open would succeed.
+  test.skipIf(process.getuid?.() === 0)("a lock file it can't open throws, held or not", () => {
+    const lock = hold(file);
+    fs.chmodSync(file, 0o000);
+    try {
+      expect(sqliteErrorCode(thrown(() => isLocked(file)))).toBe(14);
+      lock.release();
+      expect(sqliteErrorCode(thrown(() => isLocked(file)))).toBe(14);
+    } finally {
+      fs.chmodSync(file, 0o600);
+    }
   });
 });
 
@@ -598,8 +628,11 @@ describe("waitForLock", () => {
   test("a held lock times out busy once the virtual deadline passes", async () => {
     hold(file);
     const scheduler = countingSleeps(virtualScheduler(1000));
+    const now = spyOn(scheduler, "now");
     const started = performance.now();
     const error = await rejection(waitForLock(file, { timeoutMs: 500, scheduler }));
+    // The budget counts the sleeps, never the clock.
+    expect(now).not.toHaveBeenCalled();
     expect(error).toBeInstanceOf(FileLockError);
     expect((error as FileLockError).reason).toBe("busy");
     expect((error as FileLockError).message).toContain("timed out");
@@ -637,6 +670,14 @@ describe("waitForLock", () => {
     expect(lock.path).toBe(file);
     expect(isLocked(file)).toBe(true);
     expect(scheduler.sleeps).toBe(2);
+  });
+
+  test("a pre-aborted signal on a free lock rejects with its reason and leaves it free", async () => {
+    const reason = new Error("stopped");
+    const scheduler = countingSleeps(virtualScheduler());
+    expect(await rejection(waitForLock(file, { signal: AbortSignal.abort(reason), scheduler }))).toBe(reason);
+    expect(isLocked(file)).toBe(false);
+    expect(scheduler.sleeps).toBe(0);
   });
 
   test("a free lock is taken at once", async () => {
@@ -854,22 +895,25 @@ describe("the lock across processes", () => {
   );
 
   test.skipIf(!NODE)(
-    "a Node child's isLocked sees a lock Bun holds",
+    "a Node child's isLocked and lockFile see a lock Bun holds",
     () => {
-      const probe = () =>
-        execFileSync(
-          NODE!,
-          [
-            "--input-type=module",
-            "-e",
-            `const { isLocked } = await import(${JSON.stringify(BUILT_URL)}); console.log(isLocked(${JSON.stringify(file)}));`,
-          ],
-          { encoding: "utf8" },
-        ).trim();
+      const script = `
+const { FileLockError, isLocked, lockFile } = await import(${JSON.stringify(BUILT_URL)});
+const p = ${JSON.stringify(file)};
+const locked = isLocked(p);
+let lock = "acquired";
+try {
+  lockFile(p).release();
+} catch (error) {
+  lock = error instanceof FileLockError ? error.reason : String(error);
+}
+console.log(JSON.stringify({ isLocked: locked, lock }));
+`;
+      const probe = () => JSON.parse(execFileSync(NODE!, ["--input-type=module", "-e", script], { encoding: "utf8" }));
       const lock = hold(file);
-      expect(probe()).toBe("true");
+      expect(probe()).toEqual({ isLocked: true, lock: "busy" });
       lock.release();
-      expect(probe()).toBe("false");
+      expect(probe()).toEqual({ isLocked: false, lock: "acquired" });
     },
     SPAWNED_MS,
   );

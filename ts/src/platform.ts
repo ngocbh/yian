@@ -231,9 +231,16 @@ function primaryCode(error: unknown): number {
  * has it, `"unsafe"` unless `path` is a regular file (and, with `private`, one with
  * exactly one link), `"not-private"` when `private` and the file isn't owned by this
  * user or grants group or other bits, and `"changed"` when `path` names another file
- * once locked. That last check reads the path, not SQLite's own descriptor. OS
- * errors (`ENOENT` for a missing directory) and SQLite errors (`SQLITE_NOTADB` for
- * a foreign file) propagate unchanged.
+ * (or none) once locked. Busy can also be reported transiently while another
+ * contender or a probe is mid-attempt (busy_timeout is 0); `waitForLock` absorbs it.
+ * OS errors (`ENOENT` for a missing directory) and SQLite errors (`SQLITE_NOTADB`
+ * for a foreign file) propagate unchanged.
+ *
+ * The "changed" check reads the path, not SQLite's own descriptor. So a FIFO swapped
+ * in between the checks and SQLite's open would block that open, and a path deleted
+ * in that window is recreated by SQLite with its default mode (0644): this call
+ * reports `"changed"`, but later `private` locks fail `"not-private"` until the file
+ * is removed.
  */
 export function lockFile(path: string, { private: isPrivate = false }: { private?: boolean } = {}): FileLock {
   // The file is never opened through fs once it exists: POSIX locks belong to the
@@ -267,7 +274,13 @@ export function lockFile(path: string, { private: isPrivate = false }: { private
     // (not BEGIN) is usually what fails busy, hence the catch around every step.
     db.exec("PRAGMA journal_mode = MEMORY");
     db.exec("BEGIN EXCLUSIVE");
-    const after = fs.lstatSync(path, { bigint: true });
+    let after: fs.BigIntStats;
+    try {
+      after = fs.lstatSync(path, { bigint: true });
+    } catch (error) {
+      if (errnoCode(error) !== "ENOENT") throw error;
+      throw new FileLockError(path, "changed", "was removed while being locked", { cause: error });
+    }
     if (after.dev !== before.dev || after.ino !== before.ino) {
       throw new FileLockError(path, "changed", "was replaced while being locked");
     }
@@ -289,7 +302,9 @@ export function lockFile(path: string, { private: isPrivate = false }: { private
  * A missing path or one that isn't a regular file is `false`, and is never opened
  * or created. Otherwise this reads the schema under a shared lock, so two probes
  * never see each other as held; a `lockFile` racing that brief read can still fail
- * busy. Errors other than busy, a vanished path and a foreign file propagate.
+ * busy. A foreign file is `false`. When SQLite can't open the file, a path that has
+ * since vanished is `false`; any other cause (such as no read permission) rethrows
+ * the driver error, so a held lock is never reported free. Other errors propagate.
  */
 export function isLocked(path: string): boolean {
   try {
@@ -307,7 +322,15 @@ export function isLocked(path: string): boolean {
   } catch (error) {
     const code = primaryCode(error);
     if (code === SQLITE_BUSY || code === SQLITE_LOCKED) return true;
-    if (code === SQLITE_CANTOPEN || code === SQLITE_NOTADB) return false;
+    if (code === SQLITE_NOTADB) return false;
+    if (code === SQLITE_CANTOPEN) {
+      // CANTOPEN also covers EACCES and EMFILE; only a vanished path means free.
+      try {
+        fs.lstatSync(path);
+      } catch (statError) {
+        if (errnoCode(statError) === "ENOENT") return false;
+      }
+    }
     throw error;
   } finally {
     db?.close();
@@ -444,12 +467,11 @@ const LOCK_POLL_MS = 100;
  * Take the exclusive lock on `path` as `lockFile` does, retrying every 100 ms while
  * another holder has it.
  *
- * Gives up with `FileLockError` (reason `"busy"`) once `timeoutMs` has passed on
- * `scheduler.now()`; the default `Infinity` waits for as long as it takes. The
- * deadline is wall-clock time, so a clock step can lengthen or shorten a bounded
- * wait. Each try first checks `signal`, and an abort rejects with its reason. A
- * `NaN` or negative `timeoutMs` rejects with `RangeError`. Every other `lockFile`
- * failure propagates at once.
+ * Gives up with `FileLockError` (reason `"busy"`) once its sleeps add up to
+ * `timeoutMs`; it never reads `scheduler.now()`, so a clock step doesn't change the
+ * wait. The default `Infinity` waits for as long as it takes. Each try first checks
+ * `signal`, and an abort rejects with its reason. A `NaN` or negative `timeoutMs`
+ * rejects with `RangeError`. Every other `lockFile` failure propagates at once.
  */
 export async function waitForLock(
   path: string,
@@ -463,20 +485,21 @@ export async function waitForLock(
   if (Number.isNaN(timeoutMs) || timeoutMs < 0) {
     throw new RangeError(`waitForLock needs a timeout of 0 or more milliseconds, got ${timeoutMs}`);
   }
-  const deadline = scheduler.now() + timeoutMs;
+  let remaining = timeoutMs;
   for (;;) {
     signal?.throwIfAborted();
     try {
       return lockFile(path, { private: isPrivate });
     } catch (error) {
       if (!(error instanceof FileLockError) || error.reason !== "busy") throw error;
-      const remaining = deadline - scheduler.now();
       if (remaining <= 0) {
         throw new FileLockError(path, "busy", `timed out after ${timeoutMs} ms waiting for another holder`, {
           cause: error,
         });
       }
-      await scheduler.sleep(Math.min(LOCK_POLL_MS, remaining), signal);
+      const step = Math.min(LOCK_POLL_MS, remaining);
+      await scheduler.sleep(step, signal);
+      remaining -= step;
     }
   }
 }

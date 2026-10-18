@@ -7,7 +7,16 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { isAlias, isSeq, LineCounter, YAMLError, type YAMLSeq } from "yaml";
+import {
+  type Alias,
+  isAlias,
+  isSeq,
+  LineCounter,
+  type Node,
+  YAMLError,
+  type YAMLMap,
+  type YAMLSeq,
+} from "yaml";
 
 import { composeFlowDocument, FlowLoaderError } from "../../src/compose/source/scalars.ts";
 import { BUILTIN, install } from "../../src/defaults.ts";
@@ -108,6 +117,7 @@ describe("the YAML nesting limit", () => {
     }
     expect(caught).toBeInstanceOf(YAMLError);
     expect(caught).not.toBeInstanceOf(FlowLoaderError);
+    expect((caught as YAMLError).pos[0]).toBe(1);
 
     const error = refusal("[".repeat(deep) + "}" + "]".repeat(deep));
     expect(error.message).toContain(`this list ${MESSAGE}`);
@@ -129,10 +139,29 @@ describe("aliases", () => {
 
   test("resolve a redefined anchor to its latest definition", () => {
     const { document, aliasTargets } = composeFlowDocument("[&a 1, &a 2, *a]");
-    const items = (document.contents as YAMLSeq).items;
+    const [, second, alias] = (document.contents as YAMLSeq<Node>).items;
 
     expect(aliasTargets.size).toBe(1);
-    expect(aliasTargets.get(items[2] as never)).toBe(items[1] as never);
+    expect(isAlias(alias)).toBe(true);
+    expect(aliasTargets.get(alias as Alias)).toBe(second);
+  });
+
+  test("resolve an alias inside its own anchored node to that node", () => {
+    const { document, aliasTargets } = composeFlowDocument("&a [*a]");
+    const [alias] = (document.contents as YAMLSeq<Node>).items;
+
+    expect(isAlias(alias)).toBe(true);
+    expect(aliasTargets.get(alias as Alias)).toBe(document.contents as Node);
+  });
+
+  test("resolve an alias used as a mapping key", () => {
+    // `*k:` would read `k:` as the alias name, so a space comes before the colon.
+    const { document, aliasTargets } = composeFlowDocument("[&k a, {*k : 1}]");
+    const [scalar, mapping] = (document.contents as YAMLSeq<Node>).items;
+    const key = (mapping as YAMLMap<Node, Node>).items[0]?.key;
+
+    expect(isAlias(key)).toBe(true);
+    expect(aliasTargets.get(key as Alias)).toBe(scalar);
   });
 });
 

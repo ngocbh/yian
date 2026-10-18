@@ -27,6 +27,7 @@ import {
   type ParsedNode,
   parseDocument,
   type ParseOptions,
+  type YAMLError,
 } from "yaml";
 
 import { current } from "../../defaults.ts";
@@ -194,9 +195,9 @@ export function composeFlowDocument(text: string, options: FlowParseOptions = {}
     }
   }
   // The library's errors are not in source order.
-  let first = document.errors[0];
+  let first: YAMLError | undefined;
   for (const error of document.errors) {
-    if (error.pos[0] < first!.pos[0]) first = error;
+    if (first === undefined || error.pos[0] < first.pos[0]) first = error;
   }
   if (refused !== null && (first === undefined || refused.at < first.pos[0])) {
     throw refused.error;

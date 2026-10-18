@@ -21,8 +21,8 @@ conformance/
 
 A case file is YAML 1.2 core schema: `true`/`false`, `null`/`~`, integers (decimal, `0o` octal,
 `0x` hex), floats, and text. Nothing else is implicit: a date is text, and there are no merge
-keys or `yes`/`no` booleans. A duplicate key or a mapping key that isn't text is an error. `1`
-is an int and `1.0` a float.
+keys or `yes`/`no` booleans. A tag (`!!str`, `!!timestamp`, `!x` or a bare `!`) is an error. A
+duplicate key or a mapping key that isn't text is an error. `1` is an int and `1.0` a float.
 
 Values in a case (everything except flow text, `files` and `stdin`) are read in yian's JSON codec
 form: `{$float: inf}` and `{$float: -inf}` are the floats infinity and minus infinity, and
@@ -53,8 +53,8 @@ expect: {}                 # the expected results
 python_expect: {}          # the Python expectation, when the rules changed it
 ```
 
-Each kind adds a few keys of its own (below). `kind` and `expect` are required, and
-`python_expect` needs `rules`.
+Each kind adds a few keys of its own (below). `kind` and `expect` are required, and so are the
+keys and results each kind requires (Kinds, below); `python_expect` needs `rules`.
 
 ### Which runner runs what
 
@@ -91,16 +91,19 @@ Every case runs in a new temporary directory, the *case directory*:
 
 ## Kinds
 
+Keys marked required must be present. In a `load`, `expr`, `value`, `defaults` or `fingerprint`
+case, `expect` and `python_expect` hold the results under Checks (one group where it says "or").
+
 | Kind | Keys | Checks |
 |---|---|---|
 | `load` | `flow`, `files`, `env` | `expect.load` |
 | `run` | `flow`, `files`, `env`, `inputs`, `run`, `host` | `expect.raises`, or `expect.output`; then `trace`, `events`, `stream`, `tool_calls` when present |
 | `resume` | as `run`, plus `host.crash_after_record` and `resume` | as `run`, for the resumed run |
 | `backward` | as `run`, plus `backward` | as `run`, plus `expect.backward` |
-| `expr` | `expr` or `template`, `values`, `item`, `mode`, `typedefs`, `env` | `expect.value` or `expect.raises` |
-| `value` | `type`, `typedefs`, `value`, `env` | `expect.value` and `expect.kind`, or `expect.raises` |
+| `expr` | exactly one of `expr` and `template` (required), `values`, `item`, `mode`, `typedefs`, `env` | `expect.value` or `expect.raises` |
+| `value` | `type` and `value` (required), `typedefs`, `env` | `expect.value` and `expect.kind`, or `expect.raises` |
 | `defaults` | `env` | `expect.defaults` or `expect.raises` |
-| `fingerprint` | `flow`, `other`, `files`, `env` | `expect.fingerprint` |
+| `fingerprint` | `flow` and `other` (required), `files`, `env` | `expect.fingerprint` |
 | `cli` | `flow`, `files`, `env`, `args`, `stdin` | `expect.exit`, then `stdout`, `stderr`, `json`, `json_lines` when present |
 
 ### `load`
@@ -150,8 +153,8 @@ Evaluates one expression, or one template.
 | `expr` | an expression as written inside `${...}` |
 | `template` | instead of `expr`: a template with `${...}` spans |
 | `values` | the names in scope; a dotted reference walks into them |
-| `item` | the MAP item in scope (`item`, `item.path`), when present (not with a strict `template`) |
-| `mode` | `binding` (the default): a missing reference is null, and a template is a binding value (one whole span gives its value; embedded spans give text, null as empty); `condition`: the same null, as `when:` and asserts read it (`expr` only); `strict`: a missing reference is an error, and a template is a prompt rendered with the AGENT and HUMAN_INPUT prompt rules |
+| `item` | the MAP item in scope (`item`, `item.path`), when present (not with a strict `template` or `mode: condition`) |
+| `mode` | `binding` (the default): a missing reference is null, and a template is a binding value (one whole span gives its value; embedded spans give text, null as empty); `condition`: the `expr` is evaluated as a `when:` condition (either spelling, `a > 1` or `${a > 1}`) and gives a bool, with no `item`; `strict`: a missing reference is an error, and a template is a prompt rendered with the AGENT and HUMAN_INPUT prompt rules |
 | `typedefs` | a `typedefs:` mapping as in a flow, for `isinstance` and constructors (not with a strict `template`) |
 
 `expect.value` is the result; `expect.raises` the error.

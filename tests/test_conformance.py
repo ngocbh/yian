@@ -17,6 +17,7 @@ import sys
 
 import pytest
 import yaml
+from yaml.composer import ComposerError
 from yaml.constructor import ConstructorError
 
 from yian import defaults
@@ -36,7 +37,7 @@ from yian.expr import (
     parse_expr,
     render_template_record,
 )
-from yian.expr.expressions import ResolveMode, _resolve_in_record
+from yian.expr.expressions import ResolveMode, _resolve_in_record, evaluate_when_record
 from yian.typesys.types import read_typedefs, type_for
 from yian.typesys.values import TypeCheckError, build_value_as
 
@@ -46,43 +47,30 @@ _FIXTURES = _ROOT / "fixtures"
 
 
 class _CaseLoader(yaml.SafeLoader):
-    """SafeLoader that reads YAML 1.2 core scalars only and refuses duplicate or non-text keys."""
+    """SafeLoader that reads untagged YAML 1.2 core only and refuses duplicate or non-text keys."""
 
-    # Own tables, so SafeLoader's YAML 1.1 resolvers (yes/no, timestamps, merge keys) and
-    # its constructors for other tags never apply; the add_* calls below copy nothing.
+    # An own table, so SafeLoader's YAML 1.1 resolvers (yes/no, timestamps, merge keys) never
+    # apply; add_implicit_resolver below copies nothing from it.
     yaml_implicit_resolvers: dict = {}
-    yaml_constructors: dict = {}
 
-    def _core(self, node: yaml.Node, pattern: re.Pattern, kind: str) -> str:
-        """Return a scalar's text, raising unless it is a YAML 1.2 core `kind`."""
-        text = self.construct_scalar(node)
-        # An explicit tag skips the resolver's pattern.
-        if not pattern.fullmatch(text):
-            raise ConstructorError(
-                None, None, f"expected a YAML 1.2 core {kind}, found {text!r}", node.start_mark
+    def compose_node(self, parent: yaml.Node | None, index: object) -> yaml.Node:
+        """Compose the next node, refusing any tag (`!!str`, `!!timestamp`, `!x`, `!`)."""
+        event = self.peek_event()
+        # YAML readers disagree on tags (`! 12` is text to some, `!!timestamp` a date), and
+        # without tags SafeLoader's constructors see only text the core resolvers matched.
+        # An alias event has no tag.
+        if getattr(event, "tag", None) is not None:
+            raise ComposerError(
+                None, None, f"a case file has no tags, found {event.tag!r}", event.start_mark
             )
-        return text
-
-    def construct_bool(self, node: yaml.Node) -> bool:
-        """Build a core bool."""
-        return self._core(node, _BOOL, "bool").lower() == "true"
+        return super().compose_node(parent, index)
 
     def construct_int(self, node: yaml.Node) -> int:
         """Build a core int: `0o` octal, `0x` hex, else decimal (leading zeros included)."""
-        text = self._core(node, _INT, "int")
+        text = self.construct_scalar(node)
         if text.startswith(("0o", "0x")):
             return int(text[2:], 8 if text[1] == "o" else 16)
         return int(text)
-
-    def construct_float(self, node: yaml.Node) -> float:
-        """Build a core float, `.inf`, `-.inf` and `.nan` included."""
-        text = self._core(node, _FLOAT, "float")
-        lowered = text.lower()
-        if lowered.endswith(".inf"):
-            return float("-inf") if text[0] == "-" else float("inf")
-        if lowered == ".nan":
-            return float("nan")
-        return float(text)
 
     def construct_mapping(self, node: yaml.Node, deep: bool = False) -> dict:
         """Build a mapping, refusing a key that isn't text or that appears twice."""
@@ -106,15 +94,7 @@ _CaseLoader.add_implicit_resolver("tag:yaml.org,2002:bool", _BOOL, list("tTfF"))
 _CaseLoader.add_implicit_resolver("tag:yaml.org,2002:int", _INT, list("-+0123456789"))
 _CaseLoader.add_implicit_resolver("tag:yaml.org,2002:float", _FLOAT, list("-+0123456789."))
 _CaseLoader.add_implicit_resolver("tag:yaml.org,2002:null", _NULL, ["~", "n", "N", ""])
-_CaseLoader.add_constructor("tag:yaml.org,2002:str", yaml.SafeLoader.construct_yaml_str)
-_CaseLoader.add_constructor("tag:yaml.org,2002:seq", yaml.SafeLoader.construct_yaml_seq)
-_CaseLoader.add_constructor("tag:yaml.org,2002:map", yaml.SafeLoader.construct_yaml_map)
-_CaseLoader.add_constructor("tag:yaml.org,2002:null", yaml.SafeLoader.construct_yaml_null)
-_CaseLoader.add_constructor("tag:yaml.org,2002:bool", _CaseLoader.construct_bool)
 _CaseLoader.add_constructor("tag:yaml.org,2002:int", _CaseLoader.construct_int)
-_CaseLoader.add_constructor("tag:yaml.org,2002:float", _CaseLoader.construct_float)
-# Any other tag, explicit (`!!timestamp`, `!!binary`, `!!set`) or unknown, is an error.
-_CaseLoader.add_constructor(None, yaml.SafeLoader.construct_undefined)
 
 
 # The closed format, as conformance/README.md defines it.
@@ -142,6 +122,15 @@ _EXPECT_KEYS = {
     "defaults": {"defaults", "raises"},
     "fingerprint": {"fingerprint"},
     "cli": {"exit", "stdout", "stderr", "json", "json_lines"},
+}
+# The keys a kind requires, and the result keys its `expect` requires: one of the groups.
+_REQUIRED = {"value": ("type", "value"), "fingerprint": ("flow", "other")}
+_RESULTS = {
+    "load": (("load",),),
+    "defaults": (("defaults",), ("raises",)),
+    "value": (("value", "kind"), ("raises",)),
+    "expr": (("value",), ("raises",)),
+    "fingerprint": (("fingerprint",),),
 }
 _ALL_KEYS = _COMMON.union(*_KIND_KEYS.values())
 _ALL_EXPECT_KEYS = set().union(*_EXPECT_KEYS.values())
@@ -235,10 +224,16 @@ def _check(case: dict) -> dict:
     kind = case.get("kind")
     if kind not in _KIND_KEYS:
         raise ValueError(f"`kind` must be one of {', '.join(_KIND_KEYS)}, not {kind!r}")
-    _keys("", case, _COMMON | _KIND_KEYS[kind], _ALL_KEYS, kind, required=("kind", "expect"))
+    _keys("", case, _COMMON | _KIND_KEYS[kind], _ALL_KEYS, kind,
+          required=("kind", "expect", *_REQUIRED.get(kind, ())))
     for key in ("expect", "python_expect"):
-        if key in case:
-            _keys(key, case[key], _EXPECT_KEYS[kind], _ALL_EXPECT_KEYS, kind)
+        if key not in case:
+            continue
+        _keys(key, case[key], _EXPECT_KEYS[kind], _ALL_EXPECT_KEYS, kind)
+        groups = _RESULTS.get(kind, ())
+        if groups and not any(set(group) <= case[key].keys() for group in groups):
+            needs = ", or ".join(" and ".join(f"`{name}`" for name in group) for group in groups)
+            raise ValueError(f"`{key}` needs {needs}")
     if "python_expect" in case and not case.get("rules"):
         raise ValueError("`python_expect` needs `rules`")
     rules = case.get("rules", [])
@@ -265,6 +260,16 @@ def _check(case: dict) -> dict:
             _keys(f"backward[{index}]", entry, _BACKWARD_KEYS, required=("feedback",))
     if "host" in case:
         _check_host(case["host"], kind)
+    if kind == "expr":
+        if ("expr" in case) == ("template" in case):
+            raise ValueError("an `expr` case takes one of `expr` and `template`")
+        mode = case.get("mode", "binding")
+        if mode not in ("binding", "condition", "strict"):
+            raise ValueError(f"`mode` must be one of binding, condition, strict, not {mode!r}")
+        if mode == "condition" and {"template", "item"} & case.keys():
+            raise ValueError("`mode: condition` takes an `expr` and no `item`")
+        if mode == "strict" and "template" in case and {"item", "typedefs"} & case.keys():
+            raise ValueError("a strict `template` takes no `item` or `typedefs`")
     return case
 
 
@@ -450,35 +455,27 @@ def _run_fingerprint(case: dict, case_dir: Path) -> None:
     _compare("fingerprint", "same" if same else "different", case["expect"]["fingerprint"])
 
 
-_MODES = {
-    "binding": ResolveMode.BINDING_NONE,
-    "condition": ResolveMode.CONDITION_FALSY,
-    "strict": ResolveMode.STRICT_RAISE,
-}
+_MODES = {"binding": ResolveMode.BINDING_NONE, "strict": ResolveMode.STRICT_RAISE}
 
 
 def _run_expr(case: dict, case_dir: Path) -> None:
     """Evaluate `expr` or `template` in `mode` over `values` and `item`; compare the result."""
     mode = case.get("mode", "binding")
-    if ("expr" in case) == ("template" in case):
-        pytest.fail("an `expr` case takes one of `expr` and `template`", pytrace=False)
-    if mode not in _MODES:
-        pytest.fail(f"`mode` must be one of {', '.join(_MODES)}, not {mode!r}", pytrace=False)
     template = case.get("template")
-    if template is not None and mode == "condition":
-        pytest.fail("`mode: condition` takes an `expr`, not a `template`", pytrace=False)
-    strict_template = template is not None and mode == "strict"
-    if strict_template and {"item", "typedefs"} & case.keys():
-        pytest.fail("a strict `template` takes no `item` or `typedefs`", pytrace=False)
     values = case.get("values", {})
 
     def resolve(path: str) -> object:
         return _resolve_in_record(path, values)
 
     def evaluate() -> object:
-        if strict_template:
+        if template is not None and mode == "strict":
             return render_template_record(template, values)
-        trees = expression_trees(template) if template is not None else [parse_expr(case["expr"])]
+        if template is not None:
+            trees = expression_trees(template)
+        elif mode == "condition":
+            trees = expression_trees(case["expr"], condition=True)
+        else:
+            trees = [parse_expr(case["expr"])]
         # The type table the loader gives a node: its isinstance and constructor names.
         registry = read_typedefs(case.get("typedefs") or {})
         types = {}
@@ -489,6 +486,9 @@ def _run_expr(case: dict, case_dir: Path) -> None:
                 types[name] = resolve_constructor_type(name, registry)
         if template is not None:
             return eval_binding(template, resolve, case.get("item"), types=types)
+        if mode == "condition":
+            # What every `when:`, `while:` and assert runs.
+            return evaluate_when_record(case["expr"], values, types)
         return eval_expr(trees[0], resolve, case.get("item"), _MODES[mode], types=types)
 
     expect = case["expect"]

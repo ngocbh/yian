@@ -1,0 +1,152 @@
+kind: backward
+# The CODE body is the same text in TS and Python.
+flow: |
+  id: code-feedback
+  name: code_feedback
+  nodes:
+    c:
+      kind: code
+      output: str
+      code: |
+        return "hello"
+  output: ${c.output}
+run: {run_id: r1, num_workers: 0, learnable: true}
+backward:
+  - {feedback: shorter}
+expect:
+  output: {status: succeeded, output: hello}
+  backward:
+    - status: succeeded
+      feedback: {input_feedback: {}, self_feedback: [], variable_feedback: {}}
+      failure: null
+      learning: null
+  trace:
+    - [run_started, null, {inputs: {}, learnable: true, num_workers: 0}]
+    - [node_started, __start__]
+    - - node_succeeded
+      - __start__
+      - value: {}
+        forward_capture:
+          bound_inputs: {}
+          route:
+            kind: record
+            source: null
+            value_json: null
+            children: []
+            expression: "{}"
+            names: []
+            sizes: []
+            count: 0
+            content_index: 0
+            spans: []
+            path: []
+            result_type: null
+            snapshot: null
+          evaluated_keys: []
+          items: []
+          scope: {static_path: [__start__], flow_path: [], occurrence_path: [], boundary: start}
+          node_data: {input_output_paths: {}}
+          input_names: []
+          variable_names: []
+    - [node_started, c]
+    - - node_succeeded
+      - c
+      - value: hello
+        forward_capture:
+          bound_inputs: {}
+          route:
+            kind: record
+            source: null
+            value_json: null
+            children: []
+            expression: "{}"
+            names: []
+            sizes: []
+            count: 0
+            content_index: 0
+            spans: []
+            path: []
+            result_type: null
+            snapshot: null
+          evaluated_keys: []
+          items: []
+          scope: {static_path: [c], flow_path: [], occurrence_path: [], boundary: null}
+          node_data: {}
+          input_names: []
+          variable_names: []
+    - [node_started, __end__]
+    - - node_succeeded
+      - __end__
+      - value: hello
+        forward_capture:
+          bound_inputs: {result: hello}
+          route:
+            kind: record
+            source: null
+            value_json: null
+            children:
+              - kind: source
+                source: {run_id: r1, execution_seq: 3, path: []}
+                value_json: null
+                children: []
+                expression: c.output
+                names: []
+                sizes: []
+                count: 0
+                content_index: 0
+                spans: []
+                path: []
+                result_type: null
+                snapshot: null
+            expression: "{result: c.output}"
+            names: [result]
+            sizes: []
+            count: 0
+            content_index: 0
+            spans: []
+            path: []
+            result_type: null
+            snapshot: null
+          evaluated_keys: [result]
+          items: []
+          scope: {static_path: [__end__], flow_path: [], occurrence_path: [], boundary: end}
+          node_data: {input_output_paths: {result: []}}
+          input_names: [result]
+          variable_names: []
+    - [backward_started, null, {attempt_id: 1, feedback: shorter}]
+    - - backward_ready
+      - null
+      - attempt_id: 1
+        root_result: {input_feedback: {}, self_feedback: [], variable_feedback: {}}
+        attributed_results:
+          - source: {run_id: r1, execution_seq: 1, path: []}
+            feedback: []
+            attribution: []
+            result: {input_feedback: {}, self_feedback: [], variable_feedback: {}}
+            invoked: false
+          - source: {run_id: r1, execution_seq: 3, path: []}
+            feedback: [shorter]
+            attribution:
+              - sender: {run_id: r1, execution_seq: 5, path: []}
+                input_name: result
+                message_index: 0
+                contribution_index: 0
+                parents: [0]
+            result: {input_feedback: {}, self_feedback: [], variable_feedback: {}}
+            invoked: true
+          - source: {run_id: r1, execution_seq: 5, path: []}
+            feedback: [shorter]
+            attribution:
+              - {sender: null, input_name: null, message_index: 0, contribution_index: null, parents: []}
+            result: {input_feedback: {result: [shorter]}, self_feedback: [], variable_feedback: {}}
+            invoked: true
+        proposals: []
+    - - backward_finished
+      - null
+      - attempt_id: 1
+        outcome:
+          status: succeeded
+          feedback: {input_feedback: {}, self_feedback: [], variable_feedback: {}}
+          failure: null
+          learning: null
+        attributed_results: []

@@ -42,7 +42,8 @@ from yian.expr import (
 )
 from yian.expr.expressions import ResolveMode, _resolve_in_record, evaluate_when_record
 from yian.nodes.tool import node as tool_node
-from yian.run import RunResult, run_flow
+from yian.run import RunResult, resume_flow, run_flow
+from yian.runtime.log import JsonlRunLog
 from yian.tools.context import ToolContext
 from yian.tools.errors import (
     PermanentToolError,
@@ -300,6 +301,15 @@ def _check(case: dict) -> dict:
             _keys(f"backward[{index}]", entry, _BACKWARD_KEYS, required=("feedback",))
     if "host" in case:
         _check_host(case["host"], kind)
+    run = case.get("run", {})
+    if kind == "resume":
+        cut = case.get("host", {}).get("crash_after_record")
+        if type(cut) is not int or cut < 0:
+            raise ValueError("a `resume` case needs `host.crash_after_record`, a record number")
+        if run.get("num_workers") != 0:
+            raise ValueError("`host.crash_after_record` needs `run.num_workers: 0`")
+    if kind == "backward" and run.get("learnable") is not True:
+        raise ValueError("a `backward` case needs `run.learnable: true`")
     if kind == "expr":
         if ("expr" in case) == ("template" in case):
             raise ValueError("an `expr` case takes one of `expr` and `template`")
@@ -910,31 +920,73 @@ def _placeholders(projections: list, run_id: str | None) -> list:
     return replace(projections)
 
 
+class _Cut(BaseException):
+    """The refused append that cuts a `resume` case's first run."""
+
+
 def _run_run(case: dict, case_dir: Path) -> None:
     """Run the flow on the case's host; compare `raises` or `output`, then the rest.
 
-    The rest is the trace, events, stream and `tool_calls`, each when the case expects it.
+    A `resume` case's first run is cut after record `host.crash_after_record`, and the
+    flow is resumed from its log; the output, events and stream are the resumed run's. A
+    `backward` case then calls backward once per `backward` entry. The rest is the trace,
+    events, stream, `tool_calls` and backward outcomes, each when the case expects it.
     Secrets are checked first; a pooled run is grouped, and placeholders put in, before
     anything is compared.
     """
     flow = _load(case["flow"], case_dir)
     expect = case["expect"]
     log = case_dir / "run.jsonl"
-    events, chunks, results = [], [], []
+    events, chunks, results, outcomes = [], [], [], []
     with pytest.MonkeyPatch.context() as patch:
         tools, calls, check = _host(case, patch)
-        run = dict(case.get("run", {}))
-        if "context" in run:
-            run["context"] = object()
+        run, resume = dict(case.get("run", {})), dict(case.get("resume", {}))
+        for arguments in (run, resume):
+            if "context" in arguments:
+                arguments["context"] = object()
+        hooks = {"log": log, "tools": tools, "on_event": events.append,
+                 "on_stream": chunks.append}
 
         def start() -> None:
-            results.append(run_flow(flow, case.get("inputs", {}), log=log, tools=tools,
-                                    on_event=events.append, on_stream=chunks.append, **run))
+            results.append(run_flow(flow, case.get("inputs", {}), **hooks, **run))
+
+        if case["kind"] == "resume":
+            last = case["host"]["crash_after_record"]
+            append = JsonlRunLog.append
+
+            def refuse(self: JsonlRunLog, record: object) -> object:
+                if self._next_sequence > last:
+                    raise _Cut
+                return append(self, record)
+
+            with pytest.MonkeyPatch.context() as cut:
+                cut.setattr(JsonlRunLog, "append", refuse)
+                try:
+                    start()
+                except _Cut:
+                    pass
+                else:
+                    pytest.fail(f"the run ended before record {last + 1}", pytrace=False)
+            events.clear()
+            chunks.clear()
+
+            def start() -> None:
+                results.append(resume_flow(flow, **hooks, **resume))
 
         if "raises" in expect:
             _expect_raises(expect["raises"], start)
         else:
             start()
+        for entry in case.get("backward", []) if results else []:
+            try:
+                results[0].backward(entry["feedback"], api_key=entry.get("api_key"),
+                                    headers=entry.get("headers"))
+            except Exception as exc:
+                outcomes.append({"raises": _raised(exc)})
+                continue
+            trace = _trace(log.read_text(encoding="utf-8").splitlines(), flow)
+            finished = [record for record in trace if record[0] == "backward_finished"]
+            outcomes.append(finished[-1][2]["outcome"])
         text = log.read_text(encoding="utf-8") if log.exists() else ""
         lines = text.splitlines()
         actual = {
@@ -943,10 +995,11 @@ def _run_run(case: dict, case_dir: Path) -> None:
             "stream": [_fields(chunk, flow) for chunk in chunks],
             "tool_calls": calls,
             "output": _output(results[0], flow) if results else None,
+            "backward": outcomes,
         }
         _check_secrets(case, {**{name: repr(value) for name, value in actual.items()},
                               "the run log": text})
-        if run.get("num_workers", 8) != 0:
+        if {**run, **resume}.get("num_workers", 8) != 0:
             actual, expect = _pooled(actual), _pooled(expect)
         if "run_id" in run:
             run_id = None
@@ -958,9 +1011,11 @@ def _run_run(case: dict, case_dir: Path) -> None:
         if "output" in expect:
             _compare("output", actual["output"], expect["output"],
                      by_value=actual["output"]["status"] == "succeeded")
-        for name in ("trace", "events", "stream", "tool_calls"):
+        for name in ("trace", "events", "stream", "tool_calls", "backward"):
             if name in expect:
-                _compare(name, actual[name], expect[name], by_value=name != "trace")
+                # Backward outcomes are projected like the trace, so they keep the kinds.
+                _compare(name, actual[name], expect[name],
+                         by_value=name not in ("trace", "backward"))
         # Last: a leftover entry usually follows from a divergence the comparisons show.
         check()
 
@@ -968,6 +1023,8 @@ def _run_run(case: dict, case_dir: Path) -> None:
 _KINDS = {
     "load": _run_load,
     "run": _run_run,
+    "resume": _run_run,
+    "backward": _run_run,
     "defaults": _run_defaults,
     "fingerprint": _run_fingerprint,
     "expr": _run_expr,

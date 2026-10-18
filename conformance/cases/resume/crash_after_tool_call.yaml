@@ -1,0 +1,66 @@
+kind: resume
+flow: |
+  id: crash-after-tool-call
+  name: crash_after_tool_call
+  input:
+    q: !str
+  nodes:
+    fetch:
+      kind: tool
+      tool_id: lookup
+      input:
+        q: ${input.q}
+    ok:
+      kind: human_input
+      input:
+        found: ${fetch.output}
+      prompt: "Use ${found}?"
+      output: str
+  output:
+    found: ${fetch.output}
+    answer: ${ok.output}
+inputs: {q: x}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    lookup:
+      parameters:
+        type: object
+        properties: {q: {type: string}}
+        required: [q]
+      # Attempt 1 runs before the cut, attempt 2 in the resumed run.
+      results:
+        - return: F1
+        - return: F1
+  human:
+    ok: ["yes"]
+  # Record 3 is fetch's node_started: the tool runs, then its node_succeeded is refused.
+  crash_after_record: 3
+expect:
+  output:
+    status: succeeded
+    output: {found: F1, answer: "yes"}
+  tool_calls:
+    lookup:
+      - {args: {q: x}, call_id: r1/fetch, attempt: 1, node: fetch}
+      - {args: {q: x}, call_id: r1/fetch, attempt: 2, node: fetch}
+    ask_user:
+      - args:
+          question: Use F1?
+          answer_schema: [{name: answer, type: str, required: true}]
+          node_id: ok
+        call_id: r1/ok
+        attempt: 1
+        node: ok
+  trace:
+    - [run_started, null, {inputs: {q: x}, learnable: false, num_workers: 0}]
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {q: x}}]
+    - [node_started, fetch]
+    - [run_resumed, null, {retry_node_ids: [fetch], num_workers: 0}]
+    - [node_started, fetch]
+    - [node_succeeded, fetch, {value: F1}]
+    - [node_started, ok]
+    - [node_succeeded, ok, {value: "yes"}]
+    - [node_started, __end__]
+    - [node_succeeded, __end__, {value: {found: F1, answer: "yes"}}]

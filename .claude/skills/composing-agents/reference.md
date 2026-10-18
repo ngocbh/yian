@@ -723,10 +723,10 @@ nodes:
   r: {kind: agent, prompt: hi, tools: [search], env: {max_tool_iterations: 300}}  # node override
 ```
 
-Keys in use: `max_tool_iterations` (AGENT node) — tool-calling loop turns before an
-`AgentLoopError` (default `-1` = no cap, `YIAN_AGENT_MAX_TOOL_ITERATIONS`; set a
-positive int to bound it; any other value fails at load). Tool calls in the last allowed
-turn's reply are not run.
+Keys in use: `max_tool_iterations` (AGENT node) — tool-calling loop turns before the
+node fails with `agent.max_tool_iterations` (default `-1` = no cap,
+`YIAN_AGENT_MAX_TOOL_ITERATIONS`; set a positive int to bound it; any other value fails
+at load). Tool calls in the last allowed turn's reply are not run.
 
 ## Agent memory — `long_term_memory:`
 

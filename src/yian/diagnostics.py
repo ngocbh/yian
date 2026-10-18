@@ -23,6 +23,9 @@ FailureCode: TypeAlias = Literal[
     "contract.route",
     "contract.growth",
     "graph.terminal_unreachable",
+    "loop.max_exceeded",
+    "agent.max_tool_iterations",
+    "provider.auth",
 ]
 """Closed semantic categories for expected flow-owned failures."""
 
@@ -39,6 +42,9 @@ FAILURE_CODES: Final[frozenset[str]] = frozenset(
         "contract.route",
         "contract.growth",
         "graph.terminal_unreachable",
+        "loop.max_exceeded",
+        "agent.max_tool_iterations",
+        "provider.auth",
     }
 )
 """Runtime census of every accepted :class:`Failure` code."""

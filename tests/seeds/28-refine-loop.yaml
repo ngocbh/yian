@@ -49,6 +49,6 @@ nodes:
       draft: ${input.seed}
       score: 0.0
     until: score >= 0.8                        # bare form (canonical); a whole `${score >= 0.8}` also works
-    max: 5                                     # optional runaway guard (LoopMaxExceeded)
+    max: 5                                     # optional runaway guard (loop.max_exceeded)
 
 output: ${polish.output.draft}                 # the final carried draft

@@ -36,11 +36,12 @@ from yian.nodes.agent.interrupts import ReplyInterrupted
 from yian.nodes.agent.live import (
     invoke_chat,
     live_sinks,
+    mark_model_failure,
     observe_model_call,
     observe_skipped_tool_call,
     observe_tool_call,
 )
-from yian.nodes.agent.context import AgentLoopError, AgentRunContext
+from yian.nodes.agent.context import AgentLoopError, AgentRunContext, ToolIterationLimitError
 from yian.nodes.agent.text import (
     record_model_text,
     record_tool_result,
@@ -66,7 +67,12 @@ def run_agent(ctx: AgentRunContext) -> Output:
     new_messages = list(messages)
     live = live_sinks(ctx)
     ctx.check_stopped()
-    model = llm_clients.model_from_config(ctx.llm_config or {})
+    try:
+        model = llm_clients.model_from_config(ctx.llm_config or {})
+    except Exception as exc:
+        # Building the model resolves its credentials, which can fail as refused ones.
+        mark_model_failure(exc)
+        raise
     ctx.check_stopped()
     prior = prepare_history(
         ctx.memory_context.transcript,
@@ -169,7 +175,7 @@ def run_agent(ctx: AgentRunContext) -> Output:
         if iterations == ctx.max_tool_iterations:
             # No later model call could read these results, so running them would only
             # add side effects to a node that is already failing.
-            raise AgentLoopError(
+            raise ToolIterationLimitError(
                 f"agent node {ctx.node_id!r} hit the tool-iteration cap "
                 f"({ctx.max_tool_iterations}) without a final answer; the last reply's "
                 f"{len(calls)} tool call(s) were not run"

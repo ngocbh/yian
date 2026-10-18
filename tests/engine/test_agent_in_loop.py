@@ -23,6 +23,7 @@ from yian.runtime.log import (
     NodeSucceededRecord,
     RunResumedRecord,
 )
+from tests.engine.test_agent import AuthenticationError
 
 
 class _SimulatedCrash(BaseException):
@@ -140,6 +141,24 @@ def test_tool_calling_agent_in_loop_runs(monkeypatch):
     result = run_flow(loaded, {"seed": "s"})
     assert result.status == "succeeded", result.failure
     assert result.output == "s|turn1|turn2"
+
+
+# FLOW's body under a `while:` loop with a `max:` budget.
+_BOUNDED_FLOW = FLOW.replace("    times: 2\n", "    while: not exited\n    max: 3\n")
+
+
+def test_auth_failure_inside_loop_reaches_run_result(monkeypatch):
+    """A body AGENT's refused credentials stay `provider.auth` through the loop."""
+    monkeypatch.setattr(
+        llm_clients_mod,
+        "model_from_config",
+        lambda _config: _FakeChat([AuthenticationError("unauthorized")]),
+    )
+    monkeypatch.setitem(tools_mod.TOOL_REGISTRY, "ping", _FakeTool(lambda a: "pong"))
+    result = run_flow(load_flow(_BOUNDED_FLOW), {"seed": "s"})
+    assert result.status == "failed"
+    assert result.failure.code == "provider.auth"
+    assert result.failure.cause_type == "AuthenticationError"
 
 
 def test_tool_calling_agent_in_loop_retries_whole_node_after_process_loss(

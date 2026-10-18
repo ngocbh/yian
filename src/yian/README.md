@@ -135,12 +135,15 @@ graph inference.
 
 The closed codes are `binding.evaluate`, `binding.type`, `contract.input`,
 `assertion.failed`, `node.execute`, `contract.node_result`, `contract.output`,
-`contract.route`, `contract.growth`, and `graph.terminal_unreachable`. They cover
+`contract.route`, `contract.growth`, `graph.terminal_unreachable`,
+`loop.max_exceeded`, `agent.max_tool_iterations`, and `provider.auth`. They cover
 expected flow-owned rejection. `EvaluationFailure` owns exactly one `Failure`. The
 evaluator assigns its first six codes by
 operation stage: expression/default/required binding, tagged-binding checks,
 supplied-input contracts, base-wrapper assertions, node execution, and result
-validation. Each producer
+validation. A node-body failure is `node.execute` unless the node's `exception_code`
+hook names a finer code: LOOP names `loop.max_exceeded`, and AGENT names
+`agent.max_tool_iterations` and `provider.auth`. Each producer
 passes its best operation origin, if any, through `Node.failure_trace()`; the
 node origin is the local fallback after any generated ancestry. Host control,
 stream callbacks, unexpected binder faults, and malformed compiled/setup state
@@ -1490,7 +1493,7 @@ contract its typed parameters give the type its committed files are read through
 `bind_reserved`, `validate_execution_setup`, `grow_depth_delta`, `is_loop`,
 `needs_stop_event`, `needs_tools`, `needs_memory_context`, `needs_skills`,
 `needs_evaluation_trace`, `needs_live_events`, `needs_steering`, `needs_steps`,
-`memory_scope`, and
+`memory_scope`, `exception_code`, and
 `skipped_output_target`) plus the diagnostic-only projections
 `exception_origin` and `failure_trace`; it never branches behavior on `NodeKind`.
 A kind label may appear in diagnostic text. The diagnostic projections do not

@@ -233,8 +233,9 @@ uses it:
 - **`models`**: scripted model replies by node id, then by consumer: `agent` (the AGENT's own
   calls), `structured_retry`, `summary`, `memory:<key>`, `compose` or `backward`. Each consumer
   has a list of entries in call order: `{reply: <yian.message.v1 message>}`, or `{chunks: [...]}`
-  ending in a finish or followed by `raise: {class, message}` for a failure after the last chunk;
-  either may add `request:` with the expected request (messages, tools, structured strategy).
+  ending in a finish or followed by `raise: {class, message}` for a failure after the last chunk
+  (`raise` may add `status`, the provider's HTTP status); either may add `request:` with the
+  expected request (messages, tools, structured strategy).
   Calls that run out and leftovers fail as above.
 - **`steering`** and **`stop`**: a steer, interrupt or stop at a point: before model call `n` of
   a node, after chunk `k` of model call `n`, or before tool call `i`.

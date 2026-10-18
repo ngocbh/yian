@@ -20,10 +20,11 @@ DEFAULT_SYSTEM = (
 
 
 class AgentLoopError(RuntimeError):
-    """The AGENT tool loop could not produce a final answer.
+    """The AGENT tool loop could not produce a final answer."""
 
-    For example, it hit its iteration cap.
-    """
+
+class ToolIterationLimitError(AgentLoopError):
+    """The AGENT tool loop hit `max_tool_iterations` without a final answer."""
 
 
 @dataclass
@@ -37,7 +38,7 @@ class AgentRunContext:
     output_type: Any = None  # the node's declared output Type; None = text passthrough
     # structured-generation self-correction cap (extra attempts)
     retries: int = field(default_factory=lambda: current().agent_retries)
-    # model turns before AgentLoopError; -1 = no cap
+    # model turns before ToolIterationLimitError; -1 = no cap
     max_tool_iterations: int = field(default_factory=lambda: current().agent_max_tool_iterations)
     stop_event: Event | None = None  # transient host lifecycle; absent for direct loop tests
     evaluation_trace: EvaluationTrace | None = None  # write-only visible evidence sink

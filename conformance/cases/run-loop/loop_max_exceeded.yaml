@@ -1,0 +1,120 @@
+kind: run
+flow: |
+  id: loop-max-exceeded
+  name: loop_max_exceeded
+  nodes:
+    repeat:
+      kind: loop
+      while: "true"
+      max: 2
+      input:
+        n: 0
+      nodes:
+        bump:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: int
+          code: |
+            return {n: inputs.n + 1}
+      output: ${bump.output}
+  output: ${repeat.output}
+python_flow: |
+  id: loop-max-exceeded
+  name: loop_max_exceeded
+  nodes:
+    repeat:
+      kind: loop
+      while: "true"
+      max: 2
+      input:
+        n: 0
+      nodes:
+        bump:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: int
+          code: |
+            return {"n": inputs["n"] + 1}
+      output: ${bump.output}
+  output: ${repeat.output}
+run: {run_id: r1, num_workers: 0}
+expect:
+  output:
+    status: failed
+    failure:
+      code: loop.max_exceeded
+      message: loop 'repeat' exceeded max (2)
+      node: repeat~2
+      frames: [{label: flow.yaml, range: [4, 3, 4, 9]}]
+  trace:
+    - [run_started, null, {inputs: {}, learnable: false, num_workers: 0}]
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {}}]
+    - [node_started, repeat]
+    - [node_expanded, repeat, {seed: [{n: 0}, 0], prune_ids: []}]
+    - [node_started, "repeat#0/__start__"]
+    - [node_succeeded, "repeat#0/__start__", {value: {n: 0}}]
+    - [node_started, "repeat#0/bump"]
+    - [node_succeeded, "repeat#0/bump", {value: {n: 1}}]
+    - [node_started, "repeat#0/__end__"]
+    - [node_succeeded, "repeat#0/__end__", {value: {n: 1}}]
+    - [node_started, repeat~1]
+    - - node_expanded
+      - repeat~1
+      - seed: [{n: 1}, 1]
+        prune_ids: ["repeat#0/__end__", "repeat#0/__start__", "repeat#0/bump", repeat~1]
+    - [node_started, "repeat#1/__start__"]
+    - [node_succeeded, "repeat#1/__start__", {value: {n: 1}}]
+    - [node_started, "repeat#1/bump"]
+    - [node_succeeded, "repeat#1/bump", {value: {n: 2}}]
+    - [node_started, "repeat#1/__end__"]
+    - [node_succeeded, "repeat#1/__end__", {value: {n: 2}}]
+    - [node_started, repeat~2]
+    - - node_failed
+      - repeat~2
+      - failure:
+          code: loop.max_exceeded
+          message: loop 'repeat' exceeded max (2)
+          node: repeat~2
+          frames: [{label: flow.yaml, range: [4, 3, 4, 9]}]
+  events:
+    - [RunStarted]
+    - [NodeStarted, {node_id: __start__}]
+    - [NodeSucceeded, {node_id: __start__, output: {}}]
+    - [NodeStarted, {node_id: repeat}]
+    - [NodeExpanded, {node_id: repeat, grow: {seed: [{n: 0}, 0], prune: []}}]
+    - [NodeStarted, {node_id: "repeat#0/__start__"}]
+    - [NodeSucceeded, {node_id: "repeat#0/__start__", output: {n: 0}}]
+    - [NodeStarted, {node_id: "repeat#0/bump"}]
+    - [NodeSucceeded, {node_id: "repeat#0/bump", output: {n: 1}}]
+    - [NodeStarted, {node_id: "repeat#0/__end__"}]
+    - [NodeSucceeded, {node_id: "repeat#0/__end__", output: {n: 1}}]
+    - [NodeStarted, {node_id: repeat~1}]
+    - - NodeExpanded
+      - node_id: repeat~1
+        grow:
+          seed: [{n: 1}, 1]
+          prune: ["repeat#0/__end__", "repeat#0/__start__", "repeat#0/bump", repeat~1]
+    - [NodeStarted, {node_id: "repeat#1/__start__"}]
+    - [NodeSucceeded, {node_id: "repeat#1/__start__", output: {n: 1}}]
+    - [NodeStarted, {node_id: "repeat#1/bump"}]
+    - [NodeSucceeded, {node_id: "repeat#1/bump", output: {n: 2}}]
+    - [NodeStarted, {node_id: "repeat#1/__end__"}]
+    - [NodeSucceeded, {node_id: "repeat#1/__end__", output: {n: 2}}]
+    - [NodeStarted, {node_id: repeat~2}]
+    - - NodeFailed
+      - failure:
+          code: loop.max_exceeded
+          message: loop 'repeat' exceeded max (2)
+          node: repeat~2
+          frames: [{label: flow.yaml, range: [4, 3, 4, 9]}]
+    - - RunFailed
+      - failure:
+          code: loop.max_exceeded
+          message: loop 'repeat' exceeded max (2)
+          node: repeat~2
+          frames: [{label: flow.yaml, range: [4, 3, 4, 9]}]

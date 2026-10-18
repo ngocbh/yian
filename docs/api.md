@@ -1014,6 +1014,53 @@ There are no `error`, `error_type`, or standalone `traceback` aliases.
 Host-control, callback, log I/O, and internal reducer errors propagate after the
 engine has drained active workers and released the boundary-owned log.
 
+### Failure codes
+
+`failure.code` is one of the codes below (`yian.diagnostics.FAILURE_CODES`). A failed
+run is terminal: `resume_flow` on its log returns the same failure and runs nothing, so
+"Retry helps" below means a new run. `failure.cause_type`, the exception's class name,
+is for debugging only; don't branch on it.
+
+| Code | Raised when | Typical host reaction | Retry helps |
+|------|-------------|-----------------------|-------------|
+| `binding.evaluate` | A node input's `${...}` binding or default can't be evaluated, or a required input is unbound. | Fix the flow or its inputs. | No |
+| `binding.type` | A tagged binding (`!int ${...}`) holds a value that breaks its tag. | Fix the flow or its inputs. | No |
+| `contract.input` | A value supplied to a node input breaks the input's declared type, or a MAP `over:`, WAIT `until:`, or AGENT `llm_config` value has the wrong shape. | Fix the flow or its inputs. | No |
+| `assertion.failed` | A node's or the flow's `asserts:` condition is false. | Treat the result as rejected; fix the flow or its inputs. | Only if the asserted values vary between runs |
+| `node.execute` | A node's body raised and no finer code applies: a CODE node's exception, a tool's error, an AGENT's model error, an ungranted tool request. | Read `failure.message`. | Sometimes: transient errors such as a timeout or a rate limit |
+| `contract.node_result` | A node returned something other than `Output`, `Route`, or `Grow`, or a node that isn't CALL, MAP, or LOOP returned `Grow`. | Report a bug in that node's implementation. | No |
+| `contract.output` | A node's or the flow's output value doesn't match its declared type. | Fix the flow, or the code or tool that produced the value. | Only if the producer's output varies |
+| `contract.route` | A node returned a route handle that isn't a non-empty string. | Report a bug in that node's implementation. | No |
+| `contract.growth` | A CALL, MAP, or LOOP growth was rejected, typically because the graph would grow past `YIAN_MAX_TOTAL_NODES`. | Bound the fan-out, or raise the [limit](defaults.md). | Only with a larger limit |
+| `graph.terminal_unreachable` | A route skipped every path to the flow's output. A flow from `load_flow` doesn't reach this through its outputs; a hand-built graph can. | Fix the graph. | No |
+| `loop.max_exceeded` | A `while:`/`until:` LOOP with `max: M` would start body run M+1 (see below). | Treat it as the loop ending without meeting its condition, or raise `max:`. | Only if the body's results vary between runs |
+| `agent.max_tool_iterations` | An AGENT's tool loop reached its `max_tool_iterations` and the last reply still asked for tools; those calls are not run. There is no cap by default. | Raise the cap, or simplify the task. | Sometimes: model replies vary |
+| `provider.auth` | An AGENT's model build or model call failed on its credentials (see below). | Ask the user to fix the connection (`yian auth <provider>`, or the right key). | After the credentials are fixed; or at once if the token refresh request itself failed (a network error or a 5xx) |
+
+`loop.max_exceeded` is on the LOOP node, with a message such as `loop 'refine'
+exceeded max (5)`. A failure inside the body keeps its own code, and a `times:` loop
+never raises it.
+
+`provider.auth` means the provider refused the AGENT's own model credentials, or yian
+couldn't supply them:
+
+- the OpenAI environment key (`OPENAI_API_KEY`) is missing or changed;
+- a saved login is missing or changed, its subscription expired, or a token refresh
+  was refused or its request failed (a network error or a 5xx). In that last case a
+  new run can help without changing the credentials;
+- the provider answered HTTP 401 or 403, or 400 naming `API_KEY_INVALID` (Gemini's
+  invalid key). Another provider's missing key is `provider.auth` only when the
+  provider answers 401 or 403.
+
+Typed-output correction retries stop at once on it. A TOOL node's or a granted tool's
+own 401 is `node.execute`. An agent that resolves its `llm_config` when it runs and
+needs a host key the resume wasn't given raises `AuthError` out of `resume_flow`, a
+host error, not a `Failure`; see [`resume_flow`](#durable-recovery-with-resume_flow).
+Credential errors in memory learners and `RunResult.backward` raise their own
+exceptions, not a `provider.auth` failure.
+
+An older yian can't read a run log holding a code added after it.
+
 ## Explicit backward feedback
 
 `RunResult.backward(feedback=None, *, api_key=None, headers=None) -> BackwardOutcome`

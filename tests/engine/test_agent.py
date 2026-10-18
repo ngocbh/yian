@@ -9,6 +9,8 @@ model that yields canned `AIMessage`s; tool execution goes through `TOOL_REGISTR
 run lands; AGENT compile-time validation moved with the v0 compiler.)
 """
 
+from threading import Event
+
 import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.tools import StructuredTool
@@ -16,9 +18,13 @@ from pydantic import BaseModel
 
 import yian.llm_clients as llm_clients_mod
 import yian.tools as tools_mod
+from yian.compose.loader import load_flow
 from yian.diagnostics import OriginRef
+from yian.llm_clients.auth import AuthError
 from yian.nodes.agent import AgentNode
+from yian.nodes.base import _HostStop
 from yian.nodes.contracts import ContractOrigins, Parameter, ValueContract
+from yian.run import run_flow
 from yian.runtime.eval_node import EvaluationFailure, eval_node
 from yian.typesys.pool import VariablePool
 from yian.typesys.values import Type, ValueKind
@@ -435,7 +441,7 @@ def test_source_free_structured_failure_keeps_empty_trace(monkeypatch):
 
 def test_tool_loop_cap_trips_when_bounded(monkeypatch):
     # A POSITIVE env cap bounds the loop: always-asks-for-a-tool -> never answers -> trips
-    # the cap after `cap` turns. The raised AgentLoopError becomes EvaluationFailure at
+    # the cap after `cap` turns. The raised ToolIterationLimitError becomes EvaluationFailure at
     # eval_node. (The DEFAULT is -1 / no cap — see the no-cap test below.)
     cap = 5
     monkeypatch.setitem(tools_mod.TOOL_REGISTRY, "noop", _FakeTool(lambda a: "ok"))
@@ -445,8 +451,12 @@ def test_tool_loop_cap_trips_when_bounded(monkeypatch):
     node.env = {"max_tool_iterations": cap}
     ev = _run_node(node)
     assert isinstance(ev, EvaluationFailure)
-    assert ev.failure.cause_type == "AgentLoopError"
-    assert "tool-iteration cap" in ev.failure.message
+    assert ev.failure.code == "agent.max_tool_iterations"
+    assert ev.failure.cause_type == "ToolIterationLimitError"
+    assert ev.failure.message == (
+        "agent node 'n' hit the tool-iteration cap (5) without a final answer; "
+        "the last reply's 1 tool call(s) were not run"
+    )
 
 
 def test_default_no_cap_runs_unbounded(monkeypatch):
@@ -475,7 +485,7 @@ def test_env_max_tool_iterations_overrides_cap(monkeypatch):
     node.env = {"max_tool_iterations": 2}
     ev = _run_node(node)
     assert isinstance(ev, EvaluationFailure)
-    assert ev.failure.cause_type == "AgentLoopError"
+    assert ev.failure.code == "agent.max_tool_iterations"
     assert "(2)" in ev.failure.message  # the message uses the env override, not the default
     assert looping.calls == 2         # stopped at exactly the env bound
 
@@ -491,10 +501,22 @@ def test_tool_loop_cap_does_not_run_the_last_replys_tools(monkeypatch):
     node.env = {"max_tool_iterations": 2}
     ev = _run_node(node)
     assert isinstance(ev, EvaluationFailure)
-    assert ev.failure.cause_type == "AgentLoopError"
+    assert ev.failure.code == "agent.max_tool_iterations"
     assert "not run" in ev.failure.message
     assert looping.calls == 2
     assert len(tool.seen) == 1        # only the first reply's call ran
+
+
+def test_ungranted_tool_stays_node_execute(monkeypatch):
+    # Only the iteration cap has its own code; asking for a tool the node was not
+    # granted is an ordinary node-body failure.
+    monkeypatch.setitem(tools_mod.TOOL_REGISTRY, "noop", _FakeTool(lambda a: "ok"))
+    _patch_model(monkeypatch, _FakeChat([_ai_tool_call("other", {})]))
+    ev = _run_node(_node(tools=["noop"]))
+    assert isinstance(ev, EvaluationFailure)
+    assert ev.failure.code == "node.execute"
+    assert ev.failure.cause_type == "AgentLoopError"
+    assert "not granted" in ev.failure.message
 
 
 def test_tool_loop_cap_of_one_still_answers_without_tools(monkeypatch):
@@ -529,3 +551,155 @@ def test_agent_run_has_no_scratch_kwarg():
     import inspect
 
     assert "scratch" not in inspect.signature(AgentNode.run).parameters
+
+
+class AuthenticationError(Exception):
+    """A stand-in for a provider SDK's 401 error."""
+
+    status_code = 401
+
+
+class PermissionDeniedError(AuthenticationError):
+    """A stand-in for a provider SDK's 403 error."""
+
+    status_code = 403
+
+
+class RateLimitError(AuthenticationError):
+    """A stand-in for a provider SDK's 429 error."""
+
+    status_code = 429
+
+
+class _RaisingChat:
+    """Raise one provider error from every chat or structured call; counts the calls."""
+
+    def __init__(self, error):
+        self.error = error
+        self.calls = 0
+
+    def bind_tools(self, tools):
+        return self
+
+    def invoke(self, messages):
+        self.calls += 1
+        raise self.error
+
+    def with_structured_output(self, schema, include_raw=False):
+        return self
+
+
+def _structured_node(provider, model):
+    """An AGENT with an integer ``output:`` and no tools, for the given model."""
+    node = AgentNode("n", retries=2, llm_config={"provider": provider, "model": model})
+    node.output_contract = ValueContract(type=Type.scalar(ValueKind.INTEGER))
+    return node
+
+
+def test_model_auth_failure_is_provider_auth(monkeypatch):
+    _patch_model(monkeypatch, _RaisingChat(AuthenticationError("Incorrect API key provided")))
+    ev = _run_node(_node())
+    assert isinstance(ev, EvaluationFailure)
+    assert ev.failure.code == "provider.auth"
+    assert ev.failure.cause_type == "AuthenticationError"
+    assert ev.failure.message == "Incorrect API key provided"
+
+
+def test_permission_denied_is_provider_auth(monkeypatch):
+    _patch_model(monkeypatch, _RaisingChat(PermissionDeniedError("forbidden")))
+    ev = _run_node(_node())
+    assert isinstance(ev, EvaluationFailure)
+    assert ev.failure.code == "provider.auth"
+
+
+def test_rate_limit_stays_node_execute(monkeypatch):
+    _patch_model(monkeypatch, _RaisingChat(RateLimitError("slow down")))
+    ev = _run_node(_node())
+    assert isinstance(ev, EvaluationFailure)
+    assert ev.failure.code == "node.execute"
+
+
+def test_credential_resolution_auth_error_is_provider_auth(monkeypatch):
+    message = (
+        "Subscription credentials expired; sign in again. "
+        "Run 'yian auth openai' and start a new run"
+    )
+
+    def expired(config):
+        raise AuthError(message)
+
+    monkeypatch.setattr(llm_clients_mod, "model_from_config", expired)
+    ev = _run_node(_node())
+    assert isinstance(ev, EvaluationFailure)
+    assert ev.failure.code == "provider.auth"
+    assert ev.failure.message == message
+
+
+def test_tool_auth_failure_stays_node_execute(monkeypatch):
+    # A tool's own refused credentials are the tool's failure, not the agent's provider's.
+    def refused(args):
+        raise AuthenticationError("tool service rejected its token")
+
+    monkeypatch.setitem(tools_mod.TOOL_REGISTRY, "fetch", _FakeTool(refused))
+    _patch_model(monkeypatch, _FakeChat([_ai_tool_call("fetch", {})]))
+    ev = _run_node(_node(tools=["fetch"]))
+    assert isinstance(ev, EvaluationFailure)
+    assert ev.failure.code == "node.execute"
+    assert ev.failure.cause_type == "AuthenticationError"
+
+
+def test_structured_call_auth_failure_is_provider_auth(monkeypatch):
+    chat = _RaisingChat(AuthenticationError("unauthorized"))
+    _patch_model(monkeypatch, chat)
+    ev = _run_node(_structured_node("openai", "gpt-4o"))
+    assert isinstance(ev, EvaluationFailure)
+    assert ev.failure.code == "provider.auth"
+    assert chat.calls == 1  # refused credentials are not corrected and retried
+
+
+def test_fallback_structured_auth_failure_is_not_retried(monkeypatch):
+    # The sentinel model has no native structured output, so the reply is prompted JSON.
+    chat = _RaisingChat(AuthenticationError("unauthorized"))
+    _patch_model(monkeypatch, chat)
+    ev = _run_node(_structured_node("vllm", "no-structured-sentinel"))
+    assert isinstance(ev, EvaluationFailure)
+    assert ev.failure.code == "provider.auth"
+    assert chat.calls == 1
+
+
+@pytest.mark.parametrize("provider,model", [
+    ("openai", "gpt-4o"), ("vllm", "no-structured-sentinel"),
+])
+def test_a_stop_during_a_refused_structured_call_stops_the_node(monkeypatch, provider, model):
+    # A pending stop wins over refused credentials, as it does over any provider error.
+    stop = Event()
+
+    class _StopThenRefuse(_RaisingChat):
+        def invoke(self, messages):
+            stop.set()
+            return super().invoke(messages)
+
+    _patch_model(monkeypatch, _StopThenRefuse(AuthenticationError("unauthorized")))
+    with pytest.raises(_HostStop):
+        eval_node(_structured_node(provider, model), None, VariablePool(), stop_event=stop)
+
+
+_KEYED = """id: keyed
+name: keyed
+nodes:
+  agent: {kind: agent, prompt: hi}
+output: ${agent.output}
+"""
+
+
+def test_provider_auth_failure_message_is_scrubbed(monkeypatch, tmp_path):
+    monkeypatch.setenv("YIAN_AUTH_FILE", str(tmp_path / "auth.json"))
+    key = "sk-sentinel-401-zqxw"
+    _patch_model(monkeypatch, _RaisingChat(AuthenticationError(f"Incorrect API key: {key}")))
+    result = run_flow(
+        load_flow(_KEYED), {}, llm_config={"provider": "vllm", "model": "m", "api_key": key}
+    )
+    assert result.status == "failed"
+    assert result.failure.code == "provider.auth"
+    assert result.failure.message == "Incorrect API key: [REDACTED]"
+    assert key not in result.failure.message

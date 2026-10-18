@@ -83,12 +83,35 @@ def test_while_loop_max_exceeded_fails_run():
     # (a `MAX_TOTAL_NODES` budget blowup also contains "max"). The guard message is
     # `loop 'loop' exceeded max (2)`; the budget error says "exceeded node budget".
     assert "exceeded max" in result.failure.message
+    assert result.failure.code == "loop.max_exceeded"
     # And confirm the located cause type reaches the RunFailed event.
     cause_types = {
         getattr(getattr(e, "failure", None), "cause_type", None)
         for e in result.events
     }
     assert "LoopMaxExceeded" in cause_types
+
+
+def test_until_loop_max_exceeded_fails_run():
+    """An `until:` loop that never ends trips the same runaway guard."""
+    never_ends = UNTIL_COUNTDOWN.replace("until: n <= 0", 'until: "false"').replace(
+        "max: 10", "max: 2"
+    )
+
+    result = run_flow(load_flow(never_ends), {})
+
+    assert result.status != "succeeded"
+    assert result.failure.code == "loop.max_exceeded"
+    assert "exceeded max (2)" in result.failure.message
+
+
+def test_body_failure_in_bounded_loop_keeps_the_body_code():
+    """Only the runaway guard is `loop.max_exceeded`; a failing body keeps its own code."""
+    result = run_flow(load_flow(COUNTER.replace("loop_bump", "boom")), {})
+
+    assert result.status != "succeeded"
+    assert result.failure.code == "node.execute"
+    assert result.failure.cause_type == "ValueError"
 
 
 def test_while_loop_max_permits_exactly_max_body_runs():
@@ -149,6 +172,7 @@ def test_nested_call_loop_respawn_failure_keeps_each_authored_origin_once():
     assert result.status != "succeeded"
     assert result.failure.node_id == "outer/repeat~1"
     assert result.failure.cause_type == "LoopMaxExceeded"
+    assert result.failure.code == "loop.max_exceeded"
     assert result.failure.trace == (outer.origin, repeat.origin)
 
 

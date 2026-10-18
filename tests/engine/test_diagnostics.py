@@ -38,6 +38,9 @@ EXPECTED_FAILURE_CODES = frozenset(
         "contract.route",
         "contract.growth",
         "graph.terminal_unreachable",
+        "loop.max_exceeded",
+        "agent.max_tool_iterations",
+        "provider.auth",
     }
 )
 

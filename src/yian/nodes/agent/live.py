@@ -9,7 +9,7 @@ Sink exceptions arrive already wrapped as `_CapabilityFault` by the evaluator an
 propagate unchanged; provider and tool exceptions are reported by type name only,
 because their text can contain credentials, then re-raised.
 
-Layer: nodes — imports events, nodes.base, peer AGENT modules, and LangChain.
+Layer: nodes — imports events, llm_clients, nodes.base, peer AGENT modules, and LangChain.
 """
 
 from __future__ import annotations
@@ -30,11 +30,31 @@ from yian.events import (
     ToolCallFinished,
     ToolCallStarted,
 )
+from yian.llm_clients.auth import is_auth_failure
 from yian.nodes.agent.interrupts import ReplyInterrupted
 from yian.nodes.agent.text import text_of
 from yian.nodes.base import _CapabilityFault, _HostStop
 
 STREAM_KEY = "text"
+_PROVIDER_AUTH = "_yian_provider_auth"
+
+
+def mark_model_failure(exc: BaseException) -> None:
+    """Mark ``exc`` as a refused model credential when `is_auth_failure` says so.
+
+    The mark rides on the exception itself, so its class, message and traceback
+    stay as raised. An exception that refuses new attributes stays unmarked.
+    """
+    if is_auth_failure(exc):
+        try:
+            setattr(exc, _PROVIDER_AUTH, True)
+        except (AttributeError, TypeError):
+            pass
+
+
+def is_provider_auth(exc: BaseException) -> bool:
+    """Whether `mark_model_failure` marked ``exc`` as a refused model credential."""
+    return getattr(exc, _PROVIDER_AUTH, False) is True
 
 
 @dataclass(frozen=True)
@@ -164,10 +184,17 @@ def observe_model_call(
 
     `usage` maps the call's return value to its usage. After an exception it is
     given `None`, so the default reports no usage for a failed call. A reply cut
-    by a host interrupt reports the usage carried by `ReplyInterrupted`.
+    by a host interrupt reports the usage carried by `ReplyInterrupted`. A
+    provider error passes through `mark_model_failure`, with or without sinks.
     """
     if live is None or live.emit_event is None:
-        return invoke()
+        try:
+            return invoke()
+        except (_CapabilityFault, _HostStop, ReplyInterrupted):
+            raise
+        except Exception as exc:
+            mark_model_failure(exc)
+            raise
     identity = (live.node_id, exchange_id, purpose, live.provider, live.model)
     live.emit_event(ModelCallStarted(*identity))
     try:
@@ -180,6 +207,7 @@ def observe_model_call(
         live.emit_event(ModelCallFinished(*identity, usage=cut.usage))
         raise
     except Exception as exc:
+        mark_model_failure(exc)
         live.emit_event(ModelCallFinished(*identity, usage=usage(None), error=type(exc).__name__))
         raise
     live.emit_event(ModelCallFinished(*identity, usage=usage(reply)))

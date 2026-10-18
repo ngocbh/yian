@@ -51,7 +51,7 @@ from yian.memory.contracts import (
     ModelValueInteraction,
 )
 from yian.nodes.agent.memory import invoke_model
-from yian.nodes.agent.live import LiveSinks, invoke_chat, invoke_structured
+from yian.nodes.agent.live import LiveSinks, invoke_chat, invoke_structured, is_provider_auth
 from yian.nodes.agent.text import record_model_text, text_of
 from yian.nodes.base import _CapabilityFault, _HostStop
 from yian.typesys.values import (
@@ -478,6 +478,8 @@ def _generate_native(
             if memory_context.transcript is not None and isinstance(err, FutureCancelledError):
                 raise
             check_stopped()
+            if is_provider_auth(err):
+                raise  # refused credentials fail every retry the same way
             last_err = err
             # Provider/binding errors can include credentials. An error raised once the
             # reply surfaced is a local diagnostic of that reply (yian's check or the
@@ -695,6 +697,8 @@ def _generate_fallback(
             if memory_context.transcript is not None and isinstance(err, FutureCancelledError):
                 raise
             check_stopped()
+            if is_provider_auth(err):
+                raise  # refused credentials fail every retry the same way
             last_err = err
             # As on the native path, an error raised once the reply surfaced is sent in full.
             detail = (f"provider error ({type(err).__name__})"

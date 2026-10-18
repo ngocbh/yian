@@ -131,6 +131,7 @@ const punctuation = (text: string): Terminal => [text, new RegExp(text.replace(/
 const keyword = (type: string, words: string): Terminal => terminal(type, `(?:${words})(?![A-Za-z0-9_])`);
 
 const NOT_IN = keyword("NOT_IN", "not\\s+in");
+// Not `keyword()`: NOT also refuses a `#` or `/` next, so `not#0` and `not/child` stay names.
 const NOT = terminal("NOT", "not(?![A-Za-z0-9_#/])");
 const IN = keyword("IN", "in");
 const AND = keyword("AND", "and");
@@ -259,7 +260,54 @@ type Frame =
   | { kind: "group" }
   | { kind: "list"; items: ExprNode[] }
   | { kind: "call"; children: ExprNode[]; args: Tree[]; label: Token | null }
-  | { kind: "prefix"; level: typeof LEVEL.NOT | typeof LEVEL.UNARY; token: Token };
+  | { kind: "prefix"; level: typeof LEVEL.NOT | typeof LEVEL.UNARY; token: Token }
+  // Waiting for its next operand, so `operands` is as long as `ops`.
+  | { kind: "chain"; level: number; operands: ExprNode[]; ops: Token[] };
+
+type ChainFrame = Extract<Frame, { kind: "chain" }>;
+
+/** The precedence level of each binary operator, by token type. */
+const OPERATOR_LEVEL: Readonly<Record<string, number>> = {
+  "|": LEVEL.COALESCE,
+  ":-": LEVEL.DEFAULT,
+  ":?": LEVEL.DEFAULT,
+  OR: LEVEL.OR,
+  AND: LEVEL.AND,
+  COMP_OP: LEVEL.COMPARE,
+  IN: LEVEL.COMPARE,
+  NOT_IN: LEVEL.COMPARE,
+  ADD_OP: LEVEL.SUM,
+  MUL_OP: LEVEL.PRODUCT,
+  POW_OP: LEVEL.POWER,
+};
+
+/** The rule name of an n-ary chain at each level; its operator tokens sit between the operands. */
+const CHAIN_RULE: Readonly<Record<number, string>> = {
+  [LEVEL.OR]: "or_expr",
+  [LEVEL.AND]: "and_expr",
+  [LEVEL.SUM]: "sum",
+  [LEVEL.PRODUCT]: "product",
+  [LEVEL.POWER]: "power",
+};
+
+/** The rule name of a comparison, by its operator's token type. */
+const COMPARE_RULE: Readonly<Record<string, string>> = {
+  COMP_OP: "compare",
+  IN: "compare_in",
+  NOT_IN: "compare_notin",
+};
+
+/** Build the tree of a complete chain, whose `operands` now hold one more than its `ops`. */
+function chainTree({ level, operands, ops }: ChainFrame): Tree {
+  if (level === LEVEL.COALESCE) return new Tree("coalesce", operands);
+  const [first, second] = operands as [ExprNode, ExprNode];
+  const op = ops[0]!;
+  if (level === LEVEL.DEFAULT) return new Tree(op.type === ":-" ? "default_expr" : "required_expr", [first, second]);
+  if (level === LEVEL.COMPARE) return new Tree(COMPARE_RULE[op.type]!, [first, op, second]);
+  const children: ExprNode[] = [first];
+  ops.forEach((token, i) => children.push(token, operands[i + 1]!));
+  return new Tree(CHAIN_RULE[level]!, children);
+}
 
 type CallFrame = Extract<Frame, { kind: "call" }>;
 
@@ -281,13 +329,19 @@ function addArg(call: CallFrame, value: ExprNode): void {
   call.label = null;
 }
 
-/** Complete every prefix frame on top of `stack` above `level` around `value`; return the result. */
+/** Complete every prefix or chain frame on top of `stack` above `level` around `value`; return the result. */
 function reduce(stack: Frame[], value: ExprNode, level: number): ExprNode {
-  for (let top = stack.at(-1); top?.kind === "prefix" && top.level > level; top = stack.at(-1)) {
+  for (;;) {
+    const top = stack.at(-1);
+    if (!(top?.kind === "prefix" || top?.kind === "chain") || top.level <= level) return value;
     stack.pop();
-    value = top.level === LEVEL.NOT ? new Tree("negate", [top.token, value]) : new Tree("neg", [value]);
+    if (top.kind === "chain") {
+      top.operands.push(value);
+      value = chainTree(top);
+    } else {
+      value = top.level === LEVEL.NOT ? new Tree("negate", [top.token, value]) : new Tree("neg", [value]);
+    }
   }
-  return value;
 }
 
 /** Parse `text` into a tree, or throw a `ParseError`; no post-parse checks. */
@@ -297,9 +351,12 @@ function parseRaw(text: string): ExprNode {
   // The operand just read; null while one is expected.
   let value: ExprNode | null = null;
   for (;;) {
-    const top = stack.at(-1);
     if (value === null) {
-      const offersNot = !(top?.kind === "prefix" && top.level === LEVEL.UNARY);
+      const top = stack.at(-1);
+      const offersNot = !(
+        (top?.kind === "prefix" && top.level === LEVEL.UNARY) ||
+        (top?.kind === "chain" && top.level >= LEVEL.COMPARE)
+      );
       const token = cursor.next(offersNot ? OPERAND : OPERAND_WITHOUT_NOT);
       switch (token.type) {
         case "(":
@@ -332,6 +389,7 @@ function parseRaw(text: string): ExprNode {
           break;
         }
         default:
+          // A literal: NUMBER, STRING, BOOL, NULL or INF.
           value = token;
       }
       continue;
@@ -342,8 +400,20 @@ function parseRaw(text: string): ExprNode {
       cursor.fail(text.length);
     }
     const token = cursor.next(OPERATOR);
-    if (token.type !== ")" && token.type !== "]" && token.type !== ",") {
-      throw new Error(`the operator ${reprText(token.value)} is not supported yet`);
+    const level = OPERATOR_LEVEL[token.type];
+    if (level !== undefined) {
+      value = reduce(stack, value, level);
+      const top = stack.at(-1);
+      if (top?.kind === "chain" && top.level === level) {
+        // `a :- b :- c` and `a == b in c` don't parse: those levels take two operands.
+        if (level === LEVEL.DEFAULT || level === LEVEL.COMPARE) cursor.fail(token.startPos);
+        top.operands.push(value);
+        top.ops.push(token);
+      } else {
+        stack.push({ kind: "chain", level, operands: [value], ops: [token] });
+      }
+      value = null;
+      continue;
     }
     value = reduce(stack, value, 0);
     const frame = stack.at(-1);
@@ -370,7 +440,7 @@ function parseRaw(text: string): ExprNode {
 }
 
 /**
- * Parse one unified `${...}` expression into a tree (parse only).
+ * Parse one unified `${...}` expression into a tree.
  *
  * This does no evaluation; it is the shared front end for the evaluator in `expressions.ts`.
  * A lone literal (a `NUMBER`, `STRING`, `BOOL`, `NULL` or `INF`) comes back as a bare `Token`,

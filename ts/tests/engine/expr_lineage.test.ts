@@ -627,8 +627,12 @@ test("list constructor preserves nested routes", () => {
   ]);
   expect(messages(sources.feedback(result, "Whole list."))).toHaveLength(3);
   expect(messages(sources.feedback(result, [null, [null], [null, null]]))).toEqual([]);
-  expect(() => sources.feedback(result, [null])).toThrow(/exactly 3/);
-  expect(() => sources.feedback(result, [["Bad."], null, null])).toThrow(/exactly 2/);
+  const short = thrown(() => sources.feedback(result, [null]));
+  expect(short).toBeInstanceOf(RangeError);
+  expect((short as Error).message).toMatch(/exactly 3/);
+  const inner = thrown(() => sources.feedback(result, [["Bad."], null, null]));
+  expect(inner).toBeInstanceOf(RangeError);
+  expect((inner as Error).message).toMatch(/exactly 2/);
   const record = ValueRoute.record([
     ["items", result.route],
     ["constant", ValueRoute.literal(1n)],
@@ -636,7 +640,9 @@ test("list constructor preserves nested routes", () => {
   expect(messages(routeFeedback(record, { items: feedback }, sources.lookup))).toEqual(
     messages(sources.feedback(result, feedback)),
   );
-  expect(() => routeFeedback(record, { unknown: "Bad." }, sources.lookup)).toThrow(/unknown field/);
+  const unknown = thrown(() => routeFeedback(record, { unknown: "Bad." }, sources.lookup));
+  expect(unknown).toBeInstanceOf(RangeError);
+  expect((unknown as Error).message).toMatch(/unknown field/);
 });
 
 test("concat splits feedback at recorded operand lengths", () => {
@@ -694,24 +700,18 @@ test.each([
 });
 
 test.each([
-  ["reorder", (values: Value) => [(values as Value[])[1], (values as Value[])[0]], "", ["b", "a"], ["Wrong.", null]],
+  ["reorder", (values: Value[]) => [values[1], values[0]], "", ["b", "a"], ["Wrong.", null]],
   [
     "record",
-    (values: Value) => ({ second: (values as Value[])[1], first: (values as Value[])[0] }),
+    (values: Value[]) => ({ second: values[1], first: values[0] }),
     "",
     { second: "b", first: "a" },
     { second: "Wrong." },
   ],
-  ["count", (values: Value) => (values as Value[]).length, "", 2n, "Too many."],
-  ["upper", (values: Value) => [(values as Value[])[1], (values as Value[])[0]], "", ["b", "a"], [null, "Wrong."]],
-  [
-    "projected",
-    (values: Value) => ({ result: [(values as Value[])[1], (values as Value[])[0]] }),
-    ".result",
-    ["b", "a"],
-    ["Wrong.", null],
-  ],
-] as [string, (values: Value) => unknown, string, Value, FeedbackValue][])(
+  ["count", (values: Value[]) => values.length, "", 2n, "Too many."],
+  ["upper", (values: Value[]) => [values[1], values[0]], "", ["b", "a"], [null, "Wrong."]],
+  ["projected", (values: Value[]) => ({ result: [values[1], values[0]] }), ".result", ["b", "a"], ["Wrong.", null]],
+] as [string, (values: Value[]) => unknown, string, Value, FeedbackValue][])(
   "opaque functions stop feedback and execute once: %s",
   (name, fn, suffix, expected, feedback) => {
     const calls: Value[] = [];
@@ -719,7 +719,7 @@ test.each([
       name,
       (values) => {
         calls.push(values);
-        return fn(values);
+        return fn(values as Value[]);
       },
       [{ name: "values" }],
     );

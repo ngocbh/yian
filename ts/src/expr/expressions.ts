@@ -922,7 +922,7 @@ class EvalExpr {
       if (constructor) {
         frame.route = this.constructorRoute(name, callSuffix).project(steps);
       } else {
-        const routes = [...frame.children];
+        const routes = frame.children;
         const names = valueArgs(name, callSuffix).map((arg) =>
           arg.children.length === 2 ? String(arg.children[0]) : "",
         );
@@ -1224,14 +1224,14 @@ class EvalExpr {
     const [operands, operators] = splitChain(node);
     let acc = this.asValue(this.walk(operands[0]!));
     // The operand values, kept only when tracing (for the route).
-    const values = [acc];
+    const values: Value[] | null = this.#trace ? [acc] : null;
     for (const [i, op] of operators.entries()) {
       const rhs = this.asValue(this.walk(operands[i + 1]!));
       acc = applyStep(op, acc, rhs);
-      if (this.#trace) values.push(rhs);
+      values?.push(rhs);
     }
     if (
-      this.#trace &&
+      values !== null &&
       node.data === "sum" &&
       operators.every((op) => op === "+") &&
       values.every((value) => Array.isArray(value))
@@ -1278,6 +1278,12 @@ export interface EvalOptions {
   types?: ReadonlyMap<string, Type> | null;
 }
 
+/** The options of a traced `evalExpr`: `item` may be a `ResolvedValue`, and `trace` is set. */
+export interface TraceOptions extends Omit<EvalOptions, "item"> {
+  item?: Value | ResolvedValue;
+  trace?: boolean;
+}
+
 /**
  * Evaluate a unified `${...}` expression tree (from `parseExpr`).
  *
@@ -1319,7 +1325,7 @@ export interface EvalOptions {
 export function evalExpr(
   tree: ExprNode,
   resolve: (path: string) => ResolvedValue,
-  options: Omit<EvalOptions, "item"> & { item?: Value | ResolvedValue; trace: true },
+  options: TraceOptions & { trace: true },
 ): TracedValue;
 export function evalExpr(
   tree: ExprNode,
@@ -1329,7 +1335,7 @@ export function evalExpr(
 export function evalExpr(
   tree: ExprNode,
   resolve: (path: string) => Value | ResolvedValue,
-  options?: Omit<EvalOptions, "item"> & { item?: Value | ResolvedValue; trace?: boolean },
+  options?: TraceOptions,
 ): Value | TracedValue;
 export function evalExpr(
   tree: ExprNode,
@@ -1339,7 +1345,7 @@ export function evalExpr(
     mode = ResolveMode.BINDING_NONE,
     types = null,
     trace = false,
-  }: Omit<EvalOptions, "item"> & { item?: Value | ResolvedValue; trace?: boolean } = {},
+  }: TraceOptions = {},
 ): Value | TracedValue {
   return new EvalExpr(resolve, item, mode, types, trace).eval(tree);
 }

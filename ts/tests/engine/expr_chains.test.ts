@@ -350,7 +350,10 @@ test.each([
 // Traced chains against their old binary forms
 // --------------------------------------------------------------------------------------- //
 
-/** Single-read references backed by distinct accepted execution identities (`expr_lineage`'s). */
+/**
+ * A trimmed copy of `expr_lineage.test.ts`'s `Sources` (no `reads`; `lookup` matches on sequence
+ * only), kept here because importing a test file would make Bun run its tests again.
+ */
 class Sources {
   readonly values: ValueRecord;
   readonly identities: Record<string, SourceRef>;
@@ -435,6 +438,7 @@ test("traced chains match the old binary steps", () => {
       try {
         sources.evaluate(binaryText);
       } catch (oldError) {
+        expect(oldError).toBeInstanceOf(ExpressionError);
         oldMessage = (oldError as Error).message;
       }
       expect(oldMessage).toBe(error.message);

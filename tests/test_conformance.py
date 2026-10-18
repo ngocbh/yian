@@ -1826,10 +1826,12 @@ def test_value():
 '''
 
 
-def _harvest(tmp_path: Path, text: str) -> tuple[subprocess.CompletedProcess, Path]:
+def _harvest(tmp_path: Path, text: str,
+             *args: str) -> tuple[subprocess.CompletedProcess, Path]:
     """Run the test file `text` under the harvest plugin; return the run and the output root.
 
-    The run gets no `YIAN_*` variables but the model defaults and auth file the suite sets.
+    `args` select the tests (default: the whole file). The run gets no `YIAN_*` variables but
+    the model defaults and auth file the suite sets.
     """
     root = Path(__file__).resolve().parent.parent
     (tmp_path / "test_sample.py").write_text(text, encoding="utf-8")
@@ -1839,7 +1841,8 @@ def _harvest(tmp_path: Path, text: str) -> tuple[subprocess.CompletedProcess, Pa
             "YIAN_DEFAULT_MODEL": "gpt-5.5", "YIAN_AUTH_FILE": str(tmp_path / "auth.json")}
     done = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
-         "-p", "tests.conformance_harvest", "--harvest-out", str(out), "test_sample.py"],
+         "-p", "tests.conformance_harvest", "--harvest-out", str(out),
+         *(args or ["test_sample.py"])],
         cwd=tmp_path, env=env, capture_output=True, encoding="utf-8", timeout=300,
     )
     return done, out
@@ -1900,3 +1903,149 @@ def test_harvest_records_expr_value_defaults(tmp_path: Path) -> None:
                                                            "test_or_condition"]},
         "flags": {},
     }
+
+
+_LOAD_TESTS = '''
+import pytest
+
+from yian import LoadError, load_flow
+
+OK = """\\
+id: minimal
+name: minimal
+input:
+  q: !str
+nodes:
+  score:
+    kind: tool
+    tool_id: score
+    input:
+      q: ${input.q}
+output: ${score.output}
+"""
+
+AGENT = """\\
+id: agent
+name: agent
+input:
+  topic: !str
+nodes:
+  rate:
+    kind: agent
+    input:
+      topic: ${input.topic}
+    output: float
+    prompt: "Rate ${topic}."
+output: ${rate.output}
+"""
+
+CHILD = """\\
+id: child
+name: child
+input:
+  q: !str
+nodes:
+  score:
+    kind: tool
+    tool_id: score
+    input:
+      q: ${input.q}
+output: ${score.output}
+"""
+
+USES = """\\
+id: parent
+name: parent
+input:
+  q: !str
+uses:
+  child: lib/child
+nodes:
+  run:
+    kind: call
+    call: child
+    input:
+      q: ${input.q}
+output: ${run.output}
+"""
+
+
+def test_load_ok():
+    load_flow(OK)
+
+
+def test_load_error():
+    with pytest.raises(LoadError):
+        load_flow(OK.replace("${score.output}", "${scor.output}"))
+
+
+def test_agent():
+    load_flow(AGENT)
+
+
+def test_uses(tmp_path):
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "lib" / "child.yaml").write_text(CHILD)
+    # The flow's own file, under the runner's name for it, isn't one of the case's files.
+    (tmp_path / "flow.yaml").write_text(USES)
+    load_flow(USES, search_paths=[tmp_path], source_label="flow.yaml")
+
+
+def test_child_resolver():
+    load_flow(USES, child_resolver=lambda path, version=None: load_flow(CHILD))
+'''
+
+
+def test_harvest_records_loads_and_resumes(tmp_path: Path) -> None:
+    """Loads become `load` cases, `uses:` ones with `files`; a reported file isn't run again."""
+    done, out = _harvest(tmp_path, _LOAD_TESTS)
+    assert "5 passed" in done.stdout, done.stdout + done.stderr
+    cases = {path.relative_to(out / "cases").as_posix(): _read(path)
+             for path in sorted((out / "cases").glob("*/*.yaml"))}
+    assert sorted(cases) == ["load-agent/sample__agent.yaml", "load-core/sample__load_error.yaml",
+                             "load-core/sample__load_ok.yaml", "load-core/sample__uses.yaml"]
+    # Loads keep the model defaults the suite sets.
+    env = {"YIAN_DEFAULT_MODEL": "gpt-5.5", "YIAN_DEFAULT_PROVIDER": "openai"}
+    ok = cases["load-core/sample__load_ok.yaml"]
+    assert ok == {"kind": "load", "flow": ok["flow"], "env": env, "expect": {"load": "ok"}}
+    uses = cases["load-core/sample__uses.yaml"]
+    assert uses["expect"] == {"load": "ok"}
+    assert list(uses["files"]) == ["lib/child.yaml"]
+    assert uses["files"]["lib/child.yaml"].startswith("id: child\n")
+    error = cases["load-core/sample__load_error.yaml"]["expect"]["load"]["diagnostics"]
+    assert [diag["code"] for diag in error] == ["compose.load"]
+    assert "${scor.output}" in error[0]["message"]
+    for name, case in cases.items():
+        case_dir = tmp_path / "replay" / name
+        case_dir.mkdir(parents=True)
+        _check_results(case, results(case, case_dir))
+
+    report_path = out / "report" / "test_sample.py.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report == {
+        "file": "test_sample.py",
+        "tests": {"passed": 5, "failed": 0, "skipped": 0},
+        # The child_resolver's own load runs inside a recorded one.
+        "records": {"load_flow": 5},
+        "written": {"load-core": 3, "load-agent": 1},
+        "duplicates": 0,
+        "skips": {"child_resolver": ["test_child_resolver"]},
+        "flags": {},
+    }
+    assert "conformance harvest" in done.stdout
+    assert "written: load-agent 1, load-core 3; 0 duplicates" in done.stdout, done.stdout
+
+    before = {path: path.read_bytes() for path in out.rglob("*") if path.is_file()}
+    again, _ = _harvest(tmp_path, _LOAD_TESTS)
+    assert "5 deselected" in again.stdout, again.stdout + again.stderr
+    assert {path: path.read_bytes() for path in out.rglob("*") if path.is_file()} == before
+
+    # A narrowed selection harvests its tests but never closes the file.
+    for name, args in (("k", ("-k", "load_ok", "test_sample.py")),
+                       ("node", ("test_sample.py::test_load_ok",))):
+        narrow = tmp_path / name
+        narrow.mkdir()
+        done, out = _harvest(narrow, _LOAD_TESTS, *args)
+        assert "1 passed" in done.stdout, done.stdout + done.stderr
+        assert (out / "cases" / "load-core" / "sample__load_ok.yaml").is_file()
+        assert not (out / "report").exists()

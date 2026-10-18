@@ -13,6 +13,7 @@ Design section 4.4 explains the harvest; `conformance/README.md` defines the cas
 
 from __future__ import annotations
 
+from collections import Counter
 import functools
 import hashlib
 import inspect
@@ -31,6 +32,7 @@ import yaml
 
 import yian
 from yian import defaults
+from yian.compose import LoadError, load_flow
 from yian.expr.expressions import ResolveMode, eval_expr, evaluate_when_record
 from yian.expr.grammar import parse_expr
 from yian.expr.template import eval_binding, render_template_record
@@ -196,6 +198,11 @@ _YIAN_DIR = os.path.dirname(yian.__file__) + os.sep
 # Calls from these files are the engine's own or the harvest's, never a test's.
 _NOT_TEST = {runner.__file__, __file__}
 _GROUPS = {"value": "values", "defaults": "defaults"}
+# A top-level `uses:` key; the flow text can't be read as plain YAML (tags), so it's matched.
+_USES = re.compile(r"^uses\s*:", re.MULTILINE)
+_AGENT = re.compile(r"\bkind:\s*agent\b")
+_FILES_LIMIT = 50
+_FILES_BYTES = 256 * 1024
 # The harvest's state while it runs, None when the plugin is off.
 _STATE: _Harvest | None = None
 
@@ -232,17 +239,20 @@ def _written(case: dict) -> str:
         raise _Skip("not data: case file") from None
 
 
-def _env() -> dict:
-    """Return the environment an `expr`, `value` or `defaults` call sees, as `{"env": ...}`.
+def _env(models: bool = False) -> dict:
+    """Return the environment a call sees, as `{"env": ...}`.
 
-    That is every `YIAN_*` variable but `YIAN_AUTH_FILE` and the model defaults (these kinds
-    don't read them), and each connection variable whose value differs from the session's
-    start, with `*_API_KEY` values as `<key:N>`. Empty: `{}`.
+    That is every `YIAN_*` variable but `YIAN_AUTH_FILE` and, unless `models`, the model
+    defaults (`expr`, `value` and `defaults` calls don't read them), and each connection
+    variable whose value differs from the session's start, with `*_API_KEY` values as
+    `<key:N>`. Empty: `{}`.
     """
+    left_out = ("YIAN_AUTH_FILE",) if models else (
+        "YIAN_AUTH_FILE", "YIAN_DEFAULT_PROVIDER", "YIAN_DEFAULT_MODEL")
     env = {}
     for name, value in sorted(os.environ.items()):
         if name.startswith("YIAN_"):
-            keep = name not in ("YIAN_AUTH_FILE", "YIAN_DEFAULT_PROVIDER", "YIAN_DEFAULT_MODEL")
+            keep = name not in left_out
         else:
             # The harvesting shell's own keys must never land in a case.
             keep = name.endswith(runner._ENV_SUFFIXES) and _STATE.start_env.get(name) != value
@@ -468,6 +478,65 @@ def _record_defaults(arguments: dict):
     return finish
 
 
+def _files(text: str, search_paths: list | None) -> dict:
+    """Return the files a load of `text` reads from `search_paths`, as `{"files": ...}`.
+
+    A flow with `uses:` needs exactly one search path; each `.yaml` file under it, at most 50
+    and 256 KiB in all, is a file by its relative path. A `flow.yaml` there, the runner's name
+    for the flow, must hold the flow's text and is left out. Otherwise, or with no files: `{}`.
+    """
+    if not _USES.search(text):
+        return {}
+    if len(search_paths or []) != 1:
+        raise _Skip("uses: needs one search path")
+    root = Path(search_paths[0])
+    paths = []
+    for path in root.rglob("*.yaml"):
+        if path.is_file():
+            paths.append(path)
+        # A search path can be a large tree; stop at the limit rather than walk all of it.
+        if len(paths) > _FILES_LIMIT:
+            raise _Skip(f"files: more than {_FILES_LIMIT}")
+    files, size = {}, 0
+    for path in sorted(paths):
+        data = path.read_bytes()
+        size += len(data)
+        if size > _FILES_BYTES:
+            raise _Skip("files: more than 256 KiB")
+        try:
+            files[path.relative_to(root).as_posix()] = data.decode("utf-8")
+        except UnicodeDecodeError:
+            raise _Skip("files: not UTF-8") from None
+    # The runner writes the flow to `flow.yaml` and then the files, so one there would replace it.
+    if files.pop("flow.yaml", text) != text:
+        raise _Skip("files: flow.yaml isn't the flow")
+    return {"files": files} if files else {}
+
+
+def _record_load_flow(arguments: dict):
+    """Record a `load_flow` call as a `load` case; its `source_label` isn't kept.
+
+    The runner compares a load error's code and message, not its frames, which name the label.
+    """
+    if arguments["child_resolver"] is not None:
+        raise _Skip("child_resolver")
+    text = arguments["text"]
+    # Read now: the test may change the files after the call.
+    case = {"kind": "load", "flow": text, **_files(text, arguments["search_paths"]),
+            **_env(models=True)}
+
+    def finish(outcome: tuple) -> tuple:
+        kind, value = outcome
+        if kind == "value":
+            _STATE.flows[id(value)] = (value, case)
+            return case, {"load": "ok"}
+        if not isinstance(value, LoadError):
+            raise _Skip(f"load raised {type(value).__name__}")
+        return case, {"load": {"diagnostics": [runner._diagnostic(value.diagnostic)]}}
+
+    return finish
+
+
 def _remember_tree(arguments: dict, tree: object) -> None:
     """Note the text a test parsed into `tree`."""
     _STATE.trees[id(tree)] = (tree, arguments["text"])
@@ -672,8 +741,14 @@ class _Harvest:
         self.trees: dict = {}
         self.types: dict = {}
         self.registries: dict = {}
+        # The load case of each flow the test loaded, so a run of that flow can claim it.
+        self.flows: dict = {}
         self.remaining: dict[str, int] = {}
         self.reports: dict[str, dict] = {}
+        # Files pytest's own selection narrowed, whose reports aren't written.
+        self.narrowed: set[str] = set()
+        # Set while the plugin deselects reported files, to tell its call from pytest's.
+        self.deselecting = False
         self.replaced: list = []
         self.paths: set | None = None
 
@@ -721,6 +796,25 @@ def _replay(state: _Harvest, case: dict) -> dict:
             defaults._forget()
 
 
+def _agreed(case: dict, results: dict) -> dict:
+    """Return what agreement compares of `results`.
+
+    That is their `expect`, with a load error cut to its first diagnostic's code and message.
+    """
+    agreed = _expect(case, results)
+    load = agreed.get("load")
+    if isinstance(load, dict):
+        agreed["load"] = {key: load["diagnostics"][0][key] for key in ("code", "message")}
+    return agreed
+
+
+def _group(case: dict) -> str:
+    """Return the group a case is written in."""
+    if case["kind"] == "load":
+        return "load-agent" if _AGENT.search(case["flow"]) else "load-core"
+    return _GROUPS.get(case["kind"]) or ("templates" if "template" in case else "expr")
+
+
 def _expected(state: _Harvest, call: _Call) -> tuple[str, str]:
     """Return a recorded call's group and case file text, its `expect` from the runner."""
     if call.skip:
@@ -732,14 +826,13 @@ def _expected(state: _Harvest, call: _Call) -> tuple[str, str]:
     actual = _replay(state, case)
     if actual.get("left"):
         raise _Skip("replay left script entries")
-    expect = _expect(case, actual)
-    if not runner._same(expect, _expect(case, call.result)):
+    if not runner._same(_agreed(case, actual), _agreed(case, call.result)):
         raise _Skip("replay differs")
+    expect = _expect(case, actual)
     text = _written({**case, "expect": expect})
     if any(path in text for path in _machine_paths(state)):
         raise _Skip("machine path")
-    group = _GROUPS.get(case["kind"]) or ("templates" if "template" in case else "expr")
-    return group, text
+    return _group(case), text
 
 
 def _write(state: _Harvest, report: dict, call: _Call, path: str, test_id: str,
@@ -760,14 +853,19 @@ def _write(state: _Harvest, report: dict, call: _Call, path: str, test_id: str,
 def _end_test(state: _Harvest) -> _Test:
     """Return the running test, leaving no test running and no texts noted."""
     test, state.test = state.test, None
-    for table in (state.trees, state.types, state.registries):
+    for table in (state.trees, state.types, state.registries, state.flows):
         table.clear()
     return test
 
 
+def _report_path(state: _Harvest, path: str) -> Path:
+    """Return where the report of the test file `path` goes."""
+    return state.out / "report" / f"{path.replace('/', '__')}.json"
+
+
 def _write_report(state: _Harvest, report: dict) -> None:
     """Write a test file's report, through a temporary file: a report marks the file done."""
-    target = state.out / "report" / f"{report['file'].replace('/', '__')}.json"
+    target = _report_path(state, report["file"])
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_name(f"{target.name}.tmp")
     temporary.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
@@ -777,7 +875,8 @@ def _write_report(state: _Harvest, report: dict) -> None:
 def _finish(state: _Harvest, item: pytest.Item) -> None:
     """End the running test: harvest its calls if it passed, and report its file if last.
 
-    A test's path is the file's in its node id, relative to the rootdir.
+    A test's path is the file's in its node id, relative to the rootdir. A file pytest's own
+    selection narrowed is never reported, so a partial harvest doesn't close it.
     """
     test = _end_test(state)
     path, _, test_id = item.nodeid.partition("::")
@@ -797,7 +896,7 @@ def _finish(state: _Harvest, item: pytest.Item) -> None:
             if test_id not in ids:
                 ids.append(test_id)
     state.remaining[path] = state.remaining.get(path, 1) - 1
-    if state.remaining[path] <= 0:
+    if state.remaining[path] <= 0 and path not in state.narrowed:
         _write_report(state, report)
 
 
@@ -821,6 +920,7 @@ def pytest_configure(config: pytest.Config) -> None:
         "render_template_record": (render_template_record, _record_render_template_record),
         "build_value_as": (build_value_as, _record_build_value_as),
         "defaults.current": (defaults.current, _record_defaults),
+        "load_flow": (load_flow, _record_load_flow),
     }
     for entry, (original, recorder) in entries.items():
         _replace(original, _entry(entry, original, recorder), _STATE.replaced)
@@ -840,13 +940,62 @@ def pytest_unconfigure(config: pytest.Config) -> None:
 
 
 @pytest.hookimpl(trylast=True)
-def pytest_collection_modifyitems(items: list) -> None:
-    """Count each file's selected tests, so its report is written after its last one."""
+def pytest_collection_modifyitems(config: pytest.Config, items: list) -> None:
+    """Deselect the tests of files with a report, and count each other file's selected tests.
+
+    A file's report is written after its last selected test. A file named with `::` on the
+    command line is narrowed.
+    """
     if _STATE is None:
         return
+    paths = {item.nodeid.partition("::")[0] for item in items}
+    reported = {path for path in paths if _report_path(_STATE, path).exists()}
+    deselected = [item for item in items if item.nodeid.partition("::")[0] in reported]
+    if deselected:
+        items[:] = [item for item in items if item.nodeid.partition("::")[0] not in reported]
+        _STATE.deselecting = True
+        try:
+            config.hook.pytest_deselected(items=deselected)
+        finally:
+            _STATE.deselecting = False
+    named = {(config.invocation_params.dir / arg.partition("::")[0]).resolve()
+             for arg in config.args if "::" in arg}
     for item in items:
         path = item.nodeid.partition("::")[0]
         _STATE.remaining[path] = _STATE.remaining.get(path, 0) + 1
+        if item.path.resolve() in named:
+            _STATE.narrowed.add(path)
+
+
+def pytest_deselected(items: list) -> None:
+    """Note the files pytest's own selection (`-k`, `-m`, `--deselect`, `--lf`) narrowed."""
+    if _STATE is None or _STATE.deselecting:
+        return
+    _STATE.narrowed.update(item.nodeid.partition("::")[0] for item in items)
+
+
+def pytest_terminal_summary(terminalreporter) -> None:
+    """Add up every report under `<out>/report`: tests, cases written, duplicates, skips."""
+    if _STATE is None:
+        return
+    reports = [json.loads(path.read_text(encoding="utf-8"))
+               for path in sorted((_STATE.out / "report").glob("*.json"))]
+    tests, written, skips, duplicates = Counter(), Counter(), Counter(), 0
+    for report in reports:
+        tests.update(report["tests"])
+        written.update(report["written"])
+        duplicates += report["duplicates"]
+        skips.update({reason: len(ids) for reason, ids in report["skips"].items()})
+    write = terminalreporter.write_line
+    terminalreporter.write_sep("-", "conformance harvest")
+    write(f"files reported: {len(reports)}; tests: {tests['passed']} passed, "
+          f"{tests['failed']} failed, {tests['skipped']} skipped")
+    groups = ", ".join(f"{group} {n}" for group, n in sorted(written.items())) or "none"
+    write(f"written: {groups}; {duplicates} duplicates")
+    if skips:
+        write("top skip reasons (tests):")
+    for reason, n in skips.most_common(10):
+        write(f"  {n:5}  {reason}")
 
 
 @pytest.hookimpl(wrapper=True)

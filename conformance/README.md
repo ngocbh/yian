@@ -266,9 +266,10 @@ A case can't hold code, so its host is declared under `host`.
   `convert_to_openai_tool(schema)["function"]["parameters"]`), which the runner compares
   exactly with the call's, failing the case when they differ (`tools` absent: none bound;
   `schema` present: the call asked for output matching it, Python's native structured call).
-  A `request`, like a model call's `structured_*` `purpose` in `events`, records how Python
-  lowers the call, so a case that depends on either carries `rules: [llm]` (harvested cases are
-  tagged before they are committed).
+  A request's `messages` and tool specs are yian's own and shared; its `schema`, any text built
+  from it (a fallback call's schema instruction) and a model call's `structured_*` `purpose` in
+  `events` record how Python lowers a structured call, so a case that depends on them carries
+  `rules: [llm]` (harvested cases are tagged before they are committed).
   A tool spec is `{name, description, parameters}` (Python:
   `convert_to_openai_tool(tool)["function"]`), in the bound order. A reply to a `schema` call is
   one text part holding the JSON value in the schema's carrier form (a wrapped scalar is

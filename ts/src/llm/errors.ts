@@ -37,7 +37,7 @@ const RETRYABLE_KINDS: ReadonlySet<ErrorKind> = new Set(["rate_limit", "overload
 // openai's MAX_RETRY_AFTER_DELAY + 1: an overflowing delay stays finite, so the default
 // 120 s refusal still applies to it.
 const OVERFLOW_RETRY_AFTER = 121;
-const DECIMAL = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
+const DECIMAL = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
 const FLOAT_LITERAL = /^([+-]?)(inf|infinity|nan)$/i;
 const CONTEXT_PHRASES = ["context_length_exceeded", "prompt is too long", "maximum context length"];
 const MAX_DETAIL_CHARS = 2000;
@@ -140,7 +140,11 @@ function parseHttpDate(text: string): number | null {
     const sign = zone[0] === "-" ? -1 : 1;
     offset = sign * (Number(zone.slice(1, 3)) * 3600 + Number(zone.slice(3, 5)) * 60);
   }
-  const utc = Date.UTC(Number(m[3]), month, Number(m[1]), Number(m[4]), Number(m[5]), Number(m[6] ?? 0));
+  // Python's parsedate_tz rule, which Date.UTC would otherwise read as 19YY.
+  let year = Number(m[3]);
+  if (year < 100) year += year > 68 ? 1900 : 2000;
+  // Out-of-range fields (day 32, hour 24, ...) roll over on purpose, as in Python's parsedate_tz/mktime_tz.
+  const utc = Date.UTC(year, month, Number(m[1]), Number(m[4]), Number(m[5]), Number(m[6] ?? 0));
   return utc / 1000 - offset;
 }
 
@@ -275,8 +279,9 @@ export function redirectDetail(location: string | null): string {
   const text = location.trim();
   const scheme = /^[A-Za-z][A-Za-z0-9+.-]*:/.exec(text)?.[0] ?? "";
   const rest = text.slice(scheme.length);
-  // Only `//` and a non-empty authority name a host, as in Python's urlsplit; the URL
-  // parser would read `http:///x` or `http:x` as host `x`.
+  // Follows only urlsplit's "is there an authority" rule (`//` then a non-empty authority);
+  // the URL parser alone would read `http:///x` or `http:x` as host `x`. `//user@/x` and
+  // `//:80/x` give "unparsable" here where Python says relative.
   if (!/^\/\/[^/?#]/.test(rest)) return "redirect to a relative Location";
   let url: URL;
   try {

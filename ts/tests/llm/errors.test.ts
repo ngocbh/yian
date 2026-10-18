@@ -134,6 +134,22 @@ describe("retry policy", () => {
     expect(reply(429, { "retry-after": "120" }).retryable).toBe(true);
   });
 
+  test("errorFromResponse passes now to the HTTP-date retry-after", () => {
+    const now = Date.UTC(2027, 0, 15, 8, 0, 0) / 1000;
+    const soon = errorFromResponse(429, new Headers({ "retry-after": "Fri, 15 Jan 2027 08:00:30 GMT" }), "", {
+      provider: "p",
+      now,
+    });
+    expect(soon.retryAfter).toBe(30);
+    expect(soon.retryable).toBe(true);
+    const late = errorFromResponse(429, new Headers({ "retry-after": "Fri, 15 Jan 2027 08:03:20 GMT" }), "", {
+      provider: "p",
+      now,
+    });
+    expect(late.retryAfter).toBe(200);
+    expect(late.retryable).toBe(false);
+  });
+
   test("no maxRetryAfter keeps retry", () => {
     const err = reply(429, { "retry-after": "500" }, "", null);
     expect(err.retryable).toBe(true);
@@ -227,6 +243,19 @@ describe("parseRetryAfter", () => {
       expect(parseRetryAfter(new Headers({ "retry-after": value }), 0)).toBeNull();
     },
   );
+
+  test("a four-digit year below 100 follows Python's two-digit rule", () => {
+    const now = Date.UTC(2050, 0, 15, 8, 0, 0) / 1000;
+    expect(parseRetryAfter(new Headers({ "retry-after": "15 Jan 0050 08:00:30 GMT" }), now)).toBe(30);
+    const then = Date.UTC(1999, 0, 15, 8, 0, 0) / 1000;
+    expect(parseRetryAfter(new Headers({ "retry-after": "15 Jan 0099 08:00:30 GMT" }), then)).toBe(30);
+  });
+
+  test("a long numeric header is refused in linear time", () => {
+    const start = performance.now();
+    expect(parseRetryAfter(new Headers({ "retry-after": "1".repeat(32768) + "x" }))).toBeNull();
+    expect(performance.now() - start).toBeLessThan(100);
+  });
 
   test("garbage ms falls back to seconds", () => {
     expect(parseRetryAfter(new Headers({ "retry-after-ms": "soon", "retry-after": "3" }))).toBe(3);

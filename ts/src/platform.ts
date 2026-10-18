@@ -599,7 +599,9 @@ function toTypeStripError(error: AmaroError, body: string, transformSync: Transf
  *
  * Types become whitespace, so the result has the body's UTF-16 length and newline
  * offsets, and every line keeps its number. A body amaro can't parse or strip throws
- * `TypeStripError`; anything else amaro throws propagates unchanged.
+ * `TypeStripError`; anything else amaro throws propagates unchanged, such as the
+ * WASM `RuntimeError` amaro raises for a syntax error past display column 65535 of
+ * its line, so callers report a non-`TypeStripError` at the whole body.
  *
  * Only text comes back. The caller builds the function, such as
  * `new AsyncFunction("inputs", js + "\n//# sourceURL=yian-code:<id>")`, and that

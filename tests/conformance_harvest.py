@@ -45,21 +45,14 @@ import yian
 from yian import defaults, llm_clients
 from yian.compose import LoadError, load_flow
 from yian.expr import builtins as expr_builtins, template
-from yian.expr.expressions import ExpressionError, ResolveMode, eval_expr, evaluate_when_record
+from yian.expr.expressions import ResolveMode, eval_expr, evaluate_when_record
 from yian.expr.grammar import parse_expr
 from yian.expr.template import eval_binding, render_template_record
 from yian.nodes.agent import memory
 from yian.nodes.tool import node as tool_node
 from yian.run import RunResult, resume_flow, run_flow
 from yian.typesys.types import read_typedefs, type_for
-from yian.typesys.values import (
-    FileRef,
-    ValueKind,
-    build_value_as,
-    long_int_digits,
-    long_int_message,
-    write_as_text,
-)
+from yian.typesys.values import FileRef, ValueKind, build_value_as, write_as_text
 
 from tests import test_conformance as runner
 
@@ -1413,14 +1406,6 @@ def _js_ordered(value: object) -> object:
     return value
 
 
-def _ts_as_text(value: object) -> str:
-    """Return `value`'s text form, as `template._as_text` does `str(value)`."""
-    try:
-        return write_as_text(_ts_text, value)
-    except ValueError as exc:
-        raise ExpressionError(str(exc)) from exc
-
-
 def _ts_join(value: object, sep: str = "\n") -> str:
     """Join a list's elements in their text form with `sep`, with `_join`'s checks."""
     expr_builtins._reject_null("join", value, "[]")
@@ -1446,17 +1431,6 @@ def _ts_render_as_json(original):
     return render_as_json
 
 
-def _ts_tool_text(name: str, result: object) -> str:
-    """Return a tool result's text form, as `memory._tool_text` does `str(result)`."""
-    try:
-        return write_as_text(_ts_text, result)
-    except ValueError as exc:
-        digits = long_int_digits(result)
-        if digits is None:
-            raise
-        raise ValueError(f"tool {name!r} result: {long_int_message(digits)}") from exc
-
-
 def _keep_text_builtins(patch: pytest.MonkeyPatch) -> None:
     """Make the installed text builtins `builtins._TEXT_BUILTINS`, so they still type as `str`."""
     fns = expr_builtins.TEMPLATE_FNS
@@ -1467,10 +1441,12 @@ def _keep_text_builtins(patch: pytest.MonkeyPatch) -> None:
 def _install_text_form(patch: pytest.MonkeyPatch, case: dict) -> None:
     """Write `${...}` spans, `join` elements, `render_as_json` and tool results in the text form."""
     fns = expr_builtins.TEMPLATE_FNS
-    patch.setattr(template, "_as_text", _ts_as_text)
+    # `_as_text` and `_tool_text` each write their value with `write_as_text(str, ...)`.
+    for module in (template, memory):
+        patch.setattr(module, "write_as_text",
+                      lambda convert, value: write_as_text(_ts_text, value))
     patch.setitem(fns, "join", _ts_join)
     patch.setitem(fns, "render_as_json", _ts_render_as_json(fns["render_as_json"]))
-    patch.setattr(memory, "_tool_text", _ts_tool_text)
     _keep_text_builtins(patch)
 
 

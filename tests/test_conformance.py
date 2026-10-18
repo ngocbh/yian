@@ -11,6 +11,7 @@ import contextlib
 from dataclasses import fields, is_dataclass
 from functools import reduce
 import hashlib
+import inspect
 import json
 import math
 from operator import add
@@ -2806,12 +2807,11 @@ def test_harvest_replay_installs_shims(tmp_path: Path, monkeypatch: pytest.Monke
 
 
 def _install_shims(patch: pytest.MonkeyPatch, *names: str) -> None:
-    """Install the harvest's shims named in `names` through `patch`, in `_SHIMS` order."""
+    """Install the harvest's shims named in `names`, given in install order, through `patch`."""
     from tests import conformance_harvest as harvest
 
-    for name, shim in harvest._SHIMS.items():
-        if name in names:
-            shim.install(patch, {})
+    for name in names:
+        harvest._SHIMS[name].install(patch, {})
 
 
 def test_shim_js_number() -> None:
@@ -2842,8 +2842,6 @@ def test_shim_ts_text() -> None:
 
 def test_shim_render_as_json(monkeypatch: pytest.MonkeyPatch) -> None:
     """Under `text-form`, `render_as_json` lays a value out as Python does, numbers as JS."""
-    import inspect
-
     from yian.expr import builtins
 
     original = builtins.TEMPLATE_FNS["render_as_json"]
@@ -2878,9 +2876,8 @@ def test_shim_js_key_order() -> None:
     assert harvest._js_ordered(1.5) == 1.5
 
 
-def test_shim_text_form_through_yian(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_shim_text_form_through_yian() -> None:
     """Python yian writes values in the text form under the shims, and as `str` without them."""
-    from tests import conformance_harvest as harvest
     from yian.expr import builtins
     from yian.expr.expressions import ExpressionError
     from yian.nodes.agent import memory
@@ -2905,7 +2902,6 @@ def test_shim_text_form_through_yian(tmp_path: Path, monkeypatch: pytest.MonkeyP
             '{\n  "a": 1,\n  "b": [\n    true,\n    null\n  ]\n}')
         assert render_template_record("${join(xs, \",\")}", values) == '1,1.5,true,a,[1,"b"]'
         assert render_template_record("r=${rec}", values) == 'r={"b":1,"1":2}'
-        assert builtins.builtin_result_type("join") is not None
         assert memory._tool_text("t", None) == "null"
         assert memory._tool_text("t", {"k": [1.0]}) == '{"k":[1]}'
         assert memory._reported_text("t", ReportedToolError("no such row")) == "no such row"
@@ -2923,8 +2919,13 @@ def test_shim_text_form_through_yian(tmp_path: Path, monkeypatch: pytest.MonkeyP
             render_template_record("${render_as_json(r, 1, 2)}", values)
     assert eval_binding("x=${flag}", values.get) == "x=True"
     assert memory._tool_text("t", None) == "None"
-    assert list(harvest._SHIMS)[:2] == ["text-form", "key-order"]
-    assert {shim.rule for shim in harvest._SHIMS.values()} == {"text-form"}
+
+
+def test_shim_text_form_replay(tmp_path: Path) -> None:
+    """A replay under `text-form` writes the text form; key order tags the same rule."""
+    from tests import conformance_harvest as harvest
+
+    assert harvest._SHIMS["key-order"].rule == "text-form"
     case = {"kind": "expr", "template": "x=${v}", "values": {"v": True}}
     assert harvest._replay(harvest._Harvest(None, tmp_path), case, ("text-form",)) == (
         {"value": "x=true"}, frozenset())

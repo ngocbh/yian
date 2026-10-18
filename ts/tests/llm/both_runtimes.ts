@@ -10,7 +10,7 @@ import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
 
 import { RedirectError, realScheduler, safeFetch, type Scheduler, type Send, USER_AGENT, virtualScheduler } from "../../src/platform.ts";
-import { type Auth, BearerAuth, HeaderKeyAuth } from "../../src/llm/auth.ts";
+import { type Auth, BearerAuth, HeaderKeyAuth, REDACTED } from "../../src/llm/auth.ts";
 import { type ErrorKind, errorFromResponse, ProviderError } from "../../src/llm/errors.ts";
 import { type ChatModel, collect, Finish, TextDelta } from "../../src/llm/events.ts";
 import { callWithRetries, type RetryInfo, RouteModel, type SseProtocol } from "../../src/llm/executor.ts";
@@ -22,6 +22,8 @@ import { openExchange, shortRequest } from "../../src/llm/transport.ts";
 // The "/" gives the key a JSON-escaped form (`\/`) that differs from the plain one.
 const KEY = "sk-test/key-0123456789abcdef";
 const ESCAPED_KEY = KEY.replaceAll("/", "\\/");
+// `\/` and `e` mixed: only the parse undoes this, so the executor rebuilds the error.
+const MIXED_KEY = ESCAPED_KEY.replace("key", "k\\u0065y");
 const ENDPOINT = "https://api.example.test/v1";
 const REQUEST = new Request({ messages: [] });
 const S = 1000;
@@ -316,6 +318,12 @@ const ROWS: Row[] = [
     false,
   ],
   ["refused", () => once(new ProviderError("refused", "the model refused")), "refused", false],
+  [
+    "a redirect",
+    routed(async () => new Response(null, { status: 307, headers: { location: "https://other.example/" } })),
+    "redirect",
+    false,
+  ],
 ];
 
 /** Run `model` with a one-retry budget on `clock`, recording each retry. */
@@ -356,18 +364,16 @@ async function retryTable(): Promise<void> {
 /** Check that `error` holds no form of the key in its message, stack or string form. */
 function assertNoKey(error: unknown, what: string): void {
   assert.ok(error instanceof ProviderError, `${what}: not a ProviderError: ${String(error)}`);
-  assert.ok(error.message.includes("[REDACTED]"), `${what}: ${error.message}`);
+  assert.ok(error.message.includes(REDACTED), `${what}: ${error.message}`);
   for (const text of [error.message, error.stack ?? "", String(error)]) {
-    assert.ok(!text.includes(KEY) && !text.includes(ESCAPED_KEY), `${what} holds the key`);
+    for (const form of [KEY, ESCAPED_KEY, MIXED_KEY]) assert.ok(!text.includes(form), `${what} holds the key`);
   }
 }
 
 /** An echoed key never reaches a status or transport error, and a recorded cassette holds none. */
 async function redaction(): Promise<void> {
   const echo = (key: string) => `{"error": {"message": "Incorrect API key provided: ${key}."}}`;
-  // `\/` and `e` mixed: only the parse undoes this, so the executor rebuilds the error.
-  const mixed = ESCAPED_KEY.replace("key", "k\\u0065y");
-  for (const [form, body] of [["plain", echo(KEY)], ["JSON-escaped", echo(ESCAPED_KEY)], ["mixed-escape", echo(mixed)]]) {
+  for (const [form, body] of [["plain", echo(KEY)], ["JSON-escaped", echo(ESCAPED_KEY)], ["mixed-escape", echo(MIXED_KEY)]]) {
     const send: Send = async () => new Response(body, { status: 401 });
     const error = await rejection(collect(model({}, send).stream(REQUEST)));
     assertNoKey(error, `a status error echoing the key ${form}`);
@@ -420,7 +426,7 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
 };
 
 /** Run every scenario, printing `{"name", "ok", "error"?}` per line; return how many failed. */
-export async function main(): Promise<number> {
+async function main(): Promise<number> {
   let failures = 0;
   for (const [name, run] of Object.entries(SCENARIOS)) {
     try {
@@ -437,7 +443,6 @@ export async function main(): Promise<number> {
 
 // `import.meta.main` doesn't exist on Node 22.
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const failures = await main();
-  // Exit once stdout has flushed: a pipe's writes are asynchronous on macOS.
-  process.stdout.write("", () => process.exit(failures ? 1 : 0));
+  // No process.exit: a leaked timer or socket then shows as a hang.
+  process.exitCode = (await main()) ? 1 : 0;
 }

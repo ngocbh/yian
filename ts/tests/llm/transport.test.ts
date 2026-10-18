@@ -820,10 +820,20 @@ describe("the exit scenarios", () => {
     "all pass on Node, built",
     () => {
       const result = spawnSync(NODE!, [BUILT], { encoding: "utf8", timeout: 60_000 });
-      const lines = result.stdout.trim().split("\n").map((line) => JSON.parse(line));
+      const context = `signal: ${result.signal}\nstderr: ${result.stderr}\nstdout: ${result.stdout}`;
+      expect(result.stdout.trim(), context).not.toBe("");
+      const lines = result.stdout.trim().split("\n").map((line) => {
+        let parsed: { name?: unknown; ok?: unknown; error?: string };
+        try {
+          parsed = JSON.parse(line);
+        } catch {
+          throw new Error(`not a JSON line: ${line}\n${context}`);
+        }
+        return parsed;
+      });
       expect(lines.map((line) => line.name)).toEqual(Object.keys(SCENARIOS));
       for (const line of lines) expect(line, line.error).toEqual({ name: line.name, ok: true });
-      expect(result.status, result.stderr).toBe(0);
+      expect(result.status, context).toBe(0);
     },
     90_000,
   );

@@ -9,7 +9,8 @@
  *
  * Snapshots are yian's codec JSON (`logJson`, read back with `parseJson(text, "codec")`): ints of
  * any size, floats marked `.0`, infinity as `{"$float":"inf"}`, and a record shaped like a tag
- * escaped with `$record`.
+ * escaped with `$record`. Its keys are sorted, so a record read back from a snapshot may list its
+ * fields in another order than the forward value; feedback selects fields by name.
  *
  * Knows about: `typesys` (`logJson`, `parseJson`, `buildValue`, `TypeCheckError`, `isRecord`),
  * `diagnostics` (`reprText`), `builtins` (`kindName`). Never imports: `expressions`,

@@ -44,14 +44,13 @@
  * `ExpressionError`, `EvalOptions`, `TraceOptions`), `lineage` (`ValueRoute`, `ResolvedValue`,
  * `TracedValue`), `builtins` (`TEMPLATE_FNS`), `grammar` (`parseExpr`, `findSpanEnd`,
  * `rejectNestedSpans`, `iterSubtrees`, `callSuffixOf`, `wholeSpanInterior`, `ExprNode`, `Token`,
- * `Tree`), `typesys` (`writeAsText`), `typesys/json` (`logJson`) and `diagnostics` (`reprText`,
+ * `Tree`), `typesys` (`writeAsText`) and `diagnostics` (`reprText`,
  * `compareCodeUnits`). Never imports: `nodes`, `compile`, `compose`, `runtime`, or the pool
  * (pool-agnostic via `resolve`).
  */
 
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import type { Value, ValueRecord } from "../typesys/index.ts";
-import { logJson } from "../typesys/json.ts";
 import { writeAsText } from "../typesys/values.ts";
 import { TEMPLATE_FNS } from "./builtins.ts";
 import {
@@ -227,11 +226,11 @@ export function evalTemplate(
     }
   }
   if (!trace) return text;
-  const route =
-    routes.length > 0
-      ? new ValueRoute("interpolation", { valueJson: logJson(text), children: routes, expression, spans })
-      : ValueRoute.literal(text);
-  return { value: text, route };
+  if (routes.length === 0) return { value: text, route: ValueRoute.literal(text) };
+  // `JSON.stringify`, as Python's `json.dumps`: literal text holding a lone surrogate then fails at
+  // the slot's write check, traced or not, rather than here.
+  const valueJson = JSON.stringify(text);
+  return { value: text, route: new ValueRoute("interpolation", { valueJson, children: routes, expression, spans }) };
 }
 
 /** Count the code points of `text`: interpolation spans are in code points, not UTF-16 units. */

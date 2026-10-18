@@ -27,8 +27,8 @@
  *
  * Knows about: `typesys` (the pool and value types, in `expressions`; `writeAsText`, in
  * `builtins` and `template`; `writeAsJson`, `Type` and `ValueKind`, in `builtins`; `buildValue`,
- * in `lineage`), `typesys/json` (`logJson`, in `lineage` and `template`; `parseJson`, in
- * `lineage`), `defaults` (the value nesting bound, in `grammar`) and `diagnostics`.
+ * in `lineage`), `typesys/json` (`logJson` and `parseJson`, in `lineage`), `defaults` (the value
+ * nesting bound, in `grammar`) and `diagnostics`.
  * Never imports: `nodes`, `compile`, or `runtime` (they import it).
  */
 

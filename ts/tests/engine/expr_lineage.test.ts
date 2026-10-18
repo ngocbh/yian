@@ -6,7 +6,10 @@
  * TS-only: the codec form of literal snapshots, a file as an unavailable leaf, own-key record
  * fields, the depth bound inside a partial snapshot, the focused `validateFeedback` and
  * `hasFeedback` checks, a scalar route lifting a projected selection, a traced resolver that
- * doesn't return `ResolvedValue`, and interpolation spans counting code points.
+ * doesn't return `ResolvedValue`, interpolation spans counting code points, and frozen routed
+ * feedback. Python's `test_routes_are_immutable_serializable_and_keep_opaque_snapshots` is split
+ * in two: `routes are immutable and serializable` (hand-built) and `routes keep opaque snapshots`
+ * (through a traced binding).
  *
  * Changed: an infinite temporary has a codec snapshot (`{"$float":"inf"}`), where Python's JSON
  * has none; `a deep temporary keeps a complete snapshot` (10,000 levels) replaces

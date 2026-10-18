@@ -5,13 +5,18 @@
  * replaces the `flock` calls in `runtime/log.py` and `llm_clients/auth/store.py`;
  * the scheduler that ports TOOL's chunked `_sleep` in `nodes/tool/node.py`, with a
  * virtual one for tests; and the waiting lock that ports the auth store's `_locked`.
+ * Child processes check the lock across processes, as `log.py`'s `_lock_exclusive`
+ * and the storage and auth stores' multiprocess tests do, and, with
+ * `YIAN_TEST_NODE` set to a Node binary, the built output on Node.
  */
 
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { execFileSync } from "node:child_process";
+import { type ChildProcess, execFileSync, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
+import { pathToFileURL } from "node:url";
 
 import {
   type FileLock,
@@ -35,6 +40,7 @@ let dir: string;
 let file: string;
 let opened: Sqlite[];
 let held: FileLock[];
+let children: Holder[];
 
 /** Open `p` and close it after the test. */
 function open(p: string, options?: { readonly?: boolean }): Sqlite {
@@ -65,11 +71,13 @@ beforeEach(() => {
   file = path.join(dir, "db.sqlite");
   opened = [];
   held = [];
+  children = [];
 });
 
-afterEach(() => {
+afterEach(async () => {
   mock.restore();
   try {
+    for (const child of children) await kill(child);
     for (const lock of held) lock.release();
     for (const db of opened) db.close();
   } finally {
@@ -633,5 +641,359 @@ describe("waitForLock", () => {
     const error = await rejection(waitForLock(file, { private: true, scheduler }));
     expect((error as FileLockError).reason).toBe("not-private");
     expect(scheduler.sleeps).toBe(0);
+  });
+});
+
+/** The `ts/` directory: Bun children run from it, so Bun never looks for packages to install. */
+const ROOT = path.resolve(import.meta.dir, "../..");
+const SOURCE_URL = pathToFileURL(path.join(ROOT, "src/platform.ts")).href;
+const BUILT = path.join(ROOT, "dist/src/platform.js");
+const BUILT_URL = pathToFileURL(BUILT).href;
+
+/**
+ * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
+ * value that can't run, a Node older than the `engines` floor, or a missing build
+ * fails the whole file, so a typo can't pass as a run with the Node cases skipped.
+ */
+const NODE = ((): string | undefined => {
+  const node = process.env.YIAN_TEST_NODE;
+  if (!node) return undefined;
+  let version: string;
+  try {
+    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
+  } catch (error) {
+    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
+  }
+  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
+  if (major < 22 || (major === 22 && minor < 18)) {
+    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
+  }
+  if (!fs.existsSync(BUILT)) throw new Error(`${BUILT} is missing; run bun run build first`);
+  return node;
+})();
+
+const BWRAP =
+  process.platform === "linux" && spawnSync("bwrap", ["--ro-bind", "/", "/", "true"]).status === 0;
+
+/** A child process holding a lock, its stdout read line by line. */
+interface Holder {
+  child: ChildProcess;
+  lines: AsyncIterator<string>;
+  closed: Promise<unknown>;
+  stderr: string;
+  /** The child's own second `lockFile` and `isLocked` results, with `selfCheck`. */
+  selfCheck?: unknown;
+}
+
+/** Return the holder's next stdout line; reject, with its stderr, when it exits or after 10 s. */
+async function nextLine(holder: Holder): Promise<string> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`the holder printed nothing for 10 s; stderr:\n${holder.stderr}`)), 10_000);
+  });
+  try {
+    const next = await Promise.race([holder.lines.next(), timeout]);
+    if (!next.done) return next.value;
+    await holder.closed;
+    throw new Error(`the holder exited (${holder.child.exitCode ?? holder.child.signalCode}); stderr:\n${holder.stderr}`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Start a child that locks `p`, and resolve once it prints `locked`. `"bun"` runs the
+ * source on this Bun, `"node"` the build on `NODE`, `"bwrap"` the Bun child in its own
+ * pid namespace. With `selfCheck`, the child first retries `lockFile(p)` and probes
+ * `isLocked(p)` itself. Stdin line `release` releases the lock (the child answers
+ * `released`); stdin EOF ends the child, so a crashed test leaves no orphan.
+ */
+async function spawnHolder(
+  kind: "bun" | "node" | "bwrap",
+  p: string,
+  { selfCheck = false }: { selfCheck?: boolean } = {},
+): Promise<Holder> {
+  // Plain JavaScript without `using`, which Node 22 can't parse.
+  const script = `
+const { FileLockError, isLocked, lockFile } = await import(${JSON.stringify(kind === "node" ? BUILT_URL : SOURCE_URL)});
+const { createInterface } = await import("node:readline");
+const p = ${JSON.stringify(p)};
+const lock = lockFile(p);
+if (${selfCheck}) {
+  let second = "acquired";
+  try {
+    lockFile(p).release();
+  } catch (error) {
+    second = error instanceof FileLockError ? error.reason : String(error);
+  }
+  console.log(JSON.stringify({ second, isLocked: isLocked(p) }));
+}
+console.log("locked");
+for await (const line of createInterface({ input: process.stdin })) {
+  if (line === "release") {
+    lock.release();
+    console.log("released");
+  }
+}
+`;
+  const argv =
+    kind === "node"
+      ? [NODE!, "--input-type=module", "-e", script]
+      : kind === "bun"
+        ? [process.execPath, "-e", script]
+        : [
+            "bwrap",
+            ...["--unshare-pid", "--die-with-parent", "--ro-bind", "/", "/", "--bind", dir, dir],
+            ...["--dev", "/dev", "--proc", "/proc", process.execPath, "-e", script],
+          ];
+  const child = spawn(argv[0]!, argv.slice(1), { cwd: ROOT, stdio: "pipe" });
+  const holder: Holder = {
+    child,
+    lines: createInterface({ input: child.stdout! })[Symbol.asyncIterator](),
+    closed: new Promise((resolve) => child.on("close", resolve)),
+    stderr: "",
+  };
+  children.push(holder);
+  child.stderr!.setEncoding("utf8").on("data", (chunk: string) => {
+    holder.stderr += chunk;
+  });
+  if (selfCheck) holder.selfCheck = JSON.parse(await nextLine(holder));
+  const line = await nextLine(holder);
+  if (line !== "locked") throw new Error(`the holder printed ${line}; stderr:\n${holder.stderr}`);
+  return holder;
+}
+
+/** SIGKILL the holder and wait for it to exit and close its pipes. */
+async function kill(holder: Holder): Promise<void> {
+  holder.child.kill("SIGKILL");
+  await holder.closed;
+}
+
+/** Spawned tests wait on real processes, well past the default timeout. */
+const SPAWNED_MS = 20_000;
+
+describe("the lock across processes", () => {
+  test(
+    "a Bun child's lock is busy here until the child is killed, and leaves nothing behind",
+    async () => {
+      const holder = await spawnHolder("bun", file);
+      expect(lockError(() => lockFile(file), file).reason).toBe("busy");
+      expect(isLocked(file)).toBe(true);
+      await kill(holder);
+      hold(file);
+      expect(fs.readdirSync(dir)).toEqual(["db.sqlite"]);
+    },
+    SPAWNED_MS,
+  );
+
+  test(
+    "a child's own retry and probe see busy and keep its lock",
+    async () => {
+      const holder = await spawnHolder("bun", file, { selfCheck: true });
+      expect(holder.selfCheck).toEqual({ second: "busy", isLocked: true });
+      // Closing the extra connections in the holder must not drop its POSIX lock.
+      expect(lockError(() => lockFile(file), file).reason).toBe("busy");
+    },
+    SPAWNED_MS,
+  );
+
+  test(
+    "a child's release frees the lock without a kill",
+    async () => {
+      const holder = await spawnHolder("bun", file);
+      holder.child.stdin!.write("release\n");
+      expect(await nextLine(holder)).toBe("released");
+      hold(file);
+    },
+    SPAWNED_MS,
+  );
+
+  test(
+    "waitForLock takes the lock once the holding child is killed",
+    async () => {
+      const holder = await spawnHolder("bun", file);
+      const started = performance.now();
+      // The one deliberate delay: the wait must outlast a few busy polls first.
+      setTimeout(() => holder.child.kill("SIGKILL"), 200);
+      held.push(await waitForLock(file, { timeoutMs: 5000 }));
+      expect(performance.now() - started).toBeGreaterThanOrEqual(200);
+    },
+    SPAWNED_MS,
+  );
+
+  test.skipIf(!NODE)(
+    "a Node child running the build holds the lock against Bun, and keeps it through its own checks",
+    async () => {
+      const holder = await spawnHolder("node", file, { selfCheck: true });
+      expect(holder.selfCheck).toEqual({ second: "busy", isLocked: true });
+      expect(lockError(() => lockFile(file), file).reason).toBe("busy");
+      await kill(holder);
+      hold(file);
+    },
+    SPAWNED_MS,
+  );
+
+  test.skipIf(!NODE)(
+    "a Node child's isLocked sees a lock Bun holds",
+    () => {
+      const probe = () =>
+        execFileSync(
+          NODE!,
+          [
+            "--input-type=module",
+            "-e",
+            `const { isLocked } = await import(${JSON.stringify(BUILT_URL)}); console.log(isLocked(${JSON.stringify(file)}));`,
+          ],
+          { encoding: "utf8" },
+        ).trim();
+      const lock = hold(file);
+      expect(probe()).toBe("true");
+      lock.release();
+      expect(probe()).toBe("false");
+    },
+    SPAWNED_MS,
+  );
+
+  test.skipIf(!BWRAP)(
+    "a child in another pid namespace holds the lock until killed",
+    async () => {
+      const holder = await spawnHolder("bwrap", file);
+      expect(lockError(() => lockFile(file), file).reason).toBe("busy");
+      expect(isLocked(file)).toBe(true);
+      await kill(holder);
+      hold(file);
+      expect(fs.readdirSync(dir)).toEqual(["db.sqlite"]);
+    },
+    SPAWNED_MS,
+  );
+});
+
+describe("the built output on Node", () => {
+  test.skipIf(!NODE)(
+    "runs the SQLite wrapper, the lock and the schedulers without an experimental warning",
+    () => {
+      // One process for every check, so Node starts once; it reports a JSON object.
+      const script = `
+import fs from "node:fs";
+import path from "node:path";
+const p = await import(${JSON.stringify(BUILT_URL)});
+const dir = ${JSON.stringify(dir)};
+const out = { runtime: p.runtime };
+const caught = (f) => {
+  try {
+    f();
+    return "no throw";
+  } catch (error) {
+    return error;
+  }
+};
+
+const file = path.join(dir, "round-trip.sqlite");
+const db = p.openSqlite(file);
+db.exec("CREATE TABLE t (a INTEGER, b TEXT, c BLOB, d TEXT)");
+db.prepare("INSERT INTO t VALUES (?, ?, ?, ?)").run(Number.MAX_SAFE_INTEGER, "x", new Uint8Array([0, 1, 255]), null);
+const row = db.prepare("SELECT a, b, c, d FROM t").get();
+out.row = { ...row, c: [...row.c] };
+out.rowIsPlain = Object.getPrototypeOf(row) === Object.prototype;
+out.blobIsBytes = row.c instanceof Uint8Array;
+out.noRow = db.prepare("SELECT a FROM t WHERE a = ?").get(0) === undefined;
+db.prepare("INSERT INTO t (a) VALUES (?)").run(2n ** 53n);
+out.unsafeInteger = caught(() => db.prepare("SELECT a FROM t").all()) instanceof RangeError;
+db.close();
+db.close();
+const ro = p.openSqlite(file, { readonly: true });
+out.readonlyRows = ro.prepare("SELECT count(*) AS n FROM t").get().n;
+out.readonlyWriteThrows = caught(() => ro.exec("DELETE FROM t")) instanceof Error;
+ro.close();
+
+const a = p.openSqlite(file);
+a.exec("PRAGMA busy_timeout = 0");
+a.exec("BEGIN EXCLUSIVE");
+const b = p.openSqlite(file);
+b.exec("PRAGMA busy_timeout = 0");
+out.busyCode = p.sqliteErrorCode(caught(() => b.exec("BEGIN EXCLUSIVE")));
+a.close();
+b.exec("BEGIN EXCLUSIVE");
+b.exec("COMMIT");
+out.closeReleases = true;
+b.close();
+const enoent = caught(() => fs.statSync(path.join(dir, "missing")));
+out.enoent = [enoent.code, p.sqliteErrorCode(enoent) === undefined];
+
+const lockPath = path.join(dir, "lock");
+const lock = p.lockFile(lockPath);
+const busy = caught(() => p.lockFile(lockPath));
+out.lockBusy = busy instanceof p.FileLockError ? busy.reason : String(busy);
+out.lockedWhileHeld = p.isLocked(lockPath);
+lock.release();
+out.lockedAfterRelease = p.isLocked(lockPath);
+p.lockFile(lockPath).release();
+
+const clock = p.virtualScheduler(1000);
+const ended = [];
+await Promise.all([1000, 500].map((ms) => clock.sleep(ms).then(() => ended.push([ms, clock.now()]))));
+out.virtualOrder = ended;
+
+const started = performance.now();
+await p.realScheduler.sleep(30);
+out.sleptMs = performance.now() - started;
+const reason = new Error("stopped");
+try {
+  await p.realScheduler.sleep(0, AbortSignal.abort(reason));
+  out.preAborted = "resolved";
+} catch (error) {
+  out.preAborted = error === reason;
+}
+
+const holder = p.lockFile(lockPath);
+try {
+  const scheduler = p.virtualScheduler(1000);
+  try {
+    await p.waitForLock(lockPath, { timeoutMs: 500, scheduler });
+    out.waitTimeout = "acquired";
+  } catch (error) {
+    out.waitTimeout = [error.reason, error.message.includes("timed out"), scheduler.now()];
+  }
+} finally {
+  holder.release();
+}
+console.log(JSON.stringify(out));
+`;
+      const result = spawnSync(NODE!, ["--input-type=module", "-e", script], { encoding: "utf8" });
+      expect(result.stderr).not.toContain("ExperimentalWarning");
+      expect(result.status, result.stderr).toBe(0);
+      const out = JSON.parse(result.stdout);
+      expect(out.runtime).toBe("node");
+      expect(out.row).toEqual({ a: Number.MAX_SAFE_INTEGER, b: "x", c: [0, 1, 255], d: null });
+      expect(out.rowIsPlain).toBe(true);
+      expect(out.blobIsBytes).toBe(true);
+      expect(out.noRow).toBe(true);
+      expect(out.unsafeInteger).toBe(true);
+      expect(out.readonlyRows).toBe(2);
+      expect(out.readonlyWriteThrows).toBe(true);
+      expect(out.busyCode).toBe(5);
+      expect(out.closeReleases).toBe(true);
+      expect(out.enoent).toEqual(["ENOENT", true]);
+      expect(out.lockBusy).toBe("busy");
+      expect(out.lockedWhileHeld).toBe(true);
+      expect(out.lockedAfterRelease).toBe(false);
+      expect(out.virtualOrder).toEqual([
+        [500, 1500],
+        [1000, 2000],
+      ]);
+      // Node's timers can fire a millisecond early against performance.now().
+      expect(out.sleptMs).toBeGreaterThanOrEqual(29);
+      expect(out.preAborted).toBe(true);
+      expect(out.waitTimeout).toEqual(["busy", true, 1500]);
+    },
+    SPAWNED_MS,
+  );
+
+  test.skipIf(!NODE)("imports no bun: module statically", () => {
+    // A quoted specifier, as in `import type`, would make Node consumers need Bun's
+    // types; the module doc naming `bun:sqlite` in backticks is fine.
+    expect(fs.readFileSync(path.join(ROOT, "dist/src/platform.d.ts"), "utf8")).not.toMatch(/["']bun:/);
+    // The lazy require("bun:sqlite") is a call, not an import.
+    expect(fs.readFileSync(BUILT, "utf8")).not.toMatch(/^\s*import[^;(]*["']bun:/m);
   });
 });

@@ -192,8 +192,8 @@ written, so a pair with CODE bodies is in TS form and carries `rules: [code]`.
 Runs the `yian` command with `args` (the arguments after `yian`) in the case directory, with
 `HOME` set to an empty `home/` directory there, `PATH`, `COLUMNS=1000`, the `env` variables
 and no other variables (the Python runner adds `PYTHONPATH`, to find yian; the runner doesn't
-set `YIAN_AUTH_FILE`, so unless `env` does, its default under `HOME` applies), and `stdin` (absent: empty; never a terminal). `expect.exit` is
-the exit code. In stdout and stderr the case directory's path, and its resolved real path, are
+set `YIAN_AUTH_FILE`, so unless `env` does, its default under `HOME` applies), and `stdin`
+(absent: empty; never a terminal). `expect.exit` is the exit code. In stdout and stderr the case directory's path, and its resolved real path, are
 replaced by `<tmp>`, and spaces at line ends are removed; then `stdout` and `stderr` are
 compared exactly when present. `json` is stdout read as one JSON document, and `json_lines`
 stdout read as one JSON document per non-empty line, both in codec form. A command that names a
@@ -281,8 +281,9 @@ are the case names.
 - The tool classes `PermanentToolError`, `TransientToolError`, `ReportedToolError`,
   `ToolCheckError`, `TimeoutError` and `ConnectionError`, and yian's own classes `LoadError`,
   `FlowValidationError`, `ExpressionError`, `RequiredError`, `ConstructorTypeError`,
-  `TypeCheckError`, `IntTooLongError`, `DefaultsError` and `DefaultsMismatchError`, have the same
-  name in both implementations.
+  `TypeCheckError`, `DefaultsError` and `DefaultsMismatchError`, have the same name in both
+  implementations. `IntTooLongError` is Python-only (TS has no digit limit), so a case holding it
+  carries `rules: [numbers]`.
 - Any other class compares by its name as given, a stub's declared class included.
 - A row mapping a TS class to a different case name is added by the change that introduces that
   TS class; rows are only added.

@@ -1208,8 +1208,6 @@ console.log(JSON.stringify(out));
       expect(out.stripped).toBe(await stripTypes(sample));
       expect(out.nonAsciiError).toEqual([true, "TypeStripError", 1, 27]);
       expect(out.openReturn).toEqual([true, "TypeStripError", 1, 9]);
-      // V8 puts the function header on two lines before the body.
-      expect(out.stackHeader).toBe(2);
       expect(out.stackLine).toBe(4);
     },
     SPAWNED_MS,

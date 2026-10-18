@@ -40,6 +40,7 @@ from yian.nodes.agent.llm_values import (
 )
 from yian.nodes.agent.memory import compatibility
 from yian.nodes.agent.backward import backward_agent
+from yian.nodes.agent.live import is_provider_auth
 from yian.nodes.agent.loop import run_agent
 from yian.nodes.agent.structured import _structured_validation_path
 from yian.nodes.base import (
@@ -498,9 +499,15 @@ class AgentNode(Node):
         return origin if origin is not None else super().exception_origin(exception)
 
     def exception_code(self, exception: Exception) -> FailureCode:
-        """Classify the tool-iteration cap as ``agent.max_tool_iterations``; defer the rest."""
+        """Classify the tool-iteration cap and refused model credentials; defer the rest.
+
+        The cap is ``agent.max_tool_iterations``. An exception the agent's own model
+        build or model call marked as refused credentials is ``provider.auth``.
+        """
         if isinstance(exception, ToolIterationLimitError):
             return "agent.max_tool_iterations"
+        if is_provider_auth(exception):
+            return "provider.auth"
         return super().exception_code(exception)
 
     def forward(

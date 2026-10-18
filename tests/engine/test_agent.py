@@ -16,9 +16,12 @@ from pydantic import BaseModel
 
 import yian.llm_clients as llm_clients_mod
 import yian.tools as tools_mod
+from yian.compose.loader import load_flow
 from yian.diagnostics import OriginRef
+from yian.llm_clients.auth import AuthError
 from yian.nodes.agent import AgentNode
 from yian.nodes.contracts import ContractOrigins, Parameter, ValueContract
+from yian.run import run_flow
 from yian.runtime.eval_node import EvaluationFailure, eval_node
 from yian.typesys.pool import VariablePool
 from yian.typesys.values import Type, ValueKind
@@ -545,3 +548,187 @@ def test_agent_run_has_no_scratch_kwarg():
     import inspect
 
     assert "scratch" not in inspect.signature(AgentNode.run).parameters
+
+
+class AuthenticationError(Exception):
+    """A stand-in for a provider SDK's 401 error."""
+
+    status_code = 401
+
+
+class PermissionDeniedError(AuthenticationError):
+    """A stand-in for a provider SDK's 403 error."""
+
+    status_code = 403
+
+
+class RateLimitError(AuthenticationError):
+    """A stand-in for a provider SDK's 429 error."""
+
+    status_code = 429
+
+
+class _RaisingChat:
+    """Raise one provider error from every chat or structured call; counts the calls."""
+
+    def __init__(self, error):
+        self.error = error
+        self.calls = 0
+
+    def bind_tools(self, tools):
+        return self
+
+    def invoke(self, messages):
+        self.calls += 1
+        raise self.error
+
+    def with_structured_output(self, schema, include_raw=False):
+        return self
+
+
+def _structured_node(provider, model):
+    """An AGENT with an integer ``output:`` and no tools, for the given model."""
+    node = AgentNode("n", retries=2, llm_config={"provider": provider, "model": model})
+    node.output_contract = ValueContract(type=Type.scalar(ValueKind.INTEGER))
+    return node
+
+
+def test_model_auth_failure_is_provider_auth(monkeypatch):
+    _patch_model(monkeypatch, _RaisingChat(AuthenticationError("Incorrect API key provided")))
+    ev = _run_node(_node())
+    assert isinstance(ev, EvaluationFailure)
+    assert ev.failure.code == "provider.auth"
+    assert ev.failure.cause_type == "AuthenticationError"
+    assert ev.failure.message == "Incorrect API key provided"
+
+
+def test_permission_denied_is_provider_auth(monkeypatch):
+    _patch_model(monkeypatch, _RaisingChat(PermissionDeniedError("forbidden")))
+    ev = _run_node(_node())
+    assert isinstance(ev, EvaluationFailure)
+    assert ev.failure.code == "provider.auth"
+
+
+def test_rate_limit_stays_node_execute(monkeypatch):
+    _patch_model(monkeypatch, _RaisingChat(RateLimitError("slow down")))
+    ev = _run_node(_node())
+    assert isinstance(ev, EvaluationFailure)
+    assert ev.failure.code == "node.execute"
+
+
+def test_credential_resolution_auth_error_is_provider_auth(monkeypatch):
+    message = (
+        "Subscription credentials expired; sign in again. "
+        "Run 'yian auth openai' and start a new run"
+    )
+
+    def expired(config):
+        raise AuthError(message)
+
+    monkeypatch.setattr(llm_clients_mod, "model_from_config", expired)
+    ev = _run_node(_node())
+    assert isinstance(ev, EvaluationFailure)
+    assert ev.failure.code == "provider.auth"
+    assert ev.failure.message == message
+
+
+def test_tool_auth_failure_stays_node_execute(monkeypatch):
+    # A tool's own refused credentials are the tool's failure, not the agent's provider's.
+    def refused(args):
+        raise AuthenticationError("tool service rejected its token")
+
+    monkeypatch.setitem(tools_mod.TOOL_REGISTRY, "fetch", _FakeTool(refused))
+    _patch_model(monkeypatch, _FakeChat([_ai_tool_call("fetch", {})]))
+    ev = _run_node(_node(tools=["fetch"]))
+    assert isinstance(ev, EvaluationFailure)
+    assert ev.failure.code == "node.execute"
+    assert ev.failure.cause_type == "AuthenticationError"
+
+
+def test_structured_call_auth_failure_is_provider_auth(monkeypatch):
+    chat = _RaisingChat(AuthenticationError("unauthorized"))
+    _patch_model(monkeypatch, chat)
+    ev = _run_node(_structured_node("openai", "gpt-4o"))
+    assert isinstance(ev, EvaluationFailure)
+    assert ev.failure.code == "provider.auth"
+    assert chat.calls == 1  # refused credentials are not corrected and retried
+
+
+def test_fallback_structured_auth_failure_is_not_retried(monkeypatch):
+    # The sentinel model has no native structured output, so the reply is prompted JSON.
+    chat = _RaisingChat(AuthenticationError("unauthorized"))
+    _patch_model(monkeypatch, chat)
+    ev = _run_node(_structured_node("vllm", "no-structured-sentinel"))
+    assert isinstance(ev, EvaluationFailure)
+    assert ev.failure.code == "provider.auth"
+    assert chat.calls == 1
+
+
+_AGENT_IN_LOOP = """
+id: t
+name: t
+input:
+  seed: !str
+defs:
+  body:
+    input:
+      transcript: !str
+      exited: !bool
+    nodes:
+      reply:
+        kind: agent
+        input:
+          transcript: ${input.transcript}
+        output: str
+        prompt: "history ${transcript}"
+      fold:
+        kind: code
+        code: tests.engine._compose_codefns:reply_fold
+        input:
+          transcript: ${input.transcript}
+          reply:      ${reply.output}
+          exited:     ${input.exited}
+        output:
+          transcript: str
+          exited: bool
+    output: ${fold.output}
+nodes:
+  loop:
+    kind: loop
+    call: body
+    input:
+      transcript: ${input.seed}
+      exited: false
+    while: not exited
+    max: 3
+output: ${loop.output.transcript}
+"""
+
+
+def test_auth_failure_inside_loop_reaches_run_result(monkeypatch):
+    _patch_model(monkeypatch, _RaisingChat(AuthenticationError("unauthorized")))
+    result = run_flow(load_flow(_AGENT_IN_LOOP), {"seed": "s"})
+    assert result.status == "failed"
+    assert result.failure.code == "provider.auth"
+    assert result.failure.cause_type == "AuthenticationError"
+
+
+_KEYED = """id: keyed
+name: keyed
+nodes:
+  agent: {kind: agent, prompt: hi}
+output: ${agent.output}
+"""
+
+
+def test_provider_auth_failure_message_is_scrubbed(monkeypatch, tmp_path):
+    monkeypatch.setenv("YIAN_AUTH_FILE", str(tmp_path / "auth.json"))
+    key = "sk-sentinel-401-zqxw"
+    _patch_model(monkeypatch, _RaisingChat(AuthenticationError(f"Incorrect API key: {key}")))
+    result = run_flow(
+        load_flow(_KEYED), {}, llm_config={"provider": "vllm", "model": "m", "api_key": key}
+    )
+    assert result.status == "failed"
+    assert result.failure.code == "provider.auth"
+    assert result.failure.message == "Incorrect API key: [REDACTED]"
+    assert key not in result.failure.message

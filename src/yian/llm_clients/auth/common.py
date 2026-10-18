@@ -19,6 +19,34 @@ class AuthError(RuntimeError):
     """An authentication or credential-storage failure safe to show to a user."""
 
 
+def is_auth_failure(exc: BaseException) -> bool:
+    """Whether a model call's exception means the provider refused its credentials, or yian couldn't supply them.
+
+    Walks ``exc`` and its ``__cause__`` chain, since LangChain re-raises a
+    provider error ``from`` the SDK's. A link counts when it is an `AuthError`,
+    or carries an ``int`` ``status_code`` or ``code`` of 401 or 403, or of 400
+    with ``api_key_invalid`` in its text: Gemini reports an invalid key as a 400
+    whose only distinguishing mark is that reason, so the substring match is
+    deliberate.
+    """
+    seen: set[int] = set()
+    link: BaseException | None = exc
+    while link is not None and id(link) not in seen and len(seen) < 16:
+        seen.add(id(link))
+        if isinstance(link, AuthError):
+            return True
+        for name in ("status_code", "code"):
+            status = getattr(link, name, None)
+            if type(status) is not int:
+                continue
+            if status in (401, 403) or (
+                status == 400 and "api_key_invalid" in str(link).lower()
+            ):
+                return True
+        link = link.__cause__
+    return False
+
+
 def _text(value: object) -> bool:
     return (
         isinstance(value, str) and bool(value) and all(32 < ord(c) < 127 for c in value)

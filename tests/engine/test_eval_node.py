@@ -332,7 +332,7 @@ class _ExceptionCodeNode(Node):
 
     kind = NodeKind.CODE
 
-    def __init__(self, node_id: str, outcome: object = None) -> None:
+    def __init__(self, node_id: str, outcome: object) -> None:
         super().__init__(node_id, origin=OriginRef(f"node:{node_id}"))
         self.outcome = outcome
 
@@ -466,7 +466,7 @@ def _failing_pre_assert(node: Node) -> None:
 def test_exception_code_is_asked_only_for_the_body(
     outcome: object,
     configure: Callable[[Node], None],
-    expected_code: str,
+    expected_code: FailureCode,
 ) -> None:
     """Binding, assertion and result-contract stages keep their own codes."""
     node = _ExceptionCodeNode("n", outcome)

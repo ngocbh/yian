@@ -24,6 +24,7 @@ from yian.llm_clients.auth import (
     OAuthCredentials,
     OpenAIAuth,
     ProviderSelection,
+    is_auth_failure,
 )
 
 
@@ -1380,3 +1381,63 @@ def test_builtin_http_deadline_during_connect_raises_timeout_error():
             "GET", "http://127.0.0.1:9", headers={}, timeout=1,
             monotonic=lambda: next(readings, 100.0),
         )
+
+
+class _StatusError(Exception):
+    """A provider error carrying an HTTP ``status_code``, like the OpenAI and Anthropic SDKs'."""
+
+    def __init__(self, message, status_code):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class _CodeError(Exception):
+    """A provider error carrying an HTTP ``code``, like google-genai's ``ClientError``."""
+
+    def __init__(self, message, code):
+        super().__init__(message)
+        self.code = code
+
+
+def _raised_from(wrapper, cause):
+    """Return ``wrapper`` after raising it ``from`` ``cause``."""
+    try:
+        raise wrapper from cause
+    except BaseException as exc:
+        return exc
+
+
+def _cycle():
+    first, second = ValueError("first"), ValueError("second")
+    first.__cause__, second.__cause__ = second, first
+    return first
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected"),
+    [
+        (AuthError("Subscription credentials expired"), True),
+        (_StatusError("unauthorized", 401), True),
+        (_StatusError("forbidden", 403), True),
+        (_StatusError("bad request", 400), False),
+        (_StatusError("not found", 404), False),
+        (_StatusError("rate limited", 429), False),
+        (_StatusError("server error", 500), False),
+        (_raised_from(RuntimeError("wrapped"), _StatusError("unauthorized", 401)), True),
+        (_CodeError("unauthenticated", 401), True),
+        (_raised_from(RuntimeError("model build"), AuthError("no credentials")), True),
+        (_StatusError("API key not valid. reason: API_KEY_INVALID", 400), True),
+        (_CodeError("API key not valid. reason: API_KEY_INVALID", 400), True),
+        (_StatusError("invalid argument", 400), False),
+        (_StatusError("unauthorized", True), False),
+        (ValueError("bad value"), False),
+        (_cycle(), False),
+    ],
+    ids=[
+        "auth-error", "401", "403", "400", "404", "429", "500", "wrapped-401",
+        "code-401", "wrapped-auth-error", "400-api-key-invalid", "code-400-api-key-invalid",
+        "400-other", "bool-status", "value-error", "cause-cycle",
+    ],
+)
+def test_is_auth_failure(exc, expected):
+    assert is_auth_failure(exc) is expected

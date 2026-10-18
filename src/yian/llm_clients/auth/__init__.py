@@ -21,6 +21,7 @@ from .common import (
     HttpResponse,
     OAuthCredentials,
     ProviderSelection,
+    is_auth_failure,
 )
 from .openai import OpenAIAuth
 from .store import AuthStore
@@ -35,4 +36,5 @@ __all__ = [
     "OAuthCredentials",
     "OpenAIAuth",
     "ProviderSelection",
+    "is_auth_failure",
 ]

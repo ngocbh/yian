@@ -1022,8 +1022,9 @@ console.log(JSON.stringify({ isLocked: locked, lock }));
 
 describe("the built output on Node", () => {
   test.skipIf(!NODE)(
-    "runs the SQLite wrapper, the lock and the schedulers without an experimental warning",
-    () => {
+    "runs the SQLite wrapper, the lock, the schedulers and stripTypes without an experimental warning",
+    async () => {
+      const sample = "const n: number = inputs.n;\nreturn (n as number) * 2;";
       // One process for every check, so Node starts once; it reports a JSON object.
       const script = `
 import fs from "node:fs";
@@ -1143,6 +1144,32 @@ try {
 } finally {
   holder.release();
 }
+
+out.stripped = await p.stripTypes(${JSON.stringify(sample)});
+const stripError = async (body) => {
+  try {
+    await p.stripTypes(body);
+    return "no throw";
+  } catch (error) {
+    return [error instanceof p.TypeStripError, error.name, error.line, error.column];
+  }
+};
+out.nonAsciiError = await stripError(${JSON.stringify("const s = '😀é'; const x: = 1;")});
+out.openReturn = await stripError(${JSON.stringify("return (\n")});
+const AsyncFunction = (async () => {}).constructor;
+const thrownLine = async (body) => {
+  const js = await p.stripTypes(body);
+  try {
+    await new AsyncFunction("inputs", js + "\\n//# sourceURL=yian-code:t")({});
+    return "no throw";
+  } catch (error) {
+    const frame = /yian-code:t:(\\d+):\\d+/.exec(error.stack ?? "");
+    return frame ? Number(frame[1]) : error.stack;
+  }
+};
+out.stackHeader = (await thrownLine('throw new Error("h");')) - 1;
+out.stackLine =
+  (await thrownLine(${JSON.stringify('// a comment\n\nconst n: number = 1;\nthrow new Error("x" + n);')})) - out.stackHeader;
 console.log(JSON.stringify(out));
 `;
       const result = spawnSync(NODE!, ["--input-type=module", "-e", script], { encoding: "utf8" });
@@ -1178,6 +1205,12 @@ console.log(JSON.stringify(out));
       expect(out.sleptMs).toBeGreaterThanOrEqual(29);
       expect(out.preAborted).toBe(true);
       expect(out.waitTimeout).toEqual(["busy", true, 1500]);
+      expect(out.stripped).toBe(await stripTypes(sample));
+      expect(out.nonAsciiError).toEqual([true, "TypeStripError", 1, 27]);
+      expect(out.openReturn).toEqual([true, "TypeStripError", 1, 9]);
+      // V8 puts the function header on two lines before the body.
+      expect(out.stackHeader).toBe(2);
+      expect(out.stackLine).toBe(4);
     },
     SPAWNED_MS,
   );

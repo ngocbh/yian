@@ -1,9 +1,16 @@
-/** Tests for routes in `src/llm/route.ts`. */
+/** Tests for routes in `src/llm/route.ts` and `RouteModel` in `src/llm/executor.ts`. */
 
 import { describe, expect, test } from "bun:test";
 
-import { BearerAuth } from "../../src/llm/auth.ts";
+import { type Send, USER_AGENT, virtualScheduler } from "../../src/platform.ts";
+import { type Auth, BearerAuth, HeaderKeyAuth, NoAuth } from "../../src/llm/auth.ts";
+import { ProviderError } from "../../src/llm/errors.ts";
+import { type Event, EventStream, Finish, TextDelta } from "../../src/llm/events.ts";
+import { type NdjsonProtocol, RouteModel, type SseProtocol, type WireProtocol } from "../../src/llm/executor.ts";
+import { SSEEvent } from "../../src/llm/framing.ts";
+import { Request } from "../../src/llm/messages.ts";
 import { Route } from "../../src/llm/route.ts";
+import type { JsonObject } from "../../src/typesys/json.ts";
 
 function route(overrides: Partial<ConstructorParameters<typeof Route>[0]> = {}): Route {
   return new Route({
@@ -86,4 +93,530 @@ describe("Route", () => {
       expect(error.stack ?? "").not.toContain(value);
     });
   }
+});
+
+// RouteModel
+
+const KEY = "sk-test-key-0123456789";
+const BODY = { model: "m", input: "héllo ✓", n: 1.5 };
+const REQUEST = new Request({ messages: [] });
+const encoder = new TextEncoder();
+/** A body item: a chunk, an error that ends the body, or a read that never settles. */
+const HANG = Symbol("hang");
+type Item = string | Uint8Array | Error | typeof HANG;
+
+/** What the fake `send` replies. */
+interface Reply {
+  status?: number;
+  headers?: Record<string, string>;
+  /** The body's items, pulled one per read; no body when absent. */
+  body?: Item[];
+  /** Whether `send` waits until the request signal aborts, then rejects with its reason. */
+  hang?: boolean;
+}
+
+/** One request the fake `send` received, and what happened to its body. */
+interface Sent {
+  url: string;
+  method: string | undefined;
+  headers: Headers;
+  body: unknown;
+  signal: AbortSignal;
+  /** How many body items were pulled, and whether the body was cancelled. */
+  stats: { pulled: number; cancelled: boolean };
+}
+
+/** Return a body that hands out one item per pull, so `stats.pulled` counts the reads. */
+function playBody(items: Item[], stats: Sent["stats"]): ReadableStream<Uint8Array> {
+  let next = 0;
+  return new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        if (next >= items.length) return controller.close();
+        const item = items[next++]!;
+        if (item === HANG) return new Promise<void>(() => {});
+        if (item instanceof Error) return controller.error(item);
+        stats.pulled++;
+        controller.enqueue(typeof item === "string" ? encoder.encode(item) : item);
+      },
+      cancel() {
+        stats.cancelled = true;
+      },
+    },
+    { highWaterMark: 0 },
+  );
+}
+
+/** A fake `send` answering with `replies` in order, recording each request in `sent`. */
+function fake(...replies: Reply[]): { send: Send; sent: Sent[] } {
+  const sent: Sent[] = [];
+  const send: Send = async (url, init) => {
+    const reply = replies.shift();
+    if (reply === undefined) throw new Error("unexpected request");
+    const stats = { pulled: 0, cancelled: false };
+    const signal = init.signal!;
+    sent.push({ url: String(url), method: init.method, headers: new Headers(init.headers), body: init.body, signal, stats });
+    if (reply.hang) {
+      await new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
+    }
+    const body = reply.body === undefined ? null : playBody(reply.body, stats);
+    return new Response(body, { status: reply.status ?? 200, headers: reply.headers });
+  };
+  return { send, sent };
+}
+
+/** An SSE reply carrying `texts` as data lines, then `[DONE]`. */
+function sseReply(...texts: string[]): Reply {
+  return { body: [...texts.map((text) => `data: ${text}\n\n`), "data: [DONE]\n\n"] };
+}
+
+/** A protocol that records the frames it is given. */
+type Recording<P> = P & { frames: unknown[] };
+
+/** A test SSE protocol: each data line is a `TextDelta`, ending at `[DONE]` or the end with a `Finish`. */
+function sse(body: unknown = BODY): Recording<SseProtocol> {
+  const frames: unknown[] = [];
+  return {
+    name: "test",
+    model: "test-model",
+    framing: "sse",
+    frames,
+    buildBody: () => body as JsonObject,
+    async *parse(events) {
+      for await (const event of events) {
+        frames.push(event);
+        if (event.data === "[DONE]") break;
+        yield new TextDelta(0, event.data);
+      }
+      yield new Finish({ reason: "stop", protocol: "test" });
+    },
+  };
+}
+
+/** A test NDJSON protocol: each line's `text` is a `TextDelta`, then a `Finish`. */
+function ndjson(): Recording<NdjsonProtocol> {
+  const frames: unknown[] = [];
+  return {
+    name: "test",
+    model: "test-model",
+    framing: "ndjson",
+    frames,
+    buildBody: () => BODY,
+    async *parse(values) {
+      for await (const value of values) {
+        frames.push(value);
+        yield new TextDelta(0, (value as { text: string }).text);
+      }
+      yield new Finish({ reason: "stop", protocol: "test" });
+    },
+  };
+}
+
+/** A model over `route(overrides)` with `protocol`, sending with `send`. */
+function model(send: Send, protocol: WireProtocol = sse(), overrides: Parameters<typeof route>[0] = {}): RouteModel {
+  return new RouteModel({ route: route({ query: { "api-version": "2026-01-01" }, ...overrides }), protocol, send });
+}
+
+/** Read every event of `stream`. */
+async function drain(stream: EventStream): Promise<Event[]> {
+  const events: Event[] = [];
+  for await (const event of stream) events.push(event);
+  return events;
+}
+
+/** Return the error `promise` rejects with, failing when it resolves. */
+async function rejection(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected a rejection");
+}
+
+/** Return the error a call over `auth` ends with, its reply being `reply`. */
+async function callError(reply: Reply, auth: Auth): Promise<ProviderError> {
+  const { send } = fake(reply);
+  const error = await rejection(drain(model(send, sse(), { auth }).stream(REQUEST)));
+  expect(error).toBeInstanceOf(ProviderError);
+  return error as ProviderError;
+}
+
+/** Check that `error` holds no `key` in its message, stack or string form. */
+function expectScrubbed(error: ProviderError, key: string): void {
+  expect(error.message).toContain("[REDACTED]");
+  expect(error.message).not.toContain(key);
+  expect(error.stack ?? "").not.toContain(key);
+  expect(String(error)).not.toContain(key);
+}
+
+describe("RouteModel request", () => {
+  test("request shape", async () => {
+    const { send, sent } = fake(sseReply("1"));
+    await drain(model(send, sse(), { headers: { "x-extra": "a" } }).stream(REQUEST));
+    expect(sent).toHaveLength(1);
+    const [request] = sent;
+    expect(request!.method).toBe("POST");
+    expect(request!.url).toBe("https://api.example/v1/responses?api-version=2026-01-01");
+    expect(request!.body).toBe('{"model":"m","input":"héllo ✓","n":1.5}');
+    expect(request!.headers.get("content-type")).toBe("application/json");
+    expect(request!.headers.get("accept")).toBe("application/json");
+    expect(request!.headers.get("authorization")).toBe(`Bearer ${KEY}`);
+    expect(request!.headers.get("x-extra")).toBe("a");
+    expect(request!.headers.get("user-agent")).toBe(USER_AGENT);
+  });
+
+  test("auth beats a route header of any case", async () => {
+    const { send, sent } = fake(sseReply("1"));
+    await drain(model(send, sse(), { headers: { AUTHORIZATION: "x" } }).stream(REQUEST));
+    expect(sent[0]!.headers.get("authorization")).toBe(`Bearer ${KEY}`);
+  });
+
+  test("route headers override the defaults of any case", async () => {
+    const { send, sent } = fake(sseReply("1"));
+    const headers = { accept: "text/event-stream", "CONTENT-TYPE": "text/plain" };
+    await drain(model(send, sse(), { headers, auth: new NoAuth() }).stream(REQUEST));
+    expect(sent[0]!.headers.get("accept")).toBe("text/event-stream");
+    expect(sent[0]!.headers.get("content-type")).toBe("text/plain");
+    expect(sent[0]!.headers.has("authorization")).toBe(false);
+  });
+
+  for (const protocol of [sse, ndjson]) {
+    test(`accept defaults to application/json for ${protocol.name}`, async () => {
+      const { send, sent } = fake({ body: [] });
+      await drain(model(send, protocol()).stream(REQUEST));
+      expect(sent[0]!.headers.get("accept")).toBe("application/json");
+    });
+  }
+
+  const refused: [string, unknown][] = [
+    ["NaN", { x: NaN }],
+    ["Infinity", { x: Infinity }],
+    ["a lone surrogate", { text: "a\ud800b" }],
+    ["a Map", { x: new Map() }],
+  ];
+  for (const [name, body] of refused) {
+    test(`a body with ${name} throws from the first next() and sends nothing`, async () => {
+      const { send, sent } = fake();
+      const stream = model(send, sse(body)).stream(REQUEST);
+      expect(await rejection(stream.next())).toBeInstanceOf(TypeError);
+      expect(sent).toHaveLength(0);
+    });
+  }
+
+  test("nothing is sent before the first next()", async () => {
+    const { send, sent } = fake(sseReply("1"));
+    let resolved = 0;
+    const auth = new BearerAuth(() => {
+      resolved++;
+      return KEY;
+    });
+    const stream = model(send, sse(), { auth }).stream(REQUEST);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sent).toHaveLength(0);
+    expect(resolved).toBe(0);
+    expect(await stream.next()).toEqual({ done: false, value: new TextDelta(0, "1") });
+    expect(sent).toHaveLength(1);
+    expect(resolved).toBe(1);
+    await stream.close();
+  });
+
+  test("closing before the first next() sends nothing", async () => {
+    const { send, sent } = fake(sseReply("1"));
+    const stream = model(send).stream(REQUEST);
+    await stream.close();
+    expect(await stream.next()).toEqual({ done: true, value: undefined });
+    expect(sent).toHaveLength(0);
+  });
+
+  test("auth is resolved per call", async () => {
+    const keys = ["key-one", "key-two"].values();
+    const { send, sent } = fake(sseReply("1"), sseReply("2"));
+    const m = model(send, sse(), { auth: new BearerAuth(() => keys.next().value!) });
+    await drain(m.stream(REQUEST));
+    await drain(m.stream(REQUEST));
+    expect(sent.map((request) => request.headers.get("authorization"))).toEqual(["Bearer key-one", "Bearer key-two"]);
+  });
+
+  const failed = new Error("refresh failed");
+  const sources: [string, () => string | Promise<string>][] = [
+    ["a throwing source", () => {
+      throw failed;
+    }],
+    ["a rejecting source", async () => {
+      throw failed;
+    }],
+  ];
+  for (const [name, source] of sources) {
+    test(`an auth source's error propagates unchanged from ${name} and nothing is sent`, async () => {
+      const { send, sent } = fake(sseReply("1"));
+      const auth = new BearerAuth(source);
+      expect(await rejection(drain(model(send, sse(), { auth }).stream(REQUEST)))).toBe(failed);
+      expect(sent).toHaveLength(0);
+    });
+  }
+
+  test("provider and model come from the route and the protocol", () => {
+    const { send } = fake();
+    const protocol = sse();
+    const m = model(send, protocol, { provider: "example" });
+    expect(m.provider).toBe("example");
+    expect(m.model).toBe("test-model");
+    expect(m.route.provider).toBe("example");
+    expect(m.protocol).toBe(protocol);
+  });
+
+  test("send and scheduler reach the transport", async () => {
+    const { send, sent } = fake({ hang: true });
+    const m = new RouteModel({ route: route(), protocol: sse(), send, scheduler: virtualScheduler(0) });
+    const error = await rejection(drain(m.stream(REQUEST)));
+    expect(error).toBeInstanceOf(ProviderError);
+    expect((error as ProviderError).kind).toBe("timeout");
+    expect(sent).toHaveLength(1);
+  });
+});
+
+describe("RouteModel status errors", () => {
+  test("a 401 echoing the key is an auth error without the key", async () => {
+    const key = "sk-live-secret-key-abcdef";
+    const body = JSON.stringify({ error: { message: `Incorrect API key provided: ${key}.` } });
+    const error = await callError({ status: 401, body: [body] }, new HeaderKeyAuth("x-api-key", key));
+    expect(error.kind).toBe("auth");
+    expect(error.status).toBe(401);
+    expect(error.provider).toBe("openai");
+    expectScrubbed(error, key);
+  });
+
+  test("a 401 echoing the key JSON-escaped (\\/) holds no key", async () => {
+    const key = "sk-live/secret/key-abcdef";
+    const body = JSON.stringify({ error: { message: `Incorrect API key provided: ${key}.` } }).replaceAll("/", "\\/");
+    expect(body).not.toContain(key);
+    const error = await callError({ status: 401, body: [body] }, new BearerAuth(key));
+    expect(error.message).toContain("Incorrect API key provided: [REDACTED].");
+    expectScrubbed(error, key);
+  });
+
+  test("a 401 echoing the key all \\u-escaped holds no key", async () => {
+    const key = "sk-live-secret-key-abcdef";
+    const escaped = Array.from(key, (char) => `\\u${char.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0")}`);
+    const body = `{"error": {"message": "Incorrect API key provided: ${escaped.join("")}."}}`;
+    const error = await callError({ status: 401, body: [body] }, new BearerAuth(key));
+    expect(error.message).toContain("Incorrect API key provided: [REDACTED].");
+    expectScrubbed(error, key);
+  });
+
+  test("a 401 echoing the key in a mixed escape only the parse undoes is rebuilt without it", async () => {
+    const key = "sk-live-secret-key-abcdef";
+    const body = `{"error": {"message": "Incorrect API key provided: sk-live-secret-k\\u0065y-abcdef."}}`;
+    const error = await callError(
+      { status: 401, headers: { "retry-after": "3" }, body: [body] },
+      new BearerAuth(key),
+    );
+    expect(error.message).toBe("openai returned HTTP 401 (auth): Incorrect API key provided: [REDACTED].");
+    expectScrubbed(error, key);
+    expect(error.kind).toBe("auth");
+    expect(error.status).toBe(401);
+    expect(error.retryAfter).toBe(3);
+    expect(error.retryable).toBe(false);
+    expect(error.provider).toBe("openai");
+  });
+
+  test("the longest credential is replaced first", async () => {
+    const keys = ["abcdefgh", "abcdefgh-longer"].values();
+    const { send } = fake(sseReply("1"), { status: 401, body: ["saw abcdefgh-longer"] });
+    const m = model(send, sse(), { auth: new BearerAuth(() => keys.next().value!) });
+    await drain(m.stream(REQUEST));
+    const error = await rejection(drain(m.stream(REQUEST)));
+    expect((error as ProviderError).message.endsWith("saw [REDACTED]")).toBe(true);
+  });
+
+  test("a non-retryable status names the body's message", async () => {
+    const error = await callError({ status: 400, body: ['{"error": {"message": "bad field"}}'] }, new BearerAuth(KEY));
+    expect(error.kind).toBe("bad_request");
+    expect(error.message).toContain("bad field");
+  });
+
+  test("the error body read stops at 64 KiB and aborts the request", async () => {
+    const chunk = new Uint8Array(16 * 1024).fill(0x78);
+    const { send, sent } = fake({ status: 400, body: Array.from({ length: 640 }, () => chunk) });
+    const error = await rejection(drain(model(send).stream(REQUEST)));
+    expect((error as ProviderError).kind).toBe("bad_request");
+    expect(sent[0]!.stats.pulled).toBeLessThanOrEqual(5);
+    expect(sent[0]!.signal.aborted).toBe(true);
+  });
+
+  test("a body read failure after the status keeps what arrived", async () => {
+    const reset = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+    const error = await callError({ status: 500, body: ["upstream ", "exploded", reset] }, new BearerAuth(KEY));
+    expect(error.kind).toBe("server");
+    expect(error.message).toBe("openai returned HTTP 500 (server): upstream exploded");
+  });
+
+  test("a caller abort during the error body read rethrows its reason", async () => {
+    const { send } = fake({ status: 500, body: ["partial", HANG] });
+    const controller = new AbortController();
+    const stream = model(send).stream(REQUEST, { signal: controller.signal });
+    const pending = rejection(stream.next());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const reason = new Error("stop");
+    controller.abort(reason);
+    expect(await pending).toBe(reason);
+  });
+
+  test("a 3xx is a redirect error, not retryable, after one request", async () => {
+    const { send, sent } = fake({ status: 307, headers: { location: "https://evil.example/steal?k=1" }, body: ["moved"] });
+    const error = (await rejection(drain(model(send).stream(REQUEST)))) as ProviderError;
+    expect(error).toBeInstanceOf(ProviderError);
+    expect(error.kind).toBe("redirect");
+    expect(error.retryable).toBe(false);
+    expect(error.message).toContain("https://evil.example");
+    expect(error.message).not.toContain("/steal");
+    expect(sent).toHaveLength(1);
+  });
+});
+
+describe("RouteModel reply", () => {
+  test("SSE frames reach the protocol", async () => {
+    const { send } = fake({ body: ["data: Hel\n\nda", "ta: lo\n\n", "data: [DONE]\n\n"] });
+    const protocol = sse();
+    const events = await drain(model(send, protocol).stream(REQUEST));
+    expect(events).toEqual([new TextDelta(0, "Hel"), new TextDelta(0, "lo"), new Finish({ reason: "stop", protocol: "test" })]);
+    expect(protocol.frames).toEqual([
+      new SSEEvent({ data: "Hel" }),
+      new SSEEvent({ data: "lo" }),
+      new SSEEvent({ data: "[DONE]" }),
+    ]);
+  });
+
+  test("NDJSON values reach the protocol", async () => {
+    const { send } = fake({ body: ['{"text": "a"}\n', '\n{"te', 'xt": "b"}'] });
+    const protocol = ndjson();
+    const events = await drain(model(send, protocol).stream(REQUEST));
+    expect(events).toEqual([new TextDelta(0, "a"), new TextDelta(0, "b"), new Finish({ reason: "stop", protocol: "test" })]);
+    expect(protocol.frames).toEqual([{ text: "a" }, { text: "b" }]);
+  });
+
+  test("invalid NDJSON is a protocol error with the route's provider", async () => {
+    const { send } = fake({ body: ['{"text": "a"\n'] });
+    const error = (await rejection(drain(model(send, ndjson()).stream(REQUEST)))) as ProviderError;
+    expect(error).toBeInstanceOf(ProviderError);
+    expect(error.kind).toBe("protocol");
+    expect(error.provider).toBe("openai");
+  });
+
+  test("comment-only SSE gives the protocol no frames", async () => {
+    const { send } = fake({ body: [": keep-alive\n\n", ": again\n\n"] });
+    const protocol = sse();
+    const events = await drain(model(send, protocol).stream(REQUEST));
+    expect(protocol.frames).toEqual([]);
+    expect(events).toEqual([new Finish({ reason: "stop", protocol: "test" })]);
+  });
+
+  test("an SSE parse error with no provider gets the route's", async () => {
+    const { send } = fake(sseReply("a", "b"));
+    const protocol: SseProtocol = {
+      ...sse(),
+      async *parse(events) {
+        for await (const event of events) {
+          yield new TextDelta(0, event.data);
+          throw new ProviderError("protocol", "bad frame");
+        }
+      },
+    };
+    const stream = model(send, protocol).stream(REQUEST);
+    expect(await stream.next()).toEqual({ done: false, value: new TextDelta(0, "a") });
+    const error = (await rejection(stream.next())) as ProviderError;
+    expect(error.message).toBe("bad frame");
+    expect(error.provider).toBe("openai");
+  });
+
+  test("an SSE parse error with a provider keeps it", async () => {
+    const { send } = fake(sseReply("a"));
+    const protocol: SseProtocol = {
+      ...sse(),
+      async *parse() {
+        throw new ProviderError("protocol", "bad frame", { provider: "other" });
+      },
+    };
+    const error = (await rejection(drain(model(send, protocol).stream(REQUEST)))) as ProviderError;
+    expect(error.provider).toBe("other");
+  });
+
+  test("an adapter defect propagates unchanged", async () => {
+    const { send, sent } = fake(sseReply("a"));
+    const defect = new TypeError("adapter bug");
+    const protocol: SseProtocol = {
+      ...sse(),
+      async *parse() {
+        throw defect;
+      },
+    };
+    expect(await rejection(drain(model(send, protocol).stream(REQUEST)))).toBe(defect);
+    expect(sent[0]!.signal.aborted).toBe(true);
+  });
+});
+
+describe("RouteModel stream lifetime", () => {
+  test("closing the stream early aborts the request", async () => {
+    const { send, sent } = fake({ body: ["data: a\n\n", "data: b\n\n", HANG] });
+    const stream = model(send).stream(REQUEST);
+    expect(await stream.next()).toEqual({ done: false, value: new TextDelta(0, "a") });
+    expect(sent[0]!.signal.aborted).toBe(false);
+    await stream.close();
+    expect(sent[0]!.signal.aborted).toBe(true);
+  });
+
+  test("closing the stream while the request is opening aborts it", async () => {
+    const { send, sent } = fake({ hang: true });
+    const stream = model(send).stream(REQUEST);
+    const pending = rejection(stream.next());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sent).toHaveLength(1);
+    await stream.close();
+    expect(sent[0]!.signal.aborted).toBe(true);
+    expect(await pending).toBeInstanceOf(Error);
+  });
+
+  test("exhaustion closes the request", async () => {
+    const { send, sent } = fake(sseReply("a"));
+    await drain(model(send).stream(REQUEST));
+    expect(sent[0]!.signal.aborted).toBe(true);
+  });
+
+  test("an error closes the request", async () => {
+    const { send, sent } = fake({ body: ["data: a\n\n", "data: b\n\n", HANG] });
+    const protocol: SseProtocol = {
+      ...sse(),
+      async *parse(events) {
+        for await (const event of events) {
+          yield new TextDelta(0, event.data);
+          throw new ProviderError("protocol", "bad frame");
+        }
+      },
+    };
+    await rejection(drain(model(send, protocol).stream(REQUEST)));
+    expect(sent[0]!.signal.aborted).toBe(true);
+  });
+
+  test("await using closes the stream", async () => {
+    const { send, sent } = fake({ body: ["data: a\n\n", HANG] });
+    {
+      await using stream = model(send).stream(REQUEST);
+      await stream.next();
+    }
+    expect(sent[0]!.signal.aborted).toBe(true);
+  });
+
+  test("a caller abort ends the stream with the reason", async () => {
+    const { send, sent } = fake({ body: ["data: a\n\n", HANG] });
+    const controller = new AbortController();
+    const stream = model(send).stream(REQUEST, { signal: controller.signal });
+    expect(await stream.next()).toEqual({ done: false, value: new TextDelta(0, "a") });
+    const pending = rejection(stream.next());
+    const reason = new Error("stop");
+    controller.abort(reason);
+    expect(await pending).toBe(reason);
+    expect(sent[0]!.signal.aborted).toBe(true);
+    expect(await stream.next()).toEqual({ done: true, value: undefined });
+  });
 });

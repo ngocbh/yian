@@ -759,7 +759,7 @@ def _evaluate_node_stream(
         original = wrapped.original
         return _evaluation_failure(
             node,
-            "node.execute",
+            node.exception_code(original),
             original,
             origin=node.exception_origin(original),
             traceback_text=_format_exception(original),
@@ -769,7 +769,7 @@ def _evaluate_node_stream(
             raise
         return _evaluation_failure(
             node,
-            "node.execute",
+            node.exception_code(exc),
             exc,
             origin=node.exception_origin(exc),
         )

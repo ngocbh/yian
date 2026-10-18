@@ -93,7 +93,7 @@ def test_agent_max_tool_iterations_default_caps_the_loop(monkeypatch, set_defaul
     set_defaults(AGENT_MAX_TOOL_ITERATIONS=1)
     model = _looping(monkeypatch, [_ai_tool_call("lookup", {}, str(i)) for i in range(5)])
     result = run_flow(load_flow(_LOOPING), {"question": "q"})
-    assert result.status == "failed" and result.failure.code == "node.execute"
+    assert result.status == "failed" and result.failure.code == "agent.max_tool_iterations"
     assert "tool-iteration cap (1)" in result.failure.message
     assert model.calls == 1
 

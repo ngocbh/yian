@@ -40,7 +40,7 @@ from yian.nodes.agent.live import (
     observe_skipped_tool_call,
     observe_tool_call,
 )
-from yian.nodes.agent.context import AgentLoopError, AgentRunContext
+from yian.nodes.agent.context import AgentLoopError, AgentRunContext, ToolIterationLimitError
 from yian.nodes.agent.text import (
     record_model_text,
     record_tool_result,
@@ -169,7 +169,7 @@ def run_agent(ctx: AgentRunContext) -> Output:
         if iterations == ctx.max_tool_iterations:
             # No later model call could read these results, so running them would only
             # add side effects to a node that is already failing.
-            raise AgentLoopError(
+            raise ToolIterationLimitError(
                 f"agent node {ctx.node_id!r} hit the tool-iteration cap "
                 f"({ctx.max_tool_iterations}) without a final answer; the last reply's "
                 f"{len(calls)} tool call(s) were not run"

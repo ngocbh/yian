@@ -16,7 +16,7 @@ from copy import deepcopy
 from typing import Any, Callable, Iterator, Literal, Mapping, Optional
 
 from yian.defaults import current
-from yian.diagnostics import OriginRef
+from yian.diagnostics import FailureCode, OriginRef
 from yian.expr.template import render_template_record
 from yian.expr.lineage import FeedbackValue
 from yian.llm_clients.config import HostConnection
@@ -29,7 +29,7 @@ from yian.memory.contracts import (
     _iter_memory_decl_origins,
     _rewrite_memory_decl_origins,
 )
-from yian.nodes.agent.context import DEFAULT_SYSTEM, AgentRunContext
+from yian.nodes.agent.context import DEFAULT_SYSTEM, AgentRunContext, ToolIterationLimitError
 from yian.nodes.agent.llm_values import (
     LLM_CONFIG_KEY,
     CallTimeLLM,
@@ -496,6 +496,12 @@ class AgentNode(Node):
             return super().exception_origin(exception)
         origin = contract.origins.at(path)
         return origin if origin is not None else super().exception_origin(exception)
+
+    def exception_code(self, exception: Exception) -> FailureCode:
+        """Classify the tool-iteration cap as ``agent.max_tool_iterations``; defer the rest."""
+        if isinstance(exception, ToolIterationLimitError):
+            return "agent.max_tool_iterations"
+        return super().exception_code(exception)
 
     def forward(
         self,

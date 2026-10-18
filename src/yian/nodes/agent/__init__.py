@@ -24,11 +24,12 @@ Knows about: nodes.base, events, expr, typesys, tools, llm_clients, memory contr
 Never imports: compile, compose, runtime, the run boundary, or CLI.
 """
 
-from yian.nodes.agent.context import AgentLoopError, AgentRunContext
+from yian.nodes.agent.context import AgentLoopError, AgentRunContext, ToolIterationLimitError
 from yian.nodes.agent.node import AgentNode
 
 __all__ = [
     "AgentNode",
     "AgentLoopError",
     "AgentRunContext",
+    "ToolIterationLimitError",
 ]

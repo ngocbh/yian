@@ -5,10 +5,12 @@ The evaluator binds from flow-owned wiring, runs the node, and returns exactly o
 belong to ``FlowEngine`` rather than this pure evaluation seam.
 """
 
+from collections.abc import Callable
+
 import pytest
 
 from yian.compile.model import START_ID
-from yian.diagnostics import OriginRef
+from yian.diagnostics import FailureCode, OriginRef
 from yian.nodes.base import (
     Grow,
     Node,
@@ -325,6 +327,24 @@ class _OperationOriginNode(Node):
         return self.operation_origin
 
 
+class _ExceptionCodeNode(Node):
+    """Return or raise a configured body outcome while classifying every body exception."""
+
+    kind = NodeKind.CODE
+
+    def __init__(self, node_id: str, outcome: object = None) -> None:
+        super().__init__(node_id, origin=OriginRef(f"node:{node_id}"))
+        self.outcome = outcome
+
+    def forward(self, inputs):
+        if isinstance(self.outcome, Exception):
+            raise self.outcome
+        return self.outcome
+
+    def exception_code(self, exception: Exception) -> FailureCode:
+        return "provider.auth"
+
+
 class _OverrideRaisesStageShaped(Node):
     """Bypass the base wrapper and raise an exception resembling a stage marker."""
 
@@ -339,6 +359,13 @@ class _OverrideRaisesStageShaped(Node):
 
     def run(self, inputs, **caps):
         raise self.failure
+
+
+class _OverrideRaisesWithCode(_OverrideRaisesStageShaped):
+    """Bypass the base wrapper while classifying every body exception."""
+
+    def exception_code(self, exception: Exception) -> FailureCode:
+        return "provider.auth"
 
 
 class _DeepcopyBomb:
@@ -393,6 +420,62 @@ def test_node_execution_prefers_operation_origin_then_node_fallback(
 
     assert isinstance(result, EvaluationFailure)
     assert result.failure.trace == (outer, OriginRef(expected_key))
+
+
+@pytest.mark.parametrize(
+    "node",
+    [
+        _ExceptionCodeNode("n", RuntimeError("unauthorized")),
+        _OverrideRaisesWithCode("n", RuntimeError("unauthorized")),
+    ],
+)
+def test_node_execution_uses_the_node_exception_code(node: Node) -> None:
+    """A body exception takes the code the node's hook selects."""
+    result = drive(node)
+
+    assert isinstance(result, EvaluationFailure)
+    assert result.failure.code == "provider.auth"
+    assert result.failure.trace == (node.origin,)
+    assert result.failure.cause_type == "RuntimeError"
+
+
+def test_base_exception_code_is_node_execution() -> None:
+    """A node without a finer classification reports `node.execute`."""
+    assert Node("n").exception_code(RuntimeError("boom")) == "node.execute"
+
+
+def _unbound_parameter(node: Node) -> None:
+    """Require one parameter the node has no wiring for."""
+    node.params = [Parameter(name="x", required=True)]
+    node._wiring_src = {}
+
+
+def _failing_pre_assert(node: Node) -> None:
+    """Add one pre-assert that cannot hold."""
+    node.pre_asserts = [Assertion("1 == 2", "must hold")]
+
+
+@pytest.mark.parametrize(
+    ("outcome", "configure", "expected_code"),
+    [
+        (Output("unused"), _unbound_parameter, "binding.evaluate"),
+        (Output("unused"), _failing_pre_assert, "assertion.failed"),
+        ({"not": "a NodeResult"}, lambda _node: None, "contract.node_result"),
+    ],
+)
+def test_exception_code_is_asked_only_for_the_body(
+    outcome: object,
+    configure: Callable[[Node], None],
+    expected_code: str,
+) -> None:
+    """Binding, assertion and result-contract stages keep their own codes."""
+    node = _ExceptionCodeNode("n", outcome)
+    configure(node)
+
+    result = drive(node)
+
+    assert isinstance(result, EvaluationFailure)
+    assert result.failure.code == expected_code
 
 
 @pytest.mark.parametrize(

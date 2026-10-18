@@ -435,7 +435,7 @@ def test_source_free_structured_failure_keeps_empty_trace(monkeypatch):
 
 def test_tool_loop_cap_trips_when_bounded(monkeypatch):
     # A POSITIVE env cap bounds the loop: always-asks-for-a-tool -> never answers -> trips
-    # the cap after `cap` turns. The raised AgentLoopError becomes EvaluationFailure at
+    # the cap after `cap` turns. The raised ToolIterationLimitError becomes EvaluationFailure at
     # eval_node. (The DEFAULT is -1 / no cap — see the no-cap test below.)
     cap = 5
     monkeypatch.setitem(tools_mod.TOOL_REGISTRY, "noop", _FakeTool(lambda a: "ok"))
@@ -445,8 +445,12 @@ def test_tool_loop_cap_trips_when_bounded(monkeypatch):
     node.env = {"max_tool_iterations": cap}
     ev = _run_node(node)
     assert isinstance(ev, EvaluationFailure)
-    assert ev.failure.cause_type == "AgentLoopError"
-    assert "tool-iteration cap" in ev.failure.message
+    assert ev.failure.code == "agent.max_tool_iterations"
+    assert ev.failure.cause_type == "ToolIterationLimitError"
+    assert ev.failure.message == (
+        "agent node 'n' hit the tool-iteration cap (5) without a final answer; "
+        "the last reply's 1 tool call(s) were not run"
+    )
 
 
 def test_default_no_cap_runs_unbounded(monkeypatch):
@@ -475,7 +479,7 @@ def test_env_max_tool_iterations_overrides_cap(monkeypatch):
     node.env = {"max_tool_iterations": 2}
     ev = _run_node(node)
     assert isinstance(ev, EvaluationFailure)
-    assert ev.failure.cause_type == "AgentLoopError"
+    assert ev.failure.code == "agent.max_tool_iterations"
     assert "(2)" in ev.failure.message  # the message uses the env override, not the default
     assert looping.calls == 2         # stopped at exactly the env bound
 
@@ -491,10 +495,22 @@ def test_tool_loop_cap_does_not_run_the_last_replys_tools(monkeypatch):
     node.env = {"max_tool_iterations": 2}
     ev = _run_node(node)
     assert isinstance(ev, EvaluationFailure)
-    assert ev.failure.cause_type == "AgentLoopError"
+    assert ev.failure.code == "agent.max_tool_iterations"
     assert "not run" in ev.failure.message
     assert looping.calls == 2
     assert len(tool.seen) == 1        # only the first reply's call ran
+
+
+def test_ungranted_tool_stays_node_execute(monkeypatch):
+    # Only the iteration cap has its own code; asking for a tool the node was not
+    # granted is an ordinary node-body failure.
+    monkeypatch.setitem(tools_mod.TOOL_REGISTRY, "noop", _FakeTool(lambda a: "ok"))
+    _patch_model(monkeypatch, _FakeChat([_ai_tool_call("other", {})]))
+    ev = _run_node(_node(tools=["noop"]))
+    assert isinstance(ev, EvaluationFailure)
+    assert ev.failure.code == "node.execute"
+    assert ev.failure.cause_type == "AgentLoopError"
+    assert "not granted" in ev.failure.message
 
 
 def test_tool_loop_cap_of_one_still_answers_without_tools(monkeypatch):

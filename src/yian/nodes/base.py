@@ -26,7 +26,7 @@ from enum import Enum
 from math import isfinite
 from typing import Any, Callable, ClassVar, Iterator, Optional, Protocol, Union, runtime_checkable
 
-from yian.diagnostics import Failure, OriginRef
+from yian.diagnostics import Failure, FailureCode, OriginRef
 from yian.expr import ExpressionError, prompt_refs
 from yian.expr.expressions import evaluate_when_record, parse_condition
 from yian.expr.lineage import FeedbackValue, has_feedback, validate_feedback
@@ -1002,6 +1002,14 @@ class Node(ABC):
         The default is the authored node context; source-free nodes return ``None``.
         """
         return self.origin
+
+    def exception_code(self, exception: Exception) -> FailureCode:
+        """Return the semantic failure code for one node-body exception.
+
+        Kinds with a finer source-neutral classification may override this hook;
+        the default is ``node.execute``.
+        """
+        return "node.execute"
 
     def skipped_output_target(self) -> str:
         """Return the node whose successors observe this node's absent output.

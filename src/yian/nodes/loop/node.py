@@ -23,7 +23,7 @@ The compile-owned injected builder constructs body/driver at the ORIGIN callsite
 from dataclasses import replace
 from typing import Any, Callable, ClassVar, Iterator, Optional
 
-from yian.diagnostics import OriginRef
+from yian.diagnostics import FailureCode, OriginRef
 from yian.expr.expressions import evaluate_when_record
 from yian.expr.lineage import FeedbackValue
 from yian.nodes.base import (
@@ -49,7 +49,7 @@ class LoopMaxExceeded(RuntimeError):
     Raised only when the loop sets `max:`; a while/until loop without one has no limit.
 
     Raised inside `LoopNode.run` so `eval_node` records a located `Failure` whose
-    `cause_type` is `"LoopMaxExceeded"` and whose message names the exceeded limit."""
+    code is `loop.max_exceeded` and whose message names the exceeded limit."""
 
 
 class LoopNode(Node):
@@ -140,6 +140,12 @@ class LoopNode(Node):
     def origin_children(self) -> tuple[Any, ...]:
         """Return the baked body flow, or no child for an unbaked LOOP."""
         return () if self.child is None else (self.child,)
+
+    def exception_code(self, exception: Exception) -> FailureCode:
+        """Classify the runaway guard as `loop.max_exceeded`; defer everything else."""
+        if isinstance(exception, LoopMaxExceeded):
+            return "loop.max_exceeded"
+        return super().exception_code(exception)
 
     def validate_execution_setup(self) -> None:
         """Require the body flow that Compose must bake before execution."""

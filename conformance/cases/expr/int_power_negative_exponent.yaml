@@ -1,0 +1,4 @@
+kind: expr
+# An int to a negative power is a float, correctly rounded.
+expr: "10 ** -4"
+expect: {value: 0.0001}

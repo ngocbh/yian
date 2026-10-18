@@ -28,10 +28,23 @@ import type { YAMLMap } from "yaml";
 
 import { ENTRIES, forget, nonDefaults, read, reload } from "../src/defaults.ts";
 import type { Env } from "../src/defaults.ts";
+import { reprText } from "../src/diagnostics.ts";
+import {
+  constructorNames,
+  evalExpr,
+  evaluateWhenRecord,
+  isinstanceTypeNames,
+  parseCondition,
+  ResolveMode,
+  resolveInRecord,
+  unknownFunctionMessage,
+} from "../src/expr/expressions.ts";
+import { parseExpr } from "../src/expr/grammar.ts";
 import { canonicalJson, logJson, parseJson } from "../src/typesys/json.ts";
 import type { JsonMode } from "../src/typesys/json.ts";
 import { readTypedefs, typeFor } from "../src/typesys/types.ts";
-import { buildValueAs } from "../src/typesys/values.ts";
+import { buildValueAs, FileRef, isRecord, TypeCheckError } from "../src/typesys/values.ts";
+import type { Type, Value as YianValue, ValueRecord } from "../src/typesys/values.ts";
 
 /** A case value: an int is a `bigint`, a float a `number`. */
 export type Value = null | boolean | bigint | number | string | Value[] | Case;
@@ -670,7 +683,7 @@ export const KINDS: Partial<Record<Kind, KindRunner>> = {
   // run: not run yet
   // resume: not run yet
   // backward: not run yet
-  // expr: not run yet
+  expr: runExpr,
   value: runValue,
   defaults: runDefaults,
   // fingerprint: not run yet
@@ -889,6 +902,65 @@ export async function main(
 // ---- backward ----
 
 // ---- expr ----
+
+// The scalar names `isinstance` takes besides a `typedefs:` name, as compose lists them.
+const ISINSTANCE_BUILTIN_TYPE_NAMES: readonly string[] = [
+  "str", "int", "float", "bool", "date", "datetime", "object",
+];
+
+/** Return `value` in data form: every `FileRef` in it as its mapping `{uri, mime, name}`. */
+function dataForm(value: YianValue): Value {
+  if (FileRef.isFileRef(value)) return { uri: value.uri, mime: value.mime, name: value.name };
+  if (Array.isArray(value)) return value.map(dataForm);
+  if (isRecord(value)) {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, dataForm(item)]));
+  }
+  return value;
+}
+
+/**
+ * Run an `expr` case: evaluate `expr` in `mode` over `values` and `item`, with the type table
+ * the loader would give its `isinstance` and constructor names, under the defaults `env` sets.
+ */
+async function runExpr(case_: Case, ctx: CaseContext): Promise<void> {
+  if (Object.hasOwn(case_, "template")) throw new CaseFailure("`template` cases need template.ts");
+  const mode = get(case_, "mode", "binding");
+  const text = case_["expr"] as string;
+  const values = get(case_, "values", {}) as ValueRecord;
+  const item = get(case_, "item", null) as YianValue;
+  await results(case_["expect"] as Case, () => {
+    // Read inside the result, so a bad variable is raised as the case's error; forgotten
+    // after, so a later case reads its own.
+    try {
+      reload(caseEnv(ctx));
+      const tree = mode === "condition" ? parseCondition(text) : parseExpr(text);
+      const registry = readTypedefs((case_["typedefs"] ?? {}) as Record<string, unknown>);
+      const types = new Map<string, Type>();
+      for (const name of isinstanceTypeNames(tree)) {
+        if (!registry.has(name) && !ISINSTANCE_BUILTIN_TYPE_NAMES.includes(name)) {
+          throw new TypeCheckError(
+            `unknown type ${reprText(name)}; isinstance takes a typedefs: name or one of ` +
+              ISINSTANCE_BUILTIN_TYPE_NAMES.join(", "),
+          );
+        }
+        types.set(name, typeFor(name, registry));
+      }
+      for (const name of constructorNames(tree)) {
+        if (!registry.has(name)) throw new TypeCheckError(unknownFunctionMessage(name));
+        types.set(name, typeFor(name, registry));
+      }
+      if (mode === "condition") {
+        // What every `when:`, `while:` and assert runs.
+        return { value: evaluateWhenRecord(text, values, types) };
+      }
+      const resolveMode = mode === "strict" ? ResolveMode.STRICT_RAISE : ResolveMode.BINDING_NONE;
+      const resolve = (path: string) => resolveInRecord(path, values);
+      return { value: dataForm(evalExpr(tree, resolve, { item, mode: resolveMode, types })) };
+    } finally {
+      forget();
+    }
+  });
+}
 
 // ---- value ----
 

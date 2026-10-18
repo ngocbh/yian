@@ -133,6 +133,23 @@ export function iterSubtrees(tree: Tree): Tree[] {
   return queue.reverse();
 }
 
+/**
+ * Return every subtree of `tree`, itself included, in Lark's `iter_subtrees_topdown` order: each
+ * node before its children, and the children left to right, as a depth-first walk.
+ */
+export function iterSubtreesTopdown(tree: Tree): Tree[] {
+  // Lark keeps a stack and pushes each node's children reversed, so the leftmost pops first.
+  const out: Tree[] = [];
+  const stack: ExprNode[] = [tree];
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    if (!(node instanceof Tree)) continue;
+    out.push(node);
+    for (let i = node.children.length - 1; i >= 0; i--) stack.push(node.children[i]!);
+  }
+  return out;
+}
+
 /** Precedence levels, low to high: a pending operator above the incoming one completes first. */
 const LEVEL = {
   COALESCE: 1,
@@ -485,7 +502,7 @@ export const EXPRESSION_KEYWORDS: ReadonlySet<string> = new Set([
 ]);
 
 /** Return the `call_suffix` of the refcall `node`, or undefined when it is a reference. */
-function callSuffixOf(node: Tree): Tree | undefined {
+export function callSuffixOf(node: Tree): Tree | undefined {
   return node.children.find((child): child is Tree => child instanceof Tree && child.data === "call_suffix");
 }
 

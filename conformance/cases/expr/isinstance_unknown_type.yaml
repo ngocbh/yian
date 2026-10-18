@@ -1,0 +1,9 @@
+kind: expr
+# A type name that is neither a typedef nor a builtin scalar name, as the loader rejects it.
+expr: "isinstance(x, Nope)"
+values: {x: 1}
+expect:
+  raises:
+    class: TypeCheckError
+    message: "unknown type 'Nope'; isinstance takes a typedefs: name or one of str, int, float, bool, date, datetime, object"
+    path: []

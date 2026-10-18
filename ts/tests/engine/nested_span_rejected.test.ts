@@ -1,17 +1,47 @@
 /**
  * A `${...}` marks an expression inside a YAML string; it can't appear inside one: the
- * `parseExpr` tests of `tests/engine/test_nested_span_rejected.py`, which check the error a
- * `${...}` nested inside an expression raises and the rewrite it shows.
+ * `parseExpr` and condition tests of `tests/engine/test_nested_span_rejected.py`, which check
+ * that a whole-span condition reads as its bare spelling, and the error a `${...}` nested inside
+ * an expression raises and the rewrite it shows.
  *
- * The condition, template and load tests land with `expressions.ts`, `template.ts` and compose.
+ * Left for later: the template-span tests land with `template.ts`; the binding, case, assert,
+ * loop and prompt load tests and the run tests with compose and `run.ts`.
  */
 
 import { expect, test } from "bun:test";
 
-import { ExpressionError } from "../../src/expr/expressions.ts";
-import { parseExpr, rejectNestedSpans } from "../../src/expr/grammar.ts";
+import {
+  conditionRefs,
+  ExpressionError,
+  parseCondition,
+  rewriteConditionRefs,
+} from "../../src/expr/expressions.ts";
+import { type ExprNode, parseExpr, rejectNestedSpans, Token } from "../../src/expr/grammar.ts";
 
 const NESTED = "`${...}` can't appear inside an expression";
+
+/** A position-blind form of `node`, as Lark's `Tree`/`Token` equality ignores positions. */
+function plain(node: ExprNode): unknown {
+  if (node instanceof Token) return { type: node.type, value: node.value };
+  return { data: node.data, children: node.children.map(plain) };
+}
+
+// --- whole-span conditions: one `${...}` around the whole value --- //
+
+test("whole-span condition matches its bare spelling", () => {
+  expect(plain(parseCondition("${a > 5}"))).toEqual(plain(parseCondition("a > 5")));
+});
+
+test("whole-span condition with a brace in a string literal", () => {
+  expect(conditionRefs('${x == "}"}')).toEqual(["x"]);
+});
+
+test("whole-span rewrite with a brace in a string literal", () => {
+  const rename = (path: string) => (path === "x" ? "y" : null);
+  expect(rewriteConditionRefs('${x == "}"}', rename)).toBe('${y == "}"}');
+});
+
+// --- a `${...}` inside an expression is an error that shows the rewrite --- //
 
 /** Return the error `fn` throws, which must be an `ExpressionError`. */
 function caught(fn: () => unknown): Error {
@@ -54,6 +84,10 @@ test("nested span without a parsable rewrite shows none", () => {
 
 test("a span inside a string literal is text", () => {
   for (const text of ['x == "${y}"', "x == '${y}'"]) expect(() => parseExpr(text)).not.toThrow();
+});
+
+test("a whole-span condition holding a nested span shows the bare rewrite", () => {
+  expect(caught(() => parseCondition("${a > ${b}}")).message).toBe(`${NESTED}; write \`a > b\``);
 });
 
 test("deeply nested spans are rejected without a rewrite", () => {

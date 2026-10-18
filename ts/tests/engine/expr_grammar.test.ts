@@ -2,10 +2,11 @@
  * Parse tests for the unified `${...}` expression grammar (`expr/grammar.ts`), a port of
  * `tests/engine/test_expr_grammar.py`: references, operators and their precedence, builtin
  * calls, keyword arguments, list literals, groups, coalesce/default/required, literals, token
- * positions, parse-error messages, the error classes, `iterSubtrees` order, and the checks after
- * the parse: reserved reference roots, the dotted callee, the nesting limit, float overflow and
- * the order the checks run in; and the `${...}` helpers: a nested span's error and rewrite,
- * `findSpanEnd` and `wholeSpanInterior`. Later: the `scanTemplate` halves come with `template.ts`.
+ * positions, parse-error messages, the error classes, `iterSubtrees` and `iterSubtreesTopdown`
+ * order, and the checks after the parse: reserved reference roots, the dotted callee, the nesting
+ * limit, float overflow and the order the checks run in; and the `${...}` helpers: a nested
+ * span's error and rewrite, `findSpanEnd` and `wholeSpanInterior`. Later: the `scanTemplate`
+ * halves come with `template.ts`.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -18,6 +19,7 @@ import {
   findSpanEnd,
   isBareName,
   iterSubtrees,
+  iterSubtreesTopdown,
   parseExpr,
   Token,
   Tree,
@@ -584,6 +586,28 @@ describe("iterSubtrees", () => {
       "arg",
       "call_suffix",
       "refcall f",
+    ]);
+  });
+});
+
+describe("iterSubtreesTopdown", () => {
+  test("Lark's order: each node before its children, left to right", () => {
+    const order = iterSubtreesTopdown(tree("f(g(a), h(b))")).map((n) =>
+      n.data === "refcall" ? `refcall ${(n.children[0] as Token).value}` : n.data,
+    );
+    expect(order).toEqual([
+      "refcall f",
+      "call_suffix",
+      "arg",
+      "refcall g",
+      "call_suffix",
+      "arg",
+      "refcall a",
+      "arg",
+      "refcall h",
+      "call_suffix",
+      "arg",
+      "refcall b",
     ]);
   });
 });

@@ -885,6 +885,21 @@ describe("main", () => {
     });
   });
 
+  test("runs `expr` cases with the runner's own kind table", async () => {
+    const files = {
+      "e/expr.yaml": "kind: expr\nexpr: x.n * 2\nvalues: {x: {n: 3}}\nexpect: {value: 6}\n",
+      "e/template.yaml": "kind: expr\ntemplate: n=${n}\nvalues: {n: 1}\nexpect: {value: n=1}\n",
+    };
+    expect(await run([], files, {}, RUNNERS)).toEqual({
+      code: 1,
+      out: [
+        "FAIL e/template: `template` cases need template.ts",
+        "2 cases: 1 passed, 1 failed, 0 pending",
+      ],
+      err: [],
+    });
+  });
+
   test.each([[["--bogus"]], [["--group"]], [["a/ok"]]])("exits 2 on %p", async (argv) => {
     const { code, out, err } = await run(argv);
     expect(code).toBe(2);

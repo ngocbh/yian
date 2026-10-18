@@ -158,6 +158,19 @@ describe("openSqlite", () => {
     expect(read.get()).toEqual({ a: Number.MAX_SAFE_INTEGER });
   });
 
+  test("a safe-integer number binds as INTEGER, any other number as REAL", () => {
+    const db = open(file);
+    const type = db.prepare("SELECT typeof(?) AS t");
+    expect(type.get(1)).toEqual({ t: "integer" });
+    expect(type.get(1.5)).toEqual({ t: "real" });
+  });
+
+  test("foreign keys are off and double-quoted literals are accepted, as in Python", () => {
+    const db = open(file);
+    expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 0 });
+    expect(db.prepare('SELECT "x" AS v').get()).toEqual({ v: "x" });
+  });
+
   test("preparing the same SQL twice returns the cached statement", () => {
     const db = open(file);
     expect(db.prepare("SELECT 1 AS one")).toBe(db.prepare("SELECT 1 AS one"));
@@ -907,6 +920,13 @@ out.noRow = db.prepare("SELECT a FROM t WHERE a = ?").get(0) === undefined;
 db.exec("CREATE TABLE n (a INTEGER)");
 db.prepare("INSERT INTO n VALUES (?)").run(5n);
 out.bigintParam = db.prepare("SELECT a FROM n").get().a;
+out.boundTypes = [1, 1.5].map((value) => db.prepare("SELECT typeof(?) AS t").get(value).t);
+out.foreignKeys = db.prepare("PRAGMA foreign_keys").get().foreign_keys;
+try {
+  out.doubleQuoted = db.prepare('SELECT "x" AS v').get().v;
+} catch (error) {
+  out.doubleQuoted = String(error);
+}
 out.unsafeIntegers = [2n ** 53n, 2n ** 60n].map((big) => {
   db.prepare("DELETE FROM n").run();
   db.prepare("INSERT INTO n VALUES (?)").run(big);
@@ -1003,6 +1023,9 @@ console.log(JSON.stringify(out));
       expect(out.blobIsBytes).toBe(true);
       expect(out.noRow).toBe(true);
       expect(out.bigintParam).toBe(5);
+      expect(out.boundTypes).toEqual(["integer", "real"]);
+      expect(out.foreignKeys).toBe(0);
+      expect(out.doubleQuoted).toBe("x");
       expect(out.unsafeIntegers).toEqual([true, true]);
       expect(out.readonlyRows).toBe(1);
       expect(out.readonlyWriteThrows).toBe(true);

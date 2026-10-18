@@ -14,7 +14,11 @@ import type { DatabaseSync } from "node:sqlite";
 /** The JavaScript runtime yian is running on, detected once at load. */
 export const runtime: "bun" | "node" = typeof Bun !== "undefined" ? "bun" : "node";
 
-/** A value bound to a positional `?` parameter. */
+/**
+ * A value bound to a positional `?` parameter. A `number` passing
+ * `Number.isSafeInteger` binds as INTEGER, as Python's `int` does; any other
+ * `number` binds as REAL.
+ */
 export type SqliteParam = null | number | bigint | string | Uint8Array;
 
 /** A value read from a column; integers are always safe `number`s. */
@@ -23,7 +27,11 @@ export type SqliteValue = null | number | string | Uint8Array;
 /** One result row: a plain object from column name to value. */
 export type SqliteRow = Record<string, SqliteValue>;
 
-/** A prepared statement taking positional `?` parameters. */
+/**
+ * A prepared statement taking positional `?` parameters. A missing positional
+ * parameter throws on Bun but binds NULL on Node; the wrapper doesn't normalize that
+ * programming error.
+ */
 export interface SqliteStatement {
   /** Return every result row, in order. */
   all(...params: SqliteParam[]): SqliteRow[];
@@ -71,7 +79,14 @@ function driver(): (path: string, readonly: boolean) => DriverDatabase {
       new BunDatabase(path, { create: !readonly, readwrite: !readonly, readonly, strict: true, safeIntegers: true });
   } else {
     const { DatabaseSync: NodeDatabase } = requireNodeSqlite();
-    openDriver = (path, readonly) => new NodeDatabase(path, { readOnly: readonly });
+    // Node's defaults differ from Bun's and Python's sqlite3, which leave foreign keys
+    // off and accept double-quoted string literals.
+    openDriver = (path, readonly) =>
+      new NodeDatabase(path, {
+        readOnly: readonly,
+        enableForeignKeyConstraints: false,
+        enableDoubleQuotedStringLiterals: true,
+      });
   }
   return openDriver;
 }
@@ -93,6 +108,11 @@ function requireNodeSqlite(): { DatabaseSync: typeof DatabaseSync } {
   }
 }
 
+/** Map safe-integer `number`s to `bigint`, which both drivers bind as INTEGER; Node binds any `number` as REAL. */
+function bindable(params: SqliteParam[]): SqliteParam[] {
+  return params.map((value) => (typeof value === "number" && Number.isSafeInteger(value) ? BigInt(value) : value));
+}
+
 /** Copy a driver row into a plain object, turning Bun's `bigint`s into safe numbers. */
 function plainRow(row: object): SqliteRow {
   // Spread defines each column as an own property, even one named `__proto__`.
@@ -111,8 +131,9 @@ function plainRow(row: object): SqliteRow {
  * Open the SQLite database file at `path`, creating it unless `readonly`.
  *
  * Integers read back as `number` on both runtimes, and one outside
- * `Number.isSafeInteger` throws `RangeError`. Driver errors pass through; read their
- * result code with `sqliteErrorCode`.
+ * `Number.isSafeInteger` throws `RangeError`. As with Python's sqlite3, foreign keys
+ * are off and double-quoted string literals are accepted. Driver errors pass
+ * through; read their result code with `sqliteErrorCode`.
  */
 export function openSqlite(path: string, { readonly = false }: { readonly?: boolean } = {}): Sqlite {
   const db = driver()(path, readonly);
@@ -127,14 +148,14 @@ export function openSqlite(path: string, { readonly = false }: { readonly?: bool
       if (cached) return cached.statement;
       const raw = db.prepare(sql);
       const statement: SqliteStatement = {
-        all: (...params) => raw.all(...params).map((row) => plainRow(row as object)),
+        all: (...params) => raw.all(...bindable(params)).map((row) => plainRow(row as object)),
         get: (...params) => {
           // Bun returns null for no row, Node undefined.
-          const row = raw.get(...params);
+          const row = raw.get(...bindable(params));
           return row == null ? undefined : plainRow(row);
         },
         run: (...params) => {
-          raw.run(...params);
+          raw.run(...bindable(params));
         },
       };
       statements.set(sql, { statement, raw });

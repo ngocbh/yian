@@ -49,9 +49,10 @@ ids like `node#0`) while `-` is not (so `a - b` is subtraction).
 Changed (TS yian): `ts/src/expr/grammar.ts` is a hand-written parser, not Lark, and builds
 the same tree (`Tree` with `data` and `children`, `Token` with `type` and `value`). A
 number's digits are ASCII `0`–`9`, as a name's letters already were; Python's also took
-other scripts' digits. A parse error still starts `could not parse expression '<text>': `,
-but the rest is TS's own text naming what it found, at a 1-based line and a UTF-16 column:
-`unexpected ')' at line 1, column 2`.
+other scripts' digits. Whitespace inside `not in` follows JavaScript's `\s`, which differs
+from Python's only on rare control and format characters. A parse error still starts
+`could not parse expression '<text>': `, but the rest is TS's own text naming what it found,
+at a 1-based line and a UTF-16 column: `unexpected ')' at line 1, column 2`.
 
 `and`, `or`, `not`, and `in` are reserved operators and cannot be the exact root
 name of a reference. They remain legal as dotted field names, such as

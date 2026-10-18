@@ -115,10 +115,6 @@ value, and exactly 4300 digits is allowed. A longer int is not a yian value, lik
 input 'n': integer with 5000 digits is larger than yian allows (4300 digits)
 ```
 
-Changed (TS yian): ints have no size limit and `YIAN_MAX_INT_DIGITS` doesn't exist, so an int
-of any length is accepted everywhere, number literals in expressions included, and none of the
-errors below happen.
-
 The first boundary that sees one rejects it and names where it sits:
 
 - an int literal in the flow file (a value, a default, a bare `call(...)` argument, a

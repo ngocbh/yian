@@ -24,6 +24,29 @@
  * No suffix is a reference; a suffix makes a builtin call whose callee is the leading `NAME`,
  * and trailers after the parentheses are dotted access on the result.
  *
+ * ## Tree shape
+ *
+ * Precedence, low to high, with each level's node:
+ *
+ * - `a | b | c`: `coalesce[a, b, c]`, no tokens; present only when a `|` appears.
+ * - `a :- d`, `a :? m`: `default_expr[a, d]`, `required_expr[a, m]`, no token; they don't chain.
+ * - `or`, `and`: `or_expr` / `and_expr`, with the `OR` / `AND` tokens between the operands.
+ * - `not x`: `negate[NOT, x]`.
+ * - Comparisons: `compare[a, COMP_OP, b]`, `compare_in[a, IN, b]`, `compare_notin[a, NOT_IN, b]`;
+ *   they don't chain.
+ * - `+ -`, `* / %`: `sum`, `product`, flat, with `ADD_OP` / `MUL_OP` tokens between the operands.
+ * - Unary `-x`: `neg[x]`, no token.
+ * - `**`: `power`, flat, with `POW_OP` tokens between the operands.
+ *
+ * A chain of one level is one node, and author parentheses start a new one. A level with one
+ * operand makes no node and parentheses make none, so a lone literal is a bare `Token`. The
+ * operands: `list_lit[items]`, `refcall[NAME, trailer*, call_suffix?, trailer*]`,
+ * `trailer[NAME]`, `call_suffix[arg*]`, and `arg[NAME?, expr]` (a keyword argument's label first).
+ *
+ * Token types: `NAME`, `NUMBER` (text; no `.` is an int, with `.` a float), `STRING` (keeps its
+ * quotes), `BOOL`, `NULL` (`null` / `none`), `INF`, `NOT`, `NOT_IN` (keeps its source gap), `IN`,
+ * `AND`, `OR`, `COMP_OP`, `ADD_OP`, `MUL_OP`, `POW_OP`. `startPos` / `endPos` are UTF-16 offsets.
+ *
  * ## Why `-` is not in `NAME` (and `#` / `/` are)
  *
  * `NAME` is `[A-Za-z_][A-Za-z0-9_#/]*`. With `-` in it, `a - b` would lex as the one name `a-b`
@@ -49,6 +72,7 @@
 
 import { current } from "../defaults.ts";
 import { reprText } from "../diagnostics.ts";
+// expressions.ts imports this module too, so each uses the other's exports only inside functions.
 import { ExpressionError, ISINSTANCE } from "./expressions.ts";
 
 /** A terminal of the parse: its type, its source text, and where it sits in the text. */
@@ -764,9 +788,12 @@ function rejectReservedReferenceRoots(tree: ExprNode): void {
  * Parse one unified `${...}` expression into a tree.
  *
  * This does no evaluation; it is the shared front end for the evaluator in `expressions.ts`.
- * A lone literal (a `NUMBER`, `STRING`, `BOOL`, `NULL` or `INF`) comes back as a bare `Token`,
- * since a level with one operand makes no node.
  *
+ * @returns The parse tree, shaped as the module's "Tree shape" section says: a `refcall` for a
+ *   reference or call, `coalesce` (only when a `|` appears) / `default_expr` / `required_expr` at
+ *   the top, and the boolean, comparison and arithmetic nodes below. A lone literal (a `NUMBER`,
+ *   `STRING`, `BOOL`, `NULL` or `INF`) comes back as a bare `Token`, since a level with one
+ *   operand makes no node.
  * @throws {ExpressionError} If `text` holds a `${...}` (see `rejectNestedSpans`), does not parse
  *   (`could not parse expression '<text>': unexpected <what> at line L, column C`), nests deeper
  *   than `current().maxValueNesting` levels, holds a float literal outside the double range, is a

@@ -6,7 +6,7 @@
  * counterpart: there is one compose pass and no SafeLoader to compare with. Python's three
  * `!!value` tests become refusal tests in TS, since YAML 1.2 has no `!!value`; `!!binary`,
  * `!!set`, `!!omap` and `!!pairs` are refused too; the merge texts compare with hand-written
- * values. The cursor-based checks come with the cursor. The tag rows planned for the document
+ * values. The cursor-based checks come with the cursor. The tag rows that read the document
  * (merge-source tags included) and the merge-rope size and literal-line rows of
  * `test_source_cursor.py` read definitions here; `test_source_tags.py` itself is ported in
  * `source_tags.test.ts`, with the cursor. TS-era rows: a mapping key YAML reads as
@@ -835,13 +835,16 @@ describe("merges", () => {
     const mappings = document._definitions.filter((definition) => definition.kind === "mapping");
     const ropes = new Set<ArcSequence>();
     const pending = mappings.map((definition) => definition.pairSequence);
+    let arcs = 0;
+    let largest = 0;
     while (pending.length > 0) {
       const rope = pending.pop()!;
       if (ropes.has(rope)) continue;
       ropes.add(rope);
-      pending.push(...rope.parts);
+      arcs += rope.arcs.length;
+      largest = Math.max(largest, rope.flatPairCount);
+      for (const part of rope.parts) pending.push(part);
     }
-    const arcs = [...ropes].reduce((sum, rope) => sum + rope.arcs.length, 0);
     const effective = mappings.reduce((sum, definition) => sum + definition.effectiveIndex.size, 0);
 
     expect((document._value as Record<string, Record<string, Value>>)["root"]!["value"]).toBe(
@@ -850,9 +853,7 @@ describe("merges", () => {
     expect(arcs).toBeLessThan(levels * 8);
     expect(effective).toBeLessThan(levels * 8);
     expect(ropes.size).toBeLessThan(levels * 8);
-    expect(Math.max(...[...ropes].map((rope) => rope.flatPairCount))).toBeGreaterThanOrEqual(
-      2 ** levels,
-    );
+    expect(largest).toBeGreaterThanOrEqual(2 ** levels);
   });
 
   test("a binary merge chain of 120 levels parses", () => {

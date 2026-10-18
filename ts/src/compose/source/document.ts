@@ -132,12 +132,18 @@ interface Summary {
   readonly last: ReadonlyMap<string, MapOccurrence>;
 }
 
-const EMPTY_PAIRS: PairSequence = Object.freeze({
+/** An arc rope and its summary. */
+interface ArcRope {
+  readonly sequence: ArcSequence;
+  readonly summary: Summary;
+}
+
+const EMPTY_PAIRS: PairSequence = {
   pairs: NO_PARTS,
   parts: NO_PARTS,
   partOffsets: NO_PARTS,
   flatPairCount: 0,
-});
+};
 
 /**
  * One safely constructed YAML document with its source graph kept private.
@@ -409,55 +415,36 @@ function build(
       flatPairCount: arcs.length,
     });
   };
-  const converted = new Map<PairSequence, ArcSequence>();
+  const arcRopes = new Map<PairSequence, ArcRope>();
   /**
-   * Return a pair rope as an arc rope of the same shape, on an explicit stack: each distinct
-   * leaf is interned once, leaves in first-occurrence order.
+   * Return a pair rope as an arc rope of the same shape with its summary (Python's
+   * `effective_sequence` and its first-key order), post-order on an explicit stack and cached
+   * per rope: each distinct leaf is interned once, leaves in first-occurrence order, and a
+   * shared rope is summarized once.
    */
-  const convert = (sequence: PairSequence): ArcSequence => {
-    const stack: [PairSequence, boolean][] = [[sequence, false]];
+  const arcRope = (pairSequence: PairSequence): ArcRope => {
+    const stack: [PairSequence, boolean][] = [[pairSequence, false]];
     while (stack.length > 0) {
       const [current, ready] = stack.pop()!;
-      if (converted.has(current)) continue;
+      if (arcRopes.has(current)) continue;
       if (current.parts.length === 0) {
-        converted.set(current, leafArcs(current.pairs));
+        const sequence = leafArcs(current.pairs);
+        arcRopes.set(current, { sequence, summary: leafSummary(sequence.arcs) });
       } else if (!ready) {
         stack.push([current, true]);
         for (let i = current.parts.length - 1; i >= 0; i--) stack.push([current.parts[i]!, false]);
       } else {
-        converted.set(
-          current,
-          Object.freeze({
-            arcs: NO_PARTS,
-            parts: Object.freeze(current.parts.map((part) => converted.get(part)!)),
-            partOffsets: current.partOffsets,
-            flatPairCount: current.flatPairCount,
-          }),
-        );
+        const parts = current.parts.map((part) => arcRopes.get(part)!);
+        const sequence: ArcSequence = Object.freeze({
+          arcs: NO_PARTS,
+          parts: Object.freeze(parts.map((part) => part.sequence)),
+          partOffsets: Object.freeze(current.partOffsets),
+          flatPairCount: current.flatPairCount,
+        });
+        arcRopes.set(current, { sequence, summary: concatSummary(sequence, parts) });
       }
     }
-    return converted.get(sequence)!;
-  };
-  const summaries = new Map<ArcSequence, Summary>();
-  /**
-   * Return an arc rope's summary (Python's `effective_sequence` and its first-key order),
-   * post-order on an explicit stack and cached per rope, so a shared rope is summarized once.
-   */
-  const summarize = (sequence: ArcSequence): Summary => {
-    const stack: [ArcSequence, boolean][] = [[sequence, false]];
-    while (stack.length > 0) {
-      const [current, ready] = stack.pop()!;
-      if (summaries.has(current)) continue;
-      if (current.parts.length === 0) {
-        summaries.set(current, leafSummary(current.arcs));
-      } else if (!ready) {
-        stack.push([current, true]);
-        for (const part of current.parts) stack.push([part, false]);
-      } else {
-        summaries.set(current, concatSummary(current, summaries));
-      }
-    }
-    return summaries.get(sequence)!;
+    return arcRopes.get(pairSequence)!;
   };
   const intern = (written: ParsedNode): number => {
     const node = target(aliasTargets, written);
@@ -529,8 +516,9 @@ function build(
       if (!isMap(node)) {
         throw new SourceSyntaxError(`expected a mapping node, but found ${nodeId(node)}`, at);
       }
-      const pairSequence = convert(flatten(node));
-      const { order, last } = summarize(pairSequence);
+      // Flattened first, so every merge error comes before any pair is interned.
+      const { sequence: pairSequence, summary } = arcRope(flatten(node));
+      const { order, last } = summary;
       // A repeated key keeps its first position and takes the last value, as in SafeLoader.
       for (const key of order) {
         setRecordKey(record, key, values[last.get(key)!.arc.valueDefinition]!);
@@ -579,12 +567,7 @@ function concat(parts: readonly PairSequence[]): PairSequence {
     partOffsets.push(count);
     count += part.flatPairCount;
   }
-  return {
-    pairs: NO_PARTS,
-    parts: kept,
-    partOffsets: Object.freeze(partOffsets),
-    flatPairCount: count,
-  };
+  return { pairs: NO_PARTS, parts: kept, partOffsets, flatPairCount: count };
 }
 
 /** Return an arc leaf's summary: its keys by first occurrence, and each key's last arc. */
@@ -599,33 +582,30 @@ function leafSummary(arcs: readonly MapArc[]): Summary {
 }
 
 /**
- * Return a concatenation's summary from its parts' summaries, each distinct part read once: a
- * key's first occurrence is in the leftmost part that holds it, its last in the rightmost.
+ * Return a concatenation's summary from its parts, each distinct part read once: a key's first
+ * occurrence is in the leftmost part that holds it, its last in the rightmost.
  */
-function concatSummary(
-  sequence: ArcSequence,
-  summaries: ReadonlyMap<ArcSequence, Summary>,
-): Summary {
+function concatSummary(sequence: ArcSequence, parts: readonly ArcRope[]): Summary {
   const order: string[] = [];
   const known = new Set<string>();
-  const firstParts = new Set<ArcSequence>();
-  for (const part of sequence.parts) {
+  const firstParts = new Set<ArcRope>();
+  for (const part of parts) {
     if (firstParts.has(part)) continue;
     firstParts.add(part);
-    for (const key of summaries.get(part)!.order) {
+    for (const key of part.summary.order) {
       if (known.has(key)) continue;
       known.add(key);
       order.push(key);
     }
   }
   const last = new Map<string, MapOccurrence>();
-  const lastParts = new Set<ArcSequence>();
-  for (let i = sequence.parts.length - 1; i >= 0; i--) {
-    const part = sequence.parts[i]!;
+  const lastParts = new Set<ArcRope>();
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const part = parts[i]!;
     if (lastParts.has(part)) continue;
     lastParts.add(part);
     const offset = sequence.partOffsets[i]!;
-    for (const [key, occurrence] of summaries.get(part)!.last) {
+    for (const [key, occurrence] of part.summary.last) {
       if (last.has(key)) continue;
       const pairOrdinal = occurrence.pairOrdinal + offset;
       last.set(key, Object.freeze({ arc: occurrence.arc, pairOrdinal }));

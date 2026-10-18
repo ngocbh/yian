@@ -40,7 +40,7 @@ import {
 export type MapPair = Pair<ParsedNode, ParsedNode | null>;
 
 /** The core scalar tags; on a list or mapping they say `expected a scalar node`. */
-export const SCALAR_TAGS: ReadonlySet<string> = new Set([
+const SCALAR_TAGS: ReadonlySet<string> = new Set([
   STR_TAG,
   NULL_TAG,
   BOOL_TAG,

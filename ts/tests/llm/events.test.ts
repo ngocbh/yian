@@ -1,8 +1,8 @@
 /**
  * Stream events: argument parsing, collecting a reply and the owning stream, a port of
- * `tests/llm/test_events.py`,
- * plus JavaScript's own cases: ints of any size, raw control characters inside strings, async
- * sources, and the rule that a stream ends with exactly one `Finish`.
+ * `tests/llm/test_events.py`, plus JavaScript's own cases: ints of any size, raw control
+ * characters inside strings, async sources, and the rule that a stream ends with exactly one
+ * `Finish`.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -64,7 +64,7 @@ describe("parseArguments", () => {
     expect(parseArguments('{"a": [1, 2.5, null, true]}')).toEqual([{ a: [1n, 2.5, null, true] }, null]);
   });
 
-  test.each(["[1, 2]", "{bad", '{"a": NaN}', '{"a": Infinity}', '{"a": -Infinity}', '"s"', "1e400"])(
+  test.each(["[1, 2]", "{bad", '{"a": NaN}', '{"a": Infinity}', '{"a": -Infinity}', '"s"', "1e400", '{"a": 1e400}'])(
     "rejects %p",
     (text) => {
       expect(parseArguments(text)).toEqual([null, text]);
@@ -233,6 +233,12 @@ describe("collect", () => {
     expect(state).toEqual(["closed"]);
   });
 
+  test("an array is not an event", async () => {
+    const error = await rejection(collect([[]] as unknown as Event[]));
+    expect(error).toBeInstanceOf(TypeError);
+    expect(error.message).toBe("not a stream event: array");
+  });
+
   test("the empty stream is incomplete", async () => {
     const error = await rejection(collect([]));
     expect(error).toBeInstanceOf(ProviderError);
@@ -289,6 +295,8 @@ describe("ReplyAssembler.partial", () => {
     assembler.add(new ReasoningDelta(1, "why"));
     assembler.add(call(2, "c1", "f", '{"a": 1}'));
     assembler.add(call(3, "c2", null, "{"));
+    assembler.add(new ReasoningDelta(4, "dra"));
+    assembler.add(new PartDone(4, new ReasoningPart("draft", { signature: "s" })));
     expect(assembler.partial()).toEqual(
       new Message({
         role: "assistant",
@@ -296,9 +304,17 @@ describe("ReplyAssembler.partial", () => {
           new TextPart("hi"),
           new ReasoningPart("why"),
           new ToolCallPart({ id: "c1", name: "f", arguments: { a: 1n } }),
+          new ReasoningPart("draft", { signature: "s" }),
         ],
       }),
     );
+  });
+
+  test("leaves out a PartDone that holds no part, without throwing", () => {
+    const assembler = new ReplyAssembler();
+    assembler.add(new PartDone(0, "x" as never));
+    assembler.add(new TextDelta(1, "ok"));
+    expect(assembler.partial()).toEqual(new Message({ role: "assistant", parts: [new TextPart("ok")] }));
   });
 
   test("leaves out a part it can't build, without throwing", () => {
@@ -370,6 +386,29 @@ describe("EventStream", () => {
     expect(error.message).toBe("dropped");
     expect(closes).toEqual([1]);
     expect(await drain(stream)).toEqual([]);
+    expect(closes).toEqual([1]);
+  });
+
+  test("a failed close keeps the read error", async () => {
+    async function* events(): AsyncGenerator<Event> {
+      throw new ProviderError("connection", "dropped");
+    }
+    const stream = new EventStream(events(), () => {
+      throw new Error("close failed");
+    });
+    const error = await rejection(stream.next());
+    expect(error).toBeInstanceOf(ProviderError);
+    expect((error as ProviderError).kind).toBe("connection");
+    expect((await rejection(stream.close())).message).toBe("close failed");
+  });
+
+  test("a callback that closes the stream again runs once", async () => {
+    const closes: number[] = [];
+    const stream: EventStream = new EventStream([].values(), () => {
+      closes.push(1);
+      void stream.close();
+    });
+    await stream.close();
     expect(closes).toEqual([1]);
   });
 

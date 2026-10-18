@@ -72,7 +72,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  * a class name, or `non-plain object` for an object with no class name. A value controls its
  * class name, so `isPlainObject` decides what is plain.
  */
-function typeName(value: unknown): string {
+export function typeName(value: unknown): string {
   if (value === null) return "null";
   if (Array.isArray(value)) return "array";
   if (typeof value !== "object") return typeof value;

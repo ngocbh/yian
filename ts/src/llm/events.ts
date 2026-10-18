@@ -19,6 +19,7 @@ import {
   Response,
   TextPart,
   ToolCallPart,
+  typeName,
   type Part,
   type Request,
   type Usage,
@@ -181,14 +182,6 @@ interface Assembly {
   chunks: string[];
   id: string | null;
   name: string | null;
-}
-
-/** Return the type name of a value that is not an event: its class name, or `typeof` for a non-object. */
-function typeName(value: unknown): string {
-  if (value === null) return "null";
-  if (typeof value !== "object") return typeof value;
-  const name: unknown = (value as { constructor?: { name?: unknown } }).constructor?.name;
-  return typeof name === "string" && name !== "" ? name : "object";
 }
 
 /**
@@ -368,7 +361,9 @@ export class EventStream implements AsyncIterableIterator<Event> {
     try {
       result = await this.#events.next();
     } catch (error) {
-      await this.close();
+      // The read error is the one the caller acts on (a retryable ProviderError, say); a
+      // failed close stays stored for later close() callers.
+      await this.close().catch(() => {});
       throw error;
     }
     if (result.done) {

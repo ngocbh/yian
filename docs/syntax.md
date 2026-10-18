@@ -142,8 +142,9 @@ written. This changes the first paragraph and the table above: `2026-10-14` read
 not as a date value. The text must be a `date` (`2026-10-14`) or a `datetime`
 (`2026-10-14T10:00:00Z`) in one of [the accepted forms](typing.md#valuekind-the-closed-vocabulary).
 Other YAML timestamp spellings, such as a lowercase `t`, a blank before the offset, a
-one-digit hour or offset hour, a one-digit month or day before a time (`2026-1-1 10:00:00`),
-or more than six fraction digits, are load errors like an impossible date.
+one-digit hour or offset hour, an offset without minutes (`+05`), a one-digit month or day
+before a time (`2026-1-1 10:00:00`), or more than six fraction digits, are load errors like
+an impossible date.
 
 Changed (TS yian): `.inf`, `+.inf`, and `-.inf` (also `.Inf`, `.INF`) read as floats, and
 `-0.0` reads as `0`. `.nan` and a number too large for a float are errors when YAML reads

@@ -45,7 +45,8 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - It parses with `FLOW_OPTIONS` (YAML 1.2, failsafe schema), so the library resolves no
   scalar; `scalars.ts` applies yian's table.
 - `composeFlowDocument` resolves aliases and applies the nesting and node limits.
-- Ints are `bigint`, dates stay text, `.inf` is a float, and `.nan` is refused.
+- Ints are `bigint`, dates stay text, `.inf` is a float, and `.nan` and an overflowing float
+  are refused.
 - In a flow document, a local type tag never changes how its scalar reads (`!float 3` is `3n`);
   `parseYamlLiteral` refuses local tags.
 

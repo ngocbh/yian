@@ -19,6 +19,11 @@ The Python names are in `yian.defaults`: `current()` returns this process's valu
 a frozen `Defaults` with one lower-case attribute per entry
 (`current().max_total_nodes`), and `ENTRIES` lists each entry with its range.
 
+Changed (TS yian): `current()` comes from `ts/src/defaults.ts` and has one camelCase key
+per entry (`current().maxTotalNodes`). It reads the process environment (`processEnv`);
+`read(env)` takes any `Env` accessor and returns the values it sets, with built-in values
+for the rest. TS yian's own entries are in a second table, [TS yian only](#ts-yian-only).
+
 ## Setting a value
 
 Set the variable before the process starts:
@@ -46,6 +51,12 @@ YIAN_MAX_VALUE_NESTING='150' is out of range; use an integer from 1 to 100, or u
 
 An entry with no maximum accepts any value of up to 18 digits. A failed read is not
 kept: every later call raises again until the variable is fixed.
+
+Changed (TS yian): the message quotes the value as JSON text
+(`YIAN_MAX_VALUE_NESTING="abc" is not an integer; use an integer from 1 to 100, or unset it`),
+and a long value is cut by code points. An entry with no maximum accepts values up to
+9,007,199,254,740,991 (JavaScript's largest safe integer), not any value of up to 18 digits.
+`DefaultsError` and `DefaultsMismatchError` are `RangeError`s.
 
 ## Runs record the values they started with
 
@@ -91,6 +102,9 @@ Two bounds follow `YIAN_MAX_VALUE_NESTING` and have no variable of their own:
   `(derived from YIAN_MAX_VALUE_NESTING)`. The bound also guards stored memory, so a
   memory store written under a higher value limit may not load under a lower one.
 
+Changed (TS yian): memory JSON nesting doesn't exist. Stores are read without a depth
+limit, and stored values are checked against value nesting.
+
 ## Why the nesting limits have maxima
 
 yian walks values, types, YAML documents, and chains of flow bodies recursively, and
@@ -101,21 +115,29 @@ load, run, and resume with stack to spare:
 - `YIAN_MAX_VALUE_NESTING` can only be lowered (its maximum is its default, 100). A
   learnable run logs a CALL binding's expression as a route two JSON levels deep per
   call, and the run log's encoder refuses to write past 255 levels, so a 125-level
-  call expression could not be logged.
+  call expression could not be logged. Changed (TS yian): yian's JSON writer and reader
+  don't recurse, so the log encoder reason is gone; the limit stays for the value walkers
+  not yet ported.
 - `YIAN_MAX_CALL_NESTING` can only be lowered (maximum 50). Loading, running, and
   resuming walk a chain of bodies at about 10 frames per level; 50 levels load, run,
   and resume within Python's default recursion limit, and deeper chains are not
   shown to fit. A chain of `uses:` imports is held to the same limit, since loading
   each file recurses too; the deepest accepted load measured, 50 imports whose last
   file calls a 50-level chain, peaks near 735 frames on Python 3.10 and 3.12.
+  Changed (TS yian): the loader, run, and resume are not yet ported, so the maximum stays
+  until they are measured.
 - `YIAN_MAX_YAML_NESTING` can only be lowered (maximum 200): composing and walking a
   document 200 levels deep stays within Python's default recursion limit.
+  Changed (TS yian): the `yaml` package composes about 500 levels on Node but 5000 on
+  Bun's main thread; the limit keeps the deepest accepted document the same on both.
 - `YIAN_MAX_TYPE_NESTING` may be raised to 125, the depth proven for type text: type
   text nested 125 levels still parses, and text nested 150 levels does not. A record
   type in `output:` counts its record levels against the same limit. Copies of a flow
   share its types, so record depth adds no stack at run setup. The limit also bounds
   each typedef's levels, the length of a chain of typedefs naming each other, and a
-  type with its typedef names expanded.
+  type with its typedef names expanded. Changed (TS yian): the TS type walkers handle at
+  least 500 levels on Node and Bun; the maximum stays 125 until the walkers not yet ported
+  are measured.
 - `YIAN_MAX_AGENT_OUTPUT_NESTING` can only be lowered (maximum 16). Building a model's
   structured reply schema is recursive. The costliest shape is an `Optional(Union(...))`
   field at each level, about 28 frames per level on Python 3.12 and more on 3.11. With
@@ -124,7 +146,12 @@ load, run, and resume with stack to spare:
   The maximum is the smallest passing depth minus 2, a margin for Python versions and
   library releases that weren't measured. Under the deepest accepted load (50 `uses:`
   imports whose last file calls a 50-level chain), an AGENT at 16 levels builds its
-  schema well above the load's peak.
+  schema well above the load's peak. Changed (TS yian): the schema builder is not yet
+  ported; the maximum also stays because providers limit the nesting of a structured-output
+  schema, so a deeper `output:` type is of no use.
+
+Changed (TS yian): the limits keep the deepest accepted input the same on Node and Bun,
+whose stacks differ. Each maximum is re-measured once every recursive walker is ported.
 
 `YIAN_MAX_YAML_NODES` has no maximum, since counting a document's nodes takes no stack;
 raising it raises load time and run-log size in proportion.
@@ -139,6 +166,24 @@ honour more. The default is not checked against it, so with a lower
 is not a yian value: it fails at the first boundary that sees it, and an int literal
 in a flow file is a load error; see [Types → Integer size
 limit](typing.md#integer-size-limit).
+
+Changed (TS yian): `YIAN_MAX_INT_DIGITS` doesn't exist; ints have no size limit.
+
+## TS yian only
+
+These entries exist only in TS yian; Python yian neither reads nor records them.
+
+| TS yian variable | Group | Default | Valid values | Meaning |
+| --- | --- | ---: | --- | --- |
+| `YIAN_MODEL_RETRIES` | setting | 6 | 0 or more | Extra attempts a model call gets after a transport failure (a network error, 5xx, 429 or timeout) |
+| `YIAN_MODEL_FIRST_RESPONSE_TIMEOUT_SECONDS` | setting | 240 | 1 or more | Longest wait in seconds from sending a model request to the first bytes of its response |
+| `YIAN_MODEL_IDLE_TIMEOUT_SECONDS` | setting | 240 | 1 or more | Longest wait in seconds between bytes of a streamed model response |
+| `YIAN_REQUEST_TIMEOUT_SECONDS` | setting | 30 | 1 or more | Longest wait in seconds for a short request (model listing, sign-in calls) |
+| `YIAN_MAX_MCP_MESSAGE_BYTES` | input cap | 16,777,216 | 1 or more | Largest message read from an MCP server |
+
+A value of 300 or more for either model timeout takes effect only on Bun: Node's fetch
+has its own 300-second limits. TS yian has no restart limit (a host that resumes runs
+automatically sets its own) and no int digit limit.
 
 ## All defaults and limits
 

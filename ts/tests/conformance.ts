@@ -26,6 +26,7 @@ import { parseArgs } from "node:util";
 import { Document, isCollection, isMap, isNode, isSeq, parseDocument, visit } from "yaml";
 import type { YAMLMap } from "yaml";
 
+import { ENTRIES, nonDefaults, read } from "../src/defaults.ts";
 import { canonicalJson, logJson, parseJson } from "../src/typesys/json.ts";
 import type { JsonMode } from "../src/typesys/json.ts";
 
@@ -663,7 +664,7 @@ export const KINDS: Partial<Record<Kind, KindRunner>> = {
   // backward: not run yet
   // expr: not run yet
   // value: not run yet
-  // defaults: not run yet
+  defaults: runDefaults,
   // fingerprint: not run yet
   // cli: not run yet
   json: runJson,
@@ -884,6 +885,23 @@ export async function main(
 // ---- value ----
 
 // ---- defaults ----
+
+/** Run a `defaults` case: read yian's defaults from `env`; compare the entries `expect` names. */
+async function runDefaults(case_: Case, ctx: CaseContext): Promise<void> {
+  const expect = case_["expect"] as Case;
+  await results(expect, () => {
+    const byName: Record<string, bigint> = {
+      ...Object.fromEntries(ENTRIES.map((entry) => [entry.name, BigInt(entry.default)])),
+      ...nonDefaults(read((name) => (Object.hasOwn(ctx.env, name) ? ctx.env[name] : undefined))),
+    };
+    const names = Object.keys(get(expect, "defaults", {}) as Case);
+    const unknown = names.filter((name) => !Object.hasOwn(byName, name)).sort();
+    if (unknown.length > 0) {
+      throw new CaseFailure(`\`expect.defaults\` names unknown entries: ${unknown.join(", ")}`);
+    }
+    return { defaults: Object.fromEntries(names.map((name) => [name, byName[name]])) };
+  });
+}
 
 // ---- fingerprint ----
 

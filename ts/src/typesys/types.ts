@@ -7,6 +7,7 @@
  * only resolved `Type` values.
  */
 
+import { current } from "../defaults.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import {
   type Bound,
@@ -129,15 +130,6 @@ const SCALAR_KIND: ReadonlyMap<ScalarName, ValueKind> = new Map([
   ["file", ValueKind.FILE],
   ["Any", ValueKind.ANY],
 ]);
-
-/**
- * The deepest constructor nesting a type may have.
- *
- * Becomes `current().maxTypeNesting` once the defaults module exists.
- */
-function typeNestingLimit(): number {
-  return 100;
-}
 
 /** Return whether `text` encodes as UTF-8, i.e. holds no lone Unicode surrogate. */
 export function encodesAsUtf8(text: string): boolean {
@@ -297,7 +289,7 @@ class TypeParser {
   private readonly tokens: Token[];
   private index = 0;
   private depth = 0;
-  private readonly maxDepth = typeNestingLimit();
+  private readonly maxDepth = current().maxTypeNesting;
 
   constructor(src: string) {
     this.src = src;
@@ -386,7 +378,7 @@ class TypeParser {
     if (this.peek() !== "(") return namedType(name);
     this.next();
     this.depth += 1;
-    if (this.depth > this.maxDepth) throw nestedTooDeeply(this.src);
+    if (this.depth > this.maxDepth) throw nestedTooDeeply(this.src, this.maxDepth);
     const t = this.constructed(name);
     this.depth -= 1;
     return t;
@@ -526,11 +518,11 @@ function rangeNeedsDots(ctor: "int" | "float"): string {
   return `a numeric range needs \`..\`, e.g. ${examples}`;
 }
 
-/** The error for type text `src` nested deeper than `typeNestingLimit()`. */
-function nestedTooDeeply(src: string): TypeCheckError {
+/** The error for type text `src` nested deeper than `limit` levels. */
+function nestedTooDeeply(src: string, limit: number): TypeCheckError {
   const head = Array.from(src).slice(0, 40).join("");
   return new TypeCheckError(
-    `type nested too deeply in ${reprText(head)}... (at most ${typeNestingLimit()} levels)`,
+    `type nested too deeply in ${reprText(head)}... (at most ${limit} levels)`,
   );
 }
 
@@ -695,13 +687,14 @@ function legacySyntax(src: string): LegacyNode {
   const tokens = tokenize(LEGACY_TOKEN, src) ?? malformed();
   let index = 0;
   let depth = 0;
+  const maxDepth = current().maxTypeNesting;
   const peek = (): string | null => tokens[index]?.text ?? null;
   const next = (): Token => tokens[index++] ?? malformed();
 
   // Read `item, item, ...` up to `]` after a `[`; `comma` tells whether one was written.
   const bracketed = (): { items: LegacyNode[]; comma: boolean } => {
     depth += 1;
-    if (depth > typeNestingLimit()) throw nestedTooDeeply(src);
+    if (depth > maxDepth) throw nestedTooDeeply(src, maxDepth);
     const items: LegacyNode[] = [];
     let comma = false;
     while (peek() !== "]") {
@@ -1113,7 +1106,7 @@ export function formatTypeExpr(t: TypeExpr): string {
  */
 export function typeFor(text: string, registry: TypeRegistry): Type {
   const typ = resolveType(parseType(text), registry);
-  const limit = typeNestingLimit();
+  const limit = current().maxTypeNesting;
   if (typeLevels(typ) > limit) {
     throw new TypeCheckError(
       `type nests deeper than ${limit} levels once its typedef names are expanded, ` +
@@ -1279,7 +1272,7 @@ function checkMeasure(
   levels: Map<string, number>,
   chain: Map<string, number>,
 ): void {
-  const limit = typeNestingLimit();
+  const limit = current().maxTypeNesting;
   const [depth, length, levelsField, chainField] = measureTypedef(
     name,
     defn,

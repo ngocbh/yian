@@ -1,11 +1,12 @@
 kind: defaults
-# The message quotes the variable's text as a value: JSON text in TS, a repr in Python.
-rules: [messages]
+# The message quotes the variable's text as a value: JSON text in TS, a repr in Python. An entry
+# with no maximum stops at JS's largest safe integer in TS, at 10**18 - 1 in Python.
+rules: [messages, numbers]
 env: {YIAN_MAX_TOTAL_NODES: lots}
 expect:
   raises:
     class: DefaultsError
-    message: 'YIAN_MAX_TOTAL_NODES="lots" is not an integer; use an integer from 1 to 999999999999999999, or unset it'
+    message: 'YIAN_MAX_TOTAL_NODES="lots" is not an integer; use an integer from 1 to 9007199254740991, or unset it'
 python_expect:
   raises:
     class: DefaultsError

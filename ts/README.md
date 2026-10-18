@@ -23,6 +23,11 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   snake_case JSON form (`../conformance/schema/events.schema.json`); flow values inside are left
   as they are, so write the form with yian's JSON codec, not `JSON.stringify` (it turns infinity
   into null and throws on a bigint).
+- Read limits and settings with `current()` from `src/defaults.ts`. Read the environment only
+  through an injected `Env`: `processEnv` in `defaults.ts` is the one place that touches
+  `process.env`, and a lint checks it. Unit tests read the process environment's `YIAN_*`
+  variables, so run them with none set; the test files that set limits reset them with
+  `install(BUILTIN)` or `forget()`.
 
 ## Commands
 

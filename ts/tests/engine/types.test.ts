@@ -9,8 +9,9 @@
  * arguments); `test_is_shadow_guard` checks the private guard through `readTypedefs`.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
+import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { reprText } from "../../src/diagnostics.ts";
 import {
   formatTypeExpr,
@@ -36,6 +37,10 @@ import {
   typeLevels,
   ValueKind,
 } from "../../src/typesys/values.ts";
+
+// Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
+beforeEach(() => install(BUILTIN));
+afterEach(forget);
 
 const INT = Type.scalar(ValueKind.INTEGER);
 const FLOAT = Type.scalar(ValueKind.NUMBER);

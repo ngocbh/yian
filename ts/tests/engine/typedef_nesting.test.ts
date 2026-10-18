@@ -2,9 +2,7 @@
  * How `readTypedefs` walks typedef references and bounds their nesting, and how deep a type
  * may nest once its typedef names are expanded, a port of `tests/engine/test_typedef_nesting.py`.
  * The flow-loading tests run their typedefs through `readTypedefs` and `typeFor` here.
- * Later: the lower-limit rows (`test_a_lower_limit_bounds_records_and_aliases`, the limit-125
- * rows of `test_types_at_the_limit_load`, `test_field_parse_follows_the_type_nesting_limit`),
- * which need the defaults module, and the located load errors
+ * Later: the located load errors
  * (`test_a_flow_with_a_long_chain_is_a_located_load_error`,
  * `test_a_flow_wrapping_a_deep_typedef_is_a_located_load_error`), which need the loader.
  * Not ported: `test_field_parse_follows_the_int_digit_limit` (D4a: no digit limits);
@@ -14,10 +12,15 @@
  * `readTypedefs` instead.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
+import { BUILTIN, forget, install, reload } from "../../src/defaults.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { TypeCheckError, typeLevels } from "../../src/typesys/values.ts";
+
+// Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
+beforeEach(() => install(BUILTIN));
+afterEach(forget);
 
 type Raw = Record<string, unknown>;
 
@@ -58,20 +61,31 @@ function nest(ctor: string, n: number, name: string): string {
   return `${ctor}(`.repeat(n) + name + ")".repeat(n);
 }
 
+/** Set the type nesting limit to `limit` through `YIAN_MAX_TYPE_NESTING`. */
+function setTypeNesting(limit: number): void {
+  reload((name) => (name === "YIAN_MAX_TYPE_NESTING" ? String(limit) : undefined));
+}
+
 /** The levels error for record `name`'s `field` of type `text`, which adds `adds` levels. */
-function levelsMessage(name: string, field: string, text: string, adds: number): string {
+function levelsMessage(
+  name: string,
+  field: string,
+  text: string,
+  adds: number,
+  limit = 100,
+): string {
   return (
-    `typedef '${name}' field '${field}': type nests deeper than 100 levels, the limit for a ` +
+    `typedef '${name}' field '${field}': type nests deeper than ${limit} levels, the limit for a ` +
     `type (each record and list is a level); its type '${text}' adds ${adds}`
   );
 }
 
 /** The chain error for typedef `name` (at `field`, if given) ending a chain of `chain`. */
-function chainMessage(name: string, chain: number, field?: string): string {
+function chainMessage(name: string, chain: number, field?: string, limit = 100): string {
   const where = field === undefined ? `'${name}'` : `'${name}' field '${field}'`;
   return (
     `typedef ${where}: it ends a chain of ${chain} typedefs, each naming the next, more than ` +
-    "100, the limit for a type; write its type with fewer typedefs in between"
+    `${limit}, the limit for a type; write its type with fewer typedefs in between`
   );
 }
 
@@ -186,15 +200,20 @@ function diamond(n: number): Raw {
 }
 
 describe("types at the limit", () => {
-  test.each([
-    ["tagged unions", () => unionLevels(100, true)],
-    ["untagged unions", () => unionLevels(100, false)],
-    ["unions over a union", () => unionsOverADeepUnion(100)],
-    ["records over a union", () => recordsOverADeepUnion(100)],
-  ] as const)("%s load", (_id, build) => {
-    const [raw, top] = build();
+  const builds = [
+    ["tagged unions", (limit: number) => unionLevels(limit, true)],
+    ["untagged unions", (limit: number) => unionLevels(limit, false)],
+    ["unions over a union", unionsOverADeepUnion],
+    ["records over a union", recordsOverADeepUnion],
+  ] as const;
+  const rows = [BUILTIN.maxTypeNesting, 125].flatMap((limit) =>
+    builds.map(([id, build]) => [id, limit, build] as const),
+  );
+  test.each(rows)("%s load at the limit %p", (_id, limit, build) => {
+    setTypeNesting(limit);
+    const [raw, top] = build(limit);
     const start = performance.now();
-    expect(typeLevels(typeFor(top, readTypedefs(raw)))).toBe(100);
+    expect(typeLevels(typeFor(top, readTypedefs(raw)))).toBe(limit);
     expect(performance.now() - start).toBeLessThan(5000);
   });
 
@@ -204,6 +223,13 @@ describe("types at the limit", () => {
 
   test("an empty record and an enum load", () => {
     readTypedefs({ E: {}, V: "Literal(a)" });
+  });
+
+  test("field parse follows the type nesting limit", () => {
+    const raw = { R: { a: nest("list", 6, "int") } };
+    readTypedefs(raw);
+    setTypeNesting(5);
+    expect(() => readTypedefs(raw)).toThrow(TypeCheckError);
   });
 });
 
@@ -256,6 +282,14 @@ describe("levels and chains", () => {
       chainMessage("R", 101, "a"),
       ["R", "a"],
     );
+  });
+
+  test("a lower limit bounds records and aliases", () => {
+    setTypeNesting(5);
+    readTypedefs(records(5));
+    readTypedefs(aliases(5));
+    expect(typedefsError(records(6)).message).toBe(levelsMessage("T5", "a", "T4", 5, 5));
+    expect(typedefsError(aliases(6)).message).toBe(chainMessage("A5", 6, undefined, 5));
   });
 
   // Each typedef's levels as Python's `_measure_typedef` measures them.

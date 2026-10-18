@@ -1,0 +1,65 @@
+# From tests/seeds/errors/e41-structured-output-no-range.yaml.
+# A record output's one wrong field fails `contract.output` at that field's declared type.
+kind: run
+# The message quotes the returned text as a value: JSON text in TS, a repr in Python.
+rules: [messages]
+flow: |
+  # e41 — a structured `output:` whose one bad field fails validation at the typed
+  # write boundary. Run with no inputs. The message describes the type mismatch without
+  # naming `score`; the canonical Failure trace nevertheless selects the exact `score`
+  # contract origin, which `ComposedFlow.diagnose()` resolves directly. (e21 is the
+  # scalar twin.)
+  id: err-structured-output-no-range
+  name: err_structured_output_no_range
+  nodes:
+    calc:
+      kind: code
+      output:
+        claim: str                                        # L12 — fine
+        score: int                                        # L13 — the field that fails
+      code: |
+        return {"claim": "ok", "score": "not-an-int"}
+  output: ${calc.output.claim}
+inputs: {}
+run: {run_id: r1, num_workers: 0}
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.output
+      message: '"not-an-int" does not match declared type int'
+      node: calc
+      # The declared type `int` of `score` on line 13.
+      frames: [{label: flow.yaml, range: [13, 14, 13, 17]}]
+  trace:
+    - [run_started, null, {inputs: {}, learnable: false, num_workers: 0}]
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {}}]
+    - [node_started, calc]
+    - - node_failed
+      - calc
+      - failure:
+          code: contract.output
+          message: '"not-an-int" does not match declared type int'
+          node: calc
+          frames: [{label: flow.yaml, range: [13, 14, 13, 17]}]
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: contract.output
+      message: "'not-an-int' does not match declared type int"
+      node: calc
+      frames: [{label: flow.yaml, range: [13, 14, 13, 17]}]
+  trace:
+    - [run_started, null, {inputs: {}, learnable: false, num_workers: 0}]
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {}}]
+    - [node_started, calc]
+    - - node_failed
+      - calc
+      - failure:
+          code: contract.output
+          message: "'not-an-int' does not match declared type int"
+          node: calc
+          frames: [{label: flow.yaml, range: [13, 14, 13, 17]}]

@@ -1,0 +1,66 @@
+# From tests/seeds/errors/e31-inline-no-return.yaml.
+# A TS inline CODE body with no `return` loads, then fails its node at the `code:` value.
+# The header (the has-`return` load gate) describes the Python form; Python can't load it.
+kind: run
+# A body that returns nothing is a TS run-time rule; Python rejects it at load.
+rules: [code]
+flow: |
+  # e31 — an inline CODE body with no `return`. COMPILE: the has-`return` load gate rejects
+  # it with a located LoadError before any node runs — a value-producing node that never
+  # returns would silently yield None. Anchored at the `code:` field (a missing return has no
+  # single interior line).
+  id: err-inline-no-return
+  name: err_inline_no_return
+  input:
+    topic: !str
+  nodes:
+    silent:
+      kind: code
+      input:
+        topic: ${input.topic}
+      output: str
+      code: |
+        const summary = inputs.topic.toUpperCase()
+  output: ${silent.output}
+# The CODE body differs by language: `flow` holds the TS body, this the Python one.
+python_flow: |
+  # e31 — an inline CODE body with no `return`. COMPILE: the has-`return` load gate rejects
+  # it with a located LoadError before any node runs — a value-producing node that never
+  # returns would silently yield None. Anchored at the `code:` field (a missing return has no
+  # single interior line).
+  id: err-inline-no-return
+  name: err_inline_no_return
+  input:
+    topic: !str
+  nodes:
+    silent:
+      kind: code
+      input:
+        topic: ${input.topic}
+      output: str
+      code: |
+        summary = inputs["topic"].upper()
+  output: ${silent.output}
+inputs: {topic: X}
+run: {run_id: r1, num_workers: 0}
+expect:
+  output:
+    status: failed
+    failure:
+      code: node.execute
+      message: "CODE body returned no value; return null for no value"
+      node: silent
+      # The whole `code:` value, from `|` on line 15 to the `output:` key that ends it.
+      frames: [{label: flow.yaml, range: [15, 11, 17, 1]}]
+  trace:
+    - [run_started, null, {inputs: {topic: X}, learnable: false, num_workers: 0}]
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {topic: X}}]
+    - [node_started, silent]
+    - - node_failed
+      - silent
+      - failure:
+          code: node.execute
+          message: "CODE body returned no value; return null for no value"
+          node: silent
+          frames: [{label: flow.yaml, range: [15, 11, 17, 1]}]

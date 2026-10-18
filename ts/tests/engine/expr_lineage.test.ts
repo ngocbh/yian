@@ -5,7 +5,11 @@
  *
  * TS-only: the codec form of literal snapshots, a file as an unavailable leaf, own-key record
  * fields, the depth bound inside a partial snapshot, the focused `validateFeedback` and
- * `hasFeedback` checks, and a scalar route lifting a projected selection.
+ * `hasFeedback` checks, a scalar route lifting a projected selection, and a traced resolver that
+ * doesn't return `ResolvedValue`.
+ *
+ * Left for later: the tests and halves that trace through `template.ts` (`eval_binding` /
+ * `eval_template` with `trace=True`) land with its trace option.
  *
  * Not ported:
  * - The MAP and WAIT capture tests (`test_reserved_map_over_uses_the_same_capture_path`,
@@ -24,21 +28,26 @@
  *   `repeat` / `* 2` row are gone.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 
+import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
+import { evalExpr } from "../../src/expr/expressions.ts";
+import { parseExpr } from "../../src/expr/grammar.ts";
 import {
   type FeedbackValue,
   hasFeedback,
+  ResolvedValue,
   type RouteKind,
   type RoutedFeedback,
   RouteContext,
   routeFeedback,
   routeValue,
   SourceRef,
+  type TracedValue,
   validateFeedback,
   ValueRoute,
 } from "../../src/expr/lineage.ts";
-import { FileRef } from "../../src/typesys/index.ts";
+import { FileRef, isRecord, type Value, type ValueRecord } from "../../src/typesys/index.ts";
 import { logJson } from "../../src/typesys/json.ts";
 
 const FILE = new FileRef({ uri: "file:///tmp/x" });
@@ -493,4 +502,301 @@ test("routed feedback is frozen", () => {
   expect(Object.isFrozen(routed.contributions[0])).toBe(true);
   expect(Object.isFrozen(routed.contributions[0]!.context)).toBe(true);
   expect(routed.contributions[0]!.context[0]!.role).toBe("source");
+});
+
+// --------------------------------------------------------------------------------------- //
+// Traced evaluation
+// --------------------------------------------------------------------------------------- //
+
+/** Single-read references backed by distinct accepted execution identities. */
+class Sources {
+  readonly values: ValueRecord;
+  readonly identities: Record<string, SourceRef>;
+  readonly reads: string[] = [];
+
+  constructor(values: ValueRecord = {}) {
+    this.values = values;
+    this.identities = Object.fromEntries(Object.keys(values).map((name, i) => [name, new SourceRef("run", i)]));
+  }
+
+  resolve = (path: string): ResolvedValue => {
+    this.reads.push(path);
+    const [head, ...parts] = path.split(".") as [string, ...string[]];
+    if (!Object.hasOwn(this.values, head)) return new ResolvedValue(null, false);
+    let value = this.values[head]!;
+    for (const part of parts) {
+      if (!isRecord(value) || !Object.hasOwn(value, part)) return new ResolvedValue(null, false);
+      value = value[part]!;
+    }
+    const root = this.identities[head]!;
+    return new ResolvedValue(value, true, new SourceRef(root.runId, root.executionSeq, parts));
+  };
+
+  lookup = (source: SourceRef): unknown => {
+    expect(source.path).toEqual([]);
+    const name = Object.keys(this.identities).find((key) => {
+      const identity = this.identities[key]!;
+      return identity.runId === source.runId && identity.executionSeq === source.executionSeq;
+    });
+    if (name === undefined) throw new Error(`no source ${source.runId}/${source.executionSeq}`);
+    return this.values[name];
+  };
+
+  evaluate(expression: string): TracedValue {
+    return evalExpr(parseExpr(expression), this.resolve, { trace: true });
+  }
+
+  feedback(traced: TracedValue, feedback: FeedbackValue): RoutedFeedback {
+    return routeFeedback(traced.route, feedback, this.lookup);
+  }
+}
+
+// Each registration's previous entry (or its absence), put back after the test, as Python's
+// `monkeypatch.setitem` does.
+const saved: [string, TemplateFn | undefined][] = [];
+
+/** Register a stand-in builtin `name` running `call` for this test only. */
+function standIn(name: string, call: (...args: Value[]) => unknown, params: TemplateParam[]): void {
+  saved.push([name, TEMPLATE_FNS.get(name)]);
+  registerTemplateFn(name, { params, call });
+}
+
+afterEach(() => {
+  for (const [name, fn] of saved.reverse()) {
+    if (fn === undefined) TEMPLATE_FNS.delete(name);
+    else TEMPLATE_FNS.set(name, fn);
+  }
+  saved.length = 0;
+});
+
+test("direct projection lifts feedback into source shape", () => {
+  const original = { tags: ["one", "two"], summary: "text" };
+  const root = new SourceRef("run", 7);
+  const reads: string[] = [];
+  const resolve = (path: string) => {
+    reads.push(path);
+    if (path === "producer.output.tags") {
+      return new ResolvedValue(original.tags, true, new SourceRef("run", 7, ["tags"]));
+    }
+    return new ResolvedValue("two", true, new SourceRef("run", 7, ["tags", 1]));
+  };
+
+  const result = evalExpr(parseExpr("producer.output.tags"), resolve, { trace: true });
+  let routed = routeFeedback(result.route, [null, "Bad."], () => original);
+  expect(result.value).toBe(original.tags);
+  expect(reads).toEqual(["producer.output.tags"]);
+  expect(messages(routed)).toEqual([[root, { tags: [null, "Bad."] }]]);
+  const projected = evalExpr(parseExpr("tag"), resolve, { trace: true });
+  routed = routeFeedback(projected.route, "Bad.", () => original);
+  expect(messages(routed)).toEqual([[root, { tags: [null, "Bad."] }]]);
+});
+
+test.each([0n, false, "", ["item"]] as Value[])("coalesce and default drop losing arm routes (%p)", (winning) => {
+  const sources = new Sources({ empty: null, winner: winning, losing: "unused" });
+  for (const [expression, reads] of [
+    ["empty | winner | losing", ["empty", "winner"]],
+    ["empty :- winner", ["empty", "winner"]],
+    ["winner :- losing", ["winner"]],
+    ['winner :? "Required"', ["winner"]],
+  ] as [string, string[]][]) {
+    sources.reads.length = 0;
+    const result = sources.evaluate(expression);
+    expect(result.value).toEqual(winning);
+    expect(sources.reads).toEqual(reads);
+    expect(messages(sources.feedback(result, "Keep this."))).toEqual([[sources.identities.winner!, "Keep this."]]);
+  }
+  for (const expression of ['empty :- "literal"', "empty | absent | null"]) {
+    expect(messages(sources.feedback(sources.evaluate(expression), "Feedback."))).toEqual([]);
+  }
+  const nullDefault = sources.evaluate("absent :- empty");
+  expect(messages(sources.feedback(nullDefault, "Still empty."))).toEqual([
+    [sources.identities.empty!, "Still empty."],
+  ]);
+});
+
+test("list constructor preserves nested routes", () => {
+  const sources = new Sources({ producer: { tags: ["one", "two"], summary: "long" } });
+  const producer = sources.identities.producer!;
+  const result = sources.evaluate("[producer.tags, [producer.summary], producer.tags]");
+  expect(result.value).toEqual([["one", "two"], ["long"], ["one", "two"]]);
+  const feedback: FeedbackValue = [[null, "Bad."], ["Too long."], "List note."];
+  expect(messages(sources.feedback(result, feedback))).toEqual([
+    [producer, { tags: [null, "Bad."] }],
+    [producer, { summary: "Too long." }],
+    [producer, { tags: "List note." }],
+  ]);
+  expect(messages(sources.feedback(result, "Whole list."))).toHaveLength(3);
+  expect(messages(sources.feedback(result, [null, [null], [null, null]]))).toEqual([]);
+  expect(() => sources.feedback(result, [null])).toThrow(/exactly 3/);
+  expect(() => sources.feedback(result, [["Bad."], null, null])).toThrow(/exactly 2/);
+  const record = ValueRoute.record([
+    ["items", result.route],
+    ["constant", ValueRoute.literal(1n)],
+  ]);
+  expect(messages(routeFeedback(record, { items: feedback }, sources.lookup))).toEqual(
+    messages(sources.feedback(result, feedback)),
+  );
+  expect(() => routeFeedback(record, { unknown: "Bad." }, sources.lookup)).toThrow(/unknown field/);
+});
+
+test("concat splits feedback at recorded operand lengths", () => {
+  const sources = new Sources({ left: ["a"], right: ["b", "c"] });
+  const { left, right } = sources.identities as { left: SourceRef; right: SourceRef };
+  const result = sources.evaluate("left + right");
+  expect(result.value).toEqual(["a", "b", "c"]);
+  expect(messages(sources.feedback(result, [null, "Bad.", null]))).toEqual([[right, ["Bad.", null]]]);
+  expect(messages(sources.feedback(result, "Too many."))).toEqual([
+    [left, "Too many."],
+    [right, "Too many."],
+  ]);
+  const repeated = sources.evaluate("left + left");
+  expect(messages(sources.feedback(repeated, ["First.", "Second."]))).toEqual([
+    [left, ["First."]],
+    [left, ["Second."]],
+  ]);
+  expect(messages(sources.feedback(repeated, "Whole."))).toEqual([
+    [left, "Whole."],
+    [left, "Whole."],
+  ]);
+  expect(messages(sources.feedback(sources.evaluate("[] + right + []"), [null, "Bad."]))).toEqual([
+    [right, [null, "Bad."]],
+  ]);
+});
+
+test.each([
+  ["x + y", 7n, ["x", "y"]],
+  ["x - y", -1n, ["x", "y"]],
+  ["x * y", 12n, ["x", "y"]],
+  ["x / y", 0.75, ["x", "y"]],
+  ["x % y", 3n, ["x", "y"]],
+  ["x ** y", 81n, ["x", "y"]],
+  ["-x", -3n, ["x"]],
+  ["x < y", true, ["x", "y"]],
+  ["x == y", false, ["x", "y"]],
+  ["x in items", true, ["x", "items"]],
+  ["x not in items", false, ["x", "items"]],
+  ["not x", false, ["x"]],
+  ["x or absent", true, ["x"]],
+  ["x and y", true, ["x", "y"]],
+  ["zero and absent", false, ["zero"]],
+] as [string, Value, string[]][])("scalar text stays unchanged: %s", (expression, expected, names) => {
+  const sources = new Sources({ x: 3n, y: 4n, items: [3n, 4n], zero: 0n });
+  const result = sources.evaluate(expression);
+  expect(result.value).toEqual(expected);
+  expect(sources.reads).toEqual(names);
+  const routed = sources.feedback(result, "Original text.");
+  expect(messages(routed)).toEqual(names.map((name) => [sources.identities[name]!, "Original text."]));
+  for (const contribution of routed.contributions) {
+    expect(contribution.context[0]!.result).toEqual(expected);
+    expect(contribution.context[0]!.expression).toBeTruthy();
+    expect(contribution.context[0]!.sources).toEqual(names.map((name) => sources.identities[name]!));
+  }
+});
+
+test.each([
+  ["reorder", (values: Value) => [(values as Value[])[1], (values as Value[])[0]], "", ["b", "a"], ["Wrong.", null]],
+  [
+    "record",
+    (values: Value) => ({ second: (values as Value[])[1], first: (values as Value[])[0] }),
+    "",
+    { second: "b", first: "a" },
+    { second: "Wrong." },
+  ],
+  ["count", (values: Value) => (values as Value[]).length, "", 2n, "Too many."],
+  ["upper", (values: Value) => [(values as Value[])[1], (values as Value[])[0]], "", ["b", "a"], [null, "Wrong."]],
+  [
+    "projected",
+    (values: Value) => ({ result: [(values as Value[])[1], (values as Value[])[0]] }),
+    ".result",
+    ["b", "a"],
+    ["Wrong.", null],
+  ],
+] as [string, (values: Value) => unknown, string, Value, FeedbackValue][])(
+  "opaque functions stop feedback and execute once: %s",
+  (name, fn, suffix, expected, feedback) => {
+    const calls: Value[] = [];
+    standIn(
+      name,
+      (values) => {
+        calls.push(values);
+        return fn(values);
+      },
+      [{ name: "values" }],
+    );
+    const sources = new Sources({ items: ["a", "b"] });
+    const result = sources.evaluate(`${name}(items)${suffix}`);
+    expect(result.value).toEqual(expected);
+    for (const supplied of [feedback, "Original feedback."]) {
+      const routed = sources.feedback(result, supplied);
+      expect(routed.contributions).toEqual([]);
+      expect(routed.stopped).toHaveLength(1);
+      expect(routed.stopped[0]!.feedback).toEqual(supplied);
+      const detail = routed.stopped[0]!.context.at(-1)!;
+      expect(detail.result).toEqual(expected);
+      expect(detail.expression).toBe(`${name}(items)${suffix}`);
+      expect(detail.sources).toEqual([sources.identities.items!]);
+    }
+    expect(sources.reads).toEqual(["items"]);
+    expect(calls).toEqual([["a", "b"]]);
+    expect(sources.feedback(result, null).stopped).toEqual([]);
+  },
+);
+
+test("structural routes retain selection and position context", () => {
+  const sources = new Sources({ left: ["a"], right: ["b", "c"], record: { tags: ["x", "y"] } });
+  const combined = sources.evaluate("left + right");
+  const contributions = sources.feedback(combined, "Too long.").contributions;
+  const details = contributions.map((part) => part.context.find((c) => c.role === "concat")!);
+  expect(details.map((c) => c.operand)).toEqual([0, 1]);
+  expect(details.map((c) => c.span)).toEqual([
+    [0, 1],
+    [1, 3],
+  ]);
+  expect(details.map((c) => c.positions)).toEqual([[[0]], [[1], [2]]]);
+  for (const c of details) {
+    expect(c.expression).toBe("(left + right)");
+    expect(c.result).toEqual(combined.value);
+  }
+  expect(details[0]!.resultJson).toBe(details[1]!.resultJson);
+  expect(contributions.map((part) => part.context.at(-1)!.sources)).toEqual([
+    [sources.identities.left!],
+    [sources.identities.right!],
+  ]);
+  for (const part of contributions) expect(part.context.at(-1)!.resultJson).toBeNull();
+
+  const repeated = sources.feedback(sources.evaluate("left + left"), "Same text.").contributions;
+  expect(repeated.map((part) => part.context.find((c) => c.role === "concat")!.span)).toEqual([
+    [0, 1],
+    [1, 2],
+  ]);
+  const nestedList = sources.evaluate("[[left], right]");
+  const nestedContribution = sources.feedback(nestedList, [["Bad."], null]).contributions[0]!;
+  const items = nestedContribution.context.filter((c) => c.role === "item");
+  expect(items.map((c) => c.operand)).toEqual([0, 0]);
+  expect(items.map((c) => c.result)).toEqual([nestedList.value, [["a"]]]);
+
+  const record = ValueRoute.record([
+    ["other", sources.evaluate("left").route],
+    ["chosen", sources.evaluate("right").route],
+  ]);
+  const projected = routeFeedback(record.project(["chosen", 1]), "Bad.", sources.lookup).contributions[0]!;
+  expect(projected.feedback).toEqual([null, "Bad."]);
+  expect(projected.context[0]!.role).toBe("projection");
+  expect(projected.context[0]!.operand).toEqual(["chosen", 1]);
+  expect(projected.context[0]!.result).toBe("c");
+  const field = projected.context.find((c) => c.role === "field")!;
+  expect(field.operand).toBe("chosen");
+  expect(field.result).toEqual({ other: ["a"], chosen: ["b", "c"] });
+  expect(field.expression).toBeTruthy();
+
+  const direct = sources.feedback(sources.evaluate("record.tags"), [null, "Bad."]).contributions[0]!;
+  expect(direct.context.at(-1)!.role).toBe("projection");
+  expect(direct.context.at(-1)!.sources[0]!.path).toEqual(["tags"]);
+});
+
+test("a traced resolver must return ResolvedValue", () => {
+  const resolve = (() => 1n) as unknown as (path: string) => ResolvedValue;
+  const error = thrown(() => evalExpr(parseExpr("a"), resolve, { trace: true }));
+  expect(error).toBeInstanceOf(TypeError);
+  expect((error as Error).message).toBe("a traced resolver must return ResolvedValue");
 });

@@ -6,8 +6,8 @@
  * subclasses other than arrays (a YAML value here is text, a number, a boolean, null, a plain
  * array or a plain record), the `_value_view` set operations, and the hash-call-count test
  * (ropes are cached by identity, with no hashing). The `scalar_style` tests that need Compose
- * come with Compose; the typed accessors, range helpers, scalar facts and projections come with
- * those methods. Mapping keys are text, so the constructed-key cases read keys as written.
+ * come with Compose, and the projections come with those methods. Mapping keys are text, so
+ * the constructed-key cases read keys as written.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -17,6 +17,7 @@ import {
   freezeValue,
   type MapStep,
   type OccurrencePath,
+  type ScalarStyle,
   setRecordKey,
   snapshotValue,
   SourceAccessError,
@@ -210,12 +211,13 @@ describe("values", () => {
     expect(values.get("0x10")).toBe("hexadecimal");
     expect(values.get("1.50")).toBe("floating");
     expect(values.get("2001-12-15T02:59:43.1Z")).toBe("timestamp");
-    expect(values.child("0x10").range).toEqual(new SourceRange(2, 9, 2, 20));
+    expect(values.rangeOf("0x10")).toEqual(new SourceRange(2, 9, 2, 20));
 
     // Text keys: `true:` and `1:` no longer collide.
     const collision = root.child("collision");
     expect(collision.child("1").range).toEqual(new SourceRange(8, 5, 9, 1));
-    expect(collision.child("1").get("nested")).toBe("second");
+    expect(collision.child("1").str("nested")).toBe("second");
+    expect(collision.child("1").sourceKeyValue).toBe(1n);
     expect(collision.child("true").value).toBe("first");
 
     const copied = values.value as ValueRecord;
@@ -754,5 +756,258 @@ describe("navigation", () => {
     expect(refused([{ key: "a", pairOrdinal: 0 }, { key: "x", pairOrdinal: 0 }])).toBe(
       "invalid mapping occurrence path",
     );
+  });
+});
+
+describe("typed accessors", () => {
+  test("typed accessors read required fields and copy containers", () => {
+    const root = SourceDocument.parse(
+      "name: compose\n" + "count: 3\n" + "config:\n" + "  enabled: true\n" + "items: [one, two]\n",
+    ).root;
+
+    expect(root.str("name")).toBe("compose");
+    expect(root.int("count")).toBe(3n);
+    expect(root.mapping("config")).toEqual({ enabled: true });
+    expect(root.sequence("items")).toEqual(["one", "two"]);
+    expect(root.rangeOf("name")).toEqual(new SourceRange(1, 7, 1, 14));
+    expect(root.keyRangeOf("name")).toEqual(new SourceRange(1, 1, 1, 5));
+    expect(root.keyRangeOf("missing")).toBeNull();
+
+    const mapping = root.mapping("config");
+    const sequence = root.sequence("items");
+    expect(Object.isFrozen(mapping) || Object.isFrozen(sequence)).toBe(false);
+    mapping["enabled"] = false;
+    sequence.push("three");
+    expect(root.mapping("config")).toEqual({ enabled: true });
+    expect(root.sequence("items")).toEqual(["one", "two"]);
+
+    expect(accessError(() => root.str("missing")).message).toBe("missing required field 'missing'");
+    const notText = accessError(() => root.str("count"));
+    expect(notText.message).toBe("field 'count' must be a string, got int");
+    expect(notText.range).toEqual(root.rangeOf("count"));
+    expect(accessError(() => root.mapping("items")).message).toBe(
+      "field 'items' must be a mapping, got list",
+    );
+    expect(accessError(() => root.sequence("config")).message).toBe(
+      "field 'config' must be a sequence, got dict",
+    );
+  });
+
+  test("int rejects a boolean and str names null as NoneType", () => {
+    const root = SourceDocument.parse("flag: true\nnothing:\n").root;
+
+    const error = accessError(() => root.int("flag"));
+    expect(error.message).toBe("field 'flag' must be an integer, got bool");
+    expect(error.range).toEqual(new SourceRange(1, 7, 1, 11));
+    expect(accessError(() => root.str("nothing")).message).toBe(
+      "field 'nothing' must be a string, got NoneType",
+    );
+  });
+});
+
+describe("range helpers", () => {
+  test("item range lists keep duplicates and item ranges keep the last", () => {
+    const root = SourceDocument.parse("asserts:\n  - output > 0\n  - output > 0\n").root;
+
+    expect(root.itemRangeList("asserts")).toEqual([
+      new SourceRange(2, 5, 2, 15),
+      new SourceRange(3, 5, 3, 15),
+    ]);
+    expect(root.itemRanges("asserts")).toEqual(
+      new Map([["output > 0", new SourceRange(3, 5, 3, 15)]]),
+    );
+    expect(root.itemRangeList("missing")).toEqual([]);
+    expect(root.itemRanges("missing")).toEqual(new Map());
+  });
+
+  test("sequence field ranges follow item order", () => {
+    const root = SourceDocument.parse(
+      "cases:\n" +
+        '  - when: "a >= 1"\n' +
+        "    then: x\n" +
+        '  - when: "b >= 2"\n' +
+        "    then: y\n" +
+        "  - scalar\n",
+    ).root;
+
+    expect(root.sequenceFieldRanges("cases", "when")).toEqual([
+      new SourceRange(2, 11, 2, 19),
+      new SourceRange(4, 11, 4, 19),
+      null,
+    ]);
+    expect(root.sequenceFieldRanges("cases", "then")).toEqual([
+      new SourceRange(3, 11, 3, 12),
+      new SourceRange(5, 11, 5, 12),
+      null,
+    ]);
+    expect(root.mappingValueRanges("missing")).toEqual(new Map());
+  });
+
+  test("mapping value ranges keep each key's last range in first-key order", () => {
+    const root = SourceDocument.parse("m:\n  a: 1\n  b: 2\n  a: 3\n").root;
+
+    const ranges = root.mappingValueRanges("m");
+    expect([...ranges.keys()]).toEqual(["a", "b"]);
+    expect(ranges.get("a")).toEqual(new SourceRange(4, 6, 4, 7));
+  });
+
+  test("a merge range summary folds a shared rope without enumerating", () => {
+    unboundedNodes();
+    const document = binaryMergeDocument(24);
+    const original = SourceCursor.prototype._iterFlatOccurrences;
+    SourceCursor.prototype._iterFlatOccurrences = () => {
+      throw new Error("an effective range lookup must not flatten occurrences");
+    };
+    try {
+      expect(document.root.mappingValueRanges("root")).toEqual(
+        new Map([["value", new SourceRange(2, 10, 2, 14)]]),
+      );
+    } finally {
+      SourceCursor.prototype._iterFlatOccurrences = original;
+    }
+  });
+});
+
+describe("scalar facts", () => {
+  test("scalarSource is a frozen view of an unchanged text scalar", () => {
+    const cursor = SourceDocument.parse("code: |-\n  first\n").root.child("code");
+
+    const source = cursor.scalarSource!;
+    expect(Object.isFrozen(source)).toBe(true);
+    expect(source.range).toEqual(cursor.range!);
+    expect(source.constructedLineRanges).toEqual([new SourceRange(2, 3, 2, 8)]);
+    expect(SourceCursor.virtual("first\nsecond").scalarSource).toBeNull();
+    expect(SourceDocument.parse("n: 3\n").root.child("n").scalarSource).toBeNull();
+  });
+
+  /** One literal case: name, text, built value, and each constructed line's range bounds. */
+  type LiteralCase = [string, string, string, [number, number, number, number][]];
+  const literalCases: LiteralCase[] = [
+    ["clip", "code: |\n  alpha\n  beta\n", "alpha\nbeta\n", [[2, 3, 2, 8], [3, 3, 3, 7]]],
+    ["strip", "code: |-\n  alpha\n  beta\n", "alpha\nbeta", [[2, 3, 2, 8], [3, 3, 3, 7]]],
+    [
+      "keep",
+      "code: |+\n  alpha\n  beta\n\n\n",
+      "alpha\nbeta\n\n\n",
+      [[2, 3, 2, 8], [3, 3, 3, 7], [4, 1, 4, 1], [5, 1, 5, 1]],
+    ],
+    [
+      "explicit indent",
+      "code: |2-\n    first\n      second\n",
+      "  first\n    second",
+      [[2, 3, 2, 10], [3, 3, 3, 13]],
+    ],
+    [
+      "blank lines",
+      "code: |+\n\n  first\n  \n  second\n\n",
+      "\nfirst\n\nsecond\n\n",
+      [[2, 1, 2, 1], [3, 3, 3, 8], [4, 3, 4, 3], [5, 3, 5, 9], [6, 1, 6, 1]],
+    ],
+    ["CRLF", "code: |-\r\n  first\r\n  second\r\n", "first\nsecond", [[2, 3, 2, 8], [3, 3, 3, 9]]],
+    [
+      "anchored tagged header",
+      "code: &shared # fake | indicator\n  !!str |-\n    first\n",
+      "first",
+      [[3, 5, 3, 10]],
+    ],
+    ["EOF", "code: |-\n  final", "final", [[2, 3, 2, 8]]],
+    ["empty clip", "code: |\n", "", []],
+    ["empty strip", "code: |-\n", "", []],
+    ["empty keep", "code: |+\n", "", []],
+    ["empty clip at EOF", "code: |", "", []],
+    ["empty strip at EOF", "code: |-", "", []],
+    ["empty keep at EOF", "code: |+", "", []],
+    ["kept blank lines", "code: |+\n\n\n", "\n\n", [[2, 1, 2, 1], [3, 1, 3, 1]]],
+  ];
+
+  test.each(literalCases)(
+    "scalarSource maps literal lines: %s",
+    (_name, text, value, expected) => {
+      const cursor = SourceDocument.parse(text).root.child("code");
+
+      expect(cursor.value).toBe(value);
+      const source = cursor.scalarSource!;
+      expect(source.range).toEqual(cursor.range!);
+      expect(source.constructedLineRanges).toEqual(
+        expected.map((bounds) => new SourceRange(...bounds)),
+      );
+    },
+  );
+
+  test.each([
+    ["folded", "code: >-\n  first\n  second\n"],
+    ["quoted", 'code: "first\\nsecond"\n'],
+    ["plain", "code: first\n  second\n"],
+  ])("scalarSource falls back to the whole range: %s", (_name, text) => {
+    const cursor = SourceDocument.parse(text).root.child("code");
+
+    const source = cursor.scalarSource!;
+    expect(source.range).toEqual(cursor.range!);
+    expect(source.constructedLineRanges).toBeNull();
+  });
+
+  test.each([
+    ["plain", "value: x = 1\n", "plain"],
+    ["single", "value: 'x = 1'\n", "single"],
+    ["double", 'value: "x = 1"\n', "double"],
+    ["literal", "value: |\n  x = 1\n", "literal"],
+    ["folded", "value: >\n  x = 1\n", "folded"],
+    ["multi-line plain", "value: first\n  second\n", "plain"],
+    ["plain int", "value: 3\n", "plain"],
+    ["plain null", "value:\n", "plain"],
+  ] as [string, string, ScalarStyle][])(
+    "scalarStyle reports the authored style: %s",
+    (_name, text, expected) => {
+      expect(SourceDocument.parse(text).root.child("value").scalarStyle).toBe(expected);
+    },
+  );
+
+  test("scalarStyle of sequence items and aliases; null for containers", () => {
+    const root = SourceDocument.parse(
+      "items: [plain, 'single', \"double\"]\n" +
+        "anchored: &a 'x = 1'\n" +
+        "alias: *a\n" +
+        "map: {a: 1}\n",
+    ).root;
+
+    expect(root.child("items").children().map((item) => item.scalarStyle)).toEqual([
+      "plain",
+      "single",
+      "double",
+    ]);
+    expect(root.child("alias").scalarStyle).toBe("single");
+    expect(root.child("map").scalarStyle).toBeNull();
+    expect(root.child("items").scalarStyle).toBeNull();
+    expect(SourceCursor.virtual("x").scalarStyle).toBeNull();
+  });
+
+  test("scalarText, keyText and sourceKeyValue read the authored source", () => {
+    const root = SourceDocument.parse("a: !str yes\nb: 30\nc: 'q'\nd: [1]\n0x10: hex\n").root;
+
+    expect(root.child("a").scalarText).toBe("yes");
+    expect(root.child("b").scalarText).toBe("30");
+    expect(root.child("c").scalarText).toBe("q");
+    expect(root.child("d").scalarText).toBeNull();
+    expect(root.child("0x10").keyText).toBe("0x10");
+    expect(root.child("0x10").sourceKeyValue).toBe(16n);
+    expect(root.child("d").child(0).keyText).toBeNull();
+    expect(root.child("d").child(0).sourceKeyValue).toBeNull();
+    expect(root.keyText).toBeNull();
+    expect(SourceCursor.virtual(1).keyText).toBeNull();
+  });
+
+  test("tags, tag definition ids and hasValue on physical cursors", () => {
+    const root = SourceDocument.parse("a: !int 5\nb: !int\nc: !int null\nd: 7\n").root;
+
+    expect(root.child("a").tag).toBe("int");
+    expect(root.child("a").hasValue).toBe(true);
+    expect(root.child("b").tag).toBe("int");
+    expect(root.child("b").hasValue).toBe(false);
+    expect(root.child("c").hasValue).toBe(true);
+    expect(root.child("d").tag).toBeNull();
+    expect(root.child("d").tagDefinitionId).toBeNull();
+    expect(root.child("a").tagDefinitionId).toBe(root.child("a")._definition);
+    expect(SourceCursor.virtual(1).tag).toBeNull();
+    expect(SourceCursor.virtual(null).hasValue).toBe(true);
   });
 });

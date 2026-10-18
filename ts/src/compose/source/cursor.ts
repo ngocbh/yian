@@ -1,7 +1,13 @@
 /** Immutable cursors over physical and virtual YAML source values. */
 
 import { reprText, type SourceRange } from "../../diagnostics.ts";
-import { isList, isRecord, type Value, type ValueRecord } from "../../typesys/index.ts";
+import {
+  isList,
+  isRecord,
+  pythonTypeName,
+  type Value,
+  type ValueRecord,
+} from "../../typesys/index.ts";
 import {
   type ArcSequence,
   freezeValue,
@@ -11,6 +17,9 @@ import {
   type OccurrencePath,
   type OccurrenceStep,
   type PathLink,
+  type ScalarDef,
+  type ScalarSource,
+  type ScalarStyle,
   type SequenceDef,
   snapshotValue,
   SourceAccessError,
@@ -142,6 +151,94 @@ export class SourceCursor {
   get range(): SourceRange | null {
     if (this._document === null || this._definition === null) return null;
     return this._document._definitions[this._definition]!.range;
+  }
+
+  /**
+   * The source of an unchanged text scalar: its whole range, plus its constructed lines'
+   * ranges when it is a literal block. Null for a virtual cursor, a value that isn't text, or
+   * a value that differs from the authored one.
+   *
+   * Example: `SourceDocument.parse("code: |-\n  pass\n").root.child("code").scalarSource`
+   * has one constructed line range, on line 2.
+   */
+  get scalarSource(): ScalarSource | null {
+    const definition = this._sourceScalarDefinition();
+    if (
+      definition === null ||
+      definition.range === null ||
+      typeof definition.value !== "string" ||
+      typeof this._value !== "string" ||
+      this._value !== definition.value
+    ) {
+      return null;
+    }
+    return Object.freeze({
+      range: definition.range,
+      constructedLineRanges: definition.constructedLineRanges,
+    });
+  }
+
+  /**
+   * The authored style of an unchanged source scalar; null for a mapping, a sequence, a
+   * virtual value, or a value that differs from the authored scalar.
+   *
+   * Example: `SourceDocument.parse("a: 'x = 1'\n").root.child("a").scalarStyle` is
+   * `"single"`.
+   */
+  get scalarStyle(): ScalarStyle | null {
+    return this._unchangedScalarDefinition()?.style ?? null;
+  }
+
+  /**
+   * The local tag of an unchanged source value, without the leading `!` (`"list(str)"`);
+   * null when the value is untagged or core-tagged, virtual, or differs from the authored
+   * value.
+   *
+   * Example: `SourceDocument.parse("a: !int 5\n").root.child("a").tag` is `"int"`.
+   */
+  get tag(): string | null {
+    if (this._document === null || this._definition === null) return null;
+    const definition = this._document._definitions[this._definition]!;
+    if (definition.tag === null || !sameValue(this._value, definition.value)) return null;
+    return definition.tag;
+  }
+
+  /**
+   * The document-local id of the tagged definition this cursor reads, which aliases of one
+   * tagged node share; null whenever `tag` is.
+   */
+  get tagDefinitionId(): number | null {
+    return this.tag === null ? null : this._definition;
+  }
+
+  /**
+   * The authored text of an unchanged source scalar, before YAML resolves its type: a plain
+   * `yes` reads `"yes"`. Null where `scalarStyle` is.
+   */
+  get scalarText(): string | null {
+    return this._unchangedScalarDefinition()?.raw ?? null;
+  }
+
+  /**
+   * The authored text of the mapping key selecting this occurrence; null for a root, a
+   * sequence item, or a virtual cursor.
+   */
+  get keyText(): string | null {
+    return this._sourceKeyText();
+  }
+
+  /**
+   * Whether the source wrote a value, not just a tag: false only for an unchanged empty plain
+   * scalar that carries a local tag, as in `a: !int`.
+   */
+  get hasValue(): boolean {
+    const definition = this._sourceScalarDefinition();
+    return !(
+      definition !== null &&
+      definition.raw === "" &&
+      definition.style === "plain" &&
+      this.tag !== null
+    );
   }
 
   /** The selecting mapping key's range; null for a root, a sequence item, or a virtual cursor. */
@@ -277,6 +374,232 @@ export class SourceCursor {
   get(key: string, fallback: Value = null): Value {
     if (!this.has(key)) return snapshotValue(fallback);
     return this.child(key).value;
+  }
+
+  /**
+   * Return the required text field `key`.
+   *
+   * @throws SourceAccessError when the field is absent, isn't text, or can't be reached.
+   */
+  str(key: string): string {
+    const child = this.child(key);
+    const value = child._value;
+    if (typeof value !== "string") throw typeError(key, "a string", value, child.range);
+    return value;
+  }
+
+  /**
+   * Return the required integer field `key`; a boolean or a float is refused.
+   *
+   * @throws SourceAccessError when the field is absent, isn't an integer, or can't be reached.
+   */
+  int(key: string): bigint {
+    const child = this.child(key);
+    const value = child._value;
+    if (typeof value !== "bigint") throw typeError(key, "an integer", value, child.range);
+    return value;
+  }
+
+  /**
+   * Return a fresh, unfrozen copy of the required mapping field `key`.
+   *
+   * @throws SourceAccessError when the field is absent, isn't a mapping, or can't be reached.
+   */
+  mapping(key: string): ValueRecord {
+    const child = this.child(key);
+    const value = child._value;
+    if (!isRecord(value)) throw typeError(key, "a mapping", value, child.range);
+    return snapshotValue(value) as ValueRecord;
+  }
+
+  /**
+   * Return a fresh, unfrozen copy of the required sequence field `key`.
+   *
+   * @throws SourceAccessError when the field is absent, isn't a sequence, or can't be reached.
+   */
+  sequence(key: string): Value[] {
+    const child = this.child(key);
+    const value = child._value;
+    if (!isList(value)) throw typeError(key, "a sequence", value, child.range);
+    return snapshotValue(value) as Value[];
+  }
+
+  /**
+   * Return the range of the required child at mapping key or sequence index `key`; null when
+   * the child has no source.
+   *
+   * @throws SourceAccessError when `key` can't be selected or reached.
+   */
+  rangeOf(key: string | number): SourceRange | null {
+    return this.child(key).range;
+  }
+
+  /**
+   * Return the key range of the mapping child at `key`; null when it is absent or has no
+   * source.
+   *
+   * @throws SourceAccessError at a recursive alias.
+   */
+  keyRangeOf(key: string): SourceRange | null {
+    this._ensureTraversable();
+    if (this._overlay || this._document === null) return null;
+    const occurrence = this._effectiveOccurrence(key);
+    if (occurrence === null) return null;
+    return this._document._definitions[occurrence.arc.keyDefinition]!.range;
+  }
+
+  /**
+   * Return the ranges of the scalar items of the sequence field `key`, by authored text; a
+   * repeated text keeps its last range. An absent, unlocated or non-sequence field has none.
+   *
+   * @throws SourceAccessError at a recursive alias.
+   */
+  itemRanges(key: string): Map<string, SourceRange> {
+    this._ensureTraversable();
+    return this._optionalChild(key)?._ownItemRanges() ?? new Map();
+  }
+
+  /**
+   * Return one range per item of the sequence field `key`, repeats kept, null for an item that
+   * isn't a scalar. An absent or unlocated field has none.
+   *
+   * @throws SourceAccessError at a recursive alias.
+   */
+  itemRangeList(key: string): (SourceRange | null)[] {
+    this._ensureTraversable();
+    return this._optionalChild(key)?._ownItemRangeList() ?? [];
+  }
+
+  /**
+   * Return the value ranges of the mapping field `key`'s children, by authored key text. An
+   * absent, unlocated or non-mapping field has none.
+   *
+   * @throws SourceAccessError at a recursive alias.
+   */
+  mappingValueRanges(key: string): Map<string, SourceRange> {
+    this._ensureTraversable();
+    return this._optionalChild(key)?._ownMappingValueRanges() ?? new Map();
+  }
+
+  /**
+   * Return one range per item of the sequence field `sequenceKey`, in order: the item's
+   * `field` value range, or null when the item isn't a mapping or lacks `field`. An absent,
+   * unlocated or non-sequence field has none.
+   *
+   * @throws SourceAccessError at a recursive alias.
+   */
+  sequenceFieldRanges(sequenceKey: string, field: string): (SourceRange | null)[] {
+    this._ensureTraversable();
+    return this._optionalChild(sequenceKey)?._ownSequenceFieldRanges(field) ?? [];
+  }
+
+  /**
+   * The built value of the mapping key selecting this occurrence (`1n` for `1:`); null for a
+   * root, a sequence item, or a virtual cursor. Pair it with `keyRange` to tell a YAML null
+   * key apart.
+   */
+  get sourceKeyValue(): Value {
+    if (this._document === null || this._keyDefinition === null) return null;
+    const definition = this._document._definitions[this._keyDefinition]!;
+    return definition.kind === "scalar" ? definition.value : null;
+  }
+
+  /** @internal Return the child at `key`, or null when it is absent or can't be reached. */
+  _optionalChild(key: string): SourceCursor | null {
+    try {
+      if (this.has(key)) return this.child(key);
+    } catch (error) {
+      if (!(error instanceof SourceAccessError)) throw error;
+    }
+    return null;
+  }
+
+  /** @internal Return the scalar definition behind this cursor, or null. */
+  _sourceScalarDefinition(): ScalarDef | null {
+    if (this._document === null || this._definition === null) return null;
+    const definition = this._document._definitions[this._definition]!;
+    return definition.kind === "scalar" ? definition : null;
+  }
+
+  /** @internal Return the authored scalar definition while this value still equals it. */
+  _unchangedScalarDefinition(): ScalarDef | null {
+    const definition = this._sourceScalarDefinition();
+    if (definition === null || definition.raw === null || this._value !== definition.value) {
+      return null;
+    }
+    return definition;
+  }
+
+  /** @internal Return the authored text of this cursor's selecting key, or null. */
+  _sourceKeyText(): string | null {
+    if (this._document === null || this._keyDefinition === null) return null;
+    const definition = this._document._definitions[this._keyDefinition]!;
+    return definition.kind === "scalar" ? definition.raw : null;
+  }
+
+  /** @internal Return this sequence's scalar item ranges by authored text, the last kept. */
+  _ownItemRanges(): Map<string, SourceRange> {
+    this._ensureTraversable();
+    const ranges = new Map<string, SourceRange>();
+    const sequence = this._sequenceDefinition();
+    if (sequence === null) return ranges;
+    for (const id of sequence.itemDefinitions) {
+      const definition = this._document!._definitions[id]!;
+      if (definition.kind === "scalar" && definition.raw !== null && definition.range !== null) {
+        ranges.set(definition.raw, definition.range);
+      }
+    }
+    return ranges;
+  }
+
+  /** @internal Return this sequence's item ranges by position, null for a non-scalar item. */
+  _ownItemRangeList(): (SourceRange | null)[] {
+    this._ensureTraversable();
+    const sequence = this._sequenceDefinition();
+    if (sequence === null) return [];
+    return sequence.itemDefinitions.map((id) => {
+      const definition = this._document!._definitions[id]!;
+      return definition.kind === "scalar" ? definition.range : null;
+    });
+  }
+
+  /**
+   * @internal Return this mapping's child value ranges by key, each key at its first place
+   * with its last pair's range.
+   */
+  _ownMappingValueRanges(): Map<string, SourceRange> {
+    this._ensureTraversable();
+    const definition = this._mappingDefinition();
+    if (definition === null) return new Map();
+    // Each distinct rope leaf once, so a shared merge source is read once, not once per use.
+    const lastRanges = new Map<string, SourceRange>();
+    for (const { arc } of this._iterUniqueOccurrences(definition.pairSequence, true)) {
+      const range = this._document!._definitions[arc.valueDefinition]!.range;
+      if (range !== null && !lastRanges.has(arc.key)) lastRanges.set(arc.key, range);
+    }
+    const ranges = new Map<string, SourceRange>();
+    for (const { arc } of this._iterUniqueOccurrences(definition.pairSequence)) {
+      const located = lastRanges.get(arc.key);
+      if (located !== undefined && !ranges.has(arc.key)) ranges.set(arc.key, located);
+    }
+    return ranges;
+  }
+
+  /**
+   * @internal Return one range per item of this sequence: the item's effective `field` value
+   * range, or null when the item isn't a mapping or lacks `field`.
+   */
+  _ownSequenceFieldRanges(field: string): (SourceRange | null)[] {
+    this._ensureTraversable();
+    const sequence = this._sequenceDefinition();
+    if (sequence === null) return [];
+    const definitions = this._document!._definitions;
+    return sequence.itemDefinitions.map((id) => {
+      const definition = definitions[id]!;
+      if (definition.kind !== "mapping" || !Object.hasOwn(definition.value, field)) return null;
+      const occurrence = definition.effectiveIndex.get(field);
+      return occurrence === undefined ? null : definitions[occurrence.arc.valueDefinition]!.range;
+    });
   }
 
   /** @internal Navigate a value with no navigable definition: virtual, or replaced. */
@@ -476,6 +799,22 @@ export class SourceCursor {
 /** Return the message for a missing mapping key. */
 function missingField(key: string | number): string {
   return `missing required field ${typeof key === "string" ? reprText(key) : String(key)}`;
+}
+
+/**
+ * Return the error for a field `key` whose `value` isn't `expected`, naming the value's type as
+ * Python does (`int`, `NoneType`).
+ */
+function typeError(
+  key: string,
+  expected: string,
+  value: Value,
+  range: SourceRange | null,
+): SourceAccessError {
+  return new SourceAccessError(
+    `field ${reprText(key)} must be ${expected}, got ${pythonTypeName(value)}`,
+    range,
+  );
 }
 
 /**

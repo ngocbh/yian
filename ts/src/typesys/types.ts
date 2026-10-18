@@ -1450,7 +1450,7 @@ function isPlainMapping(value: unknown): value is Readonly<Record<string, unknow
  * object, `list` for an array, `str`, `int` for a bigint, `float` for a number, `bool`,
  * `NoneType` for `null`, else its constructor's name (or `typeof`).
  */
-function pythonTypeName(value: unknown): string {
+export function pythonTypeName(value: unknown): string {
   if (isPlainMapping(value)) return "dict";
   if (Array.isArray(value)) return "list";
   switch (typeof value) {

@@ -20,14 +20,18 @@ class AuthError(RuntimeError):
 
 
 def is_auth_failure(exc: BaseException) -> bool:
-    """Whether a model call's exception means the provider refused its credentials, or yian couldn't supply them.
+    """Whether a model call's exception means its credentials were refused or missing.
 
+    Missing means yian couldn't supply them, which it reports as an `AuthError`.
     Walks ``exc`` and its ``__cause__`` chain, since LangChain re-raises a
-    provider error ``from`` the SDK's. A link counts when it is an `AuthError`,
-    or carries an ``int`` ``status_code`` or ``code`` of 401 or 403, or of 400
-    with ``api_key_invalid`` in its text: Gemini reports an invalid key as a 400
-    whose only distinguishing mark is that reason, so the substring match is
-    deliberate.
+    provider error ``from`` the SDK's; the walk stops at a repeated link or
+    after 16 links, so a cyclic or runaway chain ends. A link counts when it is
+    an `AuthError`, or carries an ``int`` ``status_code`` or ``code`` of 401 or
+    403, or of 400 with ``api_key_invalid`` in its text: Gemini reports an
+    invalid key as a 400 whose only distinguishing mark is that reason, so the
+    substring match is deliberate. Callers run this inside an ``except``
+    handler, so it never raises: a link whose attribute or text can't be read
+    doesn't count.
     """
     seen: set[int] = set()
     link: BaseException | None = exc
@@ -36,13 +40,21 @@ def is_auth_failure(exc: BaseException) -> bool:
         if isinstance(link, AuthError):
             return True
         for name in ("status_code", "code"):
-            status = getattr(link, name, None)
+            try:
+                status = getattr(link, name, None)
+            except Exception:
+                status = None
             if type(status) is not int:
                 continue
-            if status in (401, 403) or (
-                status == 400 and "api_key_invalid" in str(link).lower()
-            ):
+            if status in (401, 403):
                 return True
+            if status == 400:
+                try:
+                    text = str(link).lower()
+                except Exception:
+                    text = ""
+                if "api_key_invalid" in text:
+                    return True
         link = link.__cause__
     return False
 

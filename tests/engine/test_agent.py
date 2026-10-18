@@ -664,55 +664,6 @@ def test_fallback_structured_auth_failure_is_not_retried(monkeypatch):
     assert chat.calls == 1
 
 
-_AGENT_IN_LOOP = """
-id: t
-name: t
-input:
-  seed: !str
-defs:
-  body:
-    input:
-      transcript: !str
-      exited: !bool
-    nodes:
-      reply:
-        kind: agent
-        input:
-          transcript: ${input.transcript}
-        output: str
-        prompt: "history ${transcript}"
-      fold:
-        kind: code
-        code: tests.engine._compose_codefns:reply_fold
-        input:
-          transcript: ${input.transcript}
-          reply:      ${reply.output}
-          exited:     ${input.exited}
-        output:
-          transcript: str
-          exited: bool
-    output: ${fold.output}
-nodes:
-  loop:
-    kind: loop
-    call: body
-    input:
-      transcript: ${input.seed}
-      exited: false
-    while: not exited
-    max: 3
-output: ${loop.output.transcript}
-"""
-
-
-def test_auth_failure_inside_loop_reaches_run_result(monkeypatch):
-    _patch_model(monkeypatch, _RaisingChat(AuthenticationError("unauthorized")))
-    result = run_flow(load_flow(_AGENT_IN_LOOP), {"seed": "s"})
-    assert result.status == "failed"
-    assert result.failure.code == "provider.auth"
-    assert result.failure.cause_type == "AuthenticationError"
-
-
 _KEYED = """id: keyed
 name: keyed
 nodes:

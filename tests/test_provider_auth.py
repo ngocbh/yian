@@ -1407,6 +1407,21 @@ def _raised_from(wrapper, cause):
         return exc
 
 
+class _UnreadableError(_StatusError):
+    """A 400 whose text can't be read."""
+
+    def __str__(self):
+        raise RuntimeError("no text")
+
+
+class _RaisingStatus(Exception):
+    """An error whose ``status_code`` property raises something other than AttributeError."""
+
+    @property
+    def status_code(self):
+        raise RuntimeError("no status")
+
+
 def _cycle():
     first, second = ValueError("first"), ValueError("second")
     first.__cause__, second.__cause__ = second, first
@@ -1431,12 +1446,15 @@ def _cycle():
         (_StatusError("invalid argument", 400), False),
         (_StatusError("unauthorized", True), False),
         (ValueError("bad value"), False),
+        (_UnreadableError("unused", 400), False),
+        (_RaisingStatus("unreadable status"), False),
         (_cycle(), False),
     ],
     ids=[
         "auth-error", "401", "403", "400", "404", "429", "500", "wrapped-401",
         "code-401", "wrapped-auth-error", "400-api-key-invalid", "code-400-api-key-invalid",
-        "400-other", "bool-status", "value-error", "cause-cycle",
+        "400-other", "bool-status", "value-error", "unreadable-text", "raising-status",
+        "cause-cycle",
     ],
 )
 def test_is_auth_failure(exc, expected):

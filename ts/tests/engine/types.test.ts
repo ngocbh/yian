@@ -1,13 +1,14 @@
 /**
  * The `Type` vocabulary's shape checks, levels and labels, and the type-text parser and
- * `formatTypeExpr`, a port of those tests of `tests/engine/test_types.py`; the bracket
- * spelling and the resolver tests come later.
+ * `formatTypeExpr` and the bracket-spelling error, a port of those tests of
+ * `tests/engine/test_types.py`; the resolver tests come later.
  */
 
 import { describe, expect, test } from "bun:test";
 
 import {
   formatTypeExpr,
+  legacyRespelling,
   parseType,
   type ScalarName,
   type TypeExpr,
@@ -797,5 +798,154 @@ describe("formatTypeExpr", () => {
 
   test("prints a dict as dict", () => {
     expect(formatTypeExpr(parseType("dict(str, int)"))).toBe("dict");
+  });
+});
+
+describe("bracket spelling", () => {
+  /** The error for bracket text that has no parenthesized spelling. */
+  const bracketError = (detail: string) => `types use parentheses, not brackets (${detail})`;
+  const RANGE_NEEDS_DOTS = "a numeric range needs `..`, e.g. int(1..12), int(0..), or int(..100)";
+
+  test.each([
+    ["Optional[list[Buy]]", "Optional(list(Buy))"],
+    ["int[1, 12]", "int(1..12)"],
+    ["Optional[Union[Buy, Sell]]", "Optional(Union(Buy, Sell))"],
+    ["dict[str, int]", "object"],
+    ['Literal["a b", c]', 'Literal("a b", c)'],
+    ["int[-1, +2]", "int(-1..2)"],
+    ["Optional[None]", "Optional(None)"],
+    ["list[dict[str, Buy]]", "list(object)"],
+    // A trailing comma makes a one-member tuple.
+    ["Union[A,]", "Union(A)"],
+    ["float[1., .5e1]", "float(1.0..5.0)"],
+    ["int[00, 2]", "int(0..2)"],
+    // Python keeps the sign: `float(-0.0..1)`.
+    ["float[-0.0, 1]", "float(0.0..1)"],
+  ])("is an error showing the parenthesized spelling: %p", (text, spelled) => {
+    expect(parseError(text)).toBe(`types use parentheses: \`${spelled}\``);
+  });
+
+  test("text that is no type still says types use parentheses", () => {
+    // Python appends the `SyntaxError` detail.
+    expect(parseError("list[")).toBe(bracketError(malformed("list[")));
+  });
+
+  test("a single endpoint hint uses the range spelling", () => {
+    expect(parseError("int[1]")).toBe(bracketError(malformed("int[1]", RANGE_NEEDS_DOTS)));
+    expect(parseError("int[1,]")).toBe(bracketError(malformed("int[1,]", RANGE_NEEDS_DOTS)));
+  });
+
+  test("deep nesting is a type error", () => {
+    const deep = "Optional[".repeat(300) + "str" + "]".repeat(300);
+    expect(parseError(deep)).toStartWith("types use parentheses, not brackets (");
+    // Python reports the `SyntaxError` of its parser's own limit.
+    expect(parseError(deep)).toBe(
+      bracketError(
+        "type nested too deeply in 'Optional[Optional[Optional[Optional[Opti'... " +
+          "(at most 100 levels)",
+      ),
+    );
+    // Python respells 150 levels.
+    expect(parseError("Optional[".repeat(150) + "str" + "]".repeat(150))).toStartWith(
+      "types use parentheses, not brackets (type nested too deeply in ",
+    );
+    const moderate = "Optional[".repeat(100) + "str" + "]".repeat(100);
+    const spelled = "Optional(".repeat(100) + "str" + ")".repeat(100);
+    expect(parseError(moderate)).toBe(`types use parentheses: \`${spelled}\``);
+  });
+
+  test.each([
+    [
+      "Optional[Buy | Sell]",
+      malformed("Optional[Buy | Sell]", "use Union(Buy, Sell) (| is not a type operator)"),
+    ],
+    [
+      "Buy | Foo[ 'x' ,1.50]",
+      `malformed type expression "Buy | Foo[ 'x' ,1.50]": ` +
+        "use Union(Buy, Foo['x', 1.5]) (| is not a type operator)",
+    ],
+    [
+      "Optional[x]|y",
+      malformed("Optional[x]|y", "use Union(Optional(x), y) (| is not a type operator)"),
+    ],
+    ["Buy | []", malformed("Buy | []", "use Union(Buy, []) (| is not a type operator)")],
+    ["Foo[int]", "unknown type constructor 'Foo' in 'Foo[int]'"],
+    ["list[any]", "unknown type 'any'; write Any"],
+    ["int[1, x]", "numeric bounds require literal endpoints in 'int[1, x]'"],
+    ["int[--1, 2]", "numeric bounds require literal endpoints in 'int[--1, 2]'"],
+    ["int[-x, 2]", "numeric bounds require literal endpoints in 'int[-x, 2]'"],
+    ["int[+None, 2]", "numeric bounds require literal endpoints in 'int[+None, 2]'"],
+    [
+      "int[3, 1]",
+      "invalid bounds in 'int[3, 1]': type bounds must be ordered from minimum to maximum",
+    ],
+    [
+      "int[1.5, 2]",
+      "invalid bounds in 'int[1.5, 2]': int bounds require exact numeric endpoints, excluding bool",
+    ],
+    [
+      "float[1e400, 2]",
+      "invalid bounds in 'float[1e400, 2]': float bounds require finite endpoints",
+    ],
+    [
+      "Union[Buy, None]",
+      "None is not a union member in 'Union[Buy, None]'; use Optional(Union(...))",
+    ],
+    ["Literal[1]", "invalid Literal member in 'Literal[1]' (use names or quoted strings)"],
+    ["Literal[True]", "invalid Literal member in 'Literal[True]' (use names or quoted strings)"],
+    [
+      'Literal[""]',
+      `empty Literal member in 'Literal[""]' (tags must be non-empty names or quoted strings)`,
+    ],
+    [
+      String.raw`Literal['\ud800']`,
+      String.raw`Literal member '\ud800' in "Literal['\\ud800']" contains a Unicode surrogate ` +
+        "(tags must be valid UTF-8 text)",
+    ],
+    ["Optional[True]", malformed("Optional[True]")],
+    ["[str]", malformed("[str]")],
+    ["[]", malformed("[]")],
+    ["list[A,]", malformed("list[A,]")],
+    ["A[1][2]", malformed("A[1][2]")],
+    ["A[1], B", malformed("A[1], B")],
+    ["int[1, 2, 3]", malformed("int[1, 2, 3]", RANGE_NEEDS_DOTS)],
+  ])("explains why %p has no parenthesized spelling", (text, detail) => {
+    expect(parseError(text)).toBe(bracketError(detail));
+  });
+
+  test.each([
+    // Python appends the `SyntaxError` detail here.
+    "A[]",
+    "int[01, 2]",
+    // Python reads `0x10` as 16 and respells `int(16..20)`.
+    "int[0x10, 20]",
+  ])("text that fails the syntax pass is malformed: %p", (text) => {
+    expect(parseError(text)).toBe(bracketError(malformed(text)));
+  });
+
+  test("an operand that is no type is printed as written", () => {
+    const text = "Buy | A[b,] | -x | [a, 'q'] | --1 | -A[1] | None | True | 1e400";
+    // Python prints the overflowing float as `1e309`.
+    expect(parseError(text)).toBe(
+      bracketError(
+        `malformed type expression "${text}": use Union(Buy, A[b,], -x, [a, 'q'], --1, ` +
+          "-A[1], None, True, Infinity) (| is not a type operator)",
+      ),
+    );
+  });
+
+  test("a raw lone surrogate is refused", () => {
+    // Python crashes here with an uncaught `UnicodeEncodeError` from `tokenize`.
+    expect(parseError("Optional[\ud800]")).toBe(
+      bracketError(
+        String.raw`type expression 'Optional[\ud800]' contains a Unicode surrogate ` +
+          "(types must be valid UTF-8 text)",
+      ),
+    );
+  });
+
+  test("legacyRespelling spells bracket text with parentheses", () => {
+    expect(legacyRespelling("Optional[str]")).toBe("Optional(str)");
+    expect(legacyRespelling("dict[str, int]")).toBe("object");
   });
 });

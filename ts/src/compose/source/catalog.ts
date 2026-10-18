@@ -185,10 +185,7 @@ export class SourceCatalog implements OriginResolver {
         throw new TypeError("source catalog values must be source sites");
       }
       // A site from outside the builder may still be mutable; the snapshot keeps its own.
-      copied.set(
-        key,
-        Object.isFrozen(site) ? site : siteOf(site.document, site.occurrencePath, site.selector),
-      );
+      copied.set(key, siteOf(site.document, site.occurrencePath, site.selector));
     }
     this.#sites = copied;
   }

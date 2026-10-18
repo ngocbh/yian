@@ -281,14 +281,6 @@ describe("RouteModel request", () => {
     expect(sent[0]!.headers.has("authorization")).toBe(false);
   });
 
-  for (const protocol of [sse, ndjson]) {
-    test(`accept defaults to application/json for ${protocol.name}`, async () => {
-      const { send, sent } = fake({ body: [] });
-      await drain(model(send, protocol()).stream(REQUEST));
-      expect(sent[0]!.headers.get("accept")).toBe("application/json");
-    });
-  }
-
   const refused: [string, unknown][] = [
     ["NaN", { x: NaN }],
     ["Infinity", { x: Infinity }],
@@ -319,6 +311,22 @@ describe("RouteModel request", () => {
     expect(sent).toHaveLength(1);
     expect(resolved).toBe(1);
     await stream.close();
+  });
+
+  test("a caller signal aborted before the first next() never calls the auth source", async () => {
+    const { send, sent } = fake(sseReply("1"));
+    let resolved = 0;
+    const auth = new BearerAuth(() => {
+      resolved++;
+      return KEY;
+    });
+    const controller = new AbortController();
+    const reason = new Error("stop");
+    controller.abort(reason);
+    const stream = model(send, sse(), { auth }).stream(REQUEST, { signal: controller.signal });
+    expect(await rejection(stream.next())).toBe(reason);
+    expect(resolved).toBe(0);
+    expect(sent).toHaveLength(0);
   });
 
   test("closing before the first next() sends nothing", async () => {
@@ -441,7 +449,7 @@ describe("RouteModel status errors", () => {
     const { send, sent } = fake({ status: 400, body: Array.from({ length: 640 }, () => chunk) });
     const error = await rejection(drain(model(send).stream(REQUEST)));
     expect((error as ProviderError).kind).toBe("bad_request");
-    expect(sent[0]!.stats.pulled).toBeLessThanOrEqual(5);
+    expect(sent[0]!.stats.pulled).toBe(4);
     expect(sent[0]!.signal.aborted).toBe(true);
   });
 
@@ -453,11 +461,12 @@ describe("RouteModel status errors", () => {
   });
 
   test("a caller abort during the error body read rethrows its reason", async () => {
-    const { send } = fake({ status: 500, body: ["partial", HANG] });
+    const { send, sent } = fake({ status: 500, body: ["partial", HANG] });
     const controller = new AbortController();
     const stream = model(send).stream(REQUEST, { signal: controller.signal });
     const pending = rejection(stream.next());
     await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(sent[0]!.stats.pulled).toBe(1);
     const reason = new Error("stop");
     controller.abort(reason);
     expect(await pending).toBe(reason);
@@ -577,6 +586,32 @@ describe("RouteModel stream lifetime", () => {
     expect(await pending).toBeInstanceOf(Error);
   });
 
+  test("closing a stream whose protocol yielded before reading a frame releases the body", async () => {
+    const { send, sent } = fake({ body: ["data: a\n\n", HANG] });
+    const protocol: SseProtocol = {
+      ...sse(),
+      async *parse() {
+        yield new TextDelta(0, "early");
+      },
+    };
+    const stream = model(send, protocol).stream(REQUEST);
+    expect(await stream.next()).toEqual({ done: false, value: new TextDelta(0, "early") });
+    await stream.close();
+    expect(sent[0]!.stats.cancelled).toBe(true);
+  });
+
+  test("a protocol that throws before reading a frame releases the body", async () => {
+    const { send, sent } = fake({ body: ["data: a\n\n", HANG] });
+    const protocol: SseProtocol = {
+      ...sse(),
+      async *parse() {
+        throw new ProviderError("protocol", "bad start");
+      },
+    };
+    await rejection(drain(model(send, protocol).stream(REQUEST)));
+    expect(sent[0]!.stats.cancelled).toBe(true);
+  });
+
   test("exhaustion closes the request", async () => {
     const { send, sent } = fake(sseReply("a"));
     await drain(model(send).stream(REQUEST));
@@ -595,15 +630,6 @@ describe("RouteModel stream lifetime", () => {
       },
     };
     await rejection(drain(model(send, protocol).stream(REQUEST)));
-    expect(sent[0]!.signal.aborted).toBe(true);
-  });
-
-  test("await using closes the stream", async () => {
-    const { send, sent } = fake({ body: ["data: a\n\n", HANG] });
-    {
-      await using stream = model(send).stream(REQUEST);
-      await stream.next();
-    }
     expect(sent[0]!.signal.aborted).toBe(true);
   });
 

@@ -4,8 +4,9 @@
  * becomes a body and the reply's frames become events) and the transport, making one
  * attempt per call. Retries happen above the call.
  *
- * Every error leaving a call is scrubbed of the credentials the route sent, in its
- * message and its `stack`.
+ * A status error is scrubbed of the credentials the route sent, in its message and its
+ * `stack`; the transport scrubs its own errors, and the AGENT scrubs every error a call
+ * raises.
  */
 
 import type { Scheduler, Send } from "../platform.ts";
@@ -93,20 +94,11 @@ export class RouteModel implements ChatModel {
   stream(request: Request, options: { signal?: AbortSignal } = {}): EventStream {
     const stop = new AbortController();
     const signal = options.signal ? AbortSignal.any([options.signal, stop.signal]) : stop.signal;
-    let exchange: Exchange | undefined;
-    const events = this.#call(request, signal, (opened) => {
-      exchange = opened;
-    });
-    // Aborting `stop` also ends an `openExchange` still pending; `body.return()` alone would
-    // release nothing before the body's first read.
-    return new EventStream(events, () => {
-      stop.abort();
-      exchange?.abort();
-    });
+    return new EventStream(this.#call(request, signal), () => stop.abort());
   }
 
-  /** Make the call's one attempt, handing the exchange to `opened` once it exists. */
-  async *#call(request: Request, signal: AbortSignal, opened: (exchange: Exchange) => void): AsyncGenerator<Event> {
+  /** Make the call's one attempt, releasing its exchange however the parse ends. */
+  async *#call(request: Request, signal: AbortSignal): AsyncGenerator<Event> {
     const { route, protocol } = this;
     signal.throwIfAborted();
     const body = encodeBody(protocol.buildBody(request));
@@ -124,7 +116,6 @@ export class RouteModel implements ChatModel {
         scheduler: this.#scheduler,
       },
     );
-    opened(exchange);
     if (exchange.status < 200 || exchange.status >= 300) {
       const credentials = route.auth.credentials();
       const text = scrub(await readErrorBody(exchange), credentials);
@@ -138,13 +129,17 @@ export class RouteModel implements ChatModel {
       // Protocol parsers don't know the route.
       if (error instanceof ProviderError && error.provider === null) error.provider = route.provider;
       throw error;
+    } finally {
+      // `body.return()` releases nothing before the body's first read.
+      exchange.abort();
     }
   }
 }
 
 /**
- * Read at most 64 KiB of an error reply's body, decoded as UTF-8 with replacement, and
- * abort the request. A `ProviderError` from a read keeps what arrived; any other error,
+ * Read at most 64 KiB of an error reply's body, decoded as UTF-8 with replacement. The body
+ * aborts the request however the read ends: stopping at the cap returns it early, which
+ * runs its own release. A `ProviderError` from a read keeps what arrived; any other error,
  * such as a caller abort, propagates.
  */
 async function readErrorBody(exchange: Exchange): Promise<string> {
@@ -159,8 +154,6 @@ async function readErrorBody(exchange: Exchange): Promise<string> {
   } catch (error) {
     // The status already names the failure.
     if (!(error instanceof ProviderError)) throw error;
-  } finally {
-    exchange.abort();
   }
   const bytes = new Uint8Array(Math.min(size, MAX_ERROR_BODY));
   let at = 0;
@@ -177,8 +170,8 @@ async function readErrorBody(exchange: Exchange): Promise<string> {
  * message when it still holds one.
  *
  * The body is scrubbed before parsing, but an echo with mixed escapes only matches a
- * credential once the parse has undone them. The error is rebuilt, not edited, because its
- * `stack` keeps the message it was built with.
+ * credential once the parse has undone them. The error is rebuilt, not edited: a `stack` read
+ * before the scrub would keep the old message.
  */
 function scrubbed(error: ProviderError, credentials: readonly string[]): ProviderError {
   const message = scrub(error.message, credentials);

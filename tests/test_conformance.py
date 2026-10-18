@@ -170,6 +170,7 @@ _RESERVED = [
 _TEXT_KEYS = {"flow", "python_flow", "other", "files", "stdin"}
 _SECRET_KEYS = {"run", "resume", "backward", "env", "host", "stdin"}
 _SECRET = re.compile(r"<key:([0-9]+)>")
+_FILLED = re.compile(r"sk-conformance-[0-9]+")
 _ENV_SUFFIXES = ("_API_KEY", "_BASE_URL", "_ENDPOINT", "_API_VERSION")
 _TOOL_ERRORS = {
     error.__name__: error
@@ -465,13 +466,14 @@ def _raised(exc: Exception) -> dict:
     return raised
 
 
-def _expect_raises(expected: dict, call) -> None:
-    """Fail the case unless `call()` raises the error `expected` describes."""
+def _expect_raises(expected: dict, call) -> dict:
+    """Return the error `call()` raises in `raises` form; fail unless it is the one expected."""
     try:
         call()
     except Exception as exc:
-        _compare("raises", _raised(exc), expected)
-        return
+        raised = _raised(exc)
+        _compare("raises", raised, expected)
+        return raised
     pytest.fail(f"expected {expected.get('class')} to be raised, but nothing was", pytrace=False)
 
 
@@ -833,10 +835,9 @@ def _output(result: RunResult, flow) -> dict:
 
 def _check_secrets(case: dict, texts: dict) -> None:
     """Fail the case when a secret it filled in appears in one of `texts`, keyed by where."""
-    filled = repr([case.get(key) for key in sorted(_SECRET_KEYS)])
-    secrets = sorted(set(re.findall(r"sk-conformance-[0-9]+", filled)))
-    leaks = [f"secret {secret} appears in {where}"
-             for where, text in texts.items() for secret in secrets if secret in text]
+    secrets = set(_FILLED.findall(repr([case.get(key) for key in sorted(_SECRET_KEYS)])))
+    leaks = [f"secret {secret} appears in {where}" for where, text in texts.items()
+             for secret in sorted(set(_FILLED.findall(text)) & secrets)]
     if leaks:
         pytest.fail("\n".join(leaks), pytrace=False)
 
@@ -845,13 +846,6 @@ def _event_node(event: list) -> str | None:
     """Return an event's node: its `node_id`, a `NodeFailed`'s failure node, else None."""
     data = event[1] if len(event) > 1 else {}
     return data["failure"]["node"] if event[0] == "NodeFailed" else data.get("node_id")
-
-
-_NODE_OF = {
-    "trace": lambda entry: entry[1],
-    "events": _event_node,
-    "stream": lambda chunk: chunk.get("node_id"),
-}
 
 
 def _group(entries: list, node_of) -> list:
@@ -868,23 +862,23 @@ def _group(entries: list, node_of) -> list:
 
 def _pooled(results: dict) -> dict:
     """Return `results` with the trace, events, stream and each tool's calls grouped by node."""
-    grouped = {name: _group(value, _NODE_OF[name]) if name in _NODE_OF else value
-               for name, value in results.items()}
-    if "tool_calls" in results:
-        grouped["tool_calls"] = {tool: _group(calls, lambda call: call.get("node"))
-                                 for tool, calls in results["tool_calls"].items()}
-    return grouped
+    return {**results,
+            "trace": _group(results["trace"], lambda entry: entry[1]),
+            "events": _group(results["events"], _event_node),
+            "stream": _group(results["stream"], lambda chunk: chunk.get("node_id")),
+            "tool_calls": {tool: _group(calls, lambda call: call["node"])
+                           for tool, calls in results["tool_calls"].items()}}
 
 
 _ID_FIELDS = ("exchange_id", "commit_id", "mutation_id", "note_id")
 
 
-def _placeholders(projections: list, run_id: str | None) -> list:
-    """Return `projections` with each made-up id in their text replaced by `<id:N>`.
+def _placeholders(results: dict, run_id: str | None) -> dict:
+    """Return `results` with each made-up id in their text replaced by `<id:N>`.
 
     The ids are `run_id` (unless None) and every text value of an `_ID_FIELDS` key. They
-    are numbered in order of first appearance, walking `projections` in order, lists in
-    order and mapping keys sorted by UTF-16 code units.
+    are numbered in order of first appearance, walking `results` in order, lists in order
+    and mapping keys sorted by UTF-16 code units.
     """
     ids = set() if run_id is None else {run_id}
 
@@ -898,9 +892,9 @@ def _placeholders(projections: list, run_id: str | None) -> list:
             for item in value:
                 collect(item)
 
-    collect(projections)
+    collect(results)
     if not ids:
-        return projections
+        return results
     # Longest first, so an id that holds another is replaced whole.
     pattern = re.compile("|".join(map(re.escape, sorted(ids, key=len, reverse=True))))
     numbers: dict = {}
@@ -917,7 +911,7 @@ def _placeholders(projections: list, run_id: str | None) -> list:
                     for key in sorted(value, key=lambda key: key.encode("utf-16-be"))}
         return value
 
-    return replace(projections)
+    return {name: replace(value) for name, value in results.items()}
 
 
 class _Cut(BaseException):
@@ -973,8 +967,9 @@ def _run_run(case: dict, case_dir: Path) -> None:
             def start() -> None:
                 results.append(resume_flow(flow, **hooks, **resume))
 
+        raised = {}
         if "raises" in expect:
-            _expect_raises(expect["raises"], start)
+            raised = _expect_raises(expect["raises"], start)
         else:
             start()
         for entry in case.get("backward", []) if results else []:
@@ -998,16 +993,11 @@ def _run_run(case: dict, case_dir: Path) -> None:
             "backward": outcomes,
         }
         _check_secrets(case, {**{name: repr(value) for name, value in actual.items()},
-                              "the run log": text})
+                              "the run log": text, "the raised error": raised.get("message", "")})
         if {**run, **resume}.get("num_workers", 8) != 0:
-            actual, expect = _pooled(actual), _pooled(expect)
-        if "run_id" in run:
-            run_id = None
-        elif results:
-            run_id = results[0].run_id
-        else:
-            run_id = json.loads(lines[0])["run_id"] if lines else None
-        actual = dict(zip(actual, _placeholders(list(actual.values()), run_id)))
+            actual = _pooled(actual)
+        run_id = None if "run_id" in run or not lines else json.loads(lines[0])["run_id"]
+        actual = _placeholders(actual, run_id)
         if "output" in expect:
             _compare("output", actual["output"], expect["output"],
                      by_value=actual["output"]["status"] == "succeeded")

@@ -86,7 +86,8 @@ Every case runs in a new temporary directory, the *case directory*:
   without the host number intake of design 3.2.1.)
 - **Secrets** are written as `<key:N>` (N a number) in `run`, `resume`, `backward`, `env`, `host`
   and `stdin`. The runner replaces each with the text `sk-conformance-N` and fails the case if one
-  appears in the trace, events, stream, tool calls, output, stdout, stderr or the run log file.
+  appears in the trace, events, stream, tool calls, output, the raised error's message, stdout,
+  stderr or the run log file.
 - **Time.** The TS runner uses a virtual scheduler, so waits take no time. The Python runner
   waits for real, so a case keeps its waits short.
 
@@ -133,12 +134,13 @@ When the run raised before creating its log, its trace is `[]`.
 
 ### `resume`
 
-For serial runs (`num_workers: 0`). `host.crash_after_record: k` cuts the first run after record
-`k` (0-based, so records `0`..`k` are kept): every later append is refused without writing, the
-run is abandoned, and the runner checks that the cut happened. Then the flow is resumed from the
-log with the `resume` arguments `num_workers` (absent: the recorded value), `api_key`, `headers`
-and `context` (`context` as in `run`). The expectations are for the resumed run: its output, the
-trace of the whole log, the events of the resume call, and `tool_calls` over both runs.
+For serial runs (`num_workers: 0`). `host.crash_after_record: k` (required) cuts the first run
+after record `k` (0-based, so records `0`..`k` are kept): every later append is refused without
+writing, the run is abandoned, and the runner checks that the cut happened. Then the flow is
+resumed from the log with the `resume` arguments `num_workers` (absent: the recorded value),
+`api_key`, `headers` and `context` (`context` as in `run`). The expectations are for the resumed
+run: its output, the trace of the whole log, the events and stream of the resume call, and
+`tool_calls` over both runs.
 
 ### `backward`
 
@@ -219,6 +221,7 @@ A case can't hold code, so its host is declared under `host`.
 attempt, node}`.
 `ask_user` calls from `human` are listed too; their `args` are the request in data form
 (`question`, `questions`, `answer_schema`, `title`, `node_id`, `options`; nulls left out).
+HUMAN_INPUT never sends `options`; a model's `ask_user` call can.
 
 The format reserves these host keys; a runner that doesn't support one yet fails the case that
 uses it:
@@ -248,6 +251,8 @@ receives (`expect.output`'s `output`, event data, stream chunks and `tool_calls`
 float compare by value (`2` equals `2.0`), because a TS host receives both as a JS `number`. The
 trace keeps the kinds. Kinds are about yian values: the format's own numbers (ranges, paths,
 attempts, sequence numbers, `defaults` values, `exit`) are ints, and `retry_in` is a float.
+
+**Sorting**, wherever this file sorts, is by UTF-16 code units.
 
 **Diagnostic**: `{code, message, frames, notes}`. A frame is `{label, range: [start_line,
 start_col, end_line, end_col], note}`, 1-based with an exclusive end column. `notes`, `frames`
@@ -342,12 +347,13 @@ run's own id. Every occurrence inside a text value is replaced, so a call id `<r
 becomes `<id:1>/fetch`; mapping keys are left alone. The ids are collected from every
 projection, expected or not, and numbered in order of first appearance (by position, within one
 text), walking the trace, then the events, stream, tool calls (tools in sorted order), output and
-backward outcomes, with lists in order and mapping keys in sorted order. Sorting is by UTF-16
-code units.
+backward outcomes, with lists in order and mapping keys in sorted order. A `raises` expectation
+is compared as is; a case whose error names the run id gives `run_id`.
 
 **Pooled runs.** When the run's `num_workers` isn't 0, the trace, events, stream and each tool's
 calls are first grouped: run-level entries first, then each node's entries, nodes in sorted
 order, each group keeping its order. Placeholders are numbered and lists compared after that.
+Expectations are written grouped.
 An entry's node is its trace `node`; an event's `node_id` (a `NodeFailed`'s failure node; run
 events are run-level); a chunk's `node_id`; a tool call's `node`.
 

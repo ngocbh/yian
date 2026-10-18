@@ -295,6 +295,49 @@ describe("strict decode", () => {
   });
 });
 
+describe("strict decode of odd objects", () => {
+  test("a symbol key on the message", () => {
+    const data = canonical();
+    data[Symbol("s") as never] = 1;
+    const error = formatError(() => Message.fromJSON(data));
+    expect([error.path, error.reason]).toEqual(["", "object key is symbol, not string"]);
+  });
+
+  test("a symbol key on a part", () => {
+    const data = canonical();
+    data["parts"][1][Symbol("s")] = 1;
+    const error = formatError(() => Message.fromJSON(data));
+    expect([error.path, error.reason]).toEqual(["parts[1]", "object key is symbol, not string"]);
+  });
+
+  test("each key is read once", () => {
+    const data = canonical();
+    const reads = { payload: 0, protocol: 0 };
+    // A second read would answer null, which the explicit-null check refuses.
+    Object.defineProperty(data["parts"][1], "provider_payload", {
+      get: () => (++reads.payload === 1 ? { id: "p" } : null),
+      enumerable: true,
+    });
+    Object.defineProperty(data, "protocol", {
+      get: () => (++reads.protocol === 1 ? "p" : null),
+      enumerable: true,
+    });
+    const message = Message.fromJSON(data);
+    expect(reads).toEqual({ payload: 1, protocol: 1 });
+    expect((message.parts[1] as TextPart).providerPayload).toEqual({ id: "p" });
+    expect(message.protocol).toBe("p");
+  });
+
+  test("a message or part that isn't a plain object", () => {
+    expect(formatError(() => Message.fromJSON(Object.assign(new (class {})(), canonical()))).message).toBe(
+      "expected an object, got object",
+    );
+    const data = canonical();
+    data["parts"][1] = Object.assign(Object.create(Object.create(null)) as Data, data["parts"][1]);
+    expect(errorPath(data)).toBe("parts[1]");
+  });
+});
+
 describe("MessageFormatError", () => {
   test("the message is the path and reason, or the reason alone", () => {
     expect(new MessageFormatError("parts[1].text", "missing").message).toBe("parts[1].text: missing");
@@ -498,6 +541,50 @@ describe("construction", () => {
     expect(formatError(() => checkJsonValue({ a: Symbol("s") }, "v")).message).toBe(
       "v.a: symbol is not a JSON value",
     );
+  });
+
+  test("an instance of an anonymous class isn't a plain object", () => {
+    const instance = Object.assign(new (class {})(), { a: 1n });
+    expect(formatError(() => new TextPart("x", bad(instance))).message).toBe(
+      "provider_payload: expected an object, got object",
+    );
+    expect(formatError(() => new TextPart("x", bad({ v: instance }))).message).toBe(
+      "provider_payload.v: object is not a JSON value",
+    );
+    // A class may even be named `object`; TypeScript forbids declaring one, so set the name.
+    const Named = Object.defineProperty(class {}, "name", { value: "object" });
+    expect(Named.name).toBe("object");
+    expect(formatError(() => new TextPart("x", bad({ v: new Named() }))).path).toBe("provider_payload.v");
+  });
+
+  test("a prototype chain with no constructor isn't a plain object", () => {
+    const chained = Object.assign(Object.create(Object.create(null)) as Data, { a: 1n });
+    expect(formatError(() => new TextPart("x", bad(chained))).path).toBe("provider_payload");
+    expect(formatError(() => new TextPart("x", bad({ v: [chained] }))).message).toBe(
+      "provider_payload.v[0]: object is not a JSON value",
+    );
+  });
+
+  test("a hole in the parts array is refused", () => {
+    const parts = [new TextPart("a"), , new TextPart("b")];
+    expect(formatError(() => new Message({ role: "user", parts: bad(parts) })).message).toBe(
+      "parts[1]: expected a part, got undefined",
+    );
+  });
+
+  test("an overridden iterator on the parts array is not used", () => {
+    const hiding = Object.defineProperty(["text"], Symbol.iterator, {
+      value: function* () {
+        yield new TextPart("ok");
+      },
+    });
+    expect(formatError(() => new Message({ role: "user", parts: bad(hiding) })).path).toBe("parts[0]");
+    const parts = Object.defineProperty([new TextPart("a")], Symbol.iterator, {
+      value: function* () {
+        yield new TextPart("b");
+      },
+    });
+    expect(new Message({ role: "user", parts }).parts).toEqual([new TextPart("a")]);
   });
 
   test("isPart", () => {

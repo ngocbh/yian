@@ -58,13 +58,22 @@ function segment(key: string): string {
   return PLAIN_KEY.test(key) ? key : `[${JSON.stringify(key)}]`;
 }
 
-/** Return a value's type name for error text: a `typeof` name, `null`, `array`, `object` or a class name. */
+/** Return whether `value` is a plain object: not an array, with prototype `Object.prototype` or `null`. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * Return a value's type name for error text only: a `typeof` name, `null`, `array`, `object`
+ * or a class name. A value controls its class name, so `isPlainObject` decides what is plain.
+ */
 function typeName(value: unknown): string {
   if (value === null) return "null";
   if (Array.isArray(value)) return "array";
   if (typeof value !== "object") return typeof value;
-  const proto: unknown = Object.getPrototypeOf(value);
-  if (proto === Object.prototype || proto === null) return "object";
+  if (isPlainObject(value)) return "object";
   const name: unknown = (value as { constructor?: { name?: unknown } }).constructor?.name;
   return typeof name === "string" && name !== "" ? name : "object";
 }
@@ -140,9 +149,9 @@ export function checkJsonValue(value: unknown, path: string): JsonValue {
       for (let i = item.length - 1; i >= 0; i--) {
         stack.push({ item: item[i], where: { parent: where, segment: i }, level: level + 1, into: copy, key: i });
       }
-    } else if (typeName(item) === "object") {
+    } else if (isPlainObject(item)) {
       if (level > limit) throw new MessageFormatError(formatPath(where), `value nests deeper than ${limit} levels`);
-      const object = item as Record<string, unknown>;
+      const object = item;
       if (Object.getOwnPropertySymbols(object).length > 0) {
         throw new MessageFormatError(formatPath(where), "object key is symbol, not string");
       }
@@ -188,9 +197,41 @@ function optionalString(value: unknown, path: string): string | null {
 /** Return a copy of `value` if it is a JSON object, or `null` when it is `null` or `undefined`. */
 function optionalObject(value: unknown, path: string): JsonObject | null {
   if (value === null || value === undefined) return null;
-  const kind = typeName(value);
-  if (kind !== "object") throw new MessageFormatError(path, `expected an object, got ${kind}`);
+  if (!isPlainObject(value)) throw new MessageFormatError(path, `expected an object, got ${typeName(value)}`);
   return checkJsonValue(value, path) as JsonObject;
+}
+
+/**
+ * Return a frozen copy of the array `value`, each item read once by index and checked by
+ * `isItem`; indexing rather than iterating means a hole or an overridden iterator can't skip
+ * an item.
+ */
+function frozenArray<T>(value: unknown, path: string, isItem: (item: unknown) => item is T, what: string): readonly T[] {
+  if (!Array.isArray(value)) throw new MessageFormatError(path, `expected an array, got ${typeName(value)}`);
+  const copy: T[] = [];
+  for (let i = 0; i < value.length; i++) {
+    const item: unknown = value[i];
+    if (!isItem(item)) throw new MessageFormatError(`${path}[${i}]`, `expected ${what}, got ${typeName(item)}`);
+    copy.push(item);
+  }
+  return Object.freeze(copy);
+}
+
+/**
+ * Return the plain object `data`'s own enumerable string keys and values in a null-prototype
+ * record, each value read once, so a getter can't answer one check and then another.
+ */
+function ownRecord(data: Record<string, unknown>): Record<string, unknown> {
+  const record = Object.create(null) as Record<string, unknown>;
+  for (const key of Object.keys(data)) record[key] = data[key];
+  return record;
+}
+
+/** Throw at `path` if the object `data` has a symbol key, which JSON can't hold. */
+function refuseSymbolKeys(data: object, path: string): void {
+  if (Object.getOwnPropertySymbols(data).length > 0) {
+    throw new MessageFormatError(path, "object key is symbol, not string");
+  }
 }
 
 /** Return the JSON of a part: `type` first, then each field whose value isn't `null`, payloads copied. */
@@ -494,8 +535,9 @@ const PART_READERS: ReadonlyMap<string, PartReader> = new Map<string, PartReader
   ],
 ]);
 
-// Keys `toJSON` omits when `null`, so an explicit `null` is not JSON `toJSON` writes.
+// The keys among `NULLABLE_KEYS` whose value is a JSON object rather than a string.
 const OBJECT_KEYS: ReadonlySet<string> = new Set(["provider_payload", "arguments"]);
+// Keys `toJSON` omits when `null`, so an explicit `null` is not JSON `toJSON` writes.
 const NULLABLE_KEYS: ReadonlySet<string> = new Set([
   "protocol",
   "provider_payload",
@@ -518,13 +560,13 @@ function refuseNulls(data: Record<string, unknown>, keys: readonly string[], pat
 
 /** Read one part's JSON strictly; errors name paths under `path`. */
 function partFromJSON(data: unknown, path: string): Part {
-  const kind = typeName(data);
-  if (kind !== "object") throw new MessageFormatError(path, `expected an object, got ${kind}`);
-  const record = data as Record<string, unknown>;
+  if (!isPlainObject(data)) throw new MessageFormatError(path, `expected an object, got ${typeName(data)}`);
+  const record = ownRecord(data);
   if (!Object.hasOwn(record, "type")) throw new MessageFormatError(join(path, "type"), "missing");
   const type = record["type"];
   const reader = typeof type === "string" ? PART_READERS.get(type) : undefined;
   if (reader === undefined) throw new MessageFormatError(join(path, "type"), "unknown part type");
+  refuseSymbolKeys(data, path);
   for (const key of Object.keys(record)) {
     if (key !== "type" && !reader.keys.includes(key)) {
       throw new MessageFormatError(join(path, segment(key)), "unknown key");
@@ -565,12 +607,7 @@ export class Message {
   }) {
     if (!ROLES.has(options.role)) throw new MessageFormatError("role", "expected system, user, assistant or tool");
     this.role = options.role;
-    const parts: unknown = options.parts;
-    if (!Array.isArray(parts)) throw new MessageFormatError("parts", `expected an array, got ${typeName(parts)}`);
-    parts.forEach((part: unknown, index) => {
-      if (!isPart(part)) throw new MessageFormatError(`parts[${index}]`, `expected a part, got ${typeName(part)}`);
-    });
-    this.parts = Object.freeze([...(parts as Part[])]);
+    this.parts = frozenArray(options.parts, "parts", isPart, "a part");
     this.protocol = optionalString(options.protocol, "protocol");
     this.providerPayload = optionalObject(options.providerPayload, "provider_payload");
   }
@@ -601,12 +638,12 @@ export class Message {
    *   the key, or a value that is not plain JSON within yian's limits.
    */
   static fromJSON(data: unknown): Message {
-    const kind = typeName(data);
-    if (kind !== "object") throw new MessageFormatError("", `expected an object, got ${kind}`);
-    const record = data as Record<string, unknown>;
+    if (!isPlainObject(data)) throw new MessageFormatError("", `expected an object, got ${typeName(data)}`);
+    const record = ownRecord(data);
     if (!Object.hasOwn(record, "format")) throw new MessageFormatError("format", "missing");
     // Python's repr quoting, kept so both ports word the error alike.
     if (record["format"] !== MESSAGE_FORMAT) throw new MessageFormatError("format", `expected '${MESSAGE_FORMAT}'`);
+    refuseSymbolKeys(data, "");
     for (const key of Object.keys(record)) {
       if (!MESSAGE_KEYS.has(key)) throw new MessageFormatError(segment(key), "unknown key");
     }

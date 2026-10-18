@@ -6,6 +6,7 @@ import {
   isMap,
   isScalar,
   isSeq,
+  type Pair,
   type ParsedNode,
   Scalar,
   type YAMLMap,
@@ -37,6 +38,9 @@ import {
 /** A composed node other than an alias. */
 type NonAlias = Scalar.Parsed | YAMLMap.Parsed | YAMLSeq.Parsed;
 
+/** A composed mapping's pair. */
+type MapPair = Pair<ParsedNode, ParsedNode | null>;
+
 /** The core scalar tags; on a list or mapping they say `expected a scalar node`. */
 const SCALAR_TAGS: ReadonlySet<string> = new Set([
   STR_TAG,
@@ -53,7 +57,8 @@ const SCALAR_TAGS: ReadonlySet<string> = new Set([
  * Plain scalars read with the flow loader's scalar rules, the same as in a source document,
  * but no document graph is retained: input defaults need a value, not a graph. Mapping keys
  * must be text. An alias shares its target's value, so a recursive alias builds a recursive
- * list or record.
+ * list or record. A `<<` key merges a mapping, or a list of mappings, into its own mapping,
+ * whose own keys win.
  *
  * Example: `parseYamlLiteral("{a: 017, b: yes}")` is `{a: 17n, b: "yes"}`.
  *
@@ -146,7 +151,7 @@ function construct(root: ParsedNode | null, aliasTargets: ReadonlyMap<Alias, Non
       if (!isMap(node)) {
         throw new FlowLoaderError(`expected a mapping node, but found ${nodeId(node)}`, node);
       }
-      for (const pair of node.items) {
+      for (const pair of flatten(node)) {
         const key = valueOf(pair.key);
         if (typeof key !== "string") throw nonTextKey(key, target(pair.key));
         const value = valueOf(pair.value);
@@ -165,6 +170,43 @@ function construct(root: ParsedNode | null, aliasTargets: ReadonlyMap<Alias, Non
       }
     });
     return record;
+  };
+  const flattened = new Map<YAMLMap.Parsed, MapPair[]>();
+  const merging = new Set<YAMLMap.Parsed>();
+  /**
+   * Return the pairs SafeLoader's `flatten_mapping` leaves in `root`: each merge source's
+   * flattened pairs, in the order of the merge keys, then the mapping's own other pairs.
+   *
+   * The walk is post-order over merge sources on an explicit stack, since a raised
+   * `YIAN_MAX_YAML_NODES` admits merge chains deep enough to exhaust a recursive one. A
+   * source still being flattened (a merge cycle) contributes its own other pairs. Python
+   * flattens in place, so in a cycle with two merge keys it can order the keys differently;
+   * the values are the same.
+   */
+  const flatten = (root: YAMLMap.Parsed): MapPair[] => {
+    const done = flattened.get(root);
+    if (done !== undefined) return done;
+    let pairs: MapPair[] = [];
+    const stack: [YAMLMap.Parsed, Generator<YAMLMap.Parsed, YAMLMap.Parsed[]>][] = [];
+    const enter = (node: YAMLMap.Parsed): void => {
+      merging.add(node);
+      stack.push([node, mergeSources(node, target)]);
+    };
+    enter(root);
+    for (let frame = stack.at(-1); frame !== undefined; frame = stack.at(-1)) {
+      const [node, sources] = frame;
+      const next = sources.next();
+      if (!next.done) {
+        if (!flattened.has(next.value) && !merging.has(next.value)) enter(next.value);
+        continue;
+      }
+      stack.pop();
+      merging.delete(node);
+      pairs = next.value.flatMap((source) => flattened.get(source) ?? ownPairs(source, target));
+      pairs.push(...ownPairs(node, target));
+      flattened.set(node, pairs);
+    }
+    return pairs; // the root's: it leaves the stack last
   };
   const value = valueOf(root);
   // The loop also reaches the fills pushed while it runs: an array iterator rereads the
@@ -200,8 +242,73 @@ function checkCollectionTag(node: YAMLSeq.Parsed | YAMLMap.Parsed): void {
   throw new FlowLoaderError("could not determine a constructor for the tag " + reprText(tag), node);
 }
 
-/** Name a node's kind as PyYAML's node id does. */
-function nodeId(node: NonAlias): string {
+/**
+ * Yield a mapping's merge sources as `flatten_mapping` reaches them, a list's items in their
+ * written order, and return them in merge order, each list's items reversed so its first
+ * mapping comes last and wins.
+ *
+ * @throws FlowLoaderError at the first merge value that is not a mapping or a list of
+ *   mappings.
+ */
+function* mergeSources(
+  node: YAMLMap.Parsed,
+  target: (written: ParsedNode | null) => NonAlias | null,
+): Generator<YAMLMap.Parsed, YAMLMap.Parsed[]> {
+  const merged: YAMLMap.Parsed[] = [];
+  for (const pair of node.items) {
+    if (!isMergeKey(target(pair.key))) continue;
+    // The value's tag is ignored, as in Python, which looks only at the node's kind.
+    const value = target(pair.value);
+    if (isMap(value)) {
+      yield value;
+      merged.push(value);
+    } else if (isSeq(value)) {
+      const items: YAMLMap.Parsed[] = [];
+      for (const item of value.items) {
+        const source = target(item);
+        if (!isMap(source)) {
+          throw new FlowLoaderError(
+            `expected a mapping for merging, but found ${nodeId(source)}`,
+            source,
+          );
+        }
+        yield source;
+        items.push(source);
+      }
+      merged.push(...items.reverse());
+    } else {
+      // A missing value has no node, so the mapping stands in.
+      throw new FlowLoaderError(
+        `expected a mapping or list of mappings for merging, but found ${nodeId(value)}`,
+        value ?? node,
+      );
+    }
+  }
+  return merged;
+}
+
+/** Return a mapping's pairs other than its merge pairs. */
+function ownPairs(
+  node: YAMLMap.Parsed,
+  target: (written: ParsedNode | null) => NonAlias | null,
+): MapPair[] {
+  return node.items.filter((pair) => !isMergeKey(target(pair.key)));
+}
+
+/**
+ * Say whether a key is a merge key: a scalar tagged `!!merge`, or an untagged plain one
+ * the table resolves to it.
+ */
+function isMergeKey(key: NonAlias | null): boolean {
+  if (!isScalar(key)) return false;
+  if (key.tag === undefined) {
+    return key.type === Scalar.PLAIN && resolvePlain(key.source) === MERGE_TAG;
+  }
+  return key.tag === MERGE_TAG;
+}
+
+/** Name a node's kind as PyYAML's node id does; a missing node is an empty scalar. */
+function nodeId(node: NonAlias | null): string {
   return isSeq(node) ? "sequence" : isMap(node) ? "mapping" : "scalar";
 }
 

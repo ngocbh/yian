@@ -15,6 +15,7 @@ import { SourceSyntaxError } from "../../src/compose/source/common.ts";
 import { parseYamlLiteral, readPlainScalar } from "../../src/compose/source/literals.ts";
 import { composeFlowDocument, FlowLoaderError } from "../../src/compose/source/scalars.ts";
 import { BUILTIN, install } from "../../src/defaults.ts";
+import { isRecord } from "../../src/typesys/index.ts";
 
 const MAX_YAML_NODES = BUILTIN.maxYamlNodes;
 
@@ -148,6 +149,14 @@ describe("the YAML node limit", () => {
     const error = refusal(text);
     expect(error.message).toContain(`this list ${message(1000)}`);
     expect(lineOf(text, error.node)).toBe(8);
+    const merged = parseYamlLiteral(lines.slice(0, 5).join("\n") + "\n");
+    expect(isRecord(merged) ? merged["m4"] : null).toEqual({
+      k0: 1n,
+      k1: 1n,
+      k2: 1n,
+      k3: 1n,
+      k4: 1n,
+    });
   });
 
   test("doubling aliases fail fast at the first anchor over the limit", () => {

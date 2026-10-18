@@ -440,6 +440,61 @@ describe("parseYamlLiteral", () => {
     expect(Object.getPrototypeOf(value)).toBe(Object.prototype);
   });
 
+  test("merge keys merge and own keys override", () => {
+    // Python's `017: a` key is quoted here: a literal's keys must be text.
+    const text = 'base: &base\n  on: x\n  yes: 1\n  "017": a\ntarget:\n  <<: *base\n  yes: 2\n';
+
+    expect(parseYamlLiteral(text)).toEqual({
+      base: { on: "x", yes: 1n, "017": "a" },
+      target: { on: "x", yes: 2n, "017": "a" },
+    });
+  });
+
+  test("merged keys come before the mapping's own keys", () => {
+    const value = parseYamlLiteral("{a: 1, <<: {b: 2, a: 0}}");
+
+    expect(Object.keys(value ?? {})).toEqual(["b", "a"]);
+    expect(value).toEqual({ b: 2n, a: 1n });
+  });
+
+  test("a merge list's first mapping wins; of two merge keys, the later wins", () => {
+    expect(parseYamlLiteral("{<<: [{a: 1}, {a: 2}]}")).toEqual({ a: 1n });
+    expect(parseYamlLiteral("{<<: {a: 1}, <<: {a: 2}}")).toEqual({ a: 2n });
+  });
+
+  test("a merge chain of 200 anchors reads every key of the last link", () => {
+    const links = ["&m0 {k0: 1}"];
+    for (let i = 1; i < 200; i++) links.push(`&m${i} {<<: *m${i - 1}, k${i}: 1}`);
+
+    const value = parseYamlLiteral(`[${links.join(", ")}]`);
+
+    const keys = Array.from({ length: 200 }, (_, i) => `k${i}`);
+    expect(Array.isArray(value) ? value[199] : null).toEqual(
+      Object.fromEntries(keys.map((key) => [key, 1n])),
+    );
+  });
+
+  test.each([
+    ["{<<: 1}", "expected a mapping or list of mappings for merging, but found scalar"],
+    ["{<<: [1]}", "expected a mapping for merging, but found scalar"],
+    ["{<<: [[1]]}", "expected a mapping for merging, but found sequence"],
+    ["{<<: }", "expected a mapping or list of mappings for merging, but found scalar"],
+  ])("a merge source that is not a mapping or list of mappings is refused: %p", (text, problem) => {
+    expect(literalError(text)).toBe(problem);
+  });
+
+  test("a merge cycle ends", () => {
+    expect(parseYamlLiteral("&m {<<: *m, a: 1}")).toEqual({ a: 1n });
+  });
+
+  test("a merge source's tag is ignored", () => {
+    expect(parseYamlLiteral("{<<: !!str {a: 1}}")).toEqual({ a: 1n });
+  });
+
+  test("an explicit !!merge key merges", () => {
+    expect(parseYamlLiteral("{!!merge x: {a: 1}}")).toEqual({ a: 1n });
+  });
+
   test.each(["value: [1, 2\n", "a\n---\nb\n"])(
     "YAML errors are SourceSyntaxErrors without a range: %p",
     (text) => {

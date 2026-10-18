@@ -852,6 +852,39 @@ describe("main", () => {
     });
   });
 
+  test("runs `value` cases with the runner's own kind table", async () => {
+    const files = {
+      "v/kept.yaml":
+        "kind: value\ntype: Any\nvalue: {$float: inf}\n" +
+        "expect: {value: {$float: inf}, kind: float}\n",
+      "v/raises.yaml":
+        "kind: value\ntype: list(int)\nvalue: [1, 2.5]\nexpect:\n  raises: " +
+        "{class: TypeCheckError, message: 2.5 does not match declared type int, path: [1]}\n",
+      "v/wrong.yaml": "kind: value\ntype: float\nvalue: 2\nexpect: {value: 2, kind: float}\n",
+      "v/cap.yaml":
+        'kind: value\nenv: {YIAN_MAX_SHOWN_VALUE_CHARS: "10"}\ntype: int\n' +
+        "value: abcdefghijklmnop\nexpect:\n  raises: {class: TypeCheckError, " +
+        "message: '\"abcdefgh… does not match declared type int', path: []}\n",
+      // Runs after `v/cap.yaml`; with no `env` it is cut at the default 200 again.
+      "v/later.yaml":
+        "kind: value\ntype: int\nvalue: abcdefghijklmnop\nexpect:\n  raises: " +
+        "{class: TypeCheckError, message: '\"abcdefghijklmnop\" does not match declared " +
+        "type int', path: []}\n",
+    };
+    expect(await run([], files, {}, RUNNERS)).toEqual({
+      code: 1,
+      out: [
+        "FAIL v/wrong: value differs",
+        "  --- actual",
+        "  2.0",
+        "  --- expected",
+        "  2",
+        "5 cases: 4 passed, 1 failed, 0 pending",
+      ],
+      err: [],
+    });
+  });
+
   test.each([[["--bogus"]], [["--group"]], [["a/ok"]]])("exits 2 on %p", async (argv) => {
     const { code, out, err } = await run(argv);
     expect(code).toBe(2);

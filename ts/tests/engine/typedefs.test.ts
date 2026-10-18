@@ -1,14 +1,13 @@
 /**
  * `readTypedefs`, the `typedefs:` registry builder, a port of `tests/engine/test_typedefs.py`.
- * Later: the `buildValueAs` asserts of
- * `test_bounded_aliases_preserve_nullable_and_nested_value_paths`. Not ported: the int field
- * name row of `test_record_field_name_rejected` (object keys are always strings).
+ * Not ported: the int field name row of `test_record_field_name_rejected` (object keys are
+ * always strings).
  */
 
 import { describe, expect, test } from "bun:test";
 
 import { readTypedefs, type RecordDef, typeFor } from "../../src/typesys/types.ts";
-import { TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
+import { buildValueAs, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
 
 /** Return the `TypeCheckError` `readTypedefs(raw)` throws. */
 function typedefsError(raw: Readonly<Record<string, unknown>>): TypeCheckError {
@@ -19,6 +18,17 @@ function typedefsError(raw: Readonly<Record<string, unknown>>): TypeCheckError {
     return error as TypeCheckError;
   }
   throw new Error("readTypedefs did not throw");
+}
+
+/** Return the `TypeCheckError` `run` throws. */
+function typeCheckError(run: () => unknown): TypeCheckError {
+  try {
+    run();
+  } catch (error) {
+    expect(error).toBeInstanceOf(TypeCheckError);
+    return error as TypeCheckError;
+  }
+  throw new Error("expected a TypeCheckError");
 }
 
 /** Expect `readTypedefs(raw)` to throw exactly `message` at `path`. */
@@ -51,15 +61,25 @@ describe("building", () => {
     expect(typeFor("Bundle", reg).kind).toBe(ValueKind.LIST_STRING);
   });
 
-  test("bounded aliases resolve under Optional and in nested records", () => {
+  test("bounded aliases keep Optional and nested value paths", () => {
     const registry = readTypedefs({
       Score: "float(0..1)",
       MaybeScore: "Optional(Score)",
       Rating: { scores: "list(MaybeScore)", count: "int(1..12)" },
       Ratings: "list(Rating)",
     });
-    typeFor("Ratings", registry).validateShape();
-    expect(typeFor("MaybeScore", registry).nullable).toBe(true);
+    const typ = typeFor("Ratings", registry);
+    typ.validateShape();
+    // The int 1 fills a float slot, so it is stored as the float 1.
+    const value = [{ scores: [null, 0.5, 1n], count: 4n }];
+    expect(buildValueAs(typ, value).toObject()).toEqual([{ scores: [null, 0.5, 1], count: 4n }]);
+    expect(buildValueAs(typeFor("MaybeScore", registry), null).toObject()).toBeNull();
+    for (const [bad, path] of [
+      [[{ scores: [null, 1.1], count: 4n }], [0, "scores", 1]],
+      [[{ scores: [0n], count: 0n }], [0, "count"]],
+    ] as const) {
+      expect(typeCheckError(() => buildValueAs(typ, bad)).path).toEqual(path);
+    }
   });
 
   test("a record resolves with an enum and an Optional field", () => {

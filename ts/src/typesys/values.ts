@@ -1,12 +1,22 @@
 /**
- * The typed value system's type half: the type vocabulary `types.ts` builds on.
+ * The typed value system: yian's values, their typed carriers and wire form, the write
+ * boundary that checks a value against a declared type, host value intake, and the type
+ * vocabulary those checks use.
+ *
+ * A value is plain JS data (`Value`): `null`, a `boolean`, a `bigint` int, a `number` float, a
+ * `string`, a `FileRef`, an array or a plain record. A `TypedValue` pairs a value with its
+ * storage kind; the kind tag keeps an int an int and a float a float through the run log's
+ * JSON, so the log can rebuild the same pool on replay. The write boundary wraps a value in
+ * its natural kind or checks it against a declared `Type`; host intake reads a value a host
+ * hands in (a tool or CODE result, an input) into a fresh yian value. Messages show a value
+ * with `valueRepr`, cut to the shown-value cap.
  *
  * `ValueKind` is the closed set of storage tags, and `Type` the resolved structure of a
- * declared type (records, `Literal` tags, typed lists, numeric ranges and unions) that
- * the write boundary checks values against, with its canonical labels, union member
- * order and overlap check.
+ * declared type (records, `Literal` tags, typed lists, numeric ranges and unions), with its
+ * canonical labels, union member order and overlap check.
  */
 
+import { current } from "../defaults.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { parseDate, parseDatetime } from "./temporal.ts";
 
@@ -19,15 +29,436 @@ import { parseDate, parseDatetime } from "./temporal.ts";
 export class TypeCheckError extends RangeError {
   override name = "TypeCheckError";
   /** The frozen record-field/list-index path to the rejected value. */
-  readonly path: readonly (string | number)[];
+  readonly path: ValuePath;
 
-  constructor(
-    message?: string,
-    options: ErrorOptions & { path?: readonly (string | number)[] } = {},
-  ) {
+  constructor(message?: string, options: ErrorOptions & { path?: ValuePath } = {}) {
     super(message, options);
     this.path = Object.freeze([...(options.path ?? [])]);
   }
+}
+
+/** A record-field/list-index path to a value, as `TypeCheckError.path` holds it. */
+type ValuePath = readonly (string | number)[];
+
+/**
+ * Cut text to `YIAN_MAX_SHOWN_VALUE_CHARS` (200 by default) for a message, counting code points.
+ *
+ * Returns `text` when it fits; else its first cap - 1 code points and `…`. A surrogate pair
+ * is never split.
+ *
+ * Example: `shownText("x".repeat(500))` gives 199 x's then `…`.
+ */
+export function shownText(text: string): string {
+  const cap = current().maxShownValueChars;
+  // A string has at least as many code units as code points.
+  if (text.length <= cap) return text;
+  let index = 0;
+  let cut = 0;
+  for (let count = 0; count < cap; count++) {
+    if (index >= text.length) return text;
+    if (count === cap - 1) cut = index;
+    index += text.codePointAt(index)! > 0xffff ? 2 : 1;
+  }
+  return index >= text.length ? text : text.slice(0, cut) + "…";
+}
+
+/**
+ * Return a value's text form for a message, cut to the shown-value cap (see `shownText`).
+ *
+ * The text form is compact JSON with JS number spelling: `true`, `null`, `2.5`, `2` for the
+ * float 2, `Infinity`, an int's digits, text JSON-quoted, a `FileRef` as its mapping
+ * `{"uri":…,"mime":…,"name":…}`, records in JS property order. A part that isn't a yian
+ * value (a `Date`, a `Map`, a class instance, a symbol, a function, `undefined`) shows as
+ * `<Name object>`, and an int the runtime can't stringify as `<int too large to display>`.
+ * The value never makes it throw: when a getter or proxy trap throws, the whole value shows as
+ * `<Name object>`. The writer stops once it has more than the cap can show, so a long list,
+ * a deep value or a cyclic one costs time bounded by the cap.
+ *
+ * @throws DefaultsError when a `YIAN_*` variable holds a value its entry does not accept.
+ */
+export function valueRepr(value: unknown): string {
+  // Read before the `try`, so a bad `YIAN_*` value is thrown, not turned into a placeholder.
+  const cap = current().maxShownValueChars;
+  let text: string;
+  try {
+    text = textForm(value, 2 * cap + 2);
+  } catch {
+    // A getter or proxy trap is user code; a broken one must not crash the message.
+    try {
+      return `<${jsTypeName(value)} object>`;
+    } catch {
+      return "<object object>";
+    }
+  }
+  return shownText(text);
+}
+
+/** An open container while writing: its keys (`null` for an array) and the next index. */
+interface TextCursor {
+  readonly container: { readonly [key: string]: unknown } | readonly unknown[];
+  readonly keys: readonly string[] | null;
+  index: number;
+}
+
+/**
+ * Return the text form of `root` (see `valueRepr`), stopping once it holds at least `budget`
+ * code units. The walk uses an explicit stack and reads an array's items as it writes them.
+ */
+function textForm(root: unknown, budget: number): string {
+  let out = "";
+  const stack: ({ value: unknown } | TextCursor)[] = [{ value: root }];
+  while (stack.length > 0 && out.length < budget) {
+    const step = stack[stack.length - 1]!;
+    if ("container" in step) {
+      const size = step.keys === null ? step.container.length : step.keys.length;
+      if (step.index === size) {
+        stack.pop();
+        out += step.keys === null ? "]" : "}";
+        continue;
+      }
+      const index = step.index++;
+      if (index > 0) out += ",";
+      if (step.keys === null) {
+        stack.push({ value: (step.container as readonly unknown[])[index] });
+      } else {
+        const key = step.keys[index]!;
+        out += quoteHead(key, budget) + ":";
+        stack.push({ value: (step.container as { readonly [key: string]: unknown })[key] });
+      }
+      continue;
+    }
+    stack.pop();
+    const value = step.value;
+    if (value === null || typeof value === "boolean" || typeof value === "number") {
+      out += String(value);
+    } else if (typeof value === "bigint") {
+      out += bigintText(value);
+    } else if (typeof value === "string") {
+      out += quoteHead(value, budget);
+    } else if (FileRef.isFileRef(value)) {
+      out += "{";
+      const container = value as unknown as { readonly [key: string]: unknown };
+      stack.push({ container, keys: FILE_FIELDS, index: 0 });
+    } else if (isList(value)) {
+      out += "[";
+      stack.push({ container: value, keys: null, index: 0 });
+    } else if (isRecord(value)) {
+      out += "{";
+      stack.push({ container: value, keys: Object.keys(value), index: 0 });
+    } else {
+      out += `<${jsTypeName(value)} object>`;
+    }
+  }
+  return out;
+}
+
+/** Return `text` JSON-quoted, quoting only its first `budget` code units when it is longer. */
+function quoteHead(text: string, budget: number): string {
+  // The rendering is cut far before `budget` code units, so the rest can't show.
+  return JSON.stringify(text.length > budget ? text.slice(0, budget) : text);
+}
+
+/** Return an int's digits, or a placeholder when the runtime can't stringify it. */
+function bigintText(value: bigint): string {
+  try {
+    return value.toString();
+  } catch (error) {
+    // JavaScriptCore reports a bigint too large to stringify as a RangeError.
+    if (error instanceof RangeError) return "<int too large to display>";
+    throw error;
+  }
+}
+
+/**
+ * Name a JS value's type for a message: the name of its prototype's own `constructor`
+ * (`Date`, `Map`, `Foo`; not `value.constructor`, which the value can fake), else its
+ * `typeof` (`symbol`, `function`, `undefined`), else `object`.
+ */
+function jsTypeName(value: unknown): string {
+  if (typeof value !== "object" || value === null) return typeof value;
+  const proto: unknown = Object.getPrototypeOf(value);
+  if (proto === null) return "object";
+  const constructor: unknown = Object.getOwnPropertyDescriptor(proto, "constructor")?.value;
+  if (typeof constructor !== "function") return "object";
+  const name: unknown = Object.getOwnPropertyDescriptor(constructor, "name")?.value;
+  return typeof name === "string" && name !== "" ? name : "object";
+}
+
+/**
+ * Render a value path as `a[1].b`, quoting a key that isn't an identifier as `['my key']`.
+ *
+ * Each key is cut with `shownText`, and a rendering longer than four times the shown-value
+ * cap keeps its start and end around `…` (counting code points).
+ */
+export function renderValuePath(path: readonly (string | number)[]): string {
+  const parts: string[] = [];
+  for (const segment of path) {
+    if (typeof segment === "number") {
+      parts.push(`[${segment}]`);
+    } else if (IDENTIFIER.test(segment)) {
+      const shown = shownText(segment);
+      parts.push(parts.length > 0 ? `.${shown}` : shown);
+    } else {
+      parts.push(`[${shownText(reprText(segment))}]`);
+    }
+  }
+  const text = parts.join("");
+  const limit = 4 * current().maxShownValueChars;
+  if (text.length <= limit) return text;
+  const points = Array.from(text);
+  if (points.length <= limit) return text;
+  const head = Math.floor(limit / 2);
+  const tail = points.slice(points.length - (limit - head - 1));
+  return points.slice(0, head).join("") + "…" + tail.join("");
+}
+
+/**
+ * Throw if a value nests deeper than `YIAN_MAX_VALUE_NESTING` levels (100 by default).
+ *
+ * Each array, record and `FileRef` is one level; a `TypedValue` is unwrapped and adds none.
+ * The walk is depth first and in order. A container already on the current path is skipped;
+ * the codecs refuse cycles.
+ *
+ * @param value The value to check.
+ * @param where Names the boundary for the message, e.g. `"output"`.
+ * @param options.enclosingLevels Levels counted around the value (default 0); -1 lets the
+ *   value itself go one level over, as for a START's input record.
+ * @throws TypeCheckError at the first container past the limit, reading `<where>[ at <path>]:
+ *   value nests deeper than <limit> levels, the limit for a yian value (each record and list
+ *   is a level)`.
+ */
+export function rejectDeepNesting(
+  value: unknown,
+  where: string,
+  { enclosingLevels = 0 }: { enclosingLevels?: number } = {},
+): void {
+  const limit = current().maxValueNesting;
+  if (1 + enclosingLevels > limit && isNestingLevel(unwrapTyped(value))) {
+    throw tooDeep(where, [], limit);
+  }
+  for (const [stack, key, , descends] of walkNesting(value)) {
+    if (descends && stack.length + 1 + enclosingLevels > limit) {
+      throw tooDeep(where, [...framePath(stack), key], limit);
+    }
+  }
+}
+
+/**
+ * Return the path of the first entry that refers back to a container enclosing it.
+ *
+ * Walks the containers `rejectDeepNesting` walks, depth first and in order, and unwraps a
+ * `TypedValue`. A container repeated outside its own path does not count.
+ *
+ * Returns the entry's path from `value`, or `null` if no entry holds a container enclosing it.
+ */
+export function recursiveEntryPath(value: unknown): ValuePath | null {
+  for (const [stack, key, child, descends] of walkNesting(value)) {
+    if (!descends && isNestingLevel(child)) return [...framePath(stack), key];
+  }
+  return null;
+}
+
+/** An open container in the nesting walk. */
+interface NestingFrame {
+  readonly container: object;
+  /** The keys of a record or `FileRef`, or `null` for an array, read up to its length. */
+  readonly keys: readonly string[] | null;
+  /** The container's key or index in its parent (`null` for the root). */
+  readonly key: string | number | null;
+  index: number;
+}
+
+/**
+ * One entry of the nesting walk: the frames of the containers on the current path, root
+ * first, with the entry's container last; the entry's key in that container; its value,
+ * unwrapped; and whether the walk goes into the entry next.
+ */
+type NestingEntry = [
+  stack: readonly NestingFrame[],
+  key: string | number,
+  child: unknown,
+  descends: boolean,
+];
+
+/**
+ * Yield each entry of a value's containers, depth first and in order.
+ *
+ * Unwraps a `TypedValue` wherever it sits. The walk goes into an entry that is an array,
+ * record or `FileRef` not already on the path. A caller reads the stack before resuming the
+ * walk, which changes it. A leaf yields nothing.
+ */
+function* walkNesting(value: unknown): Generator<NestingEntry> {
+  const root = unwrapTyped(value);
+  if (!isNestingLevel(root)) return;
+  // An explicit stack, not recursion, so any depth works.
+  const stack: NestingFrame[] = [nestingFrame(root, null)];
+  const active = new Set<object>([root]);
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1]!;
+    const container = frame.container as Record<string | number, unknown>;
+    const size = frame.keys === null ? (frame.container as unknown[]).length : frame.keys.length;
+    if (frame.index >= size) {
+      stack.pop();
+      active.delete(frame.container);
+      continue;
+    }
+    const index = frame.index++;
+    const key = frame.keys === null ? index : frame.keys[index]!;
+    const child = unwrapTyped(container[key]);
+    const descends = isNestingLevel(child) && !active.has(child);
+    yield [stack, key, child, descends];
+    if (descends) {
+      stack.push(nestingFrame(child, key));
+      active.add(child);
+    }
+  }
+}
+
+/** Return the open frame of `container`, an array, record or `FileRef`, at `key`. */
+function nestingFrame(container: object, key: string | number | null): NestingFrame {
+  let keys: readonly string[] | null = null;
+  if (FileRef.isFileRef(container)) keys = FILE_FIELDS;
+  else if (!isList(container)) keys = Object.keys(container);
+  return { container, keys, key, index: 0 };
+}
+
+/** Return the path from the root to the last frame's container; each frame holds its key. */
+function framePath(
+  stack: readonly { readonly key: string | number | null }[],
+): (string | number)[] {
+  return stack.slice(1).map((frame) => frame.key!);
+}
+
+/** Whether `value` is a nesting level: an array, a record or a `FileRef`. */
+function isNestingLevel(value: unknown): value is object {
+  return isList(value) || isRecord(value) || FileRef.isFileRef(value);
+}
+
+/** Return `value` with any `TypedValue` wrapping it removed. */
+function unwrapTyped(value: unknown): unknown {
+  while (value instanceof TypedValue) value = value.value;
+  return value;
+}
+
+/** Build the error for a container past the nesting limit at `path`. */
+function tooDeep(where: string, path: ValuePath, limit: number): TypeCheckError {
+  return locatedError(
+    where,
+    path,
+    `value nests deeper than ${limit} levels, ` +
+      "the limit for a yian value (each record and list is a level)",
+  );
+}
+
+/** Build the `TypeCheckError` reading `<where>[ at <path>]: <reason>`, with `path`. */
+function locatedError(where: string, path: ValuePath, reason: string): TypeCheckError {
+  const location = path.length > 0 ? `${where} at ${renderValuePath(path)}` : where;
+  return new TypeCheckError(`${location}: ${reason}`, { path });
+}
+
+/** Why text or a record key holding a lone surrogate is not a yian value. */
+const LONE_SURROGATE_REASON = "text holding a lone surrogate is not a yian value";
+
+/** An open array or record in host intake, with the fresh copy being filled. */
+interface HostFrame {
+  readonly source: Record<string | number, unknown>;
+  /** The record's keys, or `null` for an array. */
+  readonly keys: readonly string[] | null;
+  /** The number of entries: the array's length or the record's key count, read once. */
+  readonly size: number;
+  /** The container's key or index in its parent (`null` for the root). */
+  readonly key: string | number | null;
+  readonly copy: Value[] | ValueRecord;
+  index: number;
+}
+
+/**
+ * Return a host value (a tool's result, a CODE body's return value) as a fresh yian value.
+ *
+ * `null`, a boolean, well-formed text, a `bigint` and a `FileRef` are taken as they are. A
+ * `number` that is an integer within ±(2^53−1) becomes an int (`-0` becomes `0n`); any other
+ * number but NaN (`±Infinity`, `1e20`, `2.5`, `9007199254740992`) is a float. A plain array
+ * (prototype `Array.prototype`) and a plain record (prototype `Object.prototype` or `null`)
+ * become a fresh array and record, their entries taken the same way; like `JSON.stringify`,
+ * symbol keys, non-enumerable keys and extra array properties are skipped. A record key is
+ * set as an own data property, so a `__proto__` key stays data.
+ *
+ * Each property is read once, and a value shared by two parents is copied once, so sharing
+ * is kept and a diamond costs linear time. The walk uses an explicit stack, so any depth works;
+ * depth is left to `rejectDeepNesting`.
+ *
+ * Example: `fromHost({a: [1, 2.5]}, "output")` gives `{a: [1n, 2.5]}`.
+ *
+ * @throws TypeCheckError at the first bad part, depth first and in order, reading `<where>[ at
+ *   <path>]: <reason>`: `undefined` or an array hole is `undefined is not a yian value; use
+ *   null`; NaN is `NaN is not a yian value`; text or a record key holding a lone surrogate
+ *   (a key: at its record's path) is `text holding a lone surrogate is not a yian value`; a
+ *   container inside itself is `value contains itself` at the entry holding it; anything else
+ *   (a `Date`, a `Map`, a class instance, a `TypedValue`, a symbol, a function) is
+ *   `<Name> is not a yian value`.
+ * @throws whatever a getter or proxy trap throws, unchanged.
+ */
+export function fromHost(value: unknown, where: string): Value {
+  const stack: HostFrame[] = [];
+  const active = new Set<object>();
+  const copies = new Map<object, Value[] | ValueRecord>();
+  /** Throw `reason` at the top frame's entry `keys` (none: the top frame itself). */
+  const fail = (reason: string, ...keys: (string | number)[]): never => {
+    // The path is built only on a throw.
+    throw locatedError(where, [...framePath(stack), ...keys], reason);
+  };
+
+  /** Return what `item`, the top frame's entry `key`, stores as; push a new container's frame. */
+  const enter = (item: unknown, key: string | number | null): Value => {
+    const at = key === null ? [] : [key];
+    switch (typeof item) {
+      case "boolean":
+      case "bigint":
+        return item;
+      case "string":
+        return item.isWellFormed() ? item : fail(LONE_SURROGATE_REASON, ...at);
+      case "number":
+        if (Number.isNaN(item)) fail("NaN is not a yian value", ...at);
+        return Number.isSafeInteger(item) ? BigInt(item) : item;
+      case "undefined":
+        return fail("undefined is not a yian value; use null", ...at);
+    }
+    if (item === null || FileRef.isFileRef(item)) return item;
+    const list = isList(item);
+    if (list || isRecord(item)) {
+      if (active.has(item)) fail("value contains itself", ...at);
+      const shared = copies.get(item);
+      if (shared !== undefined) return shared;
+      const source = item as Record<string | number, unknown>;
+      const keys = list ? null : Object.keys(item);
+      const size = keys === null ? (item as unknown[]).length : keys.length;
+      const copy: Value[] | ValueRecord = list ? [] : {};
+      copies.set(item, copy);
+      active.add(item);
+      stack.push({ source, keys, size, key, copy, index: 0 });
+      return copy;
+    }
+    return fail(`${jsTypeName(item)} is not a yian value`, ...at);
+  };
+
+  const root = enter(value, null);
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1]!;
+    if (frame.index === frame.size) {
+      stack.pop();
+      active.delete(frame.source);
+      continue;
+    }
+    const index = frame.index++;
+    if (frame.keys === null) {
+      (frame.copy as Value[]).push(enter(frame.source[index], index));
+    } else {
+      const key = frame.keys[index]!;
+      if (!key.isWellFormed()) fail(LONE_SURROGATE_REASON);
+      setField(frame.copy as ValueRecord, key, enter(frame.source[key], key));
+    }
+  }
+  return root;
 }
 
 // --------------------------------------------------------------------------------------- //
@@ -69,6 +500,28 @@ export type ValueKind = (typeof ValueKind)[keyof typeof ValueKind];
 
 const VALUE_KINDS: ReadonlySet<string> = new Set(Object.values(ValueKind));
 
+/** A kind a value is stored under: every `ValueKind` but the type-only `Any`. */
+export type StorageKind = Exclude<ValueKind, typeof ValueKind.ANY>;
+
+const STORAGE_KINDS: ReadonlySet<string> = new Set(
+  Object.values(ValueKind).filter((kind) => kind !== ValueKind.ANY),
+);
+
+/**
+ * A yian value as JS holds it: `null`, a `boolean`, an int as a `bigint`, a float as a
+ * `number` (never NaN), a `string` (well-formed), a `FileRef`, an array or a `ValueRecord`.
+ */
+export type Value = null | boolean | bigint | number | string | FileRef | Value[] | ValueRecord;
+
+/**
+ * A record: a plain object (prototype `Object.prototype` or `null`) whose own enumerable
+ * string keys are its fields. A record yian builds sets a `__proto__` key with
+ * `Object.defineProperty`, so it stays data.
+ */
+export interface ValueRecord {
+  [key: string]: Value;
+}
+
 /** Return whether `kind` is one of the six `list[...]` kinds. */
 export function isListKind(kind: ValueKind): boolean {
   return LIST_ELEMENT_KIND.has(kind);
@@ -77,6 +530,331 @@ export function isListKind(kind: ValueKind): boolean {
 /** Return the scalar element kind of a list kind (`null` for `LIST_ANY` and scalars). */
 export function listElementKind(kind: ValueKind): ValueKind | null {
   return LIST_ELEMENT_KIND.get(kind) ?? null;
+}
+
+// --------------------------------------------------------------------------------------- //
+// Reserved FILE placeholder
+// --------------------------------------------------------------------------------------- //
+
+/** The fields a `FileRef` is built from; `mime` and `name` default to `null`. */
+interface FileRefInit {
+  readonly uri: string;
+  readonly mime?: string | null;
+  readonly name?: string | null;
+}
+
+/**
+ * A minimal, opaque file reference: a reserved placeholder.
+ *
+ * Carries only what is needed to round-trip through the typed-value wire form. Its JSON
+ * form is the mapping `{"uri": ..., "mime": ..., "name": ...}`: a `file` slot reads that
+ * mapping as a `FileRef`, and an `object` slot reads a nested `FileRef` as that mapping.
+ * Storage, transfer, size and markdown rendering are absent until file handling is built.
+ * A `FileRef` is frozen.
+ */
+export class FileRef {
+  readonly uri: string;
+  readonly mime: string | null;
+  readonly name: string | null;
+  // Set only by the constructor, so an object merely given this prototype isn't a FileRef.
+  readonly #built = true;
+
+  /** Whether `value` is a `FileRef` its constructor built (not one forged from its prototype). */
+  static isFileRef(value: unknown): value is FileRef {
+    return typeof value === "object" && value !== null && #built in value;
+  }
+
+  /**
+   * Build a file reference from its fields.
+   *
+   * @throws RangeError when `uri` isn't text, or `mime` or `name` isn't text or null, or a
+   *   field holds a lone surrogate.
+   */
+  constructor({ uri, mime = null, name = null }: FileRefInit) {
+    checkFileField("uri", uri, false);
+    checkFileField("mime", mime, true);
+    checkFileField("name", name, true);
+    this.uri = uri;
+    this.mime = mime;
+    this.name = name;
+    Object.freeze(this);
+  }
+}
+
+/** Require file field `field` to be well-formed text, or null when `nullable`. */
+function checkFileField(field: string, value: unknown, nullable: boolean): void {
+  if (nullable && value === null) return;
+  if (typeof value !== "string") {
+    const expected = nullable ? "text or null" : "text";
+    throw new RangeError(`file ${field} must be ${expected}, got ${valueRepr(value)}`);
+  }
+  if (!value.isWellFormed()) {
+    throw new RangeError(`file ${field} holds a lone surrogate`);
+  }
+}
+
+/** A file's fields: the keys of its JSON form and the only names a dotted read gives. */
+const FILE_FIELDS: readonly ("uri" | "mime" | "name")[] = ["uri", "mime", "name"];
+
+/**
+ * Read field `name` of `value`, as a dotted `${x.name}` read sees it.
+ *
+ * A record gives its own key `name`; a `FileRef` gives its `uri`, `mime` or `name`. Nothing
+ * else is read, so a dotted read never reaches an inherited property such as `constructor`,
+ * `toString` or `__proto__` (unless the record holds it as an own key).
+ *
+ * Returns `[true, field value]` when `value` has the field, else `[false, null]`. A present
+ * field may hold `null`, as a file's unset `mime` does.
+ *
+ * Example: `fieldOf(new FileRef({uri: "a"}), "uri")` gives `[true, "a"]`;
+ * `fieldOf({a: 1n}, "constructor")` gives `[false, null]`.
+ */
+export function fieldOf(value: Value, name: string): [present: boolean, value: Value] {
+  if (isRecord(value)) return Object.hasOwn(value, name) ? [true, value[name] as Value] : [false, null];
+  if (FileRef.isFileRef(value)) {
+    const field = FILE_FIELDS.find((candidate) => candidate === name);
+    if (field !== undefined) return [true, value[field]];
+  }
+  return [false, null];
+}
+
+/**
+ * Return the type of reading field `name` on a `file`, as load checks it.
+ *
+ * `uri` is `str`; `mime` and `name` are `Optional(str)`, since a file may leave them unset. A
+ * file has no other field, so any other name gives `null`.
+ *
+ * Example: `fileFieldType("uri")` gives `Type.scalar(ValueKind.STRING)`;
+ * `fileFieldType("size")` gives `null`.
+ */
+export function fileFieldType(name: string): Type | null {
+  return FILE_FORM.fields!.get(name) ?? null;
+}
+
+/**
+ * Whether `value` is a record: a plain object with prototype `Object.prototype` or `null`. An
+ * array is never a record, whatever its prototype.
+ */
+function isRecord(value: unknown): value is ValueRecord {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+/** Whether `value` is a list: a plain array (prototype `Array.prototype`). */
+function isList(value: unknown): value is unknown[] {
+  return Array.isArray(value) && Object.getPrototypeOf(value) === Array.prototype;
+}
+
+// --------------------------------------------------------------------------------------- //
+// Typed values
+// --------------------------------------------------------------------------------------- //
+
+// ---- Open owner question: a whole number in a `float` slot ---------------------------- //
+
+/**
+ * `intInFloatSlot(value, path)` returns the float an int filling a `float` slot is stored as
+ * (a typed `float` slot at any depth, a flat `list(float)` item, an int in a list `buildValue`
+ * infers as `list[float]`); `floatSlotHolds(value)` says whether a `float` carrier may hold
+ * `value`: a `number` other than NaN.
+ *
+ * Open owner question. Design 3.2.1 says a whole number filling a `float` slot stays an
+ * int; Python yian and the shared case `values/int_fills_float` widen it to a float, which
+ * is what is implemented: a `float` value is always a `number`. Under widening, a `bigint`
+ * whose `Number()` is infinite (`10n ** 400n`) fails with `int is too large for float` at
+ * `path`, where design 3.2.2's mixing rule would give `±Infinity`. If the owner picks "stays
+ * an int", these two functions change together, and a stored value takes either the `float`
+ * kind holding a `bigint` or the `int` kind.
+ */
+function intInFloatSlot(value: bigint, path: ValuePath): number {
+  const widened = Number(value);
+  if (!Number.isFinite(widened)) throw new TypeCheckError("int is too large for float", { path });
+  return widened;
+}
+
+function floatSlotHolds(value: unknown): value is number {
+  return typeof value === "number" && !Number.isNaN(value);
+}
+
+// ---- End of the open owner question --------------------------------------------------- //
+
+/** What a typed value of each storage kind holds, for the decoder's messages. */
+const KIND_HOLDS: ReadonlyMap<StorageKind, string> = new Map([
+  [ValueKind.NONE, "null"],
+  [ValueKind.STRING, "a string"],
+  [ValueKind.INTEGER, "a bigint"],
+  [ValueKind.NUMBER, "a number other than NaN"],
+  [ValueKind.DATE, "a string"],
+  [ValueKind.DATETIME, "a string"],
+  [ValueKind.BOOLEAN, "a boolean"],
+  [ValueKind.OBJECT, "a plain record"],
+  [ValueKind.LIST_ANY, "an array"],
+  [ValueKind.LIST_STRING, "an array of strings or null"],
+  [ValueKind.LIST_INTEGER, "an array of bigints or null"],
+  [ValueKind.LIST_NUMBER, "an array of numbers other than NaN, or null"],
+  [ValueKind.LIST_BOOLEAN, "an array of booleans or null"],
+  [ValueKind.LIST_OBJECT, "an array of plain records or null"],
+]);
+
+/**
+ * Whether `value` is a scalar of storage kind `kind` (`None`, `str`, `int`, `float`, `bool`,
+ * `object`); `false` for any other kind.
+ */
+function holdsScalar(kind: ValueKind, value: unknown): boolean {
+  switch (kind) {
+    case ValueKind.NONE:
+      return value === null;
+    case ValueKind.STRING:
+      return typeof value === "string";
+    case ValueKind.INTEGER:
+      return typeof value === "bigint";
+    case ValueKind.NUMBER:
+      return floatSlotHolds(value);
+    case ValueKind.BOOLEAN:
+      return typeof value === "boolean";
+    case ValueKind.OBJECT:
+      return isRecord(value);
+    default:
+      return false;
+  }
+}
+
+/**
+ * A value tagged with the storage kind it persists as; frozen.
+ *
+ * The tag is what makes the run log lossless: on a JSON round trip `fromWire` reads it back,
+ * so an int stays an int and a float a float whatever JSON's number spelling. The constructor
+ * doesn't check that `value` fits `kind`; the write boundary and `fromWire` are the checked
+ * ways to build one.
+ */
+export class TypedValue {
+  readonly kind: StorageKind;
+  readonly value: Value;
+
+  /** Pair `value` with `kind` as given, unchecked. */
+  constructor(kind: StorageKind, value: Value) {
+    this.kind = kind;
+    this.value = value;
+    Object.freeze(this);
+  }
+
+  /** Return the plain value (what expressions and node code see). */
+  toObject(): Value {
+    return this.value;
+  }
+
+  /**
+   * Return the wire form `{kind, value}`, with every `FileRef` in the value (the root or
+   * nested) written as its mapping, as the run log's encoder takes it. The value is copied
+   * only on the paths to its files.
+   *
+   * @throws TypeCheckError when the value isn't a JSON value (see `jsonPart`): a non-JSON part,
+   *   NaN, text holding a lone surrogate, or a container inside itself. The unchecked
+   *   constructor can hold such a value.
+   */
+  toWire(): { kind: StorageKind; value: Value } {
+    return { kind: this.kind, value: jsonPart(this.value, [], "mapping") };
+  }
+
+  /**
+   * Decode a typed value's wire form strictly.
+   *
+   * `data` must be a plain record with exactly `kind` and `value`; `kind` a storage kind (not
+   * `Any`); and `value` of that kind: `None` null, `str` a string, `int` a `bigint`, `float` a
+   * `number` other than NaN (an int is refused: the log writes a float with `.0`), `date` and
+   * `datetime` text in their grammar, `bool` a boolean, `object` a plain record, `file` a
+   * file's mapping with exactly `uri`, `mime` and `name` (read as a `FileRef`), `list[Any]`
+   * an array, and `list[X]` an array of `X` or null. Contents aren't walked: the lossless
+   * reader made the data.
+   *
+   * @throws RangeError naming the kind when `data` isn't such a wire form.
+   */
+  static fromWire(data: unknown): TypedValue {
+    if (!isRecord(data)) throw new RangeError("typed-value wire must be a JSON object");
+    requireFields(data, ["kind", "value"], "typed value");
+    const kind: unknown = data["kind"];
+    if (typeof kind !== "string" || !STORAGE_KINDS.has(kind)) {
+      throw new RangeError(`typed-value kind must be a storage kind, got ${valueRepr(kind)}`);
+    }
+    const storage = kind as StorageKind;
+    const value = data["value"] as Value;
+    if (storage === ValueKind.FILE) {
+      if (!isRecord(value)) throw new RangeError("file typed value must contain a JSON object");
+      requireFields(value, FILE_FIELDS, "file reference");
+      try {
+        return new TypedValue(storage, new FileRef(value as unknown as FileRefInit));
+      } catch (error) {
+        if (error instanceof RangeError) {
+          throw new RangeError(`invalid file typed value: ${error.message}`);
+        }
+        throw error;
+      }
+    }
+    if (storage === ValueKind.DATE || storage === ValueKind.DATETIME) {
+      if (typeof value === "string") {
+        try {
+          if (storage === ValueKind.DATE) parseDate(value);
+          else parseDatetime(value);
+        } catch (error) {
+          if (error instanceof RangeError) {
+            throw new RangeError(`invalid ${storage} typed value: ${error.message}`);
+          }
+          throw error;
+        }
+        return new TypedValue(storage, value);
+      }
+    } else if (holdsScalar(storage, value)) {
+      return new TypedValue(storage, value);
+    } else if (isListKind(storage) && isList(value)) {
+      const element = listElementKind(storage);
+      // An index loop, not `every`, so a hole is checked as `undefined`.
+      let holds = true;
+      for (let index = 0; holds && element !== null && index < value.length; index++) {
+        const item = value[index];
+        holds = item === null || holdsScalar(element, item);
+      }
+      if (holds) return new TypedValue(storage, value);
+    }
+    const expected = KIND_HOLDS.get(storage)!;
+    throw new RangeError(
+      `invalid ${storage} typed value: expected ${expected}, got ${valueRepr(value)}`,
+    );
+  }
+}
+
+/**
+ * Require `record`'s own keys to be exactly `expected`.
+ *
+ * @throws RangeError listing the missing and extra keys, each sorted.
+ */
+function requireFields(record: ValueRecord, expected: readonly string[], label: string): void {
+  const actual = Object.keys(record);
+  const missing = expected.filter((key) => !Object.hasOwn(record, key)).sort(compareCodeUnits);
+  const extra = actual.filter((key) => !expected.includes(key)).sort(compareCodeUnits);
+  if (missing.length > 0 || extra.length > 0) {
+    throw new RangeError(
+      `invalid ${label} fields; missing=${pythonList(missing)}, extra=${pythonList(extra)}`,
+    );
+  }
+}
+
+/** Spell a list of names as Python prints it: `['a', 'b']`. */
+function pythonList(names: readonly string[]): string {
+  return "[" + names.map(reprText).join(", ") + "]";
+}
+
+/** Set `record[key]` as an own data property, so a `__proto__` key stays data. */
+function setField(record: ValueRecord, key: string, value: Value): void {
+  if (key === "__proto__") {
+    Object.defineProperty(record, key, {
+      value,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+  } else {
+    record[key] = value;
+  }
 }
 
 // --------------------------------------------------------------------------------------- //
@@ -618,6 +1396,26 @@ function literalMember(tag: string): string {
 // Unions of records
 // --------------------------------------------------------------------------------------- //
 
+/**
+ * Every union member has the field; `type` is what a read gives, or `null` when the members'
+ * types differ and the read is untyped.
+ */
+export interface FieldRead {
+  readonly kind: "read";
+  readonly type: Type | null;
+}
+
+/** Only some union members have the field: `members`, in the union's member order. */
+export interface FieldPartial {
+  readonly kind: "partial";
+  readonly members: readonly Type[];
+}
+
+/** No union member has the field. */
+export interface FieldAbsent {
+  readonly kind: "absent";
+}
+
 /** Return the one value of a single-value `Literal`, else `null`. */
 function singleTag(typ: Type): string | null {
   if (typ.tags === undefined || typ.tags.size !== 1) return null;
@@ -704,9 +1502,161 @@ function orderedMemberLabels(members: readonly Type[]): [Type, string, string][]
   return labelled.sort(([, , a], [, , b]) => compareCodeUnits(a, b));
 }
 
+/**
+ * Pick a union's tag field: `field` when given, else the first by name.
+ *
+ * @throws RangeError when `typ` is not a tagged union, or `field` is not one of its tag fields.
+ */
+function tagField(typ: Type, field: string | undefined): string {
+  const tagFields = unionTagFields(typ);
+  if (tagFields.length === 0) throw new RangeError("the type is not a tagged union");
+  if (field === undefined) return tagFields[0]!;
+  if (!tagFields.includes(field)) {
+    throw new RangeError(`${reprText(field)} is not a tag field of the union`);
+  }
+  return field;
+}
+
+/**
+ * Return the member of the tagged union `typ` whose tag field equals `tag`, or `null` when no
+ * member has that tag (a non-string `tag` included). `field` is the tag field to match on; by
+ * default the first tag field by name.
+ *
+ * @throws RangeError when `typ` is not a tagged union, or `field` is not one of its tag fields.
+ */
+export function unionMemberForTag(typ: Type, tag: unknown, field?: string): Type | null {
+  return memberWithTag(typ.variants!, tagField(typ, field), tag);
+}
+
+/** Return the member whose single-value tag field `field` equals `tag`, or `null`. */
+function memberWithTag(members: readonly Type[], field: string, tag: unknown): Type | null {
+  const index = tagIndex(members, field, tag);
+  return index === null ? null : members[index]!;
+}
+
+/**
+ * Return the index of the member whose tag field `field` equals `tag`, or `null`; a non-string
+ * tag finds no member.
+ */
+function tagIndex(members: readonly Type[], field: string, tag: unknown): number | null {
+  if (typeof tag !== "string") return null;
+  const index = members.findIndex((member) => member.fields!.get(field)!.tags!.has(tag));
+  return index === -1 ? null : index;
+}
+
+/**
+ * Return the part of the union `typ` that `keep` selects, keeping its nullability.
+ *
+ * Each item of `keep` names a member by its tag value (tagged unions only) or is a member
+ * `Type` (compared with `typeEquals`); `field` is the tag field tag values refer to, by
+ * default the first by name. One selected member gives that member record; several give a
+ * smaller union with its members in canonical order. Either is nullable when `typ` is.
+ *
+ * Example: restricting `Union(Buy, Hold, Sell)` to `["buy", "sell"]` gives `Union(Buy, Sell)`.
+ *
+ * @throws TypeError when `keep` is a bare string rather than a collection of tags.
+ * @throws RangeError when `typ` is not a union, `keep` is empty, or an item is neither a tag
+ *   nor a member of `typ`.
+ */
+export function restrictUnion(typ: Type, keep: Iterable<string | Type>, field?: string): Type {
+  if (typeof keep === "string") {
+    throw new TypeError("restrictUnion keeps a collection of tags, not a bare string");
+  }
+  if (typ.variants === undefined) throw new RangeError("only a union can be restricted");
+  const members = typ.variants;
+  let selectedField: string | null = null;
+  const selected = new Set<number>();
+  for (const item of keep) {
+    let index: number | null;
+    if (item instanceof Type) {
+      index = members.findIndex((member) => typeEquals(member, item));
+      if (index === -1) {
+        throw new RangeError("restrictUnion got a type that is not a union member");
+      }
+    } else {
+      selectedField ??= tagField(typ, field);
+      index = tagIndex(members, selectedField, item);
+      if (index === null) throw new RangeError(`${reprText(item)} is not a tag of the union`);
+    }
+    selected.add(index);
+  }
+  if (selected.size === 0) throw new RangeError("restrictUnion needs at least one member");
+  const indexes = [...selected].sort((a, b) => a - b);
+  if (indexes.length === 1) return members[indexes[0]!]!.replace({ nullable: typ.nullable });
+  const kept = canonicalUnionOrder(indexes.map((index) => members[index]!));
+  return new Type({ kind: ValueKind.OBJECT, variants: kept, nullable: typ.nullable });
+}
+
+/**
+ * Describe reading field `name` on a value of the union type `typ`.
+ *
+ * When every member has the field, the read's type is the members' type if they are equal
+ * ignoring `nullable`, the merged `Literal` if they are all string `Literal`s, and untyped
+ * otherwise. It is nullable when any member's field is `Optional` or not required.
+ *
+ * @returns A `FieldRead` when every member has the field, a `FieldPartial` with the members
+ *   that have it when only some do, and a `FieldAbsent` when none do.
+ * @throws RangeError when `typ` is not a union.
+ */
+export function unionField(typ: Type, name: string): FieldRead | FieldPartial | FieldAbsent {
+  if (typ.variants === undefined) throw new RangeError("unionField needs a union type");
+  const having = typ.variants.filter((member) => member.fields!.has(name));
+  if (having.length === 0) return { kind: "absent" };
+  if (having.length < typ.variants.length) return { kind: "partial", members: having };
+  const fieldTypes = having.map((member) => member.fields!.get(name)!);
+  const nullable = having.some(
+    (member, i) => fieldTypes[i]!.nullable || !member.required?.has(name),
+  );
+  const strict = fieldTypes.map((fieldType) => fieldType.replace({ nullable: false }));
+  if (strict.every((fieldType) => typeEquals(fieldType, strict[0]!))) {
+    return { kind: "read", type: strict[0]!.replace({ nullable }) };
+  }
+  if (strict.every((fieldType) => fieldType.tags !== undefined)) {
+    const merged = new Set(strict.flatMap((fieldType) => [...fieldType.tags!]));
+    return { kind: "read", type: new Type({ kind: ValueKind.STRING, tags: merged, nullable }) };
+  }
+  return { kind: "read", type: null };
+}
+
 /** Whether `null` satisfies `typ`. */
 function admitsNone(typ: Type): boolean {
   return typ.nullable || typ.kind === ValueKind.NONE;
+}
+
+/**
+ * Whether `file` appears anywhere in `typ`: itself, a field, the element, or a member, so some
+ * value of `typ` may hold a file. A type without `file` holds only JSON values, so every value
+ * of it is an `Any` value.
+ */
+export function hasFile(typ: Type): boolean {
+  if (typ.kind === ValueKind.FILE) return true;
+  if (typ.element !== undefined && hasFile(typ.element)) return true;
+  if (typ.fields !== undefined && [...typ.fields.values()].some(hasFile)) return true;
+  return typ.variants !== undefined && typ.variants.some(hasFile);
+}
+
+/**
+ * Whether every non-null value of `typ` holds a file, so none is an `Any` value.
+ *
+ * A list counts when its element is a non-nullable type that requires a file: the empty list
+ * is shared by every list type and is not counted as a shared value. A record counts when a
+ * required, non-nullable field requires a file; a union when every member does. Load treats
+ * such a type as disjoint from `Any`, although a `file` slot reads a file's JSON form (an
+ * `Any` value) at runtime, where load can't tell.
+ */
+export function requiresFile(typ: Type): boolean {
+  if (typ.kind === ValueKind.FILE) return true;
+  if (typ.variants !== undefined) return typ.variants.every(requiresFile);
+  if (isListKind(typ.kind)) {
+    const element = typ.element;
+    return element !== undefined && !element.nullable && requiresFile(element);
+  }
+  if (typ.fields !== undefined) {
+    return [...typ.fields].some(
+      ([name, field]) => typ.required?.has(name) === true && !field.nullable && requiresFile(field),
+    );
+  }
+  return false;
 }
 
 /** Whether `typ` is `object` with no record or union refinement. */
@@ -736,18 +1686,6 @@ function boundsIntersect(a: Type, b: Type): boolean {
     (aLow === null || bHigh === null || aLow <= bHigh) &&
     (bLow === null || aHigh === null || bLow <= aHigh)
   );
-}
-
-/** Whether `tag` is a valid `date` or `datetime` string, as `kind` says. */
-function matchesTemporal(kind: ValueKind, tag: string): boolean {
-  try {
-    if (kind === ValueKind.DATE) parseDate(tag);
-    else parseDatetime(tag);
-  } catch (error) {
-    if (error instanceof RangeError) return false;
-    throw error;
-  }
-  return true;
 }
 
 const TEXT_KINDS: ReadonlySet<ValueKind> = new Set([
@@ -805,7 +1743,7 @@ export function typesOverlap(a: Type, b: Type): boolean {
     const [literal, other] = a.tags !== undefined ? [a, b] : [b, a];
     if (other.kind === ValueKind.STRING) return true;
     if (other.kind === ValueKind.DATE || other.kind === ValueKind.DATETIME) {
-      return [...literal.tags!].some((tag) => matchesTemporal(other.kind, tag));
+      return [...literal.tags!].some((tag) => scalarMatches(other.kind, tag));
     }
     return false;
   }
@@ -819,4 +1757,656 @@ export function typesOverlap(a: Type, b: Type): boolean {
     return other.fields !== undefined && recordsOverlap(other, FILE_FORM);
   }
   return a.kind === b.kind;
+}
+
+// --------------------------------------------------------------------------------------- //
+// Scalar type checks / coercion
+// --------------------------------------------------------------------------------------- //
+
+/** Return the storage kind a scalar, file or record infers as, or `null` for anything else. */
+function inferScalarKind(value: unknown): StorageKind | null {
+  if (value === null) return ValueKind.NONE;
+  if (typeof value === "boolean") return ValueKind.BOOLEAN;
+  if (typeof value === "bigint") return ValueKind.INTEGER;
+  if (typeof value === "number") return ValueKind.NUMBER;
+  if (typeof value === "string") return ValueKind.STRING;
+  if (FileRef.isFileRef(value)) return ValueKind.FILE;
+  if (isRecord(value)) return ValueKind.OBJECT;
+  return null;
+}
+
+/**
+ * Return why `value` is not a valid `declared` (`date` or `datetime`) string, or `null` when
+ * it parses.
+ */
+function temporalError(declared: ValueKind, value: string): string | null {
+  try {
+    if (declared === ValueKind.DATE) parseDate(value);
+    else parseDatetime(value);
+  } catch (error) {
+    if (error instanceof RangeError) return error.message;
+    throw error;
+  }
+  return null;
+}
+
+/**
+ * Whether `value` fits the scalar kind `declared`. A `float` slot takes an int (it widens);
+ * a `file` slot takes a `FileRef` or a file's JSON form.
+ */
+function scalarMatches(declared: ValueKind, value: unknown): boolean {
+  switch (declared) {
+    case ValueKind.NONE:
+      return value === null;
+    case ValueKind.STRING:
+      return typeof value === "string";
+    case ValueKind.BOOLEAN:
+      return typeof value === "boolean";
+    case ValueKind.INTEGER:
+      return typeof value === "bigint";
+    case ValueKind.NUMBER:
+      return typeof value === "bigint" || typeof value === "number";
+    case ValueKind.DATE:
+    case ValueKind.DATETIME:
+      return typeof value === "string" && temporalError(declared, value) === null;
+    case ValueKind.OBJECT:
+      return isRecord(value);
+    case ValueKind.FILE:
+      return FileRef.isFileRef(value) || isFileForm(value);
+    default:
+      return false;
+  }
+}
+
+/**
+ * Return `value` as a `declared` slot stores it: an int in a `float` slot widens and `-0`
+ * becomes `0`; a file's JSON form in a `file` slot becomes a `FileRef`. Any other value is
+ * returned unchanged.
+ *
+ * @throws TypeCheckError at `path` when an int is too large for a float, or a file form's
+ *   text holds a lone surrogate.
+ */
+function coerceScalar(declared: ValueKind, value: unknown, path: ValuePath): unknown {
+  if (declared === ValueKind.NUMBER) {
+    if (typeof value === "bigint") return intInFloatSlot(value, path);
+    if (Object.is(value, -0)) return 0;
+  }
+  if (declared === ValueKind.FILE && isFileForm(value)) {
+    for (const field of FILE_FIELDS) rejectNonValue(value[field], [...path, field]);
+    return new FileRef(value);
+  }
+  return value;
+}
+
+/**
+ * Whether `value` is a file's JSON form: a record with exactly the keys `uri` (text), `mime`
+ * and `name` (each text or null).
+ */
+function isFileForm(value: unknown): value is ValueRecord & FileRefInit {
+  if (!isRecord(value) || Object.keys(value).length !== FILE_FIELDS.length) return false;
+  if (!FILE_FIELDS.every((field) => Object.hasOwn(value, field))) return false;
+  const { uri, mime, name } = value;
+  return (
+    typeof uri === "string" &&
+    (mime === null || typeof mime === "string") &&
+    (name === null || typeof name === "string")
+  );
+}
+
+/**
+ * Return why `value` itself can't be a yian value (NaN, or text holding a lone surrogate), or
+ * `null`. A container's contents aren't looked at.
+ */
+function nonValueReason(value: unknown): string | null {
+  if (typeof value === "number" && Number.isNaN(value)) return "NaN is not a yian value";
+  if (typeof value === "string" && !value.isWellFormed()) {
+    return LONE_SURROGATE_REASON;
+  }
+  return null;
+}
+
+/** Refuse NaN or text holding a lone surrogate at `path`; a container passes. */
+function rejectNonValue(value: unknown, path: ValuePath): void {
+  const reason = nonValueReason(value);
+  if (reason !== null) throw new TypeCheckError(reason, { path });
+}
+
+/** What the JSON walk does with a `FileRef`: keep it, write it as its mapping, or refuse it. */
+type FileMode = "keep" | "mapping" | "refuse";
+
+/** An open list or record in the JSON walk. */
+interface JsonFrame {
+  readonly container: unknown[] | ValueRecord;
+  /** The record's keys, or `null` for a list. */
+  readonly keys: readonly string[] | null;
+  /** The container's key or index in its parent (`null` for the root). */
+  readonly key: string | number | null;
+  index: number;
+  /** The copy holding the entries read so far, made at the first entry that changes. */
+  copy: Value[] | ValueRecord | null;
+}
+
+/**
+ * Return `root` as a JSON value: `null`, a boolean, a `bigint`, a `number`, text, and lists and
+ * records of those, with `FileRef`s handled as `files` says.
+ *
+ * `-0` becomes `0`, and under `"mapping"` each `FileRef` (the root too) becomes its mapping
+ * `{uri, mime, name}`. Only the containers on the path to a change are copied; `root` itself is
+ * returned when nothing changes, and a container shared by two parents is walked once. The
+ * walk uses an explicit stack, so any depth works; nesting depth is left to the boundaries.
+ *
+ * @throws TypeCheckError at the bad part's path, the first depth-first in order: NaN or text
+ *   holding a lone surrogate (a key: at its record's path) is not a yian value; `undefined` or
+ *   a list hole is `undefined is not a JSON value`; a container inside itself is `value
+ *   contains itself` at the entry holding it; anything else (a `Date`, a `Map`, a class
+ *   instance, a `FileRef` under `"refuse"`) is `<valueRepr> is not a JSON value`.
+ */
+function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value {
+  const stack: JsonFrame[] = [];
+  const active = new Set<object>();
+  const done = new Map<object, Value>();
+  const pathTo = (...keys: (string | number)[]): ValuePath => [
+    ...path,
+    ...framePath(stack),
+    ...keys,
+  ];
+  /** Throw `message` at the entry `key` of the top frame (`null`: the root). */
+  const fail = (key: string | number | null, message: string): never => {
+    // The path is built only on a throw.
+    throw new TypeCheckError(message, { path: key === null ? path : pathTo(key) });
+  };
+
+  /** Return what `value` stores as, or `undefined` once its container's frame is pushed. */
+  const enter = (value: unknown, key: string | number | null): Value | undefined => {
+    const reason = nonValueReason(value);
+    if (reason !== null) fail(key, reason);
+    if (value === null || typeof value === "boolean" || typeof value === "bigint") return value;
+    if (typeof value === "string") return value;
+    if (typeof value === "number") return Object.is(value, -0) ? 0 : value;
+    if (FileRef.isFileRef(value)) {
+      if (files === "keep") return value;
+      if (files === "mapping") return { uri: value.uri, mime: value.mime, name: value.name };
+      // Under "refuse" a file is not a JSON value.
+      return fail(key, `${valueRepr(value)} is not a JSON value`);
+    }
+    if (isList(value) || isRecord(value)) {
+      if (active.has(value)) fail(key, "value contains itself");
+      const finished = done.get(value);
+      if (finished !== undefined) return finished;
+      const keys = isList(value) ? null : Object.keys(value);
+      stack.push({ container: value, keys, key, index: 0, copy: null });
+      active.add(value);
+      return undefined;
+    }
+    if (value === undefined) fail(key, "undefined is not a JSON value");
+    return fail(key, `${valueRepr(value)} is not a JSON value`);
+  };
+
+  /** Record that `frame`'s last-read entry, holding `original`, stores `stored`. */
+  const settle = (frame: JsonFrame, original: unknown, stored: Value): void => {
+    const index = frame.index - 1;
+    if (frame.copy === null) {
+      if (Object.is(stored, original)) return;
+      if (frame.keys === null) {
+        frame.copy = (frame.container as Value[]).slice(0, index);
+      } else {
+        const copy: ValueRecord = {};
+        const container = frame.container as ValueRecord;
+        for (const name of frame.keys.slice(0, index)) setField(copy, name, container[name]!);
+        frame.copy = copy;
+      }
+    }
+    if (Array.isArray(frame.copy)) frame.copy.push(stored);
+    else setField(frame.copy, frame.keys![index]!, stored);
+  };
+
+  const rootValue = enter(root, null);
+  if (rootValue !== undefined) return rootValue;
+  for (;;) {
+    const frame = stack[stack.length - 1]!;
+    const size = frame.keys === null ? (frame.container as unknown[]).length : frame.keys.length;
+    if (frame.index < size) {
+      const index = frame.index++;
+      const key = frame.keys === null ? index : frame.keys[index]!;
+      if (typeof key === "string" && !key.isWellFormed()) {
+        throw new TypeCheckError(LONE_SURROGATE_REASON, { path: pathTo() });
+      }
+      const child = (frame.container as Record<string | number, unknown>)[key];
+      const stored = enter(child, key);
+      if (stored !== undefined) settle(frame, child, stored);
+      continue;
+    }
+    stack.pop();
+    active.delete(frame.container);
+    const result = frame.copy ?? (frame.container as Value);
+    done.set(frame.container, result);
+    const parent = stack[stack.length - 1];
+    if (parent === undefined) return result;
+    settle(parent, frame.container, result);
+  }
+}
+
+// --------------------------------------------------------------------------------------- //
+// Constructors
+// --------------------------------------------------------------------------------------- //
+
+/**
+ * Wrap a value in the `TypedValue` of its natural kind, inferring the kind.
+ *
+ * A `TypedValue` is returned as is, so the call is idempotent. Any other value is first walked
+ * as a JSON value with files kept (see `jsonPart`): `-0` becomes `0` at any depth, and a part
+ * that isn't a yian JSON value is refused. `file` is never inferred from a record or text;
+ * only a `FileRef` is a file. A list of text, bools, ints or records infers its list kind, a
+ * list of ints and floats is `list[float]` (each int widens), and an empty or mixed list is
+ * `list[Any]`.
+ *
+ * Example: `buildValue([1n, 2.5])` gives a `list[float]` holding `[1, 2.5]`.
+ *
+ * @throws TypeCheckError when the value is not a scalar, `FileRef`, list or record (`cannot
+ *   wrap value of type 'Date'`), or a part of it is not a JSON value.
+ */
+export function buildValue(value: unknown): TypedValue {
+  if (value instanceof TypedValue) return value;
+  if (inferScalarKind(value) === null && !isList(value)) {
+    throw new TypeCheckError(`cannot wrap value of type ${reprText(jsTypeName(value))}`);
+  }
+  const json = jsonPart(value, [], "keep");
+  const kind = inferScalarKind(json);
+  return kind === null ? inferList(json as Value[]) : new TypedValue(kind, json);
+}
+
+/** Wrap a list in the list kind its items infer (see `buildValue`). */
+function inferList(items: Value[]): TypedValue {
+  if (items.length === 0) return new TypedValue(ValueKind.LIST_ANY, items);
+  const kinds = new Set(items.map(inferScalarKind));
+  const only = (kind: StorageKind) => kinds.size === 1 && kinds.has(kind);
+  if (kinds.has(null)) return new TypedValue(ValueKind.LIST_ANY, items);
+  if (only(ValueKind.STRING)) return new TypedValue(ValueKind.LIST_STRING, items);
+  if (only(ValueKind.BOOLEAN)) return new TypedValue(ValueKind.LIST_BOOLEAN, items);
+  if (only(ValueKind.INTEGER)) return new TypedValue(ValueKind.LIST_INTEGER, items);
+  if ([...kinds].every((kind) => kind === ValueKind.INTEGER || kind === ValueKind.NUMBER)) {
+    const floats = items.map((item, index) =>
+      typeof item === "bigint" ? intInFloatSlot(item, [index]) : item,
+    );
+    return new TypedValue(ValueKind.LIST_NUMBER, floats);
+  }
+  if (only(ValueKind.OBJECT)) return new TypedValue(ValueKind.LIST_OBJECT, items);
+  return new TypedValue(ValueKind.LIST_ANY, items);
+}
+
+/**
+ * Wrap `value` as a `TypedValue` of `declared`, throwing on a type mismatch.
+ *
+ * This is the write-boundary check against each declared type, so a node returning the wrong
+ * type fails at the write rather than downstream. NaN and text holding a lone surrogate are
+ * refused at any depth. Conversions apply at any depth (a record field, a list item): an int
+ * filling a `float` slot widens, and `-0` there becomes `0`; a file's JSON form `{uri, mime,
+ * name}` (exactly those keys) filling a `file` slot becomes a `FileRef`; and a `FileRef`
+ * nested in an `object` value or `list(object)` item becomes that mapping, copying only the
+ * containers on its path.
+ *
+ * `Any` accepts any non-null JSON value and stores it in its natural kind (a list as
+ * `list[Any]`); its one conversion is `-0` to `0` at any depth, as in an `object` value. An
+ * `object` value, a `list(object)` item and a `list[Any]` item must be JSON values (see
+ * `jsonPart`); a `FileRef` is not one, so it fails anywhere in an `Any` or `list[Any]` value.
+ * A record keeps the value's key order.
+ *
+ * `declared` is a `Type`, or a bare `ValueKind` for a scalar or flat list. A `TypedValue`
+ * input is unwrapped to its value first.
+ *
+ * Example: `buildValueAs(ValueKind.NUMBER, 7n)` gives a `float` holding `7`.
+ *
+ * @throws TypeCheckError at the failing value's path when the value does not satisfy
+ *   `declared`: a wrong scalar, a non-member variant tag, an out-of-range number, a record
+ *   with missing or unknown fields, a union value with a missing or unknown tag or matching no
+ *   member, a bad list element, or a part that is not a JSON value where one is required.
+ */
+export function buildValueAs(declared: ValueKind | Type, value: unknown): TypedValue {
+  const typ = declared instanceof Type ? declared : Type.scalar(declared);
+  return buildForType(typ, value instanceof TypedValue ? value.value : value, []);
+}
+
+/**
+ * Check `value` against `typ` at `path` (relative to the checked root) and return it as `typ`
+ * stores it.
+ *
+ * @throws TypeCheckError at `path` or the failing descendant's path.
+ */
+function buildForType(typ: Type, value: unknown, path: ValuePath): TypedValue {
+  rejectNonValue(value, path);
+  if (typ.bounds !== undefined) {
+    validateNumericBounds(typ.kind, typ.bounds);
+    const [low, high] = typ.bounds;
+    // `<` and `>` compare a bigint with a number exactly; an open end admits its infinity.
+    if (scalarMatches(typ.kind, value)) {
+      const number = value as bigint | number;
+      const below = low !== null && number < low;
+      const above = high !== null && number > high;
+      if (below || above) {
+        let message: string;
+        if (low !== null && high !== null) {
+          const bounds = `(${boundText(low)}, ${boundText(high)})`;
+          message = `is outside inclusive ${typ.kind} bounds ${bounds}`;
+        } else if (below) {
+          message = `is below the inclusive ${typ.kind} minimum ${valueRepr(low)}`;
+        } else {
+          message = `is above the inclusive ${typ.kind} maximum ${valueRepr(high)}`;
+        }
+        throw new TypeCheckError(`${valueRepr(value)} ${message}`, { path });
+      }
+    }
+  }
+
+  if (value === null && typ.nullable) return new TypedValue(ValueKind.NONE, null);
+
+  if (typ.variants !== undefined) return buildForUnion(typ, value, path);
+
+  if (typ.tags !== undefined) {
+    if (typeof value !== "string" || !typ.tags.has(value)) {
+      const tags = pythonList([...typ.tags].sort(compareCodeUnits));
+      throw new TypeCheckError(`${valueRepr(value)} is not a member of variant ${tags}`, { path });
+    }
+    return new TypedValue(ValueKind.STRING, value);
+  }
+
+  if (typ.fields !== undefined) {
+    const fields = typ.fields;
+    if (!isRecord(value)) {
+      throw new TypeCheckError(`${valueRepr(value)} is not an object for a record type`, { path });
+    }
+    const missing = [...(typ.required ?? [])]
+      .filter((name) => !Object.hasOwn(value, name))
+      .sort(compareCodeUnits);
+    if (missing.length > 0) {
+      throw new TypeCheckError(`record missing required fields: ${pythonList(missing)}`, {
+        path: [...path, missing[0]!],
+      });
+    }
+    const names = Object.keys(value);
+    const unknown = names.filter((name) => !fields.has(name)).sort(compareCodeUnits);
+    if (unknown.length > 0) {
+      const shown = shownText(unknown.map(reprText).join(", "));
+      throw new TypeCheckError(`record has unknown fields: [${shown}]`, {
+        path: [...path, unknown[0]!],
+      });
+    }
+    // Each field stores its checked value, so a nested `float` slot widens as a top one does.
+    const record: ValueRecord = {};
+    for (const name of names) {
+      setField(record, name, buildForType(fields.get(name)!, value[name], [...path, name]).value);
+    }
+    return new TypedValue(ValueKind.OBJECT, record);
+  }
+
+  if (isListKind(typ.kind) && typ.element !== undefined) {
+    if (!isList(value)) {
+      const label = canonicalTypeLabel(typ);
+      throw new TypeCheckError(`${valueRepr(value)} is not a list for declared ${label}`, {
+        path,
+      });
+    }
+    const items: Value[] = [];
+    // An index loop, not `map`, so a hole is checked as `undefined`.
+    for (let index = 0; index < value.length; index++) {
+      items.push(buildForType(typ.element, value[index], [...path, index]).value);
+    }
+    return new TypedValue(typ.kind as StorageKind, items);
+  }
+
+  if (typ.kind === ValueKind.ANY) {
+    if (value === null) {
+      throw new TypeCheckError("None does not match declared type Any", { path });
+    }
+    const json = jsonPart(value, path, "refuse");
+    return new TypedValue(isList(json) ? ValueKind.LIST_ANY : inferScalarKind(json)!, json);
+  }
+
+  return buildScalarOrList(typ.kind, value, path);
+}
+
+/**
+ * Check `value` against the member of the union `typ` it belongs to, at `path`, and return it
+ * stored as an object.
+ *
+ * A tagged union selects the member by its first tag field; an untagged union takes the first
+ * member the value satisfies.
+ *
+ * @throws TypeCheckError when the value is not a record, its tag is missing or unknown, or it
+ *   fails the selected member (or every member, a `NoUnionMember`).
+ */
+function buildForUnion(typ: Type, value: unknown, path: ValuePath): TypedValue {
+  if (!isRecord(value)) {
+    throw new TypeCheckError(`${valueRepr(value)} is not an object for a union type`, { path });
+  }
+  const members = typ.variants!;
+  const tagged = taggedMember(members, value);
+  if (tagged !== null) {
+    const [field, member] = tagged;
+    if (!Object.hasOwn(value, field)) {
+      const expected = pythonList(tagValues(members, field));
+      throw new TypeCheckError(
+        `missing tag field ${reprText(field)} (expected one of ${expected})`,
+        { path: [...path, field] },
+      );
+    }
+    if (member === null) {
+      const expected = pythonList(tagValues(members, field));
+      throw new TypeCheckError(
+        `${valueRepr(value[field])} is not a tag of the union (expected one of ${expected})`,
+        { path: [...path, field] },
+      );
+    }
+    return buildForType(member, value, path);
+  }
+  const reasons: string[] = [];
+  for (const member of members) {
+    try {
+      return buildForType(member, value, path);
+    } catch (error) {
+      if (!(error instanceof TypeCheckError)) throw error;
+      // A nested union contributes its summary, so the message stays bounded.
+      const reason = error instanceof NoUnionMember ? error.summary : error.message;
+      reasons.push(`${canonicalTypeLabel(member)}: ${reason}`);
+    }
+  }
+  const summary = `value matches no member of ${canonicalTypeLabel(typ)}`;
+  throw new NoUnionMember(`${summary}: ${reasons.join("; ")}`, summary, path);
+}
+
+/**
+ * Return a tagged union's first tag field and the member `value`'s tag selects (`null` when
+ * that field is missing or holds an unknown tag), or `null` when the members share no tag
+ * field (an untagged union).
+ */
+function taggedMember(
+  members: readonly Type[],
+  value: ValueRecord,
+): [string, Type | null] | null {
+  const tagFields = membersTagFields(members);
+  if (tagFields.length === 0) return null;
+  const field = tagFields[0]!;
+  const member = Object.hasOwn(value, field) ? memberWithTag(members, field, value[field]) : null;
+  return [field, member];
+}
+
+/** Return the sorted values of one tag field across union members. */
+function tagValues(members: readonly Type[], field: string): string[] {
+  return members.map((member) => singleTag(member.fields!.get(field)!)!).sort(compareCodeUnits);
+}
+
+/**
+ * A value matches no member of an untagged union; `summary` is the message without the
+ * per-member reasons. Its `name` stays `TypeCheckError`, so it reads as that class.
+ */
+class NoUnionMember extends TypeCheckError {
+  readonly summary: string;
+
+  constructor(message: string, summary: string, path: ValuePath) {
+    super(message, { path });
+    this.summary = summary;
+  }
+}
+
+/**
+ * Check `value` against the plain scalar or flat-list kind `declared` at `path` and return it
+ * as `declared` stores it.
+ *
+ * @throws TypeCheckError at `path`, or at an element's index for a flat-list element.
+ */
+function buildScalarOrList(declared: ValueKind, value: unknown, path: ValuePath): TypedValue {
+  if (isListKind(declared)) {
+    const label = kindLabel(declared);
+    if (!isList(value)) {
+      throw new TypeCheckError(`${valueRepr(value)} is not a list for declared ${label}`, {
+        path,
+      });
+    }
+    const kind = declared as StorageKind;
+    const element = listElementKind(declared);
+    if (element === null) return new TypedValue(kind, jsonPart(value, path, "refuse"));
+    const items: unknown[] = [];
+    for (let index = 0; index < value.length; index++) {
+      let item = value[index];
+      rejectNonValue(item, [...path, index]);
+      if (!scalarMatches(element, item)) {
+        throw new TypeCheckError(
+          `list element ${valueRepr(item)} is not ${element} (declared ${label})`,
+          { path: [...path, index] },
+        );
+      }
+      if (element === ValueKind.OBJECT) item = jsonPart(item, [...path, index], "mapping");
+      items.push(item);
+    }
+    // Converting in a second pass keeps Python's error order: every item is checked first.
+    const coerced = items.map((item, index) => coerceScalar(element, item, [...path, index]));
+    return new TypedValue(kind, coerced as Value[]);
+  }
+
+  if (!scalarMatches(declared, value)) {
+    let message = `${valueRepr(value)} does not match declared type ${declared}`;
+    const temporal = declared === ValueKind.DATE || declared === ValueKind.DATETIME;
+    if (temporal && typeof value === "string") message += `: ${temporalError(declared, value)}`;
+    throw new TypeCheckError(message, { path });
+  }
+  const stored = declared === ValueKind.OBJECT ? jsonPart(value, path, "mapping") : value;
+  return new TypedValue(declared as StorageKind, coerceScalar(declared, stored, path) as Value);
+}
+
+/**
+ * Return `value` with only its file and object representation read as `typ` reads it.
+ *
+ * At a `file` position a file's JSON form becomes a `FileRef`; at an `object` position (a
+ * plain `object` value, a `list(object)` item, an `object` record field) each nested `FileRef`
+ * becomes its mapping. Nothing else converts: an int at a `float` position stays an int, and a
+ * value that doesn't fit `typ` is walked as far as it fits and otherwise kept. A union member
+ * is picked as `buildValueAs` picks it: by its tag, else the first member the value
+ * satisfies. Only the containers on the path to a change are copied; `value` itself is
+ * returned when nothing changes (always so when `typ` has no `file` and no `object` position).
+ *
+ * An `object` position reads its value with the write check's JSON walk, so a `-0` there
+ * becomes `0` as the write check stores it, and a value there that isn't a JSON value (NaN, a
+ * container inside itself, a non-JSON part) is kept whole.
+ *
+ * Example: with `Rec` the record `{f: file, n: float}`,
+ * `normalizeFiles(Rec, {f: {uri: "a", mime: null, name: null}, n: 1n})` gives
+ * `{f: new FileRef({uri: "a"}), n: 1n}`.
+ */
+export function normalizeFiles(typ: Type, value: Value): Value {
+  if (value === null || !readsFiles(typ)) return value;
+  if (typ.variants !== undefined) {
+    const member = unionMemberOf(typ, value);
+    return member === null ? value : normalizeFiles(member, value);
+  }
+  if (typ.fields !== undefined) {
+    if (!isRecord(value)) return value;
+    const changed = new Map<string, Value>();
+    for (const [name, field] of typ.fields) {
+      if (!Object.hasOwn(value, name)) continue;
+      const normalized = normalizeFiles(field, value[name]!);
+      if (!Object.is(normalized, value[name])) changed.set(name, normalized);
+    }
+    if (changed.size === 0) return value;
+    const copy: ValueRecord = {};
+    for (const name of Object.keys(value)) {
+      setField(copy, name, changed.has(name) ? changed.get(name)! : value[name]!);
+    }
+    return copy;
+  }
+  if (isListKind(typ.kind)) {
+    if (!isList(value)) return value;
+    // `readsFiles` admits a list only with an element type or as a flat `list(object)`.
+    const element = typ.element ?? Type.scalar(ValueKind.OBJECT);
+    const items = (value as Value[]).map((item) => normalizeFiles(element, item));
+    return items.every((item, index) => Object.is(item, value[index])) ? value : items;
+  }
+  if (typ.kind === ValueKind.FILE) {
+    if (!isFileForm(value)) return value;
+    // A form whose text holds a lone surrogate isn't a yian value, so it is kept.
+    const fits = FILE_FIELDS.every((name) => nonValueReason(value[name]) === null);
+    return fits ? new FileRef(value) : value;
+  }
+  if (typ.kind === ValueKind.OBJECT && (isList(value) || isRecord(value))) {
+    try {
+      return jsonPart(value, [], "mapping");
+    } catch (error) {
+      if (error instanceof TypeCheckError) return value;
+      throw error;
+    }
+  }
+  return value;
+}
+
+/**
+ * Return `typed` with its value read through `typ` by `normalizeFiles`; a `null` `typ` reads
+ * nothing.
+ *
+ * A decoded value holds each file as its JSON form unless its whole kind is `file`; reading it
+ * through the type it was written as turns each one back into a `FileRef`. The result keeps
+ * `typed`'s kind and writes the same wire form. `typed` itself is returned when nothing
+ * changes.
+ *
+ * Example: with `typ` the type `list(file)` and `form` a file's JSON form,
+ * `normalizeTypedFiles(typ, new TypedValue("list[Any]", [form]))` holds `[new FileRef(form)]`.
+ */
+export function normalizeTypedFiles(typ: Type | null, typed: TypedValue): TypedValue {
+  if (typ === null) return typed;
+  const value = normalizeFiles(typ, typed.value);
+  return Object.is(value, typed.value) ? typed : new TypedValue(typed.kind, value);
+}
+
+/**
+ * Whether `typ` has a `file` or an unrefined `object` position at any depth, so reading a
+ * value through it may change how a file is held. Unlike `hasFile`, it also counts plain
+ * `object` and flat `list(object)`, whose nested `FileRef`s are read as mappings.
+ */
+function readsFiles(typ: Type): boolean {
+  if (typ.kind === ValueKind.FILE || isPlainObject(typ)) return true;
+  if (typ.kind === ValueKind.LIST_OBJECT && typ.element === undefined) return true;
+  if (typ.element !== undefined && readsFiles(typ.element)) return true;
+  if (typ.fields !== undefined && [...typ.fields.values()].some(readsFiles)) return true;
+  return typ.variants !== undefined && typ.variants.some(readsFiles);
+}
+
+/**
+ * Return the member of the union `typ` that `buildValueAs` checks `value` against, or `null`
+ * when the value is not a record, has a missing or unknown tag, or matches no member.
+ *
+ * A tagged union's member comes from `taggedMember`, as in `buildForUnion`. For an untagged
+ * union it builds the value against each member again, deliberately: the first member it
+ * satisfies is the one the write check took.
+ */
+function unionMemberOf(typ: Type, value: Value): Type | null {
+  if (!isRecord(value)) return null;
+  const tagged = taggedMember(typ.variants!, value);
+  if (tagged !== null) return tagged[1];
+  for (const member of typ.variants!) {
+    try {
+      buildForType(member, value, []);
+    } catch (error) {
+      if (error instanceof TypeCheckError) continue;
+      throw error;
+    }
+    return member;
+  }
+  return null;
 }

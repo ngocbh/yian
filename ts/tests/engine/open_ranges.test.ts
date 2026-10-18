@@ -1,9 +1,12 @@
 /**
- * One-sided numeric ranges' shape, labels, overlap, parsing and resolution, a port of those
- * tests of `tests/engine/test_open_ranges.py`. Later: the value checks
- * (`test_value_check_one_sided`, `test_value_check_one_sided_rejects_nan`, with
- * `buildValueAs`). `test_numeric_interval_maps_open_ends_to_infinity` is not ported (design
- * 3.2.12: open ends stay `null`).
+ * One-sided numeric ranges' shape, labels, overlap, parsing, resolution and value checks, a
+ * port of `tests/engine/test_open_ranges.py`. `test_value_check_one_sided_rejects_nan` is
+ * rewritten: NaN is never a value, so it is refused before any range check.
+ *
+ * TS-only: which ranges admit `Infinity` and `-Infinity`.
+ *
+ * Not ported: `test_numeric_interval_maps_open_ends_to_infinity` (design 3.2.12: open ends stay
+ * `null`).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -17,6 +20,7 @@ import {
 } from "../../src/typesys/types.ts";
 import {
   type Bounds,
+  buildValueAs,
   canonicalTypeLabel,
   Type,
   TypeCheckError,
@@ -111,5 +115,69 @@ describe("open range parsing", () => {
     expect(order.fields!.get("qty")!.bounds).toEqual([1n, null]);
     expect(order.fields!.get("price")!.bounds).toEqual([null, 100]);
     expect(typeFor("list(Optional(int(..3)))", new Map()).element!.bounds).toEqual([null, 3n]);
+  });
+});
+
+/** Return the message of the `TypeCheckError` `buildValueAs(typ, value)` throws. */
+function buildError(typ: Type, value: unknown): string {
+  try {
+    buildValueAs(typ, value);
+  } catch (error) {
+    expect(error).toBeInstanceOf(TypeCheckError);
+    return (error as TypeCheckError).message;
+  }
+  throw new Error("buildValueAs did not throw");
+}
+
+describe("open range values", () => {
+  test("a value check names the end it fails", () => {
+    expect(buildValueAs(new Type({ kind: INT, bounds: [0n, null] }), 10n ** 50n).toObject()).toBe(
+      10n ** 50n,
+    );
+    expect(
+      buildValueAs(new Type({ kind: INT, bounds: [null, 100n] }), -(10n ** 50n)).toObject(),
+    ).toBe(-(10n ** 50n));
+    expect(buildError(new Type({ kind: INT, bounds: [0n, null] }), -1n)).toBe(
+      "-1 is below the inclusive int minimum 0",
+    );
+    expect(buildError(new Type({ kind: INT, bounds: [null, 100n] }), 101n)).toBe(
+      "101 is above the inclusive int maximum 100",
+    );
+    // Values in messages use the text form: the float bound 0.0 shows as `0`.
+    expect(buildError(new Type({ kind: NUM, bounds: [0.0, null] }), -0.5)).toBe(
+      "-0.5 is below the inclusive float minimum 0",
+    );
+    // The two-sided message is unchanged.
+    expect(buildError(new Type({ kind: INT, bounds: [1n, 12n] }), 13n)).toBe(
+      "13 is outside inclusive int bounds (1, 12)",
+    );
+    // Not in Python's test: pins the bounds spelling, Python's tuple spelling of the ends.
+    expect(buildError(new Type({ kind: NUM, bounds: [0.0, 1.0] }), 2n)).toBe(
+      "2 is outside inclusive float bounds (0.0, 1.0)",
+    );
+  });
+
+  test("NaN is refused before any range check", () => {
+    // NaN is never a value, so Python's "outside the inclusive range" message can't occur.
+    expect(buildError(new Type({ kind: NUM, bounds: [0.0, null] }), NaN)).toBe(
+      "NaN is not a yian value",
+    );
+    expect(buildError(new Type({ kind: NUM, bounds: [null, 1n], nullable: true }), NaN)).toBe(
+      "NaN is not a yian value",
+    );
+  });
+
+  // A one-sided range admits the infinity on its open side; a two-sided range admits neither.
+  test.each<[Bounds, number, boolean]>([
+    [[0.0, null], Infinity, true],
+    [[0.0, null], -Infinity, false],
+    [[null, 1.0], -Infinity, true],
+    [[null, 1.0], Infinity, false],
+    [[0.0, 10.0], Infinity, false],
+    [[0.0, 10.0], -Infinity, false],
+  ])("float bounds %p admit %p: %p", (bounds, value, admitted) => {
+    const typ = new Type({ kind: NUM, bounds });
+    if (admitted) expect(buildValueAs(typ, value).toObject()).toBe(value);
+    else buildError(typ, value);
   });
 });

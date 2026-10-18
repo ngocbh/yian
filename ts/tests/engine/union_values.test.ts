@@ -1,6 +1,9 @@
 /**
- * The union refinement's shape, tag fields, order, labels and overlap, a port of those tests
- * of `tests/engine/test_union_values.py`; value checks and the member helpers come later.
+ * The union refinement's shape, tag fields, order, labels, overlap, value checks
+ * (`buildValueAs`) and member helpers (`unionMemberForTag`, `restrictUnion`, `unionField`), a
+ * port of `tests/engine/test_union_values.py`. Python's `ValueError` is a `RangeError` here.
+ *
+ * TS-only: a no-member error still reads as class `TypeCheckError` (`error.name`).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -8,10 +11,19 @@ import { describe, expect, test } from "bun:test";
 import { compareCodeUnits } from "../../src/diagnostics.ts";
 import {
   type Bounds,
+  buildValueAs,
   canonicalTypeLabel,
   canonicalUnionOrder,
+  type FieldAbsent,
+  type FieldPartial,
+  type FieldRead,
+  restrictUnion,
   Type,
+  TypeCheckError,
+  typeEquals,
   typesOverlap,
+  unionField,
+  unionMemberForTag,
   unionTagFields,
   ValueKind,
 } from "../../src/typesys/values.ts";
@@ -241,6 +253,17 @@ describe("typesOverlap", () => {
   });
 });
 
+/** Return the `TypeCheckError` `run` throws. */
+function typeCheckError(run: () => unknown): TypeCheckError {
+  try {
+    run();
+  } catch (error) {
+    expect(error).toBeInstanceOf(TypeCheckError);
+    return error as TypeCheckError;
+  }
+  throw new Error("expected a TypeCheckError");
+}
+
 function deepUntaggedUnion(depth: number): Type {
   let typ = union([rec({ a: STR }), rec({ b: INT })]);
   for (let level = 0; level < depth; level++) {
@@ -248,6 +271,119 @@ function deepUntaggedUnion(depth: number): Type {
   }
   return typ;
 }
+
+describe("buildValueAs", () => {
+  test("a tagged union accepts each member", () => {
+    expect(buildValueAs(U, { action: "buy", qty: 2n }).toObject()).toEqual({
+      action: "buy",
+      qty: 2n,
+    });
+    expect(buildValueAs(U, { action: "sell", price: 1.5 }).kind).toBe(ValueKind.OBJECT);
+  });
+
+  test("a tagged union missing its tag", () => {
+    const error = typeCheckError(() => buildValueAs(U, { qty: 2n }));
+    expect(error.message).toBe("missing tag field 'action' (expected one of ['buy', 'sell'])");
+    expect(error.path).toEqual(["action"]);
+  });
+
+  test("a tagged union with an unknown tag", () => {
+    const error = typeCheckError(() => buildValueAs(U, { action: "hold" }));
+    expect(error.message).toBe(
+      `"hold" is not a tag of the union (expected one of ['buy', 'sell'])`,
+    );
+    expect(error.path).toEqual(["action"]);
+  });
+
+  test("a non-string tag value is not a tag", () => {
+    expect(typeCheckError(() => buildValueAs(U, { action: ["buy"] })).path).toEqual(["action"]);
+  });
+
+  test("a tagged union checks the member record", () => {
+    let error = typeCheckError(() => buildValueAs(U, { action: "sell", price: 1.0, qty: 2n }));
+    expect(error.message).toContain("unknown fields: ['qty']");
+    expect(error.path).toEqual(["qty"]);
+
+    error = typeCheckError(() => buildValueAs(U, { action: "sell", qty: 2n }));
+    expect(error.path).toEqual(["price"]);
+  });
+
+  test("a union rejects a non-record at the root", () => {
+    expect(typeCheckError(() => buildValueAs(U, "buy")).path).toEqual([]);
+    expect(typeCheckError(() => buildValueAs(UNTAGGED, 3n)).path).toEqual([]);
+  });
+
+  test("an Optional union accepts null", () => {
+    expect(buildValueAs(optional(U), null).toObject()).toBeNull();
+    typeCheckError(() => buildValueAs(U, null));
+  });
+
+  test("an untagged union picks the matching member", () => {
+    expect(buildValueAs(UNTAGGED, { text: "hi" }).toObject()).toEqual({ text: "hi" });
+    expect(buildValueAs(UNTAGGED, { name: "f", input: {} }).toObject()).toEqual({
+      name: "f",
+      input: {},
+    });
+  });
+
+  test("an untagged union matching no member", () => {
+    const error = typeCheckError(() => buildValueAs(UNTAGGED, { text: 3n }));
+    const callLabel = canonicalTypeLabel(call);
+    const textLabel = canonicalTypeLabel(text);
+    expect(error.message).toBe(
+      `value matches no member of ${canonicalTypeLabel(UNTAGGED)}: ` +
+        `${callLabel}: record missing required fields: ['input', 'name']; ` +
+        `${textLabel}: 3 does not match declared type str`,
+    );
+    expect(error.path).toEqual([]);
+    expect(error.name).toBe("TypeCheckError");
+  });
+
+  test("an untagged no-match message does not nest member messages", () => {
+    const inner = union([rec({ a: STR }), rec({ b: INT })]);
+    const outer = union([rec({ wrap: inner }), rec({ c: BOOL })]);
+    const error = typeCheckError(() => buildValueAs(outer, { wrap: { a: 1n } }));
+    const wrapLabel = canonicalTypeLabel(rec({ wrap: inner }));
+    const cLabel = canonicalTypeLabel(rec({ c: BOOL }));
+    expect(error.message).toBe(
+      `value matches no member of ${canonicalTypeLabel(outer)}: ` +
+        `${wrapLabel}: value matches no member of ${canonicalTypeLabel(inner)}; ` +
+        `${cLabel}: record missing required fields: ['c']`,
+    );
+    expect(error.path).toEqual([]);
+  });
+
+  test("a deep untagged union labels and checks in linear work", () => {
+    // Python counts calls to its private label function, which TS can't monkeypatch; a time
+    // bound stands in. An exponential walk of depth 30 would take minutes, not seconds.
+    const depth = 30;
+    const typ = deepUntaggedUnion(depth);
+    let start = performance.now();
+    const label = canonicalTypeLabel(typ);
+    expect(performance.now() - start).toBeLessThan(2000);
+    expect(label.split("Union(").length - 1).toBe(depth + 1);
+    start = performance.now();
+    const error = typeCheckError(() => buildValueAs(typ, { inner: 3n }));
+    expect(performance.now() - start).toBeLessThan(2000);
+    expect(error.message).toStartWith("value matches no member of ");
+  });
+
+  test("a list of a union", () => {
+    const typ = new Type({ kind: ValueKind.LIST_OBJECT, element: U });
+    const stored = buildValueAs(typ, [
+      { action: "buy", qty: 1n },
+      { action: "sell", price: 2.0 },
+    ]);
+    expect(stored.kind).toBe(ValueKind.LIST_OBJECT);
+    const error = typeCheckError(() =>
+      buildValueAs(typ, [
+        { action: "buy", qty: 1n },
+        { action: "buy", qty: "x" },
+      ]),
+    );
+    expect(error.path).toEqual([1, "qty"]);
+  });
+});
 
 describe("union labels and order", () => {
   test("a deep untagged union labels in linear work", () => {
@@ -272,5 +408,149 @@ describe("union labels and order", () => {
     const labels = [canonicalTypeLabel(text), canonicalTypeLabel(call)].sort(compareCodeUnits);
     const ordered = canonicalUnionOrder([text, call]);
     expect(ordered.map(canonicalTypeLabel)).toEqual(labels);
+  });
+});
+
+describe("unionMemberForTag and restrictUnion", () => {
+  test("unionMemberForTag", () => {
+    expect(unionMemberForTag(U, "buy")).toBe(buy);
+    expect(unionMemberForTag(U, "sell")).toBe(sell);
+    expect(unionMemberForTag(U, "hold")).toBeNull();
+  });
+
+  test("unionMemberForTag on another tag field", () => {
+    const first = rec({ side: lit("b"), action: lit("buy"), qty: INT });
+    const second = rec({ side: lit("s"), action: lit("sell"), price: FLOAT });
+    const both = union([first, second]);
+    expect(unionMemberForTag(both, "s", "side")).toBe(second);
+    expect(() => unionMemberForTag(both, "buy", "qty")).toThrow(
+      new RangeError("'qty' is not a tag field of the union"),
+    );
+  });
+
+  test("restrictUnion on another tag field", () => {
+    const first = rec({ side: lit("b"), action: lit("buy"), qty: INT });
+    const second = rec({ side: lit("s"), action: lit("sell"), price: FLOAT });
+    const third = rec({ side: lit("h"), action: lit("hold") });
+    const three = union([first, second, third]);
+    expect(typeEquals(restrictUnion(three, ["s"], "side"), second)).toBe(true);
+    expect(typeEquals(restrictUnion(three, ["s", "b"], "side"), union([first, second]))).toBe(
+      true,
+    );
+    expect(() => restrictUnion(three, ["sell"], "side")).toThrow(
+      new RangeError("'sell' is not a tag of the union"),
+    );
+  });
+
+  test("restrictUnion returns members in canonical order", () => {
+    const restricted = restrictUnion(union([sell, hold, buy]), new Set(["sell", "buy"]));
+    expect(typeEquals(restricted, union([buy, sell]))).toBe(true);
+  });
+
+  test("restrictUnion rejects a bare string", () => {
+    expect(() => restrictUnion(U, "buy")).toThrow(
+      new TypeError("restrictUnion keeps a collection of tags, not a bare string"),
+    );
+  });
+
+  test("unionMemberForTag needs a tagged union", () => {
+    expect(() => unionMemberForTag(UNTAGGED, "text")).toThrow(
+      new RangeError("the type is not a tagged union"),
+    );
+  });
+
+  test("restrictUnion to one tag gives the member", () => {
+    expect(typeEquals(restrictUnion(union([buy, sell, hold]), ["buy"]), buy)).toBe(true);
+    expect(typeEquals(restrictUnion(union([buy, sell], true), ["buy"]), optional(buy))).toBe(
+      true,
+    );
+  });
+
+  test("restrictUnion to two tags keeps nullable", () => {
+    const three = union([buy, sell, hold], true);
+    expect(typeEquals(restrictUnion(three, ["sell", "buy"]), union([buy, sell], true))).toBe(
+      true,
+    );
+    expect(typeEquals(restrictUnion(union([buy, sell, hold]), ["buy", "sell"]), U)).toBe(true);
+  });
+
+  test("restrictUnion by member", () => {
+    expect(typeEquals(restrictUnion(UNTAGGED, [text]), text)).toBe(true);
+  });
+
+  test("restrictUnion rejects empty and unknown", () => {
+    expect(() => restrictUnion(U, new Set())).toThrow(
+      new RangeError("restrictUnion needs at least one member"),
+    );
+    expect(() => restrictUnion(U, ["hold"])).toThrow(
+      new RangeError("'hold' is not a tag of the union"),
+    );
+    expect(() => restrictUnion(UNTAGGED, [hold])).toThrow(
+      new RangeError("restrictUnion got a type that is not a union member"),
+    );
+  });
+});
+
+/** Require `result` to be a `FieldRead` whose type equals `expected` (`null`: untyped). */
+function expectRead(
+  result: FieldRead | FieldPartial | FieldAbsent,
+  expected: Type | null,
+): void {
+  expect(result.kind).toBe("read");
+  const read = (result as FieldRead).type;
+  if (expected === null) expect(read).toBeNull();
+  else expect(typeEquals(read!, expected)).toBe(true);
+}
+
+describe("unionField", () => {
+  test("a shared tag reads the merged Literal", () => {
+    expectRead(unionField(U, "action"), lit("buy", "sell"));
+  });
+
+  test("equal types read that type", () => {
+    const first = rec({ action: lit("buy"), note: STR });
+    const second = rec({ action: lit("sell"), note: STR });
+    expectRead(unionField(union([first, second]), "note"), STR);
+  });
+
+  test("equality ignores nullable and nullability spreads", () => {
+    const first = rec({ action: lit("buy"), note: STR });
+    const second = rec({ action: lit("sell"), note: optional(STR) });
+    expectRead(unionField(union([first, second]), "note"), optional(STR));
+  });
+
+  test("a field that is not required is nullable", () => {
+    const first = new Type({
+      kind: ValueKind.OBJECT,
+      fields: new Map([
+        ["action", lit("buy")],
+        ["note", STR],
+      ]),
+      required: new Set(["action"]),
+    });
+    const second = rec({ action: lit("sell"), note: STR });
+    expectRead(unionField(union([first, second]), "note"), optional(STR));
+  });
+
+  test("a merged Literal is nullable if any member's is", () => {
+    const first = rec({ action: lit("buy"), mode: lit("a") });
+    const second = rec({ action: lit("sell"), mode: optional(lit("b")) });
+    expectRead(unionField(union([first, second]), "mode"), optional(lit("a", "b")));
+  });
+
+  test("differing types read untyped", () => {
+    const first = rec({ action: lit("buy"), size: INT });
+    const second = rec({ action: lit("sell"), size: STR });
+    expectRead(unionField(union([first, second]), "size"), null);
+  });
+
+  test("partial", () => {
+    const partial = unionField(union([buy, sell, hold]), "qty");
+    expect(partial).toEqual({ kind: "partial", members: [buy] });
+    expect(unionField(UNTAGGED, "text")).toEqual({ kind: "partial", members: [text] });
+  });
+
+  test("absent", () => {
+    expect(unionField(U, "zzz")).toEqual({ kind: "absent" });
   });
 });

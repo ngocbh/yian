@@ -1,0 +1,56 @@
+# From tests/seeds/errors/e32-malformed-code-ref.yaml.
+# A `code:` value that is neither a reference nor inline source fails at load, at the value.
+# The header (a dotted token, `module:function`) describes the Python form; TS uses a path with
+# no `:fn` part, which isn't a reference, so it is read as an inline body that doesn't parse.
+kind: load
+# The TS form and its message differ: TS reports a body syntax error, Python a "did you mean".
+rules: [code]
+flow: |
+  # e32 — a `code:` value that is neither a valid `module:function` reference nor inline
+  # source: a bare dotted token with no colon (a likely typo'd reference). COMPILE: rejected
+  # at load with a located LoadError naming the fix, rather than silently run as inline
+  # (where it would fail with a confusing "no main" error). Anchored at the `code:` field.
+  id: err-malformed-code-ref
+  name: err_malformed_code_ref
+  input:
+    topic: !str
+  nodes:
+    oops:
+      kind: code
+      input:
+        topic: ${input.topic}
+      output: str
+      code: ./helpers.ts
+  output: ${oops.output}
+# The `code:` value differs by language: `flow` holds the TS form, this the Python one.
+python_flow: |
+  # e32 — a `code:` value that is neither a valid `module:function` reference nor inline
+  # source: a bare dotted token with no colon (a likely typo'd reference). COMPILE: rejected
+  # at load with a located LoadError naming the fix, rather than silently run as inline
+  # (where it would fail with a confusing "no main" error). Anchored at the `code:` field.
+  id: err-malformed-code-ref
+  name: err_malformed_code_ref
+  input:
+    topic: !str
+  nodes:
+    oops:
+      kind: code
+      input:
+        topic: ${input.topic}
+      output: str
+      code: pkg.mod.helper
+  output: ${oops.output}
+expect:
+  load:
+    diagnostics:
+      # No `message`: it is the language runtime's syntax-error text, which yian doesn't write.
+      - code: compose.load
+        # The `code:` value `./helpers.ts` on line 15.
+        frames: [{label: flow.yaml, range: [15, 11, 15, 23]}]
+python_expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "node 'oops': `code:` value 'pkg.mod.helper' is neither a `module:function` reference nor inline source (a bare body reading `inputs`); did you mean 'pkg.mod:helper'?"
+        # The `code:` value `pkg.mod.helper` on line 15.
+        frames: [{label: flow.yaml, range: [15, 11, 15, 25]}]

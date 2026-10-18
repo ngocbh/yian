@@ -1,0 +1,23 @@
+# From tests/seeds/errors/e12-missing-required-field.yaml.
+# A CODE node with no `code:` fails at the node body.
+kind: load
+flow: |
+  # e12 — a kind-required field omitted. COMPILE: "missing required field 'code'".
+  id: err-missing-required-field
+  name: err_missing_required_field
+  input:
+    topic: !str
+  nodes:
+    calc:
+      kind: code         # ERROR: missing `code:`
+      input:
+        topic: ${input.topic}
+      output: str
+  output: ${calc.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "node 'calc' (kind=code): missing required field 'code'"
+        # The `calc:` node body, from `kind:` on line 8 to the `output:` key that ends it.
+        frames: [{label: flow.yaml, range: [8, 5, 12, 1]}]

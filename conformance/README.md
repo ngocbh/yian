@@ -454,3 +454,14 @@ PYTHONPATH=src python -m pytest -q tests/test_conformance.py -k run-core  # one 
 ```
 
 Each case is one test named by its id. A skipped case says why.
+
+```bash
+cd ts && bun tests/conformance.ts                                  # every case, on Bun
+cd ts && bun tests/conformance.ts --group defaults --kind defaults # a selection
+cd ts && bun run build && node dist/tests/conformance.js           # every case, on Node
+```
+
+The TS runner's flags, each repeatable, are `--group`, `--kind`, `--case <group>/<name>`,
+`--rules` and `--diagnostic-code`. It prints one `FAIL` line per failing case and a summary,
+counts a failing `pending` case as expected, fails a case whose kind it doesn't run yet, and exits
+1 when any case fails.

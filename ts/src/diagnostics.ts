@@ -222,8 +222,9 @@ export class SourceRange {
       if (!prefix.trim()) last -= 1;
     }
     last = Math.min(last, lineCount);
+    const end = Math.max(last, this.startLine);
     const covered: number[] = [];
-    for (let line = this.startLine; line <= Math.max(last, this.startLine); line++) {
+    for (let line = this.startLine; line <= end; line++) {
       covered.push(line);
     }
     return covered;

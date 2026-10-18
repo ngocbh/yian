@@ -155,12 +155,35 @@ describe("SourceRange", () => {
     ["U+2028 inside a line", new SourceRange(2, 1, 9, 1), "a\u2028b\nc", [2]],
     // Python gives [1, 2]: its `strip` keeps U+FEFF, JS `trim` strips it (`rule: text`).
     ["a U+FEFF-only prefix", new SourceRange(1, 1, 2, 2), "a\n\ufeff\n", [1]],
-    // Python gives [1]: its `strip` removes U+001C, JS `trim` keeps it (`rule: text`).
-    ["a U+001C-only prefix", new SourceRange(1, 1, 2, 2), "a\n\u001c\n", [1, 2]],
+    // Python gives [1]: its `strip` removes U+001F, JS `trim` keeps it (`rule: text`).
+    ["a U+001F-only prefix", new SourceRange(1, 1, 2, 2), "a\n\u001f\n", [1, 2]],
   ];
 
   test.each(cases)("coveredLines: %s", (_, range, text, expected) => {
     expect(range.coveredLines(text)).toEqual(expected);
+  });
+});
+
+describe("DiagnosticFrame", () => {
+  test("is frozen presentation data", () => {
+    const range = new SourceRange(2, 3, 2, 8);
+    const frame = new DiagnosticFrame({
+      label: "flow.yaml",
+      text: "nodes:\n  ask: {}\n",
+      range,
+      note: "inside call 'review'",
+    });
+
+    expect(Object.keys(frame)).toEqual(["label", "text", "range", "note"]);
+    expect(frame.label).toBe("flow.yaml");
+    expect(frame.text).toBe("nodes:\n  ask: {}\n");
+    expect(frame.range).toBe(range);
+    expect(frame.note).toBe("inside call 'review'");
+    expect(new DiagnosticFrame({ label: "flow.yaml", text: "", range }).note).toBeNull();
+    if (false) {
+      // @ts-expect-error fields are readonly
+      frame.note = null;
+    }
   });
 });
 
@@ -366,29 +389,6 @@ describe("OriginRef", () => {
       const error = thrown(() => new OriginRef(invalid as unknown as string));
       expect(error).toBeInstanceOf(RangeError);
       expect((error as Error).message).toBe("origin key must be a non-empty string");
-    }
-  });
-});
-
-describe("DiagnosticFrame", () => {
-  test("is frozen presentation data", () => {
-    const range = new SourceRange(2, 3, 2, 8);
-    const frame = new DiagnosticFrame({
-      label: "flow.yaml",
-      text: "nodes:\n  ask: {}\n",
-      range,
-      note: "inside call 'review'",
-    });
-
-    expect(Object.keys(frame)).toEqual(["label", "text", "range", "note"]);
-    expect(frame.label).toBe("flow.yaml");
-    expect(frame.text).toBe("nodes:\n  ask: {}\n");
-    expect(frame.range).toBe(range);
-    expect(frame.note).toBe("inside call 'review'");
-    expect(new DiagnosticFrame({ label: "flow.yaml", text: "", range }).note).toBeNull();
-    if (false) {
-      // @ts-expect-error fields are readonly
-      frame.note = null;
     }
   });
 });

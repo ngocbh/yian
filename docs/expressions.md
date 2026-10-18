@@ -262,9 +262,10 @@ expression). `$$` escapes a literal `$`. Evaluation then follows one rule:
 - a span **embedded** in surrounding text is **stringified** into it;
 - text with no span is a plain literal.
 
-Changed (TS yian): an embedded value is written in the text form: text as itself, `true`, a
-number in JavaScript spelling (`1.0` is `1`, infinity is `Infinity`), and a list, record or file
-as compact JSON with keys in JavaScript order (`[1,"a"]`, `{"k":"v"}`).
+Changed (TS yian): an embedded value is written in the text form: text as itself, `true`/`false`,
+a number in JavaScript spelling (`1.0` is `1`, infinity is `Infinity`), and a list, record or file
+as compact JSON (`[1,"a"]`, `{"k":"v"}`); record keys that look like array indexes (`"0"`, `"17"`)
+come first, here and in `render_as_json`.
 
 The same rule applies to every string nested in a record or list value of a slot: the
 binder evaluates each nested string as its own template, so `{n: ${a.output}}` gives a
@@ -315,7 +316,8 @@ create no graph node.
 Changed (TS yian): `join` writes each element in the text form, and `sep` must be text.
 `render_as_json` uses yian's own writer with Python's layout and floats in the text form (`1.0`
 renders as `1`, infinity as bare `Infinity`, so the text is not strict JSON), and takes only an
-int indent of 0 or more. `upper`/`lower` use JavaScript's non-locale mapping (`ß` → `SS`).
+int indent of 0 or more. `upper`/`lower` use JavaScript's non-locale case mapping, which differs
+from Python's only where the engines' Unicode versions differ.
 
 A builtin never turns null into text. A null argument, a null `join` element, a
 non-text `upper`/`lower` argument, or a non-list `join` argument fails the

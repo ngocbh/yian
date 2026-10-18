@@ -638,8 +638,9 @@ longer than 4300 digits is a load error. See
 [Types → Integer size limit](typing.md#integer-size-limit).
 
 Changed (TS yian): stringified in the text form; an int of any length is written in full (no
-digit limit), and `%` is gone (see
-[Expressions → the `${...}` scanner](expressions.md#layer-3-the-scanner)).
+digit limit), and `%` no longer formats text (see
+[Expressions → the `${...}` scanner](expressions.md#layer-3-the-scanner) and
+[Arithmetic follows Python](expressions.md#arithmetic-follows-python)).
 
 Changed: an operator Python can't complete in a binding or an `asserts:` used to raise
 out of `run_flow`; now the run fails like any other expression error. In a prompt or a

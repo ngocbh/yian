@@ -130,3 +130,137 @@ export function reprText(text: string): string {
   }
   return out + quote;
 }
+
+const CODES = [
+  "binding.evaluate",
+  "binding.type",
+  "contract.input",
+  "assertion.failed",
+  "node.execute",
+  "contract.node_result",
+  "contract.output",
+  "contract.route",
+  "contract.growth",
+  "graph.terminal_unreachable",
+  "loop.max_exceeded",
+  "agent.max_tool_iterations",
+  "provider.auth",
+  "agent.output_invalid",
+  "provider.rate_limit",
+  "provider.quota",
+  "provider.unavailable",
+  "provider.context_length",
+  "provider.refused",
+  "condition.evaluate",
+] as const;
+
+/**
+ * The closed list of semantic categories for expected flow failures. Each code is
+ * `<area>.<condition>`, documented in `docs/api.md` "Failure codes" and stable once
+ * added; codes are never derived from error class names.
+ */
+export type FailureCode = (typeof CODES)[number];
+
+/** Every code `Failure` accepts, at run time. */
+export const FAILURE_CODES: ReadonlySet<string> = new Set(CODES);
+
+/** An opaque source identity interpreted only by its producing front end. */
+export class OriginRef {
+  /** A non-empty key unique within one returned authored flow. */
+  readonly key: string;
+
+  /** Create an origin, rejecting keys that cannot serve as stable opaque identities. */
+  constructor(key: string) {
+    if (typeof key !== "string" || key === "") {
+      throw new RangeError("origin key must be a non-empty string");
+    }
+    this.key = key;
+  }
+}
+
+/** One immutable source-neutral account of an expected flow failure. */
+export class Failure {
+  /** Stable semantic category from `FAILURE_CODES`. */
+  readonly code: FailureCode;
+  /** Human-readable failure detail; it may be empty. */
+  readonly message: string;
+  /**
+   * Runtime execution identity, or `null` when the failure is not attributable to one
+   * executing node.
+   */
+  readonly nodeId: string | null;
+  /**
+   * Authored identities ordered outermost to innermost; the final item is the most
+   * precise available operation.
+   */
+  readonly trace: readonly OriginRef[];
+  /**
+   * The thrown error's `name`, retained only for debugging, never for semantic
+   * classification.
+   */
+  readonly causeType: string | null;
+  /** The thrown error's `stack`, retained as opaque debugging text. */
+  readonly traceback: string | null;
+
+  /**
+   * Create a failure, rejecting values that cannot enter the canonical failure
+   * pipeline. `trace` defaults to empty and is copied; `causeType` and `traceback`
+   * default to `null`.
+   */
+  constructor(options: {
+    code: FailureCode;
+    message: string;
+    nodeId: string | null;
+    trace?: readonly OriginRef[];
+    causeType?: string | null;
+    traceback?: string | null;
+  }) {
+    const { code, message, nodeId } = options;
+    const trace = options.trace === undefined ? [] : options.trace;
+    const causeType = options.causeType === undefined ? null : options.causeType;
+    const traceback = options.traceback === undefined ? null : options.traceback;
+    if (typeof code !== "string") throw new TypeError("failure code must be a string");
+    if (!FAILURE_CODES.has(code)) throw new RangeError(`unknown failure code ${reprText(code)}`);
+    if (typeof message !== "string") throw new TypeError("failure message must be a string");
+    if (nodeId !== null && typeof nodeId !== "string") {
+      throw new TypeError("failure node_id must be a string or null");
+    }
+    if (!Array.isArray(trace)) throw new TypeError("failure trace must be an array");
+    for (const origin of trace) {
+      if (!(origin instanceof OriginRef)) {
+        throw new TypeError("failure trace item must be an OriginRef");
+      }
+    }
+    if (causeType !== null && typeof causeType !== "string") {
+      throw new TypeError("failure cause_type must be a string or null");
+    }
+    if (traceback !== null && typeof traceback !== "string") {
+      throw new TypeError("failure traceback must be a string or null");
+    }
+    this.code = code;
+    this.message = message;
+    this.nodeId = nodeId;
+    this.trace = [...trace];
+    this.causeType = causeType;
+    this.traceback = traceback;
+  }
+
+  /** Return the JSON form: snake_case keys in field order, every key present. */
+  toJSON(): {
+    code: FailureCode;
+    message: string;
+    node_id: string | null;
+    trace: { key: string }[];
+    cause_type: string | null;
+    traceback: string | null;
+  } {
+    return {
+      code: this.code,
+      message: this.message,
+      node_id: this.nodeId,
+      trace: this.trace.map((origin) => ({ key: origin.key })),
+      cause_type: this.causeType,
+      traceback: this.traceback,
+    };
+  }
+}

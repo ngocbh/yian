@@ -6,7 +6,47 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 
-import { compareCodeUnits, reprText } from "../../src/diagnostics.ts";
+import {
+  compareCodeUnits,
+  FAILURE_CODES,
+  Failure,
+  type FailureCode,
+  OriginRef,
+  reprText,
+} from "../../src/diagnostics.ts";
+
+const EXPECTED_FAILURE_CODES: readonly FailureCode[] = [
+  "binding.evaluate",
+  "binding.type",
+  "contract.input",
+  "assertion.failed",
+  "node.execute",
+  "contract.node_result",
+  "contract.output",
+  "contract.route",
+  "contract.growth",
+  "graph.terminal_unreachable",
+  "loop.max_exceeded",
+  "agent.max_tool_iterations",
+  "provider.auth",
+  "agent.output_invalid",
+  "provider.rate_limit",
+  "provider.quota",
+  "provider.unavailable",
+  "provider.context_length",
+  "provider.refused",
+  "condition.evaluate",
+];
+
+/** Return what `fn` throws; fail the test if it returns. */
+function thrown(fn: () => unknown): unknown {
+  try {
+    fn();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected a throw");
+}
 
 describe("compareCodeUnits", () => {
   test("sorts by UTF-16 code units", () => {
@@ -80,5 +120,143 @@ describe("reprText", () => {
     expect(createHash("sha256").update(bits.join("")).digest("hex")).toBe(
       "0326b64c15e91a0583a1d9f8bc53f4bb534adc91a5ae096b55adaf19525ed98d",
     );
+  });
+});
+
+describe("Failure", () => {
+  test("has one closed source-neutral shape", () => {
+    const outer = new OriginRef("root:call");
+    const operation = new OriginRef("child:input:topic");
+    const failure = new Failure({
+      code: "contract.input",
+      message: "expected integer",
+      nodeId: "review/score",
+      trace: [outer, operation, operation],
+      causeType: "TypeCheckError",
+      traceback: "Traceback ...",
+    });
+
+    expect([...FAILURE_CODES]).toEqual([...EXPECTED_FAILURE_CODES]);
+    for (const code of FAILURE_CODES) expect(code).toMatch(/^[a-z]+\.[a-z_]+$/);
+    expect(failure.code).toBe("contract.input");
+    expect(failure.message).toBe("expected integer");
+    expect(failure.nodeId).toBe("review/score");
+    expect(failure.trace).toEqual([outer, operation, operation]);
+    expect(failure.trace[0]).toBe(outer);
+    expect(failure.causeType).toBe("TypeCheckError");
+    expect(failure.traceback).toBe("Traceback ...");
+    if (false) {
+      // @ts-expect-error fields are readonly
+      failure.message = "changed";
+      // @ts-expect-error the trace is a readonly array
+      failure.trace.push(outer);
+    }
+  });
+
+  test("copies its trace", () => {
+    const trace = [new OriginRef("root:node")];
+    const failure = new Failure({ code: "node.execute", message: "boom", nodeId: "work", trace });
+    trace.push(new OriginRef("root:other"));
+
+    expect(failure.trace).toEqual([new OriginRef("root:node")]);
+  });
+
+  test("accepts every closed code and source-free optional values", () => {
+    for (const code of EXPECTED_FAILURE_CODES) {
+      const failure = new Failure({
+        code,
+        message: "",
+        nodeId: null,
+        causeType: "",
+        traceback: "",
+      });
+
+      expect(failure.code).toBe(code);
+      expect(failure.trace).toEqual([]);
+      expect(failure.causeType).toBe("");
+      expect(failure.traceback).toBe("");
+    }
+
+    const bare = new Failure({ code: "node.execute", message: "", nodeId: "" });
+    expect(bare.nodeId).toBe("");
+    expect(bare.trace).toEqual([]);
+    expect(bare.causeType).toBeNull();
+    expect(bare.traceback).toBeNull();
+  });
+
+  test.each([
+    [{ code: "unknown" }, RangeError, "unknown failure code 'unknown'"],
+    [{ code: 1 }, TypeError, "failure code must be a string"],
+    [{ message: null }, TypeError, "failure message must be a string"],
+    [{ nodeId: 1 }, TypeError, "failure node_id must be a string or null"],
+    [{ trace: "x" }, TypeError, "failure trace must be an array"],
+    [{ trace: ["origin"] }, TypeError, "failure trace item must be an OriginRef"],
+    [{ causeType: 1 }, TypeError, "failure cause_type must be a string or null"],
+    [{ traceback: 1 }, TypeError, "failure traceback must be a string or null"],
+  ] as const)("rejects malformed fields: %j", (changes, errorType, message) => {
+    const options = { code: "node.execute", message: "boom", nodeId: "work", ...changes };
+    const error = thrown(
+      () => new Failure(options as unknown as ConstructorParameters<typeof Failure>[0]),
+    );
+
+    expect(error).toBeInstanceOf(errorType);
+    expect((error as Error).message).toBe(message);
+  });
+
+  test("toJSON keeps every key, nulls included, in field order", () => {
+    const full = new Failure({
+      code: "contract.input",
+      message: "expected integer",
+      nodeId: "review/score",
+      trace: [new OriginRef("root:call"), new OriginRef("child:input:topic")],
+      causeType: "TypeError",
+      traceback: "TypeError: x",
+    });
+    const bare = new Failure({ code: "node.execute", message: "boom", nodeId: null });
+
+    expect(full.toJSON()).toEqual({
+      code: "contract.input",
+      message: "expected integer",
+      node_id: "review/score",
+      trace: [{ key: "root:call" }, { key: "child:input:topic" }],
+      cause_type: "TypeError",
+      traceback: "TypeError: x",
+    });
+    expect(bare.toJSON()).toEqual({
+      code: "node.execute",
+      message: "boom",
+      node_id: null,
+      trace: [],
+      cause_type: null,
+      traceback: null,
+    });
+    expect(Object.keys(bare.toJSON())).toEqual([
+      "code",
+      "message",
+      "node_id",
+      "trace",
+      "cause_type",
+      "traceback",
+    ]);
+    expect(Object.keys(full.toJSON().trace[0]!)).toEqual(["key"]);
+  });
+});
+
+describe("OriginRef", () => {
+  test("is a validated frozen single key", () => {
+    const origin = new OriginRef("root:node");
+
+    expect(origin.key).toBe("root:node");
+    expect(Object.keys(origin)).toEqual(["key"]);
+    if (false) {
+      // @ts-expect-error the key is readonly
+      origin.key = "changed";
+    }
+
+    for (const invalid of ["", null, 0, false]) {
+      const error = thrown(() => new OriginRef(invalid as unknown as string));
+      expect(error).toBeInstanceOf(RangeError);
+      expect((error as Error).message).toBe("origin key must be a non-empty string");
+    }
   });
 });

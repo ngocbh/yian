@@ -862,9 +862,9 @@ describe("main", () => {
         "{class: TypeCheckError, message: 2.5 does not match declared type int, path: [1]}\n",
       "v/wrong.yaml": "kind: value\ntype: float\nvalue: 2\nexpect: {value: 2, kind: float}\n",
       "v/cap.yaml":
-        'kind: value\nenv: {YIAN_MAX_SHOWN_VALUE_CHARS: "10"}\ntype: int\nvalue: abcdefghijklmnop\n' +
-        "expect:\n  raises: {class: TypeCheckError, message: '\"abcdefgh… does not match declared " +
-        "type int', path: []}\n",
+        'kind: value\nenv: {YIAN_MAX_SHOWN_VALUE_CHARS: "10"}\ntype: int\n' +
+        "value: abcdefghijklmnop\nexpect:\n  raises: {class: TypeCheckError, " +
+        "message: '\"abcdefgh… does not match declared type int', path: []}\n",
     };
     expect(await run([], files, {}, RUNNERS)).toEqual({
       code: 1,

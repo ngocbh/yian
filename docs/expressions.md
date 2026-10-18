@@ -101,9 +101,9 @@ value (`${2 ** 60 == 2.0 ** 60}` is `true`; a bool counts as 0 or 1), text by co
 item by item, records by keys and values, files by `uri`, `mime` and `name`; any other pair is
 unequal. Ordering takes only two numbers (by exact value, a bool as 0 or 1) or two texts (by
 UTF-16 code units); any other pair, lists included (`${[1] < [2]}`), is an error naming the
-operator and the operand kinds, and a null operand still gives `false`. `in` finds text in text, an equal item
-in a list, or a text key in a record; any other right side, or a non-text left side with text
-on the right, is an error.
+operator and the operand kinds, and a null operand still gives `false`. `in` finds text in
+text, an equal item in a list, or a text key in a record; any other right side, or a non-text
+left side with text on the right, is an error.
 
 When the `None` would come from a node a `case` may skip, Compose rejects the arithmetic at
 load and asks for a `:-` default (see `syntax.md`, "Skipped branches and flow outputs").
@@ -163,16 +163,18 @@ Changed (TS yian): the operators follow this table instead:
 | an int with a float, int `**` negative int | the int becomes the nearest float, then float arithmetic |
 | `/` or `%` by zero, `0 ** negative` | an error: `division by zero: 1 / 0` |
 
-`**` with a finite non-zero base and an integral exponent (an int, or a float with no
+`**` with a finite non-zero base and an integral exponent `n` (an int, or a float with no
 fraction) with `|n| ≤ 1100` is correctly rounded when its result is a float: `${10 ** -4}` is
 `0.0001` and `${1.1 ** 10}` is `2.5937424601000023`. Any other float `**` is JavaScript's
 `**`, whose last bit may differ between Bun and Node. Operand kinds an operator doesn't take
 fail naming the operator and the kinds, with the operands in the text form:
 ``type error evaluating "ab" * 2: unsupported operand kinds for `*`: `str` and `int` ``.
-There are still no cost limits, but repetition is gone, so only a huge `**` takes long.
 
 There are no cost limits. A huge `**` or repetition takes whatever time and memory
 Python needs.
+
+Changed (TS yian): repetition is gone; a huge `**` or `*` takes whatever time and memory the
+runtime needs, up to `integer result is too large for this runtime`.
 
 Float `+`, `-`, `*` and `/` that overflow give `inf`, which the
 [non-finite rule](#non-finite-results) catches at the binding. A result Python refuses to
@@ -223,15 +225,15 @@ with a `case`, such as checking the base is not negative before `**`, or compute
 a `code` node), or return null explicitly: a `case` that routes to a value entry
 `no_value: !Optional(float) null`, or a `code` node that returns `None`.
 
-A list literal adds a level of nesting (`${[x]}` is one level deeper than `x`), and
-a binding whose final value nests deeper than 100 levels fails its node
-with `binding.evaluate` (see [Types → Nesting limit](typing.md#nesting-limit)).
-
 Changed (TS yian): infinity is a float value, not an error. A float result past the float
 range, `**` and an int converted to a float included, is `inf` (`${2.0 ** 5000}`). `**`
 follows IEEE `pow`: `${1 ** inf}` is `1.0`. An operation with no numeric result fails, naming
 the operator and the operands: `- on Infinity and Infinity has no numeric result` (also
 `${inf * 0}` and `${(0 - 8) ** 0.5}`), so NaN never exists, and there are no complex numbers.
+
+A list literal adds a level of nesting (`${[x]}` is one level deeper than `x`), and
+a binding whose final value nests deeper than 100 levels fails its node
+with `binding.evaluate` (see [Types → Nesting limit](typing.md#nesting-limit)).
 
 **Compile-time companions** (never evaluate): `infer_expr_type(tree, ref_type_fn)` returns
 a type only for statically fixed results: scalar literals, exact references,

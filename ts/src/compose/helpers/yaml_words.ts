@@ -54,8 +54,7 @@ export function yamlReadAs(value: unknown): string {
 }
 
 /** Return the boolean and fix text for one YAML 1.1 boolean word, else `null`. */
-function wordFix(value: unknown): [boolean, string] | null {
-  if (typeof value !== "string") return null;
+function wordFix(value: string): [boolean, string] | null {
   const text = value.trim();
   const flag = BOOLEAN_WORDS.get(text.toLowerCase());
   if (flag === undefined) return null;

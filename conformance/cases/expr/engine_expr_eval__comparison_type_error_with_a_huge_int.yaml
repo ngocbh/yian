@@ -1,4 +1,5 @@
 kind: expr
+# The 5001-digit int is cut at the 200-code-point shown-value cap; Python shows a placeholder.
 rules: [compare, messages, numbers]
 expr: n < "a"
 values:

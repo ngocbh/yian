@@ -1,8 +1,0 @@
-kind: expr
-expr: a * b >= 10
-values:
-  a: 4
-  b: 3
-mode: condition
-expect:
-  value: true

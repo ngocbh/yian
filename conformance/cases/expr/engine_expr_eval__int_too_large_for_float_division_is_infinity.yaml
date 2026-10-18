@@ -1,4 +1,5 @@
 kind: expr
+# 10 ** 400 / 3 is past the float range, so the quotient is infinity; Python refuses it.
 rules: [arithmetic, infinity]
 expr: n / 3
 values:

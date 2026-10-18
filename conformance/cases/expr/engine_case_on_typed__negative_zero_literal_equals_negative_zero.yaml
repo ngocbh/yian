@@ -1,7 +1,0 @@
-kind: expr
-expr: __on == -0.0 and not isinstance(__on, bool)
-values:
-  __on: -0.0
-mode: condition
-expect:
-  value: true

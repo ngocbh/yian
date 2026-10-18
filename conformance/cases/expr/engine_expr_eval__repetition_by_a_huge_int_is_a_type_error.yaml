@@ -1,4 +1,5 @@
 kind: expr
+# Repetition is gone, and the int beyond 2^53 is spelled in full in the message.
 rules: [arithmetic, messages]
 expr: '"a" * n'
 values:

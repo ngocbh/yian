@@ -125,8 +125,13 @@ const RESERVED: readonly (readonly [string, string])[] = [
   ["expect", "memory"],
 ];
 const RULES: ReadonlySet<string> = new Set([
+<<<<<<< ours
   "numbers", "int-in-float", "arithmetic", "compare", "text-form", "canonical", "columns",
   "messages", "text", "yaml", "dates", "infinity", "llm", "code",
+=======
+  "numbers", "arithmetic", "compare", "text-form", "canonical", "columns", "messages",
+  "text", "yaml", "dates", "infinity", "llm", "code", "int-in-float",
+>>>>>>> theirs
 ]);
 // Keys holding text that is not a case value: no codec form, no number checks.
 const TEXT_KEYS: ReadonlySet<string> = new Set([

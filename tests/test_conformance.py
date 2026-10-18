@@ -205,8 +205,13 @@ _USAGE_DETAILS = {
 }
 _RESUME_HOST_KEYS = _HOST_KEYS | {"crash_after_record"}
 _RULES = {
+<<<<<<< ours
     "numbers", "int-in-float", "arithmetic", "compare", "text-form", "canonical", "columns",
     "messages", "text", "yaml", "dates", "infinity", "llm", "code",
+=======
+    "numbers", "arithmetic", "compare", "text-form", "canonical", "columns", "messages",
+    "text", "yaml", "dates", "infinity", "llm", "code", "int-in-float",
+>>>>>>> theirs
 }
 _RESERVED = [*(("host", key) for key in _RESERVED_HOST_KEYS), ("expect", "memory")]
 # Keys holding text that is not a case value: no codec form, no number checks.
@@ -1872,7 +1877,8 @@ def test_harvest_records_expr_value_defaults(tmp_path: Path) -> None:
              for path in sorted((out / "cases").glob("*/*.yaml"))}
     assert sorted(cases) == [
         "defaults/sample__defaults.yaml", "expr/sample__arithmetic.yaml",
-        "expr/sample__condition.yaml", "expr/sample__item.yaml", "expr/sample__strict_miss.yaml",
+        "expr/sample__condition.yaml", "expr/sample__item.yaml", "expr/sample__or_binding.yaml",
+        "expr/sample__or_condition.yaml", "expr/sample__strict_miss.yaml",
         "templates/sample__binding.yaml", "templates/sample__template.yaml",
         "values/sample__value.yaml",
     ]
@@ -1884,6 +1890,12 @@ def test_harvest_records_expr_value_defaults(tmp_path: Path) -> None:
         "expect": {"value": True}}
     assert cases["expr/sample__item.yaml"] == {
         "kind": "expr", "expr": "item.t", "item": {"t": 1}, "expect": {"value": 1}}
+    # `and` and `or` give a bool, as in TS: shared cases.
+    assert cases["expr/sample__or_binding.yaml"] == {
+        "kind": "expr", "expr": "x or y", "values": {"x": 0, "y": 2}, "expect": {"value": True}}
+    assert cases["expr/sample__or_condition.yaml"] == {
+        "kind": "expr", "expr": "(x or y) == 1", "values": {"x": 1, "y": 0}, "mode": "condition",
+        "expect": {"value": True}}
     strict = cases["expr/sample__strict_miss.yaml"]
     assert {key: strict[key] for key in ("kind", "expr", "mode")} == {
         "kind": "expr", "expr": "a.b", "mode": "strict"}
@@ -1913,10 +1925,9 @@ def test_harvest_records_expr_value_defaults(tmp_path: Path) -> None:
         "tests": {"passed": 10, "failed": 1, "skipped": 0},
         "records": {"eval_expr": 4, "render_template_record": 1, "eval_binding": 1,
                     "evaluate_when_record": 2, "defaults.current": 1, "build_value_as": 1},
-        "written": {"expr": 4, "templates": 2, "defaults": 1, "values": 1},
+        "written": {"expr": 6, "templates": 2, "defaults": 1, "values": 1},
         "duplicates": 0,
-        "skips": {"held: and/or result (owner deciding)": ["test_or_binding",
-                                                           "test_or_condition"]},
+        "skips": {},
         "flags": {},
     }
 
@@ -2647,7 +2658,7 @@ def test_or_load():
 
 
 def test_harvest_records_backward_and_pooled(tmp_path: Path) -> None:
-    """Pooled runs replay thrice; backward calls join their run; `and`/`or` runs are flagged."""
+    """Pooled runs replay thrice; backward calls join their run; `and`/`or` runs are shared."""
     done, out = _harvest(tmp_path, _POOLED_TESTS)
     assert _summary(done) == "6 passed", done.stdout + done.stderr
     cases = {path.relative_to(out / "cases").as_posix(): _read(path)
@@ -2693,7 +2704,6 @@ def test_harvest_records_backward_and_pooled(tmp_path: Path) -> None:
     assert report["flags"] == {
         "pooled: trace dropped": ["run-core/sample__pooled_failed__2"],
         "pooled: events dropped": ["run-core/sample__pooled_failed__2"],
-        "uses and/or": ["run-core/sample__or_case__2", "load-core/sample__or_load"],
     }
 
 
@@ -2786,6 +2796,14 @@ def test_harvest_shim_skips_and_requests(tmp_path: Path,
     monkeypatch.setattr(harvest, "_replay", all_shims)
     with pytest.raises(harvest._Skip, match="^shims: no single shim changes the outcome$"):
         harvest._expected(state, call)
+    # One a rule no shim covers touches is written for review, with that rule.
+    call.case = {"kind": "expr", "expr": "\u0661"}
+    _, text, flags = harvest._expected(state, call)
+    assert yaml.load(text, Loader=_CaseLoader) == {
+        "kind": "expr", "rules": ["text"], "expr": "\u0661", "expect": {"value": 2},
+        "python_expect": {"value": 1}}
+    assert flags == ["needs TS expect: text"]
+    call.case = {"kind": "expr", "expr": "1"}
 
     def failing(state: object, case: dict, shims: tuple = ()) -> tuple:
         if shims:
@@ -2856,6 +2874,19 @@ def test_harvest_replay_installs_shims(tmp_path: Path, monkeypatch: pytest.Monke
     assert harvest._replay(state, case) == ({"value": "x=True"}, frozenset())
     with pytest.raises(KeyError, match="no such shims"):
         harvest._replay(state, case, ("text", "missing"))
+
+    # Under a shim, an int a `float` slot widens is noted; it is widened all the same.
+    coerce = harvest.typesys_values._coerce_scalar
+    noted = frozenset({"int-in-float"})
+    for typ, value, kept, notes in (
+            ("float", 2, {"value": 2.0, "kind": "float"}, noted),
+            ("list(float)", [1, 2.5], {"value": [1.0, 2.5], "kind": "list[float]"}, noted),
+            ("float", 2.5, {"value": 2.5, "kind": "float"}, frozenset())):
+        case = {"kind": "value", "type": typ, "value": value}
+        assert harvest._replay(state, case, ("idle",)) == (kept, notes), typ
+    assert harvest._replay(state, {"kind": "value", "type": "float", "value": 2}) == (
+        {"value": 2.0, "kind": "float"}, frozenset())
+    assert harvest.typesys_values._coerce_scalar is coerce
 
     run = _read(_ROOT / "cases/run-agent/model_reply.yaml")
     del run["expect"]
@@ -3091,18 +3122,23 @@ def test_code():
 
 def test_digit():
     assert eval_expr(parse_expr("\\u0661 + 1"), lambda path: None) == 2
+
+
+def test_int_float():
+    assert build_value_as(type_for("float", {}), 2).value == 2.0
 '''
 
 
 def test_harvest_tags_unshimmable_rules(tmp_path: Path) -> None:
     """A case touching a rule no shim covers carries it, `python_expect` and a review flag."""
     done, out = _harvest(tmp_path, _UNSHIMMABLE_TESTS)
-    assert _summary(done) == "6 passed", done.stdout + done.stderr
+    assert _summary(done) == "7 passed", done.stdout + done.stderr
     cases = {path.relative_to(out / "cases").as_posix(): _read(path)
              for path in sorted((out / "cases").glob("*/*.yaml"))}
     tagged = {"values/sample__infinite": "infinity", "templates/sample__digits": "numbers",
               "load-core/sample__today": "dates", "load-core/sample__yaml": "yaml",
-              "run-core/sample__code__2": "code", "expr/sample__digit": "text"}
+              "run-core/sample__code__2": "code", "expr/sample__digit": "text",
+              "values/sample__int_float": "int-in-float"}
     assert sorted(cases) == sorted(f"{name}.yaml" for name in tagged)
     for name, rule in tagged.items():
         case = cases[f"{name}.yaml"]
@@ -3115,6 +3151,8 @@ def test_harvest_tags_unshimmable_rules(tmp_path: Path) -> None:
     assert cases["values/sample__infinite.yaml"]["value"] == {"$float": "inf"}
     assert cases["templates/sample__digits.yaml"]["env"] == {"YIAN_MAX_INT_DIGITS": "10"}
     assert cases["run-core/sample__code__2.yaml"]["expect"]["output"]["failure"]["node"] == "c"
+    assert cases["values/sample__int_float.yaml"]["python_expect"] == {"value": 2.0,
+                                                                       "kind": "float"}
 
     report = json.loads((out / "report" / "test_sample.py.json").read_text(encoding="utf-8"))
     assert report["skips"] == {}
@@ -3164,6 +3202,28 @@ def test_harvest_unshimmable_llm() -> None:
     assert harvest._unshimmable(run(), plain | {"events": events}, frozenset()) == set()
 
 
+def test_harvest_unshimmable_texts() -> None:
+    """A flow's leading BOM is the `yaml` rule's, any other U+FEFF the `text` rule's."""
+    from tests import conformance_harvest as harvest
+
+    def rules(case: dict, py: dict, notes: frozenset = frozenset()) -> set:
+        return harvest._unshimmable(case, py, notes)
+
+    loaded = {"load": "ok"}
+    assert rules({"kind": "load", "flow": "\ufeffid: f\n"}, loaded) == {"yaml"}
+    assert rules({"kind": "load", "flow": "id: f # \ufeff\n"}, loaded) == {"text"}
+    assert rules({"kind": "expr", "expr": "\ufeff1"}, {"value": 1}) == {"text"}
+
+    value = {"kind": "value", "type": "float", "value": 2}
+    finite = {"raises": {"class": "TypeCheckError", "message": "Input should be a finite number"}}
+    assert rules(value, finite) == {"infinity"}
+    other = {"raises": {"class": "ValueError", "message": "need a finite number of items"}}
+    assert rules(value, other) == set()
+    widened = {"value": 2.0, "kind": "float"}
+    assert rules(value, widened) == set()
+    assert rules(value, widened, frozenset({"int-in-float"})) == {"int-in-float"}
+
+
 _CODE_FLOW = '''\
 id: f
 name: f
@@ -3208,7 +3268,7 @@ def test_harvest_unshimmable_code() -> None:
     # Another label reads the file of that name.
     child = {"kind": "load", "flow": "id: f\nuses: [lib/child.yaml]\n",
              "files": {"lib/child.yaml": _CODE_FLOW}}
-    assert harvest._unshimmable(child, load_error(6, "lib/child.yaml"), frozenset()) == {"code"}
+    assert harvest._unshimmable(child, load_error(6, "child.yaml"), frozenset()) == {"code"}
     assert harvest._unshimmable(child, load_error(6, "other.yaml"), frozenset()) == set()
 
     run = {"kind": "run", "flow": _CODE_FLOW}
@@ -3216,8 +3276,12 @@ def test_harvest_unshimmable_code() -> None:
         assert harvest._unshimmable(run, failed(node), frozenset()) == {"code"}, node
     for node in ("other", "loop/other#2", "picked"):
         assert harvest._unshimmable(run, failed(node), frozenset()) == set(), node
-    trace = {"trace": [["node_failed", "body", {"failure": failed("body")["output"]["failure"]}]]}
-    assert harvest._unshimmable(run, trace, frozenset()) == {"code"}
+    failure = failed("body")["output"]["failure"]
+    for entry in (["node_failed", "body", {"failure": failure}],
+                  ["node_routed", "body", {"terminal_failure": failure}]):
+        assert harvest._unshimmable(run, {"trace": [entry]}, frozenset()) == {"code"}, entry[0]
+    routed = {"trace": [["node_routed", "body", {"terminal_failure": None}]]}
+    assert harvest._unshimmable(run, routed, frozenset()) == set()
 
 
 def test_harvest_code_scalars() -> None:
@@ -3243,6 +3307,9 @@ def test_harvest_code_scalars() -> None:
     assert found(flow) == [("a", "return 1", "'return 1'", 2, 2),
                            ("inner", "return 2", "return 2", 7, 7),
                            (None, "return 3", "return 3", 9, 9)]
+    # A recursive alias is walked once.
+    assert found("a: &x\n  b: *x\n") == []
+    assert found("nodes:\n  c: &x {kind: code, code: r, again: *x}\n") == [("c", "r", "r", 2, 2)]
     # Not CODE, or not text to compose.
     assert found("nodes:\n  t: {kind: tool, code: x}\n") == []
     assert found("nodes: [\n") == []
@@ -3708,8 +3775,7 @@ def test_shim_code_intake(tmp_path: Path) -> None:
         return repr(results["output"]["output"]), repr(entry[2]["value"]), notes
 
     assert stored() == ("{'a': {'n': 2.0}, 'v': 2.0}", "{'n': 2.0}", frozenset())
-    assert stored(("code-intake",)) == ("{'a': {'n': 2}, 'v': 2.0}", "{'n': 2}",
-                                        frozenset({"intake"}))
+    assert stored(("code-intake",)) == ("{'a': {'n': 2}, 'v': 2.0}", "{'n': 2}", frozenset())
     assert CodeNode.forward is forward
     assert harvest._SHIMS["code-intake"].rule == "numbers"
 

@@ -7,10 +7,11 @@ with, become the run's `host.models`. Each passing test's calls become candidate
 replayed through the conformance runner (`tests/test_conformance.py`), plain and with every TS-rule
 shim on (three times each for a pooled run). The shimmed outcome is its `expect`; when that
 differs, the plain one is its `python_expect` and the rules whose shims change it are its `rules`.
-A rule no shim can follow (huge ints, infinity, dates, YAML, structured model calls, CODE, some
-text rules) is added to `rules` by what the case holds, with `python_expect` even when equal,
-and flagged `needs TS expect: <rule>`: its TS expectation is written by hand. It is written as a
-case file under `<out>/cases/<group>/<name>.yaml`, deduplicated by content. Run it with:
+A rule no shim can follow (huge ints, an int in a float slot, infinity, dates, YAML, structured
+model calls, CODE, some text rules) is added to `rules` by what the case holds, with
+`python_expect` even when equal, and flagged `needs TS expect: <rule>`: its TS expectation is
+written by hand. It is written as a case file under `<out>/cases/<group>/<name>.yaml`,
+deduplicated by content. Run it with:
 
     PYTHONPATH=src python -m pytest -p tests.conformance_harvest --harvest-out DIR tests
 
@@ -253,7 +254,6 @@ class _Index:
         return "written"
 
 
-_HELD = "held: and/or result (owner deciding)"
 _WORKTREE = Path(__file__).parent.parent
 _YIAN_DIR = os.path.dirname(yian.__file__) + os.sep
 # Calls from these files are the engine's own or the harvest's, never a test's.
@@ -382,22 +382,6 @@ def _trees(case: dict) -> list:
     if case.get("mode") == "condition":
         return runner.expression_trees(case["expr"], condition=True)
     return [runner.parse_expr(case["expr"])]
-
-
-def _uses_and_or(tree: object) -> bool:
-    """Return whether the expression tree `tree` uses `and` or `or`."""
-    return isinstance(tree, Tree) and any(node.data in ("or_expr", "and_expr")
-                                          for node in tree.iter_subtrees())
-
-
-def _and_or(case: dict) -> bool:
-    """Return whether an `expr` case's expressions use `and` or `or`."""
-    try:
-        trees = _trees(case)
-    except Exception:
-        # Text that doesn't parse holds no `and`/`or` the replay would reach.
-        return False
-    return any(_uses_and_or(tree) for tree in trees)
 
 
 def _check_types(case: dict, types: dict | None) -> None:
@@ -640,8 +624,6 @@ def _record_run_flow(arguments: dict):
     _, load, load_call = held
     call = _STATE.active
     load_call.runs.append(call)
-    # The run's replay loads the flow too.
-    call.and_or = load_call.and_or
     case = {"kind": "run", **{key: load[key] for key in ("flow", "files") if key in load},
             **_env(models=True, keys=call.keys)}
     inputs = _plain(arguments["inputs"], "inputs")
@@ -1064,10 +1046,6 @@ class _Call:
         self.keys: dict = {}
         self.backward: list = []
         self.outcomes: list = []
-        # Whether a load or run evaluated an expression using `and` or `or`, and the trees it
-        # checked, by id (strong references: ids can be reused).
-        self.and_or = False
-        self.checked: dict = {}
         self.written = False
 
 
@@ -1132,25 +1110,6 @@ def _entry(entry: str, original, recorder):
             return _recorded(*begun, original, recorder, signature, args, kwargs)
         finally:
             _end_record()
-
-    return wrapper
-
-
-def _noting_and_or(original):
-    """Return `eval_expr` wrapped to note, on the active record, a tree using `and` or `or`."""
-    @functools.wraps(original)
-    def wrapper(*args: object, **kwargs: object) -> object:
-        state = _STATE
-        call = state.active if state is not None else None
-        tree = args[0] if args else kwargs.get("tree")
-        if call is not None and not call.and_or and id(tree) not in call.checked:
-            call.checked[id(tree)] = tree
-            try:
-                call.and_or = _uses_and_or(tree)
-            except Exception:
-                # The check never changes yian's result; an unchecked tree isn't flagged.
-                pass
-        return original(*args, **kwargs)
 
     return wrapper
 
@@ -1760,24 +1719,25 @@ def _ts_range(text: str, rng: list) -> list:
     return position(*rng[:2]) + position(*rng[2:])
 
 
+def _labelled(case: dict, label: str) -> str | None:
+    """Return the text Python ran under a frame's `label`: the flow, or the one file so named."""
+    if label == "flow.yaml":
+        return case.get("python_flow", case.get("flow"))
+    files = case.get("python_files", case.get("files", {}))
+    # A child flow's label is its file name.
+    named = [text for path, text in files.items() if Path(path).name == label]
+    return named[0] if len(named) == 1 else None
+
+
 def _install_columns(patch: pytest.MonkeyPatch, case: dict) -> None:
     """Give every diagnostic frame's range in TS lines and columns, by its label's text."""
-    flow = case.get("python_flow", case.get("flow"))
-    files = case.get("python_files", case.get("files", {}))
     diagnostic = runner._diagnostic
-
-    def text_of(label: str) -> str | None:
-        if label == "flow.yaml":
-            return flow
-        # A child flow's label is its file name.
-        named = [text for name, text in files.items() if Path(name).name == label]
-        return named[0] if len(named) == 1 else None
 
     @functools.wraps(diagnostic)
     def ts_diagnostic(diag: object) -> dict:
         form = diagnostic(diag)
         for frame in form.get("frames", []):
-            text = text_of(frame["label"])
+            text = _labelled(case, frame["label"])
             if text is not None:
                 frame["range"] = _ts_range(text, frame["range"])
         return form
@@ -1811,7 +1771,7 @@ def _ts_intake(value: object) -> object:
 
 
 def _install_code_intake(patch: pytest.MonkeyPatch, case: dict) -> None:
-    """Read a CODE body's result as a TS host does, noting `intake` when that changes it."""
+    """Read a CODE body's result as a TS host does."""
     forward = CodeNode.forward
 
     @functools.wraps(forward)
@@ -1824,10 +1784,7 @@ def _install_code_intake(patch: pytest.MonkeyPatch, case: dict) -> None:
             # A value entry's value is authored, not a host's result.
             return output
         value = _ts_intake(output.value)
-        if value is output.value:
-            return output
-        _NOTES.add("intake")
-        return dataclasses.replace(output, value=value)
+        return output if value is output.value else dataclasses.replace(output, value=value)
 
     patch.setattr(CodeNode, "forward", ts_forward)
 
@@ -1865,13 +1822,29 @@ def _noting_requests(original):
     return _request_difference
 
 
+def _noting_int_in_float(original):
+    """Return `_coerce_scalar` wrapped to note `int-in-float` when it widens an int to a float.
+
+    The value is still widened: TS keeps it an int, which no shim can follow, since pydantic
+    widens it again inside `NumberValue` and `list[float]`.
+    """
+    @functools.wraps(original)
+    def _coerce_scalar(declared: ValueKind, value: object, path: tuple) -> object:
+        if declared == ValueKind.NUMBER and isinstance(value, int) and not isinstance(value, bool):
+            _NOTES.add("int-in-float")
+        return original(declared, value, path)
+
+    return _coerce_scalar
+
+
 def _replay(state: _Harvest, case: dict, shims: Collection[str] = ()) -> tuple[dict, frozenset]:
     """Return the runner's results for the candidate `case`, read back from its file, and notes.
 
     The shims named in `shims` are on during the replay, and the notes are what they noted.
     Under any shim, a model call's request that differs from its entry's is noted instead of
-    failing the replay: a shim may change a prompt or a tool result's text. Raises KeyError for
-    a name with no shim, and `_Skip` when the replay raises anything.
+    failing the replay: a shim may change a prompt or a tool result's text; and an int a `float`
+    slot widens is noted `int-in-float`. Raises KeyError for a name with no shim, and `_Skip`
+    when the replay raises anything.
     """
     unknown = set(shims) - _SHIMS.keys()
     if unknown:
@@ -1892,6 +1865,9 @@ def _replay(state: _Harvest, case: dict, shims: Collection[str] = ()) -> tuple[d
                 if installed:
                     patch.setattr(runner, "_request_difference",
                                   _noting_requests(runner._request_difference))
+                    # Only `values` calls it, through its module global.
+                    patch.setattr(typesys_values, "_coerce_scalar",
+                                  _noting_int_in_float(typesys_values._coerce_scalar))
                 results = runner.results(runner._read(path), case_dir, candidate=True)
             return results, frozenset(_NOTES)
         except (KeyboardInterrupt, SystemExit):
@@ -1938,17 +1914,22 @@ def _cut_diagnostic(diagnostic: dict, keys: tuple) -> dict:
             "ranges": [frame["range"] for frame in diagnostic.get("frames", [])]}
 
 
-def _texts(value: object):
-    """Yield every text in the case value `value`, mapping keys included."""
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, list):
+def _leaves(value: object):
+    """Yield every scalar in the case value `value`, mapping keys included."""
+    if isinstance(value, list):
         for item in value:
-            yield from _texts(item)
+            yield from _leaves(item)
     elif isinstance(value, dict):
         for key, item in value.items():
             yield key
-            yield from _texts(item)
+            yield from _leaves(item)
+    else:
+        yield value
+
+
+def _texts(value: object):
+    """Yield every text in the case value `value`, mapping keys included."""
+    return (leaf for leaf in _leaves(value) if isinstance(leaf, str))
 
 
 def _scan_secrets(case: dict, secrets: set) -> None:
@@ -2043,11 +2024,17 @@ def _code_scalars(text: str) -> list[_CodeScalar]:
     except yaml.YAMLError:
         return []
     found = []
+    # An alias shares its anchor's node, so a recursive one would walk forever.
+    seen = set()
 
     def walk(node: yaml.Node | None, node_id: str | None) -> None:
+        if id(node) in seen:
+            return
+        seen.add(id(node))
         if isinstance(node, yaml.SequenceNode):
             for item in node.value:
                 walk(item, None)
+            return
         if not isinstance(node, yaml.MappingNode):
             return
         fields = {key.value: value for key, value in node.value
@@ -2073,7 +2060,8 @@ def _code_scalars(text: str) -> list[_CodeScalar]:
 
 
 _INFINITY_TEXTS = ("non-finite number", "numbers must be finite", "int is too large for float",
-                   "Result too large", "Numerical result out of range", "finite number")
+                   "Result too large", "Numerical result out of range",
+                   "Input should be a finite number")
 _LONG_INT_TEXTS = ("IntTooLongError", "<int with", "larger than yian allows")
 _INF_SPELLING = re.compile(r"\.(?:inf|Inf|INF)\b")
 # Candidates only: `float()` decides which are numbers and which overflow.
@@ -2082,43 +2070,24 @@ _DATES = re.compile(r"\bsystem\.(?:now|today)\b")
 _STRUCTURED_PROMPTS = ("Respond with ONLY a JSON object matching this JSON schema",
                        "Your previous output was invalid:")
 # `\d` is Unicode category Nd: Python's expression lexer reads any decimal digit as a number;
-# U+001C-U+001F and U+0085 are whitespace to Python, and U+FEFF is a BOM.
+# U+001C-U+001F and U+0085 are whitespace to Python, and U+FEFF is whitespace to JS.
 _TEXT_CHARS = re.compile(r"(?![0-9])\d|[\x1c-\x1f\x85\ufeff]")
 # The arithmetic shim's notes for what TS rejects at load, where both operand types are known.
 _LOAD_ARITHMETIC = frozenset({"repetition", "printf", "operand-kinds"})
 
 
-def _floats(value: object):
-    """Yield every float in the case value `value`."""
-    if type(value) is float:
-        yield value
-    elif isinstance(value, list):
-        for item in value:
-            yield from _floats(item)
-    elif isinstance(value, dict):
-        for item in value.values():
-            yield from _floats(item)
-
-
 def _diagnostics(expect: dict) -> list:
-    """Return the diagnostics in an `expect`: a load's, a run's failure and `node_failed`'s."""
+    """Return the diagnostics in an `expect`: a load's, a run's failure and its trace's failures."""
     load = expect.get("load")
     found = list(load["diagnostics"]) if isinstance(load, dict) else []
     failure = expect.get("output", {}).get("failure")
     if failure:
         found.append(failure)
-    found += [entry[2]["failure"] for entry in expect.get("trace", [])
-              if entry[0] == "node_failed" and len(entry) > 2 and "failure" in entry[2]]
+    for entry in expect.get("trace", []):
+        field = runner._FAILURE_FIELDS.get(entry[0])
+        if field is not None and len(entry) > 2 and entry[2].get(field):
+            found.append(entry[2][field])
     return found
-
-
-def _labelled(case: dict, label: str) -> str | None:
-    """Return the text Python ran under a frame's `label`: the flow, or the one file so named."""
-    if label == "flow.yaml":
-        return case.get("python_flow", case.get("flow"))
-    files = case.get("python_files", case.get("files", {}))
-    named = [text for path, text in files.items() if Path(path).name == Path(label).name]
-    return named[0] if len(named) == 1 else None
 
 
 def _overflows(literal: str) -> bool:
@@ -2147,11 +2116,12 @@ def _unshimmable(case: dict, py: dict, notes: frozenset) -> set[str]:
     flows = [case.get(key) for key in ("flow", "python_flow")]
     flows += [text for key in ("files", "python_files") for text in case.get(key, {}).values()]
     flows = [text for text in flows if isinstance(text, str)]
-    texts = flows + [case[key] for key in ("expr", "template") if isinstance(case.get(key), str)]
+    exprs = [case[key] for key in ("expr", "template") if isinstance(case.get(key), str)]
+    texts = flows + exprs
     outcome = list(_texts(py))
     rules = set()
 
-    if (any(math.isinf(x) for part in (case, py) for x in _floats(part))
+    if (any(type(x) is float and math.isinf(x) for part in (case, py) for x in _leaves(part))
             or any(_INF_SPELLING.search(text) for text in texts)
             or any(_overflows(literal) for text in texts
                    for literal in _FLOAT_LITERAL.findall(text))
@@ -2160,8 +2130,11 @@ def _unshimmable(case: dict, py: dict, notes: frozenset) -> set[str]:
         rules.add("infinity")
 
     if (any(part in text for text in outcome for part in _LONG_INT_TEXTS)
-            or "YIAN_MAX_INT_DIGITS" in case.get("env", {}) or "intake" in notes):
+            or "YIAN_MAX_INT_DIGITS" in case.get("env", {})):
         rules.add("numbers")
+
+    if "int-in-float" in notes:
+        rules.add("int-in-float")
 
     if any(_DATES.search(text) for text in texts):
         rules.add("dates")
@@ -2193,7 +2166,9 @@ def _unshimmable(case: dict, py: dict, notes: frozenset) -> set[str]:
             or any("`code:`" in diagnostic["message"] for diagnostic in diagnostics)):
         rules.add("code")
 
-    if any(_TEXT_CHARS.search(text) for text in texts):
+    # A flow's leading U+FEFF is a BOM, the yaml rule's; one anywhere else is the text rule's.
+    if any(_TEXT_CHARS.search(text) for text in [*(flow.removeprefix("\ufeff") for flow in flows),
+                                                  *exprs]):
         rules.add("text")
     return rules
 
@@ -2205,14 +2180,14 @@ def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list]:
     must agree in each. The call is then replayed as many times with every shim on, where they
     must agree too, and that outcome is the `expect`. When it differs from the plain one, the
     call is replayed once with each shim alone: the case's `rules` are those of the shims that
-    change the outcome, and the plain outcome is its `python_expect`. A pooled run's trace,
-    events, stream, tool calls and backward outcomes are kept only when the plain and shimmed
-    runs succeeded and the replays of each are equal, each one dropped giving a
-    `pooled: <result> dropped` flag. A model entry whose request the shims change loses its
-    `request` (flag `shims: request dropped`). A load or run that evaluated `and` or `or` is
-    flagged `uses and/or`. Each rule `_unshimmable` finds joins `rules` and is flagged
-    `needs TS expect: <rule>`; a load, run or backward pass whose arithmetic TS rejects at load
-    (repetition, `%` on text, operand kinds) is flagged `needs TS expect: arithmetic`.
+    change the outcome (none, and no rule `_unshimmable` finds, is a skip), and the plain outcome
+    is its `python_expect`. A pooled run's trace, events, stream, tool calls and backward
+    outcomes are kept only when the plain and shimmed runs succeeded and the replays of each are
+    equal, each one dropped giving a `pooled: <result> dropped` flag. A model entry whose
+    request the shims change loses its `request` (flag `shims: request dropped`). Each rule
+    `_unshimmable` finds joins `rules` and is flagged `needs TS expect: <rule>`; a load, run or
+    backward pass whose arithmetic TS rejects at load (repetition, `%` on text, operand kinds) is
+    flagged `needs TS expect: arithmetic`.
     """
     if call.skip:
         raise _Skip(call.skip)
@@ -2223,9 +2198,6 @@ def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list]:
         raise _Skip("model: a call didn't end during its run")
     case, result = _completed(call)
     _scan_secrets(case, call.secrets)
-    # Python's `and`/`or` give an operand, not a bool, and that decides conditions too.
-    if case["kind"] == "expr" and _and_or(case):
-        raise _Skip(_HELD)
     is_run = case["kind"] in ("run", "backward")
     pooled = is_run and case.get("run", {}).get("num_workers", _RUN_DEFAULTS["num_workers"]) != 0
     times = 3 if pooled else 1
@@ -2244,7 +2216,7 @@ def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list]:
     py, ts = _expect(case, replays[0]), _expect(case, shimmed[0])
     # Before a pooled result or a request is dropped: either may hold a rule's signal.
     unshimmable = _unshimmable(case, py, notes)
-    flags = ["uses and/or"] if call.and_or else []
+    flags = []
     if pooled:
         # When a pooled run fails, siblings racing the failure make its trace depend on timing
         # across processes, even when three replays in one process agree.
@@ -2268,7 +2240,8 @@ def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list]:
             # can at worst add a rule (the case keeps `python_expect`), not lose a case.
             if not runner._same({key: alone[key] for key in alone.keys() & py.keys()}, py):
                 rules.add(shim.rule)
-        if not rules:
+        # With the rules no shim covers, the case still goes to review by its flags.
+        if not rules and not unshimmable:
             raise _Skip("shims: no single shim changes the outcome")
     rules |= unshimmable
     flags += [f"needs TS expect: {rule}" for rule in sorted(unshimmable)]
@@ -2397,9 +2370,7 @@ def pytest_configure(config: pytest.Config) -> None:
         "resume_flow": (resume_flow, _record_resume_flow),
     }
     for entry, (original, recorder) in entries.items():
-        # yian's own `eval_expr` calls pass through the entry's wrapper too.
-        called = _noting_and_or(original) if entry == "eval_expr" else original
-        _replace(original, _entry(entry, called, recorder), _STATE.replaced)
+        _replace(original, _entry(entry, original, recorder), _STATE.replaced)
     for original, remember in ((parse_expr, _remember_tree), (type_for, _remember_type),
                                (read_typedefs, _remember_typedefs)):
         _replace(original, _mapper(original, remember), _STATE.replaced)

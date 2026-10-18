@@ -77,10 +77,15 @@ describe("site keys", () => {
     expect(new Set(first.map((origin) => origin!.key)).size).toBe(paths.length);
   });
 
-  test.each([[true], [1.5]])("reject the ambiguous segment %p", (segment) => {
+  test.each([
+    [true, "boolean"],
+    [1.5, "non-integer number 1.5"],
+  ])("reject the ambiguous segment %p", (segment, got) => {
     expect(() =>
       new SourceCatalogBuilder().register([segment as unknown as string], valueCursor()),
-    ).toThrow(TypeError);
+    ).toThrow(
+      new TypeError(`source site path segments must be text or integer values, got ${got}`),
+    );
   });
 
   test("must be non-empty arrays", () => {
@@ -312,18 +317,17 @@ describe("resolution", () => {
   });
 
   test("does not reparse the source", () => {
-    const { parses, result } = countParses(() => {
+    const { parses } = countParses(() => {
       const document = SourceDocument.parse("value: present\n");
       const builder = new SourceCatalogBuilder();
       const origin = builder.register(["value"], document.root.child("value"))!;
       const currentFrame = builder.resolveRegistered(origin);
       const catalog = builder.freeze();
+      expect(currentFrame).toEqual(catalog.resolve(origin));
       expect(catalog.resolve(origin)).not.toBeNull();
       expect(catalog.resolve(origin)).not.toBeNull();
-      return { origin, currentFrame, catalog };
     });
 
-    expect(result.currentFrame).toEqual(result.catalog.resolve(result.origin));
     expect(parses).toBe(1);
   });
 });
@@ -517,6 +521,26 @@ describe("constructed lines", () => {
     );
 
     expect(catalog.resolve(origin)).toBeNull();
+  });
+
+  test("a snapshot keeps its own copy of a mutable input site", () => {
+    const document = SourceDocument.parse("value: |-\n  first\n  second\n");
+    const cursor = document.root.child("value");
+    const origin = new OriginRef("site");
+    const occurrencePath: { key?: string; index?: number }[] = cursor.path.map((step) => ({
+      ...step,
+    }));
+    const selector = { index: 1 };
+    const site = { document, occurrencePath: occurrencePath as OccurrencePath, selector };
+    const catalog = new SourceCatalog(new Map([[origin.key, site]]));
+    const before = catalog.resolve(origin);
+
+    occurrencePath[0]!.key = "missing";
+    occurrencePath.push({ index: 0 });
+    selector.index = 0;
+
+    expect(before!.range).toEqual(new SourceRange(3, 3, 3, 9));
+    expect(catalog.resolve(origin)).toEqual(before);
   });
 
   test("duplicate detection crosses selector kinds", () => {

@@ -65,9 +65,9 @@ export function encodeSitePath(path: SourceSitePath): string {
     } else if (typeof segment === "number" && Number.isInteger(segment)) {
       encoded.push("i:" + String(segment));
     } else {
-      throw new TypeError(
-        `source site path segments must be text or integer values, got ${jsTypeName(segment)}`,
-      );
+      const got =
+        typeof segment === "number" ? `non-integer number ${segment}` : jsTypeName(segment);
+      throw new TypeError(`source site path segments must be text or integer values, got ${got}`);
     }
   }
   return "/" + encoded.join("/");
@@ -133,6 +133,27 @@ function tupleRepr(path: SourceSitePath): string {
   return items.length === 1 ? `(${items[0]},)` : `(${items.join(", ")})`;
 }
 
+/** Return the error for registering `sitePath` twice, located at `range`. */
+function duplicateSiteError(
+  sitePath: SourceSitePath,
+  range: SourceRange | null,
+): SourceAccessError {
+  return new SourceAccessError(`duplicate source catalog site ${tupleRepr(sitePath)}`, range);
+}
+
+/** Build a frozen site over frozen copies of `occurrencePath`, its steps, and a line selector. */
+function siteOf(
+  document: SourceDocument,
+  occurrencePath: OccurrencePath,
+  selector: SiteAnchor | ConstructedLine,
+): SourceSite {
+  return Object.freeze({
+    document,
+    occurrencePath: Object.freeze(occurrencePath.map((step) => Object.freeze({ ...step }))),
+    selector: typeof selector === "object" ? Object.freeze({ index: selector.index }) : selector,
+  });
+}
+
 /**
  * An immutable Compose resolver from opaque origins to diagnostic frames.
  *
@@ -163,7 +184,11 @@ export class SourceCatalog implements OriginResolver {
       ) {
         throw new TypeError("source catalog values must be source sites");
       }
-      copied.set(key, site);
+      // A site from outside the builder may still be mutable; the snapshot keeps its own.
+      copied.set(
+        key,
+        Object.isFrozen(site) ? site : siteOf(site.document, site.occurrencePath, site.selector),
+      );
     }
     this.#sites = copied;
   }
@@ -186,12 +211,7 @@ export class SourceCatalog implements OriginResolver {
    * or malformed value is absent.
    */
   has(origin: unknown): boolean {
-    return (
-      origin instanceof OriginRef &&
-      typeof origin.key === "string" &&
-      origin.key !== "" &&
-      this.#sites.has(origin.key)
-    );
+    return origin instanceof OriginRef && this.#sites.has(origin.key);
   }
 }
 
@@ -234,11 +254,11 @@ export class SourceCatalogBuilder {
     const document = cursor.document;
     const range = anchor === "value" ? cursor.range : cursor.keyRange;
     if (this.#sites.has(key)) {
-      throw new SourceAccessError(`duplicate source catalog site ${tupleRepr(sitePath)}`, range);
+      throw duplicateSiteError(sitePath, range);
     }
     if (document === null || range === null) return null;
 
-    this.#sites.set(key, siteOf(document, cursor, anchor));
+    this.#sites.set(key, siteOf(document, cursor.path, anchor));
     return new OriginRef(key);
   }
 
@@ -263,22 +283,19 @@ export class SourceCatalogBuilder {
     if (!(cursor instanceof SourceCursor)) {
       throw new TypeError("source catalog registration requires a SourceCursor");
     }
-    if (typeof index !== "number" || !Number.isInteger(index)) {
+    if (!Number.isInteger(index)) {
       throw new TypeError("constructed line index must be an integer");
     }
     if (index < 0) {
       throw new SourceAccessError("constructed line index must be non-negative", cursor.range);
     }
     if (this.#sites.has(key)) {
-      throw new SourceAccessError(
-        `duplicate source catalog site ${tupleRepr(sitePath)}`,
-        cursor.range,
-      );
+      throw duplicateSiteError(sitePath, cursor.range);
     }
 
     const scalarSource = cursor.scalarSource;
-    const lineRanges = scalarSource?.constructedLineRanges ?? null;
-    if (scalarSource === null || lineRanges === null) return null;
+    if (scalarSource === null || scalarSource.constructedLineRanges === null) return null;
+    const lineRanges = scalarSource.constructedLineRanges;
     if (index >= lineRanges.length) {
       throw new SourceAccessError(
         `constructed line index ${index} is out of range`,
@@ -288,7 +305,7 @@ export class SourceCatalogBuilder {
 
     const document = cursor.document;
     if (document === null) return null;
-    this.#sites.set(key, siteOf(document, cursor, Object.freeze({ index })));
+    this.#sites.set(key, siteOf(document, cursor.path, { index }));
     return new OriginRef(key);
   }
 
@@ -332,17 +349,4 @@ export class SourceCatalogBuilder {
   freeze(): SourceCatalog {
     return new SourceCatalog(this.#sites);
   }
-}
-
-/** Build the frozen site that replays `cursor`'s occurrence in `document`. */
-function siteOf(
-  document: SourceDocument,
-  cursor: SourceCursor,
-  selector: SiteAnchor | ConstructedLine,
-): SourceSite {
-  return Object.freeze({
-    document,
-    occurrencePath: Object.freeze(cursor.path),
-    selector,
-  });
 }

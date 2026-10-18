@@ -680,6 +680,8 @@ interface Holder {
   child: ChildProcess;
   lines: AsyncIterator<string>;
   closed: Promise<unknown>;
+  /** Rejects when the child can't be spawned or signalled. */
+  failed: Promise<never>;
   stderr: string;
   /** The child's own second `lockFile` and `isLocked` results, with `selfCheck`. */
   selfCheck?: unknown;
@@ -692,7 +694,7 @@ async function nextLine(holder: Holder): Promise<string> {
     timer = setTimeout(() => reject(new Error(`the holder printed nothing for 10 s; stderr:\n${holder.stderr}`)), 10_000);
   });
   try {
-    const next = await Promise.race([holder.lines.next(), timeout]);
+    const next = await Promise.race([holder.lines.next(), timeout, holder.failed]);
     if (!next.done) return next.value;
     await holder.closed;
     throw new Error(`the holder exited (${holder.child.exitCode ?? holder.child.signalCode}); stderr:\n${holder.stderr}`);
@@ -719,14 +721,16 @@ const { FileLockError, isLocked, lockFile } = await import(${JSON.stringify(kind
 const { createInterface } = await import("node:readline");
 const p = ${JSON.stringify(p)};
 const lock = lockFile(p);
-if (${selfCheck}) {
-  let second = "acquired";
-  try {
-    lockFile(p).release();
-  } catch (error) {
-    second = error instanceof FileLockError ? error.reason : String(error);
-  }
-  console.log(JSON.stringify({ second, isLocked: isLocked(p) }));
+${
+  selfCheck
+    ? `let second = "acquired";
+try {
+  lockFile(p).release();
+} catch (error) {
+  second = error instanceof FileLockError ? error.reason : String(error);
+}
+console.log(JSON.stringify({ second, isLocked: isLocked(p) }));`
+    : ""
 }
 console.log("locked");
 for await (const line of createInterface({ input: process.stdin })) {
@@ -751,8 +755,11 @@ for await (const line of createInterface({ input: process.stdin })) {
     child,
     lines: createInterface({ input: child.stdout! })[Symbol.asyncIterator](),
     closed: new Promise((resolve) => child.on("close", resolve)),
+    failed: new Promise((_, reject) => child.on("error", reject)),
     stderr: "",
   };
+  // `nextLine` races `failed`; this keeps a failure after the last line from going unhandled.
+  holder.failed.catch(() => {});
   children.push(holder);
   child.stderr!.setEncoding("utf8").on("data", (chunk: string) => {
     holder.stderr += chunk;
@@ -897,26 +904,53 @@ out.row = { ...row, c: [...row.c] };
 out.rowIsPlain = Object.getPrototypeOf(row) === Object.prototype;
 out.blobIsBytes = row.c instanceof Uint8Array;
 out.noRow = db.prepare("SELECT a FROM t WHERE a = ?").get(0) === undefined;
-db.prepare("INSERT INTO t (a) VALUES (?)").run(2n ** 53n);
-out.unsafeInteger = caught(() => db.prepare("SELECT a FROM t").all()) instanceof RangeError;
+db.exec("CREATE TABLE n (a INTEGER)");
+db.prepare("INSERT INTO n VALUES (?)").run(5n);
+out.bigintParam = db.prepare("SELECT a FROM n").get().a;
+out.unsafeIntegers = [2n ** 53n, 2n ** 60n].map((big) => {
+  db.prepare("DELETE FROM n").run();
+  db.prepare("INSERT INTO n VALUES (?)").run(big);
+  return caught(() => db.prepare("SELECT a FROM n").all()) instanceof RangeError;
+});
 db.close();
 db.close();
 const ro = p.openSqlite(file, { readonly: true });
 out.readonlyRows = ro.prepare("SELECT count(*) AS n FROM t").get().n;
 out.readonlyWriteThrows = caught(() => ro.exec("DELETE FROM t")) instanceof Error;
 ro.close();
+const missing = path.join(dir, "missing.sqlite");
+out.readonlyMissing = [p.sqliteErrorCode(caught(() => p.openSqlite(missing, { readonly: true }))), fs.existsSync(missing)];
 
-const a = p.openSqlite(file);
+const closeFile = path.join(dir, "close.sqlite");
+const a = p.openSqlite(closeFile);
 a.exec("PRAGMA busy_timeout = 0");
+a.exec("PRAGMA locking_mode = EXCLUSIVE");
+a.exec("CREATE TABLE t (a INTEGER)");
 a.exec("BEGIN EXCLUSIVE");
-const b = p.openSqlite(file);
-b.exec("PRAGMA busy_timeout = 0");
-out.busyCode = p.sqliteErrorCode(caught(() => b.exec("BEGIN EXCLUSIVE")));
+a.prepare("INSERT INTO t VALUES (?)").run(1);
+a.exec("COMMIT");
+const kept = a.prepare("SELECT a FROM t");
+out.keptRows = kept.all();
 a.close();
-b.exec("BEGIN EXCLUSIVE");
-b.exec("COMMIT");
-out.closeReleases = true;
+const b = p.openSqlite(closeFile);
+b.exec("PRAGMA busy_timeout = 0");
+const begun = caught(() => {
+  b.exec("BEGIN EXCLUSIVE");
+  b.exec("COMMIT");
+});
+out.closeReleases = begun === "no throw" ? "began" : String(begun);
+out.keptAfterCloseThrows = caught(() => kept.all()) instanceof Error;
 b.close();
+
+const holderDb = p.openSqlite(file);
+const waiterDb = p.openSqlite(file);
+holderDb.exec("PRAGMA busy_timeout = 0");
+waiterDb.exec("PRAGMA busy_timeout = 0");
+holderDb.exec("BEGIN EXCLUSIVE");
+out.busyCode = p.sqliteErrorCode(caught(() => waiterDb.exec("BEGIN EXCLUSIVE")));
+holderDb.exec("COMMIT");
+holderDb.close();
+waiterDb.close();
 const enoent = caught(() => fs.statSync(path.join(dir, "missing")));
 out.enoent = [enoent.code, p.sqliteErrorCode(enoent) === undefined];
 
@@ -968,11 +1002,15 @@ console.log(JSON.stringify(out));
       expect(out.rowIsPlain).toBe(true);
       expect(out.blobIsBytes).toBe(true);
       expect(out.noRow).toBe(true);
-      expect(out.unsafeInteger).toBe(true);
-      expect(out.readonlyRows).toBe(2);
+      expect(out.bigintParam).toBe(5);
+      expect(out.unsafeIntegers).toEqual([true, true]);
+      expect(out.readonlyRows).toBe(1);
       expect(out.readonlyWriteThrows).toBe(true);
+      expect(out.readonlyMissing).toEqual([14, false]);
+      expect(out.keptRows).toEqual([{ a: 1 }]);
+      expect(out.closeReleases).toBe("began");
+      expect(out.keptAfterCloseThrows).toBe(true);
       expect(out.busyCode).toBe(5);
-      expect(out.closeReleases).toBe(true);
       expect(out.enoent).toEqual(["ENOENT", true]);
       expect(out.lockBusy).toBe("busy");
       expect(out.lockedWhileHeld).toBe(true);
@@ -993,7 +1031,7 @@ console.log(JSON.stringify(out));
     // A quoted specifier, as in `import type`, would make Node consumers need Bun's
     // types; the module doc naming `bun:sqlite` in backticks is fine.
     expect(fs.readFileSync(path.join(ROOT, "dist/src/platform.d.ts"), "utf8")).not.toMatch(/["']bun:/);
-    // The lazy require("bun:sqlite") is a call, not an import.
-    expect(fs.readFileSync(BUILT, "utf8")).not.toMatch(/^\s*import[^;(]*["']bun:/m);
+    // The lazy require("bun:sqlite") is a call, not an import or re-export.
+    expect(fs.readFileSync(BUILT, "utf8")).not.toMatch(/^\s*(?:import|export)\b[^;(]*["']bun:/m);
   });
 });

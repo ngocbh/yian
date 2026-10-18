@@ -1,12 +1,12 @@
 /**
  * The `Type` vocabulary's shape checks, levels and labels, the type-text parser,
- * `formatTypeExpr`, the bracket-spelling error, and `resolveType`/`typeFor`, a port of those
- * tests of `tests/engine/test_types.py`. Registries are built by hand. Later: the value
- * halves and value tests (with `buildValueAs`), `test_is_shadow_guard` and
- * `test_bounded_type_defaults_preserve_compatible_integer_payloads` (with `readTypedefs`),
- * the pool write test and `test_public_exports`.
+ * `formatTypeExpr`, the bracket-spelling error, typedef names, and `resolveType`/`typeFor`, a
+ * port of those tests of `tests/engine/test_types.py`. Later: the value halves and value
+ * tests (with `buildValueAs`, including the widening half of
+ * `test_union_member_value_widens_its_float_fields`), the pool write test, `test_public_exports`,
+ * and `test_bounded_type_defaults_preserve_compatible_integer_payloads` (with the loader).
  * `test_type_for_preserves_its_public_keyword_name` is not ported (TypeScript has no keyword
- * arguments).
+ * arguments); `test_is_shadow_guard` checks the private guard through `readTypedefs`.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -16,6 +16,7 @@ import {
   formatTypeExpr,
   legacyRespelling,
   parseType,
+  readTypedefs,
   resolveType,
   type ScalarName,
   type TypeDef,
@@ -27,6 +28,7 @@ import {
   type Bounds,
   boundText,
   canonicalTypeLabel,
+  canonicalUnionOrder,
   listKindForElement,
   Type,
   TypeCheckError,
@@ -972,30 +974,25 @@ describe("bracket spelling", () => {
 // Registry and resolution
 // --------------------------------------------------------------------------------------- //
 
-/**
- * Build a registry by hand, without checks: a mapping is a record, `Literal(...)` text a
- * variant and other text an alias.
- */
-function registry(raw: Record<string, string | Record<string, string>>): TypeRegistry {
+/** A registry of record typedefs built directly, without checks, from each one's fields. */
+function records(raw: Record<string, Record<string, string>>): TypeRegistry {
   return new Map(
-    Object.entries(raw).map(([name, value]): [string, TypeDef] => {
-      if (typeof value !== "string") {
-        return [name, { kind: "record", fields: new Map(Object.entries(value)) }];
-      }
-      const target = parseType(value);
-      if (target.kind === "enum") return [name, { kind: "variant", tags: target.tags }];
-      return [name, { kind: "alias", target }];
-    }),
+    Object.entries(raw).map(([name, fields]): [string, TypeDef] => [
+      name,
+      { kind: "record", fields: new Map(Object.entries(fields)) },
+    ]),
   );
 }
 
 const EMPTY: TypeRegistry = new Map();
 
-const REG = registry({
-  Rating: { value: "float", confidence: "float" },
-  Action: "Literal(Approve, Reject, Defer)",
-  Prices: { closes: "List(float)", last: "float" },
-});
+const REG: TypeRegistry = new Map([
+  ...records({
+    Rating: { value: "float", confidence: "float" },
+    Prices: { closes: "List(float)", last: "float" },
+  }),
+  ["Action", { kind: "variant", tags: ["Approve", "Reject", "Defer"] }],
+]);
 
 /** Return the message of the `TypeCheckError` `typeFor(text, reg)` throws. */
 function typeForError(text: string, reg: TypeRegistry): string {
@@ -1024,7 +1021,7 @@ describe("resolveType", () => {
 
 describe("typeFor", () => {
   test("an Optional record field is not required", () => {
-    const sh = typeFor("Sig", registry({ Sig: { score: "float", note: "Optional(str)" } }));
+    const sh = typeFor("Sig", records({ Sig: { score: "float", note: "Optional(str)" } }));
     expect(sh.required).toEqual(new Set(["score"]));
     expect(sh.fields!.get("note")!.nullable).toBe(true);
     expect(sh.fields!.get("score")!.nullable).toBe(false);
@@ -1113,7 +1110,7 @@ describe("typeFor", () => {
   });
 
   test("a recursive record is rejected", () => {
-    expect(typeForError("Node", registry({ Node: { child: "Node" } }))).toBe(
+    expect(typeForError("Node", records({ Node: { child: "Node" } }))).toBe(
       "recursive type reference: 'Node'",
     );
   });
@@ -1141,5 +1138,75 @@ describe("typeFor", () => {
     expect(label("list(str)")).toBe("list(str)");
     expect(label("Literal(b, a)")).toBe("Literal(a, b)");
     expect(label("float(0.5..1.5)")).toBe("float(0.5..1.5)");
+  });
+
+  test("union member order follows the bracket labels", () => {
+    // By the parenthesized labels `{"a":int(1..2)}` sorts first; by the bracket labels
+    // `{"a":int,"b":str}` does. Keeping the bracket order keeps manifests stable.
+    const reg = readTypedefs({ A: { a: "int(1..2)" }, B: { a: "int", b: "str" } });
+    const union = typeFor("Union(A, B)", reg);
+    const [first, second] = union.variants!;
+    expect(new Set(first!.fields!.keys())).toEqual(new Set(["a", "b"]));
+    const order = canonicalUnionOrder([second!, first!]);
+    expect(order[0]).toBe(first!);
+    expect(order[1]).toBe(second!);
+    expect(canonicalTypeLabel(union)).toBe('Union({"a":int,"b":str},{"a":int(1..2)})');
+  });
+
+  test("a registry of union members with float fields resolves", () => {
+    const reg = readTypedefs({
+      Buy: { action: "Literal(buy)", qty: "int" },
+      Sell: { action: "Literal(sell)", price: "float" },
+      Count: { n: "int" },
+      Score: { n: "float", label: "str" },
+    });
+    expect(typeFor("Union(Buy, Sell)", reg).variants).toHaveLength(2);
+    expect(typeFor("Union(Count, Score)", reg).variants).toHaveLength(2);
+  });
+});
+
+/** Return the `TypeCheckError` `readTypedefs(raw)` throws. */
+function typedefsError(raw: Readonly<Record<string, unknown>>): TypeCheckError {
+  try {
+    readTypedefs(raw);
+  } catch (error) {
+    expect(error).toBeInstanceOf(TypeCheckError);
+    return error as TypeCheckError;
+  }
+  throw new Error("readTypedefs did not throw");
+}
+
+describe("typedef names", () => {
+  test.each(["str", "list"])("%p fails PascalCase before the shadow check", (name) => {
+    const error = typedefsError({ [name]: "int" });
+    expect(error.message).toBe(
+      `typedef name '${name}' must be PascalCase (an uppercase identifier)`,
+    );
+    expect(error.path).toEqual([name]);
+  });
+
+  test.each([
+    "Optional",
+    "Literal",
+    "Any",
+    "List",
+    "Dict",
+    "Union",
+    "None",
+    "NONE",
+    "Str",
+    "INT",
+    "DateTime",
+  ])("%p shadows a builtin", (name) => {
+    const error = typedefsError({ [name]: "int" });
+    expect(error.message).toBe(
+      `typedef name '${name}' shadows a builtin scalar or typing constructor`,
+    );
+    expect(error.path).toEqual([name]);
+  });
+
+  // `String` was the old engine's name, no longer a scalar keyword.
+  test.each(["ANY", "String", "Rating"])("%p loads", (name) => {
+    expect(readTypedefs({ [name]: "int" }).has(name)).toBe(true);
   });
 });

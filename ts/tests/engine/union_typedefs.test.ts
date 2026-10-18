@@ -1,16 +1,16 @@
 /**
- * `Union(...)` in the type grammar and its resolution, a port of the parsing and resolution
- * tests of `tests/engine/test_union_typedefs.py`, with registries built by hand. Later:
- * `test_recursive_member_rejected` and the eager checks (with `readTypedefs`) and the flow
- * loading tests.
+ * `Union(...)` of records in the type grammar and in `typedefs:`, a port of
+ * `tests/engine/test_union_typedefs.py`. Later: the flow loading tests
+ * (`test_load_flow_locates_bad_union_at_its_typedef`, `test_load_flow_accepts_union_typedef`),
+ * which need the loader.
  */
 
 import { describe, expect, test } from "bun:test";
 
 import {
   parseType,
+  readTypedefs,
   resolveType,
-  type TypeDef,
   type TypeRegistry,
   typeFor,
 } from "../../src/typesys/types.ts";
@@ -32,26 +32,9 @@ const TRADES: RawTypedefs = {
   Hold: { action: "Literal(hold)" },
 };
 
-/**
- * Build a registry by hand, without checks: a mapping is a record, `Literal(...)` text a
- * variant and other text an alias.
- */
-function registry(raw: RawTypedefs): TypeRegistry {
-  return new Map(
-    Object.entries(raw).map(([name, value]): [string, TypeDef] => {
-      if (typeof value !== "string") {
-        return [name, { kind: "record", fields: new Map(Object.entries(value)) }];
-      }
-      const target = parseType(value);
-      if (target.kind === "enum") return [name, { kind: "variant", tags: target.tags }];
-      return [name, { kind: "alias", target }];
-    }),
-  );
-}
-
 /** The trades registry with `extra` typedefs added. */
 function trades(extra: RawTypedefs = {}): TypeRegistry {
-  return registry({ ...TRADES, ...extra });
+  return readTypedefs({ ...TRADES, ...extra });
 }
 
 /** Each member's `action` tag, in order. */
@@ -197,7 +180,7 @@ describe("resolution", () => {
   });
 
   test("an untagged disjoint union resolves", () => {
-    const reg = registry({
+    const reg = readTypedefs({
       Text: { text: "str" },
       Call: { name: "str", input: "object" },
       Reply: "Union(Text, Call)",
@@ -283,14 +266,14 @@ describe("resolution errors", () => {
   });
 
   test("overlapping members are rejected", () => {
-    const reg = registry({ Bull: { conviction: "float" }, Bear: { conviction: "float" } });
+    const reg = readTypedefs({ Bull: { conviction: "float" }, Bear: { conviction: "float" } });
     expect(typeForError("Union(Bull, Bear)", reg)).toBe(
       overlap("Union(Bull, Bear)", "Bull", "Bear"),
     );
   });
 
   test("overlapping shapes that differ are rejected", () => {
-    const reg = registry({
+    const reg = readTypedefs({
       Bull: { conviction: "float" },
       Bear: { conviction: "float", note: "Optional(str)" },
     });
@@ -300,7 +283,7 @@ describe("resolution errors", () => {
   });
 
   test("an Optional Literal is not a tag", () => {
-    const reg = registry({
+    const reg = readTypedefs({
       Bull: { side: "Optional(Literal(bull))", conviction: "float" },
       Bear: { side: "Optional(Literal(bear))", conviction: "float" },
     });
@@ -314,7 +297,7 @@ describe("resolution errors", () => {
   });
 
   test("every member resolves before any is checked", () => {
-    const reg = registry({ A: { x: "int" } });
+    const reg = readTypedefs({ A: { x: "int" } });
     expect(typeForError("Union(Optional(A), Nope)", reg)).toBe("unknown type 'Nope'");
   });
 
@@ -326,20 +309,85 @@ describe("resolution errors", () => {
       "Union(Buy, P): member 'P' is not a record",
     );
     // A union between the alias and the member names the member as that union writes it.
-    expect(typeForError("Union(Buy, P)", trades({ P: "Q", Q: "Union(X, Sell)", X: "int" }))).toBe(
-      "Union(Buy, P): member 'X' is not a record",
-    );
+    const reg = trades({ P: "Q", Q: "Union(X, Sell)", X: { action: "Literal(buy)", qty: "int" } });
+    expect(typeForError("Union(Buy, P)", reg)).toBe(overlap("Union(Buy, P)", "Buy", "X"));
   });
 
   test("two differently named records of one shape overlap", () => {
     // The members are equal, so the error comes before the overlap check and has no
     // `file` note.
-    const reg = registry({ F: { f: "file" }, G: { f: "file" } });
+    const reg = readTypedefs({ F: { f: "file" }, G: { f: "file" } });
     expect(typeForError("Union(F, G)", reg)).toBe(overlap("Union(F, G)", "F", "G"));
   });
 
   test("overlapping records with a file field explain the file overlap", () => {
-    const reg = registry({ F: { f: "file" }, G: { f: "object" } });
+    const reg = readTypedefs({ F: { f: "file" }, G: { f: "object" } });
     expect(typeForError("Union(F, G)", reg)).toBe(overlap("Union(F, G)", "F", "G", true));
+  });
+});
+
+/** Return the `TypeCheckError` `readTypedefs(raw)` throws. */
+function typedefsError(raw: RawTypedefs): TypeCheckError {
+  try {
+    readTypedefs(raw);
+  } catch (error) {
+    expect(error).toBeInstanceOf(TypeCheckError);
+    return error as TypeCheckError;
+  }
+  throw new Error("readTypedefs did not throw");
+}
+
+describe("eager checks in typedefs", () => {
+  test("a recursive member is rejected", () => {
+    const error = typedefsError({
+      Leaf: { kind: "Literal(leaf)" },
+      Node: { kind: "Literal(node)", child: "Union(Node, Leaf)" },
+    });
+    expect(error.message).toBe("typedef 'Node' field 'child': recursive type reference: 'Node'");
+    expect(error.path).toEqual(["Node", "child"]);
+  });
+
+  test("an unused overlapping union fails in readTypedefs", () => {
+    const error = typedefsError({
+      Bull: { conviction: "float" },
+      Bear: { conviction: "float" },
+      Mood: "Union(Bull, Bear)",
+    });
+    expect(error.message).toBe(`typedef 'Mood': ${overlap("Union(Bull, Bear)", "Bull", "Bear")}`);
+    expect(error.path).toEqual(["Mood"]);
+  });
+
+  test("an unused record with a bad union field fails in readTypedefs", () => {
+    const error = typedefsError({
+      ...TRADES,
+      Ticker: "str",
+      Order: { pick: "Union(Buy, Ticker)" },
+    });
+    expect(error.message).toBe(
+      "typedef 'Order' field 'pick': Union(Buy, Ticker): member 'Ticker' is not a record",
+    );
+    expect(error.path).toEqual(["Order", "pick"]);
+  });
+
+  test("a malformed union field is prefixed", () => {
+    const error = typedefsError({ ...TRADES, Order: { pick: "Union(Buy, Sell" } });
+    expect(error.message).toBe(
+      "typedef 'Order' field 'pick': malformed type expression 'Union(Buy, Sell': unbalanced " +
+        "parentheses — if this type sits inside a `{...}` mapping, its comma split it; quote " +
+        "it or use block style",
+    );
+    expect(error.path).toEqual(["Order", "pick"]);
+  });
+
+  test("an alias cycle through a union is rejected", () => {
+    const error = typedefsError({ ...TRADES, Decision: "Union(Buy, Again)", Again: "Decision" });
+    expect(error.message).toBe("alias cycle through 'Decision' in typedefs");
+    expect(error.path).toEqual(["Decision"]);
+  });
+
+  test("a self-referencing union alias is rejected", () => {
+    const error = typedefsError({ ...TRADES, Decision: "Union(Buy, Decision)" });
+    expect(error.message).toBe("alias cycle through 'Decision' in typedefs");
+    expect(error.path).toEqual(["Decision"]);
   });
 });

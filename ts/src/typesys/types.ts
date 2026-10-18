@@ -7,7 +7,7 @@
  * only resolved `Type` values.
  */
 
-import { reprText } from "../diagnostics.ts";
+import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import {
   type Bound,
   type Bounds,
@@ -142,6 +142,15 @@ function typeNestingLimit(): number {
 /** Return whether `text` encodes as UTF-8, i.e. holds no lone Unicode surrogate. */
 export function encodesAsUtf8(text: string): boolean {
   return text.isWellFormed();
+}
+
+/** Whether typedef name `name` shadows a scalar keyword or a typing constructor. */
+function isShadow(name: string): boolean {
+  return (
+    SCALAR_KEYWORDS.has(name) ||
+    SCALAR_KEYWORDS.has(name.toLowerCase()) ||
+    TYPING_CONSTRUCTORS.has(name)
+  );
 }
 
 /**
@@ -1112,4 +1121,452 @@ export function typeFor(text: string, registry: TypeRegistry): Type {
     );
   }
   return typ;
+}
+
+// --------------------------------------------------------------------------------------- //
+// typedefs: registry builder
+// --------------------------------------------------------------------------------------- //
+
+/** A typedef's parsed `[field, type]` parts: each record field, or the alias target. */
+type TypedefParts = readonly (readonly [field: string | null, type: TypeExpr])[];
+
+/** The registry names a parsed type references (for the eager alias-cycle check). */
+function refsInType(t: TypeExpr): Set<string> {
+  switch (t.kind) {
+    case "ref":
+      return new Set([t.name]);
+    case "list":
+      return refsInType(t.element);
+    case "optional":
+      return refsInType(t.inner);
+    case "union":
+      return new Set(t.members.flatMap((member) => [...refsInType(member)]));
+    default:
+      return new Set(); // scalars, enums and the dict placeholder reference nothing
+  }
+}
+
+/** Return a typedef's `[field, type]` parts: each record field, or the alias target. */
+function typedefParts(defn: TypeDef): [string | null, string | TypeExpr][] {
+  if (defn.kind === "record") return [...defn.fields];
+  if (defn.kind === "alias") return [[null, defn.target]];
+  return []; // an enum's tags are already checked by parseType
+}
+
+/**
+ * Prefix error `exc` with the typedef `name` (and `field`) it belongs to, and locate it
+ * there; `exc` is the new error's cause.
+ */
+function typedefError(name: string, field: string | null, exc: TypeCheckError): TypeCheckError {
+  if (field === null) {
+    return new TypeCheckError(`typedef ${reprText(name)}: ${exc.message}`, {
+      path: [name],
+      cause: exc,
+    });
+  }
+  const where = `typedef ${reprText(name)} field ${reprText(field)}`;
+  return new TypeCheckError(`${where}: ${exc.message}`, { path: [name, field], cause: exc });
+}
+
+/** Check what a type expression says on its own: names it uses exist, bounds are valid. */
+function checkLocal(t: TypeExpr, registry: TypeRegistry): void {
+  switch (t.kind) {
+    case "scalar":
+      if (t.bounds !== undefined) validateNumericBounds(SCALAR_KIND.get(t.name)!, t.bounds);
+      break;
+    case "ref":
+      if (!registry.has(t.name)) throw new TypeCheckError(`unknown type ${reprText(t.name)}`);
+      break;
+    case "list":
+      checkLocal(t.element, registry);
+      break;
+    case "optional":
+      checkLocal(t.inner, registry);
+      break;
+    case "union":
+      for (const member of t.members) checkLocal(member, registry);
+      break;
+  }
+}
+
+/**
+ * Return how many record and list levels a parsed type nests.
+ *
+ * Each `list(...)` is a level, `Optional(...)` adds none, a union counts as its deepest
+ * member, and a name counts as `levels.get(name)` (0 when not yet measured, which happens
+ * only on a reference cycle). Other scalars, `Literal(...)` and `dict(...)` are 0.
+ */
+function exprLevels(t: TypeExpr, levels: ReadonlyMap<string, number>): number {
+  // Levels are the most lists on any path to a leaf plus that leaf's levels, so an
+  // explicit stack of [expression, lists above it] needs no recursion.
+  let deepest = 0;
+  const stack: [TypeExpr, number][] = [[t, 0]];
+  while (stack.length > 0) {
+    const [expr, above] = stack.pop()!;
+    if (expr.kind === "list") {
+      stack.push([expr.element, above + 1]);
+    } else if (expr.kind === "optional") {
+      stack.push([expr.inner, above]);
+    } else if (expr.kind === "union") {
+      for (const member of expr.members) stack.push([member, above]);
+    } else {
+      const leaf = expr.kind === "ref" ? (levels.get(expr.name) ?? 0) : 0;
+      deepest = Math.max(deepest, above + leaf);
+    }
+  }
+  return deepest;
+}
+
+/**
+ * Measure typedef `name` (definition `defn`, parsed `parts`) from the typedefs it names, and
+ * store its levels and chain under `name` in `levels` and `chain`, where a name not yet
+ * stored counts 0.
+ *
+ * Returns its levels (a record is 1 more than its deepest field, an alias its target's, an
+ * enum 0; equal to `typeLevels` of the resolved type), its chain (the typedefs on the
+ * longest path of names from it, itself included), the first field with the most levels,
+ * and the first field with the longest chain. The fields are `null` for an alias or an enum.
+ */
+function measureTypedef(
+  name: string,
+  defn: TypeDef,
+  parts: TypedefParts,
+  levels: Map<string, number>,
+  chain: Map<string, number>,
+): [depth: number, length: number, levelsField: string | null, chainField: string | null] {
+  // Maxima by reduce, not spread: a spread's argument count is capped.
+  const most = (counts: Iterable<number>): number =>
+    Array.from(counts).reduce((a, b) => Math.max(a, b), 0);
+  const fieldLevels = parts.map(([field, t]) => [field, exprLevels(t, levels)] as const);
+  const fieldChain = parts.map(
+    ([field, t]) => [field, most(Array.from(refsInType(t), (ref) => chain.get(ref) ?? 0))] as const,
+  );
+  const deepest = most(fieldLevels.map(([, d]) => d));
+  const longest = most(fieldChain.map(([, c]) => c));
+  // An enum has no parts, so it measures 0 levels like the string it resolves to.
+  const depth = (defn.kind === "record" ? 1 : 0) + deepest;
+  const length = 1 + longest;
+  levels.set(name, depth);
+  chain.set(name, length);
+  const levelsField = fieldLevels.find(([, d]) => d === deepest)?.[0] ?? null;
+  const chainField = fieldChain.find(([, c]) => c === longest)?.[0] ?? null;
+  return [depth, length, levelsField, chainField];
+}
+
+/**
+ * Measure typedef `name` (definition `defn`, parsed `parts`) into the `levels` and `chain`
+ * memos of `measureTypedef`, and reject it when its levels or chain exceed the type nesting
+ * limit.
+ *
+ * @throws TypeCheckError when the typedef nests more record and list levels than the limit,
+ *   or ends a longer chain of typedefs each naming the next. `path` is `[typedef, field]`
+ *   for the record field reported, else `[typedef]`.
+ */
+function checkMeasure(
+  name: string,
+  defn: TypeDef,
+  parts: TypedefParts,
+  levels: Map<string, number>,
+  chain: Map<string, number>,
+): void {
+  const limit = typeNestingLimit();
+  const [depth, length, levelsField, chainField] = measureTypedef(
+    name,
+    defn,
+    parts,
+    levels,
+    chain,
+  );
+  if (depth > limit) {
+    let message =
+      `type nests deeper than ${limit} levels, the limit for a type (each record and ` +
+      "list is a level)";
+    if (defn.kind === "record") {
+      message += `; its type ${reprText(defn.fields.get(levelsField!)!)} adds ${depth - 1}`;
+      throw typedefError(name, levelsField, new TypeCheckError(message));
+    }
+    throw typedefError(name, null, new TypeCheckError(message));
+  }
+  if (length > limit) {
+    throw typedefError(
+      name,
+      chainField,
+      new TypeCheckError(
+        `it ends a chain of ${length} typedefs, each naming the next, more than ` +
+          `${limit}, the limit for a type; write its type with fewer typedefs in between`,
+      ),
+    );
+  }
+}
+
+/**
+ * Resolve every typedef, so a broken one fails even when nothing uses it.
+ *
+ * Typedefs are checked dependencies first, each one's fields in order. Each typedef is first
+ * measured: its levels and its chain of typedef names must stay within the type nesting
+ * limit, so resolution's stack stays bounded by the limit. A cycle is reported at the field
+ * that closes it, naming the typedef that holds that field: with `A: {x: B}` and
+ * `B: {y: A}` the error is `typedef 'B' field 'y': recursive type reference: 'B'`.
+ */
+function checkTypedefs(registry: TypeRegistry): void {
+  const parsed = new Map<string, TypedefParts>();
+  // First each typedef's own text, so an error names the typedef that holds the mistake
+  // rather than the first typedef that happens to use it.
+  for (const [name, defn] of registry) {
+    const parts: [string | null, TypeExpr][] = [];
+    for (const [field, written] of typedefParts(defn)) {
+      let t: TypeExpr;
+      try {
+        t = typeof written === "string" ? parseType(written) : written;
+        checkLocal(t, registry);
+      } catch (error) {
+        if (!(error instanceof TypeCheckError)) throw error;
+        throw typedefError(name, field, error);
+      }
+      parts.push([field, t]);
+    }
+    parsed.set(name, parts);
+  }
+
+  // Then the checks that follow references (recursion, union members), dependencies first
+  // for the same reason. The walk is iterative so a long chain can't overflow the stack; a
+  // ref still on the walk's stack (gray) when met is a back edge, so the typedef holding it
+  // lies on a cycle.
+  const order: string[] = [];
+  const finished = new Set<string>();
+  const backRefs = new Map<string, Set<string>>();
+
+  const refsOf = (name: string): Iterator<string> =>
+    parsed
+      .get(name)!
+      .flatMap(([, t]) => [...refsInType(t)].sort(compareCodeUnits))
+      .values();
+
+  // A typedef becomes a key of `backRefs` when the walk reaches it, so the keys are also
+  // the set of typedefs already discovered.
+  for (const root of registry.keys()) {
+    if (backRefs.has(root)) continue;
+    backRefs.set(root, new Set());
+    const stack: [string, Iterator<string>][] = [[root, refsOf(root)]];
+    while (stack.length > 0) {
+      const [name, refs] = stack.at(-1)!;
+      let descended = false;
+      for (let step = refs.next(); !step.done; step = refs.next()) {
+        const ref = step.value;
+        if (!backRefs.has(ref)) {
+          backRefs.set(ref, new Set());
+          stack.push([ref, refsOf(ref)]);
+          descended = true;
+          break;
+        }
+        if (!finished.has(ref)) backRefs.get(name)!.add(ref);
+      }
+      if (!descended) {
+        stack.pop();
+        finished.add(name);
+        order.push(name);
+      }
+    }
+  }
+
+  const levels = new Map<string, number>();
+  const chain = new Map<string, number>();
+  for (const name of order) {
+    const parts = parsed.get(name)!;
+    checkMeasure(name, registry.get(name)!, parts, levels, chain);
+    const back = backRefs.get(name)!;
+    for (const [field, t] of parts) {
+      if ([...refsInType(t)].some((ref) => back.has(ref))) {
+        const exc = new TypeCheckError(`recursive type reference: ${reprText(name)}`);
+        throw typedefError(name, field, exc);
+      }
+      try {
+        resolveType(t, registry, new Set([name]));
+      } catch (error) {
+        if (!(error instanceof TypeCheckError)) throw error;
+        throw typedefError(name, field, error);
+      }
+    }
+  }
+}
+
+/**
+ * Reject an alias-to-alias cycle, located at the alias it was found from (record recursion
+ * is caught by `checkTypedefs`).
+ */
+function checkAliasCycles(registry: TypeRegistry): void {
+  // An iterative walk, so a long alias chain can't overflow the stack; an alias whose walk
+  // finished without a cycle is not walked again, so a chain costs linear time.
+  const finished = new Set<string>();
+  const aliasRefs = (defn: AliasDef): Iterator<string> =>
+    [...refsInType(defn.target)].sort(compareCodeUnits).values();
+
+  for (const [start, defn] of registry) {
+    if (defn.kind !== "alias" || finished.has(start)) continue;
+    const onPath = new Set([start]);
+    const stack: [string, Iterator<string>][] = [[start, aliasRefs(defn)]];
+    while (stack.length > 0) {
+      const [name, refs] = stack.at(-1)!;
+      let descended = false;
+      for (let step = refs.next(); !step.done; step = refs.next()) {
+        const ref = step.value;
+        if (onPath.has(ref)) {
+          throw new TypeCheckError(`alias cycle through ${reprText(ref)} in typedefs`, {
+            path: [start],
+          });
+        }
+        const target = registry.get(ref);
+        if (target?.kind === "alias" && !finished.has(ref)) {
+          onPath.add(ref);
+          stack.push([ref, aliasRefs(target)]);
+          descended = true;
+          break;
+        }
+      }
+      if (!descended) {
+        stack.pop();
+        onPath.delete(name);
+        finished.add(name);
+      }
+    }
+  }
+}
+
+// A PascalCase name is an identifier whose first character is uppercase.
+const PASCAL_CASE = new RegExp(`^(?=\\p{Uppercase})${IDENTIFIER_PATTERN}$`, "u");
+
+/** Whether `value` is a plain object: its prototype is `Object.prototype` or `null`. */
+function isPlainObject(value: unknown): value is Readonly<Record<string, unknown>> {
+  if (typeof value !== "object" || value === null) return false;
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * The name Python's `type(x).__name__` gives the host value `value`: `dict` for a plain
+ * object, `list` for an array, `str`, `int` for a bigint or a safe integer, `float` for any
+ * other number, `bool`, `NoneType` for `null`, else its constructor's name (or `typeof`).
+ */
+function pythonTypeName(value: unknown): string {
+  if (isPlainObject(value)) return "dict";
+  if (Array.isArray(value)) return "list";
+  switch (typeof value) {
+    case "string":
+      return "str";
+    case "bigint":
+      return "int";
+    case "number":
+      return Number.isSafeInteger(value) ? "int" : "float";
+    case "boolean":
+      return "bool";
+  }
+  if (value === null) return "NoneType";
+  if (value === undefined) return typeof value;
+  const name: unknown = (value as { constructor?: { name?: unknown } }).constructor?.name;
+  return typeof name === "string" ? name : typeof value;
+}
+
+/**
+ * Build a `TypeRegistry` from a raw `typedefs:` mapping (Python-typing surface).
+ *
+ * A plain-object value is a RECORD (`RecordDef`; field type texts kept raw, in property
+ * order). A `Literal(...)` string is an ENUM (`VariantDef`, tag-only). Any other string is
+ * an ALIAS (`AliasDef`). An array is the dropped tagged-union spelling and is rejected: an
+ * all-bare-tags array must be a `Literal(...)` enum; a payload array must be a `Union(...)`
+ * of records. Names must be PascalCase and must not shadow a scalar or typing constructor.
+ * Every typedef is then resolved, even one nothing uses, so a bad field type, an unknown
+ * name, a recursive record, an alias cycle, or a bad `Union(...)` fails here.
+ *
+ * `raw` maps each name to its definition; `null` or `undefined` means none.
+ *
+ * Example: `readTypedefs({Buy: {action: "Literal(buy)"}, Sell: {action: "Literal(sell)"},
+ * Decision: "Union(Buy, Sell)"})` registers two records and an alias to their union.
+ *
+ * @throws TypeCheckError when a name is not PascalCase or shadows a builtin, a field name is
+ *   empty or holds a Unicode surrogate, a field type is not a string, a value is a union
+ *   array or of another type, a typedef nests more record and list levels than the type
+ *   nesting limit or ends a longer chain of typedefs each naming the next, or a typedef
+ *   does not resolve (an unknown constructor or name, bad bounds, a recursive record, an
+ *   alias cycle, or a bad `Union(...)`). The message names the typedef and field, and
+ *   `path` is `[typedef]` or `[typedef, field]` when the error belongs to one entry.
+ */
+export function readTypedefs(
+  raw: Readonly<Record<string, unknown>> | null | undefined,
+): TypeRegistry {
+  const registry = new Map<string, TypeDef>();
+  for (const [name, value] of Object.entries(raw ?? {})) {
+    if (!PASCAL_CASE.test(name)) {
+      throw new TypeCheckError(
+        `typedef name ${reprText(name)} must be PascalCase (an uppercase identifier)`,
+        { path: [name] },
+      );
+    }
+    if (isShadow(name)) {
+      throw new TypeCheckError(
+        `typedef name ${reprText(name)} shadows a builtin scalar or typing constructor`,
+        { path: [name] },
+      );
+    }
+    if (isPlainObject(value)) {
+      const fields = new Map<string, string>();
+      for (const [fname, ftype] of Object.entries(value)) {
+        if (!fname) {
+          throw new TypeCheckError(
+            `typedef ${reprText(name)} field ${reprText(fname)}: field names must be ` +
+              "non-empty strings",
+          );
+        }
+        if (!encodesAsUtf8(fname)) {
+          throw new TypeCheckError(
+            `typedef ${reprText(name)} field ${reprText(fname)}: field names must not ` +
+              "contain a Unicode surrogate",
+          );
+        }
+        if (typeof ftype !== "string") {
+          throw new TypeCheckError(
+            `typedef ${reprText(name)} field ${reprText(fname)}: type must be a string ` +
+              `expression (got ${pythonTypeName(ftype)})`,
+            { path: [name, fname] },
+          );
+        }
+        fields.set(fname, ftype);
+      }
+      registry.set(name, { kind: "record", fields });
+    } else if (typeof value === "string") {
+      let parsed: TypeExpr;
+      try {
+        parsed = parseType(value);
+      } catch (error) {
+        if (!(error instanceof TypeCheckError)) throw error;
+        throw typedefError(name, null, error);
+      }
+      registry.set(
+        name,
+        parsed.kind === "enum"
+          ? { kind: "variant", tags: parsed.tags }
+          : { kind: "alias", target: parsed },
+      );
+    } else if (Array.isArray(value)) {
+      if (value.every((member): member is string => typeof member === "string")) {
+        throw new TypeCheckError(
+          `typedef ${reprText(name)}: a tag-only union must be a Literal(...) enum, not a ` +
+            `sequence (e.g. ${name}: ${literalLabel(value)})`,
+          { path: [name] },
+        );
+      }
+      throw new TypeCheckError(
+        `typedef ${reprText(name)}: a tagged/payload union sequence is not supported; ` +
+          `declare each member as a record and write ${name}: Union(A, B, ...)`,
+        { path: [name] },
+      );
+    } else {
+      throw new TypeCheckError(
+        `typedef ${reprText(name)}: unsupported definition of type ${pythonTypeName(value)}`,
+        { path: [name] },
+      );
+    }
+  }
+  checkAliasCycles(registry);
+  checkTypedefs(registry);
+  return registry;
 }

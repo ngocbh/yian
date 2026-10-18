@@ -1,20 +1,31 @@
 /**
- * The one spelling every message uses to print a `Literal` type, a port of the hand-built
- * half of `tests/engine/test_literal_label.py`, its `formatTypeExpr` asserts and its
- * `typeFor` read-backs. Later: the two hint tests (with `readTypedefs`) and
- * `test_case_message_prints_the_parenthesized_literal` (with flow loading).
+ * The one spelling every message uses to print a `Literal` type, a port of
+ * `tests/engine/test_literal_label.py`. Later: `test_case_message_prints_the_parenthesized_literal`
+ * (with flow loading).
  */
 
 import { describe, expect, test } from "bun:test";
 
-import { formatTypeExpr, parseType, typeFor } from "../../src/typesys/types.ts";
+import { formatTypeExpr, parseType, readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import {
   canonicalTypeLabel,
   literalLabel,
   Type,
+  TypeCheckError,
   typeEquals,
   ValueKind,
 } from "../../src/typesys/values.ts";
+
+/** Return the message of the `TypeCheckError` `readTypedefs(raw)` throws. */
+function typedefsError(raw: Readonly<Record<string, unknown>>): string {
+  try {
+    readTypedefs(raw);
+  } catch (error) {
+    expect(error).toBeInstanceOf(TypeCheckError);
+    return (error as TypeCheckError).message;
+  }
+  throw new Error("readTypedefs did not throw");
+}
 
 function lit(...tags: string[]): Type {
   return new Type({ kind: ValueKind.STRING, tags: new Set(tags) });
@@ -79,6 +90,26 @@ describe("literal labels", () => {
     ['say "hi"', 'Literal("say \\"hi\\"")'],
   ])("spells %p as %p", (tag, label) => {
     expect(literalLabel([tag])).toBe(label);
+  });
+
+  test("the tag-only sequence hint spells a parseable Literal", () => {
+    expect(typedefsError({ Mode: ["a b", "True"] })).toBe(
+      "typedef 'Mode': a tag-only union must be a Literal(...) enum, not a sequence " +
+        '(e.g. Mode: Literal("a b", "True"))',
+    );
+    expect(typeEquals(typeFor('Literal("a b", "True")', new Map()), lit("a b", "True"))).toBe(
+      true,
+    );
+  });
+
+  test("the union overlap hint spells a parseable Literal", () => {
+    const message = typedefsError({
+      Buy: { qty: "int" },
+      Sell: { qty: "int" },
+      Order: "Union(Buy, Sell)",
+    });
+    expect(message.endsWith("e.g. kind: Literal(buy)")).toBe(true);
+    expect(typeEquals(typeFor("Literal(buy)", new Map()), lit("buy"))).toBe(true);
   });
 
   test("the order key keeps the bracket spelling", () => {

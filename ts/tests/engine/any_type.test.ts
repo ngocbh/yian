@@ -1,20 +1,16 @@
 /**
- * The `Any` type's shape, labels, overlap, parsing and resolution, a port of those tests of
- * `tests/engine/test_any_type.py`; value, compatibility and `readTypedefs` tests come later,
- * as does the `readTypedefs` half of `test_any_overlaps_a_list_of_files_through_the_empty_list`.
- * The records and registries written as typedefs there are built by hand here.
+ * The `Any` type's shape, labels, overlap, parsing, typedefs and resolution, a port of those
+ * tests of `tests/engine/test_any_type.py`. Later: the value tests and value halves (with
+ * `buildValueAs`), the compatibility, proof and field-read tests (with the compile checks and
+ * node contracts), the `requires_file`/`has_file` tests, and the flow loading tests.
  */
 
 import { describe, expect, test } from "bun:test";
 
-import {
-  parseType,
-  type TypeDef,
-  type TypeRegistry,
-  typeFor,
-} from "../../src/typesys/types.ts";
+import { parseType, readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import {
   canonicalTypeLabel,
+  canonicalUnionOrder,
   Type,
   TypeCheckError,
   typeEquals,
@@ -97,12 +93,16 @@ describe("Any overlap", () => {
   });
 
   test("a record with an Any field overlaps one with an int field", () => {
-    expect(typesOverlap(rec({ v: ANY }), rec({ v: Type.scalar(ValueKind.INTEGER) }))).toBe(true);
+    const reg = readTypedefs({ A: { v: "Any" }, B: { v: "int" } });
+    expect(typesOverlap(typeFor("A", reg), typeFor("B", reg))).toBe(true);
   });
 
   test("Any overlaps a list of files through the empty list", () => {
     const listOfFiles = new Type({ kind: ValueKind.LIST_ANY, element: FILE });
     expect(typesOverlap(ANY, listOfFiles)).toBe(true);
+    expect(
+      typedefsError({ A: { v: "Any" }, B: { v: "list(file)" }, W: "Union(A, B)" }),
+    ).toBe(`typedef 'W': ${overlap("Union(A, B)", "A", "B")}`);
   });
 });
 
@@ -117,21 +117,40 @@ describe("Any parsing", () => {
   });
 });
 
-/**
- * Build a registry by hand, without checks: a mapping is a record, `Literal(...)` text a
- * variant and other text an alias.
- */
-function registry(raw: Record<string, string | Record<string, string>>): TypeRegistry {
-  return new Map(
-    Object.entries(raw).map(([name, value]): [string, TypeDef] => {
-      if (typeof value !== "string") {
-        return [name, { kind: "record", fields: new Map(Object.entries(value)) }];
-      }
-      const target = parseType(value);
-      if (target.kind === "enum") return [name, { kind: "variant", tags: target.tags }];
-      return [name, { kind: "alias", target }];
-    }),
-  );
+describe("Any in typedefs", () => {
+  test("records that differ only in list item nullability sort deterministically", () => {
+    const reg = readTypedefs({ A: { xs: "list(Any)" }, B: { xs: "list(Optional(Any))" } });
+    const a = typeFor("A", reg);
+    const b = typeFor("B", reg);
+    for (const order of [canonicalUnionOrder([a, b]), canonicalUnionOrder([b, a])]) {
+      expect(order).toHaveLength(2);
+      expect(order[0]).toBe(a);
+      expect(order[1]).toBe(b);
+    }
+  });
+
+  test("a typedef cannot be named Any", () => {
+    expect(typedefsError({ Any: "str" })).toBe(
+      "typedef name 'Any' shadows a builtin scalar or typing constructor",
+    );
+  });
+
+  test("Any resolves through an alias and a record field", () => {
+    const reg = readTypedefs({ Payload: "Any", Rec: { data: "Any" } });
+    expect(typeEquals(typeFor("Payload", reg), ANY)).toBe(true);
+    expect(typeEquals(typeFor("Rec", reg).fields!.get("data")!, ANY)).toBe(true);
+  });
+});
+
+/** Return the message of the `TypeCheckError` `readTypedefs(raw)` throws. */
+function typedefsError(raw: Readonly<Record<string, unknown>>): string {
+  try {
+    readTypedefs(raw);
+  } catch (error) {
+    expect(error).toBeInstanceOf(TypeCheckError);
+    return (error as TypeCheckError).message;
+  }
+  throw new Error("readTypedefs did not throw");
 }
 
 /** Python's overlap error for `label`, members `a` and `b`, with the `file` note if `files`. */
@@ -149,21 +168,23 @@ function overlap(label: string, a: string, b: string, files = false): string {
 
 describe("Any in untagged unions", () => {
   test("a union of Any and int fields does not resolve", () => {
-    const reg = registry({ A: { v: "Any" }, B: { v: "int" }, U: "Union(A, B)" });
-    expect(() => typeFor("U", reg)).toThrow(TypeCheckError);
-    expect(() => typeFor("U", reg)).toThrow(overlap("Union(A, B)", "A", "B"));
+    expect(typedefsError({ A: { v: "Any" }, B: { v: "int" }, U: "Union(A, B)" })).toBe(
+      `typedef 'U': ${overlap("Union(A, B)", "A", "B")}`,
+    );
   });
 
   test("a union of Any and a union with a file member does not resolve", () => {
-    const reg = registry({
+    const typedefs = {
       F: { f: "file" },
       N: { n: "int" },
       U: "Union(F, N)",
+      OF: { f: "Optional(file)", n: "int" },
       A: { v: "Any" },
       B: { v: "U" },
       W: "Union(A, B)",
-    });
-    expect(() => typeFor("W", reg)).toThrow(TypeCheckError);
-    expect(() => typeFor("W", reg)).toThrow(overlap("Union(A, B)", "A", "B", true));
+    };
+    expect(typedefsError(typedefs)).toBe(
+      `typedef 'W': ${overlap("Union(A, B)", "A", "B", true)}`,
+    );
   });
 });

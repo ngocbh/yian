@@ -1,15 +1,20 @@
 /**
- * One-sided numeric ranges' shape, labels, overlap, parsing and resolved labels, a port of
- * those tests of `tests/engine/test_open_ranges.py`. Later: the value checks (with
- * `buildValueAs`) and `test_open_ranges_resolve_in_records_aliases_and_lists` (with
- * `readTypedefs`).
- * `test_numeric_interval_maps_open_ends_to_infinity` is not ported (design 3.2.12: open ends
- * stay `null`).
+ * One-sided numeric ranges' shape, labels, overlap, parsing and resolution, a port of those
+ * tests of `tests/engine/test_open_ranges.py`. Later: the value checks
+ * (`test_value_check_one_sided`, `test_value_check_one_sided_rejects_nan`, with
+ * `buildValueAs`). `test_numeric_interval_maps_open_ends_to_infinity` is not ported (design
+ * 3.2.12: open ends stay `null`).
  */
 
 import { describe, expect, test } from "bun:test";
 
-import { formatTypeExpr, parseType, typeFor } from "../../src/typesys/types.ts";
+import {
+  formatTypeExpr,
+  parseType,
+  readTypedefs,
+  resolveType,
+  typeFor,
+} from "../../src/typesys/types.ts";
 import {
   type Bounds,
   canonicalTypeLabel,
@@ -94,5 +99,17 @@ describe("open range parsing", () => {
     expect(() => parseType("int(..)")).toThrow(
       "malformed type expression 'int(..)': a range needs at least one end; write int for any int",
     );
+  });
+
+  test("open ranges resolve in records, aliases and lists", () => {
+    const reg = readTypedefs({
+      Count: "int(0..)",
+      Order: { qty: "int(1..)", price: "float(..100.0)" },
+    });
+    expect(resolveType(parseType("Count"), reg).bounds).toEqual([0n, null]);
+    const order = resolveType(parseType("Order"), reg);
+    expect(order.fields!.get("qty")!.bounds).toEqual([1n, null]);
+    expect(order.fields!.get("price")!.bounds).toEqual([null, 100]);
+    expect(typeFor("list(Optional(int(..3)))", new Map()).element!.bounds).toEqual([null, 3n]);
   });
 });

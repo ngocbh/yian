@@ -4,9 +4,10 @@
  *
  * Python's `AnyValue`, `DateValue` and `DateTimeValue` carriers are all `TypedValue` here.
  * `StorageKind`, `Value`, `ValueRecord` and `PoolWire` name shapes Python leaves untyped;
- * `TypedValue` and `VariablePool` use them in their public signatures. `isRecord` is the
- * plain-object test `buildValueAs` uses, so callers read a record exactly as the type system
- * does (Python checks `isinstance(value, dict)` inline).
+ * `TypedValue` and `VariablePool` use them in their public signatures. `isRecord` and
+ * `isList` are the plain-object and plain-array tests `buildValueAs` uses, so callers read a
+ * record or list exactly as the type system does (Python checks `isinstance(value, dict)`
+ * inline), and `jsTypeName` names a rejected value's type the same way.
  */
 
 export type { PoolWire } from "./pool.ts";
@@ -27,7 +28,9 @@ export {
   canonicalTypeLabel,
   canonicalUnionOrder,
   FileRef,
+  isList,
   isRecord,
+  jsTypeName,
   listKindForElement,
   normalizeFiles,
   restrictUnion,

@@ -4,7 +4,7 @@
  */
 
 import type { SourceRange } from "../../diagnostics.ts";
-import { isRecord, type Value, type ValueRecord } from "../../typesys/index.ts";
+import { isList, isRecord, jsTypeName, type Value, type ValueRecord } from "../../typesys/index.ts";
 
 /**
  * A source cursor can't satisfy a requested navigation or typed access. `range` is the
@@ -199,8 +199,10 @@ export function snapshotValue(value: unknown): Value {
     if (copies.has(current as object)) continue;
     // Each original is read once: the copy first holds the original children, and the loop
     // below swaps the containers among them for their copies.
-    if (Array.isArray(current) && Object.getPrototypeOf(current) === Array.prototype) {
+    if (isList(current)) {
       const list: unknown[] = [];
+      // An index loop, not for-of, so a sparse array's hole reads as `undefined` and is
+      // rejected below rather than skipped.
       for (let index = 0; index < current.length; index++) list.push(current[index]);
       copies.set(current, list as Value[]);
       for (const item of list) pending.push(item);
@@ -212,7 +214,7 @@ export function snapshotValue(value: unknown): Value {
     } else {
       throw new TypeError(
         "source cursors accept only YAML values (text, numbers, booleans, null, lists and " +
-          `records); got ${typeName(current)}`,
+          `records); got ${jsTypeName(current)}`,
       );
     }
   }
@@ -233,15 +235,12 @@ export function freezeValue<T extends Value>(value: T): T {
   const pending: Value[] = [value];
   while (pending.length > 0) {
     const current = pending.pop()!;
-    if (Array.isArray(current)) {
-      if (seen.has(current)) continue;
-      seen.add(current);
-      Object.freeze(current);
-      for (const item of current) pending.push(item);
-    } else if (isRecord(current)) {
-      if (seen.has(current)) continue;
-      seen.add(current);
-      Object.freeze(current);
+    if (!(isList(current) || isRecord(current)) || seen.has(current)) continue;
+    seen.add(current);
+    Object.freeze(current);
+    if (isList(current)) {
+      for (const item of current) pending.push(item as Value);
+    } else {
       for (const key of Object.keys(current)) pending.push(current[key]!);
     }
   }
@@ -258,11 +257,4 @@ function isAtom(value: unknown): value is string | bigint | number | boolean | n
     type === "number" ||
     type === "boolean"
   );
-}
-
-/** Name a rejected value: an object's constructor name, else its `typeof`. */
-function typeName(value: unknown): string {
-  if (typeof value !== "object" || value === null) return typeof value;
-  const name: unknown = (value as { constructor?: { name?: unknown } }).constructor?.name;
-  return typeof name === "string" ? name : "object";
 }

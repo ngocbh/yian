@@ -28,15 +28,17 @@ describe("value snapshots", () => {
   });
 
   test("deep lists, records and alias DAGs copy without stack overflow", () => {
+    // Deep enough to overflow a recursive copy; Bun's stack survives 20,000 levels.
+    const depth = 100_000;
     const levels = 2_000;
     let list: Value = "leaf";
     let record: Value = "leaf";
     let dag: Value = ["leaf"];
-    for (let level = 0; level < levels; level++) {
+    for (let level = 0; level < depth; level++) {
       list = [list];
       record = { next: record };
-      dag = [dag, dag];
     }
+    for (let level = 0; level < levels; level++) dag = [dag, dag];
 
     let copiedList = snapshotValue(list);
     let copiedRecord = snapshotValue(record);
@@ -45,9 +47,11 @@ describe("value snapshots", () => {
     expect(copiedList).not.toBe(list);
     expect(copiedRecord).not.toBe(record);
     expect(copiedDag).not.toBe(dag);
-    for (let level = 0; level < levels; level++) {
+    for (let level = 0; level < depth; level++) {
       copiedList = (copiedList as Value[])[0]!;
       copiedRecord = (copiedRecord as ValueRecord)["next"]!;
+    }
+    for (let level = 0; level < levels; level++) {
       const pair = copiedDag as Value[];
       expect(pair[0]).toBe(pair[1]!);
       copiedDag = pair[0]!;
@@ -61,7 +65,7 @@ describe("value snapshots", () => {
     class Custom {}
     class ListSubclass extends Array<Value> {}
     let deep: unknown = new Map();
-    for (let level = 0; level < 2_000; level++) deep = [deep];
+    for (let level = 0; level < 100_000; level++) deep = [deep];
     const invalid: unknown[] = [
       new Custom(),
       new Map(),

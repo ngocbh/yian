@@ -47,8 +47,9 @@
  * explicit stack instead.
  */
 
+import { current } from "../defaults.ts";
 import { reprText } from "../diagnostics.ts";
-import { ExpressionError } from "./expressions.ts";
+import { ExpressionError, ISINSTANCE } from "./expressions.ts";
 
 /** A terminal of the parse: its type, its source text, and where it sits in the text. */
 export class Token {
@@ -121,6 +122,8 @@ const LEVEL = {
   UNARY: 9,
   POWER: 10,
 } as const;
+
+type Level = (typeof LEVEL)[keyof typeof LEVEL];
 
 /** A token type and its sticky pattern. Punctuation is typed by its text. */
 type Terminal = readonly [type: string, pattern: RegExp];
@@ -262,12 +265,12 @@ type Frame =
   | { kind: "call"; children: ExprNode[]; args: Tree[]; label: Token | null }
   | { kind: "prefix"; level: typeof LEVEL.NOT | typeof LEVEL.UNARY; token: Token }
   // Waiting for its next operand, so `operands` is as long as `ops`.
-  | { kind: "chain"; level: number; operands: ExprNode[]; ops: Token[] };
+  | { kind: "chain"; level: Level; operands: ExprNode[]; ops: Token[] };
 
 type ChainFrame = Extract<Frame, { kind: "chain" }>;
 
 /** The precedence level of each binary operator, by token type. */
-const OPERATOR_LEVEL: Readonly<Record<string, number>> = {
+const OPERATOR_LEVEL: Readonly<Record<string, Level>> = {
   "|": LEVEL.COALESCE,
   ":-": LEVEL.DEFAULT,
   ":?": LEVEL.DEFAULT,
@@ -282,12 +285,18 @@ const OPERATOR_LEVEL: Readonly<Record<string, number>> = {
 };
 
 /** The rule name of an n-ary chain at each level; its operator tokens sit between the operands. */
-const CHAIN_RULE: Readonly<Record<number, string>> = {
+const CHAIN_RULE: Readonly<Partial<Record<Level, string>>> = {
   [LEVEL.OR]: "or_expr",
   [LEVEL.AND]: "and_expr",
   [LEVEL.SUM]: "sum",
   [LEVEL.PRODUCT]: "product",
   [LEVEL.POWER]: "power",
+};
+
+/** The rule name of a default or required expression, by its operator's token type. */
+const DEFAULT_RULE: Readonly<Record<string, string>> = {
+  ":-": "default_expr",
+  ":?": "required_expr",
 };
 
 /** The rule name of a comparison, by its operator's token type. */
@@ -302,7 +311,7 @@ function chainTree({ level, operands, ops }: ChainFrame): Tree {
   if (level === LEVEL.COALESCE) return new Tree("coalesce", operands);
   const [first, second] = operands as [ExprNode, ExprNode];
   const op = ops[0]!;
-  if (level === LEVEL.DEFAULT) return new Tree(op.type === ":-" ? "default_expr" : "required_expr", [first, second]);
+  if (level === LEVEL.DEFAULT) return new Tree(DEFAULT_RULE[op.type]!, [first, second]);
   if (level === LEVEL.COMPARE) return new Tree(COMPARE_RULE[op.type]!, [first, op, second]);
   const children: ExprNode[] = [first];
   ops.forEach((token, i) => children.push(token, operands[i + 1]!));
@@ -333,7 +342,8 @@ function addArg(call: CallFrame, value: ExprNode): void {
 function reduce(stack: Frame[], value: ExprNode, level: number): ExprNode {
   for (;;) {
     const top = stack.at(-1);
-    if (!(top?.kind === "prefix" || top?.kind === "chain") || top.level <= level) return value;
+    if (top?.kind !== "prefix" && top?.kind !== "chain") return value;
+    if (top.level <= level) return value;
     stack.pop();
     if (top.kind === "chain") {
       top.operands.push(value);
@@ -439,6 +449,176 @@ function parseRaw(text: string): ExprNode {
   }
 }
 
+// Parse nodes that only group the parts of a reference or call; they add no level.
+const WRAPPER_NODES: ReadonlySet<string> = new Set(["trailer", "call_suffix", "arg"]);
+
+const RESERVED_REFERENCE_ROOTS: ReadonlySet<string> = new Set(["and", "or", "not", "in"]);
+
+/** The keywords of the grammar; none of them can be a reference root. */
+export const EXPRESSION_KEYWORDS: ReadonlySet<string> = new Set([
+  ...RESERVED_REFERENCE_ROOTS,
+  "true",
+  "false",
+  "null",
+  "none",
+  "inf",
+]);
+
+/** Return the `call_suffix` of the refcall `node`, or undefined when it is a reference. */
+function callSuffixOf(node: Tree): Tree | undefined {
+  return node.children.find((child): child is Tree => child instanceof Tree && child.data === "call_suffix");
+}
+
+/**
+ * Throw if a parsed expression nests deeper than the value nesting limit.
+ *
+ * An expression nests no deeper than a value, so one limit, `current().maxValueNesting`, bounds
+ * both. Each operator chain (`sum`, `product`, `power`, `and_expr`, `or_expr`), unary operator,
+ * comparison, escape (`|`, `:-`, `:?`), list literal, and call is one level; a plain reference
+ * and the parts of a reference or call add none, and parentheses make no node.
+ *
+ * @throws {ExpressionError} If any path from the root passes more than the limit.
+ */
+function rejectDeepExpression(tree: ExprNode): void {
+  const limit = current().maxValueNesting;
+  const stack: [ExprNode, number][] = [[tree, 0]];
+  while (stack.length > 0) {
+    const [node, outer] = stack.pop()!;
+    if (!(node instanceof Tree)) continue;
+    let depth = outer;
+    if (!WRAPPER_NODES.has(node.data) && (node.data !== "refcall" || callSuffixOf(node))) {
+      depth += 1;
+      if (depth > limit) {
+        throw new ExpressionError(
+          `expression nests deeper than ${limit} levels, the limit for a yian expression (each call, ` +
+            "list, unary operator, comparison, and chain of operators is a level); split it into smaller " +
+            "bindings or steps",
+        );
+      }
+    }
+    for (const child of node.children) stack.push([child, depth]);
+  }
+}
+
+/**
+ * Throw if a parsed expression holds a float literal outside the double range.
+ *
+ * The walk pops the last child first, so of two such literals the rightmost is reported.
+ *
+ * @throws {ExpressionError} If a `NUMBER` token with a `.` is not a finite double; the message
+ *   gives the count of integer digits after any leading zeros, never the digits.
+ */
+function rejectOverflowingFloatLiterals(tree: ExprNode): void {
+  const stack: ExprNode[] = [tree];
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    if (node instanceof Tree) {
+      for (const child of node.children) stack.push(child);
+    } else if (node.type === "NUMBER" && node.value.includes(".") && !Number.isFinite(Number(node.value))) {
+      const digits = node.value.slice(0, node.value.indexOf(".")).replace(/^0+/, "").length;
+      throw new ExpressionError(
+        `float literal with ${digits} digits before the decimal point is out of range; write inf for infinity`,
+      );
+    }
+  }
+}
+
+/**
+ * Throw if a `refcall` is a call with a `trailer` before its `call_suffix`.
+ *
+ * Builtins are bare-callee only, matching prompt syntax: `a.b(x)` is rejected, while trailers
+ * after the parentheses (`fn(x).field`) are dotted access on the result and fine.
+ */
+function rejectDottedCallee(tree: ExprNode): void {
+  if (!(tree instanceof Tree)) return;
+  for (const node of iterSubtrees(tree)) {
+    if (node.data !== "refcall") continue;
+    let hasCall = false;
+    let trailerBeforeCall = false;
+    for (const child of node.children) {
+      if (child instanceof Tree && child.data === "call_suffix") hasCall = true;
+      else if (child instanceof Tree && child.data === "trailer" && !hasCall) trailerBeforeCall = true;
+    }
+    if (hasCall && trailerBeforeCall) {
+      throw new ExpressionError(
+        "builtin call must have a bare callee (no dotted access before '('): a form like 'a.b(x)' is not allowed",
+      );
+    }
+  }
+}
+
+/** Return whether `node` is a `refcall` that is one non-keyword `NAME` with no trailers or call suffix. */
+export function isBareName(node: ExprNode): boolean {
+  if (!(node instanceof Tree) || node.data !== "refcall" || node.children.length !== 1) return false;
+  const head = node.children[0];
+  return head instanceof Token && head.type === "NAME" && !RESERVED_REFERENCE_ROOTS.has(head.value);
+}
+
+/**
+ * Require every `isinstance(...)` call to be `isinstance(<expr>, <TypeName>)`.
+ *
+ * The second argument names a type, so it must be a bare `NAME`: no dotted path, call, or
+ * literal. Keyword arguments and dotted access on the boolean result (`isinstance(x, T).f`) are
+ * not accepted.
+ */
+function validateIsinstance(tree: ExprNode): void {
+  if (!(tree instanceof Tree)) return;
+  for (const node of iterSubtrees(tree)) {
+    if (node.data !== "refcall" || String(node.children[0]) !== ISINSTANCE) continue;
+    const callSuffix = callSuffixOf(node);
+    if (callSuffix === undefined) continue;
+    if (node.children.at(-1) !== callSuffix) {
+      throw new ExpressionError("isinstance(...) gives a bool; it has no fields to read");
+    }
+    const args = callSuffix.children as Tree[];
+    if (args.some((arg) => arg.children.length === 2)) {
+      throw new ExpressionError("isinstance takes positional arguments, not keyword arguments");
+    }
+    if (args.length !== 2) {
+      throw new ExpressionError(
+        `isinstance takes exactly two arguments (a value and a type name), got ${args.length}`,
+      );
+    }
+    if (!isBareName(args[1]!.children[0]!)) {
+      throw new ExpressionError("isinstance's second argument must be a bare type name, e.g. isinstance(x, Buy)");
+    }
+  }
+}
+
+/** Throw if a call repeats a keyword argument, which no callee accepts. */
+function validateCallArguments(tree: ExprNode): void {
+  if (!(tree instanceof Tree)) return;
+  for (const node of iterSubtrees(tree)) {
+    if (node.data !== "refcall") continue;
+    const callSuffix = callSuffixOf(node);
+    if (callSuffix === undefined) continue;
+    const keywords = (callSuffix.children as Tree[])
+      .filter((arg) => arg.children.length === 2)
+      .map((arg) => String(arg.children[0]));
+    const repeated = keywords.find((keyword, i) => keywords.indexOf(keyword) < i);
+    if (repeated !== undefined) {
+      throw new ExpressionError(`${String(node.children[0])}(...) repeats the keyword ${reprText(repeated)}`);
+    }
+  }
+}
+
+/**
+ * Throw if an operator word parsed contextually as a reference root.
+ *
+ * A `refcall` with a `call_suffix` is a builtin call rather than a reference, so its callee is
+ * outside this rule. Trailer segments and keyword-argument labels are likewise not roots.
+ */
+function rejectReservedReferenceRoots(tree: ExprNode): void {
+  if (!(tree instanceof Tree)) return;
+  for (const node of iterSubtrees(tree)) {
+    if (node.data !== "refcall" || callSuffixOf(node)) continue;
+    const head = node.children[0];
+    if (head instanceof Token && head.type === "NAME" && RESERVED_REFERENCE_ROOTS.has(head.value)) {
+      throw new ExpressionError(`reserved expression keyword ${reprText(head.value)} cannot be used as a reference root`);
+    }
+  }
+}
+
 /**
  * Parse one unified `${...}` expression into a tree.
  *
@@ -446,16 +626,31 @@ function parseRaw(text: string): ExprNode {
  * A lone literal (a `NUMBER`, `STRING`, `BOOL`, `NULL` or `INF`) comes back as a bare `Token`,
  * since a level with one operand makes no node.
  *
- * @throws {ExpressionError} If `text` does not parse:
- *   `could not parse expression '<text>': unexpected <what> at line L, column C`.
+ * A dotted-callee builtin call (`a.b(x)`) and a malformed `isinstance(x, T)` are rejected here.
+ *
+ * @throws {ExpressionError} If `text` does not parse
+ *   (`could not parse expression '<text>': unexpected <what> at line L, column C`), nests deeper
+ *   than `current().maxValueNesting` levels, holds a float literal outside the double range, is a
+ *   dotted-callee builtin call, calls `isinstance` with anything but a value and a bare type
+ *   name, repeats a keyword argument, or uses a reserved operator word as a reference root.
  */
 export function parseExpr(text: string): ExprNode {
+  let tree: ExprNode;
   try {
-    return parseRaw(text);
+    tree = parseRaw(text);
   } catch (error) {
     if (!(error instanceof ParseError)) throw error;
     throw new ExpressionError(`could not parse expression ${reprText(text)}: ${error.message}`, {
       cause: error,
     });
   }
+  // First, so no later walk meets a tree deep enough to overflow it.
+  rejectDeepExpression(tree);
+  rejectOverflowingFloatLiterals(tree);
+  rejectDottedCallee(tree);
+  // Before the reserved-root check, so `isinstance(x, in)` reports the type-name rule.
+  validateIsinstance(tree);
+  validateCallArguments(tree);
+  rejectReservedReferenceRoots(tree);
+  return tree;
 }

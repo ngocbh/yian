@@ -2,15 +2,25 @@
  * Parse tests for the unified `${...}` expression grammar (`expr/grammar.ts`), a port of
  * `tests/engine/test_expr_grammar.py`: references, operators and their precedence, builtin
  * calls, keyword arguments, list literals, groups, coalesce/default/required, literals, token
- * positions, parse-error messages, the error classes and `iterSubtrees` order. Later: the
- * nesting-limit tests come with the post-parse checks (dotted callee, reserved roots), and the
- * nested-span and `scanTemplate` tests with the `${...}` helpers and `template.ts`.
+ * positions, parse-error messages, the error classes, `iterSubtrees` order, and the checks after
+ * the parse: reserved reference roots, the dotted callee, the nesting limit, float overflow and
+ * the order the checks run in. Later: the nested-span tests come with the `${...}` helpers, and
+ * the `scanTemplate` halves with `template.ts`.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 
+import { BUILTIN, install } from "../../src/defaults.ts";
 import { ConstructorTypeError, ExpressionError, RequiredError } from "../../src/expr/expressions.ts";
-import { type ExprNode, iterSubtrees, parseExpr, Token, Tree } from "../../src/expr/grammar.ts";
+import {
+  EXPRESSION_KEYWORDS,
+  type ExprNode,
+  isBareName,
+  iterSubtrees,
+  parseExpr,
+  Token,
+  Tree,
+} from "../../src/expr/grammar.ts";
 
 /** A position-blind form of `node`, as Lark's `Tree`/`Token` equality ignores positions. */
 type Plain = { type: string; value: string } | { data: string; children: Plain[] };
@@ -71,6 +81,22 @@ function expectParseErrorDetail(text: string, detail: string): void {
   expect((error as Error).message).toBe(`could not parse expression ${quoted}: ${detail}`);
 }
 
+/** Expect `parseExpr(text)` to fail with exactly `message`. */
+function expectMessage(text: string, message: string): void {
+  let error: unknown;
+  try {
+    parseExpr(text);
+  } catch (e) {
+    error = e;
+  }
+  expect(error).toBeInstanceOf(ExpressionError);
+  expect((error as Error).message).toBe(message);
+}
+
+const reservedRoot = (keyword: string) => `reserved expression keyword '${keyword}' cannot be used as a reference root`;
+const DOTTED_CALLEE =
+  "builtin call must have a bare callee (no dotted access before '('): a form like 'a.b(x)' is not allowed";
+
 describe("references", () => {
   test("bare ref", () => {
     expect(kinds(tree("a")).has("refcall")).toBe(true);
@@ -107,6 +133,31 @@ describe("references", () => {
     expect(tree("not(x)").data).toBe("negate");
   });
 
+  test("reserved keyword cannot be a bare reference root", () => {
+    for (const keyword of ["and", "or", "in"]) expectMessage(keyword, reservedRoot(keyword));
+    // At the start `not` lexes as the operator, which then lacks its operand.
+    expectParseErrorDetail("not", "unexpected end of expression at line 1, column 4");
+  });
+
+  test("reserved keyword cannot be an operand reference root", () => {
+    const cases: [string, string][] = [
+      ["x and and", "and"],
+      ["x or or", "or"],
+      ["x == not", "not"],
+      ["x in in", "in"],
+    ];
+    for (const [text, keyword] of cases) expectMessage(text, reservedRoot(keyword));
+  });
+
+  test("reserved keyword cannot be the root of a dotted reference", () => {
+    expectMessage("and.x", reservedRoot("and"));
+    expectMessage("x + not.y", reservedRoot("not"));
+  });
+
+  test("a not as a keyword argument's whole value is a parse error", () => {
+    expectParseError("f(a=not)");
+  });
+
   test("keyword prefixes stay legal in generated roots", () => {
     for (const root of ["and/child", "or#0", "not/child", "not#0", "in#0"]) {
       expect(parsed(`${root}.output`)).toEqual(plain(ref(root, "output")));
@@ -133,6 +184,10 @@ describe("builtin calls", () => {
 
   test("dotted access on a call result", () => {
     expect(parsed("fn(x).field")).toEqual(plain(call("fn", [arg(ref("x"))], "field")));
+  });
+
+  test("dotted callee rejected", () => {
+    expectMessage("a.b(x)", DOTTED_CALLEE);
   });
 
   test("empty argument call", () => {
@@ -319,7 +374,7 @@ describe("arithmetic, comparisons and booleans", () => {
 
   test("misplaced and chained operators are parse errors", () => {
     for (const text of [
-      "- not x", "x == not y", "2 ** not x", "x in not y", "not in x", "a == b == c", "a in b in c",
+      "x == not y", "2 ** not x", "x in not y", "not in x", "a == b == c", "a in b in c",
       "a == b in c", "a :? b :- c", "x and not", "not not", "x |", "a||b", "a :",
     ]) {
       expectParseError(text);
@@ -332,8 +387,11 @@ describe("coalesce, default and required", () => {
     expect(parsed("a | b | c")).toEqual(plain(new Tree("coalesce", [ref("a"), ref("b"), ref("c")])));
   });
 
-  test("default and required don't chain", () => {
+  test("default non-chaining", () => {
     expectParseError("a :- b :- c");
+  });
+
+  test("required non-chaining", () => {
     expectParseError("a :? b :? c");
   });
 
@@ -360,8 +418,11 @@ describe("coalesce, default and required", () => {
 });
 
 describe("shared NAME terminal", () => {
-  test("a call is told from a reference", () => {
+  test("distinguishes builtin call", () => {
     expect(kinds(tree("upper(name)")).has("call_suffix")).toBe(true);
+  });
+
+  test("parses mixed call arguments", () => {
     const t = tree('join(items, ", ")');
     expect(kinds(t).has("call_suffix")).toBe(true);
     expect(kinds(t).has("arg")).toBe(true);
@@ -517,20 +578,132 @@ describe("long but shallow expressions", () => {
     expect(tree("[" + Array(3000).fill("1").join(", ") + "]").children).toHaveLength(3000);
   });
 
-  const chains: [string, string, string][] = [
-    ["and", "true", " and "],
-    ["coalesce", "x", " | "],
-    ["add", "1", " + "],
-    ["sub", "1", " - "],
-    ["mul", "1", " * "],
-    ["div", "1", " / "],
-    ["pow", "1", " ** "],
+  // One flat chain; coalesce holds no operator tokens.
+  const chains: [id: string, operand: string, separator: string, data: string, children: number][] = [
+    ["and", "true", " and ", "and_expr", 5999],
+    ["coalesce", "x", " | ", "coalesce", 3000],
+    ["add", "1", " + ", "sum", 5999],
+    ["sub", "1", " - ", "sum", 5999],
+    ["mul", "1", " * ", "product", 5999],
+    ["div", "1", " / ", "product", 5999],
+    ["pow", "1", " ** ", "power", 5999],
   ];
-  for (const [id, operand, separator] of chains) {
+  for (const [id, operand, separator, data, children] of chains) {
     test(id, () => {
       const t = tree(Array(3000).fill(operand).join(separator));
-      // One flat chain; coalesce holds no operator tokens.
-      expect(t.children).toHaveLength(id === "coalesce" ? 3000 : 5999);
+      expect(t.data).toBe(data);
+      expect(t.children).toHaveLength(children);
     });
+  }
+});
+
+describe("nesting limit", () => {
+  afterEach(() => install(BUILTIN));
+
+  const tooDeep = (limit: number) =>
+    `expression nests deeper than ${limit} levels, the limit for a yian expression (each call, list, ` +
+    "unary operator, comparison, and chain of operators is a level); split it into smaller bindings or steps";
+
+  /** `((1 + 1) * 2) + 1 ...`: each switch of precedence level is a level. */
+  function alternating(n: number): string {
+    let text = "1 + 1";
+    for (let i = 0; i < n - 1; i++) text = i % 2 === 0 ? `(${text}) * 2` : `(${text}) + 1`;
+    return text;
+  }
+
+  /** `((1 + 1) + 1) + 1 ...`: author parentheses make each `+` its own chain. */
+  function grouped(n: number): string {
+    let text = "1 + 1";
+    for (let i = 0; i < n - 1; i++) text = `(${text}) + 1`;
+    return text;
+  }
+
+  // kind -> a builder of an expression exactly `n` levels deep.
+  const nested: Record<string, (n: number) => string> = {
+    not: (n) => "not ".repeat(n) + "true",
+    neg: (n) => "-(".repeat(n) + "1" + ")".repeat(n),
+    list: (n) => "[".repeat(n) + "1" + "]".repeat(n),
+    call: (n) => "upper(".repeat(n) + "x" + ")".repeat(n),
+    and: (n) => "true and (".repeat(n - 1) + "true and true" + ")".repeat(n - 1),
+    coalesce: (n) => "x | (".repeat(n - 1) + "x | 1" + ")".repeat(n - 1),
+    default: (n) => "x :- (".repeat(n - 1) + "x :- 1" + ")".repeat(n - 1),
+    compare: (n) => "(".repeat(n - 1) + "1 == 1" + ") == true".repeat(n - 1),
+    alternating,
+    grouped,
+  };
+
+  for (const [kind, build] of Object.entries(nested)) {
+    test(`${kind} at the nesting limit parses`, () => {
+      expect(() => parseExpr(build(100))).not.toThrow();
+    });
+
+    for (const depth of [101, 3000]) {
+      test(`${kind} ${depth} deep is an expression error`, () => {
+        expectMessage(build(depth), tooDeep(100));
+      });
+    }
+  }
+
+  test("the limit is current().maxValueNesting", () => {
+    install({ ...BUILTIN, maxValueNesting: 5 });
+    expect(() => parseExpr(nested.not!(5))).not.toThrow();
+    expectMessage(nested.not!(6), tooDeep(5));
+  });
+
+  test("a malformed too-deep expression is the parse error", () => {
+    expectParseError("not ".repeat(3000) + "true +");
+  });
+});
+
+describe("float overflow", () => {
+  const overflow = (digits: number) =>
+    `float literal with ${digits} digits before the decimal point is out of range; write inf for infinity`;
+
+  test("a float literal past the double range is an expression error", () => {
+    expectMessage("1".repeat(400) + ".0", overflow(400));
+  });
+
+  test("the rightmost overflowing literal is reported", () => {
+    expectMessage("1".repeat(400) + ".0 + " + "1".repeat(500) + ".0", overflow(500));
+  });
+
+  test("leading zeros don't count", () => {
+    expect(parsed("0".repeat(400) + "1.5")).toEqual(plain(num("0".repeat(400) + "1.5")));
+  });
+
+  test("the edge of the double range", () => {
+    expectMessage("9".repeat(309) + ".0", overflow(309));
+    expect(() => parseExpr("9".repeat(308) + ".0")).not.toThrow();
+  });
+});
+
+describe("keywords and bare names", () => {
+  test("EXPRESSION_KEYWORDS", () => {
+    expect(EXPRESSION_KEYWORDS).toEqual(new Set(["and", "or", "not", "in", "true", "false", "null", "none", "inf"]));
+  });
+
+  test("isBareName", () => {
+    expect(isBareName(parseExpr("x"))).toBe(true);
+    for (const text of ["x.y", "f(x)", "1"]) expect(isBareName(parseExpr(text))).toBe(false);
+    expect(isBareName(new Tree("refcall", [new Token("NAME", "and")]))).toBe(false);
+  });
+});
+
+describe("check order", () => {
+  const isinstanceArity = "isinstance takes exactly two arguments (a value and a type name), got 1";
+  const typeName = "isinstance's second argument must be a bare type name, e.g. isinstance(x, Buy)";
+  const cases: [string, string][] = [
+    ["isinstance(a.b(x), T)", DOTTED_CALLEE],
+    ["a.b(isinstance(x))", DOTTED_CALLEE],
+    ["isinstance(x, in)", typeName],
+    ["isinstance(x) and isinstance(y, 1)", isinstanceArity],
+    ["isinstance(y, 1) and isinstance(x)", typeName],
+    ["isinstance(b) and f(isinstance(a, 1))", typeName],
+    ["f(a=1, a=2) and g(b=1,b=2)", "f(...) repeats the keyword 'a'"],
+    ["f(a=1,a=2) + g(h(b=1,b=2))", "h(...) repeats the keyword 'b'"],
+    ["isinstance(y) + a.b(x)", DOTTED_CALLEE],
+  ];
+  for (const [text, message] of cases) {
+    test(text, () => expectMessage(text, message));
   }
 });

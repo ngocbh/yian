@@ -37,11 +37,11 @@
  * Value tracing lands here later, with `lineage.ts`; the call-parsing helpers land with compose's
  * `call(...)` directive.
  *
- * Knows about: `expressions` (the evaluator, `exprRefs`, `rewriteExprRefs`, `checkCalls`,
- * `valueArgs`, `conversionHint`, `ISINSTANCE`, `resolveInRecord`, `ExpressionError`), `builtins`
- * (`TEMPLATE_FNS`), `grammar` (`parseExpr`, `findSpanEnd`, `rejectNestedSpans`, `iterSubtrees`,
- * `callSuffixOf`, `wholeSpanInterior`, `Token`, `Tree`), `typesys` (`writeAsText`) and
- * `diagnostics` (`reprText`, `compareCodeUnits`).
+ * Knows about: `expressions` (the evaluator, `ResolveMode`, `exprRefs`, `rewriteExprRefs`,
+ * `checkCalls`, `valueArgs`, `conversionHint`, `ISINSTANCE`, `resolveInRecord`,
+ * `ExpressionError`), `builtins` (`TEMPLATE_FNS`), `grammar` (`parseExpr`, `findSpanEnd`,
+ * `rejectNestedSpans`, `iterSubtrees`, `callSuffixOf`, `wholeSpanInterior`, `ExprNode`, `Token`,
+ * `Tree`), `typesys` (`writeAsText`) and `diagnostics` (`reprText`, `compareCodeUnits`).
  * Never imports: `nodes`, `compile`, `compose`, `runtime`, or the pool (pool-agnostic via
  * `resolve`).
  */
@@ -269,7 +269,7 @@ export function exprRefsOf(source: string): string[] {
  *   binding parser reports it later, located).
  * @throws {ExpressionError} If a span's interior does not parse.
  */
-export function rewriteTemplateRefs<T>(source: T, rename: (path: string) => string | null): T {
+export function rewriteTemplateRefs<T>(source: T, rename: (path: string) => string | null): T | string {
   if (typeof source !== "string" || !source.includes("${")) return source;
   let out = "";
   let i = 0;
@@ -290,8 +290,7 @@ export function rewriteTemplateRefs<T>(source: T, rename: (path: string) => stri
       i += 1;
     }
   }
-  // `source` is text here, so `T` is a string type and the rewritten text has it.
-  return out as unknown as T;
+  return out;
 }
 
 /**
@@ -366,7 +365,8 @@ export interface ConditionRead {
  * Return each reference leaf of a parsed condition with its `ConditionRead`, in source order.
  *
  * The one walk behind `conditionReads` and `rewriteConditionReads`, so their occurrence indexes
- * agree. Keep in sync with the reference and builtin-argument decomposition of `exprRefs`: a
+ * agree. Keep in sync with the reference and builtin-argument decomposition of `collectExprRefs`
+ * (and `rewriteConditionReads` with the splice of `collectRefEdits`), both in `expressions.ts`: a
  * builtin call's callee and an `isinstance` type name are not reads; its argument values are.
  */
 function conditionReadLeaves(tree: ExprNode): [Tree, ConditionRead][] {
@@ -474,10 +474,10 @@ export function renderTemplateRecord(text: string, record: ValueRecord): string 
 }
 
 /**
- * Return every declared-input reference path a prompt reads: the compile-time companion to
- * `renderTemplateRecord`, which compose uses to check a prompt's names.
+ * Return every declared-input reference path a prompt reads.
  *
- * Also rejects, so a bad prompt fails at load rather than at render: a callee that is no
+ * The compile-time companion to `renderTemplateRecord`, which compose uses to check a prompt's
+ * names. Also rejects, so a bad prompt fails at load rather than at render: a callee that is no
  * `TEMPLATE_FNS` builtin, `isinstance` (a prompt has no type table), and a builtin called with
  * arguments it doesn't take.
  *

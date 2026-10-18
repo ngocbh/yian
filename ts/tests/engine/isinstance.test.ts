@@ -311,9 +311,7 @@ test("isinstance is not a flow callee", () => {
 });
 
 test("isinstance is not a prompt function", () => {
-  expect(() => promptRefs("${isinstance(x, Buy)}")).toThrow(ExpressionError);
-  expect(() => promptRefs("${isinstance(x, Buy)}")).toThrow("isinstance is not a prompt function");
-  expect(() => promptRefs("Order: ${render_as_json(x)} ${upper(isinstance(x, Buy))}")).toThrow(
-    "compute it in an input binding",
-  );
+  const message = "isinstance is not a prompt function; compute it in an input binding";
+  expectError(() => promptRefs("${isinstance(x, Buy)}"), message);
+  expectError(() => promptRefs("Order: ${render_as_json(x)} ${upper(isinstance(x, Buy))}"), message);
 });

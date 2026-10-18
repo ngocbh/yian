@@ -272,7 +272,8 @@ test("a typedef name is not a flow callee", () => {
 });
 
 test("a constructor is not a prompt function", () => {
-  expect(() => promptRefs("Order: ${Buy(order)}")).toThrow(
+  expectError(
+    () => promptRefs("Order: ${Buy(order)}"),
     "unknown prompt function 'Buy'; prompts call only formatting builtins " +
       "(join, lower, render_as_json, upper); build or check a typed value with a " +
       "`typedefs:` constructor `T(...)` in an input binding",
@@ -280,13 +281,16 @@ test("a constructor is not a prompt function", () => {
 });
 
 test("a builtin type name in a prompt is not a conversion", () => {
-  expect(() => promptRefs("Count: ${int(order)}")).toThrow(
+  expectError(
+    () => promptRefs("Count: ${int(order)}"),
     "unknown prompt function 'int'; types in expressions are typedef names; `int(...)` is not a conversion",
   );
 });
 
 test("a prompt call with several arguments is an unknown prompt function", () => {
-  expect(() => promptRefs("${foo(a, b)}")).toThrow("unknown prompt function 'foo';");
+  const error = errorOf(() => promptRefs("${foo(a, b)}"));
+  expect(error).toBeInstanceOf(ExpressionError);
+  expect(error.message.startsWith("unknown prompt function 'foo';")).toBe(true);
 });
 
 // --- static inference --- //

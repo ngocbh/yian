@@ -1324,8 +1324,9 @@ export function exprRefs(tree: ExprNode): string[] {
 function collectExprRefs(node: ExprNode, refs: string[]): void {
   if (node instanceof Token) return; // a lone NUMBER / STRING / BOOL / NULL literal names no reference
   if (node.data === "refcall") {
-    // Keep in sync with the evaluator's refcall decomposition and `collectRefEdits`: each finds
-    // the call_suffix and joins the path (leading NAME + trailer segments) the same way.
+    // Keep in sync with the evaluator's refcall decomposition, `collectRefEdits` and
+    // `conditionReadLeaves` in `template.ts`: each finds the call_suffix and joins the path
+    // (leading NAME + trailer segments) the same way.
     const children = node.children;
     const callSuffix = callSuffixOf(node);
     if (callSuffix === undefined) {
@@ -1370,8 +1371,8 @@ export function rewriteExprRefs(text: string, rename: (path: string) => string |
 
 /**
  * Walk `node`, collecting a `[start, end, replacement]` splice for each renamed reference leaf.
- * Keep in sync with `collectExprRefs`: the same refcall / builtin-argument decomposition, but
- * capturing token source positions to edit in place.
+ * Keep in sync with `collectExprRefs` (and `rewriteConditionReads` in `template.ts`): the same
+ * refcall / builtin-argument decomposition, but capturing token source positions to edit in place.
  */
 function collectRefEdits(
   node: ExprNode,

@@ -673,7 +673,8 @@ tools explicitly; retired `provider: codex`, `sandbox`, `cwd`, and `builtin_tool
 settings are rejected.
 Tune a node's non-model behavior with a static `env:` block (flow-level default +
 per-node override, node wins): e.g. `env: {max_tool_iterations: 300}` bounds an
-AGENT's tool-calling loop (default `-1` = no cap, `YIAN_AGENT_MAX_TOOL_ITERATIONS`).
+AGENT's tool-calling loop (default `-1` = no cap, `YIAN_AGENT_MAX_TOOL_ITERATIONS`);
+reaching the cap fails the node with `agent.max_tool_iterations`.
 `env:` values are literals, checked at load against the 100-level value nesting limit,
 and must not contain themselves.
 `retries` bounds typed-output correction, not tool, transport, authentication, or stop

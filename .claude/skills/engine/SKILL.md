@@ -200,10 +200,13 @@ this model whenever you design anything:
   origins, and optional exception-name/traceback debug data. Its exact closed
   codes are `binding.evaluate`, `binding.type`, `contract.input`,
   `assertion.failed`, `node.execute`, `contract.node_result`, `contract.output`,
-  `contract.route`, `contract.growth`, and `graph.terminal_unreachable`. Exception
-  classes and traceback text must never decide behavior. The evaluator assigns
+  `contract.route`, `contract.growth`, `graph.terminal_unreachable`,
+  `loop.max_exceeded`, `agent.max_tool_iterations`, and `provider.auth`. Exception
+  class names and traceback text must never decide behavior. The evaluator assigns
   `binding.evaluate`, `binding.type`, `contract.input`, `assertion.failed`,
-  `node.execute`, and `contract.node_result` by operation stage. The dispatcher assigns
+  `node.execute`, and `contract.node_result` by operation stage; a node-body failure
+  takes the node's `exception_code` hook (default `node.execute`; LOOP and AGENT name
+  their own codes). The dispatcher assigns
   `contract.output`, `contract.route`, and `contract.growth` from the closed
   `Output`, `Route`, and `Grow` arms, never from an exception class. A
   `TypeCheckError.path` is a contract-relative tuple of record names and actual
@@ -619,7 +622,7 @@ Most are just the functional model (above) made enforceable:
   (`is_spawner`, `binds_per_item`, `item_source_key`,
   `bind_reserved`, `reserved_wiring_keys`, `validate_execution_setup`,
   `grow_depth_delta`, `is_loop`, `needs_stop_event`, `needs_tools`,
-  `needs_steering`, `needs_steps`, `skipped_output_target`)
+  `needs_steering`, `needs_steps`, `exception_code`, `skipped_output_target`)
   plus the diagnostic-only projections `exception_origin` and `failure_trace`.
   Those projections are identity-neutral. `skipped_output_target()` is pure, deterministic
   topology authority derived only from manifest-backed node state. Its base

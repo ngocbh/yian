@@ -73,6 +73,26 @@ engine or flow change.
 - Put new external dependencies behind small injected callables. The AGENT node's
   direct model access is the existing exception.
 
+## Failure codes
+
+`failure.code` is how a host tells failures apart. The list is `FAILURE_CODES` in
+`src/yian/diagnostics.py`; each code is documented in
+[`docs/api.md`](docs/api.md#failure-codes).
+
+1. A code names a category a host can act on differently than `node.execute`.
+   Mere detail goes in the message.
+2. Shape: `<area>.<condition>`, lowercase. The area is where it is detected:
+   `binding`, `contract`, `assertion`, `graph`, `node`, `loop`, `agent`, `provider`.
+3. The list is closed. Each code's `docs/api.md` entry gives its meaning, exactly when
+   it is raised, the typical host reaction, and whether a resume or retry can help.
+4. Specific before generic: `node.execute` is only the fallback. When several codes
+   apply, the root cause wins.
+5. Never derive a code from an exception class name. `cause_type` is for debugging only.
+6. A code means the same in every implementation, checked by a conformance case.
+7. A code is stable once added: never renamed or repurposed.
+8. A new code needs a distinct host reaction, a test, a conformance case, and its
+   docs entry.
+
 ## Language principles
 
 Judge every change to the flow language against these. A change that breaks one

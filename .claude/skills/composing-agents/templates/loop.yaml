@@ -51,6 +51,6 @@ nodes:
       messages: []
       exited: false
     while: not exited              # pre-check; bare boolean predicate (no `${}`)
-    max: 100                       # optional runaway guard, >= 1 (LoopMaxExceeded)
+    max: 100                       # optional runaway guard, >= 1 (loop.max_exceeded)
 
 output: ${loop.output}

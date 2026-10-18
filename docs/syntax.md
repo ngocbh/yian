@@ -1396,7 +1396,7 @@ Keys in use today:
 
 | Key | Node kind | Meaning |
 |-----|-----------|---------|
-| `max_tool_iterations` | `agent` | Model turns the tool-calling loop runs before it gives up with an `AgentLoopError`. If the reply on the last allowed turn asks for tools, the node fails without running them, since no later model call could read their results. Default `-1` (**no cap** — run until a final answer; `YIAN_AGENT_MAX_TOOL_ITERATIONS` changes it, see [Defaults and limits](defaults.md)). Set a positive int to bound it; any other value (`0`, other negatives, a non-int) fails at load, on the flow `env:` or the AGENT node's `env:`. |
+| `max_tool_iterations` | `agent` | Model turns the tool-calling loop runs before it fails with `failure.code` `agent.max_tool_iterations`. If the reply on the last allowed turn asks for tools, the node fails without running them, since no later model call could read their results. Default `-1` (**no cap** — run until a final answer; `YIAN_AGENT_MAX_TOOL_ITERATIONS` changes it, see [Defaults and limits](defaults.md)). Set a positive int to bound it; any other value (`0`, other negatives, a non-int) fails at load, on the flow `env:` or the AGENT node's `env:`. |
 
 ## Secrets stay out of flow files
 
@@ -3628,12 +3628,13 @@ poll:
 - **`max:`** (for `while:`/`until:`) is an optional runaway guard. Without it (or
   with `max: null`) the loop has no iteration limit: it runs until its predicate ends
   it (or the run is interrupted). When given, it is a plain integer `>= 1`, and a
-  loop that would run more than `max` iterations fails loudly (`LoopMaxExceeded`).
+  loop that would run more than `max` iterations fails loudly with the failure code
+  `loop.max_exceeded`.
 - A `while:`/`until:` predicate that reads only fields the body never returns cannot
   change. Without `max:`, such a loop could never end, so it is a load error
   (`` this loop can never end: `until: done` reads `done`, which the body never
   updates; return `done` from the body, or add `max:` ``). With `max:`, it loads, and
-  fails with `LoopMaxExceeded` if it reaches the cap.
+  fails with `loop.max_exceeded` if it reaches the cap.
 
 The node's value is the final merged carried record (committed under the loop
 node's id once the loop stops).

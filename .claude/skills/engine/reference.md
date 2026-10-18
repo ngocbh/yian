@@ -146,11 +146,13 @@ the most precise available local operation, while `node_id` remains runtime
 execution identity. The closed plain-string codes are `binding.evaluate`,
 `binding.type`, `contract.input`, `assertion.failed`, `node.execute`,
 `contract.node_result`, `contract.output`, `contract.route`, `contract.growth`,
-and `graph.terminal_unreachable`. Exception names and traceback text are debug data,
+`graph.terminal_unreachable`, `loop.max_exceeded`, `agent.max_tool_iterations`, and
+`provider.auth`. Exception names and traceback text are debug data,
 not semantic categories. The contract reserves these codes for expected
 flow-owned rejection. The evaluator structurally assigns `binding.evaluate`,
 `binding.type`, `contract.input`, `assertion.failed`, `node.execute`, and
-`contract.node_result`; it never classifies by exception type. `EvaluationFailure`
+`contract.node_result`; it never classifies by exception type. A body failure's
+code comes from the node's `exception_code` hook (default `node.execute`). `EvaluationFailure`
 owns exactly that single `Failure`. Dispatcher
 classification is structural too:
 
@@ -244,6 +246,7 @@ Runtime and compile validation read these node members instead of branching on
 | `reserved_wiring_keys() -> set` | load-time (compile passes: `check_wiring_parity`, ref-scan): the NAMES of those reserved keys so validation gates on traits, not `node.kind` | `∅` → `wait` `{"until"}`, `map` `{"over"}` |
 | `validate_execution_setup()` | base run wrapper: reject malformed node-owned setup before assertions/body | concrete `forward` and every condition parses (`validate_conditions`: assertions, CASE `when`, LOOP `while`/`until`) → baked child on call/map/loop; complete predicates on case |
 | `validate_prompts()` | run boundary only (`run.py`'s pre-run check): reject a prompt span that doesn't parse, calls a non-builtin, or mis-calls a builtin, before any record | no-op → AGENT prompt/`system_prompt`; HUMAN_INPUT prompt and question text |
+| `exception_code(exc)` | evaluator body boundary: select the body failure's code | `node.execute` → LOOP `loop.max_exceeded`; AGENT `agent.max_tool_iterations`, `provider.auth` |
 | `exception_origin(exc)` | evaluator body boundary: select the best operation origin | authored node origin → CODE wrapped line, CASE active predicate, generated-schema path in the AGENT node |
 | `failure_trace(operation_origin=None)` | evaluator, dispatcher, and terminal-unreachable producers: combine generated ancestry with the best local origin | `origin_context + (operation origin or node origin)`; omit only an absent local suffix |
 | `skipped_output_target() -> str` | route reducer and growth validation: select the logical output whose out-edges receive this physical node's absence | baked `commit_as` or own id → LOOP `origin_id` |
@@ -1591,8 +1594,10 @@ never runtime ids, graph topology, or a text heuristic.
   the binding's origin, then the parameter's. Base-wrapper
   `NodeAssertFailed` carries its exact `Assertion` and becomes
   `assertion.failed`; the same class raised by node code remains `node.execute`.
-  Body exceptions become `node.execute`, using the node's `exception_origin`
-  projection: CODE selects its deepest owned wrapped line, while CASE selects the
+  Body exceptions take the node's `exception_code` (`node.execute` unless LOOP
+  names `loop.max_exceeded` or AGENT names `agent.max_tool_iterations` or
+  `provider.auth`) and its `exception_origin` projection: CODE selects its
+  deepest owned wrapped line, while CASE selects the
   exact active predicate by frame/node/`Case` identity, and the AGENT node selects a proven
   generated-schema path through its output contract. Invalid terminal values from
   ordinary or generator bodies and a non-spawner `Grow` become

@@ -2929,3 +2929,86 @@ def test_shim_text_form_replay(tmp_path: Path) -> None:
     case = {"kind": "expr", "template": "x=${v}", "values": {"v": True}}
     assert harvest._replay(harvest._Harvest(None, tmp_path), case, ("text-form",)) == (
         {"value": "x=true"}, frozenset())
+
+
+def test_shim_value_repr() -> None:
+    """`_ts_value_repr` shows a value in the text form, text JSON-quoted, cut as `value_repr`."""
+    from tests import conformance_harvest as harvest
+    from yian.typesys.values import shown_text, value_repr
+
+    rows = [(True, "true"), (None, "null"), ("x", '"x"'), (["a"], '["a"]'), ({"k": 1.0}, '{"k":1}')]
+    assert [harvest._ts_value_repr(value) for value, _ in rows] == [text for _, text in rows]
+    assert harvest._ts_value_repr("x" * 300) == shown_text('"' + "x" * 300 + '"')
+    assert harvest._ts_value_repr("x" * 300).endswith("x…")
+    # Long-int placeholders are the numbers rule's, so they stay Python's.
+    assert harvest._ts_value_repr([10**5000]) == value_repr([10**5000])
+
+
+def test_shim_value_repr_through_yian() -> None:
+    """Under `messages`, yian's messages show values in the text form and names as Python does."""
+    from tests import conformance_harvest as harvest
+    from yian.expr import expressions
+    from yian.nodes.binding import check_input_names
+    from yian.nodes.contracts import Parameter, PartialRecordContract, validate_output_contract
+    from yian.typesys import values
+    from yian.typesys.values import Type, ValueKind, reject_non_text_keys
+
+    record = Type(kind=ValueKind.OBJECT, fields={"a": Type.scalar(ValueKind.INTEGER)},
+                  required=frozenset({"a"}))
+    names = [
+        (lambda: check_input_names([Parameter("a")], {"zz": 1}), "unknown input 'zz'"),
+        (lambda: validate_output_contract(PartialRecordContract((("a", None),)),
+                                          {"a": 1, "zz": 2}), "unknown fields: ['zz']"),
+        (lambda: build_value_as(record, {"a": 1, "zz": 2}), "unknown fields: ['zz']"),
+        (lambda: reject_non_text_keys({None: 1}, "input 'x'"), "must be text, got None"),
+    ]
+
+    def raised(call) -> str:
+        with pytest.raises((TypeCheckError, ValueError)) as caught:
+            call()
+        return str(caught.value)
+
+    def not_an_int() -> str:
+        return raised(lambda: build_value_as(type_for("int", {}), "not-an-int"))
+
+    original = values.value_repr
+    assert not_an_int() == "'not-an-int' does not match declared type int"
+    with pytest.MonkeyPatch.context() as patch:
+        _install_shims(patch, "messages")
+        assert expressions.value_repr is values.value_repr is not original
+        assert inspect.signature(values.value_repr) == inspect.signature(original)
+        assert not_an_int() == '"not-an-int" does not match declared type int'
+        assert expressions._operand_repr(True) == "true"
+        for call, message in names:
+            assert message in raised(call)
+    with pytest.MonkeyPatch.context() as patch:
+        _install_shims(patch, "key-order")
+        assert values.value_repr({"b": 1, "0": 2}) == "{'0': 2, 'b': 1}"
+        assert expressions.value_repr is values.value_repr
+    with pytest.MonkeyPatch.context() as patch:
+        _install_shims(patch, *harvest._SHIMS)
+        assert inspect.signature(values.value_repr) == inspect.signature(original)
+        assert expressions.value_repr({"b": 1, "0": 2}) == '{"0":2,"b":1}'
+        assert not_an_int() == '"not-an-int" does not match declared type int'
+        for call, message in names:
+            assert message in raised(call)
+    assert values.value_repr is original and expressions.value_repr is original
+
+
+def test_shim_value_repr_name_sites() -> None:
+    """Each of the `messages` shim's name sites is one code object that calls `value_repr`."""
+    import types
+
+    from tests import conformance_harvest as harvest
+    import yian
+
+    root = Path(yian.__file__).parent
+    for path, qualname in harvest._NAME_CALLERS:
+        source = root / path
+        stack = [compile(source.read_text(encoding="utf-8"), str(source), "exec")]
+        found = 0
+        while stack:
+            code = stack.pop()
+            stack += [const for const in code.co_consts if isinstance(const, types.CodeType)]
+            found += code.co_qualname == qualname and "value_repr" in code.co_names
+        assert found == 1, (path, qualname)

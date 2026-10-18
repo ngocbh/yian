@@ -51,8 +51,17 @@ from yian.expr.template import eval_binding, render_template_record
 from yian.nodes.agent import memory
 from yian.nodes.tool import node as tool_node
 from yian.run import RunResult, resume_flow, run_flow
+from yian.typesys import values as typesys_values
 from yian.typesys.types import read_typedefs, type_for
-from yian.typesys.values import FileRef, ValueKind, build_value_as, write_as_text
+from yian.typesys.values import (
+    FileRef,
+    ValueKind,
+    build_value_as,
+    long_int_digits,
+    shown_text,
+    value_repr,
+    write_as_text,
+)
 
 from tests import test_conformance as runner
 
@@ -1450,6 +1459,72 @@ def _install_text_form(patch: pytest.MonkeyPatch, case: dict) -> None:
     _keep_text_builtins(patch)
 
 
+def _patch_held(patch: pytest.MonkeyPatch, original: object, wrapper: object) -> None:
+    """Put `wrapper` in place of `original`, through `patch`, in every loaded yian module."""
+    for module_name, module in list(sys.modules.items()):
+        if module is None or not (module_name == "yian" or module_name.startswith("yian.")):
+            continue
+        for name, value in list(vars(module).items()):
+            if value is original:
+                patch.setattr(module, name, wrapper)
+
+
+def _ts_value_repr(value: object) -> str:
+    """Return `value` as `value_repr` shows it, but written by `_ts_json`, so text is JSON-quoted.
+
+    The long-int placeholders are `value_repr`'s; a value `_ts_json` can't write is
+    `<{type} object>`, or `<{type} too large to display>` for an int past Python's digit limit.
+    """
+    # Read before the `try`, so a bad `YIAN_*` value is raised, as `value_repr` raises it.
+    defaults.current()
+    try:
+        if long_int_digits(value) is not None:
+            # The long-int placeholders are the numbers rule's.
+            return value_repr(value)
+        text = _ts_json(value)
+    except ValueError:
+        return f"<{type(value).__name__} too large to display>"
+    except Exception:
+        return f"<{type(value).__name__} object>"
+    return shown_text(text)
+
+
+# The `value_repr` callers that pass it a name or a key, as `(path under src/yian, co_qualname)`.
+# Design 3.2.8 keeps Python's repr for a name, so a message quoting one reads as in Python.
+_NAME_CALLERS = frozenset({
+    ("nodes/binding.py", "check_input_names.<locals>.<genexpr>"),
+    ("nodes/contracts.py", "validate_output_contract.<locals>.<genexpr>"),
+    ("typesys/values.py", "_build_for_type.<locals>.<genexpr>"),
+    ("typesys/values.py", "reject_non_text_keys"),
+    ("typesys/values.py", "plain_containers"),
+    ("typesys/values.py", "_json_value_error"),
+    ("typesys/values.py", "_dict_children"),
+    ("typesys/values.py", "_nesting_segment"),
+})
+
+
+def _from_name_caller() -> bool:
+    """Return whether the first calling frame outside this file is one of `_NAME_CALLERS`."""
+    frame = sys._getframe(1)
+    # Skip this file's frames, so a key-order wrapper in between doesn't hide the caller.
+    while frame.f_code.co_filename == __file__:
+        frame = frame.f_back
+    code = frame.f_code
+    path = code.co_filename.removeprefix(_YIAN_DIR).replace(os.sep, "/")
+    return (path, code.co_qualname) in _NAME_CALLERS
+
+
+def _install_messages(patch: pytest.MonkeyPatch, case: dict) -> None:
+    """Show values in yian's messages in the text form, and names with Python's repr."""
+    original = typesys_values.value_repr
+
+    @functools.wraps(original)
+    def messages_value_repr(value: object) -> str:
+        return original(value) if _from_name_caller() else _ts_value_repr(value)
+
+    _patch_held(patch, original, messages_value_repr)
+
+
 def _ordering(original):
     """Return `original` wrapped to take its first argument through `_js_ordered`."""
     @functools.wraps(original)
@@ -1460,7 +1535,7 @@ def _ordering(original):
 
 
 def _install_key_order(patch: pytest.MonkeyPatch, case: dict) -> None:
-    """Hand the text points each record with its keys in JS order."""
+    """Hand the text points and `value_repr` each record with its keys in JS order."""
     fns = expr_builtins.TEMPLATE_FNS
     for name in ("join", "render_as_json"):
         patch.setitem(fns, name, _ordering(fns[name]))
@@ -1473,11 +1548,14 @@ def _install_key_order(patch: pytest.MonkeyPatch, case: dict) -> None:
 
     patch.setattr(memory, "_tool_text", ordered_tool_text)
     _keep_text_builtins(patch)
+    shown = typesys_values.value_repr
+    _patch_held(patch, shown, _ordering(shown))
 
 
 # The shims by name, in install order: a later shim may wrap what an earlier one patched.
 _SHIMS: dict[str, _Shim] = {
     "text-form": _Shim("text-form", _install_text_form),
+    "messages": _Shim("messages", _install_messages),
     # Record key order is in the text-form rule's section of the design.
     "key-order": _Shim("text-form", _install_key_order),
 }

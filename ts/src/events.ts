@@ -51,7 +51,7 @@ export class StreamChunk {
   readonly key: string;
   readonly chunk: string;
   readonly final: boolean;
-  // AGENT text chunks name the model exchange they belong to; null for other streams.
+  /** The model exchange an AGENT text chunk belongs to; `null` for other streams. */
   readonly exchangeId: string | null;
   /** The AGENT model attempt the text belongs to, 1-based; `null` for other streams. */
   readonly attempt: number | null;
@@ -176,10 +176,7 @@ export class NodeExpanded {
   // Structural, because `Grow` lives in `nodes/base.ts`, a layer above this one.
   readonly grow: { readonly seed: unknown; readonly prune: ReadonlySet<string> };
 
-  constructor(options: {
-    nodeId: string;
-    grow: { readonly seed: unknown; readonly prune: ReadonlySet<string> };
-  }) {
+  constructor(options: { nodeId: string; grow: NodeExpanded["grow"] }) {
     this.nodeId = options.nodeId;
     this.grow = options.grow;
   }
@@ -247,7 +244,7 @@ export class TokenUsage {
     this.reasoningTokens = options.reasoningTokens ?? null;
   }
 
-  /** Return the JSON form. */
+  /** Return the data form. */
   toJSON() {
     return {
       input_tokens: this.inputTokens,
@@ -353,7 +350,7 @@ export class ModelCallFinished {
     this.attempt = options.attempt;
   }
 
-  /** Return the data form, the usage in its JSON form. */
+  /** Return the data form, the usage in its data form. */
   toJSON() {
     return {
       node_id: this.nodeId,

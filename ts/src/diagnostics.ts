@@ -150,17 +150,15 @@ function calculateRatio(matches: number, length: number): number {
  */
 class SequenceMatcher {
   /** The first sequence, set by `setSeq1`. */
-  a: string[] = [];
+  private a: string[] = [];
   /** The second sequence, set by `setSeq2`. */
-  b: string[] = [];
+  private b: string[] = [];
   /** Each element of `b` mapped to its increasing indices in `b`; popular elements are absent. */
-  b2j = new Map<string, number[]>();
-  /** The elements of `b` the autojunk rule dropped from `b2j`. */
-  bpopular = new Set<string>();
+  private b2j = new Map<string, number[]>();
   /** Each element of `b` mapped to its count, computed by `quickRatio`. */
-  fullbcount: Map<string, number> | null = null;
+  private fullbcount: Map<string, number> | null = null;
   /** The cached result of `getMatchingBlocks`. */
-  matchingBlocks: Match[] | null = null;
+  private matchingBlocks: Match[] | null = null;
 
   /** Set the first sequence to compare; the second is unchanged. */
   setSeq1(a: string): void {
@@ -177,8 +175,8 @@ class SequenceMatcher {
     this.chainB();
   }
 
-  /** Build `b2j` and `bpopular` from `b`. */
-  chainB(): void {
+  /** Build `b2j` from `b`, without the elements the autojunk rule calls popular. */
+  private chainB(): void {
     const b = this.b;
     const b2j = new Map<string, number[]>();
     this.b2j = b2j;
@@ -196,7 +194,6 @@ class SequenceMatcher {
 
     // Purge popular elements; autojunk is always on.
     const popular = new Set<string>();
-    this.bpopular = popular;
     const n = b.length;
     if (n >= 200) {
       const ntest = Math.floor(n / 100) + 1;

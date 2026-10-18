@@ -296,7 +296,7 @@ describe("run events", () => {
 describe("type discriminant", () => {
   test("every event's type is its class name", () => {
     for (const { event } of SAMPLES) {
-      expect(event.type).toBe(event.constructor.name as typeof event.type);
+      expect(event.constructor.name).toBe(event.type);
     }
   });
 
@@ -320,7 +320,6 @@ describe("toJSON", () => {
     for (const { event, data } of SAMPLES) {
       const form = event.toJSON();
       expect(form).toEqual(data);
-      expect(Object.keys(form)).toEqual(Object.keys(data));
       expect(JSON.stringify(form)).toBe(JSON.stringify(data));
     }
   });

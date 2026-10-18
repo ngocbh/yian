@@ -133,6 +133,15 @@ describe("reprText", () => {
 });
 
 describe("getCloseMatches", () => {
+  // Strings of 200 or more code points, long enough for the autojunk rule.
+  const a120 = "a".repeat(120);
+  const b120 = "b".repeat(120);
+  const c120 = "c".repeat(120);
+  const b240 = "b".repeat(240);
+  const ab120 = "ab".repeat(120);
+  const xyz69 = "xyz".repeat(69);
+  const xyz70 = "xyz".repeat(70);
+  const zyx70 = "zyx".repeat(70);
   // `expected` is CPython 3.12.14's `difflib.get_close_matches(word, possibilities, n, cutoff)`.
   const cases: [string, string[], number, number, string[]][] = [
     ["appel", ["ape", "apple", "peach", "puppy"], 3, 0.6, ["apple", "ape"]],
@@ -144,8 +153,8 @@ describe("getCloseMatches", () => {
     ["x", [], 3, 0.6, []],
     ["Strng", ["String", "string", "str", "Sting"], 2, 0.6, ["String", "Sting"]],
     ["aaaa", ["aaab", "abaa", "baaa"], 3, 0.0, ["baaa", "aaab", "abaa"]],
-    ["a".repeat(120) + "b".repeat(120), ["a".repeat(120) + "c".repeat(120), "b".repeat(240), "ab".repeat(120)], 3, 0.0, ["a".repeat(120) + "c".repeat(120), "ab".repeat(120), "b".repeat(240)]],
-    ["xyz".repeat(70), ["xyz".repeat(69) + "q", "zyx".repeat(70)], 2, 0.0, ["xyz".repeat(69) + "q", "zyx".repeat(70)]],
+    [a120 + b120, [a120 + c120, b240, ab120], 3, 0.0, [a120 + c120, ab120, b240]],
+    [xyz70, [xyz69 + "q", zyx70], 2, 0.0, [xyz69 + "q", zyx70]],
     ["lookup", ["look_up", "lookups", "Lookup", "kool"], 4, 0.6, ["lookups", "look_up", "Lookup"]],
     ["int", ["Int", "integer", "in", "nit"], 4, 0.5, ["in", "nit", "Int", "integer"]],
     ["\ud83d\ude00\ud83d\ude01", ["\ud83d\ude00", "\ud83d\ude01x", "\ud83d"], 3, 0.0, ["\ud83d\ude00", "\ud83d\ude01x", "\ud83d"]],
@@ -618,6 +627,14 @@ describe("ResolverTable", () => {
       () =>
         ResolverTable.fromEntries([
           [new OriginRef("new"), {}, new OriginRef("old")],
+        ] as unknown as Entries),
+      "resolver table delegate must implement resolve",
+    ],
+    [
+      "a null delegate",
+      () =>
+        ResolverTable.fromEntries([
+          [new OriginRef("new"), null, new OriginRef("old")],
         ] as unknown as Entries),
       "resolver table delegate must implement resolve",
     ],

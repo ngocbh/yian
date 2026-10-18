@@ -30,24 +30,9 @@ expect:
           bound_inputs: {}
           route:
             kind: record
-            source: null
-            value_json: null
-            children: []
             expression: "{}"
-            names: []
-            sizes: []
-            count: 0
-            content_index: 0
-            spans: []
-            path: []
-            result_type: null
-            snapshot: null
-          evaluated_keys: []
-          items: []
           scope: {static_path: [__start__], flow_path: [], occurrence_path: [], boundary: start}
           node_data: {input_output_paths: {}}
-          input_names: []
-          variable_names: []
     - [node_started, c]
     - - node_succeeded
       - c
@@ -56,24 +41,8 @@ expect:
           bound_inputs: {}
           route:
             kind: record
-            source: null
-            value_json: null
-            children: []
             expression: "{}"
-            names: []
-            sizes: []
-            count: 0
-            content_index: 0
-            spans: []
-            path: []
-            result_type: null
-            snapshot: null
-          evaluated_keys: []
-          items: []
           scope: {static_path: [c], flow_path: [], occurrence_path: [], boundary: null}
-          node_data: {}
-          input_names: []
-          variable_names: []
     - [node_started, __end__]
     - - node_succeeded
       - __end__
@@ -82,37 +51,16 @@ expect:
           bound_inputs: {result: hello}
           route:
             kind: record
-            source: null
-            value_json: null
             children:
               - kind: source
                 source: {run_id: r1, execution_seq: 3, path: []}
-                value_json: null
-                children: []
                 expression: c.output
-                names: []
-                sizes: []
-                count: 0
-                content_index: 0
-                spans: []
-                path: []
-                result_type: null
-                snapshot: null
             expression: "{result: c.output}"
             names: [result]
-            sizes: []
-            count: 0
-            content_index: 0
-            spans: []
-            path: []
-            result_type: null
-            snapshot: null
           evaluated_keys: [result]
-          items: []
           scope: {static_path: [__end__], flow_path: [], occurrence_path: [], boundary: end}
           node_data: {input_output_paths: {result: []}}
           input_names: [result]
-          variable_names: []
     - [backward_started, null, {attempt_id: 1, feedback: shorter}]
     - - backward_ready
       - null

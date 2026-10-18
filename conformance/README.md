@@ -136,19 +136,20 @@ When the run raised before creating its log, its trace is `[]`.
 
 For serial runs (`num_workers: 0`). `host.crash_after_record: k` (required) cuts the first run
 after record `k` (0-based, so records `0`..`k` are kept): every later append is refused without
-writing, the run is abandoned, and the runner checks that the cut happened. Then the flow is
-resumed from the log with the `resume` arguments `num_workers` (absent: the recorded value),
-`api_key`, `headers` and `context` (`context` as in `run`). The expectations are for the resumed
-run: its output, the trace of the whole log, the events and stream of the resume call, and
-`tool_calls` over both runs.
+writing, the run is abandoned, and the runner checks that the cut happened. The Python runner's
+cut still runs the run's own cleanup (closing the log; later, memory and MCP close calls), which
+a real crash would not. Then the flow is resumed from the log with the `resume` arguments
+`num_workers` (absent: the recorded value), `api_key`, `headers` and `context` (`context` as in
+`run`). The expectations are for the resumed run: its output, the trace of the whole log, the
+events and stream of the resume call, and `tool_calls` over both runs.
 
 ### `backward`
 
-Runs the flow (`run.learnable: true`), then calls backward once per entry of `backward`, a list
-of `{feedback, api_key, headers}` (only `feedback` required). `expect.backward` has one entry per
-call: the `outcome` of the `backward_finished` record the call appended, projected like the
-trace (nested nulls kept, so `failure: null` stays), or `{raises: <raises>}` when the call
-raised. The trace includes the backward records.
+Runs the flow (`run.learnable: true`), then calls backward once per entry of `backward`
+(required), a non-empty list of `{feedback, api_key, headers}` (only `feedback` required).
+`expect.backward` has one entry per call: the `outcome` of the `backward_finished` record the
+call appended, projected like the trace (nested nulls kept, so `failure: null` stays), or
+`{raises: <raises>}` when the call raised. The trace includes the backward records.
 
 ### `expr`
 
@@ -194,8 +195,8 @@ applies), and `stdin` (absent: empty; never a terminal). `expect.exit` is the ex
 stdout and stderr the case directory's path is replaced by `<tmp>` and spaces at line ends are
 removed; then `stdout` and `stderr` are compared exactly when present. `json` is stdout read as
 one JSON document, and `json_lines` stdout read as one JSON document per non-empty line, both
-in codec form. A command that names a generated path (`yian run` names its new run log on stderr) is
-checked without `stderr`, or given the path (`--log`).
+in codec form. A command that names a generated path (`yian run` names its new run log on
+stderr) is checked without `stderr`, or given the path (`--log`).
 
 ## The host, as data
 
@@ -288,7 +289,7 @@ only; lists and tuples as lists, sets as sorted lists, a failure in failure form
 The trace is the run log projected to what both implementations must agree on. Each record
 becomes one entry `[<kind>, <node>, <payload>]`, in log order. `node` is null for a run-level
 record. In a payload, a top-level field that is null is left out (nested values are kept as
-they are), and an empty payload is left out.
+they are, except in `forward_capture`, below), and an empty payload is left out.
 
 | Record | Node | Payload fields |
 |---|---|---|
@@ -329,9 +330,14 @@ For example:
   is removed, and values the flow produced or received are never rewritten. A memory record's
   `failure` is a memory operation failure, `{stage, code, message, retryable}`, kept as
   recorded.
-- In `forward_capture`, a route's `value_json` text is read as JSON (codec form), and
-  `node_data.effective_llm_config` is cut as below; everything else is kept as recorded
-  (expressions, spans, sources).
+- In `forward_capture`, a route (and each route nested in its `children` and `snapshot`)
+  leaves out every field equal to its empty value (null, `[]`, `0`, `""`), except `kind` and
+  `expression`, which always stay, and its `value_json` text is read as JSON (codec form). The
+  capture leaves out `evaluated_keys`, `items`, `input_names` and `variable_names` when they
+  are `[]`, and `node_data` when it is null or `{}`; `bound_inputs` is kept as recorded, even
+  when empty. `node_data.effective_llm_config` is cut as below; everything else is kept as
+  recorded (expressions, sources, spans). A route's `spans` are offsets in code points into
+  its result text (the text its `value_json` holds).
 - A connection record keeps only `method`, `source` and `endpoint` (key hashes and store
   paths are dropped). The connection records are: the `_connection` of the LLM configs in
   `run_started.effective_llm_by_static_path`, in an `effective_llm_config` step, and in a

@@ -138,11 +138,11 @@ _EXPECT_KEYS = {
     "fingerprint": {"fingerprint"},
     "cli": {"exit", "stdout", "stderr", "json", "json_lines"},
 }
-# The keys a kind requires, and the result keys its `expect` requires: one of the groups, plus
-# any of the kind's result keys that are in no group.
+# The keys a kind requires, and the result keys its `expect` requires: one of the groups; its
+# other result keys are optional.
 _REQUIRED = {
     "value": ("type", "value"), "fingerprint": ("flow", "other"), "load": ("flow",),
-    "run": ("flow",), "resume": ("flow",), "backward": ("flow",),
+    "run": ("flow",), "resume": ("flow",), "backward": ("flow", "backward"),
 }
 _RESULTS = {
     "load": (("load",),),
@@ -301,8 +301,8 @@ def _check(case: dict) -> dict:
         if case.get(key, {}).get("context", "present") != "present":
             raise ValueError(f"`{key}.context` must be `present`")
     if "backward" in case:
-        if not isinstance(case["backward"], list):
-            raise ValueError("`backward` must be a list")
+        if not isinstance(case["backward"], list) or not case["backward"]:
+            raise ValueError("`backward` must be a non-empty list")
         for index, entry in enumerate(case["backward"]):
             _keys(f"backward[{index}]", entry, _BACKWARD_KEYS, required=("feedback",))
     if "host" in case:
@@ -749,25 +749,37 @@ def _llm(config: dict | None) -> dict | None:
     return {**config, "_connection": _cut(config["_connection"])}
 
 
-def _capture(capture: dict) -> dict:
-    """Return a `forward_capture` with each route's `value_json` text read as JSON.
+_LEFT_OUT_OF_CAPTURE_WHEN_EMPTY = {
+    "evaluated_keys", "items", "node_data", "input_names", "variable_names",
+}
 
-    Its `node_data.effective_llm_config` has its connection cut.
+
+def _capture(capture: dict) -> dict:
+    """Return a `forward_capture` projected to the trace.
+
+    Each route leaves out its empty fields but `kind` and `expression`, and has its
+    `value_json` text read as JSON; the capture leaves out its empty lists and `node_data`,
+    and its `node_data.effective_llm_config` has its connection cut.
     """
-    def route(node: dict | None) -> dict | None:
-        if node is None:
-            return None
-        return {**node, "value_json": None if node["value_json"] is None
-                else json.loads(node["value_json"]),
-                "children": [route(child) for child in node["children"]],
-                "snapshot": route(node["snapshot"])}
+    def route(node: dict) -> dict:
+        lean = {key: value for key, value in node.items()
+                if key in ("kind", "expression") or value not in (None, [], 0, "")}
+        if "value_json" in lean:
+            lean["value_json"] = json.loads(lean["value_json"])
+        if "children" in lean:
+            lean["children"] = [route(child) for child in lean["children"]]
+        if "snapshot" in lean:
+            lean["snapshot"] = route(lean["snapshot"])
+        return lean
 
     data = capture["node_data"]
-    if data is not None and "effective_llm_config" in data:
+    if data and "effective_llm_config" in data:
         data = {**data, "effective_llm_config": _llm(data["effective_llm_config"])}
-    return {**capture, "route": route(capture["route"]), "node_data": data,
-            "items": [{**item, "capture": _capture(item["capture"])}
-                      for item in capture["items"]]}
+    projected = {**capture, "route": route(capture["route"]), "node_data": data,
+                 "items": [{**item, "capture": _capture(item["capture"])}
+                           for item in capture["items"]]}
+    return {key: value for key, value in projected.items()
+            if value or key not in _LEFT_OUT_OF_CAPTURE_WHEN_EMPTY}
 
 
 def _trace(lines: list, flow) -> list:
@@ -954,7 +966,7 @@ def _run_run(case: dict, case_dir: Path) -> None:
             append = JsonlRunLog.append
 
             def refuse(self: JsonlRunLog, record: object) -> object:
-                if self._next_sequence > last:
+                if self.next_sequence > last:
                     raise _Cut
                 return append(self, record)
 
@@ -977,16 +989,23 @@ def _run_run(case: dict, case_dir: Path) -> None:
             raised = _expect_raises(expect["raises"], start)
         else:
             start()
-        for entry in case.get("backward", []) if results else []:
+        def finished() -> list:
+            trace = _trace(log.read_text(encoding="utf-8").splitlines(), flow)
+            return [record for record in trace if record[0] == "backward_finished"]
+
+        for index, entry in enumerate(case.get("backward", []) if results else []):
+            before = len(finished())
             try:
                 results[0].backward(entry["feedback"], api_key=entry.get("api_key"),
                                     headers=entry.get("headers"))
             except Exception as exc:
                 outcomes.append({"raises": _raised(exc)})
                 continue
-            trace = _trace(log.read_text(encoding="utf-8").splitlines(), flow)
-            finished = [record for record in trace if record[0] == "backward_finished"]
-            outcomes.append(finished[-1][2]["outcome"])
+            after = finished()
+            if len(after) != before + 1:
+                pytest.fail(f"backward call {index + 1} appended {len(after) - before} "
+                            "`backward_finished` records, not one", pytrace=False)
+            outcomes.append(after[-1][2]["outcome"])
         text = log.read_text(encoding="utf-8") if log.exists() else ""
         lines = text.splitlines()
         actual = {
@@ -1034,10 +1053,14 @@ def _run_cli(case: dict, case_dir: Path) -> None:
         return re.sub(r" +$", "", text, flags=re.MULTILINE)
 
     def refuse(token: str) -> None:
-        raise ValueError(f"`{token}` in stdout is not JSON")
+        raise ValueError(f"{token} is not JSON")
 
     def document(text: str) -> object:
-        return _decode(json.loads(text, parse_constant=refuse))
+        try:
+            return _decode(json.loads(text, parse_constant=refuse))
+        except ValueError as error:  # JSONDecodeError is a ValueError
+            pytest.fail(f"stdout is not a JSON document ({error})\n--- stdout\n{stdout}",
+                        pytrace=False)
 
     stdout, stderr = normal(done.stdout), normal(done.stderr)
     _check_secrets(case, {"stdout": stdout, "stderr": stderr, **{
@@ -1046,11 +1069,12 @@ def _run_cli(case: dict, case_dir: Path) -> None:
     }})
     expect = case["expect"]
     if not _same(done.returncode, expect["exit"]):
-        pytest.fail(f"exit {done.returncode}, expected {expect['exit']}\n--- stderr\n{stderr}",
-                    pytrace=False)
+        pytest.fail(f"exit {done.returncode}, expected {expect['exit']}\n--- stdout\n{stdout}"
+                    f"--- stderr\n{stderr}", pytrace=False)
     for name, text in (("stdout", stdout), ("stderr", stderr)):
-        if name in expect:
-            _compare(name, text, expect[name])
+        if name in expect and text != expect[name]:
+            pytest.fail(f"{name} differs\n--- actual\n{text}--- expected\n{expect[name]}",
+                        pytrace=False)
     if "json" in expect:
         _compare("json", document(stdout), expect["json"], optional_message=True)
     if "json_lines" in expect:

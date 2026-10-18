@@ -1,15 +1,25 @@
 /**
  * `isinstance(x, T)` in the expression language: the parse tests of
- * `tests/engine/test_isinstance.py`.
+ * `tests/engine/test_isinstance.py`, the `expr_refs`/`condition_refs`/`rewrite_*` parts of
+ * `test_reference_walks_skip_the_type_name` and `test_rewrites_leave_the_type_name_alone`, and
+ * `test_isinstance_subject_is_the_tested_expression`.
  *
  * `isinstance` is a special form: the first argument is an expression, the second a bare type
- * name, never a reference. The evaluation, reference and rewrite tests land with the evaluator.
+ * name, never a reference. The evaluation and inference tests land with the evaluator, and the
+ * template parts of the walk and rewrite tests with `template.ts` (T2-5).
  */
 
 import { expect, test } from "bun:test";
 
-import { ExpressionError } from "../../src/expr/expressions.ts";
-import { parseExpr } from "../../src/expr/grammar.ts";
+import {
+  conditionRefs,
+  ExpressionError,
+  exprRefs,
+  isinstanceSubject,
+  rewriteConditionRefs,
+  rewriteExprRefs,
+} from "../../src/expr/expressions.ts";
+import { type ExprNode, parseExpr, Token } from "../../src/expr/grammar.ts";
 
 /** Expect `parseExpr(text)` to fail with exactly `message`. */
 function expectMessage(text: string, message: string): void {
@@ -73,4 +83,38 @@ test("isinstance result has no fields to read", () => {
 test("isinstance nested in a larger expression is validated", () => {
   expectMessage("a > 1 and isinstance(x)", "isinstance takes exactly two arguments (a value and a type name), got 1");
   expectMessage("upper(isinstance(x, a.b))", TYPE_NAME);
+});
+
+test("reference walks skip the type name", () => {
+  expect(exprRefs(parseExpr("isinstance(d.output, Buy)"))).toEqual(["d.output"]);
+  expect(conditionRefs("isinstance(d.output, Buy) and d.output.qty > 1")).toEqual(["d.output", "d.output.qty"]);
+  expect(conditionRefs("${isinstance(d.output, Buy)}")).toEqual(["d.output"]);
+});
+
+test("rewrites leave the type name alone", () => {
+  const rename = (path: string) => "x." + path;
+  expect(rewriteExprRefs("isinstance(d.output, Buy)", rename)).toBe("isinstance(x.d.output, Buy)");
+  expect(rewriteConditionRefs("${isinstance(d.output, Buy)}", rename)).toBe("${isinstance(x.d.output, Buy)}");
+});
+
+/** A position-blind form of `node`, as Lark's `Tree`/`Token` equality ignores positions. */
+function plain(node: ExprNode): unknown {
+  if (node instanceof Token) return { type: node.type, value: node.value };
+  return { data: node.data, children: node.children.map(plain) };
+}
+
+test("isinstanceSubject is the tested expression", () => {
+  const cases: [string, string | null][] = [
+    ["isinstance(d.output, Buy)", "d.output"],
+    ["isinstance(upper(x), str)", "upper(x)"],
+    ["isinstance(d.output, Buy) and x", null],
+    ["not isinstance(d.output, Buy)", null],
+    ["upper(x)", null],
+    ["x", null],
+  ];
+  for (const [text, subject] of cases) {
+    const found = isinstanceSubject(parseExpr(text));
+    if (subject === null) expect(found).toBeNull();
+    else expect(plain(found!)).toEqual(plain(parseExpr(subject)));
+  }
 });

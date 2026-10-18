@@ -1344,10 +1344,11 @@ def _completed(call: _Call) -> tuple[dict, dict]:
 def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list]:
     """Return a recorded call's group, case file text (its `expect` from the runner) and flags.
 
-    A pooled run is replayed three times, and its output or error must agree in each; its
-    trace, events, stream, tool calls and backward outcomes are kept only when the three are
-    equal and the run succeeded, each one dropped giving a `pooled: <result> dropped` flag. A
-    load or run that evaluated `and` or `or` is flagged `uses and/or`.
+    A pooled run is replayed three times, and its output or error, and its backward statuses,
+    must agree in each; its trace, events, stream, tool calls and backward outcomes are kept
+    only when the three are equal and the run succeeded, each one dropped giving a
+    `pooled: <result> dropped` flag. A load or run that evaluated `and` or `or` is flagged
+    `uses and/or`.
     """
     if call.skip:
         raise _Skip(call.skip)

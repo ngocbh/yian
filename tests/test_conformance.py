@@ -2562,6 +2562,28 @@ nodes:
 output: ${big.output | small.output}
 """
 
+# A CASE's `when:` is first evaluated in the run; a CALL binding's constant fallback is
+# evaluated when the flow loads, to check its type against the child's input.
+EITHER = """\\
+id: either
+name: either
+input:
+  a: !bool
+defs:
+  child:
+    input:
+      flag: !bool
+    nodes: {}
+    output: ${input.flag}
+nodes:
+  pick:
+    kind: call
+    call: child
+    input:
+      flag: ${input.a :- (true or false)}
+output: ${pick.output}
+"""
+
 FEEDBACK = json.dumps({"input_feedback": {}, "self_feedback": [], "variable_feedback": {}})
 
 
@@ -2611,19 +2633,23 @@ def test_backward_unrecorded(monkeypatch):
 
 def test_or_case():
     assert run_flow(load_flow(GATE), {"n": 7}, run_id="r1", num_workers=0).output == "big"
+
+
+def test_or_load():
+    load_flow(EITHER)
 '''
 
 
 def test_harvest_records_backward_and_pooled(tmp_path: Path) -> None:
     """Pooled runs replay thrice; backward calls join their run; `and`/`or` runs are flagged."""
     done, out = _harvest(tmp_path, _POOLED_TESTS)
-    assert _summary(done) == "5 passed", done.stdout + done.stderr
+    assert _summary(done) == "6 passed", done.stdout + done.stderr
     cases = {path.relative_to(out / "cases").as_posix(): _read(path)
              for path in sorted((out / "cases").glob("*/*.yaml"))}
     assert sorted(cases) == [
         "backward/sample__backward__2.yaml", "load-agent/sample__backward_unrecorded.yaml",
-        "run-agent/sample__pooled_agents__2.yaml", "run-core/sample__or_case__2.yaml",
-        "run-core/sample__pooled_failed__2.yaml",
+        "load-core/sample__or_load.yaml", "run-agent/sample__pooled_agents__2.yaml",
+        "run-core/sample__or_case__2.yaml", "run-core/sample__pooled_failed__2.yaml",
     ]
     pooled = cases["run-agent/sample__pooled_agents__2.yaml"]
     assert pooled["run"] == {"run_id": "r1"}
@@ -2654,13 +2680,14 @@ def test_harvest_records_backward_and_pooled(tmp_path: Path) -> None:
         _check_results(case, results(case, case_dir))
 
     report = json.loads((out / "report" / "test_sample.py.json").read_text(encoding="utf-8"))
-    assert report["tests"] == {"passed": 5, "failed": 0, "skipped": 0}
-    assert report["written"] == {"run-agent": 1, "run-core": 2, "backward": 1, "load-agent": 1}
+    assert report["tests"] == {"passed": 6, "failed": 0, "skipped": 0}
+    assert report["written"] == {"run-agent": 1, "run-core": 2, "backward": 1, "load-agent": 1,
+                                 "load-core": 1}
     assert report["skips"] == {"host: tools": ["test_backward_unrecorded"]}
     assert report["flags"] == {
         "pooled: trace dropped": ["run-core/sample__pooled_failed__2"],
         "pooled: events dropped": ["run-core/sample__pooled_failed__2"],
-        "uses and/or": ["run-core/sample__or_case__2"],
+        "uses and/or": ["run-core/sample__or_case__2", "load-core/sample__or_load"],
     }
 
 
@@ -2684,3 +2711,43 @@ def test_harvest_records_jitter_draws(tmp_path: Path, monkeypatch: pytest.Monkey
     assert module._jitter() == 0.125
     assert call.jitter == [0.25, 0.75, 0.125]
     assert call.host_skip == "jitter: draw 1.0 outside [0, 1)"
+
+
+def test_harvest_checks_pooled_replays(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pooled run replays thrice; a result differing in one, or a raised run's, is dropped."""
+    from tests import conformance_harvest as harvest
+
+    monkeypatch.setattr(harvest, "_STATE", harvest._Harvest(None, tmp_path))
+    output = {"status": "succeeded", "output": "hi"}
+    raises = {"class": "ValueError", "message": "no"}
+
+    def replay(**results: object) -> dict:
+        return {"trace": [["run_started", None]], "events": [["RunStarted"]], "stream": [],
+                "tool_calls": {}, "left": [], **results}
+
+    def expected(result: dict, *replays: dict) -> tuple:
+        call = harvest._Call("run_flow")
+        call.case, call.result, call.skip = {"kind": "run", "flow": "id: f\n"}, result, None
+        served = list(replays)
+        monkeypatch.setattr(harvest, "_replay", lambda state, case: served.pop(0))
+        _, text, flags = harvest._expected(harvest._STATE, call)
+        assert served == []
+        return yaml.load(text, Loader=_CaseLoader)["expect"], flags
+
+    events = [["RunStarted"], ["RunSucceeded", {"output": "hi"}]]
+    expect, flags = expected({"output": output}, replay(output=output), replay(output=output),
+                             replay(output=output, events=events))
+    assert expect == {"output": output, "trace": [["run_started", None]]}
+    assert flags == ["pooled: events dropped"]
+
+    differing = {"status": "succeeded", "output": "ho"}
+    with pytest.raises(harvest._Skip, match="replay differs"):
+        expected({"output": output}, replay(output=output), replay(output=differing),
+                 replay(output=output))
+
+    calls = {"tool": [{"args": {}, "call_id": "c1", "attempt": 1, "node": "n"}]}
+    raised = replay(raises=raises, stream=[{"text": "x"}], tool_calls=calls)
+    expect, flags = expected({"raises": raises}, raised, raised, raised)
+    assert expect == {"raises": raises}
+    assert flags == [f"pooled: {key} dropped"
+                     for key in ("trace", "events", "stream", "tool_calls")]

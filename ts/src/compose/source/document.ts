@@ -9,11 +9,13 @@
 
 import {
   type Alias,
+  CST,
   isAlias,
   isMap,
   isScalar,
   isSeq,
   type Node,
+  Parser,
   type ParsedNode,
   Scalar,
   YAMLError,
@@ -70,6 +72,15 @@ const STYLES: Readonly<Record<Scalar.Type, ScalarStyle>> = {
 };
 
 const NO_PARTS: readonly never[] = Object.freeze([]);
+
+/** Offsets from `start` to the exclusive `end`. */
+interface Span {
+  readonly start: number;
+  readonly end: number;
+}
+
+/** Return a composed node's span: its range, from its anchor or tag when it has one. */
+type SpanOf = (node: Node) => Span;
 
 /**
  * One safely constructed YAML document with its source graph kept private.
@@ -133,6 +144,7 @@ export class SourceDocument {
         pointRange(starts, refused.index),
       );
     }
+    const spanOf = propertySpans(source);
     let flow: FlowDocument;
     try {
       flow = composeFlowDocument(source);
@@ -145,13 +157,13 @@ export class SourceDocument {
         throw new SourceSyntaxError(message, pointRange(starts, error.pos[0]));
       }
       if (error instanceof FlowLoaderError) {
-        const at = error.node?.range?.[0];
-        const range = at === undefined ? null : pointRange(starts, at);
+        const node = error.node;
+        const range = node?.range ? pointRange(starts, spanOf(node).start) : null;
         throw new SourceSyntaxError(error.message, range);
       }
       throw error;
     }
-    const { definitions, ids, nonTextKey } = build(flow, starts);
+    const { definitions, ids, nonTextKey } = build(flow, starts, spanOf);
     return new SourceDocument(
       text,
       label,
@@ -179,7 +191,7 @@ interface Built {
  * @throws SourceSyntaxError at a scalar the flow loader can't build, or at a list or mapping
  *   key.
  */
-function build(flow: FlowDocument, starts: readonly number[]): Built {
+function build(flow: FlowDocument, starts: readonly number[], spanOf: SpanOf): Built {
   const { document, aliasTargets } = flow;
   const ids = new Map<Node, number>();
   if (document.contents === null) {
@@ -228,7 +240,8 @@ function build(flow: FlowDocument, starts: readonly number[]): Built {
     const node = target(aliasTargets, written);
     const known = ids.get(node);
     if (known !== undefined) return known;
-    const range = toRange(starts, node.range[0], node.range[1]);
+    const span = spanOf(node);
+    const range = toRange(starts, span.start, span.end);
     if (isScalar(node)) {
       const text = node.source;
       const plain = node.type === Scalar.PLAIN;
@@ -237,7 +250,7 @@ function build(flow: FlowDocument, starts: readonly number[]): Built {
         value = plain ? constructScalar(resolvePlain(text), text, true) : text;
       } catch (error) {
         if (error instanceof FlowLoaderError) {
-          throw new SourceSyntaxError(error.message, pointRange(starts, node.range[0]));
+          throw new SourceSyntaxError(error.message, pointRange(starts, span.start));
         }
         throw error;
       }
@@ -283,7 +296,7 @@ function build(flow: FlowDocument, starts: readonly number[]): Built {
         if (!isScalar(keyNode)) {
           throw new SourceSyntaxError(
             "a list or mapping can't be a mapping key; mapping keys must be text",
-            pointRange(starts, keyNode.range[0]),
+            pointRange(starts, spanOf(keyNode).start),
           );
         }
         const keyDefinition = intern(keyNode);
@@ -294,13 +307,11 @@ function build(flow: FlowDocument, starts: readonly number[]): Built {
         const key = keyText(keyScalar);
         // Fills don't run in document order, so the key that starts first wins; an alias
         // key is its anchored node.
-        if (
-          typeof keyScalar.value !== "string" &&
-          (nonTextKey === null || keyNode.range[0] < nonTextKeyAt)
-        ) {
+        const keyAt = spanOf(keyNode).start;
+        if (typeof keyScalar.value !== "string" && (nonTextKey === null || keyAt < nonTextKeyAt)) {
           const keyValue = keyScalar.value as NonTextKey["key"];
           nonTextKey = { key: keyValue, text: key, range: keyScalar.range! };
-          nonTextKeyAt = keyNode.range[0];
+          nonTextKeyAt = keyAt;
         }
         const arc: MapArc = Object.freeze({ key, keyDefinition, valueDefinition });
         // A repeated key keeps its first position and takes the last value, as in SafeLoader.
@@ -383,6 +394,94 @@ function firstRepeatedKey(
     }
   }
   return null;
+}
+
+/**
+ * Lex `source` and return each composed node's span.
+ *
+ * The composed tree keeps no property positions, so the CST records them: under the end of
+ * the properties, and under the token they precede by `offset:is a collection` (a block
+ * mapping and its first key share an offset). An empty node has no token, or a zero-length
+ * `scalar` one before a `,` in a flow collection; eemeli places it after its properties and
+ * any spaces that follow them.
+ */
+function propertySpans(source: string): SpanOf {
+  const byEnd = new Map<number, Span>();
+  const byToken = new Map<string, Span>();
+  const note = (props: readonly CST.SourceToken[], token?: CST.Token | null): void => {
+    const span = propertiesSpan(props);
+    if (span === null) return;
+    byEnd.set(span.end, span);
+    if (token) byToken.set(`${token.offset}:${CST.isCollection(token)}`, span);
+  };
+  const stack: CST.Token[] = [];
+  const document = [...new Parser().parse(source)].find(
+    (token): token is CST.Document => token.type === "document",
+  );
+  if (document !== undefined) {
+    // The root's properties sit in the document's start.
+    note(document.start, document.value);
+    if (document.value) stack.push(document.value);
+  }
+  while (stack.length > 0) {
+    const token = stack.pop()!;
+    if (token.type === "block-seq") {
+      for (const item of token.items) {
+        note(item.start, item.value);
+        if (item.value) stack.push(item.value);
+      }
+    } else if (token.type === "block-map" || token.type === "flow-collection") {
+      for (const item of token.items) {
+        if (item.key !== undefined || item.sep !== undefined) {
+          note(item.start, item.key);
+          note(afterValueIndicator(item.sep ?? []), item.value);
+        } else {
+          note(item.start, item.value);
+        }
+        if (item.key) stack.push(item.key);
+        if (item.value) stack.push(item.value);
+      }
+      // A block mapping starts at its first key's properties, as `&k a: 1`, unless its own
+      // come earlier; after an explicit `?` they follow the mapping's start.
+      const first = token.type === "block-map" ? token.items[0] : undefined;
+      const keySpan = first === undefined ? null : propertiesSpan(first.start);
+      if (keySpan !== null && keySpan.start < token.offset) {
+        const key = `${token.offset}:true`;
+        const known = byToken.get(key);
+        if (known === undefined || known.start > keySpan.start) byToken.set(key, keySpan);
+      }
+    }
+  }
+  return (node) => {
+    const [start, end] = node.range!;
+    if (start === end) {
+      let p = start;
+      while (p > 0 && (source[p - 1] === " " || source[p - 1] === "\t")) p--;
+      return byToken.get(`${start}:false`) ?? byEnd.get(p) ?? { start, end: start };
+    }
+    if (isMap(node) || isSeq(node)) {
+      return { start: byToken.get(`${start}:true`)?.start ?? start, end };
+    }
+    if (node.anchor !== undefined || node.tag !== undefined) {
+      return { start: byToken.get(`${start}:false`)?.start ?? start, end };
+    }
+    return { start, end };
+  };
+}
+
+/** Return the span of the anchor and tag among `props`, or null when there are none. */
+function propertiesSpan(props: readonly CST.SourceToken[]): Span | null {
+  const marks = props.filter((token) => token.type === "anchor" || token.type === "tag");
+  const first = marks[0];
+  const last = marks[marks.length - 1];
+  if (first === undefined || last === undefined) return null;
+  return { start: first.offset, end: last.offset + last.source.length };
+}
+
+/** Return the tokens after the last `:` indicator in `sep`; none without one. */
+function afterValueIndicator(sep: readonly CST.SourceToken[]): readonly CST.SourceToken[] {
+  const at = sep.findLastIndex((token) => token.type === "map-value-ind");
+  return at === -1 ? [] : sep.slice(at + 1);
 }
 
 /** Return the node `written` names: an alias's target, else `written` itself. */

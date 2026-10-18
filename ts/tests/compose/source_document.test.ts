@@ -10,10 +10,11 @@
  * breaks while NEL, U+2028 and U+2029 are not, and an undefined alias follows YAML 1.2.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 
 import { SourceSyntaxError } from "../../src/compose/source/common.ts";
 import { type NonTextKey, SourceDocument } from "../../src/compose/source/document.ts";
+import { BUILTIN, install } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 
 /** Return the `SourceSyntaxError` parsing `text` throws, failing if it throws none. */
@@ -230,4 +231,94 @@ test("a list or mapping key is refused", () => {
 
 test("a missing value is null", () => {
   expect(SourceDocument.parse("{a}")._value).toEqual({ a: null });
+});
+
+describe("property ranges", () => {
+  afterEach(() => install(BUILTIN));
+
+  /** Return the range of the definition at `path` (mapping keys and list indexes). */
+  function rangeAt(text: string, ...path: (string | number)[]): SourceRange | null {
+    const document = SourceDocument.parse(text);
+    let definition = document._definitions[document._rootDefinition]!;
+    for (const step of path) {
+      const id =
+        definition.kind === "mapping"
+          ? definition.effectiveIndex.get(step as string)!.arc.valueDefinition
+          : definition.kind === "sequence"
+            ? definition.itemDefinitions[step as number]!
+            : null;
+      if (id === null) throw new Error(`no definition at ${String(step)}`);
+      definition = document._definitions[id]!;
+    }
+    return definition.range;
+  }
+
+  /** Return the start line and column of the definition at `path`. */
+  function startAt(text: string, ...path: (string | number)[]): [number, number] {
+    const range = rangeAt(text, ...path)!;
+    return [range.startLine, range.startCol];
+  }
+
+  test.each<[string, (string | number)[], SourceRange]>([
+    ["a: &x !int 5\n", ["a"], new SourceRange(1, 4, 1, 13)],
+    ["a: !int\n", ["a"], new SourceRange(1, 4, 1, 8)],
+    ["a: !int   \n", ["a"], new SourceRange(1, 4, 1, 8)],
+    ["a: !int # c\n", ["a"], new SourceRange(1, 4, 1, 8)],
+    ["- !a\n- x\n", [0], new SourceRange(1, 3, 1, 5)],
+  ])("include a node's anchor and tag: %p", (text, path, range) => {
+    expect(rangeAt(text, ...path)).toEqual(range);
+  });
+
+  test.each<[string, (string | number)[], [number, number]]>([
+    ["!top\nk: v\n", [], [1, 1]],
+    ["- &x !a [1]\n", [0], [1, 3]],
+  ])("start a list or mapping at its properties: %p", (text, path, start) => {
+    expect(startAt(text, ...path)).toEqual(start);
+  });
+
+  test.each<[string, (string | number)[], SourceRange]>([
+    ["{a: !int, b: !str}\n", ["a"], new SourceRange(1, 5, 1, 9)],
+    ["{a: !int, b: !str}\n", ["b"], new SourceRange(1, 14, 1, 18)],
+    ["{a: !int , b: 1}\n", ["a"], new SourceRange(1, 5, 1, 9)],
+    ["[!a, b]\n", [0], new SourceRange(1, 2, 1, 4)],
+    ["[!a , b]\n", [0], new SourceRange(1, 2, 1, 4)],
+    ["[&x , b]\n", [0], new SourceRange(1, 2, 1, 4)],
+    ["[!a, &b , !c]\n", [0], new SourceRange(1, 2, 1, 4)],
+    ["[!a, &b , !c]\n", [1], new SourceRange(1, 6, 1, 8)],
+    ["[!a, &b , !c]\n", [2], new SourceRange(1, 11, 1, 13)],
+  ])("make an empty value in a flow collection span its properties: %p", (text, path, range) => {
+    expect(rangeAt(text, ...path)).toEqual(range);
+  });
+
+  test.each<[string, (string | number)[], [number, number]]>([
+    ["&k a: 1\n", [], [1, 1]],
+    ["- &k a: 1\n", [0], [1, 3]],
+    ["x:\n  !t b: 1\n", ["x"], [2, 3]],
+    ["? &k a\n: 1\n", [], [1, 1]],
+    ["- ? !t a\n  : 1\n", [0], [1, 3]],
+  ])("start a block mapping at its first key's properties: %p", (text, path, start) => {
+    expect(startAt(text, ...path)).toEqual(start);
+  });
+
+  test.each([
+    ["&k 1: a\nb: {*k : c}\n", new SourceRange(1, 1, 1, 5)],
+    ["a: &k 1\n*k : b\n", new SourceRange(1, 4, 1, 8)],
+  ])("make a non-text key span its properties: %p", (text, range) => {
+    expect(SourceDocument.parse(text).nonTextKey).toEqual({ key: 1n, text: "1", range });
+  });
+
+  test("locate an undefined alias at the alias", () => {
+    const error = refusal("x: &a [*a, *b]");
+
+    expect(error.message).toBe("found undefined alias 'b'");
+    expect(error.range).toEqual(new SourceRange(1, 12, 1, 13));
+  });
+
+  test("locate a nesting-limit error at the list's anchor", () => {
+    install({ ...BUILTIN, maxYamlNesting: 1 });
+    const error = refusal("x: &a [1]\n");
+
+    expect(error.message).toContain("this list nests deeper than 1 levels");
+    expect(error.range).toEqual(new SourceRange(1, 4, 1, 5));
+  });
 });

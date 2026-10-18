@@ -522,9 +522,13 @@ def parse_file(source: str | SourceDocument) -> ComposeFile:
     allowed_top = set(ComposeFile.model_fields) | {"input", "output"}
     for key in body:
         if key not in allowed_top:
+            # Name the authored spellings; the plural carrier names fail to load.
+            surface = {
+                {"inputs": "input", "outputs": "output"}.get(name, name)
+                for name in ComposeFile.model_fields
+            }
             raise diagnostics.error(
-                f"unknown top-level key {key!r} "
-                f"(allowed: {', '.join(sorted(set(ComposeFile.model_fields)))})",
+                f"unknown top-level key {key!r} (allowed: {', '.join(sorted(surface))})",
                 range=root.key_range_of(key),
             )
 

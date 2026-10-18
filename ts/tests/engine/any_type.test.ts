@@ -7,7 +7,7 @@
  * TS-only: `-0`, NaN and lone surrogates inside `object` and `Any` values.
  *
  * Later: the compatibility, proof and field-read tests (with the compile checks and node
- * contracts), the `requires_file`/`has_file` tests, and the flow loading tests.
+ * contracts), and the flow loading tests.
  *
  * Not ported: the tuple rows, `test_any_path_unwraps_a_str_subclass_key`, and the non-text key
  * rows (`test_object_rejects_a_non_text_key`,
@@ -25,6 +25,8 @@ import {
   canonicalTypeLabel,
   canonicalUnionOrder,
   FileRef,
+  hasFile,
+  requiresFile,
   type StorageKind,
   Type,
   TypeCheckError,
@@ -402,6 +404,51 @@ describe("Any values", () => {
     expect(decoded.kind).toBe(typed.kind);
     expect(decoded.value).toEqual(typed.value);
     expect(jsTypes(decoded.value)).toEqual(jsTypes(typed.value));
+  });
+});
+
+const LIST_FILE = new Type({ kind: ValueKind.LIST_ANY, element: FILE });
+
+const FILE_TYPEDEFS = {
+  F: { f: "file" },
+  N: { n: "int" },
+  U: "Union(F, N)",
+  OF: { f: "Optional(file)", n: "int" },
+};
+
+describe("requiresFile and hasFile", () => {
+  test.each<[string, Type]>([
+    ["file", FILE],
+    ["Optional(file)", new Type({ kind: ValueKind.FILE, nullable: true })],
+    ["list(file)", LIST_FILE],
+    ["a record with a file field", FILE_RECORD],
+    [
+      "a union of records with a file field",
+      new Type({ kind: ValueKind.OBJECT, variants: [FILE_RECORD, FILE_RECORD] }),
+    ],
+  ])("requires a file when every non-null value holds one: %s", (_id, typ) => {
+    expect(requiresFile(typ)).toBe(true);
+    expect(hasFile(typ)).toBe(true);
+  });
+
+  test.each(["U", "OF"])("a type that may hold a file does not require one: %s", (text) => {
+    const typ = typeFor(text, readTypedefs(FILE_TYPEDEFS));
+    expect(hasFile(typ)).toBe(true);
+    expect(requiresFile(typ)).toBe(false);
+  });
+
+  test("requires a non-null list element and a required field", () => {
+    const optionalFile = new Type({ kind: ValueKind.FILE, nullable: true });
+    const optionalField = new Type({
+      kind: ValueKind.OBJECT,
+      fields: new Map([["f", FILE]]),
+      required: new Set(),
+    });
+    expect(requiresFile(new Type({ kind: ValueKind.LIST_ANY, element: optionalFile }))).toBe(
+      false,
+    );
+    expect(requiresFile(optionalField)).toBe(false);
+    expect(requiresFile(ANY)).toBe(false);
   });
 });
 

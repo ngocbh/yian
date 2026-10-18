@@ -1137,6 +1137,26 @@ function literalMember(tag: string): string {
 // Unions of records
 // --------------------------------------------------------------------------------------- //
 
+/**
+ * Every union member has the field; `type` is what a read gives, or `null` when the members'
+ * types differ and the read is untyped.
+ */
+export interface FieldRead {
+  readonly kind: "read";
+  readonly type: Type | null;
+}
+
+/** Only some union members have the field: `members`, in the union's member order. */
+export interface FieldPartial {
+  readonly kind: "partial";
+  readonly members: readonly Type[];
+}
+
+/** No union member has the field. */
+export interface FieldAbsent {
+  readonly kind: "absent";
+}
+
 /** Return the one value of a single-value `Literal`, else `null`. */
 function singleTag(typ: Type): string | null {
   if (typ.tags === undefined || typ.tags.size !== 1) return null;
@@ -1223,6 +1243,32 @@ function orderedMemberLabels(members: readonly Type[]): [Type, string, string][]
   return labelled.sort(([, , a], [, , b]) => compareCodeUnits(a, b));
 }
 
+/**
+ * Pick a union's tag field: `field` when given, else the first by name.
+ *
+ * @throws RangeError when `typ` is not a tagged union, or `field` is not one of its tag fields.
+ */
+function tagField(typ: Type, field: string | undefined): string {
+  const tagFields = unionTagFields(typ);
+  if (tagFields.length === 0) throw new RangeError("the type is not a tagged union");
+  if (field === undefined) return tagFields[0]!;
+  if (!tagFields.includes(field)) {
+    throw new RangeError(`${reprText(field)} is not a tag field of the union`);
+  }
+  return field;
+}
+
+/**
+ * Return the member of the tagged union `typ` whose tag field equals `tag`, or `null` when no
+ * member has that tag (a non-string `tag` included). `field` is the tag field to match on; by
+ * default the first tag field by name.
+ *
+ * @throws RangeError when `typ` is not a tagged union, or `field` is not one of its tag fields.
+ */
+export function unionMemberForTag(typ: Type, tag: unknown, field?: string): Type | null {
+  return memberWithTag(typ.variants!, tagField(typ, field), tag);
+}
+
 /** Return the member whose single-value tag field `field` equals `tag`, or `null`. */
 function memberWithTag(members: readonly Type[], field: string, tag: unknown): Type | null {
   const index = tagIndex(members, field, tag);
@@ -1239,9 +1285,119 @@ function tagIndex(members: readonly Type[], field: string, tag: unknown): number
   return index === -1 ? null : index;
 }
 
+/**
+ * Return the part of the union `typ` that `keep` selects, keeping its nullability.
+ *
+ * Each item of `keep` names a member by its tag value (tagged unions only) or is a member
+ * `Type` (compared with `typeEquals`); `field` is the tag field tag values refer to, by
+ * default the first by name. One selected member gives that member record; several give a
+ * smaller union with its members in canonical order. Either is nullable when `typ` is.
+ *
+ * Example: restricting `Union(Buy, Hold, Sell)` to `["buy", "sell"]` gives `Union(Buy, Sell)`.
+ *
+ * @throws TypeError when `keep` is a bare string rather than a collection of tags.
+ * @throws RangeError when `typ` is not a union, `keep` is empty, or an item is neither a tag
+ *   nor a member of `typ`.
+ */
+export function restrictUnion(typ: Type, keep: Iterable<string | Type>, field?: string): Type {
+  if (typeof keep === "string") {
+    throw new TypeError("restrictUnion keeps a collection of tags, not a bare string");
+  }
+  if (typ.variants === undefined) throw new RangeError("only a union can be restricted");
+  const members = typ.variants;
+  let selectedField: string | null = null;
+  const selected = new Set<number>();
+  for (const item of keep) {
+    let index: number | null;
+    if (item instanceof Type) {
+      index = members.findIndex((member) => typeEquals(member, item));
+      if (index === -1) {
+        throw new RangeError("restrictUnion got a type that is not a union member");
+      }
+    } else {
+      selectedField ??= tagField(typ, field);
+      index = tagIndex(members, selectedField, item);
+      if (index === null) throw new RangeError(`${reprText(item)} is not a tag of the union`);
+    }
+    selected.add(index);
+  }
+  if (selected.size === 0) throw new RangeError("restrictUnion needs at least one member");
+  const indexes = [...selected].sort((a, b) => a - b);
+  if (indexes.length === 1) return members[indexes[0]!]!.replace({ nullable: typ.nullable });
+  const kept = canonicalUnionOrder(indexes.map((index) => members[index]!));
+  return new Type({ kind: ValueKind.OBJECT, variants: kept, nullable: typ.nullable });
+}
+
+/**
+ * Describe reading field `name` on a value of the union type `typ`.
+ *
+ * When every member has the field, the read's type is the members' type if they are equal
+ * ignoring `nullable`, the merged `Literal` if they are all string `Literal`s, and untyped
+ * otherwise. It is nullable when any member's field is `Optional` or not required.
+ *
+ * @returns A `FieldRead` when every member has the field, a `FieldPartial` with the members
+ *   that have it when only some do, and a `FieldAbsent` when none do.
+ * @throws RangeError when `typ` is not a union.
+ */
+export function unionField(typ: Type, name: string): FieldRead | FieldPartial | FieldAbsent {
+  if (typ.variants === undefined) throw new RangeError("unionField needs a union type");
+  const having = typ.variants.filter((member) => member.fields!.has(name));
+  if (having.length === 0) return { kind: "absent" };
+  if (having.length < typ.variants.length) return { kind: "partial", members: having };
+  const fieldTypes = having.map((member) => member.fields!.get(name)!);
+  const nullable = having.some(
+    (member, i) => fieldTypes[i]!.nullable || !member.required?.has(name),
+  );
+  const strict = fieldTypes.map((fieldType) => fieldType.replace({ nullable: false }));
+  if (strict.every((fieldType) => typeEquals(fieldType, strict[0]!))) {
+    return { kind: "read", type: strict[0]!.replace({ nullable }) };
+  }
+  if (strict.every((fieldType) => fieldType.tags !== undefined)) {
+    const merged = new Set(strict.flatMap((fieldType) => [...fieldType.tags!]));
+    return { kind: "read", type: new Type({ kind: ValueKind.STRING, tags: merged, nullable }) };
+  }
+  return { kind: "read", type: null };
+}
+
 /** Whether `null` satisfies `typ`. */
 function admitsNone(typ: Type): boolean {
   return typ.nullable || typ.kind === ValueKind.NONE;
+}
+
+/**
+ * Whether `file` appears anywhere in `typ`: itself, a field, the element, or a member, so some
+ * value of `typ` may hold a file. A type without `file` holds only JSON values, so every value
+ * of it is an `Any` value.
+ */
+export function hasFile(typ: Type): boolean {
+  if (typ.kind === ValueKind.FILE) return true;
+  if (typ.element !== undefined && hasFile(typ.element)) return true;
+  if (typ.fields !== undefined && [...typ.fields.values()].some(hasFile)) return true;
+  return typ.variants !== undefined && typ.variants.some(hasFile);
+}
+
+/**
+ * Whether every non-null value of `typ` holds a file, so none is an `Any` value.
+ *
+ * A list counts when its element is a non-nullable type that requires a file: the empty list
+ * is shared by every list type and is not counted as a shared value. A record counts when a
+ * required, non-nullable field requires a file; a union when every member does. Load treats
+ * such a type as disjoint from `Any`, although a `file` slot reads a file's JSON form (an
+ * `Any` value) at runtime, where load can't tell.
+ */
+export function requiresFile(typ: Type): boolean {
+  if (typ.kind === ValueKind.FILE) return true;
+  if (typ.variants !== undefined) return typ.variants.every(requiresFile);
+  if (isListKind(typ.kind)) {
+    const element = typ.element;
+    return element !== undefined && !element.nullable && requiresFile(element);
+  }
+  if (typ.fields !== undefined) {
+    return [...typ.fields].some(
+      ([name, field]) => typ.required?.has(name) === true && !field.nullable && requiresFile(field),
+    );
+  }
+  return false;
 }
 
 /** Whether `typ` is `object` with no record or union refinement. */
@@ -1877,4 +2033,123 @@ function buildScalarOrList(declared: ValueKind, value: unknown, path: ValuePath)
   }
   const stored = declared === ValueKind.OBJECT ? jsonPart(value, path, "mapping") : value;
   return new TypedValue(declared as StorageKind, coerceScalar(declared, stored, path) as Value);
+}
+
+/**
+ * Return `value` with only its file and object representation read as `typ` reads it.
+ *
+ * At a `file` position a file's JSON form becomes a `FileRef`; at an `object` position (a
+ * plain `object` value, a `list(object)` item, an `object` record field) each nested `FileRef`
+ * becomes its mapping. Nothing else converts: an int at a `float` position stays an int, and a
+ * value that doesn't fit `typ` is walked as far as it fits and otherwise kept. A union member
+ * is picked as `buildValueAs` picks it: by its tag, else the first member the value
+ * satisfies. Only the containers on the path to a change are copied; `value` itself is
+ * returned when nothing changes (always so when `typ` has no `file` and no `object` position).
+ *
+ * An `object` position reads its value with the write check's JSON walk, so a `-0` there
+ * becomes `0` as the write check stores it, and a value there that isn't a JSON value (NaN, a
+ * container inside itself, a non-JSON part) is kept whole.
+ *
+ * Example: with `Rec` the record `{f: file, n: float}`,
+ * `normalizeFiles(Rec, {f: {uri: "a", mime: null, name: null}, n: 1n})` gives
+ * `{f: new FileRef({uri: "a"}), n: 1n}`.
+ */
+export function normalizeFiles(typ: Type, value: Value): Value {
+  if (value === null || !readsFiles(typ)) return value;
+  if (typ.variants !== undefined) {
+    const member = unionMemberOf(typ, value);
+    return member === null ? value : normalizeFiles(member, value);
+  }
+  if (typ.fields !== undefined) {
+    if (!isRecord(value)) return value;
+    const changed = new Map<string, Value>();
+    for (const [name, field] of typ.fields) {
+      if (!Object.hasOwn(value, name)) continue;
+      const normalized = normalizeFiles(field, value[name]!);
+      if (!Object.is(normalized, value[name])) changed.set(name, normalized);
+    }
+    if (changed.size === 0) return value;
+    const copy: ValueRecord = {};
+    for (const name of Object.keys(value)) {
+      setField(copy, name, changed.has(name) ? changed.get(name)! : value[name]!);
+    }
+    return copy;
+  }
+  if (isListKind(typ.kind)) {
+    if (!isList(value)) return value;
+    // `readsFiles` admits a list only with an element type or as a flat `list(object)`.
+    const element = typ.element ?? Type.scalar(ValueKind.OBJECT);
+    const items = (value as Value[]).map((item) => normalizeFiles(element, item));
+    return items.every((item, index) => Object.is(item, value[index])) ? value : items;
+  }
+  if (typ.kind === ValueKind.FILE) {
+    // A form whose text holds a lone surrogate isn't a yian value, so it is kept.
+    if (!isFileForm(value)) return value;
+    const fits = FILE_FIELDS.every((name) => nonValueReason(value[name]) === null);
+    return fits ? new FileRef(value) : value;
+  }
+  if (typ.kind === ValueKind.OBJECT && (isList(value) || isRecord(value))) {
+    try {
+      return jsonPart(value, [], "mapping");
+    } catch (error) {
+      if (error instanceof TypeCheckError) return value;
+      throw error;
+    }
+  }
+  return value;
+}
+
+/**
+ * Return `typed` with its value read through `typ` by `normalizeFiles`; a `null` `typ` reads
+ * nothing.
+ *
+ * A decoded value holds each file as its JSON form unless its whole kind is `file`; reading it
+ * through the type it was written as turns each one back into a `FileRef`. The result keeps
+ * `typed`'s kind and writes the same wire form. `typed` itself is returned when nothing
+ * changes.
+ *
+ * Example: with `typ` the type `list(file)` and `form` a file's JSON form,
+ * `normalizeTypedFiles(typ, new TypedValue("list[Any]", [form]))` holds `[new FileRef(form)]`.
+ */
+export function normalizeTypedFiles(typ: Type | null, typed: TypedValue): TypedValue {
+  if (typ === null) return typed;
+  const value = normalizeFiles(typ, typed.value);
+  return Object.is(value, typed.value) ? typed : new TypedValue(typed.kind, value);
+}
+
+/**
+ * Whether `typ` has a `file` or an unrefined `object` position at any depth, so reading a
+ * value through it may change how a file is held. Unlike `hasFile`, it also counts plain
+ * `object` and flat `list(object)`, whose nested `FileRef`s are read as mappings.
+ */
+function readsFiles(typ: Type): boolean {
+  if (typ.kind === ValueKind.FILE || isPlainObject(typ)) return true;
+  if (typ.kind === ValueKind.LIST_OBJECT && typ.element === undefined) return true;
+  if (typ.element !== undefined && readsFiles(typ.element)) return true;
+  if (typ.fields !== undefined && [...typ.fields.values()].some(readsFiles)) return true;
+  return typ.variants !== undefined && typ.variants.some(readsFiles);
+}
+
+/**
+ * Return the member of the union `typ` that `buildValueAs` checks `value` against, or `null`
+ * when the value is not a record, has a missing or unknown tag, or matches no member.
+ *
+ * A tagged union's member comes from `taggedMember`, as in `buildForUnion`. For an untagged
+ * union it builds the value against each member again, deliberately: the first member it
+ * satisfies is the one the write check took.
+ */
+function unionMemberOf(typ: Type, value: Value): Type | null {
+  if (!isRecord(value)) return null;
+  const tagged = taggedMember(typ.variants!, value);
+  if (tagged !== null) return tagged[1];
+  for (const member of typ.variants!) {
+    try {
+      buildForType(member, value, []);
+    } catch (error) {
+      if (error instanceof TypeCheckError) continue;
+      throw error;
+    }
+    return member;
+  }
+  return null;
 }

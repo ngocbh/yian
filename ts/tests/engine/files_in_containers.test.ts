@@ -1,14 +1,20 @@
 /**
- * Files inside typed containers, a port of the value checks (`buildValueAs`), the overlap
- * tests and the `field_of` table of `tests/engine/test_files_in_containers.py`, with `FileRef`
- * constructor refusals (`RangeError`, as pydantic's `ValidationError` is a `ValueError`).
- * Where Python checks that a value is kept with `is`, these tests use `toBe`.
+ * Files inside typed containers, a port of the value checks (`buildValueAs`), file
+ * normalization (`normalizeFiles`), the overlap tests and the `field_of` table of
+ * `tests/engine/test_files_in_containers.py`, with `FileRef` constructor refusals
+ * (`RangeError`, as pydantic's `ValidationError` is a `ValueError`). Where Python checks that
+ * a value is kept with `is`, these tests use `toBe`.
  *
- * Later: file normalization (`normalizeFiles`) and flow runs (with the runner).
+ * TS-only: the `normalizeTypedFiles` tests, and the `normalizeFiles` row keeping an `object`
+ * value that holds NaN.
+ *
+ * Later: flow runs (with the runner).
  *
  * Not ported: the `field_of` rows on dict subclasses, `defaultdict` and a `FileRef` subclass; a
  * record is a plain object and a dotted read gives its own keys. The tuple in
- * `test_an_object_without_files_is_stored_as_given` is a list here (no tuples in TS).
+ * `test_an_object_without_files_is_stored_as_given` is a list here, and
+ * `test_normalize_files_reads_a_tuple_as_a_list_only_when_it_changes` is not ported (no tuples
+ * in TS).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -18,10 +24,14 @@ import {
   buildValueAs,
   FileRef,
   fieldOf,
+  normalizeFiles,
+  normalizeTypedFiles,
   Type,
   TypeCheckError,
+  TypedValue,
   typesOverlap,
   type Value,
+  type ValueRecord,
   ValueKind,
 } from "../../src/typesys/values.ts";
 
@@ -155,6 +165,111 @@ describe("an object slot reads a nested file as its mapping", () => {
     expect(typeCheckError(() => buildValueAs(OBJECT, cyclic)).message).toBe(
       "value contains itself",
     );
+  });
+});
+
+describe("normalizeFiles", () => {
+  test("reads the JSON form at a file position", () => {
+    expect(normalizeFiles(t("Rec"), { f: form(), n: 1n })).toStrictEqual({ f: REF, n: 1n });
+  });
+
+  test("reads a nested file as a mapping at an object position", () => {
+    expect(normalizeFiles(t("Box"), { x: { f: REF } })).toStrictEqual({ x: { f: form() } });
+  });
+
+  test("keeps an int at a float position", () => {
+    const normalized = normalizeFiles(t("Num"), { n: 3n }) as ValueRecord;
+    expect(typeof normalized["n"]).toBe("bigint");
+  });
+
+  test.each<[string, Value]>([
+    ["int", 3n],
+    ["Num", { n: 3n }],
+    ["list(str)", ["a"]],
+    ["Rec", { f: REF, n: 1n }],
+    ["list(file)", [REF]],
+    ["object", { a: [1n] }],
+    ["Any", { uri: "f", mime: null, name: null }],
+  ])("returns the same value when nothing changes: %s", (declared, value) => {
+    expect(normalizeFiles(t(declared), value)).toBe(value);
+  });
+
+  test.each<[string, string[], Value]>([
+    ["XFile first", ["XFile", "XObject"], { x: REF }],
+    ["XObject first", ["XObject", "XFile"], { x: form() }],
+  ])("picks an untagged union member like the write check: %s", (_id, members, expected) => {
+    // Both members admit `{x: form}`, so the first one decides how `x` reads.
+    const union = new Type({ kind: ValueKind.OBJECT, variants: members.map(t) });
+    const value = { x: form() };
+    expect(normalizeFiles(union, value)).toStrictEqual(expected);
+    expect(buildValueAs(union, value).toObject()).toStrictEqual(expected);
+  });
+
+  test.each<[string, Value, Value]>([
+    ["file", { kind: "file", x: form() }, { kind: "file", x: REF }],
+    ["object", { kind: "object", x: { f: REF } }, { kind: "object", x: { f: form() } }],
+  ])("picks a tagged union member by its tag: %s", (_id, value, expected) => {
+    expect(normalizeFiles(t("Union(TFile, TObject)"), value)).toStrictEqual(expected);
+  });
+
+  test("reads an Optional union", () => {
+    const declared = t("Optional(Union(TFile, TObject))");
+    expect(normalizeFiles(declared, null)).toBeNull();
+    expect(normalizeFiles(declared, { kind: "file", x: form() })).toStrictEqual({
+      kind: "file",
+      x: REF,
+    });
+  });
+
+  test.each<[string, Value]>([
+    ["Rec", "text"],
+    ["list(file)", { f: form() }],
+    ["Union(TFile, TObject)", { kind: "other", x: form() }],
+    ["Union(TFile, TObject)", { x: form() }],
+    ["Union(XFile, IntUri)", { y: form() }],
+    ["Union(XFile, IntUri)", [form()]],
+    // An object position reads with the write check's JSON walk, which refuses NaN, so the
+    // whole value is kept; Python still maps the file.
+    ["object", { f: REF, bad: NaN }],
+  ])("keeps a value that fails the type: %s", (declared, value) => {
+    expect(normalizeFiles(t(declared), value)).toBe(value);
+  });
+
+  test.each<[string, Value]>([
+    ["file", form()],
+    ["Rec", { f: form(), n: 1n }],
+    ["list(Rec)", [{ f: REF, n: 1n }, { f: form(), n: 2n }]],
+    ["Optional(list(Optional(file)))", [form(), null]],
+    ["object", { f: REF, g: [REF, 1n] }],
+    ["list(object)", [{ f: REF }, { a: 1n }]],
+    ["Box", { x: { f: [REF] } }],
+    ["Union(TFile, TObject)", { kind: "file", x: form() }],
+    ["Union(XFile, IntUri)", { x: form() }],
+  ])("agrees with the write check: %s", (declared, value) => {
+    const typ = t(declared);
+    expect(normalizeFiles(typ, value)).toStrictEqual(buildValueAs(typ, value).toObject());
+  });
+});
+
+describe("normalizeTypedFiles", () => {
+  test("a list of files decoded from the wire holds FileRefs", () => {
+    const typ = t("list(file)");
+    const written = buildValueAs(typ, [REF, form()]);
+    const decoded = TypedValue.fromWire(written.toWire());
+    expect(decoded.value).toStrictEqual([form(), form()]);
+    const normalized = normalizeTypedFiles(typ, decoded);
+    expect(normalized.kind).toBe(decoded.kind);
+    expect(normalized.value).toStrictEqual([REF, REF]);
+  });
+
+  test("returns the same TypedValue when nothing changes", () => {
+    const typed = buildValueAs(t("list(file)"), [REF]);
+    expect(normalizeTypedFiles(t("list(file)"), typed)).toBe(typed);
+  });
+
+  test("a null type returns the TypedValue", () => {
+    const typed = TypedValue.fromWire({ kind: "list[Any]", value: [form()] });
+    expect(normalizeTypedFiles(null, typed)).toBe(typed);
   });
 });
 

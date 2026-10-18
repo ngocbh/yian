@@ -1,10 +1,9 @@
 /**
- * The union refinement's shape, tag fields, order, labels, overlap and value checks
- * (`buildValueAs`), a port of those tests of `tests/engine/test_union_values.py`.
+ * The union refinement's shape, tag fields, order, labels, overlap, value checks
+ * (`buildValueAs`) and member helpers (`unionMemberForTag`, `restrictUnion`, `unionField`), a
+ * port of `tests/engine/test_union_values.py`. Python's `ValueError` is a `RangeError` here.
  *
  * TS-only: a no-member error still reads as class `TypeCheckError` (`error.name`).
- *
- * Later: the member helpers (`unionField`, `unionMemberForTag`, `restrictUnion`).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -15,9 +14,16 @@ import {
   buildValueAs,
   canonicalTypeLabel,
   canonicalUnionOrder,
+  type FieldAbsent,
+  type FieldPartial,
+  type FieldRead,
+  restrictUnion,
   Type,
   TypeCheckError,
+  typeEquals,
   typesOverlap,
+  unionField,
+  unionMemberForTag,
   unionTagFields,
   ValueKind,
 } from "../../src/typesys/values.ts";
@@ -402,5 +408,149 @@ describe("union labels and order", () => {
     const labels = [canonicalTypeLabel(text), canonicalTypeLabel(call)].sort(compareCodeUnits);
     const ordered = canonicalUnionOrder([text, call]);
     expect(ordered.map(canonicalTypeLabel)).toEqual(labels);
+  });
+});
+
+describe("unionMemberForTag and restrictUnion", () => {
+  test("unionMemberForTag", () => {
+    expect(unionMemberForTag(U, "buy")).toBe(buy);
+    expect(unionMemberForTag(U, "sell")).toBe(sell);
+    expect(unionMemberForTag(U, "hold")).toBeNull();
+  });
+
+  test("unionMemberForTag on another tag field", () => {
+    const first = rec({ side: lit("b"), action: lit("buy"), qty: INT });
+    const second = rec({ side: lit("s"), action: lit("sell"), price: FLOAT });
+    const both = union([first, second]);
+    expect(unionMemberForTag(both, "s", "side")).toBe(second);
+    expect(() => unionMemberForTag(both, "buy", "qty")).toThrow(
+      new RangeError("'qty' is not a tag field of the union"),
+    );
+  });
+
+  test("restrictUnion on another tag field", () => {
+    const first = rec({ side: lit("b"), action: lit("buy"), qty: INT });
+    const second = rec({ side: lit("s"), action: lit("sell"), price: FLOAT });
+    const third = rec({ side: lit("h"), action: lit("hold") });
+    const three = union([first, second, third]);
+    expect(typeEquals(restrictUnion(three, ["s"], "side"), second)).toBe(true);
+    expect(typeEquals(restrictUnion(three, ["s", "b"], "side"), union([first, second]))).toBe(
+      true,
+    );
+    expect(() => restrictUnion(three, ["sell"], "side")).toThrow(
+      new RangeError("'sell' is not a tag of the union"),
+    );
+  });
+
+  test("restrictUnion returns members in canonical order", () => {
+    const restricted = restrictUnion(union([sell, hold, buy]), new Set(["sell", "buy"]));
+    expect(typeEquals(restricted, union([buy, sell]))).toBe(true);
+  });
+
+  test("restrictUnion rejects a bare string", () => {
+    expect(() => restrictUnion(U, "buy")).toThrow(
+      new TypeError("restrictUnion keeps a collection of tags, not a bare string"),
+    );
+  });
+
+  test("unionMemberForTag needs a tagged union", () => {
+    expect(() => unionMemberForTag(UNTAGGED, "text")).toThrow(
+      new RangeError("the type is not a tagged union"),
+    );
+  });
+
+  test("restrictUnion to one tag gives the member", () => {
+    expect(typeEquals(restrictUnion(union([buy, sell, hold]), ["buy"]), buy)).toBe(true);
+    expect(typeEquals(restrictUnion(union([buy, sell], true), ["buy"]), optional(buy))).toBe(
+      true,
+    );
+  });
+
+  test("restrictUnion to two tags keeps nullable", () => {
+    const three = union([buy, sell, hold], true);
+    expect(typeEquals(restrictUnion(three, ["sell", "buy"]), union([buy, sell], true))).toBe(
+      true,
+    );
+    expect(typeEquals(restrictUnion(union([buy, sell, hold]), ["buy", "sell"]), U)).toBe(true);
+  });
+
+  test("restrictUnion by member", () => {
+    expect(typeEquals(restrictUnion(UNTAGGED, [text]), text)).toBe(true);
+  });
+
+  test("restrictUnion rejects empty and unknown", () => {
+    expect(() => restrictUnion(U, new Set())).toThrow(
+      new RangeError("restrictUnion needs at least one member"),
+    );
+    expect(() => restrictUnion(U, ["hold"])).toThrow(
+      new RangeError("'hold' is not a tag of the union"),
+    );
+    expect(() => restrictUnion(UNTAGGED, [hold])).toThrow(
+      new RangeError("restrictUnion got a type that is not a union member"),
+    );
+  });
+});
+
+/** Require `result` to be a `FieldRead` whose type equals `expected` (`null`: untyped). */
+function expectRead(
+  result: FieldRead | FieldPartial | FieldAbsent,
+  expected: Type | null,
+): void {
+  expect(result.kind).toBe("read");
+  const read = (result as FieldRead).type;
+  if (expected === null) expect(read).toBeNull();
+  else expect(typeEquals(read!, expected)).toBe(true);
+}
+
+describe("unionField", () => {
+  test("a shared tag reads the merged Literal", () => {
+    expectRead(unionField(U, "action"), lit("buy", "sell"));
+  });
+
+  test("equal types read that type", () => {
+    const first = rec({ action: lit("buy"), note: STR });
+    const second = rec({ action: lit("sell"), note: STR });
+    expectRead(unionField(union([first, second]), "note"), STR);
+  });
+
+  test("equality ignores nullable and nullability spreads", () => {
+    const first = rec({ action: lit("buy"), note: STR });
+    const second = rec({ action: lit("sell"), note: optional(STR) });
+    expectRead(unionField(union([first, second]), "note"), optional(STR));
+  });
+
+  test("a field that is not required is nullable", () => {
+    const first = new Type({
+      kind: ValueKind.OBJECT,
+      fields: new Map([
+        ["action", lit("buy")],
+        ["note", STR],
+      ]),
+      required: new Set(["action"]),
+    });
+    const second = rec({ action: lit("sell"), note: STR });
+    expectRead(unionField(union([first, second]), "note"), optional(STR));
+  });
+
+  test("a merged Literal is nullable if any member's is", () => {
+    const first = rec({ action: lit("buy"), mode: lit("a") });
+    const second = rec({ action: lit("sell"), mode: optional(lit("b")) });
+    expectRead(unionField(union([first, second]), "mode"), optional(lit("a", "b")));
+  });
+
+  test("differing types read untyped", () => {
+    const first = rec({ action: lit("buy"), size: INT });
+    const second = rec({ action: lit("sell"), size: STR });
+    expectRead(unionField(union([first, second]), "size"), null);
+  });
+
+  test("partial", () => {
+    const partial = unionField(union([buy, sell, hold]), "qty");
+    expect(partial).toEqual({ kind: "partial", members: [buy] });
+    expect(unionField(UNTAGGED, "text")).toEqual({ kind: "partial", members: [text] });
+  });
+
+  test("absent", () => {
+    expect(unionField(U, "zzz")).toEqual({ kind: "absent" });
   });
 });

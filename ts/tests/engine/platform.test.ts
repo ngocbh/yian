@@ -531,6 +531,20 @@ describe("virtualScheduler", () => {
     expect(clock.now()).toBe(3000);
   });
 
+  test("a woken sleeper's next sleep is queued before the clock moves on", async () => {
+    const clock = virtualScheduler();
+    const woke: string[] = [];
+    const a = (async () => {
+      await clock.sleep(100);
+      woke.push(`A@${clock.now()}`);
+      await clock.sleep(100);
+      woke.push(`A@${clock.now()}`);
+    })();
+    const b = clock.sleep(150).then(() => woke.push(`B@${clock.now()}`));
+    await Promise.all([a, b]);
+    expect(woke).toEqual(["A@100", "B@150", "A@200"]);
+  });
+
   test("sleep(0) doesn't advance the clock", async () => {
     const clock = virtualScheduler(1000);
     await clock.sleep(0);
@@ -568,12 +582,12 @@ describe("waitForLock", () => {
     expect(error).toBeInstanceOf(FileLockError);
     expect((error as FileLockError).reason).toBe("busy");
     expect((error as FileLockError).message).toContain("timed out");
-    expect(scheduler.now()).toBeGreaterThanOrEqual(1500);
+    expect(scheduler.now()).toBe(1500);
     expect(scheduler.sleeps).toBe(5);
     expect(performance.now() - started).toBeLessThan(1000);
   });
 
-  test("a NaN or negative timeout throws RangeError", async () => {
+  test("a NaN or negative timeout rejects with RangeError", async () => {
     for (const timeoutMs of [Number.NaN, -1]) {
       expect(await rejection(waitForLock(file, { timeoutMs, scheduler: virtualScheduler() }))).toBeInstanceOf(
         RangeError,

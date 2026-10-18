@@ -308,7 +308,10 @@ export interface Scheduler {
 /** The longest single timer `realScheduler.sleep` arms (one hour); longer sleeps run in chunks. */
 export const SLEEP_CHUNK_MS = 3_600_000;
 
-/** Reject unless a sleep of `ms` under `signal` must wait; return whether it must. */
+/**
+ * Throw `signal.reason` once aborted, or `RangeError` for a non-finite `ms`; return
+ * whether a sleep of `ms` must wait.
+ */
 function mustWait(ms: number, signal: AbortSignal | undefined): boolean {
   signal?.throwIfAborted();
   if (ms <= 0) return false;

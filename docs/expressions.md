@@ -99,9 +99,9 @@ evaluator serves the pool, a prompt's local record, and the map-body `item` scop
 Changed (TS yian): comparisons. `==` and `!=` compare deeply across kinds: numbers by exact
 value (`${2 ** 60 == 2.0 ** 60}` is `true`; a bool counts as 0 or 1), text by code units, lists
 item by item, records by keys and values, files by `uri`, `mime` and `name`; any other pair is
-unequal. Ordering takes only two numbers (by exact value, a bool as 0 or 1) or two texts (by UTF-16 code units);
-any other pair, lists included (`${[1] < [2]}`), is an error naming the operator and the
-operand kinds, and a null operand still gives `false`. `in` finds text in text, an equal item
+unequal. Ordering takes only two numbers (by exact value, a bool as 0 or 1) or two texts (by
+UTF-16 code units); any other pair, lists included (`${[1] < [2]}`), is an error naming the
+operator and the operand kinds, and a null operand still gives `false`. `in` finds text in text, an equal item
 in a list, or a text key in a record; any other right side, or a non-text left side with text
 on the right, is an error.
 

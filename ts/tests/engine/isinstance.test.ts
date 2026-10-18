@@ -1,18 +1,16 @@
 /**
  * `isinstance(x, T)` in the expression language: the evaluation and parse tests of
- * `tests/engine/test_isinstance.py`, `test_reference_walks_skip_the_type_name`, the
- * `rewrite_expr_refs`/`rewrite_condition_refs` parts of `test_rewrites_leave_the_type_name_alone`,
- * `test_isinstance_subject_is_the_tested_expression`,
+ * `tests/engine/test_isinstance.py`, `test_reference_walks_skip_the_type_name`,
+ * `test_rewrites_leave_the_type_name_alone`, `test_isinstance_subject_is_the_tested_expression`,
  * `test_infer_expr_type_gives_bool_without_looking_up_the_type_name`,
  * `test_eval_binding_and_eval_template_use_the_type_table` (an embedded `false` is written
- * `false`), and an `isinstanceTypeNames` test.
+ * `false`), the co-skip, flow-callee and prompt-function tests, and an `isinstanceTypeNames`
+ * test.
  *
  * `isinstance` is a special form: the first argument is an expression, the second a bare type
  * name looked up in the type table (`types`, a `Map`), never a reference.
  *
- * Left for later: the co-skip, flow-callee and prompt-function tests and the
- * `rewrite_template_refs` part of the rewrite test land with the template walks; the tracing
- * test with `lineage.ts`; the node, case and loop tests (from
+ * Left for later: the tracing test lands with `lineage.ts`; the node, case and loop tests (from
  * `test_a_node_starts_with_an_empty_type_table` on) with compose and `run.ts`.
  */
 
@@ -33,7 +31,16 @@ import {
   rewriteExprRefs,
 } from "../../src/expr/expressions.ts";
 import { type ExprNode, parseExpr, Token } from "../../src/expr/grammar.ts";
-import { evalBinding, evalTemplate, exprRefsOf, scanTemplate } from "../../src/expr/template.ts";
+import {
+  bindingCoSkips,
+  evalBinding,
+  evalTemplate,
+  exprRefsOf,
+  flowCallCalleesInSpans,
+  promptRefs,
+  rewriteTemplateRefs,
+  scanTemplate,
+} from "../../src/expr/template.ts";
 import { Type, type Value, type ValueRecord, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import { fieldOf } from "../../src/typesys/values.ts";
 
@@ -250,6 +257,7 @@ test("rewrites leave the type name alone", () => {
   const rename = (path: string) => "x." + path;
   expect(rewriteExprRefs("isinstance(d.output, Buy)", rename)).toBe("isinstance(x.d.output, Buy)");
   expect(rewriteConditionRefs("${isinstance(d.output, Buy)}", rename)).toBe("${isinstance(x.d.output, Buy)}");
+  expect(rewriteTemplateRefs("ok ${isinstance(d.output, Buy)}", rename)).toBe("ok ${isinstance(x.d.output, Buy)}");
 });
 
 /** A position-blind form of `node`, as Lark's `Tree`/`Token` equality ignores positions. */
@@ -288,4 +296,24 @@ test("isinstanceTypeNames lists each type name once, in source order", () => {
   expect(isinstanceTypeNames(parseExpr("isinstance(x, Buy) or isinstance(y, int)"))).toEqual(["Buy", "int"]);
   expect(isinstanceTypeNames(parseExpr("isinstance(x, Buy) and not isinstance(y.z, Buy)"))).toEqual(["Buy"]);
   expect(isinstanceTypeNames(parseExpr("x"))).toEqual([]);
+});
+
+test("an isinstance binding does not co-skip", () => {
+  expect(bindingCoSkips("${isinstance(d.output, Buy)}")).toBe(false);
+  expect(bindingCoSkips("${upper(d.output)}")).toBe(false);
+});
+
+// --- callee and prompt handling --- //
+
+test("isinstance is not a flow callee", () => {
+  expect(flowCallCalleesInSpans("${isinstance(x, Buy)}")).toEqual([]);
+  expect(flowCallCalleesInSpans("${isinstance(x, Buy) and flow(a=1)}")).toEqual(["flow"]);
+});
+
+test("isinstance is not a prompt function", () => {
+  expect(() => promptRefs("${isinstance(x, Buy)}")).toThrow(ExpressionError);
+  expect(() => promptRefs("${isinstance(x, Buy)}")).toThrow("isinstance is not a prompt function");
+  expect(() => promptRefs("Order: ${render_as_json(x)} ${upper(isinstance(x, Buy))}")).toThrow(
+    "compute it in an input binding",
+  );
 });

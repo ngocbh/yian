@@ -2,12 +2,11 @@
  * `T(...)` constructors in the expression language: the parse and evaluation tests of
  * `tests/engine/test_constructor_expr.py` (call shape, the positional and keyword forms, larger
  * expressions, names that are not constructors, a constructor in an embedded template span),
- * its walker tests (`expr_refs`, `rewrite_expr_refs`, `constructor_names`) and its static
- * inference tests.
+ * its walker tests (`expr_refs`, `rewrite_expr_refs`, `constructor_names`), the co-skip,
+ * flow-callee and prompt tests, and its static inference tests.
  *
- * Left for later: the co-skip, flow-callee (`test_a_typedef_name_is_not_a_flow_callee`) and
- * prompt tests land with the template walks; the route and feedback tests with `lineage.ts`;
- * the binder tests with `nodes/binding.ts`.
+ * Left for later: the route and feedback tests land with `lineage.ts`; the binder tests with
+ * `nodes/binding.ts`.
  */
 
 import { expect, test } from "bun:test";
@@ -24,7 +23,7 @@ import {
   rewriteExprRefs,
 } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
-import { evalBinding } from "../../src/expr/template.ts";
+import { bindingCoSkips, evalBinding, flowCallCalleesInSpans, promptRefs } from "../../src/expr/template.ts";
 import { Type, typeFor, type Value, type ValueRecord, ValueKind } from "../../src/typesys/index.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
 import { fieldOf } from "../../src/typesys/values.ts";
@@ -253,10 +252,41 @@ test("rewrites leave the type and field names alone", () => {
   expect(renamed).toBe("Buy(action=x.a, conviction=x.s.output).action");
 });
 
+test("a positional constructor co-skips like its argument", () => {
+  expect(bindingCoSkips("${Buy(d.output)}")).toBe(true);
+  expect(bindingCoSkips("${Buy(d.output).conviction}")).toBe(true);
+  expect(bindingCoSkips('${Buy(action="buy", conviction=d.output)}')).toBe(false);
+  expect(bindingCoSkips("${upper(d.output)}")).toBe(false);
+});
+
 test("constructor names are the callees that are no builtin", () => {
   const tree = parseExpr("[Buy(d.output), upper(x), isinstance(y, Sell), Sell(price=p), Buy(z)]");
   expect(constructorNames(tree)).toEqual(["Buy", "Sell"]);
   expect(constructorNames(parseExpr("x"))).toEqual([]);
+});
+
+test("a typedef name is not a flow callee", () => {
+  const text = "${Buy(d.output)} ${review(d.output)}";
+  expect(flowCallCalleesInSpans(text)).toEqual(["Buy", "review"]);
+  expect(flowCallCalleesInSpans(text, new Set(["Buy"]))).toEqual(["review"]);
+});
+
+test("a constructor is not a prompt function", () => {
+  expect(() => promptRefs("Order: ${Buy(order)}")).toThrow(
+    "unknown prompt function 'Buy'; prompts call only formatting builtins " +
+      "(join, lower, render_as_json, upper); build or check a typed value with a " +
+      "`typedefs:` constructor `T(...)` in an input binding",
+  );
+});
+
+test("a builtin type name in a prompt is not a conversion", () => {
+  expect(() => promptRefs("Count: ${int(order)}")).toThrow(
+    "unknown prompt function 'int'; types in expressions are typedef names; `int(...)` is not a conversion",
+  );
+});
+
+test("a prompt call with several arguments is an unknown prompt function", () => {
+  expect(() => promptRefs("${foo(a, b)}")).toThrow("unknown prompt function 'foo';");
 });
 
 // --- static inference --- //

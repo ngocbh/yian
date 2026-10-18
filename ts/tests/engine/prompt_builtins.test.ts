@@ -3,13 +3,14 @@
  * evaluates a prompt span as a plain reference, a builtin call (positional and keyword
  * arguments, optional dotted access on the result), or a larger expression, and raises on a miss
  * or a final `null`; a call-result dotted miss coalesces, defaults or is falsy outside strict
- * mode; and the result type a shipped builtin always returns (`builtinResultType`).
+ * mode; `promptRefs` collects the references a prompt reads and rejects an unknown builtin; and
+ * the result type a shipped builtin always returns (`builtinResultType`).
  *
  * The values follow the TS number model (ints are `bigint`s). Python's `_mkrec`, registered for
  * good, is a stand-in registered for one test each.
  *
- * Left for later: the `prompt_refs` tests land with `promptRefs`, the loader tests with compose,
- * and `test_prompt_default_fires_in_a_running_flow` with `run.ts`.
+ * Left for later: the loader tests land with compose, and
+ * `test_prompt_default_fires_in_a_running_flow` with `run.ts`.
  */
 
 import { afterEach, expect, test } from "bun:test";
@@ -23,7 +24,7 @@ import {
 } from "../../src/expr/builtins.ts";
 import { ExpressionError, evalExpr, RequiredError, ResolveMode, resolveInRecord } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
-import { evalBinding, renderTemplateRecord } from "../../src/expr/template.ts";
+import { evalBinding, promptRefs, renderTemplateRecord } from "../../src/expr/template.ts";
 import { Type, type Value, ValueKind, type ValueRecord } from "../../src/typesys/index.ts";
 
 const REC: ValueRecord = { briefs: ["ab", "adf"], name: "zeta", sig: { value: 0.8 } };
@@ -193,6 +194,24 @@ test("a plain reference that is unknown or null raises", () => {
 test("a span nested in a call shows the rewrite", () => {
   // Inside a span, a builtin's argument names the input directly.
   expect(expectRenderError("[${render_as_json(${briefs})}]").message).toContain("write `${render_as_json(briefs)}`");
+});
+
+// --- promptRefs, the compile-time companion --- //
+
+test("promptRefs collects plain and argument references", () => {
+  expect(promptRefs("a ${name} b ${render_as_json(briefs, 4)} c ${join(sig.value)}")).toEqual([
+    "name",
+    "briefs",
+    "sig.value",
+  ]);
+});
+
+test("promptRefs skips literals", () => {
+  expect(promptRefs("${render_as_json(briefs, 4)} ${lower('HI')}")).toEqual(["briefs"]);
+});
+
+test("promptRefs rejects an unknown builtin", () => {
+  expect(() => promptRefs("${frobnicate(name)}")).toThrow(ExpressionError);
 });
 
 // --- mode interaction for call-result dotted misses --- //

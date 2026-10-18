@@ -21,7 +21,8 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   with a comparator" lint bans a bare `.sort()` or `.toSorted()`.
 - Every event in `src/events.ts` has a `type` naming its class and a `toJSON()` giving its
   snake_case JSON form (`../conformance/schema/events.schema.json`); flow values inside are left
-  as they are, so write the form with yian's JSON codec.
+  as they are, so write the form with yian's JSON codec, not `JSON.stringify` (it turns infinity
+  into null and throws on a bigint).
 
 ## Commands
 

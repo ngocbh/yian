@@ -34,6 +34,7 @@ import {
   ToolCallFinished,
   ToolCallStarted,
 } from "../../src/events.ts";
+import { importStatements } from "./source_scan.ts";
 
 const FAILURE = new Failure({
   code: "node.execute",
@@ -445,7 +446,8 @@ describe("toJSON", () => {
     expect(expanded.toJSON().grow.seed).toBe(seed);
   });
 
-  test("JSON.stringify writes the data form, so type never reaches JSON", () => {
+  test("type stays out of the JSON form (plain samples only: no bigint or infinity)", () => {
+    // Not a serialization recipe: JSON.stringify turns infinity into null and throws on a bigint.
     for (const { event } of SAMPLES) {
       expect(JSON.parse(JSON.stringify(event))).toEqual(event.toJSON());
     }
@@ -735,5 +737,14 @@ describe("events schema", () => {
       const properties = def(name).properties as Record<string, Schema>;
       expect(properties.purpose!.enum).toEqual(Object.keys(PURPOSES));
     }
+  });
+});
+
+describe("the events module", () => {
+  test('imports only "./diagnostics.ts"', () => {
+    // The observer vocabulary sits just above the diagnostic value spine.
+    const path = fileURLToPath(new URL("../../src/events.ts", import.meta.url));
+    const specifiers = importStatements(readFileSync(path, "utf8")).map((i) => i.specifier);
+    expect(specifiers).toEqual(["./diagnostics.ts"]);
   });
 });

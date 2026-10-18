@@ -20,7 +20,8 @@
  * Each event has a `type` discriminant equal to its class name and a `toJSON()`
  * giving its snake_case data form, described by `conformance/schema/events.schema.json`:
  * keys in field order, every key present (`null` for an absent optional). Values the
- * flow produced are kept as they are, so write the form with yian's JSON codec.
+ * flow produced are kept as they are, so write the form with yian's JSON codec, not
+ * `JSON.stringify`, which turns infinity into null and throws on a bigint.
  */
 
 import { compareCodeUnits, type Failure } from "./diagnostics.ts";
@@ -452,7 +453,10 @@ export class ToolCallFinished {
   }
 }
 
-// Hosts sharing one `onEvent` callback can separate these from post-durable observers.
+/**
+ * The in-loop AGENT event classes, so hosts sharing one `onEvent` callback can
+ * separate them from post-durable observers.
+ */
 export const IN_LOOP_EVENTS = [
   ModelCallStarted,
   ModelCallFinished,

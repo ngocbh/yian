@@ -1,14 +1,14 @@
 /**
  * Tests for OpenAI Responses reply parsing in `src/llm/protocols/openai_responses.ts`: SSE
- * events into deltas, parts with replay records, dense indexes, terminal events, usage and
- * finish reasons.
+ * events into deltas, parts with replay records, dense indexes, terminal events, usage, finish
+ * reasons, stream errors and the round trip back into a body.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { BUILTIN, install } from "../../src/defaults.ts";
 import { encodeBody } from "../../src/llm/body.ts";
-import { ProviderError } from "../../src/llm/errors.ts";
+import { type ErrorKind, ProviderError } from "../../src/llm/errors.ts";
 import {
   collect,
   type Event,
@@ -23,10 +23,12 @@ import { SSEEvent } from "../../src/llm/framing.ts";
 import {
   Message,
   type Part,
+  readReplayRecord,
   ReasoningPart,
   RefusalPart,
   type ReplayKey,
   replayRecord,
+  Request,
   Response,
   TextPart,
   ToolCallPart,
@@ -209,9 +211,14 @@ function completed(output: JsonValue[] = [], fields: JsonObject = {}): JsonObjec
   return { type: "response.completed", response: reply(output, fields) };
 }
 
-function incomplete(reason: string, output: JsonValue[] = []): JsonObject {
-  const response = reply(output, { status: "incomplete", incomplete_details: { reason } });
+function incomplete(reason: string | null, output: JsonValue[] = []): JsonObject {
+  const response = reply(output, { status: "incomplete", incomplete_details: reason === null ? null : { reason } });
   return { type: "response.incomplete", response };
+}
+
+function failed(code: string | null, message: JsonValue | null): JsonObject {
+  const error = code === null && message === null ? null : { code, message };
+  return { type: "response.failed", response: reply([], { status: "failed", error }) };
 }
 
 /** Return a message item as `output_item.added` carries it: in progress, with no content yet. */
@@ -670,11 +677,11 @@ describe("terminal output", () => {
   });
 
   test("a refusal built from deltas whose record can't be built is a protocol error", async () => {
-    let phase: JsonValue = "deep";
-    for (let i = 0; i < 200; i++) phase = [phase];
+    install({ ...BUILTIN, maxValueNesting: 3 });
+    const phase = [[["deep"]]];
     const error = await failure([added(0, { ...started(MESSAGE), phase }), refusalDelta(0, 0, "No."), completed()]);
     expect(error.kind).toBe("protocol");
-    expect(error.message).toMatch(/^openai stream has an invalid refusal: .*nests deeper than 100 levels$/);
+    expect(error.message).toMatch(/^openai stream has an invalid refusal: .*nests deeper than 3 levels$/);
   });
 
   test("a refusal missing from the terminal output takes its done text", async () => {
@@ -860,5 +867,348 @@ describe("usage and finish", () => {
   test("the parser returns at the terminal event", async () => {
     const events = await parse([completed(), { type: "error", code: "server_error", message: "late" }]);
     expect(events.at(-1)).toEqual(finish("stop"));
+  });
+});
+
+describe("usage errors", () => {
+  test.each(["input_tokens_details", "output_tokens_details"])("usage %s that aren't objects", async (field) => {
+    for (const details of ["text", [1n], 3n, true]) {
+      const error = await failure([completed([], { usage: { ...USAGE, [field]: details } })]);
+      expect(error.kind).toBe("protocol");
+      expect(error.retryable).toBe(false);
+      expect(error.message).toBe("openai response usage details are not objects");
+    }
+  });
+
+  const counts: [string, (count: JsonValue) => JsonObject][] = [
+    ["input_tokens", (count) => ({ ...USAGE, input_tokens: count })],
+    ["output_tokens", (count) => ({ ...USAGE, output_tokens: count })],
+    ["total_tokens", (count) => ({ ...USAGE, total_tokens: count })],
+    ["cached_tokens", (count) => ({ ...USAGE, input_tokens_details: { cached_tokens: count } })],
+    ["cache_write_tokens", (count) => ({ ...USAGE, input_tokens_details: { cache_write_tokens: count } })],
+    ["reasoning_tokens", (count) => ({ ...USAGE, output_tokens_details: { reasoning_tokens: count } })],
+  ];
+  test.each(counts)("a usage %s that isn't a safe int", async (_, usage) => {
+    // Written as raw JSON so a float token that is an integer (`1.0`, `1e3`) reaches the parser.
+    for (const token of ["1.0", "1e3", "1.5", "9007199254740992", "18446744073709551616", '"3"', "true"]) {
+      const data = encodeBody(completed([], { usage: usage("COUNT") })).replace('"COUNT"', token);
+      const error = await failure([new SSEEvent({ data })]);
+      expect(error.kind).toBe("protocol");
+      expect(error.retryable).toBe(false);
+      expect(error.message).toBe("openai response usage has a count that is not an int");
+    }
+  });
+
+  test("a usage count of 2^53 - 1 is read", async () => {
+    const usage = { input_tokens: 2n ** 53n - 1n, output_tokens: 0n };
+    const events = await parse([completed([], { usage })]);
+    const max = Number.MAX_SAFE_INTEGER;
+    expect(events.at(-2)).toEqual(new UsageReport(new Usage({ inputTokens: max, outputTokens: 0, totalTokens: max })));
+  });
+
+  test("a missing total whose sum is past 2^53 - 1 is a protocol error", async () => {
+    const usage = { input_tokens: 2n ** 53n - 1n, output_tokens: 1n };
+    const error = await failure([completed([], { usage })]);
+    expect(error.kind).toBe("protocol");
+    expect(error.message).toBe("openai response usage has a count that is not an int");
+  });
+});
+
+describe("incomplete replies", () => {
+  const ROUTES = [
+    ["api key", apiKey, "openai"],
+    ["subscription", subscription, "OpenAI subscription"],
+  ] as const;
+
+  describe.each(ROUTES)("on the %s route", (_, protocol, prefix) => {
+    test.each([
+      ["content_filter", "refused", "content_filter"],
+      ["something_new", "incomplete", "something_new"],
+      ["", "incomplete", "unknown"],
+      [null, "incomplete", "unknown"],
+    ] as const)("incomplete for reason %p raises %s", async (reason, kind, shown) => {
+      const error = await failure([created(), incomplete(reason, [MESSAGE])], protocol());
+      expect(error.kind).toBe(kind);
+      expect(error.retryable).toBe(false);
+      expect(error.provider).toBeNull();
+      expect(error.message).toBe(`${prefix} response did not complete (${shown})`);
+    });
+
+    test("incomplete details without a reason raise incomplete", async () => {
+      const response = reply([MESSAGE], { status: "incomplete", incomplete_details: {} });
+      const error = await failure([{ type: "response.incomplete", response }], protocol());
+      expect(error.kind).toBe("incomplete");
+      expect(error.message).toBe(`${prefix} response did not complete (unknown)`);
+    });
+
+    test.each(["response.completed", "response.done"])("%s without completed status raises", async (type) => {
+      for (const status of ["in_progress", "failed", null]) {
+        const event = { type, response: reply([MESSAGE], { status }) };
+        const error = await failure([event], protocol());
+        expect(error.kind).toBe("incomplete");
+        expect(error.retryable).toBe(false);
+        expect(error.message).toBe(`${prefix} response did not complete (unknown)`);
+      }
+    });
+
+    test.each([
+      [[]],
+      [[created()]],
+      [[created(), added(0, started(MESSAGE)), textDelta(0, 0, "Hel")]],
+      [[created(), new SSEEvent({ data: "[DONE]" })]],
+    ])("without a terminal event raises incomplete, retryable (%#)", async (events) => {
+      const error = await failure(events, protocol());
+      expect(error.kind).toBe("incomplete");
+      expect(error.retryable).toBe(true);
+      expect(error.provider).toBeNull();
+      expect(error.message).toBe(`${prefix} stream ended before a complete response`);
+    });
+  });
+
+  test("a completed event with incomplete status raises even at max_output_tokens", async () => {
+    const details = { incomplete_details: { reason: "max_output_tokens" } };
+    for (const type of ["response.completed", "response.done"]) {
+      const event = { type, response: reply([MESSAGE], { status: "incomplete", ...details }) };
+      const error = await failure([event]);
+      expect(error.kind).toBe("incomplete");
+      expect(error.message).toBe("openai response did not complete (max_output_tokens)");
+    }
+  });
+
+  test("deltas before a truncation are still emitted", async () => {
+    const events = [created(), added(0, started(MESSAGE)), textDelta(0, 0, "Hel")];
+    const stream = apiKey().parse(frames(events));
+    expect((await stream.next()).value).toEqual(new TextDelta(0, "Hel"));
+    await expect(stream.next()).rejects.toBeInstanceOf(ProviderError);
+  });
+});
+
+describe("stream failures", () => {
+  const BAD_REQUEST = [
+    "invalid_prompt",
+    "invalid_request_error",
+    "invalid_image",
+    "invalid_image_format",
+    "invalid_base64_image",
+    "invalid_image_url",
+    "invalid_image_mode",
+    "image_too_large",
+    "image_too_small",
+    "image_parse_error",
+    "image_file_too_large",
+    "image_file_not_found",
+    "empty_image_file",
+    "unsupported_image_media_type",
+    "failed_to_download_image",
+  ];
+  const CODE_TABLE: [string | null, ErrorKind, boolean][] = [
+    ["rate_limit_exceeded", "rate_limit", true],
+    ["server_error", "server", true],
+    ["vector_store_timeout", "server", true],
+    ["something_new", "server", true],
+    [null, "server", true],
+    ["context_length_exceeded", "context_length", false],
+    ...BAD_REQUEST.map((code): [string, ErrorKind, boolean] => [code, "bad_request", false]),
+    ["image_content_policy_violation", "refused", false],
+    ["insufficient_quota", "quota", false],
+    ["usage_limit_reached", "quota", false],
+    ["usage_not_included", "quota", false],
+  ];
+  // The ways a stream reports a failure, each given the error's code and message.
+  const SOURCES: [string, (code: string | null, message: JsonValue | null) => JsonObject][] = [
+    ["a failed response", failed],
+    ["an error event", (code, message) => ({ type: "error", code, message, param: null })],
+    ["an error event with a nested error", (code, message) => ({ type: "error", error: { code, message } })],
+  ];
+  const LONG = "x".repeat(2500);
+
+  describe.each(SOURCES)("%s", (_, source) => {
+    test.each(CODE_TABLE)("code %p raises %s", async (code, kind, retryable) => {
+      const error = await failure([created(), source(code, "It broke.")]);
+      expect(error.kind).toBe(kind);
+      expect(error.retryable).toBe(retryable);
+      expect(error.provider).toBeNull();
+      expect(error.message).toBe(`openai stream failed (${kind}): It broke.`);
+    });
+
+    test("on the subscription the message is appended to its wording", async () => {
+      const error = await failure([created(), source("server_error", "It broke.")], subscription());
+      expect(error.kind).toBe("server");
+      expect(error.provider).toBeNull();
+      expect(error.message).toBe("OpenAI subscription stream ended before a complete response: It broke.");
+    });
+
+    test("the message is capped at 2,000 code points", async () => {
+      const cases = [
+        [LONG, "x".repeat(2000) + "…"],
+        ["😀".repeat(2001), "😀".repeat(2000) + "…"],
+        ["x".repeat(2000), "x".repeat(2000)],
+      ];
+      for (const [message, shown] of cases) {
+        const error = await failure([source("server_error", message!)]);
+        expect(error.message).toBe(`openai stream failed (server): ${shown}`);
+      }
+    });
+
+    test("the message is the provider's text, unscrubbed", async () => {
+      const text = "Bad key sk-test-123 in Authorization: Bearer abc\n  next line";
+      const error = await failure([source("server_error", text)]);
+      expect(error.message).toBe(`openai stream failed (server): ${text}`);
+    });
+
+    test("an empty, missing or non-string message is no message", async () => {
+      for (const message of ["", null, 3n, ["It broke."]]) {
+        const error = await failure([source("server_error", message)]);
+        expect(error.message).toBe("openai stream failed (server): no message");
+      }
+    });
+  });
+
+  test("a failed response without an error is a server error with no message", async () => {
+    const error = await failure([created(), failed(null, null)]);
+    expect(error.kind).toBe("server");
+    expect(error.retryable).toBe(true);
+    expect(error.message).toBe("openai stream failed (server): no message");
+  });
+
+  test("a nested error wins over the event's own fields", async () => {
+    const event = { type: "error", code: "server_error", message: "Outer.", error: { code: "insufficient_quota" } };
+    const error = await failure([event]);
+    expect(error.kind).toBe("quota");
+    expect(error.message).toBe("openai stream failed (quota): no message");
+  });
+});
+
+describe("invalid event JSON", () => {
+  const INVALID = [
+    ["not JSON", "{not json test-key-1"],
+    ["a lone surrogate escape", '{"type": "response.output_text.delta", "delta": "\\ud800 test-key-1"}'],
+    ["a duplicate key", '{"type": "keepalive", "type": "test-key-1"}'],
+  ];
+
+  test.each(INVALID)("%s is a protocol error that doesn't echo the event", async (_, data) => {
+    const error = await failure([created(), new SSEEvent({ data: data! }), completed()]);
+    expect(error.kind).toBe("protocol");
+    expect(error.retryable).toBe(false);
+    expect(error.provider).toBeNull();
+    expect(error.message).toBe("invalid JSON in openai stream event");
+    expect(error.cause).toBeUndefined();
+    expect(String(error.stack)).not.toContain("test-key-1");
+  });
+});
+
+describe("replay records", () => {
+  const ACCOUNT_KEY: ReplayKey = { ...KEY, account: "acct_1" };
+  const FINAL_URL: JsonObject = { type: "url_citation", url: "https://example.com" };
+  const COMMENTARY: JsonObject = {
+    id: "msg_c",
+    type: "message",
+    role: "assistant",
+    phase: "commentary",
+    content: [{ type: "output_text", text: "Let me check.", annotations: [] }],
+  };
+  const FINAL: JsonObject = {
+    id: "msg_f",
+    type: "message",
+    role: "assistant",
+    phase: "final_answer",
+    content: [
+      { type: "output_text", text: "Part A.", annotations: [FINAL_URL] },
+      { type: "refusal", refusal: "Not that." },
+      { type: "output_text", text: "Part B.", annotations: [] },
+    ],
+  };
+  const OUTPUT = [REASONING, COMMENTARY, FINAL, CALL];
+
+  function withAccount(): OpenAIResponses {
+    return new OpenAIResponses({ model: "gpt-5.5", provider: "openai", account: "acct_1" });
+  }
+
+  test.each([
+    ["streamed items", sseEventsFor(reply(OUTPUT))],
+    ["terminal output items", [created(), completed(OUTPUT)]],
+  ])("every part's record from %s is readable with its allowed keys", async (_, events) => {
+    const response = await collect(await parse(events, withAccount()));
+    const expectedFields: [string, string[], JsonObject][] = [
+      ["ReasoningPart", ["item"], { item: REASONING }],
+      ["TextPart", ["id", "phase", "annotations"], { id: "msg_c", phase: "commentary", annotations: [] }],
+      ["TextPart", ["id", "phase", "annotations"], { id: "msg_f", phase: "final_answer", annotations: [FINAL_URL] }],
+      ["RefusalPart", ["id", "phase"], { id: "msg_f", phase: "final_answer" }],
+      ["TextPart", ["id", "phase", "annotations"], { id: "msg_f", phase: "final_answer", annotations: [] }],
+      ["ToolCallPart", ["item"], { item: CALL }],
+    ];
+    const parts = response.message.parts;
+    expect(parts.map((part) => part.constructor.name)).toEqual(expectedFields.map(([name]) => name));
+    for (const [i, [, allowed, fields]] of expectedFields.entries()) {
+      const payload = parts[i]!.providerPayload!;
+      expect(payload).toMatchObject({ kind: PROTOCOL, v: 1n, provider: "openai", model: "gpt-5.5", account: "acct_1" });
+      expect(readReplayRecord(payload, ACCOUNT_KEY, allowed)).toEqual({ ok: true, fields });
+    }
+    expect(response.message.providerPayload).toEqual(replayRecord(ACCOUNT_KEY, { response_id: "resp_1" }));
+    expect(readReplayRecord(response.message.providerPayload, ACCOUNT_KEY, ["response_id"])).toEqual({
+      ok: true,
+      fields: { response_id: "resp_1" },
+    });
+  });
+
+  test("a refusal built from deltas carries the account", async () => {
+    const events = await parse([added(0, started(FINAL)), refusalDelta(0, 0, "No."), completed()], withAccount());
+    const part = new RefusalPart("No.", replayRecord(ACCOUNT_KEY, { id: "msg_f", phase: "final_answer" }));
+    expect(partsDone(events)).toEqual([new PartDone(0, part)]);
+  });
+
+  test("without an account the records have none", async () => {
+    const response = await collect(await parse(sseEventsFor(reply(OUTPUT))));
+    for (const part of response.message.parts) expect(Object.hasOwn(part.providerPayload!, "account")).toBe(false);
+    expect(Object.hasOwn(response.message.providerPayload!, "account")).toBe(false);
+  });
+
+  test("nulls are dropped from items at every depth", async () => {
+    const deep = { a: null, b: [{ c: null, d: 1n }], e: { f: { g: null } } };
+    const kept = { b: [{ d: 1n }], e: { f: {} } };
+    const reasoning = { ...REASONING, status: null, extra: deep };
+    const call = { ...CALL, extra: deep };
+    for (const events of [
+      [done(0, reasoning), done(1, call), completed()],
+      [created(), completed([reasoning, call])],
+    ]) {
+      const parts = (await collect(await parse(events))).message.parts;
+      expect(parts[0]!.providerPayload).toEqual(replayRecord(KEY, { item: { ...REASONING, extra: kept } }));
+      expect(parts[1]!.providerPayload).toEqual(replayRecord(KEY, { item: { ...CALL, extra: kept } }));
+    }
+  });
+
+  describe("round trip", () => {
+    const user = new Message({ role: "user", parts: [new TextPart("Check it.")] });
+
+    /** Parse a streamed reply of `OUTPUT` and send it back, returning the replied message's input items. */
+    async function roundTrip(protocol: OpenAIResponses): Promise<JsonValue[]> {
+      const response = await collect(await parse(sseEventsFor(reply(OUTPUT)), protocol));
+      const body = protocol.buildBody(new Request({ messages: [user, response.message] }));
+      return (body["input"] as JsonValue[]).slice(1);
+    }
+
+    test("a parsed reply is sent back as its output items", async () => {
+      expect(await roundTrip(apiKey())).toEqual(OUTPUT);
+    });
+
+    test("on the API key route reasoning without encrypted content is sent back too", async () => {
+      const { encrypted_content: _, ...plain } = REASONING;
+      const output = [plain, COMMENTARY, CALL];
+      const protocol = apiKey();
+      const response = await collect(await parse(sseEventsFor(reply(output)), protocol));
+      const body = protocol.buildBody(new Request({ messages: [user, response.message] }));
+      expect((body["input"] as JsonValue[]).slice(1)).toEqual(output);
+    });
+
+    test("on the subscription it is sent back without message ids or the call's status", async () => {
+      const { id: _c, ...commentary } = COMMENTARY;
+      const { id: _f, ...final } = FINAL;
+      const { status: _s, ...call } = CALL;
+      // Without ids, a message's parts no longer merge into one item.
+      const content = FINAL["content"] as JsonObject[];
+      const finals = content.map((entry) => ({ ...final, content: [entry] }));
+      expect(await roundTrip(subscription())).toEqual([REASONING, commentary, ...finals, call]);
+    });
   });
 });

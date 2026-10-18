@@ -376,6 +376,7 @@ export class OpenAIResponses implements SseProtocol {
     const events: Event[] = [];
     const usage = usageOf(response["usage"]);
     if (usage !== null) events.push(new UsageReport(usage));
+    // `||`, not `??`: an empty id counts as none.
     const id = strOrNull(response["id"]) || responseId;
     const providerPayload = replayRecord(this.#key, id === null ? {} : { response_id: id });
     events.push(new Finish({ reason: finishReason, responseId: id, protocol: PROTOCOL, providerPayload }));
@@ -476,6 +477,7 @@ export class OpenAIResponses implements SseProtocol {
   #records(message: Message): (JsonObject | null)[] {
     const records: (JsonObject | null)[] = [];
     let reason: ReplayDegradedReason | null = null;
+    let unencrypted = false;
     for (const part of message.parts) {
       if (part instanceof MediaPart) throw new TypeError(NO_MEDIA);
       if (part instanceof ToolResultPart) throw new TypeError(wrongPart(part, message.role));
@@ -484,8 +486,15 @@ export class OpenAIResponses implements SseProtocol {
         continue;
       }
       const read = readRecord(part, this.#key);
-      if (read.ok) records.push(read.fields);
-      else reason ??= read.reason;
+      if (!read.ok) {
+        reason ??= read.reason;
+        records.push(null);
+        continue;
+      }
+      records.push(read.fields);
+      if (this.subscription && part instanceof ReasoningPart && !encrypted(read.fields["item"] as JsonObject)) {
+        unencrypted = true;
+      }
     }
     const neutral = message.parts.map(() => null);
     if (reason !== null) {
@@ -494,10 +503,7 @@ export class OpenAIResponses implements SseProtocol {
     }
     // Without stored state only encrypted reasoning can be replayed; that is no record mismatch,
     // so nothing is signalled.
-    const unreplayable = (part: Part, index: number) =>
-      part instanceof ReasoningPart && records[index] !== null && !encrypted(records[index]!["item"] as JsonObject);
-    if (this.subscription && message.parts.some(unreplayable)) return neutral;
-    return records;
+    return unencrypted ? neutral : records;
   }
 
   /**

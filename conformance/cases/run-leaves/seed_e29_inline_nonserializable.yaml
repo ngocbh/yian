@@ -1,6 +1,5 @@
 # From tests/seeds/errors/e29-inline-nonserializable.yaml.
 # An inline CODE return holding a non-yian value fails `contract.output` at its `output:`.
-# The bodies return a value whose text is stable: TS `new Date(0)`, Python `b"x"`.
 kind: run
 # The non-yian value and its message differ by language.
 rules: [code]
@@ -20,7 +19,7 @@ flow: |
         topic: ${input.topic}
       output: object
       code: |
-        return {"topic": inputs.topic, "handle": new Date(0)}
+        return {topic: inputs.topic, handle: new Date(0)}
   output: ${bad.output}
 # The CODE body differs by language: `flow` holds the TS body, this the Python one.
 # The source's `object()` is `b"x"` here, since an object's text names its memory address.

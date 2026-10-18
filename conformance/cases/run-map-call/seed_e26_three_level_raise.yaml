@@ -136,7 +136,7 @@ python_expect:
     status: failed
     failure:
       code: node.execute
-      message: intentional CODE failure
+      message: "intentional CODE failure"
       node: outer/via/boom
       frames:
         - {label: flow.yaml, range: [37, 3, 37, 8]}
@@ -159,7 +159,7 @@ python_expect:
       - outer/via/boom
       - failure:
           code: node.execute
-          message: intentional CODE failure
+          message: "intentional CODE failure"
           node: outer/via/boom
           frames:
             - {label: flow.yaml, range: [37, 3, 37, 8]}

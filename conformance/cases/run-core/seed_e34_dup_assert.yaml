@@ -41,7 +41,7 @@ expect:
       code: assertion.failed
       message: "node 'compute' post-assert failed: output < 0"
       node: compute
-      # The first assert `output < 0`, on line 12.
+      # The first assert `output < 0` on line 12.
       frames: [{label: flow.yaml, range: [12, 9, 12, 19]}]
   trace:
     - [run_started, null, {inputs: {}, learnable: false, num_workers: 0}]

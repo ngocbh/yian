@@ -73,7 +73,7 @@ python_expect:
     status: failed
     failure:
       code: node.execute
-      message: intentional inline failure
+      message: "intentional inline failure"
       node: boom
       frames: [{label: flow.yaml, range: [17, 7, 17, 59]}]
   trace:
@@ -85,6 +85,6 @@ python_expect:
       - boom
       - failure:
           code: node.execute
-          message: intentional inline failure
+          message: "intentional inline failure"
           node: boom
           frames: [{label: flow.yaml, range: [17, 7, 17, 59]}]

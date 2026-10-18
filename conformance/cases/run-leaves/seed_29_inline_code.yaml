@@ -1,6 +1,7 @@
 # From tests/seeds/29-inline-code.yaml.
 # An inline CODE body reads `inputs` and returns the verdict line.
 # The header (`def main(inputs)`, `module:function`) describes the Python form.
+# String concatenation, not a template literal: `${...}` in flow text reads as a yian reference.
 kind: run
 flow: |
   # 29 — inline CODE source. A `code:` node carries a bare body that reads `inputs` and
@@ -28,12 +29,11 @@ flow: |
         label:  ${input.label}
       output: str
       code: |
-        const lean = inputs.rating >= 0 ? "positive" : "negative"
-        return inputs.label + ": " + lean + " (" + (inputs.rating >= 0 ? "+" : "") + inputs.rating.toFixed(2) + ")"
+        const [lean, sign] = inputs.rating >= 0 ? ["positive", "+"] : ["negative", ""]
+        return inputs.label + ": " + lean + " (" + sign + inputs.rating.toFixed(2) + ")"
 
   output: ${verdict.output}
 # The CODE body differs by language: `flow` holds the TS body, this the Python one.
-# String concatenation, not a template literal: `${...}` in flow text reads as a yian reference.
 python_flow: |
   # 29 — inline CODE source. A `code:` node carries a bare body that reads `inputs` and
   # `return`s a value; the engine wraps it as `def main(inputs)` and runs it IN-PROCESS

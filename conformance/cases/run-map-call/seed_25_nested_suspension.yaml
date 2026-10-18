@@ -1,6 +1,7 @@
 # From tests/seeds/25-nested-suspension.yaml.
 # A HUMAN_INPUT inside a called child asks and answers under growth; the child returns the answer.
 # The header's `review/approve` is stale: the CALL node `gate` namespaces the leaf, `gate/approve`.
+# No `tool_calls`: docs/api.md's `ask_user` doesn't define the form of `answer_schema`.
 kind: run
 flow: |
   # 25 — Nested interaction: a HUMAN_INPUT inside a called child.
@@ -104,7 +105,6 @@ run: {run_id: r1, num_workers: 0}
 host:
   human:
     gate/approve: [approve]
-# No `tool_calls`: docs/api.md's `ask_user` doesn't define the form of `answer_schema`.
 expect:
   output: {status: succeeded, output: approve}
   trace:

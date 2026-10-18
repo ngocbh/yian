@@ -37,7 +37,7 @@ expect:
     status: failed
     failure:
       code: binding.evaluate
-      message: as_of is required
+      message: "as_of is required"
       node: use
       # The `as_of:` binding's value on line 10.
       frames: [{label: flow.yaml, range: [10, 14, 10, 49]}]
@@ -51,6 +51,6 @@ expect:
       - use
       - failure:
           code: binding.evaluate
-          message: as_of is required
+          message: "as_of is required"
           node: use
           frames: [{label: flow.yaml, range: [10, 14, 10, 49]}]

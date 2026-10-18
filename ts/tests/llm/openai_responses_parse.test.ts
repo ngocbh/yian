@@ -152,6 +152,7 @@ async function failure(events: (JsonObject | SSEEvent)[], protocol = apiKey()): 
     await parse(events, protocol);
   } catch (error) {
     expect(error).toBeInstanceOf(ProviderError);
+    expect((error as ProviderError).provider).toBeNull();
     return error as ProviderError;
   }
   throw new Error("expected a ProviderError");
@@ -930,7 +931,6 @@ describe("incomplete replies", () => {
       const error = await failure([created(), incomplete(reason, [MESSAGE])], protocol());
       expect(error.kind).toBe(kind);
       expect(error.retryable).toBe(false);
-      expect(error.provider).toBeNull();
       expect(error.message).toBe(`${prefix} response did not complete (${shown})`);
     });
 
@@ -960,7 +960,6 @@ describe("incomplete replies", () => {
       const error = await failure(events, protocol());
       expect(error.kind).toBe("incomplete");
       expect(error.retryable).toBe(true);
-      expect(error.provider).toBeNull();
       expect(error.message).toBe(`${prefix} stream ended before a complete response`);
     });
   });
@@ -979,7 +978,7 @@ describe("incomplete replies", () => {
     const events = [created(), added(0, started(MESSAGE)), textDelta(0, 0, "Hel")];
     const stream = apiKey().parse(frames(events));
     expect((await stream.next()).value).toEqual(new TextDelta(0, "Hel"));
-    await expect(stream.next()).rejects.toBeInstanceOf(ProviderError);
+    await expect(stream.next()).rejects.toMatchObject({ kind: "incomplete", retryable: true });
   });
 });
 
@@ -1027,25 +1026,23 @@ describe("stream failures", () => {
       const error = await failure([created(), source(code, "It broke.")]);
       expect(error.kind).toBe(kind);
       expect(error.retryable).toBe(retryable);
-      expect(error.provider).toBeNull();
       expect(error.message).toBe(`openai stream failed (${kind}): It broke.`);
     });
 
     test("on the subscription the message is appended to its wording", async () => {
       const error = await failure([created(), source("server_error", "It broke.")], subscription());
       expect(error.kind).toBe("server");
-      expect(error.provider).toBeNull();
       expect(error.message).toBe("OpenAI subscription stream ended before a complete response: It broke.");
     });
 
     test("the message is capped at 2,000 code points", async () => {
-      const cases = [
+      const cases: [string, string][] = [
         [LONG, "x".repeat(2000) + "…"],
         ["😀".repeat(2001), "😀".repeat(2000) + "…"],
         ["x".repeat(2000), "x".repeat(2000)],
       ];
       for (const [message, shown] of cases) {
-        const error = await failure([source("server_error", message!)]);
+        const error = await failure([source("server_error", message)]);
         expect(error.message).toBe(`openai stream failed (server): ${shown}`);
       }
     });
@@ -1080,17 +1077,16 @@ describe("stream failures", () => {
 });
 
 describe("invalid event JSON", () => {
-  const INVALID = [
+  const INVALID: [string, string][] = [
     ["not JSON", "{not json test-key-1"],
     ["a lone surrogate escape", '{"type": "response.output_text.delta", "delta": "\\ud800 test-key-1"}'],
     ["a duplicate key", '{"type": "keepalive", "type": "test-key-1"}'],
   ];
 
   test.each(INVALID)("%s is a protocol error that doesn't echo the event", async (_, data) => {
-    const error = await failure([created(), new SSEEvent({ data: data! }), completed()]);
+    const error = await failure([created(), new SSEEvent({ data }), completed()]);
     expect(error.kind).toBe("protocol");
     expect(error.retryable).toBe(false);
-    expect(error.provider).toBeNull();
     expect(error.message).toBe("invalid JSON in openai stream event");
     expect(error.cause).toBeUndefined();
     expect(String(error.stack)).not.toContain("test-key-1");
@@ -1181,9 +1177,9 @@ describe("replay records", () => {
   describe("round trip", () => {
     const user = new Message({ role: "user", parts: [new TextPart("Check it.")] });
 
-    /** Parse a streamed reply of `OUTPUT` and send it back, returning the replied message's input items. */
-    async function roundTrip(protocol: OpenAIResponses): Promise<JsonValue[]> {
-      const response = await collect(await parse(sseEventsFor(reply(OUTPUT)), protocol));
+    /** Parse a streamed reply of `output` and send it back, returning the replied message's input items. */
+    async function roundTrip(protocol: OpenAIResponses, output: JsonValue[] = OUTPUT): Promise<JsonValue[]> {
+      const response = await collect(await parse(sseEventsFor(reply(output)), protocol));
       const body = protocol.buildBody(new Request({ messages: [user, response.message] }));
       return (body["input"] as JsonValue[]).slice(1);
     }
@@ -1195,10 +1191,7 @@ describe("replay records", () => {
     test("on the API key route reasoning without encrypted content is sent back too", async () => {
       const { encrypted_content: _, ...plain } = REASONING;
       const output = [plain, COMMENTARY, CALL];
-      const protocol = apiKey();
-      const response = await collect(await parse(sseEventsFor(reply(output)), protocol));
-      const body = protocol.buildBody(new Request({ messages: [user, response.message] }));
-      expect((body["input"] as JsonValue[]).slice(1)).toEqual(output);
+      expect(await roundTrip(apiKey(), output)).toEqual(output);
     });
 
     test("on the subscription it is sent back without message ids or the call's status", async () => {

@@ -29,6 +29,8 @@ import type { YAMLMap } from "yaml";
 import { ENTRIES, nonDefaults, read } from "../src/defaults.ts";
 import { canonicalJson, logJson, parseJson } from "../src/typesys/json.ts";
 import type { JsonMode } from "../src/typesys/json.ts";
+import { readTypedefs, typeFor } from "../src/typesys/types.ts";
+import { buildValueAs } from "../src/typesys/values.ts";
 
 /** A case value: an int is a `bigint`, a float a `number`. */
 export type Value = null | boolean | bigint | number | string | Value[] | Case;
@@ -663,7 +665,7 @@ export const KINDS: Partial<Record<Kind, KindRunner>> = {
   // resume: not run yet
   // backward: not run yet
   // expr: not run yet
-  // value: not run yet
+  value: runValue,
   defaults: runDefaults,
   // fingerprint: not run yet
   // cli: not run yet
@@ -883,6 +885,17 @@ export async function main(
 // ---- expr ----
 
 // ---- value ----
+
+/** Run a `value` case: build `value` as `type` and compare the stored value and its kind. */
+async function runValue(case_: Case): Promise<void> {
+  await results(case_["expect"] as Case, () => {
+    const typedefs = (case_["typedefs"] ?? {}) as Record<string, unknown>;
+    const typ = typeFor(case_["type"] as string, readTypedefs(typedefs));
+    const typed = buildValueAs(typ, case_["value"]);
+    // A file in the value is compared in data form.
+    return { value: typed.toWire().value, kind: typed.kind };
+  });
+}
 
 // ---- defaults ----
 

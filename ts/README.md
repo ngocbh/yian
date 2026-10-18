@@ -33,6 +33,7 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   (`Scheduler`, `realScheduler`, `virtualScheduler`, `SLEEP_CHUNK_MS`). Never open a lock file
   any other way: on Node, closing any descriptor of a locked file drops the process's lock. Code
   that waits takes an injected `Scheduler`, so tests and conformance run on `virtualScheduler`.
+- Host values enter through `fromHost`; values reaching `buildValueAs` are yian values.
 
 ## Commands
 

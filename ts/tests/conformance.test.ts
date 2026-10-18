@@ -852,6 +852,30 @@ describe("main", () => {
     });
   });
 
+  test("runs `value` cases with the runner's own kind table", async () => {
+    const files = {
+      "v/kept.yaml":
+        "kind: value\ntype: Any\nvalue: {$float: inf}\n" +
+        "expect: {value: {$float: inf}, kind: float}\n",
+      "v/raises.yaml":
+        "kind: value\ntype: list(int)\nvalue: [1, 2.5]\nexpect:\n  raises: " +
+        "{class: TypeCheckError, message: 2.5 does not match declared type int, path: [1]}\n",
+      "v/wrong.yaml": "kind: value\ntype: float\nvalue: 2\nexpect: {value: 2, kind: float}\n",
+    };
+    expect(await run([], files, {}, RUNNERS)).toEqual({
+      code: 1,
+      out: [
+        "FAIL v/wrong: value differs",
+        "  --- actual",
+        "  2.0",
+        "  --- expected",
+        "  2",
+        "3 cases: 2 passed, 1 failed, 0 pending",
+      ],
+      err: [],
+    });
+  });
+
   test.each([[["--bogus"]], [["--group"]], [["a/ok"]]])("exits 2 on %p", async (argv) => {
     const { code, out, err } = await run(argv);
     expect(code).toBe(2);

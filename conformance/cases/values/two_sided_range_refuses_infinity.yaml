@@ -1,0 +1,10 @@
+kind: value
+# Infinity is above every finite upper end, so a range closed on both sides refuses it.
+rules: [infinity]
+type: float(0.0..10.0)
+value: {$float: inf}
+expect:
+  raises:
+    class: TypeCheckError
+    message: Infinity is outside inclusive float bounds (0.0, 10.0)
+    path: []

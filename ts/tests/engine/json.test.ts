@@ -162,6 +162,9 @@ describe("parseJson", () => {
     expectError("[-1e400]", "number is too large for a float", 1);
     expectError('{"a":1,"a":2}', 'duplicate JSON object key: "a"', 7);
     expectError('{"b":{"a\\n":1,"a\\n":2}}', 'duplicate JSON object key: "a\\n"', 14);
+    expectError('{"a":1,"a":2,"b":1,"b":2}', 'duplicate JSON object key: "a"', 7);
+    expectError('{"__proto__":1,"__proto__":2}', 'duplicate JSON object key: "__proto__"', 15);
+    expectError('{"a":1,"a":{"b":1,"b":2}}', 'duplicate JSON object key: "b"', 18);
     expectError('"\\ud800"', "string has an unpaired surrogate", 0);
     expectError('"\\ud800A"', "string has an unpaired surrogate", 0);
     expectError('"x\\udc00"', "string has an unpaired surrogate", 0);

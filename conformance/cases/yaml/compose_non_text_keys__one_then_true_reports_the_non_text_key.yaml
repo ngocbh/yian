@@ -1,4 +1,5 @@
 kind: load
+# In Python `1 == True`, so the second key would repeat the first; the non-text key is reported first.
 flow: |
   id: f
   name: f
@@ -9,9 +10,6 @@ flow: |
       code: return 1
       output: int
   output: ${a.output}
-env:
-  YIAN_DEFAULT_MODEL: gpt-5.5
-  YIAN_DEFAULT_PROVIDER: openai
 expect:
   load:
     diagnostics:

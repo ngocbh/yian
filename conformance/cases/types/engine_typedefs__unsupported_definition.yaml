@@ -1,5 +1,5 @@
 kind: value
-# Hand-written from tests/engine/the non-text, non-mapping typedef check in typesys/types.py: a bad typedef raises when the typedefs are read.
+# Hand-written from the non-text, non-mapping typedef check in `src/yian/typesys/types.py`: a bad typedef raises when the typedefs are read.
 type: X
 typedefs: {X: 5}
 value: 1

@@ -49,9 +49,6 @@ flow: |
     n_flow_output: ${a.output}
   x-meta:
     2026-10-13 10:00:00: v
-env:
-  YIAN_DEFAULT_MODEL: gpt-5.5
-  YIAN_DEFAULT_PROVIDER: openai
 expect:
   load:
     diagnostics:

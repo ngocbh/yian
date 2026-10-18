@@ -56,9 +56,6 @@ flow: |
         topic: *t29
       output: str
   output: ${use.output}
-env:
-  YIAN_DEFAULT_MODEL: gpt-5.5
-  YIAN_DEFAULT_PROVIDER: openai
 expect:
   load:
     diagnostics:

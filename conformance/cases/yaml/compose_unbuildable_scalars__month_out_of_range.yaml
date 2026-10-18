@@ -22,9 +22,6 @@ python_flow: |
         topic: 2026-13-45
       output: str
   output: ${use.output}
-env:
-  YIAN_DEFAULT_MODEL: gpt-5.5
-  YIAN_DEFAULT_PROVIDER: openai
 expect:
   load:
     diagnostics:

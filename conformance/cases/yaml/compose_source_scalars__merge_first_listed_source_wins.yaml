@@ -12,8 +12,5 @@ flow: |
       kind: code
       code: return 1
   output: ${a.output}
-env:
-  YIAN_DEFAULT_MODEL: gpt-5.5
-  YIAN_DEFAULT_PROVIDER: openai
 expect:
   load: ok

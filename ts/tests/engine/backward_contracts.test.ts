@@ -4,7 +4,8 @@
  * positions and paths).
  *
  * Changed: `FrozenInstanceError` is the `TypeError` an assignment to a frozen object throws in a
- * module; dataclass `!=` is `not.toEqual`.
+ * module; dataclass `!=` is `not.toEqual`; each rejected row names its one error class, where
+ * Python accepts either `TypeError` or `ValueError` (`RangeError`).
  *
  * Left for later: the other fifteen tests (`BackwardResult`, the backward contexts, memory and the
  * run contracts) need `nodes/base` and the runtime.
@@ -38,19 +39,13 @@ test("execution scopes keep root-relative structured positions", () => {
   }).toThrow(TypeError);
 });
 
-test.each<[string, () => unknown]>([
-  ["a boolean path component", () => new ExecutionScope([true] as never)],
-  ["an unknown boundary", () => new ExecutionScope(["node"], { boundary: "other" as never })],
-  ["a boolean index", () => new ExecutionPosition("map_item", ["each"], true as never)],
-  ["a negative index", () => new ExecutionPosition("loop_driver", ["loop"], -1)],
-  ["a missing index", () => new ExecutionPosition("loop_body", ["loop"])],
-  ["an index on a call", () => new ExecutionPosition("call", ["child"], 2)],
-])("execution scopes reject %s", (_name, factory) => {
-  let error: unknown;
-  try {
-    factory();
-  } catch (caught) {
-    error = caught;
-  }
-  expect(error instanceof TypeError || error instanceof RangeError).toBe(true);
+test.each<[string, () => unknown, typeof TypeError | typeof RangeError]>([
+  ["a boolean path component", () => new ExecutionScope([true] as never), RangeError],
+  ["an unknown boundary", () => new ExecutionScope(["node"], { boundary: "other" as never }), RangeError],
+  ["a boolean index", () => new ExecutionPosition("map_item", ["each"], true as never), TypeError],
+  ["a negative index", () => new ExecutionPosition("loop_driver", ["loop"], -1), RangeError],
+  ["a missing index", () => new ExecutionPosition("loop_body", ["loop"]), TypeError],
+  ["an index on a call", () => new ExecutionPosition("call", ["child"], 2), RangeError],
+])("execution scopes reject %s", (_name, factory, cls) => {
+  expect(factory).toThrow(cls);
 });

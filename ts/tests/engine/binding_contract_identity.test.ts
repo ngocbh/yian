@@ -8,7 +8,7 @@
  *
  * Left for later: the eight flow tests (fingerprints, manifests, renamespacing, origin traversal,
  * CALL expansion, never hashing a record-typed binding) need compile, compose and the runtime, and
- * land with T3-10, T3-21 and T3-22.
+ * land with the compile layer, compose and the runner.
  */
 
 import { expect, test } from "bun:test";

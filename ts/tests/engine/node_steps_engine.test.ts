@@ -20,5 +20,6 @@ test("NodeSteps checks its fields", () => {
   expect(() => new NodeSteps(true as never, [], record)).toThrow(TypeError);
   expect(() => new NodeSteps(0, [], record)).toThrow(RangeError);
   expect(() => new NodeSteps(1, ["x"] as never, record)).toThrow(TypeError);
+  expect(() => new NodeSteps(1, ["x"] as never, record)).toThrow(/^prior must be an array of records$/);
   expect(() => new NodeSteps(1, [], null as never)).toThrow(TypeError);
 });

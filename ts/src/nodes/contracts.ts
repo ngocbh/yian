@@ -18,14 +18,14 @@ import { jsTypeName, setField, valueRepr } from "../typesys/values.ts";
 export type ValuePath = readonly (string | number)[];
 
 /** Transforms one present origin. */
-type OriginMapper = (origin: OriginRef) => OriginRef;
+export type OriginMapper = (origin: OriginRef) => OriginRef;
 
 /**
  * Require an optional origin field to contain only the opaque leaf value. Used by node kinds.
  *
  * @throws TypeError when `origin` is neither `null` nor an `OriginRef`.
  */
-export function validateOptionalOrigin(origin: unknown, fieldName: string): void {
+export function validateOptionalOrigin(origin: unknown, fieldName: string): asserts origin is OriginRef | null {
   if (origin !== null && !(origin instanceof OriginRef)) {
     throw new TypeError(`${fieldName} must be an OriginRef or null`);
   }
@@ -91,10 +91,10 @@ function freezeEntries(
   return Object.freeze(entries.map(([path, origin]) => Object.freeze([Object.freeze([...path]), origin] as const)));
 }
 
-/** The kinds of structured position in an instantiated child computation. */
-type PositionKind = "call" | "map_item" | "loop_body" | "loop_driver";
+const POSITION_KINDS = ["call", "map_item", "loop_body", "loop_driver"] as const;
 
-const POSITION_KINDS: readonly string[] = ["call", "map_item", "loop_body", "loop_driver"];
+/** The kinds of structured position in an instantiated child computation. */
+export type PositionKind = (typeof POSITION_KINDS)[number];
 
 /** One structured position in an instantiated child computation. Frozen. */
 export class ExecutionPosition {
@@ -175,9 +175,6 @@ export class ExecutionScope {
       if (!isExactly(position, ExecutionPosition)) {
         throw new TypeError("occurrence_path items must be ExecutionPosition values");
       }
-      // An object given the prototype without the constructor is checked like a built one.
-      const { kind, staticPath: path, index } = position;
-      new ExecutionPosition(kind, path, index);
     }
     if (boundary !== null && boundary !== "start" && boundary !== "end") {
       throw new RangeError("execution boundary must be 'start', 'end', or null");
@@ -893,7 +890,7 @@ export class Parameter {
 }
 
 /** A carrier that holds origins. */
-type OriginCarrier =
+export type OriginCarrier =
   | Binding
   | ValueTemplate
   | Assertion
@@ -906,39 +903,30 @@ type OriginCarrier =
  * Yield one frozen carrier graph once, preserving its semantic origin order. Used by node kinds.
  *
  * @param seen Carriers already visited by this traversal; a carrier in it yields nothing.
- * @throws TypeError for an unknown carrier or a non-origin value inside one.
+ * @throws TypeError for an unknown carrier.
  */
 export function* iterOriginCarrier(carrier: OriginCarrier, seen: Set<object>): Generator<OriginRef> {
   if (seen.has(carrier)) return;
   seen.add(carrier);
 
   if (carrier instanceof Binding) {
-    validateOptionalOrigin(carrier.origin, "binding origin");
     if (carrier.origin !== null) yield carrier.origin;
     if (carrier.contract !== null) yield* iterOriginCarrier(carrier.contract, seen);
     if (carrier.source instanceof ValueTemplate) yield* iterOriginCarrier(carrier.source, seen);
     return;
   }
   if (carrier instanceof ValueTemplate) {
-    for (const [, origin] of carrier.origins) {
-      if (!(origin instanceof OriginRef)) throw new TypeError("value template origin must be an OriginRef");
-      yield origin;
-    }
+    for (const [, origin] of carrier.origins) yield origin;
     for (const binding of treeBindings(carrier.value)) yield* iterOriginCarrier(binding, seen);
     return;
   }
   if (carrier instanceof Assertion) {
-    validateOptionalOrigin(carrier.origin, "assertion origin");
     if (carrier.origin !== null) yield carrier.origin;
     return;
   }
   if (carrier instanceof ContractOrigins) {
-    validateOptionalOrigin(carrier.default, "contract default origin");
     if (carrier.default !== null) yield carrier.default;
-    for (const [, origin] of carrier.entries) {
-      if (!(origin instanceof OriginRef)) throw new TypeError("contract entry origin must be an OriginRef");
-      yield origin;
-    }
+    for (const [, origin] of carrier.entries) yield origin;
     return;
   }
   if (carrier instanceof ValueContract) {
@@ -953,8 +941,6 @@ export function* iterOriginCarrier(carrier: OriginCarrier, seen: Set<object>): G
   }
   if (carrier instanceof Parameter) {
     if (carrier.contract !== null) yield* iterOriginCarrier(carrier.contract, seen);
-    validateOptionalOrigin(carrier.origin, "parameter origin");
-    validateOptionalOrigin(carrier.defaultOrigin, "parameter default origin");
     if (carrier.origin !== null) yield carrier.origin;
     if (carrier.defaultOrigin !== null) yield carrier.defaultOrigin;
     return;
@@ -970,7 +956,8 @@ export function* iterOriginCarrier(carrier: OriginCarrier, seen: Set<object>): G
  * shared object: pass one `seen` for a whole graph. A binding's source is rebuilt the same way
  * wherever the binding is reached: a `ValueTemplate` through `seen`; a record or list holding a
  * binding by rebuilding the containers around each rewritten binding; any other source, and any
- * container holding no binding, by identity. A template's tree is rebuilt the same way.
+ * container holding no binding, by identity. A template's tree is rebuilt the same way. The
+ * carrier graph and the payloads it walks must have no cycles; compose never builds one.
  *
  * @param seen Carriers already rewritten, mapped to their rebuilt form.
  * @throws TypeError for an unknown carrier or a mapper result that isn't an `OriginRef`.
@@ -996,7 +983,7 @@ export function rewriteOriginCarrier<C extends OriginCarrier>(
     const origins = carrier.origins.map(([path, origin]) => [path, mapOrigin(origin, mapper) as OriginRef] as const);
     rebuilt = new ValueTemplate(rewriteTree(carrier.value, mapper, seen) as TemplateTree, origins);
   } else if (carrier instanceof Assertion) {
-    rebuilt = new Assertion(carrier.expression, carrier.display, { origin: mapOrigin(carrier.origin, mapper) });
+    rebuilt = carrier.mapOrigins(mapper);
   } else if (carrier instanceof ContractOrigins) {
     rebuilt = carrier.mapOrigins(mapper);
   } else if (carrier instanceof ValueContract) {
@@ -1027,22 +1014,29 @@ export function rewriteOriginCarrier<C extends OriginCarrier>(
 
 /**
  * Rebuild the records and lists of `node` around each nested binding rewritten through `seen`;
- * a container holding no binding, and any other value, is kept by identity.
+ * a container holding no binding, and any other value, is kept by identity. Each container is
+ * walked once per `seen`, so a container reached twice comes back as one shared object.
  */
 function rewriteTree(node: unknown, mapper: OriginMapper, seen: Map<object, object>): unknown {
   if (node instanceof Binding) return rewriteOriginCarrier(node, mapper, seen);
-  if (isRecord(node)) {
-    const entries = Object.entries(node).map(([key, item]) => [key, rewriteTree(item, mapper, seen)] as const);
-    if (entries.every(([key, item]) => item === node[key])) return node;
-    const rebuilt: ValueRecord = {};
-    for (const [key, item] of entries) setField(rebuilt, key, item as Value);
-    return rebuilt;
-  }
+  if (!isRecord(node) && !Array.isArray(node)) return node;
+  const done = seen.get(node);
+  if (done !== undefined) return done;
+
+  let rebuilt: object = node;
   if (Array.isArray(node)) {
     const items = node.map((item: unknown) => rewriteTree(item, mapper, seen));
-    return items.every((item, i) => item === node[i]) ? node : items;
+    if (items.some((item, i) => item !== node[i])) rebuilt = items;
+  } else {
+    const entries = Object.entries(node).map(([key, item]) => [key, rewriteTree(item, mapper, seen)] as const);
+    if (entries.some(([key, item]) => item !== node[key])) {
+      const record: ValueRecord = {};
+      for (const [key, item] of entries) setField(record, key, item as Value);
+      rebuilt = record;
+    }
   }
-  return node;
+  seen.set(node, rebuilt);
+  return rebuilt;
 }
 
 /** Return `value` unchanged when it is a `Binding`, otherwise wrap it origin-free. */

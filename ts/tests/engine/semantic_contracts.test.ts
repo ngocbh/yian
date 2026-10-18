@@ -16,7 +16,7 @@
  * Left for later: `test_partial_record_contract_enforces_closed_shape_and_known_fields` and
  * `test_output_contract_field_error_rejects_fields_on_fieldless_types` land with the output
  * contract functions; `test_nodes_package_exports_the_canonical_contract_vocabulary` waits for
- * `nodes/index.ts` (T3-3).
+ * `nodes/index.ts`.
  *
  * Not ported: the rows that differ from a good one only by a list where Python wants a tuple
  * (`ContractOrigins(entries=[])`, a list path, `PartialRecordContract(fields=[])`): TS has only
@@ -198,13 +198,17 @@ test("parameter distinguishes an explicit null from no default", () => {
   expect("typeStr" in absent).toBe(false);
 });
 
-test.each<[string, ConstructorParameters<typeof Parameter>[1]]>([
-  ["required with a default", { required: true, hasDefault: true }],
-  ["a default without hasDefault", { default: 0n }],
-  ["a default origin without hasDefault", { defaultOrigin: origin("default") }],
-])("parameter rejects %s", (_name, options) => {
+test.each<[string, ConstructorParameters<typeof Parameter>[1], RegExp]>([
+  ["required with a default", { required: true, hasDefault: true }, /^a required parameter cannot have a default$/],
+  ["a default without hasDefault", { default: 0n }, /^parameter default requires has_default=true$/],
+  [
+    "a default origin without hasDefault",
+    { defaultOrigin: origin("default") },
+    /^parameter default_origin requires has_default=true$/,
+  ],
+])("parameter rejects %s", (_name, options, message) => {
   expect(() => new Parameter("value", options)).toThrow(RangeError);
-  expect(() => new Parameter("value", options)).toThrow(/default/);
+  expect(() => new Parameter("value", options)).toThrow(message);
 });
 
 test("value contract uses a fresh empty origin index", () => {

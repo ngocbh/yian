@@ -13,7 +13,8 @@
  * TS-only: a `Parameter` and a `Binding` sharing one contract, rewritten with one `seen`, share
  * one rebuilt contract; a binding whose record source holds a binding, rewritten first at the top
  * level and then inside a `ValueTemplate` with one `seen`, is rebuilt once, and every origin the
- * rebuilt template yields is mapped.
+ * rebuilt template yields is mapped; a record holding a binding and shared by two bindings' sources
+ * comes back as one shared record, as Python's `copy.deepcopy` keeps it.
  *
  * Left for later: the binder tests (`test_template_strings_evaluate_with_types_and_unescape`
  * onward) land with `nodes/binding.ts` (`resolveSource`/`bindParams`, then binding capture).
@@ -55,6 +56,9 @@ test("a value template requires a record or a list", () => {
   expect(new ValueTemplate({ a: "${n.output}" }).value).toEqual({ a: "${n.output}" });
   expect(new ValueTemplate(["${n.output}"]).origins).toEqual([]);
   expect(() => new ValueTemplate("${n.output}" as never)).toThrow(TypeError);
+  expect(() => new ValueTemplate("${n.output}" as never)).toThrow(
+    /^value template must hold a record or array, got string$/,
+  );
 });
 
 test("a value template validates its origins", () => {
@@ -296,7 +300,23 @@ test("a binding reached at the top level and inside a template is rebuilt once",
   expect((top.source as Record<string, unknown>)["n"]).toBe(1n);
   const keys = [...iterOriginCarrier(newTemplate, new Set())].map((origin) => origin.key);
   expect(keys).toEqual(["m:leaf", "m:middle", "m:inner"]);
-  // A literal-only container keeps its identity.
+});
+
+test("rewriting keeps a literal-only binding source by identity", () => {
   const literal = { a: [1n] };
   expect(rewriteOriginCarrier(new Binding(literal), rename, new Map()).source).toBe(literal);
+});
+
+test("a container shared by two binding sources is rebuilt once", () => {
+  const shared = { item: new Binding("${c.output}", { origin: new OriginRef("inner") }) };
+  const first = new Binding(shared, { origin: new OriginRef("first") });
+  const second = new Binding(shared, { origin: new OriginRef("second") });
+  const seen = new Map<object, object>();
+
+  const newFirst = rewriteOriginCarrier(first, rename, seen);
+  const newSecond = rewriteOriginCarrier(second, rename, seen);
+
+  expect(newFirst.source).not.toBe(shared);
+  expect(newSecond.source).toBe(newFirst.source);
+  expect(((newFirst.source as Record<string, unknown>)["item"] as Binding).origin).toEqual(new OriginRef("m:inner"));
 });

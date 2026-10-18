@@ -1454,8 +1454,8 @@ function isPlainMapping(value: unknown): value is Readonly<Record<string, unknow
 
 /**
  * The name Python's `type(x).__name__` gives the host value `value`: `dict` for a plain
- * object, `list` for an array, `str`, `int` for a bigint or a safe integer, `float` for any
- * other number, `bool`, `NoneType` for `null`, else its constructor's name (or `typeof`).
+ * object, `list` for an array, `str`, `int` for a bigint, `float` for a number, `bool`,
+ * `NoneType` for `null`, else its constructor's name (or `typeof`).
  */
 function pythonTypeName(value: unknown): string {
   if (isPlainMapping(value)) return "dict";
@@ -1466,7 +1466,8 @@ function pythonTypeName(value: unknown): string {
     case "bigint":
       return "int";
     case "number":
-      return Number.isSafeInteger(value) ? "int" : "float";
+      // The loader reads YAML ints as bigints, so a number here is always a YAML float.
+      return "float";
     case "boolean":
       return "bool";
   }

@@ -176,7 +176,7 @@ describe("rejected definitions", () => {
 
   test.each([
     ["5n", 5n, "int"],
-    ["5", 5, "int"],
+    ["5 (a YAML float such as 5.0)", 5, "float"],
     ["1.5", 1.5, "float"],
     ["true", true, "bool"],
     ["null", null, "NoneType"],

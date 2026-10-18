@@ -4,7 +4,7 @@
  * `ValueKind` is the closed set of storage tags, and `Type` the resolved structure of a
  * declared type (records, `Literal` tags, typed lists, numeric ranges and unions) that
  * the write boundary checks values against, with its canonical labels, union member
- * order and overlap check. The value half arrives later.
+ * order and overlap check.
  */
 
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
@@ -102,7 +102,10 @@ export type Bound = bigint | number | null;
 /** A numeric type's inclusive `[minimum, maximum]`. */
 export type Bounds = readonly [Bound, Bound];
 
-/** The properties a `Type` is built from; absent refinements are left out. */
+/**
+ * The properties a `Type` is built from. An absent refinement is left out (`undefined`), never
+ * `null`: decode a JSON `null` to `undefined` before building a `Type`.
+ */
 export interface TypeInit {
   readonly kind: ValueKind;
   readonly fields?: ReadonlyMap<string, Type> | undefined;

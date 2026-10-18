@@ -768,11 +768,13 @@ destination slot, which checks the value at run time (`mode: !Mode ${input.s}`, 
 `isinstance(input.s, Mode)`.
 
 Changed (TS yian): integer range ends have no digit limit; whitespace in type text is
-JavaScript whitespace; a `-0.0` end reads as `0.0`. Type text in the old bracket spelling
-(`Optional[str]`) still fails with the parenthesized spelling, but for text that isn't a type
-either the message leaves out Python's syntax-error detail, and the TS reader doesn't take
-Python-only forms (hex or underscore numbers, joined or prefixed strings, parenthesized groups,
-attributes, calls, slices, comments) or more than 100 levels.
+JavaScript whitespace, and names follow the JavaScript engine's Unicode tables; labels sort
+record keys, `Literal` tags and union members by UTF-16 code units; a `-0.0` end reads as
+`0.0`. Type text in the old bracket spelling (`Optional[str]`) still fails with the
+parenthesized spelling, but for text that isn't a type either the message leaves out Python's
+syntax-error detail, and the TS reader doesn't take Python-only forms (hex or underscore
+numbers, joined or prefixed strings, parenthesized groups, attributes, calls, slices, comments)
+or more than 100 levels, and it reads Python keywords used as names.
 
 Name reusable types in `typedefs:`:
 

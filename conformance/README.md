@@ -207,7 +207,7 @@ given the path (`--log`).
 A `json` document, and each `json_lines` line, is checked as parsed (before the codec decoding)
 against `conformance/schema/cli.schema.json` before it is compared; a document that doesn't
 match fails the case. Runners use a JSON Schema 2020-12 validator (in TS a dev-only dependency,
-shared with the design 6.11 event and message schema tests).
+shared with the event and message schema tests).
 
 `signal: {name: SIGINT, after: <text>}` interrupts the command: the runner starts it, sends the
 signal once `after` appears in what it has written to stdout or stderr so far, then waits for it

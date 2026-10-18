@@ -1106,18 +1106,18 @@ def _run_cli(case: dict, case_dir: Path) -> None:
     def document(text: str) -> object:
         try:
             parsed = json.loads(text, parse_constant=refuse)
-            # Checked as parsed: the schema describes the JSON, not the codec's values.
-            invalid = best_match(_CLI_VALIDATOR.iter_errors(parsed))
-            if invalid is not None:
-                # Under `anyOf` or `oneOf` the best match only says no branch matched; the
-                # branches' own errors say why.
-                reasons = "".join(f"  {error.json_path}: {error.message}\n"
-                                  for error in invalid.context or [invalid])
-                _fail(f"stdout doesn't match conformance/schema/cli.schema.json\n{reasons}"
-                      f"--- stdout\n{stdout}")
-            return _decode(parsed)
         except ValueError as error:  # JSONDecodeError is a ValueError
             _fail(f"stdout is not a JSON document ({error})\n--- stdout\n{stdout}")
+        # Checked as parsed: the schema describes the JSON, not the codec's values.
+        invalid = best_match(_CLI_VALIDATOR.iter_errors(parsed))
+        if invalid is not None:
+            # When no `anyOf` or `oneOf` branch is clearly closest, the best match is the
+            # combinator's own error, so each branch's errors are listed.
+            reasons = "".join(f"  {error.json_path}: {error.message}\n"
+                              for error in invalid.context or [invalid])
+            _fail(f"stdout doesn't match conformance/schema/cli.schema.json\n{reasons}"
+                  f"--- stdout\n{stdout}")
+        return _decode(parsed)
 
     stdout, stderr = normal(out), normal(err)
     _check_secrets(case, {"stdout": stdout, "stderr": stderr, **{

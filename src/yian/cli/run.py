@@ -49,7 +49,7 @@ import sys
 import threading
 import warnings
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional
+from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Tuple
 
 import typer
 from rich.console import Console, Group
@@ -2201,24 +2201,29 @@ def run(
         raise typer.Exit(code=1)
 
 
-def _check_flow(arg: str) -> tuple[Dict[str, Any], Optional[Diagnostic]]:
+def _check_flow(arg: str) -> Tuple[Dict[str, Any], Optional[Diagnostic]]:
     """Load the flow file `arg` as `yian run` loads it, running nothing.
 
     Args:
         arg (`str`): The flow path exactly as given on the command line.
 
     Returns:
-        `tuple[Dict[str, Any], Optional[Diagnostic]]`: The flow's `check` result,
+        `Tuple[Dict[str, Any], Optional[Diagnostic]]`: The flow's `check` result,
             `{path, ok: True, id, name, description, inputs}` or
             `{path, ok: False, diagnostics}`, and the diagnostic when it didn't load.
     """
     path = Path(arg)
     try:
-        loaded = load_flow(path.read_text(), search_paths=[path.parent], source_label=path.name)
+        text = path.read_text(encoding="utf-8")
+        loaded = load_flow(text, search_paths=[path.parent], source_label=path.name)
     except LoadError as err:
         diagnostic = err.diagnostic
-    except (OSError, UnicodeDecodeError) as err:
-        diagnostic = Diagnostic(code="compose.load", message=f"can't read {arg}: {err}")
+    except UnicodeDecodeError:
+        diagnostic = Diagnostic(code="compose.load", message=f"can't read {arg}: not UTF-8 text")
+    except OSError as err:
+        # `str(err)` repeats the path the message already starts with.
+        reason = err.strerror or str(err)
+        diagnostic = Diagnostic(code="compose.load", message=f"can't read {arg}: {reason}")
     else:
         inputs = [
             {

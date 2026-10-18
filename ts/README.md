@@ -35,6 +35,19 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   that waits takes an injected `Scheduler`, so tests and conformance run on `virtualScheduler`.
 - Host values enter through `fromHost`; values reaching `buildValueAs` are yian values.
 
+## LLM layer
+
+- `src/llm/` is a leaf: it imports only `defaults`, `platform` and `typesys/json` (the layer
+  ratchet checks this).
+- Messages are `yian.message.v1` (`../conformance/schema/message.schema.json`). Provider payloads
+  are opaque JSON, holding the versioned replay records of design 7.5 (`replayRecord`,
+  `readReplayRecord` in `src/llm/messages.ts`); a record that doesn't match the request is
+  left out, never an error.
+- Every model call streams. A call ends with exactly one `Finish`, its last event, or a thrown
+  `ProviderError`, whose `kind` is the stable code and whose `retryable` is set when it is built.
+  Any other error is a defect and is never retried.
+- `ScriptedModel` in `src/llm/testing.ts` scripts model replies for tests.
+
 ## Commands
 
 Run from `ts/`:

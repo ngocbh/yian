@@ -49,7 +49,13 @@ function fullMessage(): Message {
       new ToolCallPart({ id: "call_1", name: "search", arguments: { q: "x", deep: { k: [true, false] } } }),
       new ToolCallPart({ id: "call_2", name: "broken", arguments: null, rawArguments: "{oops" }),
       new ToolCallPart({ id: "call_3", name: "both", arguments: { a: 1n }, rawArguments: '{"a": 1}' }),
-      new ToolResultPart({ callId: "call_1", name: "search", content: "result", isError: true, providerPayload: { x: 1n } }),
+      new ToolResultPart({
+        callId: "call_1",
+        name: "search",
+        content: "result",
+        isError: true,
+        providerPayload: { x: 1n },
+      }),
       new ToolResultPart({ callId: "call_2", name: "broken", content: "ok" }),
       new RefusalPart("I can't help with that", { id: "msg_2", phase: "final" }),
     ],
@@ -288,7 +294,11 @@ describe("strict decode", () => {
     const cases: [(data: Data) => void, string, string][] = [
       [(data) => (data["protocol"] = null), "protocol", "expected string, got null"],
       [(data) => (data["provider_payload"] = null), "provider_payload", "expected an object, got null"],
-      [(data) => (data["parts"][0]["provider_payload"] = null), "parts[0].provider_payload", "expected an object, got null"],
+      [
+        (data) => (data["parts"][0]["provider_payload"] = null),
+        "parts[0].provider_payload",
+        "expected an object, got null",
+      ],
       [(data) => (data["parts"][2]["data"] = null), "parts[2].data", "expected string, got null"],
       [(data) => (data["parts"][3]["url"] = null), "parts[3].url", "expected string, got null"],
       [(data) => (data["parts"][2]["name"] = null), "parts[2].name", "expected string, got null"],
@@ -339,7 +349,7 @@ describe("strict decode of odd objects", () => {
 
   test("a message or part that isn't a plain object", () => {
     expect(formatError(() => Message.fromJSON(Object.assign(new (class {})(), canonical()))).message).toBe(
-      "expected an object, got object",
+      "expected an object, got non-plain object",
     );
     const data = canonical();
     data["parts"][1] = Object.assign(Object.create(Object.create(null)) as Data, data["parts"][1]);
@@ -555,10 +565,10 @@ describe("construction", () => {
   test("an instance of an anonymous class isn't a plain object", () => {
     const instance = Object.assign(new (class {})(), { a: 1n });
     expect(formatError(() => new TextPart("x", bad(instance))).message).toBe(
-      "provider_payload: expected an object, got object",
+      "provider_payload: expected an object, got non-plain object",
     );
     expect(formatError(() => new TextPart("x", bad({ v: instance }))).message).toBe(
-      "provider_payload.v: object is not a JSON value",
+      "provider_payload.v: non-plain object is not a JSON value",
     );
     // A class may even be named `object`; TypeScript forbids declaring one, so set the name.
     const Named = Object.defineProperty(class {}, "name", { value: "object" });
@@ -570,7 +580,7 @@ describe("construction", () => {
     const chained = Object.assign(Object.create(Object.create(null)) as Data, { a: 1n });
     expect(formatError(() => new TextPart("x", bad(chained))).path).toBe("provider_payload");
     expect(formatError(() => new TextPart("x", bad({ v: [chained] }))).message).toBe(
-      "provider_payload.v[0]: object is not a JSON value",
+      "provider_payload.v[0]: non-plain object is not a JSON value",
     );
   });
 
@@ -662,9 +672,8 @@ describe("tool specs", () => {
   test("strict is a boolean, null when absent", () => {
     expect(new ToolSpec({ name: "f", description: "d", parameters: {} }).strict).toBeNull();
     expect(new ToolSpec({ name: "f", description: "d", parameters: {}, strict: true }).strict).toBe(true);
-    expect(formatError(() => new ToolSpec({ name: "f", description: "d", parameters: {}, strict: bad(1) })).message).toBe(
-      "strict: expected boolean, got number",
-    );
+    const error = formatError(() => new ToolSpec({ name: "f", description: "d", parameters: {}, strict: bad(1) }));
+    expect(error.message).toBe("strict: expected boolean, got number");
   });
 });
 
@@ -745,6 +754,23 @@ describe("requests and replies", () => {
     );
   });
 
+  test("a named tool's name is a string", () => {
+    expect(formatError(() => new NamedTool(bad(1))).message).toBe("name: expected string, got number");
+  });
+
+  test("a response checks its usage, finish reason and response id", () => {
+    const message = new Message({ role: "assistant", parts: [] });
+    expect(formatError(() => new Response({ message, usage: bad({}) })).message).toBe(
+      "usage: expected a Usage, got object",
+    );
+    expect(formatError(() => new Response({ message, finishReason: bad(1) })).message).toBe(
+      "finish_reason: expected string, got number",
+    );
+    expect(formatError(() => new Response({ message, responseId: "x\ud800" })).message).toBe(
+      "response_id: string has an unpaired surrogate",
+    );
+  });
+
   test("response and usage", () => {
     const usage = new Usage({ inputTokens: 1, outputTokens: 2, totalTokens: 3, cacheReadTokens: 1 });
     const response = new Response({
@@ -778,8 +804,14 @@ describe("requests and replies", () => {
     });
   }
 
-  test("Usage allows absent or null optional counts and integral floats", () => {
-    const usage = new Usage({ inputTokens: 1.0, outputTokens: 0, totalTokens: 0, cacheCreationTokens: 4, reasoningTokens: null });
+  test("Usage allows absent or null optional counts", () => {
+    const usage = new Usage({
+      inputTokens: 1.0,
+      outputTokens: 0,
+      totalTokens: 0,
+      cacheCreationTokens: 4,
+      reasoningTokens: null,
+    });
     expect(usage.inputTokens).toBe(1);
     expect(usage.cacheCreationTokens).toBe(4);
     expect(usage.reasoningTokens).toBeNull();
@@ -855,7 +887,11 @@ describe("replay records", () => {
 
   test("unknown_version", () => {
     for (const v of [2n, 0, "1", null, 1.5]) {
-      const record = edited((record) => (record["v"] = v));
+      // The version is checked before the protocol.
+      const record = edited((record) => {
+        record["v"] = v;
+        record["kind"] = "anthropic_messages";
+      });
       expect(readReplayRecord(record, KEY, FIELDS)).toEqual({ ok: false, reason: "unknown_version" });
     }
   });
@@ -888,6 +924,9 @@ describe("replay records", () => {
   test("other_account", () => {
     const withAccount = replayRecord({ ...KEY, account: "acct_1" }, { item_id: "i" });
     expect(readReplayRecord(withAccount, KEY, FIELDS)).toEqual({ ok: false, reason: "other_account" });
+    // The account is checked before the fields.
+    const withExtra = replayRecord({ ...KEY, account: "acct_1" }, { item_id: "i", extra: 1n });
+    expect(readReplayRecord(withExtra, KEY, FIELDS)).toEqual({ ok: false, reason: "other_account" });
     expect(readReplayRecord(withAccount, { ...KEY, account: "acct_2" }, FIELDS)).toEqual({
       ok: false,
       reason: "other_account",

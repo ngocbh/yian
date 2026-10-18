@@ -4,8 +4,9 @@
  * A `Message` holds typed parts; `Message.toJSON` writes the `yian.message.v1` JSON shape and
  * `Message.fromJSON` reads it back strictly. Every class checks its values on construction, so
  * an invalid message cannot exist: opaque provider data, tool-call arguments and tool parameters
- * must be plain JSON within yian's nesting limit. The check walks values iteratively, so a deep value throws
- * `MessageFormatError`, never `RangeError`. Fields are camelCase; JSON keys are snake_case.
+ * must be plain JSON within yian's nesting limit. The check walks values iteratively, so a deep
+ * value throws `MessageFormatError`, never `RangeError`. Fields are camelCase; JSON keys are
+ * snake_case.
  */
 
 import { current } from "../defaults.ts";
@@ -21,6 +22,7 @@ const ROLES: ReadonlySet<unknown> = new Set(["system", "user", "assistant", "too
 const MESSAGE_KEYS: ReadonlySet<string> = new Set(["format", "role", "parts", "protocol", "provider_payload"]);
 const PLAIN_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const UNPAIRED_SURROGATE = "string has an unpaired surrogate";
+const SYMBOL_KEY = "object key is symbol, not string";
 
 /**
  * A message, part or value that does not fit the `yian.message.v1` shape.
@@ -66,8 +68,9 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Return a value's type name for error text only: a `typeof` name, `null`, `array`, `object`
- * or a class name. A value controls its class name, so `isPlainObject` decides what is plain.
+ * Return a value's type name for error text only: a `typeof` name, `null`, `array`, `object`,
+ * a class name, or `non-plain object` for an object with no class name. A value controls its
+ * class name, so `isPlainObject` decides what is plain.
  */
 function typeName(value: unknown): string {
   if (value === null) return "null";
@@ -75,7 +78,7 @@ function typeName(value: unknown): string {
   if (typeof value !== "object") return typeof value;
   if (isPlainObject(value)) return "object";
   const name: unknown = (value as { constructor?: { name?: unknown } }).constructor?.name;
-  return typeof name === "string" && name !== "" ? name : "object";
+  return typeof name === "string" && name !== "" ? name : "non-plain object";
 }
 
 /** Set `target[key]`, defining a `"__proto__"` key so it stays data rather than setting the prototype. */
@@ -151,20 +154,22 @@ export function checkJsonValue(value: unknown, path: string): JsonValue {
       }
     } else if (isPlainObject(item)) {
       if (level > limit) throw new MessageFormatError(formatPath(where), `value nests deeper than ${limit} levels`);
-      const object = item;
-      if (Object.getOwnPropertySymbols(object).length > 0) {
-        throw new MessageFormatError(formatPath(where), "object key is symbol, not string");
+      if (Object.getOwnPropertySymbols(item).length > 0) {
+        throw new MessageFormatError(formatPath(where), SYMBOL_KEY);
       }
-      const keys = Object.keys(object);
+      const keys = Object.keys(item);
       for (const each of keys) {
-        if (!each.isWellFormed()) throw new MessageFormatError(formatPath(where), "object key has an unpaired surrogate");
+        if (!each.isWellFormed()) {
+          throw new MessageFormatError(formatPath(where), "object key has an unpaired surrogate");
+        }
       }
       const copy: JsonObject = {};
       put(into, key, copy);
       // Pushed last to first so the first offending value in document order is reported.
       for (let i = keys.length - 1; i >= 0; i--) {
         const each = keys[i]!;
-        stack.push({ item: object[each], where: { parent: where, segment: each }, level: level + 1, into: copy, key: each });
+        const child = { parent: where, segment: each };
+        stack.push({ item: item[each], where: child, level: level + 1, into: copy, key: each });
       }
     } else {
       throw new MessageFormatError(formatPath(where), `${typeName(item)} is not a JSON value`);
@@ -230,7 +235,12 @@ function optionalInteger(value: unknown, path: string): number | null {
  * `isItem`; indexing rather than iterating means a hole or an overridden iterator can't skip
  * an item.
  */
-function frozenArray<T>(value: unknown, path: string, isItem: (item: unknown) => item is T, what: string): readonly T[] {
+function frozenArray<T>(
+  value: unknown,
+  path: string,
+  isItem: (item: unknown) => item is T,
+  what: string,
+): readonly T[] {
   if (!Array.isArray(value)) throw new MessageFormatError(path, `expected an array, got ${typeName(value)}`);
   const copy: T[] = [];
   for (let i = 0; i < value.length; i++) {
@@ -254,7 +264,7 @@ function ownRecord(data: Record<string, unknown>): Record<string, unknown> {
 /** Throw at `path` if the object `data` has a symbol key, which JSON can't hold. */
 function refuseSymbolKeys(data: object, path: string): void {
   if (Object.getOwnPropertySymbols(data).length > 0) {
-    throw new MessageFormatError(path, "object key is symbol, not string");
+    throw new MessageFormatError(path, SYMBOL_KEY);
   }
 }
 
@@ -866,12 +876,17 @@ const REPLAY_ENVELOPE: ReadonlySet<string> = new Set(["kind", "v", "provider", "
  */
 export function replayRecord(key: ReplayKey, fields: JsonObject): JsonObject {
   const copy = checkObject(fields, "");
+  const record: JsonObject = {
+    kind: key.protocol,
+    v: BigInt(REPLAY_VERSION),
+    provider: key.provider,
+    model: key.model,
+  };
+  if (key.account !== null && key.account !== undefined) record["account"] = key.account;
   for (const name of Object.keys(copy)) {
     if (REPLAY_ENVELOPE.has(name)) throw new MessageFormatError(name, "reserved replay record key");
+    put(record, name, copy[name]!);
   }
-  const record: JsonObject = { kind: key.protocol, v: BigInt(REPLAY_VERSION), provider: key.provider, model: key.model };
-  if (key.account !== null && key.account !== undefined) record["account"] = key.account;
-  for (const name of Object.keys(copy)) put(record, name, copy[name]!);
   return record;
 }
 
@@ -883,13 +898,13 @@ export function replayRecord(key: ReplayKey, fields: JsonObject): JsonObject {
  *
  * @param payload The payload holding the record, or `null`.
  * @param key Who the record must belong to; the accounts must match exactly, both absent counting as equal.
- * @param fields The keys the record may hold besides its envelope.
+ * @param allowed The keys the record may hold besides its envelope.
  * @returns The record's other keys, copied, or why it can't be replayed.
  */
 export function readReplayRecord(
   payload: JsonObject | null,
   key: ReplayKey,
-  fields: readonly string[],
+  allowed: readonly string[],
 ): { ok: true; fields: JsonObject } | { ok: false; reason: ReplayDegradedReason } {
   if (payload === null) return { ok: false, reason: "missing" };
   const { kind, provider, model, v } = payload;
@@ -903,7 +918,8 @@ export function readReplayRecord(
   ) {
     return { ok: false, reason: "malformed" };
   }
-  if (v !== 1n && v !== 1) return { ok: false, reason: "unknown_version" };
+  // `parseJson` reads ints as `bigint`, and a payload a caller built may hold a `number`.
+  if (v !== BigInt(REPLAY_VERSION) && v !== REPLAY_VERSION) return { ok: false, reason: "unknown_version" };
   if (kind !== key.protocol) return { ok: false, reason: "other_protocol" };
   if (provider !== key.provider) return { ok: false, reason: "other_provider" };
   if (model !== key.model) return { ok: false, reason: "other_model" };
@@ -911,7 +927,7 @@ export function readReplayRecord(
   const rest: JsonObject = {};
   for (const name of Object.keys(payload)) {
     if (REPLAY_ENVELOPE.has(name)) continue;
-    if (!fields.includes(name)) return { ok: false, reason: "unknown_field" };
+    if (!allowed.includes(name)) return { ok: false, reason: "unknown_field" };
     put(rest, name, copyJson(payload[name]!));
   }
   return { ok: true, fields: rest };

@@ -46,6 +46,7 @@ import asyncio
 from concurrent.futures import CancelledError
 from contextlib import contextmanager, redirect_stdout
 from functools import partial
+import errno
 import itertools
 import json
 import os
@@ -2006,10 +2007,25 @@ def run(
     ),
 ) -> None:
     """Start or recover a durable flow run and print its terminal output."""
-    json_out = sys.stdout if json_output else None
+    json_out = None
     if json_output:
-        # stdout carries only the document; CODE prints and stray output go to stderr.
+        # stdout carries only the document. Descriptor 1 points at stderr for the run, so
+        # os.write(1, ...), child processes and native code can't write there either; the
+        # document goes to a duplicate of the real stdout.
+        stdout = sys.stdout
+        stdout.flush()
+        saved = os.dup(1)
+        json_out = os.fdopen(saved, "w", encoding="utf-8")
+        os.dup2(2, 1)
         ctx.with_resource(redirect_stdout(sys.stderr))
+
+        def restore_stdout() -> None:
+            # Flush buffered writes to stderr first; closing `json_out` closes `saved`.
+            stdout.flush()
+            os.dup2(saved, 1)
+            json_out.close()
+
+        ctx.call_on_close(restore_stdout)
 
     def fail(diagnostic: Diagnostic) -> NoReturn:
         """Exit 1, first printing `diagnostic` as the error document under `--json`."""
@@ -2026,7 +2042,12 @@ def run(
         resume=resume,
     )
     _ensure_cwd_importable()  # so `code: pkg.mod:fn` refs to repo-local packages resolve
-    text = flow.read_text()
+    try:
+        text = flow.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        message = f"can't read {flow}: not UTF-8 text"
+        err_console.print(Text(message, style="red"), soft_wrap=True)
+        fail(Diagnostic(code="compose.load", message=message))
     try:
         loaded = load_flow(
             text,
@@ -2287,7 +2308,11 @@ def _load_confined(root: Path, path: Path, loading: frozenset[Path]) -> Composed
         `OSError`: The flow can't be read.
     """
     # Compare resolved paths so a symlinked root (/var -> /private/var on macOS) works.
-    path = path.resolve()
+    try:
+        path = path.resolve()
+    except RuntimeError:
+        # Python 3.11 and 3.12 raise RuntimeError for a symlink loop; 3.13 raises OSError.
+        raise OSError(errno.ELOOP, os.strerror(errno.ELOOP)) from None
     shown = os.path.relpath(path, root)
     if not path.is_relative_to(root):
         raise LoadError(
@@ -2422,7 +2447,8 @@ def skills_check(
     for arg in directories:
         try:
             skill = load_skill_dir(arg)
-        except (SkillError, OSError) as err:
+        # RuntimeError: Python 3.11 and 3.12 raise it when resolving a symlink loop.
+        except (SkillError, OSError, RuntimeError) as err:
             error = {"code": "skill.invalid", "message": str(err)}
             results.append({"path": arg, "ok": False, "error": error})
         else:
@@ -2436,8 +2462,7 @@ def skills_check(
             if result["ok"]:
                 console.print(Text(f"{result['path']}: ok ({result['name']})"), soft_wrap=True)
             else:
-                err_console.print(
-                    Text(f"{result['path']}: {result['error']['message']}"), soft_wrap=True
-                )
+                # The message already names the path.
+                err_console.print(Text(result["error"]["message"]), soft_wrap=True)
     if not all(result["ok"] for result in results):
         raise typer.Exit(code=1)

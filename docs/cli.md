@@ -566,8 +566,11 @@ Every document follows these rules:
 - Every document has `"format": "yian.cli.v1"`. Keys are snake_case. Every key
   listed below is always present, as `null` where stated.
 - Consumers ignore keys they don't know; keys are only added within v1.
+- Codes and enum values are only added within v1. A consumer treats an unknown error
+  code as a generic error and ignores an unknown login method.
 - Message and note text is not part of the contract, nor are the number and order of
-  `config check` errors. Codes and fields are.
+  `config check` errors. Codes and fields are. Conformance cases still pin the number
+  and order, so the implementations agree.
 - Numbers use yian's lossless JSON form: a float always has a fraction or an
   exponent (`2.0`), an int never does.
 
@@ -656,7 +659,8 @@ are not reported.
    "error": {"code": "skill.invalid", "message": "skills/empty: missing SKILL.md"}}]}
 ```
 
-Without `--json`, it prints `PATH: ok (NAME)`, or `PATH: MESSAGE` on stderr.
+Without `--json`, it prints `PATH: ok (NAME)`, or the error message, which names the
+path, on stderr.
 
 ### Checking an `llm_config` layer
 
@@ -713,7 +717,7 @@ two, or whose only key is `$record`, is wrapped as `{"$record": ...}`, so
 `{"$record": 1}` is written `{"$record": {"$record": 1}}`.
 
 During a `--json` run, anything else written to stdout, such as a CODE node's
-`print`, goes to stderr. `--json` changes nothing else: prompts, key checks, and exit
+`print` or the output of a command it starts, goes to stderr. `--json` changes nothing else: prompts, key checks, and exit
 codes are the same as without it.
 
 ## Exit codes

@@ -18,7 +18,9 @@ python_flow: |
       kind: code
       output: str
       code: |
+        import os
         print("noise")
+        os.write(1, b"raw\n")
         return "x"
   output: ${talk.output}
 args: [run, flow.yaml, -w, "0", --log, run.jsonl, --json]

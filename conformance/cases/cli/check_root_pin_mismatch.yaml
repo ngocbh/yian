@@ -1,0 +1,36 @@
+kind: cli
+files:
+  company/main.yaml: |
+    id: main
+    name: main
+    input:
+      n: !int
+    nodes:
+      work:
+        kind: call
+        call: child
+        input:
+          n: ${input.n}
+    output: ${work.output}
+    uses:
+      child: lib/child@2
+  company/lib/child.yaml: |
+    id: child
+    name: child
+    version: "1"
+    input:
+      n: !int
+    nodes: {}
+    output: ${input.n}
+args: [check, --root, company, --json, company/main.yaml]
+expect:
+  exit: 1
+  json:
+    format: yian.cli.v1
+    flows:
+      - path: company/main.yaml
+        ok: false
+        diagnostics:
+          - code: compose.load
+            frames:
+              - {label: main.yaml, range: [13, 10, 13, 21], note: "uses alias 'child'"}

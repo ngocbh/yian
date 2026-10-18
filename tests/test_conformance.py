@@ -1070,7 +1070,11 @@ def _interrupted(argv: list, case_dir: Path, env: dict, stdin: str, after: str) 
                 _fail(f"{after!r} didn't appear within 60 seconds")
             time.sleep(0.02)
         process.send_signal(signal.SIGINT)
-        process.wait(timeout=120)
+        try:
+            process.wait(timeout=120)
+        except subprocess.TimeoutExpired:
+            _fail(f"the command didn't exit within 120 seconds after SIGINT\n--- stdout\n"
+                  f"{''.join(out)}--- stderr\n{''.join(err)}")
     finally:
         # Ends a command the case gave up on; a no-op once it has exited.
         process.kill()

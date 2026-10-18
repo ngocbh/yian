@@ -523,6 +523,10 @@ The runtime state primitive the engine owns. Narrow by design:
 - **Lossless serialization.** `dumps()`/`loads()` round-trip the whole pool through the
   `AnyValue` union. The run-record codec uses the same typed representation for the
   complete initial pool and for each committed node output.
+
+  Changed (TS yian): `store` and `system` are `Map`s; `toWire()`/`fromWire()` give and
+  strictly read the wire object `{store, system, start_id}` (each value as `{kind, value}`),
+  and `dumps()`/`loads()` write and read it with yian's JSON codec.
 - **Files keep their type in typed containers.** The run log stores a file nested in a
   container as its JSON form. The runtime reads each committed value back through its
   commit target's contract, so every position the contract types as `file` holds a

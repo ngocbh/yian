@@ -635,7 +635,7 @@ export function fileFieldType(name: string): Type | null {
  * Whether `value` is a record: a plain object with prototype `Object.prototype` or `null`. An
  * array is never a record, whatever its prototype.
  */
-function isRecord(value: unknown): value is ValueRecord {
+export function isRecord(value: unknown): value is ValueRecord {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const proto: unknown = Object.getPrototypeOf(value);
   return proto === Object.prototype || proto === null;
@@ -803,7 +803,7 @@ export class TypedValue {
  *
  * @throws RangeError listing the missing and extra keys, each sorted.
  */
-function requireFields(record: ValueRecord, expected: readonly string[], label: string): void {
+export function requireFields(record: ValueRecord, expected: readonly string[], label: string): void {
   const actual = Object.keys(record);
   const missing = expected.filter((key) => !Object.hasOwn(record, key)).sort(compareCodeUnits);
   const extra = actual.filter((key) => !expected.includes(key)).sort(compareCodeUnits);

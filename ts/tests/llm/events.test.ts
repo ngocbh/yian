@@ -1,14 +1,50 @@
 /**
- * Stream events: argument parsing, a port of `tests/llm/test_events.py`, plus JavaScript's own
- * cases: ints of any size and raw control characters inside strings.
+ * Stream events: argument parsing and collecting a reply, a port of `tests/llm/test_events.py`,
+ * plus JavaScript's own cases: ints of any size, raw control characters inside strings, async
+ * sources, and the rule that a stream ends with exactly one `Finish`.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
 
 import { BUILTIN, install } from "../../src/defaults.ts";
-import { parseArguments } from "../../src/llm/events.ts";
+import { ProviderError } from "../../src/llm/errors.ts";
+import {
+  collect,
+  type Event,
+  Finish,
+  parseArguments,
+  PartDone,
+  ReasoningDelta,
+  ReplyAssembler,
+  TextDelta,
+  ToolCallDelta,
+  UsageReport,
+} from "../../src/llm/events.ts";
+import { Message, ReasoningPart, TextPart, ToolCallPart, Usage } from "../../src/llm/messages.ts";
 
 afterEach(() => install(BUILTIN));
+
+/** Return what `promise` rejects with; fail the test if it resolves. */
+async function rejection(promise: Promise<unknown>): Promise<Error> {
+  try {
+    await promise;
+  } catch (error) {
+    return error as Error;
+  }
+  throw new Error("expected a rejection");
+}
+
+/** Return a tool-call delta. */
+function call(index: number, id: string | null, name: string | null, args: string): ToolCallDelta {
+  return new ToolCallDelta({ index, id, name, arguments: args });
+}
+
+/** Return a `Usage` with these counts. */
+function usage(inputTokens: number, outputTokens: number, totalTokens: number): Usage {
+  return new Usage({ inputTokens, outputTokens, totalTokens });
+}
+
+const STOP = new Finish({ reason: "stop" });
 
 describe("parseArguments", () => {
   test("empty text is an empty object", () => {
@@ -74,5 +110,192 @@ describe("parseArguments", () => {
   test("a duplicate key fails", () => {
     const text = '{"a": 1, "a": 2}';
     expect(parseArguments(text)).toEqual([null, text]);
+  });
+});
+
+describe("collect", () => {
+  test("interleaved text and tool call", async () => {
+    const response = await collect([
+      new TextDelta(0, "Hel"),
+      call(1, "call_1", null, '{"q": '),
+      new TextDelta(0, "lo"),
+      call(1, null, "search", '"x"}'),
+      call(1, "ignored", "ignored", ""),
+      new Finish({ reason: "tool_calls" }),
+    ]);
+    expect(response.message).toEqual(
+      new Message({
+        role: "assistant",
+        parts: [new TextPart("Hello"), new ToolCallPart({ id: "call_1", name: "search", arguments: { q: "x" } })],
+      }),
+    );
+    expect(response.finishReason).toBe("tool_calls");
+  });
+
+  test("parts ordered by index", async () => {
+    const response = await collect([
+      new ReasoningDelta(10, "b"),
+      new TextDelta(9, "a"),
+      new ReasoningDelta(10, "c"),
+      STOP,
+    ]);
+    // Numeric order: 9 before 10, which a text sort would reverse.
+    expect(response.message.parts).toEqual([new TextPart("a"), new ReasoningPart("bc")]);
+  });
+
+  test("PartDone wins", async () => {
+    const final = new ReasoningPart("full", { signature: "s" });
+    const response = await collect([new ReasoningDelta(0, "fu"), new PartDone(0, final), new ReasoningDelta(0, "ll"), STOP]);
+    expect(response.message.parts).toEqual([final]);
+  });
+
+  test("PartDone supplies the tool call id", async () => {
+    const done = new ToolCallPart({ id: "assigned", name: "f", arguments: {} });
+    const response = await collect([call(0, null, "f", "{}"), new PartDone(0, done), STOP]);
+    expect(response.message.toolCalls()).toEqual([done]);
+  });
+
+  test("unparsable arguments keep the raw text", async () => {
+    const response = await collect([call(0, "c", "f", "{bad"), STOP]);
+    expect(response.message.parts).toEqual([new ToolCallPart({ id: "c", name: "f", arguments: null, rawArguments: "{bad" })]);
+  });
+
+  test("empty arguments are an empty object", async () => {
+    const response = await collect([call(0, "c", "f", ""), STOP]);
+    expect(response.message.parts).toEqual([new ToolCallPart({ id: "c", name: "f", arguments: {} })]);
+  });
+
+  test("the last usage wins", async () => {
+    const response = await collect([
+      new UsageReport(usage(1, 1, 2)),
+      new TextDelta(0, "x"),
+      new UsageReport(usage(3, 4, 7)),
+      new Finish({ reason: "stop", responseId: "r1" }),
+    ]);
+    expect(response.usage).toEqual(usage(3, 4, 7));
+    expect(response.finishReason).toBe("stop");
+    expect(response.responseId).toBe("r1");
+  });
+
+  test("the finish sets protocol and payload", async () => {
+    const response = await collect([
+      new TextDelta(0, "x"),
+      new Finish({ reason: "stop", protocol: "openai_chat", providerPayload: { system_fingerprint: "fp" } }),
+    ]);
+    expect(response.message.protocol).toBe("openai_chat");
+    expect(response.message.providerPayload).toEqual({ system_fingerprint: "fp" });
+  });
+
+  test("mixed delta kinds name the index", async () => {
+    let error = await rejection(collect([new TextDelta(0, "a"), new ReasoningDelta(0, "b"), STOP]));
+    expect(error.message).toBe("index 0 mixes TextDelta and ReasoningDelta");
+    error = await rejection(collect([call(2, "c", "f", ""), new TextDelta(2, "a"), STOP]));
+    expect(error.message).toBe("index 2 mixes ToolCallDelta and TextDelta");
+  });
+
+  test("a tool call without an id fails", async () => {
+    const error = await rejection(collect([call(3, null, "f", "{}"), STOP]));
+    expect(error).toBeInstanceOf(ProviderError);
+    expect((error as ProviderError).kind).toBe("protocol");
+    expect(error.message).toBe("tool call 3 has no id");
+  });
+
+  test("a tool call without a name fails", async () => {
+    const error = await rejection(collect([call(0, "c", null, "{}"), STOP]));
+    expect(error).toBeInstanceOf(ProviderError);
+    expect((error as ProviderError).kind).toBe("protocol");
+    expect(error.message).toBe("tool call 0 has no name");
+  });
+
+  test("a non-event fails and closes the source", async () => {
+    const state: string[] = [];
+    function* events(): Generator<unknown> {
+      try {
+        yield new TextDelta(0, "a");
+        yield "not an event";
+        yield new TextDelta(0, "b");
+      } finally {
+        state.push("closed");
+      }
+    }
+    const error = await rejection(collect(events() as Iterable<Event>));
+    expect(error).toBeInstanceOf(TypeError);
+    expect(error.message).toBe("not a stream event: string");
+    expect(state).toEqual(["closed"]);
+  });
+
+  test("the empty stream is incomplete", async () => {
+    const error = await rejection(collect([]));
+    expect(error).toBeInstanceOf(ProviderError);
+    expect((error as ProviderError).kind).toBe("incomplete");
+    expect((error as ProviderError).retryable).toBe(true);
+    expect(error.message).toBe("the stream ended before its finish event");
+  });
+
+  test("deltas without a finish are incomplete", async () => {
+    const error = await rejection(collect([new TextDelta(0, "a"), new UsageReport(usage(1, 1, 2))]));
+    expect(error).toBeInstanceOf(ProviderError);
+    expect((error as ProviderError).kind).toBe("incomplete");
+  });
+
+  test.each([
+    ["a second Finish", STOP],
+    ["a delta", new TextDelta(0, "b")],
+  ])("%s after the finish fails and closes the source", async (_, late) => {
+    const state: string[] = [];
+    function* events(): Generator<Event> {
+      try {
+        yield new TextDelta(0, "a");
+        yield STOP;
+        yield late;
+        yield new TextDelta(0, "c");
+      } finally {
+        state.push("closed");
+      }
+    }
+    const error = await rejection(collect(events()));
+    expect(error.message).toBe("event after finish");
+    expect(state).toEqual(["closed"]);
+  });
+
+  test("an async generator source", async () => {
+    async function* events(): AsyncGenerator<Event> {
+      yield new TextDelta(0, "a");
+      await Promise.resolve();
+      yield new TextDelta(0, "b");
+      yield STOP;
+    }
+    expect((await collect(events())).message.text()).toBe("ab");
+  });
+});
+
+describe("ReplyAssembler.partial", () => {
+  test("null before any event", () => {
+    expect(new ReplyAssembler().partial()).toBeNull();
+  });
+
+  test("holds the parts that arrived", () => {
+    const assembler = new ReplyAssembler();
+    assembler.add(new TextDelta(0, "hi"));
+    assembler.add(new ReasoningDelta(1, "why"));
+    assembler.add(call(2, "c1", "f", '{"a": 1}'));
+    assembler.add(call(3, "c2", null, "{"));
+    expect(assembler.partial()).toEqual(
+      new Message({
+        role: "assistant",
+        parts: [
+          new TextPart("hi"),
+          new ReasoningPart("why"),
+          new ToolCallPart({ id: "c1", name: "f", arguments: { a: 1n } }),
+        ],
+      }),
+    );
+  });
+
+  test("leaves out a part it can't build, without throwing", () => {
+    const assembler = new ReplyAssembler();
+    assembler.add(new TextDelta(0, "ok"));
+    assembler.add(new TextDelta(1, "\ud800"));
+    expect(assembler.partial()).toEqual(new Message({ role: "assistant", parts: [new TextPart("ok")] }));
   });
 });

@@ -1,0 +1,5 @@
+kind: value
+# An int filling a float slot widens, so the stored value is the float 2.0.
+type: float
+value: 2
+expect: {value: 2.0, kind: float}

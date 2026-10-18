@@ -22,8 +22,23 @@ from yaml.constructor import ConstructorError
 from yian import defaults
 from yian.compile.manifest import flow_fingerprint
 from yian.compose import load_flow
+from yian.compose.helpers.isinstance_types import (
+    expression_trees,
+    resolve_constructor_type,
+    resolve_isinstance_type,
+)
 from yian.compose.source.scalars import _BOOL, _FLOAT, _INT, _NULL
-from yian.typesys.values import TypeCheckError
+from yian.expr import (
+    constructor_names,
+    eval_binding,
+    eval_expr,
+    isinstance_type_names,
+    parse_expr,
+    render_template_record,
+)
+from yian.expr.expressions import ResolveMode, _resolve_in_record
+from yian.typesys.types import read_typedefs, type_for
+from yian.typesys.values import TypeCheckError, build_value_as
 
 _ROOT = Path(__file__).resolve().parent.parent / "conformance"
 _CASES = _ROOT / "cases"
@@ -435,9 +450,74 @@ def _run_fingerprint(case: dict, case_dir: Path) -> None:
     _compare("fingerprint", "same" if same else "different", case["expect"]["fingerprint"])
 
 
+_MODES = {
+    "binding": ResolveMode.BINDING_NONE,
+    "condition": ResolveMode.CONDITION_FALSY,
+    "strict": ResolveMode.STRICT_RAISE,
+}
+
+
+def _run_expr(case: dict, case_dir: Path) -> None:
+    """Evaluate `expr` or `template` in `mode` over `values` and `item`; compare the result."""
+    mode = case.get("mode", "binding")
+    if ("expr" in case) == ("template" in case):
+        pytest.fail("an `expr` case takes one of `expr` and `template`", pytrace=False)
+    if mode not in _MODES:
+        pytest.fail(f"`mode` must be one of {', '.join(_MODES)}, not {mode!r}", pytrace=False)
+    template = case.get("template")
+    if template is not None and mode == "condition":
+        pytest.fail("`mode: condition` takes an `expr`, not a `template`", pytrace=False)
+    strict_template = template is not None and mode == "strict"
+    if strict_template and {"item", "typedefs"} & case.keys():
+        pytest.fail("a strict `template` takes no `item` or `typedefs`", pytrace=False)
+    values = case.get("values", {})
+
+    def resolve(path: str) -> object:
+        return _resolve_in_record(path, values)
+
+    def evaluate() -> object:
+        if strict_template:
+            return render_template_record(template, values)
+        trees = expression_trees(template) if template is not None else [parse_expr(case["expr"])]
+        # The type table the loader gives a node: its isinstance and constructor names.
+        registry = read_typedefs(case.get("typedefs") or {})
+        types = {}
+        for tree in trees:
+            for name in isinstance_type_names(tree):
+                types[name] = resolve_isinstance_type(name, registry)
+            for name in constructor_names(tree):
+                types[name] = resolve_constructor_type(name, registry)
+        if template is not None:
+            return eval_binding(template, resolve, case.get("item"), types=types)
+        return eval_expr(trees[0], resolve, case.get("item"), _MODES[mode], types=types)
+
+    expect = case["expect"]
+    if "raises" in expect:
+        _expect_raises(expect["raises"], evaluate)
+    else:
+        _compare("value", evaluate(), expect["value"])
+
+
+def _run_value(case: dict, case_dir: Path) -> None:
+    """Build `value` as `type` and compare the stored value and its kind, or the error."""
+    def build():
+        typ = type_for(case["type"], read_typedefs(case.get("typedefs") or {}))
+        return build_value_as(typ, case["value"])
+
+    expect = case["expect"]
+    if "raises" in expect:
+        _expect_raises(expect["raises"], build)
+        return
+    typed = build()
+    _compare("value", typed.to_object(), expect["value"])
+    _compare("kind", typed.kind.value, expect["kind"])
+
+
 _KINDS = {
     "defaults": _run_defaults,
     "fingerprint": _run_fingerprint,
+    "expr": _run_expr,
+    "value": _run_value,
 }
 
 

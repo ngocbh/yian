@@ -1,0 +1,7 @@
+kind: expr
+expr: "missing"
+mode: strict
+expect:
+  raises:
+    class: ExpressionError
+    message: "unresolved reference ${missing} in expression"

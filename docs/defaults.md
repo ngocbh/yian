@@ -140,6 +140,18 @@ is not a yian value: it fails at the first boundary that sees it, and an int lit
 in a flow file is a load error; see [Types → Integer size
 limit](typing.md#integer-size-limit).
 
+## TS yian only
+
+These entries exist only in TS yian; Python yian neither reads nor records them.
+
+| TS yian variable | Group | Default | Valid values | Meaning |
+| --- | --- | ---: | --- | --- |
+| `YIAN_MODEL_RETRIES` | setting | 6 | 0 or more | Extra attempts a model call gets after a transport failure (a network error, 5xx, 429 or timeout) |
+| `YIAN_MODEL_FIRST_RESPONSE_TIMEOUT_SECONDS` | setting | 240 | 1 or more | Longest wait in seconds from sending a model request to the first bytes of its response |
+| `YIAN_MODEL_IDLE_TIMEOUT_SECONDS` | setting | 240 | 1 or more | Longest wait in seconds between bytes of a streamed model response |
+| `YIAN_REQUEST_TIMEOUT_SECONDS` | setting | 30 | 1 or more | Longest wait in seconds for a short request (model listing, sign-in calls) |
+| `YIAN_MAX_MCP_MESSAGE_BYTES` | input cap | 16,777,216 | 1 or more | Largest message read from an MCP server |
+
 ## All defaults and limits
 
 An entry whose valid values say "can only be lowered" has its default as its maximum.

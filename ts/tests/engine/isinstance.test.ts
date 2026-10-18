@@ -50,8 +50,10 @@ test("the second argument must be a bare type name", () => {
 });
 
 test("a not as the type name is a parse error", () => {
-  expect(() => parseExpr("isinstance(x, not)")).toThrow(ExpressionError);
-  expect(() => parseExpr("isinstance(x, not)")).toThrow("could not parse expression");
+  expectMessage(
+    "isinstance(x, not)",
+    "could not parse expression 'isinstance(x, not)': unexpected ')' at line 1, column 18",
+  );
 });
 
 test("a wrapped type name shows the bare one", () => {

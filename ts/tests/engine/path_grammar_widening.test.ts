@@ -31,5 +31,5 @@ test("a genuinely bad path is still rejected", () => {
     error = e;
   }
   expect(error).toBeInstanceOf(ExpressionError);
-  expect((error as Error).message).toStartWith("could not parse expression");
+  expect((error as Error).message).toBe("could not parse expression 'a..b': unexpected '.' at line 1, column 3");
 });

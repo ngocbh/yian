@@ -268,6 +268,7 @@ type Frame =
   | { kind: "chain"; level: Level; operands: ExprNode[]; ops: Token[] };
 
 type ChainFrame = Extract<Frame, { kind: "chain" }>;
+type CallFrame = Extract<Frame, { kind: "call" }>;
 
 /** The precedence level of each binary operator, by token type. */
 const OPERATOR_LEVEL: Readonly<Record<string, Level>> = {
@@ -317,8 +318,6 @@ function chainTree({ level, operands, ops }: ChainFrame): Tree {
   ops.forEach((token, i) => children.push(token, operands[i + 1]!));
   return new Tree(CHAIN_RULE[level]!, children);
 }
-
-type CallFrame = Extract<Frame, { kind: "call" }>;
 
 /** Read `.NAME` trailers into a refcall's `children`; any keyword is a plain name here. */
 function readTrailers(cursor: Cursor, children: ExprNode[]): void {
@@ -449,9 +448,6 @@ function parseRaw(text: string): ExprNode {
   }
 }
 
-// Parse nodes that only group the parts of a reference or call; they add no level.
-const WRAPPER_NODES: ReadonlySet<string> = new Set(["trailer", "call_suffix", "arg"]);
-
 const RESERVED_REFERENCE_ROOTS: ReadonlySet<string> = new Set(["and", "or", "not", "in"]);
 
 /** The keywords of the grammar; none of them can be a reference root. */
@@ -464,15 +460,20 @@ export const EXPRESSION_KEYWORDS: ReadonlySet<string> = new Set([
   "inf",
 ]);
 
+/** Return the `call_suffix` of the refcall `node`, or undefined when it is a reference. */
+function callSuffixOf(node: Tree): Tree | undefined {
+  return node.children.find((child): child is Tree => child instanceof Tree && child.data === "call_suffix");
+}
+
 /**
- * Return the index of the `}` closing a `${...}` span whose interior begins at `start` (brace
- * depth and quote aware), or null if the span is unbalanced.
+ * Return the index in `text` of the `}` closing a `${...}` span whose interior begins at `start`
+ * (brace depth and quote aware), or null if the span is unbalanced.
  */
-export function findSpanEnd(s: string, start: number): number | null {
+export function findSpanEnd(text: string, start: number): number | null {
   let depth = 1;
   let quote: string | null = null;
-  for (let i = start; i < s.length; i++) {
-    const c = s[i];
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
     if (quote !== null) {
       if (c === quote) quote = null;
     } else if (c === "'" || c === '"') {
@@ -547,11 +548,13 @@ function unwrapSpans(text: string, depth = 0, limit = current().maxValueNesting)
       i += 1;
     } else if (c === "$" && text[i + 1] === "{") {
       const end = findSpanEnd(text, i + 2);
-      let inner = end === null ? null : unwrapSpans(text.slice(i + 2, end), depth + 1, limit);
-      if (end === null || inner === null) return null;
-      inner = inner.trim();
+      if (end === null) return null;
+      const unwrapped = unwrapSpans(text.slice(i + 2, end), depth + 1, limit);
+      if (unwrapped === null) return null;
+      const inner = unwrapped.trim();
       let piece = isLoneAtom(inner) ? inner : `(${inner})`;
-      // As Python's `re.match`, this tests the first character of the last piece pushed.
+      // `out` holds single characters and whole pieces, and only the first character of the last
+      // entry is tested, as Python does.
       if (out.length > 0 && NAME_CHAR.test(out.at(-1)!)) piece = " " + piece;
       if (NAME_CHAR.test(text.slice(end + 1, end + 2))) piece += " ";
       out.push(piece);
@@ -604,10 +607,8 @@ export function rejectNestedSpans(text: string, { inSpan = false }: { inSpan?: b
   throw new ExpressionError(message);
 }
 
-/** Return the `call_suffix` of the refcall `node`, or undefined when it is a reference. */
-function callSuffixOf(node: Tree): Tree | undefined {
-  return node.children.find((child): child is Tree => child instanceof Tree && child.data === "call_suffix");
-}
+// Parse nodes that only group the parts of a reference or call; they add no level.
+const WRAPPER_NODES: ReadonlySet<string> = new Set(["trailer", "call_suffix", "arg"]);
 
 /**
  * Throw if a parsed expression nests deeper than the value nesting limit.

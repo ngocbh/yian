@@ -4,6 +4,9 @@
  *
  * Not ported: the date, datetime and binary `yamlReadAs` rows; the loader keeps dates as text
  * and builds no bytes.
+ *
+ * Changed: no search inside a list or record; only a bare word gets the fix (Python makes the
+ * same change).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -44,30 +47,15 @@ describe("formerBooleanFix", () => {
     expect(formerBooleanFix("yes", declared)).toEqual(expected as [boolean, string] | null);
   });
 
-  const registry: TypeRegistry = new Map([
-    [
-      "Rec",
-      {
-        kind: "record",
-        fields: new Map([
-          ["ok", "bool"],
-          ["name", "str"],
-        ]),
-      },
-    ],
-  ]);
-
   test.each([
-    ["list(bool)", ["yes", "no"], [true, "`yes` is text; write `true`"]],
-    ["list(bool)", [true, "Off"], [false, "`Off` is text; write `false`"]],
-    ["Rec", { ok: "on", name: "yes" }, [true, "`on` is text; write `true`"]],
-    ["list(str)", ["yes"], null],
-    ["list(bool)", ["maybe"], null],
-    ["list(bool)", [1n], null],
-    ["Rec", { ok: true, name: 3n }, null],
-  ])("finds the rejected word inside a %p", (typeText, value, expected) => {
-    const declared = typeFor(typeText, registry);
-    expect(formerBooleanFix(value, declared)).toEqual(expected as [boolean, string] | null);
+    [["yes", "no"], "list(bool)"],
+    [{ ok: "on" }, "Rec"],
+  ])("has no fix for the list or record %p, declared or not", (value, typeText) => {
+    const registry: TypeRegistry = new Map([
+      ["Rec", { kind: "record", fields: new Map([["ok", "bool"]]) }],
+    ]);
+    expect(formerBooleanFix(value)).toBeNull();
+    expect(formerBooleanFix(value, typeFor(typeText, registry))).toBeNull();
   });
 });
 

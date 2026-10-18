@@ -126,6 +126,9 @@ The same rules apply to keys, to input and output defaults, to a tagged value
 tagged binding or default, a call input, a value entry, `steerable:`, or `llm_config`
 `inherit:`, including inside a list or record.
 
+Changed (TS yian): only a bare word gets the fix; a word inside a list or record, such as
+`[yes, no]` for a `list(bool)`, gets the plain type error.
+
 An unquoted value shaped like a date that isn't a real one (`2026-13-45`,
 `2026-02-30`, `2026-01-01T25:00:00`, `2026-01-01T10:00:00+05:99`) is a located
 load error; quote it to keep it as text.

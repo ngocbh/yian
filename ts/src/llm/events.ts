@@ -431,7 +431,9 @@ export interface ChatModel {
    * The stream ends with exactly one `Finish` or throws a `ProviderError`. `Finish` is the
    * last event: an adapter holds it until the provider's end of stream, so usage and
    * `PartDone`s come before it. Aborting `signal` ends the stream by throwing the signal's
-   * reason. Closing the stream releases the connection.
+   * reason. Closing the stream releases the connection. `stream()` returns at once and
+   * sending starts on the first `next()`, so provider failures surface from `next()`, not
+   * from `stream()`.
    *
    * @param request The call's input.
    * @param options `signal` aborts the call.

@@ -49,9 +49,10 @@ export function jsonTypes(value: unknown): string[] {
   return [typeof value];
 }
 
-/** Return `value` as problem text; `JSON.stringify` throws on a `bigint`. */
+/** Return `value` as problem text, with any `bigint` in it written as digits. */
 function show(value: unknown): string {
-  return typeof value === "bigint" ? String(value) : JSON.stringify(value);
+  // JSON.stringify throws on a bigint, even one nested inside the value.
+  return JSON.stringify(value, (_, v) => (typeof v === "bigint" ? String(v) : v));
 }
 
 /** Return the `root.$defs` entry a `#/$defs/<name>` reference names, or `undefined`. */

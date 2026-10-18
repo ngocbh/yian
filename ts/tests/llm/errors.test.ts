@@ -192,6 +192,10 @@ describe("ProviderError", () => {
     expect(err.provider).toBe("azure");
   });
 
+  test("an unknown kind throws, as Python's ErrorKind(kind) does", () => {
+    expect(() => new ProviderError("nope" as never, "x")).toThrow(new TypeError("unknown provider error kind: nope"));
+  });
+
   const retryableKinds = new Set<ErrorKind>(["rate_limit", "overloaded", "server", "timeout", "connection"]);
   test.each(ERROR_KINDS.map((kind): [ErrorKind, boolean] => [kind, retryableKinds.has(kind)]))(
     "retryable defaults by kind: %s -> %p",
@@ -379,5 +383,7 @@ describe("message", () => {
     expect(redirectDetail("https:///x")).toBe("redirect to a relative Location");
     expect(redirectDetail("//h.example/x")).toBe("redirect to a Location without a scheme");
     expect(redirectDetail("x/y")).toBe("redirect to a relative Location");
+    // urlsplit("http:host") has no netloc.
+    expect(redirectDetail("http:host")).toBe("redirect to a relative Location");
   });
 });

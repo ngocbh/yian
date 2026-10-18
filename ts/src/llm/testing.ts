@@ -20,7 +20,12 @@ import { ReasoningPart, Response, TextPart, ToolCallPart, type Request } from ".
 /** One scripted reply: a `Response`, the events to stream with errors at their positions, or an error. */
 export type ScriptedReply = Response | readonly (Event | Error)[] | Error;
 
-/** Yield the events a provider would stream for `response`. */
+/**
+ * Yield the events a provider would stream for `response`.
+ *
+ * A tool call's delta text is `logJson` text (sorted keys; ints written as digits), unlike
+ * Python's `json.dumps`; `collect` is unaffected because the `PartDone` wins.
+ */
 function* responseEvents(response: Response): Generator<Event> {
   const parts = response.message.parts;
   for (let index = 0; index < parts.length; index++) {
@@ -46,7 +51,7 @@ function* responseEvents(response: Response): Generator<Event> {
 
 /** Yield the reply's events, throwing a scripted error at its position or `signal.reason` once aborted. */
 async function* replyEvents(reply: ScriptedReply, signal: AbortSignal | undefined): AsyncGenerator<Event> {
-  const items = reply instanceof Response ? responseEvents(reply) : reply instanceof Error ? [reply] : reply;
+  const items = reply instanceof Response ? responseEvents(reply) : reply instanceof Error ? [reply] : [...reply];
   for (const item of items) {
     signal?.throwIfAborted();
     if (item instanceof Error) throw item;

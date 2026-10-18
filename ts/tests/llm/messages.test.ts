@@ -1073,7 +1073,10 @@ describe("message schema", () => {
         }
       }
     }
-    expect([files.reply.size, counts.reply]).toEqual([35, 70]);
-    expect([files.messages.size, counts.messages]).toEqual([4, 10]);
+    // Minimums, so new cases don't break this, while proving the cases were read.
+    expect(files.reply.size).toBeGreaterThanOrEqual(35);
+    expect(counts.reply).toBeGreaterThanOrEqual(70);
+    expect(files.messages.size).toBeGreaterThanOrEqual(4);
+    expect(counts.messages).toBeGreaterThanOrEqual(10);
   });
 });

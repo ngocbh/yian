@@ -83,6 +83,8 @@ export class ProviderError extends Error {
   readonly causeName: string | null;
 
   constructor(kind: ErrorKind, message: string, options: ProviderErrorOptions = {}) {
+    // Python's ErrorKind(kind) raises on an unknown kind too.
+    if (!ERROR_KINDS.includes(kind)) throw new TypeError(`unknown provider error kind: ${String(kind)}`);
     super(message);
     this.kind = kind;
     this.status = options.status ?? null;

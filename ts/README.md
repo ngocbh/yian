@@ -44,8 +44,9 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   `readReplayRecord` in `src/llm/messages.ts`); a record that doesn't match the request is
   left out, never an error.
 - Every model call streams. A call ends with exactly one `Finish`, its last event, or a thrown
-  `ProviderError`, whose `kind` is the stable code and whose `retryable` is set when it is built.
-  Any other error is a defect and is never retried.
+  `ProviderError`, whose `kind` is a stable error kind (failure codes are assigned above
+  `llm/`) and whose `retryable` is set when it is built. Any other error is a defect and is
+  never retried.
 - `ScriptedModel` in `src/llm/testing.ts` scripts model replies for tests.
 
 ## Commands

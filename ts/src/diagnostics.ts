@@ -215,10 +215,7 @@ export class Failure {
     causeType?: string | null;
     traceback?: string | null;
   }) {
-    const { code, message, nodeId } = options;
-    const trace = options.trace === undefined ? [] : options.trace;
-    const causeType = options.causeType === undefined ? null : options.causeType;
-    const traceback = options.traceback === undefined ? null : options.traceback;
+    const { code, message, nodeId, trace = [], causeType = null, traceback = null } = options;
     if (typeof code !== "string") throw new TypeError("failure code must be a string");
     if (!FAILURE_CODES.has(code)) throw new RangeError(`unknown failure code ${reprText(code)}`);
     if (typeof message !== "string") throw new TypeError("failure message must be a string");

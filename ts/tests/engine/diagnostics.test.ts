@@ -138,6 +138,14 @@ describe("Failure", () => {
 
     expect([...FAILURE_CODES]).toEqual([...EXPECTED_FAILURE_CODES]);
     for (const code of FAILURE_CODES) expect(code).toMatch(/^[a-z]+\.[a-z_]+$/);
+    expect(Object.keys(failure)).toEqual([
+      "code",
+      "message",
+      "nodeId",
+      "trace",
+      "causeType",
+      "traceback",
+    ]);
     expect(failure.code).toBe("contract.input");
     expect(failure.message).toBe("expected integer");
     expect(failure.nodeId).toBe("review/score");

@@ -61,7 +61,7 @@ const KIND_KEYS = {
   defaults: new Set(["env"]),
   // Both runners load `flow` and `other` as written: no `python_flow` or `python_files`.
   fingerprint: new Set(["flow", "files", "env", "other"]),
-  cli: new Set([...FLOW, "args", "stdin"]),
+  cli: new Set([...FLOW, "args", "stdin", "signal"]),
 } satisfies Record<Kind, ReadonlySet<string>>;
 const REQUIRED: Partial<Record<Kind, readonly string[]>> = {
   load: ["flow"], run: ["flow"], resume: ["flow"], backward: ["flow", "backward"],
@@ -369,6 +369,16 @@ export function checkCase(case_: Case): Case {
       if (get(args, "context", "present") !== "present") {
         throw new Error(`\`${key}.context\` must be \`present\``);
       }
+    }
+  }
+  if (Object.hasOwn(case_, "signal")) {
+    const signal = keys("signal", case_["signal"], new Set(["name", "after"]), {
+      required: ["name", "after"],
+    });
+    if (get(signal, "name") !== "SIGINT") throw new Error("`signal.name` must be SIGINT");
+    const after = get(signal, "after");
+    if (typeof after !== "string" || after === "") {
+      throw new Error("`signal.after` must be non-empty text");
     }
   }
   if (Object.hasOwn(case_, "backward")) {

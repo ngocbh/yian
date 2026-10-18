@@ -7,8 +7,23 @@
  * Runs under Bun from source and under Node from `dist/`; only `node:` APIs and `yaml`.
  */
 
-import { isCollection, isMap, isNode, isSeq, parseDocument, visit } from "yaml";
-import type { Document, YAMLMap } from "yaml";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
+import { Document, isCollection, isMap, isNode, isSeq, parseDocument, visit } from "yaml";
+import type { YAMLMap } from "yaml";
 
 /** A case value: an int is a `bigint`, a float a `number`. */
 export type Value = null | boolean | bigint | number | string | Value[] | Case;
@@ -103,6 +118,7 @@ const SECRET_KEYS: ReadonlySet<string> = new Set([
   "run", "resume", "backward", "env", "host", "stdin",
 ]);
 const SECRET = /<key:([0-9]+)>/g;
+const ENV_SUFFIXES: readonly string[] = ["_API_KEY", "_BASE_URL", "_ENDPOINT", "_API_VERSION"];
 
 /** Return `value` spelled for a message: JSON, a `bigint` as its digits, `null` when absent. */
 function spell(value: Value | undefined): string {
@@ -442,4 +458,384 @@ export function prepare(case_: Case): Case {
       return [key, SECRET_KEYS.has(key) ? fillSecrets(decoded) : decoded];
     }),
   );
+}
+
+/** Return the first directory above this file holding `conformance/cases`: the repository. */
+function findRoot(): string {
+  // `ts/tests/` from source, `ts/dist/tests/` when built.
+  let dir = dirname(fileURLToPath(import.meta.url));
+  while (!existsSync(join(dir, "conformance", "cases"))) {
+    const parent = dirname(dir);
+    if (parent === dir) throw new Error("no `conformance/cases` above the conformance runner");
+    dir = parent;
+  }
+  return dir;
+}
+
+const ROOT = findRoot();
+const CASES = join(ROOT, "conformance", "cases");
+const FIXTURES = join(ROOT, "conformance", "fixtures");
+
+/** The runner's own "this case failed" error, carrying only a message. */
+export class CaseFailure extends Error {
+  override name = "CaseFailure";
+}
+
+/** Return `value` as Python's `str()` writes it into a message: text as is, else spelled. */
+function str(value: Value | undefined): string {
+  return typeof value === "string" ? value : spell(value);
+}
+
+/** How `same` compares. */
+export interface SameFlags {
+  /** An int and a float compare by value. */
+  byValue?: boolean;
+  /** An expected mapping without `message` doesn't compare it. */
+  optionalMessage?: boolean;
+}
+
+/** Return whether `value` is a mapping: an object that isn't an array. */
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Return whether `actual` equals `expected`, kinds included: a `bigint` int, a `number` float. */
+export function same(actual: unknown, expected: unknown, flags: SameFlags = {}): boolean {
+  if (isObject(expected)) {
+    if (!isObject(actual)) return false;
+    const dropMessage = flags.optionalMessage === true && !Object.hasOwn(expected, "message");
+    const names = Object.keys(actual).filter((key) => !(dropMessage && key === "message"));
+    const wanted = Object.keys(expected);
+    return (
+      names.length === wanted.length &&
+      wanted.every((key) => Object.hasOwn(actual, key) && same(actual[key], expected[key], flags))
+    );
+  }
+  if (Array.isArray(expected)) {
+    return (
+      Array.isArray(actual) &&
+      actual.length === expected.length &&
+      expected.every((item, index) => same(actual[index], item, flags))
+    );
+  }
+  const numeric = (value: unknown) => typeof value === "bigint" || typeof value === "number";
+  if (flags.byValue === true && numeric(actual) && numeric(expected)) {
+    // `==` compares a bigint and a number exactly.
+    return (actual as bigint | number) == (expected as bigint | number);
+  }
+  return actual === expected;
+}
+
+/** Return `value` as YAML, a float always with a fraction (`1.0`), lines never folded. */
+function dump(value: unknown): string {
+  const doc = new Document(value);
+  visit(doc, {
+    Scalar(_, node) {
+      if (typeof node.value === "number") node.minFractionDigits = 1;
+    },
+  });
+  return doc.toString({ lineWidth: 0 });
+}
+
+/** Throw a `CaseFailure` showing both sides as YAML unless `actual` is the same as `expected`. */
+export function compare(
+  what: string,
+  actual: unknown,
+  expected: unknown,
+  flags: SameFlags = {},
+): void {
+  if (!same(actual, expected, flags)) {
+    throw new CaseFailure(
+      `${what} differs\n--- actual\n${dump(actual)}--- expected\n${dump(expected)}`,
+    );
+  }
+}
+
+/**
+ * TS error class names that differ from the case names, mapped to the case names. A change that
+ * introduces such a class adds its entry here and the matching row to the error-class table in
+ * `conformance/README.md`; empty while no class differs.
+ */
+export const ERROR_CLASSES: ReadonlyMap<string, string> = new Map();
+
+/**
+ * Return `error` in the case's `raises` form: `{class, message}`, plus `path` for a
+ * `TypeCheckError`. The class is `error.name` read through `classes`, so every yian error class
+ * sets `override name = "<Class>"`. A thrown non-`Error` is named by its `typeof`.
+ */
+export function raised(error: unknown, classes: ReadonlyMap<string, string> = ERROR_CLASSES): Case {
+  if (!(error instanceof Error)) return { class: typeof error, message: String(error) };
+  const form: Case = { class: classes.get(error.name) ?? error.name, message: error.message };
+  const path: unknown = (error as { path?: unknown }).path;
+  if (error.name === "TypeCheckError" && Array.isArray(path)) {
+    form["path"] = path.map((step: Value) => (typeof step === "number" ? BigInt(step) : step));
+  }
+  return form;
+}
+
+/**
+ * Return the error `call()` throws in `raises` form; throw a `CaseFailure` unless it is the one
+ * expected. A `CaseFailure` from `call()` is the case's own failure and passes through.
+ */
+export async function expectRaises(expected: Case, call: () => unknown): Promise<Case> {
+  try {
+    await call();
+  } catch (error) {
+    if (error instanceof CaseFailure) throw error;
+    const form = raised(error);
+    compare("raises", form, expected);
+    return form;
+  }
+  throw new CaseFailure(`expected ${str(get(expected, "class"))} to be raised, but nothing was`);
+}
+
+/**
+ * Compare the results `compute()` returns, by name, with `expect`. When `expect` has `raises`,
+ * compare the error `compute()` throws instead.
+ */
+export async function results(
+  expect: Case,
+  compute: () => Record<string, unknown> | Promise<Record<string, unknown>>,
+): Promise<void> {
+  if (Object.hasOwn(expect, "raises")) {
+    await expectRaises(expect["raises"] as Case, compute);
+    return;
+  }
+  for (const [name, actual] of Object.entries(await compute())) {
+    compare(name, actual, get(expect, name));
+  }
+}
+
+/** A case's directory and the environment yian gets. */
+export interface CaseContext {
+  dir: string;
+  env: Record<string, string>;
+}
+
+/** Run one prepared case of a kind; throw (a `CaseFailure`, normally) when it fails. */
+export type KindRunner = (c: Case, ctx: CaseContext) => void | Promise<void>;
+
+/**
+ * The kind runners. A case whose kind has none fails. A kind is added by replacing its comment
+ * line with `<kind>: run<Kind>,` and writing `run<Kind>` under the kind's section header below.
+ */
+export const KINDS: Partial<Record<Kind, KindRunner>> = {
+  // load: not run yet
+  // run: not run yet
+  // resume: not run yet
+  // backward: not run yet
+  // expr: not run yet
+  // value: not run yet
+  // defaults: not run yet
+  // fingerprint: not run yet
+  // cli: not run yet
+};
+
+/**
+ * Make the case directory under the OS temp directory: `flow.yaml`, the `files`, and a copy of
+ * `fixturesDir` as `fixtures/` when it exists. Except for `cli`, the environment is the
+ * process's without yian's own variables, plus `YIAN_AUTH_FILE` naming a missing file in the
+ * directory, plus the case's `env`; for `cli` it is the case's `env` alone.
+ */
+export function setUp(case_: Case, fixturesDir: string = FIXTURES): CaseContext {
+  const dir = mkdtempSync(join(tmpdir(), "yian-conformance-"));
+  try {
+    const flow = get(case_, "flow");
+    if (typeof flow === "string") writeFileSync(join(dir, "flow.yaml"), flow);
+    for (const [name, text] of Object.entries(get(case_, "files", {}) as Record<string, string>)) {
+      const path = join(dir, name);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, text);
+    }
+    if (existsSync(fixturesDir)) cpSync(fixturesDir, join(dir, "fixtures"), { recursive: true });
+  } catch (error) {
+    rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
+  const env = get(case_, "env", {}) as Record<string, string>;
+  if (case_["kind"] === "cli") return { dir, env: { ...env } };
+  const inherited = Object.entries(process.env).filter(
+    (entry): entry is [string, string] =>
+      entry[1] !== undefined &&
+      !entry[0].startsWith("YIAN_") &&
+      !ENV_SUFFIXES.some((suffix) => entry[0].endsWith(suffix)),
+  );
+  return {
+    dir,
+    env: { ...Object.fromEntries(inherited), YIAN_AUTH_FILE: join(dir, "auth.json"), ...env },
+  };
+}
+
+/** Return the codes of a `load` case's expected diagnostics. */
+function diagnosticCodes(case_: Case): Value[] {
+  if (case_["kind"] !== "load") return [];
+  const load = get(case_["expect"] as Case, "load");
+  const diagnostics = isMapping(load) ? get(load, "diagnostics") : undefined;
+  if (!Array.isArray(diagnostics)) return [];
+  return diagnostics.flatMap((diagnostic) =>
+    isMapping(diagnostic) && Object.hasOwn(diagnostic, "code") ? [diagnostic["code"] ?? null] : [],
+  );
+}
+
+/** Return the message a failing case reports for `error`. */
+function failureText(error: unknown): string {
+  if (error instanceof CaseFailure) return error.message;
+  if (!(error instanceof Error)) return String(error);
+  const header = `${error.name}: ${error.message}`;
+  const stack = error.stack ?? "";
+  return stack.startsWith(header) ? stack : `${header}\n${stack}`;
+}
+
+/** Run one prepared case; return its failure message, or `undefined` when it passes. */
+async function runCase(
+  case_: Case,
+  kinds: Partial<Record<Kind, KindRunner>>,
+): Promise<string | undefined> {
+  const kind = case_["kind"] as Kind;
+  const run = Object.hasOwn(kinds, kind) ? kinds[kind] : undefined;
+  if (run === undefined) return `the TS runner doesn't run \`${kind}\` cases yet`;
+  let ctx: CaseContext | undefined;
+  try {
+    ctx = setUp(case_);
+    await run(case_, ctx);
+    return undefined;
+  } catch (error) {
+    return failureText(error);
+  } finally {
+    if (ctx !== undefined) rmSync(ctx.dir, { recursive: true, force: true });
+  }
+}
+
+const USAGE =
+  "usage: conformance [--group GROUP] [--kind KIND] [--case GROUP/NAME] [--rules RULE] " +
+  "[--diagnostic-code CODE]";
+
+/** What `main` reads cases from, runs them with and writes lines to. */
+export interface MainOptions {
+  casesDir?: string;
+  kinds?: Partial<Record<Kind, KindRunner>>;
+  /** Write one line of the report. */
+  write?: (line: string) => void;
+  /** Write one line of a usage error. */
+  writeError?: (line: string) => void;
+}
+
+/**
+ * Run the cases the flags in `argv` select; report one `FAIL` line per failing case and a
+ * summary. Return the exit code: 0 when no case fails, 1 when one does or none matches, 2 on a
+ * usage error. Each flag is repeatable; values of one flag are alternatives, flags all apply.
+ */
+export async function main(
+  argv: readonly string[],
+  {
+    casesDir = CASES,
+    kinds = KINDS,
+    write = (line) => {
+      process.stdout.write(`${line}\n`);
+    },
+    writeError = (line) => {
+      process.stderr.write(`${line}\n`);
+    },
+  }: MainOptions = {},
+): Promise<number> {
+  const option = { type: "string", multiple: true } as const;
+  let flags: Partial<Record<"group" | "kind" | "case" | "rules" | "diagnostic-code", string[]>>;
+  try {
+    flags = parseArgs({
+      args: [...argv],
+      strict: true,
+      options: {
+        group: option, kind: option, case: option, rules: option, "diagnostic-code": option,
+      },
+    }).values;
+  } catch {
+    writeError(USAGE);
+    return 2;
+  }
+  const allows = (values: string[] | undefined, value: (wanted: string) => boolean) =>
+    values === undefined || values.some(value);
+  // The default sort compares UTF-16 code units.
+  const ids = readdirSync(casesDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .flatMap((group) =>
+      readdirSync(join(casesDir, group.name))
+        .filter((name) => name.endsWith(".yaml"))
+        .map((name) => `${group.name}/${name.slice(0, -".yaml".length)}`),
+    )
+    .sort();
+  const selected: { id: string; case_?: Case; unreadable?: string }[] = [];
+  for (const id of ids) {
+    const group = id.slice(0, id.indexOf("/"));
+    if (!allows(flags.group, (wanted) => wanted === group)) continue;
+    if (!allows(flags.case, (wanted) => wanted === id)) continue;
+    let case_: Case;
+    try {
+      case_ = prepare(checkCase(readCase(readFileSync(join(casesDir, `${id}.yaml`), "utf8"))));
+    } catch (error) {
+      // A broken file stays selected, so no filter can hide it.
+      selected.push({ id, unreadable: error instanceof Error ? error.message : String(error) });
+      continue;
+    }
+    const rules = get(case_, "rules", []) as string[];
+    const codes = diagnosticCodes(case_);
+    if (
+      allows(flags.kind, (wanted) => wanted === case_["kind"]) &&
+      allows(flags.rules, (wanted) => rules.includes(wanted)) &&
+      allows(flags["diagnostic-code"], (wanted) => codes.includes(wanted))
+    ) {
+      selected.push({ id, case_ });
+    }
+  }
+  if (selected.length === 0) {
+    write("no case matches");
+    return 1;
+  }
+  let passed = 0;
+  let failed = 0;
+  let pending = 0;
+  for (const { id, case_, unreadable } of selected) {
+    let failure = case_ === undefined ? unreadable : await runCase(case_, kinds);
+    if (case_ !== undefined && Object.hasOwn(case_, "pending")) {
+      if (failure !== undefined) {
+        pending += 1;
+        continue;
+      }
+      failure = `passes, but is marked pending (${str(case_["pending"])}); remove the marker`;
+    }
+    if (failure === undefined) {
+      passed += 1;
+      continue;
+    }
+    failed += 1;
+    const [first, ...rest] = failure.replace(/\n$/, "").split("\n");
+    write(`FAIL ${id}: ${first}`);
+    for (const line of rest) write(line === "" ? "" : `  ${line}`);
+  }
+  write(`${selected.length} cases: ${passed} passed, ${failed} failed, ${pending} pending`);
+  return failed > 0 ? 1 : 0;
+}
+
+// ---- load ----
+
+// ---- run ----
+
+// ---- resume ----
+
+// ---- backward ----
+
+// ---- expr ----
+
+// ---- value ----
+
+// ---- defaults ----
+
+// ---- fingerprint ----
+
+// ---- cli ----
+
+// Node 22 has no `import.meta.main`; under `bun test`, `argv[1]` is the test file.
+const entry = process.argv[1];
+if (entry !== undefined && realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url))) {
+  // Not `process.exit()`, which can cut off piped stdout on Node.
+  process.exitCode = await main(process.argv.slice(2));
 }

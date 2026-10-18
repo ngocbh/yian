@@ -28,3 +28,19 @@ bun run typecheck
 bun run test                  # or one file: bun test ./tests/engine/layer_direction.test.ts
 bun run build
 ```
+
+## Conformance
+
+`tests/conformance.ts` runs the cases in `../conformance/cases/` (see `../conformance/README.md`).
+Run from `ts/`:
+
+```sh
+bun tests/conformance.ts                                  # every case, on Bun
+bun tests/conformance.ts --group defaults --kind defaults # a selection
+bun run build && node dist/tests/conformance.js           # every case, on Node
+```
+
+Flags, each repeatable (values of one flag are alternatives; different flags all apply):
+`--group G`, `--kind K`, `--case <group>/<name>`, `--rules R` (cases whose `rules` hold R),
+`--diagnostic-code C` (`load` cases expecting a diagnostic with code C). A case file that can't
+be read is always reported.

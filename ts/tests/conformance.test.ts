@@ -1,15 +1,39 @@
 /**
- * The conformance runner's own unit tests: reading a case file, the format check and case
- * values. Not a port of `tests/test_conformance.py`, which `conformance.ts` is.
+ * The conformance runner's own unit tests: reading a case file, the format check, case values,
+ * comparison, the case directory, selection and the report. Not a port of
+ * `tests/test_conformance.py`, which `conformance.ts` is.
  */
 
-import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { afterEach, describe, expect, test } from "bun:test";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseDocument } from "yaml";
 
-import { checkCase, decode, prepare, readCase } from "./conformance.ts";
+import {
+  CaseFailure,
+  checkCase,
+  compare,
+  decode,
+  expectRaises,
+  main,
+  prepare,
+  raised,
+  readCase,
+  results,
+  same,
+  setUp,
+} from "./conformance.ts";
+import type { Case, CaseContext, KindRunner } from "./conformance.ts";
 
 const CASES = fileURLToPath(new URL("../../conformance/cases/", import.meta.url));
 
@@ -334,5 +358,375 @@ describe("prepare", () => {
       inputs: { a: "<key:3>" },
       expect: { output: "<key:3>" },
     });
+  });
+});
+
+describe("same", () => {
+  test("is kind-strict", () => {
+    expect(same(1n, 1n)).toBe(true);
+    expect(same(1n, 1)).toBe(false);
+    expect(same(true, 1n)).toBe(false);
+    expect(same("1", 1n)).toBe(false);
+    expect(same(null, {})).toBe(false);
+    expect(same({}, null)).toBe(false);
+    expect(same(-0, 0)).toBe(true);
+  });
+
+  test("compares an int and a float by value with `byValue`", () => {
+    const byValue = { byValue: true };
+    expect(same(2n, 2, byValue)).toBe(true);
+    expect(same(2, 2n, byValue)).toBe(true);
+    expect(same(2n ** 60n, 2 ** 60, byValue)).toBe(true);
+    expect(same(2n ** 60n + 1n, 2 ** 60, byValue)).toBe(false);
+    expect(same(1n, "1", byValue)).toBe(false);
+    expect(same(true, 1n, byValue)).toBe(false);
+    expect(same({ a: [2n] }, { a: [2] }, byValue)).toBe(true);
+  });
+
+  test("compares mappings by keys, ignoring order, and lists in order", () => {
+    expect(same({ a: 1n, b: 2n }, { b: 2n, a: 1n })).toBe(true);
+    expect(same({ a: 1n }, { a: 1n, b: 2n })).toBe(false);
+    expect(same({ a: 1n, b: 2n }, { a: 1n })).toBe(false);
+    expect(same({ a: 1n, c: 2n }, { a: 1n, b: 2n })).toBe(false);
+    expect(same([1n, 2n], [1n, 2n])).toBe(true);
+    expect(same([2n, 1n], [1n, 2n])).toBe(false);
+    expect(same([1n], [1n, 2n])).toBe(false);
+    expect(same([1n], { 0: 1n })).toBe(false);
+    expect(same({ 0: 1n }, [1n])).toBe(false);
+  });
+
+  test("leaves out `message` the expected mapping leaves out, with `optionalMessage`", () => {
+    const optionalMessage = { optionalMessage: true };
+    const actual = { code: "c", message: "m", frames: [{ label: "l", message: "n" }] };
+    expect(same(actual, { code: "c", frames: [{ label: "l" }] }, optionalMessage)).toBe(true);
+    expect(same(actual, { code: "c", frames: [{ label: "l" }] })).toBe(false);
+    expect(same(actual, { code: "c", message: "x", frames: [{ label: "l" }] }, optionalMessage))
+      .toBe(false);
+    expect(same({ code: "c" }, { code: "c", message: "m" }, optionalMessage)).toBe(false);
+  });
+});
+
+describe("compare", () => {
+  test("passes when the sides are the same", () => {
+    expect(() => compare("x", { a: 1n }, { a: 1n })).not.toThrow();
+    expect(() => compare("x", 2n, 2, { byValue: true })).not.toThrow();
+    expect(() => compare("x", { message: "m" }, {}, { optionalMessage: true })).not.toThrow();
+  });
+
+  test("fails with both sides as YAML", () => {
+    const long = "word ".repeat(40).trim();
+    let failure: unknown;
+    try {
+      compare("x", { a: 1, b: 1n, c: -0, d: Infinity, s: long }, { a: 1n });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(CaseFailure);
+    expect((failure as Error).name).toBe("CaseFailure");
+    expect((failure as Error).message).toBe(
+      `x differs\n--- actual\na: 1.0\nb: 1\nc: -0.0\nd: .inf\ns: ${long}\n--- expected\na: 1\n`,
+    );
+  });
+});
+
+describe("raised", () => {
+  class Foo extends Error {
+    override name = "Foo";
+  }
+
+  test("gives the class name and message", () => {
+    expect(raised(new RangeError("m"))).toEqual({ class: "RangeError", message: "m" });
+    expect(raised(new Foo("m"))).toEqual({ class: "Foo", message: "m" });
+  });
+
+  test("reads the name through the error-class table", () => {
+    expect(raised(new Foo("m"), new Map([["Foo", "Bar"]]))).toEqual({ class: "Bar", message: "m" });
+  });
+
+  test("adds a TypeCheckError's path, list indexes as ints", () => {
+    const error = Object.assign(new Error("bad"), { name: "TypeCheckError", path: ["a", 0, "b"] });
+    expect(raised(error)).toEqual({
+      class: "TypeCheckError",
+      message: "bad",
+      path: ["a", 0n, "b"],
+    });
+    const root = Object.assign(new Error("bad"), { name: "TypeCheckError", path: [] });
+    expect(raised(root)).toEqual({ class: "TypeCheckError", message: "bad", path: [] });
+    const other = Object.assign(new Error("bad"), { path: ["a"] });
+    expect(raised(other)).toEqual({ class: "Error", message: "bad" });
+  });
+
+  test("names a thrown non-Error by its type", () => {
+    expect(raised("oops")).toEqual({ class: "string", message: "oops" });
+    expect(raised(42)).toEqual({ class: "number", message: "42" });
+  });
+});
+
+describe("expectRaises and results", () => {
+  const expected = { class: "TypeError", message: "m" };
+
+  test("returns the raised form when it matches", async () => {
+    const thrown = () => {
+      throw new TypeError("m");
+    };
+    expect(await expectRaises(expected, thrown)).toEqual(expected);
+    expect(await expectRaises(expected, () => Promise.reject(new TypeError("m")))).toEqual(
+      expected,
+    );
+  });
+
+  test("fails on another error", async () => {
+    const call = () => {
+      throw new RangeError("m");
+    };
+    const failure = expectRaises(expected, call);
+    await expect(failure).rejects.toBeInstanceOf(CaseFailure);
+    await expect(failure).rejects.toThrow("raises differs\n--- actual\nclass: RangeError\n");
+  });
+
+  test("lets the case's own failure through", async () => {
+    const own = new CaseFailure("own");
+    const call = () => {
+      throw own;
+    };
+    await expect(expectRaises(expected, call)).rejects.toBe(own);
+  });
+
+  test("fails when nothing is raised", async () => {
+    const failure = expectRaises({ class: "LoadError", message: "m" }, () => 1);
+    await expect(failure).rejects.toBeInstanceOf(CaseFailure);
+    await expect(failure).rejects.toThrow("expected LoadError to be raised, but nothing was");
+  });
+
+  test("results compares each named result", async () => {
+    const expect_ = { value: 1n, kind: "int" };
+    await results(expect_, () => ({ value: 1n, kind: "int" }));
+    await results(expect_, async () => ({ value: 1n, kind: "int" }));
+    await expect(results(expect_, () => ({ value: 1, kind: "int" }))).rejects.toThrow(
+      "value differs",
+    );
+  });
+
+  test("results compares the raises", async () => {
+    const thrown = () => {
+      throw new TypeError("m");
+    };
+    await results({ raises: expected }, thrown);
+    await expect(results({ raises: expected }, () => ({ value: 1n }))).rejects.toThrow(
+      "expected TypeError to be raised, but nothing was",
+    );
+  });
+});
+
+describe("setUp", () => {
+  const made: string[] = [];
+  const leaks = ["YIAN_LEAK", "FOO_API_KEY", "FOO_BASE_URL", "FOO_ENDPOINT", "FOO_API_VERSION"];
+  afterEach(() => {
+    for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+    for (const name of [...leaks, "KEEP_ME"]) delete process.env[name];
+  });
+
+  /** Return a new temporary directory, removed after the test. */
+  function temp(): string {
+    const dir = mkdtempSync(join(tmpdir(), "conformance-test-"));
+    made.push(dir);
+    return dir;
+  }
+
+  test("writes the case directory", () => {
+    const fixtures = temp();
+    mkdirSync(join(fixtures, "f"));
+    writeFileSync(join(fixtures, "f", "one.txt"), "1");
+    const ctx = setUp(
+      { kind: "load", flow: "id: x", files: { "lib/child.yaml": "c", "a.txt": "é" } },
+      fixtures,
+    );
+    made.push(ctx.dir);
+    expect(dirname(ctx.dir)).toBe(tmpdir().replace(/\/$/, ""));
+    expect(readFileSync(join(ctx.dir, "flow.yaml"), "utf8")).toBe("id: x");
+    expect(readFileSync(join(ctx.dir, "lib", "child.yaml"), "utf8")).toBe("c");
+    expect(readFileSync(join(ctx.dir, "a.txt"), "utf8")).toBe("é");
+    expect(readFileSync(join(ctx.dir, "fixtures", "f", "one.txt"), "utf8")).toBe("1");
+    expect(existsSync(join(ctx.dir, "auth.json"))).toBe(false);
+  });
+
+  test("writes no flow or fixtures when there are none", () => {
+    const ctx = setUp({ kind: "defaults" }, join(temp(), "missing"));
+    made.push(ctx.dir);
+    expect(readdirSync(ctx.dir)).toEqual([]);
+  });
+
+  test("gives yian only the case's variables", () => {
+    for (const name of leaks) process.env[name] = "leak";
+    process.env["KEEP_ME"] = "1";
+    const ctx = setUp({ kind: "load", env: { YIAN_X: "1", A_API_KEY: "k" } }, temp());
+    made.push(ctx.dir);
+    for (const name of leaks) expect(Object.hasOwn(ctx.env, name)).toBe(false);
+    expect(ctx.env["KEEP_ME"]).toBe("1");
+    expect(ctx.env["PATH"]).toBe(process.env["PATH"] ?? "");
+    expect(ctx.env["YIAN_AUTH_FILE"]).toBe(join(ctx.dir, "auth.json"));
+    expect(ctx.env["YIAN_X"]).toBe("1");
+    expect(ctx.env["A_API_KEY"]).toBe("k");
+    // The process environment is never changed.
+    expect(process.env["YIAN_LEAK"]).toBe("leak");
+    expect(process.env["YIAN_X"]).toBeUndefined();
+    expect(process.env["YIAN_AUTH_FILE"]).not.toBe(ctx.env["YIAN_AUTH_FILE"]);
+  });
+
+  test("lets the case's `env` set YIAN_AUTH_FILE", () => {
+    const ctx = setUp({ kind: "load", env: { YIAN_AUTH_FILE: "x" } }, temp());
+    made.push(ctx.dir);
+    expect(ctx.env["YIAN_AUTH_FILE"]).toBe("x");
+  });
+
+  test("gives a `cli` case only its `env`", () => {
+    const ctx = setUp({ kind: "cli", env: { A: "1" } }, temp());
+    made.push(ctx.dir);
+    expect(ctx.env).toEqual({ A: "1" });
+    const bare = setUp({ kind: "cli" }, temp());
+    made.push(bare.dir);
+    expect(bare.env).toEqual({});
+  });
+});
+
+describe("main", () => {
+  const FILES: Record<string, string> = {
+    "a/ok.yaml": "kind: expr\nexpr: pass\nexpect: {value: 1}\n",
+    "a/x.yaml": "kind: expr\nexpr: differ\nexpect: {value: 1}\n",
+    "a/boom.yaml": "kind: expr\nexpr: throw\nexpect: {value: 1}\n",
+    "a/rules.yaml": "kind: expr\nexpr: pass\nrules: [text]\nexpect: {value: 1}\n",
+    "a/run.log.jsonl": "{}\n",
+    "b/y.yaml": "kind: load\nflow: x\nexpect: {load: ok}\n",
+    "b/diag.yaml": "kind: load\nflow: x\nexpect: {load: {diagnostics: [{code: compose.load}]}}\n",
+    "b/bad.yaml": "kind: nope\npending: '#391'\nexpect: {}\n",
+    "b/pending_fails.yaml": "kind: expr\nexpr: differ\npending: '#391'\nexpect: {value: 1}\n",
+    "b/pending_passes.yaml": "kind: expr\nexpr: pass\npending: '#391'\nexpect: {value: 1}\n",
+  };
+  const BAD =
+    "FAIL b/bad: `kind` must be one of load, run, resume, backward, expr, value, defaults, " +
+    'fingerprint, cli, not "nope"';
+  const X = ["FAIL a/x: x differs", "  --- actual", "  1", "  --- expected", "  2"];
+  const PASSES = "FAIL b/pending_passes: passes, but is marked pending (#391); remove the marker";
+  const NO_LOAD = "the TS runner doesn't run `load` cases yet";
+
+  let casesDir = "";
+  let ran: { id: string; ctx: CaseContext; present: boolean }[] = [];
+  const expr: KindRunner = (case_: Case, ctx: CaseContext) => {
+    ran.push({ id: String(case_["expr"]), ctx, present: existsSync(ctx.dir) });
+    if (case_["expr"] === "differ") compare("x", 1n, 2n);
+    if (case_["expr"] === "throw") throw new TypeError("boom");
+  };
+
+  afterEach(() => {
+    rmSync(casesDir, { recursive: true, force: true });
+    ran = [];
+  });
+
+  /** Run `main` over `files` with the `expr` kind injected; return its exit code and output. */
+  async function run(argv: string[], files: Record<string, string> = FILES) {
+    casesDir = mkdtempSync(join(tmpdir(), "conformance-cases-"));
+    for (const [name, text] of Object.entries(files)) {
+      mkdirSync(dirname(join(casesDir, name)), { recursive: true });
+      writeFileSync(join(casesDir, name), text);
+    }
+    const out: string[] = [];
+    const err: string[] = [];
+    const code = await main(argv, {
+      casesDir,
+      kinds: { expr },
+      write: (line) => out.push(line),
+      writeError: (line) => err.push(line),
+    });
+    return { code, out, err };
+  }
+
+  test("reports every case and a summary", async () => {
+    const { code, out, err } = await run([]);
+    expect(code).toBe(1);
+    expect(err).toEqual([]);
+    expect(out[0]).toBe("FAIL a/boom: TypeError: boom");
+    const stack = out.slice(1, out.indexOf(X[0] ?? ""));
+    expect(stack.length).toBeGreaterThan(0);
+    // The stack's frames, indented under the FAIL line.
+    expect(stack.every((line) => line.startsWith("      at "))).toBe(true);
+    expect(out.slice(1 + stack.length)).toEqual([
+      ...X,
+      BAD,
+      `FAIL b/diag: ${NO_LOAD}`,
+      PASSES,
+      `FAIL b/y: ${NO_LOAD}`,
+      "9 cases: 2 passed, 6 failed, 1 pending",
+    ]);
+  });
+
+  test("runs cases in UTF-16 code-unit order, each in a directory removed after", async () => {
+    const files = {
+      "g/B.yaml": "kind: expr\nexpr: B\nexpect: {value: 1}\n",
+      "g/a.yaml": "kind: expr\nexpr: a\nexpect: {value: 1}\n",
+      "g/ｱ.yaml": "kind: expr\nexpr: ｱ\nexpect: {value: 1}\n",
+      "g/\u{1F600}.yaml": "kind: expr\nexpr: \u{1F600}\nexpect: {value: 1}\n",
+    };
+    const { code, out } = await run([], files);
+    expect(code).toBe(0);
+    expect(out).toEqual(["4 cases: 4 passed, 0 failed, 0 pending"]);
+    expect(ran.map((entry) => entry.id)).toEqual(["B", "a", "\u{1F600}", "ｱ"]);
+    expect(ran.every((entry) => entry.present && !existsSync(entry.ctx.dir))).toBe(true);
+    expect(new Set(ran.map((entry) => entry.ctx.dir)).size).toBe(4);
+  });
+
+  test("exits 0 when no case fails, a failing pending case included", async () => {
+    expect(await run(["--case", "a/ok"])).toEqual({
+      code: 0,
+      out: ["1 cases: 1 passed, 0 failed, 0 pending"],
+      err: [],
+    });
+    expect(await run(["--case", "b/pending_fails"])).toEqual({
+      code: 0,
+      out: ["1 cases: 0 passed, 0 failed, 1 pending"],
+      err: [],
+    });
+  });
+
+  const ALL = [
+    "a/boom", "a/ok", "a/rules", "a/x",
+    "b/bad", "b/diag", "b/pending_fails", "b/pending_passes", "b/y",
+  ];
+  const FAILING = new Set(["a/boom", "a/x", "b/bad", "b/diag", "b/pending_passes", "b/y"]);
+
+  test.each([
+    [["--group", "a"], ["a/boom", "a/ok", "a/rules", "a/x"]],
+    [["--group", "a", "--group", "b"], ALL],
+    [["--case", "a/ok", "--case", "b/y"], ["a/ok", "b/y"]],
+    [["--kind", "load"], ["b/bad", "b/diag", "b/y"]],
+    [["--rules", "text"], ["a/rules", "b/bad"]],
+    [["--diagnostic-code", "compose.load"], ["b/bad", "b/diag"]],
+    [["--diagnostic-code", "other"], ["b/bad"]],
+    [["--group", "b", "--kind", "expr"], ["b/bad", "b/pending_fails", "b/pending_passes"]],
+    [["--group", "b", "--rules", "text"], ["b/bad"]],
+    [["--kind", "nope"], ["b/bad"]],
+  ])("selects with %p", async (argv, ids) => {
+    const { out } = await run(argv);
+    expect(out.at(-1)).toStartWith(`${ids.length} cases: `);
+    const failed = out.filter((line) => line.startsWith("FAIL ")).map((line) => line.split(":")[0]);
+    expect(failed).toEqual(ids.filter((id) => FAILING.has(id)).map((id) => `FAIL ${id}`));
+  });
+
+  test("exits 1 when no case matches", async () => {
+    expect(await run(["--group", "a", "--kind", "load"])).toEqual({
+      code: 1,
+      out: ["no case matches"],
+      err: [],
+    });
+    expect(await run(["--group", "c"])).toEqual({ code: 1, out: ["no case matches"], err: [] });
+  });
+
+  test.each([[["--bogus"]], [["--group"]], [["a/ok"]]])("exits 2 on %p", async (argv) => {
+    const { code, out, err } = await run(argv);
+    expect(code).toBe(2);
+    expect(out).toEqual([]);
+    expect(err).toEqual([
+      "usage: conformance [--group GROUP] [--kind KIND] [--case GROUP/NAME] [--rules RULE] " +
+        "[--diagnostic-code CODE]",
+    ]);
   });
 });

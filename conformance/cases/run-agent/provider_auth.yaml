@@ -1,0 +1,28 @@
+kind: run
+python_skip: "the Python runner doesn't script models (host.models) yet"
+flow: |
+  id: provider-auth
+  name: provider_auth
+  nodes:
+    write:
+      kind: agent
+      output: str
+      llm_config: {provider: openai, model: gpt-5.5}
+      prompt: "Write a line."
+  output: ${write.output}
+env: {OPENAI_API_KEY: "<key:1>"}
+run: {run_id: r1, num_workers: 0}
+host:
+  models:
+    write:
+      agent:
+        - chunks: []
+          raise: {class: AuthenticationError, message: Incorrect API key provided, status: 401}
+expect:
+  output:
+    status: failed
+    failure:
+      code: provider.auth
+      message: Incorrect API key provided
+      node: write
+      frames: [{label: flow.yaml, range: [4, 3, 4, 8]}]

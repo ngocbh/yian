@@ -1,0 +1,47 @@
+kind: run
+python_skip: "the Python runner doesn't script models (host.models) yet"
+flow: |
+  id: agent-max-tool-iterations
+  name: agent_max_tool_iterations
+  nodes:
+    research:
+      kind: agent
+      tools: [lookup]
+      env: {max_tool_iterations: 2}
+      output: str
+      llm_config: {provider: openai, model: gpt-5.5}
+      prompt: "Look up x."
+  output: ${research.output}
+env: {OPENAI_API_KEY: "<key:1>"}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    lookup:
+      parameters:
+        type: object
+        properties: {q: {type: string}}
+        required: [q]
+      results:
+        - return: X1
+  models:
+    research:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: tool_call, id: c1, name: lookup, arguments: {q: x}}]
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: tool_call, id: c2, name: lookup, arguments: {q: x}}]
+expect:
+  output:
+    status: failed
+    failure:
+      code: agent.max_tool_iterations
+      message: "agent node 'research' hit the tool-iteration cap (2) without a final answer; the last reply's 1 tool call(s) were not run"
+      node: research
+      frames: [{label: flow.yaml, range: [4, 3, 4, 11]}]
+  tool_calls:
+    lookup:
+      - {args: {q: x}, call_id: r1/research/<id:1>/0, attempt: 1, node: research}

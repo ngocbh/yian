@@ -1,0 +1,196 @@
+# From tests/seeds/17-effects-human-wait.yaml.
+# The human approves, the `case ... on` the answer takes `settle`, the WAIT's past deadline returns
+# at once with no value, and `confirm` runs after it; `abort` is skipped.
+# `confirm_action` reads `answer`, which `confirm` doesn't bind (it binds `action`), so it returns
+# its default, `cancel`.
+# No `tool_calls`: docs/api.md's `ask_user` doesn't define the form of `answer_schema`.
+kind: run
+flow: |
+  # 17 — Effects: HUMAN_INPUT + WAIT.
+  #
+  # Propose an action, ask a human to APPROVE it (blocking HUMAN_INPUT, a TYPED answer),
+  # route on the answer, WAIT until a settle time, then confirm (a side effect). Shows:
+  # kind: human_input (flat: input:/prompt:/output:, the answer validated against a type),
+  # kind: wait (until:), `case … on` routing the human's answer, and depends_on: to order a
+  # side-effect node after the wait with no data binding.
+  #
+  # HUMAN_INPUT blocks its live worker through the host-owned ask_user tool; WAIT blocks one
+  # worker until its absolute UTC deadline and then returns None. This seed pins both effects in
+  # the Compose surface and proves the human answer feeds an ordinary CASE before the UTC WAIT.
+  # The answer is validated at the same typed Output boundary as every other node value.
+
+  id: effects
+  name: effects_human_wait
+  description: Propose an action, get human approval, wait until settle, then confirm.
+
+  typedefs:
+    Approval: Literal(approve, reject)    # the typed human answer (a tag-only enum)
+
+  input:
+    topic: !str
+    settle_at: !date                       # when to confirm
+
+  nodes:
+    propose:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output: str
+      prompt: "Propose one concrete, neutral action for ${topic} in a single sentence."
+
+    approve:
+      kind: human_input
+      input:
+        action: ${propose.output}        # context the prompt may reference (bare ${action})
+      prompt: "Approve this action? ${action}  (approve / reject)"
+      output: Approval                   # the injected answer is validated against Approval's tags
+
+    gate:
+      kind: case                          # route on the human's answer (simple form)
+      on: ${approve.output}
+      cases:
+        - when: approve
+          then: settle
+      else: abort
+
+    settle:
+      kind: wait
+      until: ${input.settle_at}          # a date means midnight UTC
+      # `wait` produces no meaningful value — downstream orders after it via depends_on.
+
+    confirm:
+      kind: code
+      depends_on: [settle]                # ordering edge — run after the wait (side effect)
+      input:
+        action: ${propose.output}
+      output: str
+      code: ./fixtures/seeds.ts:confirm_action
+
+    abort:
+      kind: agent
+      input:
+        action: ${propose.output}
+      output: str
+      prompt: "Write one neutral sentence noting this action was NOT approved: ${action}."
+
+  # settle/confirm run only on approve; abort runs otherwise. Coalesce picks whichever ran.
+  output: ${confirm.output | abort.output}
+# The CODE reference differs by language: `flow` names the TS function, this the Python one.
+python_flow: |
+  # 17 — Effects: HUMAN_INPUT + WAIT.
+  #
+  # Propose an action, ask a human to APPROVE it (blocking HUMAN_INPUT, a TYPED answer),
+  # route on the answer, WAIT until a settle time, then confirm (a side effect). Shows:
+  # kind: human_input (flat: input:/prompt:/output:, the answer validated against a type),
+  # kind: wait (until:), `case … on` routing the human's answer, and depends_on: to order a
+  # side-effect node after the wait with no data binding.
+  #
+  # HUMAN_INPUT blocks its live worker through the host-owned ask_user tool; WAIT blocks one
+  # worker until its absolute UTC deadline and then returns None. This seed pins both effects in
+  # the Compose surface and proves the human answer feeds an ordinary CASE before the UTC WAIT.
+  # The answer is validated at the same typed Output boundary as every other node value.
+
+  id: effects
+  name: effects_human_wait
+  description: Propose an action, get human approval, wait until settle, then confirm.
+
+  typedefs:
+    Approval: Literal(approve, reject)    # the typed human answer (a tag-only enum)
+
+  input:
+    topic: !str
+    settle_at: !date                       # when to confirm
+
+  nodes:
+    propose:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output: str
+      prompt: "Propose one concrete, neutral action for ${topic} in a single sentence."
+
+    approve:
+      kind: human_input
+      input:
+        action: ${propose.output}        # context the prompt may reference (bare ${action})
+      prompt: "Approve this action? ${action}  (approve / reject)"
+      output: Approval                   # the injected answer is validated against Approval's tags
+
+    gate:
+      kind: case                          # route on the human's answer (simple form)
+      on: ${approve.output}
+      cases:
+        - when: approve
+          then: settle
+      else: abort
+
+    settle:
+      kind: wait
+      until: ${input.settle_at}          # a date means midnight UTC
+      # `wait` produces no meaningful value — downstream orders after it via depends_on.
+
+    confirm:
+      kind: code
+      depends_on: [settle]                # ordering edge — run after the wait (side effect)
+      input:
+        action: ${propose.output}
+      output: str
+      code: tests.seeds.fns:confirm_action
+
+    abort:
+      kind: agent
+      input:
+        action: ${propose.output}
+      output: str
+      prompt: "Write one neutral sentence noting this action was NOT approved: ${action}."
+
+  # settle/confirm run only on approve; abort runs otherwise. Coalesce picks whichever ran.
+  output: ${confirm.output | abort.output}
+# The AGENTs have no `llm_config:`, so `run.llm_config` gives their provider and model; the key
+# makes the recorded connection source `environment`, which the trace pins.
+env: {OPENAI_API_KEY: "<key:1>"}
+# A past `settle_at`, so the WAIT doesn't block.
+inputs: {topic: rates, settle_at: "2026-01-01"}
+run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
+host:
+  human:
+    approve: [approve]
+  models:
+    propose:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: Review the rate outlook on Friday.}]
+expect:
+  output: {status: succeeded, output: cancel}
+  trace:
+    - - run_started
+      - null
+      - inputs: {topic: rates, settle_at: "2026-01-01"}
+        learnable: false
+        num_workers: 0
+        effective_llm_by_static_path:
+          propose:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          abort:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {topic: rates, settle_at: "2026-01-01"}}]
+    - [node_started, propose]
+    - [node_succeeded, propose, {value: Review the rate outlook on Friday.}]
+    - [node_started, approve]
+    - [node_succeeded, approve, {value: approve}]
+    - [node_started, gate]
+    - [node_routed, gate, {handle: settle}]
+    - [node_started, settle]
+    # WAIT returns None: the null value is left out, and so is the empty payload.
+    - [node_succeeded, settle]
+    - [node_started, confirm]
+    - [node_succeeded, confirm, {value: cancel}]
+    - [node_started, __end__]
+    - [node_succeeded, __end__, {value: cancel}]

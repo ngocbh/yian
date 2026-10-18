@@ -1,5 +1,4 @@
 kind: run
-python_skip: "the Python runner doesn't script models (host.models) yet"
 flow: |
   id: agent-max-tool-iterations
   name: agent_max_tool_iterations

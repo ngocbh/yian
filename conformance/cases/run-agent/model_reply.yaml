@@ -1,0 +1,74 @@
+kind: run
+flow: |
+  id: model-reply
+  name: model_reply
+  input:
+    name: !str
+  nodes:
+    write:
+      kind: agent
+      input:
+        name: ${input.name}
+      output: str
+      llm_config: {provider: openai, model: gpt-5.5}
+      prompt: "Greet ${name}."
+  output: ${write.output}
+env: {OPENAI_API_KEY: "<key:1>"}
+inputs: {name: Ada}
+run: {run_id: r1, num_workers: 0}
+host:
+  models:
+    write:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: Hello Ada}]
+          usage: {input_tokens: 12, output_tokens: 3, total_tokens: 15, cache_read_tokens: 4}
+          # The default system prompt, then the rendered prompt; no tools are bound.
+          request:
+            messages:
+              - format: yian.message.v1
+                role: system
+                parts:
+                  - type: text
+                    text: >-
+                      You are an analysis agent inside a larger workflow. Follow the
+                      instructions precisely, use the available tools to gather any facts you
+                      need, and return a clear, self-contained answer. Ask the user only
+                      through an explicitly granted tool.
+              - format: yian.message.v1
+                role: user
+                parts: [{type: text, text: Greet Ada.}]
+expect:
+  output: {status: succeeded, output: Hello Ada}
+  # <id:1> is the model call's exchange id. The usage is a nested structure, so its unreported
+  # counts stay as nulls.
+  events:
+    - [RunStarted]
+    - [NodeStarted, {node_id: __start__}]
+    - [NodeSucceeded, {node_id: __start__, output: {name: Ada}}]
+    - [NodeStarted, {node_id: write}]
+    - - ModelCallStarted
+      - {node_id: write, exchange_id: "<id:1>", purpose: chat, provider: openai, model: gpt-5.5}
+    - - ModelCallFinished
+      - node_id: write
+        exchange_id: "<id:1>"
+        purpose: chat
+        provider: openai
+        model: gpt-5.5
+        usage:
+          input_tokens: 12
+          output_tokens: 3
+          total_tokens: 15
+          cache_read_tokens: 4
+          cache_creation_tokens: null
+          reasoning_tokens: null
+    - [NodeSucceeded, {node_id: write, output: Hello Ada}]
+    - [NodeStarted, {node_id: __end__}]
+    - [NodeSucceeded, {node_id: __end__, output: Hello Ada}]
+    - [RunSucceeded, {output: Hello Ada}]
+  # A reply served to a streamed call streams as one chunk, then the final chunk.
+  stream:
+    - {node_id: write, key: text, chunk: Hello Ada, final: false, exchange_id: "<id:1>"}
+    - {node_id: write, key: text, chunk: "", final: true, exchange_id: "<id:1>"}

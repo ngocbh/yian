@@ -1,5 +1,4 @@
 kind: run
-python_skip: "the Python runner doesn't script models (host.models) yet"
 flow: |
   id: provider-auth
   name: provider_auth

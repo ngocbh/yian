@@ -29,6 +29,7 @@ from yian.llm_clients.api_key_env import (
     PROVIDER_API_KEY_ENV,
 )
 from yian.llm_clients.config import (
+    LLM_CONFIG_KEYS,
     SUPPORTED_LLM_PROVIDERS,
     LLMConfig,
     pop_host_credentials,
@@ -59,9 +60,9 @@ _ELSEWHERE_ENV = {
     "google": ("GOOGLE_GEMINI_BASE_URL",),
 }
 _SETTINGS_NEED_API_KEY = "--organization, --project and --header apply to API-key authentication"
-# The top-level `llm_config` keys as written, in declaration order.
-_LLM_FIELDS = tuple(field.alias or name for name, field in LLMConfig.model_fields.items())
-_EXTRA_FIELD = f"llm_config has an extra field; the fields are {', '.join(_LLM_FIELDS)}"
+_EXTRA_FIELD = (
+    f"llm_config has an extra field; the fields are {', '.join(sorted(LLM_CONFIG_KEYS))}"
+)
 
 
 def _require_terminal(option: str) -> None:
@@ -773,26 +774,27 @@ def _config_errors(layer: dict) -> list[dict]:
     """Check a host `llm_config` layer as `run_flow` does and return its errors.
 
     The credentials are popped from a copy, then the rest is validated; the first
-    failing step's errors are returned. An unknown key is reported without its name,
-    since a pasted key could be the name.
+    failing step's errors are returned. An unknown top-level key is reported without
+    its name, since a pasted key could be the name; a provider block reports its own
+    field problems at its block's name.
 
     Args:
         layer (`dict`): The layer, key included.
 
     Returns:
         `list[dict]`: Each distinct error as `{"field", "message"}`, where `field` is
-        the error's location joined with `.`, or `None` for an unknown key, a plain
-        `ValueError` or a model-level error; empty when the layer is valid.
+        the error's location joined with `.`, or `None` for an unknown top-level key, a
+        plain `ValueError` or a model-level error; empty when the layer is valid.
     """
+    rest = dict(layer)
     try:
-        rest = dict(layer)
         pop_host_credentials(rest)
         LLMConfig.model_validate(rest)
     except ValidationError as error:
         errors = []
-        for item in error.errors(include_url=False, include_input=False):
+        for item in error.errors(include_url=False, include_input=False, include_context=False):
             loc = [str(part) for part in item["loc"]]
-            if item["type"] == "extra_forbidden" or (loc and loc[0] not in _LLM_FIELDS):
+            if item["type"] == "extra_forbidden" and len(loc) == 1:
                 entry = {"field": None, "message": _EXTRA_FIELD}
             else:
                 message = item["msg"].removeprefix("Value error, ")
@@ -824,6 +826,7 @@ def config_check(
         typer.Exit: With code 1 when the layer has errors.
     """
 
+    # json.loads accepts NaN and Infinity, which aren't JSON.
     def refuse(token: str) -> None:
         raise ValueError(f"{token} is not JSON")
 

@@ -2232,7 +2232,7 @@ def _load_confined(root: Path, path: Path, loading: frozenset[Path]) -> Composed
     shown = os.path.relpath(path, root)
     if not path.is_relative_to(root):
         raise LoadError(
-            Diagnostic(code="compose.outside_root", message=f"{shown} is outside the root {root}")
+            Diagnostic(code="compose.outside_root", message=f"{shown} is outside the root")
         )
     if path in loading:
         raise ValueError(f"flow-reference cycle at {shown}")
@@ -2248,8 +2248,13 @@ def _load_confined(root: Path, path: Path, loading: frozenset[Path]) -> Composed
             )
         )
 
+    # Unlike the default file resolver, this keeps no reuse cache, so a child imported
+    # along several paths loads once per path; that is fine for a check.
     def resolve(ref: str, version: Optional[str] = None) -> ComposedFlow:
-        child = _load_confined(root, path.parent / f"{ref}.yaml", loading | {path})
+        child_path = path.parent / f"{ref}.yaml"
+        if not child_path.is_file():
+            raise ValueError(f"flow {ref!r} not found: {os.path.relpath(child_path, root)}")
+        child = _load_confined(root, child_path, loading | {path})
         if version is not None and child.version != version:
             raise ValueError(f"{ref} is version {child.version!r}, not {version!r}")
         return child

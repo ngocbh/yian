@@ -118,7 +118,7 @@
       }
     },
     "config_error": {
-      "description": "One problem with an llm_config layer. field is the location joined with `.` (base_url, openai.temperature), or null for an unknown key, which is never named, or a problem with no single field.",
+      "description": "One problem with an llm_config layer. field is the location joined with `.` (base_url, openai.temperature), or null for an unknown top-level key, which is never named, or a problem with no single field. A provider block reports its own field problems, an unknown key in it included, at field: <block> (openai).",
       "type": "object",
       "required": ["field", "message"],
       "properties": {
@@ -127,7 +127,7 @@
       }
     },
     "config_document": {
-      "description": "`yian config check --json`: the llm_config layer on stdin, checked as a run checks it. ok is true exactly when errors is empty. Values never appear in messages.",
+      "description": "`yian config check --json`: the llm_config layer on stdin, checked as a run checks it. ok is true exactly when errors is empty. Values never appear in messages; an unknown top-level key is never named, but a provider block's messages name its own keys.",
       "type": "object",
       "required": ["format", "ok", "errors"],
       "properties": {

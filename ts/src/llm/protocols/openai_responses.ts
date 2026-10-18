@@ -6,11 +6,25 @@
  * ChatGPT subscription speaks the same format with its own rules: no stored state, so no
  * message ids; system text moves to `instructions`; encrypted reasoning is included. Every call
  * streams.
+ *
+ * Replies parse into parts whose payloads are replay records, so the next turn can replay them.
+ * A reply that failed or stopped early raises `ProviderError`, except a stop at
+ * `max_output_tokens`, which finishes with `length`.
  */
 
-import type { JsonObject, JsonValue } from "../../typesys/json.ts";
+import { JSONDecodeError, type JsonObject, type JsonValue, parseJson } from "../../typesys/json.ts";
 import { encodeBody, mergeRequestBody } from "../body.ts";
-import type { Event } from "../events.ts";
+import { capDetail, type ErrorKind, ProviderError } from "../errors.ts";
+import {
+  type Event,
+  Finish,
+  parseArguments,
+  PartDone,
+  ReasoningDelta,
+  TextDelta,
+  ToolCallDelta,
+  UsageReport,
+} from "../events.ts";
 import type { SseProtocol } from "../executor.ts";
 import type { SSEEvent } from "../framing.ts";
 import {
@@ -18,6 +32,7 @@ import {
   isPlainObject,
   MediaPart,
   type Message,
+  MessageFormatError,
   NamedTool,
   type Part,
   put,
@@ -26,11 +41,13 @@ import {
   RefusalPart,
   type ReplayDegradedReason,
   type ReplayKey,
+  replayRecord,
   type Request,
   TextPart,
   ToolCallPart,
   type ToolSpec,
   ToolResultPart,
+  Usage,
 } from "../messages.ts";
 
 /** The protocol id, in `Finish.protocol` and replay records. */
@@ -44,6 +61,49 @@ const SUBSCRIPTION_TEXT_ONLY = "OpenAI subscription instructions must contain on
 const ITEM_FIELDS = ["item"];
 const TEXT_FIELDS = ["id", "phase", "annotations"];
 const REFUSAL_FIELDS = ["id", "phase"];
+// Stream events about one output item, which must say which.
+const ITEM_EVENTS: ReadonlySet<string> = new Set([
+  "response.output_item.added",
+  "response.output_item.done",
+  "response.content_part.added",
+  "response.output_text.delta",
+  "response.refusal.delta",
+  "response.refusal.done",
+  "response.reasoning_summary_text.delta",
+  "response.function_call_arguments.delta",
+]);
+// The subscription backend may end a reply with `response.done` instead of `response.completed`.
+const TERMINAL_EVENTS: ReadonlySet<string> = new Set(["response.completed", "response.done", "response.incomplete"]);
+const BAD_REQUEST_CODES = [
+  "invalid_prompt",
+  "invalid_request_error",
+  "invalid_image",
+  "invalid_image_format",
+  "invalid_base64_image",
+  "invalid_image_url",
+  "invalid_image_mode",
+  "image_too_large",
+  "image_too_small",
+  "image_parse_error",
+  "image_file_too_large",
+  "image_file_not_found",
+  "empty_image_file",
+  "unsupported_image_media_type",
+  "failed_to_download_image",
+];
+// In-stream error codes; any other code, or none, is a server error.
+const STREAM_ERROR_KINDS: ReadonlyMap<string, ErrorKind> = new Map<string, ErrorKind>([
+  ["rate_limit_exceeded", "rate_limit"],
+  ["server_error", "server"],
+  ["vector_store_timeout", "server"],
+  ["context_length_exceeded", "context_length"],
+  ...BAD_REQUEST_CODES.map((code): [string, ErrorKind] => [code, "bad_request"]),
+  ["image_content_policy_violation", "refused"],
+  ["insufficient_quota", "quota"],
+  ["usage_limit_reached", "quota"],
+  ["usage_not_included", "quota"],
+]);
+const USAGE_NOT_INT = "openai response usage has a count that is not an int";
 
 /** An assistant part that can carry a replay record. */
 type ReplayPart = TextPart | RefusalPart | ReasoningPart | ToolCallPart;
@@ -128,9 +188,199 @@ export class OpenAIResponses implements SseProtocol {
     return body;
   }
 
-  /** Turn a streamed reply's events into stream events. */
-  async *parse(_frames: AsyncIterable<SSEEvent>): AsyncGenerator<Event> {
-    throw new Error("not implemented");
+  /**
+   * Turn a streamed reply's events into stream events.
+   *
+   * Deltas stream as they arrive; each `output_item.done` gives one `PartDone` per part of the
+   * done item. An item that never got its done event takes its parts from the terminal event's
+   * `output` at its output index; when it is absent there, its deltas build its parts. Part
+   * indexes are dense, in the order each (output index, content index) is first seen. An added
+   * item's own text or arguments are ignored, since the deltas that follow carry them. Unknown
+   * events are ignored, and a `[DONE]` sentinel ends the stream.
+   *
+   * @param frames The reply's server-sent events, in order.
+   * @returns The deltas and parts, then `UsageReport` (when the reply has usage) and `Finish` on
+   *   `response.completed` (or `response.done`) or a length-truncated `response.incomplete`.
+   * @throws {ProviderError} For `response.failed` or an `error` event (kind from the error code),
+   *   a stream that ends without a terminal event or a reply that did not complete (kind
+   *   `incomplete`, or `refused` for a content filter), or an event that is not JSON, lacks the
+   *   output index it needs, or holds an item or usage that cannot be read (kind `protocol`).
+   */
+  async *parse(frames: AsyncIterable<SSEEvent>): AsyncGenerator<Event> {
+    // Part index by output index, then content index.
+    const indexes = new Map<number, Map<number, number>>();
+    let count = 0;
+    const index = (outputIndex: number, contentIndex = 0): number => {
+      let slots = indexes.get(outputIndex);
+      if (slots === undefined) indexes.set(outputIndex, (slots = new Map()));
+      let slot = slots.get(contentIndex);
+      if (slot === undefined) slots.set(contentIndex, (slot = count++));
+      return slot;
+    };
+    const opened = new Map<number, JsonObject>();
+    const finished = new Set<number>();
+    const lastSummary = new Map<number, JsonValue | undefined>();
+    // Refusal text by output index, then content index.
+    const refusals = new Map<number, Map<number, string>>();
+    let sawCalls = false;
+    let responseId: string | null = null;
+    for await (const frame of frames) {
+      // The openai SDK stops at a `[DONE]` sentinel; the stream is then over.
+      if (frame.data.startsWith("[DONE]")) break;
+      const data = eventData(frame.data);
+      if (!isPlainObject(data)) continue;
+      const rawType = data["type"] || frame.event;
+      const type = typeof rawType === "string" ? rawType : null;
+      const nested = data["error"];
+      if (type === "error" || isPlainObject(nested)) {
+        throw this.#streamFailure(isPlainObject(nested) ? nested : data);
+      }
+      let outputIndex = -1;
+      if (type !== null && ITEM_EVENTS.has(type)) {
+        const raw = data["output_index"];
+        if (typeof raw !== "bigint") {
+          throw new ProviderError("protocol", `openai stream event ${type} has no output_index`);
+        }
+        outputIndex = Number(raw);
+      }
+      const rawContentIndex = data["content_index"];
+      const contentIndex = typeof rawContentIndex === "bigint" ? Number(rawContentIndex) : 0;
+      const rawDelta = data["delta"];
+      let delta = typeof rawDelta === "string" ? rawDelta : "";
+      if (type === "response.created") {
+        const response = data["response"];
+        if (isPlainObject(response) && typeof response["id"] === "string") responseId = response["id"];
+      } else if (type === "response.output_item.added") {
+        const item = data["item"];
+        if (!isPlainObject(item)) continue;
+        opened.set(outputIndex, item);
+        if (item["type"] === "function_call") {
+          sawCalls = true;
+          const id = strOrNull(item["call_id"]);
+          yield new ToolCallDelta({ index: index(outputIndex), id, name: strOrNull(item["name"]), arguments: "" });
+        } else if (item["type"] === "reasoning") {
+          index(outputIndex);
+        }
+      } else if (type === "response.content_part.added") {
+        // Taking the index here keeps a content part that never gets a delta (an empty text)
+        // in its place.
+        index(outputIndex, contentIndex);
+      } else if (type === "response.output_text.delta") {
+        yield new TextDelta(index(outputIndex, contentIndex), delta);
+      } else if (type === "response.refusal.delta" || type === "response.refusal.done") {
+        index(outputIndex, contentIndex);
+        let texts = refusals.get(outputIndex);
+        if (texts === undefined) refusals.set(outputIndex, (texts = new Map()));
+        if (type === "response.refusal.delta") {
+          texts.set(contentIndex, (texts.get(contentIndex) ?? "") + delta);
+        } else if (typeof data["refusal"] === "string") {
+          // The part itself comes from `output_item.done`; the final text is kept in case that
+          // event never arrives.
+          texts.set(contentIndex, data["refusal"]);
+        }
+      } else if (type === "response.reasoning_summary_text.delta") {
+        const partIndex = index(outputIndex);
+        const summaryIndex = data["summary_index"];
+        // Summary parts are joined with newlines in the final part; the deltas add the same
+        // separator so the live text matches it.
+        if (lastSummary.has(partIndex) && lastSummary.get(partIndex) !== summaryIndex) delta = "\n" + delta;
+        lastSummary.set(partIndex, summaryIndex);
+        yield new ReasoningDelta(partIndex, delta);
+      } else if (type === "response.function_call_arguments.delta") {
+        yield new ToolCallDelta({ index: index(outputIndex), id: null, name: null, arguments: delta });
+      } else if (type === "response.output_item.done") {
+        const item = data["item"];
+        if (!isPlainObject(item)) continue;
+        finished.add(outputIndex);
+        if (item["type"] === "function_call") sawCalls = true;
+        for (const [itemContentIndex, part] of itemParts(item, this.#key)) {
+          yield new PartDone(index(outputIndex, itemContentIndex), part);
+        }
+      } else if (type !== null && TERMINAL_EVENTS.has(type)) {
+        const response = data["response"];
+        if (!isPlainObject(response)) throw new ProviderError("protocol", `openai ${type} event has no response`);
+        const rawOutput = response["output"];
+        const output = Array.isArray(rawOutput) ? rawOutput : [];
+        const started = new Set([...opened.keys(), ...indexes.keys()]);
+        const unfinished = [...started].filter((each) => !finished.has(each)).sort((a, b) => a - b);
+        for (const each of unfinished) {
+          if (0 <= each && each < output.length) {
+            for (const [itemContentIndex, part] of itemParts(output[each]!, this.#key)) {
+              yield new PartDone(index(each, itemContentIndex), part);
+            }
+            continue;
+          }
+          // Text, reasoning and calls are built from their deltas; a refusal streams none, so
+          // its part is built here.
+          const item = opened.get(each) ?? {};
+          for (const [refusalIndex, text] of refusals.get(each) ?? []) {
+            const record = replayRecord(this.#key, contentFields(item["id"], item["phase"]));
+            yield new PartDone(index(each, refusalIndex), new RefusalPart(text, record));
+          }
+        }
+        yield* this.#finish(response, sawCalls || hasCalls(response), responseId, type);
+        return;
+      } else if (type === "response.failed") {
+        const response = data["response"];
+        const error = isPlainObject(response) ? response["error"] : undefined;
+        throw this.#streamFailure(isPlainObject(error) ? error : {});
+      }
+    }
+    const message = this.subscription
+      ? "OpenAI subscription stream ended before a complete response"
+      : "openai stream ended before a complete response";
+    throw new ProviderError("incomplete", message, { retryable: true });
+  }
+
+  /**
+   * Return a finished reply's `UsageReport` and `Finish`, or throw if it did not finish.
+   *
+   * `response.completed` and `response.done` must carry status `completed`. Among incomplete
+   * replies only a stop at `max_output_tokens` signalled by `response.incomplete` counts as
+   * finished; it finishes with `length` even when the reply has calls, since a truncated call
+   * cannot be trusted.
+   *
+   * @param response The terminal event's response.
+   * @param hasCalls Whether the reply holds a function call.
+   * @param responseId The id to use when `response` has none.
+   * @param type The terminal event type.
+   * @throws {ProviderError} The reply did not complete (kind `incomplete`, or `refused` for a
+   *   content filter), or its usage cannot be read (kind `protocol`).
+   */
+  #finish(response: JsonObject, hasCalls: boolean, responseId: string | null, type: string): Event[] {
+    const incomplete = type === "response.incomplete";
+    const details = response["incomplete_details"];
+    const reason = isPlainObject(details) ? details["reason"] : undefined;
+    let finishReason: string;
+    if (!incomplete && response["status"] === "completed") {
+      finishReason = hasCalls ? "tool_calls" : "stop";
+    } else if (incomplete && reason === "max_output_tokens") {
+      finishReason = "length";
+    } else {
+      const prefix = this.subscription ? "OpenAI subscription response" : "openai response";
+      const shown = typeof reason === "string" && reason ? reason : "unknown";
+      const kind = reason === "content_filter" ? "refused" : "incomplete";
+      throw new ProviderError(kind, `${prefix} did not complete (${shown})`, { retryable: false });
+    }
+    const events: Event[] = [];
+    const usage = usageOf(response["usage"]);
+    if (usage !== null) events.push(new UsageReport(usage));
+    const id = strOrNull(response["id"]) ?? responseId;
+    const providerPayload = replayRecord(this.#key, id === null ? {} : { response_id: id });
+    events.push(new Finish({ reason: finishReason, responseId: id, protocol: PROTOCOL, providerPayload }));
+    return events;
+  }
+
+  /** Return the error for `response.failed` or an `error` event. */
+  #streamFailure(error: JsonObject): ProviderError {
+    const code = error["code"];
+    const kind = (typeof code === "string" ? STREAM_ERROR_KINDS.get(code) : undefined) ?? "server";
+    const rawMessage = error["message"];
+    const message = typeof rawMessage === "string" && rawMessage ? capDetail(rawMessage) : "no message";
+    const text = this.subscription
+      ? `OpenAI subscription stream ended before a complete response: ${message}`
+      : `openai stream failed (${kind}): ${message}`;
+    return new ProviderError(kind, text);
   }
 
   /**
@@ -298,6 +548,148 @@ function readRecord(
       (!Object.hasOwn(fields, "annotations") || Array.isArray(fields["annotations"]));
   }
   return fits ? read : { ok: false, reason: "malformed" };
+}
+
+/** Parse one event's JSON, throwing a `ProviderError` that does not echo it. */
+function eventData(data: string): JsonValue {
+  try {
+    return parseJson(data, "plain");
+  } catch (error) {
+    if (!(error instanceof JSONDecodeError)) throw error;
+  }
+  throw new ProviderError("protocol", "invalid JSON in openai stream event");
+}
+
+/** Return `value` when it is a string, else `null`. */
+function strOrNull(value: JsonValue | undefined): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+/** Return whether a response's `output` holds a function call. */
+function hasCalls(response: JsonObject): boolean {
+  const output = response["output"];
+  return Array.isArray(output) && output.some((item) => isPlainObject(item) && item["type"] === "function_call");
+}
+
+/**
+ * Return the token counts of a Responses `usage` object; `null` when it is not an object.
+ *
+ * Missing or `null` input and output counts are 0, and a missing total is their sum. Cache and
+ * reasoning counts are read whatever the service tier.
+ *
+ * @throws {ProviderError} A count is not an int within `Number.MAX_SAFE_INTEGER`, or the
+ *   details are not objects (kind `protocol`).
+ */
+function usageOf(usage: JsonValue | undefined): Usage | null {
+  if (!isPlainObject(usage)) return null;
+  const inputDetails = usage["input_tokens_details"] ?? {};
+  const outputDetails = usage["output_tokens_details"] ?? {};
+  if (!isPlainObject(inputDetails) || !isPlainObject(outputDetails)) {
+    throw new ProviderError("protocol", "openai response usage details are not objects");
+  }
+  const inputTokens = tokenCount(usage["input_tokens"]) ?? 0;
+  const outputTokens = tokenCount(usage["output_tokens"]) ?? 0;
+  try {
+    return new Usage({
+      inputTokens,
+      outputTokens,
+      totalTokens: tokenCount(usage["total_tokens"]) ?? inputTokens + outputTokens,
+      cacheReadTokens: tokenCount(inputDetails["cached_tokens"]),
+      cacheCreationTokens: tokenCount(inputDetails["cache_write_tokens"]),
+      reasoningTokens: tokenCount(outputDetails["reasoning_tokens"]),
+    });
+  } catch (error) {
+    // `Usage` refuses a count past `Number.MAX_SAFE_INTEGER`, which `Number()` rounds.
+    if (!(error instanceof MessageFormatError)) throw error;
+  }
+  throw new ProviderError("protocol", USAGE_NOT_INT);
+}
+
+/** Return a usage count as a number, `null` when it is `null` or absent. */
+function tokenCount(value: JsonValue | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "bigint") throw new ProviderError("protocol", USAGE_NOT_INT);
+  return Number(value);
+}
+
+/**
+ * Return the parts of one output item, each with its content index.
+ *
+ * A reasoning item or function call gives one part at content index 0; a message gives one part
+ * per text or refusal content part. Other items give none.
+ *
+ * @throws {ProviderError} The item cannot become a part (kind `protocol`).
+ */
+function itemParts(item: JsonValue, key: ReplayKey): [number, Part][] {
+  if (!isPlainObject(item)) {
+    throw new ProviderError("protocol", "openai response has an output item that is not an object");
+  }
+  const type = item["type"];
+  let message: string;
+  try {
+    if (type === "reasoning") return [[0, reasoningPart(item, key)]];
+    if (type === "message") return messageParts(item, key);
+    if (type === "function_call") return [[0, callPart(item, key)]];
+    return [];
+  } catch (error) {
+    if (!(error instanceof MessageFormatError)) throw error;
+    message = `openai response has an invalid ${type} item: ${error.message}`;
+  }
+  throw new ProviderError("protocol", message);
+}
+
+/** Build a reasoning part: the summary texts joined with newlines, the item in its record. */
+function reasoningPart(item: JsonObject, key: ReplayKey): ReasoningPart {
+  const payload = dropNulls(item);
+  const summary = payload["summary"];
+  const texts: string[] = [];
+  for (const entry of Array.isArray(summary) ? summary : []) {
+    if (isPlainObject(entry) && typeof entry["text"] === "string") texts.push(entry["text"]);
+  }
+  return new ReasoningPart(texts.join("\n"), replayRecord(key, { item: payload }));
+}
+
+/** Build a message item's text and refusal parts, keyed by content index. */
+function messageParts(item: JsonObject, key: ReplayKey): [number, Part][] {
+  const content = item["content"] ?? [];
+  if (!Array.isArray(content)) throw new ProviderError("protocol", "openai response message content is not a list");
+  const fields = contentFields(item["id"], item["phase"]);
+  const parts: [number, Part][] = [];
+  for (const [contentIndex, entry] of content.entries()) {
+    if (!isPlainObject(entry)) continue;
+    if (entry["type"] === "output_text") {
+      const text = entry["text"];
+      if (typeof text !== "string") throw new ProviderError("protocol", "openai response output_text has no text");
+      const annotations = entry["annotations"];
+      const kept = Array.isArray(annotations) ? dropNulls(annotations) : [];
+      parts.push([contentIndex, new TextPart(text, replayRecord(key, { ...fields, annotations: kept }))]);
+    } else if (entry["type"] === "refusal") {
+      const refusal = entry["refusal"];
+      if (typeof refusal !== "string") throw new ProviderError("protocol", "openai response refusal has no text");
+      parts.push([contentIndex, new RefusalPart(refusal, replayRecord(key, fields))]);
+    }
+  }
+  return parts;
+}
+
+/** Return a text or refusal part's record fields: the message id when a string, its phase when set. */
+function contentFields(id: JsonValue | undefined, phase: JsonValue | undefined): JsonObject {
+  const fields: JsonObject = {};
+  if (typeof id === "string") fields["id"] = id;
+  if (phase !== null && phase !== undefined) fields["phase"] = phase;
+  return fields;
+}
+
+/** Build a tool call from a function call item, the item in its record; invalid arguments are kept raw. */
+function callPart(item: JsonObject, key: ReplayKey): ToolCallPart {
+  const payload = dropNulls(item);
+  const { call_id: id, name, arguments: text } = payload;
+  if (typeof id !== "string" || typeof name !== "string" || typeof text !== "string") {
+    throw new ProviderError("protocol", "openai response function_call needs call_id, name and arguments");
+  }
+  const [args, raw] = parseArguments(text);
+  const providerPayload = replayRecord(key, { item: payload });
+  return new ToolCallPart({ id, name, arguments: args, rawArguments: raw, providerPayload });
 }
 
 /** Return whether a reasoning item holds non-empty `encrypted_content`. */

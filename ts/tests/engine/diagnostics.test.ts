@@ -75,10 +75,7 @@ describe("reprText", () => {
       const ch = String.fromCodePoint(cp);
       if (ch === "\\") bits.push("1");
       else if (cp >= 0xd800 && cp <= 0xdfff) bits.push("0");
-      else {
-        const repr = reprText(ch);
-        bits.push(repr.length === ch.length + 2 && repr.slice(1, -1) === ch ? "1" : "0");
-      }
+      else bits.push(reprText(ch).slice(1, -1) === ch ? "1" : "0");
     }
     expect(createHash("sha256").update(bits.join("")).digest("hex")).toBe(
       "0326b64c15e91a0583a1d9f8bc53f4bb534adc91a5ae096b55adaf19525ed98d",

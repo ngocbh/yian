@@ -74,7 +74,10 @@ const PRINTABLE_RUNS = `
   15u 3t7 5 38g f9e8 6o 47bk
 `;
 
-/** The start of each run of `PRINTABLE_RUNS`, decoded on first use; odd runs are printable. */
+/**
+ * The start of each run of `PRINTABLE_RUNS`, decoded on first use; runs at odd indices
+ * are printable.
+ */
 let runStarts: number[] | undefined;
 
 /** Return whether Python 3.12 counts code point `cp` as printable. */

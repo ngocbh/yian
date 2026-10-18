@@ -62,7 +62,8 @@ engine or flow change.
 - The author fixes the graph. A running flow does not rewrite itself, and an LLM
   does not choose the graph.
 - `runtime/` stays kind-blind. Kind-specific work belongs in the node. The kind
-  census in `tests/engine/test_kind_census.py` must stay at zero.
+  census in `tests/engine/test_kind_census.py` (TS:
+  `ts/tests/engine/kind_census.test.ts`) must stay at zero.
 - Nodes do not write the variable pool. They return one of `Output`, `Route`, or
   `Grow`; the engine records and binds the result.
 - Runtime transitions stay record-authoritative: prepare and validate, append to

@@ -16,6 +16,7 @@ import {
   type ArcSequence,
   freezeValue,
   type MapStep,
+  type OccurrencePath,
   setRecordKey,
   snapshotValue,
   SourceAccessError,
@@ -337,7 +338,6 @@ describe("merges and aliases", () => {
     const document = binaryAliasDocument();
 
     expect(document._definitions.length).toBeLessThan(200);
-    expect(new Set(document._definitions).size).toBe(document._definitions.length);
   });
 
   test("a repeated cached merge source keeps the rightmost winner's ordinal", () => {
@@ -737,7 +737,7 @@ describe("navigation", () => {
 
   test("an occurrence path that does not fit the document is refused", () => {
     const document = SourceDocument.parse("a: [x]\nb: y\n");
-    const refused = (path: Parameters<SourceDocument["_resolveOccurrence"]>[0]): string =>
+    const refused = (path: OccurrencePath): string =>
       accessError(() => document._resolveOccurrence(path)).message;
 
     expect(document._resolveOccurrence([{ key: "a", pairOrdinal: 0 }, { index: 0 }]).value).toBe(

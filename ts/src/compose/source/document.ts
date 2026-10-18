@@ -535,10 +535,8 @@ function build(
         throw new SourceSyntaxError(`expected a mapping node, but found ${nodeId(node)}`, at);
       }
       // Flattened first, so every merge error comes before any pair is interned.
-      const {
-        sequence: pairSequence,
-        summary: { order, last },
-      } = arcRope(flatten(node));
+      const { sequence: pairSequence, summary } = arcRope(flatten(node));
+      const { order, last } = summary;
       // A repeated key keeps its first position and takes the last value, as in SafeLoader.
       for (const key of order) {
         setRecordKey(record, key, values[last.get(key)!.arc.valueDefinition]!);

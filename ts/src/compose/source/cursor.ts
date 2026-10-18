@@ -408,17 +408,17 @@ export class SourceCursor {
     const { arc, pairOrdinal } = occurrence;
     const step = Object.freeze({ key: arc.key, pairOrdinal });
     return SourceCursor._physical(this._document!, arc.valueDefinition, {
-      pathLink: this._childLink(step, arc.valueDefinition),
+      pathLink: this.childLink(step, arc.valueDefinition),
       keyDefinition: arc.keyDefinition,
-      cycleCut: this._onPath(arc.valueDefinition),
+      cycleCut: this.onPath(arc.valueDefinition),
     });
   }
 
   /** @internal Return the cursor at item `index`, definition `definitionId`, of this sequence. */
   _descendSequenceItem(index: number, definitionId: number): SourceCursor {
     return SourceCursor._physical(this._document!, definitionId, {
-      pathLink: this._childLink(Object.freeze({ index }), definitionId),
-      cycleCut: this._onPath(definitionId),
+      pathLink: this.childLink(Object.freeze({ index }), definitionId),
+      cycleCut: this.onPath(definitionId),
     });
   }
 
@@ -460,12 +460,12 @@ export class SourceCursor {
   }
 
   /** Return the path link one step below this cursor's. */
-  private _childLink(step: OccurrenceStep, definitionId: number): PathLink {
+  private childLink(step: OccurrenceStep, definitionId: number): PathLink {
     return Object.freeze({ parent: this._pathLink, step, definitionId });
   }
 
   /** Say whether this cursor's path, itself included, already reaches `definitionId`. */
-  private _onPath(definitionId: number): boolean {
+  private onPath(definitionId: number): boolean {
     for (let link = this._pathLink; link !== null; link = link.parent) {
       if (link.definitionId === definitionId) return true;
     }

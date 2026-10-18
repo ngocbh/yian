@@ -300,6 +300,15 @@ describe("property ranges", () => {
     expect(startAt(text, ...path)).toEqual(start);
   });
 
+  test.each<[string, (string | number)[], [number, number]]>([
+    ["[&k a: 1]\n", [0], [1, 2]],
+    ["[!t a: 1, b]\n", [0], [1, 2]],
+    ["[&k : 1]\n", [0], [1, 2]],
+    ["- [&k a: 1]\n", [0, 0], [1, 4]],
+  ])("start a one-pair flow mapping at its key's properties: %p", (text, path, start) => {
+    expect(startAt(text, ...path)).toEqual(start);
+  });
+
   test.each([
     ["&k 1: a\nb: {*k : c}\n", new SourceRange(1, 1, 1, 5)],
     ["a: &k 1\n*k : b\n", new SourceRange(1, 4, 1, 8)],

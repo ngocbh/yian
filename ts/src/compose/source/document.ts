@@ -399,9 +399,10 @@ function firstRepeatedKey(
 /**
  * Lex `source` and return each composed node's span.
  *
- * The composed tree keeps no property positions, so the CST records them: under the end of
- * the properties, and under the token they precede by `offset:is a collection` (a block
- * mapping and its first key share an offset). An empty node has no token, or a zero-length
+ * The composed tree keeps no property positions, so the CST records them. Each span of
+ * properties is stored twice: under the offset where the properties end, to find an empty
+ * node, and under the `tokenKey` of the token they precede, whose collection flag tells a
+ * block mapping from its first key, which shares its offset. An empty node has no token, or a zero-length
  * `scalar` one before a `,` in a flow collection; eemeli places it after its properties and
  * any spaces that follow them.
  */
@@ -412,7 +413,7 @@ function propertySpans(source: string): SpanOf {
     const span = propertiesSpan(props);
     if (span === null) return;
     byEnd.set(span.end, span);
-    if (token) byToken.set(`${token.offset}:${CST.isCollection(token)}`, span);
+    if (token) byToken.set(tokenKey(token.offset, CST.isCollection(token)), span);
   };
   const stack: CST.Token[] = [];
   const document = [...new Parser().parse(source)].find(
@@ -446,27 +447,40 @@ function propertySpans(source: string): SpanOf {
       const first = token.type === "block-map" ? token.items[0] : undefined;
       const keySpan = first === undefined ? null : propertiesSpan(first.start);
       if (keySpan !== null && keySpan.start < token.offset) {
-        const key = `${token.offset}:true`;
+        const key = tokenKey(token.offset, true);
         const known = byToken.get(key);
         if (known === undefined || known.start > keySpan.start) byToken.set(key, keySpan);
       }
     }
   }
-  return (node) => {
+  const spanOf: SpanOf = (node) => {
     const [start, end] = node.range!;
     if (start === end) {
-      let p = start;
-      while (p > 0 && (source[p - 1] === " " || source[p - 1] === "\t")) p--;
-      return byToken.get(`${start}:false`) ?? byEnd.get(p) ?? { start, end: start };
+      let propertiesEnd = start;
+      while (
+        propertiesEnd > 0 &&
+        (source[propertiesEnd - 1] === " " || source[propertiesEnd - 1] === "\t")
+      ) {
+        propertiesEnd--;
+      }
+      return (
+        byToken.get(tokenKey(start, false)) ?? byEnd.get(propertiesEnd) ?? { start, end: start }
+      );
     }
-    if (isMap(node) || isSeq(node)) {
-      return { start: byToken.get(`${start}:true`)?.start ?? start, end };
-    }
-    if (node.anchor !== undefined || node.tag !== undefined) {
-      return { start: byToken.get(`${start}:false`)?.start ?? start, end };
-    }
-    return { start, end };
+    // Only a token with properties has an entry.
+    let from = byToken.get(tokenKey(start, isMap(node) || isSeq(node)))?.start ?? start;
+    // A one-pair mapping in a flow sequence, as `[&k a: 1]`, has no token, and eemeli starts
+    // it at its key, after the key's properties.
+    const key = isMap(node) && node.flow ? node.items[0]?.key : undefined;
+    if (isScalar(key)) from = Math.min(from, spanOf(key).start);
+    return { start: from, end };
   };
+  return spanOf;
+}
+
+/** Return the key under which `byToken` records the properties before a token. */
+function tokenKey(offset: number, collection: boolean): string {
+  return `${offset}:${collection}`;
 }
 
 /** Return the span of the anchor and tag among `props`, or null when there are none. */

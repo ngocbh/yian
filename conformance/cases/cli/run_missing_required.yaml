@@ -1,0 +1,13 @@
+kind: cli
+flow: |
+  id: echo
+  name: echo
+  input:
+    n: !int
+  nodes: {}
+  output:
+    n: ${input.n}
+args: [run, flow.yaml, -w, "0", --log, run.jsonl]
+expect:
+  exit: 2
+  stdout: ""

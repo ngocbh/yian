@@ -1,0 +1,22 @@
+kind: cli
+flow: |
+  id: from-file
+  name: from_file
+  input:
+    xs: !list(int)
+    maybe: !Optional(str)
+    n: !int
+  nodes: {}
+  output:
+    xs: ${input.xs}
+    maybe: ${input.maybe}
+    n: ${input.n}
+files: {in.json: '{"xs": [1, 2], "maybe": null, "n": 1}'}
+args: [run, flow.yaml, -w, "0", --log, run.jsonl, --json,
+       --inputs, in.json, --input, n=5]
+expect:
+  exit: 0
+  json:
+    format: yian.cli.v1
+    status: succeeded
+    output: {xs: [1, 2], maybe: null, n: 5}

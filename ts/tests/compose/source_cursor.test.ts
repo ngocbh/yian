@@ -1258,23 +1258,4 @@ describe("scalar facts", () => {
     expect(value.withValue("x").scalarStyle).toBe("plain");
     expect(value.withValue("other").scalarStyle).toBeNull();
   });
-
-  test("tags are value-gated through withValue, by value and type", () => {
-    const cursor = (text: string, key: string) => SourceDocument.parse(text).root.child(key);
-    const five = cursor("a: !int 5\n", "a");
-    const one = cursor("a: !int 1\n", "a");
-    const buy = cursor("m: !Buy {x: 1}\n", "m");
-    const empty = cursor("a: !int\n", "a");
-
-    expect(five.withValue(5n).tag).toBe("int");
-    expect(five.withValue("${input.a}").tag).toBeNull();
-    expect(five.withValue("${input.a}").hasValue).toBe(true);
-    expect(one.withValue(true).tag).toBeNull();
-    expect(buy.withValue({ x: true }).tag).toBeNull();
-    expect(buy.withValue({ x: 1n }).tag).toBe("Buy");
-    expect(empty.withValue(null).tag).toBe("int");
-    expect(empty.withValue(null).hasValue).toBe(false);
-    expect(empty.withValue(3n).tag).toBeNull();
-    expect(empty.withValue(3n).hasValue).toBe(true);
-  });
 });

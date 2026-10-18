@@ -35,6 +35,7 @@ import {
   type ScalarStyle,
   setRecordKey,
   SourceSyntaxError,
+  type TaggedNode,
 } from "./common.ts";
 import { SourceCursor } from "./cursor.ts";
 import {
@@ -147,6 +148,27 @@ const EMPTY_PAIRS: PairSequence = {
   flatPairCount: 0,
 };
 
+/** One authored key path step linked to its parent: a key as written, or an item index. */
+interface KeyLink {
+  readonly parent: KeyLink | null;
+  readonly step: string | number;
+}
+
+/** One pending occurrence of the tagged-node walk. */
+interface WalkFrame {
+  readonly cursor: SourceCursor;
+  /** The key definition selecting the occurrence; null for the root or a sequence item. */
+  readonly keyDefinition: number | null;
+  readonly link: KeyLink | null;
+}
+
+/** Spell a linked authored key path out from the root. */
+function spellKeyLink(link: KeyLink | null): (string | number)[] {
+  const steps: (string | number)[] = [];
+  for (let current = link; current !== null; current = current.parent) steps.push(current.step);
+  return steps.reverse();
+}
+
 /**
  * One safely constructed YAML document with its source graph kept private.
  *
@@ -194,6 +216,110 @@ export class SourceDocument {
   /** A cursor at the document root. */
   get root(): SourceCursor {
     return SourceCursor._physical(this, this._rootDefinition);
+  }
+
+  /**
+   * Return every node that carries a local tag, in document order.
+   *
+   * An aliased node is listed once, with the first occurrence path that reaches it.
+   * `skipTopLevel` picks top-level keys, as written, whose pairs are not walked: a node
+   * reached only through them is not listed; a node also reached elsewhere is listed with its
+   * first path outside them.
+   *
+   * Example: `SourceDocument.parse("a: !int 1\nb: [!str x]\n").taggedNodes()` lists the
+   * tags `"int"` and `"str"`.
+   */
+  taggedNodes(options: { skipTopLevel?: (key: string) => boolean } = {}): readonly TaggedNode[] {
+    if (!this._definitions.some((definition) => definition.tag !== null)) return [];
+    const skipTopLevel = options.skipTopLevel ?? null;
+    // Each definition's first cursor and authored key link; paths and key paths are spelled
+    // out only for tagged nodes, so the walk stays linear in the document size.
+    const firstCursors = new Map<number, SourceCursor>();
+    const keyLinks = new Map<number, KeyLink | null>();
+    const keyIds = new Set<number>();
+    const walkedParts = new Set<ArcSequence>();
+    const stack: WalkFrame[] = [{ cursor: this.root, keyDefinition: null, link: null }];
+    while (stack.length > 0) {
+      const { cursor, keyDefinition, link } = stack.pop()!;
+      if (keyDefinition !== null && !firstCursors.has(keyDefinition)) {
+        firstCursors.set(keyDefinition, cursor);
+        keyLinks.set(keyDefinition, link);
+        keyIds.add(keyDefinition);
+      }
+      const definitionId = cursor._definition!;
+      if (firstCursors.has(definitionId)) continue;
+      firstCursors.set(definitionId, cursor);
+      keyLinks.set(definitionId, link);
+      const definition = this._definitions[definitionId]!;
+      const skip = definitionId === this._rootDefinition ? skipTopLevel : null;
+      const children: WalkFrame[] = [];
+      if (definition.kind === "mapping") {
+        // A rope part shared by several mappings (a `<<:` source) is walked once per
+        // document: the first walk already reached every node in it, so merge-heavy
+        // documents stay linear.
+        const parts: [ArcSequence, number][] = [[definition.pairSequence, 0]];
+        while (parts.length > 0) {
+          const [part, base] = parts.pop()!;
+          // The root is walked once; with skipped keys, its parts stay unmarked so another
+          // mapping sharing them walks every pair.
+          if (skip === null) {
+            if (walkedParts.has(part)) continue;
+            walkedParts.add(part);
+          }
+          for (let index = part.parts.length - 1; index >= 0; index--) {
+            parts.push([part.parts[index]!, base + part.partOffsets[index]!]);
+          }
+          part.arcs.forEach((arc, index) => {
+            if (skip !== null && skip(arc.key)) return;
+            children.push({
+              cursor: cursor._descendMappingOccurrence({ arc, pairOrdinal: base + index }),
+              keyDefinition: arc.keyDefinition,
+              link: { parent: link, step: arc.key },
+            });
+          });
+        }
+      } else if (definition.kind === "sequence") {
+        definition.itemDefinitions.forEach((item, index) => {
+          children.push({
+            cursor: cursor._descendSequenceItem(index, item),
+            keyDefinition: null,
+            link: { parent: link, step: index },
+          });
+        });
+      }
+      for (let index = children.length - 1; index >= 0; index--) stack.push(children[index]!);
+    }
+
+    const tagged: TaggedNode[] = [];
+    this._definitions.forEach((definition, definitionId) => {
+      if (definition.tag === null) return;
+      const first = firstCursors.get(definitionId);
+      if (skipTopLevel !== null && first === undefined) return;
+      tagged.push(
+        Object.freeze({
+          definitionId,
+          tag: definition.tag,
+          range: definition.range,
+          path: first?.path ?? [],
+          isKey: keyIds.has(definitionId),
+          keyPath: spellKeyLink(keyLinks.get(definitionId) ?? null),
+        }),
+      );
+    });
+    // Nodes without a range sort last.
+    tagged.sort((first, second) => {
+      const a = first.range;
+      const b = second.range;
+      if (a === null || b === null) {
+        if (a !== b) return a === null ? 1 : -1;
+      } else if (a.startLine !== b.startLine) {
+        return a.startLine - b.startLine;
+      } else if (a.startCol !== b.startCol) {
+        return a.startCol - b.startCol;
+      }
+      return first.definitionId - second.definitionId;
+    });
+    return Object.freeze(tagged);
   }
 
   /**

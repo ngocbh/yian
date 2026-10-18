@@ -829,3 +829,90 @@ export class Response {
     this.responseId = optionalString(options.responseId, "response_id");
   }
 }
+
+/** The version every replay record carries as `v`. */
+export const REPLAY_VERSION = 1;
+
+/** Who a replay record belongs to: the adapter's protocol, the provider, the model and, if any, the account. */
+export interface ReplayKey {
+  protocol: string;
+  provider: string;
+  model: string;
+  /** `null` or absent when the provider has no account to tell apart. */
+  account?: string | null;
+}
+
+/** Why a replay record can't be replayed, so the adapter sends the turn without it. */
+export type ReplayDegradedReason =
+  | "missing"
+  | "malformed"
+  | "unknown_version"
+  | "other_protocol"
+  | "other_provider"
+  | "other_model"
+  | "other_account"
+  | "unknown_field";
+
+const REPLAY_ENVELOPE: ReadonlySet<string> = new Set(["kind", "v", "provider", "model", "account"]);
+
+/**
+ * Return a replay record for a provider payload: `kind` (the protocol), `v`, `provider`, `model`,
+ * `account` when the key has one, then `fields`.
+ *
+ * @param key Who the record belongs to.
+ * @param fields The provider data to replay; checked and copied like a payload.
+ * @returns The record.
+ * @throws {MessageFormatError} If a field uses an envelope key, or `fields` is not plain JSON.
+ */
+export function replayRecord(key: ReplayKey, fields: JsonObject): JsonObject {
+  const copy = checkObject(fields, "");
+  for (const name of Object.keys(copy)) {
+    if (REPLAY_ENVELOPE.has(name)) throw new MessageFormatError(name, "reserved replay record key");
+  }
+  const record: JsonObject = { kind: key.protocol, v: BigInt(REPLAY_VERSION), provider: key.provider, model: key.model };
+  if (key.account !== null && key.account !== undefined) record["account"] = key.account;
+  for (const name of Object.keys(copy)) put(record, name, copy[name]!);
+  return record;
+}
+
+/**
+ * Read a replay record from a provider payload, checking that it belongs to `key`.
+ *
+ * Decoding a message never looks inside a payload, so a stored message never fails on a
+ * record; a record that doesn't fit only degrades the replay, with the first reason that applies.
+ *
+ * @param payload The payload holding the record, or `null`.
+ * @param key Who the record must belong to; the accounts must match exactly, both absent counting as equal.
+ * @param fields The keys the record may hold besides its envelope.
+ * @returns The record's other keys, copied, or why it can't be replayed.
+ */
+export function readReplayRecord(
+  payload: JsonObject | null,
+  key: ReplayKey,
+  fields: readonly string[],
+): { ok: true; fields: JsonObject } | { ok: false; reason: ReplayDegradedReason } {
+  if (payload === null) return { ok: false, reason: "missing" };
+  const { kind, provider, model, v } = payload;
+  const hasAccount = Object.hasOwn(payload, "account");
+  if (
+    typeof kind !== "string" ||
+    typeof provider !== "string" ||
+    typeof model !== "string" ||
+    !Object.hasOwn(payload, "v") ||
+    (hasAccount && typeof payload["account"] !== "string")
+  ) {
+    return { ok: false, reason: "malformed" };
+  }
+  if (v !== 1n && v !== 1) return { ok: false, reason: "unknown_version" };
+  if (kind !== key.protocol) return { ok: false, reason: "other_protocol" };
+  if (provider !== key.provider) return { ok: false, reason: "other_provider" };
+  if (model !== key.model) return { ok: false, reason: "other_model" };
+  if ((hasAccount ? payload["account"] : null) !== (key.account ?? null)) return { ok: false, reason: "other_account" };
+  const rest: JsonObject = {};
+  for (const name of Object.keys(payload)) {
+    if (REPLAY_ENVELOPE.has(name)) continue;
+    if (!fields.includes(name)) return { ok: false, reason: "unknown_field" };
+    put(rest, name, copyJson(payload[name]!));
+  }
+  return { ok: true, fields: rest };
+}

@@ -1,6 +1,6 @@
 /**
  * Messages, requests and replies: the stable JSON shape, strict decoding and construction checks, a port of
- * `tests/llm/test_messages.py`, plus JavaScript's own values: ints of any size, `-0`, a
+ * `tests/llm/test_messages.py`; replay records; plus JavaScript's own values: ints of any size, `-0`, a
  * `"__proto__"` key, non-plain objects, `undefined` and array holes.
  */
 
@@ -15,8 +15,12 @@ import {
   Message,
   MessageFormatError,
   NamedTool,
+  readReplayRecord,
   ReasoningPart,
   RefusalPart,
+  REPLAY_VERSION,
+  type ReplayKey,
+  replayRecord,
   Request,
   Response,
   TextPart,
@@ -780,5 +784,150 @@ describe("requests and replies", () => {
     expect(usage.cacheCreationTokens).toBe(4);
     expect(usage.reasoningTokens).toBeNull();
     expect(usage.cacheReadTokens).toBeNull();
+  });
+});
+
+describe("replay records", () => {
+  const KEY: ReplayKey = { protocol: "openai_responses", provider: "openai", model: "gpt-5" };
+  const FIELDS = ["encrypted_content", "item_id"];
+
+  test("the built record without an account", () => {
+    expect(REPLAY_VERSION).toBe(1);
+    const record = replayRecord(KEY, { encrypted_content: "e", item_id: "i" });
+    expect(record).toEqual({
+      kind: "openai_responses",
+      v: 1n,
+      provider: "openai",
+      model: "gpt-5",
+      encrypted_content: "e",
+      item_id: "i",
+    });
+    expect(Object.keys(record)).toEqual(["kind", "v", "provider", "model", "encrypted_content", "item_id"]);
+    expect(Object.keys(replayRecord({ ...KEY, account: null }, {}))).toEqual(["kind", "v", "provider", "model"]);
+  });
+
+  test("the built record with an account", () => {
+    const record = replayRecord({ ...KEY, account: "acct_1" }, { item_id: "i" });
+    expect(Object.keys(record)).toEqual(["kind", "v", "provider", "model", "account", "item_id"]);
+    expect(record["account"]).toBe("acct_1");
+  });
+
+  test("the fields are checked and copied", () => {
+    const fields = { item_id: "i", list: [1n] };
+    const record = replayRecord(KEY, fields);
+    fields.list.push(2n);
+    expect(record["list"]).toEqual([1n]);
+    expect(formatError(() => replayRecord(KEY, { a: [NaN] })).message).toBe("a[0]: float is not finite");
+  });
+
+  for (const name of ["kind", "v", "provider", "model", "account"]) {
+    test(`a field named ${name} is refused`, () => {
+      const error = formatError(() => replayRecord(KEY, { item_id: "i", [name]: "x" }));
+      expect([error.path, error.reason]).toEqual([name, "reserved replay record key"]);
+    });
+  }
+
+  /** Return a valid record for `KEY`, edited by `edit`. */
+  function edited(edit: (record: Data) => void): Data {
+    const record = replayRecord(KEY, { item_id: "i" }) as Data;
+    edit(record);
+    return record;
+  }
+
+  test("missing", () => {
+    expect(readReplayRecord(null, KEY, FIELDS)).toEqual({ ok: false, reason: "missing" });
+  });
+
+  test("malformed", () => {
+    const cases: ((record: Data) => void)[] = [
+      (record) => (record["kind"] = 1n),
+      (record) => delete record["kind"],
+      (record) => (record["provider"] = null),
+      (record) => (record["model"] = ["gpt-5"]),
+      (record) => delete record["v"],
+      (record) => (record["account"] = 1n),
+      (record) => (record["account"] = null),
+    ];
+    for (const edit of cases) {
+      expect(readReplayRecord(edited(edit), KEY, FIELDS)).toEqual({ ok: false, reason: "malformed" });
+    }
+  });
+
+  test("unknown_version", () => {
+    for (const v of [2n, 0, "1", null, 1.5]) {
+      const record = edited((record) => (record["v"] = v));
+      expect(readReplayRecord(record, KEY, FIELDS)).toEqual({ ok: false, reason: "unknown_version" });
+    }
+  });
+
+  test("other_protocol", () => {
+    // A record with several mismatches reports the first.
+    const record = edited((record) => {
+      record["kind"] = "anthropic_messages";
+      record["model"] = "other";
+    });
+    expect(readReplayRecord(record, KEY, FIELDS)).toEqual({ ok: false, reason: "other_protocol" });
+  });
+
+  test("other_provider", () => {
+    const record = edited((record) => {
+      record["provider"] = "azure";
+      record["model"] = "other";
+    });
+    expect(readReplayRecord(record, KEY, FIELDS)).toEqual({ ok: false, reason: "other_provider" });
+  });
+
+  test("other_model", () => {
+    const record = edited((record) => {
+      record["model"] = "gpt-4";
+      record["account"] = "acct_1";
+    });
+    expect(readReplayRecord(record, KEY, FIELDS)).toEqual({ ok: false, reason: "other_model" });
+  });
+
+  test("other_account", () => {
+    const withAccount = replayRecord({ ...KEY, account: "acct_1" }, { item_id: "i" });
+    expect(readReplayRecord(withAccount, KEY, FIELDS)).toEqual({ ok: false, reason: "other_account" });
+    expect(readReplayRecord(withAccount, { ...KEY, account: "acct_2" }, FIELDS)).toEqual({
+      ok: false,
+      reason: "other_account",
+    });
+    const without = replayRecord(KEY, { item_id: "i" });
+    expect(readReplayRecord(without, { ...KEY, account: "acct_1" }, FIELDS)).toEqual({
+      ok: false,
+      reason: "other_account",
+    });
+    expect(readReplayRecord(without, { ...KEY, account: null }, FIELDS).ok).toBe(true);
+    expect(readReplayRecord(withAccount, { ...KEY, account: "acct_1" }, FIELDS).ok).toBe(true);
+  });
+
+  test("unknown_field", () => {
+    const record = edited((record) => (record["extra"] = 1n));
+    expect(readReplayRecord(record, KEY, FIELDS)).toEqual({ ok: false, reason: "unknown_field" });
+  });
+
+  test("a valid record's fields come back without the envelope, as a copy", () => {
+    const record = replayRecord({ ...KEY, account: "acct_1" }, { item_id: "i", encrypted_content: "e" }) as Data;
+    const read = readReplayRecord(record, { ...KEY, account: "acct_1" }, FIELDS);
+    expect(read).toEqual({ ok: true, fields: { item_id: "i", encrypted_content: "e" } });
+    const nested = replayRecord(KEY, { item_id: { deep: ["x"] } });
+    const back = readReplayRecord(nested, KEY, FIELDS);
+    if (!back.ok) throw new Error("expected a valid record");
+    (back.fields["item_id"] as Data)["deep"].push("y");
+    expect(nested["item_id"]).toEqual({ deep: ["x"] });
+  });
+
+  test("a number v of 1 is accepted", () => {
+    const record = edited((record) => (record["v"] = 1));
+    expect(readReplayRecord(record, KEY, FIELDS)).toEqual({ ok: true, fields: { item_id: "i" } });
+  });
+
+  test("a malformed record in a payload doesn't stop a message", () => {
+    const payload = { kind: 1n, v: "two" };
+    const message = new Message({ role: "assistant", parts: [new ReasoningPart("r", payload)] });
+    const back = Message.fromJSON(parseJson(logJson(message.toJSON()), "codec"));
+    expect(back).toEqual(message);
+    const stored = (back.parts[0] as ReasoningPart).providerPayload;
+    expect(readReplayRecord(stored, KEY, FIELDS)).toEqual({ ok: false, reason: "malformed" });
   });
 });

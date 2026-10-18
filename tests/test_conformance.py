@@ -3251,7 +3251,7 @@ output: ${body.output}
 
 
 def test_harvest_unshimmable_code() -> None:
-    """Failures of CODE nodes and frames on a `code:` line are the `code` rule's."""
+    """CODE nodes' body and output failures and frames on a `code:` line are the `code` rule's."""
     from tests import conformance_harvest as harvest
 
     def load_error(line: int, label: str = "flow.yaml", message: str = "bad") -> dict:
@@ -3259,9 +3259,11 @@ def test_harvest_unshimmable_code() -> None:
         return {"load": {"diagnostics": [{"code": "compose.load", "message": message,
                                           "frames": [frame]}]}}
 
-    def failed(node: str) -> dict:
-        return {"output": {"status": "failed", "failure": {
-            "code": "node.execute", "message": "ValueError: no", "node": node}}}
+    def failed(node: str, code: str = "node.execute", frames: list | None = None) -> dict:
+        failure = {"code": code, "message": "ValueError: no", "node": node}
+        if frames:
+            failure["frames"] = frames
+        return {"output": {"status": "failed", "failure": failure}}
 
     load = {"kind": "load", "flow": _CODE_FLOW}
     for line in (6, 9, 10, 11):
@@ -3284,6 +3286,13 @@ def test_harvest_unshimmable_code() -> None:
         assert harvest._unshimmable(run, failed(node), frozenset()) == {"code"}, node
     for node in ("other", "loop/other#2", "picked"):
         assert harvest._unshimmable(run, failed(node), frozenset()) == set(), node
+    assert harvest._unshimmable(run, failed("body", "contract.output"), frozenset()) == {"code"}
+    # An input binding's failure doesn't depend on the CODE body, unless a frame is on its line.
+    assert harvest._unshimmable(run, failed("body", "binding.evaluate"), frozenset()) == set()
+    for line, rules in ((10, {"code"}), (5, set())):
+        frames = [{"label": "flow.yaml", "range": [line, 5, line, 9]}]
+        assert harvest._unshimmable(run, failed("body", "binding.evaluate", frames),
+                                    frozenset()) == rules, line
     failure = failed("body")["output"]["failure"]
     for entry in (["node_failed", "body", {"failure": failure}],
                   ["node_routed", "body", {"terminal_failure": failure}]):

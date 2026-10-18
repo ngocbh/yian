@@ -2204,6 +2204,10 @@ _STRUCTURED_PROMPTS = ("Respond with ONLY a JSON object matching this JSON schem
 _TEXT_CHARS = re.compile(r"(?![0-9])\d|[\x1c-\x1f\x85\ufeff]")
 # The arithmetic shim's notes for what TS rejects at load, where both operand types are known.
 _LOAD_ARITHMETIC = frozenset({"repetition", "printf", "operand-kinds"})
+# The failure codes whose text a CODE node's own behavior gives: its body raised (TS writes
+# `<name>: <message>`) or its return failed the output check (TS names JS types). A CODE node's
+# other failures, such as an input binding's, read the same in both.
+_CODE_FAILURES = frozenset({"node.execute", "contract.output"})
 
 
 def _diagnostics(expect: dict) -> list:
@@ -2288,7 +2292,8 @@ def _unshimmable(case: dict, py: dict, notes: frozenset) -> set[str]:
         rules.add("llm")
 
     code_ids = {scalar.node for text in flows for scalar in _code_scalars(text) if scalar.node}
-    failed = [diagnostic["node"] for diagnostic in diagnostics if diagnostic.get("node")]
+    failed = [diagnostic["node"] for diagnostic in diagnostics
+              if diagnostic.get("node") and diagnostic["code"] in _CODE_FAILURES]
     frames = [frame for diagnostic in diagnostics for frame in diagnostic.get("frames", [])]
     if (any(segment.split("#", 1)[0] in code_ids
             for node in failed for segment in node.split("/"))

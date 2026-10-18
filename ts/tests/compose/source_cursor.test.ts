@@ -1114,6 +1114,12 @@ describe("scalar facts", () => {
     expect(Object.isFrozen(source)).toBe(true);
     expect(source.range).toEqual(cursor.range!);
     expect(source.constructedLineRanges).toEqual([new SourceRange(2, 3, 2, 8)]);
+    expect(Object.isFrozen(source.constructedLineRanges)).toBe(true);
+    expect(Object.isFrozen(source.constructedLineRanges![0])).toBe(true);
+    expect(Object.isFrozen(source.range)).toBe(true);
+    const empty = SourceDocument.parse("code: |").root.child("code").scalarSource!;
+    expect(empty.constructedLineRanges).toEqual([]);
+    expect(Object.isFrozen(empty.constructedLineRanges)).toBe(true);
     expect(SourceCursor.virtual("first\nsecond").scalarSource).toBeNull();
     expect(SourceDocument.parse("n: 3\n").root.child("n").scalarSource).toBeNull();
   });

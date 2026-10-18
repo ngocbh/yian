@@ -16,6 +16,9 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+
+import { parse as parseYaml } from "yaml";
 
 import {
   type ArcSequence,
@@ -250,14 +253,19 @@ describe("repeatedKey", () => {
     });
     expect(document.repeatedKey).toBeNull();
     expect(document._value).toEqual({ "017": "a", "17": "b" });
+    expect(Object.isFrozen(document.nonTextKey)).toBe(true);
   });
 
   test("is the first key a mapping repeats, with both ranges", () => {
-    expect(SourceDocument.parse("a: 1\nb: 2\na: 3\n").repeatedKey).toEqual({
+    const { repeatedKey } = SourceDocument.parse("a: 1\nb: 2\na: 3\n");
+
+    expect(repeatedKey).toEqual({
       key: "a",
       first: new SourceRange(1, 1, 1, 2),
       second: new SourceRange(3, 1, 3, 2),
     });
+    expect(Object.isFrozen(repeatedKey)).toBe(true);
+    expect(Object.isFrozen(repeatedKey!.first)).toBe(true);
   });
 
   test("is not two pairs keyed by one alias target", () => {
@@ -270,6 +278,19 @@ test("a list or mapping key is refused", () => {
 
   expect(error.message).toBe("a list or mapping can't be a mapping key; mapping keys must be text");
   expect(error.range).toEqual(new SourceRange(1, 1, 1, 2));
+});
+
+test.each([
+  ["!!seq a: 1", new SourceRange(1, 1, 1, 2)],
+  ["!!map a: 1", new SourceRange(1, 1, 1, 2)],
+  ["? !!seq a\n: 1", new SourceRange(1, 3, 1, 4)],
+  ["{!!seq a: 1}", new SourceRange(1, 2, 1, 3)],
+  ["!!map on: !!bool", new SourceRange(1, 1, 1, 2)],
+])("a scalar key tagged as a list or mapping is refused before its value: %p", (text, range) => {
+  const error = refusal(text);
+
+  expect(error.message).toBe("a list or mapping can't be a mapping key; mapping keys must be text");
+  expect(error.range).toEqual(range);
 });
 
 test("a missing value is null", () => {
@@ -361,6 +382,44 @@ describe("property ranges", () => {
     expect(error.message).toContain("this list nests deeper than 1 levels");
     expect(error.range).toEqual(new SourceRange(1, 4, 1, 5));
   });
+
+  test("are frozen", () => {
+    expect(Object.isFrozen(rangeAt("a: 1\n", "a"))).toBe(true);
+    expect(Object.isFrozen(refusal("a: ]\n").range)).toBe(true);
+  });
+});
+
+describe("range ends", () => {
+  // PyYAML's ends: a block collection ends at the next token past blank lines and comments,
+  // a block scalar after the blank lines that follow it.
+  test.each<[string, (string | number)[], SourceRange]>([
+    ["- &n0\n  <<: *n0\n  c: ''\n- on", [], new SourceRange(1, 1, 4, 5)],
+    ["- &n0\n  <<: *n0\n  c: ''\n- on", [0], new SourceRange(1, 3, 4, 1)],
+    ["root:\n  -\n    - x y\n    - \n", [], new SourceRange(1, 1, 5, 1)],
+    ["root:\n  -\n    - x y\n    - \n", ["root"], new SourceRange(2, 3, 5, 1)],
+    ["root:\n  -\n    - x y\n    - \n", ["root", 0], new SourceRange(3, 5, 5, 1)],
+    ["root: !int |\n    t\n\n", ["root"], new SourceRange(1, 7, 4, 1)],
+    ["a:\n  b: 1\n  # c\n# d\nc: 2\n", ["a"], new SourceRange(2, 3, 5, 1)],
+    ["a: |-\n  t\n  \n\nb: 1", ["a"], new SourceRange(1, 4, 5, 1)],
+    ["a:\r\n  b: 1\r\n  # x\r\n\r\nc: 2\r\n", ["a"], new SourceRange(2, 3, 5, 1)],
+    ["a: [1,\n  2]\n\nb: 1", ["a"], new SourceRange(1, 4, 2, 5)],
+    ["a: 'q'  # c\n\nb: 1", ["a"], new SourceRange(1, 4, 1, 7)],
+  ])("are PyYAML's: %p at %p", (text, path, range) => {
+    expect(definitionAt(text, ...path).range).toEqual(range);
+  });
+
+  test("frame a block record up to the next key in the shared depends_on case", () => {
+    const url = new URL(
+      "../../../conformance/cases/run-agent/seed_12_depends_on.yaml",
+      import.meta.url,
+    );
+    const { flow } = parseYaml(readFileSync(url, "utf8")) as { flow: string };
+
+    // The frame the case expects for `fetch`'s declared output record.
+    expect(definitionAt(flow, "nodes", "fetch", "output").range).toEqual(
+      new SourceRange(34, 7, 35, 5),
+    );
+  });
 });
 
 describe("core tags", () => {
@@ -423,8 +482,16 @@ describe("bare and unknown tags", () => {
     expect(error.range).toEqual(new SourceRange(1, 4, 1, 7));
   });
 
-  test("a bare tag on a collection is an error", () => {
-    expect(refusal("a: ! [1]\n").message).toBe("a tag names a type, e.g. `!int`");
+  test.each([
+    ["a: ! [1]\n", new SourceRange(1, 4, 1, 7)],
+    ["root: ! ['q', &n1 {b: c}]\n", new SourceRange(1, 7, 1, 10)],
+    ["root: !\n  1: x\n", new SourceRange(1, 7, 2, 3)],
+    ["- !\n  - 1\n", new SourceRange(1, 3, 2, 3)],
+  ])("a bare tag on a collection is an error up to its opening token: %p", (text, range) => {
+    const error = refusal(text);
+
+    expect(error.message).toBe("a tag names a type, e.g. `!int`");
+    expect(error.range).toEqual(range);
   });
 
   test("a bare tag is checked after the YAML syntax", () => {
@@ -808,6 +875,19 @@ describe("merges", () => {
     const error = refusal(text);
 
     expect(error.message).toBe(message);
+    expect(error.range).toEqual(range);
+  });
+
+  test.each([
+    ["root: {<<}\n", new SourceRange(1, 10, 1, 11)],
+    ["root: {a: 1, <<}\n", new SourceRange(1, 16, 1, 17)],
+    ["root:\n  <<:\n  a: 1\n", new SourceRange(2, 6, 2, 7)],
+  ])("a merge key with no value is refused where the key ends: %p", (text, range) => {
+    const error = refusal(text);
+
+    expect(error.message).toBe(
+      "expected a mapping or list of mappings for merging, but found scalar",
+    );
     expect(error.range).toEqual(range);
   });
 

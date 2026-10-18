@@ -43,6 +43,7 @@ import {
   isMergeKey,
   type MapPair,
   mergeSources,
+  mergeValueError,
   nodeId,
   ownPairs,
 } from "./literals.ts";
@@ -461,13 +462,17 @@ function build(
   /**
    * Refuse a tag written at a `<<:` merge site, as Python's `_reject_merge_source_tag`: YAML
    * never builds a merge source, so a local tag there checks nothing. An alias is skipped: its
-   * target's tag sits at the anchor and checks the value there.
+   * target's tag sits at the anchor and checks the value there. A missing value fails here,
+   * where its key `key` ends, as `internMissing` places a missing value.
    */
-  const checkSite = (written: ParsedNode | null): void => {
-    if (written === null || isAlias(written)) return;
+  const checkSite = (written: ParsedNode | null, key: ParsedNode): void => {
+    if (written === null) {
+      throw new SourceSyntaxError(mergeValueError(null), pointRange(starts, key.range[1]));
+    }
+    if (isAlias(written)) return;
     const span = spanOf(written);
     const range = toRange(starts, span.start, span.end);
-    if (localTag(written, span, range) !== null) {
+    if (localTag(written, span, starts) !== null) {
       throw new SourceSyntaxError(
         "a tag on a `<<:` merge source checks nothing; tag the mapping that merges it",
         range,
@@ -537,6 +542,14 @@ function build(
         );
       }
       const keyDefinition = intern(keyNode);
+      // A scalar tagged `!!seq` or `!!map` builds a list or record; it fails here, as PyYAML's
+      // unhashable key does, before the value is built.
+      if (definitions[keyDefinition]?.kind !== "scalar") {
+        throw new SourceSyntaxError(
+          "a list or mapping can't be a mapping key; mapping keys must be text",
+          pointRange(starts, spanOf(keyNode).start),
+        );
+      }
       // A missing value sits where the key ends.
       const valueDefinition =
         pair.value === null ? internMissing(pair.key.range[1]) : intern(pair.value);
@@ -547,7 +560,7 @@ function build(
       const keyAt = spanOf(keyNode).start;
       if (typeof keyScalar.value !== "string" && (nonTextKey === null || keyAt < nonTextKeyAt)) {
         const keyValue = keyScalar.value as NonTextKey["key"];
-        nonTextKey = { key: keyValue, text: key, range: keyScalar.range! };
+        nonTextKey = Object.freeze({ key: keyValue, text: key, range: keyScalar.range! });
         nonTextKeyAt = keyAt;
       }
       arcs.push(Object.freeze({ key, keyDefinition, valueDefinition }));
@@ -597,7 +610,7 @@ function build(
     const span = spanOf(node);
     const range = toRange(starts, span.start, span.end);
     const at = pointRange(starts, span.start);
-    const tag = localTag(node, span, range);
+    const tag = localTag(node, span, starts);
     // A local tag reads its node as if untagged.
     const core = tag === null ? node.tag : undefined;
     // The tag picks the constructor, as in PyYAML: `!!seq` builds a list and `!!map` a record
@@ -792,7 +805,7 @@ function firstRepeatedKey(
         firstKeys.set(key, keyNode);
       } else if (first !== keyNode) {
         const firstScalar = definitions[ids.get(first)!]!;
-        return { key, first: firstScalar.range!, second: keyScalar.range! };
+        return Object.freeze({ key, first: firstScalar.range!, second: keyScalar.range! });
       }
     }
     for (let i = node.items.length - 1; i >= 0; i--) {
@@ -886,9 +899,46 @@ function propertySpans(source: string): SpanOf {
     // before its key, so `Math.min` leaves it unchanged.
     const key = isMap(node) && node.flow ? node.items[0]?.key : undefined;
     if (isScalar(key)) from = Math.min(from, spanOf(key).start);
-    return { start: from, end, bare: own?.bare ?? false };
+    return { start: from, end: pyyamlEnd(source, node, end), bare: own?.bare ?? false };
   };
   return spanOf;
+}
+
+/**
+ * Return where PyYAML ends a non-empty node that eemeli ends at `end`.
+ *
+ * PyYAML ends a block mapping or list at the block-end token that closes it, which the scanner
+ * emits at the next token, past blank lines and comments, or at the end of the text; it ends a
+ * `|` or `>` scalar after the blank lines that follow its text. eemeli ends both at their last
+ * content, so the scan moves the end on; every other node already ends where PyYAML's does.
+ */
+function pyyamlEnd(source: string, node: Node, end: number): number {
+  let at = end;
+  if ((isMap(node) || isSeq(node)) && !node.flow) {
+    while (at < source.length) {
+      const char = source[at];
+      if (char === "#") {
+        const lineBreak = source.indexOf("\n", at);
+        at = lineBreak === -1 ? source.length : lineBreak;
+      } else if (char === " " || char === "\t" || char === "\n" || char === "\r") {
+        at++;
+      } else {
+        break;
+      }
+    }
+  } else if (
+    isScalar(node) &&
+    (node.type === Scalar.BLOCK_LITERAL || node.type === Scalar.BLOCK_FOLDED)
+  ) {
+    for (;;) {
+      let lineEnd = at;
+      while (source[lineEnd] === " ") lineEnd++;
+      if (source[lineEnd] === "\r" && source[lineEnd + 1] === "\n") lineEnd++;
+      if (source[lineEnd] !== "\n") break;
+      at = lineEnd + 1;
+    }
+  }
+  return at;
 }
 
 /** Return the key under which `byToken` records the properties before a token. */
@@ -915,19 +965,25 @@ function afterValueIndicator(sep: readonly CST.SourceToken[]): readonly CST.Sour
 /**
  * Return a node's local tag without its `!`, or null when it has none or a core tag.
  *
- * @throws SourceSyntaxError over `range` at the bare tag `!`, which eemeli keeps on a scalar
- *   but resolves away on a list or mapping, or at a tag neither local nor core.
+ * `starts` are the line starts of the text `span` indexes.
+ *
+ * @throws SourceSyntaxError at the bare tag `!`, which eemeli keeps on a scalar but resolves
+ *   away on a list or mapping, or over the node at a tag neither local nor core.
  */
-function localTag(node: AnchoredNode, span: Span, range: SourceRange): string | null {
+function localTag(node: AnchoredNode, span: Span, starts: readonly number[]): string | null {
   const tag = node.tag;
   if (isScalar(node) ? tag === "!" : span.bare) {
+    // PyYAML refuses the bare tag at the node's start event: a scalar's ends with the
+    // scalar, a flow collection's after its opening bracket, a block one's at its first token.
+    const end = isScalar(node) ? span.end : node.flow ? node.range![0] + 1 : node.range![0];
+    const range = toRange(starts, span.start, end);
     throw new SourceSyntaxError("a tag names a type, e.g. `!int`", range);
   }
   if (tag === undefined || tag.startsWith(CORE_TAG_PREFIX)) return null;
   if (tag.startsWith("!")) return tag.slice(1);
   throw new SourceSyntaxError(
     `unknown YAML tag ${reprText(tag)}; a type tag is local, e.g. \`!int\``,
-    range,
+    toRange(starts, span.start, span.end),
   );
 }
 
@@ -963,12 +1019,12 @@ function literalLineRanges(
   starts: readonly number[],
   node: Scalar.Parsed,
   value: ScalarValue,
-): SourceRange[] | null {
+): readonly SourceRange[] | null {
   if (node.type !== Scalar.BLOCK_LITERAL || value !== node.source) return null;
   const [header, end] = node.range;
   // The body starts after the header's line break.
   const headerBreak = source.indexOf("\n", header);
-  if (headerBreak === -1 || headerBreak >= end) return value === "" ? [] : null;
+  if (headerBreak === -1 || headerBreak >= end) return value === "" ? Object.freeze([]) : null;
   // Each physical line's start and the offset before its line break.
   const physical: [number, number][] = [];
   for (let at = headerBreak + 1; at < end; ) {
@@ -1003,7 +1059,7 @@ function literalLineRanges(
   if (!rest.every(([start, lineEnd]) => ONLY_SPACES.test(source.slice(start, lineEnd)))) {
     return null;
   }
-  return ranges;
+  return Object.freeze(ranges);
 }
 
 /** Say whether a YAML error is at a `,`, `[`, `]`, `{` or `}` glued to the tag before it. */
@@ -1053,11 +1109,11 @@ function position(starts: readonly number[], offset: number): [number, number] {
 function toRange(starts: readonly number[], start: number, end: number): SourceRange {
   const [startLine, startCol] = position(starts, start);
   const [endLine, endCol] = position(starts, end);
-  return new SourceRange(startLine, startCol, endLine, endCol);
+  return Object.freeze(new SourceRange(startLine, startCol, endLine, endCol));
 }
 
 /** Return the one-character range at `offset`. */
 function pointRange(starts: readonly number[], offset: number): SourceRange {
   const [line, column] = position(starts, offset);
-  return new SourceRange(line, column, line, column + 1);
+  return Object.freeze(new SourceRange(line, column, line, column + 1));
 }

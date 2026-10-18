@@ -245,8 +245,9 @@ export function collectionTagError(
  * written order, and return them in merge order, each list's items reversed so its first
  * mapping comes last and wins.
  *
- * At each merge pair, `checkSite` first sees the value as written and, when it is a list
- * written there, each of its items, before any kind check or yield for that pair.
+ * At each merge pair, `checkSite` first sees the value as written (null when missing) and,
+ * when it is a list written there, each of its items, with the pair's key, before any kind
+ * check or yield for that pair.
  *
  * @throws FlowLoaderError at the first merge value that is not a mapping or a list of
  *   mappings.
@@ -254,14 +255,14 @@ export function collectionTagError(
 export function* mergeSources(
   node: YAMLMap.Parsed,
   target: (written: ParsedNode | null) => AnchoredNode | null,
-  checkSite?: (written: ParsedNode | null) => void,
+  checkSite?: (written: ParsedNode | null, key: ParsedNode) => void,
 ): Generator<YAMLMap.Parsed, YAMLMap.Parsed[]> {
   const merged: YAMLMap.Parsed[] = [];
   for (const pair of node.items) {
     if (!isMergeKey(target(pair.key))) continue;
     if (checkSite !== undefined) {
-      checkSite(pair.value);
-      if (isSeq(pair.value)) for (const item of pair.value.items) checkSite(item);
+      checkSite(pair.value, pair.key);
+      if (isSeq(pair.value)) for (const item of pair.value.items) checkSite(item, pair.key);
     }
     // Past `checkSite`, the value's tag is ignored, as in Python, which looks only at the
     // node's kind.
@@ -287,13 +288,15 @@ export function* mergeSources(
       for (const item of items.reverse()) merged.push(item);
     } else {
       // A missing value has no node, so the mapping stands in.
-      throw new FlowLoaderError(
-        `expected a mapping or list of mappings for merging, but found ${nodeId(value)}`,
-        value ?? node,
-      );
+      throw new FlowLoaderError(mergeValueError(value), value ?? node);
     }
   }
   return merged;
+}
+
+/** Return the error for a merge value, `null` when missing, that is not a mapping or list. */
+export function mergeValueError(value: AnchoredNode | null): string {
+  return `expected a mapping or list of mappings for merging, but found ${nodeId(value)}`;
 }
 
 /** Return a mapping's pairs other than its merge pairs. */

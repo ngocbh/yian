@@ -1575,7 +1575,8 @@ def _ts_kind(value: object) -> str:
 
 def _shown(lhs: object, rhs: object) -> tuple[str, str]:
     """Return the operands as yian's operator messages show them."""
-    # Looked up at call time, so the `messages` shim's `value_repr` spells them.
+    # `_operand_repr` is what yian's own operator messages use; the `messages` shim reaches it
+    # through `value_repr`.
     return expressions._operand_repr(lhs), expressions._operand_repr(rhs)
 
 
@@ -1644,15 +1645,15 @@ def _ts_apply_step(self, symbol: str, lhs: object, rhs: object) -> object:
             try:
                 return lhs / rhs
             except OverflowError:
-                _NOTES.add("infinity")
-                return math.inf if (lhs < 0) == (rhs < 0) else -math.inf
+                # The quotient is past the float range, and so is its floor, of the same sign.
+                return _to_float(lhs // rhs)
         if symbol == "%":
             # Truncating, so the remainder has the sign of `lhs`.
             remainder = abs(lhs) % abs(rhs)
             return -remainder if lhs < 0 else remainder
         return expressions._ARITH_STEPS[symbol](lhs, rhs)
     a, b = _to_float(lhs), _to_float(rhs)
-    if symbol in ("/", "%") and b == 0 or symbol == "**" and a == 0 and b < 0:
+    if (symbol in ("/", "%") and b == 0) or (symbol == "**" and a == 0 and b < 0):
         raise _division_by_zero(symbol, lhs, rhs)
     result = _float_step(symbol, a, b)
     if math.isnan(result):
@@ -1687,6 +1688,8 @@ def _ts_comparison(original):
     def _eval_comparison(op: str, lhs: object, rhs: object) -> bool:
         if op in ("in", "not in"):
             if isinstance(lhs, str) and isinstance(rhs, str):
+                # By code points, which is JS's code-unit test for well-formed text (lone
+                # surrogates aren't yian values, design 3.2.1).
                 contained = lhs in rhs
             elif isinstance(rhs, list):
                 contained = any(lhs == x for x in rhs)
@@ -1698,9 +1701,8 @@ def _ts_comparison(original):
         if op not in ("<", "<=", ">", ">=") or lhs is None or rhs is None:
             return original(op, lhs, rhs)
         if isinstance(lhs, str) and isinstance(rhs, str):
-            # Big-endian UTF-16 orders as its code units; a lone surrogate is its own unit.
-            return original(op, lhs.encode("utf-16-be", "surrogatepass"),
-                            rhs.encode("utf-16-be", "surrogatepass"))
+            # Big-endian UTF-16 orders as its code units.
+            return original(op, lhs.encode("utf-16-be"), rhs.encode("utf-16-be"))
         if _is_number(lhs) and _is_number(rhs):
             return original(op, lhs, rhs)
         raise _operand_kinds(op, lhs, rhs)

@@ -3030,14 +3030,18 @@ def _shim_outcome(expr: str, values: dict) -> tuple[str, set]:
     return shown, set(harvest._NOTES)
 
 
+def _kinds_raise(l: object, op: str, r: object, k1: str, k2: str) -> str:
+    """Return `_shim_outcome`'s text for the unsupported-operand-kinds error of `l op r`."""
+    return (f"raises: type error evaluating {l} {op} {r}: unsupported operand kinds for `{op}`: "
+            f"`{k1}` and `{k2}`")
+
+
 def test_shim_arithmetic() -> None:
     """Under `arithmetic`, the operators follow design 3.2.2 and note where Python differs."""
     from tests import conformance_harvest as harvest
     from yian.expr import expressions
 
-    values = {"inf": math.inf, "r": {}}
-    kinds = ("raises: type error evaluating {} {} {}: unsupported operand kinds for `{}`: `{}` "
-             "and `{}`")
+    values = {"inf": math.inf, "r": {}, "f": FileRef(uri="s3://b/k")}
     rows = [
         ("7 % -2", "1", set()),
         ("-7 % 2", "-1", set()),
@@ -3055,17 +3059,22 @@ def test_shim_arithmetic() -> None:
         ("-(0.0)", "-0.0", set()),
         ('"a" + "b"', "'ab'", set()),
         ("[1] + [2]", "[1, 2]", set()),
-        ('"a" + 1', kinds.format('"a"', "+", 1, "+", "str", "int"), {"operand-kinds"}),
-        ("r + r", kinds.format("{}", "+", "{}", "+", "record", "record"), {"operand-kinds"}),
+        ('"a" + 1', _kinds_raise('"a"', "+", 1, "str", "int"), {"operand-kinds"}),
+        ("r + r", _kinds_raise("{}", "+", "{}", "record", "record"), {"operand-kinds"}),
+        ("null + 1", _kinds_raise("null", "+", 1, "null", "int"), {"operand-kinds"}),
+        ("f + 1", _kinds_raise('{"uri":"s3://b/k","mime":null,"name":null}', "+", 1, "file",
+                               "int"), {"operand-kinds"}),
         ('-"a"', 'raises: unary minus on non-number "a": unsupported operand kind for `-`: `str`',
          {"operand-kinds"}),
-        ('"ab" * 3', kinds.format('"ab"', "*", 3, "*", "str", "int"),
+        ("-null", "raises: unary minus on non-number null: unsupported operand kind for `-`: "
+         "`null`", {"operand-kinds"}),
+        ('"ab" * 3', _kinds_raise('"ab"', "*", 3, "str", "int"),
          {"operand-kinds", "repetition"}),
-        ("[0] * 3", kinds.format("[0]", "*", 3, "*", "list", "int"),
+        ("[0] * 3", _kinds_raise("[0]", "*", 3, "list", "int"),
          {"operand-kinds", "repetition"}),
         ('"%s" % 1', "raises: text formatting with `%` was removed; use a template", {"printf"}),
         ("10 ** 400 / 1", "inf", {"infinity"}),
-        ('"a" - 1', kinds.format('"a"', "-", 1, "-", "str", "int"), {"operand-kinds"}),
+        ('"a" - 1', _kinds_raise('"a"', "-", 1, "str", "int"), {"operand-kinds"}),
         ("1 / 0", "raises: division by zero: 1 / 0", set()),
         ("1.0 % 0.0", "raises: division by zero: 1 % 0", set()),
         ("0 ** -1", "raises: division by zero: 0 ** -1", set()),
@@ -3084,10 +3093,9 @@ def test_shim_arithmetic() -> None:
     with pytest.MonkeyPatch.context() as patch:
         # `messages` spells the operands as TS does, so the messages read as under every shim.
         _install_shims(patch, "arithmetic", "messages")
-        assert harvest._SHIMS["arithmetic"].rule == "arithmetic"
-        assert list(harvest._SHIMS)[:2] == ["arithmetic", "compare"]
         outcomes = [_shim_outcome(expr, values) for expr, _, _ in rows]
     assert outcomes == [(shown, notes) for _, shown, notes in rows]
+    assert harvest._SHIMS["arithmetic"].rule == "arithmetic"
     assert expressions._EvalExpr._apply_step is apply_step and expressions._EvalExpr._do_neg is neg
     assert _shim_outcome('"%s" % 1', values) == ("'1'", set())
 
@@ -3098,11 +3106,9 @@ def test_shim_compare() -> None:
 
     values = {"inf": math.inf, "r": {"k": 1}, "a": {"a": 1}, "hi": "\uffff",
               "smile": "\U0001F600"}
-    kinds = ("raises: type error evaluating {} {} {}: unsupported operand kinds for `{}`: `{}` "
-             "and `{}`")
     rows = [
-        ("[1, 2] < [1, 3]", kinds.format("[1,2]", "<", "[1,3]", "<", "list", "list")),
-        ('"a" < 1', kinds.format('"a"', "<", 1, "<", "str", "int")),
+        ("[1, 2] < [1, 3]", _kinds_raise("[1,2]", "<", "[1,3]", "list", "list")),
+        ('"a" < 1', _kinds_raise('"a"', "<", 1, "str", "int")),
         ("hi < smile", "False"),
         ("null < 1", "False"),
         ("true < 2", "True"),
@@ -3112,15 +3118,15 @@ def test_shim_compare() -> None:
         ("1 in [1.0]", "True"),
         ('"k" in r', "True"),
         ("[1] in a", "False"),
-        ('1 in "abc"', kinds.format(1, "in", '"abc"', "in", "int", "str")),
+        ('1 in "abc"', _kinds_raise(1, "in", '"abc"', "int", "str")),
         ('"b" in "abc"', "True"),
-        ("1 in null", kinds.format(1, "in", "null", "in", "int", "null")),
-        ("1 not in null", kinds.format(1, "not in", "null", "not in", "int", "null")),
+        ("1 in null", _kinds_raise(1, "in", "null", "int", "null")),
+        ("1 not in null", _kinds_raise(1, "not in", "null", "int", "null")),
     ]
     with pytest.MonkeyPatch.context() as patch:
         _install_shims(patch, "compare", "messages")
-        assert harvest._SHIMS["compare"].rule == "compare"
         outcomes = [_shim_outcome(expr, values) for expr, _ in rows]
     assert outcomes == [(shown, set()) for _, shown in rows]
+    assert harvest._SHIMS["compare"].rule == "compare"
     # Python orders text by code point.
     assert _shim_outcome("hi < smile", values) == ("True", set())

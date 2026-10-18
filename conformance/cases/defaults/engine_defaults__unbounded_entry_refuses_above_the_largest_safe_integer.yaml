@@ -1,6 +1,6 @@
 kind: defaults
 # An entry with no maximum stops at JS's largest safe integer in TS, at 10**18 - 1 in Python.
-rules: [numbers, messages]
+rules: [messages, numbers]
 env:
   YIAN_MAX_TOTAL_NODES: '9007199254740992'
 expect:

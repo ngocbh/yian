@@ -1,7 +1,7 @@
 kind: defaults
 rules: [messages]
 env:
-  YIAN_MAX_VALUE_NESTING: 1_000
+  YIAN_MAX_VALUE_NESTING: '1_000'
 expect:
   raises:
     class: DefaultsError

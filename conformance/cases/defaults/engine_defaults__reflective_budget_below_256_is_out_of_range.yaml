@@ -1,5 +1,5 @@
 kind: defaults
-rules: [numbers, messages]
+rules: [messages, numbers]
 env:
   YIAN_REFLECTIVE_MAX_LESSON_CHARS: '255'
 expect:

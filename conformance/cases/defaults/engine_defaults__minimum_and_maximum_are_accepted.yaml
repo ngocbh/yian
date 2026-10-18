@@ -4,5 +4,5 @@ env:
   YIAN_MAX_TYPE_NESTING: '125'
 expect:
   defaults:
-    MAX_TYPE_NESTING: 125
     AGENT_RETRIES: 0
+    MAX_TYPE_NESTING: 125

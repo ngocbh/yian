@@ -825,6 +825,9 @@ describe("bracket spelling", () => {
     // Python reads identifiers in NFKC form.
     ["Optional[ｓｔｒ]", "Optional(str)"],
     ["Optional[℘]", "Optional(℘)"],
+    // Keywords are matched before NFKC, so `Ｔｒｕｅ` is a name.
+    ["Literal[Ｔｒｕｅ]", 'Literal("True")'],
+    ["Optional[Ｔｒｕｅ]", "Optional(True)"],
     // Python refuses a keyword as a name: `malformed type expression 'Literal[if, b]'`.
     ["Literal[if, b]", "Literal(if, b)"],
   ])("is an error showing the parenthesized spelling: %p", (text, spelled) => {
@@ -832,6 +835,7 @@ describe("bracket spelling", () => {
     expect(legacyRespelling(text)).toBe(spelled);
   });
 
+  // The bracket half of test_deep_nesting_is_a_type_error.
   test("bracket nesting is capped at 100 levels", () => {
     const deep = "Optional[".repeat(300) + "str" + "]".repeat(300);
     // Python reports the `SyntaxError` of its parser's own limit.
@@ -905,6 +909,7 @@ describe("bracket spelling", () => {
     ["A[1][2]", malformed("A[1][2]")],
     ["A[1], B", malformed("A[1], B")],
     ["int[1, 2, 3]", malformed("int[1, 2, 3]", RANGE_NEEDS_DOTS)],
+    // test_bracket_single_endpoint_hint_uses_the_range_spelling
     ["int[1]", malformed("int[1]", RANGE_NEEDS_DOTS)],
     ["int[1,]", malformed("int[1,]", RANGE_NEEDS_DOTS)],
     // Python crashes here with an uncaught `UnicodeEncodeError` from `tokenize`.
@@ -918,7 +923,8 @@ describe("bracket spelling", () => {
   });
 
   test.each([
-    // Python appends the `SyntaxError` detail here.
+    // test_bracket_text_that_is_no_type_still_says_types_use_parentheses. Python appends
+    // the `SyntaxError` detail to this row and the next three.
     "list[",
     "A[]",
     "int[01, 2]",

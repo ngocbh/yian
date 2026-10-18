@@ -701,9 +701,10 @@ function legacySyntax(src: string): LegacyNode {
   const atom = (): LegacyNode => {
     const { kind, text } = next();
     if (kind === "name") {
-      // Python reads identifiers in NFKC form, so `ｓｔｒ` is `str`.
-      const id = text.normalize("NFKC");
-      return BUILTIN_CONSTANTS.has(id) ? { kind: "constant", value: id } : { kind, id };
+      // Python matches keywords before it reads identifiers in NFKC form, so `ｓｔｒ` is
+      // `str` but `Ｔｒｕｅ` is a name, not the constant.
+      if (BUILTIN_CONSTANTS.has(text)) return { kind: "constant", value: text };
+      return { kind, id: text.normalize("NFKC") };
     }
     if (kind === "string") return { kind, value: decodeQuoted(text, src) };
     if (kind === "number") {

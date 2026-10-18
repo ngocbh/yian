@@ -18,7 +18,7 @@
  * This module imports only `node:` builtins, so any layer may import it.
  */
 
-import { env as nodeEnv } from "node:process";
+import process from "node:process";
 
 /** The kind of an entry: a language safety limit, a setting's default, or an input cap. */
 export type Group = "limit" | "setting" | "input cap";
@@ -33,6 +33,7 @@ export interface Entry<N extends string = string> {
   readonly default: number;
   /** One line saying what the value controls. */
   readonly description: string;
+  /** Whether this is a language safety limit, a setting's default, or an input cap. */
   readonly group: Group;
   /** Smallest value accepted from the environment. */
   readonly minimum: number;
@@ -60,8 +61,8 @@ function entry<N extends string>(
 }
 
 // The nesting limits keep the deepest accepted input the same on Node and Bun, whose
-// stacks differ: the `yaml` package overflows at about 500 levels on Node but 5000 on
-// Bun's main thread. Each maximum is re-measured once every recursive walker is ported.
+// stacks differ: the `yaml` package handles about 500 levels on Node but 5000 on Bun's
+// main thread. Each maximum is re-measured once every recursive walker is ported.
 export const ENTRIES = Object.freeze([
   // Language safety limits.
   // yian's JSON writer and reader are iterative, but walkers still to be ported recurse
@@ -418,9 +419,6 @@ export class DefaultsMismatchError extends RangeError {
 }
 
 const CANONICAL_INT = /^(?:0|-?[1-9][0-9]*)$/;
-// `Number.MAX_SAFE_INTEGER` has 16 digits, so a longer text is out of range without
-// parsing it and a huge injected value never reaches `BigInt`.
-const MAX_DIGITS = 16;
 // Counted in code points, so a cut never splits a surrogate pair.
 const SHOWN_CHARS = 40;
 
@@ -440,30 +438,27 @@ function rangeText(each: Entry): string {
  * @throws {DefaultsError} If `raw` is not a canonical decimal integer in range.
  */
 function parse(each: Entry, raw: string): number {
-  const points = Array.from(raw);
-  const cut = points.length <= SHOWN_CHARS ? raw : points.slice(0, SHOWN_CHARS - 3).join("") + "...";
-  const shown = JSON.stringify(cut);
-  const advice = `use ${rangeText(each)}, or unset it`;
-  if (!CANONICAL_INT.test(raw)) {
-    throw new DefaultsError(`${each.variable}=${shown} is not an integer; ${advice}`);
-  }
-  const digits = raw.startsWith("-") ? raw.length - 1 : raw.length;
-  const value = digits <= MAX_DIGITS ? BigInt(raw) : null;
+  const fail = (problem: string): DefaultsError => {
+    const points = Array.from(raw);
+    const cut = points.length <= SHOWN_CHARS ? raw : points.slice(0, SHOWN_CHARS - 3).join("") + "...";
+    const advice = `use ${rangeText(each)}, or unset it`;
+    return new DefaultsError(`${each.variable}=${JSON.stringify(cut)} is ${problem}; ${advice}`);
+  };
+  if (!CANONICAL_INT.test(raw)) throw fail("not an integer");
+  // Rounding is monotonic and every bound is an exact double, so a text above
+  // `Number.MAX_SAFE_INTEGER` rounds to at least 2^53 (or `Infinity`) and is refused.
+  const value = Number(raw);
   const inRange =
-    value !== null &&
-    ((each.noLimit !== null && value === BigInt(each.noLimit)) ||
-      (BigInt(each.minimum) <= value && value <= BigInt(each.maximum ?? Number.MAX_SAFE_INTEGER)));
-  if (!inRange) {
-    throw new DefaultsError(`${each.variable}=${shown} is out of range; ${advice}`);
-  }
-  return Number(value);
+    value === each.noLimit || (each.minimum <= value && value <= (each.maximum ?? Number.MAX_SAFE_INTEGER));
+  if (!inRange) throw fail("out of range");
+  return value;
 }
 
 /** Read one environment variable: its text, or `undefined` when it is unset. */
 export type Env = (name: string) => string | undefined;
 
 /** Read `process.env`; a name that is not an own property, such as `"__proto__"`, is unset. */
-export const processEnv: Env = (name) => (Object.hasOwn(nodeEnv, name) ? nodeEnv[name] : undefined);
+export const processEnv: Env = (name) => (Object.hasOwn(process.env, name) ? process.env[name] : undefined);
 
 /**
  * Return the values `env` sets, with built-in values for the rest.

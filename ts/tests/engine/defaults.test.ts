@@ -1,6 +1,6 @@
 /**
  * The defaults table, `BUILTIN`, parsing and errors, a port of `tests/engine/test_defaults.py`
- * and of the cell format of `tests/test_defaults_docs.py`. Not ported:
+ * and of `tests/test_defaults_docs.py`. Not ported:
  * `test_int_digits_cannot_exceed_the_interpreter_limit` and
  * `test_int_digits_has_no_upper_bound_without_an_interpreter_limit` (TS has no int digit
  * limit, so no `MAX_INT_DIGITS` entry), `test_memory_json_nesting_follows_value_nesting` (TS has
@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 
 import { describe, expect, test } from "bun:test";
 
-import { BUILTIN, DefaultsError, ENTRIES, type Entry, read } from "../../src/defaults.ts";
+import { BUILTIN, type Defaults, DefaultsError, ENTRIES, type Entry, read } from "../../src/defaults.ts";
 
 const TS_ONLY = [
   "MODEL_RETRIES",
@@ -37,9 +37,9 @@ function camel(name: string): string {
 }
 
 /** Return the values read from an environment holding only `values`. */
-function readOnly(values: Readonly<Record<string, string>>): Record<string, number> {
+function readOnly(values: Readonly<Record<string, string>>): Defaults {
   const env = (name: string) => (Object.hasOwn(values, name) ? values[name] : undefined);
-  return read(env) as unknown as Record<string, number>;
+  return read(env);
 }
 
 /** Return whether `entry`'s variable accepts the text `value`. */
@@ -69,7 +69,7 @@ describe("the table", () => {
     const names: readonly string[] = ENTRIES.map((entry) => entry.name);
     expect(new Set(names).size).toBe(names.length);
     expect(Object.keys(BUILTIN)).toEqual(names.map(camel));
-    const builtin = BUILTIN as unknown as Record<string, number>;
+    const builtin: Record<string, number> = BUILTIN;
     for (const entry of ENTRIES) {
       expect([entry.name, builtin[camel(entry.name)]]).toEqual([entry.name, entry.default]);
       expect(["limit", "setting", "input cap"]).toContain(entry.group);
@@ -140,7 +140,7 @@ describe("read", () => {
   });
 
   test("an empty value counts as unset", () => {
-    expect(readOnly({ YIAN_MAX_VALUE_NESTING: "" })).toEqual(BUILTIN as unknown as Record<string, number>);
+    expect(readOnly({ YIAN_MAX_VALUE_NESTING: "" })).toEqual(BUILTIN);
   });
 
   const advice = "use an integer from 1 to 100, or unset it";
@@ -170,6 +170,12 @@ describe("read", () => {
   test("a 5000-digit value shows 37 nines then ...", () => {
     const error = readError("YIAN_MAX_VALUE_NESTING", "9".repeat(5000));
     expect(error.message).toStartWith(`YIAN_MAX_VALUE_NESTING="${"9".repeat(37)}..." is out of range`);
+  });
+
+  test("a lone surrogate is escaped", () => {
+    expect(readError("YIAN_MAX_VALUE_NESTING", "\uD800").message).toBe(
+      `YIAN_MAX_VALUE_NESTING="\\ud800" is not an integer; ${advice}`,
+    );
   });
 
   test("a long value is cut by code points", () => {
@@ -226,10 +232,10 @@ describe("docs/defaults.md", () => {
       .map((cell) => cell.trim());
   }
 
-  /** Return the body rows of the one table whose first header cell is `first`. */
-  function tableRows(first: string): string[][] {
+  /** Return the body rows of the one table in `text` whose first header cell is `first`. */
+  function tableRows(first: string, text = DOC): string[][] {
     const header = [first, "Group", "Default", "Valid values", "Meaning"];
-    const lines = DOC.split("\n");
+    const lines = text.split("\n");
     const starts = lines.flatMap((line, i) =>
       line.startsWith("|") && JSON.stringify(cells(line)) === JSON.stringify(header) ? [i] : [],
     );
@@ -257,6 +263,17 @@ describe("docs/defaults.md", () => {
     if (entry.noLimit !== null) valid += `, or ${entry.noLimit} for no cap`;
     return [`\`${entry.variable}\``, entry.group, grouped(entry.default), valid, entry.description];
   }
+
+  test("the table parser finds rows", () => {
+    const text = [
+      "| Variable | Group | Default | Valid values | Meaning |",
+      "| --- | --- | --- | --- | --- |",
+      "| `YIAN_X` | limit | 1 | 1 or more | X |",
+      "",
+      "| not | the table |",
+    ].join("\n");
+    expect(tableRows("Variable", text)).toEqual([["`YIAN_X`", "limit", "1", "1 or more", "X"]]);
+  });
 
   test("the cell format", () => {
     expect([grouped(-1), grouped(256), grouped(1024), grouped(16777216)]).toEqual(["-1", "256", "1,024", "16,777,216"]);

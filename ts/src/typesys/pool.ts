@@ -67,7 +67,7 @@ export class VariablePool {
   /** Build an empty pool whose `${input.X}` reads `store[startId]`. */
   constructor(startId: string = "__start__") {
     // The default mirrors `StartNode.ID` but isn't imported from it: `typesys` is a leaf below
-    // `nodes`, so it can't import the node class. A consistency test pins the two together.
+    // `nodes`, so it can't import the node class. The `nodes/` port adds a test pinning the two together.
     this.startId = startId;
   }
 
@@ -158,7 +158,8 @@ export class VariablePool {
    *
    * `data` must be a plain record with exactly `store`, `system` and `start_id`; `store` and
    * `system` records whose every entry is a typed value's wire form (`TypedValue.fromWire`);
-   * and `start_id` text. Entries keep the record's key order.
+   * and `start_id` text. Entries keep the record's key order. Values aren't walked: the
+   * lossless reader made the data.
    *
    * @throws RangeError when `data` has missing or extra fields, a namespace or entry of the
    *   wrong shape, an invalid typed value, or a `start_id` that isn't text.

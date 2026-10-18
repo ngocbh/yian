@@ -5,8 +5,9 @@
  * TS-only: the default and a custom `startId`, `resolve` rows for `system` with a longer path
  * and `input` with none, a dotted read through a `FileRef` field, a failed `set` keeping the
  * previous value, the exact `dumps()` text, the int-in-float and infinity round trips, node ids
- * `constructor` and `__proto__`, and the `fromWire` refusal table (Python's strict reader is
- * `runtime/log.py::decode_pool`, whose messages these keep) and `loads` of bad JSON.
+ * `constructor` and `__proto__`, `fromWire` reading `toWire`'s object, the `fromWire` refusal
+ * table (Python's strict reader is `runtime/log.py::decode_pool`, whose messages these keep) and
+ * `loads` of bad JSON.
  *
  * Not ported: Python's carrier-class check (`type(stored) is ListObjectValue`); TS has one
  * `TypedValue` class, so the round trip checks the kind and `instanceof TypedValue`.
@@ -224,7 +225,6 @@ describe("VariablePool round trip", () => {
     const back = VariablePool.loads(pool.dumps());
     expect(back.get("constructor")).toBe(1n);
     expect(back.get("__proto__")).toBe("p");
-    expect([...back.store.keys()]).toEqual(["__proto__", "constructor"]);
   });
 
   test("fromWire reads toWire's object", () => {

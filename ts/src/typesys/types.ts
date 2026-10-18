@@ -378,7 +378,7 @@ class TypeParser {
     if (this.peek() !== "(") return namedType(name);
     this.next();
     this.depth += 1;
-    if (this.depth > this.maxDepth) throw nestedTooDeeply(this.src);
+    if (this.depth > this.maxDepth) throw nestedTooDeeply(this.src, this.maxDepth);
     const t = this.constructed(name);
     this.depth -= 1;
     return t;
@@ -518,11 +518,11 @@ function rangeNeedsDots(ctor: "int" | "float"): string {
   return `a numeric range needs \`..\`, e.g. ${examples}`;
 }
 
-/** The error for type text `src` nested deeper than the type nesting limit. */
-function nestedTooDeeply(src: string): TypeCheckError {
+/** The error for type text `src` nested deeper than `limit` levels. */
+function nestedTooDeeply(src: string, limit: number): TypeCheckError {
   const head = Array.from(src).slice(0, 40).join("");
   return new TypeCheckError(
-    `type nested too deeply in ${reprText(head)}... (at most ${current().maxTypeNesting} levels)`,
+    `type nested too deeply in ${reprText(head)}... (at most ${limit} levels)`,
   );
 }
 
@@ -687,13 +687,14 @@ function legacySyntax(src: string): LegacyNode {
   const tokens = tokenize(LEGACY_TOKEN, src) ?? malformed();
   let index = 0;
   let depth = 0;
+  const maxDepth = current().maxTypeNesting;
   const peek = (): string | null => tokens[index]?.text ?? null;
   const next = (): Token => tokens[index++] ?? malformed();
 
   // Read `item, item, ...` up to `]` after a `[`; `comma` tells whether one was written.
   const bracketed = (): { items: LegacyNode[]; comma: boolean } => {
     depth += 1;
-    if (depth > current().maxTypeNesting) throw nestedTooDeeply(src);
+    if (depth > maxDepth) throw nestedTooDeeply(src, maxDepth);
     const items: LegacyNode[] = [];
     let comma = false;
     while (peek() !== "]") {

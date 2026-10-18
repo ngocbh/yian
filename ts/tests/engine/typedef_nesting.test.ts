@@ -210,7 +210,7 @@ describe("types at the limit", () => {
     builds.map(([id, build]) => [id, limit, build] as const),
   );
   test.each(rows)("%s load at the limit %p", (_id, limit, build) => {
-    if (limit !== BUILTIN.maxTypeNesting) setTypeNesting(limit);
+    setTypeNesting(limit);
     const [raw, top] = build(limit);
     const start = performance.now();
     expect(typeLevels(typeFor(top, readTypedefs(raw)))).toBe(limit);

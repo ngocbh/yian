@@ -2280,6 +2280,9 @@ def test_harvest_records_runs(tmp_path: Path) -> None:
 
 
 _MODEL_TESTS = '''
+from langchain_core.messages import AIMessage
+from langchain_core.runnables import Runnable
+
 import yian.llm_clients as llm_clients
 from yian import load_flow
 from yian.llm_clients import factory
@@ -2287,7 +2290,7 @@ from yian.run import run_flow
 from tests.engine._stream_fakes import Cut, ScriptedStreamChat, reply, usage
 
 
-def _run(output, **hooks):
+def _run(output, model="{provider: openai, model: gpt-5.5}", **hooks):
     flow = f"""\\
 id: write
 name: write
@@ -2295,7 +2298,7 @@ nodes:
   write:
     kind: agent
     output: {output}
-    llm_config: {{provider: openai, model: gpt-5.5}}
+    llm_config: {model}
     prompt: Write.
 output: ${{write.output}}
 """
@@ -2334,10 +2337,54 @@ def test_structured(monkeypatch):
 
 
 def test_structured_retry(monkeypatch):
+    # A model without native structured output: each attempt is a plain call whose reply is seen.
+    fake = Fake([AIMessage('{"name": "Ada", "score": "high"}'),
+                 AIMessage('{"name": "Ada", "score": 3}')])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: fake)
+    result = _run("{name: str, score: int}", "{provider: vllm, model: no-structured-sentinel}")
+    assert result.output == {"name": "Ada", "score": 3}
+    assert fake.replies == []
+
+
+def test_structured_raises(monkeypatch):
     fake = Fake(structured=[{"name": "Ada", "score": "high"}, {"name": "Ada", "score": 3}])
     monkeypatch.setattr(llm_clients, "model_from_config", lambda config: fake)
     assert _run("{name: str, score: int}").output == {"name": "Ada", "score": 3}
     assert fake.structured == []
+
+
+def test_structured_runnable(monkeypatch):
+    configs = []
+
+    class Bound(Runnable):
+        def __init__(self, schema):
+            self.schema = schema
+
+        def invoke(self, messages, config=None, **kwargs):
+            configs.append(config)
+            return self.schema.model_validate({"name": "Bo", "score": 4})
+
+    class Model:
+        def with_structured_output(self, schema, **kwargs):
+            return Bound(schema)
+
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: Model())
+    result = _run("{name: str, score: int}", on_event=lambda event: None)
+    assert result.output == {"name": "Bo", "score": 4}
+    # yian hands its usage callback only to a Runnable binding.
+    assert configs[0]["callbacks"]
+
+
+def test_no_stream(monkeypatch):
+    fake = Fake([reply("hello")])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: fake)
+    assert _run("str", on_stream=lambda chunk: None).output == "hello"
+
+
+def test_list_content(monkeypatch):
+    fake = Fake([AIMessage(content=[{"type": "text", "text": "hi"}])])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: fake)
+    assert _run("str").output == "hi"
 
 
 def test_streamed(monkeypatch):
@@ -2369,18 +2416,22 @@ def _summary(done: subprocess.CompletedProcess) -> str:
 def test_harvest_records_models(tmp_path: Path) -> None:
     """Model calls through a patched factory become `host.models` entries of `run-agent` cases."""
     done, out = _harvest(tmp_path, _MODEL_TESTS)
-    assert _summary(done) == "6 passed", done.stdout + done.stderr
+    assert _summary(done) == "10 passed", done.stdout + done.stderr
     # The plugin changes no test's outcome.
     assert _summary(_pytest(tmp_path, "test_sample.py")) == _summary(done)
     cases = {path.relative_to(out / "cases").as_posix(): _read(path)
              for path in sorted((out / "cases").glob("*/*.yaml"))}
+    # The loads of the skipped runs stay.
     assert sorted(cases) == [
-        "run-agent/sample__stream_cut__2.yaml", "run-agent/sample__streamed__2.yaml",
-        "run-agent/sample__structured__2.yaml", "run-agent/sample__structured_retry__2.yaml",
-        "run-agent/sample__text__2.yaml",
+        "load-agent/sample__list_content.yaml", "load-agent/sample__structured_raises.yaml",
+        "run-agent/sample__no_stream__2.yaml", "run-agent/sample__stream_cut__2.yaml",
+        "run-agent/sample__streamed__2.yaml", "run-agent/sample__structured__2.yaml",
+        "run-agent/sample__structured_retry__2.yaml",
+        "run-agent/sample__structured_runnable__2.yaml", "run-agent/sample__text__2.yaml",
     ]
     models = {name.removeprefix("run-agent/sample__").removesuffix("__2.yaml"):
-              case["host"]["models"]["write"] for name, case in cases.items()}
+              case["host"]["models"]["write"] for name, case in cases.items()
+              if name.startswith("run-agent/")}
 
     def text(value: str) -> dict:
         return {"format": "yian.message.v1", "role": "assistant",
@@ -2402,13 +2453,22 @@ def test_harvest_records_models(tmp_path: Path) -> None:
     assert entry["reply"] == text('{"name": "Ada", "score": 3}') and "usage" not in entry
     assert entry["request"]["schema"]["required"] == ["name", "score"]
 
-    # The fake's validation error is the first attempt's; the retry's request names it.
+    # The first reply fails the schema; the retry's request ends in the correction.
     assert list(models["structured_retry"]) == ["agent", "structured_retry"]
     (first,), (retry,) = models["structured_retry"].values()
-    assert first["chunks"] == [] and first["raise"]["class"] == "ValidationError"
-    assert roles(first) == ["system", "user"] and roles(retry) == ["system", "user", "user"]
-    assert first["raise"]["message"] in retry["request"]["messages"][2]["parts"][0]["text"]
+    assert first["reply"] == text('{"name": "Ada", "score": "high"}')
     assert retry["reply"] == text('{"name": "Ada", "score": 3}')
+    assert "schema" not in first["request"] and roles(first) == ["system", "user", "user"]
+    assert roles(retry) == ["system", "user", "user", "user"]
+    correction = retry["request"]["messages"][3]["parts"][0]["text"]
+    assert correction.startswith("Your previous output was invalid: ")
+
+    (entry,), = models["structured_runnable"].values()
+    assert entry["reply"] == text('{"name": "Bo", "score": 4}')
+
+    # A model without `stream` is invoked even with a stream sink.
+    (entry,), = models["no_stream"].values()
+    assert entry["reply"] == text("hello") and "chunks" not in entry
 
     (entry,), = models["streamed"].values()
     assert entry["chunks"] == [
@@ -2425,5 +2485,10 @@ def test_harvest_records_models(tmp_path: Path) -> None:
         _check_results(case, results(case, case_dir))
 
     report = json.loads((out / "report" / "test_sample.py.json").read_text(encoding="utf-8"))
-    assert report["tests"] == {"passed": 6, "failed": 0, "skipped": 0}
-    assert report["written"] == {"run-agent": 5} and report["skips"] == {}
+    assert report["tests"] == {"passed": 10, "failed": 0, "skipped": 0}
+    assert report["written"] == {"run-agent": 7, "load-agent": 2}
+    assert report["skips"] == {
+        "model: structured call raised ValidationError, its reply isn't visible": [
+            "test_structured_raises"],
+        "model: AIMessage with list content": ["test_list_content"],
+    }

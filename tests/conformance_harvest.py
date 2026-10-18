@@ -625,6 +625,8 @@ def _taken(tools: list, schema: type | None, messages: list) -> tuple | None:
     state = _STATE
     if state is None:
         return None
+    # A run nested in a recorded one (from a test's hook) records into the outer run, whose
+    # replay makes no nested calls, so it has entries left over and is rejected.
     with state.lock:
         call = state.active
     if call is None:
@@ -656,13 +658,20 @@ def _add_entry(taken: tuple | None, entry) -> None:
         _skip_models(call, _harvest_error(exc))
         return
     with _STATE.lock:
-        call.models.setdefault(node, {}).setdefault(consumer, []).append(recorded)
+        # A call ending after its run did (a thread the test left running) would change a case
+        # already built.
+        if _STATE.active is call:
+            call.models.setdefault(node, {}).setdefault(consumer, []).append(recorded)
 
 
 def _skip_models(call: _Call, reason: str) -> None:
-    """Note why a model call of `call`'s run can't be recorded, unless one already is."""
+    """Note why a model call of `call`'s run can't be recorded, unless one already is.
+
+    Nothing is noted once the run has ended.
+    """
     with _STATE.lock:
-        call.model_skip = call.model_skip or reason
+        if _STATE.active is call:
+            call.model_skip = call.model_skip or reason
 
 
 def _model_data(convert, *args: object) -> object:
@@ -764,31 +773,42 @@ class _Proxy:
 
     def __getattr__(self, name: str) -> object:
         """Return the wrapped model's attribute `name`, or the proxy's own for a recorded one."""
+        # A proxy `copy` builds without `__init__` has no fields yet, and must not take the
+        # wrapped model's copy protocol.
+        if name.startswith("__") or name in ("_model", "_tools", "_schema"):
+            raise AttributeError(name)
         value = getattr(self._model, name)
-        return getattr(self, f"_{name}") if name in _RECORDED else value
+        return getattr(self, f"_recorded_{name}") if name in _RECORDED else value
 
-    def _bind_tools(self, tools: list, *args: object, **kwargs: object) -> _Proxy:
+    def _recorded_bind_tools(self, tools: list, *args: object, **kwargs: object) -> _Proxy:
         """Bind `tools` to the wrapped model; return the result wrapped to send them."""
         tools = list(tools)
         return _Proxy(self._model.bind_tools(tools, *args, **kwargs), tools, self._schema)
 
-    def _with_structured_output(self, schema: type, *args: object, **kwargs: object) -> _Proxy:
+    def _recorded_with_structured_output(self, schema: type, *args: object,
+                                         **kwargs: object) -> _Proxy:
         """Bind `schema` to the wrapped model; return the result wrapped to ask for it."""
         return _Proxy(self._model.with_structured_output(schema, *args, **kwargs), (), schema)
 
-    def _invoke(self, messages: list, *args: object, **kwargs: object) -> object:
+    def _recorded_invoke(self, messages: list, *args: object, **kwargs: object) -> object:
         """Invoke the wrapped model, recording its reply or error."""
         taken = _taken(self._tools, self._schema, messages)
         try:
             result = self._model.invoke(messages, *args, **kwargs)
         except Exception as exc:
-            _add_entry(taken, lambda: {"chunks": [], "raise": _error(exc)})
+            if self._schema is None:
+                _add_entry(taken, lambda: {"chunks": [], "raise": _error(exc)})
+            elif taken is not None:
+                # A binding validates the reply itself, so its error may be a rejected reply the
+                # recorder never sees, not a provider failure: no entry can stand for it.
+                _skip_models(taken[0], f"model: structured call raised {type(exc).__name__}, "
+                                       "its reply isn't visible")
             raise
         _add_entry(taken, lambda: _reply(result) if self._schema is None
                    else _structured_reply(result))
         return result
 
-    def _stream(self, messages: list, *args: object, **kwargs: object):
+    def _recorded_stream(self, messages: list, *args: object, **kwargs: object):
         """Stream from the wrapped model, recording its chunks and how the stream ended."""
         # Taken when the call is made, as the runner's replay takes its entry.
         taken = _taken(self._tools, self._schema, messages)
@@ -1127,21 +1147,32 @@ def _replay(state: _Harvest, case: dict) -> dict:
 def _agreed(case: dict, results: dict) -> dict:
     """Return what agreement compares of `results`.
 
-    That is their `expect`, with a load error cut to its first diagnostic's code and message,
-    and a run's cut to its `raises` or `output`, a failure to its code, message and node.
+    That is their `expect`, with a load error cut to its first diagnostic's code, message and
+    frame ranges, and a run's cut to its `raises` or `output`, a failure to its code, message,
+    node and frame ranges.
     """
     agreed = _expect(case, results)
     load = agreed.get("load")
     if isinstance(load, dict):
-        agreed["load"] = {key: load["diagnostics"][0][key] for key in ("code", "message")}
+        agreed["load"] = _cut_diagnostic(load["diagnostics"][0], ("code", "message"))
     if case["kind"] == "run":
         # The test's own call gives no trace, events or stream.
         agreed = {key: agreed[key] for key in ("raises", "output") if key in agreed}
         output = agreed.get("output")
         if output is not None and output["status"] == "failed":
-            agreed["output"] = {"status": "failed", "failure": {
-                key: output["failure"][key] for key in ("code", "message", "node")}}
+            agreed["output"] = {"status": "failed", "failure": _cut_diagnostic(
+                output["failure"], ("code", "message", "node"))}
     return agreed
+
+
+def _cut_diagnostic(diagnostic: dict, keys: tuple) -> dict:
+    """Return `diagnostic`'s `keys` and its frames' ranges.
+
+    The labels are left out: the test names its flow, the runner's replay `flow.yaml`. A range
+    still tells where yian placed the error, which a replayed error of a stand-in class can move.
+    """
+    return {**{key: diagnostic[key] for key in keys},
+            "ranges": [frame["range"] for frame in diagnostic.get("frames", [])]}
 
 
 def _texts(value: object):

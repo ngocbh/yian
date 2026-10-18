@@ -53,6 +53,12 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   are refused.
 - In a flow document, a local type tag never changes how its scalar reads (`!float 3` is `3n`);
   `parseYamlLiteral` refuses local tags.
+- `SourceDocument.parse` reads lone CRs as LF, composes once, lexes the CST for property
+  positions, and keeps every node as a frozen definition with text keys; it reports the first
+  `nonTextKey` and `repeatedKey` for Compose to refuse.
+- `SourceCursor` navigates a document's values, which are frozen; `value` returns a copy.
+- `SourceCatalog` turns an opaque origin into a diagnostic frame by replaying the occurrence
+  path it kept.
 
 ## LLM layer
 

@@ -137,6 +137,10 @@ values; quote it to keep it as text, or tag it (`!date "2026-01-01"`). So is a Y
 `'g': numbers must be finite (got .nan)`, and `g: 1e400` gives `'g': numbers must be
 finite (got 1e400, which YAML reads as .inf)`.
 
+Changed (TS yian): in a flow file, `!!binary`, `!!set`, `!!omap`, `!!pairs`, and `!!value`
+are load errors anywhere (`invalid YAML: could not determine a constructor for the tag
+'tag:yaml.org,2002:binary'`); TS values have no bytes, sets, or pairs.
+
 Changed (TS yian): an unquoted date or timestamp stays text; the value is the text as
 written. This changes the first paragraph and the table above: `2026-10-14` reads as text,
 not as a date value. The text must be a `date` (`2026-10-14`) or a `datetime`
@@ -151,8 +155,10 @@ Changed (TS yian): `.inf`, `+.inf`, and `-.inf` (also `.Inf`, `.INF`) read as fl
 them, wherever they are written: `.nan` gives `NaN is not a yian value; quote it to keep it
 as text`, and `1e400` gives `number is too large for a float; quote it to keep it as text`.
 YAML syntax follows YAML 1.2 as the `yaml` package reads it, so an anchor may be defined
-again. In a YAML text yian reads on its own, such as a skill's frontmatter, `! 5` (the bare
-tag) is the text `"5"`, and every key must be text, as in a flow file (see below).
+again, an alias name may contain `:` (`{*k: 1}` is the alias `k:`; write `{*k : 1}`), and a
+lone CR is a line break. In a YAML text yian reads on its own, such as a skill's frontmatter,
+`! 5` (the bare tag) is the text `"5"`, and every key must be text, as in a flow file (see
+below).
 
 A flow file's YAML nests at most 200 levels (`YIAN_MAX_YAML_NESTING` can lower it; see
 [Defaults and limits](defaults.md)); each mapping and list is a level, counting the
@@ -204,6 +210,9 @@ site-specific error in some places, a raw `TypeError` or a silently renamed name
 others); every such key now fails at the key with the error above. Keys that used to
 load, such as `1:` in an `x-*` block or in a written-out record value, now fail too;
 quote them.
+
+Changed (TS yian): an unquoted date key is text, so the error above no longer applies to
+dates; `true`, `1`, `1.5`, and `null` keys still fail.
 
 Every field that takes text or an expression must be text after YAML reads it:
 `code:`, `tool_id:`, `call:`, CASE `on:`, `kind:`, `node_name:`, the flow's `id:`,
@@ -1087,6 +1096,15 @@ An AGENT's `variables:` take the same form, and every variable needs a value:
   (`{qty: !int 5, note: !str "" }`), or use block style.
 - Inside a `{...}` flow mapping, a comma splits an unquoted multi-argument type. Quote it
   (`{action: 'Literal(buy, sell)'}`) or use block style.
+
+Changed (TS yian): a tag ends at `,`, `[`, `]`, `{`, or `}` (YAML 1.2), so no space is
+needed before them: `{qty: !int, note: !str}` tags two empty values. A tag written with one
+of them inside (`!Union(Buy, Sell)`, `!list[str]`) fails with:
+
+```text
+invalid YAML: Tags and anchors must be separated from the next token by white space
+hint: a YAML tag ends at `,`, `[`, `]`, `{` or `}`; name a type with several arguments in `typedefs:` and tag with its name (e.g. `Decision: Union(Buy, Sell)`, then `!Decision`), and write `list(str)`, not `list[str]`
+```
 
 ### The value
 

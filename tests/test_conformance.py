@@ -1,9 +1,7 @@
 """Run the language-neutral conformance cases in `conformance/cases/` against Python yian.
 
-Each case file is one test, named by its id `<group>/<name>`. The test reads the case,
-checks it against the closed format, sets up its directory and environment, calls yian
-for the case's kind, and compares the results with the case's expectations.
-`conformance/README.md` defines the case format and what each kind checks.
+Each case file is one test, named by its id `<group>/<name>`. `conformance/README.md` defines
+the case format and what each kind checks.
 """
 
 from __future__ import annotations
@@ -17,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+from typing import NoReturn
 
 import pytest
 import yaml
@@ -87,10 +86,8 @@ class _CaseLoader(yaml.SafeLoader):
             return int(text[2:], 8 if text[1] == "o" else 16)
         return int(text)
 
-    def construct_mapping(self, node: yaml.Node, deep: bool = False) -> dict:
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict:
         """Build a mapping, refusing a key that isn't text or that appears twice."""
-        if not isinstance(node, yaml.MappingNode):
-            raise ConstructorError(None, None, "expected a mapping", node.start_mark)
         mapping = {}
         for key_node, value_node in node.value:
             key = self.construct_object(key_node, deep=True)
@@ -114,61 +111,55 @@ _CaseLoader.add_constructor("tag:yaml.org,2002:int", _CaseLoader.construct_int)
 
 # The closed format, as conformance/README.md defines it.
 _COMMON = {"kind", "rules", "pending", "python_skip", "expect", "python_expect"}
-_RUN = {"flow", "python_flow", "files", "env", "inputs", "run", "host"}
+_FLOW = {"flow", "python_flow", "files", "env"}
+_RUN = _FLOW | {"inputs", "run", "host"}
 _KIND_KEYS = {
-    "load": {"flow", "python_flow", "files", "env"},
+    "load": _FLOW,
     "run": _RUN,
     "resume": _RUN | {"resume"},
     "backward": _RUN | {"backward"},
     "expr": {"expr", "template", "values", "item", "mode", "typedefs", "env"},
     "value": {"type", "typedefs", "value", "env"},
     "defaults": {"env"},
-    "fingerprint": {"flow", "python_flow", "other", "files", "env"},
-    "cli": {"flow", "python_flow", "files", "env", "args", "stdin"},
+    "fingerprint": _FLOW | {"other"},
+    "cli": _FLOW | {"args", "stdin"},
 }
-_RUN_EXPECT = {"raises", "output", "trace", "events", "stream", "tool_calls", "memory"}
-_EXPECT_KEYS = {
-    "load": {"load"},
-    "run": _RUN_EXPECT,
-    "resume": _RUN_EXPECT,
-    "backward": _RUN_EXPECT | {"backward"},
-    "expr": {"value", "raises"},
-    "value": {"value", "kind", "raises"},
-    "defaults": {"defaults", "raises"},
-    "fingerprint": {"fingerprint"},
-    "cli": {"exit", "stdout", "stderr", "json", "json_lines"},
-}
-# The keys a kind requires, and the result keys its `expect` requires: one of the groups; its
-# other result keys are optional.
 _REQUIRED = {
-    "value": ("type", "value"), "fingerprint": ("flow", "other"), "load": ("flow",),
-    "run": ("flow",), "resume": ("flow",), "backward": ("flow", "backward"),
+    "load": ("flow",), "run": ("flow",), "resume": ("flow",), "backward": ("flow", "backward"),
+    "value": ("type", "value"), "fingerprint": ("flow", "other"),
 }
+# Each kind's `expect` holds exactly one of its result groups, and any of its optional keys.
 _RESULTS = {
     "load": (("load",),),
-    "defaults": (("defaults",), ("raises",)),
-    "value": (("value", "kind"), ("raises",)),
+    "run": (("raises",), ("output",)),
+    "resume": (("raises",), ("output",)),
+    "backward": (("raises",), ("output",)),
     "expr": (("value",), ("raises",)),
+    "value": (("value", "kind"), ("raises",)),
+    "defaults": (("defaults",), ("raises",)),
     "fingerprint": (("fingerprint",),),
     "cli": (("exit",),),
 }
+_RUN_OPTIONAL = {"trace", "events", "stream", "tool_calls", "memory"}
+_OPTIONAL = {
+    "run": _RUN_OPTIONAL, "resume": _RUN_OPTIONAL, "backward": _RUN_OPTIONAL | {"backward"},
+    "cli": {"stdout", "stderr", "json", "json_lines"},
+}
+_EXPECT_KEYS = {kind: _OPTIONAL.get(kind, set()).union(*groups)
+                for kind, groups in _RESULTS.items()}
 _ALL_KEYS = _COMMON.union(*_KIND_KEYS.values())
 _ALL_EXPECT_KEYS = set().union(*_EXPECT_KEYS.values())
 _RUN_KEYS = {"run_id", "num_workers", "learnable", "llm_config", "context"}
 _RESUME_KEYS = {"num_workers", "api_key", "headers", "context"}
-_BACKWARD_KEYS = {"feedback", "api_key", "headers"}
-_HOST_KEYS = {"tools", "human", "jitter", "models", "steering", "stop", "memory", "skills"}
+# Host keys the format reserves and this runner doesn't support yet.
+_RESERVED_HOST_KEYS = ("models", "steering", "stop", "memory", "skills")
+_HOST_KEYS = {"tools", "human", "jitter", *_RESERVED_HOST_KEYS}
 _RESUME_HOST_KEYS = _HOST_KEYS | {"crash_after_record"}
-_TOOL_KEYS = {"parameters", "description", "results"}
-_RAISE_KEYS = {"class", "message", "retry_after"}
 _RULES = {
     "numbers", "arithmetic", "compare", "text-form", "canonical", "columns", "messages",
     "text", "yaml", "dates", "infinity", "llm", "code",
 }
-_RESERVED = [
-    ("host", "models"), ("host", "steering"), ("host", "stop"), ("host", "memory"),
-    ("host", "skills"), ("expect", "memory"),
-]
+_RESERVED = [*(("host", key) for key in _RESERVED_HOST_KEYS), ("expect", "memory")]
 # Keys holding text that is not a case value: no codec form, no number checks.
 _TEXT_KEYS = {"flow", "python_flow", "other", "files", "stdin"}
 _SECRET_KEYS = {"run", "resume", "backward", "env", "host", "stdin"}
@@ -209,16 +200,17 @@ def _keys(where: str, mapping: object, allowed: set, known: frozenset | set = fr
 
     A key in `known` but not in `allowed` belongs to another kind of case than `kind`.
     """
-    _mapping(where, mapping)
-    for key in mapping:
-        name = f"{where}.{key}" if where else key
+    def name(key: str) -> str:
+        return f"{where}.{key}" if where else key
+
+    for key in _mapping(where, mapping):
         if key in known and key not in allowed:
-            raise ValueError(f"`{name}` is not a key of a `{kind}` case")
+            raise ValueError(f"`{name(key)}` is not a key of a `{kind}` case")
         if key not in allowed:
-            raise ValueError(f"unknown key `{name}`")
+            raise ValueError(f"unknown key `{name(key)}`")
     for key in required:
         if key not in mapping:
-            raise ValueError(f"`{where}.{key}` is required" if where else f"`{key}` is required")
+            raise ValueError(f"`{name(key)}` is required")
 
 
 def _check_host(host: object, kind: str) -> None:
@@ -228,7 +220,8 @@ def _check_host(host: object, kind: str) -> None:
     tools = _mapping("host.tools", host.get("tools", {}))
     for name, tool in tools.items():
         where = f"host.tools.{name}"
-        _keys(where, tool, _TOOL_KEYS, required=("parameters", "results"))
+        _keys(where, tool, {"parameters", "description", "results"},
+              required=("parameters", "results"))
         results = tool["results"]
         scripts = results.items() if isinstance(results, dict) else [(None, results)]
         for node, script in scripts:
@@ -242,7 +235,8 @@ def _check_host(host: object, kind: str) -> None:
                     raise ValueError(f"`{at}` takes `return` or `raise`")
                 if "raise" in entry:
                     error = entry["raise"]
-                    _keys(f"{at}.raise", error, _RAISE_KEYS, required=("class", "message"))
+                    _keys(f"{at}.raise", error, {"class", "message", "retry_after"},
+                          required=("class", "message"))
                     if "retry_after" in error and error["class"] != "TransientToolError":
                         raise ValueError(f"`{at}.raise.retry_after` is for TransientToolError")
     human = _mapping("host.human", host.get("human", {}))
@@ -268,15 +262,11 @@ def _check(case: dict) -> dict:
         if key not in case:
             continue
         _keys(key, case[key], _EXPECT_KEYS[kind], _ALL_EXPECT_KEYS, kind)
-        groups = _RESULTS.get(kind, ())
-        optional = _EXPECT_KEYS[kind].difference(*groups)
-        if groups and not any(set(group) == case[key].keys() - optional for group in groups):
+        groups = _RESULTS[kind]
+        if not any(set(group) == case[key].keys() - _OPTIONAL.get(kind, set())
+                   for group in groups):
             needs = ", or ".join(" and ".join(f"`{name}`" for name in group) for group in groups)
             raise ValueError(f"`{key}` needs {needs}")
-        if kind in ("run", "resume", "backward") and (
-            ("raises" in case[key]) == ("output" in case[key])
-        ):
-            raise ValueError(f"`{key}` takes one of `raises` and `output`")
     if "python_expect" in case and not case.get("rules"):
         raise ValueError("`python_expect` needs `rules`")
     for key, what in (("rules", "rule ids"), ("args", "text")):
@@ -287,24 +277,22 @@ def _check(case: dict) -> dict:
     if unknown:
         raise ValueError(f"unknown rule ids: {', '.join(unknown)}")
     for key in ("env", "files"):
-        texts = _mapping(key, case.get(key, {}))
-        if any(not isinstance(text, str) for text in texts.values()):
+        if any(not isinstance(text, str) for text in _mapping(key, case.get(key, {})).values()):
             raise ValueError(f"`{key}` values must be text")
     for key in _TEXT_KEYS - {"files"}:
-        if key in case and not isinstance(case[key], str):
+        if not isinstance(case.get(key, ""), str):
             raise ValueError(f"`{key}` must be text")
-    if "run" in case:
-        _keys("run", case["run"], _RUN_KEYS)
-    if "resume" in case:
-        _keys("resume", case["resume"], _RESUME_KEYS)
-    for key in ("run", "resume"):
-        if case.get(key, {}).get("context", "present") != "present":
-            raise ValueError(f"`{key}.context` must be `present`")
+    for key, allowed in (("run", _RUN_KEYS), ("resume", _RESUME_KEYS)):
+        if key in case:
+            _keys(key, case[key], allowed)
+            if case[key].get("context", "present") != "present":
+                raise ValueError(f"`{key}.context` must be `present`")
     if "backward" in case:
         if not isinstance(case["backward"], list) or not case["backward"]:
             raise ValueError("`backward` must be a non-empty list")
         for index, entry in enumerate(case["backward"]):
-            _keys(f"backward[{index}]", entry, _BACKWARD_KEYS, required=("feedback",))
+            _keys(f"backward[{index}]", entry, {"feedback", "api_key", "headers"},
+                  required=("feedback",))
     if "host" in case:
         _check_host(case["host"], kind)
     run = case.get("run", {})
@@ -344,10 +332,9 @@ def _decode(value: object) -> object:
     if value in ({"$float": "inf"}, {"$float": "-inf"}):
         return float(value["$float"])
     if list(value) == ["$record"]:
-        record = value["$record"]
-        if not isinstance(record, dict):
+        value = value["$record"]
+        if not isinstance(value, dict):
             raise ValueError("`$record` takes a mapping")
-        return {key: _decode(item) for key, item in record.items()}
     return {key: _decode(item) for key, item in value.items()}
 
 
@@ -421,46 +408,41 @@ def _set_up(case: dict, case_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None
     defaults._forget()
 
 
+def _fail(message: str) -> NoReturn:
+    """Fail the case with `message` and no traceback."""
+    pytest.fail(message, pytrace=False)
+
+
 def _same(actual: object, expected: object, by_value: bool = False,
           optional_message: bool = False) -> bool:
     """Return whether `actual` equals `expected`, kinds included.
 
-    Bools, ints, floats, text and null are distinct kinds; mappings compare by keys and
-    values, lists in order. With `by_value`, an int and a float compare by value. With
-    `optional_message`, an expected mapping without `message` doesn't compare it.
+    With `by_value`, an int and a float compare by value. With `optional_message`, an
+    expected mapping without `message` doesn't compare it.
     """
     if isinstance(expected, dict):
         if not isinstance(actual, dict):
             return False
         if optional_message and "message" not in expected:
             actual = {key: value for key, value in actual.items() if key != "message"}
-        return set(actual) == set(expected) and all(
+        return actual.keys() == expected.keys() and all(
             _same(actual[key], expected[key], by_value, optional_message) for key in expected
         )
     if isinstance(expected, list):
-        return (
-            isinstance(actual, list)
-            and len(actual) == len(expected)
-            and all(_same(a, e, by_value, optional_message) for a, e in zip(actual, expected))
+        return isinstance(actual, list) and len(actual) == len(expected) and all(
+            _same(a, e, by_value, optional_message) for a, e in zip(actual, expected)
         )
-    numbers = (int, float)
-    if by_value and type(actual) in numbers and type(expected) in numbers:
+    if by_value and type(actual) in (int, float) and type(expected) in (int, float):
         return actual == expected
     return type(actual) is type(expected) and actual == expected
 
 
-def _dump(value: object) -> str:
-    """Return `value` as YAML text for a failure message."""
-    return yaml.safe_dump(value, sort_keys=False, allow_unicode=True, width=1000)
-
-
 def _compare(what: str, actual: object, expected: object, **flags: bool) -> None:
-    """Fail the case, showing both sides, unless `actual` is the same as `expected`."""
+    """Fail the case, showing both sides as YAML, unless `actual` is the same as `expected`."""
     if not _same(actual, expected, **flags):
-        pytest.fail(
-            f"{what} differs\n--- actual\n{_dump(actual)}--- expected\n{_dump(expected)}",
-            pytrace=False,
-        )
+        dump = [yaml.safe_dump(side, sort_keys=False, allow_unicode=True, width=1000)
+                for side in (actual, expected)]
+        _fail(f"{what} differs\n--- actual\n{dump[0]}--- expected\n{dump[1]}")
 
 
 def _raised(exc: Exception) -> dict:
@@ -479,7 +461,19 @@ def _expect_raises(expected: dict, call) -> dict:
         raised = _raised(exc)
         _compare("raises", raised, expected)
         return raised
-    pytest.fail(f"expected {expected.get('class')} to be raised, but nothing was", pytrace=False)
+    _fail(f"expected {expected.get('class')} to be raised, but nothing was")
+
+
+def _results(expect: dict, compute) -> None:
+    """Compare the results `compute()` returns, by name, with `expect`.
+
+    When `expect` has `raises`, compare the error `compute()` raises instead.
+    """
+    if "raises" in expect:
+        _expect_raises(expect["raises"], compute)
+        return
+    for name, actual in compute().items():
+        _compare(name, actual, expect[name])
 
 
 def _load(text: str, case_dir: Path):
@@ -492,19 +486,11 @@ def _diagnostic(diag: Diagnostic) -> dict:
     frames = []
     for frame in diag.frames:
         span = frame.range
-        entry = {
-            "label": frame.label,
-            "range": [span.start_line, span.start_col, span.end_line, span.end_col],
-        }
-        if frame.note:
-            entry["note"] = frame.note
-        frames.append(entry)
-    form = {"code": diag.code, "message": diag.message}
-    if frames:
-        form["frames"] = frames
-    if diag.notes:
-        form["notes"] = list(diag.notes)
-    return form
+        frames.append({"label": frame.label,
+                       "range": [span.start_line, span.start_col, span.end_line, span.end_col],
+                       **({"note": frame.note} if frame.note else {})})
+    form = {"code": diag.code, "message": diag.message, "frames": frames, "notes": list(diag.notes)}
+    return {key: value for key, value in form.items() if value or key in ("code", "message")}
 
 
 def _run_load(case: dict, case_dir: Path) -> None:
@@ -520,17 +506,16 @@ def _run_load(case: dict, case_dir: Path) -> None:
 
 def _run_defaults(case: dict, case_dir: Path) -> None:
     """Read yian's defaults and compare the listed entries, or the error."""
-    expect = case["expect"]
-    if "raises" in expect:
-        _expect_raises(expect["raises"], defaults.current)
-        return
-    unknown = set(expect["defaults"]) - {entry.name for entry in defaults.ENTRIES}
-    if unknown:
-        pytest.fail(f"`expect.defaults` names unknown entries: {', '.join(sorted(unknown))}",
-                    pytrace=False)
-    values = defaults.current()
-    actual = {name: getattr(values, name.lower()) for name in expect["defaults"]}
-    _compare("defaults", actual, expect["defaults"])
+    names = case["expect"].get("defaults", {})
+
+    def compute() -> dict:
+        unknown = set(names) - {entry.name for entry in defaults.ENTRIES}
+        if unknown:
+            _fail(f"`expect.defaults` names unknown entries: {', '.join(sorted(unknown))}")
+        values = defaults.current()
+        return {"defaults": {name: getattr(values, name.lower()) for name in names}}
+
+    _results(case["expect"], compute)
 
 
 def _run_fingerprint(case: dict, case_dir: Path) -> None:
@@ -540,19 +525,15 @@ def _run_fingerprint(case: dict, case_dir: Path) -> None:
 
     first = fingerprint(case["flow"])
     if fingerprint(case["flow"]) != first:
-        pytest.fail("two loads of `flow` have different fingerprints", pytrace=False)
+        _fail("two loads of `flow` have different fingerprints")
     same = fingerprint(case["other"]) == first
     _compare("fingerprint", "same" if same else "different", case["expect"]["fingerprint"])
 
 
-_MODES = {"binding": ResolveMode.BINDING_NONE, "strict": ResolveMode.STRICT_RAISE}
-
-
 def _run_expr(case: dict, case_dir: Path) -> None:
     """Evaluate `expr` or `template` in `mode` over `values` and `item`; compare the result."""
-    mode = case.get("mode", "binding")
-    template = case.get("template")
-    values = case.get("values", {})
+    mode, template = case.get("mode", "binding"), case.get("template")
+    values, item = case.get("values", {}), case.get("item")
 
     def resolve(path: str) -> object:
         return _resolve_in_record(path, values)
@@ -570,46 +551,38 @@ def _run_expr(case: dict, case_dir: Path) -> None:
         registry = read_typedefs(case.get("typedefs") or {})
         types = {}
         for tree in trees:
-            for name in isinstance_type_names(tree):
-                types[name] = resolve_isinstance_type(name, registry)
-            for name in constructor_names(tree):
-                types[name] = resolve_constructor_type(name, registry)
+            types |= {name: resolve_isinstance_type(name, registry)
+                      for name in isinstance_type_names(tree)}
+            types |= {name: resolve_constructor_type(name, registry)
+                      for name in constructor_names(tree)}
         if template is not None:
-            return eval_binding(template, resolve, case.get("item"), types=types)
+            return eval_binding(template, resolve, item, types=types)
         if mode == "condition":
             # What every `when:`, `while:` and assert runs.
             return evaluate_when_record(case["expr"], values, types)
-        return eval_expr(trees[0], resolve, case.get("item"), _MODES[mode], types=types)
+        resolve_mode = ResolveMode.STRICT_RAISE if mode == "strict" else ResolveMode.BINDING_NONE
+        return eval_expr(trees[0], resolve, item, resolve_mode, types=types)
 
-    expect = case["expect"]
-    if "raises" in expect:
-        _expect_raises(expect["raises"], evaluate)
-    else:
-        _compare("value", evaluate(), expect["value"])
+    _results(case["expect"], lambda: {"value": evaluate()})
 
 
 def _run_value(case: dict, case_dir: Path) -> None:
     """Build `value` as `type` and compare the stored value and its kind, or the error."""
-    def build():
+    def compute() -> dict:
         typ = type_for(case["type"], read_typedefs(case.get("typedefs") or {}))
-        return build_value_as(typ, case["value"])
+        typed = build_value_as(typ, case["value"])
+        return {"value": typed.to_object(), "kind": typed.kind.value}
 
-    expect = case["expect"]
-    if "raises" in expect:
-        _expect_raises(expect["raises"], build)
-        return
-    typed = build()
-    _compare("value", typed.to_object(), expect["value"])
-    _compare("kind", typed.kind.value, expect["kind"])
+    _results(case["expect"], compute)
 
 
 def _host(case: dict, patch: pytest.MonkeyPatch) -> tuple:
     """Build the case's host and return `(tools, calls, check)`.
 
-    `tools` is the run's tool set: a stub per `host.tools` entry and `ask_user` for
-    `host.human`. Each call is recorded in `calls`, by tool, and takes its script's next
-    entry; `host.jitter` replaces the TOOL backoff draws. `check()` fails the case when a
-    call found its script used up, or when a script has entries left.
+    `tools` holds a stub per `host.tools` entry and `ask_user` for `host.human`; each call is
+    recorded in `calls`, by tool, and takes its script's next entry, as each TOOL backoff takes
+    the next `host.jitter` draw. `check()` fails the case when a script ran out or has entries
+    left.
     """
     host = case.get("host", {})
     calls: dict = {}
@@ -628,16 +601,16 @@ def _host(case: dict, patch: pytest.MonkeyPatch) -> tuple:
         # Permanent, so a TOOL node doesn't retry the overrun.
         raise PermanentToolError(f"`{label}` is used up")
 
-    def record(name: str, args: dict, ctx: ToolContext) -> None:
+    def call(name: str, label: str, ctx: ToolContext, args: dict) -> object:
         calls.setdefault(name, []).append(
             {"args": args, "call_id": ctx.call_id, "attempt": ctx.attempt, "node": ctx.node}
         )
+        return take(label, f"a call to `{name}` from node {ctx.node!r}")
 
     def stub(name: str, by_node: bool):
         def on_invoke(ctx: ToolContext, args: dict) -> object:
-            record(name, args, ctx)
             label = f"host.tools.{name}.results" + (f".{ctx.node}" if by_node else "")
-            entry = take(label, f"a `{name}` call from node {ctx.node!r}")
+            entry = call(name, label, ctx, args)
             if "return" in entry:
                 return entry["return"]
             error = entry["raise"]
@@ -658,9 +631,8 @@ def _host(case: dict, patch: pytest.MonkeyPatch) -> tuple:
                                    stub(name, isinstance(results, dict)))
 
     def ask_user(ctx: ToolContext, **request: object) -> object:
-        record("ask_user", {key: value for key, value in request.items() if value is not None},
-               ctx)
-        return take(f"host.human.{ctx.node}", f"a question from node {ctx.node!r}")
+        request = {key: value for key, value in request.items() if value is not None}
+        return call("ask_user", f"host.human.{ctx.node}", ctx, request)
 
     if "human" in host:
         tools["ask_user"] = ask_user
@@ -672,7 +644,7 @@ def _host(case: dict, patch: pytest.MonkeyPatch) -> tuple:
         left = [f"`{label}` has {len(script)} {'entry' if len(script) == 1 else 'entries'} left"
                 for label, script in scripts.items() if script]
         if problems or left:
-            pytest.fail("\n".join(problems + left), pytrace=False)
+            _fail("\n".join(problems + left))
 
     return tools, calls, check
 
@@ -733,6 +705,8 @@ _TRACE = {
     **dict.fromkeys(("backward_started", "backward_ready", "backward_finished"), (None, None)),
 }
 _LEFT_OUT_WHEN_EMPTY = {"defaults", "effective_llm_by_static_path", "call_time_llm"}
+_CAPTURE_LEFT_OUT_WHEN_EMPTY = {"evaluated_keys", "items", "node_data", "input_names",
+                                "variable_names"}
 _FAILURE_FIELDS = {"node_failed": "failure", "node_routed": "terminal_failure"}
 
 
@@ -742,25 +716,14 @@ def _cut(connection: dict) -> dict:
             if name in connection}
 
 
-def _llm(config: dict | None) -> dict | None:
-    """Return an LLM config with its `_connection` cut, when it has one."""
-    if config is None or config.get("_connection") is None:
-        return config
-    return {**config, "_connection": _cut(config["_connection"])}
-
-
-_LEFT_OUT_OF_CAPTURE_WHEN_EMPTY = {
-    "evaluated_keys", "items", "node_data", "input_names", "variable_names",
-}
+def _cut_llm(config: dict | None) -> None:
+    """Cut the `_connection` of an LLM config, when it has one."""
+    if config and config.get("_connection") is not None:
+        config["_connection"] = _cut(config["_connection"])
 
 
 def _capture(capture: dict) -> dict:
-    """Return a `forward_capture` projected to the trace.
-
-    Each route leaves out its empty fields but `kind` and `expression`, and has its
-    `value_json` text read as JSON; the capture leaves out its empty lists and `node_data`,
-    and its `node_data.effective_llm_config` has its connection cut.
-    """
+    """Return a `forward_capture` projected to the trace, changing it in place."""
     def route(node: dict) -> dict:
         lean = {key: value for key, value in node.items()
                 if key in ("kind", "expression") or value not in (None, [], 0, "")}
@@ -772,14 +735,13 @@ def _capture(capture: dict) -> dict:
             lean["snapshot"] = route(lean["snapshot"])
         return lean
 
-    data = capture["node_data"]
-    if data and "effective_llm_config" in data:
-        data = {**data, "effective_llm_config": _llm(data["effective_llm_config"])}
-    projected = {**capture, "route": route(capture["route"]), "node_data": data,
-                 "items": [{**item, "capture": _capture(item["capture"])}
-                           for item in capture["items"]]}
-    return {key: value for key, value in projected.items()
-            if value or key not in _LEFT_OUT_OF_CAPTURE_WHEN_EMPTY}
+    if capture["node_data"]:
+        _cut_llm(capture["node_data"].get("effective_llm_config"))
+    capture["route"] = route(capture["route"])
+    for item in capture["items"]:
+        item["capture"] = _capture(item["capture"])
+    return {key: value for key, value in capture.items()
+            if value or key not in _CAPTURE_LEFT_OUT_WHEN_EMPTY}
 
 
 def _trace(lines: list, flow) -> list:
@@ -791,8 +753,9 @@ def _trace(lines: list, flow) -> list:
 
     entries = []
     for line in lines:
+        # Each record is parsed afresh, so its payload is projected in place.
         record = json.loads(line)
-        kind, payload = record["kind"], dict(record["payload"])
+        kind, payload = record["kind"], record["payload"]
         node_field, kept = _TRACE[kind]
         node = payload[node_field] if node_field else None
         if kind == "node_failed":
@@ -800,17 +763,11 @@ def _trace(lines: list, flow) -> list:
         if kind == "run_started":
             pool = payload["initial_pool"]
             payload["inputs"] = pool["store"][pool["start_id"]]["value"]
-            payload["effective_llm_by_static_path"] = {
-                path: _llm(config)
-                for path, config in payload["effective_llm_by_static_path"].items()
-            }
-            call_time = payload.get("call_time_llm")
-            if call_time is not None:
-                selection = call_time["selection"]
-                payload["call_time_llm"] = {**call_time, "selection": {
-                    **selection, "connections": {provider: _cut(connection) for provider,
-                                                 connection in selection["connections"].items()}
-                }}
+            for config in payload["effective_llm_by_static_path"].values():
+                _cut_llm(config)
+            if payload.get("call_time_llm") is not None:
+                connections = payload["call_time_llm"]["selection"]["connections"]
+                connections.update({name: _cut(value) for name, value in connections.items()})
         if kind == "node_succeeded":
             payload["value"] = payload["value"]["value"]
             if payload["commit_target"] == node:
@@ -821,19 +778,17 @@ def _trace(lines: list, flow) -> list:
         if payload.get("forward_capture") is not None:
             payload["forward_capture"] = _capture(payload["forward_capture"])
         if kind == "node_step":
-            step = payload["step"] = dict(payload["step"])
+            step = payload["step"]
             if "retry_in" in step:
                 step["retry_in"] = float(step["retry_in"])
-            if "effective_llm_config" in step:
-                step["effective_llm_config"] = _llm(step["effective_llm_config"])
+            _cut_llm(step.get("effective_llm_config"))
         backward = payload["outcome"]["failure"] if kind == "backward_finished" else None
         if backward is not None:
-            backward = {key: value for key, value in backward.items()
-                        if key not in ("cause_type", "traceback")}
+            backward.pop("cause_type", None)
+            backward.pop("traceback", None)
             # A backward failure's `cause` is a node failure when it has a `trace`.
             if isinstance(backward["cause"], dict) and "trace" in backward["cause"]:
                 backward["cause"] = failure(backward["cause"])
-            payload["outcome"] = {**payload["outcome"], "failure": backward}
         payload = {
             key: value for key, value in payload.items()
             if (kept is None or key in kept) and value is not None
@@ -856,34 +811,34 @@ def _check_secrets(case: dict, texts: dict) -> None:
     leaks = [f"secret {secret} appears in {where}" for where, text in texts.items()
              for secret in sorted(set(_FILLED.findall(text)) & secrets)]
     if leaks:
-        pytest.fail("\n".join(leaks), pytrace=False)
+        _fail("\n".join(leaks))
 
 
-def _event_node(event: list) -> str | None:
-    """Return an event's node: its `node_id`, a `NodeFailed`'s failure node, else None."""
-    data = event[1] if len(event) > 1 else {}
-    return data["failure"]["node"] if event[0] == "NodeFailed" else data.get("node_id")
-
-
-def _group(entries: list, node_of) -> list:
-    """Return `entries` with run-level ones (node None) first, then each node's, nodes sorted.
-
-    Each group keeps its order; nodes sort by UTF-16 code units.
-    """
-    def key(entry: object) -> tuple:
-        node = node_of(entry)
-        return (node is not None, b"" if node is None else node.encode("utf-16-be"))
-
-    return sorted(entries, key=key)
+def _utf16(text: str) -> bytes:
+    """Return the sort key that orders text by UTF-16 code units."""
+    return text.encode("utf-16-be")
 
 
 def _pooled(results: dict) -> dict:
-    """Return `results` with the trace, events, stream and each tool's calls grouped by node."""
+    """Return `results` with the trace, events, stream and each tool's calls grouped by node.
+
+    Run-level entries (node None) come first, then each node's, nodes sorted; each group keeps
+    its order.
+    """
+    def group(entries: list, node_of) -> list:
+        return sorted(entries, key=lambda entry: (node_of(entry) is not None,
+                                                  _utf16(node_of(entry) or "")))
+
+    def event_node(event: list) -> str | None:
+        # A `NodeFailed` belongs to its failure's node; run events have no `node_id`.
+        data = event[1] if len(event) > 1 else {}
+        return data["failure"]["node"] if event[0] == "NodeFailed" else data.get("node_id")
+
     return {**results,
-            "trace": _group(results["trace"], lambda entry: entry[1]),
-            "events": _group(results["events"], _event_node),
-            "stream": _group(results["stream"], lambda chunk: chunk.get("node_id")),
-            "tool_calls": {tool: _group(calls, lambda call: call["node"])
+            "trace": group(results["trace"], lambda entry: entry[1]),
+            "events": group(results["events"], event_node),
+            "stream": group(results["stream"], lambda chunk: chunk.get("node_id")),
+            "tool_calls": {tool: group(calls, lambda call: call["node"])
                            for tool, calls in results["tool_calls"].items()}}
 
 
@@ -893,9 +848,8 @@ _ID_FIELDS = ("exchange_id", "commit_id", "mutation_id", "note_id")
 def _placeholders(results: dict, run_id: str | None) -> dict:
     """Return `results` with each made-up id in their text replaced by `<id:N>`.
 
-    The ids are `run_id` (unless None) and every text value of an `_ID_FIELDS` key. They
-    are numbered in order of first appearance, walking `results` in order, lists in order
-    and mapping keys sorted by UTF-16 code units.
+    The ids are `run_id` (unless None) and every text value of an `_ID_FIELDS` key, numbered
+    in order of first appearance, with mapping keys in sorted order.
     """
     ids = set() if run_id is None else {run_id}
 
@@ -924,8 +878,7 @@ def _placeholders(results: dict, run_id: str | None) -> dict:
         if isinstance(value, list):
             return [replace(item) for item in value]
         if isinstance(value, dict):
-            return {key: replace(value[key])
-                    for key in sorted(value, key=lambda key: key.encode("utf-16-be"))}
+            return {key: replace(value[key]) for key in sorted(value, key=_utf16)}
         return value
 
     return {name: replace(value) for name, value in results.items()}
@@ -936,19 +889,15 @@ class _Cut(BaseException):
 
 
 def _run_run(case: dict, case_dir: Path) -> None:
-    """Run the flow on the case's host; compare `raises` or `output`, then the rest.
+    """Run the flow on the case's host and compare the results the case expects.
 
-    A `resume` case's first run is cut after record `host.crash_after_record`, and the
-    flow is resumed from its log; the output, events and stream are the resumed run's. A
-    `backward` case then calls backward once per `backward` entry. The rest is the trace,
-    events, stream, `tool_calls` and backward outcomes, each when the case expects it.
-    Secrets are checked first; a pooled run is grouped, and placeholders put in, before
-    anything is compared.
+    A `resume` case's first run is cut after record `host.crash_after_record` and resumed; a
+    `backward` case then calls backward once per `backward` entry.
     """
     flow = _load(case["flow"], case_dir)
     expect = case["expect"]
     log = case_dir / "run.jsonl"
-    events, chunks, results, outcomes = [], [], [], []
+    events, chunks = [], []
     with pytest.MonkeyPatch.context() as patch:
         tools, calls, check = _host(case, patch)
         run, resume = dict(case.get("run", {})), dict(case.get("resume", {}))
@@ -958,8 +907,8 @@ def _run_run(case: dict, case_dir: Path) -> None:
         hooks = {"log": log, "tools": tools, "on_event": events.append,
                  "on_stream": chunks.append}
 
-        def start() -> None:
-            results.append(run_flow(flow, case.get("inputs", {}), **hooks, **run))
+        def start() -> RunResult:
+            return run_flow(flow, case.get("inputs", {}), **hooks, **run)
 
         if case["kind"] == "resume":
             last = case["host"]["crash_after_record"]
@@ -977,34 +926,36 @@ def _run_run(case: dict, case_dir: Path) -> None:
                 except _Cut:
                     pass
                 else:
-                    pytest.fail(f"the run ended before record {last + 1}", pytrace=False)
+                    _fail(f"the run ended before record {last + 1}")
             events.clear()
             chunks.clear()
 
-            def start() -> None:
-                results.append(resume_flow(flow, **hooks, **resume))
+            def start() -> RunResult:
+                return resume_flow(flow, **hooks, **resume)
 
-        raised = {}
+        result, raised = None, {}
         if "raises" in expect:
             raised = _expect_raises(expect["raises"], start)
         else:
-            start()
+            result = start()
+
         def finished() -> list:
             trace = _trace(log.read_text(encoding="utf-8").splitlines(), flow)
-            return [record for record in trace if record[0] == "backward_finished"]
+            return [entry for entry in trace if entry[0] == "backward_finished"]
 
-        for index, entry in enumerate(case.get("backward", []) if results else []):
+        outcomes = []
+        for index, entry in enumerate(case.get("backward", []) if result is not None else []):
             before = len(finished())
             try:
-                results[0].backward(entry["feedback"], api_key=entry.get("api_key"),
-                                    headers=entry.get("headers"))
+                result.backward(entry["feedback"], api_key=entry.get("api_key"),
+                                headers=entry.get("headers"))
             except Exception as exc:
                 outcomes.append({"raises": _raised(exc)})
                 continue
             after = finished()
             if len(after) != before + 1:
-                pytest.fail(f"backward call {index + 1} appended {len(after) - before} "
-                            "`backward_finished` records, not one", pytrace=False)
+                _fail(f"backward call {index + 1} appended {len(after) - before} "
+                      "`backward_finished` records, not one")
             outcomes.append(after[-1][2]["outcome"])
         text = log.read_text(encoding="utf-8") if log.exists() else ""
         lines = text.splitlines()
@@ -1013,7 +964,7 @@ def _run_run(case: dict, case_dir: Path) -> None:
             "events": [_event(event, flow) for event in events],
             "stream": [_fields(chunk, flow) for chunk in chunks],
             "tool_calls": calls,
-            "output": _output(results[0], flow) if results else None,
+            "output": _output(result, flow) if result is not None else None,
             "backward": outcomes,
         }
         _check_secrets(case, {**{name: repr(value) for name, value in actual.items()},
@@ -1059,8 +1010,7 @@ def _run_cli(case: dict, case_dir: Path) -> None:
         try:
             return _decode(json.loads(text, parse_constant=refuse))
         except ValueError as error:  # JSONDecodeError is a ValueError
-            pytest.fail(f"stdout is not a JSON document ({error})\n--- stdout\n{stdout}",
-                        pytrace=False)
+            _fail(f"stdout is not a JSON document ({error})\n--- stdout\n{stdout}")
 
     stdout, stderr = normal(done.stdout), normal(done.stderr)
     _check_secrets(case, {"stdout": stdout, "stderr": stderr, **{
@@ -1069,12 +1019,11 @@ def _run_cli(case: dict, case_dir: Path) -> None:
     }})
     expect = case["expect"]
     if not _same(done.returncode, expect["exit"]):
-        pytest.fail(f"exit {done.returncode}, expected {expect['exit']}\n--- stdout\n{stdout}"
-                    f"--- stderr\n{stderr}", pytrace=False)
+        _fail(f"exit {done.returncode}, expected {expect['exit']}\n--- stdout\n{stdout}"
+              f"--- stderr\n{stderr}")
     for name, text in (("stdout", stdout), ("stderr", stderr)):
         if name in expect and text != expect[name]:
-            pytest.fail(f"{name} differs\n--- actual\n{text}--- expected\n{expect[name]}",
-                        pytrace=False)
+            _fail(f"{name} differs\n--- actual\n{text}--- expected\n{expect[name]}")
     if "json" in expect:
         _compare("json", document(stdout), expect["json"], optional_message=True)
     if "json_lines" in expect:
@@ -1083,15 +1032,9 @@ def _run_cli(case: dict, case_dir: Path) -> None:
 
 
 _KINDS = {
-    "load": _run_load,
-    "run": _run_run,
-    "resume": _run_run,
-    "backward": _run_run,
-    "defaults": _run_defaults,
-    "fingerprint": _run_fingerprint,
-    "expr": _run_expr,
-    "value": _run_value,
-    "cli": _run_cli,
+    "load": _run_load, "run": _run_run, "resume": _run_run, "backward": _run_run,
+    "defaults": _run_defaults, "fingerprint": _run_fingerprint, "expr": _run_expr,
+    "value": _run_value, "cli": _run_cli,
 }
 
 
@@ -1101,11 +1044,6 @@ def test_case(path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     case = _prepare(_check(_read(path)))
     for section, key in _RESERVED:
         if key in case.get(section, {}):
-            pytest.fail(
-                f"`{section}.{key}` is not supported by the Python runner yet", pytrace=False
-            )
-    run = _KINDS.get(case["kind"])
-    if run is None:
-        pytest.fail(f"kind `{case['kind']}` is not run by the Python runner yet", pytrace=False)
+            _fail(f"`{section}.{key}` is not supported by the Python runner yet")
     _set_up(case, tmp_path, monkeypatch)
-    run(case, tmp_path)
+    _KINDS[case["kind"]](case, tmp_path)

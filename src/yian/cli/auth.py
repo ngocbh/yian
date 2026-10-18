@@ -1,4 +1,5 @@
-"""Interactive provider setup over staged authentication and an atomic store.
+"""Provider setup over staged authentication and an atomic store, `llm_config` checks, and
+the provider list.
 
 `config_check` checks a host `llm_config` layer read from stdin, and `providers` lists
 the providers and the login kinds `auth` can save for each.

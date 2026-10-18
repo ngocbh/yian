@@ -41,7 +41,7 @@
       }
     },
     "failure": {
-      "description": "Why a run failed: a diagnostic, plus node, the id of the node that failed, or null when the failure belongs to no one node.",
+      "description": "A diagnostic plus `node`: the id of the node that failed, or null when no single node did.",
       "allOf": [
         {"$ref": "#/$defs/diagnostic"},
         {
@@ -63,7 +63,7 @@
             "format": {"$ref": "#/$defs/format"},
             "status": {"const": "succeeded"},
             "output": {
-              "description": "The flow's output in yian's JSON codec form: plain JSON; a file as {uri, mime, name}; a float infinity as {\"$float\": \"inf\"} or {\"$float\": \"-inf\"}; and, at every depth, a mapping that is exactly {\"$float\": \"inf\"} or {\"$float\": \"-inf\"}, or whose only key is $record, wrapped as {\"$record\": <it>}, so a host decodes it back to the record."
+              "description": "The flow's output in yian's JSON codec form (conformance/README.md): plain JSON, a file as {uri, mime, name}, a float infinity as {\"$float\": \"inf\"} or {\"$float\": \"-inf\"}, and a mapping that would read as one of those or whose only key is $record wrapped in {\"$record\": ...}."
             }
           }
         },

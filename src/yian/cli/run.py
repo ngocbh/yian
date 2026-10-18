@@ -31,6 +31,9 @@ are enforced at the engine boundary; an invalid one fails the run.
 `--provider`/`--model` feed the outermost layer of the `llm_config` cascade (fill-the-gap,
 not a hard override): they fill only the fields an agent and its enclosing flow leave unset.
 
+`--json` makes `yian run` print its result, or the error that stopped it, as one
+`yian.cli.v1` document on stdout, which carries nothing else.
+
 `yian check FLOW...` loads each flow as `yian run` would, runs nothing, and reports each
 as text or, with `--json`, as one `yian.cli.v1` document.
 
@@ -41,8 +44,7 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import CancelledError
-import contextlib
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
 from functools import partial
 import itertools
 import json
@@ -2007,7 +2009,7 @@ def run(
     json_out = sys.stdout if json_output else None
     if json_output:
         # stdout carries only the document; CODE prints and stray output go to stderr.
-        ctx.with_resource(contextlib.redirect_stdout(sys.stderr))
+        ctx.with_resource(redirect_stdout(sys.stderr))
 
     def fail(diagnostic: Diagnostic) -> NoReturn:
         """Exit 1, first printing `diagnostic` as the error document under `--json`."""

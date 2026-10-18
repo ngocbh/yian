@@ -46,6 +46,7 @@ import {
   typeEquals,
   typeLevels,
   ValueKind,
+  type ValueRecord,
 } from "../../src/typesys/values.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
@@ -1295,17 +1296,22 @@ describe("bounded numeric values", () => {
     typeCheckError(() => buildValueAs(typ, outside));
   });
 
-  test("a rejected nested write keeps the previous value (test_bounded_typed_write_preserves_the_previous_value_on_nested_rejection)", () => {
-    const typ = typeFor("list(Score)", readTypedefs({ Score: { value: "float(0..1)" } }));
-    const pool = new VariablePool();
-    pool.set("scores", [{ value: 1n }], typ);
-    const error = typeCheckError(() => pool.set("scores", [{ value: 0.5 }, { value: 1.1 }], typ));
-    expect(error.path).toEqual([1, "value"]);
-    // Python widens the stored 1 to 1.0; TS keeps the int in a float slot.
-    const scores = pool.get("scores") as typesys.ValueRecord[];
-    expect(scores).toEqual([{ value: 1n }]);
-    expect(typeof scores[0]!.value).toBe("bigint");
-  });
+  test(
+    "a rejected nested write keeps the previous value " +
+      "(test_bounded_typed_write_preserves_the_previous_value_on_nested_rejection)",
+    () => {
+      const typ = typeFor("list(Score)", readTypedefs({ Score: { value: "float(0..1)" } }));
+      const pool = new VariablePool();
+      pool.set("scores", [{ value: 1n }], typ);
+      const rejected = [{ value: 0.5 }, { value: 1.1 }];
+      const error = typeCheckError(() => pool.set("scores", rejected, typ));
+      expect(error.path).toEqual([1, "value"]);
+      // Python widens the stored 1 to 1.0; TS keeps the int (`int-in-float`).
+      const scores = pool.get("scores") as ValueRecord[];
+      expect(scores).toEqual([{ value: 1n }]);
+      expect(typeof scores[0]!.value).toBe("bigint");
+    },
+  );
 });
 
 describe("an int in a float slot", () => {
@@ -1369,19 +1375,19 @@ describe("public exports", () => {
       "unionMemberForTag",
       "unionTagFields",
     ]);
-    // The type-only exports exist only for the typechecker, so this annotation checks them.
-    const types: [
-      typesys.FieldAbsent,
-      typesys.FieldPartial,
-      typesys.FieldRead,
-      typesys.RecordDef,
-      typesys.PoolWire,
-      typesys.StorageKind,
-      typesys.TypeRegistry,
-      typesys.Value,
-      typesys.ValueRecord,
-      typesys.VariantDef,
-    ] | null = null;
-    expect(types).toBeNull();
   });
 });
+
+// The type-only exports exist only for the typechecker: `bun run typecheck` fails if one is gone.
+type _PublicTypes = [
+  typesys.FieldAbsent,
+  typesys.FieldPartial,
+  typesys.FieldRead,
+  typesys.RecordDef,
+  typesys.PoolWire,
+  typesys.StorageKind,
+  typesys.TypeRegistry,
+  typesys.Value,
+  typesys.ValueRecord,
+  typesys.VariantDef,
+];

@@ -101,12 +101,16 @@ describe("VariablePool.resolve", () => {
     expect(pool.resolve("unknown_ns", ["x"])).toBeNull();
   });
 
-  test("a subflow's value resolves via its node-first head (test_subflow_outputs_resolve_via_node_first_head)", () => {
-    // A CALL/subflow node's value lives under its own id in `store`.
-    const pool = new VariablePool();
-    pool.set("child_ref", "child-result");
-    expect(pool.resolve("child_ref", ["output"])).toBe("child-result");
-  });
+  test(
+    "a subflow's value resolves via its node-first head " +
+      "(test_subflow_outputs_resolve_via_node_first_head)",
+    () => {
+      // A CALL/subflow node's value lives under its own id in `store`.
+      const pool = new VariablePool();
+      pool.set("child_ref", "child-result");
+      expect(pool.resolve("child_ref", ["output"])).toBe("child-result");
+    },
+  );
 
   test("input reads the START record (test_inputs_resolve_via_start_store)", () => {
     // The standalone `inputs` namespace (and `add_inputs`) is retired: ${input.X} resolves to
@@ -168,24 +172,28 @@ describe("VariablePool round trip", () => {
     expect(back.get("flag_node")).toBe(true);
   });
 
-  test("nullable specialized list items survive (test_pool_round_trip_preserves_nullable_specialized_list_elements)", () => {
-    const row = new Type({
-      kind: ValueKind.OBJECT,
-      fields: new Map([["score", Type.scalar(ValueKind.NUMBER)]]),
-      required: new Set(["score"]),
-      nullable: true,
-    });
-    const rows = new Type({ kind: ValueKind.LIST_OBJECT, element: row });
-    const pool = new VariablePool();
-    pool.set("rows", [{ score: 0.9 }, null], rows);
+  test(
+    "nullable specialized list items survive " +
+      "(test_pool_round_trip_preserves_nullable_specialized_list_elements)",
+    () => {
+      const row = new Type({
+        kind: ValueKind.OBJECT,
+        fields: new Map([["score", Type.scalar(ValueKind.NUMBER)]]),
+        required: new Set(["score"]),
+        nullable: true,
+      });
+      const rows = new Type({ kind: ValueKind.LIST_OBJECT, element: row });
+      const pool = new VariablePool();
+      pool.set("rows", [{ score: 0.9 }, null], rows);
 
-    const restored = VariablePool.loads(pool.dumps());
+      const restored = VariablePool.loads(pool.dumps());
 
-    const stored = restored.getValue("rows");
-    expect(stored).toBeInstanceOf(TypedValue);
-    expect(stored!.kind).toBe(ValueKind.LIST_OBJECT);
-    expect(restored.get("rows")).toEqual([{ score: 0.9 }, null]);
-  });
+      const stored = restored.getValue("rows");
+      expect(stored).toBeInstanceOf(TypedValue);
+      expect(stored!.kind).toBe(ValueKind.LIST_OBJECT);
+      expect(restored.get("rows")).toEqual([{ score: 0.9 }, null]);
+    },
+  );
 
   test("dumps writes the wire object with sorted keys", () => {
     const pool = new VariablePool();

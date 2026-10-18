@@ -67,7 +67,8 @@ export class VariablePool {
   /** Build an empty pool whose `${input.X}` reads `store[startId]`. */
   constructor(startId: string = "__start__") {
     // The default mirrors `StartNode.ID` but isn't imported from it: `typesys` is a leaf below
-    // `nodes`, so it can't import the node class. The `nodes/` port adds a test pinning the two together.
+    // `nodes`, so it can't import the node class. The `nodes/` port adds a test pinning the two
+    // together.
     this.startId = startId;
   }
 
@@ -175,7 +176,9 @@ export class VariablePool {
     const storeEntries = decodeEntries(store, "store");
     const systemEntries = decodeEntries(system, "system");
     const startId = data["start_id"];
-    if (typeof startId !== "string") throw new RangeError("variable-pool start_id must be a string");
+    if (typeof startId !== "string") {
+      throw new RangeError("variable-pool start_id must be a string");
+    }
     const pool = new VariablePool(startId);
     for (const [key, typed] of storeEntries) pool.store.set(key, typed);
     for (const [key, typed] of systemEntries) pool.system.set(key, typed);

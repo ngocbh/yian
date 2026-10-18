@@ -5,7 +5,8 @@
  * TS-only: the injected-clock rows, which pin the `isoformat()` spelling (the fraction only when
  * non-zero, microseconds from the fraction of a millisecond, a negative epoch, the year bounds
  * and exact arithmetic far from 1970), `todayUtc` of the same instants, one clock reading for
- * both `today` and `now`, and the `RangeError` for a clock outside years 1 to 9999.
+ * both `today` and `now`, seeding from the real clock (kinds only), and the `RangeError` for a
+ * clock outside years 1 to 9999.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -58,9 +59,9 @@ describe("seeding the system namespace", () => {
       seedSystemClock(pool, AFTERNOON);
       expect(pool.system.get("today")!.kind).toBe(ValueKind.DATE);
       expect(pool.system.get("now")!.kind).toBe(ValueKind.DATETIME);
-      expect(pool.system.get("today")!.value).toBe(todayUtc(AFTERNOON));
-      expect(pool.resolve("system", ["today"])).toBe(todayUtc(AFTERNOON));
-      expect(pool.resolve("system", ["now"])).toContain("T");
+      expect(pool.system.get("today")!.value).toBe("2026-10-18");
+      expect(pool.resolve("system", ["today"])).toBe("2026-10-18");
+      expect(pool.resolve("system", ["now"])).toBe("2026-10-18T14:30:05+00:00");
     },
   );
 

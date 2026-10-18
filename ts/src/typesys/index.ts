@@ -2,8 +2,9 @@
  * The type system's public surface, as Python's `yian.typesys`: typed values, the type
  * language and the variable pool.
  *
- * Python's `AnyValue`, `DateValue` and `DateTimeValue` carriers are all `TypedValue` here;
- * `Value`, `ValueRecord` and `PoolWire` are exported because public signatures return them.
+ * Python's `AnyValue`, `DateValue` and `DateTimeValue` carriers are all `TypedValue` here.
+ * `StorageKind`, `Value`, `ValueRecord` and `PoolWire` name shapes Python leaves untyped;
+ * `TypedValue` and `VariablePool` use them in their public signatures.
  */
 
 export type { PoolWire } from "./pool.ts";

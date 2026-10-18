@@ -5,15 +5,21 @@
 
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import {
   compareCodeUnits,
+  Diagnostic,
+  DiagnosticFrame,
   FAILURE_CODES,
   Failure,
   type FailureCode,
   OriginRef,
   reprText,
+  SourceRange,
 } from "../../src/diagnostics.ts";
+import { importStatements } from "./source_scan.ts";
 
 const EXPECTED_FAILURE_CODES: readonly FailureCode[] = [
   "binding.evaluate",
@@ -120,6 +126,101 @@ describe("reprText", () => {
     expect(createHash("sha256").update(bits.join("")).digest("hex")).toBe(
       "0326b64c15e91a0583a1d9f8bc53f4bb534adc91a5ae096b55adaf19525ed98d",
     );
+  });
+});
+
+describe("SourceRange", () => {
+  test("keeps its four fields", () => {
+    const range = new SourceRange(2, 3, 4, 5);
+
+    expect(Object.keys(range)).toEqual(["startLine", "startCol", "endLine", "endCol"]);
+    expect([range.startLine, range.startCol, range.endLine, range.endCol]).toEqual([2, 3, 4, 5]);
+    if (false) {
+      // @ts-expect-error fields are readonly
+      range.endCol = 1;
+    }
+  });
+
+  const block = "a:\n  b: 1\nc: 2\n";
+  const cases: [string, SourceRange, string, number[]][] = [
+    ["a single-line span", new SourceRange(1, 2, 1, 5), "abc\n", [1]],
+    ["an end in the next line's indentation", new SourceRange(1, 1, 3, 1), block, [1, 2]],
+    ["an end after real text", new SourceRange(1, 1, 2, 4), block, [1, 2]],
+    ["a zero-width caret", new SourceRange(2, 3, 2, 3), "a\nbcd\ne\n", [2]],
+    ["a start outside the text", new SourceRange(9, 1, 9, 2), "a\nb\nc\n", [9]],
+    ["an end beyond the last line", new SourceRange(2, 1, 9, 1), "a\nb\nc\n", [2, 3]],
+    ["\\r\\n line breaks", new SourceRange(1, 1, 3, 1), "a:\r\n  b: 1\r\nc: 2\r\n", [1, 2]],
+    ["\\r line breaks", new SourceRange(1, 1, 3, 1), "a:\r  b: 1\rc: 2\r", [1, 2]],
+    // Python gives [2, 3]: its `splitlines` also breaks at U+2028 (`rule: columns`).
+    ["U+2028 inside a line", new SourceRange(2, 1, 9, 1), "a\u2028b\nc", [2]],
+    // Python gives [1, 2]: its `strip` keeps U+FEFF, JS `trim` strips it (`rule: text`).
+    ["a U+FEFF-only prefix", new SourceRange(1, 1, 2, 2), "a\n\ufeff\n", [1]],
+    // Python gives [1]: its `strip` removes U+001C, JS `trim` keeps it (`rule: text`).
+    ["a U+001C-only prefix", new SourceRange(1, 1, 2, 2), "a\n\u001c\n", [1, 2]],
+  ];
+
+  test.each(cases)("coveredLines: %s", (_, range, text, expected) => {
+    expect(range.coveredLines(text)).toEqual(expected);
+  });
+});
+
+describe("Diagnostic", () => {
+  test("has one frozen presentation shape", () => {
+    const frame = new DiagnosticFrame({
+      label: "flow.yaml",
+      text: "nodes:\n",
+      range: new SourceRange(1, 1, 1, 7),
+      note: "outer context",
+    });
+    const frames = [frame];
+    const notes = ["try another value"];
+    const diagnostic = new Diagnostic({
+      code: "node.execute",
+      message: "boom",
+      frames,
+      notes,
+      nodeId: "work",
+      causeType: "ValueError",
+      traceback: "Traceback ...",
+    });
+    frames.push(frame);
+    notes.push("changed");
+
+    expect(Object.keys(diagnostic)).toEqual([
+      "code",
+      "message",
+      "frames",
+      "notes",
+      "nodeId",
+      "causeType",
+      "traceback",
+    ]);
+    expect(diagnostic.code).toBe("node.execute");
+    expect(diagnostic.message).toBe("boom");
+    expect(diagnostic.frames).toEqual([frame]);
+    expect(diagnostic.frames[0]).toBe(frame);
+    expect(diagnostic.notes).toEqual(["try another value"]);
+    expect(diagnostic.nodeId).toBe("work");
+    expect(diagnostic.causeType).toBe("ValueError");
+    expect(diagnostic.traceback).toBe("Traceback ...");
+    if (false) {
+      // @ts-expect-error fields are readonly
+      diagnostic.message = "x";
+      // @ts-expect-error the frames are a readonly array
+      diagnostic.frames.push(frame);
+      // @ts-expect-error the notes are a readonly array
+      diagnostic.notes.push("x");
+    }
+  });
+
+  test("defaults its optional fields", () => {
+    const diagnostic = new Diagnostic({ code: "node.execute", message: "" });
+
+    expect(diagnostic.frames).toEqual([]);
+    expect(diagnostic.notes).toEqual([]);
+    expect(diagnostic.nodeId).toBeNull();
+    expect(diagnostic.causeType).toBeNull();
+    expect(diagnostic.traceback).toBeNull();
   });
 });
 
@@ -266,5 +367,36 @@ describe("OriginRef", () => {
       expect(error).toBeInstanceOf(RangeError);
       expect((error as Error).message).toBe("origin key must be a non-empty string");
     }
+  });
+});
+
+describe("DiagnosticFrame", () => {
+  test("is frozen presentation data", () => {
+    const range = new SourceRange(2, 3, 2, 8);
+    const frame = new DiagnosticFrame({
+      label: "flow.yaml",
+      text: "nodes:\n  ask: {}\n",
+      range,
+      note: "inside call 'review'",
+    });
+
+    expect(Object.keys(frame)).toEqual(["label", "text", "range", "note"]);
+    expect(frame.label).toBe("flow.yaml");
+    expect(frame.text).toBe("nodes:\n  ask: {}\n");
+    expect(frame.range).toBe(range);
+    expect(frame.note).toBe("inside call 'review'");
+    expect(new DiagnosticFrame({ label: "flow.yaml", text: "", range }).note).toBeNull();
+    if (false) {
+      // @ts-expect-error fields are readonly
+      frame.note = null;
+    }
+  });
+});
+
+describe("the diagnostics module", () => {
+  test("imports nothing", () => {
+    // The diagnostic value spine must stay below every other module.
+    const path = fileURLToPath(new URL("../../src/diagnostics.ts", import.meta.url));
+    expect(importStatements(readFileSync(path, "utf8"))).toEqual([]);
   });
 });

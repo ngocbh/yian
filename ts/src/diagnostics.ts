@@ -164,6 +164,72 @@ export type FailureCode = (typeof CODES)[number];
 /** Every code `Failure` accepts, at run time. */
 export const FAILURE_CODES: ReadonlySet<string> = new Set(CODES);
 
+/**
+ * A concrete 1-based source span, `[start, end)` with an exclusive end column.
+ *
+ * Line 1, column 1 is the first character; columns count UTF-16 code units. `endCol`
+ * is one past the last covered column, so a zero-width caret has start equal to end.
+ * Produced and resolved by an authoring front end such as the Compose loader.
+ *
+ * Because the end is exclusive, `endLine` is not necessarily a line this span covers;
+ * render with `coveredLines` rather than reading `endLine` directly.
+ */
+export class SourceRange {
+  readonly startLine: number;
+  readonly startCol: number;
+  readonly endLine: number;
+  readonly endCol: number;
+
+  /** Create a span from its 1-based start and its exclusive end. */
+  constructor(startLine: number, startCol: number, endLine: number, endCol: number) {
+    this.startLine = startLine;
+    this.startCol = startCol;
+    this.endLine = endLine;
+    this.endCol = endCol;
+  }
+
+  /**
+   * Return the 1-based lines this span actually covers, in order: what a renderer
+   * highlights. The result is never empty and starts at `startLine`; a zero-width caret
+   * still marks its own line.
+   *
+   * The end is exclusive, so `endLine` is covered only if the span reaches real text on
+   * it. A YAML block construct (a block mapping, or a `|-` scalar) ends at the start of
+   * the next token, on a later line whose text before `endCol` is only indentation; that
+   * line holds none of this span and is dropped. Naively taking `endLine` is what makes
+   * an error on one node's `code:` highlight the next node's header.
+   *
+   * `sourceText` is the full flow text this range was resolved against, needed to tell
+   * an end just past real text from an end in indentation. Lines break at `\n`, `\r\n`
+   * and `\r` only (`rule: columns`), and blankness is JS `trim()` (`rule: text`).
+   */
+  coveredLines(sourceText: string): number[] {
+    const lines = sourceText.split(/\r\n|\r|\n/);
+    // Python's `splitlines` yields no empty line after a final line break.
+    if (lines[lines.length - 1] === "") lines.pop();
+    const lineCount = lines.length;
+    if (!(1 <= this.startLine && this.startLine <= lineCount)) return [this.startLine];
+
+    let last: number;
+    if (this.endLine > lineCount) {
+      // A stale range may extend beyond the retained source. The available
+      // tail is still real context, but nonexistent line numbers are not.
+      last = lineCount;
+    } else {
+      last = this.endLine;
+      const prefix =
+        0 < last && last <= lineCount ? lines[last - 1]!.slice(0, this.endCol - 1) : "";
+      if (!prefix.trim()) last -= 1;
+    }
+    last = Math.min(last, lineCount);
+    const covered: number[] = [];
+    for (let line = this.startLine; line <= Math.max(last, this.startLine); line++) {
+      covered.push(line);
+    }
+    return covered;
+  }
+}
+
 /** An opaque source identity interpreted only by its producing front end. */
 export class OriginRef {
   /** A non-empty key unique within one returned authored flow. */
@@ -259,5 +325,75 @@ export class Failure {
       cause_type: this.causeType,
       traceback: this.traceback,
     };
+  }
+}
+
+/** A resolved source frame ready for a format-neutral diagnostic renderer. */
+export class DiagnosticFrame {
+  /** Human-facing source name, such as a path or notebook cell. */
+  readonly label: string;
+  /** Complete source text that `range` indexes. */
+  readonly text: string;
+  /** Concrete primary location within `text`. */
+  readonly range: SourceRange;
+  /** Optional context attached to this frame. */
+  readonly note: string | null;
+
+  /** Create a frame; `note` defaults to `null`. */
+  constructor(options: { label: string; text: string; range: SourceRange; note?: string | null }) {
+    const { label, text, range, note = null } = options;
+    this.label = label;
+    this.text = text;
+    this.range = range;
+    this.note = note;
+  }
+}
+
+/** One immutable presentation-ready diagnostic. */
+export class Diagnostic {
+  /** Stable semantic or load-time category. */
+  readonly code: string;
+  /** Human-readable failure detail. */
+  readonly message: string;
+  /** Resolved source context ordered outermost to innermost. */
+  readonly frames: readonly DiagnosticFrame[];
+  /** Presentation context not tied to one frame. */
+  readonly notes: readonly string[];
+  /** Optional runtime execution identity. */
+  readonly nodeId: string | null;
+  /** Optional thrown error `name` for debugging. */
+  readonly causeType: string | null;
+  /** Optional opaque stack text. */
+  readonly traceback: string | null;
+
+  /**
+   * Create a diagnostic. `frames` and `notes` default to empty and are copied;
+   * `nodeId`, `causeType` and `traceback` default to `null`.
+   */
+  constructor(options: {
+    code: string;
+    message: string;
+    frames?: readonly DiagnosticFrame[];
+    notes?: readonly string[];
+    nodeId?: string | null;
+    causeType?: string | null;
+    traceback?: string | null;
+  }) {
+    const {
+      code,
+      message,
+      frames = [],
+      notes = [],
+      nodeId = null,
+      causeType = null,
+      traceback = null,
+    } = options;
+    this.code = code;
+    this.message = message;
+    this.frames = [...frames];
+    this.notes = [...notes];
+    this.nodeId = nodeId;
+    this.causeType = causeType;
+    this.traceback = traceback;
   }
 }

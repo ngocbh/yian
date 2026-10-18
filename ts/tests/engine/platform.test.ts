@@ -2,7 +2,9 @@
  * Contracts for `src/platform.ts`: runtime detection; the SQLite wrapper that
  * `src/yian/memory/storage/sqlite.py`'s TypeScript port runs on, with the result
  * codes Python reads from `sqlite_errorcode`; and the exclusive file lock that
- * replaces the `flock` calls in `runtime/log.py` and `llm_clients/auth/store.py`.
+ * replaces the `flock` calls in `runtime/log.py` and `llm_clients/auth/store.py`;
+ * the scheduler that ports TOOL's chunked `_sleep` in `nodes/tool/node.py`, with a
+ * virtual one for tests; and the waiting lock that ports the auth store's `_locked`.
  */
 
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
@@ -17,10 +19,17 @@ import {
   isLocked,
   lockFile,
   openSqlite,
+  realScheduler,
   runtime,
+  type Scheduler,
+  SLEEP_CHUNK_MS,
   type Sqlite,
   sqliteErrorCode,
+  virtualScheduler,
+  waitForLock,
 } from "../../src/platform.ts";
+
+const realSetTimeout = globalThis.setTimeout;
 
 let dir: string;
 let file: string;
@@ -379,5 +388,236 @@ describe("isLocked", () => {
     reader.prepare("SELECT count(*) FROM sqlite_master").get();
     expect(isLocked(file)).toBe(false);
     reader.exec("COMMIT");
+  });
+});
+
+/** Make `setTimeout` fire on the next macrotask whatever its delay, running `after(n)` after the n-th (1-based) callback. */
+function instantTimers(after: (n: number) => void = () => {}) {
+  let fired = 0;
+  return spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void) =>
+    realSetTimeout(() => {
+      callback();
+      after(++fired);
+    }, 0)) as unknown as typeof setTimeout);
+}
+
+/** Return the delays `setTimeout` was armed with. */
+function delays(spy: ReturnType<typeof instantTimers>): unknown[] {
+  return spy.mock.calls.map((call) => call[1]);
+}
+
+/** Return what `promise` rejects with; fail if it resolves. */
+async function rejection(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected a rejection");
+}
+
+describe("realScheduler", () => {
+  test("sleep(0) and sleep(-5) resolve", async () => {
+    await realScheduler.sleep(0);
+    await realScheduler.sleep(-5);
+  });
+
+  test("sleep(NaN) and sleep(Infinity) reject with RangeError", async () => {
+    expect(await rejection(realScheduler.sleep(Number.NaN))).toBeInstanceOf(RangeError);
+    expect(await rejection(realScheduler.sleep(Number.POSITIVE_INFINITY))).toBeInstanceOf(RangeError);
+  });
+
+  test("sleep(30) takes at least 30 ms", async () => {
+    const started = performance.now();
+    await realScheduler.sleep(30);
+    expect(performance.now() - started).toBeGreaterThanOrEqual(30);
+  });
+
+  test("a sleep longer than a chunk arms timers chunk by chunk and never reads the clock", async () => {
+    const timers = instantTimers();
+    const now = spyOn(Date, "now");
+    await realScheduler.sleep(2.5 * SLEEP_CHUNK_MS);
+    expect(delays(timers)).toEqual([SLEEP_CHUNK_MS, SLEEP_CHUNK_MS, SLEEP_CHUNK_MS / 2]);
+    expect(now).not.toHaveBeenCalled();
+  });
+
+  test("an abort between chunks rejects with its reason and arms no further timer", async () => {
+    const controller = new AbortController();
+    const reason = new Error("stop");
+    const timers = instantTimers((n) => {
+      if (n === 2) controller.abort(reason);
+    });
+    expect(await rejection(realScheduler.sleep(3 * SLEEP_CHUNK_MS, controller.signal))).toBe(reason);
+    expect(delays(timers)).toEqual([SLEEP_CHUNK_MS, SLEEP_CHUNK_MS]);
+  });
+
+  test("a pre-aborted signal rejects with its reason and arms no timer", async () => {
+    const reason = new Error("stopped");
+    const signal = AbortSignal.abort(reason);
+    const timers = instantTimers();
+    for (const ms of [10, 0, -5]) expect(await rejection(realScheduler.sleep(ms, signal))).toBe(reason);
+    expect(timers).not.toHaveBeenCalled();
+  });
+
+  test("an abort during a long sleep rejects at once", async () => {
+    const controller = new AbortController();
+    const started = performance.now();
+    realSetTimeout(() => controller.abort(), 20);
+    const error = await rejection(realScheduler.sleep(10_000, controller.signal));
+    expect((error as DOMException).name).toBe("AbortError");
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
+  test("completed sleeps leave no abort listener on the signal", async () => {
+    const { signal } = new AbortController();
+    let listeners = 0;
+    const add = signal.addEventListener.bind(signal);
+    const remove = signal.removeEventListener.bind(signal);
+    signal.addEventListener = ((type: string, ...rest: [EventListener, AddEventListenerOptions?]) => {
+      if (type === "abort") listeners++;
+      add(type, ...rest);
+    }) as typeof signal.addEventListener;
+    signal.removeEventListener = ((type: string, ...rest: [EventListener, EventListenerOptions?]) => {
+      if (type === "abort") listeners--;
+      remove(type, ...rest);
+    }) as typeof signal.removeEventListener;
+    for (let i = 0; i < 20; i++) await realScheduler.sleep(1, signal);
+    expect(listeners).toBe(0);
+  });
+
+  test("now() is the wall clock", () => {
+    expect(Math.abs(realScheduler.now() - Date.now())).toBeLessThan(1000);
+  });
+});
+
+describe("virtualScheduler", () => {
+  test("now() starts at start and a sleep advances it", async () => {
+    const clock = virtualScheduler(1000);
+    expect(clock.now()).toBe(1000);
+    await clock.sleep(500);
+    expect(clock.now()).toBe(1500);
+  });
+
+  test("concurrent sleeps resolve in deadline order and end at the latest deadline", async () => {
+    const clock = virtualScheduler(1000);
+    const ended: [number, number][] = [];
+    await Promise.all(
+      [1000, 500].map((ms) => clock.sleep(ms).then(() => ended.push([ms, clock.now()]))),
+    );
+    expect(ended).toEqual([
+      [500, 1500],
+      [1000, 2000],
+    ]);
+    expect(clock.now()).toBe(2000);
+  });
+
+  test("same-deadline sleepers resolve in registration order", async () => {
+    const clock = virtualScheduler();
+    const ended: string[] = [];
+    await Promise.all(["a", "b", "c"].map((name) => clock.sleep(100).then(() => ended.push(name))));
+    expect(ended).toEqual(["a", "b", "c"]);
+    expect(clock.now()).toBe(100);
+  });
+
+  test("an aborted sleeper rejects with its reason; a longer sleep still ends at its deadline", async () => {
+    const clock = virtualScheduler(1000);
+    const controller = new AbortController();
+    const reason = new Error("stop");
+    const aborted = rejection(clock.sleep(500, controller.signal));
+    const longer = clock.sleep(2000);
+    controller.abort(reason);
+    expect(await aborted).toBe(reason);
+    await longer;
+    expect(clock.now()).toBe(3000);
+  });
+
+  test("sleep(0) doesn't advance the clock", async () => {
+    const clock = virtualScheduler(1000);
+    await clock.sleep(0);
+    expect(clock.now()).toBe(1000);
+  });
+
+  test("sleep(NaN) rejects with RangeError, and a pre-aborted signal rejects for 0", async () => {
+    const clock = virtualScheduler();
+    expect(await rejection(clock.sleep(Number.NaN))).toBeInstanceOf(RangeError);
+    const reason = new Error("stopped");
+    expect(await rejection(clock.sleep(0, AbortSignal.abort(reason)))).toBe(reason);
+  });
+});
+
+/** Wrap `base`, counting sleeps and running `during(n)` once the n-th (1-based) sleep has begun. */
+function countingSleeps(base: Scheduler, during: (n: number) => void = () => {}) {
+  const counted = {
+    sleeps: 0,
+    now: () => base.now(),
+    sleep(ms: number, signal?: AbortSignal) {
+      const sleeping = base.sleep(ms, signal);
+      during(++counted.sleeps);
+      return sleeping;
+    },
+  };
+  return counted;
+}
+
+describe("waitForLock", () => {
+  test("a held lock times out busy once the virtual deadline passes", async () => {
+    hold(file);
+    const scheduler = countingSleeps(virtualScheduler(1000));
+    const started = performance.now();
+    const error = await rejection(waitForLock(file, { timeoutMs: 500, scheduler }));
+    expect(error).toBeInstanceOf(FileLockError);
+    expect((error as FileLockError).reason).toBe("busy");
+    expect((error as FileLockError).message).toContain("timed out");
+    expect(scheduler.now()).toBeGreaterThanOrEqual(1500);
+    expect(scheduler.sleeps).toBe(5);
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
+  test("a NaN or negative timeout throws RangeError", async () => {
+    for (const timeoutMs of [Number.NaN, -1]) {
+      expect(await rejection(waitForLock(file, { timeoutMs, scheduler: virtualScheduler() }))).toBeInstanceOf(
+        RangeError,
+      );
+    }
+  });
+
+  test("an abort during the third poll's sleep rejects with its reason", async () => {
+    hold(file);
+    const controller = new AbortController();
+    const reason = new Error("stop");
+    const scheduler = countingSleeps(virtualScheduler(), (n) => {
+      if (n === 3) controller.abort(reason);
+    });
+    expect(await rejection(waitForLock(file, { signal: controller.signal, scheduler }))).toBe(reason);
+    expect(scheduler.sleeps).toBe(3);
+  });
+
+  test("a holder released during the second poll's sleep hands over the lock", async () => {
+    const holder = hold(file);
+    const scheduler = countingSleeps(virtualScheduler(), (n) => {
+      if (n === 2) holder.release();
+    });
+    const lock = await waitForLock(file, { scheduler });
+    held.push(lock);
+    expect(lock.path).toBe(file);
+    expect(isLocked(file)).toBe(true);
+    expect(scheduler.sleeps).toBe(2);
+  });
+
+  test("a free lock is taken at once", async () => {
+    const scheduler = countingSleeps(virtualScheduler());
+    const lock = await waitForLock(file, { scheduler });
+    held.push(lock);
+    expect(isLocked(file)).toBe(true);
+    expect(scheduler.sleeps).toBe(0);
+  });
+
+  test("private on a 0644 file fails not-private without waiting", async () => {
+    fs.writeFileSync(file, "");
+    fs.chmodSync(file, 0o644);
+    const scheduler = countingSleeps(virtualScheduler());
+    const error = await rejection(waitForLock(file, { private: true, scheduler }));
+    expect((error as FileLockError).reason).toBe("not-private");
+    expect(scheduler.sleeps).toBe(0);
   });
 });

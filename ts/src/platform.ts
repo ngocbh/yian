@@ -1,8 +1,8 @@
 /**
  * The one module holding runtime-specific APIs, so the rest of yian runs unchanged
  * on Node and Bun: runtime detection, a SQLite wrapper over `bun:sqlite` or
- * `node:sqlite`, loaded lazily for the runtime in use, and an exclusive file lock
- * built on it.
+ * `node:sqlite`, loaded lazily for the runtime in use, an exclusive file lock
+ * built on it, and the scheduler that clocks and timed waits go through.
  */
 
 import type { Database } from "bun:sqlite";
@@ -290,5 +290,169 @@ export function isLocked(path: string): boolean {
     throw error;
   } finally {
     db?.close();
+  }
+}
+
+/** A clock and a cancellable relative sleep; tests swap in `virtualScheduler`. */
+export interface Scheduler {
+  /** Return the wall-clock time in epoch milliseconds. */
+  now(): number;
+  /**
+   * Resolve after `ms` milliseconds, or reject with `signal.reason` once `signal`
+   * aborts, including when it already has (for any `ms`). Otherwise `ms <= 0`
+   * resolves without waiting, and a non-finite `ms` rejects with `RangeError`.
+   */
+  sleep(ms: number, signal?: AbortSignal): Promise<void>;
+}
+
+/** The longest single timer `realScheduler.sleep` arms (one hour); longer sleeps run in chunks. */
+export const SLEEP_CHUNK_MS = 3_600_000;
+
+/** Reject unless a sleep of `ms` under `signal` must wait; return whether it must. */
+function mustWait(ms: number, signal: AbortSignal | undefined): boolean {
+  signal?.throwIfAborted();
+  if (ms <= 0) return false;
+  if (!Number.isFinite(ms)) throw new RangeError(`sleep needs a finite number of milliseconds, got ${ms}`);
+  return true;
+}
+
+/** Wait one timer of `ms`, settling early with `signal.reason` on abort. */
+function timer(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve, reject) => {
+    signal?.throwIfAborted();
+    const onAbort = () => {
+      // Clearing the timer keeps an aborted sleep from holding the process open.
+      clearTimeout(id);
+      signal?.removeEventListener("abort", onAbort);
+      reject(signal?.reason);
+    };
+    const id = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort);
+  });
+}
+
+/**
+ * The scheduler on the system clock and `setTimeout`.
+ *
+ * `sleep` is relative and never reads `now()`: it arms timers of at most
+ * `SLEEP_CHUNK_MS`, subtracting each from what's left, since runtimes clamp delays
+ * above 2^31 - 1 ms. Fractional `ms` passes to `setTimeout` unrounded, so the
+ * runtime's timer granularity (whole milliseconds) sets the exact delay. Callers
+ * waiting for a wall-clock deadline re-read `now()` between chunks themselves.
+ */
+export const realScheduler: Scheduler = {
+  now: () => Date.now(),
+  async sleep(ms, signal) {
+    if (!mustWait(ms, signal)) return;
+    while (ms > SLEEP_CHUNK_MS) {
+      await timer(SLEEP_CHUNK_MS, signal);
+      ms -= SLEEP_CHUNK_MS;
+    }
+    await timer(ms, signal);
+  },
+};
+
+/**
+ * Return a scheduler whose clock starts at `start` and moves only to the deadline of
+ * its earliest sleeper.
+ *
+ * Each advance waits one real macrotask first, so whatever a woken sleeper does next
+ * without real I/O (including registering a new sleep) settles before the clock
+ * moves again. Sleepers with the same deadline wake in registration order. The
+ * limit: work that awaits real I/O or real timers between virtual sleeps may see the
+ * clock advance first.
+ */
+export function virtualScheduler(start = 0): Scheduler {
+  let now = start;
+  // Kept ordered by deadline, ties in registration order, so the earliest is first.
+  const sleepers: { deadline: number; wake: () => void }[] = [];
+  let ticking = false;
+
+  /** Schedule the next advance unless one is pending or nobody sleeps. */
+  function tick(): void {
+    if (ticking || sleepers.length === 0) return;
+    ticking = true;
+    setTimeout(() => {
+      ticking = false;
+      const earliest = sleepers.shift();
+      if (earliest) {
+        now = earliest.deadline;
+        earliest.wake();
+      }
+      tick();
+    }, 0);
+  }
+
+  return {
+    now: () => now,
+    async sleep(ms, signal) {
+      if (!mustWait(ms, signal)) return;
+      await new Promise<void>((resolve, reject) => {
+        const onAbort = () => {
+          const at = sleepers.indexOf(sleeper);
+          if (at !== -1) sleepers.splice(at, 1);
+          signal?.removeEventListener("abort", onAbort);
+          reject(signal?.reason);
+        };
+        const sleeper = {
+          deadline: now + ms,
+          wake: () => {
+            signal?.removeEventListener("abort", onAbort);
+            resolve();
+          },
+        };
+        const later = sleepers.findIndex((other) => other.deadline > sleeper.deadline);
+        sleepers.splice(later === -1 ? sleepers.length : later, 0, sleeper);
+        signal?.addEventListener("abort", onAbort);
+        tick();
+      });
+    },
+  };
+}
+
+/** How long `waitForLock` sleeps between tries on a busy lock. */
+const LOCK_POLL_MS = 100;
+
+/**
+ * Take the exclusive lock on `path` as `lockFile` does, retrying every 100 ms while
+ * another holder has it.
+ *
+ * Gives up with `FileLockError` (reason `"busy"`) once `timeoutMs` has passed on
+ * `scheduler.now()`; the default `Infinity` waits for as long as it takes. The
+ * deadline is wall-clock time, so a clock step can lengthen or shorten a bounded
+ * wait. Each try first checks `signal`, and an abort rejects with its reason. A
+ * `NaN` or negative `timeoutMs` rejects with `RangeError`. Every other `lockFile`
+ * failure propagates at once.
+ */
+export async function waitForLock(
+  path: string,
+  {
+    timeoutMs = Number.POSITIVE_INFINITY,
+    signal,
+    scheduler = realScheduler,
+    private: isPrivate = false,
+  }: { timeoutMs?: number; signal?: AbortSignal; scheduler?: Scheduler; private?: boolean } = {},
+): Promise<FileLock> {
+  if (Number.isNaN(timeoutMs) || timeoutMs < 0) {
+    throw new RangeError(`waitForLock needs a timeout of 0 or more milliseconds, got ${timeoutMs}`);
+  }
+  const deadline = scheduler.now() + timeoutMs;
+  for (;;) {
+    signal?.throwIfAborted();
+    try {
+      return lockFile(path, { private: isPrivate });
+    } catch (error) {
+      if (!(error instanceof FileLockError) || error.reason !== "busy") throw error;
+      const remaining = deadline - scheduler.now();
+      if (remaining <= 0) {
+        throw new FileLockError(path, "busy", `timed out after ${timeoutMs} ms waiting for another holder`, {
+          cause: error,
+        });
+      }
+      await scheduler.sleep(Math.min(LOCK_POLL_MS, remaining), signal);
+    }
   }
 }

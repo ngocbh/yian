@@ -278,7 +278,7 @@ member's field): an `int` filling a `float` slot widens; a file's JSON form fill
 `Any` value is stored as given: an int stays an int and `True` stays a bool.
 
 Changed (TS yian): `buildValue` walks its whole value as a JSON value (files kept) and refuses
-a part that isn't one; Python's `build_value` didn't walk, and its `canonical_typed` ran
+a part that isn't one; Python's `build_value` doesn't walk, and its `canonical_typed` runs
 `reject_non_json` first.
 
 `normalize_files(typ, value)` applies only the file conversions, with no check and no
@@ -316,9 +316,9 @@ plain containers, and every output check and the stored value use that copy: a `
 whose iteration yields nothing is stored as `[]`).
 
 Changed (TS yian): JSON values are `null`, a boolean, an int (`bigint`), a float (`number`),
-text, and arrays and records of those, so the dict, tuple and set wording above reads as records
-and arrays; anything else (a `Date`, a `Map`, a class instance) is `<value> is not a JSON
-value`. A value shown in a type-check message is in the text form (`"bad" does not match
+text, and arrays and records of those, so the dict and tuple wording above reads as records and
+arrays; anything else (a `Date`, a `Map` or `Set`, a class instance) is `<value> is not a JSON
+value` (`<Date object> is not a JSON value`). A value shown in a type-check message is in the text form (`"bad" does not match
 declared type int`, where Python writes `'bad'`); names keep Python's repr.
 
 Changed (TS yian): host intake replaces the plain-container read. A host value (such as a tool's
@@ -333,15 +333,17 @@ fresh yian value or throws `TypeCheckError` with `path` and the message
 | `number`, an integer within ±(2^53−1) | int (`-0` is `0`) |
 | any other `number` (`±Infinity`, `1e20`, `2.5`, `9007199254740992`) | float |
 | `NaN` | error: `NaN is not a yian value` |
+| a string or record key holding a lone surrogate | error: `text holding a lone surrogate is not a yian value` |
 | `FileRef` | itself |
-| plain array (a hole is `undefined`), plain record | a fresh array or record, its items taken in the same way |
+| plain array (a hole is `undefined`), plain record (prototype `Object.prototype` or `null`) | a fresh array or record, its items taken in the same way |
 | `undefined`, at any depth | error: `undefined is not a yian value; use null` |
 | a container inside itself | error: `value contains itself` |
 | anything else | error: `<Name> is not a yian value` (`Date is not a yian value`) |
 
 Like `JSON.stringify`, intake skips symbol keys, non-enumerable keys and extra array
-properties. A `TypedValue` handed in is refused. A tool returning `undefined` at the top gives
-`null`; a CODE body doing so fails. Depth is checked separately, by `rejectDeepNesting`.
+properties. A `TypedValue` handed in is refused. An error a getter or proxy throws propagates
+unchanged. A tool returning `undefined` at the top gives `null`; a CODE body doing so fails.
+Depth is checked separately, by `rejectDeepNesting`.
 
 ## `Type` — structure beyond the bare tag
 

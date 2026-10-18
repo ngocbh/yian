@@ -10,6 +10,9 @@ deduplicated by content. Run it with:
 
     PYTHONPATH=src python -m pytest -p tests.conformance_harvest --harvest-out DIR tests
 
+Shards of the suite run one after another into one `DIR`: deduplication and reports are per
+process, so neither shards running at once nor `-n` (xdist) are supported.
+
 Design section 4.4 explains the harvest; `conformance/README.md` defines the case format.
 """
 
@@ -52,6 +55,13 @@ from tests import test_conformance as runner
 # their given order.
 _ORDER = ("kind", "flow", "files", "env", "inputs", "run", "host", "backward", "expr",
           "template", "values", "item", "mode", "typedefs", "type", "value", "expect")
+# The order of an `expect`'s keys, and of a run's `output`: the result before what led to it.
+_EXPECT_ORDER = ("raises", "output", "load", "value", "kind", "defaults", "trace", "events",
+                 "stream", "tool_calls", "backward")
+_OUTPUT_ORDER = ("status", "output", "failure")
+# A list of one-line scalars whose texts add up to at most this many characters is written in
+# flow style, as `[12, 3, 12, 8]`.
+_FLOW_LIMIT = 60
 _NAME_LIMIT = 150
 
 
@@ -81,6 +91,13 @@ class _CaseDumper(yaml.SafeDumper):
         """Write every value in full, never as an alias."""
         return True
 
+    def represent_list(self, data: list) -> yaml.SequenceNode:
+        """Write a short list of one-line scalars in flow style, other lists as SafeDumper does."""
+        if all(not isinstance(item, (list, dict)) and "\n" not in str(item) for item in data) and (
+                sum(len(str(item)) for item in data) <= _FLOW_LIMIT):
+            return self.represent_sequence("tag:yaml.org,2002:seq", data, flow_style=True)
+        return super().represent_list(data)
+
     def represent_str(self, data: str) -> yaml.ScalarNode:
         """Write multi-line text in literal block style, other text as SafeDumper does."""
         # YAML 1.1 readers (PyYAML) take these for line breaks and YAML 1.2 readers for text;
@@ -93,6 +110,13 @@ class _CaseDumper(yaml.SafeDumper):
 
 
 _CaseDumper.add_representer(str, _CaseDumper.represent_str)
+_CaseDumper.add_representer(list, _CaseDumper.represent_list)
+
+
+def _ordered(mapping: dict, order: tuple) -> dict:
+    """Return `mapping` with the keys in `order` first, in that order, and the rest as given."""
+    return dict(sorted(mapping.items(),
+                       key=lambda item: order.index(item[0]) if item[0] in order else len(order)))
 
 
 def _dump(case: dict) -> str:
@@ -101,15 +125,21 @@ def _dump(case: dict) -> str:
     Raises ValueError when the text doesn't read back, through the runner's reader and
     `_decode`, to the same data.
     """
-    ordered = sorted(case, key=lambda key: _ORDER.index(key) if key in _ORDER else len(_ORDER))
+    ordered = _ordered(case, _ORDER)
+    if isinstance(ordered.get("expect"), dict):
+        expect = ordered["expect"] = _ordered(ordered["expect"], _EXPECT_ORDER)
+        if isinstance(expect.get("output"), dict):
+            expect["output"] = _ordered(expect["output"], _OUTPUT_ORDER)
     limit = sys.get_int_max_str_digits()
     # As the runner's `_read`: case files have no digit limit.
     sys.set_int_max_str_digits(0)
     try:
         # A value holding itself recurses without end.
-        written = {key: case[key] if key in runner._TEXT_KEYS else _encode(case[key])
-                   for key in ordered}
-        text = yaml.dump(written, Dumper=_CaseDumper, sort_keys=False, allow_unicode=True)
+        written = {key: value if key in runner._TEXT_KEYS else _encode(value)
+                   for key, value in ordered.items()}
+        # No width: an expression folded over lines is harder to read.
+        text = yaml.dump(written, Dumper=_CaseDumper, sort_keys=False, allow_unicode=True,
+                         width=math.inf)
         read = yaml.load(text, Loader=runner._CaseLoader)
         back = {key: value if key in runner._TEXT_KEYS else runner._decode(value)
                 for key, value in read.items()}
@@ -238,15 +268,19 @@ def _harvest_error(exc: Exception) -> str:
 def _plain(value: object, what: str) -> object:
     """Return a copy of `value` when it is data; raise `_Skip("not data: <what>")` otherwise.
 
-    Data is None, bools, ints, floats but NaN, text, lists, and mappings with text keys.
+    Data is None, bools, ints, floats but NaN, text, lists, and mappings with text keys. A value
+    nested deeper than the recursion limit isn't data either.
     """
     kind = type(value)
     if value is None or kind in (bool, int, str) or (kind is float and not math.isnan(value)):
         return value
-    if kind is list:
-        return [_plain(item, what) for item in value]
-    if kind is dict and all(type(key) is str for key in value):
-        return {key: _plain(item, what) for key, item in value.items()}
+    try:
+        if kind is list:
+            return [_plain(item, what) for item in value]
+        if kind is dict and all(type(key) is str for key in value):
+            return {key: _plain(item, what) for key, item in value.items()}
+    except RecursionError:
+        raise _Skip(f"not data: {what} (nested too deep)") from None
     raise _Skip(f"not data: {what}")
 
 
@@ -631,9 +665,10 @@ def _record_resume_flow(arguments: dict):
 def _taken(tools: list, schema: type | None, messages: list) -> tuple | None:
     """Take the model call being made with `messages`, `tools` bound and `schema` asked for.
 
-    Returns the active record, the call's `(node, consumer)` and its request in the case's
-    form, to give `_add_entry`. None when no record is active, or when the call can't be
-    recorded, which skips the record's run.
+    Its `host.models` entry is reserved now, in the order calls start, as the runner's replay
+    takes entries. Returns the active record, the reserved entry, empty until `_add_entry`
+    fills it, and the call's request in the case's form. None when no record is active, or
+    when the call can't be recorded, which skips the record's run.
     """
     key = runner._take_model_key()
     state = _STATE
@@ -650,19 +685,28 @@ def _taken(tools: list, schema: type | None, messages: list) -> tuple | None:
             raise _Skip("model: call outside any AGENT")
         if key[1] not in runner._CONSUMERS:
             raise _Skip(f"model: {key[1]} call")
-        return call, key, _model_data(runner._v1_request, messages, tools, schema)
+        request = _model_data(runner._v1_request, messages, tools, schema)
     except _Skip as skip:
         _skip_host(call, str(skip))
+        return None
     except Exception as exc:
         _skip_host(call, _harvest_error(exc))
-    return None
+        return None
+    node, consumer = key
+    entry: dict = {}
+    with state.lock:
+        # A call starting after its run ended (a thread the test left running) adds nothing.
+        if state.active is not call:
+            return None
+        call.models.setdefault(node, {}).setdefault(consumer, []).append(entry)
+    return call, entry, request
 
 
 def _add_entry(taken: tuple | None, entry) -> None:
-    """Add the `host.models` entry `entry()` gives, with its request, for a call `_taken` took."""
+    """Fill the `host.models` entry `_taken` reserved with `entry()` and the call's request."""
     if taken is None:
         return
-    call, (node, consumer), request = taken
+    call, reserved, request = taken
     try:
         recorded = {**entry(), "request": request}
     except _Skip as skip:
@@ -672,10 +716,10 @@ def _add_entry(taken: tuple | None, entry) -> None:
         _skip_host(call, _harvest_error(exc))
         return
     with _STATE.lock:
-        # A call ending after its run did (a thread the test left running) would change a case
-        # already built.
+        # A call ending after its run did (a thread the test left running) leaves its entry
+        # empty, which drops the run's case.
         if _STATE.active is call:
-            call.models.setdefault(node, {}).setdefault(consumer, []).append(recorded)
+            reserved.update(recorded)
 
 
 def _skip_host(call: _Call, reason: str) -> None:
@@ -858,7 +902,8 @@ def _factory(original):
     """Return the model factory `original` wrapped to give recorded models (see `_recording`)."""
     def model_from_config(*args: object, **kwargs: object) -> object:
         model = original(*args, **kwargs)
-        return _Proxy(model) if _recording() else model
+        # A test's factory that calls the wrapped one gives a proxy already.
+        return model if type(model) is _Proxy or not _recording() else _Proxy(model)
 
     model_from_config.harvest_wraps = original
     return model_from_config
@@ -995,8 +1040,10 @@ class _Call:
         self.keys: dict = {}
         self.backward: list = []
         self.outcomes: list = []
-        # Whether a load or run evaluated an expression using `and` or `or`.
+        # Whether a load or run evaluated an expression using `and` or `or`, and the trees it
+        # checked, by id (strong references: ids can be reused).
         self.and_or = False
+        self.checked: dict = {}
         self.written = False
 
 
@@ -1072,8 +1119,13 @@ def _noting_and_or(original):
         state = _STATE
         call = state.active if state is not None else None
         tree = args[0] if args else kwargs.get("tree")
-        if call is not None and not call.and_or and _uses_and_or(tree):
-            call.and_or = True
+        if call is not None and not call.and_or and id(tree) not in call.checked:
+            call.checked[id(tree)] = tree
+            try:
+                call.and_or = _uses_and_or(tree)
+            except Exception:
+                # The check never changes yian's result; an unchecked tree isn't flagged.
+                pass
         return original(*args, **kwargs)
 
     return wrapper
@@ -1354,6 +1406,9 @@ def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list]:
         raise _Skip(call.skip)
     if call.host_skip:
         raise _Skip(call.host_skip)
+    if any(not entry for consumers in call.models.values() for script in consumers.values()
+           for entry in script):
+        raise _Skip("model: a call didn't end during its run")
     case, result = _completed(call)
     _scan_secrets(case, call.secrets)
     # Python's `and`/`or` give an operand, not a bool, and that decides conditions too.
@@ -1474,12 +1529,18 @@ def pytest_configure(config: pytest.Config) -> None:
 
     `RunResult.backward` is wrapped. The model factory and the TOOL backoff draw are wrapped,
     and so is each one a test assigns; the runner's seats name each model call's node and
-    consumer.
+    consumer. `-n` is refused, and the temporary files a killed harvest left under `<out>` are
+    removed.
     """
     global _STATE
     out = config.getoption("harvest_out")
     if not out:
         return
+    if config.pluginmanager.hasplugin("xdist") and config.getoption("numprocesses", None):
+        raise pytest.UsageError("--harvest-out doesn't support -n: run shards one after another")
+    # A harvest killed between a write and its rename leaves the temporary file.
+    for leftover in [*Path(out).glob("cases/*/*.yaml.tmp"), *Path(out).glob("report/*.json.tmp")]:
+        leftover.unlink()
     _STATE = _Harvest(config, Path(out))
     entries = {
         "eval_expr": (eval_expr, _record_eval_expr),
@@ -1603,7 +1664,13 @@ def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None):
         # its file's report isn't written as if the file were done.
         _end_test(_STATE)
         raise
-    _finish(_STATE, item)
+    try:
+        _finish(_STATE, item)
+    except Exception as exc:
+        # The file stays unreported, as its count of tests left never reaches zero or its
+        # report wasn't written, and the session goes on.
+        _end_test(_STATE)
+        sys.stderr.write(f"conformance harvest: {item.nodeid}: {_harvest_error(exc)}\n")
     return result
 
 

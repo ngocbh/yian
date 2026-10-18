@@ -7,7 +7,6 @@ another root instead.
 
 from __future__ import annotations
 
-import builtins
 import contextlib
 from dataclasses import fields, is_dataclass
 from functools import reduce
@@ -219,6 +218,8 @@ _TOOL_ERRORS = {
     for error in (PermanentToolError, TransientToolError, ReportedToolError, ToolCheckError,
                   TimeoutError, ConnectionError)
 }
+# The builtins a scripted model error can be; any other class is a plain error of that name.
+_MODEL_ERRORS = {error.__name__: error for error in (TimeoutError, ConnectionError)}
 
 
 def _read(path: Path) -> dict:
@@ -773,13 +774,18 @@ def _seated(patch: pytest.MonkeyPatch) -> None:
     `run_agent` seats its node's `agent` calls (`compose` for a `<gate>__compose` node),
     `backward_agent` its node's `backward` calls and `prepare_history` `summary` calls;
     `generate_structured` keeps its caller's seat and starts counting the calls made under it.
+    A call whose context can't be read gets no seat.
     """
-    def wrap(module: object, name: str, make_seat) -> None:
+    def wrap(module: object, name: str, make_seat, first: str | None = None) -> None:
         inner = getattr(module, name)
 
         def seated(*args: object, **kwargs: object) -> object:
             outer = getattr(_SEAT, "seat", None)
-            _SEAT.seat = make_seat(outer, *args)
+            try:
+                _SEAT.seat = make_seat(outer, args[0] if args else kwargs.get(first))
+            except Exception:
+                # A call the seat can't be read from gets none, rather than an error in yian.
+                _SEAT.seat = None
             try:
                 return inner(*args, **kwargs)
             finally:
@@ -790,13 +796,13 @@ def _seated(patch: pytest.MonkeyPatch) -> None:
     wrap(agent_node, "run_agent", lambda outer, ctx: {
         "node": ctx.node_id,
         "consumer": "compose" if ctx.node_id.endswith("__compose") else "agent",
-    })
+    }, "ctx")
     wrap(agent_node, "backward_agent",
-         lambda outer, context, *rest: {"node": context.node_id, "consumer": "backward"})
+         lambda outer, context: {"node": context.node_id, "consumer": "backward"}, "context")
     wrap(agent_loop, "generate_structured",
-         lambda outer, *rest: None if outer is None else {**outer, "calls": 0})
+         lambda outer, first: None if outer is None else {**outer, "calls": 0})
     wrap(agent_loop, "prepare_history",
-         lambda outer, *rest: None if outer is None else {**outer, "consumer": "summary"})
+         lambda outer, first: None if outer is None else {**outer, "consumer": "summary"})
 
 
 def _take_model_key() -> tuple[str, str] | None:
@@ -942,14 +948,12 @@ def _request_difference(what: str, expected: dict, messages: list, tools: list,
 
 
 def _raise(error: dict) -> NoReturn:
-    """Raise a model call's recorded error.
+    """Raise a model call's scripted error.
 
-    Its class is the builtin of that name when that is an `Exception`, else a new class of that
+    Its class is `TimeoutError` or `ConnectionError` for those names, else a new class of that
     name; a `status` becomes the error's `status_code`.
     """
-    cls = getattr(builtins, error["class"], None)
-    if not (isinstance(cls, type) and issubclass(cls, Exception)):
-        cls = type(error["class"], (Exception,), {})
+    cls = _MODEL_ERRORS.get(error["class"]) or type(error["class"], (Exception,), {})
     exc = cls(error["message"])
     if "status" in error:
         exc.status_code = error["status"]

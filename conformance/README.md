@@ -258,13 +258,17 @@ A case can't hold code, so its host is declared under `host`.
   `{chunks: [<chunk>, ...]}` whose last chunk is `{finish: <reason or null>}`; or
   `{chunks: [...], raise: {class, message, status}}` for a failure after the chunks
   (`chunks: []`: before any output; `status` optional, the provider's HTTP status). The call
-  fails with an error of class `class` (read through the error-class table) and message
-  `message`.
+  fails with an error of class `class` and message `message`: as for a stub tool, `TimeoutError`
+  and `ConnectionError` are those classes, and any other name is a plain error with that class
+  name.
   Any entry may add `request: {messages: [<message>, ...], tools: [<tool spec>, ...], schema:
   <JSON Schema>}` (Python's schema:
   `convert_to_openai_tool(schema)["function"]["parameters"]`), which the runner compares
   exactly with the call's, failing the case when they differ (`tools` absent: none bound;
   `schema` present: the call asked for output matching it, Python's native structured call).
+  A `request`, like a model call's `structured_*` `purpose` in `events`, records how Python
+  lowers the call, so a case that depends on either carries `rules: [llm]` (harvested cases are
+  tagged before they are committed).
   A tool spec is `{name, description, parameters}` (Python:
   `convert_to_openai_tool(tool)["function"]`), in the bound order. A reply to a `schema` call is
   one text part holding the JSON value in the schema's carrier form (a wrapped scalar is
@@ -276,9 +280,10 @@ A case can't hold code, so its host is declared under `host`.
   served to a streamed call streams as one chunk; a `chunks` entry served to an unstreamed call
   is summed. The script replaces the provider below config resolution: the runner still
   resolves and checks each call's config, so a `models` case needs no provider key unless it
-  tests credentials. In `run`, `resume` and `backward` cases every model call is scripted, so a
-  call with no script fails the case at once instead of reaching a provider; calls that run out
-  and leftovers fail as above.
+  tests credentials. The Python runner resolves no credentials from the config, so it doesn't
+  check a pinned saved login that changed or was removed. In `run`, `resume` and `backward`
+  cases every model call is scripted, so a call with no script fails the case at once instead of
+  reaching a provider; calls that run out and leftovers fail as above.
 - **`crash_after_record`**: `resume` cases only (above).
 
 `expect.tool_calls` lists, per tool that was called, each call in order as `{args, call_id,

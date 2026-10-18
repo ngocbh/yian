@@ -1,0 +1,124 @@
+# From tests/seeds/06-case-on.yaml.
+# A `case ... on` matches the classifier's text `con` and runs `con_note`; the other notes are
+# skipped and get no model call, and the 3-way coalesce returns `con_note`'s text.
+kind: run
+flow: |
+  # 06 — `case ... on`: match a node's value against alternatives.
+  #
+  # A classifier AGENT emits a label; `case ... on` routes on that VALUE — SQL's simple
+  # form `CASE <expr> WHEN <value> ... ELSE`, the OCaml `match`. Contrast 02, the
+  # searched form (`case` with no `on:`, each `when:` a boolean). Shows: the `on:` form,
+  # value matching, an `else:` fallback, and a 3-way n-ary `|` coalesce join.
+
+  id: case-on
+  name: case_on_category
+  description: Classify a topic's market category, then route to a category-specific note.
+
+  input:
+    topic: !str
+
+  nodes:
+    classify:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output: str                # one of "pro" | "con" | "mixed"
+      prompt: |-
+        Classify ${topic}'s current market category as exactly one lowercase word —
+        pro, con, or mixed. Output only that word.
+
+    route:
+      kind: case
+      on: ${classify.output}     # simple form: match this VALUE (vs N boolean when:s)
+      cases:                      # here `when:` is a value to match, not a boolean
+        - when: pro
+          then: pro_note
+        - when: con
+          then: con_note
+        - when: mixed
+          then: choppy_note
+      else: choppy_note           # fallback when the value matches nothing
+
+    pro_note:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output: str
+      prompt: "Write a neutral 2-sentence note on ${topic} in an rising context. No advice."
+
+    con_note:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output: str
+      prompt: "Write a neutral 2-sentence note on ${topic} in a falling context. No advice."
+
+    choppy_note:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output: str
+      prompt: "Write a neutral 2-sentence note on ${topic} in a range-bound context. No advice."
+
+  # Exactly one branch runs; the rest skip-flood to null. The 3-way coalesce returns
+  # whichever ran — this is what `|` does that nested `:-` can't do cleanly.
+  output:
+    category: ${classify.output}
+    note:   ${pro_note.output | con_note.output | choppy_note.output}
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
+env: {OPENAI_API_KEY: "<key:1>"}
+inputs: {topic: ACME}
+run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
+host:
+  models:
+    classify:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: con}]
+    con_note:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: ACME trades lower. Volumes are thin.}]
+expect:
+  output:
+    status: succeeded
+    output: {category: con, note: ACME trades lower. Volumes are thin.}
+  # A skipped node writes no record.
+  trace:
+    - - run_started
+      - null
+      - inputs: {topic: ACME}
+        learnable: false
+        num_workers: 0
+        effective_llm_by_static_path:
+          classify:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          pro_note:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          con_note:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          choppy_note:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {topic: ACME}}]
+    - [node_started, classify]
+    - [node_succeeded, classify, {value: con}]
+    - [node_started, route]
+    - [node_routed, route, {handle: con_note}]
+    - [node_started, con_note]
+    - [node_succeeded, con_note, {value: ACME trades lower. Volumes are thin.}]
+    - [node_started, __end__]
+    - [node_succeeded, __end__, {value: {category: con, note: ACME trades lower. Volumes are thin.}}]

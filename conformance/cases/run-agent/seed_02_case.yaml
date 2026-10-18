@@ -1,0 +1,107 @@
+# From tests/seeds/02-case.yaml.
+# A float AGENT output routes a searched `case` to `positive`; `cautious` is skipped and gets no
+# model call, and the coalesce join returns `positive`'s text.
+kind: run
+flow: |
+  # 02 — Branching with a `case` node (searched form) + a coalesce join.
+  #
+  # A score routes to one of two AGENT takes; the flow returns whichever ran, via a
+  # coalesce binding. Shows: a `case` node (SQL searched form — when:/then: + else:),
+  # control routing inferred from then/else targets (no edges:), the recursive
+  # skip-flood (only the taken branch runs), and ${a | b} coalesce to collect
+  # "whichever branch produced a value".
+
+  id: case
+  name: case_router
+  description: Route a topic to a positive or cautious take based on a score threshold.
+
+  input:
+    topic: !str
+
+  nodes:
+    score:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output: float
+      prompt: "Rate ${topic}'s near-term relevance as a single number in [-1, 1]. Output only the number."
+
+    gate:
+      kind: case
+      # A `case` routes only — no input:. The edge score -> gate is inferred from the
+      # score.output ref in when:. Each `when:` is a boolean expression; the first
+      # true one's `then:` runs. `else:` is the unconditional fallback branch.
+      cases:
+        - when: "score.output >= 0.5"
+          then: positive
+      else: cautious
+
+    positive:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output: str
+      prompt: "Write a neutral pro case for ${topic} in 3 sentences. No advice."
+
+    cautious:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output: str
+      prompt: "Write a neutral cautionary note for ${topic} in 3 sentences. No advice."
+
+  # Exactly one of positive/cautious runs; the other is skip-flooded and never writes a
+  # value, so its ref resolves to null. Coalesce picks the one that ran.
+  output: ${positive.output | cautious.output}
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
+env: {OPENAI_API_KEY: "<key:1>"}
+inputs: {topic: ACME}
+run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
+host:
+  models:
+    score:
+      agent:
+        # A wrapped scalar's carrier: 0.6 meets the `>= 0.5` branch.
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: '{"value": 0.6}'}]
+    positive:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: ACME's demand is steady.}]
+expect:
+  output: {status: succeeded, output: ACME's demand is steady.}
+  # A skipped node writes no record.
+  trace:
+    - - run_started
+      - null
+      - inputs: {topic: ACME}
+        learnable: false
+        num_workers: 0
+        effective_llm_by_static_path:
+          score:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          positive:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+          cautious:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {topic: ACME}}]
+    - [node_started, score]
+    - [node_succeeded, score, {value: 0.6}]
+    - [node_started, gate]
+    - [node_routed, gate, {handle: positive}]
+    - [node_started, positive]
+    - [node_succeeded, positive, {value: ACME's demand is steady.}]
+    - [node_started, __end__]
+    - [node_succeeded, __end__, {value: ACME's demand is steady.}]

@@ -29,8 +29,10 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   variables, so run them with none set; the test files that set limits reset them with
   `install(BUILTIN)` or `forget()`.
 - `src/platform.ts` holds the runtime-specific APIs: `runtime`, SQLite (`openSqlite`,
-  `sqliteErrorCode`), the exclusive file lock (`lockFile`, `waitForLock`, `isLocked`) and time
-  (`Scheduler`, `realScheduler`, `virtualScheduler`, `SLEEP_CHUNK_MS`). Never open a lock file
+  `sqliteErrorCode`), the exclusive file lock (`lockFile`, `waitForLock`, `isLocked`), time
+  (`Scheduler`, `realScheduler`, `virtualScheduler`, `SLEEP_CHUNK_MS`) and HTTP (`safeFetch`
+  over an injectable `Send`, which never follows a redirect, throws `RedirectError` for a 3xx
+  and sends `USER_AGENT`; every request goes through it). Never open a lock file
   any other way: on Node, closing any descriptor of a locked file drops the process's lock. Code
   that waits takes an injected `Scheduler`, so tests and conformance run on `virtualScheduler`.
   `stripTypes` strips a CODE body's types with amaro on both runtimes, keeping every line

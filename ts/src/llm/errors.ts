@@ -7,6 +7,7 @@
  * server's requested delay the way that SDK does.
  */
 
+import { redirectDetail } from "../platform.ts";
 import { parseJson } from "../typesys/json.ts";
 
 /** What went wrong with a model call, independent of the provider. */
@@ -270,28 +271,4 @@ export function capDetail(text: string): string {
   if (text.length <= MAX_DETAIL_CHARS) return text;
   const points = Array.from(text);
   return points.length > MAX_DETAIL_CHARS ? points.slice(0, MAX_DETAIL_CHARS).join("") + "…" : text;
-}
-
-/**
- * Name a redirect's target by scheme, host and port only; the path, query and user info
- * can carry tokens, so they never reach the message.
- */
-export function redirectDetail(location: string | null): string {
-  if (!location) return "redirect without a Location header";
-  const text = location.trim();
-  const scheme = /^[A-Za-z][A-Za-z0-9+.-]*:/.exec(text)?.[0] ?? "";
-  const rest = text.slice(scheme.length);
-  // Follows only urlsplit's "is there an authority" rule (`//` then a non-empty authority);
-  // the URL parser alone would read `http:///x` or `http:x` as host `x`. `//user@/x` and
-  // `//:80/x` give "unparsable" here where Python says relative.
-  if (!/^\/\/[^/?#]/.test(rest)) return "redirect to a relative Location";
-  let url: URL;
-  try {
-    url = new URL((scheme || "http:") + rest);
-  } catch {
-    return "redirect to an unparsable Location";
-  }
-  if (!url.hostname) return "redirect to a relative Location";
-  if (!scheme) return "redirect to a Location without a scheme";
-  return `redirect to ${url.protocol}//${url.hostname}` + (url.port ? `:${url.port}` : "");
 }

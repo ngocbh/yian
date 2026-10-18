@@ -334,7 +334,7 @@ fresh yian value or throws `TypeCheckError` with `path` and the message
 | any other `number` (`±Infinity`, `1e20`, `2.5`, `9007199254740992`) | float |
 | `NaN` | error: `NaN is not a yian value` |
 | a string or record key holding a lone surrogate | error: `text holding a lone surrogate is not a yian value` |
-| `FileRef` | itself |
+| a `FileRef` its constructor built | itself |
 | plain array (a hole is `undefined`), plain record (prototype `Object.prototype` or `null`) | a fresh array or record, its items taken in the same way |
 | `undefined`, at any depth | error: `undefined is not a yian value; use null` |
 | a container inside itself | error: `value contains itself` |
@@ -342,8 +342,8 @@ fresh yian value or throws `TypeCheckError` with `path` and the message
 
 Like `JSON.stringify`, intake skips symbol keys, non-enumerable keys and extra array
 properties. A `TypedValue` handed in is refused. An error a getter or proxy throws propagates
-unchanged. A tool returning `undefined` at the top gives `null`; a CODE body doing so fails.
-Depth is checked separately, by `rejectDeepNesting`.
+unchanged. `fromHost` refuses a top-level `undefined` too: the tool caller reads it as `null`
+first, and a CODE body returning it fails. Depth is checked separately, by `rejectDeepNesting`.
 
 ## `Type` — structure beyond the bare tag
 

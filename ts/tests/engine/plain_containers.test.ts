@@ -130,6 +130,13 @@ describe("fromHost", () => {
     // Hosts don't build carriers: a TypedValue is refused like any class instance; Python
     // copies its payload.
     ["a TypedValue", { t: buildValue(1n) }, "output at t: TypedValue is not a yian value", ["t"]],
+    // A FileRef forged from the prototype never ran the constructor's checks.
+    [
+      "a forged FileRef",
+      { f: Object.create(FileRef.prototype) as unknown },
+      "output at f: FileRef is not a yian value",
+      ["f"],
+    ],
   ])("refuses %s", (_id, value, message, path) => {
     const error = intakeError(value);
     expect(error.message).toBe(message);

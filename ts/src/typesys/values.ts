@@ -135,7 +135,7 @@ function textForm(root: unknown, budget: number): string {
       out += bigintText(value);
     } else if (typeof value === "string") {
       out += quoteHead(value, budget);
-    } else if (value instanceof FileRef) {
+    } else if (FileRef.isFileRef(value)) {
       out += "{";
       const container = value as unknown as { readonly [key: string]: unknown };
       stack.push({ container, keys: FILE_FIELDS, index: 0 });
@@ -317,7 +317,7 @@ function* walkNesting(value: unknown): Generator<NestingEntry> {
 /** Return the open frame of `container`, an array, record or `FileRef`, at `key`. */
 function nestingFrame(container: object, key: string | number | null): NestingFrame {
   let keys: readonly string[] | null = null;
-  if (container instanceof FileRef) keys = FILE_FIELDS;
+  if (FileRef.isFileRef(container)) keys = FILE_FIELDS;
   else if (!isList(container)) keys = Object.keys(container);
   return { container, keys, key, index: 0 };
 }
@@ -331,7 +331,7 @@ function framePath(
 
 /** Whether `value` is a nesting level: an array, a record or a `FileRef`. */
 function isNestingLevel(value: unknown): value is object {
-  return isList(value) || isRecord(value) || value instanceof FileRef;
+  return isList(value) || isRecord(value) || FileRef.isFileRef(value);
 }
 
 /** Return `value` with any `TypedValue` wrapping it removed. */
@@ -423,7 +423,7 @@ export function fromHost(value: unknown, where: string): Value {
       case "undefined":
         return fail("undefined is not a yian value; use null", ...at);
     }
-    if (item === null || item instanceof FileRef) return item;
+    if (item === null || FileRef.isFileRef(item)) return item;
     const list = isList(item);
     if (list || isRecord(item)) {
       if (active.has(item)) fail("value contains itself", ...at);
@@ -556,6 +556,13 @@ export class FileRef {
   readonly uri: string;
   readonly mime: string | null;
   readonly name: string | null;
+  // Set only by the constructor, so an object merely given this prototype isn't a FileRef.
+  readonly #built = true;
+
+  /** Whether `value` is a `FileRef` its constructor built (not one forged from its prototype). */
+  static isFileRef(value: unknown): value is FileRef {
+    return typeof value === "object" && value !== null && #built in value;
+  }
 
   /**
    * Build a file reference from its fields.
@@ -604,7 +611,7 @@ const FILE_FIELDS: readonly ("uri" | "mime" | "name")[] = ["uri", "mime", "name"
  */
 export function fieldOf(value: Value, name: string): [present: boolean, value: Value] {
   if (isRecord(value)) return Object.hasOwn(value, name) ? [true, value[name] as Value] : [false, null];
-  if (value instanceof FileRef) {
+  if (FileRef.isFileRef(value)) {
     const field = FILE_FIELDS.find((candidate) => candidate === name);
     if (field !== undefined) return [true, value[field]];
   }
@@ -798,11 +805,15 @@ export class TypedValue {
       }
     } else if (holdsScalar(storage, value)) {
       return new TypedValue(storage, value);
-    } else if (isListKind(storage) && Array.isArray(value)) {
+    } else if (isListKind(storage) && isList(value)) {
       const element = listElementKind(storage);
-      if (element === null || value.every((item) => item === null || holdsScalar(element, item))) {
-        return new TypedValue(storage, value);
+      // An index loop, not `every`, so a hole is checked as `undefined`.
+      let holds = true;
+      for (let index = 0; holds && element !== null && index < value.length; index++) {
+        const item = value[index];
+        holds = item === null || holdsScalar(element, item);
       }
+      if (holds) return new TypedValue(storage, value);
     }
     const expected = KIND_HOLDS.get(storage)!;
     throw new RangeError(
@@ -1759,7 +1770,7 @@ function inferScalarKind(value: unknown): StorageKind | null {
   if (typeof value === "bigint") return ValueKind.INTEGER;
   if (typeof value === "number") return ValueKind.NUMBER;
   if (typeof value === "string") return ValueKind.STRING;
-  if (value instanceof FileRef) return ValueKind.FILE;
+  if (FileRef.isFileRef(value)) return ValueKind.FILE;
   if (isRecord(value)) return ValueKind.OBJECT;
   return null;
 }
@@ -1801,7 +1812,7 @@ function scalarMatches(declared: ValueKind, value: unknown): boolean {
     case ValueKind.OBJECT:
       return isRecord(value);
     case ValueKind.FILE:
-      return value instanceof FileRef || isFileForm(value);
+      return FileRef.isFileRef(value) || isFileForm(value);
     default:
       return false;
   }
@@ -1912,7 +1923,7 @@ function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value {
     if (value === null || typeof value === "boolean" || typeof value === "bigint") return value;
     if (typeof value === "string") return value;
     if (typeof value === "number") return Object.is(value, -0) ? 0 : value;
-    if (value instanceof FileRef) {
+    if (FileRef.isFileRef(value)) {
       if (files === "keep") return value;
       if (files === "mapping") return { uri: value.uri, mime: value.mime, name: value.name };
       // Under "refuse" a file is not a JSON value.

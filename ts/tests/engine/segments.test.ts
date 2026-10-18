@@ -85,6 +85,7 @@ function record(fields: Record<string, Type>, required = Object.keys(fields)): T
 }
 
 class Foo {}
+class Sub extends Array<unknown> {}
 
 describe("inference", () => {
   test("infers scalars", () => {
@@ -568,6 +569,8 @@ describe("TypedValue.fromWire refuses", () => {
     ["object holding a list", { kind: "object", value: [] }],
     ["list[Any] holding a record", { kind: "list[Any]", value: {} }],
     ["list[str] holding an int", { kind: "list[str]", value: ["a", 1n] }],
+    ["list[str] with a hole", { kind: "list[str]", value: [, "a"] }],
+    ["list[str] as an Array subclass", { kind: "list[str]", value: Sub.from(["a"]) }],
     ["list[object] holding a list", { kind: "list[object]", value: [[]] }],
     ["date holding other text", { kind: "date", value: "x" }],
     ["date holding an int", { kind: "date", value: 1n }],

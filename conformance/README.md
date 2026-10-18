@@ -73,8 +73,9 @@ Every case runs in a new temporary directory, the *case directory*:
 - `flow` (or `python_flow`) is written to `flow.yaml`, and each `files` entry to its relative
   path; `fixtures/` is a copy of `conformance/fixtures/`.
 - The flow is loaded from the text of `flow.yaml` with the source label `flow.yaml`, resolving
-  `uses:` and `call:` paths in the case directory. A frame label that is a path inside the case
-  directory is written relative to it.
+  `uses:` and `call:` paths in the case directory. Frame labels are what the loader gives:
+  `flow.yaml` for the case's flow, and a `uses:` child's file name (`child.yaml` for
+  `lib/child.yaml`).
 - yian's own variables come only from `env` (every kind but `cli`, below): every `YIAN_*`
   variable and every variable whose name ends in `_API_KEY`, `_BASE_URL`, `_ENDPOINT` or
   `_API_VERSION` is unset first, and `YIAN_AUTH_FILE` names a file in the case directory that
@@ -92,12 +93,13 @@ Every case runs in a new temporary directory, the *case directory*:
 ## Kinds
 
 Keys marked required must be present. In a `load`, `expr`, `value`, `defaults` or `fingerprint`
-case, `expect` and `python_expect` hold the results under Checks (one group where it says "or").
+case, `expect` and `python_expect` hold the results under Checks: exactly one group where it
+says "or".
 
 | Kind | Keys | Checks |
 |---|---|---|
-| `load` | `flow`, `files`, `env` | `expect.load` |
-| `run` | `flow`, `files`, `env`, `inputs`, `run`, `host` | `expect.raises`, or `expect.output`; then `trace`, `events`, `stream`, `tool_calls` when present |
+| `load` | `flow` (required), `files`, `env` | `expect.load` |
+| `run` | `flow` (required), `files`, `env`, `inputs`, `run`, `host` | `expect.raises`, or `expect.output`; then `trace`, `events`, `stream`, `tool_calls` when present |
 | `resume` | as `run`, plus `host.crash_after_record` and `resume` | as `run`, for the resumed run |
 | `backward` | as `run`, plus `backward` | as `run`, plus `expect.backward` |
 | `expr` | exactly one of `expr` and `template` (required), `values`, `item`, `mode`, `typedefs`, `env` | `expect.value` or `expect.raises` |
@@ -153,7 +155,7 @@ Evaluates one expression, or one template.
 | `expr` | an expression as written inside `${...}` |
 | `template` | instead of `expr`: a template with `${...}` spans |
 | `values` | the names in scope; a dotted reference walks into them |
-| `item` | the MAP item in scope (`item`, `item.path`), when present (not with a strict `template` or `mode: condition`) |
+| `item` | the MAP item in scope (`item`, `item.path`), when present (not with a strict `template`) |
 | `mode` | `binding` (the default): a missing reference is null, and a template is a binding value (one whole span gives its value; embedded spans give text, null as empty); `condition`: the `expr` is evaluated as a `when:` condition (either spelling, `a > 1` or `${a > 1}`) and gives a bool, with no `item`; `strict`: a missing reference is an error, and a template is a prompt rendered with the AGENT and HUMAN_INPUT prompt rules |
 | `typedefs` | a `typedefs:` mapping as in a flow, for `isinstance` and constructors (not with a strict `template`) |
 

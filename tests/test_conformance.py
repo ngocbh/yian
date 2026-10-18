@@ -125,7 +125,10 @@ _EXPECT_KEYS = {
     "cli": {"exit", "stdout", "stderr", "json", "json_lines"},
 }
 # The keys a kind requires, and the result keys its `expect` requires: one of the groups.
-_REQUIRED = {"value": ("type", "value"), "fingerprint": ("flow", "other")}
+_REQUIRED = {
+    "value": ("type", "value"), "fingerprint": ("flow", "other"), "load": ("flow",),
+    "run": ("flow",), "resume": ("flow",), "backward": ("flow",),
+}
 _RESULTS = {
     "load": (("load",),),
     "defaults": (("defaults",), ("raises",)),
@@ -232,7 +235,7 @@ def _check(case: dict) -> dict:
             continue
         _keys(key, case[key], _EXPECT_KEYS[kind], _ALL_EXPECT_KEYS, kind)
         groups = _RESULTS.get(kind, ())
-        if groups and not any(set(group) <= case[key].keys() for group in groups):
+        if groups and not any(set(group) == case[key].keys() for group in groups):
             needs = ", or ".join(" and ".join(f"`{name}`" for name in group) for group in groups)
             raise ValueError(f"`{key}` needs {needs}")
     if "python_expect" in case and not case.get("rules"):
@@ -264,6 +267,8 @@ def _check(case: dict) -> dict:
     if kind == "expr":
         if ("expr" in case) == ("template" in case):
             raise ValueError("an `expr` case takes one of `expr` and `template`")
+        if not isinstance(case.get("expr", case.get("template")), str):
+            raise ValueError("`expr` or `template` must be text")
         mode = case.get("mode", "binding")
         if mode not in ("binding", "condition", "strict"):
             raise ValueError(f"`mode` must be one of binding, condition, strict, not {mode!r}")
@@ -429,15 +434,15 @@ def _load(text: str, case_dir: Path):
     return load_flow(text, search_paths=[case_dir], source_label="flow.yaml")
 
 
-def _diagnostic(diag: Diagnostic, case_dir: Path) -> dict:
-    """Return `diag` in the case's diagnostic form, labels inside `case_dir` made relative."""
+def _diagnostic(diag: Diagnostic) -> dict:
+    """Return `diag` in the case's diagnostic form."""
     frames = []
     for frame in diag.frames:
-        label = frame.label
-        if Path(label).is_relative_to(case_dir):
-            label = Path(label).relative_to(case_dir).as_posix()
-        r = frame.range
-        entry = {"label": label, "range": [r.start_line, r.start_col, r.end_line, r.end_col]}
+        span = frame.range
+        entry = {
+            "label": frame.label,
+            "range": [span.start_line, span.start_col, span.end_line, span.end_col],
+        }
         if frame.note:
             entry["note"] = frame.note
         frames.append(entry)
@@ -454,7 +459,7 @@ def _run_load(case: dict, case_dir: Path) -> None:
     try:
         _load(case["flow"], case_dir)
     except LoadError as exc:
-        actual = {"diagnostics": [_diagnostic(exc.diagnostic, case_dir)]}
+        actual = {"diagnostics": [_diagnostic(exc.diagnostic)]}
     else:
         actual = "ok"
     _compare("load", actual, case["expect"]["load"], optional_message=True)

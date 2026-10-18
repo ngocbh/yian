@@ -321,21 +321,35 @@ describe("logJson", () => {
       nested: [[[{ a: [true, false, null] }]]],
     };
     const back = parseJson(logJson(value), "codec");
-    expect(back).toEqual(value as unknown as JsonValue);
-    // Walk both too, so every leaf's kind, each prototype and the key order are checked directly.
+    // One walk checks every leaf's kind and value (`toBe` is `Object.is`, so 1 isn't 1n), each
+    // container's kind and prototype, and the key order.
     const pairs: [unknown, unknown][] = [[value, back]];
     while (pairs.length > 0) {
       const [want, got] = pairs.pop()!;
-      expect(typeof got).toBe(typeof want);
-      if (typeof want === "object" && want !== null) {
-        expect(Array.isArray(got)).toBe(Array.isArray(want));
-        expect(Object.getPrototypeOf(got)).toBe(Object.getPrototypeOf(want));
-        // The reader keeps the written order, which is sorted by code units.
-        expect(Object.keys(got as object)).toEqual(Object.keys(want).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)));
-        for (const key of Object.keys(want)) {
-          pairs.push([(want as Record<string, unknown>)[key], (got as Record<string, unknown>)[key]]);
-        }
+      if (typeof want !== "object" || want === null) {
+        expect(got).toBe(want);
+        continue;
       }
+      expect(typeof got === "object" && got !== null).toBe(true);
+      expect(Array.isArray(got)).toBe(Array.isArray(want));
+      expect(Object.getPrototypeOf(got)).toBe(Object.getPrototypeOf(want));
+      // The reader keeps the written order, which is sorted by code units.
+      expect(Object.keys(got as object)).toEqual(Object.keys(want).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)));
+      for (const key of Object.keys(want)) {
+        pairs.push([(want as Record<string, unknown>)[key], (got as Record<string, unknown>)[key]]);
+      }
+    }
+  });
+
+  test("turns a RangeError from a bigint's toString into a defined error", () => {
+    const original = BigInt.prototype.toString;
+    BigInt.prototype.toString = () => {
+      throw new RangeError("Maximum BigInt size exceeded");
+    };
+    try {
+      expectRefusal(logJson, [1n], "integer is too large for this runtime");
+    } finally {
+      BigInt.prototype.toString = original;
     }
   });
 
@@ -377,15 +391,19 @@ describe.each(ENCODERS)("%s", (_name, encode) => {
     expectRefusal(encode, new (class FileRef {})(), "FileRef is not a canonical JSON value");
     expectRefusal(encode, Object.create({}), "Object is not a canonical JSON value");
     expectRefusal(encode, Object.create(Object.create(null)), "object is not a canonical JSON value");
-    const original = BigInt.prototype.toString;
-    BigInt.prototype.toString = () => {
-      throw new RangeError("Maximum BigInt size exceeded");
+    expectRefusal(encode, { a: 1n, [Symbol("k")]: 2n }, "canonical JSON object keys must be strings");
+  });
+
+  test("reads each object value once", () => {
+    let reads = 0;
+    const tag = {
+      get $float() {
+        reads++;
+        return reads === 1 ? "inf" : "nan";
+      },
     };
-    try {
-      expectRefusal(encode, [1n], "integer is too large for this runtime");
-    } finally {
-      BigInt.prototype.toString = original;
-    }
+    expect(encode(tag)).toBe('{"$record":{"$float":"inf"}}');
+    expect(reads).toBe(1);
   });
 
   test("refuses cycles and writes shared references", () => {

@@ -7,8 +7,10 @@
  *
  * Its encoders write what the reader reads back: `canonicalJson` writes RFC 8785 (JCS) text for
  * fingerprints and `logJson` the same layout for run-log lines, with ints of any size and floats
- * marked by `.0`. Both write infinity as yian's tag, escape records shaped like the tag, refuse
- * what isn't canonical JSON with Python yian's messages, and write any depth.
+ * marked by `.0`. Both write infinity as yian's tag, escape records shaped like the tag, and
+ * write any depth. Like `JSON.stringify` they write only an object's own enumerable string keys
+ * and an array's indices; they refuse what isn't canonical JSON, with Python yian's wording where
+ * Python has the rule.
  *
  * It imports nothing from yian, so the `llm/` leaf can use it.
  */
@@ -297,8 +299,8 @@ export function parseJson(text: string, mode: JsonMode): JsonValue {
   }
 }
 
-/** One step of writing: a value, literal text, or a container leaving the active path. */
-type Task = { value: unknown } | { text: string } | { leave: object };
+/** One step of writing: a value and the text before it, or a container closing and leaving the active path. */
+type Task = { value: unknown; before: string } | { leave: object; close: string };
 
 const MAX_SAFE = 2n ** 53n - 1n;
 
@@ -312,48 +314,49 @@ function quote(text: string): string {
   return JSON.stringify(text);
 }
 
-/** Return the digits of `n`. */
-function bigintDigits(n: bigint): string {
-  try {
-    return n.toString();
-  } catch (error) {
-    if (error instanceof RangeError) throw new TypeError("integer is too large for this runtime");
-    throw error;
-  }
-}
-
 /** Return `n` as a JCS number: an int within ±(2^53-1). */
 function jcsNumber(n: number | bigint): string {
-  if (typeof n === "bigint" && -MAX_SAFE <= n && n <= MAX_SAFE) return bigintDigits(n);
+  if (typeof n === "bigint" && -MAX_SAFE <= n && n <= MAX_SAFE) return n.toString();
   if (typeof n === "number" && Number.isSafeInteger(n)) return String(n);
   throw new TypeError("JCS numbers are ints within ±(2^53-1)");
 }
 
 /** Return `n` as a log number: a `bigint`'s digits, a float with `.0` when it has no `.` or exponent. */
 function logNumber(n: number | bigint): string {
-  if (typeof n === "bigint") return bigintDigits(n);
+  if (typeof n === "bigint") {
+    try {
+      return n.toString();
+    } catch (error) {
+      // A runtime may refuse to stringify a huge bigint (JavaScriptCore reports running out of
+      // memory as a RangeError); every boundary turns that into a defined error.
+      if (error instanceof RangeError) throw new TypeError("integer is too large for this runtime");
+      throw error;
+    }
+  }
   const text = String(n);
   // The `.0` keeps an integral float a float when the reader reads it back.
   return /[.eE]/.test(text) ? text : `${text}.0`;
 }
 
-/** Return `root` as compact key-sorted JSON, writing each finite number with `number`. */
+/**
+ * Return `root` as compact key-sorted JSON, writing each finite number with `number`. Like
+ * `JSON.stringify` it writes an object's own enumerable string keys and an array's indices;
+ * other input that isn't JSON is refused.
+ */
 function write(root: unknown, number: (n: number | bigint) => string): string {
   let out = "";
   // Ancestors only, so a shared sub-value writes twice and only a cycle is refused.
   const active = new Set<object>();
-  const stack: Task[] = [{ value: root }];
+  const stack: Task[] = [{ value: root, before: "" }];
   while (stack.length > 0) {
     const task = stack.pop()!;
-    if ("text" in task) {
-      out += task.text;
-      continue;
-    }
     if ("leave" in task) {
+      out += task.close;
       active.delete(task.leave);
       continue;
     }
     const { value } = task;
+    out += task.before;
     if (value === null) {
       out += "null";
     } else if (typeof value === "boolean") {
@@ -373,12 +376,9 @@ function write(root: unknown, number: (n: number | bigint) => string): string {
     } else if (Array.isArray(value)) {
       if (active.has(value)) throw new TypeError("cyclic container cannot be canonicalized");
       active.add(value);
-      stack.push({ leave: value }, { text: "]" });
+      stack.push({ leave: value, close: "]" });
       // Pushed last to first so they pop in order; a hole reads as `undefined` and is refused.
-      for (let i = value.length - 1; i >= 0; i--) {
-        stack.push({ value: value[i] });
-        if (i > 0) stack.push({ text: "," });
-      }
+      for (let i = value.length - 1; i >= 0; i--) stack.push({ value: value[i], before: i > 0 ? "," : "" });
       out += "[";
     } else {
       const proto = Object.getPrototypeOf(value);
@@ -387,19 +387,23 @@ function write(root: unknown, number: (n: number | bigint) => string): string {
         const kind = typeof name === "string" && name !== "" ? name : "object";
         throw new TypeError(`${kind} is not a canonical JSON value`);
       }
+      if (Object.getOwnPropertySymbols(value).length > 0) {
+        throw new TypeError("canonical JSON object keys must be strings");
+      }
       if (active.has(value)) throw new TypeError("cyclic container cannot be canonicalized");
       active.add(value);
       const record = value as Record<string, unknown>;
       const keys = Object.keys(record).sort(byCodeUnits);
+      // Each value is read once, so a getter runs once.
+      const values = keys.map((key) => record[key]);
       // A record shaped like the infinity tag or the escape itself is escaped, so the codec
       // reader returns it as written.
       const escaped =
         keys.length === 1 &&
-        (keys[0] === "$record" || (keys[0] === "$float" && (record.$float === "inf" || record.$float === "-inf")));
-      stack.push({ leave: value }, { text: escaped ? "}}" : "}" });
+        (keys[0] === "$record" || (keys[0] === "$float" && (values[0] === "inf" || values[0] === "-inf")));
+      stack.push({ leave: value, close: escaped ? "}}" : "}" });
       for (let i = keys.length - 1; i >= 0; i--) {
-        const key = keys[i]!;
-        stack.push({ value: record[key] }, { text: `${i > 0 ? "," : ""}${quote(key)}:` });
+        stack.push({ value: values[i], before: `${i > 0 ? "," : ""}${quote(keys[i]!)}:` });
       }
       out += escaped ? '{"$record":{' : "{";
     }

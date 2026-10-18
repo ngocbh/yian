@@ -945,11 +945,11 @@ export function resolveType(
   if (seen.has(name)) throw new TypeCheckError(`recursive type reference: ${reprText(name)}`);
   const defn = registry.get(name);
   if (defn === undefined) throw new TypeCheckError(`unknown type ${reprText(name)}`);
-  if (defn.kind === "alias") return resolveType(defn.target, registry, new Set([...seen, name]));
+  const inner = new Set([...seen, name]);
+  if (defn.kind === "alias") return resolveType(defn.target, registry, inner);
   if (defn.kind === "variant") {
     return new Type({ kind: ValueKind.STRING, tags: new Set(defn.tags) });
   }
-  const inner = new Set([...seen, name]);
   const fields = new Map<string, Type>();
   for (const [field, text] of defn.fields) {
     fields.set(field, resolveType(parseType(text), registry, inner));
@@ -1043,10 +1043,10 @@ function unionParts(t: TypeExpr, registry: TypeRegistry, seen: ReadonlySet<strin
   // frames. Each entry is [expression, names on its alias path, display name so far].
   const parts: UnionPart[] = [];
   const stack: [TypeExpr, ReadonlySet<string>, string | null][] = [[t, seen, null]];
-  for (let entry = stack.pop(); entry !== undefined; entry = stack.pop()) {
-    const [expr, path, name] = entry;
+  while (stack.length > 0) {
+    const [expr, path, name] = stack.pop()!;
     if (expr.kind === "union") {
-      for (const member of [...expr.members].reverse()) stack.push([member, path, null]);
+      for (const member of expr.members.toReversed()) stack.push([member, path, null]);
       continue;
     }
     if (expr.kind === "ref") {

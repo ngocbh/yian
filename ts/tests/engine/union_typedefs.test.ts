@@ -237,7 +237,7 @@ describe("resolution", () => {
 });
 
 /** Return the message of the `TypeCheckError` `typeFor(text, reg)` throws. */
-function resolveError(text: string, reg: TypeRegistry = trades()): string {
+function typeForError(text: string, reg: TypeRegistry = trades()): string {
   try {
     typeFor(text, reg);
   } catch (error) {
@@ -262,7 +262,7 @@ function overlap(label: string, a: string, b: string, files = false): string {
 
 describe("resolution errors", () => {
   test("a member must be a record", () => {
-    expect(resolveError("Union(Buy, Ticker)", trades({ Ticker: "str" }))).toBe(
+    expect(typeForError("Union(Buy, Ticker)", trades({ Ticker: "str" }))).toBe(
       "Union(Buy, Ticker): member 'Ticker' is not a record",
     );
   });
@@ -270,21 +270,21 @@ describe("resolution errors", () => {
   test.each(["str", "list(Buy)", "object", "Literal(a, b)"])(
     "a non-record member is rejected: %p",
     (member) => {
-      expect(resolveError(`Union(Buy, ${member})`)).toBe(
+      expect(typeForError(`Union(Buy, ${member})`)).toBe(
         `Union(Buy, ${member}): member '${member}' is not a record`,
       );
     },
   );
 
   test("a nullable member is rejected", () => {
-    expect(resolveError("Union(Buy, MaybeSell)", trades({ MaybeSell: "Optional(Sell)" }))).toBe(
+    expect(typeForError("Union(Buy, MaybeSell)", trades({ MaybeSell: "Optional(Sell)" }))).toBe(
       "Union(Buy, MaybeSell): member 'MaybeSell' is nullable; use Optional(Union(...)) instead",
     );
   });
 
   test("overlapping members are rejected", () => {
     const reg = registry({ Bull: { conviction: "float" }, Bear: { conviction: "float" } });
-    expect(resolveError("Union(Bull, Bear)", reg)).toBe(
+    expect(typeForError("Union(Bull, Bear)", reg)).toBe(
       overlap("Union(Bull, Bear)", "Bull", "Bear"),
     );
   });
@@ -294,7 +294,7 @@ describe("resolution errors", () => {
       Bull: { conviction: "float" },
       Bear: { conviction: "float", note: "Optional(str)" },
     });
-    expect(resolveError("Union(Bull, Bear)", reg)).toBe(
+    expect(typeForError("Union(Bull, Bear)", reg)).toBe(
       overlap("Union(Bull, Bear)", "Bull", "Bear"),
     );
   });
@@ -304,29 +304,29 @@ describe("resolution errors", () => {
       Bull: { side: "Optional(Literal(bull))", conviction: "float" },
       Bear: { side: "Optional(Literal(bear))", conviction: "float" },
     });
-    expect(resolveError("Union(Bull, Bear)", reg)).toBe(
+    expect(typeForError("Union(Bull, Bear)", reg)).toBe(
       overlap("Union(Bull, Bear)", "Bull", "Bear"),
     );
   });
 
   test("an unknown member", () => {
-    expect(resolveError("Union(Buy, Nope)")).toBe("unknown type 'Nope'");
+    expect(typeForError("Union(Buy, Nope)")).toBe("unknown type 'Nope'");
   });
 
   test("every member resolves before any is checked", () => {
     const reg = registry({ A: { x: "int" } });
-    expect(resolveError("Union(Optional(A), Nope)", reg)).toBe("unknown type 'Nope'");
+    expect(typeForError("Union(Optional(A), Nope)", reg)).toBe("unknown type 'Nope'");
   });
 
   test("an alias chain names the member by its first alias", () => {
-    expect(resolveError("Union(Buy, P)", trades({ P: "Q", Q: "Optional(Sell)" }))).toBe(
+    expect(typeForError("Union(Buy, P)", trades({ P: "Q", Q: "Optional(Sell)" }))).toBe(
       "Union(Buy, P): member 'P' is nullable; use Optional(Union(...)) instead",
     );
-    expect(resolveError("Union(Buy, P)", trades({ P: "Q", Q: "str" }))).toBe(
+    expect(typeForError("Union(Buy, P)", trades({ P: "Q", Q: "str" }))).toBe(
       "Union(Buy, P): member 'P' is not a record",
     );
     // A union between the alias and the member names the member as that union writes it.
-    expect(resolveError("Union(Buy, P)", trades({ P: "Q", Q: "Union(X, Sell)", X: "int" }))).toBe(
+    expect(typeForError("Union(Buy, P)", trades({ P: "Q", Q: "Union(X, Sell)", X: "int" }))).toBe(
       "Union(Buy, P): member 'X' is not a record",
     );
   });
@@ -335,11 +335,11 @@ describe("resolution errors", () => {
     // The members are equal, so the error comes before the overlap check and has no
     // `file` note.
     const reg = registry({ F: { f: "file" }, G: { f: "file" } });
-    expect(resolveError("Union(F, G)", reg)).toBe(overlap("Union(F, G)", "F", "G"));
+    expect(typeForError("Union(F, G)", reg)).toBe(overlap("Union(F, G)", "F", "G"));
   });
 
   test("overlapping records with a file field explain the file overlap", () => {
     const reg = registry({ F: { f: "file" }, G: { f: "object" } });
-    expect(resolveError("Union(F, G)", reg)).toBe(overlap("Union(F, G)", "F", "G", true));
+    expect(typeForError("Union(F, G)", reg)).toBe(overlap("Union(F, G)", "F", "G", true));
   });
 });

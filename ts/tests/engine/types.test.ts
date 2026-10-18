@@ -315,7 +315,7 @@ describe("typeLevels", () => {
   });
 
   test("counts a list as one", () => {
-    expect(typeLevels(new Type({ kind: ValueKind.LIST_INTEGER, element: INT }))).toBe(1);
+    expect(typeLevels(typeFor("list(int)", new Map()))).toBe(1);
   });
 
   test("counts each record", () => {
@@ -1077,12 +1077,17 @@ describe("typeFor", () => {
     );
   });
 
-  test.each([10n ** 400n, -(10n ** 400n), 2n ** 53n + 1n, -(2n ** 53n + 1n)])(
-    "a float range rejects %# without a lossless finite float",
-    (endpoint) => {
-      expect(typeForError(`float(${endpoint}..${endpoint})`, EMPTY)).toMatch(/finite|lossless/);
-    },
-  );
+  test.each([
+    [10n ** 400n, "finite"],
+    [-(10n ** 400n), "finite"],
+    [2n ** 53n + 1n, "lossless float"],
+    [-(2n ** 53n + 1n), "lossless float"],
+  ])("a float range rejects %# without a lossless finite float", (endpoint, needs) => {
+    const text = `float(${endpoint}..${endpoint})`;
+    expect(typeForError(text, EMPTY)).toBe(
+      `invalid bounds in '${text}': float bounds require ${needs} endpoints`,
+    );
+  });
 
   test("dict is a lenient object placeholder", () => {
     expect(typeFor("dict(str, int)", REG).kind).toBe(ValueKind.OBJECT);

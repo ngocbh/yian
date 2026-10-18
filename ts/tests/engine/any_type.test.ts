@@ -70,7 +70,6 @@ describe("Any labels", () => {
   ] as const)("authored %s resolves and labels back", (text, typ) => {
     expect(typeEquals(typeFor(text, new Map()), typ)).toBe(true);
     expect(canonicalTypeLabel(typ)).toBe(text);
-    expect(typeEquals(typeFor(canonicalTypeLabel(typ), new Map()), typ)).toBe(true);
   });
 
   test("a list with unproven items is labelled list of Optional(Any)", () => {
@@ -135,13 +134,24 @@ function registry(raw: Record<string, string | Record<string, string>>): TypeReg
   );
 }
 
-const MATCH_SAME = /can match the same value/;
+/** Python's overlap error for `label`, members `a` and `b`, with the `file` note if `files`. */
+function overlap(label: string, a: string, b: string, files = false): string {
+  const why = files
+    ? " (a `file` slot reads `{uri, mime, name}`, so `file` overlaps `object`, `Any` and a " +
+      "record of that shape)"
+    : "";
+  return (
+    `${label}: members '${a}' and '${b}' can match the same value${why}; add a tag field ` +
+    "every member declares as a single-value Literal, with a different value in each " +
+    `member, e.g. kind: Literal(${a.toLowerCase()})`
+  );
+}
 
 describe("Any in untagged unions", () => {
   test("a union of Any and int fields does not resolve", () => {
     const reg = registry({ A: { v: "Any" }, B: { v: "int" }, U: "Union(A, B)" });
     expect(() => typeFor("U", reg)).toThrow(TypeCheckError);
-    expect(() => typeFor("U", reg)).toThrow(MATCH_SAME);
+    expect(() => typeFor("U", reg)).toThrow(overlap("Union(A, B)", "A", "B"));
   });
 
   test("a union of Any and a union with a file member does not resolve", () => {
@@ -149,12 +159,11 @@ describe("Any in untagged unions", () => {
       F: { f: "file" },
       N: { n: "int" },
       U: "Union(F, N)",
-      OF: { f: "Optional(file)", n: "int" },
       A: { v: "Any" },
       B: { v: "U" },
       W: "Union(A, B)",
     });
     expect(() => typeFor("W", reg)).toThrow(TypeCheckError);
-    expect(() => typeFor("W", reg)).toThrow(MATCH_SAME);
+    expect(() => typeFor("W", reg)).toThrow(overlap("Union(A, B)", "A", "B", true));
   });
 });

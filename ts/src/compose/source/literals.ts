@@ -18,6 +18,7 @@ import { reprText } from "../../diagnostics.ts";
 import type { Value, ValueRecord } from "../../typesys/index.ts";
 import { SourceSyntaxError } from "./common.ts";
 import {
+  type AnchoredNode,
   BOOL_TAG,
   composeFlowDocument,
   constructScalar,
@@ -34,9 +35,6 @@ import {
   STR_TAG,
   TIMESTAMP_TAG,
 } from "./scalars.ts";
-
-/** A composed node other than an alias. */
-type NonAlias = Scalar.Parsed | YAMLMap.Parsed | YAMLSeq.Parsed;
 
 /** A composed mapping's pair. */
 type MapPair = Pair<ParsedNode, ParsedNode | null>;
@@ -112,10 +110,10 @@ export function readPlainScalar(text: string): ScalarValue {
  *
  * @throws FlowLoaderError when a node can't be built.
  */
-function construct(root: ParsedNode | null, aliasTargets: ReadonlyMap<Alias, NonAlias>): Value {
+function construct(root: ParsedNode | null, aliasTargets: ReadonlyMap<Alias, AnchoredNode>): Value {
   const values = new Map<ParsedNode, Value>();
   const fills: (() => void)[] = [];
-  const target = (written: ParsedNode | null): NonAlias | null => {
+  const target = (written: ParsedNode | null): AnchoredNode | null => {
     if (written === null) return null; // a missing key or value
     return isAlias(written) ? aliasTargets.get(written)! : written;
   };
@@ -172,7 +170,6 @@ function construct(root: ParsedNode | null, aliasTargets: ReadonlyMap<Alias, Non
     return record;
   };
   const flattened = new Map<YAMLMap.Parsed, MapPair[]>();
-  const merging = new Set<YAMLMap.Parsed>();
   /**
    * Return the pairs SafeLoader's `flatten_mapping` leaves in `root`: each merge source's
    * flattened pairs, in the order of the merge keys, then the mapping's own other pairs.
@@ -188,6 +185,7 @@ function construct(root: ParsedNode | null, aliasTargets: ReadonlyMap<Alias, Non
     if (done !== undefined) return done;
     let pairs: MapPair[] = [];
     const stack: [YAMLMap.Parsed, Generator<YAMLMap.Parsed, YAMLMap.Parsed[]>][] = [];
+    const merging = new Set<YAMLMap.Parsed>();
     const enter = (node: YAMLMap.Parsed): void => {
       merging.add(node);
       stack.push([node, mergeSources(node, target)]);
@@ -252,7 +250,7 @@ function checkCollectionTag(node: YAMLSeq.Parsed | YAMLMap.Parsed): void {
  */
 function* mergeSources(
   node: YAMLMap.Parsed,
-  target: (written: ParsedNode | null) => NonAlias | null,
+  target: (written: ParsedNode | null) => AnchoredNode | null,
 ): Generator<YAMLMap.Parsed, YAMLMap.Parsed[]> {
   const merged: YAMLMap.Parsed[] = [];
   for (const pair of node.items) {
@@ -290,16 +288,16 @@ function* mergeSources(
 /** Return a mapping's pairs other than its merge pairs. */
 function ownPairs(
   node: YAMLMap.Parsed,
-  target: (written: ParsedNode | null) => NonAlias | null,
+  target: (written: ParsedNode | null) => AnchoredNode | null,
 ): MapPair[] {
   return node.items.filter((pair) => !isMergeKey(target(pair.key)));
 }
 
 /**
  * Say whether a key is a merge key: a scalar tagged `!!merge`, or an untagged plain one
- * the table resolves to it.
+ * the table resolves to it. The bare `!` keeps `<<` text.
  */
-function isMergeKey(key: NonAlias | null): boolean {
+function isMergeKey(key: AnchoredNode | null): boolean {
   if (!isScalar(key)) return false;
   if (key.tag === undefined) {
     return key.type === Scalar.PLAIN && resolvePlain(key.source) === MERGE_TAG;
@@ -308,12 +306,12 @@ function isMergeKey(key: NonAlias | null): boolean {
 }
 
 /** Name a node's kind as PyYAML's node id does; a missing node is an empty scalar. */
-function nodeId(node: NonAlias | null): string {
+function nodeId(node: AnchoredNode | null): string {
   return isSeq(node) ? "sequence" : isMap(node) ? "mapping" : "scalar";
 }
 
 /** Return the error for a mapping key that YAML read as `key`, not text, from `node`. */
-function nonTextKey(key: Exclude<Value, string>, node: NonAlias | null): FlowLoaderError {
+function nonTextKey(key: Exclude<Value, string>, node: AnchoredNode | null): FlowLoaderError {
   if (typeof key === "object" && key !== null) {
     return new FlowLoaderError(
       "a list or mapping can't be a mapping key; mapping keys must be text",

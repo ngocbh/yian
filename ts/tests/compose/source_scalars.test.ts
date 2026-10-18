@@ -397,6 +397,8 @@ describe("parseYamlLiteral", () => {
     expect(literalError("value: !!binary aGk=\n")).toBe(noConstructor("tag:yaml.org,2002:binary"));
     // YAML 1.2: the bare tag keeps the scalar as text, where Python reads 5.
     expect(parseYamlLiteral("value: ! 5\n")).toEqual({ value: "5" });
+    // The bare tag keeps "<<" as a text key too, where Python merges.
+    expect(parseYamlLiteral("{! <<: {a: 1}}")).toEqual({ "<<": { a: 1n } });
     expect(literalError("value: !!seq {a: 1}\n")).toBe(
       "expected a sequence node, but found mapping",
     );
@@ -480,6 +482,26 @@ describe("parseYamlLiteral", () => {
     ["{<<: [[1]]}", "expected a mapping for merging, but found sequence"],
     ["{<<: }", "expected a mapping or list of mappings for merging, but found scalar"],
   ])("a merge source that is not a mapping or list of mappings is refused: %p", (text, problem) => {
+    expect(literalError(text)).toBe(problem);
+  });
+
+  test.each([
+    // The merge is checked before the mapping's own keys are built.
+    [
+      "{a: 2026-13-45, <<: 1}",
+      "expected a mapping or list of mappings for merging, but found scalar",
+    ],
+    // The first source's error comes before the second merge key's.
+    [
+      "{<<: {<<: 1}, <<: [2]}",
+      "expected a mapping or list of mappings for merging, but found scalar",
+    ],
+    // Sibling scalars are built before the mappings nested beside them.
+    [
+      "[{<<: 1}, 2026-13-45]",
+      "not a valid date: month must be in 1..12; quote it to keep it as text",
+    ],
+  ])("merge errors come in Python's order: %p", (text, problem) => {
     expect(literalError(text)).toBe(problem);
   });
 

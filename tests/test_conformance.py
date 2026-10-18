@@ -592,6 +592,8 @@ def _set_up(case: dict, case_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None
     for name in list(os.environ):
         if name.startswith("YIAN_") or name.endswith(_ENV_SUFFIXES):
             monkeypatch.delenv(name)
+    # yian refuses an auth file in a directory others can read.
+    case_dir.chmod(0o700)
     monkeypatch.setenv("YIAN_AUTH_FILE", str(case_dir / "auth.json"))
     for name, value in case.get("env", {}).items():
         monkeypatch.setenv(name, value)
@@ -1826,19 +1828,20 @@ def test_value():
 '''
 
 
-def _harvest(tmp_path: Path, text: str,
-             *args: str) -> tuple[subprocess.CompletedProcess, Path]:
+def _harvest(tmp_path: Path, text: str, *args: str,
+             **variables: str) -> tuple[subprocess.CompletedProcess, Path]:
     """Run the test file `text` under the harvest plugin; return the run and the output root.
 
     `args` select the tests (default: the whole file). The run gets no `YIAN_*` variables but
-    the model defaults and auth file the suite sets.
+    the model defaults and auth file the suite sets, and `variables` added to its environment.
     """
     root = Path(__file__).resolve().parent.parent
     (tmp_path / "test_sample.py").write_text(text, encoding="utf-8")
     out = tmp_path / "out"
     env = {name: value for name, value in os.environ.items() if not name.startswith("YIAN_")}
     env |= {"PYTHONPATH": f"{root / 'src'}{os.pathsep}{root}", "YIAN_DEFAULT_PROVIDER": "openai",
-            "YIAN_DEFAULT_MODEL": "gpt-5.5", "YIAN_AUTH_FILE": str(tmp_path / "auth.json")}
+            "YIAN_DEFAULT_MODEL": "gpt-5.5", "YIAN_AUTH_FILE": str(tmp_path / "auth.json"),
+            **variables}
     done = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
          "-p", "tests.conformance_harvest", "--harvest-out", str(out),
@@ -2087,6 +2090,8 @@ def test_harvest_files_limits(tmp_path: Path) -> None:
 
 
 _RUN_TESTS = '''
+import os
+
 import pytest
 
 from yian import load_flow
@@ -2128,6 +2133,19 @@ def test_keyed():
                     learnable=True, context=object()).output == "k"
 
 
+def test_shared_key(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-shared-key-4321")
+    config = {"provider": "openai", "api_key": "sk-shared-key-4321",
+              "headers": {"X-Team": "team-header-value"}}
+    flow = load_flow(ECHO)
+    assert run_flow(flow, {"q": "s"}, run_id="r1", num_workers=0, llm_config=config).output == "s"
+
+
+def test_shell_key():
+    flow = load_flow(ECHO)
+    run_flow(flow, {"q": os.environ["X_API_KEY"]}, run_id="r1", num_workers=0)
+
+
 def test_secret():
     config = {"provider": "openai", "api_key": "sk-test-secret-1234"}
     flow = load_flow(ECHO)
@@ -2149,6 +2167,20 @@ def test_unknown_flow():
     run_flow(flow, {"q": "u"}, run_id="r1", num_workers=0)
 
 
+def test_nested():
+    inner = []
+
+    def on_event(event):
+        # A run inside a recorded run isn't recorded, nor is its load.
+        if not inner:
+            inner.append(run_flow(load_flow(ECHO), {"q": "inner"}, num_workers=0))
+
+    flow = load_flow(ECHO)
+    assert run_flow(flow, {"q": "outer"}, run_id="r1", num_workers=0,
+                    on_event=on_event).output == "outer"
+    assert inner[0].output == "inner"
+
+
 def test_resume(tmp_path):
     flow = load_flow(ECHO)
     run_flow(flow, {"q": "again"}, run_id="r1", num_workers=0, log=tmp_path / "run.jsonl")
@@ -2157,17 +2189,18 @@ def test_resume(tmp_path):
 
 
 def test_harvest_records_runs(tmp_path: Path) -> None:
-    """Serial runs become `run-core` cases with their flow; hosts, secrets and paths skip."""
-    done, out = _harvest(tmp_path, _RUN_TESTS)
-    assert "10 passed" in done.stdout, done.stdout + done.stderr
+    """Serial runs become `run-core` cases; pooled runs, hosts, secrets and machine paths skip."""
+    # The harvesting shell's own key.
+    done, out = _harvest(tmp_path, _RUN_TESTS, X_API_KEY="sk-shell-key-0123456789")
+    assert "13 passed" in done.stdout, done.stdout + done.stderr
     cases = {path.relative_to(out / "cases").as_posix(): _read(path)
              for path in sorted((out / "cases").glob("*/*.yaml"))}
     # A load whose run is written is no case of its own; one whose run isn't stays.
     assert sorted(cases) == [
-        "load-core/sample__secret.yaml", "run-core/sample__failed__2.yaml",
-        "run-core/sample__keyed__2.yaml", "run-core/sample__pooled__2.yaml",
+        "load-core/sample__pooled.yaml", "run-core/sample__failed__2.yaml",
+        "run-core/sample__keyed__2.yaml", "run-core/sample__nested__2.yaml",
         "run-core/sample__raises__2.yaml", "run-core/sample__resume__2.yaml",
-        "run-core/sample__run__2.yaml",
+        "run-core/sample__run__2.yaml", "run-core/sample__shared_key__2.yaml",
     ]
     env = {"YIAN_DEFAULT_MODEL": "gpt-5.5", "YIAN_DEFAULT_PROVIDER": "openai"}
     run = cases["run-core/sample__run__2.yaml"]
@@ -2195,34 +2228,43 @@ def test_harvest_records_runs(tmp_path: Path) -> None:
         },
     }
     assert run["flow"].startswith("id: echo\n")
-    # The runner's default is the test's: 8 workers.
-    assert cases["run-core/sample__pooled__2.yaml"]["run"] == {"run_id": "r1"}
     failure = cases["run-core/sample__failed__2.yaml"]["expect"]["output"]
     assert failure["status"] == "failed" and failure["failure"]["node"] == "__start__"
     raises = cases["run-core/sample__raises__2.yaml"]
     assert "run" in raises and "run_id" not in raises["run"]
     assert raises["expect"]["raises"] == {"class": "ValueError",
                                           "message": "unknown input 'nope'; declared inputs: q"}
+    # Raised before the run started: no events, which the case checks.
+    assert raises["expect"]["events"] == []
     keyed = cases["run-core/sample__keyed__2.yaml"]
     assert keyed["run"] == {
         "run_id": "r1", "num_workers": 0, "learnable": True, "context": "present",
         "llm_config": {"provider": "openai", "api_key": "<key:1>",
                        "headers": {"X-Team": "<key:2>"}}}
+    # One numbering: the key in `env` and in `llm_config` is one, the header another.
+    shared = cases["run-core/sample__shared_key__2.yaml"]
+    assert shared["env"]["OPENAI_API_KEY"] == "<key:1>"
+    assert shared["run"]["llm_config"]["api_key"] == "<key:1>"
+    assert shared["run"]["llm_config"]["headers"] == {"X-Team": "<key:2>"}
+    assert not any("X_API_KEY" in case.get("env", {}) for case in cases.values())
     for name, case in cases.items():
         case_dir = tmp_path / "replay" / name
-        # A run reads the auth file here, and refuses a directory others can read.
-        case_dir.mkdir(parents=True, mode=0o700)
+        case_dir.mkdir(parents=True)
         _check_results(case, results(case, case_dir))
 
     report = json.loads((out / "report" / "test_sample.py.json").read_text(encoding="utf-8"))
     assert report == {
         "file": "test_sample.py",
-        "tests": {"passed": 10, "failed": 0, "skipped": 0},
-        "records": {"load_flow": 10, "run_flow": 10, "resume_flow": 1},
-        "written": {"run-core": 6, "load-core": 1},
-        # The loads of the tools and tmp_path tests hold the secret test's load text.
-        "duplicates": 2,
-        "skips": {"secret in inputs": ["test_secret"], "host: tools": ["test_tools"],
+        "tests": {"passed": 13, "failed": 0, "skipped": 0},
+        # The nested test's inner load and run aren't recorded.
+        "records": {"load_flow": 13, "run_flow": 13, "resume_flow": 1},
+        "written": {"run-core": 7, "load-core": 1},
+        # The loads of the shell key, secret, tools and tmp_path tests hold the pooled
+        # test's load text.
+        "duplicates": 4,
+        "skips": {"pooled run": ["test_pooled"],
+                  "secret in inputs": ["test_shell_key", "test_secret"],
+                  "host: tools": ["test_tools"],
                   "machine path": ["test_tmp_path"], "child_resolver": ["test_unknown_flow"],
                   "flow text unknown": ["test_unknown_flow"],
                   "resume (hand-converted)": ["test_resume"]},

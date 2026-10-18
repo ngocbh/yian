@@ -213,7 +213,7 @@ _RUN_HOSTS = ("tools", "memory", "skills", "steering")
 _INPUT_KEYS = ("flow", "files", "env", "inputs", "run", "host", "backward", "values", "item",
                "value")
 # Results a run case leaves out of its `expect` when they are empty.
-_LEFT_OUT_WHEN_EMPTY = ("events", "stream", "tool_calls")
+_LEFT_OUT_WHEN_EMPTY = ("stream", "tool_calls")
 # The harvest's state while it runs, None when the plugin is off.
 _STATE: _Harvest | None = None
 
@@ -299,8 +299,8 @@ def _result(outcome: tuple, form) -> dict:
 def _expect(case: dict, results: dict) -> dict:
     """Return the runner's `results` for `case` as its `expect`.
 
-    The runner's own `error` and `left` go, so do a run's empty events, stream and tool calls,
-    and `defaults` keeps the entries `env` sets.
+    The runner's own `error` and `left` go, so do a run's empty stream and tool calls, and
+    `defaults` keeps the entries `env` sets.
     """
     expect = {key: value for key, value in results.items()
               if key not in ("error", "left") and (value or key not in _LEFT_OUT_WHEN_EMPTY)}
@@ -564,6 +564,9 @@ def _record_run_flow(arguments: dict):
     for host in _RUN_HOSTS:
         if arguments[host]:
             raise _Skip(f"host: {host}")
+    # A pooled run's trace and events can depend on timing, which one replay can't rule out.
+    if arguments["num_workers"] != 0:
+        raise _Skip("pooled run")
     held = _STATE.flows.get(id(arguments["flow"]))
     if held is None:
         raise _Skip("flow text unknown")
@@ -856,8 +859,7 @@ def _replay(state: _Harvest, case: dict) -> dict:
         path = Path(directory) / "candidate.yaml"
         path.write_text(text, encoding="utf-8")
         case_dir = Path(directory) / "case"
-        # The auth file goes here, and a run refuses one in a directory others can read.
-        case_dir.mkdir(mode=0o700)
+        case_dir.mkdir()
         state.disabled = True
         try:
             return runner.results(runner._read(path), case_dir, candidate=True)

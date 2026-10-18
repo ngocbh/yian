@@ -8,12 +8,12 @@
  * the TS-era rules: the number model (an int is a `bigint` at any size, `/` always gives a
  * correctly rounded float), the operator table, and the messages.
  *
- * Calls run through stand-in builtins registered for one test each. Left for later: the tests of
- * the shipped builtins (`upper`, `join`, `render_as_json`, their null and type rules) land with
- * them in `builtins.ts`, and `test_binding_default_ref` and `test_nested_default_span_rejected`
- * with `template.ts`. Python's `%` formatting, repetition, overflow and digit-limit tests become the
- * TS-era tables below; `_Boom` (a value whose negation raises) has no counterpart, since a value
- * is plain data.
+ * The shipped builtins (`upper`, `lower`, `join`, `render_as_json`) run as themselves, with TS-era
+ * rows for the text form `join` writes and the layout `render_as_json` writes; calls to any other
+ * name run through stand-ins registered for one test each. Left for later:
+ * `test_binding_default_ref` and `test_nested_default_span_rejected` land with `template.ts`.
+ * Python's `%` formatting, repetition, overflow and digit-limit tests become the TS-era tables
+ * below; `_Boom` (a value whose negation raises) has no counterpart, since a value is plain data.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -28,7 +28,7 @@ import {
   rewriteExprRefs,
 } from "../../src/expr/expressions.ts";
 import { type ExprNode, parseExpr, Token, Tree } from "../../src/expr/grammar.ts";
-import type { Value, ValueRecord } from "../../src/typesys/index.ts";
+import { FileRef, type Value, type ValueRecord } from "../../src/typesys/index.ts";
 import { fieldOf } from "../../src/typesys/values.ts";
 
 /** Parse `text` then evaluate it, defaulting to an empty resolver (every reference misses). */
@@ -253,6 +253,130 @@ test("required short-circuits its message", () => {
 // Builtin dispatch through TEMPLATE_FNS
 // --------------------------------------------------------------------------------------- //
 
+test("upper", () => {
+  expect(evaluate("upper(name)", fromRecord({ name: "hi" }))).toBe("HI");
+});
+
+test("join", () => {
+  expect(evaluate('join(items, ", ")', fromRecord({ items: ["a", "b"] }))).toBe("a, b");
+});
+
+test("a keyword argument", () => {
+  expect(evaluate("upper(s=name)", fromRecord({ name: "hi" }))).toBe("HI");
+});
+
+test.each<[string, ValueRecord, string]>([
+  ["upper(name)", {}, 'upper() got null; give a default, e.g. `upper(x :- "")`'],
+  ["lower(name)", {}, 'lower() got null; give a default, e.g. `lower(x :- "")`'],
+  ["upper(n)", { n: 3n }, "upper() takes str, got int"],
+  ["lower(xs)", { xs: ["A"] }, "lower() takes str, got list"],
+  ["render_as_json(name)", {}, 'render_as_json() got null; give a default, e.g. `render_as_json(x :- "")`'],
+  ['join(s, "-")', { s: "abc" }, "join() takes a list, got str"],
+  ['join(xs, "-")', {}, "join() got null; give a default, e.g. `join(x :- [])`"],
+  ['join(xs, "-")', { xs: ["a", null] }, "join() got a null element; drop or default it before joining"],
+])("a builtin rejects null and wrong types: %s", (text, values, message) => {
+  // A builtin never turns null or a wrong-typed value into text (`upper(null)` is not
+  // "NONE"); it fails like arithmetic over null does.
+  const name = text.slice(0, text.indexOf("("));
+  expectMessage(text, `expression function '${name}' failed: ${message}`, fromRecord(values));
+});
+
+test("a builtin over null in a condition fails instead of routing", () => {
+  const error = errorOf('upper(name) == "NONE"', undefined, ResolveMode.CONDITION_FALSY);
+  expect(error).toBeInstanceOf(ExpressionError);
+  expect(error.message).toBe(
+    "expression function 'upper' failed: upper() got null; give a default, e.g. `upper(x :- \"\")`",
+  );
+});
+
+test("join stringifies numbers and render_as_json keeps a nested null", () => {
+  expect(evaluate('join(xs, "-")', fromRecord({ xs: [1n, 2n] }))).toBe("1-2");
+  expect(evaluate("render_as_json(d, 0)", fromRecord({ d: { k: null } }))).toBe('{\n"k": null\n}');
+});
+
+describe("the shipped builtins' TS-era rules", () => {
+  const FILE = new FileRef({ uri: "s3://b/k" });
+
+  test("join writes each element in the text form", () => {
+    expect(evaluate('join([1, true, 1.5, "a"], "-")')).toBe("1-true-1.5-a");
+    expect(evaluate('join(xs, "|")', fromRecord({ xs: [[1n, "a"], { k: null }, FILE] }))).toBe(
+      '[1,"a"]|{"k":null}|{"uri":"s3://b/k","mime":null,"name":null}',
+    );
+  });
+
+  test("render_as_json uses JS key order, the float text form, and keeps non-ASCII", () => {
+    const d = { b: 1, a: [Infinity, null], "1": "é" };
+    expect(evaluate("render_as_json(d, 2)", fromRecord({ d }))).toBe(
+      '{\n  "1": "é",\n  "b": 1,\n  "a": [\n    Infinity,\n    null\n  ]\n}',
+    );
+  });
+
+  test("render_as_json with indent 0 breaks lines without indenting", () => {
+    expect(evaluate("render_as_json(x, 0)", fromRecord({ x: [1n, [2n], {}, []] }))).toBe("[\n1,\n[\n2\n],\n{},\n[]\n]");
+  });
+
+  test("render_as_json writes an empty list or record bare", () => {
+    expect(evaluate("render_as_json([], 2)")).toBe("[]");
+    expect(evaluate("render_as_json(d, 2)", fromRecord({ d: {} }))).toBe("{}");
+  });
+
+  test("render_as_json writes a file at depth as its mapping", () => {
+    expect(evaluate("render_as_json(d)", fromRecord({ d: { f: FILE } }))).toBe(
+      '{\n  "f": {\n    "uri": "s3://b/k",\n    "mime": null,\n    "name": null\n  }\n}',
+    );
+  });
+
+  test("a big int renders its digits in both builtins", () => {
+    const digits = "1" + "0".repeat(30);
+    expect(evaluate('join([10 ** 30], "-")')).toBe(digits);
+    expect(evaluate("render_as_json(10 ** 30)")).toBe(digits);
+  });
+
+  test("render_as_json quotes text", () => {
+    expect(evaluate("render_as_json(s)", fromRecord({ s: 'a"b' }))).toBe('"a\\"b"');
+  });
+
+  test.each([
+    ["-1", "-1"],
+    ['"  "', '"  "'],
+    ["1.5", "1.5"],
+    ["null", "null"],
+    ["true", "true"],
+  ])("render_as_json rejects the indent %s", (indent, shown) => {
+    expectMessage(
+      `render_as_json(1, ${indent})`,
+      `expression function 'render_as_json' failed: render_as_json() takes an int indent of 0 or more, got ${shown}`,
+    );
+  });
+
+  test("an indent too large for the runtime fails the same on every engine", () => {
+    // V8 and JavaScriptCore both throw a RangeError from `repeat`, with different text.
+    expectMessage(
+      "render_as_json([1], 2 ** 40)",
+      "expression function 'render_as_json' failed: text is too long for this runtime",
+    );
+  });
+
+  test("join takes only text for sep", () => {
+    const xs = fromRecord({ xs: ["a"] });
+    expectMessage("join(xs, 1)", "expression function 'join' failed: join() takes str for sep, got int", xs);
+    expectMessage("join(xs, null)", "expression function 'join' failed: join() takes str for sep, got null", xs);
+  });
+
+  test("upper names a file's kind", () => {
+    expectMessage(
+      "upper(f)",
+      "expression function 'upper' failed: upper() takes str, got file",
+      fromRecord({ f: FILE }),
+    );
+  });
+
+  test("upper uses the full case mapping", () => {
+    expect(evaluate('upper("ß")')).toBe("SS");
+    expect(evaluate('lower("ÀB")')).toBe("àb");
+  });
+});
+
 test("dotted access on a builtin call's result", () => {
   // The builtin returns a record; `.k` reads its field.
   standIn("identity", [{ name: "v" }], (v) => v);
@@ -430,11 +554,11 @@ describe("calls", () => {
 
   test("a default written as a JS number reaches the builtin as an int", () => {
     const calls: Value[][] = [];
-    standIn("render_as_json", [{ name: "value" }, { name: "indent", default: 2 }], (...args) => {
+    standIn("pretty", [{ name: "value" }, { name: "indent", default: 2 }], (...args) => {
       calls.push(args);
       return "";
     });
-    evaluate("render_as_json(1)");
+    evaluate("pretty(1)");
     expect(calls).toEqual([[1n, 2n]]);
   });
 

@@ -39,14 +39,6 @@ afterEach(() => {
   saved.length = 0;
 });
 
-/** Register stand-ins for the shipped builtins, with the shipped parameters. */
-function shippedStandIns(): void {
-  standIn("upper", [{ name: "s" }]);
-  standIn("lower", [{ name: "s" }]);
-  standIn("render_as_json", [{ name: "value" }, { name: "indent", default: 2 }]);
-  standIn("join", [{ name: "value" }, { name: "sep", default: "\n" }]);
-}
-
 /** Expect `parseCondition(condition, types)` to fail with exactly `message`. */
 function expectMessage(condition: string, message: string, types: ReadonlyMap<string, unknown> | null = null): void {
   let error: unknown;
@@ -60,7 +52,6 @@ function expectMessage(condition: string, message: string, types: ReadonlyMap<st
 }
 
 test("unknown function does not parse as a condition", () => {
-  shippedStandIns();
   for (const condition of [
     "nosuchfn(n) > 0",
     "${nosuchfn(n) > 0}",
@@ -88,7 +79,6 @@ test("a builtin type name called in a condition gets the conversion hint", () =>
 });
 
 test("builtin with arguments it does not take does not parse", () => {
-  shippedStandIns();
   const cases: [string, string][] = [
     ["upper(a, b) == 'A'", "expression function 'upper' takes (s): too many positional arguments"],
     ["upper() == 'A'", "expression function 'upper' takes (s): missing a required argument: 's'"],
@@ -101,7 +91,6 @@ test("builtin with arguments it does not take does not parse", () => {
 });
 
 test("a default shows in its text form", () => {
-  shippedStandIns();
   expectMessage(
     "join(a, b, c) == ''",
     'expression function \'join\' takes (value, sep="\\n"): too many positional arguments',
@@ -109,7 +98,6 @@ test("a default shows in its text form", () => {
 });
 
 test("builtin calls that bind parse", () => {
-  shippedStandIns();
   for (const condition of [
     "upper(s) == 'A'",
     "render_as_json(a, indent=4) != ''",
@@ -132,7 +120,6 @@ test("a registered builtin is accepted", () => {
 });
 
 test("a repeated keyword does not parse", () => {
-  shippedStandIns();
   expectMessage("upper(s=a, s=b) == 'A'", "upper(...) repeats the keyword 's'");
 });
 

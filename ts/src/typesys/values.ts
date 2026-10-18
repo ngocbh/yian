@@ -184,6 +184,74 @@ function jsTypeName(value: unknown): string {
   return typeof name === "string" && name !== "" ? name : "object";
 }
 
+// The writers below give a yian value's whole text, for a template or builtin to embed. They
+// are separate from `textForm`, which writes any JS value for a message and stops at the cap.
+
+/**
+ * Return a value's text form (design 3.2.3): text as itself, anything else as `writeAsJson`'s
+ * compact JSON (`true`, `null`, an int's digits, `1.5`, `1` for the float 1, `Infinity`,
+ * `[1,"a"]`, a `FileRef` as `{"uri":…,"mime":…,"name":…}`, records in JS property order).
+ *
+ * @throws TypeError `integer is too large for this runtime` when the runtime can't stringify an
+ *   int, or `text is too long for this runtime` when the text passes the engine's string limit.
+ */
+export function writeAsText(value: Value): string {
+  return typeof value === "string" ? value : writeAsJson(value);
+}
+
+/**
+ * Return a value as JSON, laid out as Python's `json.dumps(value, indent=indent)`.
+ *
+ * With no `indent` the JSON is compact (`,` and `:`, no spaces). With an int `indent` of 0 or
+ * more, each item sits on its own line indented by `indent` spaces per level, items end with
+ * `,`, and a key is followed by `": "`; an empty list or record is `[]` or `{}`. Text is
+ * JSON-quoted with non-ASCII kept, an int is its digits, a float its JS spelling (`1` for the
+ * float 1, bare `Infinity`), and a `FileRef` its mapping `{"uri", "mime", "name"}`.
+ *
+ * @throws TypeError as `writeAsText` does.
+ */
+export function writeAsJson(value: Value, indent: number | null = null): string {
+  try {
+    return jsonText(value, indent, 0);
+  } catch (error) {
+    // Bun and Node word an over-long string differently; both throw a RangeError.
+    if (error instanceof RangeError) throw new TypeError("text is too long for this runtime");
+    throw error;
+  }
+}
+
+/** Write `value` at nesting `level` (see `writeAsJson`). */
+function jsonText(value: Value, indent: number | null, level: number): string {
+  if (value === null || typeof value === "boolean" || typeof value === "number") return String(value);
+  if (typeof value === "bigint") {
+    try {
+      return value.toString();
+    } catch (error) {
+      // JavaScriptCore reports a bigint too large to stringify as a RangeError.
+      if (error instanceof RangeError) throw new TypeError("integer is too large for this runtime");
+      throw error;
+    }
+  }
+  if (typeof value === "string") return JSON.stringify(value);
+  let items: string[];
+  let open: string;
+  if (Array.isArray(value)) {
+    open = "[";
+    items = value.map((item) => jsonText(item, indent, level + 1));
+  } else {
+    open = "{";
+    const record = value as { readonly [key: string]: Value };
+    const keys = FileRef.isFileRef(value) ? FILE_FIELDS : Object.keys(record);
+    const colon = indent === null ? ":" : ": ";
+    items = keys.map((key) => JSON.stringify(key) + colon + jsonText(record[key] as Value, indent, level + 1));
+  }
+  const close = open === "[" ? "]" : "}";
+  if (items.length === 0) return open + close;
+  if (indent === null) return open + items.join(",") + close;
+  const inner = "\n" + " ".repeat(indent * (level + 1));
+  return open + inner + items.join("," + inner) + "\n" + " ".repeat(indent * level) + close;
+}
+
 /**
  * Render a value path as `a[1].b`, quoting a key that isn't an identifier as `['my key']`.
  *

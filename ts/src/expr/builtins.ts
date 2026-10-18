@@ -11,17 +11,18 @@
  * read-only formatting and produce no graph node or edge. See `docs/expressions.md`.
  *
  * A builtin is a host callback: it declares its parameters, so a call's arguments are checked
- * (`bindArguments`) before it runs, and it receives yian values. For now this holds the registry
- * only; the four shipped builtins (`render_as_json`, `join`, `upper`, `lower`) and the result
- * type they share land here later.
+ * (`bindArguments`) before it runs, and it receives yian values. Four ship here
+ * (`render_as_json`, `join`, `upper`, `lower`); `builtinResultType` gives the type a shipped
+ * builtin always returns, so the loader can reject a field read on its result.
  *
- * Knows about: `typesys` (`Value`, `fromHost`) and `diagnostics` (`reprText`). Never imports:
- * `expressions`, `template`, or anything above them.
+ * Knows about: `typesys` (`Value`, `FileRef`, `Type`, `ValueKind`, `fromHost`, `valueRepr`,
+ * `writeAsText`, `writeAsJson`) and `diagnostics` (`reprText`). Never imports: `expressions`,
+ * `template`, or anything above them.
  */
 
 import { reprText } from "../diagnostics.ts";
-import type { Value } from "../typesys/index.ts";
-import { fromHost } from "../typesys/values.ts";
+import { FileRef, Type, type Value, ValueKind } from "../typesys/index.ts";
+import { fromHost, valueRepr, writeAsJson, writeAsText } from "../typesys/values.ts";
 
 /** One parameter of a builtin; one with an own `default` is optional. */
 export interface TemplateParam {
@@ -93,4 +94,85 @@ export function bindArguments<T>(
     if (!params.some((p) => p.name === name)) return `got an unexpected keyword argument ${reprText(name)}`;
   }
   return bound;
+}
+
+/**
+ * Return a value's kind as messages name it: `null`, `bool`, `int`, `float`, `str`, `list`,
+ * `record` or `file`. The port of Python's `_kind`.
+ */
+export function kindName(value: Value): string {
+  if (value === null) return "null";
+  switch (typeof value) {
+    case "boolean":
+      return "bool";
+    case "bigint":
+      return "int";
+    case "number":
+      return "float";
+    case "string":
+      return "str";
+  }
+  if (Array.isArray(value)) return "list";
+  return FileRef.isFileRef(value) ? "file" : "record";
+}
+
+/**
+ * Throw when a builtin argument is null, so it never becomes text like "null". `fallback` is the
+ * example default the message suggests.
+ */
+function rejectNull(fn: string, value: Value, fallback = '""'): void {
+  if (value === null) throw new TypeError(`${fn}() got null; give a default, e.g. \`${fn}(x :- ${fallback})\``);
+}
+
+/** Return `s` if it is text; throw on null or any other kind. */
+function text(fn: string, s: Value): string {
+  rejectNull(fn, s);
+  if (typeof s !== "string") throw new TypeError(`${fn}() takes str, got ${kindName(s)}`);
+  return s;
+}
+
+/**
+ * Pretty-print `value` as JSON (`writeAsJson`): the headline builtin. A file renders as its
+ * mapping `{"uri", "mime", "name"}`. A null `value` is an error; a null nested inside it renders
+ * as `null`.
+ */
+function renderAsJson(value: Value, indent: Value): string {
+  rejectNull("render_as_json", value);
+  if (typeof indent !== "bigint" || indent < 0n) {
+    throw new TypeError(`render_as_json() takes an int indent of 0 or more, got ${valueRepr(indent)}`);
+  }
+  // A huge indent becomes a huge number (or Infinity), and the writer's `repeat` then fails.
+  return writeAsJson(value, Number(indent));
+}
+
+/**
+ * Join a list's elements, each in the text form, with `sep`. A null list or element is an
+ * error, and so is a non-list (a string is not split into characters).
+ */
+function join(value: Value, sep: Value): string {
+  rejectNull("join", value, "[]");
+  if (!Array.isArray(value)) throw new TypeError(`join() takes a list, got ${kindName(value)}`);
+  if (value.includes(null)) throw new TypeError("join() got a null element; drop or default it before joining");
+  if (typeof sep !== "string") throw new TypeError(`join() takes str for sep, got ${kindName(sep)}`);
+  return value.map(writeAsText).join(sep);
+}
+
+registerTemplateFn("render_as_json", {
+  params: [{ name: "value" }, { name: "indent", default: 2 }],
+  call: renderAsJson,
+});
+registerTemplateFn("join", { params: [{ name: "value" }, { name: "sep", default: "\n" }], call: join });
+registerTemplateFn("upper", { params: [{ name: "s" }], call: (s) => text("upper", s).toUpperCase() });
+registerTemplateFn("lower", { params: [{ name: "s" }], call: (s) => text("lower", s).toLowerCase() });
+
+// Every builtin shipped here returns text. Keyed by the stored entry, so a host that registers
+// another function under one of these names gets no result type.
+const SHIPPED = new Set(["render_as_json", "join", "upper", "lower"].map((name) => TEMPLATE_FNS.get(name)));
+
+/**
+ * Return the type builtin `name` always returns: `str` for a builtin shipped here, `null` for an
+ * unknown name or a host function registered under the name.
+ */
+export function builtinResultType(name: string): Type | null {
+  return SHIPPED.has(TEMPLATE_FNS.get(name)) ? Type.scalar(ValueKind.STRING) : null;
 }

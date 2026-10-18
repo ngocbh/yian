@@ -5,16 +5,15 @@
  * and builtins).
  *
  * The values follow the TS number model: pool ints are `bigint`s, and a membership test against
- * `null` fails with the operand-kinds message. The builtin test calls an `upper` stand-in.
+ * `null` fails with the operand-kinds message.
  *
  * Left for later: the `render_template_record` tests and the `eval_binding` half of
  * `test_builtins_evaluate_in_conditions_and_bindings` land with `template.ts`; the CASE node
  * tests with the CASE node and the runtime.
  */
 
-import { afterEach, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 
-import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
 import {
   ExpressionError,
   evaluateWhen,
@@ -23,25 +22,7 @@ import {
   resolveInRecord,
   resolveReference,
 } from "../../src/expr/expressions.ts";
-import { type Value, VariablePool } from "../../src/typesys/index.ts";
-
-// Each registration's previous entry (or its absence), put back after the test, as Python's
-// `monkeypatch.setitem` does.
-const saved: [string, TemplateFn | undefined][] = [];
-
-/** Register a stand-in builtin `name` taking `params` and running `call`, for this test only. */
-function standIn(name: string, params: TemplateParam[], call: (...args: Value[]) => unknown): void {
-  saved.push([name, TEMPLATE_FNS.get(name)]);
-  registerTemplateFn(name, { params, call });
-}
-
-afterEach(() => {
-  for (const [name, fn] of saved.reverse()) {
-    if (fn === undefined) TEMPLATE_FNS.delete(name);
-    else TEMPLATE_FNS.set(name, fn);
-  }
-  saved.length = 0;
-});
+import { VariablePool } from "../../src/typesys/index.ts";
 
 /** Return a pool holding each node's value; `${<id>.output}` reads it. */
 function poolWith(outputs: Record<string, unknown>): VariablePool {
@@ -225,7 +206,6 @@ test("a record condition compares a miss as null", () => {
 });
 
 test("builtins evaluate in conditions", () => {
-  standIn("upper", [{ name: "s" }], (s) => (s as string).toUpperCase());
   expect(evaluateWhenRecord('${upper(s) == "AB"}', { s: "ab" })).toBe(true);
 });
 

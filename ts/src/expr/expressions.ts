@@ -30,7 +30,7 @@ import {
   type VariablePool,
 } from "../typesys/index.ts";
 import { fieldOf, fileFieldType, fromHost, isRecord, valueRepr } from "../typesys/values.ts";
-import { bindArguments, TEMPLATE_FNS, type TemplateFn } from "./builtins.ts";
+import { bindArguments, kindName, TEMPLATE_FNS, type TemplateFn } from "./builtins.ts";
 // grammar.ts imports this module too, so its exports are used only inside functions here.
 import {
   callSuffixOf,
@@ -229,23 +229,6 @@ function equal(a: Value, b: Value): boolean {
 function numeric(value: Value): bigint | number | null {
   if (typeof value === "boolean") return value ? 1n : 0n;
   return typeof value === "bigint" || typeof value === "number" ? value : null;
-}
-
-/** Return a value's kind as messages name it: `null`, `bool`, `int`, `float`, `str`, `list`, `record` or `file`. */
-function kindName(value: Value): string {
-  if (value === null) return "null";
-  switch (typeof value) {
-    case "boolean":
-      return "bool";
-    case "bigint":
-      return "int";
-    case "number":
-      return "float";
-    case "string":
-      return "str";
-  }
-  if (Array.isArray(value)) return "list";
-  return FileRef.isFileRef(value) ? "file" : "record";
 }
 
 /** Return the error for `lhs op rhs` on a pair of operand kinds `op` doesn't take. */

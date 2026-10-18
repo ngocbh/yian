@@ -1,8 +1,8 @@
-/** Tests for the lossless JSON reader in `src/typesys/json.ts`. */
+/** Tests for the lossless JSON reader and the canonical JSON encoders in `src/typesys/json.ts`. */
 
 import { describe, expect, test } from "bun:test";
 
-import { JSONDecodeError, parseJson, type JsonValue } from "../../src/typesys/json.ts";
+import { canonicalJson, JSONDecodeError, logJson, parseJson, type JsonValue } from "../../src/typesys/json.ts";
 
 /** Return the `JSONDecodeError` that parsing `text` throws, or fail. */
 function decodeError(text: string): JSONDecodeError {
@@ -239,5 +239,171 @@ describe("parseJson", () => {
     }
     expect(levels).toBe(n / 2);
     expect(node).toEqual({ a: 1n });
+  });
+});
+
+const ENCODERS: [string, (value: unknown) => string][] = [
+  ["canonicalJson", canonicalJson],
+  ["logJson", logJson],
+];
+
+/** Expect `encode(value)` to throw a `TypeError` with `message`. */
+function expectRefusal(encode: (value: unknown) => string, value: unknown, message: string): void {
+  let caught: unknown;
+  try {
+    encode(value);
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBeInstanceOf(TypeError);
+  expect((caught as TypeError).message).toBe(message);
+}
+
+/** Return an object holding `key` as own data, even when `key` is `__proto__`. */
+function own(key: string, value: unknown): Record<string, unknown> {
+  const object: Record<string, unknown> = {};
+  Object.defineProperty(object, key, { value, writable: true, enumerable: true, configurable: true });
+  return object;
+}
+
+describe("canonicalJson", () => {
+  test("writes JCS", () => {
+    // U+10000 is the code units D800 DC00, so it sorts before U+E000 though its code point is higher.
+    const keys = { "\uE000": 1n, "\u{10000}": 2n, b: 3n, a: 4n, "": 5n };
+    expect(canonicalJson(keys)).toBe('{"":5,"a":4,"b":3,"\u{10000}":2,"\uE000":1}');
+    const text = '\u0000\u001f\b\f\n\r\t"\\/\u007f é\u{1F600}';
+    expect(canonicalJson(text)).toBe('"\\u0000\\u001f\\b\\f\\n\\r\\t\\"\\\\/\u007f é\u{1F600}"');
+    expect(canonicalJson(null)).toBe("null");
+    expect(canonicalJson(true)).toBe("true");
+    expect(canonicalJson(false)).toBe("false");
+    expect(canonicalJson([])).toBe("[]");
+    expect(canonicalJson({})).toBe("{}");
+    expect(canonicalJson({ b: [1n, { d: [], c: {} }], a: "x" })).toBe('{"a":"x","b":[1,{"c":{},"d":[]}]}');
+    expect(canonicalJson([0n, -5n, 9007199254740991n, -9007199254740991n, 56])).toBe(
+      "[0,-5,9007199254740991,-9007199254740991,56]",
+    );
+    const bare = Object.create(null) as Record<string, unknown>;
+    bare.k = "v";
+    expect(canonicalJson(bare)).toBe('{"k":"v"}');
+  });
+
+  test("refuses non-int numbers in JCS", () => {
+    for (const value of [1.5, 9007199254740992n, -9007199254740992n, 2 ** 53, 1e300]) {
+      expectRefusal(canonicalJson, value, "JCS numbers are ints within ±(2^53-1)");
+    }
+  });
+});
+
+describe("logJson", () => {
+  test("writes the log number form", () => {
+    const value = [1n, 1, 100, 1e21, 0.5, 1e-7, 2 ** 53, 5e-324, -1.5, 123456789012345678901234567890n];
+    expect(logJson(value)).toBe(
+      "[1,1.0,100.0,1e+21,0.5,1e-7,9007199254740992.0,5e-324,-1.5,123456789012345678901234567890]",
+    );
+  });
+
+  test("round-trips the log form in codec mode", () => {
+    const value = {
+      ints: [0n, -1n, 2n ** 64n, -(2n ** 70n)],
+      floats: [1, -2, 0.5, 2 ** 53, 1e21, Infinity, -Infinity],
+      lookAlikes: [
+        { $float: "inf" },
+        { $float: "-inf" },
+        { $record: 1n },
+        { $record: "x" },
+        { $record: null },
+        { $record: [1n] },
+        { $record: { $record: {} } },
+        { $record: { $record: Infinity } },
+      ],
+      proto: own("__proto__", { x: 1n }),
+      text: "café \u{1F600} \u{10000}",
+      nested: [[[{ a: [true, false, null] }]]],
+    };
+    const back = parseJson(logJson(value), "codec");
+    expect(back).toEqual(value as unknown as JsonValue);
+    // Walk both too, so every leaf's kind, each prototype and the key order are checked directly.
+    const pairs: [unknown, unknown][] = [[value, back]];
+    while (pairs.length > 0) {
+      const [want, got] = pairs.pop()!;
+      expect(typeof got).toBe(typeof want);
+      if (typeof want === "object" && want !== null) {
+        expect(Array.isArray(got)).toBe(Array.isArray(want));
+        expect(Object.getPrototypeOf(got)).toBe(Object.getPrototypeOf(want));
+        // The reader keeps the written order, which is sorted by code units.
+        expect(Object.keys(got as object)).toEqual(Object.keys(want).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)));
+        for (const key of Object.keys(want)) {
+          pairs.push([(want as Record<string, unknown>)[key], (got as Record<string, unknown>)[key]]);
+        }
+      }
+    }
+  });
+
+  test("logJson equals canonicalJson without floats and big ints", () => {
+    const value = { z: [1n, -2n, "téxt\n", true, false, null], a: { "": [], b: {} } };
+    expect(logJson(value)).toBe(canonicalJson(value));
+  });
+});
+
+describe.each(ENCODERS)("%s", (_name, encode) => {
+  test("writes infinity as the tag in both forms", () => {
+    expect(encode(Infinity)).toBe('{"$float":"inf"}');
+    expect(encode(-Infinity)).toBe('{"$float":"-inf"}');
+    expect(encode({ a: [Infinity, -Infinity] })).toBe('{"a":[{"$float":"inf"},{"$float":"-inf"}]}');
+  });
+
+  test("escapes look-alike records in both forms", () => {
+    expect(encode({ $float: "inf" })).toBe('{"$record":{"$float":"inf"}}');
+    expect(encode({ $float: "-inf" })).toBe('{"$record":{"$float":"-inf"}}');
+    expect(encode({ $record: 1n })).toBe('{"$record":{"$record":1}}');
+    expect(encode({ $record: { $record: {} } })).toBe('{"$record":{"$record":{"$record":{"$record":{}}}}}');
+    expect(encode({ $float: "nan" })).toBe('{"$float":"nan"}');
+    expect(encode({ $float: "inf", b: 1n })).toBe('{"$float":"inf","b":1}');
+  });
+
+  test("refuses what isn't canonical JSON in both forms", () => {
+    expectRefusal(encode, NaN, "NaN is not valid canonical JSON");
+    expectRefusal(encode, [-0], "negative zero is not valid canonical JSON");
+    expectRefusal(encode, "a\ud800", "Unicode surrogate is not valid canonical JSON");
+    expectRefusal(encode, { "\udc00": 1n }, "Unicode surrogate is not valid canonical JSON");
+    expectRefusal(encode, undefined, "undefined is not a canonical JSON value");
+    expectRefusal(encode, [1n, , 2n], "undefined is not a canonical JSON value");
+    expectRefusal(encode, { a: undefined }, "undefined is not a canonical JSON value");
+    expectRefusal(encode, Symbol("s"), "symbol is not a canonical JSON value");
+    expectRefusal(encode, [() => 1], "function is not a canonical JSON value");
+    expectRefusal(encode, new Date(0), "Date is not a canonical JSON value");
+    expectRefusal(encode, new Map(), "Map is not a canonical JSON value");
+    expectRefusal(encode, new Uint8Array(1), "Uint8Array is not a canonical JSON value");
+    expectRefusal(encode, new (class FileRef {})(), "FileRef is not a canonical JSON value");
+    expectRefusal(encode, Object.create({}), "Object is not a canonical JSON value");
+    expectRefusal(encode, Object.create(Object.create(null)), "object is not a canonical JSON value");
+    const original = BigInt.prototype.toString;
+    BigInt.prototype.toString = () => {
+      throw new RangeError("Maximum BigInt size exceeded");
+    };
+    try {
+      expectRefusal(encode, [1n], "integer is too large for this runtime");
+    } finally {
+      BigInt.prototype.toString = original;
+    }
+  });
+
+  test("refuses cycles and writes shared references", () => {
+    const a: unknown[] = [];
+    a.push(a);
+    expectRefusal(encode, a, "cyclic container cannot be canonicalized");
+    const o: Record<string, unknown> = {};
+    o.self = { back: o };
+    expectRefusal(encode, o, "cyclic container cannot be canonicalized");
+    const s = { x: 1n };
+    expect(encode([s, s])).toBe('[{"x":1},{"x":1}]');
+    expect(encode({ a: s, b: [s] })).toBe('{"a":{"x":1},"b":[{"x":1}]}');
+  });
+
+  test("writes any depth", () => {
+    const n = 100_000;
+    let value: unknown[] = [];
+    for (let i = 1; i < n; i++) value = [value];
+    expect(encode(value)).toBe("[".repeat(n) + "]".repeat(n));
   });
 });

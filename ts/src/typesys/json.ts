@@ -5,6 +5,11 @@
  * that overflows, a duplicate object key and a lone surrogate. A float token that is zero
  * reads as `0`, never `-0`. It reads with an explicit stack, so any depth reads.
  *
+ * Its encoders write what the reader reads back: `canonicalJson` writes RFC 8785 (JCS) text for
+ * fingerprints and `logJson` the same layout for run-log lines, with ints of any size and floats
+ * marked by `.0`. Both write infinity as yian's tag, escape records shaped like the tag, refuse
+ * what isn't canonical JSON with Python yian's messages, and write any depth.
+ *
  * It imports nothing from yian, so the `llm/` leaf can use it.
  */
 
@@ -290,4 +295,124 @@ export function parseJson(text: string, mode: JsonMode): JsonValue {
       pos++;
     }
   }
+}
+
+/** One step of writing: a value, literal text, or a container leaving the active path. */
+type Task = { value: unknown } | { text: string } | { leave: object };
+
+const MAX_SAFE = 2n ** 53n - 1n;
+
+// A local comparator, not `compareCodeUnits` from `diagnostics.ts`: this module imports nothing
+// from yian. JCS sorts keys by UTF-16 code units, which is what `<` compares.
+const byCodeUnits = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+/** Return `text` as a JSON string; for well-formed text `JSON.stringify` is RFC 8785's form. */
+function quote(text: string): string {
+  if (!text.isWellFormed()) throw new TypeError("Unicode surrogate is not valid canonical JSON");
+  return JSON.stringify(text);
+}
+
+/** Return the digits of `n`. */
+function bigintDigits(n: bigint): string {
+  try {
+    return n.toString();
+  } catch (error) {
+    if (error instanceof RangeError) throw new TypeError("integer is too large for this runtime");
+    throw error;
+  }
+}
+
+/** Return `n` as a JCS number: an int within ±(2^53-1). */
+function jcsNumber(n: number | bigint): string {
+  if (typeof n === "bigint" && -MAX_SAFE <= n && n <= MAX_SAFE) return bigintDigits(n);
+  if (typeof n === "number" && Number.isSafeInteger(n)) return String(n);
+  throw new TypeError("JCS numbers are ints within ±(2^53-1)");
+}
+
+/** Return `n` as a log number: a `bigint`'s digits, a float with `.0` when it has no `.` or exponent. */
+function logNumber(n: number | bigint): string {
+  if (typeof n === "bigint") return bigintDigits(n);
+  const text = String(n);
+  // The `.0` keeps an integral float a float when the reader reads it back.
+  return /[.eE]/.test(text) ? text : `${text}.0`;
+}
+
+/** Return `root` as compact key-sorted JSON, writing each finite number with `number`. */
+function write(root: unknown, number: (n: number | bigint) => string): string {
+  let out = "";
+  // Ancestors only, so a shared sub-value writes twice and only a cycle is refused.
+  const active = new Set<object>();
+  const stack: Task[] = [{ value: root }];
+  while (stack.length > 0) {
+    const task = stack.pop()!;
+    if ("text" in task) {
+      out += task.text;
+      continue;
+    }
+    if ("leave" in task) {
+      active.delete(task.leave);
+      continue;
+    }
+    const { value } = task;
+    if (value === null) {
+      out += "null";
+    } else if (typeof value === "boolean") {
+      out += value ? "true" : "false";
+    } else if (typeof value === "string") {
+      out += quote(value);
+    } else if (typeof value === "bigint") {
+      out += number(value);
+    } else if (typeof value === "number") {
+      if (Number.isNaN(value)) throw new TypeError("NaN is not valid canonical JSON");
+      if (Object.is(value, -0)) throw new TypeError("negative zero is not valid canonical JSON");
+      if (value === Infinity) out += '{"$float":"inf"}';
+      else if (value === -Infinity) out += '{"$float":"-inf"}';
+      else out += number(value);
+    } else if (typeof value !== "object") {
+      throw new TypeError(`${typeof value} is not a canonical JSON value`);
+    } else if (Array.isArray(value)) {
+      if (active.has(value)) throw new TypeError("cyclic container cannot be canonicalized");
+      active.add(value);
+      stack.push({ leave: value }, { text: "]" });
+      // Pushed last to first so they pop in order; a hole reads as `undefined` and is refused.
+      for (let i = value.length - 1; i >= 0; i--) {
+        stack.push({ value: value[i] });
+        if (i > 0) stack.push({ text: "," });
+      }
+      out += "[";
+    } else {
+      const proto = Object.getPrototypeOf(value);
+      if (proto !== Object.prototype && proto !== null) {
+        const name: unknown = (value as { constructor?: { name?: unknown } }).constructor?.name;
+        const kind = typeof name === "string" && name !== "" ? name : "object";
+        throw new TypeError(`${kind} is not a canonical JSON value`);
+      }
+      if (active.has(value)) throw new TypeError("cyclic container cannot be canonicalized");
+      active.add(value);
+      const record = value as Record<string, unknown>;
+      const keys = Object.keys(record).sort(byCodeUnits);
+      // A record shaped like the infinity tag or the escape itself is escaped, so the codec
+      // reader returns it as written.
+      const escaped =
+        keys.length === 1 &&
+        (keys[0] === "$record" || (keys[0] === "$float" && (record.$float === "inf" || record.$float === "-inf")));
+      stack.push({ leave: value }, { text: escaped ? "}}" : "}" });
+      for (let i = keys.length - 1; i >= 0; i--) {
+        const key = keys[i]!;
+        stack.push({ value: record[key] }, { text: `${i > 0 ? "," : ""}${quote(key)}:` });
+      }
+      out += escaped ? '{"$record":{' : "{";
+    }
+  }
+  return out;
+}
+
+/** Return `value` as RFC 8785 (JCS) text, infinity written as yian's tag (fingerprints). */
+export function canonicalJson(value: unknown): string {
+  return write(value, jcsNumber);
+}
+
+/** Return `value` as a run-log line: JCS layout with ints of any size and floats marked by `.0`. */
+export function logJson(value: unknown): string {
+  return write(value, logNumber);
 }

@@ -458,6 +458,7 @@ A case lists in `rules` the TS-era rules its expectation depends on (design #736
 | Id | Rule |
 |---|---|
 | `numbers` | int is unbounded and kept apart from float; lossless JSON; host number intake; duplicate keys refused; `YIAN_*` values stop at 2^53-1 |
+| `int-in-float` | an int filling a float slot stays an int at any depth; Python widens it to a float |
 | `arithmetic` | the operator table: `/` gives a float, `%` takes the left sign, no repetition or `%` formatting, division by zero |
 | `compare` | equality across kinds, ordering, membership |
 | `text-form` | how a value becomes text: JSON-style values, JS number spelling |

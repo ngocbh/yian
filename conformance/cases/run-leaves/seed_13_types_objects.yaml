@@ -1,7 +1,7 @@
 # From tests/seeds/13-types-objects.yaml.
 # Every input, typed, reaches a reference CODE node, and deep dotted reads build the output.
 # Only `output` is checked: the trace holds `summary.total`, an int CODE returns into a float
-# slot, whose stored value in TS isn't settled; the output doesn't hold it.
+# slot, which TS keeps as an int (`int-in-float`); the output doesn't hold it.
 kind: run
 flow: |
   # 13 — The type grammar (Python typing): scalars, lists, objects, nesting.

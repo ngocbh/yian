@@ -2,10 +2,10 @@
 # A MAP of a `uses:` alias grows one child per topic under `research_each#<i>/`, each AGENT
 # keyed by its expanded id; the list of child records fans in to one AGENT.
 kind: run
-# The child's `fetch_facts` returns the integral float 100.0 into a `list(float)`; TS's stored
-# value (int 100 or float 100.0) isn't settled, so `expect` leaves out the trace and
-# `python_expect` pins it.
-rules: [numbers]
+# The child's `fetch_facts` returns the integral float 100.0 into a `list(float)`; TS stores the
+# int 100 (an integral host number reads as an int and a float slot keeps it); `expect` leaves out
+# the trace until the TS runtime can produce it, and `python_expect` pins Python's.
+rules: [numbers, int-in-float]
 flow: |
   # 05 — MAP + over: typed iteration over a list (List.map), then fan-in.
   #

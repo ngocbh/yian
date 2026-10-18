@@ -1,4 +1,6 @@
 kind: cli
+# The int 2 filling `x: !float` stays an int; Python yian widens it to the float 2.0.
+rules: [int-in-float]
 flow: |
   id: echo
   name: echo
@@ -14,6 +16,12 @@ flow: |
 args: [run, flow.yaml, -w, "0", --log, run.jsonl, --json,
        --input, name=Ada, --input, n=2, --input, x=2]
 expect:
+  exit: 0
+  json:
+    format: yian.cli.v1
+    status: succeeded
+    output: {greeting: Ada, n: 2, x: 2}
+python_expect:
   exit: 0
   json:
     format: yian.cli.v1

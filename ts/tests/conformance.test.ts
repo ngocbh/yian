@@ -860,7 +860,7 @@ describe("main", () => {
       "v/raises.yaml":
         "kind: value\ntype: list(int)\nvalue: [1, 2.5]\nexpect:\n  raises: " +
         "{class: TypeCheckError, message: 2.5 does not match declared type int, path: [1]}\n",
-      "v/wrong.yaml": "kind: value\ntype: float\nvalue: 2\nexpect: {value: 2, kind: float}\n",
+      "v/wrong.yaml": "kind: value\ntype: float\nvalue: 2.0\nexpect: {value: 2, kind: float}\n",
       "v/cap.yaml":
         'kind: value\nenv: {YIAN_MAX_SHOWN_VALUE_CHARS: "10"}\ntype: int\n' +
         "value: abcdefghijklmnop\nexpect:\n  raises: {class: TypeCheckError, " +

@@ -4,16 +4,15 @@
  * (`fromHost`) refuses it with Python's located message form, so the `reject_nonfinite` rows
  * run through `fromHost` with NaN as the number (the rule: infinity and minus infinity are
  * float values, NaN is not a yian value). Also here: how intake reads a `number` as an int or
- * a float, and the `int is too large for float` rows of the write boundary.
+ * a float, and a huge int in a float slot at the write boundary, which stays an int.
  *
  * Also here: `test_long_ints.py::test_reject_nonfinite_still_reports_nan`.
  *
- * Later: the `canonical_typed` half of
- * `test_an_inferred_float_list_with_a_huge_int_fails_at_its_index` (with the run log).
- *
- * Not ported: the complex-number rows (no complex numbers in TS); the `ObjectValue`, pydantic
- * extras and dataclass rows (a `TypedValue`, a class instance and a dataclass are refused by
- * intake as non-plain objects, see `plain_containers.test.ts`); the cycle half of
+ * Not ported: `test_an_inferred_float_list_with_a_huge_int_fails_at_its_index` (no int
+ * converts to a float in TS, `int-in-float`); the complex-number rows (no complex numbers in
+ * TS); the `ObjectValue`, pydantic extras and dataclass rows (a `TypedValue`, a class instance
+ * and a dataclass are refused by intake as non-plain objects, see `plain_containers.test.ts`);
+ * the cycle half of
  * `test_reject_nonfinite_accepts_finite_values_and_cycles` (intake refuses a cycle); and
  * `test_a_str_subclass_key_becomes_an_exact_str_segment` (a record key is always a string).
  */
@@ -99,24 +98,22 @@ describe("numbers at intake", () => {
   });
 });
 
-describe("an int too large for a float", () => {
-  test("fails at the root of a float slot", () => {
-    const error = typeCheckError(() => buildValueAs(Type.scalar(ValueKind.NUMBER), 10n ** 400n));
-    expect(error.message).toBe("int is too large for float");
-    expect(error.path).toEqual([]);
+describe("a huge int in a float slot stays an int", () => {
+  test("at the root of a float slot", () => {
+    const typed = buildValueAs(Type.scalar(ValueKind.NUMBER), 10n ** 400n);
+    expect(typed.kind).toBe(ValueKind.INTEGER);
+    expect(typed.value).toBe(10n ** 400n);
   });
 
-  test("fails at the index of a float list item", () => {
-    const error = typeCheckError(() =>
-      buildValueAs(Type.scalar(ValueKind.LIST_NUMBER), [1n, 10n ** 400n]),
-    );
-    expect(error.message).toBe("int is too large for float");
-    expect(error.path).toEqual([1]);
+  test("in a float list item", () => {
+    const typed = buildValueAs(Type.scalar(ValueKind.LIST_NUMBER), [1n, 10n ** 400n]);
+    expect(typed.kind).toBe(ValueKind.LIST_NUMBER);
+    expect(typed.value).toEqual([1n, 10n ** 400n]);
   });
 
-  test("fails at its index in an inferred float list", () => {
-    const error = typeCheckError(() => buildValue([0.5, 10n ** 400n]));
-    expect(error.message).toBe("int is too large for float");
-    expect(error.path).toEqual([1]);
+  test("in an inferred float list", () => {
+    const typed = buildValue([0.5, 10n ** 400n]);
+    expect(typed.kind).toBe(ValueKind.LIST_NUMBER);
+    expect(typed.value).toEqual([0.5, 10n ** 400n]);
   });
 });

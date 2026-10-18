@@ -36,6 +36,8 @@ Python package in `src/yian/` stays the reference until the two reach parity.
   `stripTypes` strips a CODE body's types with amaro on both runtimes, keeping every line
   number, and returns text: the caller builds the function.
 - Host values enter through `fromHost`; values reaching `buildValueAs` are yian values.
+- A `float` slot given an int stores kind `int`, and a `list[float]` item may be an int
+  (`bigint`): code reading a float slot handles both (#535, `int-in-float`).
 
 ## LLM layer
 

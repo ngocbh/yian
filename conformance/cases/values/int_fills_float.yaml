@@ -1,5 +1,7 @@
 kind: value
-# An int filling a float slot widens, so the stored value is the float 2.0.
+# An int filling a float slot stays an int; Python yian widens it to the float 2.0.
+rules: [int-in-float]
 type: float
 value: 2
-expect: {value: 2.0, kind: float}
+expect: {value: 2, kind: int}
+python_expect: {value: 2.0, kind: float}

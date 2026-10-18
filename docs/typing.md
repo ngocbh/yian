@@ -277,6 +277,10 @@ member's field): an `int` filling a `float` slot widens; a file's JSON form fill
 `list(object)` item becomes its mapping, copying only the containers on its path. An
 `Any` value is stored as given: an int stays an int and `True` stays a bool.
 
+Changed (TS yian): an `int` filling a `float` slot stays an int at any depth: a `float`
+slot given an int stores kind `int`, a `list(float)` keeps its int items, and a record's
+`float` field keeps the int. Slots only check.
+
 Changed (TS yian): `buildValue` walks its whole value as a JSON value (files kept) and refuses
 a part that isn't one; Python's `build_value` doesn't walk, and its `canonical_typed` runs
 `reject_non_json` first.
@@ -302,6 +306,7 @@ depth; its message names the path (`output at d.x[1]: datetime.date(2026, 1, 1) 
 JSON value`). An already-built `TypedValue` (a replayed record) is not walked. Nothing
 types those files, so a reader sees each one as its mapping.
 An `int` too large for a float fails at its path (`int is too large for float`).
+Changed (TS yian): no int converts to a float, so this error doesn't exist.
 `TypeCheckError.path` is an immutable tuple relative to the declared type: string
 segments name record fields and integer segments are actual list indices. A
 mismatch at the checked root uses `()`; a nested container mismatch keeps its

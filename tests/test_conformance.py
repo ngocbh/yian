@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sys
 
 import pytest
 import yaml
@@ -21,7 +22,7 @@ from yaml.constructor import ConstructorError
 from yian import defaults
 from yian.compile.manifest import flow_fingerprint
 from yian.compose import load_flow
-from yian.compose.source.scalars import _BOOL, _FLOAT, _INT, _NULL, _FlowLoader
+from yian.compose.source.scalars import _BOOL, _FLOAT, _INT, _NULL
 from yian.typesys.values import TypeCheckError
 
 _ROOT = Path(__file__).resolve().parent.parent / "conformance"
@@ -32,11 +33,41 @@ _FIXTURES = _ROOT / "fixtures"
 class _CaseLoader(yaml.SafeLoader):
     """SafeLoader that reads YAML 1.2 core scalars only and refuses duplicate or non-text keys."""
 
-    # An own table, so SafeLoader's YAML 1.1 resolvers (yes/no, timestamps, merge keys)
-    # never apply; add_implicit_resolver below copies nothing from it.
+    # Own tables, so SafeLoader's YAML 1.1 resolvers (yes/no, timestamps, merge keys) and
+    # its constructors for other tags never apply; the add_* calls below copy nothing.
     yaml_implicit_resolvers: dict = {}
-    # yian's flow-loader constructors check their text through this method.
-    _core_text = _FlowLoader._core_text
+    yaml_constructors: dict = {}
+
+    def _core(self, node: yaml.Node, pattern: re.Pattern, kind: str) -> str:
+        """Return a scalar's text, raising unless it is a YAML 1.2 core `kind`."""
+        text = self.construct_scalar(node)
+        # An explicit tag skips the resolver's pattern.
+        if not pattern.fullmatch(text):
+            raise ConstructorError(
+                None, None, f"expected a YAML 1.2 core {kind}, found {text!r}", node.start_mark
+            )
+        return text
+
+    def construct_bool(self, node: yaml.Node) -> bool:
+        """Build a core bool."""
+        return self._core(node, _BOOL, "bool").lower() == "true"
+
+    def construct_int(self, node: yaml.Node) -> int:
+        """Build a core int: `0o` octal, `0x` hex, else decimal (leading zeros included)."""
+        text = self._core(node, _INT, "int")
+        if text.startswith(("0o", "0x")):
+            return int(text[2:], 8 if text[1] == "o" else 16)
+        return int(text)
+
+    def construct_float(self, node: yaml.Node) -> float:
+        """Build a core float, `.inf`, `-.inf` and `.nan` included."""
+        text = self._core(node, _FLOAT, "float")
+        lowered = text.lower()
+        if lowered.endswith(".inf"):
+            return float("-inf") if text[0] == "-" else float("inf")
+        if lowered == ".nan":
+            return float("nan")
+        return float(text)
 
     def construct_mapping(self, node: yaml.Node, deep: bool = False) -> dict:
         """Build a mapping, refusing a key that isn't text or that appears twice."""
@@ -44,7 +75,7 @@ class _CaseLoader(yaml.SafeLoader):
             raise ConstructorError(None, None, "expected a mapping", node.start_mark)
         mapping = {}
         for key_node, value_node in node.value:
-            key = self.construct_object(key_node, deep=deep)
+            key = self.construct_object(key_node, deep=True)
             if not isinstance(key, str):
                 raise ConstructorError(
                     None, None, f"mapping key {key!r} is not text", key_node.start_mark
@@ -60,9 +91,15 @@ _CaseLoader.add_implicit_resolver("tag:yaml.org,2002:bool", _BOOL, list("tTfF"))
 _CaseLoader.add_implicit_resolver("tag:yaml.org,2002:int", _INT, list("-+0123456789"))
 _CaseLoader.add_implicit_resolver("tag:yaml.org,2002:float", _FLOAT, list("-+0123456789."))
 _CaseLoader.add_implicit_resolver("tag:yaml.org,2002:null", _NULL, ["~", "n", "N", ""])
-_CaseLoader.add_constructor("tag:yaml.org,2002:bool", _FlowLoader.construct_yaml_bool)
-_CaseLoader.add_constructor("tag:yaml.org,2002:int", _FlowLoader.construct_yaml_int)
-_CaseLoader.add_constructor("tag:yaml.org,2002:float", _FlowLoader.construct_yaml_float)
+_CaseLoader.add_constructor("tag:yaml.org,2002:str", yaml.SafeLoader.construct_yaml_str)
+_CaseLoader.add_constructor("tag:yaml.org,2002:seq", yaml.SafeLoader.construct_yaml_seq)
+_CaseLoader.add_constructor("tag:yaml.org,2002:map", yaml.SafeLoader.construct_yaml_map)
+_CaseLoader.add_constructor("tag:yaml.org,2002:null", yaml.SafeLoader.construct_yaml_null)
+_CaseLoader.add_constructor("tag:yaml.org,2002:bool", _CaseLoader.construct_bool)
+_CaseLoader.add_constructor("tag:yaml.org,2002:int", _CaseLoader.construct_int)
+_CaseLoader.add_constructor("tag:yaml.org,2002:float", _CaseLoader.construct_float)
+# Any other tag, explicit (`!!timestamp`, `!!binary`, `!!set`) or unknown, is an error.
+_CaseLoader.add_constructor(None, yaml.SafeLoader.construct_undefined)
 
 
 # The closed format, as conformance/README.md defines it.
@@ -91,10 +128,13 @@ _EXPECT_KEYS = {
     "fingerprint": {"fingerprint"},
     "cli": {"exit", "stdout", "stderr", "json", "json_lines"},
 }
+_ALL_KEYS = _COMMON.union(*_KIND_KEYS.values())
+_ALL_EXPECT_KEYS = set().union(*_EXPECT_KEYS.values())
 _RUN_KEYS = {"run_id", "num_workers", "learnable", "llm_config", "context"}
 _RESUME_KEYS = {"num_workers", "api_key", "headers", "context"}
 _BACKWARD_KEYS = {"feedback", "api_key", "headers"}
 _HOST_KEYS = {"tools", "human", "jitter", "models", "steering", "stop", "memory", "skills"}
+_RESUME_HOST_KEYS = _HOST_KEYS | {"crash_after_record"}
 _TOOL_KEYS = {"parameters", "description", "results"}
 _RAISE_KEYS = {"class", "message", "retry_after"}
 _RULES = {
@@ -114,24 +154,36 @@ _ENV_SUFFIXES = ("_API_KEY", "_BASE_URL", "_ENDPOINT", "_API_VERSION")
 
 def _read(path: Path) -> dict:
     """Return the case file at `path` as read by `_CaseLoader`."""
-    case = yaml.load(path.read_text(encoding="utf-8"), Loader=_CaseLoader)
+    limit = sys.get_int_max_str_digits()
+    # Case files have no digit limit; yian applies its own when a value reaches it.
+    sys.set_int_max_str_digits(0)
+    try:
+        case = yaml.load(path.read_text(encoding="utf-8"), Loader=_CaseLoader)
+    finally:
+        sys.set_int_max_str_digits(limit)
     if not isinstance(case, dict):
         raise ValueError("a case file holds one mapping")
     return case
 
 
-def _keys(where: str, mapping: object, allowed: set, known: set = frozenset(),
-          required: tuple = ()) -> None:
+def _mapping(where: str, value: object) -> dict:
+    """Return `value`, raising unless it is a mapping."""
+    if not isinstance(value, dict):
+        raise ValueError(f"`{where or 'the case'}` must be a mapping")
+    return value
+
+
+def _keys(where: str, mapping: object, allowed: set, known: frozenset | set = frozenset(),
+          kind: str = "", required: tuple = ()) -> None:
     """Raise unless `mapping` is a mapping with only `allowed` keys and every `required` one.
 
-    A key in `known` but not in `allowed` belongs to another kind of case.
+    A key in `known` but not in `allowed` belongs to another kind of case than `kind`.
     """
-    if not isinstance(mapping, dict):
-        raise ValueError(f"`{where or 'the case'}` must be a mapping")
+    _mapping(where, mapping)
     for key in mapping:
         name = f"{where}.{key}" if where else key
         if key in known and key not in allowed:
-            raise ValueError(f"`{name}` is used with the wrong kind")
+            raise ValueError(f"`{name}` is not a key of a `{kind}` case")
         if key not in allowed:
             raise ValueError(f"unknown key `{name}`")
     for key in required:
@@ -141,23 +193,25 @@ def _keys(where: str, mapping: object, allowed: set, known: set = frozenset(),
 
 def _check_host(host: object, kind: str) -> None:
     """Raise unless `host`, its tools and their scripts use only the format's keys."""
-    allowed = _HOST_KEYS | {"crash_after_record"} if kind == "resume" else _HOST_KEYS
-    _keys("host", host, allowed, _HOST_KEYS | {"crash_after_record"})
-    tools = host.get("tools", {})
-    _keys("host.tools", tools, set(tools))
+    allowed = _RESUME_HOST_KEYS if kind == "resume" else _HOST_KEYS
+    _keys("host", host, allowed, _RESUME_HOST_KEYS, kind)
+    tools = _mapping("host.tools", host.get("tools", {}))
     for name, tool in tools.items():
         where = f"host.tools.{name}"
         _keys(where, tool, _TOOL_KEYS, required=("parameters", "results"))
         results = tool["results"]
-        for script in results.values() if isinstance(results, dict) else [results]:
+        scripts = results.items() if isinstance(results, dict) else [(None, results)]
+        for node, script in scripts:
             if not isinstance(script, list):
                 raise ValueError(f"`{where}.results` must be a list or a mapping of lists")
-            for entry in script:
-                _keys(f"{where}.results entry", entry, {"return", "raise"})
+            label = f"{where}.results" if node is None else f"{where}.results.{node}"
+            for index, entry in enumerate(script):
+                at = f"{label}[{index}]"
+                _keys(at, entry, {"return", "raise"})
                 if len(entry) != 1:
-                    raise ValueError(f"a `{where}.results` entry takes `return` or `raise`")
+                    raise ValueError(f"`{at}` takes `return` or `raise`")
                 if "raise" in entry:
-                    _keys(f"{where}.results raise", entry["raise"], _RAISE_KEYS,
+                    _keys(f"{at}.raise", entry["raise"], _RAISE_KEYS,
                           required=("class", "message"))
 
 
@@ -166,13 +220,11 @@ def _check(case: dict) -> dict:
     kind = case.get("kind")
     if kind not in _KIND_KEYS:
         raise ValueError(f"`kind` must be one of {', '.join(_KIND_KEYS)}, not {kind!r}")
-    every_key = _COMMON.union(*_KIND_KEYS.values())
-    _keys("", case, _COMMON | _KIND_KEYS[kind], every_key, required=("kind", "expect"))
-    every_expect = set().union(*_EXPECT_KEYS.values())
+    _keys("", case, _COMMON | _KIND_KEYS[kind], _ALL_KEYS, kind, required=("kind", "expect"))
     for key in ("expect", "python_expect"):
         if key in case:
-            _keys(key, case[key], _EXPECT_KEYS[kind], every_expect)
-    if "python_expect" in case and "rules" not in case:
+            _keys(key, case[key], _EXPECT_KEYS[kind], _ALL_EXPECT_KEYS, kind)
+    if "python_expect" in case and not case.get("rules"):
         raise ValueError("`python_expect` needs `rules`")
     rules = case.get("rules", [])
     if not isinstance(rules, list) or any(not isinstance(rule, str) for rule in rules):
@@ -181,11 +233,10 @@ def _check(case: dict) -> dict:
     if unknown:
         raise ValueError(f"unknown rule ids: {', '.join(unknown)}")
     for key in ("env", "files"):
-        texts = case.get(key, {})
-        _keys(key, texts, set(texts))
+        texts = _mapping(key, case.get(key, {}))
         if any(not isinstance(text, str) for text in texts.values()):
             raise ValueError(f"`{key}` values must be text")
-    for key in ("flow", "python_flow", "other", "stdin"):
+    for key in _TEXT_KEYS - {"files"}:
         if key in case and not isinstance(case[key], str):
             raise ValueError(f"`{key}` must be text")
     if "run" in case:
@@ -212,9 +263,7 @@ def _decode(value: object) -> object:
         return [_decode(item) for item in value]
     if not isinstance(value, dict):
         return value
-    if list(value) == ["$float"]:
-        if value["$float"] not in ("inf", "-inf"):
-            raise ValueError(f"`$float` takes inf or -inf, not {value['$float']!r}")
+    if value in ({"$float": "inf"}, {"$float": "-inf"}):
         return float(value["$float"])
     if list(value) == ["$record"]:
         record = value["$record"]
@@ -365,6 +414,10 @@ def _run_defaults(case: dict, case_dir: Path) -> None:
     if "raises" in expect:
         _expect_raises(expect["raises"], defaults.current)
         return
+    unknown = set(expect["defaults"]) - {entry.name for entry in defaults.ENTRIES}
+    if unknown:
+        pytest.fail(f"`expect.defaults` names unknown entries: {', '.join(sorted(unknown))}",
+                    pytrace=False)
     values = defaults.current()
     actual = {name: getattr(values, name.lower()) for name in expect["defaults"]}
     _compare("defaults", actual, expect["defaults"])

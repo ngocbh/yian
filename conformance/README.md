@@ -26,8 +26,9 @@ is an int and `1.0` a float.
 
 Values in a case (everything except flow text, `files` and `stdin`) are read in yian's JSON codec
 form: `{$float: inf}` and `{$float: -inf}` are the floats infinity and minus infinity, and
-`{$record: X}` is the record `X`. A record that has one of those two shapes itself is written
-inside `$record`. A bare `.inf` or `.nan` in a value is an error.
+`{$record: X}` is the record `X`. A record that is exactly `{$float: inf}` or `{$float: -inf}`,
+or whose only key is `$record`, is written inside `$record`. A bare `.inf` or `.nan` in a value is
+an error.
 
 The format is closed: a key this file doesn't define is an error. The format changes only by
 additions to this file.
@@ -36,7 +37,7 @@ additions to this file.
 
 ```yaml
 kind: run                  # load | run | resume | backward | expr | value | defaults | fingerprint | cli
-rules: [text-form]         # TS-era rules the expectation depends on; absent means shared
+rules: [text-form]         # TS-era rules the expectation depends on; absent or empty means shared
 pending: "#391"            # the TS runner expects this case to fail until that issue lands
 python_skip: why           # the Python runner can't run this case at all
 flow: |                    # the flow, in TS form (TS CODE bodies)

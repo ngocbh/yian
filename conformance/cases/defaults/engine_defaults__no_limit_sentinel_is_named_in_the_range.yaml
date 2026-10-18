@@ -1,0 +1,12 @@
+kind: defaults
+rules: [numbers, messages]
+env:
+  YIAN_AGENT_MAX_TOOL_ITERATIONS: '0'
+expect:
+  raises:
+    class: DefaultsError
+    message: 'YIAN_AGENT_MAX_TOOL_ITERATIONS="0" is out of range; use an integer from 1 to 9007199254740991, or -1 for no cap, or unset it'
+python_expect:
+  raises:
+    class: DefaultsError
+    message: "YIAN_AGENT_MAX_TOOL_ITERATIONS='0' is out of range; use an integer from 1 to 999999999999999999, or -1 for no cap, or unset it"

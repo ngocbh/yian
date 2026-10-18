@@ -7,7 +7,7 @@ import { REDACTED } from "../../src/llm/auth.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
 import { type Exchange, type ExchangeOptions, openExchange } from "../../src/llm/transport.ts";
 
-const URL_ = "https://api.example.test/v1/chat";
+const ENDPOINT = "https://api.example.test/v1/chat";
 const S = 1000;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -27,6 +27,10 @@ interface Reply {
   end?: boolean;
   /** A ready-made body, used instead of `steps`. */
   body?: unknown;
+  /** Whether the body errors with the request signal's reason once it aborts, as the runtime's does. */
+  abortBody?: boolean;
+  /** Whether `send` waits out `after` ignoring the request signal. */
+  ignoreSignal?: boolean;
 }
 
 /** A scheduler wrapper counting the sleeps made through it and those still pending. */
@@ -49,11 +53,24 @@ function counting(inner: Scheduler): { scheduler: Scheduler; stats: { armed: num
   };
 }
 
-/** Return a body stream playing `steps` on `clock`, stopped by its `cancel()`. */
-function playBody(clock: Scheduler, steps: Step[], end: boolean): ReadableStream<Uint8Array> {
+/**
+ * Return a body stream playing `steps` on `clock`, stopped by its `cancel()` (counted in
+ * `cancels`) or, when `signal` is given, errored with its reason once it aborts.
+ */
+function playBody(
+  clock: Scheduler,
+  steps: Step[],
+  end: boolean,
+  cancels: { count: number },
+  signal?: AbortSignal,
+): ReadableStream<Uint8Array> {
   const stop = new AbortController();
   return new ReadableStream<Uint8Array>({
     start(controller) {
+      signal?.addEventListener("abort", () => {
+        stop.abort();
+        controller.error(signal.reason);
+      });
       void (async () => {
         try {
           for (const step of steps) {
@@ -69,6 +86,7 @@ function playBody(clock: Scheduler, steps: Step[], end: boolean): ReadableStream
       })();
     },
     cancel() {
+      cancels.count++;
       stop.abort();
     },
   });
@@ -79,23 +97,25 @@ function harness(reply: Reply) {
   const clock = virtualScheduler(0);
   const { scheduler, stats } = counting(clock);
   const calls: RequestInit[] = [];
+  const cancels = { count: 0 };
   const send: Send = async (_url, init) => {
     calls.push(init);
-    await clock.sleep(reply.after ?? 0, init.signal ?? undefined);
+    await clock.sleep(reply.after ?? 0, reply.ignoreSignal ? undefined : (init.signal ?? undefined));
     if (reply.error !== undefined) throw reply.error;
     const status = reply.status ?? 200;
     const headers = new Headers(reply.headers);
     if (reply.body !== undefined) return { status, headers, body: reply.body } as unknown as Response;
-    const body = reply.steps === null ? null : playBody(clock, reply.steps ?? [], reply.end ?? true);
+    const signal = reply.abortBody ? (init.signal ?? undefined) : undefined;
+    const body = reply.steps === null ? null : playBody(clock, reply.steps ?? [], reply.end ?? true, cancels, signal);
     return new Response(body, { status, headers });
   };
-  const open = (options: Partial<ExchangeOptions> = {}, url = URL_) =>
+  const open = (options: Partial<ExchangeOptions> = {}, url = ENDPOINT) =>
     openExchange(
       url,
       { method: "POST", body: "{}" },
       { provider: "openai", credentials: () => [], scheduler, send, ...options },
     );
-  return { clock, stats, calls, send, open };
+  return { clock, stats, calls, cancels, send, open };
 }
 
 /** Read the whole body as text. */
@@ -132,6 +152,7 @@ function hangingBody(...chunks: string[]) {
   return { getReader: () => reader, cancel: () => Promise.resolve() };
 }
 
+/** Check that `error` is a retryable `timeout` `ProviderError` from openai with `message`. */
 function expectTimeout(error: unknown, message: string): void {
   expect(error).toBeInstanceOf(ProviderError);
   const e = error as ProviderError;
@@ -217,6 +238,13 @@ describe("idle", () => {
     expect(h.calls[0]!.signal!.aborted).toBe(true);
   });
 
+  test("an idleMs override sets the idle timer", async () => {
+    const h = harness({ steps: [{ at: 0, chunk: "a" }, { at: 600, chunk: "b" }] });
+    const exchange = await h.open({ idleMs: 500 });
+    expectTimeout(await failure(readAll(exchange)), "openai request failed (timeout): no bytes for 0.5 s");
+    expect(h.clock.now()).toBe(500);
+  });
+
   test("a 239 s gap is fine", async () => {
     const h = harness({ steps: [{ at: 0, chunk: "a" }, { at: 239 * S, chunk: "b" }, { at: 478 * S, chunk: "c" }] });
     expect(await readAll(await h.open())).toEqual(["a", "b", "c"]);
@@ -227,7 +255,7 @@ describe("idle", () => {
     const h = harness({ steps });
     const chunks = await readAll(await h.open());
     expect(chunks.length).toBe(121);
-    expect(h.clock.now()).toBeGreaterThanOrEqual(1200 * S);
+    expect(h.clock.now()).toBe(1200 * S);
   });
 
   test("an SSE comment every 200 s keeps a 20-minute stream alive", async () => {
@@ -235,7 +263,7 @@ describe("idle", () => {
     const h = harness({ steps });
     const chunks = await readAll(await h.open());
     expect(chunks.length).toBe(7);
-    expect(h.clock.now()).toBeGreaterThanOrEqual(1200 * S);
+    expect(h.clock.now()).toBe(1200 * S);
   });
 
   test("a one-byte chunk resets the idle timer", async () => {
@@ -335,6 +363,21 @@ describe("a read that never settles", () => {
     expect(await failure(readAll(exchange))).toBe(reason);
     expect(h.clock.now()).toBe(5 * S);
   });
+
+  test("is ended by abort() with an AbortError, never a timeout", async () => {
+    const h = harness({ body: hangingBody("a") });
+    const exchange = await h.open();
+    const iterator = exchange.body;
+    await iterator.next();
+    const pending = iterator.next();
+    void h.clock.sleep(5 * S).then(() => exchange.abort());
+    const error = await failure(pending);
+    expect(error).not.toBeInstanceOf(ProviderError);
+    expect((error as Error).name).toBe("AbortError");
+    expect(h.clock.now()).toBe(5 * S);
+    await settle();
+    expect(h.stats.pending).toBe(0);
+  });
 });
 
 describe("the request's signal", () => {
@@ -360,6 +403,36 @@ describe("the request's signal", () => {
     expect(h.calls[0]!.signal!.aborted).toBe(true);
     await settle();
     expect(h.clock.now()).toBe(0);
+  });
+
+  test("returning before the first read leaves it unaborted; abort() aborts it", async () => {
+    const h = harness({ steps: [{ at: 0, chunk: "a" }, { at: 10 * S, chunk: "b" }] });
+    const exchange = await h.open();
+    expect((await exchange.body.return(undefined)).done).toBe(true);
+    expect(h.calls[0]!.signal!.aborted).toBe(false);
+    exchange.abort();
+    expect(h.calls[0]!.signal!.aborted).toBe(true);
+  });
+
+  test("abort() during a pending read rejects it instead of ending the body", async () => {
+    const h = harness({ steps: [{ at: 0, chunk: "a" }, { at: 100 * S, chunk: "b" }], abortBody: true });
+    const exchange = await h.open();
+    const iterator = exchange.body;
+    await iterator.next();
+    const pending = iterator.next();
+    void h.clock.sleep(5 * S).then(() => exchange.abort());
+    const error = await failure(pending);
+    expect(error).not.toBeInstanceOf(ProviderError);
+    expect((error as Error).name).toBe("AbortError");
+  });
+
+  test("a reply from a sender ignoring the signal after a timeout is released", async () => {
+    const h = harness({ after: 300 * S, ignoreSignal: true, steps: [{ at: 300 * S, chunk: "a" }] });
+    expectTimeout(await failure(h.open()), NO_RESPONSE);
+    expect(h.clock.now()).toBe(240 * S);
+    await settle();
+    expect(h.clock.now()).toBe(300 * S);
+    expect(h.cancels.count).toBe(1);
   });
 });
 
@@ -442,6 +515,36 @@ describe("error mapping", () => {
       expect(mapped.message).toBe(`openai request failed (timeout): TypeError: fetch failed (${code})`);
     });
   }
+
+  test("a cause cycle ends the walk and still maps", async () => {
+    const error = new TypeError("fetch failed");
+    const inner = withCode(new Error("reset"), "ECONNRESET");
+    error.cause = inner;
+    inner.cause = error;
+    const mapped = (await failure(harness({ error }).open())) as ProviderError;
+    expect(mapped.kind).toBe("connection");
+    expect(mapped.message).toBe("openai request failed (connection): TypeError: fetch failed (ECONNRESET)");
+  });
+
+  test("a codeless error that is its own cause propagates unchanged", async () => {
+    const error = new Error("loop");
+    error.cause = error;
+    expect(await failure(harness({ error }).open())).toBe(error);
+  });
+
+  test("a TimeoutError nested in the cause is a timeout", async () => {
+    const cause = new DOMException("The operation timed out.", "TimeoutError");
+    const error = new TypeError("fetch failed", { cause });
+    const mapped = (await failure(harness({ error }).open())) as ProviderError;
+    expect(mapped.kind).toBe("timeout");
+    expect(mapped.message).toBe("openai request failed (timeout): TypeError: fetch failed");
+    expect(mapped.causeName).toBe("TypeError");
+  });
+
+  test("a thrown non-Error propagates unchanged", async () => {
+    const error = { code: "ECONNRESET", message: "not an Error" };
+    expect(await failure(harness({ error }).open())).toBe(error);
+  });
 
   test("a TimeoutError is a timeout", async () => {
     const error = new DOMException("The operation timed out.", "TimeoutError");

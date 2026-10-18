@@ -3,8 +3,9 @@
  * while a read is pending, with runtime failures mapped to `ProviderError`s.
  *
  * Timers run only while the transport waits, so time the consumer spends between reads
- * never counts as silence. Each wait races its timer and the caller's signal against
- * the work, so a stop or a timeout ends even a read the runtime never settles.
+ * never counts as silence. Each wait races its timer and the exchange's request signal
+ * (the caller's stop, our timeout, `abort()`) against the work, so any of them ends even
+ * a read the runtime never settles.
  */
 
 import { current } from "../defaults.ts";
@@ -36,10 +37,15 @@ export interface Exchange {
   readonly headers: Headers;
   /**
    * The body's non-empty chunks, each read under the idle timer. Finishing, failing or
-   * returning early aborts the request.
+   * returning early aborts the request. Returning before the first read doesn't run the
+   * body; call `abort()` to release an exchange whose body you won't read.
    */
   readonly body: AsyncGenerator<Uint8Array>;
-  /** Abort the request and release the body. */
+  /**
+   * Abort the request and release the body; a pending read rejects with the runtime's
+   * `AbortError`. Returning before the first read doesn't run the body; call `abort()` to
+   * release an exchange whose body you won't read.
+   */
   abort(): void;
 }
 
@@ -57,7 +63,7 @@ const TIMEOUT_CODES = new Set([
 ]);
 
 /**
- * Wait for `work` under a timer of `ms` on `scheduler` and the caller's `signal`.
+ * Wait for `work` under a timer of `ms` on `scheduler` and `signal`.
  *
  * Rejects with `signal.reason` once the signal aborts, and with `onTimeout()`'s error once
  * the timer fires; otherwise settles as `work` does. The timer never outlives the wait.
@@ -93,10 +99,11 @@ async function timed<T>(
  * `cause`, Bun sets `code` on its `TypeError`.
  */
 function transportError(error: unknown, provider: string, credentials: Iterable<string>): ProviderError | undefined {
+  if (!(error instanceof Error)) return undefined;
   let code: string | undefined;
   let timeout = false;
   const seen = new Set<unknown>();
-  for (let link = error; typeof link === "object" && link !== null && !seen.has(link); ) {
+  for (let link: unknown = error; typeof link === "object" && link !== null && !seen.has(link); ) {
     seen.add(link);
     const { name, code: linkCode, cause } = link as { name?: unknown; code?: unknown; cause?: unknown };
     if (name === "TimeoutError") timeout = true;
@@ -114,7 +121,7 @@ function transportError(error: unknown, provider: string, credentials: Iterable<
   if (timeout || (code !== undefined && TIMEOUT_CODES.has(code))) kind = "timeout";
   else if (runtimeCode || wrapped) kind = "connection";
   else return undefined;
-  const { name, message } = error as Error;
+  const { name, message } = error;
   const text = `${provider} request failed (${kind}): ${name}: ${message}` + (code === undefined ? "" : ` (${code})`);
   return new ProviderError(kind, scrub(text, credentials), { causeName: name, provider });
 }
@@ -166,23 +173,26 @@ export async function openExchange(url: string, init: RequestInit, options: Exch
     return transportError(error, provider, credentials()) ?? error;
   };
   const release = () => {
-    void reader?.cancel().catch(() => {});
+    // Abort first: a cancel would end a pending read as a normal end of the body.
     internal.abort();
+    void reader?.cancel().catch(() => {});
   };
 
+  const requestSignal = signal ? AbortSignal.any([signal, internal.signal]) : internal.signal;
   let response: Response;
   let first: Uint8Array | undefined;
   try {
-    const requestSignal = signal ? AbortSignal.any([signal, internal.signal]) : internal.signal;
     [response, first] = await timed(
       (async () => {
         const reply = await safeFetch(url, { ...init, signal: requestSignal }, send);
         reader = reply.body?.getReader();
+        // A sender that ignores the signal can reply after a timeout or a stop already released.
+        if (internal.signal.aborted) release();
         return [reply, reader && (await nextChunk(reader))] as const;
       })(),
       firstResponseMs,
       scheduler,
-      signal,
+      requestSignal,
       onTimeout(`no response within ${firstResponseMs / 1000} s`),
     );
   } catch (error) {
@@ -199,7 +209,7 @@ export async function openExchange(url: string, init: RequestInit, options: Exch
       if (first === undefined) return;
       yield first;
       for (;;) {
-        const chunk = await timed(nextChunk(reader!), idleMs, scheduler, signal, noBytes);
+        const chunk = await timed(nextChunk(reader!), idleMs, scheduler, requestSignal, noBytes);
         if (chunk === undefined) return;
         yield chunk;
       }

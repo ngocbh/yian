@@ -89,8 +89,8 @@ flow: |
         exited: false                 # the `exited` entry sets true for exact /exit or /quit
       while: not exited               # a carried-field predicate
   output: ${chat.output.transcript}
-# The inline CODE body differs by language: `flow` has the TS body (`false`),
-# this the Python one (`False`).
+# The CODE body differs by language: `flow` holds the TS body, this the Python one.
+# Its `False` is `false` in the TS body.
 python_flow: |
   # chat — a turn-by-turn conversational REPL (agent without tools; deterministic transcript).
   #

@@ -1,5 +1,5 @@
 # From tests/seeds/errors/e15-prompt-undeclared-input.yaml.
-# An AGENT prompt naming a name that isn't one of the node's inputs fails at the `prompt:` value.
+# An AGENT prompt that reads an undeclared node input fails at the `prompt:` value.
 kind: load
 flow: |
   # e15 — an AGENT prompt references an undeclared node input. COMPILE.

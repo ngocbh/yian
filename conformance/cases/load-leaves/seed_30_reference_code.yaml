@@ -29,6 +29,7 @@ flow: |
 
   output: ${verdict.output}
 # The CODE reference differs by language: `flow` names the TS function, this the Python one.
+# Its code-line comment is reworded for the TS form (`file:function`).
 python_flow: |
   # 30 — reference CODE source. A `code:` node names a `module:function` token; the engine
   # imports the module and calls `func(inputs)` IN-PROCESS — the alternative to the inline

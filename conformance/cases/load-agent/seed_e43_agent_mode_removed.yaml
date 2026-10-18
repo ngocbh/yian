@@ -1,6 +1,5 @@
 # From tests/seeds/errors/e43-agent-mode-removed.yaml.
-# The removed AGENT `mode:` fails at its key, saying to delete it and,
-# beside `tools:`, that they now run.
+# The removed AGENT `mode:` fails at its key, saying to delete the line.
 kind: load
 flow: |
   # e43 — the removed AGENT `mode:` field is rejected at its key line.

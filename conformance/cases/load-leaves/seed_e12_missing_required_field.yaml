@@ -19,5 +19,5 @@ expect:
     diagnostics:
       - code: compose.load
         message: "node 'calc' (kind=code): missing required field 'code'"
-        # The `calc:` node body, from `kind:` on line 8 to the `output:` key that ends it.
+        # The `calc:` node body, from `kind:` on line 8 to the flow's `output:` on line 12.
         frames: [{label: flow.yaml, range: [8, 5, 12, 1]}]

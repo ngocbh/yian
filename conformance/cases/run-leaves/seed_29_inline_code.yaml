@@ -33,6 +33,7 @@ flow: |
 
   output: ${verdict.output}
 # The CODE body differs by language: `flow` holds the TS body, this the Python one.
+# String concatenation, not a template literal: `${...}` in flow text reads as a yian reference.
 python_flow: |
   # 29 — inline CODE source. A `code:` node carries a bare body that reads `inputs` and
   # `return`s a value; the engine wraps it as `def main(inputs)` and runs it IN-PROCESS

@@ -39,6 +39,15 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 - A `float` slot given an int stores kind `int`, and a `list[float]` item may be an int
   (`bigint`): code reading a float slot handles both (#535, `int-in-float`).
 
+## YAML
+
+- `src/compose/source/` is the only code that imports `yaml`.
+- It parses with `FLOW_OPTIONS` (YAML 1.2, failsafe schema), so the library resolves no
+  scalar; `scalars.ts` applies yian's table.
+- `composeFlowDocument` resolves aliases and applies the nesting and node limits.
+- Ints are `bigint`, dates stay text, `.inf` is a float, and `.nan` is refused.
+- A local type tag (`!float 3`) never changes how its scalar reads.
+
 ## LLM layer
 
 - `src/llm/` is a leaf: it imports only `defaults`, `platform` and `typesys/json` (the layer

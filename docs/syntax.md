@@ -137,6 +137,20 @@ values; quote it to keep it as text, or tag it (`!date "2026-01-01"`). So is a Y
 `'g': numbers must be finite (got .nan)`, and `g: 1e400` gives `'g': numbers must be
 finite (got 1e400, which YAML reads as .inf)`.
 
+Changed (TS yian): an unquoted date or timestamp stays text; the value is the text as
+written. This changes the table above: `2026-10-14` reads as text, not as a date value. The
+text must be a `date` (`2026-10-14`) or a `datetime` (`2026-10-14T10:00:00Z`) in yian's form
+(see [Types](typing.md#valuekind-the-closed-vocabulary)). Other YAML timestamp spellings (a
+lowercase `t`, a blank before the offset, a one-digit month, day, or offset hour, more than
+six fraction digits) are load errors like an impossible date.
+
+Changed (TS yian): `.inf`, `+.inf`, and `-.inf` (also `.Inf`, `.INF`) read as floats, and
+`-0.0` reads as `0`. `.nan` and a number too large for a float are errors when YAML reads
+them, wherever they are written: `.nan` gives `NaN is not a yian value`, and `1e400` gives
+`number is too large for a float`. YAML syntax follows YAML 1.2 as the `yaml` package reads
+it: an anchor may be defined again, and `! 5` (the bare tag) is the text `"5"`. The keys of a
+YAML document read on its own, such as a skill's frontmatter, must be text too.
+
 A flow file's YAML nests at most 200 levels (`YIAN_MAX_YAML_NESTING` can lower it; see
 [Defaults and limits](defaults.md)); each mapping and list is a level, counting the
 file's top level. A deeper file is a load error at the first mapping or list past

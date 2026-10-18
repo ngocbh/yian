@@ -25,6 +25,7 @@ import {
   compare,
   decode,
   expectRaises,
+  KINDS as RUNNERS,
   main,
   prepare,
   raised,
@@ -33,7 +34,6 @@ import {
   same,
   setUp,
 } from "./conformance.ts";
-import { KINDS as RUNNERS } from "./conformance.ts";
 import type { Case, CaseContext, Kind, KindRunner } from "./conformance.ts";
 
 const CASES = fileURLToPath(new URL("../../conformance/cases/", import.meta.url));

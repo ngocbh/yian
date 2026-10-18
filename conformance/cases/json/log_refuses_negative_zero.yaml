@@ -3,4 +3,6 @@ rules: [canonical]
 write: -0.0
 form: log
 expect:
-  raises: {class: TypeError, message: negative zero is not valid canonical JSON}
+  raises:
+    class: TypeError
+    message: negative zero is not valid canonical JSON

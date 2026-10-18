@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable, Collection
+import dataclasses
 from decimal import Decimal
 import functools
 import hashlib
@@ -44,11 +45,13 @@ import yaml
 import yian
 from yian import defaults, llm_clients
 from yian.compose import LoadError, load_flow
+from yian.compose.source.scalars import _FlowLoader
 from yian.expr import builtins as expr_builtins, expressions, template
 from yian.expr.expressions import ResolveMode, eval_expr, evaluate_when_record
 from yian.expr.grammar import parse_expr
 from yian.expr.template import eval_binding, render_template_record
 from yian.nodes.agent import memory
+from yian.nodes.code.node import CodeNode
 from yian.nodes.tool import node as tool_node
 from yian.run import RunResult, resume_flow, run_flow
 from yian.typesys import values as typesys_values
@@ -1716,6 +1719,106 @@ def _install_compare(patch: pytest.MonkeyPatch, case: dict) -> None:
     _patch_held(patch, original, _ts_comparison(original))
 
 
+# Line breaks as PyYAML (YAML 1.1) reads them, and as YAML 1.2 does.
+_PY_LINE_BREAK = re.compile("\r\n|[\r\n\x85\u2028\u2029]")
+_TS_LINE_BREAK = re.compile("\r\n|[\r\n]")
+
+
+def _ts_range(text: str, rng: list) -> list:
+    """Return the Python source range `rng` in `text` as TS gives it.
+
+    Python's `[start_line, start_col, end_line, end_col]` breaks lines at CRLF, CR, LF, NEL,
+    U+2028 and U+2029 and counts columns in code points; TS breaks lines at CRLF, CR and LF
+    and counts columns in UTF-16 code units. A position past its line or the text is kept, and
+    so is a range in a text starting with U+FEFF (the recorder tags it `yaml`).
+    """
+    if text.startswith("\ufeff"):
+        return list(rng)
+    breaks = list(_PY_LINE_BREAK.finditer(text))
+    starts = [0] + [match.end() for match in breaks]
+    ends = [match.start() for match in breaks] + [len(text)]
+
+    def position(line: int, column: int) -> list:
+        if not (1 <= line <= len(starts) and 1 <= column <= ends[line - 1] - starts[line - 1] + 1):
+            return [line, column]
+        offset = starts[line - 1] + column - 1
+        before = [match.end() for match in _TS_LINE_BREAK.finditer(text, 0, offset)]
+        start = before[-1] if before else 0
+        return [len(before) + 1, len(text[start:offset].encode("utf-16-le")) // 2 + 1]
+
+    return position(*rng[:2]) + position(*rng[2:])
+
+
+def _install_columns(patch: pytest.MonkeyPatch, case: dict) -> None:
+    """Give every diagnostic frame's range in TS lines and columns, by its label's text."""
+    flow = case.get("python_flow", case.get("flow"))
+    files = case.get("python_files", case.get("files", {}))
+    diagnostic = runner._diagnostic
+
+    def text_of(label: str) -> str | None:
+        if label == "flow.yaml":
+            return flow
+        # A child flow's label is its file name.
+        named = [text for name, text in files.items() if Path(name).name == label]
+        return named[0] if len(named) == 1 else None
+
+    @functools.wraps(diagnostic)
+    def ts_diagnostic(diag: object) -> dict:
+        form = diagnostic(diag)
+        for frame in form.get("frames", []):
+            text = text_of(frame["label"])
+            if text is not None:
+                frame["range"] = _ts_range(text, frame["range"])
+        return form
+
+    # `_failure` calls `_diagnostic`, so run failures follow.
+    patch.setattr(runner, "_diagnostic", ts_diagnostic)
+
+
+def _install_dollar(patch: pytest.MonkeyPatch, case: dict) -> None:
+    """Make `!!timestamp` text match only to its end, not also before a trailing newline."""
+    pattern = _FlowLoader.timestamp_regexp
+    patch.setattr(_FlowLoader, "timestamp_regexp",
+                  re.compile(pattern.pattern.removesuffix("$") + r"\Z", pattern.flags))
+
+
+def _ts_intake(value: object) -> object:
+    """Return `value` as a TS host reads it back: an integral float within ±(2^53-1) as an int.
+
+    Lists and records are walked; `-0.0` reads as `0`, and `inf`, `nan` and anything else are
+    kept. `value` itself comes back when nothing in it changes.
+    """
+    if type(value) is float:
+        return int(value) if value.is_integer() and abs(value) <= 2**53 - 1 else value
+    if type(value) is list:
+        items = [_ts_intake(item) for item in value]
+        return items if any(new is not old for new, old in zip(items, value)) else value
+    if type(value) is dict:
+        record = {key: _ts_intake(item) for key, item in value.items()}
+        return record if any(record[key] is not value[key] for key in value) else value
+    return value
+
+
+def _install_code_intake(patch: pytest.MonkeyPatch, case: dict) -> None:
+    """Read a CODE body's result as a TS host does, noting `intake` when that changes it."""
+    forward = CodeNode.forward
+
+    @functools.wraps(forward)
+    def ts_forward(self: CodeNode, inputs: dict, **kwargs: object) -> object:
+        output = forward(self, inputs, **kwargs)
+        own = self.id.rsplit("/", 1)[-1].split("#", 1)[0]
+        if list(inputs) == [own] and self.code == f"return inputs[{own!r}]":
+            # A value entry's value is authored, not a host's result.
+            return output
+        value = _ts_intake(output.value)
+        if value is output.value:
+            return output
+        _NOTES.add("intake")
+        return dataclasses.replace(output, value=value)
+
+    patch.setattr(CodeNode, "forward", ts_forward)
+
+
 # The shims by name, in install order: a later shim may wrap what an earlier one patched.
 _SHIMS: dict[str, _Shim] = {
     "arithmetic": _Shim("arithmetic", _install_arithmetic),
@@ -1724,6 +1827,10 @@ _SHIMS: dict[str, _Shim] = {
     "messages": _Shim("messages", _install_messages),
     # Record key order is in the text-form rule's section of the design.
     "key-order": _Shim("text-form", _install_key_order),
+    "columns": _Shim("columns", _install_columns),
+    # The timestamp pattern's `$` is the text rule's.
+    "dollar": _Shim("text", _install_dollar),
+    "code-intake": _Shim("numbers", _install_code_intake),
 }
 # What the shims noted during the latest replay.
 _NOTES: set[str] = set()

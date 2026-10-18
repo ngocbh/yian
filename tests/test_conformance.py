@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import fields, is_dataclass
+from datetime import date
 from functools import reduce
 import hashlib
 import inspect
@@ -3130,3 +3131,159 @@ def test_shim_compare() -> None:
     assert harvest._SHIMS["compare"].rule == "compare"
     # Python orders text by code point.
     assert _shim_outcome("hi < smile", values) == ("True", set())
+
+
+def test_shim_ts_range() -> None:
+    """`_ts_range` maps a Python range to TS lines (LF, CRLF, CR) and UTF-16 columns."""
+    from tests import conformance_harvest as harvest
+
+    smile = "\U0001F600"
+    rows = [
+        (f"a{smile}b", [1, 3, 1, 4], [1, 4, 1, 5]),
+        (f"a{smile}b", [1, 1, 1, 2], [1, 1, 1, 2]),
+        # NEL and U+2028 break lines for PyYAML only, so later lines move up.
+        ("a\x85b\nc", [3, 1, 3, 2], [2, 1, 2, 2]),
+        ("a\x85b\nc", [2, 1, 2, 2], [1, 3, 1, 4]),
+        ("x\u2028y\nz", [3, 1, 3, 2], [2, 1, 2, 2]),
+        (f"{smile}\x85b", [2, 1, 2, 2], [1, 4, 1, 5]),
+        ("a\r\nb\rc", [3, 1, 3, 2], [3, 1, 3, 2]),
+        ("a\r\nb\rc", [2, 1, 2, 2], [2, 1, 2, 2]),
+        # A position past its line or the text is kept.
+        (f"{smile}b", [1, 3, 1, 4], [1, 4, 1, 4]),
+        ("ab", [5, 1, 5, 2], [5, 1, 5, 2]),
+        # The recorder tags a text starting with a BOM `yaml`.
+        (f"\ufeffa{smile}b", [1, 4, 1, 5], [1, 4, 1, 5]),
+    ]
+    assert [harvest._ts_range(text, rng) for text, rng, _ in rows] == [ts for _, _, ts in rows]
+
+
+_ASTRAL_LOAD_FLOW = '''\
+id: f
+name: f
+uses:
+  child: child
+nodes:
+  go:
+    kind: call
+    call: child
+output: ${go.output}
+'''
+_ASTRAL_CHILD = '''\
+id: child
+name: child
+nodes:
+  a: {code: "return '\U0001F600'", kind: code, output: str, bogus: 1}
+output: ${a.output}
+'''
+
+
+def test_shim_columns(tmp_path: Path) -> None:
+    """Under `columns`, a diagnostic's frames give TS columns in the text their label names."""
+    from tests import conformance_harvest as harvest
+
+    state = harvest._Harvest(None, tmp_path)
+    flow = 'id: f\nname: f\nnodes:\n  a:\n    kind: code\n    title: "\U0001F600" ]\n'
+    load = {"kind": "load", "flow": "unused", "python_flow": flow}
+
+    def ranges(case: dict, shims: tuple = ()) -> list:
+        results, _ = harvest._replay(state, case, shims)
+        return [frame["range"] for frame in results["load"]["diagnostics"][0]["frames"]]
+
+    assert ranges(load) == [[6, 16, 6, 17]]
+    assert ranges(load, ("columns",)) == [[6, 17, 6, 18]]
+    child = {"kind": "load", "flow": _ASTRAL_LOAD_FLOW, "files": {"child.yaml": "unused"},
+             "python_files": {"child.yaml": _ASTRAL_CHILD}}
+    assert ranges(child) == [[4, 10, 4, 15], [4, 59, 4, 60]]
+    assert ranges(child, ("columns",)) == [[4, 10, 4, 15], [4, 60, 4, 61]]
+    assert harvest._SHIMS["columns"].rule == "columns"
+
+
+def test_shim_dollar() -> None:
+    """Under `dollar`, `!!timestamp` text with a trailing newline is no longer a date."""
+    from tests import conformance_harvest as harvest
+    from yian.compose.source.scalars import _FlowLoader
+
+    newline, plain = '!!timestamp "2026-01-01\\n"', '!!timestamp "2026-01-01"'
+    # Python's `$` also matches before a trailing newline.
+    assert yaml.load(newline, Loader=_FlowLoader) == date(2026, 1, 1)
+    pattern = _FlowLoader.timestamp_regexp
+    with pytest.MonkeyPatch.context() as patch:
+        _install_shims(patch, "dollar")
+        with pytest.raises(ConstructorError, match="expected a date or timestamp"):
+            yaml.load(newline, Loader=_FlowLoader)
+        assert yaml.load(plain, Loader=_FlowLoader) == date(2026, 1, 1)
+    assert _FlowLoader.timestamp_regexp is pattern
+    assert harvest._SHIMS["dollar"].rule == "text"
+
+
+def test_shim_ts_intake() -> None:
+    """`_ts_intake` reads an integral float within ±(2^53-1) as an int, at every depth."""
+    from tests import conformance_harvest as harvest
+
+    rows = [(2.0, 2), (-0.0, 0), (2.5, 2.5), (1e300, 1e300), (math.inf, math.inf),
+            (2.0**53, 2.0**53), (-(2.0**53 - 1), -(2**53 - 1)), ([1.0, {"a": 3.0}], [1, {"a": 3}]),
+            (True, True), ("2.0", "2.0")]
+    assert [repr(harvest._ts_intake(value)) for value, _ in rows] == [
+        repr(intake) for _, intake in rows]
+    assert math.isnan(harvest._ts_intake(math.nan))
+    # Unchanged values come back as themselves.
+    unchanged = [1, {"a": 2.5}]
+    assert harvest._ts_intake(unchanged) is unchanged
+
+
+_INTAKE_FLOW = '''\
+id: f
+name: f
+nodes:
+  a:
+    kind: code
+    output: object
+    code: |-
+      return {"n": 2.0}
+  v: !float 2.0
+output:
+  a: ${a.output}
+  v: ${v.output}
+'''
+
+
+def test_shim_code_intake(tmp_path: Path) -> None:
+    """`code-intake` stores a CODE body's integral float as an int, but not a value entry's."""
+    from tests import conformance_harvest as harvest
+    from yian.nodes.code.node import CodeNode
+
+    state = harvest._Harvest(None, tmp_path)
+    case = {"kind": "run", "flow": _INTAKE_FLOW, "run": {"run_id": "r1", "num_workers": 0}}
+    forward = CodeNode.forward
+
+    def stored(shims: tuple = ()) -> tuple[str, str, frozenset]:
+        results, notes = harvest._replay(state, case, shims)
+        [entry] = [entry for entry in results["trace"] if entry[:2] == ["node_succeeded", "a"]]
+        # By repr, so 2 and 2.0 differ.
+        return repr(results["output"]["output"]), repr(entry[2]["value"]), notes
+
+    assert stored() == ("{'a': {'n': 2.0}, 'v': 2.0}", "{'n': 2.0}", frozenset())
+    assert stored(("code-intake",)) == ("{'a': {'n': 2}, 'v': 2.0}", "{'n': 2}",
+                                        frozenset({"intake"}))
+    assert CodeNode.forward is forward
+    assert harvest._SHIMS["code-intake"].rule == "numbers"
+
+
+def test_python_counts_code_points(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without a shim, yian's character caps count an astral character as one."""
+    from yian.skills import Skill
+    from yian.skills.tool import system_prompt_with_skills
+    from yian.typesys.values import shown_text
+
+    smile = "\U0001F600"
+    monkeypatch.setenv("YIAN_MAX_SHOWN_VALUE_CHARS", "3")
+    monkeypatch.setenv("YIAN_MAX_SKILL_DESCRIPTION_CHARS", "3")
+    defaults._forget()
+    try:
+        assert shown_text(smile * 3) == smile * 3
+        assert shown_text(smile * 4) == smile * 2 + "…"
+        listed = system_prompt_with_skills("base", [Skill("a", smile * 3, ""),
+                                                    Skill("b", smile * 4, "")])
+        assert listed.endswith(f"- a: {smile * 3}\n- b: {smile * 2}…")
+    finally:
+        defaults._forget()

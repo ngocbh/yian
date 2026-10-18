@@ -1,0 +1,41 @@
+/**
+ * Value nesting at the binding boundary, a port of
+ * `tests/engine/test_value_nesting_boundaries.py::test_apply_defaults_rejects_a_default_over_the_limit`.
+ *
+ * Later: `test_bind_params_rejects_a_filled_default_over_the_limit` lands with `bindParams`;
+ * the other 39 tests run flows, agents or loads and land with the runner, the node kinds and
+ * compose.
+ */
+
+import { afterEach, beforeEach, expect, test } from "bun:test";
+
+import { BUILTIN, forget, install } from "../../src/defaults.ts";
+import { applyDefaults, BindingError } from "../../src/nodes/binding.ts";
+import { Parameter } from "../../src/nodes/contracts.ts";
+import type { Value } from "../../src/typesys/index.ts";
+
+// Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
+beforeEach(() => install(BUILTIN));
+afterEach(forget);
+
+/** Return `"leaf"` wrapped in `levels` records under `a`. */
+function nestRecord(levels: number): Value {
+  let value: Value = "leaf";
+  for (let i = 0; i < levels; i++) value = { a: value };
+  return value;
+}
+
+test("applyDefaults rejects a default over the limit", () => {
+  let caught: unknown;
+  try {
+    applyDefaults([new Parameter("p", { hasDefault: true, default: nestRecord(101) })], {});
+  } catch (error) {
+    caught = error;
+  }
+
+  expect(caught).toBeInstanceOf(BindingError);
+  const error = caught as BindingError;
+  expect(error.failureCode).toBe("binding.evaluate");
+  expect(error.message.startsWith("default for 'p' at a.a")).toBe(true);
+  expect(error.message).toContain("deeper than 100 levels");
+});

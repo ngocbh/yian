@@ -368,6 +368,11 @@ A fresh flow declares typed `input:` fields. Explicit inputs layer in this order
    A default applied by START was already validated at load and is not
    string-coerced.
 
+Changed (TS yian): text for a `float` input reads by the TS text rules. An int spelling is an
+int at any size (`--input x=2` gives `2`, kept an int in the float slot), `2.0` or `1e3` is a
+float, and `inf`/`-inf` is infinity; a spelling beyond the float range is refused. An `int`
+input's text has no digit limit. Digits are ASCII.
+
 An `int` input may have at most 4300 digits, from `--inputs`, `-i`/`--input`, or the
 interactive prompt. A longer one fails before the log is created, naming the input
 and path (`input 'xs' at [1]: integer with 5000 digits is larger than yian allows

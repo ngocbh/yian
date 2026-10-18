@@ -886,6 +886,11 @@ A supplied string coerces to `int` or `float` when it parses as one. For `bool`,
 is left as text, so the declared type rejects it: `--input approved=ture` fails
 with `input 'approved': 'ture' does not match declared type bool`.
 
+Changed (TS yian): text for a `float` input reads by the TS text rules. An int spelling is an
+int at any size (`--input x=2` gives `2`, kept an int in the float slot), `2.0` or `1e3` is a
+float, and `inf`/`-inf` is infinity; a spelling beyond the float range is refused. An `int`
+input's text has no digit limit. Digits are ASCII.
+
 A string is never coerced for an `Any` input: `--input x=3` gives the text `"3"`. Pass a
 number, a list, or an object to an `Any` input in an `--inputs` file.
 

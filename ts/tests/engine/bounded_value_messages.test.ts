@@ -11,10 +11,10 @@
  *
  * The unknown-field rows check `buildValueAs`;
  * `test_record_sorts_mixed_unknown_keys_by_type_without_crashing` keeps its two long names (a
- * record key is always a string, so the int and broken-repr keys have no TS counterpart).
+ * record key is always a string, so the int and broken-repr keys have no TS counterpart). The
+ * unknown-input row checks `checkInputNames`.
  *
- * Later: the unknown-input message row (with bindings) and the rows that run a flow (with the
- * runner).
+ * Later: the rows that run a flow (with the runner).
  *
  * Not ported: the long-int placeholders (`<int with N digits>`; an int is a `bigint` with no
  * digit limit), the set rendering (no sets in TS) and `_sort_repr` (Python-only: it orders
@@ -25,6 +25,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import process from "node:process";
 
 import { BUILTIN, DefaultsError, forget, install, reload } from "../../src/defaults.ts";
+import { checkInputNames } from "../../src/nodes/binding.ts";
+import { Parameter } from "../../src/nodes/contracts.ts";
 import {
   buildValueAs,
   FileRef,
@@ -216,4 +218,19 @@ describe("unknown record fields", () => {
     expect(error.message.length).toBeLessThanOrEqual(MESSAGE_BOUND);
     expect(error.path).toEqual([earlier]);
   });
+});
+
+test("unknown inputs list within the cap", () => {
+  const raw: Record<string, bigint> = {};
+  for (let i = 0; i < 200_000; i++) raw[`name${i}`] = BigInt(i);
+  let message = "";
+  try {
+    checkInputNames([new Parameter("topic")], raw);
+  } catch (error) {
+    expect(error).toBeInstanceOf(RangeError);
+    message = (error as RangeError).message;
+  }
+  expect(message.startsWith("unknown inputs 'name0', 'name1', ")).toBe(true);
+  expect(message.endsWith("; declared inputs: topic")).toBe(true);
+  expect(message.length).toBeLessThanOrEqual(MESSAGE_BOUND);
 });

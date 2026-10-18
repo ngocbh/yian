@@ -116,4 +116,11 @@ describe("FileRef", () => {
   ])("refuses %s", (_id, fields) => {
     expect(() => new FileRef(fields as never)).toThrow(RangeError);
   });
+
+  test("names the field in its message", () => {
+    expect(() => new FileRef({ uri: 1n } as never)).toThrow("file uri must be text, got 1");
+    expect(() => new FileRef({ uri: "u", name: "a\udc00" })).toThrow(
+      "file name holds a lone surrogate",
+    );
+  });
 });

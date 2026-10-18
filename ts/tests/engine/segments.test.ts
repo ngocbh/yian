@@ -7,6 +7,10 @@
  * Also here: the wire half of
  * `test_run_records.py::test_recorded_object_past_the_nesting_limit_still_replays`.
  *
+ * TS-only: the `fromWire` refusal table and its messages (Python's strict decode is
+ * `runtime/log.py::_decode_typed` with `ANY_VALUE_ADAPTER`'s strict check, tested there through
+ * the log reader), "toWire writes a nested FileRef as its mapping", and the frozen-carrier row.
+ *
  * Later: inference (`buildValue`), declared-type checks (`buildValueAs`), the build halves of
  * the date, datetime and nullable-list round trips, and the structural `Type` rows, with the
  * write boundary.
@@ -68,8 +72,7 @@ describe("lossless serialization", () => {
     const back = roundTrip(typed);
     expect(back.kind).toBe(ValueKind.FILE);
     expect(back.value).toBeInstanceOf(FileRef);
-    expect((back.value as FileRef).uri).toBe("s3://b/k");
-    expect((back.value as FileRef).name).toBe("d.csv");
+    expect(back.value).toEqual(new FileRef({ uri: "s3://b/k", mime: "text/csv", name: "d.csv" }));
   });
 
   test("toWire writes a nested FileRef as its mapping", () => {
@@ -84,7 +87,7 @@ describe("lossless serialization", () => {
     [ValueKind.DATE, "2026-06-08"],
     [ValueKind.DATETIME, "2026-06-12T14:30:00+00:00"],
   ])("a %s value round-trips", (kind, text) => {
-    const back = TypedValue.fromWire(new TypedValue(kind, text).toWire());
+    const back = roundTrip(new TypedValue(kind, text));
     expect(back.kind).toBe(kind);
     expect(back.value).toBe(text);
   });
@@ -137,6 +140,7 @@ describe("TypedValue.fromWire refuses", () => {
     ["list[str] holding an int", { kind: "list[str]", value: ["a", 1n] }],
     ["list[object] holding a list", { kind: "list[object]", value: [[]] }],
     ["date holding other text", { kind: "date", value: "x" }],
+    ["date holding an int", { kind: "date", value: 1n }],
     ["file holding text", { kind: "file", value: "s3://b/k" }],
     ["file missing fields", { kind: "file", value: { uri: "s3://b/k" } }],
     [
@@ -161,5 +165,8 @@ describe("TypedValue.fromWire refuses", () => {
     expect(() => TypedValue.fromWire({ kind: "file", value: { uri: "u" } })).toThrow(
       "invalid file reference fields; missing=['mime', 'name'], extra=[]",
     );
+    expect(() =>
+      TypedValue.fromWire({ kind: "file", value: { uri: 1n, mime: null, name: null } }),
+    ).toThrow("invalid file typed value: file uri must be text, got 1");
   });
 });

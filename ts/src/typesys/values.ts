@@ -292,7 +292,7 @@ export function listElementKind(kind: ValueKind): ValueKind | null {
 // --------------------------------------------------------------------------------------- //
 
 /** The fields a `FileRef` is built from; `mime` and `name` default to `null`. */
-export interface FileRefInit {
+interface FileRefInit {
   readonly uri: string;
   readonly mime?: string | null;
   readonly name?: string | null;
@@ -358,7 +358,7 @@ const FILE_FIELDS: readonly ("uri" | "mime" | "name")[] = ["uri", "mime", "name"
  * `fieldOf({a: 1n}, "constructor")` gives `[false, null]`.
  */
 export function fieldOf(value: Value, name: string): [present: boolean, value: Value] {
-  if (isRecord(value)) return Object.hasOwn(value, name) ? [true, value[name]!] : [false, null];
+  if (isRecord(value)) return Object.hasOwn(value, name) ? [true, value[name] as Value] : [false, null];
   if (value instanceof FileRef) {
     const field = FILE_FIELDS.find((candidate) => candidate === name);
     if (field !== undefined) return [true, value[field]];
@@ -419,7 +419,6 @@ const KIND_HOLDS: ReadonlyMap<StorageKind, string> = new Map([
   [ValueKind.DATETIME, "a string"],
   [ValueKind.BOOLEAN, "a boolean"],
   [ValueKind.OBJECT, "a plain record"],
-  [ValueKind.FILE, "a file reference"],
   [ValueKind.LIST_ANY, "an array"],
   [ValueKind.LIST_STRING, "an array of strings or null"],
   [ValueKind.LIST_INTEGER, "an array of bigints or null"],
@@ -428,9 +427,14 @@ const KIND_HOLDS: ReadonlyMap<StorageKind, string> = new Map([
   [ValueKind.LIST_OBJECT, "an array of plain records or null"],
 ]);
 
-/** Whether `value` is a scalar of storage kind `kind` (`str`, `int`, `float`, `bool`, `object`). */
+/**
+ * Whether `value` is a scalar of storage kind `kind` (`None`, `str`, `int`, `float`, `bool`,
+ * `object`); `false` for any other kind.
+ */
 function holdsScalar(kind: ValueKind, value: unknown): boolean {
   switch (kind) {
+    case ValueKind.NONE:
+      return value === null;
     case ValueKind.STRING:
       return typeof value === "string";
     case ValueKind.INTEGER:
@@ -499,11 +503,18 @@ export class TypedValue {
       throw new RangeError(`typed-value kind must be a storage kind, got ${valueRepr(kind)}`);
     }
     const storage = kind as StorageKind;
-    const value = data["value"]!;
+    const value = data["value"] as Value;
     if (storage === ValueKind.FILE) {
       if (!isRecord(value)) throw new RangeError("file typed value must contain a JSON object");
       requireFields(value, FILE_FIELDS, "file reference");
-      return new TypedValue(storage, new FileRef(value as unknown as FileRefInit));
+      try {
+        return new TypedValue(storage, new FileRef(value as unknown as FileRefInit));
+      } catch (error) {
+        if (error instanceof RangeError) {
+          throw new RangeError(`invalid file typed value: ${error.message}`);
+        }
+        throw error;
+      }
     }
     if (storage === ValueKind.DATE || storage === ValueKind.DATETIME) {
       if (typeof value === "string") {
@@ -518,7 +529,7 @@ export class TypedValue {
         }
         return new TypedValue(storage, value);
       }
-    } else if (storage === ValueKind.NONE ? value === null : holdsScalar(storage, value)) {
+    } else if (holdsScalar(storage, value)) {
       return new TypedValue(storage, value);
     } else if (isListKind(storage) && Array.isArray(value)) {
       const element = listElementKind(storage);

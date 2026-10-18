@@ -1729,8 +1729,9 @@ def _ts_range(text: str, rng: list) -> list:
 
     Python's `[start_line, start_col, end_line, end_col]` breaks lines at CRLF, CR, LF, NEL,
     U+2028 and U+2029 and counts columns in code points; TS breaks lines at CRLF, CR and LF
-    and counts columns in UTF-16 code units. A position past its line or the text is kept, and
-    so is a range in a text starting with U+FEFF (the recorder tags it `yaml`).
+    and counts columns in UTF-16 code units. A position past its line keeps its distance from
+    the line end; a line past the text is kept, and so is a range in a text starting with U+FEFF
+    (such a case is the `yaml` rule's).
     """
     if text.startswith("\ufeff"):
         return list(rng)
@@ -1739,12 +1740,15 @@ def _ts_range(text: str, rng: list) -> list:
     ends = [match.start() for match in breaks] + [len(text)]
 
     def position(line: int, column: int) -> list:
-        if not (1 <= line <= len(starts) and 1 <= column <= ends[line - 1] - starts[line - 1] + 1):
+        if not (1 <= line <= len(starts) and column >= 1):
             return [line, column]
-        offset = starts[line - 1] + column - 1
+        width = ends[line - 1] - starts[line - 1]
+        # A problem range at a line's end runs one column past it (`column, column + 1`).
+        past = max(column - width - 1, 0)
+        offset = starts[line - 1] + column - 1 - past
         before = [match.end() for match in _TS_LINE_BREAK.finditer(text, 0, offset)]
         start = before[-1] if before else 0
-        return [len(before) + 1, len(text[start:offset].encode("utf-16-le")) // 2 + 1]
+        return [len(before) + 1, len(text[start:offset].encode("utf-16-le")) // 2 + 1 + past]
 
     return position(*rng[:2]) + position(*rng[2:])
 
@@ -1806,6 +1810,8 @@ def _install_code_intake(patch: pytest.MonkeyPatch, case: dict) -> None:
     @functools.wraps(forward)
     def ts_forward(self: CodeNode, inputs: dict, **kwargs: object) -> object:
         output = forward(self, inputs, **kwargs)
+        # The desugar names a value entry's one input after the node itself, so a CODE node
+        # returning another input isn't skipped; an expanded id carries `ns/` and `#n`.
         own = self.id.rsplit("/", 1)[-1].split("#", 1)[0]
         if list(inputs) == [own] and self.code == f"return inputs[{own!r}]":
             # A value entry's value is authored, not a host's result.

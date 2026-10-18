@@ -3148,10 +3148,13 @@ def test_shim_ts_range() -> None:
         (f"{smile}\x85b", [2, 1, 2, 2], [1, 4, 1, 5]),
         ("a\r\nb\rc", [3, 1, 3, 2], [3, 1, 3, 2]),
         ("a\r\nb\rc", [2, 1, 2, 2], [2, 1, 2, 2]),
-        # A position past its line or the text is kept.
-        (f"{smile}b", [1, 3, 1, 4], [1, 4, 1, 4]),
+        # A position past its line keeps its distance from the line end; a line past the text
+        # is kept.
+        (f"{smile}b", [1, 3, 1, 4], [1, 4, 1, 5]),
+        ("a\r\nb", [1, 3, 1, 4], [1, 3, 1, 4]),
+        ('id: f\nname: f\nk: "\U0001F600', [3, 6, 3, 7], [3, 7, 3, 8]),
         ("ab", [5, 1, 5, 2], [5, 1, 5, 2]),
-        # The recorder tags a text starting with a BOM `yaml`.
+        # A text starting with a BOM is the `yaml` rule's.
         (f"\ufeffa{smile}b", [1, 4, 1, 5], [1, 4, 1, 5]),
     ]
     assert [harvest._ts_range(text, rng) for text, rng, _ in rows] == [ts for _, _, ts in rows]

@@ -924,8 +924,8 @@ class EvalExpr {
     } else {
       // `fromEntries` defines each field as an own property, so a `__proto__` keyword is data.
       value = Object.fromEntries(
-        args.map((arg) => [String(arg.children[0]), this.asValue(this.walk(arg.children[1]!))]),
-      ) as ValueRecord;
+        args.map((arg): [string, Value] => [String(arg.children[0]), this.asValue(this.walk(arg.children[1]!))]),
+      );
     }
     const typ = this.#types!.get(name)!;
     try {
@@ -962,8 +962,8 @@ class EvalExpr {
       if (kids.length === 2) keywords.set(String(kids[0]), this.asValue(this.walk(kids[1]!)));
       else positional.push(this.asValue(this.walk(kids[0]!)));
     }
-    const failed = (message: string, cause?: unknown) =>
-      new ExpressionError(`expression function ${reprText(callee)} failed: ${message}`, { cause });
+    const failed = (message: string, options?: ErrorOptions) =>
+      new ExpressionError(`expression function ${reprText(callee)} failed: ${message}`, options);
     const bound = bindArguments(fn, positional, keywords);
     if (typeof bound === "string") throw failed(bound);
     try {
@@ -971,7 +971,7 @@ class EvalExpr {
       return result === undefined ? null : fromHost(result, "result");
     } catch (error) {
       if (error instanceof ExpressionError) throw error;
-      throw failed(error instanceof Error ? error.message : String(error), error);
+      throw failed(error instanceof Error ? error.message : String(error), { cause: error });
     }
   }
 

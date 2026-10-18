@@ -150,23 +150,25 @@ test("a value missing a required field fails naming it", () => {
 });
 
 test("a missing value fails the check", () => {
-  const error = errorOf(() => evaluate("Buy(d.output)"));
-  expect(error).toBeInstanceOf(ConstructorTypeError);
-  expect(error.message.startsWith("Buy(...): ")).toBe(true);
+  expectError(() => evaluate("Buy(d.output)"), "Buy(...): null is not an object for a record type", ConstructorTypeError);
 });
 
 test("a union typedef checks against every member", () => {
   expect(evaluate("Decision(d.output)", { d: { output: A_SELL } })).toEqual(A_SELL);
-  expect(errorOf(() => evaluate("Decision(d.output)", { d: { output: { action: "hold" } } }))).toBeInstanceOf(
+  expectError(
+    () => evaluate("Decision(d.output)", { d: { output: { action: "hold" } } }),
+    `Decision(...): "hold" is not a tag of the union (expected one of ['buy', 'sell'])`,
     ConstructorTypeError,
   );
 });
 
 test("an enum alias checks a scalar", () => {
   expect(evaluate("Size(x)", { x: "m" })).toBe("m");
-  const error = errorOf(() => evaluate("Size(x)", { x: "xl" }));
-  expect(error).toBeInstanceOf(ConstructorTypeError);
-  expect(error.message.startsWith("Size(...): ")).toBe(true);
+  expectError(
+    () => evaluate("Size(x)", { x: "xl" }),
+    `Size(...): "xl" is not a member of variant ['l', 'm', 's']`,
+    ConstructorTypeError,
+  );
 });
 
 test("a field read on the result", () => {
@@ -193,9 +195,11 @@ test("a built record missing a field fails naming it", () => {
 });
 
 test("a built record with a wrong field fails", () => {
-  const error = errorOf(() => evaluate('Buy(action="buy", conviction="high")'));
-  expect(error).toBeInstanceOf(ConstructorTypeError);
-  expect(error.message).toContain("does not match declared type float");
+  expectError(
+    () => evaluate('Buy(action="buy", conviction="high")'),
+    'Buy(...): "high" does not match declared type float',
+    ConstructorTypeError,
+  );
 });
 
 test("a keyword named __proto__ is a field, never the prototype", () => {
@@ -215,7 +219,9 @@ test("constructors in a list literal", () => {
 test("a constructor in a condition", () => {
   const record = { d: A_BUY };
   expect(evaluateWhenRecord("Buy(d).conviction > 0.1", record, TYPES)).toBe(true);
-  expect(errorOf(() => evaluateWhenRecord("Sell(d).price > 0.1", record, TYPES))).toBeInstanceOf(
+  expectError(
+    () => evaluateWhenRecord("Sell(d).price > 0.1", record, TYPES),
+    "Sell(...): record missing required fields: ['price']",
     ConstructorTypeError,
   );
 });
@@ -295,6 +301,37 @@ test("inference reads fields of a constructor result", () => {
 test("inference reads a field every union member has", () => {
   const inferred = inferExprType(parseExpr("Decision(d.output).action"), noRefs, typeFn);
   expect(inferred).toEqual(new Type({ kind: ValueKind.STRING, tags: new Set(["buy", "sell"]) }));
+});
+
+test("inference reads optional record fields, file fields and nullable aliases", () => {
+  const order = new Type({
+    kind: ValueKind.OBJECT,
+    fields: new Map([
+      ["qty", Type.scalar(ValueKind.INTEGER)],
+      ["note", Type.scalar(ValueKind.STRING)],
+    ]),
+    required: new Set(["qty"]),
+  });
+  const types = new Map([
+    ["Order", order],
+    ["Doc", Type.scalar(ValueKind.FILE)],
+    ["MaybeBuy", TYPES.get("Buy")!.replace({ nullable: true })],
+  ]);
+  const infer = (text: string) => inferExprType(parseExpr(text), noRefs, (name) => types.get(name) ?? null);
+  const str = Type.scalar(ValueKind.STRING);
+  const optionalStr = str.replace({ nullable: true });
+  expect(infer("Order(x).qty")).toEqual(Type.scalar(ValueKind.INTEGER));
+  // A field the record doesn't require reads as Optional.
+  expect(infer("Order(x).note")).toEqual(optionalStr);
+  expect(infer("Doc(x).uri")).toEqual(str);
+  expect(infer("Doc(x).mime")).toEqual(optionalStr);
+  expect(infer("Doc(x).name")).toEqual(optionalStr);
+  expect(infer("Doc(x).size")).toBeNull();
+  // A read through a nullable alias reads as Optional.
+  expect(infer("MaybeBuy(x).conviction")).toEqual(Type.scalar(ValueKind.NUMBER).replace({ nullable: true }));
+  expect(infer("MaybeBuy(x).action")).toEqual(
+    new Type({ kind: ValueKind.STRING, tags: new Set(["buy"]), nullable: true }),
+  );
 });
 
 test("inference without types leaves a call unknown", () => {

@@ -491,16 +491,13 @@ describe("calls", () => {
     expect(evaluate("f()")).toEqual(expected);
   });
 
-  test("a result that is no yian value fails the call", () => {
-    const cases: [unknown, string][] = [
-      [NaN, "result: NaN is not a yian value"],
-      [[undefined], "result at [0]: undefined is not a yian value; use null"],
-      [new Date(0), "result: Date is not a yian value"],
-    ];
-    for (const [result, message] of cases) {
-      standIn("f", [], () => result);
-      expectMessage("f()", `expression function 'f' failed: ${message}`);
-    }
+  test.each([
+    ["NaN", NaN, "result: NaN is not a yian value"],
+    ["a nested undefined", [undefined], "result at [0]: undefined is not a yian value; use null"],
+    ["a Date", new Date(0), "result: Date is not a yian value"],
+  ] as [string, unknown, string][])("a result of %s fails the call", (_label, result, message) => {
+    standIn("f", [], () => result);
+    expectMessage("f()", `expression function 'f' failed: ${message}`);
   });
 
   test("a strict miss on a call result's field names the call", () => {

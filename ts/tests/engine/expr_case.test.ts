@@ -122,14 +122,10 @@ test("when: both spellings evaluate identically", () => {
 });
 
 test("when: braces on a reference inside the condition are rejected", () => {
-  let error: unknown;
-  try {
-    evaluateWhen("${a.output} > 5", poolWith({ a: 8n }));
-  } catch (e) {
-    error = e;
-  }
-  expect(error).toBeInstanceOf(ExpressionError);
-  expect((error as Error).message).toContain("write `a.output > 5`");
+  expectError(
+    () => evaluateWhen("${a.output} > 5", poolWith({ a: 8n })),
+    "`${...}` can't appear inside an expression; write `a.output > 5`",
+  );
 });
 
 test("when: a bare arithmetic condition", () => {

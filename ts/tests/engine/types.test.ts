@@ -1364,6 +1364,7 @@ describe("public exports", () => {
       "buildValueAs",
       "canonicalTypeLabel",
       "canonicalUnionOrder",
+      "isRecord",
       "listKindForElement",
       "normalizeFiles",
       "parseType",

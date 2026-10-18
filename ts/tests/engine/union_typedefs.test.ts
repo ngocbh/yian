@@ -44,8 +44,18 @@ describe("parsing", () => {
     });
   });
 
-  test.each(["Buy | Sell", "Optional(Buy | Sell)"])("the bar operator hints Union: %p", (text) => {
-    expect(parseError(text)).toContain("use Union(Buy, Sell) (| is not a type operator)");
+  test.each([
+    [
+      "Buy | Sell",
+      "malformed type expression 'Buy | Sell': use Union(Buy, Sell) (| is not a type operator)",
+    ],
+    [
+      "Optional(Buy | Sell)",
+      "malformed type expression 'Optional(Buy | Sell)': " +
+        "use Union(Buy, Sell) (| is not a type operator)",
+    ],
+  ])("the bar operator hints Union: %p", (text, message) => {
+    expect(parseError(text)).toBe(message);
   });
 
   test("a bar chain hints every member", () => {

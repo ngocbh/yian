@@ -178,9 +178,9 @@ const TYPE_TOKEN = new RegExp(
   "uy",
 );
 
-type TokenKind = "number" | "name" | "string" | "punct";
+const TOKEN_KINDS = ["number", "name", "string", "punct"] as const;
 
-const TOKEN_KINDS: readonly TokenKind[] = ["number", "name", "string", "punct"];
+type TokenKind = (typeof TOKEN_KINDS)[number];
 
 interface Token {
   readonly kind: TokenKind;

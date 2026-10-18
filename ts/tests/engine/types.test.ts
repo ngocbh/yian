@@ -407,13 +407,13 @@ const UNBALANCED =
   "unbalanced parentheses — if this type sits inside a `{...}` mapping, its comma split it; " +
   "quote it or use block style";
 
-/** Return the error `parseType(text)` throws, failing unless it is a `TypeCheckError`. */
-function parseError(text: string): TypeCheckError {
+/** Return the message of the `TypeCheckError` `parseType(text)` throws. */
+function parseError(text: string): string {
   try {
     parseType(text);
   } catch (error) {
     expect(error).toBeInstanceOf(TypeCheckError);
-    return error as TypeCheckError;
+    return (error as TypeCheckError).message;
   }
   throw new Error(`parseType(${JSON.stringify(text)}) did not throw`);
 }
@@ -421,12 +421,6 @@ function parseError(text: string): TypeCheckError {
 /** Return Python's `malformed type expression` message for `src` (no `'` or `\` in it). */
 function malformed(src: string, detail?: string): string {
   return `malformed type expression '${src}'${detail === undefined ? "" : `: ${detail}`}`;
-}
-
-/** Return the bounds of a parsed range. */
-function boundsOf(expr: TypeExpr): Bounds {
-  if (expr.kind !== "scalar" || expr.bounds === undefined) throw new Error("not a range");
-  return expr.bounds;
 }
 
 describe("parseType", () => {
@@ -512,7 +506,7 @@ describe("parseType", () => {
 
   test("a -0 float end is stored as 0", () => {
     // Python keeps -0.0; a -0 end never reaches a manifest or fingerprint here.
-    expect(Object.is(boundsOf(parseType("float(-0.0..1)"))[0], 0)).toBe(true);
+    expect(parseType("float(-0.0..1)")).toEqual(scalar("float", [0, 1n]));
     expect(formatTypeExpr(parseType("float(-0.0..1)"))).toBe("float(0.0..1)");
   });
 
@@ -600,23 +594,21 @@ describe("parseType", () => {
     ["float(0..None)", "numeric bounds require literal endpoints in 'float(0..None)'"],
     ["int(lo..hi)", "numeric bounds require literal endpoints in 'int(lo..hi)'"],
     ["int(1 + 1..3)", malformed("int(1 + 1..3)")],
-    // `[` is no token; the bracket spelling's own message is not ported yet.
-    ["list[str]", malformed("list[str]")],
   ] as const)("error for %p", (text, message) => {
-    expect(parseError(text).message).toBe(message);
+    expect(parseError(text)).toBe(message);
   });
 
   test("rejects a raw Unicode surrogate", () => {
-    expect(parseError('Literal("\ud800")').message).toBe(
+    expect(parseError('Literal("\ud800")')).toBe(
       String.raw`type expression 'Literal("\ud800")' contains a Unicode surrogate ` +
         "(types must be valid UTF-8 text)",
     );
   });
 
   test("malformed text", () => {
-    expect(parseError("list(").message).toBe(malformed("list(", UNBALANCED));
+    expect(parseError("list(")).toBe(malformed("list(", UNBALANCED));
     // a number literal is not a type
-    expect(parseError("123").message).toBe(malformed("123"));
+    expect(parseError("123")).toBe(malformed("123"));
   });
 
   test.each([
@@ -644,7 +636,7 @@ describe("parseType", () => {
   });
 
   test("deep nesting is a TypeCheckError", () => {
-    expect(parseError("Optional(".repeat(300) + "str" + ")".repeat(300)).message).toBe(
+    expect(parseError("Optional(".repeat(300) + "str" + ")".repeat(300))).toBe(
       "type nested too deeply in 'Optional(Optional(Optional(Optional(Opti'... " +
         "(at most 100 levels)",
     );
@@ -670,7 +662,7 @@ describe("parseType", () => {
     // the closing `)` is quoted, so `_expect` finds the end
     ['Literal("a)"', `'Literal("a)"'`],
   ])("input ending inside parentheses hints unbalanced: %p", (text, quoted) => {
-    expect(parseError(text).message).toBe(`malformed type expression ${quoted}: ${UNBALANCED}`);
+    expect(parseError(text)).toBe(`malformed type expression ${quoted}: ${UNBALANCED}`);
   });
 
   test.each([
@@ -683,16 +675,16 @@ describe("parseType", () => {
     ["list(str,)", malformed("list(str,)", "remove the trailing comma in list(...)")],
     ['"abc', malformed('"abc')],
   ])("more syntax errors: %p", (text, message) => {
-    expect(parseError(text).message).toBe(message);
+    expect(parseError(text)).toBe(message);
   });
 
   test("error precedence", () => {
     // The tokenizer fails at `$` before the `|` is read.
-    expect(parseError("Union(A | B, $)").message).toBe(malformed("Union(A | B, $)"));
+    expect(parseError("Union(A | B, $)")).toBe(malformed("Union(A | B, $)"));
     // A quoted `)` still counts, so the parentheses balance and the error is bare.
-    expect(parseError('Literal("a)",').message).toBe(malformed('Literal("a)",'));
+    expect(parseError('Literal("a)",')).toBe(malformed('Literal("a)",'));
     // The None member is checked before the trailing token.
-    expect(parseError("Union(A, None) x").message).toBe(
+    expect(parseError("Union(A, None) x")).toBe(
       "None is not a union member in 'Union(A, None) x'; use Optional(Union(...))",
     );
   });
@@ -707,7 +699,7 @@ describe("parseType", () => {
     ["float(1.0, 2)", "float(1.0..2)"],
     ["float(1e-5, 0.5)", "float(1e-05..0.5)"],
   ])("the two-argument range hint suggests only a valid range: %p", (text, range) => {
-    expect(parseError(text).message).toBe(malformed(text, `write a range: ${range}`));
+    expect(parseError(text)).toBe(malformed(text, `write a range: ${range}`));
   });
 });
 
@@ -732,7 +724,7 @@ describe("parseType: quoted Literal members", () => {
     [String.raw`Literal("\ude00")`, String.raw`'\ude00' in 'Literal("\\ude00")'`],
     [String.raw`Literal("\ud83dx")`, String.raw`'\ud83dx' in 'Literal("\\ud83dx")'`],
   ])("an escaped lone surrogate is refused: %p", (text, quoted) => {
-    expect(parseError(text).message).toBe(
+    expect(parseError(text)).toBe(
       `Literal member ${quoted} contains a Unicode surrogate (tags must be valid UTF-8 text)`,
     );
   });
@@ -762,8 +754,15 @@ describe("parseType: quoted Literal members", () => {
       String.raw`'Literal("a\rb")'`,
       "a quoted Literal member can't hold a line break",
     ],
+    // The line break is checked before escapes, so this ordering is TS-only; Python reports
+    // an empty Literal member.
+    [
+      'Literal("\\\r")',
+      String.raw`'Literal("\\\r")'`,
+      "a quoted Literal member can't hold a line break",
+    ],
   ])("rejects %p", (text, quoted, detail) => {
-    expect(parseError(text).message).toBe(`malformed type expression ${quoted}: ${detail}`);
+    expect(parseError(text)).toBe(`malformed type expression ${quoted}: ${detail}`);
   });
 
   test("every printed member reads back", () => {

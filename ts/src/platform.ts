@@ -1,10 +1,13 @@
 /**
  * The one module holding runtime-specific APIs, so the rest of yian runs unchanged
- * on Node and Bun: runtime detection and a SQLite wrapper over `bun:sqlite` or
- * `node:sqlite`, loaded lazily for the runtime in use.
+ * on Node and Bun: runtime detection, a SQLite wrapper over `bun:sqlite` or
+ * `node:sqlite`, loaded lazily for the runtime in use, and an exclusive file lock
+ * built on it.
  */
 
 import type { Database } from "bun:sqlite";
+// The default import keeps calls patchable by test spies.
+import fs from "node:fs";
 import { createRequire } from "node:module";
 import type { DatabaseSync } from "node:sqlite";
 
@@ -154,7 +157,133 @@ export function openSqlite(path: string, { readonly = false }: { readonly?: bool
  */
 export function sqliteErrorCode(error: unknown): number | undefined {
   if (typeof error !== "object" || error === null) return undefined;
-  const { name, code, errno, errcode } = error as { name?: unknown; code?: unknown; errno?: unknown; errcode?: unknown };
-  const result = name === "SQLiteError" ? errno : code === "ERR_SQLITE_ERROR" ? errcode : undefined;
+  const e = error as Record<string, unknown>;
+  const result = e.name === "SQLiteError" ? e.errno : e.code === "ERR_SQLITE_ERROR" ? e.errcode : undefined;
   return typeof result === "number" ? result : undefined;
+}
+
+/** Why `lockFile` refused a path. */
+export type FileLockReason = "busy" | "unsafe" | "not-private" | "changed";
+
+const lockMessages: Record<FileLockReason, string> = {
+  busy: "is locked by another holder",
+  unsafe: "is not a regular file with one link",
+  "not-private": "is not private to its owner",
+  changed: "was replaced while being locked",
+};
+
+/** `lockFile` refused `path` for `reason`. */
+export class FileLockError extends Error {
+  override name = "FileLockError";
+  readonly path: string;
+  readonly reason: FileLockReason;
+
+  constructor(path: string, reason: FileLockReason, options?: ErrorOptions) {
+    super(`lock file ${path} ${lockMessages[reason]}`, options);
+    this.path = path;
+    this.reason = reason;
+  }
+}
+
+/** A held exclusive lock on `path`; `release` (or disposal) frees it, and a second call does nothing. */
+export interface FileLock {
+  readonly path: string;
+  release(): void;
+  [Symbol.dispose](): void;
+}
+
+/** Return `error`'s `code` when it's a Node system error. */
+function errnoCode(error: unknown): unknown {
+  return (error as NodeJS.ErrnoException | null)?.code;
+}
+
+/** Return whether `error` is SQLite's BUSY or LOCKED result. */
+function isBusy(error: unknown): boolean {
+  const code = sqliteErrorCode(error);
+  return code !== undefined && ((code & 0xff) === 5 || (code & 0xff) === 6);
+}
+
+/**
+ * Take the exclusive lock on the file at `path` without waiting, creating it empty
+ * with mode 0600 when missing.
+ *
+ * The lock is a SQLite exclusive transaction, so the kernel frees it when the
+ * process dies; the file stays 0 bytes, no sibling file appears, and the file is
+ * never unlinked. Throws `FileLockError` with reason `"busy"` when another holder
+ * has it, `"unsafe"` unless `path` is a regular file (and, with `private`, one with
+ * exactly one link), `"not-private"` when `private` and the file isn't owned by this
+ * user or grants group or other bits, and `"changed"` when `path` names another file
+ * once locked. That last check reads the path, not SQLite's own descriptor. OS
+ * errors (`ENOENT` for a missing directory) and SQLite errors (`SQLITE_NOTADB` for
+ * a foreign file) propagate unchanged.
+ */
+export function lockFile(path: string, { private: isPrivate = false }: { private?: boolean } = {}): FileLock {
+  // The file is never opened through fs once it exists: POSIX locks belong to the
+  // process and inode, so closing any other descriptor on it drops SQLite's lock
+  // (Node). Hence lstat for the checks, and an exclusive create that only a missing
+  // file reaches.
+  try {
+    fs.lstatSync(path);
+  } catch (error) {
+    if (errnoCode(error) !== "ENOENT") throw error;
+    const { O_CREAT, O_EXCL, O_NOFOLLOW, O_WRONLY } = fs.constants;
+    try {
+      fs.closeSync(fs.openSync(path, O_CREAT | O_EXCL | O_NOFOLLOW | O_WRONLY, 0o600));
+    } catch (createError) {
+      // Another creator won the race; check its file like any existing one.
+      if (errnoCode(createError) !== "EEXIST") throw createError;
+    }
+  }
+  const before = fs.lstatSync(path, { bigint: true });
+  if (!before.isFile() || (isPrivate && before.nlink !== 1n)) throw new FileLockError(path, "unsafe");
+  if (isPrivate && (before.uid !== BigInt(process.getuid!()) || (before.mode & 0o077n) !== 0n)) {
+    throw new FileLockError(path, "not-private");
+  }
+  const db = openSqlite(path);
+  try {
+    db.exec("PRAGMA busy_timeout = 0");
+    // An in-memory rollback journal keeps the lock from ever creating a sibling file;
+    // `OFF` is silently ignored by some builds. This step usually reports a holder.
+    db.exec("PRAGMA journal_mode = MEMORY");
+    db.exec("BEGIN EXCLUSIVE");
+    const after = fs.lstatSync(path, { bigint: true });
+    if (after.dev !== before.dev || after.ino !== before.ino) throw new FileLockError(path, "changed");
+  } catch (error) {
+    // Close on every failure, so a caller polling a busy lock leaks nothing.
+    db.close();
+    if (isBusy(error)) throw new FileLockError(path, "busy", { cause: error });
+    throw error;
+  }
+  return { path, release: () => db.close(), [Symbol.dispose]: () => db.close() };
+}
+
+/**
+ * Return whether another connection holds the lock on `path`.
+ *
+ * A missing path or one that isn't a regular file is `false`, and is never opened
+ * or created. Otherwise this reads the schema under a shared lock, so two probes
+ * never see each other as held; a `lockFile` racing that brief read can still fail
+ * busy. Errors other than busy, a vanished path and a foreign file propagate.
+ */
+export function isLocked(path: string): boolean {
+  try {
+    if (!fs.lstatSync(path).isFile()) return false;
+  } catch (error) {
+    if (errnoCode(error) === "ENOENT") return false;
+    throw error;
+  }
+  let db: Sqlite | undefined;
+  try {
+    db = openSqlite(path, { readonly: true });
+    db.exec("PRAGMA busy_timeout = 0");
+    db.prepare("SELECT count(*) AS n FROM sqlite_master").get();
+    return false;
+  } catch (error) {
+    if (isBusy(error)) return true;
+    const code = (sqliteErrorCode(error) ?? 0) & 0xff;
+    if (code === 14 || code === 26) return false;
+    throw error;
+  } finally {
+    db?.close();
+  }
 }

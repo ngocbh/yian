@@ -1,0 +1,29 @@
+# From tests/seeds/errors/e43-agent-mode-removed.yaml.
+# The removed AGENT `mode:` fails at its key, saying to delete it and, beside `tools:`, that they now run.
+kind: load
+flow: |
+  # e43 — the removed AGENT `mode:` field is rejected at its key line.
+  # PARSE: fails at load; no inputs needed.
+  #
+  # Tools alone decide whether an AGENT loops. A stale `mode: plain` beside `tools:`
+  # would now run the tool loop, so the error says the tools will now be used.
+  id: err-agent-mode-removed
+  name: err_agent_mode_removed
+  input:
+    topic: !str
+  nodes:
+    note:
+      kind: agent
+      mode: plain    # L13 — THE ERROR (the field was removed)
+      tools: [web_search]
+      input:
+        topic: ${input.topic}
+      output: str
+      prompt: "Rate ${topic}."
+  output: ${note.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "node 'note': `mode:` was removed: an AGENT with tools runs the tool loop, one without tools makes a single call; delete this line (its `tools:` will now be used)"
+        frames: [{label: flow.yaml, range: [13, 5, 13, 9]}]

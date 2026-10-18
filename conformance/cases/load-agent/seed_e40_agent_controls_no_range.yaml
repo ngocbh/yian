@@ -1,0 +1,28 @@
+# From tests/seeds/errors/e40-agent-controls-no-range.yaml.
+# The retired AGENT `controls:` field fails at its value, listing the allowed fields as authored (`input`, `output`).
+kind: load
+flow: |
+  # e40 — the retired AGENT `controls:` field is rejected at its source range.
+  # PARSE: the agent descriptor rejects the field. Fails at load; no inputs needed.
+  #
+  # Human access is now authored as the ordinary `tools: [ask_user]` grant. Keeping
+  # this seed makes a stale `controls:` spelling loud and precisely located.
+  id: err-agent-controls-no-range
+  name: err_agent_controls_no_range
+  input:
+    topic: !str
+  nodes:
+    note:
+      kind: agent
+      controls: [ask_user, nope_control]    # L13 — THE ERROR (the whole field is retired)
+      input:
+        topic: ${input.topic}
+      output: str
+      prompt: "Rate ${topic}."
+  output: ${note.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "node 'note' (kind=agent): field 'controls' is not allowed (allowed: asserts, depends_on, env, input, kind, llm_config, long_term_memory, node_name, output, prompt, retries, runs_after, skills, steerable, system_prompt, tools, variables)"
+        frames: [{label: flow.yaml, range: [13, 15, 13, 39]}]

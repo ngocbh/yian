@@ -1,0 +1,53 @@
+# From tests/seeds/errors/e17-case-nonexhaustive.yaml.
+# A routing `case ... on` over a Literal producer with a tag uncovered and no `else:` fails at the node.
+kind: load
+# The message shows the uncovered tags as a list value: JSON text in TS, a repr in Python.
+rules: [messages]
+flow: |
+  # e17 — a `case … on` over an enum producer leaves a tag uncovered with no `else:`. COMPILE.
+  id: err-case-nonexhaustive
+  name: err_case_nonexhaustive
+  input:
+    topic: !str
+  nodes:
+    classify:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output: Literal(pro, con, flat)
+      prompt: "Classify ${topic}."
+    route:
+      kind: case
+      on: ${classify.output}
+      cases:
+        - when: pro
+          then: pro_note
+        - when: con
+          then: con_note
+      # ERROR: `flat` is uncovered and there is no else:
+    pro_note:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output: str
+      prompt: "Pro ${topic}."
+    con_note:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output: str
+      prompt: "Con ${topic}."
+  output: ${pro_note.output | con_note.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: 'case node ''route'' on ${classify.output}: non-exhaustive — enum tag(s) ["flat"] not covered by a case `when:` or an `else:`'
+        # The `route:` node key on line 13.
+        frames: [{label: flow.yaml, range: [13, 3, 13, 8]}]
+python_expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "case node 'route' on ${classify.output}: non-exhaustive — enum tag(s) ['flat'] not covered by a case `when:` or an `else:`"
+        frames: [{label: flow.yaml, range: [13, 3, 13, 8]}]

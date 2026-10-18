@@ -1,0 +1,41 @@
+# From tests/seeds/errors/e35-bad-map-over-ref.yaml.
+# A dangling reference in a MAP's `over:` is named `map over` and located at the `over:` value.
+kind: load
+flow: |
+  # e35 — a dangling `${...}` ref in a MAP's reserved `over:` key. COMPILE: "unresolved references".
+  # The highlight must box the `over:` line (26), whose range is stamped ("field", "over").
+  # The `input:` block on lines 27-28 is an unrelated author construct.
+  # The diagnostic names the MAP's reserved `over:` binding and selects its exact range.
+  # Fails at load; no inputs needed.
+  id: err-bad-map-over-ref
+  name: err_bad_map_over_ref
+  input:
+    topics: !list(str)
+  defs:
+    body:
+      input:
+        item: !str
+      nodes:
+        double:
+          kind: code
+          input:
+            item: ${input.item}
+          output: int
+          code: "return {'output': 1}"
+      output: ${double.output}
+  nodes:
+    each:
+      kind: map
+      call: body
+      over: ${nope.output}       # ERROR (line 26): no node `nope` — the caret belongs HERE
+      input:
+        item: ${item}
+  output: ${each.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        # A reserved key's site has no `from`, unlike an input's; the docs don't show this form.
+        message: "flow has unresolved references:\n  node 'each' map over: reference ${nope.output} uses unknown namespace 'nope'"
+        # The `over:` value on line 26.
+        frames: [{label: flow.yaml, range: [26, 11, 26, 25]}]

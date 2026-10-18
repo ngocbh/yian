@@ -39,9 +39,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
 import { evalExpr, ExpressionError, ResolveMode } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
+import { hasFeedback, validateFeedback } from "../../src/expr/index.ts";
 import {
   type FeedbackValue,
-  hasFeedback,
   ResolvedValue,
   type RouteKind,
   type RoutedFeedback,
@@ -50,7 +50,6 @@ import {
   routeValue,
   SourceRef,
   type TracedValue,
-  validateFeedback,
   ValueRoute,
 } from "../../src/expr/lineage.ts";
 import { evalBinding, evalTemplate, scanTemplate } from "../../src/expr/template.ts";

@@ -108,6 +108,8 @@ lists, concatenation, and repetition. Opaque expression functions stop feedback:
 the runtime cannot safely infer which input field caused a custom function's
 output.
 
+Changed (TS yian): repetition is gone, so feedback has no repetition step.
+
 Each reached behavioral occurrence receives its retained `BackwardContext` and
 ordered feedback tuple. The context keeps canonical JSON, so a file in it is its
 mapping `{uri, mime, name}`, not a `FileRef`. Its `backward()` hook returns three channels:

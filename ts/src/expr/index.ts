@@ -2,7 +2,7 @@
  * One unified `${...}` expression engine and the template scanner that hosts it, as Python's
  * `yian.expr`.
  *
- * The engine is three layers, all pool-agnostic (they take a `resolve` callable):
+ * The engine is four layers, all pool-agnostic (they take a `resolve` callable):
  * - `grammar` (`parseExpr`): parse only, one grammar for every `${...}` construct (references,
  *   arithmetic, boolean, coalesce/default/required, builtin calls). An expression nests at most
  *   as deep as a value, `current().maxValueNesting` levels.
@@ -18,15 +18,17 @@
  *   (`checkTemplateCalls`). It also lists each reference a condition reads with the `:-` / `:?` /
  *   `|` escape around it and whether that escape co-skips as a binding (`conditionReads`,
  *   `ConditionRead`), and renames those references by occurrence (`rewriteConditionReads`).
- *
- * Feedback values and expression routes (Python's `lineage`) land here later.
+ * - `lineage`: the routes a traced evaluation records (`evalExpr`, `evalTemplate` and
+ *   `evalBinding` with `trace: true`) and the feedback transfer over them; this module re-exports
+ *   the feedback value type and its checks (`FeedbackValue`, `hasFeedback`, `validateFeedback`).
  *
  * Flow invocation is not a `${...}` construct: it is compose's compile-time whole-value
  * `call(...)` directive, not part of this engine.
  *
  * Knows about: `typesys` (the pool and value types, in `expressions`; `writeAsText`, in
- * `builtins` and `template`; `writeAsJson`, `Type` and `ValueKind`, in `builtins`), `defaults`
- * (the value nesting bound, in `grammar`) and `diagnostics`.
+ * `builtins` and `template`; `writeAsJson`, `Type` and `ValueKind`, in `builtins`; `buildValue`,
+ * in `lineage`), `typesys/json` (`logJson`, in `lineage` and `template`; `parseJson`, in
+ * `lineage`), `defaults` (the value nesting bound, in `grammar`) and `diagnostics`.
  * Never imports: `nodes`, `compile`, or `runtime` (they import it).
  */
 
@@ -49,6 +51,8 @@ export {
   rewriteExprRefs,
 } from "./expressions.ts";
 export { parseExpr } from "./grammar.ts";
+export type { FeedbackValue } from "./lineage.ts";
+export { hasFeedback, validateFeedback } from "./lineage.ts";
 export type { ConditionRead } from "./template.ts";
 export {
   bindingCoSkips,

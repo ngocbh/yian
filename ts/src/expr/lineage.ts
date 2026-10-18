@@ -2,9 +2,10 @@
  * Recorded expression composition and source-relative feedback transfer.
  *
  * Feedback addresses recorded values without depending on nodes, memory, or the runtime. A list
- * is one positional selection; callers route each independent message separately. Routes are immutable records from the same expression evaluation, with source values
- * supplied by identity when feedback is transferred. Registered function boundaries retain
- * stopped feedback for inspection.
+ * is one positional selection; callers route each independent message separately. Routes are
+ * immutable records from the same expression evaluation, with source values supplied by
+ * identity when feedback is transferred. Registered function boundaries retain stopped feedback
+ * for inspection.
  *
  * Snapshots are yian's codec JSON (`logJson`, read back with `parseJson(text, "codec")`): ints of
  * any size, floats marked `.0`, infinity as `{"$float":"inf"}`, and a record shaped like a tag

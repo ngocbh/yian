@@ -1278,7 +1278,10 @@ export interface EvalOptions {
   types?: ReadonlyMap<string, Type> | null;
 }
 
-/** The options of a traced `evalExpr`: `item` may be a `ResolvedValue`, and `trace` is set. */
+/**
+ * The options of an `evalExpr` that may trace: `item` may be a `ResolvedValue`, and `trace` turns
+ * tracing on.
+ */
 export interface TraceOptions extends Omit<EvalOptions, "item"> {
   item?: Value | ResolvedValue;
   trace?: boolean;

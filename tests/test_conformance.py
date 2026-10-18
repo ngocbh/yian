@@ -2771,7 +2771,7 @@ def test_harvest_checks_pooled_replays(tmp_path: Path, monkeypatch: pytest.Monke
 
 def test_harvest_shim_skips_and_requests(tmp_path: Path,
                                         monkeypatch: pytest.MonkeyPatch) -> None:
-    """A shimmed outcome no single shim gives, or a failing shimmed replay, skips the candidate."""
+    """Shim skips and dropped requests; a pooled run's kept trace is compared under each shim."""
     from tests import conformance_harvest as harvest
 
     state = harvest._Harvest(None, tmp_path)
@@ -2795,6 +2795,25 @@ def test_harvest_shim_skips_and_requests(tmp_path: Path,
     monkeypatch.setattr(harvest, "_replay", failing)
     with pytest.raises(harvest._Skip, match="^shims: replay failed: Failed$"):
         harvest._expected(state, call)
+
+    output = {"status": "succeeded", "output": "hi"}
+
+    def traced(state: object, case: dict, shims: tuple = ()) -> tuple:
+        # A pooled run whose stable trace only the text-form shim changes.
+        trace = [["run_started", "text-form" in shims]]
+        return {"output": output, "trace": trace, "events": [], "stream": [], "tool_calls": {},
+                "left": []}, frozenset()
+
+    monkeypatch.setattr(harvest, "_replay", traced)
+    run = harvest._Call("run_flow")
+    run.case, run.result, run.skip = {"kind": "run", "flow": "id: f\n"}, {"output": output}, None
+    _, text, flags = harvest._expected(state, run)
+    written = yaml.load(text, Loader=_CaseLoader)
+    assert written["rules"] == ["text-form"] and flags == []
+    assert written["expect"] == {"output": output, "trace": [["run_started", True]],
+                                 "events": []}
+    assert written["python_expect"] == {"output": output, "trace": [["run_started", False]],
+                                        "events": []}
 
     def entry(text: str) -> dict:
         return {"reply": text, "request": {"messages": [text]}}

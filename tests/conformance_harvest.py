@@ -2074,13 +2074,11 @@ def _expected(state: _Harvest, call: _Call) -> tuple[str, str, list]:
         flags.append("shims: request dropped")
     rules = set()
     if not runner._same(ts, py):
-        # One replay can't tell a pooled run's timing-dependent results from a shim's change.
-        cut = _POOLED_RESULTS if pooled else ()
-        kept = {key: value for key, value in py.items() if key not in cut}
         for name, shim in _SHIMS.items():
             alone = _expect(case, _shimmed(state, case, (name,))[0])
-            if not runner._same({key: value for key, value in alone.items() if key not in cut},
-                                kept):
+            # On the results `py` kept: a timing difference in this one replay of a pooled run
+            # can at worst add a rule (the case keeps `python_expect`), not lose a case.
+            if not runner._same({key: alone[key] for key in alone.keys() & py.keys()}, py):
                 rules.add(shim.rule)
         if not rules:
             raise _Skip("shims: no single shim changes the outcome")

@@ -21,7 +21,8 @@ a frozen `Defaults` with one lower-case attribute per entry
 
 Changed (TS yian): `current()` comes from `ts/src/defaults.ts` and has one camelCase key
 per entry (`current().maxTotalNodes`). It reads the process environment (`processEnv`);
-`read(env)` takes any `Env` accessor and returns the values it sets.
+`read(env)` takes any `Env` accessor and returns the values it sets, with built-in values
+for the rest. TS yian's own entries are in a second table, [TS yian only](#ts-yian-only).
 
 ## Setting a value
 

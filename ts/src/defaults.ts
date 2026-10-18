@@ -425,7 +425,7 @@ export function nonDefaults(values: Defaults): Record<string, bigint> {
   const all: Readonly<Record<string, number>> = values;
   const changed = ENTRIES.flatMap((each) => {
     const value = all[keyOf(each.name)];
-    return value === undefined || value === each.default ? [] : [[each.name, BigInt(value)] as const];
+    return value === each.default ? [] : [[each.name, BigInt(value!)] as const];
   }).sort(([a], [b]) => compareText(a, b));
   return Object.fromEntries(changed);
 }

@@ -333,7 +333,7 @@ const ENV_READ: Lint = {
   },
   fix:
     "adapters and transport read no environment; take an injected Env accessor (defaults.ts's " +
-    "processEnv reads process.env) and document each variable read in docs/defaults.md",
+    "processEnv reads process.env) and document each variable read",
 };
 
 const LINTS = [BARE_SORT, ENGINE_DEPENDENT, BARE_FETCH, BUN_GLOBAL, BUN_IMPORT, ENV_READ];

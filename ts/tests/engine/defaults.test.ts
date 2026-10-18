@@ -393,6 +393,23 @@ describe("the process values", () => {
     expect(current()).toEqual(read(processEnv));
   });
 
+  test("current() reads the process environment once, and a bad value on every call", () => {
+    const saved = process.env["YIAN_MAX_VALUE_NESTING"];
+    try {
+      process.env["YIAN_MAX_VALUE_NESTING"] = "80";
+      forget();
+      expect(current().maxValueNesting).toBe(80);
+      process.env["YIAN_MAX_VALUE_NESTING"] = "70";
+      expect(current().maxValueNesting).toBe(80);
+      process.env["YIAN_MAX_VALUE_NESTING"] = "abc";
+      forget();
+      for (let i = 0; i < 2; i++) expect(() => current()).toThrow(DefaultsError);
+    } finally {
+      if (saved === undefined) delete process.env["YIAN_MAX_VALUE_NESTING"];
+      else process.env["YIAN_MAX_VALUE_NESTING"] = saved;
+    }
+  });
+
   test("a failed read is not kept", () => {
     const bad = envOf({ YIAN_MAX_VALUE_NESTING: "abc" });
     const kept = reload(envOf({ YIAN_MAX_VALUE_NESTING: "80" }));

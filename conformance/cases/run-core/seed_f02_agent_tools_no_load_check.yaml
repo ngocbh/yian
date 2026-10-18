@@ -1,0 +1,42 @@
+# From tests/seeds/_future/errors/f02-agent-tools-no-load-check.yaml.
+# An AGENT granting a tool the run lacks raises at run start, naming the node and the first one.
+# This pins the run-start check, not the load check the header asks for; it changes when that
+# lands. The header names Python's `run_flow`; the TS run entry point raises the same error.
+kind: run
+flow: |
+  # f02 — an unknown AGENT `tools:` entry is NOT checked at load: this flow LOADS CLEAN.
+  # The load-side check does not exist, so this remains a future negative fixture.
+  #
+  # NOT a duplicate of e23: that pins a TOOL node's `tool_id:`. This is an AGENT node's `tools:`
+  # list. Both survive compile and fail at run start: before any log exists, `run_flow` checks
+  # every static AGENT grant and TOOL `tool_id:` against the run's tools and raises `ValueError`
+  # naming the node and the unknown id. That is the run-start shape in `errors/`, which e23 uses.
+  # This seed stays here because what it asks for is a load-time check, which does not exist.
+  #
+  # A per-entry range alone cannot make this a load error: there is no load-time validation or
+  # semantic origin carrier for an AGENT `tools:` entry. Only the host knows which names it will
+  # supply (a name may be a host-filled tool group), so a load-time check needs the run's tools.
+  #
+  #   CURRENT:  loads OK. At run start: `ValueError` naming node `note` and the first grant the
+  #             run's tools lack; no log is created.
+  #   EXPECTED: a load-time check naming the unknown id, located at its own `tools:` entry.
+  id: fut-agent-tools-no-load-check
+  name: fut_agent_tools_no_load_check
+  input:
+    topic: !str
+  nodes:
+    note:
+      kind: agent
+      tools: [web_search, nope_tool]     # `nope_tool` is unregistered — not caught at load
+      input:
+        topic: ${input.topic}
+      output: str
+      prompt: "Rate ${topic}."
+  output: ${note.output}
+inputs: {topic: X}
+run: {run_id: r1, num_workers: 0}
+expect:
+  raises:
+    class: ValueError
+    message: "AGENT node 'note' grants unknown tool or group 'web_search'; tool groups in this run: []"
+  trace: []

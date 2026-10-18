@@ -1,0 +1,25 @@
+# From tests/seeds/errors/e23-unknown-tool.yaml.
+# A TOOL node naming a tool the run lacks raises at run start, before the log exists.
+# The header names Python's `run_flow`; the TS run entry point raises the same error.
+kind: run
+flow: |
+  # e23 — a TOOL node referencing an unknown tool id. RUN START: run_flow raises ValueError
+  # before any log exists, since the run's tools have no such id.
+  id: err-unknown-tool
+  name: err_unknown_tool
+  input:
+    topic: !str
+  nodes:
+    fetch:
+      kind: tool
+      tool_id: nonesuch_tool       # ERROR at run start: no such tool
+      input:
+        topic: ${input.topic}
+  output: ${fetch.output}
+inputs: {topic: X}
+run: {run_id: r1, num_workers: 0}
+expect:
+  raises:
+    class: ValueError
+    message: "TOOL node 'fetch' names tool 'nonesuch_tool', which isn't in this run's tools; known tools: []"
+  trace: []

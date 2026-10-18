@@ -1,0 +1,57 @@
+# From tests/seeds/errors/e34-dup-assert.yaml.
+# Of two identical false node asserts, the failure is at the first one.
+kind: run
+flow: |
+  # e34 — two IDENTICAL post-asserts on one node. RUNTIME: `output < 0` is false
+  # (output is 1), so both fail; the caret must point at the FIRST occurrence (located BY POSITION),
+  # never collapse to the second occurrence. Run with no inputs.
+  id: err-dup-assert
+  name: err_dup_assert
+  nodes:
+    compute:
+      kind: code
+      output: int
+      code: ./fixtures/seeds.ts:const_one
+      asserts:
+        - output < 0
+        - output < 0
+  output: ${compute.output}
+# The CODE reference differs by language: `flow` names the TS function, this the Python one.
+python_flow: |
+  # e34 — two IDENTICAL post-asserts on one node. RUNTIME: `output < 0` is false
+  # (output is 1), so both fail; the caret must point at the FIRST occurrence (located BY POSITION),
+  # never collapse to the second occurrence. Run with no inputs.
+  id: err-dup-assert
+  name: err_dup_assert
+  nodes:
+    compute:
+      kind: code
+      output: int
+      code: tests.seeds.fns:const_one
+      asserts:
+        - output < 0
+        - output < 0
+  output: ${compute.output}
+inputs: {}
+run: {run_id: r1, num_workers: 0}
+expect:
+  output:
+    status: failed
+    failure:
+      code: assertion.failed
+      message: "node 'compute' post-assert failed: output < 0"
+      node: compute
+      # The first assert `output < 0`, on line 12.
+      frames: [{label: flow.yaml, range: [12, 9, 12, 19]}]
+  trace:
+    - [run_started, null, {inputs: {}, learnable: false, num_workers: 0}]
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {}}]
+    - [node_started, compute]
+    - - node_failed
+      - compute
+      - failure:
+          code: assertion.failed
+          message: "node 'compute' post-assert failed: output < 0"
+          node: compute
+          frames: [{label: flow.yaml, range: [12, 9, 12, 19]}]

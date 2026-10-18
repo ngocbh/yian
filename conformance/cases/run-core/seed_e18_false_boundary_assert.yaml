@@ -1,0 +1,59 @@
+# From tests/seeds/errors/e18-false-boundary-assert.yaml.
+# A false flow assert over the inputs fails START before any node runs, at the assert.
+kind: run
+flow: |
+  # e18 — a false input-only BOUNDARY assert. RUNTIME: fails before any node runs.
+  # Run with window <= 0.
+  id: err-false-boundary-assert
+  name: err_false_boundary_assert
+  input:
+    window: !int
+  nodes:
+    calc:
+      kind: code
+      input:
+        window: ${input.window}
+      output: int
+      code: ./fixtures/seeds.ts:const_one
+  asserts:
+    - "input.window > 0"      # false when window <= 0
+  output: ${calc.output}
+# The CODE reference differs by language: `flow` names the TS function, this the Python one.
+python_flow: |
+  # e18 — a false input-only BOUNDARY assert. RUNTIME: fails before any node runs.
+  # Run with window <= 0.
+  id: err-false-boundary-assert
+  name: err_false_boundary_assert
+  input:
+    window: !int
+  nodes:
+    calc:
+      kind: code
+      input:
+        window: ${input.window}
+      output: int
+      code: tests.seeds.fns:const_one
+  asserts:
+    - "input.window > 0"      # false when window <= 0
+  output: ${calc.output}
+inputs: {window: -5}
+run: {run_id: r1, num_workers: 0}
+expect:
+  output:
+    status: failed
+    failure:
+      code: assertion.failed
+      message: "node '__start__' post-assert failed: input.window > 0"
+      node: __start__
+      # The assert `"input.window > 0"` on line 15.
+      frames: [{label: flow.yaml, range: [15, 5, 15, 23]}]
+  trace:
+    - [run_started, null, {inputs: {window: -5}, learnable: false, num_workers: 0}]
+    - [node_started, __start__]
+    - - node_failed
+      - __start__
+      - failure:
+          code: assertion.failed
+          message: "node '__start__' post-assert failed: input.window > 0"
+          node: __start__
+          frames: [{label: flow.yaml, range: [15, 5, 15, 23]}]

@@ -10,6 +10,6 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test ./tests"
   },
-  "dependencies": { "yaml": "2.9.1" },
+  "dependencies": { "amaro": "1.2.1", "yaml": "2.9.1" },
   "devDependencies": { "@types/bun": "1.4.3", "@types/node": "22.20.5", "typescript": "7.0.2" }
 }

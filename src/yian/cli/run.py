@@ -52,7 +52,7 @@ import sys
 import threading
 import warnings
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Mapping, NoReturn, Optional, Tuple
 
 import typer
 from rich.console import Console, Group
@@ -2008,6 +2008,13 @@ def run(
     if json_output:
         # stdout carries only the document; CODE prints and stray output go to stderr.
         ctx.with_resource(contextlib.redirect_stdout(sys.stderr))
+
+    def fail(diagnostic: Diagnostic) -> NoReturn:
+        """Exit 1, first printing `diagnostic` as the error document under `--json`."""
+        if json_out is not None:
+            print_json({"error": diagnostic_json(diagnostic)}, file=json_out)
+        raise typer.Exit(code=1)
+
     _validate_run_log_options(
         input_values=input or [],
         inputs=inputs,
@@ -2030,7 +2037,7 @@ def run(
         _render_load_error(err)
         if engine_trace:
             err_console.print_exception()
-        raise typer.Exit(code=1)
+        fail(err.diagnostic)
 
     # Construction opens nothing (built-in storage opens on the first run), so
     # the early exits below need not close the registry; each controller does.
@@ -2043,7 +2050,7 @@ def run(
     except (TypeError, ValueError) as exc:
         action = "resume" if resume is not None else "run"
         _render_host_run_error(action, exc, engine_trace=engine_trace)
-        raise typer.Exit(code=1)
+        fail(Diagnostic(code="run.setup", message=str(exc)))
     memory_options = {"memory": registry} if registry else {}
     # Claude Code and Codex skill folders (user, then project up to the git root),
     # read only when an AGENT grants skills. An invalid skill is warned about and
@@ -2075,7 +2082,7 @@ def run(
             err_console.print(Text(f"warning: {warning.message}", style="yellow"), soft_wrap=True)
         if config_error is not None:
             err_console.print(Text(str(config_error), style="red"), soft_wrap=True)
-            raise typer.Exit(code=1)
+            fail(Diagnostic(code="run.setup", message=str(config_error)))
 
     def mcp_selection(
         stop_event: threading.Event, render: Callable[[Callable[[], None]], None]
@@ -2151,7 +2158,7 @@ def run(
         )
         if prompted is None:
             err_console.print("[yellow]run cancelled[/yellow]")
-            raise typer.Exit(code=1)
+            fail(Diagnostic(code="run.cancelled", message="run cancelled"))
         supplied.update(prompted)
 
         # The CLI flags supply the OUTERMOST cascade layer (fill-the-gap), not a hard
@@ -2166,17 +2173,17 @@ def run(
             _ensure_provider_keys(loaded, cli_cfg, supplied)
         except RuntimeError as exc:
             err_console.print(f"[red]{exc}[/red]")
-            raise typer.Exit(code=1)
+            fail(Diagnostic(code="run.setup", message=str(exc)))
         except (OSError, TypeError, ValueError) as exc:
             _render_host_run_error("run", exc, engine_trace=engine_trace)
-            raise typer.Exit(code=1)
+            fail(Diagnostic(code="run.setup", message=str(exc)))
 
         run_id = default_run_id()
         try:
             selected_log = log if log is not None else _default_run_log_path(run_id)
         except (OSError, TypeError, ValueError) as exc:
             _render_host_run_error("run", exc, engine_trace=engine_trace)
-            raise typer.Exit(code=1)
+            fail(Diagnostic(code="run.setup", message=str(exc)))
         selected_workers = 8 if num_workers is None else num_workers
         _report_run_log(selected_log)
 
@@ -2218,14 +2225,16 @@ def run(
         # controller boundary has already joined its workers; report the same
         # ordinary cancellation outcome used by pre-run prompts.
         err_console.print("[yellow]run cancelled[/yellow]")
-        raise typer.Exit(code=1)
+        fail(Diagnostic(code="run.cancelled", message="run cancelled"))
     except _ResumeKeyError as exc:
         err_console.print(Text(str(exc), style="red"))
-        raise typer.Exit(code=1)
+        fail(Diagnostic(code="run.setup", message=str(exc)))
     except (OSError, TypeError, ValueError, MemoryOperationError, McpConnectError) as exc:
         action = "resume" if resume is not None else "run"
         _render_host_run_error(action, exc, engine_trace=engine_trace)
-        raise typer.Exit(code=1)
+        # An McpConnectError's notes name the missing tools and the other failed servers.
+        notes = getattr(exc, "__notes__", ()) if isinstance(exc, McpConnectError) else ()
+        fail(Diagnostic(code="run.setup", message=str(exc), notes=tuple(notes)))
     except ImportError as exc:
         # Only the missing MCP SDK is a setup problem to report in one line; any other
         # ImportError is a bug and keeps its traceback.
@@ -2233,7 +2242,7 @@ def run(
             raise
         action = "resume" if resume is not None else "run"
         _render_host_run_error(action, exc, engine_trace=engine_trace)
-        raise typer.Exit(code=1)
+        fail(Diagnostic(code="run.setup", message=str(exc)))
 
     if result.status == "succeeded":
         out = result.output

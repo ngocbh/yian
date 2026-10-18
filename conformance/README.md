@@ -213,7 +213,8 @@ A case can't hold code, so its host is declared under `host`.
   Without `jitter`, draws are the implementation's own, and the case doesn't depend on them.
 - **`crash_after_record`**: `resume` cases only (above).
 
-`expect.tool_calls` lists, per tool, each call in order as `{args, call_id, attempt, node}`.
+`expect.tool_calls` lists, per tool that was called, each call in order as `{args, call_id,
+attempt, node}`.
 `ask_user` calls from `human` are listed too; their `args` are the request in data form
 (`question`, `questions`, `answer_schema`, `title`, `node_id`, `options`; nulls left out).
 

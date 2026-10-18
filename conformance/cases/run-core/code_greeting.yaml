@@ -1,0 +1,33 @@
+kind: run
+flow: |
+  id: code-greeting
+  name: code_greeting
+  input:
+    name: !str
+  nodes:
+    greet:
+      kind: code
+      input:
+        name: ${input.name}
+      output: str
+      code: |
+        return "hi " + inputs.name
+  output: ${greet.output}
+python_flow: |
+  id: code-greeting
+  name: code_greeting
+  input:
+    name: !str
+  nodes:
+    greet:
+      kind: code
+      input:
+        name: ${input.name}
+      output: str
+      code: |
+        return "hi " + inputs["name"]
+  output: ${greet.output}
+inputs: {name: Ada}
+run: {run_id: r1, num_workers: 0}
+expect:
+  output: {status: succeeded, output: hi Ada}

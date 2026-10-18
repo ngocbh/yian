@@ -39,6 +39,16 @@ from yian.expr import (
     render_template_record,
 )
 from yian.expr.expressions import ResolveMode, _resolve_in_record, evaluate_when_record
+from yian.nodes.tool import node as tool_node
+from yian.run import RunResult, run_flow
+from yian.tools.context import ToolContext
+from yian.tools.errors import (
+    PermanentToolError,
+    ReportedToolError,
+    ToolCheckError,
+    TransientToolError,
+)
+from yian.tools.function_tools import FunctionTool
 from yian.typesys.types import read_typedefs, type_for
 from yian.typesys.values import TypeCheckError, build_value_as
 
@@ -151,13 +161,19 @@ _RULES = {
 }
 _RESERVED = [
     ("host", "models"), ("host", "steering"), ("host", "stop"), ("host", "memory"),
-    ("host", "skills"), ("expect", "memory"),
+    ("host", "skills"), ("expect", "memory"), ("expect", "trace"), ("expect", "events"),
+    ("expect", "stream"),
 ]
 # Keys holding text that is not a case value: no codec form, no number checks.
 _TEXT_KEYS = {"flow", "python_flow", "other", "files", "stdin"}
 _SECRET_KEYS = {"run", "resume", "backward", "env", "host", "stdin"}
 _SECRET = re.compile(r"<key:([0-9]+)>")
 _ENV_SUFFIXES = ("_API_KEY", "_BASE_URL", "_ENDPOINT", "_API_VERSION")
+_TOOL_ERRORS = {
+    error.__name__: error
+    for error in (PermanentToolError, ReportedToolError, ToolCheckError, TimeoutError,
+                  ConnectionError)
+}
 
 
 def _read(path: Path) -> dict:
@@ -219,8 +235,17 @@ def _check_host(host: object, kind: str) -> None:
                 if len(entry) != 1:
                     raise ValueError(f"`{at}` takes `return` or `raise`")
                 if "raise" in entry:
-                    _keys(f"{at}.raise", entry["raise"], _RAISE_KEYS,
-                          required=("class", "message"))
+                    error = entry["raise"]
+                    _keys(f"{at}.raise", error, _RAISE_KEYS, required=("class", "message"))
+                    if "retry_after" in error and error["class"] != "TransientToolError":
+                        raise ValueError(f"`{at}.raise.retry_after` is for TransientToolError")
+    human = _mapping("host.human", host.get("human", {}))
+    if any(not isinstance(answers, list) for answers in human.values()):
+        raise ValueError("`host.human` maps node ids to lists of answers")
+    if "human" in host and "ask_user" in tools:
+        raise ValueError("a case with `host.human` declares no `ask_user` tool")
+    if not isinstance(host.get("jitter", []), list):
+        raise ValueError("`host.jitter` must be a list")
 
 
 def _check(case: dict) -> dict:
@@ -238,6 +263,10 @@ def _check(case: dict) -> dict:
         if groups and not any(set(group) == case[key].keys() for group in groups):
             needs = ", or ".join(" and ".join(f"`{name}`" for name in group) for group in groups)
             raise ValueError(f"`{key}` needs {needs}")
+        if kind in ("run", "resume", "backward") and (
+            ("raises" in case[key]) == ("output" in case[key])
+        ):
+            raise ValueError(f"`{key}` takes one of `raises` and `output`")
     if "python_expect" in case and not case.get("rules"):
         raise ValueError("`python_expect` needs `rules`")
     rules = case.get("rules", [])
@@ -257,6 +286,9 @@ def _check(case: dict) -> dict:
         _keys("run", case["run"], _RUN_KEYS)
     if "resume" in case:
         _keys("resume", case["resume"], _RESUME_KEYS)
+    for key in ("run", "resume"):
+        if case.get(key, {}).get("context", "present") != "present":
+            raise ValueError(f"`{key}.context` must be `present`")
     if "backward" in case:
         if not isinstance(case["backward"], list):
             raise ValueError("`backward` must be a list")
@@ -550,8 +582,120 @@ def _run_value(case: dict, case_dir: Path) -> None:
     _compare("kind", typed.kind.value, expect["kind"])
 
 
+def _host(case: dict, patch: pytest.MonkeyPatch) -> tuple:
+    """Build the case's host and return `(tools, calls, check)`.
+
+    `tools` is the run's tool set: a stub per `host.tools` entry and `ask_user` for
+    `host.human`. Each call is recorded in `calls`, by tool, and takes its script's next
+    entry; `host.jitter` replaces the TOOL backoff draws. `check()` fails the case when a
+    call found its script used up, or when a script has entries left.
+    """
+    host = case.get("host", {})
+    calls: dict = {}
+    problems: list = []
+    scripts = {f"host.human.{node}": list(answers)
+               for node, answers in host.get("human", {}).items()}
+
+    def take(label: str, what: str) -> object:
+        if not scripts.get(label):
+            problems.append(f"{what} found `{label}` used up")
+            raise RuntimeError(f"`{label}` is used up")
+        return scripts[label].pop(0)
+
+    def record(name: str, args: dict, ctx: ToolContext) -> None:
+        calls.setdefault(name, []).append(
+            {"args": args, "call_id": ctx.call_id, "attempt": ctx.attempt, "node": ctx.node}
+        )
+
+    def stub(name: str, by_node: bool):
+        def on_invoke(ctx: ToolContext, args: dict) -> object:
+            record(name, args, ctx)
+            label = f"host.tools.{name}.results" + (f".{ctx.node}" if by_node else "")
+            entry = take(label, f"a `{name}` call from node {ctx.node!r}")
+            if "return" in entry:
+                return entry["return"]
+            error = entry["raise"]
+            if error["class"] == "TransientToolError":
+                raise TransientToolError(error["message"], retry_after=error.get("retry_after"))
+            raise _TOOL_ERRORS.get(error["class"], type(error["class"], (Exception,), {}))(
+                error["message"]
+            )
+        return on_invoke
+
+    tools = {}
+    for name, tool in host.get("tools", {}).items():
+        results = tool["results"]
+        if isinstance(results, dict):
+            scripts.update({f"host.tools.{name}.results.{node}": list(script)
+                            for node, script in results.items()})
+        else:
+            scripts[f"host.tools.{name}.results"] = list(results)
+        tools[name] = FunctionTool(name, tool.get("description", ""), tool["parameters"],
+                                   stub(name, isinstance(results, dict)))
+
+    def ask_user(ctx: ToolContext, **request: object) -> object:
+        record("ask_user", {key: value for key, value in request.items() if value is not None},
+               ctx)
+        return take(f"host.human.{ctx.node}", f"a question from node {ctx.node!r}")
+
+    if "human" in host:
+        tools["ask_user"] = ask_user
+    if "jitter" in host:
+        scripts["host.jitter"] = list(host["jitter"])
+        patch.setattr(tool_node, "_jitter", lambda: take("host.jitter", "a backoff draw"))
+
+    def check() -> None:
+        left = [f"`{label}` has {len(script)} entries left"
+                for label, script in scripts.items() if script]
+        if problems or left:
+            pytest.fail("\n".join(problems + left), pytrace=False)
+
+    return tools, calls, check
+
+
+def _failure(failure, flow) -> dict:
+    """Return a run's `failure` in the case's failure form."""
+    return {**_diagnostic(flow.diagnose(failure)), "node": failure.node_id}
+
+
+def _compare_output(result: RunResult, flow, expected: dict) -> None:
+    """Fail the case unless `result` is `expect.output`: the output by value, or the failure."""
+    if result.status == "succeeded":
+        actual = {"status": "succeeded", "output": result.output}
+    else:
+        actual = {"status": result.status, "failure": _failure(result.failure, flow)}
+    _compare("output", actual, expected, by_value=result.status == "succeeded")
+
+
+def _run_run(case: dict, case_dir: Path) -> None:
+    """Run the flow on the case's host; compare `raises` or `output`, then `tool_calls`."""
+    flow = _load(case["flow"], case_dir)
+    expect = case["expect"]
+    events, chunks = [], []
+    with pytest.MonkeyPatch.context() as patch:
+        tools, calls, check = _host(case, patch)
+        run = dict(case.get("run", {}))
+        if "context" in run:
+            run["context"] = object()
+
+        def start() -> RunResult:
+            return run_flow(flow, case.get("inputs", {}), log=case_dir / "run.jsonl",
+                            tools=tools, on_event=events.append, on_stream=chunks.append, **run)
+
+        if "raises" in expect:
+            _expect_raises(expect["raises"], start)
+            check()
+        else:
+            result = start()
+            check()
+            _compare_output(result, flow, expect["output"])
+    if "tool_calls" in expect:
+        _compare("tool_calls", calls, expect["tool_calls"], by_value=True)
+
+
 _KINDS = {
     "load": _run_load,
+    "run": _run_run,
     "defaults": _run_defaults,
     "fingerprint": _run_fingerprint,
     "expr": _run_expr,

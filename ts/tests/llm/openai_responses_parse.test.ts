@@ -354,9 +354,36 @@ describe("deltas and parts", () => {
     expect(response).toEqual(expected([new RefusalPart("I can't help.", replayRecord(KEY, { id: "msg_1" }))], "stop"));
   });
 
-  test("a function call only in the terminal output makes the finish tool_calls", async () => {
+  test("a function call only in the terminal output is a part and makes the finish tool_calls", async () => {
     const events = await parse([created(), completed([CALL])]);
+    expect(events).toEqual([new PartDone(0, CALL_PART), new UsageReport(USAGE_COUNTS), finish("tool_calls")]);
+    expect(await collect(events)).toEqual(expected([CALL_PART], "tool_calls"));
+  });
+
+  test("terminal output items the stream never mentioned follow the streamed ones", async () => {
+    const events = await parse([
+      added(1, started(MESSAGE)),
+      textDelta(1, 0, "Hello there."),
+      completed([REASONING, MESSAGE, CALL]),
+    ]);
+    expect(partsDone(events)).toEqual([
+      new PartDone(0, TEXT_PART),
+      new PartDone(1, REASONING_PART),
+      new PartDone(2, CALL_PART),
+    ]);
+    expect((await collect(events)).message.parts).toEqual([TEXT_PART, REASONING_PART, CALL_PART]);
     expect(events.at(-1)).toEqual(finish("tool_calls"));
+  });
+
+  test("an added reasoning item takes its slot before any delta", async () => {
+    const events = await parse([
+      added(0, { ...REASONING, summary: [] }),
+      added(1, started(MESSAGE)),
+      textDelta(1, 0, "Hello there."),
+      completed([REASONING, MESSAGE]),
+    ]);
+    expect(events[0]).toEqual(new TextDelta(1, "Hello there."));
+    expect((await collect(events)).message.parts).toEqual([REASONING_PART, TEXT_PART]);
   });
 
   test("reasoning summary deltas are separated by newlines", async () => {
@@ -642,6 +669,14 @@ describe("terminal output", () => {
     expect(partsDone(events)).toEqual([new PartDone(0, part)]);
   });
 
+  test("a refusal built from deltas whose record can't be built is a protocol error", async () => {
+    let phase: JsonValue = "deep";
+    for (let i = 0; i < 200; i++) phase = [phase];
+    const error = await failure([added(0, { ...started(MESSAGE), phase }), refusalDelta(0, 0, "No."), completed()]);
+    expect(error.kind).toBe("protocol");
+    expect(error.message).toMatch(/^openai stream has an invalid refusal: .*nests deeper than 100 levels$/);
+  });
+
   test("a refusal missing from the terminal output takes its done text", async () => {
     const events = await parse([
       added(0, started(MESSAGE)),
@@ -773,6 +808,11 @@ describe("usage and finish", () => {
     const final = completed([MESSAGE]);
     delete (final["response"] as JsonObject)["id"];
     const events = await parse([created("resp_9"), final]);
+    expect(events.at(-1)).toEqual(finish("stop", "resp_9"));
+  });
+
+  test("an empty terminal id falls back to response.created's", async () => {
+    const events = await parse([created("resp_9"), completed([], { id: "" })]);
     expect(events.at(-1)).toEqual(finish("stop", "resp_9"));
   });
 

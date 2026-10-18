@@ -193,7 +193,8 @@ export class OpenAIResponses implements SseProtocol {
    *
    * Deltas stream as they arrive; each `output_item.done` gives one `PartDone` per part of the
    * done item. An item that never got its done event takes its parts from the terminal event's
-   * `output` at its output index; when it is absent there, its deltas build its parts. Part
+   * `output` at its output index; when it is absent there, its deltas build its parts. Items of
+   * that `output` the stream never mentioned give their parts after all the others. Part
    * indexes are dense, in the order each (output index, content index) is first seen. An added
    * item's own text or arguments are ignored, since the deltas that follow carry them. Unknown
    * events are ignored, and a `[DONE]` sentinel ends the stream.
@@ -222,6 +223,11 @@ export class OpenAIResponses implements SseProtocol {
     const lastSummary = new Map<number, JsonValue | undefined>();
     // Refusal text by output index, then content index.
     const refusals = new Map<number, Map<number, string>>();
+    const refusalTexts = (outputIndex: number): Map<number, string> => {
+      let texts = refusals.get(outputIndex);
+      if (texts === undefined) refusals.set(outputIndex, (texts = new Map()));
+      return texts;
+    };
     let sawCalls = false;
     let responseId: string | null = null;
     for await (const frame of frames) {
@@ -256,8 +262,12 @@ export class OpenAIResponses implements SseProtocol {
         opened.set(outputIndex, item);
         if (item["type"] === "function_call") {
           sawCalls = true;
-          const id = strOrNull(item["call_id"]);
-          yield new ToolCallDelta({ index: index(outputIndex), id, name: strOrNull(item["name"]), arguments: "" });
+          yield new ToolCallDelta({
+            index: index(outputIndex),
+            id: strOrNull(item["call_id"]),
+            name: strOrNull(item["name"]),
+            arguments: "",
+          });
         } else if (item["type"] === "reasoning") {
           index(outputIndex);
         }
@@ -267,17 +277,16 @@ export class OpenAIResponses implements SseProtocol {
         index(outputIndex, contentIndex);
       } else if (type === "response.output_text.delta") {
         yield new TextDelta(index(outputIndex, contentIndex), delta);
-      } else if (type === "response.refusal.delta" || type === "response.refusal.done") {
+      } else if (type === "response.refusal.delta") {
         index(outputIndex, contentIndex);
-        let texts = refusals.get(outputIndex);
-        if (texts === undefined) refusals.set(outputIndex, (texts = new Map()));
-        if (type === "response.refusal.delta") {
-          texts.set(contentIndex, (texts.get(contentIndex) ?? "") + delta);
-        } else if (typeof data["refusal"] === "string") {
-          // The part itself comes from `output_item.done`; the final text is kept in case that
-          // event never arrives.
-          texts.set(contentIndex, data["refusal"]);
-        }
+        const texts = refusalTexts(outputIndex);
+        texts.set(contentIndex, (texts.get(contentIndex) ?? "") + delta);
+      } else if (type === "response.refusal.done") {
+        // The part itself comes from `output_item.done`; the final text is kept in case that
+        // event never arrives.
+        index(outputIndex, contentIndex);
+        const text = data["refusal"];
+        if (typeof text === "string") refusalTexts(outputIndex).set(contentIndex, text);
       } else if (type === "response.reasoning_summary_text.delta") {
         const partIndex = index(outputIndex);
         const summaryIndex = data["summary_index"];
@@ -303,9 +312,12 @@ export class OpenAIResponses implements SseProtocol {
         const output = Array.isArray(rawOutput) ? rawOutput : [];
         const started = new Set([...opened.keys(), ...indexes.keys()]);
         const unfinished = [...started].filter((each) => !finished.has(each)).sort((a, b) => a - b);
-        for (const each of unfinished) {
+        // Output items the stream never mentioned still belong to the reply, after the others.
+        const unseen = [...output.keys()].filter((each) => !finished.has(each) && !started.has(each));
+        for (const each of [...unfinished, ...unseen]) {
           if (0 <= each && each < output.length) {
             for (const [itemContentIndex, part] of itemParts(output[each]!, this.#key)) {
+              if (part instanceof ToolCallPart) sawCalls = true;
               yield new PartDone(index(each, itemContentIndex), part);
             }
             continue;
@@ -314,11 +326,10 @@ export class OpenAIResponses implements SseProtocol {
           // its part is built here.
           const item = opened.get(each) ?? {};
           for (const [refusalIndex, text] of refusals.get(each) ?? []) {
-            const record = replayRecord(this.#key, contentFields(item["id"], item["phase"]));
-            yield new PartDone(index(each, refusalIndex), new RefusalPart(text, record));
+            yield new PartDone(index(each, refusalIndex), refusalPart(text, item, this.#key));
           }
         }
-        yield* this.#finish(response, sawCalls || hasCalls(response), responseId, type);
+        yield* this.#finish(response, sawCalls, responseId, type);
         return;
       } else if (type === "response.failed") {
         const response = data["response"];
@@ -360,12 +371,12 @@ export class OpenAIResponses implements SseProtocol {
       const prefix = this.subscription ? "OpenAI subscription response" : "openai response";
       const shown = typeof reason === "string" && reason ? reason : "unknown";
       const kind = reason === "content_filter" ? "refused" : "incomplete";
-      throw new ProviderError(kind, `${prefix} did not complete (${shown})`, { retryable: false });
+      throw new ProviderError(kind, `${prefix} did not complete (${shown})`);
     }
     const events: Event[] = [];
     const usage = usageOf(response["usage"]);
     if (usage !== null) events.push(new UsageReport(usage));
-    const id = strOrNull(response["id"]) ?? responseId;
+    const id = strOrNull(response["id"]) || responseId;
     const providerPayload = replayRecord(this.#key, id === null ? {} : { response_id: id });
     events.push(new Finish({ reason: finishReason, responseId: id, protocol: PROTOCOL, providerPayload }));
     return events;
@@ -555,20 +566,14 @@ function eventData(data: string): JsonValue {
   try {
     return parseJson(data, "plain");
   } catch (error) {
-    if (!(error instanceof JSONDecodeError)) throw error;
+    if (error instanceof JSONDecodeError) throw new ProviderError("protocol", "invalid JSON in openai stream event");
+    throw error;
   }
-  throw new ProviderError("protocol", "invalid JSON in openai stream event");
 }
 
 /** Return `value` when it is a string, else `null`. */
 function strOrNull(value: JsonValue | undefined): string | null {
   return typeof value === "string" ? value : null;
-}
-
-/** Return whether a response's `output` holds a function call. */
-function hasCalls(response: JsonObject): boolean {
-  const output = response["output"];
-  return Array.isArray(output) && output.some((item) => isPlainObject(item) && item["type"] === "function_call");
 }
 
 /**
@@ -600,9 +605,9 @@ function usageOf(usage: JsonValue | undefined): Usage | null {
     });
   } catch (error) {
     // `Usage` refuses a count past `Number.MAX_SAFE_INTEGER`, which `Number()` rounds.
-    if (!(error instanceof MessageFormatError)) throw error;
+    if (error instanceof MessageFormatError) throw new ProviderError("protocol", USAGE_NOT_INT);
+    throw error;
   }
-  throw new ProviderError("protocol", USAGE_NOT_INT);
 }
 
 /** Return a usage count as a number, `null` when it is `null` or absent. */
@@ -625,17 +630,17 @@ function itemParts(item: JsonValue, key: ReplayKey): [number, Part][] {
     throw new ProviderError("protocol", "openai response has an output item that is not an object");
   }
   const type = item["type"];
-  let message: string;
   try {
     if (type === "reasoning") return [[0, reasoningPart(item, key)]];
     if (type === "message") return messageParts(item, key);
     if (type === "function_call") return [[0, callPart(item, key)]];
     return [];
   } catch (error) {
-    if (!(error instanceof MessageFormatError)) throw error;
-    message = `openai response has an invalid ${type} item: ${error.message}`;
+    if (error instanceof MessageFormatError) {
+      throw new ProviderError("protocol", `openai response has an invalid ${type} item: ${error.message}`);
+    }
+    throw error;
   }
-  throw new ProviderError("protocol", message);
 }
 
 /** Build a reasoning part: the summary texts joined with newlines, the item in its record. */
@@ -670,6 +675,23 @@ function messageParts(item: JsonObject, key: ReplayKey): [number, Part][] {
     }
   }
   return parts;
+}
+
+/**
+ * Build a refusal part from streamed text, for an item the reply never finished.
+ *
+ * @param item The added message item, whose id and phase go in the record.
+ * @throws {ProviderError} The record cannot be built (kind `protocol`).
+ */
+function refusalPart(text: string, item: JsonObject, key: ReplayKey): RefusalPart {
+  try {
+    return new RefusalPart(text, replayRecord(key, contentFields(item["id"], item["phase"])));
+  } catch (error) {
+    if (error instanceof MessageFormatError) {
+      throw new ProviderError("protocol", `openai stream has an invalid refusal: ${error.message}`);
+    }
+    throw error;
+  }
 }
 
 /** Return a text or refusal part's record fields: the message id when a string, its phase when set. */

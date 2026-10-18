@@ -59,10 +59,10 @@ const REQUEST_KEYS = ["method", "url", "headers", "json"];
 const RESPONSE_KEYS = ["status", "headers", "chunks", "json", "text"];
 const BODY_KEYS = ["chunks", "json", "text"];
 const MAX_DIFFS = 10;
+// Statuses whose response can't have a body: the Response constructor throws for one.
+const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
 const UNICODE_ESCAPE = /\\u([0-9A-Fa-f]{4})/g;
-// Each pattern starts at a word boundary (the lookbehind), so text such as `task-0123...` is no
-// `sk-` key.
 const SECRET_PATTERNS: [string, RegExp][] = [
   ["openai_key", /(?<![A-Za-z0-9_\-])sk-[A-Za-z0-9_\-]{16,}/g],
   ["anthropic_key", /(?<![A-Za-z0-9_\-])sk-ant-[A-Za-z0-9_\-]{16,}/g],
@@ -106,7 +106,7 @@ export interface Cassette {
 }
 
 /** A request `CassetteReplay` received. */
-export interface RecordedRequest {
+export interface ReceivedRequest {
   /** Upper-cased. */
   method: string;
   url: string;
@@ -131,6 +131,11 @@ export function findSecrets(text: string): string[] {
   return SECRET_PATTERNS.flatMap(([kind, pattern]) => Array.from(decoded.matchAll(pattern), () => kind));
 }
 
+/** Order strings by UTF-16 code units. */
+function byCodeUnits(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 /** Return Python's repr of a list of strings, for messages. */
 function quoted(names: readonly string[]): string {
   return `[${names.map((name) => `'${name}'`).join(", ")}]`;
@@ -144,7 +149,7 @@ function checkKeys(data: unknown, where: string, required: readonly string[], al
   }
   const unknown = Object.keys(data)
     .filter((key) => !allowed.includes(key))
-    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    .sort(byCodeUnits);
   if (unknown.length > 0) throw new TypeError(`${where}: unknown keys ${quoted(unknown)}`);
 }
 
@@ -225,7 +230,7 @@ export function loadCassette(path: string): Cassette {
  * Append the paths where `actual` differs from `recorded`, without values.
  *
  * `CASSETTE_REDACTED` in `recorded` matches any value at that path. A `bigint` and a `number`
- * differ, as Python's int and float do.
+ * of the same value match.
  */
 function jsonDiffs(recorded: JsonValue, actual: JsonValue, path: string, out: string[]): void {
   if (recorded === CASSETTE_REDACTED) return;
@@ -246,15 +251,30 @@ function jsonDiffs(recorded: JsonValue, actual: JsonValue, path: string, out: st
     for (let index = 0; index < Math.min(recorded.length, actual.length); index++) {
       jsonDiffs(recorded[index]!, actual[index]!, `${path}[${index}]`, out);
     }
-  } else if (typeof recorded !== typeof actual || recorded !== actual) {
+  } else if (recorded !== actual && !sameInt(recorded, actual)) {
     out.push(`body ${where}: differs`);
   }
+}
+
+/**
+ * Return whether `a` and `b` are a `bigint` and a `number` of the same value.
+ *
+ * Python tells an int from an equal float; TS can't, since `encodeBody` never writes `1.0`, so a
+ * sent body never holds an integral float, and a recorded `1` must match the `1` it sends.
+ */
+function sameInt(a: JsonValue, b: JsonValue): boolean {
+  const [int, other] = typeof a === "bigint" ? [a, b] : [b, a];
+  return typeof int === "bigint" && typeof other === "number" && Number.isInteger(other) && BigInt(other) === int;
 }
 
 /** Return a query's values by key. */
 function multimap(params: URLSearchParams): Map<string, string[]> {
   const out = new Map<string, string[]>();
-  for (const [key, value] of params) out.set(key, [...(out.get(key) ?? []), value]);
+  for (const [key, value] of params) {
+    const values = out.get(key);
+    if (values) values.push(value);
+    else out.set(key, [value]);
+  }
   return out;
 }
 
@@ -262,7 +282,7 @@ function multimap(params: URLSearchParams): Map<string, string[]> {
 function queryDiffs(recordedUrl: URL, actualUrl: URL): string[] {
   const recorded = multimap(recordedUrl.searchParams);
   const actual = multimap(actualUrl.searchParams);
-  const keys = [...new Set([...recorded.keys(), ...actual.keys()])].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const keys = [...new Set([...recorded.keys(), ...actual.keys()])].sort(byCodeUnits);
   const diffs: string[] = [];
   for (const key of keys) {
     const expected = recorded.get(key) ?? [];
@@ -293,9 +313,9 @@ const URL_PARTS = [
 ] as const;
 
 /** List how `request` differs from a recorded one, never showing header or query values. */
-function requestDiffs(recorded: CassetteRequest, request: RecordedRequest): string[] {
+function requestDiffs(recorded: CassetteRequest, request: ReceivedRequest): string[] {
   const diffs: string[] = [];
-  if (request.method.toUpperCase() !== recorded.method.toUpperCase()) {
+  if (request.method !== recorded.method.toUpperCase()) {
     diffs.push(`method ${request.method}, recorded ${recorded.method.toUpperCase()}`);
   }
   const expectedUrl = new URL(recorded.url);
@@ -344,14 +364,16 @@ function replayResponse(recorded: CassetteResponse): globalThis.Response {
     // No read-ahead, so each read gets exactly one recorded chunk.
     { highWaterMark: 0 },
   );
-  return new globalThis.Response(body, { status: Number(recorded.status), headers: recorded.headers });
+  const status = Number(recorded.status);
+  return new globalThis.Response(NULL_BODY_STATUSES.has(status) ? null : body, { status, headers: recorded.headers });
 }
 
 /**
  * Replay a cassette's interactions in order as a `Send`, recording every request.
  *
  * Each request must match the next interaction: the same method, case-insensitively; the same
- * URL scheme, host, port and path; the same query parameters as a multimap; every recorded
+ * URL scheme, host, port and path (the path compared undecoded, as `URL` normalizes it, which
+ * is stricter than httpx: `%41` and `A` differ); the same query parameters as a multimap; every recorded
  * header except `IGNORED_HEADERS`, by case-insensitive name; and an equal plain-JSON body when
  * the recording has `json`, or no body when it hasn't. `CASSETTE_REDACTED` in a recorded query
  * value, header value or JSON value matches any value, as long as one is present. A mismatch or
@@ -360,7 +382,7 @@ function replayResponse(recorded: CassetteResponse): globalThis.Response {
  */
 export class CassetteReplay {
   /** Every request received, in order. */
-  readonly requests: RecordedRequest[] = [];
+  readonly requests: ReceivedRequest[] = [];
   readonly #interactions: CassetteInteraction[];
 
   /**

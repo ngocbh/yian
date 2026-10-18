@@ -3,10 +3,11 @@
  * `safeFetch`, `findSecrets`, and the scripted model, plus an aborted signal ending a stream.
  */
 
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { safeFetch } from "../../src/platform.ts";
 import { BearerAuth } from "../../src/llm/auth.ts";
@@ -14,6 +15,7 @@ import { collect, type Event, EventStream, Finish, PartDone, ReasoningDelta, Tex
 import { RouteModel, type SseProtocol } from "../../src/llm/executor.ts";
 import { Message, ReasoningPart, RefusalPart, Request, Response, TextPart, ToolCallPart, Usage } from "../../src/llm/messages.ts";
 import { Route } from "../../src/llm/route.ts";
+import type { JsonValue } from "../../src/typesys/json.ts";
 import {
   type Cassette,
   CASSETTE_REDACTED,
@@ -25,7 +27,7 @@ import {
   ScriptedModel,
 } from "../../src/llm/testing.ts";
 
-const CASSETTE = new URL("./cassettes/example_sse.json", import.meta.url).pathname;
+const CASSETTE = fileURLToPath(new URL("./cassettes/example_sse.json", import.meta.url));
 // A fake key shaped like a real one, so findSecrets sees it.
 const KEY = "sk-test-0123456789abcdefghijKLMN";
 const BASE = "https://api.example.test/v1";
@@ -95,9 +97,18 @@ async function mismatch(recorded: CassetteRequest, url: string, options: Paramet
   return (error as Error).message;
 }
 
-/** Return a temporary file path holding `text`. */
+let tempDir = "";
+let tempFiles = 0;
+beforeAll(() => {
+  tempDir = mkdtempSync(join(tmpdir(), "yian-cassette-"));
+});
+afterAll(() => {
+  rmSync(tempDir, { recursive: true, force: true });
+});
+
+/** Return the path of a new temporary file holding `text`. */
 function tempFile(text: string): string {
-  const path = join(mkdtempSync(join(tmpdir(), "yian-cassette-")), "cassette.json");
+  const path = join(tempDir, `cassette-${++tempFiles}.json`);
   writeFileSync(path, text);
   return path;
 }
@@ -224,6 +235,13 @@ describe("CassetteReplay", () => {
     for (let read = await reader.read(); !read.done; read = await reader.read()) reads.push(decoder.decode(read.value));
     expect(reads).toEqual(chunks);
   });
+
+  test("replay serves a 204 with no body", async () => {
+    const replay = new CassetteReplay(oneInteraction({ method: "GET", url: "https://h.test/" }, { status: 204, text: "" }));
+    const reply = await send(replay, "https://h.test/");
+    expect(reply.status).toBe(204);
+    expect(reply.body).toBeNull();
+  });
 });
 
 // Mismatches
@@ -241,7 +259,7 @@ describe("CassetteReplay mismatches", () => {
   });
 
   test("body keys missing or unexpected, a length and a non-JSON body are named", async () => {
-    const recorded = { method: "POST", url: "https://h.test/p", json: { a: 1n, list: [1n, 2n], nested: { b: true } } };
+    const recorded = { method: "POST", url: "https://h.test/p", json: { a: 1, list: [1, 2], nested: { b: true } } };
     const message = await mismatch(recorded, "https://h.test/p", { method: "POST", json: { list: [1], nested: { b: true, c: 1 }, d: 1 } });
     expect(message.split("\n").slice(1)).toEqual([
       "  body a: missing",
@@ -257,12 +275,15 @@ describe("CassetteReplay mismatches", () => {
     expect(extra).toEndWith("body: present, recorded none");
   });
 
-  test("an int and a float differ", async () => {
-    const path = tempFile(JSON.stringify(oneInteraction({ method: "POST", url: "https://h.test/p", json: { n: 1 } })));
-    const replay = new CassetteReplay(path);
-    const error = await rejection(safeFetch("https://h.test/p", { method: "POST", body: '{"n": 1.0}' }, replay.send));
+  test("a bigint matches a number of its value, and no other", async () => {
+    const post = (recorded: JsonValue, body: string) => {
+      const replay = new CassetteReplay(oneInteraction({ method: "POST", url: "https://h.test/p", json: { n: recorded } }));
+      return safeFetch("https://h.test/p", { method: "POST", body }, replay.send);
+    };
+    await post(1n, '{"n": 1.0}');
+    await post(1, '{"n": 1}');
+    const error = await rejection(post(1n, '{"n": 1.5}'));
     expect((error as Error).message).toEndWith("body n: differs");
-    await safeFetch("https://h.test/p", { method: "POST", body: '{"n": 1}' }, new CassetteReplay(path).send);
   });
 
   test("<redacted> matches any present value but not a missing one", async () => {
@@ -270,7 +291,7 @@ describe("CassetteReplay mismatches", () => {
       method: "POST",
       url: "https://h.test/p?key=<redacted>&v=1",
       headers: { "x-api-key": CASSETTE_REDACTED },
-      json: { token: CASSETTE_REDACTED, n: 1n },
+      json: { token: CASSETTE_REDACTED, n: 1 },
     };
     const call = (url: string, headers: Record<string, string>, json: unknown) =>
       send(new CassetteReplay(oneInteraction(recorded)), url, { method: "POST", headers, json });

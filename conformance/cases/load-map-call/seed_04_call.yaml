@@ -1,0 +1,137 @@
+# From tests/seeds/04-call.yaml.
+# A `call` node through a `uses:` alias to a sibling flow file loads.
+kind: load
+flow: |
+  # 04 — CALL: typed function application (call another flow).
+  #
+  # Calls the `research_one` callable on one topic, then an AGENT adds a one-line
+  # take. Shows: a `call` node (kind: call) with flat `call:` + sink-binding call args, the
+  # callee's value re-exported as the call node's value, and ${<call>.output.field}
+  # dotted access into the callee's object output downstream.
+
+  id: call-take
+  name: call_take
+  description: Research one topic (via call) and add a one-line neutral observation.
+
+  input:
+    topic: !str
+
+  uses:
+    research-one: 03-research-one   # external sibling flow, resolved by filename on the search path
+
+  nodes:
+    research:
+      kind: call
+      call: research-one          # resolves via the uses: alias above (external sibling flow)
+      input:                      # sink: bind the callee's parameters
+        topic: ${input.topic}
+        # as_of is omitted -> the CALLEE flow's own declared date default fills it
+      # research's value IS the callee's return object {report, asof}; reference fields
+      # downstream as ${research.output.report} / ${research.output.asof}.
+
+    take:
+      kind: agent
+      input:
+        brief: ${research.output.report}     # dot into the call node's object value
+        asof:  ${research.output.asof}
+      output: str
+      prompt: |-
+        Given this research brief (as of ${asof}), add ONE neutral one-line
+        observation (no recommendations, no value target):
+        ${brief}
+
+  output:
+    report:      ${research.output.report}
+    observation: ${take.output}
+files:
+  03-research-one.yaml: |
+    # 03 — Single-topic research (a reusable child flow).
+    #
+    # A small CODE -> AGENT pipeline that researches ONE topic and returns {report, asof}.
+    # This is the atomic unit; 04 (single call) and 05 (map) compose it. Shows: a CODE data-fetch
+    # leaf (flat `code:`), ${input.X} + a typed parameter default (as_of), an
+    # object output, and a node binding from another node's object field.
+
+    id: research-one
+    name: research_one
+    description: Research a single topic into {report, asof} as of a date.
+
+    input:
+      topic: !str
+      as_of: !date "2026-01-01"   # typed defaults must already satisfy their declared type
+
+    nodes:
+      fetch:
+        kind: code
+        input:
+          topic: ${input.topic}
+          as_of:  ${input.as_of}
+        output:                    # an object: values + recent headlines
+          values: list(float)
+          news:   list(str)
+        code: ./fixtures/seeds.ts:fetch_facts   # deterministic data pull
+
+      synth:
+        kind: agent
+        input:
+          topic: ${input.topic}
+          asof:   ${input.as_of}
+          values: ${fetch.output.values}          # dot into fetch's object output
+          news:   ${fetch.output.news}
+        output: str
+        prompt: |-
+          Write a neutral research brief for ${topic} as of ${asof}.
+          Recent closes: ${values}. Headlines: ${news}.
+          Cite the headlines as [n]. No recommendations.
+
+    output:
+      report: ${synth.output}
+      asof:   ${input.as_of}
+# The child's CODE reference differs by language: `files` names the TS function,
+# this the Python one.
+python_files:
+  03-research-one.yaml: |
+    # 03 — Single-topic research (a reusable child flow).
+    #
+    # A small CODE -> AGENT pipeline that researches ONE topic and returns {report, asof}.
+    # This is the atomic unit; 04 (single call) and 05 (map) compose it. Shows: a CODE data-fetch
+    # leaf (flat `code:`), ${input.X} + a typed parameter default (as_of), an
+    # object output, and a node binding from another node's object field.
+
+    id: research-one
+    name: research_one
+    description: Research a single topic into {report, asof} as of a date.
+
+    input:
+      topic: !str
+      as_of: !date "2026-01-01"   # typed defaults must already satisfy their declared type
+
+    nodes:
+      fetch:
+        kind: code
+        input:
+          topic: ${input.topic}
+          as_of:  ${input.as_of}
+        output:                    # an object: values + recent headlines
+          values: list(float)
+          news:   list(str)
+        code: tests.seeds.fns:fetch_facts   # deterministic data pull
+
+      synth:
+        kind: agent
+        input:
+          topic: ${input.topic}
+          asof:   ${input.as_of}
+          values: ${fetch.output.values}          # dot into fetch's object output
+          news:   ${fetch.output.news}
+        output: str
+        prompt: |-
+          Write a neutral research brief for ${topic} as of ${asof}.
+          Recent closes: ${values}. Headlines: ${news}.
+          Cite the headlines as [n]. No recommendations.
+
+    output:
+      report: ${synth.output}
+      asof:   ${input.as_of}
+expect:
+  load: ok

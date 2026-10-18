@@ -1,0 +1,56 @@
+# From tests/seeds/errors/e22-required-missing.yaml.
+# A `:?` binding on an omitted Optional input fails its CODE node, at the binding.
+kind: run
+flow: |
+  # e22 — a required `:?` use-site on an omitted value. RUNTIME: run with as_of omitted.
+  id: err-required-missing
+  name: err_required_missing
+  input:
+    as_of: !Optional(date)
+  nodes:
+    use:
+      kind: code
+      input:
+        as_of: ${input.as_of:?"as_of is required"}   # null when omitted -> required error at run
+      output: str
+      code: ./fixtures/seeds.ts:echo_value
+  output: ${use.output}
+# The CODE reference differs by language: `flow` names the TS function, this the Python one.
+python_flow: |
+  # e22 — a required `:?` use-site on an omitted value. RUNTIME: run with as_of omitted.
+  id: err-required-missing
+  name: err_required_missing
+  input:
+    as_of: !Optional(date)
+  nodes:
+    use:
+      kind: code
+      input:
+        as_of: ${input.as_of:?"as_of is required"}   # null when omitted -> required error at run
+      output: str
+      code: tests.seeds.fns:echo_value
+  output: ${use.output}
+inputs: {}
+run: {run_id: r1, num_workers: 0}
+expect:
+  output:
+    status: failed
+    failure:
+      code: binding.evaluate
+      message: "as_of is required"
+      node: use
+      # The `as_of:` binding's value on line 10.
+      frames: [{label: flow.yaml, range: [10, 14, 10, 49]}]
+  trace:
+    - [run_started, null, {inputs: {}, learnable: false, num_workers: 0}]
+    - [node_started, __start__]
+    # An omitted Optional input with no default is absent here; a read of it gives null.
+    - [node_succeeded, __start__, {value: {}}]
+    - [node_started, use]
+    - - node_failed
+      - use
+      - failure:
+          code: binding.evaluate
+          message: "as_of is required"
+          node: use
+          frames: [{label: flow.yaml, range: [10, 14, 10, 49]}]

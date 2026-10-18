@@ -1,0 +1,24 @@
+# From tests/seeds/errors/e14-unknown-system-ambient.yaml.
+# An unknown `system.X` ambient fails at that one input value, not the whole `input:` block.
+kind: load
+flow: |
+  # e14 — an unknown ${system.X} ambient. COMPILE: only today/now/run_id are valid.
+  id: err-unknown-system-ambient
+  name: err_unknown_system_ambient
+  input:
+    topic: !str
+  nodes:
+    note:
+      kind: agent
+      input:
+        topic: ${input.topic}
+        rid: ${system.bogus}       # ERROR: system.bogus is not a valid ambient (only today/now/run_id)
+      output: str
+      prompt: "Rate ${topic} (${rid})."
+  output: ${note.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "flow has unresolved references:\n  node 'note' input 'rid' from: reference ${system.bogus} uses unknown system ambient 'bogus' (only today/now/run_id)"
+        frames: [{label: flow.yaml, range: [11, 12, 11, 27]}]

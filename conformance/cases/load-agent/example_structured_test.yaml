@@ -1,0 +1,63 @@
+# From examples/structured-test.yaml.
+# AGENTs with record, int, Literal and list outputs, bundled into a multi-field flow output, load.
+kind: load
+flow: |
+  # structured-test — exercise structured AGENT output across shapes on a local Ollama model.
+  # Four agents without tools, one per output shape; the flow output bundles all four so a single
+  # run shows whether structured generation + the write boundary accept each shape.
+  #   yian run examples/structured-test.yaml --input text="..."
+
+  id: structured-test
+  name: structured_test
+  description: Exercise structured AGENT output (record / int / list / enum) on Ollama.
+
+  input:
+    text: !str
+
+  nodes:
+    person:                                    # record (object) output
+      kind: agent
+      input:
+        text: ${input.text}
+      output:
+        name: str
+        age: int
+      prompt: |-
+        Extract a single person from the text as a name (string) and an age (integer).
+        If the age is not stated, make a reasonable guess.
+        Text: ${text}
+
+    wordcount:                                 # scalar int output
+      kind: agent
+      input:
+        text: ${input.text}
+      output: int
+      prompt: |-
+        Return ONLY the number of words in the text as an integer.
+        Text: ${text}
+
+    sentiment:                                 # enum (Literal) output
+      kind: agent
+      input:
+        text: ${input.text}
+      output: Literal(positive, neutral, negative)
+      prompt: |-
+        Classify the sentiment of the text as exactly one of: positive, neutral, negative.
+        Text: ${text}
+
+    keywords:                                  # list output
+      kind: agent
+      input:
+        text: ${input.text}
+      output: list(str)
+      prompt: |-
+        Extract up to 3 short keywords from the text as a list of strings.
+        Text: ${text}
+
+  output:
+    person: ${person.output}
+    wordcount: ${wordcount.output}
+    sentiment: ${sentiment.output}
+    keywords: ${keywords.output}
+expect:
+  load: ok

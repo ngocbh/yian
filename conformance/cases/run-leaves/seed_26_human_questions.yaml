@@ -1,0 +1,122 @@
+# From tests/seeds/26-human-questions.yaml.
+# A HUMAN_INPUT's static questions get an answer record keyed by header; CODE reads its label.
+# No `tool_calls`: docs/api.md's `ask_user` doesn't define `question` for a questions-only gate.
+kind: run
+flow: |
+  # 26 — HUMAN_INPUT questions: the three question surfaces.
+  #
+  # A `human_input` gate blocks its worker for a person and collects a STRUCTURED
+  # answer keyed by each question's `header` in the same live call. It carries questions in one
+  # of three forms:
+  #
+  #   static   — a literal `questions:` list written in the YAML (THIS seed).
+  #   upstream — a `code`/agent node produces the list, fed via
+  #              `input: {qs: ${src.output}}` + `questions: ${qs}`.
+  #   adaptive — an `adaptive_questions:` block `{prompt: <brief>, ...}` that
+  #              desugars at load into a synth compose-agent + the gate.
+  #
+  # This seed pins the static form: two questions (one single-select with options, one
+  # free-text), `${proj}` templated into a question to prove rendering. The gate's
+  # output defaults to `object` — a record keyed by header (e.g. {Framework: React,
+  # Notes: "..."}) — and the flow routes its terminal value on that answer.
+
+  id: human_questions
+  name: human_questions_static
+  description: Ask a person a static set of questions, then route on the keyed answer.
+
+  input:
+    proj: !str
+
+  nodes:
+    ask:
+      kind: human_input
+      input:
+        proj: ${input.proj}            # context the question text may reference (bare ${proj})
+      questions:
+        - question: "Which framework for ${proj}?"   # ${proj} renders against the bound input
+          header: Framework                          # the answer key — {Framework: <label>}
+          options:
+            - label: React
+              description: A component library.
+            - label: Vue
+              description: A progressive framework.
+        - question: "Any notes for the build?"       # no options -> a free-text question
+          header: Notes
+      # output omitted -> defaults to `object`: the answer record keyed by header.
+
+    pick:
+      kind: code
+      input:
+        ans: ${ask.output}             # the delivered {Framework, Notes} record
+      output: str
+      code: ./fixtures/seeds.ts:chosen_framework
+
+  output: ${pick.output}
+# The CODE reference differs by language: `flow` names the TS function, this the Python one.
+python_flow: |
+  # 26 — HUMAN_INPUT questions: the three question surfaces.
+  #
+  # A `human_input` gate blocks its worker for a person and collects a STRUCTURED
+  # answer keyed by each question's `header` in the same live call. It carries questions in one
+  # of three forms:
+  #
+  #   static   — a literal `questions:` list written in the YAML (THIS seed).
+  #   upstream — a `code`/agent node produces the list, fed via
+  #              `input: {qs: ${src.output}}` + `questions: ${qs}`.
+  #   adaptive — an `adaptive_questions:` block `{prompt: <brief>, ...}` that
+  #              desugars at load into a synth compose-agent + the gate.
+  #
+  # This seed pins the static form: two questions (one single-select with options, one
+  # free-text), `${proj}` templated into a question to prove rendering. The gate's
+  # output defaults to `object` — a record keyed by header (e.g. {Framework: React,
+  # Notes: "..."}) — and the flow routes its terminal value on that answer.
+
+  id: human_questions
+  name: human_questions_static
+  description: Ask a person a static set of questions, then route on the keyed answer.
+
+  input:
+    proj: !str
+
+  nodes:
+    ask:
+      kind: human_input
+      input:
+        proj: ${input.proj}            # context the question text may reference (bare ${proj})
+      questions:
+        - question: "Which framework for ${proj}?"   # ${proj} renders against the bound input
+          header: Framework                          # the answer key — {Framework: <label>}
+          options:
+            - label: React
+              description: A component library.
+            - label: Vue
+              description: A progressive framework.
+        - question: "Any notes for the build?"       # no options -> a free-text question
+          header: Notes
+      # output omitted -> defaults to `object`: the answer record keyed by header.
+
+    pick:
+      kind: code
+      input:
+        ans: ${ask.output}             # the delivered {Framework, Notes} record
+      output: str
+      code: tests.seeds.fns:chosen_framework
+
+  output: ${pick.output}
+inputs: {proj: Atlas}
+run: {run_id: r1, num_workers: 0}
+host:
+  human:
+    ask: [{Framework: React, Notes: none}]
+expect:
+  output: {status: succeeded, output: React}
+  trace:
+    - [run_started, null, {inputs: {proj: Atlas}, learnable: false, num_workers: 0}]
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {proj: Atlas}}]
+    - [node_started, ask]
+    - [node_succeeded, ask, {value: {Framework: React, Notes: none}}]
+    - [node_started, pick]
+    - [node_succeeded, pick, {value: React}]
+    - [node_started, __end__]
+    - [node_succeeded, __end__, {value: React}]

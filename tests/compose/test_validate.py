@@ -663,3 +663,49 @@ def test_input_named_like_field_no_collision():
     assert fr[("input", "env")].start_line == 9  # the input binding line
     assert fr[("field", "env")].start_line == 7  # the `env:` config value (retries: 2)
     assert fr[("input", "env")] != fr[("field", "env")]
+
+
+def _allowed_list(message: str) -> list[str]:
+    """Return the names in a message's `(allowed: a, b, ...)` list."""
+    return message.split("(allowed: ", 1)[1].split(")", 1)[0].split(", ")
+
+
+def test_unknown_top_level_key_lists_authored_names():
+    # The allowed list names the authored `input`/`output`, not the retired plural spellings.
+    text = """\
+id: f
+name: f
+bogus: x
+nodes:
+  n:
+    kind: code
+    output: int
+    code: tests.seeds.fns:const_one
+output: ${n.output}
+"""
+    with pytest.raises(LoadError) as exc:
+        load_flow(text)
+    allowed = _allowed_list(str(exc.value))
+    assert "input" in allowed and "output" in allowed
+    assert "inputs" not in allowed and "outputs" not in allowed
+
+
+def test_field_not_allowed_lists_authored_names():
+    text = """\
+id: f
+name: f
+nodes:
+  calc:
+    kind: code
+    prompt: hi
+    output: int
+    code: tests.seeds.fns:const_one
+output: ${calc.output}
+"""
+    with pytest.raises(LoadError) as exc:
+        load_flow(text)
+    message = str(exc.value)
+    assert "field 'prompt' is not allowed" in message
+    allowed = _allowed_list(message)
+    assert "input" in allowed and "output" in allowed
+    assert "inputs" not in allowed and "outputs" not in allowed

@@ -24,11 +24,11 @@ A case file is YAML 1.2 core schema: `true`/`false`, `null`/`~`, integers (decim
 keys or `yes`/`no` booleans. A tag (`!!str`, `!!timestamp`, `!x` or a bare `!`) is an error. A
 duplicate key or a mapping key that isn't text is an error. `1` is an int and `1.0` a float.
 
-Values in a case (everything except flow text, `files` and `stdin`) are read in yian's JSON codec
-form: `{$float: inf}` and `{$float: -inf}` are the floats infinity and minus infinity, and
-`{$record: X}` is the record `X`. A record that is exactly `{$float: inf}` or `{$float: -inf}`,
-or whose only key is `$record`, is written inside `$record`. A bare `.inf` or `.nan` in a value is
-an error.
+Values in a case (everything except flow text, `files`, `python_files` and `stdin`) are read in
+yian's JSON codec form: `{$float: inf}` and `{$float: -inf}` are the floats infinity and minus
+infinity, and `{$record: X}` is the record `X`. A record that is exactly `{$float: inf}` or
+`{$float: -inf}`, or whose only key is `$record`, is written inside `$record`. A bare `.inf` or
+`.nan` in a value is an error.
 
 The format is closed: a key this file doesn't define is an error. The format changes only by
 additions to this file.
@@ -45,6 +45,7 @@ flow: |                    # the flow, in TS form (TS CODE bodies)
   ...
 python_flow: |             # the flow for the Python runner, when it differs
 files: {}                  # more files in the case directory: relative path -> text
+python_files: {}           # the files for the Python runner, when they differ
 env: {}                    # environment variables: name -> text
 inputs: {name: Ada}        # run inputs
 run: {}                    # host arguments of the run
@@ -58,8 +59,8 @@ keys and results each kind requires (Kinds, below); `python_expect` needs `rules
 
 ### Which runner runs what
 
-- A runner runs `flow` and checks `expect`. The Python runner uses `python_flow` and
-  `python_expect` instead when they are present.
+- A runner runs `flow` and checks `expect`. The Python runner uses `python_flow`,
+  `python_files` and `python_expect` instead when they are present.
 - The Python runner skips a case with `python_skip`, and a case with `rules` but no
   `python_expect`.
 - `pending` is for the TS runner: it reports the case as an expected failure, and fails if the
@@ -70,8 +71,10 @@ keys and results each kind requires (Kinds, below); `python_expect` needs `rules
 
 Every case runs in a new temporary directory, the *case directory*:
 
-- `flow` (or `python_flow`) is written to `flow.yaml`, and each `files` entry to its relative
-  path; `fixtures/` is a copy of `conformance/fixtures/`.
+- `flow` (or `python_flow`) is written to `flow.yaml`, and each `files` (or `python_files`)
+  entry to its relative path; `fixtures/` is a copy of `conformance/fixtures/`. A TS CODE
+  reference resolves relative to the file that holds it, so `flow.yaml`, or a `files` entry at
+  the top of the case directory, names a shared helper `./fixtures/<file>.ts:<fn>`.
 - The flow is loaded from the text of `flow.yaml` with the source label `flow.yaml`, resolving
   `uses:` and `call:` paths in the case directory. Frame labels are what the loader gives:
   `flow.yaml` for the case's flow, and a `uses:` child's file name (`child.yaml` for
@@ -184,8 +187,9 @@ implementation doesn't define fails the case. `expect.raises` is the error for a
 
 Loads `flow` twice and `other` once. The two loads of `flow` must have the same fingerprint, and
 `expect.fingerprint` says whether `other`'s is the `same` or `different`. A case never states a
-hash. `python_flow` is not a key of a `fingerprint` case: both runners load `flow` and `other` as
-written, so a pair with CODE bodies is in TS form and carries `rules: [code]`.
+hash. `python_flow` and `python_files` are not keys of a `fingerprint` case: both runners load
+`flow` and `other` as written, so a pair with CODE bodies is in TS form and carries
+`rules: [code]`.
 
 ### `cli`
 
@@ -265,7 +269,9 @@ and a frame's `note` are left out when empty.
 
 **Messages.** In `expect.load` diagnostics and in `cli` `json`/`json_lines` documents, an expected
 mapping that leaves out `message` doesn't compare it. Cases use this for text the YAML parser
-writes (a syntax error) and for `cli` documents, whose message text isn't part of the contract.
+writes (a syntax error), for text yian doesn't write (a validation library's message, a CODE
+syntax error the runtime reports), and for `cli` documents, whose message text isn't part of
+the contract.
 
 **Failure**: a node or run failure in diagnostic form, as `diagnose(failure)` resolves it, plus
 the failing node: `{code, message, node, frames, notes}`, with `node` null for a run-level

@@ -336,6 +336,10 @@ def _desugar_compact(body: dict, root: SourceCursor) -> dict:
 
 
 _MODEL_TO_SOURCE_SECTION = {"inputs": "input", "outputs": "output"}
+# The authored spellings of the top-level keys, for error messages.
+_TOP_SURFACE_KEYS = frozenset(
+    _MODEL_TO_SOURCE_SECTION.get(name, name) for name in ComposeFile.model_fields
+)
 
 
 def _validation_error_range(
@@ -522,9 +526,10 @@ def parse_file(source: str | SourceDocument) -> ComposeFile:
     allowed_top = set(ComposeFile.model_fields) | {"input", "output"}
     for key in body:
         if key not in allowed_top:
+            # Name the authored spellings; the plural carrier names fail to load.
             raise diagnostics.error(
                 f"unknown top-level key {key!r} "
-                f"(allowed: {', '.join(sorted(set(ComposeFile.model_fields)))})",
+                f"(allowed: {', '.join(sorted(_TOP_SURFACE_KEYS))})",
                 range=root.key_range_of(key),
             )
 

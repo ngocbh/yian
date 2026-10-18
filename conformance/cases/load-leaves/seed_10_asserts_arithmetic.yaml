@@ -1,0 +1,68 @@
+# From tests/seeds/10-asserts-arithmetic.yaml.
+# Arithmetic and boolean logic in a `case` `when:`, node asserts and flow asserts load.
+kind: load
+flow: |
+  # 10 — Arithmetic + boolean logic in when: / asserts:.
+  #
+  # A position-sizing gate. Shows: simple arithmetic (`* 100`) and boolean logic
+  # (and / or / not / parens) inside a `case` `when:`, the `in` membership test, a
+  # top-level `asserts:` block mixing arithmetic ranges with enum membership,
+  # NODE-level `asserts:` on `score` (a per-node contract: bare `name` = a declared
+  # input (PRE), `output` = the node's own value (POST)), and dataclass-style
+  # defaults. Numbers only in arithmetic; no function calls. Conditions use the bare
+  # spelling — `a > 5`, no `${}` — which is the canonical form.
+
+  id: asserts-arithmetic
+  name: asserts_arithmetic
+  description: Position-sizing gate showcasing arithmetic + boolean logic in when:/asserts:.
+
+  input:
+    topic: !str
+    window: !int 30           # calendar days (dataclass-style default)
+    weight: !float 0.02           # fraction of capital in [0, 1]
+    style: !str relevance
+
+  nodes:
+    score:
+      kind: agent
+      input:
+        topic:   ${input.topic}
+        window: ${input.window}
+      output: float
+      prompt: "Rate ${topic}'s ${window}-day relevance in [-1, 1]. Output only the number."
+      asserts:                       # node-level (per-node contract): bare `name` = a declared
+        - "window >= 1"            #   input (PRE — checked before the node runs)
+        - "output >= -1 and output <= 1"  # `output` = this node's output (POST)
+
+    size:
+      kind: case
+      cases:
+        # arithmetic (weight * 100 = percent) + comparison + boolean `and`
+        - when: "score.output > 0 and input.weight * 100 <= 5"
+          then: take
+      else: skip
+
+    take:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output: str
+      prompt: "Write a neutral two-sentence position rationale for ${topic}. No advice."
+
+    skip:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output: str
+      prompt: "Write a neutral two-sentence note on why ${topic} is passed for now. No advice."
+
+  output:
+    decision: ${take.output | skip.output}
+
+  asserts:                       # any false fails the run
+    - "input.window >= 5 and input.window <= 252"   # arithmetic range + `and`
+    - "input.weight * 100 <= 10"                               # arithmetic
+    - "input.style in [\"relevance\", \"value\", \"quality\"]" # enum membership (`in`)
+    - "not (input.weight < 0)"                                  # `not` + parens
+expect:
+  load: ok

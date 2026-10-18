@@ -1,0 +1,29 @@
+# From examples/summarize.yaml.
+# One AGENT in the full `nodes:` form with explicit input and output wiring loads.
+kind: load
+flow: |
+  # summarize — one AGENT that condenses a block of text into a single sentence.
+  #
+  # Run it with:  yian run examples/summarize.yaml --input text="...long text..."
+
+  id: summarize
+  name: summarize
+  description: Summarize a block of text into one clear sentence.
+
+  input:
+    text: !str
+
+  nodes:
+    summary:
+      kind: agent
+      input:
+        text: ${input.text}
+      output: str
+      prompt: |-
+        Summarize the following text in one clear, neutral sentence:
+
+        ${text}
+
+  output: ${summary.output}
+expect:
+  load: ok

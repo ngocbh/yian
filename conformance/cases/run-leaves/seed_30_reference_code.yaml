@@ -1,0 +1,69 @@
+# From tests/seeds/30-reference-code.yaml.
+# A reference CODE node returns the same verdict line as seed 29's inline body.
+# The header (`module:function`, `tests.seeds.fns:verdict_line`) describes the Python form.
+kind: run
+flow: |
+  # 30 — reference CODE source. A `code:` node names a `module:function` token; the engine
+  # imports the module and calls `func(inputs)` IN-PROCESS — the alternative to the inline
+  # bare-body form (seed 29). This is the reference twin of seed 29: the referenced function
+  # `tests.seeds.fns:verdict_line` has the SAME body as seed 29's inline block, so the two
+  # seeds show one computation both ways (an inline body promotes to a `module:function` by
+  # copy-paste). Same one-dict `inputs` convention; the return is validated against `output:`.
+
+  id: reference-code
+  name: reference_code
+  description: Reference `code:` source — a `module:function` imported and called in-process.
+
+  input:
+    rating: !float
+    label: !str
+
+  nodes:
+    verdict:
+      kind: code
+      input:
+        rating: ${input.rating}
+        label:  ${input.label}
+      output: str
+      code: ./fixtures/seeds.ts:verdict_line   # file:function — imported and called in-process
+
+  output: ${verdict.output}
+# The CODE reference differs by language: `flow` names the TS function, this the Python one.
+python_flow: |
+  # 30 — reference CODE source. A `code:` node names a `module:function` token; the engine
+  # imports the module and calls `func(inputs)` IN-PROCESS — the alternative to the inline
+  # bare-body form (seed 29). This is the reference twin of seed 29: the referenced function
+  # `tests.seeds.fns:verdict_line` has the SAME body as seed 29's inline block, so the two
+  # seeds show one computation both ways (an inline body promotes to a `module:function` by
+  # copy-paste). Same one-dict `inputs` convention; the return is validated against `output:`.
+
+  id: reference-code
+  name: reference_code
+  description: Reference `code:` source — a `module:function` imported and called in-process.
+
+  input:
+    rating: !float
+    label: !str
+
+  nodes:
+    verdict:
+      kind: code
+      input:
+        rating: ${input.rating}
+        label:  ${input.label}
+      output: str
+      code: tests.seeds.fns:verdict_line   # module:function — imported and called in-process
+
+  output: ${verdict.output}
+inputs: {rating: 0.42, label: ACME}
+run: {run_id: r1, num_workers: 0}
+expect:
+  output: {status: succeeded, output: "ACME: positive (+0.42)"}
+  trace:
+    - [run_started, null, {inputs: {rating: 0.42, label: ACME}, learnable: false, num_workers: 0}]
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {rating: 0.42, label: ACME}}]
+    - [node_started, verdict]
+    - [node_succeeded, verdict, {value: "ACME: positive (+0.42)"}]
+    - [node_started, __end__]
+    - [node_succeeded, __end__, {value: "ACME: positive (+0.42)"}]

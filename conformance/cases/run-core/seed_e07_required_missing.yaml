@@ -1,0 +1,68 @@
+# From tests/seeds/errors/e07-required-missing.yaml.
+# A `:?` binding on an omitted Optional input fails its AGENT node before any model call.
+kind: run
+flow: |
+  # e07 — Required-at-use-site (`:?`) missing at runtime.
+  # EXPECT: RUNTIME RunFailed (not a compile error) — `as_of` is an Optional param, omitted
+  # at the boundary, but `report` insists on it via `${input.as_of:?…}`. The TYPE allows
+  # null; this USE SITE does not. The `:?` binding must fail loudly.
+  #
+  # Trigger: run this flow with `as_of` OMITTED (a runtime fixture needs its triggering
+  # inputs stated — unlike the compile fixtures, which fail regardless of inputs).
+  # Expected message: "as_of is required for the report".
+
+  id: err-required-missing
+  name: err_required_missing
+  description: (negative, runtime) :? on an omitted Optional param fails the run.
+
+  input:
+    topic: !str
+    as_of: !Optional(date)            # may be omitted -> null
+
+  nodes:
+    report:
+      kind: agent
+      input:
+        topic: ${input.topic}
+        as_of:  ${input.as_of:?"as_of is required for the report"}   # required AT THIS SITE
+      output: str
+      prompt: "Write a neutral one-line note on ${topic} as of ${as_of}. No advice."
+
+  output: ${report.output}
+# Run start resolves the AGENT's llm_config (provider and model, from `run.llm_config`) before
+# any node runs; no model is called. The key makes the recorded connection source
+# `environment`, which the trace pins.
+env: {OPENAI_API_KEY: "<key:1>"}
+inputs: {topic: X}
+run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
+expect:
+  output:
+    status: failed
+    failure:
+      code: binding.evaluate
+      message: "as_of is required for the report"
+      node: report
+      # The `as_of:` binding's value on line 23.
+      frames: [{label: flow.yaml, range: [23, 15, 23, 65]}]
+  trace:
+    - - run_started
+      - null
+      - inputs: {topic: X}
+        learnable: false
+        num_workers: 0
+        effective_llm_by_static_path:
+          report:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [node_started, __start__]
+    # An omitted Optional input with no default is absent here; a read of it gives null.
+    - [node_succeeded, __start__, {value: {topic: X}}]
+    - [node_started, report]
+    - - node_failed
+      - report
+      - failure:
+          code: binding.evaluate
+          message: "as_of is required for the report"
+          node: report
+          frames: [{label: flow.yaml, range: [23, 15, 23, 65]}]

@@ -1,0 +1,66 @@
+# From examples/debate.yaml.
+# A four-AGENT diamond (fan-out to two parallel nodes, then fan-in) inferred from bindings loads.
+kind: load
+flow: |
+  # debate — frame a question, argue both sides IN PARALLEL, then decide.
+  #
+  # The graph is a diamond, and the shape is the point:
+  #   frame ──┬─> for_case ──┐
+  #           └─> against_case ─┴─> verdict
+  # `for_case` and `against_case` have no edge between them, so they run in parallel;
+  # `verdict` reads both, so it waits for both (a fan-in). You can SEE that both sides
+  # are always argued before a verdict — an improvising agent might skip one; this
+  # structure can't. There is no `edges:` block: the graph is inferred from `${...}`.
+  #
+  # All four AGENT nodes use the default provider and model: the one saved by
+  # `yian auth <provider>`, or YIAN_DEFAULT_PROVIDER/YIAN_DEFAULT_MODEL.
+  #
+  # Run it with:
+  #   yian auth openai          # or any provider, e.g. yian auth anthropic --model ...
+  #   yian run examples/debate.yaml \
+  #     --input question="Should a small team adopt a monorepo?"
+
+  id: debate
+  name: debate
+  description: Frame a question, argue for and against in parallel, then recommend.
+
+  input:
+    question: !str
+
+  nodes:
+    frame:
+      kind: agent
+      input:
+        question: ${input.question}
+      output: str
+      prompt: "Restate the decision in '${question}' and list the 2-3 criteria that should drive it."
+
+    for_case:
+      kind: agent
+      input:
+        brief: ${frame.output}            # edge: frame -> for_case
+      output: str
+      prompt: "Make the strongest good-faith case FOR, judged against these criteria: ${brief}"
+
+    against_case:
+      kind: agent
+      input:
+        brief: ${frame.output}            # edge: frame -> against_case (parallel with for_case)
+      output: str
+      prompt: "Make the strongest good-faith case AGAINST, judged against these criteria: ${brief}"
+
+    verdict:
+      kind: agent
+      input:
+        for_case: ${for_case.output}      # fan-in: verdict waits for BOTH sides
+        against_case: ${against_case.output}
+      output: str
+      prompt: |-
+        Weigh both sides and give a clear recommendation in 2-3 sentences, with the
+        single most important reason.
+        For: ${for_case}
+        Against: ${against_case}
+
+  output: ${verdict.output}
+expect:
+  load: ok

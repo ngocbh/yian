@@ -1,0 +1,25 @@
+# From examples/hello.yaml.
+# A compact single-node AGENT flow (no `nodes:` map; the input auto-wired by name) loads.
+kind: load
+flow: |
+  # hello — the smallest agent flow, written in COMPACT form: the flow IS one node,
+  # so there is no `nodes:` map and no `output: ${greet.output}` wiring step. The flow
+  # `id:` names the node; `input:` is auto-wired into it by name; `output:` is the
+  # node's output type, re-exported as the flow output. (See examples/summarize.yaml
+  # for the full `nodes:` form.)
+  #
+  # Run it with:  yian run examples/hello.yaml --input name=Ada
+
+  id: hello
+  name: hello
+  description: Greet someone with a short, friendly one-liner.
+
+  input:
+    name: !str
+  output: str
+  kind: agent
+  prompt: |-
+    Write a short, warm one-sentence greeting addressed to ${name}.
+    Just the greeting, no preamble.
+expect:
+  load: ok

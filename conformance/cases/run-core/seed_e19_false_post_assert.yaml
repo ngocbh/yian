@@ -1,0 +1,61 @@
+# From tests/seeds/errors/e19-false-post-assert.yaml.
+# A false flow assert over a node's output fails END after the node succeeds, at the assert.
+kind: run
+flow: |
+  # e19 — a false POST-TERMINAL assert (X.output). RUNTIME: flips success to failed.
+  id: err-false-post-assert
+  name: err_false_post_assert
+  input:
+    topic: !str
+  nodes:
+    calc:
+      kind: code
+      input:
+        topic: ${input.topic}
+      output: int
+      code: ./fixtures/seeds.ts:const_one     # returns 1
+  asserts:
+    - "calc.output > 100"      # 1 > 100 is false
+  output: ${calc.output}
+# The CODE reference differs by language: `flow` names the TS function, this the Python one.
+python_flow: |
+  # e19 — a false POST-TERMINAL assert (X.output). RUNTIME: flips success to failed.
+  id: err-false-post-assert
+  name: err_false_post_assert
+  input:
+    topic: !str
+  nodes:
+    calc:
+      kind: code
+      input:
+        topic: ${input.topic}
+      output: int
+      code: tests.seeds.fns:const_one     # returns 1
+  asserts:
+    - "calc.output > 100"      # 1 > 100 is false
+  output: ${calc.output}
+inputs: {topic: X}
+run: {run_id: r1, num_workers: 0}
+expect:
+  output:
+    status: failed
+    failure:
+      code: assertion.failed
+      message: "node '__end__' post-assert failed: calc.output > 100"
+      node: __end__
+      # The assert `"calc.output > 100"` on line 14.
+      frames: [{label: flow.yaml, range: [14, 5, 14, 24]}]
+  trace:
+    - [run_started, null, {inputs: {topic: X}, learnable: false, num_workers: 0}]
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {topic: X}}]
+    - [node_started, calc]
+    - [node_succeeded, calc, {value: 1}]
+    - [node_started, __end__]
+    - - node_failed
+      - __end__
+      - failure:
+          code: assertion.failed
+          message: "node '__end__' post-assert failed: calc.output > 100"
+          node: __end__
+          frames: [{label: flow.yaml, range: [14, 5, 14, 24]}]

@@ -1,0 +1,23 @@
+# From tests/seeds/errors/e15-prompt-undeclared-input.yaml.
+# An AGENT prompt that reads an undeclared node input fails at the `prompt:` value.
+kind: load
+flow: |
+  # e15 — an AGENT prompt references an undeclared node input. COMPILE.
+  id: err-prompt-undeclared
+  name: err_prompt_undeclared
+  input:
+    topic: !str
+  nodes:
+    note:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output: str
+      prompt: "Rate ${rating}."    # ERROR: `rating` is not a declared input of this node
+  output: ${note.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "flow has unresolved references:\n  node 'note' prompt: ${rating} is not a declared input or variable"
+        frames: [{label: flow.yaml, range: [12, 13, 12, 30]}]

@@ -1,0 +1,54 @@
+# From tests/seeds/22-case-value.yaml.
+# `${gate.output}` of an exhaustive searched `case` (it has an `else:`) loads.
+kind: load
+flow: |
+  # 22 — A `case` as a VALUE: ${<case>.output} = the taken branch's value.
+  #
+  # Same shape as seed 02, but the flow output is `${gate.output}` — the value of
+  # whichever branch ran. It is SUGAR: at load it desugars to the branch coalesce
+  # `${positive.output | cautious.output}` (seed 02's hand-written join). Only the taken
+  # branch produces a value (the other is skip-flooded → null), so the coalesce yields it.
+  # Shows: the value-case `${<case>.output}` shorthand for "the taken branch's value".
+  # Inline `then: call(...)` branches use the same case-route hard-gate veto and are
+  # covered separately by the case-call tests.
+
+  id: case-value
+  name: case_value
+  description: Route a topic to a positive or cautious take; return the taken branch's value.
+
+  input:
+    topic: !str
+
+  nodes:
+    score:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output: float
+      prompt: "Rate ${topic}'s near-term relevance as a single number in [-1, 1]. Output only the number."
+
+    gate:
+      kind: case
+      cases:
+        - when: "score.output >= 0.5"
+          then: positive
+      else: cautious
+
+    positive:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output: str
+      prompt: "Write a neutral pro case for ${topic} in 3 sentences. No advice."
+
+    cautious:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output: str
+      prompt: "Write a neutral cautionary note for ${topic} in 3 sentences. No advice."
+
+  # ${gate.output} = the taken branch's value — desugars to ${positive.output | cautious.output}.
+  output: ${gate.output}
+expect:
+  load: ok

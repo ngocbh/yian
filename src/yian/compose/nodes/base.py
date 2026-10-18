@@ -553,9 +553,14 @@ class NodeDescriptor:
         for key in body:
             if key not in allowed_keys:
                 hint = cls.when_hint if key == "when" else ""
+                # Name the authored spellings; the plural carrier names fail to load.
+                surface = {
+                    {"inputs": "input", "outputs": "output"}.get(name, name)
+                    for name in allowed_keys
+                }
                 raise diagnostics.error(
                     f"node {node_id!r} (kind={cls.kind}): field {key!r} is not allowed "
-                    f"(allowed: {', '.join(sorted(allowed_keys))}){hint}",
+                    f"(allowed: {', '.join(sorted(surface))}){hint}",
                     range=cursor.range_of(key),
                 )
         for key in cls.required:

@@ -1,0 +1,25 @@
+# From tests/seeds/errors/e16-bad-typedef-name.yaml.
+# A typedef named like a typing constructor fails at the typedef's key.
+kind: load
+flow: |
+  # e16 — a typedef name shadows a typing constructor. COMPILE (read_typedefs).
+  id: err-bad-typedef-name
+  name: err_bad_typedef_name
+  typedefs:
+    Optional: str          # ERROR: shadows the `Optional` typing constructor
+  input:
+    topic: !str
+  nodes:
+    note:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output: str
+      prompt: "Rate ${topic}."
+  output: ${note.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "bad typedefs: typedef name 'Optional' shadows a builtin scalar or typing constructor"
+        frames: [{label: flow.yaml, range: [5, 3, 5, 11]}]

@@ -1,0 +1,31 @@
+# From tests/seeds/errors/e03-unknown-field.yaml.
+# A flow output that reads a field the node's output record lacks fails at the `output:` value.
+kind: load
+flow: |
+  # e03 — Unknown record field.
+  # EXPECT: compile error — `${score.output.confidence}` reads a field not on score's declared
+  # output type {rating, rationale}. Record-field validation rejects the dotted access.
+
+  id: err-unknown-field
+  name: err_unknown_field
+
+  input:
+    topic: !str
+
+  nodes:
+    score:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output:                    # an object type with exactly two fields
+        rating: float
+        rationale: str
+      prompt: "Score ${topic} as {rating, rationale}."
+
+  output: ${score.output.confidence}   # <-- no `confidence` field on score's output
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "flow has unresolved references:\n  flow output from: reference ${score.output.confidence} reads unknown field 'confidence' on record"
+        frames: [{label: flow.yaml, range: [21, 9, 21, 35]}]

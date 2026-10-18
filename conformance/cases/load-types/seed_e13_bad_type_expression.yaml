@@ -1,0 +1,38 @@
+# From tests/seeds/errors/e13-bad-type-expression.yaml.
+# A node `output:` type that doesn't parse fails at its value.
+kind: load
+flow: |
+  # e13 — a malformed type expression in `output:`. COMPILE: "bad type expression 'list('".
+  id: err-bad-type-expr
+  name: err_bad_type_expr
+  input:
+    topic: !str
+  nodes:
+    calc:
+      kind: code
+      input:
+        topic: ${input.topic}
+      output: "list("         # ERROR: not a parseable type
+      code: ./fixtures/seeds.ts:echo_value
+  output: ${calc.output}
+# The CODE reference differs by language: `flow` names the TS function, this the Python one.
+python_flow: |
+  # e13 — a malformed type expression in `output:`. COMPILE: "bad type expression 'list('".
+  id: err-bad-type-expr
+  name: err_bad_type_expr
+  input:
+    topic: !str
+  nodes:
+    calc:
+      kind: code
+      input:
+        topic: ${input.topic}
+      output: "list("         # ERROR: not a parseable type
+      code: tests.seeds.fns:echo_value
+  output: ${calc.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "bad type expression 'list(': malformed type expression 'list(': unbalanced parentheses — if this type sits inside a `{...}` mapping, its comma split it; quote it or use block style"
+        frames: [{label: flow.yaml, range: [11, 13, 11, 20]}]

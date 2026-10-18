@@ -1,0 +1,52 @@
+# From tests/seeds/errors/e31-inline-no-return.yaml.
+# An inline CODE body with no `return` fails at load in Python and loads in TS.
+# The header (the has-`return` load gate) describes the Python form.
+kind: load
+# A TS body with no `return` is a run-time matter, so the TS load is ok; Python rejects it.
+rules: [code]
+flow: |
+  # e31 — an inline CODE body with no `return`. COMPILE: the has-`return` load gate rejects
+  # it with a located LoadError before any node runs — a value-producing node that never
+  # returns would silently yield None. Anchored at the `code:` field (a missing return has no
+  # single interior line).
+  id: err-inline-no-return
+  name: err_inline_no_return
+  input:
+    topic: !str
+  nodes:
+    silent:
+      kind: code
+      input:
+        topic: ${input.topic}
+      output: str
+      code: |
+        const summary = inputs.topic.toUpperCase()
+  output: ${silent.output}
+# The CODE body differs by language: `flow` holds the TS body, this the Python one.
+python_flow: |
+  # e31 — an inline CODE body with no `return`. COMPILE: the has-`return` load gate rejects
+  # it with a located LoadError before any node runs — a value-producing node that never
+  # returns would silently yield None. Anchored at the `code:` field (a missing return has no
+  # single interior line).
+  id: err-inline-no-return
+  name: err_inline_no_return
+  input:
+    topic: !str
+  nodes:
+    silent:
+      kind: code
+      input:
+        topic: ${input.topic}
+      output: str
+      code: |
+        summary = inputs["topic"].upper()
+  output: ${silent.output}
+expect:
+  load: ok
+python_expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "node 'silent': inline `code:` has no `return` (the body must return a value)"
+        # The whole `code:` value, from `|` on line 15 to the `output:` key that ends it.
+        frames: [{label: flow.yaml, range: [15, 11, 17, 1]}]

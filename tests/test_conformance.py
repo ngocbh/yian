@@ -111,7 +111,7 @@ _CaseLoader.add_constructor("tag:yaml.org,2002:int", _CaseLoader.construct_int)
 
 # The closed format, as conformance/README.md defines it.
 _COMMON = {"kind", "rules", "pending", "python_skip", "expect", "python_expect"}
-_FLOW = {"flow", "python_flow", "files", "env"}
+_FLOW = {"flow", "python_flow", "files", "python_files", "env"}
 _RUN = _FLOW | {"inputs", "run", "host"}
 _KIND_KEYS = {
     "load": _FLOW,
@@ -121,8 +121,8 @@ _KIND_KEYS = {
     "expr": {"expr", "template", "values", "item", "mode", "typedefs", "env"},
     "value": {"type", "typedefs", "value", "env"},
     "defaults": {"env"},
-    # Both runners load `flow` and `other` as written, so there is no `python_flow`.
-    "fingerprint": _FLOW - {"python_flow"} | {"other"},
+    # Both runners load `flow` and `other` as written: no `python_flow` or `python_files`.
+    "fingerprint": _FLOW - {"python_flow", "python_files"} | {"other"},
     "cli": _FLOW | {"args", "stdin"},
 }
 _REQUIRED = {
@@ -162,7 +162,7 @@ _RULES = {
 }
 _RESERVED = [*(("host", key) for key in _RESERVED_HOST_KEYS), ("expect", "memory")]
 # Keys holding text that is not a case value: no codec form, no number checks.
-_TEXT_KEYS = {"flow", "python_flow", "other", "files", "stdin"}
+_TEXT_KEYS = {"flow", "python_flow", "other", "files", "python_files", "stdin"}
 _SECRET_KEYS = {"run", "resume", "backward", "env", "host", "stdin"}
 _SECRET = re.compile(r"<key:([0-9]+)>")
 _FILLED = re.compile(r"sk-conformance-[0-9]+")
@@ -277,10 +277,10 @@ def _check(case: dict) -> dict:
     unknown = [rule for rule in case.get("rules", []) if rule not in _RULES]
     if unknown:
         raise ValueError(f"unknown rule ids: {', '.join(unknown)}")
-    for key in ("env", "files"):
+    for key in ("env", "files", "python_files"):
         if any(not isinstance(text, str) for text in _mapping(key, case.get(key, {})).values()):
             raise ValueError(f"`{key}` values must be text")
-    for key in _TEXT_KEYS - {"files"}:
+    for key in _TEXT_KEYS - {"files", "python_files"}:
         if not isinstance(case.get(key, ""), str):
             raise ValueError(f"`{key}` must be text")
     for key, allowed in (("run", _RUN_KEYS), ("resume", _RESUME_KEYS)):
@@ -353,11 +353,11 @@ def _fill_secrets(value: object) -> object:
 def _prepare(case: dict) -> dict:
     """Return the case as the Python runner runs it.
 
-    Values are decoded, `python_flow` and `python_expect` replace `flow` and `expect`, and
-    secrets are filled in.
+    Values are decoded, `python_flow`, `python_files` and `python_expect` replace `flow`,
+    `files` and `expect`, and secrets are filled in.
     """
     case = {key: value if key in _TEXT_KEYS else _decode(value) for key, value in case.items()}
-    for key in ("flow", "expect"):
+    for key in ("flow", "files", "expect"):
         if f"python_{key}" in case:
             case[key] = case.pop(f"python_{key}")
     return {key: _fill_secrets(value) if key in _SECRET_KEYS else value

@@ -1,0 +1,107 @@
+# From tests/seeds/24-uses-external.yaml.
+# A `uses:` alias calls a sibling flow file: the CALL grows the child's nodes under `say/`.
+kind: run
+flow: |
+  # 24 — USES: call an EXTERNAL flow (Python-import style).
+  #
+  # `uses:` declares an external callable bound to a local alias; a node then `call:`s the
+  # alias like any in-file callable. The alias's ref (`lib_verdict`) is resolved on the
+  # SEARCH PATH — by default the dir of this file (so a sibling `lib_verdict.yaml` is found).
+  # A `@version` is an optional GUARD: `lib_verdict@v1` still resolves `lib_verdict.yaml`,
+  # then asserts that file's declared `version:` field equals `v1`. A `hub:` scheme is
+  # reserved for the future marketplace. CODE-only end to end -> runs locally, no model.
+  #
+  # Run it with the file resolver pointed at this dir:
+  #   load_flow(text, search_paths=[<seeds dir>]); run_flow(loaded, {...})
+
+  id: uses-external
+  name: uses_external
+  description: "Call an external (sibling-file) flow via uses: — the F demo."
+
+  input:
+    rating: !float
+    rationale: !str
+
+  uses:
+    verdict: lib_verdict@v1       # external flow on the search path; @v1 = version guard
+
+  nodes:
+    say:
+      kind: call
+      call: verdict               # resolves: defs-first -> uses alias -> host
+      input:
+        rating: ${input.rating}
+        rationale: ${input.rationale}
+
+  output:
+    line: ${say.output}          # the callee's value: lib_verdict returns its verdict string
+files:
+  lib_verdict.yaml: |
+    # lib_verdict — a small reusable CODE flow, called as an EXTERNAL flow by seed 24.
+    #
+    # Lives next to 24-uses-external.yaml so the default file resolver finds it on the
+    # search path (the importing file's own dir). CODE-only -> runs locally, no model.
+
+    id: lib_verdict
+    name: lib_verdict
+    description: Turn a (rating, rationale) pair into a one-line verdict string.
+    version: v1
+
+    input:
+      rating: !float
+      rationale: !str
+
+    nodes:
+      v:
+        kind: code
+        code: ./fixtures/seeds.ts:one_line_summary   # {rating, rationale} -> str
+        input:
+          rating: ${input.rating}
+          rationale: ${input.rationale}
+
+    output: ${v.output}                    # the verdict string itself, not a record
+# The child's CODE reference differs by language: `files` names the TS function,
+# this the Python one.
+python_files:
+  lib_verdict.yaml: |
+    # lib_verdict — a small reusable CODE flow, called as an EXTERNAL flow by seed 24.
+    #
+    # Lives next to 24-uses-external.yaml so the default file resolver finds it on the
+    # search path (the importing file's own dir). CODE-only -> runs locally, no model.
+
+    id: lib_verdict
+    name: lib_verdict
+    description: Turn a (rating, rationale) pair into a one-line verdict string.
+    version: v1
+
+    input:
+      rating: !float
+      rationale: !str
+
+    nodes:
+      v:
+        kind: code
+        code: tests.seeds.fns:one_line_summary   # {rating, rationale} -> str
+        input:
+          rating: ${input.rating}
+          rationale: ${input.rationale}
+
+    output: ${v.output}                    # the verdict string itself, not a record
+inputs: {rating: 0.42, rationale: steady growth}
+run: {run_id: r1, num_workers: 0}
+expect:
+  output: {status: succeeded, output: {line: "positive (+0.42): steady growth"}}
+  trace:
+    - [run_started, null, {inputs: {rating: 0.42, rationale: steady growth}, learnable: false, num_workers: 0}]
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {rating: 0.42, rationale: steady growth}}]
+    - [node_started, say]
+    - [node_expanded, say, {seed: {rating: 0.42, rationale: steady growth}, prune_ids: []}]
+    - [node_started, say/__start__]
+    - [node_succeeded, say/__start__, {value: {rating: 0.42, rationale: steady growth}}]
+    - [node_started, say/v]
+    - [node_succeeded, say/v, {value: "positive (+0.42): steady growth"}]
+    - [node_started, say/__end__]
+    - [node_succeeded, say/__end__, {value: "positive (+0.42): steady growth", commit_target: say}]
+    - [node_started, __end__]
+    - [node_succeeded, __end__, {value: {line: "positive (+0.42): steady growth"}}]

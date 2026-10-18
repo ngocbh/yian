@@ -1,0 +1,167 @@
+# From tests/seeds/errors/e26-three-level-raise.yaml.
+# A CODE throw two CALLs deep fails `outer/via/boom`: frames both CALLs, then the `code:`.
+# The header's `outer/mid/boom` is stale: the CALL node `via` namespaces the leaf, `outer/via/boom`.
+kind: run
+# A thrown error's text and the reference's length differ by language.
+rules: [code]
+flow: |
+  # e26 — a CODE callable that raises THREE levels deep (call -> def -> def).
+  #
+  # RUNTIME: the leaf `boom` node fails with runtime id `outer/mid/boom`. Its ordered
+  # origin trace resolves to THREE frames: `outer:`, the `via:` CALL site inside
+  # `defs:middle`, and the `boom` `code:` scalar inside `defs:deep`. CODE-only.
+  # Frame order comes from the trace itself, without parsing the runtime id or
+  # descending through baked children.
+  id: err-three-level-raise
+  name: err_three_level_raise
+  input:
+    topic: !str
+
+  defs:
+    deep:
+      input:
+        topic: !str
+      nodes:
+        boom:
+          kind: code
+          code: ./fixtures/seeds.ts:fail_always
+          input:
+            topic: ${input.topic}
+          output: str
+      output: ${boom.output}
+    middle:
+      input:
+        topic: !str
+      nodes:
+        via:
+          kind: call
+          call: deep
+          input:
+            topic: ${input.topic}
+      output: ${via.output}
+
+  nodes:
+    outer:
+      kind: call
+      call: middle
+      input:
+        topic: ${input.topic}
+
+  output: ${outer.output}
+# The CODE reference differs by language: `flow` names the TS function, this the Python one.
+python_flow: |
+  # e26 — a CODE callable that raises THREE levels deep (call -> def -> def).
+  #
+  # RUNTIME: the leaf `boom` node fails with runtime id `outer/mid/boom`. Its ordered
+  # origin trace resolves to THREE frames: `outer:`, the `via:` CALL site inside
+  # `defs:middle`, and the `boom` `code:` scalar inside `defs:deep`. CODE-only.
+  # Frame order comes from the trace itself, without parsing the runtime id or
+  # descending through baked children.
+  id: err-three-level-raise
+  name: err_three_level_raise
+  input:
+    topic: !str
+
+  defs:
+    deep:
+      input:
+        topic: !str
+      nodes:
+        boom:
+          kind: code
+          code: tests.seeds.fns:fail_always
+          input:
+            topic: ${input.topic}
+          output: str
+      output: ${boom.output}
+    middle:
+      input:
+        topic: !str
+      nodes:
+        via:
+          kind: call
+          call: deep
+          input:
+            topic: ${input.topic}
+      output: ${via.output}
+
+  nodes:
+    outer:
+      kind: call
+      call: middle
+      input:
+        topic: ${input.topic}
+
+  output: ${outer.output}
+inputs: {topic: X}
+run: {run_id: r1, num_workers: 0}
+expect:
+  output:
+    status: failed
+    failure:
+      code: node.execute
+      message: "Error: intentional CODE failure"
+      node: outer/via/boom
+      # The CALL node `outer` on line 37, the CALL node `via` on line 29, then the `code:` value
+      # on line 20 (the throw is outside the flow).
+      frames:
+        - {label: flow.yaml, range: [37, 3, 37, 8]}
+        - {label: flow.yaml, range: [29, 7, 29, 10]}
+        - {label: flow.yaml, range: [20, 15, 20, 46]}
+  trace:
+    - [run_started, null, {inputs: {topic: X}, learnable: false, num_workers: 0}]
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {topic: X}}]
+    - [node_started, outer]
+    - [node_expanded, outer, {seed: {topic: X}, prune_ids: []}]
+    - [node_started, outer/__start__]
+    - [node_succeeded, outer/__start__, {value: {topic: X}}]
+    - [node_started, outer/via]
+    - [node_expanded, outer/via, {seed: {topic: X}, prune_ids: []}]
+    - [node_started, outer/via/__start__]
+    - [node_succeeded, outer/via/__start__, {value: {topic: X}}]
+    - [node_started, outer/via/boom]
+    - - node_failed
+      - outer/via/boom
+      - failure:
+          code: node.execute
+          message: "Error: intentional CODE failure"
+          node: outer/via/boom
+          frames:
+            - {label: flow.yaml, range: [37, 3, 37, 8]}
+            - {label: flow.yaml, range: [29, 7, 29, 10]}
+            - {label: flow.yaml, range: [20, 15, 20, 46]}
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: node.execute
+      message: "intentional CODE failure"
+      node: outer/via/boom
+      frames:
+        - {label: flow.yaml, range: [37, 3, 37, 8]}
+        - {label: flow.yaml, range: [29, 7, 29, 10]}
+        - {label: flow.yaml, range: [20, 15, 20, 42]}
+  trace:
+    - [run_started, null, {inputs: {topic: X}, learnable: false, num_workers: 0}]
+    - [node_started, __start__]
+    - [node_succeeded, __start__, {value: {topic: X}}]
+    - [node_started, outer]
+    - [node_expanded, outer, {seed: {topic: X}, prune_ids: []}]
+    - [node_started, outer/__start__]
+    - [node_succeeded, outer/__start__, {value: {topic: X}}]
+    - [node_started, outer/via]
+    - [node_expanded, outer/via, {seed: {topic: X}, prune_ids: []}]
+    - [node_started, outer/via/__start__]
+    - [node_succeeded, outer/via/__start__, {value: {topic: X}}]
+    - [node_started, outer/via/boom]
+    - - node_failed
+      - outer/via/boom
+      - failure:
+          code: node.execute
+          message: "intentional CODE failure"
+          node: outer/via/boom
+          frames:
+            - {label: flow.yaml, range: [37, 3, 37, 8]}
+            - {label: flow.yaml, range: [29, 7, 29, 10]}
+            - {label: flow.yaml, range: [20, 15, 20, 42]}

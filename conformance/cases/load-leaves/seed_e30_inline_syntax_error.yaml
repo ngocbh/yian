@@ -1,0 +1,29 @@
+# From tests/seeds/errors/e30-inline-syntax-error.yaml.
+# An inline CODE body that doesn't parse fails at load, at the body line.
+# `return (` is the same text and the same syntax error in Python and TS, so this CODE case is
+# shared and carries no `code` rule.
+kind: load
+flow: |
+  # e30 — a malformed inline CODE body. COMPILE: the load-time compile() syntax gate raises
+  # a located LoadError before any node runs (a syntax slip surfaces at LOAD, not mid-run).
+  # The shared wrapped-line origin selector puts the frame on the exact literal line.
+  id: err-inline-syntax
+  name: err_inline_syntax
+  input:
+    topic: !str
+  nodes:
+    broken:
+      kind: code
+      input:
+        topic: ${input.topic}
+      output: str
+      code: |
+        return (
+  output: ${broken.output}
+expect:
+  load:
+    diagnostics:
+      # No `message`: it is the language runtime's syntax-error text, which yian doesn't write.
+      - code: compose.load
+        # The body line `return (` on line 15.
+        frames: [{label: flow.yaml, range: [15, 7, 15, 15]}]

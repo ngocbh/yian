@@ -1,0 +1,99 @@
+# From tests/seeds/errors/e08-input-type-mismatch.yaml.
+# A run input that doesn't fit its declared type fails START, at the input's type.
+# The header's `build_segment_with_type` names a Python function.
+kind: run
+# The message quotes the input's value: JSON text in TS, a repr in Python.
+rules: [messages]
+flow: |
+  # e08 — Flow input fails type enforcement at the boundary.
+  # EXPECT: RUNTIME RunFailed at the input boundary — `window` is declared `int`, but the
+  # run passes a non-numeric string that can't coerce. Runtime type enforcement uses the
+  # same `build_segment_with_type` check applied at the flow-input boundary.
+  # No CODE node needed — the value comes straight from the run inputs.
+  #
+  # Trigger: run with  window: "soon"  (a runtime fixture states its triggering inputs).
+  # Expected message: input `window` — 'soon' does not match declared type int.
+  #
+  # The write-boundary counterpart is a CODE node that returns a value outside its declared
+  # output type. That behavior is covered separately by `e21-code-wrong-type.yaml` in the
+  # runtime error gallery.
+
+  id: err-input-type-mismatch
+  name: err_input_type_mismatch
+  description: (negative, runtime) a flow input value can't coerce to its declared type.
+
+  input:
+    topic: !str
+    window: !int                    # required integer
+
+  nodes:
+    note:
+      kind: agent
+      input:
+        topic:   ${input.topic}
+        window: ${input.window}
+      output: str
+      prompt: "Write a one-line note on ${topic} over ${window} days. No advice."
+
+  output: ${note.output}
+# Run start resolves the AGENT's llm_config (provider and model, from `run.llm_config`) before
+# any node runs; no model is called. The key makes the recorded connection source
+# `environment`, which the trace pins.
+env: {OPENAI_API_KEY: "<key:1>"}
+inputs: {topic: X, window: soon}
+run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.input
+      message: "input 'window': \"soon\" does not match declared type int"
+      node: __start__
+      # The type `!int` of `window` on line 20.
+      frames: [{label: flow.yaml, range: [20, 11, 20, 15]}]
+  trace:
+    - - run_started
+      - null
+      - inputs: {topic: X, window: soon}
+        learnable: false
+        num_workers: 0
+        effective_llm_by_static_path:
+          note:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [node_started, __start__]
+    - - node_failed
+      - __start__
+      - failure:
+          code: contract.input
+          message: "input 'window': \"soon\" does not match declared type int"
+          node: __start__
+          frames: [{label: flow.yaml, range: [20, 11, 20, 15]}]
+python_expect:
+  output:
+    status: failed
+    failure:
+      code: contract.input
+      message: "input 'window': 'soon' does not match declared type int"
+      node: __start__
+      frames: [{label: flow.yaml, range: [20, 11, 20, 15]}]
+  trace:
+    - - run_started
+      - null
+      - inputs: {topic: X, window: soon}
+        learnable: false
+        num_workers: 0
+        effective_llm_by_static_path:
+          note:
+            provider: openai
+            model: gpt-5.5
+            _connection: {method: api_key, source: environment, endpoint: "https://api.openai.com/v1"}
+    - [node_started, __start__]
+    - - node_failed
+      - __start__
+      - failure:
+          code: contract.input
+          message: "input 'window': 'soon' does not match declared type int"
+          node: __start__
+          frames: [{label: flow.yaml, range: [20, 11, 20, 15]}]

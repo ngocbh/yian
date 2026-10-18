@@ -1,0 +1,276 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "yian.events.v1",
+  "description": "One yian observer event as {name, data}: name is the event's class name and data its JSON form. Keys are snake_case. Every key a data form lists is always present (null where it allows null). This schema describes this version exactly; later versions only add event names, keys and enum values, which a consumer ignores when it doesn't know them: a consumer checking against an older copy skips an event whose name it doesn't know, and treats an unknown key or enum value as unknown, not invalid; an unknown failure code is still a failure. Values the flow produced appear in yian's JSON codec form (see $defs/value). In-loop events (ModelCallStarted, ModelCallFinished, ToolCallStarted, ToolCallFinished) and stream chunks are transient: they are never recorded or replayed. $defs/StreamChunk is also the data of a stream chunk forwarded on its own.",
+  "type": "object",
+  "required": ["name", "data"],
+  "properties": {
+    "name": {"type": "string", "description": "The event's class name."},
+    "data": {"type": "object", "description": "The event's data form, $defs/<name>."}
+  },
+  "oneOf": [
+    {"properties": {"name": {"const": "NodeStarted"}, "data": {"$ref": "#/$defs/NodeStarted"}}},
+    {"properties": {"name": {"const": "StreamChunk"}, "data": {"$ref": "#/$defs/StreamChunk"}}},
+    {"properties": {"name": {"const": "NodeSucceeded"}, "data": {"$ref": "#/$defs/NodeSucceeded"}}},
+    {"properties": {"name": {"const": "NodeRouted"}, "data": {"$ref": "#/$defs/NodeRouted"}}},
+    {"properties": {"name": {"const": "NodeSkipped"}, "data": {"$ref": "#/$defs/NodeSkipped"}}},
+    {"properties": {"name": {"const": "NodeFailed"}, "data": {"$ref": "#/$defs/NodeFailed"}}},
+    {"properties": {"name": {"const": "NodeExpanded"}, "data": {"$ref": "#/$defs/NodeExpanded"}}},
+    {"properties": {"name": {"const": "NodeAttemptResumed"}, "data": {"$ref": "#/$defs/NodeAttemptResumed"}}},
+    {"properties": {"name": {"const": "ModelCallStarted"}, "data": {"$ref": "#/$defs/ModelCallStarted"}}},
+    {"properties": {"name": {"const": "ModelCallFinished"}, "data": {"$ref": "#/$defs/ModelCallFinished"}}},
+    {"properties": {"name": {"const": "ToolCallStarted"}, "data": {"$ref": "#/$defs/ToolCallStarted"}}},
+    {"properties": {"name": {"const": "ToolCallFinished"}, "data": {"$ref": "#/$defs/ToolCallFinished"}}},
+    {"properties": {"name": {"const": "RunStarted"}, "data": {"$ref": "#/$defs/RunStarted"}}},
+    {"properties": {"name": {"const": "RunResumed"}, "data": {"$ref": "#/$defs/RunResumed"}}},
+    {"properties": {"name": {"const": "RunSucceeded"}, "data": {"$ref": "#/$defs/RunSucceeded"}}},
+    {"properties": {"name": {"const": "RunFailed"}, "data": {"$ref": "#/$defs/RunFailed"}}}
+  ],
+  "$defs": {
+    "value": {
+      "description": "A value the flow produced, in yian's JSON codec form: ints and floats as JSON numbers, and a value handed to a host doesn't keep the int/float kind, so 2 may be a float; infinity as {\"$float\": \"inf\"} and minus infinity as {\"$float\": \"-inf\"}; a record with that shape, or whose only key is $record, wrapped as {\"$record\": <record>}; a file as {uri, mime, name}."
+    },
+    "failure": {
+      "description": "A failure: its stable code, message, failing node and authored origins.",
+      "type": "object",
+      "required": ["code", "message", "node_id", "trace", "cause_type", "traceback"],
+      "properties": {
+        "code": {
+          "description": "The failure's stable category, documented in docs/api.md \"Failure codes\".",
+          "type": "string",
+          "enum": [
+            "binding.evaluate",
+            "binding.type",
+            "contract.input",
+            "assertion.failed",
+            "node.execute",
+            "contract.node_result",
+            "contract.output",
+            "contract.route",
+            "contract.growth",
+            "graph.terminal_unreachable",
+            "loop.max_exceeded",
+            "agent.max_tool_iterations",
+            "provider.auth",
+            "agent.output_invalid",
+            "provider.rate_limit",
+            "provider.quota",
+            "provider.unavailable",
+            "provider.context_length",
+            "provider.refused",
+            "condition.evaluate"
+          ]
+        },
+        "message": {"type": "string", "description": "Human-readable detail; it may be empty."},
+        "node_id": {"type": ["string", "null"], "description": "The node that failed, or null when no single executing node did."},
+        "trace": {
+          "description": "The authored origins of the failure, outermost first; the last is the most precise.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["key"],
+            "properties": {
+              "key": {"type": "string"}
+            }
+          }
+        },
+        "cause_type": {"type": ["string", "null"], "description": "The thrown error's type name, for debugging only."},
+        "traceback": {"type": ["string", "null"], "description": "The thrown error's stack, opaque debugging text."}
+      }
+    },
+    "token_usage": {
+      "description": "Provider-reported token counts for one model call; an optional detail is null when unreported.",
+      "type": "object",
+      "required": ["input_tokens", "output_tokens", "total_tokens", "cache_read_tokens", "cache_creation_tokens", "reasoning_tokens"],
+      "properties": {
+        "input_tokens": {"type": "integer", "minimum": 0},
+        "output_tokens": {"type": "integer", "minimum": 0},
+        "total_tokens": {"type": "integer", "minimum": 0},
+        "cache_read_tokens": {"type": ["integer", "null"], "minimum": 0},
+        "cache_creation_tokens": {"type": ["integer", "null"], "minimum": 0},
+        "reasoning_tokens": {"type": ["integer", "null"], "minimum": 0}
+      }
+    },
+    "grow": {
+      "description": "A spawner's seed-first growth: the expansion the runtime records.",
+      "type": "object",
+      "required": ["seed", "prune"],
+      "properties": {
+        "seed": {"$ref": "#/$defs/value", "description": "The input to the growth builder, persisted so replay rebuilds the same topology."},
+        "prune": {
+          "description": "Ids to retire in the same step, sorted by UTF-16 code units.",
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "NodeStarted": {
+      "description": "A node began executing.",
+      "type": "object",
+      "required": ["node_id"],
+      "properties": {
+        "node_id": {"type": "string"}
+      }
+    },
+    "StreamChunk": {
+      "description": "A streamed fragment of a node's output, such as model text. A completed or interrupted AGENT stream ends with one empty final chunk; a failed call ends without one (its ModelCallFinished.error is set), and a host discards that exchange's partial text.",
+      "type": "object",
+      "required": ["node_id", "key", "chunk", "final", "exchange_id", "attempt"],
+      "properties": {
+        "node_id": {"type": "string"},
+        "key": {"type": "string", "description": "What the stream carries: \"text\" for AGENT reply text."},
+        "chunk": {"type": "string"},
+        "final": {"type": "boolean", "description": "True on the empty chunk that ends a completed or interrupted stream."},
+        "exchange_id": {"type": ["string", "null"], "description": "The model exchange an AGENT text chunk belongs to; null for other streams."},
+        "attempt": {"type": ["integer", "null"], "minimum": 1, "description": "The AGENT model attempt the text belongs to, 1-based; null for other streams."}
+      }
+    },
+    "NodeSucceeded": {
+      "description": "A node finished and produced its single output value.",
+      "type": "object",
+      "required": ["node_id", "output", "commit_as"],
+      "properties": {
+        "node_id": {"type": "string"},
+        "output": {"$ref": "#/$defs/value"},
+        "commit_as": {"type": ["string", "null"], "description": "The target the value was committed under instead of node_id; null when it was committed under node_id."}
+      }
+    },
+    "NodeRouted": {
+      "description": "A router (CASE) selected an out-edge; its siblings are skipped.",
+      "type": "object",
+      "required": ["node_id", "handle"],
+      "properties": {
+        "node_id": {"type": "string"},
+        "handle": {"type": "string", "description": "The taken branch: a case's then: target id, or \"#else\" for its else: route, also taken when no when: matches."}
+      }
+    },
+    "NodeSkipped": {
+      "description": "A route made a node unreachable.",
+      "type": "object",
+      "required": ["node_id"],
+      "properties": {
+        "node_id": {"type": "string"}
+      }
+    },
+    "NodeFailed": {
+      "description": "A node failed.",
+      "type": "object",
+      "required": ["failure"],
+      "properties": {
+        "failure": {"$ref": "#/$defs/failure"}
+      }
+    },
+    "NodeExpanded": {
+      "description": "A spawner returned a growth; its fragment's terminal commits the node's eventual value.",
+      "type": "object",
+      "required": ["node_id", "grow"],
+      "properties": {
+        "node_id": {"type": "string"},
+        "grow": {"$ref": "#/$defs/grow"}
+      }
+    },
+    "NodeAttemptResumed": {
+      "description": "A resume restarted a node.",
+      "type": "object",
+      "required": ["node_id", "interrupted"],
+      "properties": {
+        "node_id": {"type": "string"},
+        "interrupted": {"type": "integer", "minimum": 0, "description": "How many of the node's attempts were interrupted, derived from the log; a deliberate stop doesn't count, so a node restarted only after stops has 0."}
+      }
+    },
+    "ModelCallStarted": {
+      "description": "An AGENT node is about to call its model (in-loop, transient).",
+      "type": "object",
+      "required": ["node_id", "exchange_id", "purpose", "provider", "model", "attempt"],
+      "properties": {
+        "node_id": {"type": "string"},
+        "exchange_id": {"type": "string", "description": "The model exchange; correlates the call's events with node_id."},
+        "purpose": {
+          "description": "Why the node calls its model.",
+          "type": "string",
+          "enum": ["chat", "structured_native", "structured_fallback", "history_summary"]
+        },
+        "provider": {"type": ["string", "null"], "description": "The effective provider."},
+        "model": {"type": ["string", "null"], "description": "The effective model."},
+        "attempt": {"type": "integer", "minimum": 1, "description": "The node's model attempt this call belongs to, 1-based."}
+      }
+    },
+    "ModelCallFinished": {
+      "description": "One model call returned or raised (in-loop, transient).",
+      "type": "object",
+      "required": ["node_id", "exchange_id", "purpose", "provider", "model", "usage", "error", "attempt"],
+      "properties": {
+        "node_id": {"type": "string"},
+        "exchange_id": {"type": "string", "description": "The model exchange; correlates the call's events with node_id."},
+        "purpose": {
+          "description": "Why the node called its model.",
+          "type": "string",
+          "enum": ["chat", "structured_native", "structured_fallback", "history_summary"]
+        },
+        "provider": {"type": ["string", "null"], "description": "The effective provider."},
+        "model": {"type": ["string", "null"], "description": "The effective model."},
+        "usage": {
+          "description": "The provider's own token count, or null when it reported none; a cut stream reports the usage received so far.",
+          "oneOf": [{"$ref": "#/$defs/token_usage"}, {"type": "null"}]
+        },
+        "error": {"type": ["string", "null"], "description": "The error's type name when the call raised, never provider text; null when it returned or a steering interrupt cut its stream."},
+        "attempt": {"type": "integer", "minimum": 1, "description": "The node's model attempt this call belongs to, 1-based."}
+      }
+    },
+    "ToolCallStarted": {
+      "description": "An AGENT node is about to run one granted tool call from a model reply (in-loop, transient).",
+      "type": "object",
+      "required": ["node_id", "exchange_id", "call_index", "tool_call_id", "name", "arguments"],
+      "properties": {
+        "node_id": {"type": "string"},
+        "exchange_id": {"type": "string", "description": "The model exchange whose reply asked for the call."},
+        "call_index": {"type": "integer", "minimum": 0, "description": "The call's 0-based position in the reply."},
+        "tool_call_id": {"type": "string", "description": "The provider's id for the call."},
+        "name": {"type": "string", "description": "The tool's name."},
+        "arguments": {"$ref": "#/$defs/value"}
+      }
+    },
+    "ToolCallFinished": {
+      "description": "One tool call returned or raised (in-loop, transient).",
+      "type": "object",
+      "required": ["node_id", "exchange_id", "call_index", "tool_call_id", "name", "result", "error"],
+      "properties": {
+        "node_id": {"type": "string"},
+        "exchange_id": {"type": "string", "description": "The model exchange whose reply asked for the call."},
+        "call_index": {"type": "integer", "minimum": 0, "description": "The call's 0-based position in the reply."},
+        "tool_call_id": {"type": "string", "description": "The provider's id for the call."},
+        "name": {"type": "string", "description": "The tool's name."},
+        "result": {"type": ["string", "null"], "description": "The tool's result text; null when it raised or was skipped."},
+        "error": {"type": ["string", "null"], "description": "The error's type name when the tool raised, or \"interrupted\" for a call a steering interrupt skipped (the tool did not run); null when it returned."}
+      }
+    },
+    "RunStarted": {
+      "description": "The lead event of a fresh run.",
+      "type": "object",
+      "required": [],
+      "properties": {}
+    },
+    "RunResumed": {
+      "description": "A recovered run segment began after its unfinished nodes were requeued.",
+      "type": "object",
+      "required": [],
+      "properties": {}
+    },
+    "RunSucceeded": {
+      "description": "The run reached its terminal.",
+      "type": "object",
+      "required": ["output"],
+      "properties": {
+        "output": {"$ref": "#/$defs/value", "description": "The flow's single committed output."}
+      }
+    },
+    "RunFailed": {
+      "description": "The run ended on a node failure or an unreachable terminal output.",
+      "type": "object",
+      "required": ["failure"],
+      "properties": {
+        "failure": {"$ref": "#/$defs/failure"}
+      }
+    }
+  }
+}

@@ -176,6 +176,8 @@ run before appending any record.
   them by `node_id` and `exchange_id`. `usage` is the provider's own count
   (`None` when unreported) and `error` is an exception type name only, or
   `"interrupted"` for a tool call a [steering](#steering) interrupt skipped.
+  Changed (TS yian): `conformance/schema/events.schema.json` describes each
+  event's JSON form, with the snake_case keys hosts forward.
 - `on_stream` — receives transient `StreamChunk` values. Chunks are neither
   durable records nor members of `RunResult.events`. With `on_stream` set, AGENT
   chat replies stream visible text as `StreamChunk(node_id, "text", chunk,
@@ -1026,8 +1028,8 @@ is for debugging only; don't branch on it.
 | `binding.evaluate` | A node input's `${...}` binding or default can't be evaluated, or a required input is unbound. | Fix the flow or its inputs. | No |
 | `binding.type` | A tagged binding (`!int ${...}`) holds a value that breaks its tag. | Fix the flow or its inputs. | No |
 | `contract.input` | A value supplied to a node input breaks the input's declared type, or a MAP `over:`, WAIT `until:`, or AGENT `llm_config` value has the wrong shape. | Fix the flow or its inputs. | No |
-| `assertion.failed` | A node's or the flow's `asserts:` condition is false. | Treat the result as rejected; fix the flow or its inputs. | Only if the asserted values vary between runs |
-| `node.execute` | A node's body raised and no finer code applies: a CODE node's exception, a tool's error, an AGENT's model error, an ungranted tool request. | Read `failure.message`. | Sometimes: transient errors such as a timeout or a rate limit |
+| `assertion.failed` | A node's or the flow's `asserts:` condition is false. (TS yian: an `asserts:` condition that fails to evaluate is `condition.evaluate`.) | Treat the result as rejected; fix the flow or its inputs. | Only if the asserted values vary between runs |
+| `node.execute` | A node's body raised and no finer code applies: a CODE node's exception, a tool's error, an AGENT's model error, an ungranted tool request. (TS yian: exhausted structured-output corrections and rate-limit, quota, outage, context-length, and refusal errors have their own codes below; other provider errors, such as a bad request, an unknown model, a redirect, or a malformed reply, stay `node.execute`.) | Read `failure.message`. | Sometimes: transient errors such as a timeout or a rate limit (TS yian: a tool's; a model call's have their own codes) |
 | `contract.node_result` | A node returned something other than `Output`, `Route`, or `Grow`, or a node that isn't CALL, MAP, or LOOP returned `Grow`. | Report a bug in that node's implementation. | No |
 | `contract.output` | A node's or the flow's output value doesn't match its declared type. | Fix the flow, or the code or tool that produced the value. | Only if the producer's output varies |
 | `contract.route` | A node returned a route handle that isn't a non-empty string. | Report a bug in that node's implementation. | No |
@@ -1036,6 +1038,17 @@ is for debugging only; don't branch on it.
 | `loop.max_exceeded` | A `while:`/`until:` LOOP with `max: M` would start body run M+1 (see below). | Treat it as the loop ending without meeting its condition, or raise `max:`. | Only if the body's results vary between runs |
 | `agent.max_tool_iterations` | An AGENT's tool loop reached its `max_tool_iterations` and the last reply still asked for tools; those calls are not run. There is no cap by default. | Raise the cap, or simplify the task. | Sometimes: model replies vary |
 | `provider.auth` | An AGENT's model build or model call failed on its credentials (see below). | Ask the user to fix the connection (`yian auth <provider>`, or the right key). | After the credentials are fixed; or at once if the token refresh request itself failed (a network error or a 5xx) |
+| `agent.output_invalid` (TS yian) | An AGENT's structured reply still breaks its `output:` type after its `retries:` corrections. | Loosen the type or improve the prompt. | Sometimes: model replies vary |
+| `provider.rate_limit` (TS yian) | The provider refused the model call for its rate limit (HTTP 429), and yian's model-call retries ran out or the provider forbade a retry. | Wait, then run again; lower concurrency. | Yes, later |
+| `provider.quota` (TS yian) | The provider refused the call because the account's quota or credit is used up (OpenAI's `insufficient_quota`). | Ask the user to add credit or change plan. | After the quota is restored |
+| `provider.unavailable` (TS yian) | The provider was unreachable or failing (a 5xx or overloaded reply, a timeout, a dropped connection, or a reply cut short), and yian's model-call retries ran out or the provider forbade a retry. | Run again later, or switch provider. | Yes, later |
+| `provider.context_length` (TS yian) | The request is longer than the model's context window. | Shorten the inputs or history, or pick a model with a larger window. | No |
+| `provider.refused` (TS yian) | The model declined to answer: a refusal or a content filter stopped the reply. | Read `failure.message`; change the input. | Rarely |
+| `condition.evaluate` (TS yian) | A LOOP `while:`/`until:`, a CASE `when:`, or an `asserts:` condition can't be evaluated (an error, as opposed to evaluating false). | Fix the flow or its inputs. | No |
+
+Changed (TS yian): the codes marked (TS yian) exist only in TS yian; Python yian
+reports these failures as `node.execute`, except that an `asserts:` condition that
+fails to evaluate counts as false (`assertion.failed`).
 
 `loop.max_exceeded` is on the LOOP node, with a message such as `loop 'refine'
 exceeded max (5)`. A failure inside the body keeps its own code, and a `times:` loop

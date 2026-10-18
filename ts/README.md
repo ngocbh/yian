@@ -17,6 +17,12 @@ Python package in `src/yian/` stays the reference until the two reach parity.
 
 - Every yian error class sets `override name = "<Class>"`: hosts and the conformance runner
   read `error.name`.
+- Sort strings with `compareCodeUnits` from `src/diagnostics.ts` (UTF-16 order); the "src sorts
+  with a comparator" lint bans a bare `.sort()` or `.toSorted()`.
+- Every event in `src/events.ts` has a `type` naming its class and a `toJSON()` giving its
+  snake_case JSON form (`../conformance/schema/events.schema.json`); flow values inside are left
+  as they are, so write the form with yian's JSON codec, not `JSON.stringify` (it turns infinity
+  into null and throws on a bigint).
 
 ## Commands
 

@@ -6,8 +6,8 @@
  * subclasses other than arrays (a YAML value here is text, a number, a boolean, null, a plain
  * array or a plain record), the `_value_view` set operations, and the hash-call-count test
  * (ropes are cached by identity, with no hashing). The `scalar_style` tests that need Compose
- * come with Compose, and the projections come with those methods. Mapping keys are text, so
- * the constructed-key cases read keys as written.
+ * come with Compose. Mapping keys are text, so the constructed-key cases read keys as written,
+ * and the wide projection refuses occurrence walks rather than counting key comparisons.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -324,6 +324,62 @@ describe("values", () => {
     expect(cursor.keyRange).toBeNull();
   });
 
+  test("virtual deep lists and records copy without stack overflow", () => {
+    const levels = 2_000;
+    let list: Value = "leaf";
+    let record: Value = "leaf";
+    for (let level = 0; level < levels; level++) {
+      list = [list];
+      record = { next: record };
+    }
+
+    let copiedList = SourceCursor.virtual(list).value;
+    let copiedRecord = SourceCursor.virtual(record).value;
+
+    expect(copiedList).not.toBe(list);
+    expect(copiedRecord).not.toBe(record);
+    for (let level = 0; level < levels; level++) {
+      copiedList = (copiedList as Value[])[0]!;
+      copiedRecord = (copiedRecord as ValueRecord)["next"]!;
+    }
+    expect(copiedList).toBe("leaf");
+    expect(copiedRecord).toBe("leaf");
+  });
+
+  test("the get fallback copies without stack overflow", () => {
+    let fallback: Value = "leaf";
+    for (let level = 0; level < 2_000; level++) fallback = [fallback];
+
+    let copied = SourceCursor.virtual({}).get("missing", fallback);
+
+    expect(copied).not.toBe(fallback);
+    for (let level = 0; level < 2_000; level++) copied = (copied as Value[])[0]!;
+    expect(copied).toBe("leaf");
+  });
+
+  test("virtual, withValue and projectMapping refuse anything but a YAML value", () => {
+    class Custom {}
+    class ListSubclass extends Array<Value> {}
+    const invalid = [
+      new Custom(),
+      new Map(),
+      new ListSubclass(),
+      { nested: new ListSubclass() },
+    ] as unknown as Value[];
+    const base = SourceCursor.virtual({});
+
+    for (const value of invalid) {
+      expect(() => SourceCursor.virtual(value)).toThrow(/source cursors accept only YAML values/);
+      expect(() => base.withValue(value)).toThrow(/source cursors accept only YAML values/);
+      expect(() => base.projectMapping(new Map([["value", [value, null]]]))).toThrow(
+        /source cursors accept only YAML values/,
+      );
+    }
+    const notACursor = () => base.projectMapping(new Map([["value", [1n, {} as SourceCursor]]]));
+    expect(notACursor).toThrow(TypeError);
+    expect(notACursor).toThrow("projected entry source must be a SourceCursor or null");
+  });
+
   test("a cursor is frozen", () => {
     const cursor = SourceDocument.parse("a: 1\n").root;
 
@@ -500,6 +556,14 @@ describe("navigation", () => {
     const sources = Array.from({ length: width }, (_, index) => `*source_${index}`).join(", ");
     lines.push("root:", `  <<: [${sources}]`);
     const merged = SourceDocument.parse(lines.join("\n") + "\n").root.child("root");
+    const projected = wide.projectMapping(
+      new Map(
+        Array.from({ length: width }, (_, index) => {
+          const key = `key_${index}`;
+          return [key, [BigInt(index), wide.child(key)] as const];
+        }),
+      ),
+    );
     const prototype = SourceCursor.prototype;
     const { _iterFlatOccurrences: flat, _iterUniqueOccurrences: unique } = prototype;
     const refuse = (): never => {
@@ -518,6 +582,8 @@ describe("navigation", () => {
         expect(wide.child(key).value).toBe(BigInt(index));
         expect(merged.has(key)).toBe(true);
         expect(merged.child(key).value).toBe(BigInt(index));
+        expect(projected.has(key)).toBe(true);
+        expect(projected.child(key).value).toBe(BigInt(index));
       }
     } finally {
       prototype._iterFlatOccurrences = flat;
@@ -720,6 +786,20 @@ describe("navigation", () => {
     ).toBe(3);
   });
 
+  test("projected entries are distinct objects", () => {
+    const projected = SourceCursor.virtual({}).projectMapping(
+      new Map([
+        ["first", [1n, null]],
+        ["second", [2n, null]],
+      ]),
+    );
+
+    const [first, second] = projected._projectedEntries!;
+
+    expect(first).not.toBe(second);
+    expect(new Set([first, second]).size).toBe(2);
+  });
+
   test("a recursive alias path stops at its ancestor", () => {
     const root = SourceDocument.parse(
       "root: &root\n  name: recursive\n  self: *root\n",
@@ -762,7 +842,7 @@ describe("navigation", () => {
 describe("typed accessors", () => {
   test("typed accessors read required fields and copy containers", () => {
     const root = SourceDocument.parse(
-      "name: compose\n" + "count: 3\n" + "config:\n" + "  enabled: true\n" + "items: [one, two]\n",
+      "name: compose\ncount: 3\nconfig:\n  enabled: true\nitems: [one, two]\n",
     ).root;
 
     expect(root.str("name")).toBe("compose");
@@ -775,7 +855,8 @@ describe("typed accessors", () => {
 
     const mapping = root.mapping("config");
     const sequence = root.sequence("items");
-    expect(Object.isFrozen(mapping) || Object.isFrozen(sequence)).toBe(false);
+    expect(Object.isFrozen(mapping)).toBe(false);
+    expect(Object.isFrozen(sequence)).toBe(false);
     mapping["enabled"] = false;
     sequence.push("three");
     expect(root.mapping("config")).toEqual({ enabled: true });
@@ -865,6 +946,164 @@ describe("range helpers", () => {
     } finally {
       SourceCursor.prototype._iterFlatOccurrences = original;
     }
+  });
+
+  test("range helpers delegate through renamed to the child sources", () => {
+    const base = SourceDocument.parse(
+      "input:\n" +
+        "  value: ${start.output}\n" +
+        "asserts:\n" +
+        "  - output > 0\n" +
+        "cases:\n" +
+        "  - when: ready\n" +
+        "    then: finish\n",
+    ).root;
+
+    const renamed = base.renamed(new Map([["input", "inputs"]]));
+
+    expect(renamed.mappingValueRanges("inputs")).toEqual(base.mappingValueRanges("input"));
+    expect(renamed.mappingValueRanges("inputs").size).toBe(1);
+    expect(renamed.itemRanges("asserts")).toEqual(base.itemRanges("asserts"));
+    expect(renamed.itemRanges("asserts").size).toBe(1);
+    expect(renamed.itemRangeList("asserts")).toEqual(base.itemRangeList("asserts"));
+    for (const field of ["when", "then"]) {
+      expect(renamed.sequenceFieldRanges("cases", field)).toEqual(
+        base.sequenceFieldRanges("cases", field),
+      );
+      expect(renamed.sequenceFieldRanges("cases", field)[0]).not.toBeNull();
+    }
+  });
+});
+
+describe("projections", () => {
+  test("renamed doesn't change the base and keeps child paths and ranges", () => {
+    const base = SourceDocument.parse("input: source\nkeep: unchanged\n").root;
+
+    const renamed = base.renamed(new Map([["input", "inputs"]]));
+
+    expect(renamed.value).toEqual({ inputs: "source", keep: "unchanged" });
+    expect(base.value).toEqual({ input: "source", keep: "unchanged" });
+    expect(base.has("inputs")).toBe(false);
+    expect(renamed.child("inputs").path).toEqual(base.child("input").path);
+    expect(renamed.child("inputs").range).toEqual(base.child("input").range);
+    expect(renamed.child("inputs").keyRange).toEqual(base.child("input").keyRange);
+    expect(renamed.keyRangeOf("inputs")).toEqual(base.keyRangeOf("input"));
+  });
+
+  test("renamed refuses a key that collides with another", () => {
+    const base = SourceDocument.parse("input: singular\ninputs: plural\n").root;
+
+    const error = accessError(() => base.renamed(new Map([["input", "inputs"]])));
+
+    expect(error.message).toBe("key `input` and key `inputs` both mean 'inputs'; keep one");
+    expect(error.range).toEqual(base.keyRangeOf("input"));
+  });
+
+  test("a rename collision names keys as authored", () => {
+    const base = SourceDocument.parse('0x1F: plain\n"x": quoted\n').root;
+
+    const error = accessError(() => base.renamed(new Map([["0x1F", "x"]])));
+
+    expect(error.message.startsWith("key `0x1F` and key `\"x\"` both mean 'x'; keep one")).toBe(
+      true,
+    );
+    expect(error.message).not.toContain("31");
+    expect(error.range).toEqual(base.keyRangeOf("0x1F"));
+  });
+
+  test("renamed can swap two keys and refuses a non-mapping", () => {
+    const base = SourceDocument.parse("a: 1\nb: 2\nc: [1]\n").root;
+
+    const swapped = base.renamed(
+      new Map([
+        ["a", "b"],
+        ["b", "a"],
+      ]),
+    );
+
+    expect(swapped.value).toEqual({ b: 1n, a: 2n, c: [1n] });
+    expect(Object.keys(swapped.value as ValueRecord)).toEqual(["b", "a", "c"]);
+    expect(accessError(() => base.child("c").renamed(new Map())).message).toBe(
+      "cannot rename keys on a non-mapping value",
+    );
+  });
+
+  test("withValue aligns nested mapping and sequence sources", () => {
+    const source = SourceDocument.parse(
+      "body:\n  mapping:\n    field: old\n  sequence:\n    - field: first\n",
+    ).root.child("body");
+
+    const aligned = source.withValue({
+      mapping: { field: "new", generated: true },
+      sequence: [{ field: "changed" }, { field: "generated" }],
+    });
+
+    const mapping = aligned.child("mapping");
+    const sequence = aligned.child("sequence");
+    expect(mapping.child("field").range).toEqual(source.child("mapping").child("field").range);
+    expect(mapping.child("field").value).toBe("new");
+    expect(mapping.child("generated").range).toBeNull();
+    expect(sequence.child(0).child("field").range).toEqual(
+      source.child("sequence").child(0).child("field").range,
+    );
+    expect(sequence.child(1).document).toBeNull();
+    expect(sequence.child(1).child("field").range).toBeNull();
+    expect(sequence.children().map((item) => item.value)).toEqual([
+      { field: "changed" },
+      { field: "generated" },
+    ]);
+    expect(aligned.sequenceFieldRanges("sequence", "field")).toEqual([
+      source.child("sequence").child(0).child("field").range,
+      null,
+    ]);
+  });
+
+  test("a projected child keeps the source's document, path and range", () => {
+    const base = SourceDocument.parse("original:\n  nested: old\n").root;
+    const source = base.child("original");
+
+    const projected = base.projectMapping(
+      new Map<string, readonly [Value, SourceCursor | null]>([
+        ["renamed", [{ nested: ["new"] }, source]],
+        ["generated", [{ virtual: true }, null]],
+      ]),
+    );
+    const retained = projected.child("renamed");
+    const generated = projected.child("generated");
+
+    expect(projected.document).toBe(base.document);
+    expect(projected.path).toEqual(base.path);
+    expect(projected.range).toEqual(base.range);
+    expect(retained.value).toEqual({ nested: ["new"] });
+    expect(retained.document).toBe(source.document);
+    expect(retained.path).toEqual(source.path);
+    expect(retained.range).toEqual(source.range);
+    expect(retained.keyRange).toEqual(source.keyRange);
+    expect(generated.document).toBeNull();
+    expect(generated.path).toEqual([]);
+    expect(generated.range).toBeNull();
+    expect(generated.keyRange).toBeNull();
+    expect(projected.mappingOccurrences("renamed").map((child) => child.range)).toEqual([
+      source.range,
+    ]);
+    expect(projected.mappingOccurrences().length).toBe(2);
+    expect(projected.children().map((child) => child.document)).toEqual([base.document, null]);
+  });
+
+  test("projected mutation can't change the overlay", () => {
+    const base = SourceDocument.parse("source: original\n").root;
+    const original: ValueRecord = { nested: [1n] };
+    const projected = base.projectMapping(new Map([["source", [original, base.child("source")]]]));
+
+    (original["nested"] as Value[]).push(2n);
+    const first = projected.value as Record<string, ValueRecord>;
+    (first["source"]!["nested"] as Value[]).push(3n);
+    const childValue = projected.child("source").value as ValueRecord;
+    (childValue["nested"] as Value[]).push(4n);
+
+    expect(projected.value).toEqual({ source: { nested: [1n] } });
+    expect(Object.isFrozen(projected._valueView())).toBe(true);
+    expect(base.value).toEqual({ source: "original" });
   });
 });
 
@@ -1009,5 +1248,34 @@ describe("scalar facts", () => {
     expect(root.child("a").tagDefinitionId).toBe(root.child("a")._definition);
     expect(SourceCursor.virtual(1).tag).toBeNull();
     expect(SourceCursor.virtual(null).hasValue).toBe(true);
+  });
+
+  test("scalarSource and scalarStyle hold through withValue while unchanged", () => {
+    const code = SourceDocument.parse("code: |-\n  first\n  second\n").root.child("code");
+    const value = SourceDocument.parse("value: x\n").root.child("value");
+
+    expect(code.withValue("first\nsecond").scalarSource).toEqual(code.scalarSource);
+    expect(code.withValue("first\nchanged").scalarSource).toBeNull();
+    expect(value.withValue("x").scalarStyle).toBe("plain");
+    expect(value.withValue("other").scalarStyle).toBeNull();
+  });
+
+  test("tags are value-gated through withValue, by value and type", () => {
+    const cursor = (text: string, key: string) => SourceDocument.parse(text).root.child(key);
+    const five = cursor("a: !int 5\n", "a");
+    const one = cursor("a: !int 1\n", "a");
+    const buy = cursor("m: !Buy {x: 1}\n", "m");
+    const empty = cursor("a: !int\n", "a");
+
+    expect(five.withValue(5n).tag).toBe("int");
+    expect(five.withValue("${input.a}").tag).toBeNull();
+    expect(five.withValue("${input.a}").hasValue).toBe(true);
+    expect(one.withValue(true).tag).toBeNull();
+    expect(buy.withValue({ x: true }).tag).toBeNull();
+    expect(buy.withValue({ x: 1n }).tag).toBe("Buy");
+    expect(empty.withValue(null).tag).toBe("int");
+    expect(empty.withValue(null).hasValue).toBe(false);
+    expect(empty.withValue(3n).tag).toBeNull();
+    expect(empty.withValue(3n).hasValue).toBe(true);
   });
 });

@@ -1,6 +1,7 @@
 # From examples/chat.yaml.
 # A `loop` over a `defs:` body holding HUMAN_INPUT, a typed value entry, and a `case ... on`
 # whose `else:` is an inline `call(...)` loads.
+# Its header's `yian chat` is the Python CLI; TS yian drops that command.
 kind: load
 flow: |
   # chat — a turn-by-turn conversational REPL (agent without tools; deterministic transcript).

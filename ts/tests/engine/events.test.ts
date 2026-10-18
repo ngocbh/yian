@@ -8,7 +8,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { isDeepStrictEqual } from "node:util";
 
 import { FAILURE_CODES, Failure, OriginRef } from "../../src/diagnostics.ts";
 import * as events from "../../src/events.ts";
@@ -34,6 +33,7 @@ import {
   ToolCallFinished,
   ToolCallStarted,
 } from "../../src/events.ts";
+import { lintSchema, loadSchema, type Schema, validate } from "../schema.ts";
 import { importStatements } from "./source_scan.ts";
 
 const FAILURE = new Failure({
@@ -467,31 +467,9 @@ describe("toJSON", () => {
 // The events schema
 // --------------------------------------------------------------------------- //
 
-/** A JSON Schema subschema, as parsed. */
-type Schema = Record<string, unknown>;
-
-const SCHEMA = JSON.parse(
-  readFileSync(
-    fileURLToPath(new URL("../../../conformance/schema/events.schema.json", import.meta.url)),
-    "utf8",
-  ),
-) as Schema;
-
-/** The keywords the validator implements. */
-const KEYWORDS = new Set([
-  "$ref",
-  "type",
-  "const",
-  "enum",
-  "required",
-  "properties",
-  "items",
-  "oneOf",
-  "minimum",
-]);
-/** Annotations the validator ignores. */
-const ANNOTATIONS = new Set(["$schema", "title", "description", "$defs"]);
-const TYPES = new Set(["null", "boolean", "integer", "number", "string", "array", "object"]);
+const SCHEMA = loadSchema("events.schema.json");
+/** The events tests refuse any key a data form doesn't list. */
+const CLOSED = { closed: true };
 
 /** Every value of `ModelCallPurpose`; the type makes the key set exhaustive and exact. */
 const PURPOSES: Record<ModelCallPurpose, null> = {
@@ -500,108 +478,6 @@ const PURPOSES: Record<ModelCallPurpose, null> = {
   structured_fallback: null,
   history_summary: null,
 };
-
-/** Return the JSON Schema type names `value` has (an integer is also a number). */
-function jsonTypes(value: unknown): string[] {
-  if (value === null) return ["null"];
-  if (Array.isArray(value)) return ["array"];
-  if (typeof value === "number") return Number.isInteger(value) ? ["integer", "number"] : ["number"];
-  return [typeof value];
-}
-
-/** Return the `$defs` entry a `#/$defs/<name>` reference names, or `undefined`. */
-function resolveRef(ref: unknown): Schema | undefined {
-  if (typeof ref !== "string" || !ref.startsWith("#/$defs/")) return undefined;
-  const defs = SCHEMA.$defs as Record<string, Schema>;
-  const name = ref.slice("#/$defs/".length);
-  return Object.hasOwn(defs, name) ? defs[name] : undefined;
-}
-
-/**
- * Validate `value` against `schema` for the keywords in `KEYWORDS`, returning
- * `path: problem` strings. Stricter than JSON Schema in one way: a subschema with
- * `properties` rejects keys it doesn't list.
- */
-function validate(schema: Schema, value: unknown, path = "$"): string[] {
-  const problems: string[] = [];
-  const types = jsonTypes(value);
-  if ("$ref" in schema) problems.push(...validate(resolveRef(schema.$ref)!, value, path));
-  if ("type" in schema) {
-    const allowed = Array.isArray(schema.type) ? schema.type : [schema.type];
-    if (!types.some((type) => allowed.includes(type))) {
-      return [...problems, `${path}: ${types[0]} is not ${allowed.join(" or ")}`];
-    }
-  }
-  if ("const" in schema && !isDeepStrictEqual(value, schema.const)) {
-    problems.push(`${path}: ${JSON.stringify(value)} is not ${JSON.stringify(schema.const)}`);
-  }
-  if ("enum" in schema) {
-    const members = schema.enum as unknown[];
-    if (!members.some((member) => isDeepStrictEqual(value, member))) {
-      problems.push(`${path}: ${JSON.stringify(value)} is not one of the enum`);
-    }
-  }
-  if ("minimum" in schema && typeof value === "number" && value < (schema.minimum as number)) {
-    problems.push(`${path}: ${value} is below ${schema.minimum}`);
-  }
-  if (types[0] === "object") {
-    const object = value as Record<string, unknown>;
-    for (const key of (schema.required as string[] | undefined) ?? []) {
-      if (!Object.hasOwn(object, key)) problems.push(`${path}: missing ${key}`);
-    }
-    if ("properties" in schema) {
-      const properties = schema.properties as Record<string, Schema>;
-      for (const [key, inner] of Object.entries(object)) {
-        if (Object.hasOwn(properties, key)) {
-          problems.push(...validate(properties[key]!, inner, `${path}.${key}`));
-        } else {
-          problems.push(`${path}: undeclared key ${key}`);
-        }
-      }
-    }
-  }
-  if (types[0] === "array" && "items" in schema) {
-    (value as unknown[]).forEach((item, index) => {
-      problems.push(...validate(schema.items as Schema, item, `${path}[${index}]`));
-    });
-  }
-  if ("oneOf" in schema) {
-    const passing = (schema.oneOf as Schema[]).filter(
-      (branch) => validate(branch, value, path).length === 0,
-    ).length;
-    if (passing !== 1) problems.push(`${path}: ${passing} oneOf branches match, not 1`);
-  }
-  return problems;
-}
-
-/** Return `path: problem` strings for keywords outside the validator's list and bad `$ref`s. */
-function lintSchema(schema: unknown, path = "$"): string[] {
-  if (schema === null || typeof schema !== "object" || Array.isArray(schema)) {
-    return [`${path}: not a schema object`];
-  }
-  const problems: string[] = [];
-  for (const [key, inner] of Object.entries(schema)) {
-    const at = `${path}.${key}`;
-    if (!KEYWORDS.has(key) && !ANNOTATIONS.has(key)) problems.push(`${at}: unknown keyword`);
-    if (key === "$ref" && resolveRef(inner) === undefined) problems.push(`${at}: unresolved`);
-    if (key === "type") {
-      const types = Array.isArray(inner) ? inner : [inner];
-      for (const type of types) if (!TYPES.has(type)) problems.push(`${at}: unknown type`);
-    }
-    if (key === "items") problems.push(...lintSchema(inner, at));
-    if (key === "oneOf") {
-      (inner as unknown[]).forEach((branch, index) => {
-        problems.push(...lintSchema(branch, `${at}[${index}]`));
-      });
-    }
-    if (key === "properties" || key === "$defs") {
-      for (const [name, sub] of Object.entries(inner as Record<string, unknown>)) {
-        problems.push(...lintSchema(sub, `${at}.${name}`));
-      }
-    }
-  }
-  return problems;
-}
 
 /** Return the `$defs` entry named `name`. */
 function def(name: string): Schema {
@@ -617,12 +493,12 @@ function oneOfNames(): string[] {
 
 describe("events schema", () => {
   test("uses only the keywords the validator knows, and every $ref resolves", () => {
-    expect(lintSchema(SCHEMA)).toEqual([]);
+    expect(lintSchema(SCHEMA, SCHEMA)).toEqual([]);
   });
 
   test("the lint rejects an unknown keyword and an unresolved $ref", () => {
-    expect(lintSchema({ requried: ["a"] })).toEqual(["$.requried: unknown keyword"]);
-    expect(lintSchema({ properties: { a: { $ref: "#/$defs/nope" } } })).toEqual([
+    expect(lintSchema(SCHEMA, { requried: ["a"] })).toEqual(["$.requried: unknown keyword"]);
+    expect(lintSchema(SCHEMA, { properties: { a: { $ref: "#/$defs/nope" } } })).toEqual([
       "$.properties.a.$ref: unresolved",
     ]);
   });
@@ -634,8 +510,8 @@ describe("events schema", () => {
 
   test("every sample event validates as {name, data}", () => {
     for (const { event } of SAMPLES) {
-      expect(validate(def(event.type), event.toJSON())).toEqual([]);
-      expect(validate(SCHEMA, { name: event.type, data: event.toJSON() })).toEqual([]);
+      expect(validate(SCHEMA, def(event.type), event.toJSON(), CLOSED)).toEqual([]);
+      expect(validate(SCHEMA, SCHEMA, { name: event.type, data: event.toJSON() }, CLOSED)).toEqual([]);
     }
   });
 
@@ -673,32 +549,32 @@ describe("events schema", () => {
       ['$.failure.code: "nope" is not one of the enum'],
     ],
   ] as const)("rejects %s", (_, name, data, problems) => {
-    expect(validate(def(name), data)).toEqual([...problems]);
-    expect(validate(SCHEMA, { name, data })).toEqual(["$: 0 oneOf branches match, not 1"]);
+    expect(validate(SCHEMA, def(name), data, CLOSED)).toEqual([...problems]);
+    expect(validate(SCHEMA, SCHEMA, { name, data }, CLOSED)).toEqual(["$: 0 oneOf branches match, not 1"]);
   });
 
   test("rejects an unknown event name", () => {
-    expect(validate(SCHEMA, { name: "NodeExploded", data: { node_id: "n" } })).toEqual([
+    expect(validate(SCHEMA, SCHEMA, { name: "NodeExploded", data: { node_id: "n" } }, CLOSED)).toEqual([
       "$: 0 oneOf branches match, not 1",
     ]);
   });
 
   test("minimum skips null where the type allows it", () => {
     const chunk = { node_id: "n", key: "k", chunk: "", final: false, exchange_id: null };
-    expect(validate(def("StreamChunk"), { ...chunk, attempt: null })).toEqual([]);
-    expect(validate(def("StreamChunk"), { ...chunk, attempt: 0 })).toEqual([
+    expect(validate(SCHEMA, def("StreamChunk"), { ...chunk, attempt: null }, CLOSED)).toEqual([]);
+    expect(validate(SCHEMA, def("StreamChunk"), { ...chunk, attempt: 0 }, CLOSED)).toEqual([
       "$.attempt: 0 is below 1",
     ]);
-    expect(validate(def("StreamChunk"), { ...chunk, attempt: 1.5 })).toEqual([
+    expect(validate(SCHEMA, def("StreamChunk"), { ...chunk, attempt: 1.5 }, CLOSED)).toEqual([
       "$.attempt: number is not integer or null",
     ]);
   });
 
   test("oneOf passes when exactly one branch passes", () => {
     const branches = [{ type: "string" }, { type: ["string", "null"] }];
-    expect(validate({ oneOf: branches }, null)).toEqual([]);
-    expect(validate({ oneOf: branches }, "a")).toEqual(["$: 2 oneOf branches match, not 1"]);
-    expect(validate({ oneOf: branches }, 1)).toEqual(["$: 0 oneOf branches match, not 1"]);
+    expect(validate(SCHEMA, { oneOf: branches }, null, CLOSED)).toEqual([]);
+    expect(validate(SCHEMA, { oneOf: branches }, "a", CLOSED)).toEqual(["$: 2 oneOf branches match, not 1"]);
+    expect(validate(SCHEMA, { oneOf: branches }, 1, CLOSED)).toEqual(["$: 0 oneOf branches match, not 1"]);
   });
 
   test("event $defs, oneOf names and exported event classes are one set", () => {

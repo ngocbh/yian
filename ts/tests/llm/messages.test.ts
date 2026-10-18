@@ -1,10 +1,14 @@
 /**
  * Messages, requests and replies: the stable JSON shape, strict decoding and construction checks, a port of
  * `tests/llm/test_messages.py`; replay records; plus JavaScript's own values: ints of any size, `-0`, a
- * `"__proto__"` key, non-plain objects, `undefined` and array holes.
+ * `"__proto__"` key, non-plain objects, `undefined` and array holes; and
+ * `conformance/schema/message.schema.json`, which describes the JSON shape.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { BUILTIN, install } from "../../src/defaults.ts";
 import {
@@ -30,6 +34,8 @@ import {
   Usage,
 } from "../../src/llm/messages.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
+import { type Case, decode, readCase, type Value } from "../conformance.ts";
+import { lintSchema, loadSchema, type Schema, validate } from "../schema.ts";
 
 /** JSON data a test edits freely. */
 type Data = { [key: string]: any };
@@ -968,5 +974,106 @@ describe("replay records", () => {
     expect(back).toEqual(message);
     const stored = (back.parts[0] as ReasoningPart).providerPayload;
     expect(readReplayRecord(stored, KEY, FIELDS)).toEqual({ ok: false, reason: "malformed" });
+  });
+});
+
+describe("message schema", () => {
+  const SCHEMA = loadSchema("message.schema.json");
+  const RECORD = (SCHEMA.$defs as Record<string, Schema>).replay_record!;
+  const KEY: ReplayKey = { protocol: "openai_responses", provider: "openai", model: "gpt-5" };
+
+  test("uses only the keywords the validator knows, and every $ref resolves", () => {
+    expect(lintSchema(SCHEMA, SCHEMA)).toEqual([]);
+  });
+
+  test("declares draft 2020-12 and yian.message.v1", () => {
+    expect(SCHEMA.$schema).toBe("https://json-schema.org/draft/2020-12/schema");
+    expect(SCHEMA.title).toBe(MESSAGE_FORMAT);
+  });
+
+  test("the messages toJSON writes validate", () => {
+    expect(validate(SCHEMA, SCHEMA, fullMessage().toJSON())).toEqual([]);
+    expect(validate(SCHEMA, SCHEMA, canonical())).toEqual([]);
+    for (const role of ["system", "user", "assistant", "tool"] as const) {
+      const message = new Message({ role, parts: [new TextPart("x")] });
+      expect(validate(SCHEMA, SCHEMA, message.toJSON())).toEqual([]);
+    }
+  });
+
+  test.each([
+    ["an unknown top-level key", (data: Data) => (data["extra"] = 1)],
+    ["an unknown part key", (data: Data) => (data["parts"][1]["bold"] = true)],
+    ["an unknown part type", (data: Data) => (data["parts"][2]["type"] = "video")],
+    ["a missing format", (data: Data) => delete data["format"]],
+    ["another format", (data: Data) => (data["format"] = "yian.message.v0")],
+    ["media with data and url", (data: Data) => (data["parts"][2]["data"] = "AAAA")],
+    ["media with neither", (data: Data) => delete data["parts"][2]["url"]],
+    ["a tool call with neither", (data: Data) => delete data["parts"][5]["raw_arguments"]],
+    ["a wrong field type", (data: Data) => (data["parts"][1]["text"] = 3n)],
+    ["is_error not a boolean", (data: Data) => (data["parts"][6]["is_error"] = "yes")],
+    ["a missing part field", (data: Data) => delete data["parts"][4]["id"]],
+    ["an explicit null protocol", (data: Data) => (data["protocol"] = null)],
+    ["an explicit null provider_payload", (data: Data) => (data["provider_payload"] = null)],
+    ["an explicit null part payload", (data: Data) => (data["parts"][0]["provider_payload"] = null)],
+    ["an explicit null data", (data: Data) => (data["parts"][2]["data"] = null)],
+    ["an explicit null url", (data: Data) => (data["parts"][3]["url"] = null)],
+    ["an explicit null name", (data: Data) => (data["parts"][2]["name"] = null)],
+    ["an explicit null raw_arguments", (data: Data) => (data["parts"][4]["raw_arguments"] = null)],
+    ["an explicit null arguments", (data: Data) => (data["parts"][5]["arguments"] = null)],
+    ["an explicit null is_error", (data: Data) => (data["parts"][6]["is_error"] = null)],
+  ])("rejects %s, as decoding does", (_, edit) => {
+    const data = canonical();
+    edit(data);
+    expect(() => Message.fromJSON(data)).toThrow(MessageFormatError);
+    expect(validate(SCHEMA, SCHEMA, data)).not.toEqual([]);
+  });
+
+  test("additionalProperties, not the validator, refuses an unlisted key", () => {
+    const part = { type: "text", text: "x", extra: 1 };
+    const text = { $ref: "#/$defs/text" };
+    expect(validate(SCHEMA, text, part)).toEqual(["$: undeclared key extra"]);
+    const open = structuredClone(SCHEMA);
+    delete (open.$defs as Record<string, Schema>).text!.additionalProperties;
+    expect(validate(open, text, part)).toEqual([]);
+  });
+
+  test("a replay record validates as $defs/replay_record", () => {
+    expect(validate(SCHEMA, RECORD, replayRecord(KEY, { item_id: "i" }))).toEqual([]);
+    expect(validate(SCHEMA, RECORD, replayRecord({ ...KEY, account: "acct_1" }, {}))).toEqual([]);
+    expect(validate(SCHEMA, RECORD, { ...replayRecord(KEY, {}), v: "1" })).toEqual([
+      "$.v: string is not integer",
+    ]);
+    expect(validate(SCHEMA, RECORD, { ...replayRecord(KEY, {}), v: 0n })).toEqual(["$.v: 0 is below 1"]);
+  });
+
+  test("every scripted reply and request message in the conformance cases validates", () => {
+    const root = fileURLToPath(new URL("../../../conformance/cases", import.meta.url));
+    const files = { reply: new Set<string>(), messages: new Set<string>() };
+    const counts = { reply: 0, messages: 0 };
+    const check = (kind: "reply" | "messages", file: string, value: Value) => {
+      const data = Message.fromJSON(value).toJSON();
+      expect([file, validate(SCHEMA, SCHEMA, data)]).toEqual([file, []]);
+      files[kind].add(file);
+      counts[kind] += 1;
+    };
+    for (const file of readdirSync(root, { recursive: true, encoding: "utf8" }).sort()) {
+      if (!file.endsWith(".yaml")) continue;
+      const host = readCase(readFileSync(join(root, file), "utf8"))["host"] as Case | undefined;
+      if (host?.["models"] === undefined) continue;
+      const models = decode(host["models"]) as Record<string, Record<string, Case[]>>;
+      for (const consumers of Object.values(models)) {
+        for (const entries of Object.values(consumers)) {
+          for (const entry of entries) {
+            if (entry["reply"] !== undefined) check("reply", file, entry["reply"]);
+            const request = entry["request"] as Case | undefined;
+            for (const message of (request?.["messages"] as Value[] | undefined) ?? []) {
+              check("messages", file, message);
+            }
+          }
+        }
+      }
+    }
+    expect([files.reply.size, counts.reply]).toEqual([35, 70]);
+    expect([files.messages.size, counts.messages]).toEqual([4, 10]);
   });
 });

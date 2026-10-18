@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "yian.message.v1",
+  "description": "One yian message: yian's own message records (run logs, session transcripts, model_attempt.partial, conformance scripts). yian reads them strictly and refuses an unknown key or part type; later versions add keys and part types, so a newer record fails an older yian. An optional key is left out, never null. Payloads (provider_payload, tool-call arguments) are opaque JSON whose numbers are finite and whose ints have any size. In yian's codec form (run logs, frames), a payload object shaped like {\"$float\": \"inf\"} or {\"$float\": \"-inf\"}, or whose only key is $record, is written as {\"$record\": <object>}; message numbers are never infinite.",
+  "type": "object",
+  "required": ["format", "role", "parts"],
+  "additionalProperties": false,
+  "properties": {
+    "format": {"const": "yian.message.v1"},
+    "role": {"enum": ["system", "user", "assistant", "tool"]},
+    "parts": {
+      "description": "The content, in order.",
+      "type": "array",
+      "items": {"$ref": "#/$defs/part"}
+    },
+    "protocol": {"type": "string", "description": "The protocol id of the adapter that produced the message, e.g. openai_responses or catalog:<provider>. Every provider payload in the message belongs to it."},
+    "provider_payload": {"$ref": "#/$defs/provider_payload"}
+  },
+  "$defs": {
+    "part": {
+      "description": "One part of a message, told apart by its type.",
+      "oneOf": [
+        {"$ref": "#/$defs/text"},
+        {"$ref": "#/$defs/media"},
+        {"$ref": "#/$defs/tool_call"},
+        {"$ref": "#/$defs/tool_result"},
+        {"$ref": "#/$defs/reasoning"},
+        {"$ref": "#/$defs/refusal"}
+      ]
+    },
+    "text": {
+      "description": "Text the model wrote or the user sent.",
+      "type": "object",
+      "required": ["type", "text"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "text"},
+        "text": {"type": "string"},
+        "provider_payload": {"$ref": "#/$defs/provider_payload"}
+      }
+    },
+    "media": {
+      "description": "An image or file, given inline as base64 data or by url; exactly one of the two.",
+      "type": "object",
+      "required": ["type", "mime"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "media"},
+        "mime": {"type": "string", "description": "The media type, e.g. image/png."},
+        "data": {"type": "string", "description": "Base64 content."},
+        "url": {"type": "string", "description": "Where the content lives."},
+        "name": {"type": "string", "description": "A file name."},
+        "provider_payload": {"$ref": "#/$defs/provider_payload"}
+      },
+      "oneOf": [
+        {"required": ["data"]},
+        {"required": ["url"]}
+      ]
+    },
+    "tool_call": {
+      "description": "A tool call the model asked for, with arguments, raw_arguments or both. By adapter convention, arguments is left out exactly when the raw text failed to parse.",
+      "type": "object",
+      "required": ["type", "id", "name"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "tool_call"},
+        "id": {"type": "string", "description": "The call id that the tool result answers."},
+        "name": {"type": "string", "description": "The tool name."},
+        "arguments": {"type": "object", "description": "The parsed arguments, opaque JSON."},
+        "raw_arguments": {"type": "string", "description": "The arguments text as the model sent it."},
+        "provider_payload": {"$ref": "#/$defs/provider_payload"}
+      },
+      "anyOf": [
+        {"required": ["arguments"]},
+        {"required": ["raw_arguments"]}
+      ]
+    },
+    "tool_result": {
+      "description": "The result of a tool call, sent back to the model.",
+      "type": "object",
+      "required": ["type", "call_id", "name", "content"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "tool_result"},
+        "call_id": {"type": "string", "description": "The id of the call this answers."},
+        "name": {"type": "string", "description": "The tool name."},
+        "content": {"type": "string", "description": "The result text."},
+        "is_error": {"type": "boolean", "description": "Whether the tool failed; left out when false."},
+        "provider_payload": {"$ref": "#/$defs/provider_payload"}
+      }
+    },
+    "reasoning": {
+      "description": "The model's reasoning text, or a summary of it; it may be empty.",
+      "type": "object",
+      "required": ["type", "text"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "reasoning"},
+        "text": {"type": "string"},
+        "provider_payload": {"$ref": "#/$defs/provider_payload"}
+      }
+    },
+    "refusal": {
+      "description": "The model's refusal to answer, kept apart from its text; it may be empty.",
+      "type": "object",
+      "required": ["type", "text"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"const": "refusal"},
+        "text": {"type": "string"},
+        "provider_payload": {"$ref": "#/$defs/provider_payload"}
+      }
+    },
+    "provider_payload": {
+      "description": "Opaque provider data, kept untouched; usually a replay record ($defs/replay_record).",
+      "type": "object"
+    },
+    "replay_record": {
+      "description": "Provider data an adapter sends back on a later turn. kind is the protocol id, v the version (1), provider and model the ones the record came from, and account, when present, a non-secret hash of the account the record is bound to; the other keys are the protocol's fields. A new field is additive; a changed meaning bumps v. A record that doesn't match the request is left out of it, never an error.",
+      "type": "object",
+      "required": ["kind", "v", "provider", "model"],
+      "properties": {
+        "kind": {"type": "string"},
+        "v": {"type": "integer", "minimum": 1},
+        "provider": {"type": "string"},
+        "model": {"type": "string"},
+        "account": {"type": "string"}
+      }
+    }
+  }
+}

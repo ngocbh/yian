@@ -36,6 +36,7 @@ from yian.compose import LoadError, load_flow
 from yian.expr.expressions import ResolveMode, eval_expr, evaluate_when_record
 from yian.expr.grammar import parse_expr
 from yian.expr.template import eval_binding, render_template_record
+from yian.run import resume_flow, run_flow
 from yian.typesys.types import read_typedefs, type_for
 from yian.typesys.values import ValueKind, build_value_as
 
@@ -197,12 +198,22 @@ _WORKTREE = Path(__file__).parent.parent
 _YIAN_DIR = os.path.dirname(yian.__file__) + os.sep
 # Calls from these files are the engine's own or the harvest's, never a test's.
 _NOT_TEST = {runner.__file__, __file__}
-_GROUPS = {"value": "values", "defaults": "defaults"}
+_GROUPS = {"value": "values", "defaults": "defaults", "run": "run-core"}
 # A top-level `uses:` key; the flow text can't be read as plain YAML (tags), so it's matched.
+# One the match misses (an indented document, flow style) leaves the replay without the
+# child's files, so the replay differs and the candidate is rejected.
 _USES = re.compile(r"^uses\s*:", re.MULTILINE)
 _AGENT = re.compile(r"\bkind:\s*agent\b")
 _FILES_LIMIT = 50
 _FILES_BYTES = 256 * 1024
+# A `run_flow` argument is written under `run` when it differs from its default here.
+_RUN_DEFAULTS = {"run_id": None, "num_workers": 8, "learnable": False, "llm_config": None}
+_RUN_HOSTS = ("tools", "memory", "skills", "steering")
+# The case sections a test's inputs go into, which must not hold the test's secrets.
+_INPUT_KEYS = ("flow", "files", "env", "inputs", "run", "host", "backward", "values", "item",
+               "value")
+# Results a run case leaves out of its `expect` when they are empty.
+_LEFT_OUT_WHEN_EMPTY = ("events", "stream", "tool_calls")
 # The harvest's state while it runs, None when the plugin is off.
 _STATE: _Harvest | None = None
 
@@ -239,13 +250,18 @@ def _written(case: dict) -> str:
         raise _Skip("not data: case file") from None
 
 
-def _env(models: bool = False) -> dict:
+def _keyed(secret: str, keys: dict) -> str:
+    """Return the `<key:N>` placeholder for `secret`, numbering secrets in `keys` from 1."""
+    return f"<key:{keys.setdefault(secret, len(keys) + 1)}>"
+
+
+def _env(models: bool = False, keys: dict | None = None) -> dict:
     """Return the environment a call sees, as `{"env": ...}`.
 
     That is every `YIAN_*` variable but `YIAN_AUTH_FILE` and, unless `models`, the model
     defaults (`expr`, `value` and `defaults` calls don't read them), and each connection
     variable whose value differs from the session's start, with `*_API_KEY` values as
-    `<key:N>`. Empty: `{}`.
+    `<key:N>`, numbered in `keys` (default: a new numbering). Empty: `{}`.
     """
     left_out = ("YIAN_AUTH_FILE",) if models else (
         "YIAN_AUTH_FILE", "YIAN_DEFAULT_PROVIDER", "YIAN_DEFAULT_MODEL")
@@ -258,10 +274,10 @@ def _env(models: bool = False) -> dict:
             keep = name.endswith(runner._ENV_SUFFIXES) and _STATE.start_env.get(name) != value
         if keep:
             env[name] = value
-    keys: dict = {}
+    keys = {} if keys is None else keys
     for name, value in env.items():
         if name.endswith("_API_KEY"):
-            env[name] = f"<key:{keys.setdefault(value, len(keys) + 1)}>"
+            env[name] = _keyed(value, keys)
     return {"env": env} if env else {}
 
 
@@ -283,9 +299,11 @@ def _result(outcome: tuple, form) -> dict:
 def _expect(case: dict, results: dict) -> dict:
     """Return the runner's `results` for `case` as its `expect`.
 
-    The runner's own `error` and `left` go, and `defaults` keeps the entries `env` sets.
+    The runner's own `error` and `left` go, so do a run's empty events, stream and tool calls,
+    and `defaults` keeps the entries `env` sets.
     """
-    expect = {key: value for key, value in results.items() if key not in ("error", "left")}
+    expect = {key: value for key, value in results.items()
+              if key not in ("error", "left") and (value or key not in _LEFT_OUT_WHEN_EMPTY)}
     if "defaults" in expect:
         expect["defaults"] = {name: expect["defaults"][name] for name in _set_entries(case)}
     return expect
@@ -520,7 +538,7 @@ def _record_load_flow(arguments: dict):
     """
     if arguments["child_resolver"] is not None:
         raise _Skip("child_resolver")
-    text = arguments["text"]
+    text, call = arguments["text"], _STATE.active
     # Read now: the test may change the files after the call.
     case = {"kind": "load", "flow": text, **_files(text, arguments["search_paths"]),
             **_env(models=True)}
@@ -528,13 +546,61 @@ def _record_load_flow(arguments: dict):
     def finish(outcome: tuple) -> tuple:
         kind, value = outcome
         if kind == "value":
-            _STATE.flows[id(value)] = (value, case)
+            _STATE.flows[id(value)] = (value, case, call)
             return case, {"load": "ok"}
         if not isinstance(value, LoadError):
             raise _Skip(f"load raised {type(value).__name__}")
         return case, {"load": {"diagnostics": [runner._diagnostic(value.diagnostic)]}}
 
     return finish
+
+
+def _record_run_flow(arguments: dict):
+    """Record a `run_flow` call as a `run` case, its flow's text from its `load_flow` record.
+
+    `log` and the event and stream hooks aren't kept: the runner gives the run its own. The
+    run claims the load record, which isn't a case of its own once the run's case is written.
+    """
+    for host in _RUN_HOSTS:
+        if arguments[host]:
+            raise _Skip(f"host: {host}")
+    held = _STATE.flows.get(id(arguments["flow"]))
+    if held is None:
+        raise _Skip("flow text unknown")
+    _, load, load_call = held
+    call = _STATE.active
+    load_call.runs.append(call)
+    keys: dict = {}
+    case = {"kind": "run", **{key: load[key] for key in ("flow", "files") if key in load},
+            **_env(models=True, keys=keys)}
+    inputs = _plain(arguments["inputs"], "inputs")
+    if inputs != {}:
+        case["inputs"] = inputs
+    run = {key: _plain(arguments[key], key) for key in _RUN_DEFAULTS}
+    run = {key: value for key, value in run.items() if not runner._same(value, _RUN_DEFAULTS[key])}
+    if arguments["context"] is not None:
+        run["context"] = "present"
+    config = run.get("llm_config")
+    if isinstance(config, dict):
+        headers = config["headers"] if isinstance(config.get("headers"), dict) else {}
+        # The key and header values the run sends are secrets: the case holds placeholders.
+        for holder, name in [(config, "api_key"), *((headers, name) for name in headers)]:
+            if isinstance(holder.get(name), str):
+                call.secrets.add(holder[name])
+                holder[name] = _keyed(holder[name], keys)
+    if run:
+        case["run"] = run
+
+    def finish(outcome: tuple) -> tuple:
+        return case, _result(outcome,
+                             lambda result: {"output": runner._output(result, arguments["flow"])})
+
+    return finish
+
+
+def _record_resume_flow(arguments: dict):
+    """Skip a `resume_flow` call: resume cases are converted by hand."""
+    raise _Skip("resume (hand-converted)")
 
 
 def _remember_tree(arguments: dict, tree: object) -> None:
@@ -575,11 +641,12 @@ def _maps(frame) -> bool:
             and _from_test(frame))
 
 
-def _begin_record(frame) -> _Test | None:
-    """Start recording a call from `frame` and return the running test, when the call counts.
+def _begin_record(frame, entry: str) -> tuple[_Test, _Call] | None:
+    """Start recording a call to `entry` from `frame`, when the call counts.
 
     It counts when a test's code made it while a test runs, the harvest isn't replaying, and
-    no recorded call is active anywhere in the process. Otherwise None.
+    no recorded call is active anywhere in the process. Returns the running test and the
+    call's record, which is the active one until `_end_record`; otherwise None.
     """
     state = _STATE
     if not _maps(frame):
@@ -587,16 +654,16 @@ def _begin_record(frame) -> _Test | None:
     with state.lock:
         # Read once: a thread a test left behind may record while the test ends.
         test = state.test
-        if state.depth or test is None:
+        if state.active is not None or test is None:
             return None
-        state.depth += 1
-        return test
+        state.active = _Call(entry)
+        return test, state.active
 
 
 def _end_record() -> None:
     """End the recorded call `_begin_record` started."""
     with _STATE.lock:
-        _STATE.depth -= 1
+        _STATE.active = None
 
 
 class _Call:
@@ -608,6 +675,11 @@ class _Call:
         self.case: dict | None = None
         self.result: dict | None = None
         self.skip: str | None = "the call didn't finish"
+        # The keys and header values the call could use; a case holding one isn't written.
+        self.secrets: set[str] = set()
+        # For a load, the records of the runs of its flow.
+        self.runs: list[_Call] = []
+        self.written = False
 
 
 def _finish_call(call: _Call, finish, outcome: tuple) -> None:
@@ -626,9 +698,9 @@ def _finish_call(call: _Call, finish, outcome: tuple) -> None:
         call.skip = _harvest_error(exc)
 
 
-def _recorded(test: _Test, entry: str, original, recorder, signature, args: tuple,
+def _recorded(test: _Test, call: _Call, original, recorder, signature, args: tuple,
               kwargs: dict) -> object:
-    """Call `original` with `args` and `kwargs`, recording the call in `test` via `recorder`.
+    """Call `original` with `args` and `kwargs`, recording it as `call` in `test` via `recorder`.
 
     `recorder(arguments)` reads the bound arguments (it may replace some, such as a resolver)
     and returns the step that turns the call's outcome into a case and result. The call's own
@@ -640,8 +712,8 @@ def _recorded(test: _Test, entry: str, original, recorder, signature, args: tupl
         # The call's own error, from the function itself.
         return original(*args, **kwargs)
     bound.apply_defaults()
-    call = _Call(entry)
     test.calls.append(call)
+    call.secrets.update(value for name, value in os.environ.items() if name.endswith("_API_KEY"))
     finish = None
     try:
         finish = recorder(bound.arguments)
@@ -664,11 +736,11 @@ def _entry(entry: str, original, recorder):
 
     @functools.wraps(original)
     def wrapper(*args: object, **kwargs: object) -> object:
-        test = _begin_record(sys._getframe(1))
-        if test is None:
+        begun = _begin_record(sys._getframe(1), entry)
+        if begun is None:
             return original(*args, **kwargs)
         try:
-            return _recorded(test, entry, original, recorder, signature, args, kwargs)
+            return _recorded(*begun, original, recorder, signature, args, kwargs)
         finally:
             _end_record()
 
@@ -732,7 +804,9 @@ class _Harvest:
         self.index = _Index(out / "cases")
         self.start_env = dict(os.environ)
         self.lock = threading.Lock()
-        self.depth = 0
+        # The record of the recorded call running now, anywhere in the process; no other call
+        # is recorded while it runs.
+        self.active: _Call | None = None
         # Set while the harvest replays, so the runner's calls are never recorded.
         self.disabled = False
         self.test: _Test | None = None
@@ -741,7 +815,7 @@ class _Harvest:
         self.trees: dict = {}
         self.types: dict = {}
         self.registries: dict = {}
-        # The load case of each flow the test loaded, so a run of that flow can claim it.
+        # Each flow the test loaded, with its load case and record, so a run of it can claim it.
         self.flows: dict = {}
         self.remaining: dict[str, int] = {}
         self.reports: dict[str, dict] = {}
@@ -782,7 +856,8 @@ def _replay(state: _Harvest, case: dict) -> dict:
         path = Path(directory) / "candidate.yaml"
         path.write_text(text, encoding="utf-8")
         case_dir = Path(directory) / "case"
-        case_dir.mkdir()
+        # The auth file goes here, and a run refuses one in a directory others can read.
+        case_dir.mkdir(mode=0o700)
         state.disabled = True
         try:
             return runner.results(runner._read(path), case_dir, candidate=True)
@@ -799,13 +874,42 @@ def _replay(state: _Harvest, case: dict) -> dict:
 def _agreed(case: dict, results: dict) -> dict:
     """Return what agreement compares of `results`.
 
-    That is their `expect`, with a load error cut to its first diagnostic's code and message.
+    That is their `expect`, with a load error cut to its first diagnostic's code and message,
+    and a run's cut to its `raises` or `output`, a failure to its code, message and node.
     """
     agreed = _expect(case, results)
     load = agreed.get("load")
     if isinstance(load, dict):
         agreed["load"] = {key: load["diagnostics"][0][key] for key in ("code", "message")}
+    if case["kind"] == "run":
+        # The test's own call gives no trace, events or stream.
+        agreed = {key: agreed[key] for key in ("raises", "output") if key in agreed}
+        output = agreed.get("output")
+        if output is not None and output["status"] == "failed":
+            agreed["output"] = {"status": "failed", "failure": {
+                key: output["failure"][key] for key in ("code", "message", "node")}}
     return agreed
+
+
+def _texts(value: object):
+    """Yield every text in the case value `value`, mapping keys included."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, list):
+        for item in value:
+            yield from _texts(item)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield key
+            yield from _texts(item)
+
+
+def _scan_secrets(case: dict, secrets: set) -> None:
+    """Raise `_Skip` when one of `secrets` (those of 8 or more characters) is in a case input."""
+    secrets = {secret for secret in secrets if len(secret) >= 8}
+    for key in _INPUT_KEYS:
+        if any(secret in text for text in _texts(case.get(key)) for secret in secrets):
+            raise _Skip(f"secret in {key}")
 
 
 def _group(case: dict) -> str:
@@ -820,13 +924,16 @@ def _expected(state: _Harvest, call: _Call) -> tuple[str, str]:
     if call.skip:
         raise _Skip(call.skip)
     case = call.case
+    _scan_secrets(case, call.secrets)
     # Python's `and`/`or` give an operand, not a bool, and that decides conditions too.
     if case["kind"] == "expr" and _and_or(case):
         raise _Skip(_HELD)
     actual = _replay(state, case)
     if actual.get("left"):
         raise _Skip("replay left script entries")
-    if not runner._same(_agreed(case, actual), _agreed(case, call.result)):
+    # A run's output is a host value, whose numbers the runner compares by value.
+    if not runner._same(_agreed(case, actual), _agreed(case, call.result),
+                        by_value=case["kind"] == "run"):
         raise _Skip("replay differs")
     expect = _expect(case, actual)
     text = _written({**case, "expect": expect})
@@ -883,10 +990,16 @@ def _finish(state: _Harvest, item: pytest.Item) -> None:
     report = state.reports.setdefault(path, _new_report(path))
     report["tests"][test.outcome] += 1
     if test.outcome == "passed":
-        for number, call in enumerate(test.calls, 1):
+        # A load goes after the runs of its flow and is no case of its own once one of them is
+        # written, since a run's case holds its load.
+        calls = sorted(enumerate(test.calls, 1), key=lambda numbered: bool(numbered[1].runs))
+        for number, call in calls:
             report["records"][call.entry] = report["records"].get(call.entry, 0) + 1
+            if any(run.written for run in call.runs):
+                continue
             try:
                 _write(state, report, call, path, test_id, number)
+                call.written = True
                 continue
             except _Skip as skip:
                 reason = str(skip)
@@ -921,6 +1034,8 @@ def pytest_configure(config: pytest.Config) -> None:
         "build_value_as": (build_value_as, _record_build_value_as),
         "defaults.current": (defaults.current, _record_defaults),
         "load_flow": (load_flow, _record_load_flow),
+        "run_flow": (run_flow, _record_run_flow),
+        "resume_flow": (resume_flow, _record_resume_flow),
     }
     for entry, (original, recorder) in entries.items():
         _replace(original, _entry(entry, original, recorder), _STATE.replaced)
@@ -975,23 +1090,31 @@ def pytest_deselected(items: list) -> None:
 
 
 def pytest_terminal_summary(terminalreporter) -> None:
-    """Add up every report under `<out>/report`: tests, cases written, duplicates, skips."""
+    """Add up every report under `<out>/report`: tests, cases written, duplicates, flags, skips.
+
+    A line counts the files this run harvested but didn't report, as its selection narrowed them.
+    """
     if _STATE is None:
         return
     reports = [json.loads(path.read_text(encoding="utf-8"))
                for path in sorted((_STATE.out / "report").glob("*.json"))]
-    tests, written, skips, duplicates = Counter(), Counter(), Counter(), 0
+    tests, written, flags, skips, duplicates = Counter(), Counter(), Counter(), Counter(), 0
     for report in reports:
         tests.update(report["tests"])
         written.update(report["written"])
         duplicates += report["duplicates"]
+        flags.update({flag: len(names) for flag, names in report["flags"].items()})
         skips.update({reason: len(ids) for reason, ids in report["skips"].items()})
     write = terminalreporter.write_line
     terminalreporter.write_sep("-", "conformance harvest")
     write(f"files reported: {len(reports)}; tests: {tests['passed']} passed, "
           f"{tests['failed']} failed, {tests['skipped']} skipped")
+    narrowed = _STATE.narrowed & _STATE.reports.keys()
+    if narrowed:
+        write(f"not reported (narrowed selection): {len(narrowed)} files")
     groups = ", ".join(f"{group} {n}" for group, n in sorted(written.items())) or "none"
     write(f"written: {groups}; {duplicates} duplicates")
+    write("flags: " + (", ".join(f"{flag} {n}" for flag, n in sorted(flags.items())) or "none"))
     if skips:
         write("top skip reasons (tests):")
     for reason, n in skips.most_common(10):

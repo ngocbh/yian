@@ -1993,13 +1993,18 @@ def test_uses(tmp_path):
 
 def test_child_resolver():
     load_flow(USES, child_resolver=lambda path, version=None: load_flow(CHILD))
+
+
+def test_label():
+    with pytest.raises(TypeError):
+        load_flow(OK, source_label=1)
 '''
 
 
 def test_harvest_records_loads_and_resumes(tmp_path: Path) -> None:
     """Loads become `load` cases, `uses:` ones with `files`; a reported file isn't run again."""
     done, out = _harvest(tmp_path, _LOAD_TESTS)
-    assert "5 passed" in done.stdout, done.stdout + done.stderr
+    assert "6 passed" in done.stdout, done.stdout + done.stderr
     cases = {path.relative_to(out / "cases").as_posix(): _read(path)
              for path in sorted((out / "cases").glob("*/*.yaml"))}
     assert sorted(cases) == ["load-agent/sample__agent.yaml", "load-core/sample__load_error.yaml",
@@ -2024,20 +2029,23 @@ def test_harvest_records_loads_and_resumes(tmp_path: Path) -> None:
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report == {
         "file": "test_sample.py",
-        "tests": {"passed": 5, "failed": 0, "skipped": 0},
+        "tests": {"passed": 6, "failed": 0, "skipped": 0},
         # The child_resolver's own load runs inside a recorded one.
-        "records": {"load_flow": 5},
+        "records": {"load_flow": 6},
         "written": {"load-core": 3, "load-agent": 1},
         "duplicates": 0,
-        "skips": {"child_resolver": ["test_child_resolver"]},
+        "skips": {"child_resolver": ["test_child_resolver"],
+                  "load raised TypeError": ["test_label"]},
         "flags": {},
     }
     assert "conformance harvest" in done.stdout
     assert "written: load-agent 1, load-core 3; 0 duplicates" in done.stdout, done.stdout
+    assert "flags: none" in done.stdout, done.stdout
+    assert "not reported" not in done.stdout, done.stdout
 
     before = {path: path.read_bytes() for path in out.rglob("*") if path.is_file()}
     again, _ = _harvest(tmp_path, _LOAD_TESTS)
-    assert "5 deselected" in again.stdout, again.stdout + again.stderr
+    assert "6 deselected" in again.stdout, again.stdout + again.stderr
     assert {path: path.read_bytes() for path in out.rglob("*") if path.is_file()} == before
 
     # A narrowed selection harvests its tests but never closes the file.
@@ -2049,3 +2057,174 @@ def test_harvest_records_loads_and_resumes(tmp_path: Path) -> None:
         assert "1 passed" in done.stdout, done.stdout + done.stderr
         assert (out / "cases" / "load-core" / "sample__load_ok.yaml").is_file()
         assert not (out / "report").exists()
+        assert "not reported (narrowed selection): 1 files" in done.stdout, done.stdout
+
+
+def test_harvest_files_limits(tmp_path: Path) -> None:
+    """A `uses:` load's files: its `flow.yaml` must be the flow; 50 files and 256 KiB at most."""
+    from tests import conformance_harvest as harvest
+
+    text = "id: parent\nuses:\n  child: lib/child\n"
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "lib" / "child.yaml").write_text("id: child\n", encoding="utf-8")
+    (tmp_path / "flow.yaml").write_text(text, encoding="utf-8")
+    assert harvest._files(text, [tmp_path]) == {"files": {"lib/child.yaml": "id: child\n"}}
+    assert harvest._files("id: plain\n", [tmp_path]) == {}
+    with pytest.raises(harvest._Skip, match="uses: needs one search path"):
+        harvest._files(text, [])
+    (tmp_path / "flow.yaml").write_text(text + "# changed\n", encoding="utf-8")
+    with pytest.raises(harvest._Skip, match="files: flow.yaml isn't the flow"):
+        harvest._files(text, [tmp_path])
+    (tmp_path / "flow.yaml").unlink()
+    (tmp_path / "lib" / "big.yaml").write_text("x" * (256 * 1024), encoding="utf-8")
+    with pytest.raises(harvest._Skip, match="files: more than 256 KiB"):
+        harvest._files(text, [tmp_path])
+    (tmp_path / "lib" / "big.yaml").unlink()
+    for index in range(50):
+        (tmp_path / "lib" / f"extra_{index}.yaml").write_text("id: x\n", encoding="utf-8")
+    with pytest.raises(harvest._Skip, match="files: more than 50"):
+        harvest._files(text, [tmp_path])
+
+
+_RUN_TESTS = '''
+import pytest
+
+from yian import load_flow
+from yian.run import resume_flow, run_flow
+
+ECHO = """\\
+id: echo
+name: echo
+input:
+  q: !str
+nodes: {}
+output: ${input.q}
+"""
+
+
+def test_run():
+    flow = load_flow(ECHO)
+    assert run_flow(flow, {"q": "hi"}, run_id="r1", num_workers=0).output == "hi"
+
+
+def test_pooled():
+    assert run_flow(load_flow(ECHO), {"q": "pooled"}, run_id="r1").output == "pooled"
+
+
+def test_failed():
+    assert run_flow(load_flow(ECHO), {}, run_id="r1", num_workers=0).status == "failed"
+
+
+def test_raises():
+    with pytest.raises(ValueError):
+        run_flow(load_flow(ECHO), {"nope": 1}, num_workers=0)
+
+
+def test_keyed():
+    config = {"provider": "openai", "api_key": "sk-other-key-5678",
+              "headers": {"X-Team": "team-header-value"}}
+    flow = load_flow(ECHO)
+    assert run_flow(flow, {"q": "k"}, run_id="r1", num_workers=0, llm_config=config,
+                    learnable=True, context=object()).output == "k"
+
+
+def test_secret():
+    config = {"provider": "openai", "api_key": "sk-test-secret-1234"}
+    flow = load_flow(ECHO)
+    run_flow(flow, {"q": "sk-test-secret-1234"}, run_id="r1", num_workers=0, llm_config=config)
+
+
+def test_tools():
+    flow = load_flow(ECHO)
+    run_flow(flow, {"q": "t"}, run_id="r1", num_workers=0, tools={"noop": lambda: None})
+
+
+def test_tmp_path(tmp_path):
+    flow = load_flow(ECHO)
+    run_flow(flow, {"q": str(tmp_path)}, run_id="r1", num_workers=0)
+
+
+def test_unknown_flow():
+    flow = load_flow(ECHO, child_resolver=lambda path, version=None: None)
+    run_flow(flow, {"q": "u"}, run_id="r1", num_workers=0)
+
+
+def test_resume(tmp_path):
+    flow = load_flow(ECHO)
+    run_flow(flow, {"q": "again"}, run_id="r1", num_workers=0, log=tmp_path / "run.jsonl")
+    assert resume_flow(flow, log=tmp_path / "run.jsonl").output == "again"
+'''
+
+
+def test_harvest_records_runs(tmp_path: Path) -> None:
+    """Serial runs become `run-core` cases with their flow; hosts, secrets and paths skip."""
+    done, out = _harvest(tmp_path, _RUN_TESTS)
+    assert "10 passed" in done.stdout, done.stdout + done.stderr
+    cases = {path.relative_to(out / "cases").as_posix(): _read(path)
+             for path in sorted((out / "cases").glob("*/*.yaml"))}
+    # A load whose run is written is no case of its own; one whose run isn't stays.
+    assert sorted(cases) == [
+        "load-core/sample__secret.yaml", "run-core/sample__failed__2.yaml",
+        "run-core/sample__keyed__2.yaml", "run-core/sample__pooled__2.yaml",
+        "run-core/sample__raises__2.yaml", "run-core/sample__resume__2.yaml",
+        "run-core/sample__run__2.yaml",
+    ]
+    env = {"YIAN_DEFAULT_MODEL": "gpt-5.5", "YIAN_DEFAULT_PROVIDER": "openai"}
+    run = cases["run-core/sample__run__2.yaml"]
+    assert run == {
+        "kind": "run", "flow": run["flow"], "env": env, "inputs": {"q": "hi"},
+        "run": {"run_id": "r1", "num_workers": 0},
+        "expect": {
+            "output": {"status": "succeeded", "output": "hi"},
+            "trace": [
+                ["run_started", None, {"inputs": {"q": "hi"}, "learnable": False,
+                                       "num_workers": 0}],
+                ["node_started", "__start__"],
+                ["node_succeeded", "__start__", {"value": {"q": "hi"}}],
+                ["node_started", "__end__"],
+                ["node_succeeded", "__end__", {"value": "hi"}],
+            ],
+            "events": [
+                ["RunStarted"],
+                ["NodeStarted", {"node_id": "__start__"}],
+                ["NodeSucceeded", {"node_id": "__start__", "output": {"q": "hi"}}],
+                ["NodeStarted", {"node_id": "__end__"}],
+                ["NodeSucceeded", {"node_id": "__end__", "output": "hi"}],
+                ["RunSucceeded", {"output": "hi"}],
+            ],
+        },
+    }
+    assert run["flow"].startswith("id: echo\n")
+    # The runner's default is the test's: 8 workers.
+    assert cases["run-core/sample__pooled__2.yaml"]["run"] == {"run_id": "r1"}
+    failure = cases["run-core/sample__failed__2.yaml"]["expect"]["output"]
+    assert failure["status"] == "failed" and failure["failure"]["node"] == "__start__"
+    raises = cases["run-core/sample__raises__2.yaml"]
+    assert "run" in raises and "run_id" not in raises["run"]
+    assert raises["expect"]["raises"] == {"class": "ValueError",
+                                          "message": "unknown input 'nope'; declared inputs: q"}
+    keyed = cases["run-core/sample__keyed__2.yaml"]
+    assert keyed["run"] == {
+        "run_id": "r1", "num_workers": 0, "learnable": True, "context": "present",
+        "llm_config": {"provider": "openai", "api_key": "<key:1>",
+                       "headers": {"X-Team": "<key:2>"}}}
+    for name, case in cases.items():
+        case_dir = tmp_path / "replay" / name
+        # A run reads the auth file here, and refuses a directory others can read.
+        case_dir.mkdir(parents=True, mode=0o700)
+        _check_results(case, results(case, case_dir))
+
+    report = json.loads((out / "report" / "test_sample.py.json").read_text(encoding="utf-8"))
+    assert report == {
+        "file": "test_sample.py",
+        "tests": {"passed": 10, "failed": 0, "skipped": 0},
+        "records": {"load_flow": 10, "run_flow": 10, "resume_flow": 1},
+        "written": {"run-core": 6, "load-core": 1},
+        # The loads of the tools and tmp_path tests hold the secret test's load text.
+        "duplicates": 2,
+        "skips": {"secret in inputs": ["test_secret"], "host: tools": ["test_tools"],
+                  "machine path": ["test_tmp_path"], "child_resolver": ["test_unknown_flow"],
+                  "flow text unknown": ["test_unknown_flow"],
+                  "resume (hand-converted)": ["test_resume"]},
+        "flags": {},
+    }

@@ -1300,8 +1300,9 @@ describe("an int in a float slot", () => {
       Point: { x: "float", xs: "list(float)" },
       Wrap: { inner: "Point" },
     });
-    expect(buildValueAs(typeFor("float", reg), 1n).toObject()).toBe(1n);
-    expect(buildValueAs(typeFor("float", reg), 1n).kind).toBe(ValueKind.INTEGER);
+    const whole = buildValueAs(typeFor("float", reg), 1n);
+    expect(whole.toObject()).toBe(1n);
+    expect(whole.kind).toBe(ValueKind.INTEGER);
     expect(buildValueAs(typeFor("float(0..1)", reg), 1n).kind).toBe(ValueKind.INTEGER);
     expect(buildValueAs(typeFor("Optional(float)", reg), 1n).kind).toBe(ValueKind.INTEGER);
     const point = buildValueAs(typeFor("Point", reg), { x: 1n, xs: [1n, 2n] }).toObject();

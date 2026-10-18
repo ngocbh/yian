@@ -12,8 +12,8 @@
  * converts to a float in TS, `int-in-float`); the complex-number rows (no complex numbers in
  * TS); the `ObjectValue`, pydantic extras and dataclass rows (a `TypedValue`, a class instance
  * and a dataclass are refused by intake as non-plain objects, see `plain_containers.test.ts`);
- * the cycle half of
- * `test_reject_nonfinite_accepts_finite_values_and_cycles` (intake refuses a cycle); and
+ * the cycle half of `test_reject_nonfinite_accepts_finite_values_and_cycles` (intake refuses a
+ * cycle); and
  * `test_a_str_subclass_key_becomes_an_exact_str_segment` (a record key is always a string).
  */
 

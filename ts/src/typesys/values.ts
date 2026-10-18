@@ -2259,7 +2259,7 @@ function buildScalarOrList(declared: ValueKind, value: unknown, path: ValuePath)
     if (temporal && typeof value === "string") message += `: ${temporalError(declared, value)}`;
     throw new TypeCheckError(message, { path });
   }
-  // A `float` slot given an int stores it as an int.
+  // The stored kind follows the value, so a `float` carrier never holds a bigint.
   if (declared === ValueKind.NUMBER && typeof value === "bigint") {
     return new TypedValue(ValueKind.INTEGER, value);
   }

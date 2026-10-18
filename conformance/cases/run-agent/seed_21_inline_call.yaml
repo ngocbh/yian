@@ -3,8 +3,8 @@
 # child's CODE node; `summary` reads the child's headlines.
 kind: run
 # `fetch_facts` returns the integral float 100.0 into a `list(float)`; TS stores the int 100 (an
-# integral host number reads as an int and a float slot keeps it); `expect` leaves out the trace
-# until the TS runtime can produce it, and `python_expect` pins Python's.
+# integral host number reads as an int and a float slot keeps it); `expect` doesn't pin the trace
+# yet, and `python_expect` pins Python's.
 rules: [numbers, int-in-float]
 flow: |
   # 21 — inline call(f, ...) directive: a flow call written as a binding's whole value.

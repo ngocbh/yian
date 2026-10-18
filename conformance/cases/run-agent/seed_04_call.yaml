@@ -2,9 +2,9 @@
 # A CALL through a `uses:` alias grows the child's nodes under `research/`, the child's date
 # default filling the omitted `as_of`; an AGENT then reads fields of the CALL's record.
 kind: run
-# The child's `fetch_facts` returns the integral float 100.0 into a `list(float)`; TS stores the
-# int 100 (an integral host number reads as an int and a float slot keeps it); `expect` leaves out
-# the trace until the TS runtime can produce it, and `python_expect` pins Python's.
+# The child's `fetch_facts` returns the integral float 100.0 into a `list(float)`; TS stores the int
+# 100 (an integral host number reads as an int and a float slot keeps it); `expect` doesn't pin the
+# trace yet, and `python_expect` pins Python's.
 rules: [numbers, int-in-float]
 flow: |
   # 04 — CALL: typed function application (call another flow).

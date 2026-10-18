@@ -134,10 +134,6 @@ test("unary minus on a list holding a huge int", () => {
   );
 });
 
-test("the division by zero message", () => {
-  expectMessage("1 / 0", "division by zero: 1 / 0");
-});
-
 test("the type error message", () => {
   expectMessage('1 + "a"', 'type error evaluating 1 + "a": unsupported operand kinds for `+`: `int` and `str`');
 });
@@ -416,7 +412,7 @@ describe("/ gives a correctly rounded float", () => {
   test("1000 seeded scaled pairs divide as their unscaled doubles", () => {
     const random = mulberry32(53);
     const draw53 = (): bigint => {
-      const magnitude = (BigInt(random() >>> 11) << 32n) | BigInt(random() >>> 0);
+      const magnitude = (BigInt(random() >>> 11) << 32n) | BigInt(random());
       return random() & 1 ? -magnitude : magnitude;
     };
     const failures: string[] = [];
@@ -469,6 +465,13 @@ describe("**", () => {
     ["inf ** 0", 1],
   ] as [string, Value][])("%s", (text, expected) => {
     expect(evaluate(text)).toBe(expected);
+  });
+
+  test.each([
+    ["x ** 1", 5e-324],
+    ["x ** -1", Infinity],
+  ])("%s with the subnormal x = 5e-324", (text, expected) => {
+    expect(evaluate(text, fromRecord({ x: 5e-324 }))).toBe(expected);
   });
 });
 

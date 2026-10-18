@@ -113,7 +113,7 @@ export function constructorShapeError(name: string, callSuffix: Tree): string | 
  * @throws {ExpressionError} For `in` with a right side that isn't text, a list or a record, or a
  *   non-text left side in text; or ordering two values that aren't both numbers or both text.
  */
-function compare(op: string, lhs: Value, rhs: Value): boolean {
+function evalComparison(op: string, lhs: Value, rhs: Value): boolean {
   switch (op) {
     case "==":
       return equal(lhs, rhs);
@@ -332,16 +332,15 @@ export const ResolveMode = Object.freeze({
 
 export type ResolveMode = (typeof ResolveMode)[keyof typeof ResolveMode];
 
-// A sentinel telling a `refcall` miss apart from a resolved `null`, so `default`/`required` can
-// fire on a genuine miss. Non-strict modes turn it into `null` at the operator boundary; strict
-// mode throws.
-/** Marker for an unresolved reference (distinct from a resolved `null` value). */
-class Missing {}
-
-const MISSING = new Missing();
+/**
+ * Marker for an unresolved reference, telling a `refcall` miss apart from a resolved `null`, so
+ * `default`/`required` can fire on a genuine miss. Non-strict modes turn it into `null` at the
+ * operator boundary; strict mode throws.
+ */
+const MISSING: unique symbol = Symbol("missing");
 
 /** What walking a subtree gives: a value, or `MISSING` for an unresolved reference. */
-type Walked = Value | Missing;
+type Walked = Value | typeof MISSING;
 
 /**
  * Apply one operator of an arithmetic chain to two resolved values.
@@ -443,7 +442,8 @@ const EXACT_LIMIT = 2n ** 53n;
 
 /** Return the float nearest `x / y` (ties to even); `0n / -5n` is `-0`. */
 function trueDivide(x: bigint, y: bigint): number {
-  // Both convert exactly, so the float division is correctly rounded.
+  // Both convert exactly, so the float division is correctly rounded. Beyond 2^53,
+  // `Number(x) / Number(y)` would round twice, while Python's int / int is correctly rounded.
   if (-EXACT_LIMIT <= x && x <= EXACT_LIMIT && -EXACT_LIMIT <= y && y <= EXACT_LIMIT) return Number(x) / Number(y);
   const quotient = roundQuotient(x < 0n ? -x : x, y < 0n ? -y : y);
   return x < 0n !== y < 0n ? -quotient : quotient;
@@ -590,16 +590,19 @@ class EvalExpr {
       }
       return null;
     }
-    return value as Value;
+    return value;
   }
 
   /** Turn `MISSING` into `null` in every mode: a `|` / `:-` / `:?` operand whose miss the operator handles. */
   static orNone(value: Walked): Value {
-    return value === MISSING ? null : (value as Value);
+    return value === MISSING ? null : value;
   }
 
   // --- dispatch --- //
-  /** Evaluate one subtree; every subtree goes through here. */
+  /**
+   * Evaluate one subtree: the single hook every subtree goes through, where value tracing will
+   * go with `lineage.ts`.
+   */
   walk(node: ExprNode): Walked {
     return this.dispatch(node);
   }
@@ -622,11 +625,11 @@ class EvalExpr {
       case "and_expr":
         return this.andExpr(node);
       case "compare":
-        return this.compare(node);
+        return this.comparison(node);
       case "compare_in":
-        return this.compareIn(node);
+        return this.comparison(node, "in");
       case "compare_notin":
-        return this.compareNotin(node);
+        return this.comparison(node, "not in");
       case "sum":
       case "product":
         return this.sum(node);
@@ -703,7 +706,7 @@ class EvalExpr {
    */
   dottedStep(value: Walked, step: string): Walked {
     if (value === MISSING) return MISSING;
-    const stepped = fieldOf(value as Value, step)[1];
+    const stepped = fieldOf(value, step)[1];
     return stepped === null ? MISSING : stepped;
   }
 
@@ -766,20 +769,11 @@ class EvalExpr {
     return this.operands(node).every((c) => truthy(this.asValue(this.walk(c))));
   }
 
-  // --- comparisons (through `compare`, missing-is-falsy) --- //
-  compare(node: Tree): boolean {
-    const [lhs, op, rhs] = node.children as [ExprNode, Token, ExprNode];
-    return compare(op.value, this.asValue(this.walk(lhs)), this.asValue(this.walk(rhs)));
-  }
-
-  compareIn(node: Tree): boolean {
-    const [lhs, , rhs] = node.children as [ExprNode, Token, ExprNode];
-    return compare("in", this.asValue(this.walk(lhs)), this.asValue(this.walk(rhs)));
-  }
-
-  compareNotin(node: Tree): boolean {
-    const [lhs, , rhs] = node.children as [ExprNode, Token, ExprNode];
-    return compare("not in", this.asValue(this.walk(lhs)), this.asValue(this.walk(rhs)));
+  // --- comparisons (through `evalComparison`, missing-is-falsy) --- //
+  /** A `compare` node by its operator token, or a `compare_in` / `compare_notin` node by `op`. */
+  comparison(node: Tree, op?: "in" | "not in"): boolean {
+    const [lhs, token, rhs] = node.children as [ExprNode, Token, ExprNode];
+    return evalComparison(op ?? token.value, this.asValue(this.walk(lhs)), this.asValue(this.walk(rhs)));
   }
 
   // --- arithmetic over resolved values --- //
@@ -809,9 +803,7 @@ class EvalExpr {
    */
   power(node: Tree): Value {
     const values = splitChain(node)[0].map((operand) => this.asValue(this.walk(operand)));
-    let acc = values[values.length - 1] as Value;
-    for (let i = values.length - 2; i >= 0; i--) acc = applyStep("**", values[i] as Value, acc);
-    return acc;
+    return values.reduceRight((exponent, base) => applyStep("**", base, exponent));
   }
 
   neg(node: Tree): Value {
@@ -847,7 +839,8 @@ class EvalExpr {
  * @param options.mode How a missing reference is treated (default `BINDING_NONE`).
  * @param options.types The type table `isinstance(x, T)` and a `T(...)` constructor look `T` up
  *   in, keyed by type name; `null` (the default) means no types.
- * @returns The value: `null`, a boolean, a `bigint`, a number, text, a list or a record.
+ * @returns The value: `null`, a boolean, a `bigint`, a number, text, a list, a record or a file
+ *   (`FileRef`).
  * @throws {RequiredError} When a `head :? message` head misses or is `null`.
  * @throws {ExpressionError} On an unsupported node, a call, arithmetic or ordering over operand
  *   kinds the operator doesn't take (`null` included), a zero divisor, a NaN result, an int too

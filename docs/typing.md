@@ -119,6 +119,8 @@ The first boundary that sees one rejects it and names where it sits:
 
 - an int literal in the flow file (a value, a default, a bare `call(...)` argument, a
   number in an expression, or an `int(lo..hi)` range end): a load error at the literal;
+  Changed (TS yian): ints have no length limit, in values or in number literals in
+  expressions;
 - a run input: `run_flow` raises `ValueError` before the log exists, and `yian run`
   reports it for `-i`, `--inputs`, and the interactive prompt (which asks again);
 - a binding's value or default, a value entry, a MAP `over` list, a LOOP seed, or a

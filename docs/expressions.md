@@ -46,9 +46,21 @@ Two load-bearing points: one shared `NAME` terminal with an optional call-suffix
 separate-ref-plus-call grammar won't parse under LALR); and `#`/`/` are in `NAME` (runtime
 ids like `node#0`) while `-` is not (so `a - b` is subtraction).
 
+Changed (TS yian): `ts/src/expr/grammar.ts` is a hand-written parser, not Lark, and builds
+the same tree (`Tree` with `data` and `children`, `Token` with `type` and `value`). A
+number's digits are ASCII `0`–`9`, as a name's letters already were; Python's also took
+other scripts' digits. A parse error still starts `could not parse expression '<text>': `,
+but the rest is TS's own text naming what it found, at a 1-based line and a UTF-16 column:
+`unexpected ')' at line 1, column 2`.
+
 `and`, `or`, `not`, and `in` are reserved operators and cannot be the exact root
 name of a reference. They remain legal as dotted field names, such as
 `record.output.in`.
+
+Changed (TS yian): `inf` is a reserved constant for infinity, like `true` and `null`, not
+a reference; `-inf` is unary minus on it. After a dot it stays a field name (`x.inf`). It
+is an expression keyword, so a node can't be named `inf` (see
+[Flow syntax](syntax.md#the-flow-shape)).
 
 A chain of same-precedence operators is one flat node, like an `and` or `or` chain:
 `a + b - c` is one `sum`, `a * b / c % d` one `product`, and `a ** b ** c` one `power`.
@@ -149,6 +161,10 @@ An int longer than 4300 digits is not a value, so a whole-string `${10 ** 5000}`
 fails its binding (see [Types → Integer size limit](typing.md#integer-size-limit)).
 A temporary inside an expression may be that long: `${10 ** 5000 > 0}` is `true`. An
 int literal longer than 4300 digits is a load error.
+
+Changed (TS yian): int literals have no length limit. A float literal too large for a
+float is a load error: `float literal with 400 digits before the decimal point is out of
+range; write inf for infinity`.
 
 The failure is `binding.evaluate` in a binding, `node.execute` at the CASE node in a
 searched `when:`, `assertion.failed` in a node or flow `asserts:`, and `node.execute` at the

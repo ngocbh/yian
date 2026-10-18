@@ -3015,3 +3015,112 @@ def test_shim_value_repr_name_sites() -> None:
             stack += [const for const in code.co_consts if isinstance(const, types.CodeType)]
             found += code.co_qualname == qualname and "value_repr" in code.co_names
         assert found == 1, (path, qualname)
+
+
+def _shim_outcome(expr: str, values: dict) -> tuple[str, set]:
+    """Evaluate `expr` over `values`: return its repr or `raises: <message>`, and the notes."""
+    from tests import conformance_harvest as harvest
+    from yian.expr.expressions import ExpressionError
+
+    harvest._NOTES.clear()
+    try:
+        shown = repr(eval_expr(parse_expr(expr), values.get))
+    except ExpressionError as exc:
+        shown = f"raises: {exc}"
+    return shown, set(harvest._NOTES)
+
+
+def test_shim_arithmetic() -> None:
+    """Under `arithmetic`, the operators follow design 3.2.2 and note where Python differs."""
+    from tests import conformance_harvest as harvest
+    from yian.expr import expressions
+
+    values = {"inf": math.inf, "r": {}}
+    kinds = ("raises: type error evaluating {} {} {}: unsupported operand kinds for `{}`: `{}` "
+             "and `{}`")
+    rows = [
+        ("7 % -2", "1", set()),
+        ("-7 % 2", "-1", set()),
+        ("-7.5 % 2", "-1.5", set()),
+        ("5 % inf", "5.0", set()),
+        ("inf % 2", "raises: % on Infinity and 2 has no numeric result", set()),
+        ("10 / 4", "2.5", set()),
+        ("10 ** 400 / 10 ** 399", "10.0", set()),
+        ("1 + 0.5", "1.5", set()),
+        ("2 ** 100", repr(2**100), set()),
+        ("2 ** -1", "0.5", set()),
+        ("(10 ** 400) ** -1", "0.0", {"infinity"}),
+        ("true + 1", "2", set()),
+        ("-true", "-1", set()),
+        ("-(0.0)", "-0.0", set()),
+        ('"a" + "b"', "'ab'", set()),
+        ("[1] + [2]", "[1, 2]", set()),
+        ('"a" + 1', kinds.format('"a"', "+", 1, "+", "str", "int"), {"operand-kinds"}),
+        ("r + r", kinds.format("{}", "+", "{}", "+", "record", "record"), {"operand-kinds"}),
+        ('-"a"', 'raises: unary minus on non-number "a": unsupported operand kind for `-`: `str`',
+         {"operand-kinds"}),
+        ('"ab" * 3', kinds.format('"ab"', "*", 3, "*", "str", "int"),
+         {"operand-kinds", "repetition"}),
+        ("[0] * 3", kinds.format("[0]", "*", 3, "*", "list", "int"),
+         {"operand-kinds", "repetition"}),
+        ('"%s" % 1', "raises: text formatting with `%` was removed; use a template", {"printf"}),
+        ("10 ** 400 / 1", "inf", {"infinity"}),
+        ('"a" - 1', kinds.format('"a"', "-", 1, "-", "str", "int"), {"operand-kinds"}),
+        ("1 / 0", "raises: division by zero: 1 / 0", set()),
+        ("1.0 % 0.0", "raises: division by zero: 1 % 0", set()),
+        ("0 ** -1", "raises: division by zero: 0 ** -1", set()),
+        ("0.0 ** -1", "raises: division by zero: 0 ** -1", set()),
+        ("(0 - 8) ** 0.5", "raises: ** on -8 and 0.5 has no numeric result", set()),
+        ("inf - inf", "raises: - on Infinity and Infinity has no numeric result", set()),
+        ("0 * inf", "raises: * on 0 and Infinity has no numeric result", set()),
+        ("inf / inf", "raises: / on Infinity and Infinity has no numeric result", set()),
+        ("1 ** inf", "1.0", set()),
+        ("(0 - 1) ** inf", "1.0", set()),
+        ("2.0 ** 5000", "inf", {"infinity"}),
+        ("(0 - 2.0) ** 5001", "-inf", {"infinity"}),
+        ("10 ** 400 * 1.0", "inf", {"infinity"}),
+    ]
+    apply_step, neg = expressions._EvalExpr._apply_step, expressions._EvalExpr._do_neg
+    with pytest.MonkeyPatch.context() as patch:
+        # `messages` spells the operands as TS does, so the messages read as under every shim.
+        _install_shims(patch, "arithmetic", "messages")
+        assert harvest._SHIMS["arithmetic"].rule == "arithmetic"
+        assert list(harvest._SHIMS)[:2] == ["arithmetic", "compare"]
+        outcomes = [_shim_outcome(expr, values) for expr, _, _ in rows]
+    assert outcomes == [(shown, notes) for _, shown, notes in rows]
+    assert expressions._EvalExpr._apply_step is apply_step and expressions._EvalExpr._do_neg is neg
+    assert _shim_outcome('"%s" % 1', values) == ("'1'", set())
+
+
+def test_shim_compare() -> None:
+    """Under `compare`, comparisons and `in` follow design 3.2.2, noting nothing."""
+    from tests import conformance_harvest as harvest
+
+    values = {"inf": math.inf, "r": {"k": 1}, "a": {"a": 1}, "hi": "\uffff",
+              "smile": "\U0001F600"}
+    kinds = ("raises: type error evaluating {} {} {}: unsupported operand kinds for `{}`: `{}` "
+             "and `{}`")
+    rows = [
+        ("[1, 2] < [1, 3]", kinds.format("[1,2]", "<", "[1,3]", "<", "list", "list")),
+        ('"a" < 1', kinds.format('"a"', "<", 1, "<", "str", "int")),
+        ("hi < smile", "False"),
+        ("null < 1", "False"),
+        ("true < 2", "True"),
+        ("1 < inf", "True"),
+        ("1 == 1.0", "True"),
+        ("2 ** 60 == 2.0 ** 60", "True"),
+        ("1 in [1.0]", "True"),
+        ('"k" in r', "True"),
+        ("[1] in a", "False"),
+        ('1 in "abc"', kinds.format(1, "in", '"abc"', "in", "int", "str")),
+        ('"b" in "abc"', "True"),
+        ("1 in null", kinds.format(1, "in", "null", "in", "int", "null")),
+        ("1 not in null", kinds.format(1, "not in", "null", "not in", "int", "null")),
+    ]
+    with pytest.MonkeyPatch.context() as patch:
+        _install_shims(patch, "compare", "messages")
+        assert harvest._SHIMS["compare"].rule == "compare"
+        outcomes = [_shim_outcome(expr, values) for expr, _ in rows]
+    assert outcomes == [(shown, set()) for _, shown in rows]
+    # Python orders text by code point.
+    assert _shim_outcome("hi < smile", values) == ("True", set())

@@ -44,7 +44,7 @@ import yaml
 import yian
 from yian import defaults, llm_clients
 from yian.compose import LoadError, load_flow
-from yian.expr import builtins as expr_builtins, template
+from yian.expr import builtins as expr_builtins, expressions, template
 from yian.expr.expressions import ResolveMode, eval_expr, evaluate_when_record
 from yian.expr.grammar import parse_expr
 from yian.expr.template import eval_binding, render_template_record
@@ -1564,8 +1564,160 @@ def _install_key_order(patch: pytest.MonkeyPatch, case: dict) -> None:
     _patch_held(patch, shown, ordered_value_repr)
 
 
+def _ts_kind(value: object) -> str:
+    """Name `value`'s kind as design 3.2.2's messages do: `null`, `bool`, `int`, `record`, ..."""
+    if value is None:
+        return "null"
+    if isinstance(value, FileRef):
+        return "file"
+    return expr_builtins._kind(value)
+
+
+def _shown(lhs: object, rhs: object) -> tuple[str, str]:
+    """Return the operands as yian's operator messages show them."""
+    # Looked up at call time, so the `messages` shim's `value_repr` spells them.
+    return expressions._operand_repr(lhs), expressions._operand_repr(rhs)
+
+
+def _operand_kinds(op: str, lhs: object, rhs: object) -> expressions.ExpressionError:
+    """Return the error for `lhs op rhs` on a pair of operand kinds `op` doesn't take."""
+    l, r = _shown(lhs, rhs)
+    return expressions.ExpressionError(
+        f"type error evaluating {l} {op} {r}: unsupported operand kinds for `{op}`: "
+        f"`{_ts_kind(lhs)}` and `{_ts_kind(rhs)}`")
+
+
+def _division_by_zero(op: str, lhs: object, rhs: object) -> expressions.ExpressionError:
+    """Return the error for `lhs op rhs` dividing by zero, worded as Python yian's."""
+    l, r = _shown(lhs, rhs)
+    return expressions.ExpressionError(f"division by zero: {l} {op} {r}")
+
+
+def _is_number(value: object) -> bool:
+    """Return whether arithmetic takes `value` as a number: an int, a float, or a bool (0 or 1)."""
+    return isinstance(value, (int, float))
+
+
+def _to_float(value: int | float) -> float:
+    """Return the float nearest `value`, or a signed `inf` (noting `infinity`) past the range."""
+    try:
+        return float(value)
+    except OverflowError:
+        _NOTES.add("infinity")
+        return math.inf if value > 0 else -math.inf
+
+
+def _float_step(symbol: str, a: float, b: float) -> float:
+    """Return IEEE 754's `a symbol b`, NaN where the operation has no numeric result."""
+    try:
+        if symbol == "%":
+            return math.fmod(a, b)
+        if symbol == "**":
+            return math.pow(a, b)
+        return expressions._ARITH_STEPS[symbol](a, b)
+    except ValueError:
+        return math.nan
+    except OverflowError:
+        # Only `math.pow` overflows; IEEE pow is negative then for a negative base and an odd
+        # integral exponent.
+        return -math.inf if a < 0 and b.is_integer() and b % 2 == 1 else math.inf
+
+
+def _ts_apply_step(self, symbol: str, lhs: object, rhs: object) -> object:
+    """Apply one operator of an arithmetic chain to two resolved values, by design 3.2.2."""
+    if symbol == "%" and isinstance(lhs, str):
+        _NOTES.add("printf")
+        raise expressions.ExpressionError("text formatting with `%` was removed; use a template")
+    if symbol == "+" and (isinstance(lhs, str) and isinstance(rhs, str)
+                          or isinstance(lhs, list) and isinstance(rhs, list)):
+        return lhs + rhs
+    if not (_is_number(lhs) and _is_number(rhs)):
+        if symbol == "*" and any(isinstance(x, (str, list)) and _is_number(y)
+                                 for x, y in ((lhs, rhs), (rhs, lhs))):
+            _NOTES.add("repetition")
+        _NOTES.add("operand-kinds")
+        raise _operand_kinds(symbol, lhs, rhs)
+    if isinstance(lhs, int) and isinstance(rhs, int) and not (symbol == "**" and rhs < 0):
+        if symbol in ("/", "%") and rhs == 0:
+            raise _division_by_zero(symbol, lhs, rhs)
+        if symbol == "/":
+            try:
+                return lhs / rhs
+            except OverflowError:
+                _NOTES.add("infinity")
+                return math.inf if (lhs < 0) == (rhs < 0) else -math.inf
+        if symbol == "%":
+            # Truncating, so the remainder has the sign of `lhs`.
+            remainder = abs(lhs) % abs(rhs)
+            return -remainder if lhs < 0 else remainder
+        return expressions._ARITH_STEPS[symbol](lhs, rhs)
+    a, b = _to_float(lhs), _to_float(rhs)
+    if symbol in ("/", "%") and b == 0 or symbol == "**" and a == 0 and b < 0:
+        raise _division_by_zero(symbol, lhs, rhs)
+    result = _float_step(symbol, a, b)
+    if math.isnan(result):
+        l, r = _shown(lhs, rhs)
+        raise expressions.ExpressionError(f"{symbol} on {l} and {r} has no numeric result")
+    if math.isinf(result) and math.isfinite(a) and math.isfinite(b):
+        _NOTES.add("infinity")
+    return result
+
+
+def _ts_neg(self, node: Tree) -> object:
+    """Evaluate a unary minus node by design 3.2.2: a number's negation, a bool's as an int."""
+    value = self._as_value(self._walk(node.children[0]))
+    if _is_number(value):
+        # `-True` is already the int -1.
+        return -value
+    _NOTES.add("operand-kinds")
+    raise expressions.ExpressionError(
+        f"unary minus on non-number {expressions._operand_repr(value)}: "
+        f"unsupported operand kind for `-`: `{_ts_kind(value)}`")
+
+
+def _install_arithmetic(patch: pytest.MonkeyPatch, case: dict) -> None:
+    """Make the arithmetic operators and unary minus follow design 3.2.2."""
+    patch.setattr(expressions._EvalExpr, "_apply_step", _ts_apply_step)
+    patch.setattr(expressions._EvalExpr, "_do_neg", _ts_neg)
+
+
+def _ts_comparison(original):
+    """Return `_eval_comparison` with `in` and the ordered comparisons of design 3.2.2."""
+    @functools.wraps(original)
+    def _eval_comparison(op: str, lhs: object, rhs: object) -> bool:
+        if op in ("in", "not in"):
+            if isinstance(lhs, str) and isinstance(rhs, str):
+                contained = lhs in rhs
+            elif isinstance(rhs, list):
+                contained = any(lhs == x for x in rhs)
+            elif isinstance(rhs, dict):
+                contained = isinstance(lhs, str) and lhs in rhs
+            else:
+                raise _operand_kinds(op, lhs, rhs)
+            return contained if op == "in" else not contained
+        if op not in ("<", "<=", ">", ">=") or lhs is None or rhs is None:
+            return original(op, lhs, rhs)
+        if isinstance(lhs, str) and isinstance(rhs, str):
+            # Big-endian UTF-16 orders as its code units; a lone surrogate is its own unit.
+            return original(op, lhs.encode("utf-16-be", "surrogatepass"),
+                            rhs.encode("utf-16-be", "surrogatepass"))
+        if _is_number(lhs) and _is_number(rhs):
+            return original(op, lhs, rhs)
+        raise _operand_kinds(op, lhs, rhs)
+
+    return _eval_comparison
+
+
+def _install_compare(patch: pytest.MonkeyPatch, case: dict) -> None:
+    """Make `in` and the ordered comparisons follow design 3.2.2."""
+    original = expressions._eval_comparison
+    _patch_held(patch, original, _ts_comparison(original))
+
+
 # The shims by name, in install order: a later shim may wrap what an earlier one patched.
 _SHIMS: dict[str, _Shim] = {
+    "arithmetic": _Shim("arithmetic", _install_arithmetic),
+    "compare": _Shim("compare", _install_compare),
     "text-form": _Shim("text-form", _install_text_form),
     "messages": _Shim("messages", _install_messages),
     # Record key order is in the text-form rule's section of the design.

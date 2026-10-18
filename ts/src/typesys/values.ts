@@ -189,11 +189,9 @@ function jsTypeName(value: unknown): string {
 
 /**
  * Return a value's text form (design 3.2.3): text as itself, anything else as `writeAsJson`'s
- * compact JSON (`true`, `null`, an int's digits, `1.5`, `1` for the float 1, `Infinity`,
- * `[1,"a"]`, a `FileRef` as `{"uri":…,"mime":…,"name":…}`, records in JS property order).
+ * compact JSON.
  *
- * @throws TypeError `integer is too large for this runtime` when the runtime can't stringify an
- *   int, or `text is too long for this runtime` when the text passes the engine's string limit.
+ * @throws TypeError as `writeAsJson` does.
  */
 export function writeAsText(value: Value): string {
   return typeof value === "string" ? value : writeAsJson(value);
@@ -206,9 +204,11 @@ export function writeAsText(value: Value): string {
  * more, each item sits on its own line indented by `indent` spaces per level, items end with
  * `,`, and a key is followed by `": "`; an empty list or record is `[]` or `{}`. Text is
  * JSON-quoted with non-ASCII kept, an int is its digits, a float its JS spelling (`1` for the
- * float 1, bare `Infinity`), and a `FileRef` its mapping `{"uri", "mime", "name"}`.
+ * float 1, bare `Infinity`), and a `FileRef` its mapping `{"uri", "mime", "name"}`; records keep
+ * JS property order.
  *
- * @throws TypeError as `writeAsText` does.
+ * @throws TypeError `integer is too large for this runtime` when the runtime can't stringify an
+ *   int, or `text is too long for this runtime` when the text passes the engine's string limit.
  */
 export function writeAsJson(value: Value, indent: number | null = null): string {
   try {
@@ -233,19 +233,16 @@ function jsonText(value: Value, indent: number | null, level: number): string {
     }
   }
   if (typeof value === "string") return JSON.stringify(value);
+  const [open, close] = Array.isArray(value) ? (["[", "]"] as const) : (["{", "}"] as const);
   let items: string[];
-  let open: string;
   if (Array.isArray(value)) {
-    open = "[";
     items = value.map((item) => jsonText(item, indent, level + 1));
   } else {
-    open = "{";
-    const record = value as { readonly [key: string]: Value };
+    const record = value as ValueRecord;
     const keys = FileRef.isFileRef(value) ? FILE_FIELDS : Object.keys(record);
     const colon = indent === null ? ":" : ": ";
     items = keys.map((key) => JSON.stringify(key) + colon + jsonText(record[key] as Value, indent, level + 1));
   }
-  const close = open === "[" ? "]" : "}";
   if (items.length === 0) return open + close;
   if (indent === null) return open + items.join(",") + close;
   const inner = "\n" + " ".repeat(indent * (level + 1));

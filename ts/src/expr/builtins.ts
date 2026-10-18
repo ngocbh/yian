@@ -98,7 +98,7 @@ export function bindArguments<T>(
 
 /**
  * Return a value's kind as messages name it: `null`, `bool`, `int`, `float`, `str`, `list`,
- * `record` or `file`. The port of Python's `_kind`.
+ * `record` or `file`. The port of Python's `_kind`, which names a file by its class, `FileRef`.
  */
 export function kindName(value: Value): string {
   if (value === null) return "null";
@@ -125,7 +125,7 @@ function rejectNull(fn: string, value: Value, fallback = '""'): void {
 }
 
 /** Return `s` if it is text; throw on null or any other kind. */
-function text(fn: string, s: Value): string {
+function requireText(fn: string, s: Value): string {
   rejectNull(fn, s);
   if (typeof s !== "string") throw new TypeError(`${fn}() takes str, got ${kindName(s)}`);
   return s;
@@ -162,8 +162,8 @@ registerTemplateFn("render_as_json", {
   call: renderAsJson,
 });
 registerTemplateFn("join", { params: [{ name: "value" }, { name: "sep", default: "\n" }], call: join });
-registerTemplateFn("upper", { params: [{ name: "s" }], call: (s) => text("upper", s).toUpperCase() });
-registerTemplateFn("lower", { params: [{ name: "s" }], call: (s) => text("lower", s).toLowerCase() });
+registerTemplateFn("upper", { params: [{ name: "s" }], call: (s) => requireText("upper", s).toUpperCase() });
+registerTemplateFn("lower", { params: [{ name: "s" }], call: (s) => requireText("lower", s).toLowerCase() });
 
 // Every builtin shipped here returns text. Keyed by the stored entry, so a host that registers
 // another function under one of these names gets no result type.

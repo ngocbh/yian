@@ -130,23 +130,23 @@ describe("valueRepr", () => {
     expect(shown).toHaveLength(CAP);
     expect(shown.startsWith("[<undefined object>,<undefined object>,")).toBe(true);
   });
-});
 
-test("a message shows a value that isn't text in its text form", () => {
-  const values: Value[] = [
-    true,
-    12n,
-    10n ** 25n,
-    1.5,
-    1,
-    Infinity,
-    -Infinity,
-    null,
-    [1n, "a", null],
-    { b: 1n, "2": [true] },
-    new FileRef({ uri: "s3://b/k", mime: "text/plain" }),
-  ];
-  for (const value of values) expect(valueRepr(value)).toBe(writeAsText(value));
+  test("a message shows a value that isn't text in its text form", () => {
+    const values: Value[] = [
+      true,
+      12n,
+      10n ** 25n,
+      1.5,
+      1,
+      Infinity,
+      -Infinity,
+      null,
+      [1n, "a", null],
+      { b: 1n, "2": [true] },
+      new FileRef({ uri: "s3://b/k", mime: "text/plain" }),
+    ];
+    for (const value of values) expect(valueRepr(value)).toBe(writeAsText(value));
+  });
 });
 
 describe("shownText", () => {

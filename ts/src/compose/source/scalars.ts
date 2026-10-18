@@ -348,8 +348,10 @@ export function resolvePlain(text: string): string {
  * Build a scalar's value from its text under its resolved or explicit tag.
  *
  * Explicit `!!int`, `!!float` and `!!bool` tags accept only the forms the table resolves.
- * A timestamp is checked with yian's date grammar and kept as its text. `plain` says the
- * scalar was unquoted, so a refused value says to quote it.
+ * A timestamp is checked with yian's date grammar and kept as its text. `plain` means the
+ * scalar was written unquoted, so a refused value says to quote it. Under an explicit tag the
+ * quoting hint is kept for parity with Python, whose node doesn't record an explicit tag,
+ * although quoting doesn't remove the tag.
  *
  * Example: `constructScalar(INT_TAG, "017", true)` is `17n`.
  *
@@ -372,7 +374,13 @@ export function constructScalar(tag: string, text: string, plain: boolean): Scal
     case INT_TAG:
       coreCheck(text, INT, "integer");
       // BigInt reads a decimal with leading zeros as decimal, and `0o`/`0x` as their bases.
-      return BigInt(text);
+      try {
+        return BigInt(text);
+      } catch (error) {
+        // A runtime refuses an enormous int with its own RangeError.
+        if (error instanceof RangeError) throw refuse("integer is too large for this runtime");
+        throw error;
+      }
     case FLOAT_TAG: {
       coreCheck(text, FLOAT, "float");
       const lowered = text.toLowerCase();

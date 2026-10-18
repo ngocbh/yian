@@ -201,7 +201,9 @@ function construct(root: ParsedNode | null, aliasTargets: ReadonlyMap<Alias, Anc
       stack.pop();
       merging.delete(node);
       pairs = next.value.flatMap((source) => flattened.get(source) ?? ownPairs(source, target));
-      pairs.push(...ownPairs(node, target));
+      // A loop, not `push(...)`: spreading a document-sized array into call arguments
+      // overflows the stack.
+      for (const pair of ownPairs(node, target)) pairs.push(pair);
       flattened.set(node, pairs);
     }
     return pairs; // the root's: it leaves the stack last
@@ -273,7 +275,9 @@ function* mergeSources(
         yield source;
         items.push(source);
       }
-      merged.push(...items.reverse());
+      // A loop, not `push(...)`: spreading a document-sized array into call arguments
+      // overflows the stack.
+      for (const item of items.reverse()) merged.push(item);
     } else {
       // A missing value has no node, so the mapping stands in.
       throw new FlowLoaderError(

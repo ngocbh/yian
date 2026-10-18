@@ -1,12 +1,13 @@
 /**
  * `T(...)` constructors in the expression language: the parse and evaluation tests of
  * `tests/engine/test_constructor_expr.py` (call shape, the positional and keyword forms, larger
- * expressions, names that are not constructors), its walker tests (`expr_refs`,
- * `rewrite_expr_refs`, `constructor_names`) and its static inference tests.
+ * expressions, names that are not constructors, a constructor in an embedded template span),
+ * its walker tests (`expr_refs`, `rewrite_expr_refs`, `constructor_names`) and its static
+ * inference tests.
  *
- * Left for later: `test_a_constructor_in_an_embedded_template_span`, the co-skip, flow-callee
- * (`test_a_typedef_name_is_not_a_flow_callee`) and prompt tests land with `template.ts`; the
- * route and feedback tests with `lineage.ts`; the binder tests with `nodes/binding.ts`.
+ * Left for later: the co-skip, flow-callee (`test_a_typedef_name_is_not_a_flow_callee`) and
+ * prompt tests land with the template walks; the route and feedback tests with `lineage.ts`;
+ * the binder tests with `nodes/binding.ts`.
  */
 
 import { expect, test } from "bun:test";
@@ -23,6 +24,7 @@ import {
   rewriteExprRefs,
 } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
+import { evalBinding } from "../../src/expr/template.ts";
 import { Type, typeFor, type Value, type ValueRecord, ValueKind } from "../../src/typesys/index.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
 import { fieldOf } from "../../src/typesys/values.ts";
@@ -201,6 +203,13 @@ test("a constructor in a condition", () => {
     "Sell(...): record missing required fields: ['price']",
     ConstructorTypeError,
   );
+});
+
+test("a constructor in an embedded template span", () => {
+  const text = evalBinding("conviction ${Buy(d.output).conviction}", resolver({ d: { output: A_BUY } }), {
+    types: TYPES,
+  });
+  expect(text).toBe("conviction 0.5");
 });
 
 // --- names that are not constructors --- //

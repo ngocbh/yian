@@ -279,12 +279,12 @@ export function parseCondition(expression: string, types: ReadonlyMap<string, un
  * builtin is a `T(...)` constructor, checked against `types` when given.
  *
  * @param tree A tree from `parseExpr`.
- * @param types The type table constructor names must be in, or `null` to leave them to the
- *   caller.
+ * @param types The type table constructor names must be in, or `null` (the default) to leave
+ *   them to the caller.
  * @throws {ExpressionError} If a builtin's parameters can't bind the call's positional count and
  *   keyword names, or, with `types`, a callee is neither a builtin nor in it.
  */
-function checkCalls(tree: ExprNode, types: ReadonlyMap<string, unknown> | null): void {
+export function checkCalls(tree: ExprNode, types: ReadonlyMap<string, unknown> | null = null): void {
   if (!(tree instanceof Tree)) return;
   for (const node of iterSubtreesTopdown(tree)) {
     if (node.data !== "refcall") continue;

@@ -5,8 +5,8 @@
  * positions, parse-error messages, the error classes, `iterSubtrees` and `iterSubtreesTopdown`
  * order, and the checks after the parse: reserved reference roots, the dotted callee, the nesting
  * limit, float overflow and the order the checks run in; and the `${...}` helpers: a nested
- * span's error and rewrite, `findSpanEnd` and `wholeSpanInterior`. Later: the `scanTemplate`
- * halves come with `template.ts`.
+ * span's error and rewrite, `findSpanEnd` and `wholeSpanInterior`; and the `scanTemplate` halves
+ * of the reserved-keyword tests.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -25,6 +25,7 @@ import {
   Tree,
   wholeSpanInterior,
 } from "../../src/expr/grammar.ts";
+import { scanTemplate } from "../../src/expr/template.ts";
 
 /** A position-blind form of `node`, as Lark's `Tree`/`Token` equality ignores positions. */
 type Plain = { type: string; value: string } | { data: string; children: Plain[] };
@@ -181,12 +182,14 @@ describe("references", () => {
   test("keyword prefixes stay legal in generated roots", () => {
     for (const root of ["and/child", "or#0", "not/child", "not#0", "in#0"]) {
       expect(parsed(`${root}.output`)).toEqual(plain(ref(root, "output")));
+      scanTemplate(`\${${root}.output}`);
     }
   });
 
   test("keywords are legal dotted fields", () => {
     for (const field of ["and", "or", "not", "in", "true", "inf"]) {
       expect(parsed(`record.output.${field}`)).toEqual(plain(ref("record", "output", field)));
+      scanTemplate(`\${record.output.${field}}`);
     }
   });
 });

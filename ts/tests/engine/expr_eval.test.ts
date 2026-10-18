@@ -10,10 +10,10 @@
  *
  * The shipped builtins (`upper`, `lower`, `join`, `render_as_json`) run as themselves, with TS-era
  * rows for the text form `join` writes and the layout `render_as_json` writes; calls to any other
- * name run through stand-ins registered for one test each. Left for later:
- * `test_binding_default_ref` and `test_nested_default_span_rejected` land with `template.ts`.
- * Python's `%` formatting, repetition, overflow and digit-limit tests become the TS-era tables
- * below; `_Boom` (a value whose negation raises) has no counterpart, since a value is plain data.
+ * name run through stand-ins registered for one test each. `test_binding_default_ref` and
+ * `test_nested_default_span_rejected` run through `evalBinding` and `scanTemplate`. Python's `%`
+ * formatting, repetition, overflow and digit-limit tests become the TS-era tables below;
+ * `_Boom` (a value whose negation raises) has no counterpart, since a value is plain data.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -28,6 +28,7 @@ import {
   rewriteExprRefs,
 } from "../../src/expr/expressions.ts";
 import { type ExprNode, parseExpr, Token, Tree } from "../../src/expr/grammar.ts";
+import { evalBinding, scanTemplate } from "../../src/expr/template.ts";
 import { FileRef, type Value, type ValueRecord } from "../../src/typesys/index.ts";
 import { fieldOf } from "../../src/typesys/values.ts";
 
@@ -235,6 +236,17 @@ test("default short-circuits its fallback", () => {
 
 test("default to a reference", () => {
   expect(evaluate("a :- b", fromRecord({ b: "fallback" }))).toBe("fallback");
+});
+
+test("a binding's default reference", () => {
+  expect(evalBinding("${x :- y}", fromRecord({ y: 9n }))).toBe(9n);
+  // Both missing: null in the binding mode.
+  expect(evalBinding("${x :- y}", fromRecord({}))).toBeNull();
+});
+
+test("a nested default span is rejected", () => {
+  // A `${...}` can't appear inside an expression, at any depth; group with parentheses.
+  expect(() => scanTemplate("${x:-${y:-${z}}}")).toThrow("write `${x:-(y:-z)}`");
 });
 
 test("required raises when missing, with its message", () => {

@@ -39,7 +39,8 @@ import {
   resolveInRecord,
   unknownFunctionMessage,
 } from "../src/expr/expressions.ts";
-import { parseExpr } from "../src/expr/grammar.ts";
+import { type ExprNode, parseExpr } from "../src/expr/grammar.ts";
+import { evalBinding, renderTemplateRecord, scanTemplate, Span } from "../src/expr/template.ts";
 import { canonicalJson, logJson, parseJson } from "../src/typesys/json.ts";
 import type { JsonMode } from "../src/typesys/json.ts";
 import { readTypedefs, typeFor } from "../src/typesys/types.ts";
@@ -919,12 +920,13 @@ function dataForm(value: YianValue): Value {
 }
 
 /**
- * Run an `expr` case: evaluate `expr` in `mode` over `values` and `item`, with the type table
- * the loader would give its `isinstance` and constructor names, under the defaults `env` sets.
+ * Run an `expr` case: evaluate `expr` or `template` in `mode` over `values` and `item`, with the
+ * type table the loader would give its `isinstance` and constructor names, under the defaults
+ * `env` sets. A strict `template` renders as a prompt.
  */
 async function runExpr(case_: Case, ctx: CaseContext): Promise<void> {
-  if (Object.hasOwn(case_, "template")) throw new CaseFailure("`template` cases need template.ts");
   const mode = get(case_, "mode", "binding");
+  const template = get(case_, "template", null) as string | null;
   const text = case_["expr"] as string;
   const values = get(case_, "values", {}) as ValueRecord;
   const item = get(case_, "item", null) as YianValue;
@@ -933,29 +935,38 @@ async function runExpr(case_: Case, ctx: CaseContext): Promise<void> {
     // after, so a later case reads its own.
     try {
       reload(caseEnv(ctx));
-      const tree = mode === "condition" ? parseCondition(text) : parseExpr(text);
+      if (template !== null && mode === "strict") return { value: renderTemplateRecord(template, values) };
+      let trees: ExprNode[];
+      if (template !== null) {
+        trees = scanTemplate(template).flatMap((segment) => (segment instanceof Span ? [segment.tree] : []));
+      } else {
+        trees = [mode === "condition" ? parseCondition(text) : parseExpr(text)];
+      }
       const registry = readTypedefs((case_["typedefs"] ?? {}) as Record<string, unknown>);
       const types = new Map<string, Type>();
-      for (const name of isinstanceTypeNames(tree)) {
-        if (!registry.has(name) && !ISINSTANCE_BUILTIN_TYPE_NAMES.includes(name)) {
-          throw new TypeCheckError(
-            `unknown type ${reprText(name)}; isinstance takes a typedefs: name or one of ` +
-              ISINSTANCE_BUILTIN_TYPE_NAMES.join(", "),
-          );
+      for (const tree of trees) {
+        for (const name of isinstanceTypeNames(tree)) {
+          if (!registry.has(name) && !ISINSTANCE_BUILTIN_TYPE_NAMES.includes(name)) {
+            throw new TypeCheckError(
+              `unknown type ${reprText(name)}; isinstance takes a typedefs: name or one of ` +
+                ISINSTANCE_BUILTIN_TYPE_NAMES.join(", "),
+            );
+          }
+          types.set(name, typeFor(name, registry));
         }
-        types.set(name, typeFor(name, registry));
+        for (const name of constructorNames(tree)) {
+          if (!registry.has(name)) throw new TypeCheckError(unknownFunctionMessage(name));
+          types.set(name, typeFor(name, registry));
+        }
       }
-      for (const name of constructorNames(tree)) {
-        if (!registry.has(name)) throw new TypeCheckError(unknownFunctionMessage(name));
-        types.set(name, typeFor(name, registry));
-      }
+      const resolve = (path: string) => resolveInRecord(path, values);
+      if (template !== null) return { value: dataForm(evalBinding(template, resolve, { item, types })) };
       if (mode === "condition") {
         // What every `when:`, `while:` and assert runs.
         return { value: evaluateWhenRecord(text, values, types) };
       }
       const resolveMode = mode === "strict" ? ResolveMode.STRICT_RAISE : ResolveMode.BINDING_NONE;
-      const resolve = (path: string) => resolveInRecord(path, values);
-      return { value: dataForm(evalExpr(tree, resolve, { item, mode: resolveMode, types })) };
+      return { value: dataForm(evalExpr(trees[0]!, resolve, { item, mode: resolveMode, types })) };
     } finally {
       forget();
     }

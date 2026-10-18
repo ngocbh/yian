@@ -2,10 +2,10 @@
  * A `${...}` marks an expression inside a YAML string; it can't appear inside one: the
  * `parseExpr` and condition tests of `tests/engine/test_nested_span_rejected.py`, which check
  * that a whole-span condition reads as its bare spelling, and the error a `${...}` nested inside
- * an expression raises and the rewrite it shows.
+ * an expression raises and the rewrite it shows, plus the template-span tests (`scanTemplate`).
  *
- * Left for later: the template-span tests land with `template.ts`; the binding, case, assert,
- * loop and prompt load tests and the run tests with compose and `run.ts`.
+ * Left for later: the binding, case, assert, loop and prompt load tests and the run tests land
+ * with compose and `run.ts`.
  */
 
 import { expect, test } from "bun:test";
@@ -17,6 +17,7 @@ import {
   rewriteConditionRefs,
 } from "../../src/expr/expressions.ts";
 import { type ExprNode, parseExpr, rejectNestedSpans, Token } from "../../src/expr/grammar.ts";
+import { scanTemplate } from "../../src/expr/template.ts";
 
 const NESTED = "`${...}` can't appear inside an expression";
 
@@ -90,8 +91,28 @@ test("a whole-span condition holding a nested span shows the bare rewrite", () =
   expect(caught(() => parseCondition("${a > ${b}}")).message).toBe(`${NESTED}; write \`a > b\``);
 });
 
+test("a template span shows the whole fixed span", () => {
+  const cases: [string, string][] = [
+    ["${input.as_of:-${system.today}}", "${input.as_of:-system.today}"],
+    ["pre ${upper(${name})} post", "${upper(name)}"],
+  ];
+  for (const [template, rewrite] of cases) {
+    expect(caught(() => scanTemplate(template)).message).toBe(`${NESTED}; write \`${rewrite}\``);
+  }
+});
+
+test("a template span with a quoted span is text", () => {
+  expect(() => scanTemplate('${x == "${y}"}')).not.toThrow();
+});
+
+const DEEP_SPANS = "${".repeat(3000) + "x" + "}".repeat(3000);
+
 test("deeply nested spans are rejected without a rewrite", () => {
-  expectNoRewrite("${".repeat(3000) + "x" + "}".repeat(3000));
+  expectNoRewrite(DEEP_SPANS);
+});
+
+test("deeply nested template spans are rejected without a rewrite", () => {
+  expect(caught(() => scanTemplate(DEEP_SPANS)).message).toBe(NESTED);
 });
 
 test("a rewrite past the nesting limit is not suggested", () => {

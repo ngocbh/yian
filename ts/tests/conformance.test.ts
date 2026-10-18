@@ -889,13 +889,11 @@ describe("main", () => {
     const files = {
       "e/expr.yaml": "kind: expr\nexpr: x.n * 2\nvalues: {x: {n: 3}}\nexpect: {value: 6}\n",
       "e/template.yaml": "kind: expr\ntemplate: n=${n}\nvalues: {n: 1}\nexpect: {value: n=1}\n",
+      "e/strict.yaml": 'kind: expr\ntemplate: "${n}!"\nmode: strict\nvalues: {n: 1}\nexpect: {value: "1!"}\n',
     };
     expect(await run([], files, {}, RUNNERS)).toEqual({
-      code: 1,
-      out: [
-        "FAIL e/template: `template` cases need template.ts",
-        "2 cases: 1 passed, 1 failed, 0 pending",
-      ],
+      code: 0,
+      out: ["3 cases: 3 passed, 0 failed, 0 pending"],
       err: [],
     });
   });

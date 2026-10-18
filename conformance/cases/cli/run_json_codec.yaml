@@ -1,0 +1,17 @@
+kind: cli
+flow: |
+  id: escaped
+  name: escaped
+  nodes: {}
+  output:
+    a: {"$record": 1}
+    b: {"$float": "inf"}
+args: [run, flow.yaml, -w, "0", --log, run.jsonl, --json]
+expect:
+  exit: 0
+  json:
+    format: yian.cli.v1
+    status: succeeded
+    output:
+      a: {$record: {$record: 1}}
+      b: {$record: {$float: inf}}

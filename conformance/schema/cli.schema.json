@@ -5,6 +5,7 @@
   "anyOf": [
     {"$ref": "#/$defs/error_document"},
     {"$ref": "#/$defs/check_document"},
+    {"$ref": "#/$defs/run_document"},
     {"$ref": "#/$defs/config_document"},
     {"$ref": "#/$defs/providers_document"},
     {"$ref": "#/$defs/skills_document"}
@@ -38,6 +39,44 @@
         "frames": {"type": "array", "items": {"$ref": "#/$defs/frame"}},
         "notes": {"type": "array", "items": {"type": "string"}}
       }
+    },
+    "failure": {
+      "description": "Why a run failed: a diagnostic, plus node, the id of the node that failed, or null when the failure belongs to no one node.",
+      "allOf": [
+        {"$ref": "#/$defs/diagnostic"},
+        {
+          "type": "object",
+          "required": ["node"],
+          "properties": {
+            "node": {"type": ["string", "null"]}
+          }
+        }
+      ]
+    },
+    "run_document": {
+      "description": "`yian run --json` (fresh or --resume): the run's terminal result. A run that fails exits 1 with status failed.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["format", "status", "output"],
+          "properties": {
+            "format": {"$ref": "#/$defs/format"},
+            "status": {"const": "succeeded"},
+            "output": {
+              "description": "The flow's output in yian's JSON codec form: plain JSON; a file as {uri, mime, name}; a float infinity as {\"$float\": \"inf\"} or {\"$float\": \"-inf\"}; and, at every depth, a mapping that is exactly {\"$float\": \"inf\"} or {\"$float\": \"-inf\"}, or whose only key is $record, wrapped as {\"$record\": <it>}, so a host decodes it back to the record."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["format", "status", "failure"],
+          "properties": {
+            "format": {"$ref": "#/$defs/format"},
+            "status": {"const": "failed"},
+            "failure": {"$ref": "#/$defs/failure"}
+          }
+        }
+      ]
     },
     "error_document": {
       "description": "Written by a --json command that exits 1 without its own result document.",

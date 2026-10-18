@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import CancelledError
+import contextlib
 from contextlib import contextmanager
 from functools import partial
 import itertools
@@ -91,6 +92,7 @@ from yian.nodes.contracts import Parameter
 from yian.tools import McpServer, registered_tools
 from yian.tools.mcp import McpConnectError
 from yian.typesys import (
+    FileRef,
     Type,
     TypeCheckError,
     build_value_as,
@@ -297,7 +299,7 @@ def _render_traceback(tb: str) -> None:
     )
 
 
-def _render_run_error(result: RunResult, loaded, engine_trace: bool = False) -> None:
+def _render_run_error(result: RunResult, loaded, engine_trace: bool = False) -> Diagnostic:
     """Resolve and render one runtime failure through its authoring front end.
 
     ``Failure`` is the only semantic input. The loaded flow owns all source
@@ -311,6 +313,9 @@ def _render_run_error(result: RunResult, loaded, engine_trace: bool = False) -> 
         loaded (`ComposedFlow`): Front-end authority that resolves the failure trace.
         engine_trace (`bool`, *optional*, defaults to `False`): Whether to append
             the captured Python traceback when one exists.
+
+    Returns:
+        `Diagnostic`: The diagnostic rendered.
     """
     failure = result.failure
     if failure is None:
@@ -323,6 +328,32 @@ def _render_run_error(result: RunResult, loaded, engine_trace: bool = False) -> 
     render_diagnostic(diagnostic)
     if engine_trace and diagnostic.traceback:
         _render_traceback(diagnostic.traceback)
+    return diagnostic
+
+
+def _json_value(value: Any) -> Any:
+    """Return a run output in yian's JSON codec form.
+
+    A file becomes `{uri, mime, name}`. A mapping that is exactly `{"$float": "inf"}` or
+    `{"$float": "-inf"}`, or whose only key is `$record`, is wrapped as `{"$record": it}`,
+    so a host decodes it back to the record rather than to a float or its contents.
+
+    Args:
+        value (`Any`): A run output value.
+
+    Returns:
+        `Any`: The value as plain JSON data.
+    """
+    if isinstance(value, FileRef):
+        return value.model_dump(mode="json")
+    if isinstance(value, (list, tuple)):
+        return [_json_value(item) for item in value]
+    if isinstance(value, Mapping):
+        mapping = {key: _json_value(item) for key, item in value.items()}
+        if mapping in ({"$float": "inf"}, {"$float": "-inf"}) or list(mapping) == ["$record"]:
+            return {"$record": mapping}
+        return mapping
+    return value
 
 
 class _ProgressReporter:
@@ -1890,6 +1921,7 @@ def _open_mcp_servers(
 
 
 def run(
+    ctx: typer.Context,
     flow: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True, help="Path to a flow .yaml"),
     input: List[str] = typer.Option(  # noqa: A002 - matches the user-facing flag name
         None, "--input", "-i", help="An input as k=v (repeatable)."
@@ -1964,8 +1996,18 @@ def run(
         help="Read MCP servers from FILE (mcpServers JSON; repeatable). "
         "~/.yian/mcp.json is read first when it exists.",
     ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Print one yian.cli.v1 JSON document on stdout: the run's result, or the "
+        "error that stopped it.",
+    ),
 ) -> None:
     """Start or recover a durable flow run and print its terminal output."""
+    json_out = sys.stdout if json_output else None
+    if json_output:
+        # stdout carries only the document; CODE prints and stray output go to stderr.
+        ctx.with_resource(contextlib.redirect_stdout(sys.stderr))
     _validate_run_log_options(
         input_values=input or [],
         inputs=inputs,
@@ -2195,14 +2237,20 @@ def run(
 
     if result.status == "succeeded":
         out = result.output
-        if isinstance(out, str) and out.strip():
+        if json_out is not None:
+            print_json({"status": "succeeded", "output": _json_value(out)}, file=json_out)
+        elif isinstance(out, str) and out.strip():
             console.print(Markdown(out))
         else:
             console.print(out)
     else:
         # The loaded front end projects authored origins to source frames; failures
         # without presentable origins retain their semantic message.
-        _render_run_error(result, loaded, engine_trace=engine_trace)
+        diagnostic = _render_run_error(result, loaded, engine_trace=engine_trace)
+        if json_out is not None:
+            node = result.failure.node_id if result.failure is not None else None
+            failure = {**diagnostic_json(diagnostic), "node": node}
+            print_json({"status": "failed", "failure": failure}, file=json_out)
         raise typer.Exit(code=1)
 
 

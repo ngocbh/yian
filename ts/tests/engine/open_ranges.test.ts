@@ -151,6 +151,7 @@ describe("open range values", () => {
     expect(buildError(new Type({ kind: INT, bounds: [1n, 12n] }), 13n)).toBe(
       "13 is outside inclusive int bounds (1, 12)",
     );
+    // Not in Python's test: pins the bounds spelling, Python's tuple spelling of the ends.
     expect(buildError(new Type({ kind: NUM, bounds: [0.0, 1.0] }), 2n)).toBe(
       "2 is outside inclusive float bounds (0.0, 1.0)",
     );

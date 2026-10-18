@@ -20,6 +20,17 @@ function typedefsError(raw: Readonly<Record<string, unknown>>): TypeCheckError {
   throw new Error("readTypedefs did not throw");
 }
 
+/** Return the `TypeCheckError` `run` throws. */
+function typeCheckError(run: () => unknown): TypeCheckError {
+  try {
+    run();
+  } catch (error) {
+    expect(error).toBeInstanceOf(TypeCheckError);
+    return error as TypeCheckError;
+  }
+  throw new Error("expected a TypeCheckError");
+}
+
 /** Expect `readTypedefs(raw)` to throw exactly `message` at `path`. */
 function expectRejected(
   raw: Readonly<Record<string, unknown>>,
@@ -67,13 +78,7 @@ describe("building", () => {
       [[{ scores: [null, 1.1], count: 4n }], [0, "scores", 1]],
       [[{ scores: [0n], count: 0n }], [0, "count"]],
     ] as const) {
-      try {
-        buildValueAs(typ, bad);
-        throw new Error("buildValueAs did not throw");
-      } catch (error) {
-        expect(error).toBeInstanceOf(TypeCheckError);
-        expect((error as TypeCheckError).path).toEqual(path);
-      }
+      expect(typeCheckError(() => buildValueAs(typ, bad)).path).toEqual(path);
     }
   });
 

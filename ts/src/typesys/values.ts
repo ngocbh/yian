@@ -28,12 +28,9 @@ import { parseDate, parseDatetime } from "./temporal.ts";
 export class TypeCheckError extends RangeError {
   override name = "TypeCheckError";
   /** The frozen record-field/list-index path to the rejected value. */
-  readonly path: readonly (string | number)[];
+  readonly path: ValuePath;
 
-  constructor(
-    message?: string,
-    options: ErrorOptions & { path?: readonly (string | number)[] } = {},
-  ) {
+  constructor(message?: string, options: ErrorOptions & { path?: ValuePath } = {}) {
     super(message, options);
     this.path = Object.freeze([...(options.path ?? [])]);
   }
@@ -496,7 +493,9 @@ export class TypedValue {
    * nested) written as its mapping, as the run log's encoder takes it. The value is copied
    * only on the paths to its files.
    *
-   * @throws TypeCheckError when the value contains itself.
+   * @throws TypeCheckError when the value isn't a JSON value (see `jsonPart`): a non-JSON part,
+   *   NaN, text holding a lone surrogate, or a container inside itself. The unchecked
+   *   constructor can hold such a value.
    */
   toWire(): { kind: StorageKind; value: Value } {
     return { kind: this.kind, value: jsonPart(this.value, [], "mapping") };
@@ -1483,37 +1482,37 @@ function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value {
 
   /** Return what `value` stores as, or `undefined` once its container's frame is pushed. */
   const enter = (value: unknown, key: string | number | null): Value | undefined => {
-    const at = () => (key === null ? path : pathTo(key));
+    // The path is built only on a throw.
+    const fail = (message: string): never => {
+      throw new TypeCheckError(message, { path: key === null ? path : pathTo(key) });
+    };
     const reason = nonValueReason(value);
-    if (reason !== null) throw new TypeCheckError(reason, { path: at() });
+    if (reason !== null) fail(reason);
     if (value === null || typeof value === "boolean" || typeof value === "bigint") return value;
     if (typeof value === "string") return value;
     if (typeof value === "number") return Object.is(value, -0) ? 0 : value;
     if (value instanceof FileRef) {
       if (files === "keep") return value;
       if (files === "mapping") return { uri: value.uri, mime: value.mime, name: value.name };
-    } else if (isList(value) || isRecord(value)) {
-      if (active.has(value)) throw new TypeCheckError("value contains itself", { path: at() });
+      // Under "refuse" a file is not a JSON value.
+      return fail(`${valueRepr(value)} is not a JSON value`);
+    }
+    if (isList(value) || isRecord(value)) {
+      if (active.has(value)) fail("value contains itself");
       const finished = done.get(value);
       if (finished !== undefined) return finished;
       const keys = isList(value) ? null : Object.keys(value);
       stack.push({ container: value, keys, key, index: 0, copy: null });
       active.add(value);
       return undefined;
-    } else if (value === undefined) {
-      throw new TypeCheckError("undefined is not a JSON value", { path: at() });
     }
-    throw new TypeCheckError(`${valueRepr(value)} is not a JSON value`, { path: at() });
+    if (value === undefined) fail("undefined is not a JSON value");
+    return fail(`${valueRepr(value)} is not a JSON value`);
   };
 
-  /** Record that entry `index` (key `key`) of `frame`, holding `original`, stores `stored`. */
-  const settle = (
-    frame: JsonFrame,
-    index: number,
-    key: string | number,
-    original: unknown,
-    stored: Value,
-  ): void => {
+  /** Record that `frame`'s last-read entry, holding `original`, stores `stored`. */
+  const settle = (frame: JsonFrame, original: unknown, stored: Value): void => {
+    const index = frame.index - 1;
     if (frame.copy === null) {
       if (Object.is(stored, original)) return;
       if (frame.keys === null) {
@@ -1526,7 +1525,7 @@ function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value {
       }
     }
     if (Array.isArray(frame.copy)) frame.copy.push(stored);
-    else setField(frame.copy, key as string, stored);
+    else setField(frame.copy, frame.keys![index]!, stored);
   };
 
   const rootValue = enter(root, null);
@@ -1544,7 +1543,7 @@ function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value {
       }
       const child = (frame.container as Record<string | number, unknown>)[key];
       const stored = enter(child, key);
-      if (stored !== undefined) settle(frame, index, key, child, stored);
+      if (stored !== undefined) settle(frame, child, stored);
       continue;
     }
     stack.pop();
@@ -1553,7 +1552,7 @@ function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value {
     done.set(frame.container, result);
     const parent = stack[stack.length - 1];
     if (parent === undefined) return result;
-    settle(parent, parent.index - 1, frame.key!, frame.container, result);
+    settle(parent, frame.container, result);
   }
 }
 
@@ -1617,9 +1616,10 @@ function inferList(items: Value[]): TypedValue {
  * containers on its path.
  *
  * `Any` accepts any non-null JSON value and stores it in its natural kind (a list as
- * `list[Any]`), unconverted. An `object` value, a `list(object)` item and a `list[Any]` item
- * must be JSON values (see `jsonPart`); a `FileRef` is not one, so it fails anywhere in an
- * `Any` or `list[Any]` value. A record keeps the value's key order.
+ * `list[Any]`); its one conversion is `-0` to `0` at any depth, as in an `object` value. An
+ * `object` value, a `list(object)` item and a `list[Any]` item must be JSON values (see
+ * `jsonPart`); a `FileRef` is not one, so it fails anywhere in an `Any` or `list[Any]` value.
+ * A record keeps the value's key order.
  *
  * `declared` is a `Type`, or a bare `ValueKind` for a scalar or flat list. A `TypedValue`
  * input is unwrapped to its value first.
@@ -1764,6 +1764,7 @@ function buildScalarOrList(declared: ValueKind, value: unknown, path: ValuePath)
       if (element === ValueKind.OBJECT) item = jsonPart(item, [...path, index], "mapping");
       items.push(item);
     }
+    // Converting in a second pass keeps Python's error order: every item is checked first.
     const coerced = items.map((item, index) => coerceScalar(element, item, [...path, index]));
     return new TypedValue(kind, coerced as Value[]);
   }

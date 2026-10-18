@@ -62,7 +62,7 @@ function typeCheckError(run: () => unknown): TypeCheckError {
   throw new Error("expected a TypeCheckError");
 }
 
-describe("a file slot reads the JSON form", () => {
+describe("a file slot", () => {
   test("a file slot reads the JSON form", () => {
     const typed = buildValueAs(FILE, form());
     expect(typed.kind).toBe(ValueKind.FILE);

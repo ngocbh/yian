@@ -1828,26 +1828,33 @@ def test_value():
 '''
 
 
-def _harvest(tmp_path: Path, text: str, *args: str,
-             **variables: str) -> tuple[subprocess.CompletedProcess, Path]:
-    """Run the test file `text` under the harvest plugin; return the run and the output root.
+def _pytest(tmp_path: Path, *args: str, **variables: str) -> subprocess.CompletedProcess:
+    """Run pytest with `args` in `tmp_path` and return the run.
 
-    `args` select the tests (default: the whole file). The run gets no `YIAN_*` variables but
-    the model defaults and auth file the suite sets, and `variables` added to its environment.
+    The run gets no `YIAN_*` variables but the model defaults and auth file the suite sets,
+    and `variables` added to its environment.
     """
     root = Path(__file__).resolve().parent.parent
-    (tmp_path / "test_sample.py").write_text(text, encoding="utf-8")
-    out = tmp_path / "out"
     env = {name: value for name, value in os.environ.items() if not name.startswith("YIAN_")}
     env |= {"PYTHONPATH": f"{root / 'src'}{os.pathsep}{root}", "YIAN_DEFAULT_PROVIDER": "openai",
             "YIAN_DEFAULT_MODEL": "gpt-5.5", "YIAN_AUTH_FILE": str(tmp_path / "auth.json"),
             **variables}
-    done = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
-         "-p", "tests.conformance_harvest", "--harvest-out", str(out),
-         *(args or ["test_sample.py"])],
+    return subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *args],
         cwd=tmp_path, env=env, capture_output=True, encoding="utf-8", timeout=300,
     )
+
+
+def _harvest(tmp_path: Path, text: str, *args: str,
+             **variables: str) -> tuple[subprocess.CompletedProcess, Path]:
+    """Run the test file `text` under the harvest plugin; return the run and the output root.
+
+    `args` select the tests (default: the whole file); `variables` are as `_pytest` takes them.
+    """
+    (tmp_path / "test_sample.py").write_text(text, encoding="utf-8")
+    out = tmp_path / "out"
+    done = _pytest(tmp_path, "-p", "tests.conformance_harvest", "--harvest-out", str(out),
+                   *(args or ["test_sample.py"]), **variables)
     return done, out
 
 
@@ -2270,3 +2277,153 @@ def test_harvest_records_runs(tmp_path: Path) -> None:
                   "resume (hand-converted)": ["test_resume"]},
         "flags": {},
     }
+
+
+_MODEL_TESTS = '''
+import yian.llm_clients as llm_clients
+from yian import load_flow
+from yian.llm_clients import factory
+from yian.run import run_flow
+from tests.engine._stream_fakes import Cut, ScriptedStreamChat, reply, usage
+
+
+def _run(output, **hooks):
+    flow = f"""\\
+id: write
+name: write
+nodes:
+  write:
+    kind: agent
+    output: {output}
+    llm_config: {{provider: openai, model: gpt-5.5}}
+    prompt: Write.
+output: ${{write.output}}
+"""
+    return run_flow(load_flow(flow), {}, run_id="r1", num_workers=0, **hooks)
+
+
+class Fake:
+    """A duck-typed chat model: `invoke` serves `replies`, a structured call `structured`."""
+
+    def __init__(self, replies=(), structured=()):
+        self.replies, self.structured = list(replies), list(structured)
+
+    def invoke(self, messages):
+        return self.replies.pop(0)
+
+    def with_structured_output(self, schema, **kwargs):
+        outer = self
+
+        class Bound:
+            def invoke(self, messages):
+                return schema.model_validate(outer.structured.pop(0))
+
+        return Bound()
+
+
+def test_text(monkeypatch):
+    fake = Fake([reply("hello", tokens=usage(3, 2))])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: fake)
+    assert _run("str").output == "hello"
+
+
+def test_structured(monkeypatch):
+    fake = Fake(structured=[{"name": "Ada", "score": 3}])
+    monkeypatch.setattr("yian.llm_clients.model_from_config", lambda config: fake)
+    assert _run("{name: str, score: int}").output == {"name": "Ada", "score": 3}
+
+
+def test_structured_retry(monkeypatch):
+    fake = Fake(structured=[{"name": "Ada", "score": "high"}, {"name": "Ada", "score": 3}])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: fake)
+    assert _run("{name: str, score: int}").output == {"name": "Ada", "score": 3}
+    assert fake.structured == []
+
+
+def test_streamed(monkeypatch):
+    chat = ScriptedStreamChat(script=[reply("hello there", tokens=usage(3, 2))])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: chat)
+    assert _run("str", on_stream=lambda chunk: None).output == "hello there"
+
+
+def test_stream_cut(monkeypatch):
+    chat = ScriptedStreamChat(script=[Cut("hel lo", ConnectionError("connection reset"))])
+    monkeypatch.setattr(llm_clients, "model_from_config", lambda config: chat)
+    result = _run("str", on_stream=lambda chunk: None)
+    assert result.status == "failed" and result.failure.message == "connection reset"
+
+
+def test_client_type(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-client-0123")
+    config = {"provider": "openai", "model": "gpt-5.5"}
+    assert type(factory.model_from_config(config)).__name__ == "NormalizedChatOpenAI"
+    assert type(llm_clients.model_from_config(config)).__name__ == "NormalizedChatOpenAI"
+'''
+
+
+def _summary(done: subprocess.CompletedProcess) -> str:
+    """Return a pytest run's last line, its counts, without the time it took."""
+    return done.stdout.strip().splitlines()[-1].partition(" in ")[0]
+
+
+def test_harvest_records_models(tmp_path: Path) -> None:
+    """Model calls through a patched factory become `host.models` entries of `run-agent` cases."""
+    done, out = _harvest(tmp_path, _MODEL_TESTS)
+    assert _summary(done) == "6 passed", done.stdout + done.stderr
+    # The plugin changes no test's outcome.
+    assert _summary(_pytest(tmp_path, "test_sample.py")) == _summary(done)
+    cases = {path.relative_to(out / "cases").as_posix(): _read(path)
+             for path in sorted((out / "cases").glob("*/*.yaml"))}
+    assert sorted(cases) == [
+        "run-agent/sample__stream_cut__2.yaml", "run-agent/sample__streamed__2.yaml",
+        "run-agent/sample__structured__2.yaml", "run-agent/sample__structured_retry__2.yaml",
+        "run-agent/sample__text__2.yaml",
+    ]
+    models = {name.removeprefix("run-agent/sample__").removesuffix("__2.yaml"):
+              case["host"]["models"]["write"] for name, case in cases.items()}
+
+    def text(value: str) -> dict:
+        return {"format": "yian.message.v1", "role": "assistant",
+                "parts": [{"type": "text", "text": value}]}
+
+    def roles(entry: dict) -> list:
+        return [message["role"] for message in entry["request"]["messages"]]
+
+    (entry,), = models["text"].values()
+    assert list(models["text"]) == ["agent"]
+    assert entry["reply"] == text("hello")
+    assert entry["usage"] == {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5}
+    assert list(entry["request"]) == ["messages"] and roles(entry) == ["system", "user"]
+    assert entry["request"]["messages"][1]["parts"] == [{"type": "text", "text": "Write."}]
+
+    (entry,), = models["structured"].values()
+    assert list(models["structured"]) == ["agent"]
+    # The recorder sees no usage of a native structured call.
+    assert entry["reply"] == text('{"name": "Ada", "score": 3}') and "usage" not in entry
+    assert entry["request"]["schema"]["required"] == ["name", "score"]
+
+    # The fake's validation error is the first attempt's; the retry's request names it.
+    assert list(models["structured_retry"]) == ["agent", "structured_retry"]
+    (first,), (retry,) = models["structured_retry"].values()
+    assert first["chunks"] == [] and first["raise"]["class"] == "ValidationError"
+    assert roles(first) == ["system", "user"] and roles(retry) == ["system", "user", "user"]
+    assert first["raise"]["message"] in retry["request"]["messages"][2]["parts"][0]["text"]
+    assert retry["reply"] == text('{"name": "Ada", "score": 3}')
+
+    (entry,), = models["streamed"].values()
+    assert entry["chunks"] == [
+        {"text": "hello"}, {"text": " there"},
+        {"usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5}}, {"finish": None}]
+
+    (entry,), = models["stream_cut"].values()
+    assert entry["chunks"] == [{"text": "hel"}, {"text": " lo"}]
+    assert entry["raise"] == {"class": "ConnectionError", "message": "connection reset"}
+    assert cases["run-agent/sample__stream_cut__2.yaml"]["expect"]["output"]["status"] == "failed"
+    for name, case in cases.items():
+        case_dir = tmp_path / "replay" / name
+        case_dir.mkdir(parents=True)
+        _check_results(case, results(case, case_dir))
+
+    report = json.loads((out / "report" / "test_sample.py.json").read_text(encoding="utf-8"))
+    assert report["tests"] == {"passed": 6, "failed": 0, "skipped": 0}
+    assert report["written"] == {"run-agent": 5} and report["skips"] == {}

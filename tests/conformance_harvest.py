@@ -2,9 +2,11 @@
 
 A pytest plugin: while each test runs, it records the engine calls whose inputs can be written as
 data (flow loads, runs, resumes, backward passes, expressions, templates, values and defaults).
-Each passing test's calls become candidates; a candidate is replayed through the conformance
-runner (`tests/test_conformance.py`) to get its `expect`, and written as a case file under
-`<out>/cases/<group>/<name>.yaml`, deduplicated by content. Run it with:
+The model calls a run makes through `llm_clients.model_from_config`, whatever a test patched it
+with, become the run's `host.models`. Each passing test's calls become candidates; a candidate is
+replayed through the conformance runner (`tests/test_conformance.py`) to get its `expect`, and
+written as a case file under `<out>/cases/<group>/<name>.yaml`, deduplicated by content. Run it
+with:
 
     PYTHONPATH=src python -m pytest -p tests.conformance_harvest --harvest-out DIR tests
 
@@ -25,13 +27,16 @@ import re
 import sys
 import tempfile
 import threading
+from types import ModuleType
 
+from langchain_core.messages import AIMessage, AIMessageChunk
 from lark import Tree
+from pydantic import BaseModel
 import pytest
 import yaml
 
 import yian
-from yian import defaults
+from yian import defaults, llm_clients
 from yian.compose import LoadError, load_flow
 from yian.expr.expressions import ResolveMode, eval_expr, evaluate_when_record
 from yian.expr.grammar import parse_expr
@@ -595,8 +600,11 @@ def _record_run_flow(arguments: dict):
         case["run"] = run
 
     def finish(outcome: tuple) -> tuple:
-        return case, _result(outcome,
-                             lambda result: {"output": runner._output(result, arguments["flow"])})
+        if call.model_skip:
+            raise _Skip(call.model_skip)
+        models = {"host": {"models": call.models}} if call.models else {}
+        return case | models, _result(
+            outcome, lambda result: {"output": runner._output(result, arguments["flow"])})
 
     return finish
 
@@ -604,6 +612,243 @@ def _record_run_flow(arguments: dict):
 def _record_resume_flow(arguments: dict):
     """Skip a `resume_flow` call: resume cases are converted by hand."""
     raise _Skip("resume (hand-converted)")
+
+
+def _taken(tools: list, schema: type | None, messages: list) -> tuple | None:
+    """Take the model call being made with `messages`, `tools` bound and `schema` asked for.
+
+    Returns the active record, the call's `(node, consumer)` and its request in the case's
+    form, to give `_add_entry`. None when no record is active, or when the call can't be
+    recorded, which skips the record's run.
+    """
+    key = runner._take_model_key()
+    state = _STATE
+    if state is None:
+        return None
+    with state.lock:
+        call = state.active
+    if call is None:
+        return None
+    try:
+        if key is None:
+            raise _Skip("model: call outside any AGENT")
+        if key[1] not in runner._CONSUMERS:
+            raise _Skip(f"model: {key[1]} call")
+        return call, key, _model_data(runner._v1_request, messages, tools, schema)
+    except _Skip as skip:
+        _skip_models(call, str(skip))
+    except Exception as exc:
+        _skip_models(call, _harvest_error(exc))
+    return None
+
+
+def _add_entry(taken: tuple | None, entry) -> None:
+    """Add the `host.models` entry `entry()` gives, with its request, for a call `_taken` took."""
+    if taken is None:
+        return
+    call, (node, consumer), request = taken
+    try:
+        recorded = {**entry(), "request": request}
+    except _Skip as skip:
+        _skip_models(call, str(skip))
+        return
+    except Exception as exc:
+        _skip_models(call, _harvest_error(exc))
+        return
+    with _STATE.lock:
+        call.models.setdefault(node, {}).setdefault(consumer, []).append(recorded)
+
+
+def _skip_models(call: _Call, reason: str) -> None:
+    """Note why a model call of `call`'s run can't be recorded, unless one already is."""
+    with _STATE.lock:
+        call.model_skip = call.model_skip or reason
+
+
+def _model_data(convert, *args: object) -> object:
+    """Return `convert(*args)`, one of the runner's translations, raising `_Skip` for `_NotData`."""
+    try:
+        return convert(*args)
+    except runner._NotData as reason:
+        raise _Skip(f"model: {reason}") from None
+
+
+def _usage(metadata: dict) -> dict:
+    """Return LangChain's `usage_metadata` as a case usage, or raise `_Skip` if it can't be one."""
+    usage = {name: metadata.get(name) for name in runner._USAGE_COUNTS}
+    for name, (details, key) in runner._USAGE_DETAILS.items():
+        if key in (metadata.get(details) or {}):
+            usage[name] = metadata[details][key]
+    if runner._usage_metadata(usage) != metadata:
+        raise _Skip("model: usage the case format can't hold")
+    return usage
+
+
+def _reply(reply: object) -> dict:
+    """Return an invoked call's `AIMessage` as a `reply` entry, with its `usage` if it has one."""
+    if type(reply) is not AIMessage:
+        raise _Skip(f"model: reply is {type(reply).__name__}")
+    entry = {"reply": _model_data(runner._v1_message, reply, {})}
+    if reply.usage_metadata:
+        entry["usage"] = _usage(reply.usage_metadata)
+    return entry
+
+
+def _structured_reply(result: object) -> dict:
+    """Return a native structured call's result as a `reply` entry holding its JSON.
+
+    No usage: it reaches only the callbacks of the model inside the binding.
+    """
+    if not isinstance(result, BaseModel):
+        raise _Skip(f"model: structured result is {type(result).__name__}")
+    text = json.dumps(result.model_dump(mode="json", by_alias=True))
+    return {"reply": _model_data(runner._v1_message, AIMessage(content=text), {})}
+
+
+def _chunks(chunks: list) -> list:
+    """Return a stream's `AIMessageChunk`s as case chunks: each one's text, tool calls, usage."""
+    recorded = []
+    for chunk in chunks:
+        if type(chunk) is not AIMessageChunk:
+            raise _Skip(f"model: stream yielded {type(chunk).__name__}")
+        if not isinstance(chunk.content, str):
+            raise _Skip("model: chunk with list content")
+        if chunk.additional_kwargs:
+            raise _Skip(f"model: chunk with additional_kwargs "
+                        f"({', '.join(sorted(chunk.additional_kwargs))})")
+        if chunk.content:
+            recorded.append({"text": chunk.content})
+        for delta in chunk.tool_call_chunks:
+            call = {"index": delta["index"], "arguments": delta["args"] or ""}
+            call |= {key: delta[key] for key in ("id", "name") if delta[key] is not None}
+            recorded.append({"tool_call": call})
+        if chunk.usage_metadata:
+            recorded.append({"usage": _usage(chunk.usage_metadata)})
+    return recorded
+
+
+def _finish_chunk(chunks: list) -> dict:
+    """Return the `finish` chunk of a stream that ended: its last `finish_reason`, or null."""
+    reasons = [chunk.response_metadata.get("finish_reason") for chunk in chunks]
+    return {"finish": next((reason for reason in reversed(reasons) if reason is not None), None)}
+
+
+def _error(exc: Exception) -> dict:
+    """Return a model call's error as an entry's `raise`."""
+    error = {"class": type(exc).__name__, "message": str(exc)}
+    if type(getattr(exc, "status_code", None)) is int:
+        error["status"] = exc.status_code
+    return error
+
+
+# The model methods a proxy wraps.
+_RECORDED = ("invoke", "stream", "bind_tools", "with_structured_output")
+
+
+class _Proxy:
+    """A model that records each call it passes to the model it wraps.
+
+    It has only the wrapped model's attributes, so `stream_reply` still finds no `stream` on a
+    model without one. `invoke` and `stream` are recorded; `bind_tools` and
+    `with_structured_output` return proxies sending the tools or schema; the rest is the
+    wrapped model's own.
+    """
+
+    def __init__(self, model: object, tools: list | tuple = (), schema: type | None = None) -> None:
+        """Wrap `model`, whose calls send `tools` and ask for `schema`."""
+        self._model, self._tools, self._schema = model, list(tools), schema
+
+    # `isinstance` sees the wrapped model's class: `invoke_structured` gives its usage callback
+    # only to a `Runnable`, and a test's checks must see what they would see unwrapped.
+    __class__ = property(lambda self: type(self._model))
+
+    def __getattr__(self, name: str) -> object:
+        """Return the wrapped model's attribute `name`, or the proxy's own for a recorded one."""
+        value = getattr(self._model, name)
+        return getattr(self, f"_{name}") if name in _RECORDED else value
+
+    def _bind_tools(self, tools: list, *args: object, **kwargs: object) -> _Proxy:
+        """Bind `tools` to the wrapped model; return the result wrapped to send them."""
+        tools = list(tools)
+        return _Proxy(self._model.bind_tools(tools, *args, **kwargs), tools, self._schema)
+
+    def _with_structured_output(self, schema: type, *args: object, **kwargs: object) -> _Proxy:
+        """Bind `schema` to the wrapped model; return the result wrapped to ask for it."""
+        return _Proxy(self._model.with_structured_output(schema, *args, **kwargs), (), schema)
+
+    def _invoke(self, messages: list, *args: object, **kwargs: object) -> object:
+        """Invoke the wrapped model, recording its reply or error."""
+        taken = _taken(self._tools, self._schema, messages)
+        try:
+            result = self._model.invoke(messages, *args, **kwargs)
+        except Exception as exc:
+            _add_entry(taken, lambda: {"chunks": [], "raise": _error(exc)})
+            raise
+        _add_entry(taken, lambda: _reply(result) if self._schema is None
+                   else _structured_reply(result))
+        return result
+
+    def _stream(self, messages: list, *args: object, **kwargs: object):
+        """Stream from the wrapped model, recording its chunks and how the stream ended."""
+        # Taken when the call is made, as the runner's replay takes its entry.
+        taken = _taken(self._tools, self._schema, messages)
+        return _streamed(taken, lambda: self._model.stream(messages, *args, **kwargs))
+
+
+def _streamed(taken: tuple | None, stream):
+    """Yield each chunk of `stream()`, then add the entry of the call `_taken` took."""
+    seen = []
+    try:
+        for chunk in stream():
+            seen.append(chunk)
+            yield chunk
+    except GeneratorExit:
+        # An interrupted reply: the replay can't cut its stream at the same chunk.
+        if taken is not None:
+            _skip_models(taken[0], "model: stream closed early")
+        raise
+    except Exception as exc:
+        _add_entry(taken, lambda: {"chunks": _chunks(seen), "raise": _error(exc)})
+        raise
+    _add_entry(taken, lambda: {"chunks": [*_chunks(seen), _finish_chunk(seen)]})
+
+
+def _recording() -> bool:
+    """Return whether a model built now is recorded: a run is recorded and an AGENT seated."""
+    state = _STATE
+    return (state is not None and state.active is not None
+            and getattr(runner._SEAT, "seat", None) is not None)
+
+
+def _factory(original):
+    """Return the model factory `original` wrapped to give recorded models (see `_recording`)."""
+    def model_from_config(*args: object, **kwargs: object) -> object:
+        model = original(*args, **kwargs)
+        return _Proxy(model) if _recording() else model
+
+    model_from_config.harvest_wraps = original
+    return model_from_config
+
+
+# What a value assigned to a watched module's name is wrapped with, by name.
+_WATCHED = {"model_from_config": _factory}
+
+
+class _Watched(ModuleType):
+    """A yian module that wraps each value assigned to a `_WATCHED` name, so the harvest sees it.
+
+    However a test patches the module (`monkeypatch.setattr`, `mock.patch`, plain assignment),
+    its value is wrapped; a wrapped value isn't wrapped again, nor one the harvest's replay
+    assigns.
+    """
+
+    def __setattr__(self, name: str, value: object) -> None:
+        """Set the attribute `name`, wrapping `value` for a `_WATCHED` name."""
+        state = _STATE
+        if (name in _WATCHED and state is not None and not state.disabled
+                and "harvest_wraps" not in getattr(value, "__dict__", {})):
+            value = _WATCHED[name](value)
+        super().__setattr__(name, value)
 
 
 def _remember_tree(arguments: dict, tree: object) -> None:
@@ -682,6 +927,9 @@ class _Call:
         self.secrets: set[str] = set()
         # For a load, the records of the runs of its flow.
         self.runs: list[_Call] = []
+        # For a run, its model calls as `host.models`, and why one can't be recorded.
+        self.models: dict = {}
+        self.model_skip: str | None = None
         self.written = False
 
 
@@ -828,6 +1076,9 @@ class _Harvest:
         self.deselecting = False
         self.replaced: list = []
         self.paths: set | None = None
+        # The seats of the runner's model replay, for the session; and the model factory.
+        self.patch = pytest.MonkeyPatch()
+        self.factory = llm_clients.model_from_config
 
 
 def _new_report(path: str) -> dict:
@@ -918,6 +1169,8 @@ def _group(case: dict) -> str:
     """Return the group a case is written in."""
     if case["kind"] == "load":
         return "load-agent" if _AGENT.search(case["flow"]) else "load-core"
+    if case.get("host", {}).get("models"):
+        return "run-agent"
     return _GROUPS.get(case["kind"]) or ("templates" if "template" in case else "expr")
 
 
@@ -1022,7 +1275,11 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    """With `--harvest-out`, wrap the entry points and text helpers in every yian module."""
+    """With `--harvest-out`, wrap the entry points and text helpers in every yian module.
+
+    The model factory is wrapped, and so is each one a test assigns; the runner's seats name
+    each model call's node and consumer.
+    """
     global _STATE
     out = config.getoption("harvest_out")
     if not out:
@@ -1044,6 +1301,9 @@ def pytest_configure(config: pytest.Config) -> None:
     for original, remember in ((parse_expr, _remember_tree), (type_for, _remember_type),
                                (read_typedefs, _remember_typedefs)):
         _replace(original, _mapper(original, remember), _STATE.replaced)
+    runner._seated(_STATE.patch)
+    llm_clients.__class__ = _Watched
+    llm_clients.model_from_config = _factory(_STATE.factory)
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:
@@ -1053,6 +1313,9 @@ def pytest_unconfigure(config: pytest.Config) -> None:
         return
     for module, name, original in _STATE.replaced:
         setattr(module, name, original)
+    llm_clients.__class__ = ModuleType
+    llm_clients.model_from_config = _STATE.factory
+    _STATE.patch.undo()
     _STATE = None
 
 

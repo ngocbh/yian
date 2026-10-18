@@ -329,6 +329,21 @@ describe("docs/defaults.md", () => {
   test("the TS yian table lists the TS-only entries in order", () => {
     expect(tableRows("TS yian variable")).toEqual(TS_ONLY.map((name) => expectedRow(entryNamed(name))));
   });
+
+  // Every read yian makes goes through an injected environment accessor; each later reader of
+  // the environment adds its own reads, and the table documenting them, to this check.
+  test("read asks for each entry's variable once, in table order, and only documented ones", () => {
+    const asked: string[] = [];
+    read((name) => {
+      asked.push(name);
+      return undefined;
+    });
+    expect(asked).toEqual(ENTRIES.map((entry) => entry.variable));
+    const documented = [...tableRows("Variable"), ...tableRows("TS yian variable")].map((row) =>
+      row[0]!.replaceAll("`", ""),
+    );
+    expect(asked.filter((name) => !documented.includes(name))).toEqual([]);
+  });
 });
 
 describe("recorded values", () => {
